@@ -55,7 +55,7 @@ from compositionality_metrics import (
 )
 
 try:
-    from hypothesis import given, strategies as st, settings
+    from hypothesis import HealthCheck, given, strategies as st, settings
     HAS_HYPOTHESIS = True
 except ImportError:
     HAS_HYPOTHESIS = False
@@ -287,7 +287,7 @@ class TestContractionAnalysis:
             st.floats(0.01, 1.99),
             st.floats(-1.99, 1.99),
         )
-        @settings(max_examples=50)
+        @settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow])
         def _test(E, I, S, V):
             state = State(E=E, I=I, S=S, V=V)
             J = analytical_jacobian(state, active_params, DEFAULT_THETA)
