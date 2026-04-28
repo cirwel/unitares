@@ -1,0 +1,846 @@
+{
+  "global": {
+    "eligible_samples": 564,
+    "successes": 564,
+    "confidence_sum": 368.03738617036004,
+    "log_e_value": 297.0784030720926,
+    "last_e_value": 1.4260429835651076,
+    "last_alt_probability": 0.9982300884955753,
+    "signal_sources": {
+      "tests": 564
+    },
+    "last_updated": "2026-04-26T20:55:37.004409+00:00"
+  },
+  "agents": {
+    "170fca95-ff1b-4090-afd5-0518bb68bf80": {
+      "eligible_samples": 2,
+      "successes": 2,
+      "confidence_sum": 1.6049891710281372,
+      "log_e_value": -0.6585519466207201,
+      "last_e_value": 0.830742884376731,
+      "last_alt_probability": 0.6666666666666666,
+      "signal_sources": {
+        "tests": 2
+      },
+      "last_updated": "2026-04-12T08:26:51.692609+00:00"
+    },
+    "a7121214-f453-4764-a874-d4fd86747a20": {
+      "eligible_samples": 1,
+      "successes": 1,
+      "confidence_sum": 0.8024945855140686,
+      "log_e_value": -0.47311700953625047,
+      "last_e_value": 0.6230571632825483,
+      "last_alt_probability": 0.5,
+      "signal_sources": {
+        "tests": 1
+      },
+      "last_updated": "2026-04-12T08:26:51.694127+00:00"
+    },
+    "5f99f730-37f1-44cb-9641-f7c3792e74ea": {
+      "eligible_samples": 3,
+      "successes": 3,
+      "confidence_sum": 1.7408282160758972,
+      "log_e_value": 0.24656604888542877,
+      "last_e_value": 1.3080443679943432,
+      "last_alt_probability": 0.75,
+      "signal_sources": {
+        "tests": 3
+      },
+      "last_updated": "2026-04-12T08:26:51.700952+00:00"
+    },
+    "8970799c-51fb-445a-becd-69d7f3fd290c": {
+      "eligible_samples": 4,
+      "successes": 4,
+      "confidence_sum": 2.516349673271179,
+      "log_e_value": 0.26144628288336663,
+      "last_e_value": 1.1898959439570977,
+      "last_alt_probability": 0.8,
+      "signal_sources": {
+        "tests": 4
+      },
+      "last_updated": "2026-04-12T08:26:51.702950+00:00"
+    },
+    "26ef21aa-d651-4ddf-8e0d-5c4b08a43b76": {
+      "eligible_samples": 2,
+      "successes": 2,
+      "confidence_sum": 1.3393165469169617,
+      "log_e_value": -0.29663452982209554,
+      "last_e_value": 0.9970401772244771,
+      "last_alt_probability": 0.6666666666666666,
+      "signal_sources": {
+        "tests": 2
+      },
+      "last_updated": "2026-04-12T08:26:51.703906+00:00"
+    },
+    "a8f3539e-6b77-460c-a591-9dba9dc8c567": {
+      "eligible_samples": 17,
+      "successes": 17,
+      "confidence_sum": 9.134176582098007,
+      "log_e_value": 8.085231515642542,
+      "last_e_value": 1.4317661561884063,
+      "last_alt_probability": 0.9444444444444444,
+      "signal_sources": {
+        "tests": 17
+      },
+      "last_updated": "2026-04-12T08:26:51.716856+00:00"
+    },
+    "3f5e285f-8c3b-4c07-8e22-129a374cbd7d": {
+      "eligible_samples": 2,
+      "successes": 2,
+      "confidence_sum": 0.699999988079071,
+      "log_e_value": 1.001031994389043,
+      "last_e_value": 1.904761937199807,
+      "last_alt_probability": 0.6666666666666666,
+      "signal_sources": {
+        "tests": 2
+      },
+      "last_updated": "2026-04-12T08:26:51.710657+00:00"
+    },
+    "30abb47c-f99d-41a2-98b4-9d4dfedc2727": {
+      "eligible_samples": 5,
+      "successes": 5,
+      "confidence_sum": 3.298179805278778,
+      "log_e_value": 0.28857638223492876,
+      "last_e_value": 1.2633230789897703,
+      "last_alt_probability": 0.8333333333333334,
+      "signal_sources": {
+        "tests": 5
+      },
+      "last_updated": "2026-04-12T08:26:51.716304+00:00"
+    },
+    "f91b5c75-3384-4944-9a7b-5bf1a4ad1896": {
+      "eligible_samples": 1,
+      "successes": 1,
+      "confidence_sum": 0.3499999940395355,
+      "log_e_value": 0.35667496096863105,
+      "last_e_value": 1.4285714528998554,
+      "last_alt_probability": 0.5,
+      "signal_sources": {
+        "tests": 1
+      },
+      "last_updated": "2026-04-12T08:26:51.717512+00:00"
+    },
+    "e287ab80-3007-45fc-83a0-fd20177439e0": {
+      "eligible_samples": 2,
+      "successes": 2,
+      "confidence_sum": 0.769386351108551,
+      "log_e_value": 0.8120061294066832,
+      "last_e_value": 1.732982826394351,
+      "last_alt_probability": 0.6666666666666666,
+      "signal_sources": {
+        "tests": 2
+      },
+      "last_updated": "2026-04-12T08:26:51.718822+00:00"
+    },
+    "e93f1314-e61f-4530-a244-7d7b632a78b9": {
+      "eligible_samples": 3,
+      "successes": 3,
+      "confidence_sum": 1.1691375076770782,
+      "log_e_value": 1.4412370909975747,
+      "last_e_value": 1.949605679693645,
+      "last_alt_probability": 0.75,
+      "signal_sources": {
+        "tests": 3
+      },
+      "last_updated": "2026-04-12T08:26:51.720885+00:00"
+    },
+    "77c161e2-a22a-4062-98a2-4442ac2eb651": {
+      "eligible_samples": 8,
+      "successes": 8,
+      "confidence_sum": 3.523579925298691,
+      "log_e_value": 4.363401986582237,
+      "last_e_value": 2.0168974446940435,
+      "last_alt_probability": 0.8888888888888888,
+      "signal_sources": {
+        "tests": 8
+      },
+      "last_updated": "2026-04-12T08:26:51.726249+00:00"
+    },
+    "93fb418f-d1bb-44d2-b86f-c003e7814b14": {
+      "eligible_samples": 15,
+      "successes": 15,
+      "confidence_sum": 6.024206221103668,
+      "log_e_value": 10.923279862197496,
+      "last_e_value": 2.3471450063380632,
+      "last_alt_probability": 0.9375,
+      "signal_sources": {
+        "tests": 15
+      },
+      "last_updated": "2026-04-12T08:26:51.735693+00:00"
+    },
+    "06ca8644-aefc-4b21-a3a9-44f873ce6cdc": {
+      "eligible_samples": 5,
+      "successes": 5,
+      "confidence_sum": 1.7499999701976776,
+      "log_e_value": 3.4573512384148266,
+      "last_e_value": 2.3809524214997593,
+      "last_alt_probability": 0.8333333333333334,
+      "signal_sources": {
+        "tests": 5
+      },
+      "last_updated": "2026-04-12T08:26:51.738754+00:00"
+    },
+    "35cdedb9-1945-42f1-b82a-68a2d0cc4597": {
+      "eligible_samples": 3,
+      "successes": 3,
+      "confidence_sum": 1.2171844244003296,
+      "log_e_value": 1.3285638066226775,
+      "last_e_value": 1.9552012905692926,
+      "last_alt_probability": 0.75,
+      "signal_sources": {
+        "tests": 3
+      },
+      "last_updated": "2026-04-12T08:26:51.746730+00:00"
+    },
+    "c1322a98-8e3f-41fb-8b9c-1cd229c042cb": {
+      "eligible_samples": 8,
+      "successes": 8,
+      "confidence_sum": 3.209396630525589,
+      "log_e_value": 5.1327338911634035,
+      "last_e_value": 2.1211129871473577,
+      "last_alt_probability": 0.8888888888888888,
+      "signal_sources": {
+        "tests": 8
+      },
+      "last_updated": "2026-04-12T08:26:51.744482+00:00"
+    },
+    "6b7358f3-5e77-47f0-8124-f0e8e6c5b043": {
+      "eligible_samples": 1,
+      "successes": 1,
+      "confidence_sum": 0.999999,
+      "log_e_value": -0.6931461805594453,
+      "last_e_value": 0.5000005000005,
+      "last_alt_probability": 0.5,
+      "signal_sources": {
+        "tests": 1
+      },
+      "last_updated": "2026-04-12T08:26:51.745243+00:00"
+    },
+    "bdea2309-c165-465e-bbe8-ddada9ba5a0a": {
+      "eligible_samples": 1,
+      "successes": 1,
+      "confidence_sum": 0.3870786130428314,
+      "log_e_value": 0.25598029154382385,
+      "last_e_value": 1.2917272697385467,
+      "last_alt_probability": 0.5,
+      "signal_sources": {
+        "tests": 1
+      },
+      "last_updated": "2026-04-12T08:26:51.747382+00:00"
+    },
+    "c6ade7a4-64e4-46d9-b044-f30a906c0fcc": {
+      "eligible_samples": 4,
+      "successes": 4,
+      "confidence_sum": 1.5483144521713257,
+      "log_e_value": 2.187071975980976,
+      "last_e_value": 2.066763631581675,
+      "last_alt_probability": 0.8,
+      "signal_sources": {
+        "tests": 4
+      },
+      "last_updated": "2026-04-12T08:26:51.750088+00:00"
+    },
+    "c7d3a814-0384-4ae3-9c0c-f52b731a3a6f": {
+      "eligible_samples": 2,
+      "successes": 2,
+      "confidence_sum": 0.7645314931869507,
+      "log_e_value": 0.8252991475152865,
+      "last_e_value": 1.7889887862280025,
+      "last_alt_probability": 0.6666666666666666,
+      "signal_sources": {
+        "tests": 2
+      },
+      "last_updated": "2026-04-12T08:26:51.751713+00:00"
+    },
+    "44bd7598-b022-4eed-83dd-c519fce5cbc6": {
+      "eligible_samples": 5,
+      "successes": 5,
+      "confidence_sum": 1.8525999784469604,
+      "log_e_value": 3.1744781053164246,
+      "last_e_value": 2.2066287552814323,
+      "last_alt_probability": 0.8333333333333334,
+      "signal_sources": {
+        "tests": 5
+      },
+      "last_updated": "2026-04-12T08:26:51.755191+00:00"
+    },
+    "cd2a3139-728a-4443-b8e1-504b5997f19d": {
+      "eligible_samples": 1,
+      "successes": 1,
+      "confidence_sum": 0.37709999084472656,
+      "log_e_value": 0.2820977184359857,
+      "last_e_value": 1.3259082793398378,
+      "last_alt_probability": 0.5,
+      "signal_sources": {
+        "tests": 1
+      },
+      "last_updated": "2026-04-12T08:26:51.756107+00:00"
+    },
+    "4c528911-1451-4c8f-9857-a8f293c8f7c6": {
+      "eligible_samples": 5,
+      "successes": 5,
+      "confidence_sum": 1.7499999701976776,
+      "log_e_value": 3.4573512384148266,
+      "last_e_value": 2.3809524214997593,
+      "last_alt_probability": 0.8333333333333334,
+      "signal_sources": {
+        "tests": 5
+      },
+      "last_updated": "2026-04-12T08:26:51.762899+00:00"
+    },
+    "07c5f09c-d5bf-4cf2-88dd-bbc665494cfe": {
+      "eligible_samples": 4,
+      "successes": 4,
+      "confidence_sum": 1.4623000025749207,
+      "log_e_value": 2.416963097948331,
+      "last_e_value": 2.144197194076695,
+      "last_alt_probability": 0.8,
+      "signal_sources": {
+        "tests": 4
+      },
+      "last_updated": "2026-04-12T08:26:51.761311+00:00"
+    },
+    "77c915b7-eeff-41c0-be58-710eb50f1e92": {
+      "eligible_samples": 7,
+      "successes": 7,
+      "confidence_sum": 2.531849980354309,
+      "log_e_value": 5.04413570702717,
+      "last_e_value": 2.500000042574747,
+      "last_alt_probability": 0.875,
+      "signal_sources": {
+        "tests": 7
+      },
+      "last_updated": "2026-04-12T08:26:51.767293+00:00"
+    },
+    "fac5194c-cd67-4a03-ba80-62129c75c663": {
+      "eligible_samples": 9,
+      "successes": 9,
+      "confidence_sum": 3.4523500204086304,
+      "log_e_value": 6.320982707034997,
+      "last_e_value": 2.343444792955152,
+      "last_alt_probability": 0.9,
+      "signal_sources": {
+        "tests": 9
+      },
+      "last_updated": "2026-04-12T08:26:51.773921+00:00"
+    },
+    "aced9ed3-0089-44ea-a0dd-a850a0b07c42": {
+      "eligible_samples": 2,
+      "successes": 2,
+      "confidence_sum": 0.7607999742031097,
+      "log_e_value": 0.8344560985807881,
+      "last_e_value": 1.7562346863347345,
+      "last_alt_probability": 0.6666666666666666,
+      "signal_sources": {
+        "tests": 2
+      },
+      "last_updated": "2026-04-12T08:26:51.775318+00:00"
+    },
+    "0656b0d7-b99c-463a-a65f-30b85bf36fb8": {
+      "eligible_samples": 3,
+      "successes": 3,
+      "confidence_sum": 1.0819999873638153,
+      "log_e_value": 1.675684594185221,
+      "last_e_value": 1.9633507890164867,
+      "last_alt_probability": 0.75,
+      "signal_sources": {
+        "tests": 3
+      },
+      "last_updated": "2026-04-12T08:26:51.783074+00:00"
+    },
+    "4a96ee00-132d-4aaa-bf4f-1fdcaa1c25d0": {
+      "eligible_samples": 2,
+      "successes": 2,
+      "confidence_sum": 0.7623000144958496,
+      "log_e_value": 0.830512234395723,
+      "last_e_value": 1.7490926249229302,
+      "last_alt_probability": 0.6666666666666666,
+      "signal_sources": {
+        "tests": 2
+      },
+      "last_updated": "2026-04-12T08:26:51.778571+00:00"
+    },
+    "767da1c1-b289-4686-9c69-c70c3e7d3ede": {
+      "eligible_samples": 3,
+      "successes": 3,
+      "confidence_sum": 1.1131499707698822,
+      "log_e_value": 1.5904245176022838,
+      "last_e_value": 1.9674712173428257,
+      "last_alt_probability": 0.75,
+      "signal_sources": {
+        "tests": 3
+      },
+      "last_updated": "2026-04-12T08:26:51.780473+00:00"
+    },
+    "7d76cd19-e36c-4650-a3b3-054a21d83232": {
+      "eligible_samples": 3,
+      "successes": 3,
+      "confidence_sum": 1.13960000872612,
+      "log_e_value": 1.517519740075557,
+      "last_e_value": 1.9778480413265145,
+      "last_alt_probability": 0.75,
+      "signal_sources": {
+        "tests": 3
+      },
+      "last_updated": "2026-04-12T08:26:51.782447+00:00"
+    },
+    "7f866d53-88f9-4fac-a149-278357fd4504": {
+      "eligible_samples": 2,
+      "successes": 2,
+      "confidence_sum": 0.8298499882221222,
+      "log_e_value": 0.6678742746969228,
+      "last_e_value": 1.7550787584983563,
+      "last_alt_probability": 0.6666666666666666,
+      "signal_sources": {
+        "tests": 2
+      },
+      "last_updated": "2026-04-12T08:26:51.784475+00:00"
+    },
+    "7b3fc8d3-cf1f-4a0f-ae06-7b41a30c45bc": {
+      "eligible_samples": 15,
+      "successes": 15,
+      "confidence_sum": 5.541950017213821,
+      "log_e_value": 12.17056724471949,
+      "last_e_value": 2.544788221902393,
+      "last_alt_probability": 0.9375,
+      "signal_sources": {
+        "tests": 15
+      },
+      "last_updated": "2026-04-12T08:26:51.799734+00:00"
+    },
+    "73288290-95d5-473c-aebd-985987b7b705": {
+      "eligible_samples": 4,
+      "successes": 4,
+      "confidence_sum": 1.4113499820232391,
+      "log_e_value": 2.5579367736686955,
+      "last_e_value": 2.2139200227234976,
+      "last_alt_probability": 0.8,
+      "signal_sources": {
+        "tests": 4
+      },
+      "last_updated": "2026-04-12T08:26:51.797600+00:00"
+    },
+    "cd5fbf07-560e-466b-b456-a9e32d417d80": {
+      "eligible_samples": 1,
+      "successes": 1,
+      "confidence_sum": 0.3499999940395355,
+      "log_e_value": 0.35667496096863105,
+      "last_e_value": 1.4285714528998554,
+      "last_alt_probability": 0.5,
+      "signal_sources": {
+        "tests": 1
+      },
+      "last_updated": "2026-04-12T08:26:51.793805+00:00"
+    },
+    "37839d91-bb68-422f-9392-7ab300212a72": {
+      "eligible_samples": 1,
+      "successes": 1,
+      "confidence_sum": 0.3499999940395355,
+      "log_e_value": 0.35667496096863105,
+      "last_e_value": 1.4285714528998554,
+      "last_alt_probability": 0.5,
+      "signal_sources": {
+        "tests": 1
+      },
+      "last_updated": "2026-04-12T08:26:51.800467+00:00"
+    },
+    "03b34e2c-9b2c-43fc-860d-38e644b7995c": {
+      "eligible_samples": 2,
+      "successes": 2,
+      "confidence_sum": 0.9808285534381866,
+      "log_e_value": 0.4119310028917056,
+      "last_e_value": 1.056811168001301,
+      "last_alt_probability": 0.6666666666666666,
+      "signal_sources": {
+        "tests": 2
+      },
+      "last_updated": "2026-04-12T08:26:51.801842+00:00"
+    },
+    "3ab9315f-9e7d-4109-b9b2-f77123e5fdae": {
+      "eligible_samples": 7,
+      "successes": 7,
+      "confidence_sum": 2.534850001335144,
+      "log_e_value": 5.031017209746724,
+      "last_e_value": 2.4218101863399943,
+      "last_alt_probability": 0.875,
+      "signal_sources": {
+        "tests": 7
+      },
+      "last_updated": "2026-04-12T08:26:51.807720+00:00"
+    },
+    "81a3ba4d-018c-40de-8d58-97780dc598ee": {
+      "eligible_samples": 36,
+      "successes": 36,
+      "confidence_sum": 14.119842737913132,
+      "log_e_value": 30.919019691451165,
+      "last_e_value": 2.73845467953986,
+      "last_alt_probability": 0.972972972972973,
+      "signal_sources": {
+        "tests": 36
+      },
+      "last_updated": "2026-04-12T08:26:51.866491+00:00"
+    },
+    "14b31483-86b7-41d5-9a51-00d35f19c082": {
+      "eligible_samples": 14,
+      "successes": 14,
+      "confidence_sum": 4.9429691433906555,
+      "log_e_value": 11.873140972445452,
+      "last_e_value": 2.485779223117477,
+      "last_alt_probability": 0.9333333333333333,
+      "signal_sources": {
+        "tests": 14
+      },
+      "last_updated": "2026-04-12T08:26:51.867958+00:00"
+    },
+    "61d64fa0-f646-423f-889a-469debc694ee": {
+      "eligible_samples": 3,
+      "successes": 3,
+      "confidence_sum": 1.3287785649299622,
+      "log_e_value": 1.1799453851041144,
+      "last_e_value": 2.1554820383091946,
+      "last_alt_probability": 0.75,
+      "signal_sources": {
+        "tests": 3
+      },
+      "last_updated": "2026-04-12T08:26:51.863433+00:00"
+    },
+    "639c4afb-d920-4e64-af9f-d4117323b5b6": {
+      "eligible_samples": 19,
+      "successes": 19,
+      "confidence_sum": 8.895078420639038,
+      "log_e_value": 12.242526708691416,
+      "last_e_value": 2.7142857605097253,
+      "last_alt_probability": 0.95,
+      "signal_sources": {
+        "tests": 19
+      },
+      "last_updated": "2026-04-12T08:26:51.864261+00:00"
+    },
+    "16f05726-716f-4c66-870d-ad8a19628bda": {
+      "eligible_samples": 3,
+      "successes": 3,
+      "confidence_sum": 1.699998988079071,
+      "log_e_value": 0.7133509219377621,
+      "last_e_value": 0.7500007500007501,
+      "last_alt_probability": 0.75,
+      "signal_sources": {
+        "tests": 3
+      },
+      "last_updated": "2026-04-12T08:26:51.870318+00:00"
+    },
+    "b9c3f092-5e37-4fc4-92af-eae20b737b41": {
+      "eligible_samples": 1,
+      "successes": 1,
+      "confidence_sum": 0.35835000872612,
+      "log_e_value": 0.33309791163143354,
+      "last_e_value": 1.3952839063055258,
+      "last_alt_probability": 0.5,
+      "signal_sources": {
+        "tests": 1
+      },
+      "last_updated": "2026-04-12T08:26:51.871095+00:00"
+    },
+    "76e024e5-b3fe-4891-965b-199895613704": {
+      "eligible_samples": 11,
+      "successes": 11,
+      "confidence_sum": 3.893913894891739,
+      "log_e_value": 8.939547946124302,
+      "last_e_value": 2.619047663649735,
+      "last_alt_probability": 0.9166666666666666,
+      "signal_sources": {
+        "tests": 11
+      },
+      "last_updated": "2026-04-12T08:26:51.888926+00:00"
+    },
+    "df35cc83-bf86-4169-b1fd-46ac5453ecfc": {
+      "eligible_samples": 6,
+      "successes": 6,
+      "confidence_sum": 3.399997976158142,
+      "log_e_value": 2.253380417059992,
+      "last_e_value": 0.8571437142865714,
+      "last_alt_probability": 0.8571428571428571,
+      "signal_sources": {
+        "tests": 6
+      },
+      "last_updated": "2026-04-12T08:26:51.887802+00:00"
+    },
+    "5bd248d5-124c-41ca-96ed-3166976ee942": {
+      "eligible_samples": 14,
+      "successes": 14,
+      "confidence_sum": 5.185029745101929,
+      "log_e_value": 11.201548194316718,
+      "last_e_value": 2.473716797259503,
+      "last_alt_probability": 0.9333333333333333,
+      "signal_sources": {
+        "tests": 14
+      },
+      "last_updated": "2026-04-12T08:26:51.936675+00:00"
+    },
+    "a79af33f-7963-4402-88e1-0e371e32b44c": {
+      "eligible_samples": 7,
+      "successes": 7,
+      "confidence_sum": 3.0724450929632185,
+      "log_e_value": 4.355102652817429,
+      "last_e_value": 2.4122558495100703,
+      "last_alt_probability": 0.875,
+      "signal_sources": {
+        "tests": 7
+      },
+      "last_updated": "2026-04-12T08:26:51.967938+00:00"
+    },
+    "53b3a65e-4717-444e-8612-27ea0cb3cd44": {
+      "eligible_samples": 14,
+      "successes": 14,
+      "confidence_sum": 13.261645118797304,
+      "log_e_value": -1.7865959010337316,
+      "last_e_value": 0.9333342666676,
+      "last_alt_probability": 0.9333333333333333,
+      "signal_sources": {
+        "tests": 14
+      },
+      "last_updated": "2026-04-12T08:26:52.000819+00:00"
+    },
+    "c53fc58f-da6d-47fd-870d-ba560e67ceef": {
+      "eligible_samples": 8,
+      "successes": 8,
+      "confidence_sum": 6.72859399537468,
+      "log_e_value": -0.17612139912425762,
+      "last_e_value": 2.347831182657676,
+      "last_alt_probability": 0.8888888888888888,
+      "signal_sources": {
+        "tests": 8
+      },
+      "last_updated": "2026-04-12T08:26:52.128349+00:00"
+    },
+    "1bbc5df5-1bbf-44e3-9a49-d5b38c0140b4": {
+      "eligible_samples": 26,
+      "successes": 26,
+      "confidence_sum": 22.05173809724426,
+      "log_e_value": 2.765208109219313,
+      "last_e_value": 0.9629639259268888,
+      "last_alt_probability": 0.9629629629629629,
+      "signal_sources": {
+        "tests": 26
+      },
+      "last_updated": "2026-04-12T08:26:52.202371+00:00"
+    },
+    "dd398001-8214-47fe-8715-f70723faf1e1": {
+      "eligible_samples": 12,
+      "successes": 12,
+      "confidence_sum": 9.311650100915909,
+      "log_e_value": 1.5059663671901706,
+      "last_e_value": 0.9230778461547693,
+      "last_alt_probability": 0.9230769230769231,
+      "signal_sources": {
+        "tests": 12
+      },
+      "last_updated": "2026-04-12T08:26:52.107699+00:00"
+    },
+    "8e237d9f-3f0f-45ef-ba31-76353db3af53": {
+      "eligible_samples": 72,
+      "successes": 72,
+      "confidence_sum": 60.22677545592504,
+      "log_e_value": 14.302241874933795,
+      "last_e_value": 0.9863023561653699,
+      "last_alt_probability": 0.9863013698630136,
+      "signal_sources": {
+        "tests": 72
+      },
+      "last_updated": "2026-04-12T08:26:52.197419+00:00"
+    },
+    "6d55912c-667f-471c-a230-bece09cd3037": {
+      "eligible_samples": 4,
+      "successes": 4,
+      "confidence_sum": 3.3872470061988826,
+      "log_e_value": -0.660750128754886,
+      "last_e_value": 0.8000008000008001,
+      "last_alt_probability": 0.8,
+      "signal_sources": {
+        "tests": 4
+      },
+      "last_updated": "2026-04-12T08:26:52.116142+00:00"
+    },
+    "7027c5fe-e0ec-4a68-8072-c014e3d98da0": {
+      "eligible_samples": 14,
+      "successes": 14,
+      "confidence_sum": 12.699987988079075,
+      "log_e_value": -0.6083939180390571,
+      "last_e_value": 0.9333342666676,
+      "last_alt_probability": 0.9333333333333333,
+      "signal_sources": {
+        "tests": 14
+      },
+      "last_updated": "2026-04-12T08:26:52.277481+00:00"
+    },
+    "73930e56-4487-4d98-a11d-f1951af69eb3": {
+      "eligible_samples": 10,
+      "successes": 10,
+      "confidence_sum": 9.349990994039537,
+      "log_e_value": -1.3480641312652937,
+      "last_e_value": 0.9090918181827272,
+      "last_alt_probability": 0.9090909090909091,
+      "signal_sources": {
+        "tests": 10
+      },
+      "last_updated": "2026-04-12T08:26:52.267844+00:00"
+    },
+    "d6ace1c3-1356-4414-a22b-345987236060": {
+      "eligible_samples": 4,
+      "successes": 4,
+      "confidence_sum": 3.3753469984741207,
+      "log_e_value": -0.6295385534042583,
+      "last_e_value": 0.8000008000008001,
+      "last_alt_probability": 0.8,
+      "signal_sources": {
+        "tests": 4
+      },
+      "last_updated": "2026-04-12T08:26:52.244352+00:00"
+    },
+    "4bc63013-a822-41b4-bedd-69461a58751d": {
+      "eligible_samples": 14,
+      "successes": 14,
+      "confidence_sum": 13.999986000000003,
+      "log_e_value": -2.70803620109521,
+      "last_e_value": 0.9333342666676,
+      "last_alt_probability": 0.9333333333333333,
+      "signal_sources": {
+        "tests": 14
+      },
+      "last_updated": "2026-04-12T08:26:52.268543+00:00"
+    },
+    "5e3597c9-d56d-496b-ab25-56d89fb4b8ea": {
+      "eligible_samples": 11,
+      "successes": 11,
+      "confidence_sum": 10.673864855041504,
+      "log_e_value": -2.0901857894608256,
+      "last_e_value": 0.91666758333425,
+      "last_alt_probability": 0.9166666666666666,
+      "signal_sources": {
+        "tests": 11
+      },
+      "last_updated": "2026-04-12T08:52:45.742453+00:00"
+    },
+    "abb551d7-9460-4061-8ae7-3d83a02ff409": {
+      "eligible_samples": 1,
+      "successes": 1,
+      "confidence_sum": 0.42,
+      "log_e_value": 0.17435338714477774,
+      "last_e_value": 1.1904761904761905,
+      "last_alt_probability": 0.5,
+      "signal_sources": {
+        "tests": 1
+      },
+      "last_updated": "2026-04-12T10:32:57.325754+00:00"
+    },
+    "test-calib-sanity": {
+      "eligible_samples": 1,
+      "successes": 1,
+      "confidence_sum": 0.42,
+      "log_e_value": 0.17435338714477774,
+      "last_e_value": 1.1904761904761905,
+      "last_alt_probability": 0.5,
+      "signal_sources": {
+        "tests": 1
+      },
+      "last_updated": "2026-04-12T10:35:00.054954+00:00"
+    },
+    "1d605f92-ee45-4fbf-a4cc-f596025cc9e1": {
+      "eligible_samples": 1,
+      "successes": 1,
+      "confidence_sum": 0.3714999854564667,
+      "log_e_value": 0.29705927341251676,
+      "last_e_value": 1.3458950728777115,
+      "last_alt_probability": 0.5,
+      "signal_sources": {
+        "tests": 1
+      },
+      "last_updated": "2026-04-12T10:35:54.284318+00:00"
+    },
+    "782739ec-6d4f-4273-b92c-01a6d34cfd3f": {
+      "eligible_samples": 3,
+      "successes": 3,
+      "confidence_sum": 2.999997,
+      "log_e_value": -1.3862913611183905,
+      "last_e_value": 0.7500007500007501,
+      "last_alt_probability": 0.75,
+      "signal_sources": {
+        "tests": 3
+      },
+      "last_updated": "2026-04-12T20:35:51.658242+00:00"
+    },
+    "c6c8681a-cf33-4536-9169-849b3cf524f1": {
+      "eligible_samples": 12,
+      "successes": 12,
+      "confidence_sum": 9.399991976158143,
+      "log_e_value": 1.6343472086567687,
+      "last_e_value": 0.9230778461547693,
+      "last_alt_probability": 0.9230769230769231,
+      "signal_sources": {
+        "tests": 12
+      },
+      "last_updated": "2026-04-12T22:32:30.606644+00:00"
+    },
+    "023582d0-7712-41ca-8791-a424a0915a01": {
+      "eligible_samples": 30,
+      "successes": 30,
+      "confidence_sum": 27.155667040920253,
+      "log_e_value": 1.0454476691655308,
+      "last_e_value": 0.9677429032267743,
+      "last_alt_probability": 0.967741935483871,
+      "signal_sources": {
+        "tests": 30
+      },
+      "last_updated": "2026-04-14T01:59:30.049375+00:00"
+    },
+    "5cfebb78-d3a6-4335-a670-052d4cb075b3": {
+      "eligible_samples": 21,
+      "successes": 21,
+      "confidence_sum": 19.716530992561342,
+      "log_e_value": -1.037580966474974,
+      "last_e_value": 2.727272773717906,
+      "last_alt_probability": 0.9545454545454546,
+      "signal_sources": {
+        "tests": 21
+      },
+      "last_updated": "2026-04-13T23:53:11.219753+00:00"
+    },
+    "1bdfc7e3-f4cc-421b-a725-0eebdc4cbc76": {
+      "eligible_samples": 22,
+      "successes": 22,
+      "confidence_sum": 20.952264918857576,
+      "log_e_value": -1.668031360918054,
+      "last_e_value": 0.9565226956531305,
+      "last_alt_probability": 0.9565217391304348,
+      "signal_sources": {
+        "tests": 22
+      },
+      "last_updated": "2026-04-14T02:39:56.830379+00:00"
+    },
+    "dbe17e67-217b-4781-9ae2-6c34b8f7e5df": {
+      "eligible_samples": 2,
+      "successes": 2,
+      "confidence_sum": 1.4,
+      "log_e_value": -0.38526240079064483,
+      "last_e_value": 0.9523809523809524,
+      "last_alt_probability": 0.6666666666666666,
+      "signal_sources": {
+        "tests": 2
+      },
+      "last_updated": "2026-04-26T20:55:37.004409+00:00"
+    },
+    "1283eebb-81db-4dfb-9772-07c497de1601": {
+      "eligible_samples": 3,
+      "successes": 3,
+      "confidence_sum": 2.106175493810535,
+      "log_e_value": -0.2545645862585485,
+      "last_e_value": 1.5,
+      "last_alt_probability": 0.75,
+      "signal_sources": {
+        "tests": 3
+      },
+      "last_updated": "2026-04-26T20:17:52.822316+00:00"
+    }
+  },
+  "prior_success": 1.0,
+  "prior_failure": 1.0
+}
