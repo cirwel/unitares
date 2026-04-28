@@ -71,6 +71,62 @@ async def test_http_path_substrate_anchored_uuid_is_refused() -> None:
     assert claim.expected_launchd_label in result.get("message", "")
 
 
+@pytest.mark.asyncio
+async def test_http_path_substrate_token_is_refused_even_with_live_session() -> None:
+    """A copied resident token must not bypass S19 via its embedded session id.
+
+    Regression for the live Hermes/Sentinel containment: PATH 2 session lookup
+    used to return before the PATH 2.8 substrate-token gate, so any token whose
+    ``sid`` still had a PG/Redis session row could resume a substrate resident
+    over HTTP.
+    """
+    claim = _make_claim()
+    session = MagicMock(agent_id=claim.agent_id)
+    signals_token = set_session_signals(SessionSignals())  # HTTP path
+    try:
+        with patch(
+            "src.substrate.verification.fetch_substrate_claim",
+            new=AsyncMock(return_value=claim),
+        ), patch(
+            "src.mcp_handlers.identity.resolution._get_redis",
+            return_value=None,
+        ), patch(
+            "src.mcp_handlers.identity.resolution.get_db",
+            return_value=MagicMock(
+                init=AsyncMock(),
+                get_session=AsyncMock(return_value=session),
+                update_session_activity=AsyncMock(),
+            ),
+        ), patch(
+            "src.mcp_handlers.identity.resolution._get_agent_id_from_metadata",
+            new=AsyncMock(return_value="mcp_20260407"),
+        ), patch(
+            "src.mcp_handlers.identity.resolution._get_agent_label",
+            new=AsyncMock(return_value="Sentinel"),
+        ), patch(
+            "src.mcp_handlers.identity.resolution._get_agent_status",
+            new=AsyncMock(return_value="active"),
+        ), patch(
+            "src.mcp_handlers.identity.resolution._soft_verify_trajectory",
+            new=AsyncMock(return_value={"checked": False, "verified": None, "warning": None}),
+        ), patch(
+            "src.mcp_handlers.identity.resolution._cache_session",
+            new=AsyncMock(return_value=None),
+        ):
+            result = await resolution_mod.resolve_session_identity(
+                "agent-f92dcea8-478",
+                persist=False,
+                resume=True,
+                token_agent_uuid=claim.agent_id,
+            )
+    finally:
+        reset_session_signals(signals_token)
+
+    assert result.get("resume_failed") is True
+    assert result.get("error") == "substrate_anchored_uuid_requires_uds"
+    assert "UNITARES_UDS_SOCKET" in result.get("message", "")
+
+
 # =============================================================================
 # Substrate-anchored UUID over UDS → gate does NOT fire (peer_pid is set)
 # =============================================================================

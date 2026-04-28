@@ -335,6 +335,44 @@ async def resolve_session_identity(
         session_key = re.sub(r'[^\w\-.:@]', '_', session_key)
         logger.warning(f"[SECURITY] Session key sanitized: {original[:30]}... -> {session_key[:30]}...")
 
+    # S19 defense-in-depth: a substrate resident's copied continuity token
+    # must not resume over non-UDS transport even when the token's embedded
+    # session id still has a live Redis/PG binding. Check before PATH 1/2.
+    if token_agent_uuid and not force_new:
+        try:
+            from src.mcp_handlers.context import get_session_signals
+            _signals = get_session_signals()
+            _peer_pid = _signals.peer_pid if _signals else None
+            if _peer_pid is None:
+                from src.substrate.verification import fetch_substrate_claim
+                _claim = await fetch_substrate_claim(token_agent_uuid)
+                if _claim is not None:
+                    logger.warning(
+                        "[SUBSTRATE_HTTP_REJECT] token/session resume for "
+                        "substrate-anchored UUID %s... over HTTP — refusing. "
+                        "Resident must connect via UNITARES_UDS_SOCKET.",
+                        token_agent_uuid[:8],
+                    )
+                    return {
+                        "resume_failed": True,
+                        "error": "substrate_anchored_uuid_requires_uds",
+                        "token_agent_uuid": token_agent_uuid,
+                        "message": (
+                            f"Agent {token_agent_uuid[:8]}... is substrate-"
+                            f"anchored ({_claim.expected_launchd_label}). "
+                            f"Token-based resume is not accepted over HTTP. "
+                            f"Connect via the UNITARES_UDS_SOCKET path so the "
+                            f"kernel can attest peer credentials. See "
+                            f"docs/proposals/s19-attestation-mechanism.md."
+                        ),
+                    }
+        except Exception as exc:
+            logger.warning(
+                "[SUBSTRATE_HTTP_REJECT] pre-session gate raised for %s...: %s; "
+                "falling through to existing resolution",
+                token_agent_uuid[:8], exc, exc_info=True,
+            )
+
     # If force_new is requested, skip lookup paths and go straight to creation
 
     if not force_new:
