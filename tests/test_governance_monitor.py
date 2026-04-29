@@ -1569,13 +1569,15 @@ class TestDriftFloor:
 
 class TestHistoryTrimming:
 
-    def test_history_trimmed_to_window(self):
+    def test_history_trimmed_to_window(self, monkeypatch):
         """Histories should be trimmed to HISTORY_WINDOW."""
         from config.governance_config import config
+        monkeypatch.setattr(config, "HISTORY_WINDOW", 5)
+
         mon = UNITARESMonitor("test-trim", load_state=False)
 
         # Run more updates than the history window
-        num_updates = config.HISTORY_WINDOW + 50
+        num_updates = config.HISTORY_WINDOW + 3
         for _ in range(num_updates):
             mon.update_dynamics({'complexity': 0.5})
 
@@ -1804,5 +1806,3 @@ class TestTacticalPredictionRegistry:
         monitor._open_predictions[pid]["created_at"] = time.monotonic() - 7200.0
         monitor.expire_old_predictions(ttl_seconds=3600.0)
         assert monitor._last_prediction_id is None
-
-

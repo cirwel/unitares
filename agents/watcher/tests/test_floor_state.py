@@ -6,6 +6,7 @@ A direct write_text would let a concurrent reader (the surface hook
 fires on every UserPromptSubmit) see a truncated JSON file mid-write."""
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -175,7 +176,11 @@ class TestRecomputeFloor:
             for r in rows:
                 fh.write(json.dumps(r) + "\n")
 
-        state = recompute_floor(findings_file=findings_file, state_dir=tmp_path)
+        state = recompute_floor(
+            findings_file=findings_file,
+            state_dir=tmp_path,
+            now=datetime(2026, 4, 22, tzinfo=timezone.utc),
+        )
         b1 = state.get("P1", "app")
         assert b1 is not None
         assert b1.ci_lower is not None

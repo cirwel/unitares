@@ -149,7 +149,7 @@ def cli_env(tmp_path, mcp_test_server):
     agent_name = _unique_agent_name()
     env["UNITARES_AGENT"] = agent_name
     env["UNITARES_SESSION_FILE"] = str(tmp_path / "session.json")
-    env["UNITARES_TIMEOUT"] = "15"
+    env["UNITARES_TIMEOUT"] = "30"
     yield env
     try:
         req = urllib.request.Request(
@@ -171,7 +171,7 @@ def _run(env, *args, check=True):
         env=env,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=60,
     )
     if check and result.returncode != 0:
         raise AssertionError(

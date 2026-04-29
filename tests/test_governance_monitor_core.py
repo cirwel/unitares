@@ -520,15 +520,16 @@ class TestLambda1Update:
         """Lambda1 should stay within configured bounds."""
         monitor = UNITARESMonitor(agent_id="test_lambda1_1", load_state=False)
 
-        # Run many updates to stress test the PI controller
-        for i in range(50):
-            monitor.process_update({
+        # Run enough updates to exercise the PI controller without making the
+        # core unit suite depend on the full process_update pipeline.
+        for i in range(12):
+            monitor.update_dynamics({
                 "response_text": f"Update {i}",
                 "complexity": 0.9 if i % 2 == 0 else 0.1,
                 "parameters": [0.5] * 128,
             })
             # Update lambda1 every few iterations
-            if i % 5 == 0:
+            if i % 3 == 0:
                 monitor.update_lambda1()
 
         from config.governance_config import config
@@ -539,9 +540,9 @@ class TestLambda1Update:
         """Lambda1 should respond to void frequency deviations."""
         monitor = UNITARESMonitor(agent_id="test_lambda1_2", load_state=False)
 
-        # Build up some history first
-        for i in range(20):
-            monitor.process_update({
+        # Build up some history first without invoking the full handler path.
+        for i in range(8):
+            monitor.update_dynamics({
                 "response_text": f"Update {i}",
                 "complexity": 0.5,
                 "parameters": [0.5] * 128,
@@ -817,16 +818,17 @@ class TestUpdateDynamics:
 class TestHistoryTrimming:
     """Tests for history trimming behavior."""
 
-    def test_history_stays_bounded(self):
+    def test_history_stays_bounded(self, monkeypatch):
         """History should not grow unbounded."""
-        monitor = UNITARESMonitor(agent_id="test_history_1", load_state=False)
-
         from config.governance_config import config
+        monkeypatch.setattr(config, "HISTORY_WINDOW", 5)
+
+        monitor = UNITARESMonitor(agent_id="test_history_1", load_state=False)
         max_window = config.HISTORY_WINDOW
 
         # Run many updates
-        for i in range(max_window + 50):
-            monitor.process_update({
+        for i in range(max_window + 3):
+            monitor.update_dynamics({
                 "response_text": f"Update {i}",
                 "complexity": 0.5,
                 "parameters": [0.5] * 128,
