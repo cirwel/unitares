@@ -348,6 +348,97 @@ class TestUpdateCurrentSignature:
             assert "warning" in result
             assert result["lineage_similarity"] < 0.6
 
+    @pytest.mark.asyncio
+    async def test_established_drift_does_not_demote_or_reseed(self):
+        """Lineage drift should not reset earned trust into a reseed/promotion loop."""
+        from src.trajectory_identity import update_current_signature, TrajectorySignature
+
+        current_sig = TrajectorySignature(
+            attractor={"center": [0.9, 0.9, 0.9, 0.9]},
+            beliefs={"values": [0.9, 0.9, 0.9]},
+            recovery={"tau_estimate": 100.0},
+            stability_score=0.95,
+            observation_count=300,
+            identity_confidence=0.9,
+        )
+
+        with patch('src.db.get_db') as mock_db, \
+             patch('src.trajectory_identity.store_genesis_signature',
+                   new_callable=AsyncMock) as mock_store, \
+             patch('src.broadcaster.broadcaster_instance') as mock_bc:
+            mock_identity = MagicMock()
+            mock_identity.metadata = {
+                "trajectory_genesis": {
+                    "attractor": {"center": [0.1, 0.1, 0.1, 0.1]},
+                    "beliefs": {"values": [0.1, 0.1, 0.1]},
+                    "recovery": {"tau_estimate": 5.0},
+                    "stability_score": 0.2,
+                    "observation_count": 10,
+                    "identity_confidence": 0.4,
+                },
+                "trust_tier": {"tier": 2, "name": "established"},
+            }
+
+            mock_db_instance = AsyncMock()
+            mock_db_instance.get_identity = AsyncMock(return_value=mock_identity)
+            mock_db_instance.update_identity_metadata = AsyncMock()
+            mock_db.return_value = mock_db_instance
+
+            result = await update_current_signature("test-uuid", current_sig)
+
+            assert result["is_anomaly"] is True
+            assert result["trust_tier"]["tier"] == 2
+            mock_store.assert_not_called()
+            for call in mock_bc.broadcast_event.call_args_list:
+                assert call.args[0] != "identity_assurance_change"
+
+    @pytest.mark.asyncio
+    async def test_substrate_earned_drift_keeps_verified_assurance(self):
+        """Resident substrate routing should keep verified trust separate from drift alerts."""
+        from src.trajectory_identity import update_current_signature, TrajectorySignature
+
+        current_sig = TrajectorySignature(
+            attractor={"center": [0.9, 0.9, 0.9, 0.9]},
+            beliefs={"values": [0.9, 0.9, 0.9]},
+            recovery={"tau_estimate": 100.0},
+            stability_score=0.95,
+            observation_count=300,
+            identity_confidence=0.9,
+        )
+
+        with patch('src.db.get_db') as mock_db, \
+             patch('src.trajectory_identity.store_genesis_signature',
+                   new_callable=AsyncMock) as mock_store, \
+             patch('src.broadcaster.broadcaster_instance') as mock_bc:
+            mock_identity = MagicMock()
+            mock_identity.metadata = {
+                "tags": ["embodied"],
+                "label": "Sentinel",
+                "trajectory_genesis": {
+                    "attractor": {"center": [0.1, 0.1, 0.1, 0.1]},
+                    "beliefs": {"values": [0.1, 0.1, 0.1]},
+                    "recovery": {"tau_estimate": 5.0},
+                    "stability_score": 0.2,
+                    "observation_count": 10,
+                    "identity_confidence": 0.4,
+                },
+                "trust_tier": {"tier": 3, "name": "verified"},
+            }
+
+            mock_db_instance = AsyncMock()
+            mock_db_instance.get_identity = AsyncMock(return_value=mock_identity)
+            mock_db_instance.update_identity_metadata = AsyncMock()
+            mock_db.return_value = mock_db_instance
+
+            result = await update_current_signature("test-uuid", current_sig)
+
+            assert result["is_anomaly"] is True
+            assert result["trust_tier"]["tier"] == 3
+            assert result["trust_tier"]["name"] == "verified"
+            assert result["trust_tier"]["source"] == "substrate_earned"
+            mock_store.assert_not_called()
+            for call in mock_bc.broadcast_event.call_args_list:
+                assert call.args[0] != "identity_assurance_change"
 
     @pytest.mark.asyncio
     async def test_reseed_preserves_trust_tier_no_spurious_broadcast(self):
@@ -749,6 +840,35 @@ class TestComputeTrustTier:
         assert result["tier"] <= 1
         assert result["lineage_similarity"] is not None
         assert result["lineage_similarity"] < 0.7
+
+    def test_established_identity_does_not_fall_back_to_emerging_on_lineage_drift(self):
+        """Earned trust should not churn through tier 1 and trigger reseed cycles."""
+        from src.trajectory_identity import compute_trust_tier
+        metadata = {
+            "trajectory_genesis": {
+                "attractor": {"center": [0.1, 0.1, 0.1, 0.1]},
+                "beliefs": {"values": [0.1, 0.1, 0.1]},
+                "recovery": {"tau_estimate": 5.0},
+                "stability_score": 0.2,
+                "observation_count": 10,
+                "identity_confidence": 0.4,
+            },
+            "trajectory_current": {
+                "attractor": {"center": [0.9, 0.9, 0.9, 0.9]},
+                "beliefs": {"values": [0.9, 0.9, 0.9]},
+                "recovery": {"tau_estimate": 100.0},
+                "stability_score": 0.95,
+                "observation_count": 300,
+                "identity_confidence": 0.9,
+            },
+            "trust_tier": {"tier": 2, "name": "established"},
+        }
+        result = compute_trust_tier(metadata)
+        assert result["tier"] == 2
+        assert result["name"] == "established"
+        assert result["lineage_similarity"] is not None
+        assert result["lineage_similarity"] < 0.7
+        assert "Retaining established" in result["reason"]
 
     def test_result_has_all_fields(self):
         """Every tier result should include required fields."""
