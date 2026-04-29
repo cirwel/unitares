@@ -66,6 +66,20 @@ UNITARES governance MCP server. Information-theoretic governance framework for A
 4. Copy `scripts/ops/com.unitares.governance-mcp.plist` to `~/Library/LaunchAgents/` and fill in paths/tokens (see template comments)
 5. Start: `python src/mcp_server.py --port 8767`
 
+## Before Starting Work on a Single-Writer Surface
+
+A single-writer surface is one where only one branch can land at a time without conflict — slot collisions, semantic merge conflicts, or strategy-divergent fixes that obsolete each other. Parallel sessions converging on these produces collisions; the 2026-04-29 migration-drift incident (#236 + #237) is the canonical example.
+
+Before touching one of these, run `gh pr list -R CIRWEL/unitares --search "in:title,body <surface-keyword>" --state open` and the same against `CIRWEL/unitares-governance-plugin` for cross-repo surfaces. If an in-flight PR exists, comment there or branch from its head — do not start a parallel attempt.
+
+Surfaces:
+
+- **Migration slots and migration-drift fixes** — `db/postgres/migrations/`. Now CI-gated by `scripts/dev/unitares_doctor.py`; the doctor fails on slot/name drift, but session-level coordination still avoids wasted parallel work.
+- **Identity / onboarding documentation and ontology** — `docs/ontology/identity.md`, `commands/governance-start.md`, the `AGENTS.md`/`CLAUDE.md` shared contract, `skills/governance-fundamentals/SKILL.md`, the `force_new=true` / `parent_agent_id` posture. These flow across two repos (unitares + gov-plugin); check both.
+- **Large test-layout consolidation** — `tests/` directory. If you're about to delete more than ~200 lines of tests, surface intent in a draft PR or issue first; a stale −3496 diff (`feat/agentskills-compat`) was lost to drift this way.
+
+This section is operator-protective, not session-protective. The deeper fix is on the dispatcher's side: do not launch multiple sessions on the same single-writer surface in the same window.
+
 ## Before Committing
 
 - **ALWAYS run `./scripts/dev/test-cache.sh` before committing** (tree-hash cache — skips if tests already passed against this exact working tree; use `--fresh` to force a re-run)
