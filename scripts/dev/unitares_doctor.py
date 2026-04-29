@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import socket
 import stat
@@ -46,6 +47,11 @@ ANCHOR_DIR = Path.home() / ".unitares"
 SECRETS_FILE = Path.home() / ".config" / "cirwel" / "secrets.env"
 HTTP_HEALTH_URL = "http://127.0.0.1:8767/health/live"
 PID_FILE_REL = "data/.mcp_server.pid"
+KNOWN_SCHEMA_MIGRATION_EXCEPTIONS = {
+    # 2026-04-26: applied out-of-band before the source-file repair landed.
+    # Keep this as accepted history, but still fail any new unexpected rows.
+    18: "progress flat telemetry tables",
+}
 
 
 class Status(str, Enum):
@@ -137,24 +143,96 @@ def check_pg_extensions(db_url: str) -> CheckResult:
                        f"missing extensions: {', '.join(missing)}")
 
 
-def check_schema_migrations(db_url: str) -> CheckResult:
+def _source_schema_migrations(repo_root: Path) -> dict[int, str]:
+    migrations_dir = repo_root / "db" / "postgres" / "migrations"
+    source: dict[int, str] = {}
+    if not migrations_dir.is_dir():
+        return source
+
+    insert_re = re.compile(
+        r"INSERT\s+INTO\s+core\.schema_migrations\s*\([^)]*version[^)]*\)"
+        r"\s*VALUES\s*(.*?)(?:ON\s+CONFLICT|;)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    value_re = re.compile(r"\(\s*(\d+)\s*,\s*'([^']+)'", re.DOTALL)
+
+    for path in sorted(migrations_dir.glob("[0-9][0-9][0-9]_*.sql")):
+        text = path.read_text()
+        for block in insert_re.findall(text):
+            for version_raw, name in value_re.findall(block):
+                version = int(version_raw)
+                previous = source.get(version)
+                if previous is not None and previous != name:
+                    raise ValueError(
+                        f"source files claim version {version} as both "
+                        f"{previous!r} and {name!r}"
+                    )
+                source[version] = name
+    return source
+
+
+def _parse_schema_migration_rows(stdout: str) -> dict[int, str]:
+    rows: dict[int, str] = {}
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        version_raw, sep, name = line.partition("|")
+        if not sep:
+            raise ValueError(f"unexpected schema_migrations row: {line!r}")
+        rows[int(version_raw)] = name
+    return rows
+
+
+def _schema_migration_drift(actual: dict[int, str], expected: dict[int, str]) -> list[str]:
+    issues: list[str] = []
+    for version in sorted(expected):
+        if version not in actual:
+            issues.append(f"missing {version}:{expected[version]}")
+        elif actual[version] != expected[version]:
+            issues.append(
+                f"mismatch {version}: db={actual[version]!r} source={expected[version]!r}"
+            )
+    for version in sorted(set(actual) - set(expected)):
+        issues.append(f"unexpected {version}:{actual[version]}")
+    return issues
+
+
+def check_schema_migrations(db_url: str, repo_root: Path | None = None) -> CheckResult:
     name, mode = "schema_migrations", "local"
     if shutil.which("psql") is None:
         return CheckResult(name, mode, Status.SKIP, "psql not on PATH")
     proc = subprocess.run(
         ["psql", db_url, "-Atqc",
-         "SELECT MAX(version) FROM core.schema_migrations"],
+         "SELECT version || '|' || name FROM core.schema_migrations ORDER BY version"],
         capture_output=True, text=True, timeout=5,
     )
     if proc.returncode != 0:
         return CheckResult(name, mode, Status.FAIL,
                            "core.schema_migrations not queryable",
                            detail=proc.stderr.strip())
-    version = proc.stdout.strip()
-    if not version:
+    if not proc.stdout.strip():
         return CheckResult(name, mode, Status.FAIL,
                            "core.schema_migrations is empty (run migrations)")
-    return CheckResult(name, mode, Status.PASS, f"schema at version {version}")
+    try:
+        actual = _parse_schema_migration_rows(proc.stdout)
+        if repo_root is not None:
+            expected = _source_schema_migrations(repo_root)
+            expected.update(KNOWN_SCHEMA_MIGRATION_EXCEPTIONS)
+            drift = _schema_migration_drift(actual, expected)
+            if drift:
+                return CheckResult(
+                    name, mode, Status.FAIL,
+                    f"schema registry drift detected ({len(drift)} issue(s))",
+                    detail="\n".join(drift),
+                )
+    except Exception as exc:
+        return CheckResult(name, mode, Status.FAIL,
+                           "could not validate schema_migrations against source",
+                           detail=str(exc))
+
+    version = max(actual)
+    return CheckResult(name, mode, Status.PASS,
+                       f"schema at version {version}; registry matches source manifest")
 
 
 def check_anchor_dir() -> CheckResult:
@@ -308,7 +386,7 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
         Check("postgres_running", "local", lambda: check_postgres_running(db_url)),
         Check("governance_database", "local", lambda: check_governance_database(db_url)),
         Check("pg_extensions", "local", lambda: check_pg_extensions(db_url)),
-        Check("schema_migrations", "local", lambda: check_schema_migrations(db_url)),
+        Check("schema_migrations", "local", lambda: check_schema_migrations(db_url, repo_root)),
         Check("anchor_directory", "local", check_anchor_dir),
         Check("secrets_file", "local", check_secrets_file),
         Check("http_listening", "operator", check_http_listening),

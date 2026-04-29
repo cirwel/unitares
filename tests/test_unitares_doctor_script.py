@@ -104,6 +104,52 @@ def test_redact_strips_password(doctor):
     assert "@localhost:5432/governance" in redacted
 
 
+def _migration_root(tmp_path: Path) -> Path:
+    root = tmp_path / "repo"
+    migrations = root / "db" / "postgres" / "migrations"
+    migrations.mkdir(parents=True)
+    (migrations / "001_initial_schema.sql").write_text(
+        "INSERT INTO core.schema_migrations (version, name) "
+        "VALUES (1, 'initial_schema') ON CONFLICT (version) DO NOTHING;\n"
+    )
+    return root
+
+
+def test_check_schema_migrations_allows_known_slot_18_exception(doctor, monkeypatch, tmp_path):
+    root = _migration_root(tmp_path)
+
+    class Proc:
+        returncode = 0
+        stdout = "1|initial_schema\n18|progress flat telemetry tables\n"
+        stderr = ""
+
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *args, **kwargs: Proc())
+
+    result = doctor.check_schema_migrations("postgresql://example", root)
+
+    assert result.status == doctor.Status.PASS
+    assert "registry matches source manifest" in result.message
+
+
+def test_check_schema_migrations_detects_unexpected_out_of_band_row(doctor, monkeypatch, tmp_path):
+    root = _migration_root(tmp_path)
+
+    class Proc:
+        returncode = 0
+        stdout = "1|initial_schema\n24|manual hotfix\n"
+        stderr = ""
+
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *args, **kwargs: Proc())
+
+    result = doctor.check_schema_migrations("postgresql://example", root)
+
+    assert result.status == doctor.Status.FAIL
+    assert "schema registry drift detected" in result.message
+    assert "unexpected 24:manual hotfix" in result.detail
+
+
 def test_main_json_output(doctor, monkeypatch, capsys, tmp_path):
     # Replace build_checks so we don't probe the live system.
     fake_checks = [_fake(doctor, "always_pass", "local", doctor.Status.PASS)]

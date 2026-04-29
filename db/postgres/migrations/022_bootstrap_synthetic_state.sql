@@ -1,4 +1,4 @@
--- 018_bootstrap_synthetic_state.sql
+-- 022_bootstrap_synthetic_state.sql  (renumbered from 018)
 --
 -- Phase 1 of onboard-bootstrap-checkin.md (v2.1).
 --
@@ -37,9 +37,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_state_one_bootstrap_per_identity
     ON core.agent_state (identity_id)
     WHERE synthetic = true;
 
--- 4. Rebuild the dashboard materialized view to project the new column.
---    The existing fallback at src/db/mixins/state.py:103 covers the brief
---    drop/create window (try/except falls through to a base-table query).
+-- 4. Rebuild the dashboard materialized view to project the new column and
+--    keep bootstrap rows out of the rowset. This intentionally matches the
+--    terminal measured-only definition so a failed/manual stop before 023
+--    cannot expose synthetic rows through the matview. The existing fallback
+--    at src/db/mixins/state.py:103 covers the brief drop/create window
+--    (try/except falls through to a base-table query).
 DROP MATERIALIZED VIEW IF EXISTS core.mv_latest_agent_states;
 
 CREATE MATERIALIZED VIEW core.mv_latest_agent_states AS
@@ -49,6 +52,7 @@ SELECT DISTINCT ON (s.identity_id)
        s.regime, s.coherence, s.state_json, s.synthetic
 FROM core.agent_state s
 JOIN core.identities i ON i.identity_id = s.identity_id
+WHERE s.synthetic = false
 ORDER BY s.identity_id, s.recorded_at DESC;
 
 -- Unique index required for REFRESH CONCURRENTLY.
@@ -60,6 +64,10 @@ CREATE INDEX idx_mv_latest_states_agent
     ON core.mv_latest_agent_states (agent_id);
 
 -- Register the migration.
+-- NOTE: renumbered 018→022. Slot 18 is occupied in prod by the phantom
+-- 'progress flat telemetry tables' entry (commit f7f71723, out-of-band apply).
+-- The synthetic column was hot-fixed inline on 2026-04-26; the ALTER TABLE
+-- and CREATE INDEX IF NOT EXISTS below are safe no-ops on prod.
 INSERT INTO core.schema_migrations (version, name, applied_at)
-VALUES (18, 'bootstrap_synthetic_state', NOW())
+VALUES (22, 'bootstrap_synthetic_state', NOW())
 ON CONFLICT (version) DO NOTHING;

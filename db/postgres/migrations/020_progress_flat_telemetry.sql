@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS resident_progress_pulse (
 CREATE INDEX IF NOT EXISTS idx_rpp_uuid_recorded
     ON resident_progress_pulse (resident_uuid, recorded_at DESC);
 
+-- NOTE: the phantom that ran out-of-band registered at slot 18. This file is
+-- the canonical master copy at slot 20. Applying it on prod inserts (20, ...)
+-- alongside the existing phantom (18, ...) — two registry rows, one schema.
 INSERT INTO core.schema_migrations (version, name)
-VALUES (18, 'progress flat telemetry tables')
+VALUES (20, 'progress flat telemetry tables')
 ON CONFLICT (version) DO NOTHING;
