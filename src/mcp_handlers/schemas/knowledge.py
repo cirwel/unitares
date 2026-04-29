@@ -299,4 +299,10 @@ class KnowledgeParams(AgentIdentityMixin):
     agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get, search)")
     limit: Optional[int] = Field(None, description="Max results")
     include_details: Optional[bool] = Field(None, description="Include full details inline (for action=search/get)")
+    dry_run: Union[bool, str, None] = Field(None, description="Dry run mode (for action=cleanup)")
 
+    @model_validator(mode='after')
+    def coerce_booleans(self):
+        if isinstance(self.dry_run, str):
+            self.dry_run = self.dry_run.lower() in ('true', '1', 'yes')
+        return self

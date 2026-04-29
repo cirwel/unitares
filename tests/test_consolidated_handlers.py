@@ -703,3 +703,12 @@ class TestKnowledgeParamMaps:
             })
             args_passed = mock_search.call_args[0][0]
             assert args_passed["search_query"] == "explicit"
+
+    @pytest.mark.asyncio
+    async def test_cleanup_preserves_dry_run_false(self):
+        from src.mcp_handlers.consolidated import handle_knowledge
+        mock_cleanup = AsyncMock(return_value=_ok_response({"cleanup_result": {}}))
+        with _patch_router_action(handle_knowledge, "cleanup", mock_cleanup):
+            await handle_knowledge({"action": "cleanup", "dry_run": "false"})
+            args_passed = mock_cleanup.call_args[0][0]
+            assert args_passed["dry_run"] == "false"

@@ -106,6 +106,19 @@ class TestPydanticSchemas:
         dumped = model.model_dump()
         assert dumped["tags"] is None
 
+    def test_knowledge_cleanup_accepts_string_dry_run_false(self):
+        """Unified knowledge(cleanup) must expose and coerce dry_run.
+
+        Regression: SDK/consolidated callers pass "false" over JSON; without
+        this field in the public schema, clients could only reach the default
+        dry-run cleanup path.
+        """
+        from src.mcp_handlers.schemas.knowledge import KnowledgeParams
+
+        model = KnowledgeParams(action="cleanup", dry_run="false")
+
+        assert model.dry_run is False
+
     def test_knowledge_schema_accepts_audit_and_supersede(self):
         """Schema must accept every action the dispatcher routes.
 

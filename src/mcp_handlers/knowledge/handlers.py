@@ -2310,6 +2310,10 @@ async def handle_cleanup_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[
     Philosophy: Never delete. Archive forever.
     """
     dry_run = arguments.get("dry_run", True)
+    if isinstance(dry_run, str):
+        dry_run = dry_run.lower() in ("true", "1", "yes")
+    elif dry_run is None:
+        dry_run = True
 
     try:
         from src.knowledge_graph_lifecycle import run_kg_lifecycle_cleanup

@@ -148,6 +148,7 @@ class TestRunGroundskeeper:
         call_kwargs = client.leave_note.call_args.kwargs
         assert "groundskeeper" in call_kwargs["tags"]
         assert "vigil" in call_kwargs["tags"]
+        assert "ephemeral" in call_kwargs["tags"]
 
     @pytest.mark.asyncio
     async def test_groundskeeper_suppresses_note_when_unchanged(self):

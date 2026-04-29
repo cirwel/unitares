@@ -495,7 +495,7 @@ class VigilAgent(GovernanceAgent):
                 try:
                     await client.leave_note(
                         summary=note_text,
-                        tags=["vigil", "groundskeeper", "audit"],
+                        tags=["vigil", "groundskeeper", "audit", "ephemeral"],
                     )
                 except Exception:
                     pass

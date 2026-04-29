@@ -633,6 +633,22 @@ class TestCleanupKnowledgeGraph:
         assert "DRY RUN" not in data["message"]
 
     @pytest.mark.asyncio
+    async def test_cleanup_execute_with_string_false(self, patch_common):
+        """String dry_run=false from SDK/consolidated callers must execute."""
+        mock_mcp_server, mock_graph = patch_common
+
+        mock_cleanup = AsyncMock(return_value={"archived": 5, "total_processed": 20})
+        import src.knowledge_graph_lifecycle as lifecycle_mod
+        with patch.object(lifecycle_mod, "run_kg_lifecycle_cleanup", mock_cleanup):
+            from src.mcp_handlers.knowledge.handlers import handle_cleanup_knowledge_graph
+            result = await handle_cleanup_knowledge_graph({"dry_run": "false"})
+
+        mock_cleanup.assert_awaited_once_with(dry_run=False)
+        data = parse_result(result)
+        assert data["success"] is True
+        assert "DRY RUN" not in data["message"]
+
+    @pytest.mark.asyncio
     async def test_cleanup_defaults_to_dry_run(self, patch_common):
         """Cleanup defaults to dry_run=True when not specified."""
         mock_mcp_server, mock_graph = patch_common
