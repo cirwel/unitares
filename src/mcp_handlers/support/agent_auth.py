@@ -219,12 +219,23 @@ def require_agent_id(arguments: Dict[str, Any]) -> Tuple[str, Optional[TextConte
         from config.governance_config import identity_strict_mode
         _partc_mode = identity_strict_mode()
         if _partc_mode == "strict":
-            return None, (
-                "No agent_id provided and no session-bound identity. "
-                "Call onboard(force_new=true, parent_agent_id='<prior UUID>' if continuing, "
-                "spawn_reason='new_session') per v2 ontology — declare lineage rather than "
-                "resume via token. Resume by proof requires identity(agent_uuid=X, "
-                "continuity_token=Y) with both signals."
+            from ..error_handling import error_response
+            return None, error_response(
+                (
+                    "No agent_id provided and no session-bound identity. "
+                    "Call onboard(force_new=true, parent_agent_id='<prior UUID>' if continuing, "
+                    "spawn_reason='new_session') per v2 ontology - declare lineage rather than "
+                    "resume via token. Resume by proof requires identity(agent_uuid=X, "
+                    "continuity_token=Y) with both signals."
+                ),
+                recovery={
+                    "reason": "missing_agent_identity",
+                    "related_tools": ["onboard", "identity"],
+                    "hint": (
+                        "Call onboard(force_new=true) for a new process-instance, "
+                        "or pass agent_uuid with a matching continuity_token to resume."
+                    ),
+                },
             )
         elif _partc_mode == "log":
             logger.warning(

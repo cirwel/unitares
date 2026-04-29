@@ -13,6 +13,7 @@ Key behavior:
 """
 
 import asyncio
+import json
 import pytest
 import sys
 from pathlib import Path
@@ -181,6 +182,88 @@ class TestEphemeralIdentityMarking:
         assert resolve_mock.await_count == 1
         assert ctx.bound_agent_id is None
         assert ctx.identity_result is identity_result
+        mock_db.update_session_activity.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_weak_http_session_miss_rejects_regular_tool(self, mock_db, monkeypatch):
+        """Fingerprint-only HTTP/MCP misses require explicit identity proof."""
+        monkeypatch.setenv("UNITARES_HTTP_IDENTITY_STRICT", "strict")
+        identity_result = {
+            "resume_failed": True,
+            "error": "session_resolve_miss",
+            "session_key": "198.51.100.1:ua123",
+        }
+        resolve_mock = AsyncMock(return_value=identity_result)
+        signals = MagicMock(
+            transport="mcp",
+            ip_ua_fingerprint="198.51.100.1:ua123",
+            mcp_session_id=None,
+            x_session_id=None,
+            x_client_id=None,
+            oauth_client_id=None,
+        )
+        patches = [
+            patch("src.mcp_handlers.context.get_session_signals", return_value=signals),
+            patch("src.mcp_handlers.identity.handlers.derive_session_key", new_callable=AsyncMock, return_value="198.51.100.1:ua123"),
+            patch("src.mcp_handlers.identity.handlers.resolve_session_identity", resolve_mock),
+            patch("src.mcp_handlers.context.set_session_context", return_value=MagicMock()),
+            patch("src.db.get_db", return_value=mock_db),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            ctx = DispatchContext()
+            result = await resolve_identity("process_agent_update", {}, ctx)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        assert isinstance(result, list)
+        data = json.loads(result[0].text)
+        assert data["success"] is False
+        assert data["recovery"]["reason"] == "weak_http_identity_missing"
+        assert resolve_mock.await_count == 1
+        mock_db.update_session_activity.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_weak_http_read_only_session_miss_does_not_auto_mint(self, mock_db, monkeypatch):
+        """Read-only browse tools stay unbound instead of creating ghosts."""
+        monkeypatch.setenv("UNITARES_HTTP_IDENTITY_STRICT", "strict")
+        identity_result = {
+            "resume_failed": True,
+            "error": "session_resolve_miss",
+            "session_key": "203.0.113.8:ua456",
+        }
+        resolve_mock = AsyncMock(return_value=identity_result)
+        signals = MagicMock(
+            transport="mcp",
+            ip_ua_fingerprint="203.0.113.8:ua456",
+            mcp_session_id=None,
+            x_session_id=None,
+            x_client_id=None,
+            oauth_client_id=None,
+        )
+        patches = [
+            patch("src.mcp_handlers.context.get_session_signals", return_value=signals),
+            patch("src.mcp_handlers.identity.handlers.derive_session_key", new_callable=AsyncMock, return_value="203.0.113.8:ua456"),
+            patch("src.mcp_handlers.identity.handlers.resolve_session_identity", resolve_mock),
+            patch("src.mcp_handlers.context.set_session_context", return_value=MagicMock()),
+            patch("src.db.get_db", return_value=mock_db),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            ctx = DispatchContext()
+            result = await resolve_identity("search_knowledge_graph", {"query": "identity bugs"}, ctx)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        assert not isinstance(result, list)
+        _, _, out_ctx = result
+        assert out_ctx.bound_agent_id is None
+        assert out_ctx.identity_result is identity_result
+        assert resolve_mock.await_count == 1
         mock_db.update_session_activity.assert_not_called()
 
     @pytest.mark.asyncio

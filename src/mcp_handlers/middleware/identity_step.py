@@ -67,6 +67,69 @@ def _transport_cache_key(signals) -> Optional[str]:
     return f"sticky:{signals.ip_ua_fingerprint}"
 
 
+def _has_explicit_identity_signal(arguments: Dict[str, Any]) -> bool:
+    """Caller presented an identity or session proof, not just transport hints."""
+    return bool(
+        arguments.get("continuity_token")
+        or arguments.get("client_session_id")
+        or arguments.get("agent_uuid")
+        or arguments.get("agent_id")
+        or arguments.get("force_new")
+    )
+
+
+def _is_weak_http_identity_miss(signals, arguments: Dict[str, Any]) -> bool:
+    """True when dispatch would mint from fingerprint-only HTTP/MCP signals."""
+    if not signals or _has_explicit_identity_signal(arguments):
+        return False
+    if getattr(signals, "transport", None) not in {"http", "rest", "sse", "mcp"}:
+        return False
+    if (
+        getattr(signals, "mcp_session_id", None)
+        or getattr(signals, "x_session_id", None)
+        or getattr(signals, "x_client_id", None)
+        or getattr(signals, "oauth_client_id", None)
+    ):
+        return False
+    return bool(getattr(signals, "ip_ua_fingerprint", None))
+
+
+def _allows_unbound_session_miss(name: str, arguments: Dict[str, Any]) -> bool:
+    """Read-only/browsing tools may run without minting an identity."""
+    read_only_tools = {
+        "health_check",
+        "get_server_info",
+        "list_tools",
+        "describe_tool",
+        "get_governance_metrics",
+        "skills",
+        "search_knowledge_graph",
+        "query_knowledge_graph",
+        "list_knowledge_graph",
+        "get_knowledge_graph",
+        "get_discovery_details",
+        "list_dialectic_sessions",
+        "get_dialectic_session",
+        "dialectic",
+    }
+    if name in read_only_tools:
+        return True
+
+    action = arguments.get("action")
+    if name == "knowledge" and action in {"search", "list", "stats", "details", "get"}:
+        return True
+    if name == "agent" and action in {"list", "get"}:
+        return True
+    if name == "observe" and action in {"agent", "compare", "anomalies", "aggregate", "telemetry"}:
+        return True
+    return False
+
+
+def _is_identity_establishing_tool(name: str) -> bool:
+    """Tools that intentionally create, resume, or bind identity."""
+    return name in {"identity", "onboard", "bind_session", "status"}
+
+
 def update_transport_binding(key: str, agent_uuid: str, session_key: str, source: str) -> None:
     """Set or update a sticky transport binding (in-memory + Redis)."""
     _transport_identity_cache[key] = TransportBinding(
@@ -430,20 +493,58 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
         # leave the lineage-declaration bleed open.
         if (identity_result.get("resume_failed")
                 and identity_result.get("error") == "session_resolve_miss"):
-            read_only_diagnostic_tools = {
-                "health_check",
-                "get_server_info",
-                "list_tools",
-                "describe_tool",
-                "get_governance_metrics",
-                "skills",
-            }
-            if name in read_only_diagnostic_tools:
+            weak_http_miss = _is_weak_http_identity_miss(signals, arguments)
+            if _allows_unbound_session_miss(name, arguments):
                 logger.info(
-                    "[DISPATCH] session_resolve_miss for read-only tool %s "
+                    "[DISPATCH] session_resolve_miss for unbound read-only tool %s "
                     "under %s... — leaving request unbound (no auto-mint)",
                     name, session_key[:20],
                 )
+            elif weak_http_miss and not _is_identity_establishing_tool(name):
+                from config.governance_config import http_identity_strict_mode
+                http_mode = http_identity_strict_mode()
+                msg = (
+                    f"[HTTP_IDENTITY_STRICT] fingerprint-only {signals.transport} "
+                    f"session_resolve_miss for tool {name}; explicit identity required"
+                )
+                if http_mode == "strict":
+                    from ..error_handling import error_response
+                    logger.warning(msg)
+                    return [error_response(
+                        (
+                            "No stable HTTP identity for this request. "
+                            "Pass continuity_token or client_session_id, or call "
+                            "onboard(force_new=true, spawn_reason='new_session') "
+                            "before using this tool."
+                        ),
+                        recovery={
+                            "reason": "weak_http_identity_missing",
+                            "transport": getattr(signals, "transport", None),
+                            "related_tools": ["onboard", "identity", "bind_session"],
+                            "workflow": [
+                                "1. Call onboard(force_new=true, spawn_reason='new_session') to establish this process-instance.",
+                                "2. Save the returned continuity_token or client_session_id.",
+                                "3. Include that proof on subsequent HTTP/MCP tool calls.",
+                            ],
+                        },
+                    )]
+                if http_mode == "log":
+                    logger.warning(msg + " (log mode; dispatch_auto_mint proceeds)")
+                # off/log fall through to legacy dispatch_auto_mint below.
+                if http_mode in {"off", "log"}:
+                    logger.info(
+                        "[DISPATCH] session_resolve_miss for %s... — minting "
+                        "ephemeral dispatch identity (S21-a, spawn_reason="
+                        "dispatch_auto_mint)",
+                        session_key[:20],
+                    )
+                    identity_result = await resolve_session_identity(
+                        session_key,
+                        trajectory_signature=trajectory_sig,
+                        force_new=True,
+                        token_agent_uuid=_token_agent_uuid,
+                        spawn_reason="dispatch_auto_mint",
+                    )
             else:
                 logger.info(
                     "[DISPATCH] session_resolve_miss for %s... — minting "

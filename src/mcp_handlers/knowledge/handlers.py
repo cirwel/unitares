@@ -827,6 +827,14 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
         rerank_scores_dict = {}
         rrf_scores_dict = {}
         search_degraded_warning = None
+        hybrid_skipped_reason = None
+        fts_fallback_skipped_reason = None
+        query_terms = str(query_text).split() if query_text else []
+        query_term_count = len(query_terms)
+        # Production dogfood found that broad 5+ term auto queries could spend
+        # the whole 15s tool budget in hybrid fan-out or OR recall fallback.
+        # Keep explicit caller intent available, but make auto mode cheap.
+        complex_query_term_limit = 4
 
         # Phase 3: cross-encoder reranker. When enabled, first-stage retrieval
         # fetches a wider pool (up to rerank_pool_size) so the reranker has
@@ -923,6 +931,18 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
                 hybrid_path = (
                     search_mode_param == "auto" and hybrid_on and use_semantic and has_fts
                 )
+            if (
+                hybrid_path
+                and search_mode_param == "auto"
+                and query_term_count > complex_query_term_limit
+            ):
+                hybrid_path = False
+                hybrid_skipped_reason = (
+                    f"auto hybrid skipped for {query_term_count}-term query "
+                    f"(limit {complex_query_term_limit}); use search_mode='hybrid' "
+                    "to force RRF fusion"
+                )
+
             if hybrid_path:
                 import asyncio as _asyncio
                 min_similarity = arguments.get("min_similarity", 0.3)
@@ -1035,14 +1055,21 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
                     not candidates
                     and operator_forced is None
                     and primary_op == "AND"
-                    and len(str(query_text).split()) > 1
+                    and query_term_count > 1
                 ):
-                    candidates = await graph.full_text_search(
-                        str(query_text), limit=candidate_limit, operator="OR",
-                    )
-                    if candidates:
-                        fts_operator_used = "OR"
-                        fts_fallback_used = True
+                    if query_term_count <= complex_query_term_limit:
+                        candidates = await graph.full_text_search(
+                            str(query_text), limit=candidate_limit, operator="OR",
+                        )
+                        if candidates:
+                            fts_operator_used = "OR"
+                            fts_fallback_used = True
+                    else:
+                        fts_fallback_skipped_reason = (
+                            f"automatic OR fallback skipped for {query_term_count}-term "
+                            f"query (limit {complex_query_term_limit}); pass operator='OR' "
+                            "to request broad recall"
+                        )
                 search_mode = "fts"
             elif not hybrid_path and not use_semantic:
                 # JSON backend fallback: bounded scan of most recent entries.
@@ -1116,7 +1143,6 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
             # operator_used reports what the FTS layer actually ran. For
             # non-FTS modes (semantic, hybrid, substring) this stays "N/A" —
             # boolean operators only apply to the FTS query string. (#165)
-            query_terms = str(query_text).split() if query_text else []
             if fts_operator_used and len(query_terms) > 1:
                 operator_used = fts_operator_used
             elif len(query_terms) > 1:
@@ -1172,14 +1198,21 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
                         not fts_candidates
                         and operator_forced is None
                         and primary_op == "AND"
-                        and len(str(query_text).split()) > 1
+                        and query_term_count > 1
                     ):
-                        fts_candidates = await graph.full_text_search(
-                            str(query_text), limit=limit * 2, operator="OR",
-                        )
-                        if fts_candidates:
-                            semantic_fallback_op = "OR"
-                            semantic_fallback_or_retry = True
+                        if query_term_count <= complex_query_term_limit:
+                            fts_candidates = await graph.full_text_search(
+                                str(query_text), limit=limit * 2, operator="OR",
+                            )
+                            if fts_candidates:
+                                semantic_fallback_op = "OR"
+                                semantic_fallback_or_retry = True
+                        else:
+                            fts_fallback_skipped_reason = (
+                                f"automatic OR fallback skipped for {query_term_count}-term "
+                                f"query (limit {complex_query_term_limit}); pass operator='OR' "
+                                "to request broad recall"
+                            )
                     # Apply same filters
                     for d in fts_candidates:
                         if agent_id and d.agent_id != agent_id:
@@ -1330,6 +1363,10 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
         if search_degraded_warning:
             response_data["search_degraded"] = True
             response_data["search_degraded_message"] = search_degraded_warning
+        if hybrid_skipped_reason:
+            response_data["hybrid_skipped_reason"] = hybrid_skipped_reason
+        if fts_fallback_skipped_reason:
+            response_data["fts_fallback_skipped_reason"] = fts_fallback_skipped_reason
 
         # UX FIX: Make fallback behavior explicit and transparent
         if fallback_used:
@@ -1387,7 +1424,10 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
         # UX FIX: Document operator behavior upfront for multi-term queries
         if query_text and len(str(query_text).split()) > 1:
             if search_mode == "fts" and not fallback_used:
-                response_data["operator_note"] = "Multi-term queries use OR operator by default (finds discoveries matching any term). If you need AND behavior, use tags or multiple filters."
+                response_data["operator_note"] = (
+                    f"Multi-term FTS ran with operator={fts_operator_used or operator_used}. "
+                    "Use operator='OR' for broader recall, or tags/filters for tighter scope."
+                )
             elif search_mode == "semantic":
                 response_data["operator_note"] = "Semantic search considers all terms together (conceptual similarity, not keyword matching)."
 

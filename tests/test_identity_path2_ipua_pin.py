@@ -13,13 +13,13 @@ This module locks in the observation-phase behavior of the helper
   - Fires `identity_hijack_suspected` with `path="path2_ipua_pin"` when the
     session-derivation source is `pinned_onboard_session` and the caller
     supplied no ownership proof.
-  - In `log` mode (default) the resume still proceeds after emission.
+  - In `log` mode the resume still proceeds after emission.
   - In `strict` mode the helper additionally returns `resume=False` so the
     caller mints a fresh identity.
   - In `off` mode, no check runs — no event, no resume flip.
-  - Suppressed when the caller passes continuity_token, client_session_id,
-    agent_id, agent_uuid, or force_new — any of those is treated as proof
-    or a deliberate fresh-ask.
+  - Suppressed when the caller passes continuity_token, agent_uuid, or
+    force_new. agent_id/client_session_id are deliberately not proof on this
+    path because middleware/transport plumbing can populate them.
 """
 from __future__ import annotations
 
@@ -220,8 +220,6 @@ class TestPath2IpuaPinCheck:
         "proof_arg",
         [
             "continuity_token",
-            "client_session_id",
-            "agent_id",
             "agent_uuid",
         ],
     )
@@ -248,6 +246,45 @@ class TestPath2IpuaPinCheck:
 
         assert new_resume is True
         assert captured_events == []
+
+    @pytest.mark.parametrize(
+        "injected_arg",
+        [
+            "agent_id",
+            "client_session_id",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_middleware_injectable_args_do_not_suppress_check(
+        self, monkeypatch, captured_events, broadcaster_stub, injected_arg
+    ):
+        """Middleware/transport-populated values must not neutralize strict mode.
+
+        PR #98 regression: inject_identity populated arguments["agent_id"]
+        before onboard's PATH 2 pin check, so the helper treated an arg-less
+        onboard() as proof-bearing and resumed the pinned UUID.
+        """
+        monkeypatch.setenv("UNITARES_IPUA_PIN_CHECK", "strict")
+
+        from src.mcp_handlers.identity import handlers as h_mod
+
+        with patch(
+            "src.mcp_handlers.context.get_session_resolution_source",
+            return_value="pinned_onboard_session",
+        ), patch.object(h_mod, "_broadcaster", return_value=broadcaster_stub):
+            new_resume = await h_mod._path2_ipua_pin_check(
+                arguments={injected_arg: "some-value"},
+                base_session_key="fp-ipua-abcdef:claude",
+                force_new=False,
+                resume=True,
+            )
+
+        assert new_resume is False
+        hijack_events = [
+            e for e in captured_events
+            if e.get("event_type") == "identity_hijack_suspected"
+        ]
+        assert hijack_events
 
     @pytest.mark.asyncio
     async def test_force_new_suppresses_check(

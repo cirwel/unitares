@@ -121,8 +121,10 @@ async def _path2_ipua_pin_check(
     Observation phase emits `identity_hijack_suspected` with
     `path="path2_ipua_pin"`; strict mode additionally forces a fresh mint by
     returning resume=False. Suppressed when the caller supplied any ownership
-    proof (token, explicit session id, agent_uuid) or when force_new is set
-    (a deliberate fresh ask).
+    proof (token or agent_uuid) or when force_new is set (a deliberate fresh
+    ask). Do not treat agent_id/client_session_id as proof on this path:
+    middleware and transport plumbing can populate them before the handler sees
+    arguments, which would otherwise neutralize the guard.
 
     Returns the (possibly-flipped) `resume` flag the caller should use.
     """
@@ -130,13 +132,11 @@ async def _path2_ipua_pin_check(
     if get_session_resolution_source() != "pinned_onboard_session":
         return resume
 
-    has_proof = bool(
+    has_ownership_proof = bool(
         arguments.get("continuity_token")
-        or arguments.get("client_session_id")
-        or arguments.get("agent_id")
         or arguments.get("agent_uuid")
     )
-    if has_proof or force_new:
+    if has_ownership_proof or force_new:
         return resume
 
     from config.governance_config import ipua_pin_check_mode
@@ -669,7 +669,7 @@ async def _try_resume_by_agent_uuid_direct(
                 "resumed": True,
                 "resumed_by_uuid": True,
                 "source": "monitor_cache",
-                "message": f"Resumed identity {_direct_uuid[:12]}... via in-process monitor cache",
+                "message": f"Identity confirmed for {_direct_uuid[:12]}... via in-process monitor cache",
             })
             return _identity_success_for_request(arguments, payload, agent_uuid=_direct_uuid)
     except Exception:
@@ -713,7 +713,7 @@ async def _try_resume_by_agent_uuid_direct(
     payload.update({
         "resumed": True,
         "resumed_by_uuid": True,
-        "message": f"Welcome back! Resumed identity '{label or agent_id}' via UUID",
+        "message": f"Identity confirmed for '{label or agent_id}' via UUID",
     })
     return _identity_success_for_request(arguments, payload, agent_uuid=_direct_uuid)
 
@@ -815,7 +815,7 @@ async def _try_resume_by_session_key(
     )
     payload.update({
         "resumed": True,
-        "message": f"Welcome back! Resumed identity '{label or agent_id}'",
+        "message": f"Identity confirmed for '{label or agent_id}'",
         "hint": "Use force_new=true to create a new identity instead"
     })
     return _identity_success_for_request(arguments, payload, agent_uuid=agent_uuid), existing_identity
@@ -852,16 +852,23 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
 
     # S13 v2-ontology gate: arg-less identity() from a fresh process-instance
     # with no proof signal mints fresh by default per identity.md §"Layered
-    # taxonomy of continuity". Mirrors the gate in handle_onboard_v2 (~L1197);
-    # without it, arg-less identity() falls through to IP:UA-pin resolution
-    # and silently re-binds to the prior session, which is the resolution
-    # path S13 retires for the unauthenticated case.
+    # taxonomy of continuity". A request that already reached the handler with
+    # a context-bound UUID is not fresh/unauthenticated: the dispatch layer has
+    # already resolved the current session. Treat that binding as a proof
+    # signal so a harmless identity() introspection call cannot silently fork
+    # an active pinned session.
+    try:
+        from ..context import get_context_agent_id
+        _context_bound_agent_id = get_context_agent_id()
+    except Exception:
+        _context_bound_agent_id = None
     _has_proof_signal = bool(
         arguments.get("continuity_token")
         or arguments.get("client_session_id")
         or arguments.get("agent_uuid")
         or arguments.get("agent_id")
         or arguments.get("name")
+        or _context_bound_agent_id
     )
     if not _has_proof_signal and not arguments.get("force_new"):
         arguments["force_new"] = True

@@ -909,20 +909,20 @@ def get_delta_norm_max(agent_class: str = "default") -> ScaleConstant:
 #   - Onboard-triggered orphan sweep catching siblings of fresh onboards
 # Modes:
 #   "off"    — unchanged pre-Part-C behavior (for emergency rollback)
-#   "log"    — emit [IDENTITY_STRICT] warnings, do nothing else (default)
+#   "log"    — emit [IDENTITY_STRICT] warnings, do nothing else
 #   "strict" — reject the request with guidance, no ghost created
 # Override: UNITARES_IDENTITY_STRICT env var.
-IDENTITY_STRICT_MODE: str = os.getenv("UNITARES_IDENTITY_STRICT", "log").strip().lower()
+IDENTITY_STRICT_MODE: str = os.getenv("UNITARES_IDENTITY_STRICT", "strict").strip().lower()
 
 _VALID_STRICT_MODES = frozenset({"off", "log", "strict"})
 if IDENTITY_STRICT_MODE not in _VALID_STRICT_MODES:
-    IDENTITY_STRICT_MODE = "log"
+    IDENTITY_STRICT_MODE = "strict"
 
 
 def identity_strict_mode() -> str:
     """Runtime accessor — respects env changes set after module load (tests)."""
     m = os.getenv("UNITARES_IDENTITY_STRICT", IDENTITY_STRICT_MODE).strip().lower()
-    return m if m in _VALID_STRICT_MODES else "log"
+    return m if m in _VALID_STRICT_MODES else "strict"
 
 
 # =============================================================================
@@ -943,18 +943,17 @@ def identity_strict_mode() -> str:
 #   "off"    — skip the check entirely
 #   "log"    — emit [PATH1_FINGERPRINT_MISMATCH] + identity_hijack_suspected
 #              broadcast when the fingerprints differ; resume still proceeds
-#              (default — observation phase)
 #   "strict" — same events, but the mismatched resume falls through to
 #              PATH 3 (new session) instead of returning the cached UUID
 #
 # Override: UNITARES_SESSION_FINGERPRINT_CHECK env var.
 SESSION_FINGERPRINT_CHECK_MODE: str = os.getenv(
-    "UNITARES_SESSION_FINGERPRINT_CHECK", "log"
+    "UNITARES_SESSION_FINGERPRINT_CHECK", "strict"
 ).strip().lower()
 
 _VALID_FINGERPRINT_MODES = frozenset({"off", "log", "strict"})
 if SESSION_FINGERPRINT_CHECK_MODE not in _VALID_FINGERPRINT_MODES:
-    SESSION_FINGERPRINT_CHECK_MODE = "log"
+    SESSION_FINGERPRINT_CHECK_MODE = "strict"
 
 
 def session_fingerprint_check_mode() -> str:
@@ -962,7 +961,7 @@ def session_fingerprint_check_mode() -> str:
     m = os.getenv(
         "UNITARES_SESSION_FINGERPRINT_CHECK", SESSION_FINGERPRINT_CHECK_MODE
     ).strip().lower()
-    return m if m in _VALID_FINGERPRINT_MODES else "log"
+    return m if m in _VALID_FINGERPRINT_MODES else "strict"
 
 
 # =============================================================================
@@ -1003,3 +1002,35 @@ def ipua_pin_check_mode() -> str:
         "UNITARES_IPUA_PIN_CHECK", IPUA_PIN_CHECK_MODE
     ).strip().lower()
     return m if m in _VALID_IPUA_PIN_MODES else "strict"
+
+
+# =============================================================================
+# WEAK HTTP IDENTITY MISS CHECK (dispatch middleware)
+# =============================================================================
+# HTTP/MCP transports that carry only an IP:UA fingerprint are not stable enough
+# to justify creating a new identity on an arbitrary tool call. Mobile/browser
+# clients can rotate proxy IPs between requests, producing silent identity
+# forks when the dispatch layer handles session_resolve_miss by force-minting.
+#
+# Modes:
+#   "off"    — preserve legacy dispatch_auto_mint behavior
+#   "log"    — warn but still mint
+#   "strict" — regular tools return a structured identity-required error;
+#              identity-establishing tools and read-only browsing still run
+#
+# Override: UNITARES_HTTP_IDENTITY_STRICT env var.
+HTTP_IDENTITY_STRICT_MODE: str = os.getenv(
+    "UNITARES_HTTP_IDENTITY_STRICT", "strict"
+).strip().lower()
+
+_VALID_HTTP_IDENTITY_MODES = frozenset({"off", "log", "strict"})
+if HTTP_IDENTITY_STRICT_MODE not in _VALID_HTTP_IDENTITY_MODES:
+    HTTP_IDENTITY_STRICT_MODE = "strict"
+
+
+def http_identity_strict_mode() -> str:
+    """Runtime accessor — respects env changes set after module load (tests)."""
+    m = os.getenv(
+        "UNITARES_HTTP_IDENTITY_STRICT", HTTP_IDENTITY_STRICT_MODE
+    ).strip().lower()
+    return m if m in _VALID_HTTP_IDENTITY_MODES else "strict"

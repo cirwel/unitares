@@ -29,6 +29,23 @@ def _resolve_agent_identity_view(agent_uuid: str, meta: Any) -> tuple[str, str |
     return public_agent_id, display_name
 
 
+def _metadata_total_updates(meta: Any) -> int:
+    """Return metadata total_updates without letting mock/opaque attrs look truthy."""
+    if meta is None:
+        return 0
+    raw_value = getattr(meta, "total_updates", 0)
+    if isinstance(raw_value, bool):
+        return int(raw_value)
+    if isinstance(raw_value, Real):
+        return int(raw_value)
+    if isinstance(raw_value, str):
+        try:
+            return int(raw_value)
+        except ValueError:
+            return 0
+    return 0
+
+
 def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, Any]:
     """Attach explicit primary/behavioral/ODE EISV views for read APIs."""
     primary_eisv = {
@@ -146,11 +163,19 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         verbosity = "minimal" if lite else "full"
 
     monitor = server.get_or_create_monitor(agent_id)
-    # Heal the DB ↔ file persistence split: if the on-disk state file was
-    # dropped (anyio executor stall, crash mid-write, etc.) but core.agent_state
-    # has history, the monitor would otherwise report "uninitialized" forever.
-    from src.agent_monitor_state import hydrate_from_db_if_fresh
-    await hydrate_from_db_if_fresh(monitor, agent_id)
+    meta = server.agent_metadata.get(agent_id)
+
+    # Heal the DB ↔ file persistence split only when there is evidence that
+    # history should exist. Fresh agents with zero updates should return the
+    # uninitialized guidance immediately instead of probing core.agent_state.
+    from src.agent_monitor_state import ensure_hydrated
+    needs_hydration = getattr(monitor, "_needs_hydration", False) is True
+    has_recorded_updates = _metadata_total_updates(meta) > 0
+    if needs_hydration or has_recorded_updates:
+        if not needs_hydration and getattr(monitor.state, "update_count", 0) == 0:
+            monitor._needs_hydration = True
+        await ensure_hydrated(monitor, agent_id)
+
     include_state = arguments.get("include_state", False)
     metrics = monitor.get_metrics(include_state=include_state)
 
@@ -172,7 +197,6 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
     except Exception:
         pass
 
-    meta = server.agent_metadata.get(agent_id)
     public_agent_id, display_name = _resolve_agent_identity_view(agent_id, meta)
     # display_name (user-chosen) takes precedence over agent_id (auto-generated)
     standardized_metrics["agent_id"] = display_name or public_agent_id

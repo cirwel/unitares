@@ -390,6 +390,7 @@ class TestGetGovernanceMetrics:
 
         with patch("src.mcp_handlers.core.mcp_server", mock_mcp_server), \
              patch("src.mcp_handlers.core.require_agent_id", return_value=("agent-1", None)), \
+             patch("src.agent_monitor_state.ensure_hydrated", new_callable=AsyncMock) as ensure_hydrated, \
              patch("src.governance_monitor.UNITARESMonitor") as MockMonitorClass:
 
             MockMonitorClass.get_eisv_labels.return_value = {
@@ -401,6 +402,42 @@ class TestGetGovernanceMetrics:
 
             data = json.loads(result[0].text)
             assert "uninitialized" in data["status"]
+            ensure_hydrated.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_get_metrics_hydrates_when_metadata_has_prior_updates(self, mock_mcp_server):
+        """Agents with recorded updates still heal a missing state snapshot."""
+        state = SimpleNamespace(
+            interpret_state=MagicMock(return_value={"health": "unknown", "mode": "unknown", "basin": "unknown"}),
+            unitaires_state=None,
+        )
+        monitor = MagicMock()
+        monitor.state = state
+        monitor._needs_hydration = False
+        monitor.get_metrics.return_value = {
+            "E": 0.5, "I": 0.5, "S": 0.5, "V": 0.0,
+            "coherence": None, "risk_score": None,
+            "initialized": False, "status": "uninitialized",
+        }
+        mock_mcp_server.agent_metadata = {
+            "agent-1": SimpleNamespace(purpose=None, total_updates=3)
+        }
+        mock_mcp_server.get_or_create_monitor.return_value = monitor
+
+        with patch("src.mcp_handlers.core.mcp_server", mock_mcp_server), \
+             patch("src.mcp_handlers.core.require_agent_id", return_value=("agent-1", None)), \
+             patch("src.agent_monitor_state.ensure_hydrated", new_callable=AsyncMock) as ensure_hydrated, \
+             patch("src.governance_monitor.UNITARESMonitor") as MockMonitorClass:
+
+            MockMonitorClass.get_eisv_labels.return_value = {
+                "E": "Energy", "I": "Information", "S": "Entropy", "V": "Void"
+            }
+
+            from src.mcp_handlers.core import handle_get_governance_metrics
+            await handle_get_governance_metrics({"lite": True})
+
+            assert monitor._needs_hydration is True
+            ensure_hydrated.assert_awaited_once_with(monitor, "agent-1")
 
     @pytest.mark.asyncio
     async def test_get_metrics_includes_calibration_feedback(self, mock_mcp_server, mock_monitor):

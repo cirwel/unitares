@@ -11,8 +11,8 @@ added at the PATH 1 cache-hit site:
   - `resolve_session_identity` PATH 1 reads `bind_ip_ua`; on mismatch with
     the current request's fingerprint, fires `identity_hijack_suspected`
     with `path="path1_session_id"`.
-  - In `log` mode (default) the resume still proceeds after emission.
-  - In `strict` mode, mismatched resumes fall through to a fresh session.
+  - In `log` mode the resume still proceeds after emission.
+  - In `strict` mode (default), mismatched resumes fall through to a fresh session.
   - In `off` mode, no check runs — no event, no fall-through.
   - Legacy cache entries without `bind_ip_ua` are treated as unknown
     (no event — preserves backward compat).

@@ -472,9 +472,6 @@ async def handle_detect_stuck_agents(arguments: Dict[str, Any]) -> Sequence:
         List of stuck agents with detection reasons and recovery status
     """
     try:
-        # Reload metadata to ensure we have latest state (async for PostgreSQL)
-        await mcp_server.load_metadata_async()
-
         max_age_minutes = float(arguments.get("max_age_minutes", 30.0))
         critical_timeout = float(arguments.get("critical_margin_timeout_minutes", 5.0))
         tight_timeout = float(arguments.get("tight_margin_timeout_minutes", 15.0))

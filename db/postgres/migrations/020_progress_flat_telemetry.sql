@@ -46,5 +46,5 @@ CREATE INDEX IF NOT EXISTS idx_rpp_uuid_recorded
     ON resident_progress_pulse (resident_uuid, recorded_at DESC);
 
 INSERT INTO core.schema_migrations (version, name)
-VALUES (18, 'progress flat telemetry tables')
+VALUES (20, 'progress flat telemetry tables')
 ON CONFLICT (version) DO NOTHING;

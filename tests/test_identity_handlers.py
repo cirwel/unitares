@@ -1045,6 +1045,8 @@ class TestHandleIdentityAdapter:
         assert data["uuid"] == test_uuid
         assert data.get("resumed") is True
         assert data["identity_resolution_outcome"] == "resumed"
+        assert data["message"] == "Identity confirmed for 'ExistingAgent'"
+        assert "Welcome back" not in data["message"]
         assert "agent_signature" not in data
 
     @pytest.mark.asyncio
@@ -1438,6 +1440,8 @@ class TestHandleIdentityAdapter:
         assert data.get("resumed") is True
         assert data.get("resumed_by_uuid") is True
         assert data.get("source") != "monitor_cache", "Slow path must not claim monitor_cache"
+        assert data["message"] == "Identity confirmed for 'SlowPathLabel' via UUID"
+        assert "Welcome back" not in data["message"]
         assert db_spy.await_count == 1, "Slow path must verify existence in DB"
         assert status_spy.await_count == 1, "Slow path must verify agent is active"
 
@@ -1744,6 +1748,36 @@ class TestHandleOnboardV2:
             and "identity()" in record.getMessage()
             for record in caplog.records
         ), "v2 gate should emit [FRESH_INSTANCE] log line for arg-less identity()"
+
+    @pytest.mark.asyncio
+    async def test_arg_less_identity_with_context_binding_does_not_fork(self, patch_onboard_deps, mock_db, mock_redis, caplog):
+        """A session-bound identity() call is introspection, not a fresh-process mint."""
+        import logging
+        from src.mcp_handlers.identity.handlers import handle_identity_adapter
+
+        existing_uuid = str(uuid.uuid4())
+        mock_redis.get.return_value = {
+            "agent_id": existing_uuid,
+            "display_agent_id": "Codex_20260429",
+        }
+        mock_db.get_identity.return_value = SimpleNamespace(
+            identity_id="existing-ident",
+            metadata={"agent_id": "Codex_20260429", "label": "Codex"},
+        )
+
+        with patch("src.mcp_handlers.context.get_context_agent_id", return_value=existing_uuid), \
+             caplog.at_level(logging.INFO, logger="src.mcp_handlers.identity.handlers"):
+            result = await handle_identity_adapter({})
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["uuid"] == existing_uuid
+        assert data["identity_status"] == "resumed"
+        assert not any(
+            "[FRESH_INSTANCE]" in record.getMessage()
+            and "identity()" in record.getMessage()
+            for record in caplog.records
+        ), "session-bound identity() must not fire the fresh-instance gate"
 
     @pytest.mark.asyncio
     async def test_proof_signal_bypasses_identity_v2_gate(self, patch_onboard_deps, mock_db, mock_redis, caplog):

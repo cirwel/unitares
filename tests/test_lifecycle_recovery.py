@@ -368,6 +368,7 @@ class TestDetectStuckAgents:
             data = _parse(result)
             assert data["summary"]["total_stuck"] >= 1
             assert len(data["stuck_agents"]) >= 1
+            server.load_metadata_async.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_no_stuck_agents(self, server):
@@ -1077,13 +1078,13 @@ class TestDetectStuckAgentsException:
     @pytest.fixture
     def server(self):
         server = make_mock_server()
-        server.load_metadata_async = AsyncMock(side_effect=RuntimeError("DB down"))
         return server
 
     @pytest.mark.asyncio
     async def test_top_level_exception_returns_error(self, server):
         """Lines 2243-2245: top-level exception returns error response."""
-        with patch_lifecycle_server(server):
+        with patch_lifecycle_server(server), \
+             patch("src.mcp_handlers.lifecycle.stuck._detect_stuck_agents", side_effect=RuntimeError("detector down")):
             from src.mcp_handlers.lifecycle.handlers import handle_detect_stuck_agents
             result = await handle_detect_stuck_agents({})
             text = result[0].text

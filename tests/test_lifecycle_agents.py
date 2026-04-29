@@ -197,6 +197,88 @@ class TestListAgentsLite:
             assert by_id["parent-agent"]["spawn_reason"] is None
             assert by_id["orphan-agent"]["parent_agent_id"] is None
 
+    @pytest.mark.asyncio
+    async def test_lite_redacts_uuid_ids_for_non_operator(self, server):
+        parent_uuid = "11111111-2222-3333-4444-555555555555"
+        child_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        server.agent_metadata = {
+            parent_uuid: make_agent_meta(label="Parent", total_updates=20),
+            child_uuid: make_agent_meta(
+                label="Child",
+                total_updates=3,
+                parent_agent_id=parent_uuid,
+                spawn_reason="new_session",
+            ),
+        }
+        with patch_lifecycle_server(server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({"lite": True})
+            data = _parse(result)
+
+            by_label = {a["label"]: a for a in data["agents"]}
+            assert by_label["Child"]["id"] == "Child"
+            assert by_label["Child"]["uuid_redacted"] is True
+            assert by_label["Child"]["parent_agent_id"] == "Parent"
+            assert by_label["Child"]["parent_agent_id_redacted"] is True
+            assert by_label["Parent"]["id"] == "Parent"
+
+    @pytest.mark.asyncio
+    async def test_lite_operator_can_see_uuid_ids(self, server, monkeypatch):
+        parent_uuid = "11111111-2222-3333-4444-555555555555"
+        child_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        server.agent_metadata = {
+            parent_uuid: make_agent_meta(label="Parent", total_updates=20),
+            child_uuid: make_agent_meta(
+                label="Child",
+                total_updates=3,
+                parent_agent_id=parent_uuid,
+            ),
+        }
+        monkeypatch.setenv("UNITARES_OPERATOR_TOKENS", "test-operator-token")
+
+        from src.mcp_handlers.context import (
+            SessionSignals,
+            reset_session_signals,
+            set_session_signals,
+        )
+
+        token = set_session_signals(
+            SessionSignals(unitares_operator_token="test-operator-token")
+        )
+        try:
+            with patch_lifecycle_server(server):
+                from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+                result = await handle_list_agents({"lite": True})
+                data = _parse(result)
+        finally:
+            reset_session_signals(token)
+
+        by_label = {a["label"]: a for a in data["agents"]}
+        assert by_label["Child"]["id"] == child_uuid
+        assert by_label["Child"]["parent_agent_id"] == parent_uuid
+        assert "uuid_redacted" not in by_label["Child"]
+        assert by_label["Parent"]["id"] == parent_uuid
+
+    @pytest.mark.asyncio
+    async def test_lite_non_operator_still_sees_own_uuid(self, server):
+        self_uuid = "11111111-2222-3333-4444-555555555555"
+        other_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        server.agent_metadata = {
+            self_uuid: make_agent_meta(label="Self", total_updates=20),
+            other_uuid: make_agent_meta(label="Other", total_updates=3),
+        }
+        with patch_lifecycle_server(server), \
+             patch("src.mcp_handlers.context.get_context_agent_id", return_value=self_uuid):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({"lite": True})
+            data = _parse(result)
+
+        by_label = {a["label"]: a for a in data["agents"]}
+        assert by_label["Self"]["id"] == self_uuid
+        assert by_label["Self"]["you"] is True
+        assert by_label["Other"]["id"] == "Other"
+        assert by_label["Other"]["uuid_redacted"] is True
+
 
 # ============================================================================
 # handle_list_agents - Non-Lite (Full) Mode
@@ -337,6 +419,44 @@ class TestListAgentsFull:
             assert by_id["child-agent"]["parent_agent_id"] == "parent-agent"
             assert by_id["child-agent"]["spawn_reason"] == "new_session"
             assert by_id["parent-agent"]["parent_agent_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_full_mode_redacts_uuid_ids_for_non_operator(self, server):
+        parent_uuid = "11111111-2222-3333-4444-555555555555"
+        child_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        server.agent_metadata = {
+            parent_uuid: make_agent_meta(
+                status="active", label="Parent", total_updates=20, notes="", trust_tier="known"
+            ),
+            child_uuid: make_agent_meta(
+                status="active",
+                label="Child",
+                total_updates=3,
+                notes="",
+                parent_agent_id=parent_uuid,
+                spawn_reason="new_session",
+                trust_tier="known",
+            ),
+        }
+        health_status = MagicMock()
+        health_status.value = "healthy"
+        server.health_checker = MagicMock()
+        server.health_checker.get_health_status.return_value = (health_status, {})
+        server.monitors = {}
+
+        with patch_lifecycle_server(server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({
+                "lite": False, "grouped": False, "include_metrics": False,
+            })
+            data = _parse(result)
+
+        by_label = {a["label"]: a for a in data["agents"]}
+        assert by_label["Child"]["agent_id"] == "Child"
+        assert by_label["Child"]["agent_id_redacted"] is True
+        assert by_label["Child"]["parent_agent_id"] == "Parent"
+        assert by_label["Child"]["parent_agent_id_redacted"] is True
+        assert by_label["Parent"]["agent_id"] == "Parent"
 
     @pytest.mark.asyncio
     async def test_full_mode_status_filter_all(self, server):
@@ -2389,4 +2509,3 @@ class TestMarkResponseCompleteEdgeCases:
 # ============================================================================
 # handle_direct_resume_if_safe - edge cases (lines 1317, 1355-1356, 1391-1392)
 # ============================================================================
-
