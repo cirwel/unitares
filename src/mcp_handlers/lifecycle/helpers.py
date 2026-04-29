@@ -7,13 +7,79 @@ Private utilities used across query, mutation, and operations modules.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Optional, Sequence
 
+from mcp.types import TextContent
 from src import agent_storage
 from src.logging_utils import get_logger
 from src.cache import get_metadata_cache
 from src.agent_metadata_model import AgentMetadata
+from ..utils import error_response
 
 logger = get_logger(__name__)
+
+
+def clear_loop_detector_state(meta) -> None:
+    """Clear loop-detector fields after successful recovery/resume."""
+    meta.loop_cooldown_until = None
+    meta.loop_detected_at = None
+    meta.recent_update_timestamps = []
+    meta.recent_decisions = []
+
+
+async def _resume_with_persistence(
+    meta,
+    *,
+    agent_uuid: str,
+    event_name: str,
+    reason: str,
+    error_response_id: str,
+    error_action: str,
+    cache_agent_id: Optional[str] = None,
+    details_key: str = "agent_id",
+    storage_module=agent_storage,
+) -> Optional[Sequence[TextContent]]:
+    """Apply the canonical persist-first resume pattern.
+
+    Returns an error response sequence on persistence failure, or None on
+    success. In-memory metadata is mutated only after PostgreSQL writes and
+    cache invalidation complete, preventing the P011 DB/memory drift class from
+    reappearing across resume handlers.
+    """
+    event_entry = {
+        "event": event_name,
+        "reason": reason,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await storage_module.update_agent(agent_uuid, status="active")
+        await storage_module.persist_runtime_state(
+            agent_uuid,
+            paused_at=None,
+            loop_detected_at=None,
+            loop_cooldown_until=None,
+            append_lifecycle_event=event_entry,
+        )
+        await _invalidate_agent_cache(cache_agent_id or agent_uuid)
+    except Exception as e:
+        logger.warning(
+            "PostgreSQL update failed for %s: %s",
+            error_action,
+            e,
+            exc_info=True,
+        )
+        return [error_response(
+            f"Failed to {error_action} agent '{error_response_id}': persistence error",
+            error_code="PERSIST_FAILED",
+            error_category="system_error",
+            details={details_key: error_response_id, "cause": str(e)},
+        )]
+
+    meta.status = "active"
+    meta.paused_at = None
+    clear_loop_detector_state(meta)
+    meta.add_lifecycle_event(event_name, reason)
+    return None
 
 
 async def _archive_one_agent(

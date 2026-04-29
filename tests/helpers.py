@@ -265,6 +265,7 @@ _LIFECYCLE_MODULES = [
     "src.mcp_handlers.lifecycle.operations",
     "src.mcp_handlers.lifecycle.stuck",
     "src.mcp_handlers.lifecycle.resume",
+    "src.mcp_handlers.lifecycle.self_recovery",
 ]
 
 
@@ -294,6 +295,7 @@ def patch_agent_storage():
     with patch("src.mcp_handlers.lifecycle.handlers.agent_storage", shared), \
          patch("src.mcp_handlers.lifecycle.mutation.agent_storage", shared), \
          patch("src.mcp_handlers.lifecycle.operations.agent_storage", shared), \
+         patch("src.mcp_handlers.lifecycle.self_recovery.agent_storage", shared), \
          patch("src.mcp_handlers.lifecycle.helpers.agent_storage", shared):
         yield shared
 

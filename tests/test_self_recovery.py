@@ -490,8 +490,11 @@ class TestQuickResume:
             assert data.get("success") is True or data.get("recovered") is True
 
             mock_update.assert_awaited_once_with("test-uuid", status="active")
-            mock_persist.assert_awaited_once()
-            call = mock_persist.await_args
+            assert mock_persist.await_count == 2
+            attempt_call = mock_persist.await_args_list[0]
+            assert attempt_call.args[0] == "test-uuid"
+            assert attempt_call.kwargs["recovery_attempt_at"]
+            call = mock_persist.await_args_list[-1]
             assert call.args[0] == "test-uuid"
             assert call.kwargs["paused_at"] is None
             assert call.kwargs["loop_detected_at"] is None

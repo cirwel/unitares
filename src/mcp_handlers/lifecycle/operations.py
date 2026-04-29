@@ -25,7 +25,12 @@ from ..support.coerce import safe_float, resolve_agent_uuid
 from src.logging_utils import get_logger
 from config.governance_config import GovernanceConfig
 
-from .helpers import _invalidate_agent_cache, _archive_one_agent, _is_test_agent
+from .helpers import (
+    _invalidate_agent_cache,
+    _archive_one_agent,
+    _is_test_agent,
+    _resume_with_persistence,
+)
 
 logger = get_logger(__name__)
 
@@ -72,41 +77,19 @@ async def handle_resume_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
     reason = arguments.get("reason", "Resumed from dashboard")
     previous_status = meta.status
     event_name = "resumed" if not is_stuck_unstick else "unstuck"
-    event_entry = {
-        "event": event_name,
-        "reason": reason,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-    # Persist FIRST so in-memory state can't diverge from DB on persist failure.
-    # Runtime state (paused_at, lifecycle_events) must be persisted alongside
-    # status or it gets clobbered on the next load_metadata_async(force=True).
-    try:
-        await agent_storage.update_agent(agent_uuid, status="active")
-        await agent_storage.persist_runtime_state(
-            agent_uuid,
-            paused_at=None,
-            loop_detected_at=None,
-            loop_cooldown_until=None,
-            append_lifecycle_event=event_entry,
-        )
-        logger.debug(f"PostgreSQL: {'Unstuck' if is_stuck_unstick else 'Resumed'} agent {agent_id}")
-        await _invalidate_agent_cache(agent_id)
-    except Exception as e:
-        logger.warning(f"PostgreSQL update_agent failed: {e}", exc_info=True)
-        return [error_response(
-            f"Failed to resume agent '{agent_id}': persistence error",
-            error_code="PERSIST_FAILED",
-            error_category="system_error",
-            details={"agent_id": agent_id, "cause": str(e)},
-        )]
-
-    # Persist succeeded — now mutate in-memory state.
-    meta.status = "active"
-    meta.paused_at = None
-    from .self_recovery import clear_loop_detector_state
-    clear_loop_detector_state(meta)
-    meta.add_lifecycle_event(event_name, reason)
+    persist_error = await _resume_with_persistence(
+        meta,
+        agent_uuid=agent_uuid,
+        event_name=event_name,
+        reason=reason,
+        error_response_id=agent_id,
+        error_action="resume",
+        cache_agent_id=agent_id,
+        storage_module=agent_storage,
+    )
+    if persist_error:
+        return persist_error
+    logger.debug(f"PostgreSQL: {'Unstuck' if is_stuck_unstick else 'Resumed'} agent {agent_id}")
 
     response_payload = {
         "success": True,
