@@ -22,6 +22,13 @@ from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+_TRUST_TIER_NAMES = {
+    0: "unknown",
+    1: "emerging",
+    2: "established",
+    3: "verified",
+}
+
 # Paper Definition 2.2: Viability Envelope (EISV bounds)
 VIABILITY_BOUNDS = {
     "E": (0.1, 0.9),
@@ -657,9 +664,36 @@ async def update_current_signature(
             metadata["trajectory_genesis"] = signature.to_dict()
             metadata["trajectory_genesis_at"] = datetime.now(timezone.utc).isoformat()
 
-        # Compute and store trust tier before saving
+        # Compute and store trust tier before saving. Use the substrate-aware
+        # resolver here; otherwise resident agents can be demoted by the raw
+        # session-like trajectory thresholds before the canonical routing gets
+        # a chance to recognize substrate-earned identity.
         old_tier = metadata.get("trust_tier", {}).get("tier", 0) if isinstance(metadata.get("trust_tier"), dict) else 0
-        trust_tier = compute_trust_tier(metadata)
+        try:
+            from src.identity.trust_tier_routing import resolve_trust_tier
+
+            prefetched_tags = metadata.get("tags")
+            prefetched_label = metadata.get("label")
+            if (prefetched_tags is None or prefetched_label is None) and hasattr(db, "get_agent"):
+                agent_record = await db.get_agent(agent_id)
+                if isinstance(agent_record, dict):
+                    if prefetched_tags is None:
+                        prefetched_tags = agent_record.get("tags")
+                    if prefetched_label is None:
+                        prefetched_label = agent_record.get("label")
+
+            if prefetched_tags is not None and prefetched_label is not None:
+                trust_tier = await resolve_trust_tier(
+                    agent_id,
+                    metadata,
+                    prefetched_tags=prefetched_tags,
+                    prefetched_label=prefetched_label,
+                )
+            else:
+                trust_tier = await resolve_trust_tier(agent_id, metadata)
+        except Exception as e:
+            logger.debug(f"Trust tier routing failed, using trajectory-only tier: {e}")
+            trust_tier = compute_trust_tier(metadata)
         metadata["trust_tier"] = trust_tier
         result["trust_tier"] = trust_tier
 
@@ -740,6 +774,24 @@ def compute_trust_tier(metadata: Dict[str, Any]) -> Dict[str, Any]:
     prev_tier = metadata.get("trust_tier", {})
     current_tier = prev_tier.get("tier", 0) if isinstance(prev_tier, dict) else 0
 
+    def stabilize_demoted_tier(result: Dict[str, Any]) -> Dict[str, Any]:
+        """Avoid tier-1 reseed churn for established resident identities."""
+        if (
+            current_tier >= 2
+            and result.get("tier", 0) < 2
+            and result.get("observation_count", 0) >= 50
+            and result.get("identity_confidence", 0.0) >= 0.45
+        ):
+            stabilized = dict(result)
+            stabilized["tier"] = 2
+            stabilized["name"] = _TRUST_TIER_NAMES[2]
+            stabilized["reason"] = (
+                "Retaining established identity assurance; lineage drift is "
+                "reported separately instead of resetting earned trust."
+            )
+            return stabilized
+        return result
+
     # Hysteresis margins: demotion thresholds are 5% below promotion thresholds
     conf_3 = 0.70 if current_tier < 3 else 0.65   # promote at 0.70, demote at 0.65
     lin_3 = 0.80 if current_tier < 3 else 0.75
@@ -776,7 +828,7 @@ def compute_trust_tier(metadata: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     # Tier 1: emerging (has genesis but doesn't meet tier 2)
-    return {
+    return stabilize_demoted_tier({
         "tier": 1,
         "name": "emerging",
         "observation_count": observation_count,
@@ -784,7 +836,7 @@ def compute_trust_tier(metadata: Dict[str, Any]) -> Dict[str, Any]:
         "lineage_similarity": lineage_similarity,
         "reason": f"Building identity ({observation_count} obs, "
                   f"confidence={identity_confidence:.2f})",
-    }
+    })
 
 
 async def get_trajectory_status(agent_id: str) -> Dict[str, Any]:
