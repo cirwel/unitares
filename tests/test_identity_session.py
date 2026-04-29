@@ -1392,6 +1392,54 @@ class TestCacheSession:
             _fallback_cache.clear()
 
     @pytest.mark.asyncio
+    async def test_redis_guard_exception_warns_and_fails_open_by_default(self):
+        """H10: guard read errors must be visible but preserve default behavior."""
+        from src.mcp_handlers.identity.persistence import _redis_slot_blocks_overwrite
+
+        raw_redis = AsyncMock()
+        raw_redis.get = AsyncMock(side_effect=RuntimeError("WRONGTYPE Operation"))
+
+        with patch.dict(os.environ, {"UNITARES_NX_FAIL_CLOSED": "0"}, clear=False), \
+             patch("src.mcp_handlers.identity.persistence.logger.warning") as log_warning:
+            blocked = await _redis_slot_blocks_overwrite(
+                raw_redis,
+                "session:sess-guard-error",
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            )
+
+        assert blocked is False
+        log_warning.assert_called_once()
+        assert "S21A_REDIS_GUARD_READ_FAILED" in log_warning.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_redis_guard_exception_can_fail_closed(self, mock_raw_redis):
+        """H10: UNITARES_NX_FAIL_CLOSED=1 refuses writes when guard read fails."""
+        from src.mcp_handlers.identity.handlers import _cache_session
+
+        mock_raw_redis.get = AsyncMock(side_effect=RuntimeError("connection reset"))
+        mock_raw_redis.setex = AsyncMock()
+
+        async def _get_raw():
+            return mock_raw_redis
+
+        mock_cache = AsyncMock()
+        mock_cache.bind = AsyncMock()
+
+        with patch.dict(os.environ, {"UNITARES_NX_FAIL_CLOSED": "1"}, clear=False), \
+             patch("src.mcp_handlers.identity.persistence._redis_cache", None), \
+             patch("src.cache.get_session_cache", return_value=mock_cache), \
+             patch("src.cache.redis_client.get_redis", new=_get_raw):
+            await _cache_session(
+                "sess-guard-fail-closed",
+                "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                display_agent_id="GuardFailure",
+                mint_guard=True,
+            )
+
+        mock_raw_redis.setex.assert_not_called()
+        mock_cache.bind.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_cache_without_display_id_uses_bind(self):
         """Without display_agent_id, uses SessionCache.bind()."""
         from src.mcp_handlers.identity.handlers import _cache_session
