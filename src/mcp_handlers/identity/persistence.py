@@ -114,13 +114,9 @@ async def _cache_session(
         # ghost-fork rate documented in the S21 incident report.
         existing_uuid = binding.get("bound_agent_id") or binding.get("agent_uuid")
         if mint_guard and existing_uuid and existing_uuid != agent_uuid:
-            session_slot = session_key
-            # S21-a intentionally logs bounded non-secret session/UUID prefixes.
-            # lgtm[py/clear-text-logging-sensitive-data]
             logger.warning(
-                "[S21A_OVERWRITE_BLOCKED] in-memory session slot=%s... "
-                "existing=%s... attempted=%s... — refusing PATH 3 overwrite",
-                session_slot[:20], str(existing_uuid)[:8], agent_uuid[:8],
+                "[S21A_OVERWRITE_BLOCKED] in-memory session collision — "
+                "refusing PATH 3 overwrite"
             )
             in_memory_blocked = True
         else:
@@ -141,10 +137,7 @@ async def _cache_session(
                 new_binding["label"] = label
             _session_identities[session_key] = new_binding
     except Exception as e:
-        session_slot = session_key
-        # S21-a intentionally logs a bounded non-secret session prefix.
-        # lgtm[py/clear-text-logging-sensitive-data]
-        logger.debug(f"In-memory session cache update failed for {session_slot[:20]}...: {e}")
+        logger.debug(f"In-memory session cache update failed: {e}")
 
     # If the in-memory guard fired, skip the Redis write too — the slot for
     # this session_key already maps to a different live UUID.
@@ -200,18 +193,14 @@ async def _cache_session(
             # Bail out — the in-memory _session_identities write above is
             # still honored for this session; later reads miss Redis and
             # fall through to PostgreSQL resolution.
-            session_slot = session_key
             logger.warning(
                 f"[IDENTITY] Redis cache write timed out after "
-                f"{_REDIS_WRITE_TIMEOUT}s for {session_slot[:20]}... "
+                f"{_REDIS_WRITE_TIMEOUT}s "
                 f"— in-memory only (anyio-asyncio guard)"
             )
         except Exception as e:
             # WARNING level (v2.5.7): Cache failures can cause identity loss
-            session_slot = session_key
-            # S21-a intentionally logs a bounded non-secret session prefix.
-            # lgtm[py/clear-text-logging-sensitive-data]
-            logger.warning(f"Redis cache write failed for session {session_slot[:20]}...: {e}")
+            logger.warning(f"Redis cache write failed for session binding: {e}")
 
 
 async def _cache_session_redis_write(
@@ -341,23 +330,16 @@ async def _redis_slot_blocks_overwrite(redis, redis_slot: str, agent_uuid: str) 
                 return False
         existing_id = existing_data.get("agent_id") if isinstance(existing_data, dict) else None
         if existing_id and existing_id != agent_uuid:
-            existing_prefix = existing_id[:8] if isinstance(existing_id, str) else "?"
-            # S21-a intentionally logs bounded non-secret Redis-slot/UUID prefixes.
-            # lgtm[py/clear-text-logging-sensitive-data]
             logger.warning(
-                "[S21A_OVERWRITE_BLOCKED] redis slot=%s existing=%s... attempted=%s... "
-                "— refusing PATH 3 overwrite",
-                redis_slot, existing_prefix, agent_uuid[:8],
+                "[S21A_OVERWRITE_BLOCKED] redis session collision — "
+                "refusing PATH 3 overwrite"
             )
             return True
     except Exception as e:
         fail_closed = _nx_fail_closed_enabled()
-        # S21-a intentionally logs bounded non-secret Redis-slot/UUID prefixes.
-        # lgtm[py/clear-text-logging-sensitive-data]
         logger.warning(
-            "[S21A_REDIS_GUARD_READ_FAILED] redis slot=%s attempted=%s... "
+            "[S21A_REDIS_GUARD_READ_FAILED] redis guard read failed; "
             "fail_closed=%s error=%s",
-            redis_slot, agent_uuid[:8],
             fail_closed,
             e,
         )
@@ -375,13 +357,9 @@ async def _session_cache_blocks_overwrite(session_cache, session_slot: str, agen
         if isinstance(existing, dict):
             existing_id = existing.get("agent_id")
             if existing_id and existing_id != agent_uuid:
-                existing_prefix = existing_id[:8] if isinstance(existing_id, str) else "?"
-                # S21-a intentionally logs bounded non-secret session/UUID prefixes.
-                # lgtm[py/clear-text-logging-sensitive-data]
                 logger.warning(
-                    "[S21A_OVERWRITE_BLOCKED] session_cache slot=%s... "
-                    "existing=%s... attempted=%s... — refusing PATH 3 overwrite",
-                    session_slot[:20], existing_prefix, agent_uuid[:8],
+                    "[S21A_OVERWRITE_BLOCKED] session_cache collision — "
+                    "refusing PATH 3 overwrite"
                 )
                 return True
     except Exception as e:
@@ -806,8 +784,7 @@ async def set_agent_label(agent_uuid: str, label: str, session_key: Optional[str
                             if public_agent_id:
                                 binding["public_agent_id"] = public_agent_id
                                 binding["display_agent_id"] = binding.get("display_agent_id") or public_agent_id
-                            session_slot = session_key
-                            logger.debug(f"Updated session binding label for {session_slot[:20]}...")
+                            logger.debug("Updated session binding label")
                 except Exception as e:
                     logger.debug(f"Could not update session binding cache: {e}")
             except Exception as e:
