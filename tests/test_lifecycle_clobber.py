@@ -128,6 +128,67 @@ class TestSelfRecoveryReviewPersistsRecoveryAttempt:
                 "recovery_attempt_at must be persisted BEFORE the safety-check gate"
 
 
+class TestQuickResumePersistsRecoveryAttempt:
+    @pytest.mark.asyncio
+    async def test_recovery_attempt_at_persisted_before_safety_checks(self):
+        meta = make_agent_meta(status="paused", paused_at="2026-04-16T10:00:00+00:00")
+        server = _server_with_agent(meta)
+
+        with patch_agent_storage() as storage, \
+             patch("src.mcp_handlers.lifecycle.self_recovery.verify_agent_ownership",
+                   MagicMock(return_value=True)), \
+             patch_lifecycle_server(server,
+                                    require_registered=(AGENT_ID, None),
+                                    **{"src.mcp_handlers.lifecycle.self_recovery.resolve_agent_uuid":
+                                       MagicMock(return_value=AGENT_ID)}):
+            storage.update_agent = AsyncMock(return_value=True)
+            storage.persist_runtime_state = AsyncMock(return_value=True)
+
+            from src.mcp_handlers.lifecycle.self_recovery import handle_quick_resume
+            await handle_quick_resume({"agent_id": AGENT_ID})
+
+            assert storage.persist_runtime_state.await_count >= 1, \
+                "quick_resume must persist recovery_attempt_at before safety checks"
+            first_call = storage.persist_runtime_state.await_args_list[0].kwargs
+            assert first_call.get("recovery_attempt_at"), \
+                "recovery_attempt_at must be persisted BEFORE the safety-check gate"
+            assert meta.recovery_attempt_at == first_call["recovery_attempt_at"]
+
+
+class TestOperatorResumePersistsRuntimeState:
+    @pytest.mark.asyncio
+    async def test_operator_resume_persists_paused_at_and_lifecycle_event(self):
+        caller_id = "operator-under-test"
+        target_meta = make_agent_meta(status="paused", paused_at="2026-04-16T10:00:00+00:00")
+        caller_meta = make_agent_meta(label="Operator")
+        server = make_mock_server()
+        server.agent_metadata = {caller_id: caller_meta, AGENT_ID: target_meta}
+        server.monitors = {AGENT_ID: make_monitor()}
+        server.get_or_create_monitor = MagicMock(return_value=make_monitor())
+
+        with patch_agent_storage() as storage, \
+             patch_lifecycle_server(server,
+                                    require_registered=(caller_id, None),
+                                    **{"src.mcp_handlers.lifecycle.self_recovery.resolve_agent_uuid":
+                                       MagicMock(return_value=caller_id)}):
+            storage.update_agent = AsyncMock(return_value=True)
+            storage.persist_runtime_state = AsyncMock(return_value=True)
+
+            from src.mcp_handlers.lifecycle.self_recovery import handle_operator_resume_agent
+            await handle_operator_resume_agent({
+                "_agent_uuid": caller_id,
+                "target_agent_id": AGENT_ID,
+                "reason": "test operator recovery",
+            })
+
+            storage.update_agent.assert_awaited_once_with(AGENT_ID, status="active")
+            storage.persist_runtime_state.assert_awaited_once()
+            kwargs = storage.persist_runtime_state.await_args.kwargs
+            assert kwargs.get("paused_at") is None
+            event = kwargs.get("append_lifecycle_event")
+            assert event and event.get("event") == "operator_resumed"
+
+
 class TestPersistRuntimeStateContract:
     """Contract tests for the new agent_storage.persist_runtime_state helper."""
 

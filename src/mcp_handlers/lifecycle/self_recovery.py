@@ -41,7 +41,11 @@ from ..utils import (
 )
 from ..decorators import mcp_tool
 from ..support.coerce import safe_float, resolve_agent_uuid
-from .helpers import _invalidate_agent_cache
+from .helpers import (
+    _resume_with_persistence,
+    clear_loop_detector_state,  # re-exported for legacy imports from this module
+)
+from src import agent_storage
 from src.logging_utils import get_logger
 from config.governance_config import GovernanceConfig
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -59,17 +63,6 @@ FORBIDDEN_CONDITIONS = [
 
 MAX_RISK_FOR_SELF_RECOVERY = 0.65  # Matches lifecycle.py review thresholds
 MIN_COHERENCE_FOR_SELF_RECOVERY = 0.35  # Matches lifecycle.py review thresholds
-
-def clear_loop_detector_state(meta) -> None:
-    """Clear loop detector state after successful recovery.
-
-    This prevents the stale pause history from immediately re-triggering
-    the loop detector after self_recovery succeeds.
-    """
-    meta.loop_cooldown_until = None
-    meta.loop_detected_at = None
-    meta.recent_update_timestamps = []
-    meta.recent_decisions = []
 
 def validate_recovery_conditions(conditions: List[str]) -> tuple[bool, Optional[str]]:
     """
@@ -368,7 +361,24 @@ async def handle_quick_resume(arguments: Dict[str, Any]) -> Sequence[TextContent
     # Set before safety checks so even failed attempts suppress Pattern 2/5/6.
     meta_early = mcp_server.agent_metadata.get(agent_uuid)
     if meta_early:
-        meta_early.recovery_attempt_at = datetime.now(timezone.utc).isoformat()
+        recovery_attempt_at = datetime.now(timezone.utc).isoformat()
+        try:
+            await agent_storage.persist_runtime_state(
+                agent_uuid,
+                recovery_attempt_at=recovery_attempt_at,
+            )
+        except Exception as e:
+            logger.warning(
+                f"PostgreSQL persist_runtime_state failed for quick_resume attempt: {e}",
+                exc_info=True,
+            )
+            return [error_response(
+                f"Failed to quick_resume agent '{agent_id}': persistence error",
+                error_code="PERSIST_FAILED",
+                error_category="system_error",
+                details={"agent_id": agent_id, "cause": str(e)},
+            )]
+        meta_early.recovery_attempt_at = recovery_attempt_at
 
     # Get current metrics (use safe_float for uninitialized agents)
     try:
@@ -465,40 +475,17 @@ async def handle_quick_resume(arguments: Dict[str, Any]) -> Sequence[TextContent
     
     previous_status = meta.status
     event_details = f"Quick resume: {reason}"
-    event_entry = {
-        "event": "quick_resumed",
-        "reason": event_details,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-    # Persist FIRST so in-memory state can't diverge from DB on persist failure.
-    # Runtime state (paused_at, lifecycle_events) must be persisted alongside
-    # status or it gets clobbered on the next load_metadata_async(force=True).
-    try:
-        from src import agent_storage
-        await agent_storage.update_agent(agent_uuid, status="active")
-        await agent_storage.persist_runtime_state(
-            agent_uuid,
-            paused_at=None,
-            loop_detected_at=None,
-            loop_cooldown_until=None,
-            append_lifecycle_event=event_entry,
-        )
-        await _invalidate_agent_cache(agent_uuid)
-    except Exception as e:
-        logger.warning(f"PostgreSQL update failed for quick_resume: {e}", exc_info=True)
-        return [error_response(
-            f"Failed to quick_resume agent '{agent_id}': persistence error",
-            error_code="PERSIST_FAILED",
-            error_category="system_error",
-            details={"agent_id": agent_id, "cause": str(e)},
-        )]
-
-    # Persist succeeded — now mutate in-memory state.
-    meta.status = "active"
-    meta.paused_at = None
-    clear_loop_detector_state(meta)
-    meta.add_lifecycle_event("quick_resumed", event_details)
+    persist_error = await _resume_with_persistence(
+        meta,
+        agent_uuid=agent_uuid,
+        event_name="quick_resumed",
+        reason=event_details,
+        error_response_id=agent_id,
+        error_action="quick_resume",
+        storage_module=agent_storage,
+    )
+    if persist_error:
+        return persist_error
 
     return success_response({
         "success": True,
@@ -680,40 +667,18 @@ async def handle_operator_resume_agent(arguments: Dict[str, Any]) -> Sequence[Te
     
     previous_status = target_meta.status
     event_details = f"Resumed by operator {caller_uuid}: {reason}"
-    event_entry = {
-        "event": "operator_resumed",
-        "reason": event_details,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-    # Persist FIRST so in-memory state can't diverge from DB on persist failure.
-    # Runtime state (paused_at, lifecycle_events) must be persisted alongside
-    # status or it gets clobbered on the next load_metadata_async(force=True).
-    try:
-        from src import agent_storage
-        await agent_storage.update_agent(target_agent_id, status="active")
-        await agent_storage.persist_runtime_state(
-            target_agent_id,
-            paused_at=None,
-            loop_detected_at=None,
-            loop_cooldown_until=None,
-            append_lifecycle_event=event_entry,
-        )
-        await _invalidate_agent_cache(target_agent_id)
-    except Exception as e:
-        logger.warning(f"PostgreSQL update failed for operator_resume: {e}", exc_info=True)
-        return [error_response(
-            f"Failed to operator_resume agent '{target_agent_id}': persistence error",
-            error_code="PERSIST_FAILED",
-            error_category="system_error",
-            details={"target_agent_id": target_agent_id, "cause": str(e)},
-        )]
-
-    # Persist succeeded — now mutate in-memory state.
-    target_meta.status = "active"
-    target_meta.paused_at = None
-    clear_loop_detector_state(target_meta)
-    target_meta.add_lifecycle_event("operator_resumed", event_details)
+    persist_error = await _resume_with_persistence(
+        target_meta,
+        agent_uuid=target_agent_id,
+        event_name="operator_resumed",
+        reason=event_details,
+        error_response_id=target_agent_id,
+        error_action="operator_resume",
+        details_key="target_agent_id",
+        storage_module=agent_storage,
+    )
+    if persist_error:
+        return persist_error
     
     return success_response({
         "success": True,

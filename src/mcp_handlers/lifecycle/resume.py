@@ -8,13 +8,11 @@ from typing import Dict, Any, Sequence
 
 from mcp.types import TextContent
 
-from datetime import datetime, timezone
-
 from ..decorators import mcp_tool
 from ..utils import success_response, error_response, require_registered_agent
 from ..error_helpers import agent_not_found_error, system_error as system_error_helper
 from ..support.coerce import resolve_agent_uuid
-from .helpers import _invalidate_agent_cache
+from .helpers import _resume_with_persistence, _invalidate_agent_cache  # noqa: F401
 from src import agent_storage
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -106,41 +104,17 @@ async def handle_direct_resume_if_safe(arguments: Dict[str, Any]) -> Sequence[Te
     conditions = arguments.get("conditions", [])
     reason = arguments.get("reason", "Direct resume - state is safe")
     event_details = f"Direct resume: {reason}. Conditions: {conditions}"
-    event_entry = {
-        "event": "resumed",
-        "reason": event_details,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-    # Persist FIRST so in-memory state can't diverge from DB on persist failure.
-    # Runtime state (paused_at, lifecycle_events) must be persisted alongside
-    # status or it gets clobbered on the next load_metadata_async(force=True).
-    try:
-        await agent_storage.update_agent(agent_uuid, status="active")
-        await agent_storage.persist_runtime_state(
-            agent_uuid,
-            paused_at=None,
-            loop_detected_at=None,
-            loop_cooldown_until=None,
-            append_lifecycle_event=event_entry,
-        )
-    except Exception as e:
-        logger.warning(f"PostgreSQL update failed for direct_resume: {e}", exc_info=True)
-        return [error_response(
-            f"Failed to resume agent '{agent_id}': persistence error",
-            error_code="PERSIST_FAILED",
-            error_category="system_error",
-            details={"agent_id": agent_id, "cause": str(e)},
-        )]
-
-    await _invalidate_agent_cache(agent_uuid)
-
-    # Persist succeeded — now mutate in-memory state.
-    meta.status = "active"
-    meta.paused_at = None
-    from .self_recovery import clear_loop_detector_state
-    clear_loop_detector_state(meta)
-    meta.add_lifecycle_event("resumed", event_details)
+    persist_error = await _resume_with_persistence(
+        meta,
+        agent_uuid=agent_uuid,
+        event_name="resumed",
+        reason=event_details,
+        error_response_id=agent_id,
+        error_action="resume",
+        storage_module=agent_storage,
+    )
+    if persist_error:
+        return persist_error
 
     response_data = {
         "success": True,
