@@ -633,7 +633,7 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
         ctx.api_key = secrets.token_urlsafe(32)
 
         try:
-            agent_record, _ = await agent_storage.get_or_create_agent(
+            agent_record, created_agent = await agent_storage.get_or_create_agent(
                 agent_id=ctx.agent_id,
                 api_key=ctx.api_key,
                 status='active',
@@ -642,7 +642,11 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
             logger.debug(f"PostgreSQL: Created agent {ctx.agent_id}")
             await ctx.loop.run_in_executor(
                 None,
-                lambda: mcp_server.get_or_create_metadata(ctx.agent_id, purpose=purpose_str)
+                lambda: mcp_server.get_or_create_metadata(
+                    ctx.agent_id,
+                    purpose=purpose_str,
+                    emit_lifecycle_created=created_agent,
+                )
             )
             ctx.meta = mcp_server.agent_metadata.get(ctx.agent_id)
             if ctx.meta:

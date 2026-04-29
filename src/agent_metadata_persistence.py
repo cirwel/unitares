@@ -352,7 +352,12 @@ def load_metadata() -> None:
     raise RuntimeError("PostgreSQL backend requires async load_metadata_async(). Sync load_metadata() is not supported.")
 
 
-def get_or_create_metadata(agent_id: str, **kwargs) -> AgentMetadata:
+def get_or_create_metadata(
+    agent_id: str,
+    *,
+    emit_lifecycle_created: bool = False,
+    **kwargs,
+) -> AgentMetadata:
     """
     Get metadata for agent, creating if needed.
 
@@ -386,7 +391,6 @@ def get_or_create_metadata(agent_id: str, **kwargs) -> AgentMetadata:
             api_key=api_key,
             agent_uuid=agent_uuid
         )
-        metadata.add_lifecycle_event("created")
 
         if agent_id == "default_agent":
             metadata.tags.append("pioneer")
@@ -396,11 +400,15 @@ def get_or_create_metadata(agent_id: str, **kwargs) -> AgentMetadata:
             if hasattr(metadata, key) and value is not None:
                 setattr(metadata, key, value)
 
+        if emit_lifecycle_created:
+            metadata.add_lifecycle_event("created")
+
         agent_metadata[agent_id] = metadata
 
-        logger.info(f"Created new agent '{agent_id}'")
-        logger.info(f"API Key: {api_key}")
-        logger.warning("⚠️  Save this key - you'll need it for future updates!")
+        if emit_lifecycle_created:
+            logger.info(f"Created new agent metadata '{agent_id}'")
+        else:
+            logger.debug(f"Hydrated in-memory metadata for '{agent_id}'")
     return agent_metadata[agent_id]
 
 

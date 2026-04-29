@@ -103,7 +103,7 @@ def test_new_metadata_timestamps_are_utc_aware():
     """Fresh metadata must use explicit UTC timestamps, not naive local time."""
     agent_id = f"test-utc-aware-{uuid.uuid4().hex[:8]}"
     try:
-        meta = get_or_create_metadata(agent_id)
+        meta = get_or_create_metadata(agent_id, emit_lifecycle_created=True)
         created_at = datetime.fromisoformat(meta.created_at)
         last_update = datetime.fromisoformat(meta.last_update)
         created_event = datetime.fromisoformat(meta.lifecycle_events[0]["timestamp"])
@@ -114,6 +114,19 @@ def test_new_metadata_timestamps_are_utc_aware():
         assert created_at.utcoffset() == timedelta(0)
         assert last_update.utcoffset() == timedelta(0)
         assert created_event.utcoffset() == timedelta(0)
+    finally:
+        agent_metadata.pop(agent_id, None)
+
+
+def test_metadata_cache_hydration_does_not_emit_created_event():
+    """Cache-only metadata creation must not look like a real lifecycle create."""
+    agent_id = f"test-cache-hydrate-{uuid.uuid4().hex[:8]}"
+    try:
+        meta = get_or_create_metadata(agent_id)
+
+        assert meta.created_at is not None
+        assert meta.last_update is not None
+        assert meta.lifecycle_events == []
     finally:
         agent_metadata.pop(agent_id, None)
 
