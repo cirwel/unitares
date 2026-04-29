@@ -114,10 +114,11 @@ async def _cache_session(
         # ghost-fork rate documented in the S21 incident report.
         existing_uuid = binding.get("bound_agent_id") or binding.get("agent_uuid")
         if mint_guard and existing_uuid and existing_uuid != agent_uuid:
+            session_slot = session_key
             logger.warning(
-                "[S21A_OVERWRITE_BLOCKED] in-memory session_key=%s... "
+                "[S21A_OVERWRITE_BLOCKED] in-memory session slot=%s... "
                 "existing=%s... attempted=%s... — refusing PATH 3 overwrite",
-                session_key[:20], str(existing_uuid)[:8], agent_uuid[:8],
+                session_slot[:20], str(existing_uuid)[:8], agent_uuid[:8],
             )
             in_memory_blocked = True
         else:
@@ -138,7 +139,8 @@ async def _cache_session(
                 new_binding["label"] = label
             _session_identities[session_key] = new_binding
     except Exception as e:
-        logger.debug(f"In-memory session cache update failed for {session_key[:20]}...: {e}")
+        session_slot = session_key
+        logger.debug(f"In-memory session cache update failed for {session_slot[:20]}...: {e}")
 
     # If the in-memory guard fired, skip the Redis write too — the slot for
     # this session_key already maps to a different live UUID.
@@ -194,14 +196,16 @@ async def _cache_session(
             # Bail out — the in-memory _session_identities write above is
             # still honored for this session; later reads miss Redis and
             # fall through to PostgreSQL resolution.
+            session_slot = session_key
             logger.warning(
                 f"[IDENTITY] Redis cache write timed out after "
-                f"{_REDIS_WRITE_TIMEOUT}s for {session_key[:20]}... "
+                f"{_REDIS_WRITE_TIMEOUT}s for {session_slot[:20]}... "
                 f"— in-memory only (anyio-asyncio guard)"
             )
         except Exception as e:
             # WARNING level (v2.5.7): Cache failures can cause identity loss
-            logger.warning(f"Redis cache write failed for session {session_key[:20]}...: {e}")
+            session_slot = session_key
+            logger.warning(f"Redis cache write failed for session {session_slot[:20]}...: {e}")
 
 
 async def _cache_session_redis_write(
@@ -241,10 +245,10 @@ async def _cache_session_redis_write(
         from src.cache.redis_client import get_redis
         redis = await get_redis()
         if redis:
-            key = f"session:{session_key}"
+            redis_slot = f"session:{session_key}"
 
             # S21-a guard: refuse to overwrite a different live binding.
-            if mint_guard and await _redis_slot_blocks_overwrite(redis, key, agent_uuid):
+            if mint_guard and await _redis_slot_blocks_overwrite(redis, redis_slot, agent_uuid):
                 return
 
             data = {
@@ -261,7 +265,7 @@ async def _cache_session_redis_write(
                 data["spawn_reason"] = spawn_reason
             if bind_ip_ua:
                 data["bind_ip_ua"] = bind_ip_ua
-            await redis.setex(key, GovernanceConfig.SESSION_TTL_SECONDS, json.dumps(data))
+            await redis.setex(redis_slot, GovernanceConfig.SESSION_TTL_SECONDS, json.dumps(data))
             # Keep SessionCache's in-memory fallback coherent with the richer
             # raw Redis payload so subsequent lookups see the same binding
             # even if they fall back from Redis during this process lifetime.
@@ -302,8 +306,8 @@ async def _cache_session_redis_write(
         await session_cache.bind(session_key, agent_uuid)
 
 
-async def _redis_slot_blocks_overwrite(redis, key: str, agent_uuid: str) -> bool:
-    """Return True iff the raw-Redis slot for `key` already binds a *different*
+async def _redis_slot_blocks_overwrite(redis, redis_slot: str, agent_uuid: str) -> bool:
+    """Return True iff the raw-Redis slot already binds a *different*
     agent_uuid. Used by the S21-a guard inside _cache_session_redis_write —
     PATH 3 mint sites must not silently ratify a fresh ghost over a legitimate
     session binding.
@@ -314,7 +318,7 @@ async def _redis_slot_blocks_overwrite(redis, key: str, agent_uuid: str) -> bool
     writes when the guard cannot inspect the existing Redis slot.
     """
     try:
-        existing_raw = await redis.get(key)
+        existing_raw = await redis.get(redis_slot)
         if not existing_raw:
             return False
         if isinstance(existing_raw, bytes):
@@ -333,17 +337,17 @@ async def _redis_slot_blocks_overwrite(redis, key: str, agent_uuid: str) -> bool
         if existing_id and existing_id != agent_uuid:
             existing_prefix = existing_id[:8] if isinstance(existing_id, str) else "?"
             logger.warning(
-                "[S21A_OVERWRITE_BLOCKED] redis key=%s existing=%s... attempted=%s... "
+                "[S21A_OVERWRITE_BLOCKED] redis slot=%s existing=%s... attempted=%s... "
                 "— refusing PATH 3 overwrite",
-                key, existing_prefix, agent_uuid[:8],
+                redis_slot, existing_prefix, agent_uuid[:8],
             )
             return True
     except Exception as e:
         fail_closed = _nx_fail_closed_enabled()
         logger.warning(
-            "[S21A_REDIS_GUARD_READ_FAILED] key=%s attempted=%s... "
+            "[S21A_REDIS_GUARD_READ_FAILED] redis slot=%s attempted=%s... "
             "fail_closed=%s error=%s",
-            key,
+            redis_slot,
             agent_uuid[:8],
             fail_closed,
             e,
@@ -352,21 +356,21 @@ async def _redis_slot_blocks_overwrite(redis, key: str, agent_uuid: str) -> bool
     return False
 
 
-async def _session_cache_blocks_overwrite(session_cache, session_key: str, agent_uuid: str) -> bool:
-    """Return True iff the SessionCache view of `session_key` binds a different
+async def _session_cache_blocks_overwrite(session_cache, session_slot: str, agent_uuid: str) -> bool:
+    """Return True iff the SessionCache view of the session slot binds a different
     agent_uuid. Used by the S21-a guard for the bare-bind path (raw Redis
     unavailable, falling back through session_cache.bind).
     """
     try:
-        existing = await session_cache.get(session_key)
+        existing = await session_cache.get(session_slot)
         if isinstance(existing, dict):
             existing_id = existing.get("agent_id")
             if existing_id and existing_id != agent_uuid:
                 existing_prefix = existing_id[:8] if isinstance(existing_id, str) else "?"
                 logger.warning(
-                    "[S21A_OVERWRITE_BLOCKED] session_cache session_key=%s... "
+                    "[S21A_OVERWRITE_BLOCKED] session_cache slot=%s... "
                     "existing=%s... attempted=%s... — refusing PATH 3 overwrite",
-                    session_key[:20], existing_prefix, agent_uuid[:8],
+                    session_slot[:20], existing_prefix, agent_uuid[:8],
                 )
                 return True
     except Exception as e:
@@ -791,7 +795,8 @@ async def set_agent_label(agent_uuid: str, label: str, session_key: Optional[str
                             if public_agent_id:
                                 binding["public_agent_id"] = public_agent_id
                                 binding["display_agent_id"] = binding.get("display_agent_id") or public_agent_id
-                            logger.debug(f"Updated session binding label for {session_key}")
+                            session_slot = session_key
+                            logger.debug(f"Updated session binding label for {session_slot[:20]}...")
                 except Exception as e:
                     logger.debug(f"Could not update session binding cache: {e}")
             except Exception as e:
