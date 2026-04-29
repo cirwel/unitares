@@ -127,6 +127,8 @@ S21-b row remains correctly scoped — no changes proposed there from this pass.
 
 **Fix:** promote the exception log to `warning`. Add an env flag (`UNITARES_NX_FAIL_CLOSED=1`) that flips the default to `return True` for environments that prefer refusing mints over allowing them on cache read failure.
 
+**Status:** Implemented in `src/mcp_handlers/identity/persistence.py`. Redis guard read failures now emit `[S21A_REDIS_GUARD_READ_FAILED]` at warning level and preserve default fail-open behavior unless `UNITARES_NX_FAIL_CLOSED=1`, in which case `_redis_slot_blocks_overwrite` returns `True` and the guarded Redis write is skipped. Regression coverage lives in `tests/test_identity_session.py`.
+
 ### H11. Adversarial `client_session_id="\n\n"` reproduces the original bug post-merge
 Live probe via `mcp__unitares-governance__identity` with whitespace-only input: server returned `session_resolution_source: "explicit_client_session_id"` AND `identity_status: "created"` AND `resumed: false` — minted a fresh ghost while claiming the explicit-session-id path. This is the exact shape of the original incident. Reproducible on demand. The NX guard does not fire because the whitespace key has no prior binding. Pass-1 H6 (status enum) and the proposed regression tests do not cover this input class. Also adjacent: 10000-char and `../../etc/passwd` payloads silently dropped (no graceful JSON error, just empty body).
 

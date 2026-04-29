@@ -11,6 +11,7 @@ import asyncio
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
 import json
+import os
 
 from src.logging_utils import get_logger
 from src.db import get_db
@@ -37,6 +38,12 @@ _redis_cache = None
 # leg has the same headroom as before; under Redis pressure the guard
 # read times out cleanly rather than silently no-opping the write.
 _REDIS_WRITE_TIMEOUT = 1.0
+
+
+def _nx_fail_closed_enabled() -> bool:
+    return os.getenv("UNITARES_NX_FAIL_CLOSED", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
 
 def _metadata_public_agent_id(metadata: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -299,8 +306,12 @@ async def _redis_slot_blocks_overwrite(redis, key: str, agent_uuid: str) -> bool
     """Return True iff the raw-Redis slot for `key` already binds a *different*
     agent_uuid. Used by the S21-a guard inside _cache_session_redis_write —
     PATH 3 mint sites must not silently ratify a fresh ghost over a legitimate
-    session binding. Errors are treated as "no block" (fail-open) so a
-    transient Redis hiccup doesn't break minting on truly empty slots.
+    session binding.
+
+    Redis read errors are warning-visible. By default they remain fail-open so
+    a transient Redis hiccup doesn't break minting on truly empty slots. Set
+    UNITARES_NX_FAIL_CLOSED=1 for deployments that prefer refusing PATH 3 cache
+    writes when the guard cannot inspect the existing Redis slot.
     """
     try:
         existing_raw = await redis.get(key)
@@ -328,7 +339,16 @@ async def _redis_slot_blocks_overwrite(redis, key: str, agent_uuid: str) -> bool
             )
             return True
     except Exception as e:
-        logger.debug(f"S21-a redis guard read failed for {key}: {e}")
+        fail_closed = _nx_fail_closed_enabled()
+        logger.warning(
+            "[S21A_REDIS_GUARD_READ_FAILED] key=%s attempted=%s... "
+            "fail_closed=%s error=%s",
+            key,
+            agent_uuid[:8],
+            fail_closed,
+            e,
+        )
+        return fail_closed
     return False
 
 
