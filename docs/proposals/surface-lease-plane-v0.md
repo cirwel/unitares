@@ -34,6 +34,9 @@ related:
   - PR #218 (`feat(db): ExecutorPool — asyncpg loop-isolation wrapper for anyio (P2 full)` — the Python-side concurrency tax that motivates substrate questioning)
   - PR #247 (`fix(dialectic): accept conditions alias + early-fail on agrees+empty` — closes the immediate dialectic state-machine class)
   - docs/proposals/path1-sync-fingerprint-check.md (precedent for log->strict phased rollout)
+  - **docs/ontology/beam-coordination-kernel.md** (parallel ontology-track spec converged independently on the same primitive 2026-04-30; framed as UNITARES R7 row in `docs/ontology/plan.md`. This proposals-track RFC is the contract spec; the ontology-track plan is the integration-into-UNITARES framing. Neither subsumes the other; both should be read by anyone executing the spike. See v0.4 changelog for the convergence story.)
+  - **db/postgres/migrations/024_lease_plane.sql** (live in `governance` DB as of 2026-04-30 ~13:05 local; implements §4.4 schema verbatim — the schema is no longer a proposal, it's deployed)
+  - **src/lease_plane/** (Python contract anchor implementing §4.5 typed-absence shapes; `LeasePlaneDisabledClient` is the advisory-mode escape valve. Closes RFC §9 checklist item "Shelf-Python sketch checked in alongside the Elixir spec.")
 unblocks: |
   - Recurring "auto-recovered stuck agent" KG entries (12+ in the last 5 days)
   - Multi-agent surface collisions on shared file paths, TD networks, dialectic sessions
