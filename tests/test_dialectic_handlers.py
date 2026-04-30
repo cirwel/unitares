@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 from types import SimpleNamespace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Ensure project root is on sys.path
 project_root = Path(__file__).parent.parent
@@ -1118,6 +1118,195 @@ class TestHandleSubmitSynthesis:
         data = parse_result(result)
         assert data["success"] is True, (
             f"quorum reviewer must be accepted, got: {data}"
+        )
+
+    # ------------------------------------------------------------------
+    # Parameter-name aliasing (regression: silent data loss)
+    #
+    # Background: dialectic tool surface exposes both `proposed_conditions`
+    # (thesis/antithesis/synthesis) and `conditions` (vote). A caller passing
+    # `conditions=[...]` to synthesis got the field silently dropped; the
+    # synthesis message persisted with empty `proposed_conditions`, then
+    # finalize tripped check_hard_limits with "Resolution must include at
+    # least one condition", leaving the session in a self-contradictory
+    # phase=failed / resolution.action=resume terminal state.
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_synthesis_accepts_conditions_alias(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent,
+    ):
+        """`conditions=[...]` is accepted as an alias for `proposed_conditions=[...]`.
+
+        The DialecticMessage and pg_add_message call must receive the
+        alias-resolved conditions, not an empty list.
+        """
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+
+        captured = {}
+
+        async def capture_add(**kwargs):
+            captured.update(kwargs)
+            return None
+
+        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+                   return_value=session), \
+             patch(f"{DIALECTIC}.pg_add_message", side_effect=capture_add), \
+             mock_pg_update_phase, mock_save_session, mock_context_agent:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-paused",
+                # Note: alias `conditions=...`, not `proposed_conditions=...`
+                "conditions": ["Aliased condition A", "Aliased condition B"],
+                "root_cause": "test alias",
+                "reasoning": "passing wrong-but-symmetric param name",
+                "agrees": False,  # avoid convergence path; just verify message persistence
+                "api_key": "key",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True, (
+            f"alias `conditions` must be accepted, got: {data}"
+        )
+        assert captured.get("proposed_conditions") == [
+            "Aliased condition A", "Aliased condition B"
+        ], (
+            f"pg_add_message must receive alias-resolved conditions, got: "
+            f"{captured.get('proposed_conditions')}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_thesis_accepts_conditions_alias(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent,
+    ):
+        """Same alias support on thesis (symmetric — same parameter-name confusion class)."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_thesis
+
+        session = _make_session(phase=DialecticPhase.THESIS)
+
+        captured = {}
+
+        async def capture_add(**kwargs):
+            captured.update(kwargs)
+            return None
+
+        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+                   return_value=session), \
+             patch(f"{DIALECTIC}.pg_add_message", side_effect=capture_add), \
+             mock_pg_update_phase, mock_save_session, mock_context_agent:
+            result = await handle_submit_thesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-paused",
+                "conditions": ["Thesis condition via alias"],
+                "root_cause": "test alias on thesis",
+                "reasoning": "symmetric alias support",
+                "api_key": "key",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert captured.get("proposed_conditions") == ["Thesis condition via alias"]
+
+    # ------------------------------------------------------------------
+    # Early-fail on agrees=True with empty conditions
+    #
+    # Without this gate, the empty-conditions case slipped through to
+    # check_hard_limits at finalize time and produced phase=failed with
+    # resolution.action=resume — internally inconsistent terminal state.
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_synthesis_rejects_agrees_with_empty_conditions(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent,
+    ):
+        """`agrees=True` + empty conditions + no prior synthesis must fail before any DB write."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+        # Transcript has no prior synthesis with conditions.
+        session.transcript = []
+
+        add_called = []
+
+        async def capture_add(**kwargs):
+            add_called.append(kwargs)
+            return None
+
+        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+                   return_value=session), \
+             patch(f"{DIALECTIC}.pg_add_message", side_effect=capture_add), \
+             mock_pg_update_phase, mock_save_session, mock_context_agent:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-paused",
+                # Both empty / missing — confused-caller scenario
+                "agrees": True,
+                "api_key": "key",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False, (
+            f"agrees=True with empty conditions must be rejected, got: {data}"
+        )
+        assert data.get("error_code") == "EMPTY_AGREEMENT", (
+            f"expected EMPTY_AGREEMENT error_code, got: {data.get('error_code')}"
+        )
+        assert not add_called, (
+            "pg_add_message must NOT be called on early-fail; persisting the "
+            "broken message is what produced the original inconsistent state. "
+            f"Got calls: {add_called}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_synthesis_allows_agrees_when_prior_has_conditions(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent,
+    ):
+        """`agrees=True` with empty conditions is allowed if a prior synthesis supplied them.
+
+        This covers the legitimate convergence pattern: agent A files synthesis
+        with conditions, agent B files `agrees=True` with no new conditions to
+        signal acceptance of A's terms. The merge logic in finalize_resolution
+        pulls A's conditions forward — the early-fail must not block this.
+        """
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+        # Prior synthesis from the other agent supplies conditions
+        prior = DialecticMessage(
+            phase="synthesis",
+            agent_id="agent-reviewer",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            proposed_conditions=["Prior condition"],
+            agrees=True,
+        )
+        session.transcript = [prior]
+
+        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+                   return_value=session), \
+             mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_context_agent:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-paused",
+                # No new conditions — accepting prior agent's terms
+                "agrees": True,
+                "api_key": "key",
+            })
+
+        data = parse_result(result)
+        # Either succeeds (convergence) or proceeds to next round — both valid.
+        # The point is we don't hit the EMPTY_AGREEMENT early-fail.
+        assert data.get("error_code") != "EMPTY_AGREEMENT", (
+            f"prior synthesis with conditions should bypass early-fail, got: {data}"
         )
 
 
