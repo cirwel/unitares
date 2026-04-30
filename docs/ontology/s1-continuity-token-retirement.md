@@ -292,7 +292,7 @@ S1-a alone closes most of the ontology-hygiene concern without touching client c
 > **All eight decisions resolved 2026-04-25.** Outcomes recorded inline below. The "Recommend" lines remain as historical context for the reasoning.
 
 1. **A / A′ / C? — A → A′ accepted.** Recommend A → A′. Option B withdrawn 2026-04-24 per R1 v3 scope clarification.
-2. **TTL target for Option A? — 1h accepted.** Recommend 1h. **Justification caveat:** 1h is a convenience anchor (fits resident cadences in §5), not a threat-model anchor. The relevant question is attacker-window, not client-cadence — "how long would a stolen token need to be useful to be dangerous?" is not the same as "how often does Vigil wake." If the operator has a threat-model-derived budget (e.g., "tokens exfiltrated from logs should expire before a human operator could notice"), that number should drive the TTL. **Operator picked 1h under hygiene framing** — long enough that all rolling-refresh resident cadences stay covered, short enough to not claim "long-lived credential," not so short (5min) that clock-skew false positives outweigh proportional security gain.
+2. **TTL target for Option A? — 1h accepted.** Recommend 1h. **Justification caveat:** 1h is a convenience anchor (fits resident cadences in §5), not a threat-model anchor. The relevant question is attacker-window, not client-cadence — "how long would a stolen token need to be useful to be dangerous?" is not the same as "how often does Vigil wake." If the operator has a threat-model-derived budget (e.g., "tokens exfiltrated from logs should expire before a human operator could notice"), that number should drive the TTL. **Operator picked 1h under hygiene framing** — long enough that all rolling-refresh resident cadences stay covered, short enough to not claim "long-lived credential," not so short (5min) that clock-skew false positives outweigh proportional security gain. **Effective resolve window post-S1-a (2026-04-29) is TTL + 30s** under `_CLOCK_SKEW_TOLERANCE` — security teeth come from rotation (§7.5 / decision #7), not TTL math, so the 30s NTP-drift grace does not contradict the 1h convenience anchor. Bounded below the 60s minimum TTL so it cannot swallow whole-token validity. Documented at the constant definition in `src/mcp_handlers/identity/session.py`.
 3. **Grace-period length? — one release cycle, warning-only, accepted.** Recommend one release cycle (effectively "until telemetry is clean"). See §6 security-posture note. Tightening explicitly addressed via decision #7 below (secret rotation).
 4. **Field rename (`continuity_token` → `ownership_proof`)? — deferred to S1-d.** Confirmed; S1-d post-grace.
 5. **Chronicler re-onboard-on-wake acceptable? — accepted.** Correct v2 behavior for launchd-daily processes.
@@ -324,14 +324,17 @@ S1-a alone closes most of the ontology-hygiene concern without touching client c
 - `src/audit_log.py:368` — `log_continuity_token_deprecated_accept`
 - `src/mcp_handlers/identity/handlers.py:1702-1720` — onboard-handler wiring of deprecation block + audit event on cross-process-instance accept
 
-**Accept sites — wiring needed in S1-a (deprecation-block + audit event NOT yet wired; only onboard handler does both):**
-- `handle_identity_adapter` (the `identity()` tool path) — wire deprecation block + audit event mirroring the onboard pattern
-- `handle_bind_session` — wire deprecation block + audit event
-- `src/http_api.py` HTTP onboard direct-tool path — wire same surface
+**Accept sites — wired 2026-04-29 in S1-a (single-PR-strategy):**
+- `handle_onboard_v2` — refactored to use shared `_emit_continuity_token_deprecation` helper (was inline)
+- `handle_identity_adapter` — wired via shared helper, fires when `continuity_token` present and `not force_new`
+- `handle_bind_session` — wired via shared helper, fires only when token was used to derive `client_session_id` (i.e., caller passed token without an explicit session id). Pure in-session bridges (caller passes `client_session_id` directly) do NOT fire — that's the legitimate intra-session use.
+- `src/http_api.py` `/v1/tools/call` — HTTP REST inherits transitively through `execute_http_tool` dispatch into the same handlers; no separate wiring needed.
 
-**Code surfaces still needing change in S1-a:**
-- `resolve_continuity_token` (`src/mcp_handlers/identity/session.py:120-`) — add clock-skew tolerance parameter (currently zero drift accepted; §7.2 clock-skew test is undefined-behavior without this)
-- Audit-event call sites: ensure `caller_channel` and `caller_model_type` are threaded through identity-adapter and bind_session paths the same way they are in onboard at handlers.py:1713-1714
+**Code surfaces changed in S1-a (2026-04-29):**
+- `_CLOCK_SKEW_TOLERANCE = 30` (`src/mcp_handlers/identity/session.py`) — 30s NTP-drift grace, bounded below the 60s minimum TTL so it cannot swallow whole-token validity.
+- `resolve_continuity_token` — expiry check now `exp + _CLOCK_SKEW_TOLERANCE < now` (was `exp < now`).
+- `_emit_continuity_token_deprecation` helper in `handlers.py` — single source of truth for deprecation-block + audit-event emission across the three accept sites.
+- Existing `test_resolve_rejects_expired_token_at_ttl_boundary` test renamed/rewritten to `test_resolve_rejects_token_past_clock_skew_window` reflecting the new boundary semantics. The test's original comment ("any loosening must be deliberate") was honored — this is the deliberate loosening.
 
 **Client sites (S1-b, separate PR):**
 - `scripts/unitares` — cache read + pass paths (verify line numbers; doc previously cited :70, :148)

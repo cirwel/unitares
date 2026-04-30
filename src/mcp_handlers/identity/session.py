@@ -31,6 +31,12 @@ _PIN_REDIS_TIMEOUT = 0.5
 # TTL-only is not process-instance binding; this is honestly "performative, narrowed".
 # A′ (PID/nonce binding) is the follow-on for actual earned process-scope.
 _CONTINUITY_TTL = 3600  # 1 hour
+# S1-a (2026-04-29): clock-skew tolerance applied at resolve_continuity_token.
+# 30s is the typical upper bound of well-managed NTP drift on the public
+# internet; bounded below by min TTL (60s) so it can't swallow a whole token's
+# validity. Surfaced by s1 doc §7.2 as a new code path under the shrunk TTL —
+# a 1s-fast caller would otherwise repeatedly invalidate fresh tokens.
+_CLOCK_SKEW_TOLERANCE = 30
 _OWNERSHIP_PROOF_VERSION = 1  # bump to 2 when A′ lands; to 3 when R1-composite ships
 _MAX_CLIENT_SESSION_ID_LENGTH = 256
 _CLIENT_SESSION_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9_.:@-]")
@@ -329,7 +335,7 @@ def resolve_continuity_token(
             return None
 
         payload = json.loads(_b64url_decode(payload_b64).decode())
-        if int(payload.get("exp", 0)) < int(time.time()):
+        if int(payload.get("exp", 0)) + _CLOCK_SKEW_TOLERANCE < int(time.time()):
             return None
 
         sid = payload.get("sid")

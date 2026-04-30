@@ -62,17 +62,21 @@ def test_token_issued_with_default_ttl_carries_1h_expiry():
     assert before <= payload["iat"] <= after
 
 
-def test_resolve_rejects_expired_token_at_ttl_boundary():
-    """Token valid 1s before expiry; rejected 1s after.
+def test_resolve_rejects_token_past_clock_skew_window():
+    """Token valid through clock-skew window; rejected past it.
 
-    S1 doc §7.2 flags clock-skew near boundary as a new code path under short TTL.
-    This test pins the strict-expiry semantics; any loosening must be deliberate.
+    S1 doc §7.2 flagged clock-skew near boundary as a new code path under short
+    TTL. _CLOCK_SKEW_TOLERANCE (30s, 2026-04-29) gives a small grace zone for
+    typical NTP drift, then strict rejection. Two assertions: still valid
+    inside the window, rejected just past it.
     """
+    from src.mcp_handlers.identity import session as session_mod
     from src.mcp_handlers.identity.session import (
         create_continuity_token,
         resolve_continuity_token,
     )
 
+    tol = session_mod._CLOCK_SKEW_TOLERANCE
     with patch.dict("os.environ", {"UNITARES_CONTINUITY_TOKEN_SECRET": "test-secret"}, clear=False):
         token = create_continuity_token(
             "11111111-2222-3333-4444-555555555555",
@@ -81,13 +85,142 @@ def test_resolve_rejects_expired_token_at_ttl_boundary():
         assert token is not None
 
         # Token valid now
-        resolved = resolve_continuity_token(token)
-        assert resolved == "agent-111:claude"
+        assert resolve_continuity_token(token) == "agent-111:claude"
 
-        # Freeze "now" to 1s past expiry — resolve must reject
-        now = int(time.time()) + 3601
-        with patch("src.mcp_handlers.identity.session.time.time", return_value=now):
+        # Just past old strict boundary (exp + 1) — would have rejected pre-tolerance,
+        # NOW resolves. This assertion catches a sign-error or revert of the tolerance
+        # constant; without it, `+ _CLOCK_SKEW_TOLERANCE` becoming `- _CLOCK_SKEW_TOLERANCE`
+        # would silently pass the rest of this test.
+        past_strict = int(time.time()) + 3601
+        with patch("src.mcp_handlers.identity.session.time.time", return_value=past_strict):
+            assert resolve_continuity_token(token) == "agent-111:claude", (
+                "tolerance must keep token resolvable past the old strict exp boundary"
+            )
+
+        # Inside skew window (exp + tol - 1) — still valid
+        within = int(time.time()) + 3600 + tol - 1
+        with patch("src.mcp_handlers.identity.session.time.time", return_value=within):
+            assert resolve_continuity_token(token) == "agent-111:claude"
+
+        # Past skew window (exp + tol + 1) — rejected
+        past = int(time.time()) + 3600 + tol + 1
+        with patch("src.mcp_handlers.identity.session.time.time", return_value=past):
             assert resolve_continuity_token(token) is None
+
+
+def test_clock_skew_tolerance_constant_value():
+    """Pin the tolerance value so silent enlargement requires a code-review touch."""
+    from src.mcp_handlers.identity import session as session_mod
+
+    assert session_mod._CLOCK_SKEW_TOLERANCE == 30, (
+        f"S1-a expects 30s clock-skew tolerance; got {session_mod._CLOCK_SKEW_TOLERANCE}"
+    )
+    assert session_mod._CLOCK_SKEW_TOLERANCE < session_mod._CONTINUITY_TTL, (
+        "tolerance must be strictly less than TTL or it can swallow whole token validity"
+    )
+
+
+def test_token_expiry_mid_call_resolves_then_rejects():
+    """A caller that hits resolve once before exp and once after must see
+    accept→reject across the boundary.
+
+    Defends against caching-too-aggressively bugs in resolve_continuity_token.
+    Per S1 doc §7.2.
+    """
+    from src.mcp_handlers.identity.session import (
+        create_continuity_token,
+        resolve_continuity_token,
+        _CLOCK_SKEW_TOLERANCE,
+    )
+
+    with patch.dict("os.environ", {"UNITARES_CONTINUITY_TOKEN_SECRET": "test-secret"}, clear=False):
+        token = create_continuity_token(
+            "22222222-3333-4444-5555-666666666666",
+            "agent-222:claude",
+        )
+        assert token is not None
+
+        # First call: token fresh, resolves
+        assert resolve_continuity_token(token) == "agent-222:claude"
+
+        # Second call later: well past tolerance window, rejects
+        later = int(time.time()) + 3600 + _CLOCK_SKEW_TOLERANCE + 60
+        with patch("src.mcp_handlers.identity.session.time.time", return_value=later):
+            assert resolve_continuity_token(token) is None
+
+
+def test_per_token_expiry_independence():
+    """Two tokens for the same agent_uuid: stale one rejects, fresh one accepts.
+
+    Pins the invariant that expiry is per-token, not per-agent_uuid — defends
+    against any future shared-state expiry coupling. NOTE: this is NOT the
+    s1 doc §7.2.3 concurrent-possessor race (that requires interleaved resolves
+    under wait_for/threading) — concurrent-resolve coverage is left to future
+    work; this is a useful ancillary that prevents the wrong-shape regression.
+    """
+    from src.mcp_handlers.identity.session import (
+        create_continuity_token,
+        resolve_continuity_token,
+        _CLOCK_SKEW_TOLERANCE,
+    )
+
+    with patch.dict("os.environ", {"UNITARES_CONTINUITY_TOKEN_SECRET": "test-secret"}, clear=False):
+        agent_uuid = "33333333-4444-5555-6666-777777777777"
+        # Old token: minted "an hour and a half ago"
+        with patch(
+            "src.mcp_handlers.identity.session.time.time",
+            return_value=int(time.time()) - 5400,
+        ):
+            stale = create_continuity_token(agent_uuid, "agent-333:claude")
+        # Fresh token: minted now
+        fresh = create_continuity_token(agent_uuid, "agent-333:claude")
+
+        assert stale is not None and fresh is not None and stale != fresh
+        # Stale rejects (1.5h old, well past 1h + 30s tolerance)
+        assert resolve_continuity_token(stale) is None
+        # Fresh accepts
+        assert resolve_continuity_token(fresh) == "agent-333:claude"
+
+
+def test_chronicler_shape_old_token_forces_reonboard():
+    """Resident-shape regression: a >1h-old continuity_token (e.g. Chronicler
+    daily-cron resuming after a long gap) MUST not resolve, forcing the SDK
+    fallback to ``onboard(force_new=true, parent_agent_id=<own UUID>)``.
+
+    Operator decision per s1 doc §11.2: 1h TTL acceptable because Chronicler
+    re-onboards on wake. This test pins that behavior — if a future TTL change
+    or skew-tolerance bump makes >1h tokens resolvable, session-like residents
+    would skip the lineage-declared onboard path and re-introduce the silent-
+    re-binding pattern S11/S13 retired.
+
+    Scope: this rejection applies to session-like / Chronicler-shape residents
+    that resolve via the token path. Substrate-anchored residents under UDS
+    (Vigil/Sentinel via S19 M3-v2) pass PATH 0's Part-C ownership gate via
+    ``extract_token_agent_uuid`` (which intentionally ignores expiry per Part C
+    / PR #42) followed by kernel-attested peer match — neither call exercises
+    ``resolve_continuity_token``. See ``test_path0_substrate_does_not_use_resolve_continuity_token``.
+    """
+    from src.mcp_handlers.identity.session import (
+        create_continuity_token,
+        resolve_continuity_token,
+        _CLOCK_SKEW_TOLERANCE,
+    )
+
+    with patch.dict("os.environ", {"UNITARES_CONTINUITY_TOKEN_SECRET": "test-secret"}, clear=False):
+        # Token from "yesterday" (24h old) — Chronicler daily-cron shape.
+        with patch(
+            "src.mcp_handlers.identity.session.time.time",
+            return_value=int(time.time()) - 86400,
+        ):
+            old_token = create_continuity_token(
+                "44444444-5555-6666-7777-888888888888",
+                "agent-444:chronicler",
+            )
+
+        assert old_token is not None
+        # Skew tolerance must not be wide enough to admit a 24h-old token.
+        assert _CLOCK_SKEW_TOLERANCE < 86400
+        assert resolve_continuity_token(old_token) is None
 
 
 # -----------------------------------------------------------------------------
@@ -384,14 +517,15 @@ def test_response_omits_ownership_proof_version_when_disabled():
 
 
 def test_bind_session_resolve_path_uses_1h_ttl():
-    """bind_session calls resolve_continuity_token (handlers.py:1066) which
-    uses _CONTINUITY_TTL. S1-a's shrink propagates; §7.3 operator call was
-    let-it-propagate. Verify a token past 1h is rejected by the bind_session
-    resolve path — same function, same behavior.
+    """bind_session calls resolve_continuity_token which uses _CONTINUITY_TTL.
+    S1-a's shrink propagates; §7.3 operator call was let-it-propagate. Verify
+    a token past TTL+skew is rejected by the bind_session resolve path —
+    same function, same behavior.
     """
     from src.mcp_handlers.identity.session import (
         create_continuity_token,
         resolve_continuity_token,
+        _CLOCK_SKEW_TOLERANCE,
     )
 
     with patch.dict("os.environ", {"UNITARES_CONTINUITY_TOKEN_SECRET": "test-secret"}, clear=False):
@@ -404,10 +538,157 @@ def test_bind_session_resolve_path_uses_1h_ttl():
         # Within TTL — resolves
         assert resolve_continuity_token(token) == "agent-bind-test"
 
-        # Past 1h TTL — rejected (same gate bind_session hits)
-        past_ttl = int(time.time()) + 3601
+        # Past 1h TTL + skew window — rejected (same gate bind_session hits)
+        past_ttl = int(time.time()) + 3600 + _CLOCK_SKEW_TOLERANCE + 1
         with patch("src.mcp_handlers.identity.session.time.time", return_value=past_ttl):
             assert resolve_continuity_token(token) is None
+
+
+# -----------------------------------------------------------------------------
+# Substrate-anchored PATH 0 invariance under TTL/skew changes (S1-a + S19)
+# -----------------------------------------------------------------------------
+
+
+def test_path0_substrate_does_not_use_resolve_continuity_token():
+    """Substrate-anchored residents (Vigil/Sentinel via S19 M3-v2) must resolve
+    independently of ``resolve_continuity_token``'s expiry contract.
+
+    PATH 0's Part-C ownership gate uses ``extract_token_agent_uuid`` (ignores
+    expiry per PR #42) and the substrate-attestation gate uses ``peer_pid``
+    + ``verify_substrate_at_resume``. Neither path exercises
+    ``resolve_continuity_token``. If a future refactor wires
+    ``resolve_continuity_token`` into ``_try_resume_by_agent_uuid_direct``,
+    the new TTL+skew contract would silently make substrate residents fail
+    over to token-resolve rejection — regressing S19's substrate-attestation
+    closure of the Hermes anchor-leak class. This test pins the structural
+    invariant via static source inspection.
+    """
+    import inspect
+    from src.mcp_handlers.identity import handlers
+
+    src = inspect.getsource(handlers._try_resume_by_agent_uuid_direct)
+    assert "resolve_continuity_token" not in src, (
+        "PATH 0 must NOT call resolve_continuity_token — substrate-anchored "
+        "residents would silently regress under TTL/clock-skew changes. "
+        "See S1-a + S19 interaction note in the Chronicler-shape test."
+    )
+    # Positive contract: PATH 0 still uses extract_token_agent_uuid for Part-C
+    # ownership proof (which intentionally ignores expiry), and the S19
+    # substrate gate via verify_substrate_at_resume.
+    assert "extract_token_agent_uuid" in src
+    assert "verify_substrate_at_resume" in src
+
+
+# -----------------------------------------------------------------------------
+# §4.3 deprecation wiring at identity() and bind_session() (S1-a, 2026-04-29)
+# -----------------------------------------------------------------------------
+
+
+def test_emit_helper_appends_deprecation_block_and_audits(tmp_path, monkeypatch):
+    """Helper mutates response_dict["deprecations"] and writes one audit entry.
+
+    Pins the contract that the three handler call sites (onboard, identity,
+    bind_session) all rely on. Ontology: only fires when used_token_for_resume
+    is True.
+    """
+    from src.mcp_handlers.identity.handlers import _emit_continuity_token_deprecation
+    from src.mcp_handlers.identity.session import create_continuity_token
+    from src import audit_log as audit_mod
+
+    monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", "test-secret")
+    audit = audit_mod.AuditLogger(log_file=tmp_path / "audit.jsonl")
+    monkeypatch.setattr(audit_mod, "audit_logger", audit)
+
+    token = create_continuity_token(
+        "55555555-6666-7777-8888-999999999999",
+        "agent-555:claude",
+    )
+
+    response: dict = {}
+    _emit_continuity_token_deprecation(
+        response_dict=response,
+        used_token_for_resume=True,
+        token_str=token,
+        agent_uuid="55555555-6666-7777-8888-999999999999",
+        response_agent_id="agent-555:claude",
+        client_hint="claude_code",
+        model_type="claude",
+    )
+
+    assert "deprecations" in response and len(response["deprecations"]) == 1
+    block = response["deprecations"][0]
+    assert block["field"] == "continuity_token"
+    assert block["severity"] == "warning"
+
+    logged = (tmp_path / "audit.jsonl").read_text().strip()
+    assert logged, "expected one audit entry"
+    entry = json.loads(logged.splitlines()[-1])
+    assert entry["event_type"] == "continuity_token_deprecated_accept"
+
+
+def test_emit_helper_noop_when_not_resume(monkeypatch):
+    """used_token_for_resume=False → no mutation, no audit. Intra-session use is NOT
+    the deprecating surface."""
+    from src.mcp_handlers.identity.handlers import _emit_continuity_token_deprecation
+
+    response: dict = {"existing": "value"}
+    _emit_continuity_token_deprecation(
+        response_dict=response,
+        used_token_for_resume=False,
+        token_str="v1.aaa.bbb",
+        agent_uuid="x",
+        response_agent_id="y",
+    )
+    assert response == {"existing": "value"}
+
+
+def test_emit_helper_swallows_audit_failure(tmp_path, monkeypatch, caplog):
+    """Audit emission failures must not propagate to the request path."""
+    from src.mcp_handlers.identity.handlers import _emit_continuity_token_deprecation
+    from src import audit_log as audit_mod
+
+    class _Boom:
+        def log_continuity_token_deprecated_accept(self, **kwargs):
+            raise RuntimeError("disk full")
+
+    monkeypatch.setattr(audit_mod, "audit_logger", _Boom())
+
+    response: dict = {}
+    # Must not raise even with the audit logger throwing
+    _emit_continuity_token_deprecation(
+        response_dict=response,
+        used_token_for_resume=True,
+        token_str=None,
+        agent_uuid="x",
+        response_agent_id="y",
+    )
+    # Dep block still added (response surface independent of audit sink)
+    assert "deprecations" in response
+
+
+def test_handle_identity_adapter_wiring_present():
+    """Static contract: handle_identity_adapter source contains the helper invocation
+    on its response_data. Cheap regression against silent removal in future refactors."""
+    import inspect
+    from src.mcp_handlers.identity import handlers
+
+    src = inspect.getsource(handlers.handle_identity_adapter)
+    assert "_emit_continuity_token_deprecation" in src, (
+        "handle_identity_adapter must wire S1-a deprecation surface — "
+        "see docs/ontology/s1-continuity-token-retirement.md §4.3"
+    )
+    assert "response_dict=response_data" in src
+
+
+def test_handle_bind_session_wiring_present():
+    """Static contract: handle_bind_session source wires the helper on the response
+    payload — only when continuity_token was used to derive the session id."""
+    import inspect
+    from src.mcp_handlers.identity import handlers
+
+    src = inspect.getsource(handlers.handle_bind_session)
+    assert "_emit_continuity_token_deprecation" in src
+    assert "response_dict=bind_response" in src
 
 
 # -----------------------------------------------------------------------------
