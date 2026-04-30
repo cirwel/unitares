@@ -220,17 +220,27 @@ CREATE TABLE lease_plane.surface_leases (
   release_reason     text,                    -- see §4.4.1 below
   audit_session      text,                    -- writer's UNITARES session_id, for join into audit.tool_usage
   original_ttl_s     int NOT NULL,           -- ttl agreed at acquire-time; renew/heartbeat extends expires_at by this fixed value, NOT by caller-supplied (closes ack-pass BLOCK 2: indefinite-extension via malicious renew)
+  earned_status      text NOT NULL DEFAULT 'provisional',  -- §7.8 substrate-earned-class flag; v0 acquisitions default 'provisional', promotion to 'earned' is a future migration after ≥30d stable operation
   CHECK (
     (heartbeat_required = true  AND holder_kind = 'remote_heartbeat') OR
     (heartbeat_required = false AND holder_kind = 'local_beam')
   ),
   CHECK (holder_class IN ('process_instance','substrate_earned')),  -- 'role' is rejected at the storage layer (closes ack-pass BLOCK 1: §7.8 role-rejection was application-layer only)
   CHECK (holder_kind  IN ('local_beam','remote_heartbeat')),
+  CHECK (earned_status IN ('provisional','earned')),                  -- §7.8 visibility at the schema boundary
   CHECK (original_ttl_s > 0 AND original_ttl_s <= 3600)              -- hard cap: max 1h ttl, no indefinite leases
 );
 
--- holder_kind immutability enforced at UPDATE level (closes ack-pass BLOCK 1: row-level CHECK is bypass-able by UPDATE)
-CREATE OR REPLACE FUNCTION lease_plane.enforce_immutable_holder_kind()
+-- Lease-row field immutability enforced at UPDATE level (closes ack-pass BLOCK 1:
+-- row-level CHECK is bypass-able by UPDATE). The trigger guards every field that
+-- defines lease identity, holder identity, or TTL contract — release_reason,
+-- released_at, last_heartbeat_at, expires_at remain mutable because the
+-- legitimate state-machine transitions (release, heartbeat, renew) write them.
+-- Migration 025 confirmed via direct UPDATE against the live governance DB
+-- that surface_id, surface_kind, holder_agent_uuid, acquired_at, and
+-- earned_status were silently mutable under migration 024's narrower trigger;
+-- that gap is now closed.
+CREATE OR REPLACE FUNCTION lease_plane.enforce_immutable_lease_fields()
 RETURNS trigger AS $$
 BEGIN
   IF NEW.holder_kind IS DISTINCT FROM OLD.holder_kind THEN
@@ -242,14 +252,29 @@ BEGIN
   IF NEW.original_ttl_s IS DISTINCT FROM OLD.original_ttl_s THEN
     RAISE EXCEPTION 'original_ttl_s is immutable per lease_id; renew uses this fixed value';
   END IF;
+  IF NEW.surface_id IS DISTINCT FROM OLD.surface_id THEN
+    RAISE EXCEPTION 'surface_id is immutable per lease_id; lease identity is bound to (surface_id, holder)';
+  END IF;
+  IF NEW.surface_kind IS DISTINCT FROM OLD.surface_kind THEN
+    RAISE EXCEPTION 'surface_kind is immutable per lease_id';
+  END IF;
+  IF NEW.holder_agent_uuid IS DISTINCT FROM OLD.holder_agent_uuid THEN
+    RAISE EXCEPTION 'holder_agent_uuid is immutable per lease_id; handoff uses release+reacquire, not in-place update';
+  END IF;
+  IF NEW.acquired_at IS DISTINCT FROM OLD.acquired_at THEN
+    RAISE EXCEPTION 'acquired_at is immutable per lease_id';
+  END IF;
+  IF NEW.earned_status IS DISTINCT FROM OLD.earned_status THEN
+    RAISE EXCEPTION 'earned_status is immutable per lease_id; promote new acquisitions, not historical rows';
+  END IF;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER surface_leases_immutable_holder
+CREATE TRIGGER surface_leases_immutable_fields
   BEFORE UPDATE ON lease_plane.surface_leases
   FOR EACH ROW
-  EXECUTE FUNCTION lease_plane.enforce_immutable_holder_kind();
+  EXECUTE FUNCTION lease_plane.enforce_immutable_lease_fields();
 
 -- One active lease per surface (the load-bearing invariant)
 CREATE UNIQUE INDEX surface_leases_active_unique
@@ -353,7 +378,7 @@ POST /v1/lease/acquire
   returns: typed-absence (acquire result above)
 
 POST /v1/lease/renew
-  body: { lease_id, ttl_s }
+  body: { lease_id }                          -- no ttl_s: renew extends by the immutable original_ttl_s; see §4.4.2
   returns: typed-absence
 
 POST /v1/lease/release
@@ -369,7 +394,7 @@ POST /v1/lease/heartbeat
   returns: typed-absence
 
 POST /v1/lease/handoff/offer
-  body: { lease_id, to_holder_agent_uuid, ttl_s }
+  body: { lease_id, to_holder_agent_uuid, ttl_s }   -- ttl_s here is the NEW lease's original_ttl_s after accept (handoff is release-and-reacquire, not in-place update); offer-pending timeout is server-internal
   returns: typed-absence with handoff_id
 
 POST /v1/lease/handoff/accept
@@ -614,6 +639,25 @@ This is a 4-8 week spike. It trades against:
 The technical case is strong (three independent reviewers converged). The strategic case is the operator's call. If shelved, file this RFC as captured-decision so the next session doesn't re-litigate the substrate question from scratch.
 
 ## 11. Versions / changelog
+
+- **v0.5 (2026-04-30, same session):** Implementation council on the captured `src/lease_plane/` skeleton (parallel: dialectic-knowledge-architect / feature-dev:code-reviewer / live-verifier; adversarial framing per `feedback_council-adversarial-prompt.md`). One critical bug + four contract-staleness items found and addressed in this revision. Material changes:
+
+  *Schema (§4.4) — closes live-verifier-confirmed gap:*
+  - Migration 024's `enforce_immutable_lease_fields` trigger guarded only `holder_kind`, `holder_class`, `original_ttl_s`. live-verifier ran direct UPDATEs against the live `governance` DB and confirmed `surface_id`, `surface_kind`, `holder_agent_uuid`, `acquired_at` were silently mutable on a non-released lease row. The active-unique partial index on `(surface_id) WHERE released_at IS NULL` does not substitute for trigger protection on UPDATE. Migration 025 (`db/postgres/migrations/025_lease_plane_invariants.sql`) replaces the trigger function via `CREATE OR REPLACE` with all eight immutability guards. RFC §4.4 trigger sketch updated to match.
+  - Added `earned_status` column on `surface_leases` (NOT NULL DEFAULT 'provisional', CHECK in {provisional, earned}) and on `lease_plane_events` (nullable for non-lease-creation event types). RFC §7.8 had committed to flagging v0 leases provisional but the flag was invisible at the contract boundary; this surfaces it as a first-class field.
+  - The RFC's prior trigger function name `enforce_immutable_holder_kind` (and trigger name `surface_leases_immutable_holder`) were renamed to `enforce_immutable_lease_fields` / `surface_leases_immutable_fields` to match what migration 024 actually shipped (drift surfaced by this council pass).
+
+  *Contract (§5):*
+  - `/v1/lease/renew` body row corrected to `{ lease_id }` only — §4.4.2 already spec'd "no ttl_s parameter" but the §5 endpoint table still showed the stale shape. Elixir builders read §5.
+  - `/v1/lease/handoff/offer` `ttl_s` annotated inline: it is the new lease's `original_ttl_s` after accept (handoff is release-and-reacquire, not in-place update). The offer-pending timeout is server-internal (Oban job).
+
+  *Python contract anchor:*
+  - `LeaseRecord` gains `earned_status: Literal["provisional","earned"] = "provisional"` field; `EarnedStatus` exported from `src/lease_plane/`.
+  - `HandoffOfferRequest` docstring documents the release-and-reacquire model and the meaning of `ttl_s`.
+  - `_parse_simple` fall-through (unknown error string) now preserves the raw error in `SimpleError.reason` instead of silently mapping to bare `service_unavailable`. Protocol-skew bugs become inspectable.
+  - 5 new tests in `tests/test_lease_plane_client.py`: handoff offer ok, handoff accept not_found, unknown-error preservation, earned_status default, earned_status="earned" override.
+
+
 
 - **v0 (2026-04-30):** Initial draft. Pre-council. Author: claude_code session `agent-68437d77-65c`. Synthesis of three-voice convergence (claude_code, codex, gpt-5.5) on 2026-04-30. Replaces the implicit RFC produced by dialectic session `95c9ddfd6bb09308` by formalizing scope, invariant, and rollout pattern.
 

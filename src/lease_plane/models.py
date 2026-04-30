@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 HolderClass: TypeAlias = Literal["process_instance", "substrate_earned"]
 HolderKind: TypeAlias = Literal["local_beam", "remote_heartbeat"]
+EarnedStatus: TypeAlias = Literal["provisional", "earned"]
 ReleaseReason: TypeAlias = Literal[
     "normal",
     "down_local",
@@ -46,6 +47,7 @@ class LeaseRecord(BaseModel):
     released_at: datetime | None = None
     release_reason: ReleaseReason | None = None
     audit_session: str | None = None
+    earned_status: EarnedStatus = "provisional"
 
     @model_validator(mode="after")
     def _holder_kind_matches_heartbeat(self) -> "LeaseRecord":
@@ -91,7 +93,19 @@ class ReleaseRequest(LeasePlaneModel):
 
 
 class HandoffOfferRequest(LeasePlaneModel):
-    """Request body for POST /v1/lease/handoff/offer."""
+    """Request body for POST /v1/lease/handoff/offer.
+
+    Handoff is a release-and-reacquire pattern: on accept, the old lease row
+    is closed with `release_reason='handoff'` and a new lease row is inserted
+    for the receiving holder. `original_ttl_s` is immutable per lease_id, so
+    in-place handoff is not possible.
+
+    `ttl_s` here is therefore the **new lease's `original_ttl_s`** that the
+    receiving holder will hold after accept — not an offer-window TTL. The
+    offer-window expiry (how long the offer remains valid for accept) is
+    server-internal (Oban handoff-timeout job) and is not part of this
+    contract.
+    """
 
     lease_id: UUID
     to_holder_agent_uuid: UUID

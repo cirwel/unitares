@@ -220,6 +220,10 @@ def _parse_simple(payload: Mapping[str, Any]) -> SimpleResult:
             "service_unavailable",
         }:
             return SimpleError.model_validate(payload)
-        return SimpleError(ok=False, error="service_unavailable")
+        return SimpleError(
+            ok=False,
+            error="service_unavailable",
+            reason=f"unrecognized error: {error!r}" if error is not None else "missing error discriminant",
+        )
     except ValidationError as exc:
         return SimpleError(ok=False, error="schema_invalid", detail=exc.errors())

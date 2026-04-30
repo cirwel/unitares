@@ -12,6 +12,8 @@ from src.lease_plane import (
     AcquireRequest,
     AcquireSchemaInvalid,
     AcquireServiceUnavailable,
+    HandoffAcceptRequest,
+    HandoffOfferRequest,
     HeartbeatRequest,
     LeasePlaneClient,
     LeasePlaneClientConfig,
@@ -20,6 +22,7 @@ from src.lease_plane import (
     ReleaseRequest,
     RenewRequest,
     SimpleError,
+    SimpleOk,
     StatusOk,
 )
 from src.lease_plane.client import LeaseHTTPRequest
@@ -230,3 +233,68 @@ def test_disabled_client_returns_service_unavailable():
     result = LeasePlaneDisabledClient().status("file:///tmp/a")
 
     assert result.error == "service_unavailable"
+
+
+def test_lease_record_defaults_earned_status_to_provisional():
+    record = LeaseRecord.model_validate(_lease_payload())
+    assert record.earned_status == "provisional"
+
+
+def test_lease_record_accepts_earned_status_earned():
+    payload = _lease_payload()
+    payload["earned_status"] = "earned"
+    record = LeaseRecord.model_validate(payload)
+    assert record.earned_status == "earned"
+
+
+def test_handoff_offer_returns_handoff_id_on_ok():
+    handoff_id = uuid4()
+    seen: dict[str, Any] = {}
+
+    def transport(request: LeaseHTTPRequest):
+        seen["body"] = request.json_body
+        seen["url"] = request.url
+        return {"ok": True, "handoff_id": str(handoff_id)}
+
+    lease_id = uuid4()
+    to_holder = uuid4()
+    result = LeasePlaneClient(transport=transport).handoff_offer(
+        HandoffOfferRequest(lease_id=lease_id, to_holder_agent_uuid=to_holder, ttl_s=120)
+    )
+
+    assert isinstance(result, SimpleOk)
+    assert result.handoff_id == handoff_id
+    assert seen["body"] == {
+        "lease_id": str(lease_id),
+        "to_holder_agent_uuid": str(to_holder),
+        "ttl_s": 120,
+    }
+    assert seen["url"].endswith("/v1/lease/handoff/offer")
+
+
+def test_handoff_accept_parses_not_found():
+    handoff_id = uuid4()
+
+    def transport(_request: LeaseHTTPRequest):
+        return {"ok": False, "error": "not_found"}
+
+    result = LeasePlaneClient(transport=transport).handoff_accept(
+        HandoffAcceptRequest(handoff_id=handoff_id)
+    )
+
+    assert isinstance(result, SimpleError)
+    assert result.error == "not_found"
+
+
+def test_simple_unknown_error_preserves_raw_string_in_reason():
+    def transport(_request: LeaseHTTPRequest):
+        return {"ok": False, "error": "wormhole_collapsed"}
+
+    result = LeasePlaneClient(transport=transport).release(
+        ReleaseRequest(lease_id=uuid4(), release_reason="forced")
+    )
+
+    assert isinstance(result, SimpleError)
+    assert result.error == "service_unavailable"
+    assert result.reason is not None
+    assert "wormhole_collapsed" in result.reason
