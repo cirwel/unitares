@@ -15,3 +15,7 @@ CREATE TABLE IF NOT EXISTS core.agent_baselines (
     alpha               REAL NOT NULL DEFAULT 0.1,
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+INSERT INTO core.schema_migrations (version, name, applied_at)
+VALUES (5, 'agent_baselines', NOW())
+ON CONFLICT (version) DO NOTHING;

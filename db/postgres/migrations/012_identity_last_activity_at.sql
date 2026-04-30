@@ -19,3 +19,7 @@ ALTER TABLE core.identities
 
 CREATE INDEX IF NOT EXISTS idx_identities_last_activity_at
     ON core.identities (last_activity_at DESC NULLS LAST);
+
+INSERT INTO core.schema_migrations (version, name, applied_at)
+VALUES (12, 'identity_last_activity_at', NOW())
+ON CONFLICT (version) DO NOTHING;

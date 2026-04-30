@@ -25,3 +25,7 @@ CREATE UNIQUE INDEX idx_mv_latest_states_identity
 -- For lookups by agent_id
 CREATE INDEX idx_mv_latest_states_agent
     ON core.mv_latest_agent_states (agent_id);
+
+INSERT INTO core.schema_migrations (version, name, applied_at)
+VALUES (8, 'dashboard_matview', NOW())
+ON CONFLICT (version) DO NOTHING;
