@@ -143,7 +143,7 @@ async def handle_update_agent_metadata(arguments: Dict[str, Any]) -> Sequence[Te
             parent_agent_id=getattr(meta, "parent_agent_id", None),
             spawn_reason=getattr(meta, "spawn_reason", None),
         )
-        logger.debug(f"PostgreSQL: Updated metadata for {agent_id}")
+        logger.debug("PostgreSQL: Updated metadata")
 
         await _invalidate_agent_cache(agent_id)
     except Exception as e:
@@ -220,9 +220,9 @@ async def handle_archive_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
             meta.notes = new_notes
         except Exception as e:
             logger.warning(
-                f"Could not persist sticky-archive marker for {agent_id}: {e}. "
-                f"Cooldown window still protects against immediate resurrection.",
-                exc_info=True,
+                "Could not persist sticky-archive marker: %s. "
+                "Cooldown window still protects against immediate resurrection.",
+                type(e).__name__,
             )
 
     # Persist-first: write to Postgres before mutating in-memory state
@@ -345,7 +345,7 @@ async def handle_delete_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
     # PostgreSQL: Delete agent (single source of truth)
     try:
         await agent_storage.delete_agent(agent_id)
-        logger.debug(f"PostgreSQL: Deleted agent {agent_id}")
+        logger.debug("PostgreSQL: Deleted agent")
 
         await _invalidate_agent_cache(agent_id)
     except Exception as e:

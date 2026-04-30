@@ -324,13 +324,15 @@ async def hydrate_from_db_if_fresh(monitor: UNITARESMonitor, agent_id: str) -> b
         monitor.state.update_count = len(chrono)
 
         logger.info(
-            f"Hydrated {agent_id} from core.agent_state: "
-            f"{len(chrono)} records, coherence={monitor.state.coherence:.3f}, "
-            f"regime={monitor.state.regime}"
+            "Hydrated monitor from core.agent_state: "
+            "%s records, coherence=%.3f, regime=%s",
+            len(chrono),
+            monitor.state.coherence,
+            monitor.state.regime,
         )
         return True
     except Exception as e:
-        logger.warning(f"DB hydration failed for {agent_id}: {e}", exc_info=True)
+        logger.warning("DB hydration failed: %s", type(e).__name__)
         return False
 
 

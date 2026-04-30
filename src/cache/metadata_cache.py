@@ -89,10 +89,10 @@ class MetadataCache:
         key = f"{METADATA_PREFIX}{agent_id}"
         try:
             await redis.setex(key, ttl, json.dumps(metadata))
-            logger.debug(f"Metadata cached: {agent_id[:8]}... (TTL: {ttl}s)")
+            logger.debug("Metadata cached (TTL: %ss)", ttl)
             return True
         except Exception as e:
-            logger.debug(f"Metadata cache set failed: {e}")
+            logger.debug("Metadata cache set failed: %s", type(e).__name__)
             return False
 
     async def invalidate(self, agent_id: str) -> bool:
@@ -112,10 +112,10 @@ class MetadataCache:
         key = f"{METADATA_PREFIX}{agent_id}"
         try:
             await redis.delete(key)
-            logger.debug(f"Metadata cache invalidated: {agent_id[:8]}...")
+            logger.debug("Metadata cache invalidated")
             return True
         except Exception as e:
-            logger.debug(f"Metadata cache invalidate failed: {e}")
+            logger.debug("Metadata cache invalidate failed: %s", type(e).__name__)
             return False
 
     async def invalidate_all(self) -> int:
@@ -156,4 +156,3 @@ def get_metadata_cache() -> MetadataCache:
     if _metadata_cache is None:
         _metadata_cache = MetadataCache()
     return _metadata_cache
-

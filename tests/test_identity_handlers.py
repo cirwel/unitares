@@ -965,6 +965,46 @@ class TestHandleIdentityAdapter:
         assert "session_continuity" not in data
 
     @pytest.mark.asyncio
+    async def test_identity_uses_middleware_resolved_identity(
+        self, patch_identity_deps, mock_db, mock_redis,
+    ):
+        """S21-b item 5: identity() must not re-resolve the same request."""
+        from src.mcp_handlers.identity import handlers as identity_handlers
+
+        agent_uuid = "77777777-7777-4777-8777-777777777777"
+        middleware_identity = {
+            "agent_uuid": agent_uuid,
+            "agent_id": "Gpt_5_Codex_20260429",
+            "public_agent_id": "Gpt_5_Codex_20260429",
+            "label": "Codex_77777777",
+            "display_name": "Codex_77777777",
+            "created": False,
+            "persisted": True,
+            "source": "postgres",
+            "identity_resolution_outcome": "resumed",
+            "core_agent_row_status": "active",
+        }
+
+        resolve_spy = AsyncMock(side_effect=AssertionError("handler re-resolved"))
+        with patch.object(
+            identity_handlers,
+            "derive_session_key",
+            new_callable=AsyncMock,
+            return_value="agent-pre-resolved",
+        ), patch.object(identity_handlers, "resolve_session_identity", resolve_spy):
+            result = await identity_handlers.handle_identity_adapter({
+                "client_session_id": "agent-pre-resolved",
+                "_middleware_identity_session_key": "agent-pre-resolved",
+                "_middleware_identity_result": middleware_identity,
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["uuid"] == agent_uuid
+        assert data["identity_status"] == "resumed"
+        resolve_spy.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_identity_returns_stable_client_session_id_for_existing_identity(self, patch_identity_deps, mock_db, mock_redis):
         """identity() should always return the stable agent-... session handle, not the transport key."""
         from src.mcp_handlers.identity.handlers import handle_identity_adapter

@@ -105,8 +105,8 @@ async def _archive_one_agent(
         )
     except Exception as e:
         logger.warning(
-            f"Could not persist archival for {agent_id[:12]}...: {e}",
-            exc_info=True,
+            "Could not persist archival: %s",
+            type(e).__name__,
         )
         return False
 

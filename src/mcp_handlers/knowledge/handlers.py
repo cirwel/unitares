@@ -71,8 +71,10 @@ async def _clamp_confidence_to_coherence(discovery, agent_id: str) -> bool:
             discovery.provenance["confidence_clamped"] = True
             discovery.provenance["original_confidence"] = original
             logger.info(
-                "Confidence clamped for agent %s: %.3f -> %.3f (coherence=%.3f)",
-                agent_id, original, discovery.confidence, coherence,
+                "Knowledge confidence clamped: %.3f -> %.3f (coherence=%.3f)",
+                original,
+                discovery.confidence,
+                coherence,
             )
             await broadcaster_instance.broadcast_event(
                 "knowledge_confidence_clamped",

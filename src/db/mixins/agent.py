@@ -117,7 +117,10 @@ class AgentMixin:
                 )
                 return "UPDATE 1" in result
             except Exception as e:
-                logger.error(f"Failed to update agent fields for {agent_id}: {e}")
+                logger.error(
+                    "Failed to update agent fields: %s",
+                    type(e).__name__,
+                )
                 return False
 
     async def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:

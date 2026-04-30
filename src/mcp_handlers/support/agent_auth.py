@@ -8,6 +8,53 @@ from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+_REGISTERED_AGENT_ALLOWED_STATUSES = ("active", "paused", "waiting_input")
+
+
+def _identity_result_aliases(identity: Dict[str, Any]) -> set[str]:
+    aliases = set()
+    for key in ("agent_uuid", "agent_id", "public_agent_id", "display_name", "label"):
+        value = identity.get(key)
+        if value:
+            aliases.add(str(value))
+    return aliases
+
+
+def _identity_result_row_status(identity: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(identity, dict):
+        return None
+    status = identity.get("core_agent_row_status")
+    if status:
+        return str(status)
+    if identity.get("archived"):
+        return "archived"
+    return None
+
+
+def _select_trusted_identity_result(
+    *,
+    arguments: Dict[str, Any],
+    context_identity: Optional[Dict[str, Any]],
+    requested_agent_id: str,
+    bound_uuid: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Choose middleware/core identity data matching this request."""
+    candidates = []
+    if isinstance(context_identity, dict):
+        candidates.append(context_identity)
+    arg_identity = arguments.get("_middleware_identity_result") if arguments else None
+    if isinstance(arg_identity, dict):
+        candidates.append(arg_identity)
+
+    for identity in candidates:
+        agent_uuid = identity.get("agent_uuid")
+        if not agent_uuid:
+            continue
+        aliases = _identity_result_aliases(identity)
+        if requested_agent_id in aliases or (bound_uuid and bound_uuid == agent_uuid):
+            return identity
+    return None
+
 
 def compute_agent_signature(
     agent_id: Optional[str] = None,
@@ -29,7 +76,13 @@ def compute_agent_signature(
         context_bound_id = get_context_agent_id()
         bound_id = agent_id or context_bound_id
 
-        logger.debug(f"compute_agent_signature: agent_id={agent_id}, context={context_bound_id}, final={bound_id}")
+        logger.debug(
+            "compute_agent_signature resolved identity "
+            "(explicit=%s, context=%s, final=%s)",
+            agent_id is not None,
+            context_bound_id is not None,
+            bound_id is not None,
+        )
 
         if not bound_id:
             return {"uuid": None}
@@ -76,7 +129,7 @@ def compute_agent_signature(
         return signature
 
     except Exception as e:
-        logger.debug(f"compute_agent_signature error: {e}")
+        logger.debug("compute_agent_signature error: %s", type(e).__name__)
         return {"uuid": None}
 
 
@@ -160,10 +213,13 @@ def require_agent_id(arguments: Dict[str, Any]) -> Tuple[str, Optional[TextConte
             bound_id = get_context_agent_id()
             if bound_id:
                 agent_id = bound_id
-                logger.debug(f"Using session-bound identity UUID: {agent_id}")
+                logger.debug("Using session-bound identity UUID")
                 arguments["agent_id"] = agent_id
         except Exception as e:
-            logger.debug(f"Could not retrieve session-bound identity: {e}")
+            logger.debug(
+                "Could not retrieve session-bound identity: %s",
+                type(e).__name__,
+            )
 
     # Canonical ID resolution when both explicit agent_id and a session binding exist.
     #
@@ -193,18 +249,15 @@ def require_agent_id(arguments: Dict[str, Any]) -> Tuple[str, Optional[TextConte
                         public_agent_id = getattr(meta, 'public_agent_id', None)
                         if explicit_agent_id in (label, public_agent_id, structured_id):
                             # Case 1: alias of the bound agent — rewrite to UUID.
-                            logger.debug(
-                                f"Explicit agent_id '{explicit_agent_id}' is an alias "
-                                f"of bound UUID '{bound_uuid[:8]}...'; using UUID."
-                            )
+                            logger.debug("Explicit agent_id is a bound identity alias; using UUID")
                             agent_id = bound_uuid
                             arguments["agent_id"] = agent_id
                         else:
                             # Case 2: cross-agent reference — honor the explicit
                             # value; ownership verification runs downstream.
                             logger.debug(
-                                f"Explicit agent_id '{explicit_agent_id}' differs from "
-                                f"bound UUID '{bound_uuid[:8]}...'; honoring explicit value."
+                                "Explicit agent_id differs from bound UUID; "
+                                "honoring explicit value"
                             )
                 except Exception:
                     pass
@@ -237,7 +290,7 @@ def require_agent_id(arguments: Dict[str, Any]) -> Tuple[str, Optional[TextConte
         short_uuid = str(uuid.uuid4())[:8]
         agent_id = f"auto_{timestamp}_{short_uuid}"
         arguments["agent_id"] = agent_id
-        logger.info(f"Auto-generated agent_id: {agent_id}")
+        logger.info("Auto-generated agent_id")
 
     # Validate format and reserved names
     from ..validators import validate_agent_id_format
@@ -268,7 +321,7 @@ def require_registered_agent(arguments: Dict[str, Any]) -> Tuple[str, Optional[T
 
     try:
         from ..shared import get_mcp_server
-        from ..context import get_context_agent_id
+        from ..context import get_context_agent_id, get_session_context
         import uuid as uuid_module
 
         mcp_server = get_mcp_server()
@@ -293,6 +346,11 @@ def require_registered_agent(arguments: Dict[str, Any]) -> Tuple[str, Optional[T
         structured_id = None
         display_name = None
         label = None
+        context_identity = None
+        try:
+            context_identity = (get_session_context() or {}).get("identity_result")
+        except Exception:
+            context_identity = None
 
         if is_uuid:
             if agent_id in mcp_server.agent_metadata:
@@ -329,6 +387,26 @@ def require_registered_agent(arguments: Dict[str, Any]) -> Tuple[str, Optional[T
                 display_name = getattr(meta, 'display_name', None) or getattr(meta, 'label', None)
                 label = getattr(meta, 'label', None)
 
+        trusted_identity = _select_trusted_identity_result(
+            arguments=arguments,
+            context_identity=context_identity,
+            requested_agent_id=agent_id,
+            bound_uuid=get_context_agent_id(),
+        )
+        if not agent_found and trusted_identity:
+            actual_uuid = trusted_identity.get("agent_uuid")
+            agent_found = True
+            public_agent_id = (
+                trusted_identity.get("public_agent_id")
+                or trusted_identity.get("agent_id")
+            )
+            structured_id = trusted_identity.get("structured_id")
+            display_name = (
+                trusted_identity.get("display_name")
+                or trusted_identity.get("label")
+            )
+            label = trusted_identity.get("label")
+
         # S21-b §2: gate on meta.status. update_identity_status writes only PG,
         # so the in-memory dict can hold a stale-active row for an agent that
         # core.identities has marked archived/deleted/disabled. Without this
@@ -339,11 +417,24 @@ def require_registered_agent(arguments: Dict[str, Any]) -> Tuple[str, Optional[T
         # Allowlist (not blocklist) so a future status value not enumerated
         # below fails closed instead of silently passing through (council
         # pass-2 dialectic finding #1: blocklist is fail-open on unknown).
-        if agent_found and actual_uuid in mcp_server.agent_metadata:
-            agent_status = getattr(
-                mcp_server.agent_metadata[actual_uuid], "status", "active"
+        if agent_found and actual_uuid:
+            core_status = (
+                _identity_result_row_status(trusted_identity)
+                if (
+                    trusted_identity
+                    and trusted_identity.get("agent_uuid") == actual_uuid
+                )
+                else None
             )
-            if agent_status not in ("active", "paused", "waiting_input"):
+            if core_status is not None:
+                agent_status = core_status
+            elif actual_uuid in mcp_server.agent_metadata:
+                agent_status = getattr(
+                    mcp_server.agent_metadata[actual_uuid], "status", "active"
+                )
+            else:
+                agent_status = "active"
+            if agent_status not in _REGISTERED_AGENT_ALLOWED_STATUSES:
                 # Map to the inferer's keyword so error_code lands in the
                 # right category (AGENT_ARCHIVED / AGENT_DELETED / etc.).
                 return None, error_response(

@@ -446,7 +446,7 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
     if reviewer_mode == "auto":
         agent_tags = set(t.lower() for t in (getattr(meta, "tags", None) or []))
         if agent_tags & {"autonomous", "embodied", "anima"}:
-            logger.info(f"[DIALECTIC] Skipping auto-recovery for non-reasoning agent {agent_uuid[:12]}...")
+            logger.info("[DIALECTIC] Skipping auto-recovery for non-reasoning agent")
             return success_response({
                 "success": True,
                 "skipped": True,
@@ -527,7 +527,9 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             reviewer_agent_id = None
         # Fall back to self-review if no eligible reviewer found
         if reviewer_agent_id is None:
-            logger.info(f"[DIALECTIC] No eligible reviewer for {agent_uuid[:12]}... — falling back to self-review")
+            logger.info(
+                "[DIALECTIC] No eligible reviewer found; falling back to self-review"
+            )
             reviewer_agent_id = agent_uuid
             auto_self_review = True
     else:
@@ -1077,9 +1079,12 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                 try:
                     await pg_update_reviewer(session_id, agent_id)
                     result["reviewer_auto_assigned"] = True
-                    logger.info(f"Reviewer auto-assigned: {agent_id[:8]}... for session {session_id[:8]}...")
+                    logger.info("Reviewer auto-assigned for dialectic session")
                 except Exception as e:
-                    logger.warning(f"Could not persist reviewer assignment to PostgreSQL: {e}")
+                    logger.warning(
+                        "Could not persist reviewer assignment to PostgreSQL: %s",
+                        type(e).__name__,
+                    )
             elif reviewer_takeover:
                 result["reviewer_takeover"] = reviewer_takeover
 
@@ -1862,7 +1867,7 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         logger.debug(f"Could not get agent state: {e}")
 
     # Run full dialectic
-    logger.info(f"Running LLM-assisted dialectic for agent {agent_uuid[:8]}...")
+    logger.info("Running LLM-assisted dialectic")
     result = await run_full_dialectic(
         thesis=thesis,
         agent_state=agent_state,

@@ -7,6 +7,7 @@ by reusing the first-resolved identity for all subsequent tool calls.
 
 import sys
 import time
+import asyncio
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
@@ -206,14 +207,40 @@ class TestStickyResolveIdentity:
             with patch("src.mcp_handlers.context.set_session_context", return_value="tok") as mock_set:
                 # derive_session_key should NOT be called
                 with patch("src.mcp_handlers.identity.handlers.derive_session_key") as mock_derive:
-                    result = await resolve_identity("some_tool", {}, ctx)
+                    with patch("src.mcp_handlers.identity.handlers._get_agent_status", new_callable=AsyncMock, return_value="active") as status_spy:
+                        result = await resolve_identity("some_tool", {}, ctx)
 
                     name, args, out_ctx = result
                     assert out_ctx.bound_agent_id == "uuid-cached"
                     assert out_ctx.session_key == "sk-cached"
                     assert out_ctx.identity_result["source"] == "sticky_cache"
+                    assert out_ctx.identity_result["core_agent_row_status"] == "active"
                     # derive_session_key was never called
                     mock_derive.assert_not_called()
+                    status_spy.assert_awaited_once_with("uuid-cached")
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_status_lookup_timeout_degrades_to_none(self):
+        """Sticky-cache DB status lookup is bounded on the hot path."""
+        update_transport_binding("sticky:192.168.1.1:abc", "uuid-cached", "sk-cached", "redis")
+
+        async def _slow_status(_agent_uuid):
+            await asyncio.sleep(0.05)
+            return "archived"
+
+        signals = FakeSignals(ip_ua_fingerprint="192.168.1.1:abc")
+        ctx = DispatchContext()
+
+        with patch("src.mcp_handlers.context.get_session_signals", return_value=signals), \
+             patch("src.mcp_handlers.context.set_session_context", return_value="tok"), \
+             patch("src.mcp_handlers.middleware.identity_step._REDIS_RECOVERY_TIMEOUT", 0.001), \
+             patch("src.mcp_handlers.identity.handlers._get_agent_status", new=AsyncMock(side_effect=_slow_status)):
+            _, args, out_ctx = await resolve_identity("some_tool", {}, ctx)
+
+        assert out_ctx.bound_agent_id == "uuid-cached"
+        assert out_ctx.identity_result["source"] == "sticky_cache"
+        assert out_ctx.identity_result["core_agent_row_status"] is None
+        assert args["_middleware_identity_result"]["core_agent_row_status"] is None
 
     @pytest.mark.asyncio
     async def test_cache_bypass_on_force_new(self):
@@ -279,16 +306,40 @@ class TestStickyResolveIdentity:
                 with patch("src.mcp_handlers.identity.handlers.derive_session_key", new_callable=AsyncMock, return_value="sk-derived"):
                     with patch("src.mcp_handlers.identity.handlers.resolve_session_identity", new_callable=AsyncMock) as mock_resolve:
                         with patch("src.mcp_handlers.context.set_session_context", return_value="tok"):
-                            result = await resolve_identity(
-                                "identity",
-                                {"agent_uuid": "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4", "resume": True},
-                                ctx,
-                            )
+                            with patch("src.mcp_handlers.identity.handlers._get_agent_status", new_callable=AsyncMock, return_value="active") as status_spy:
+                                result = await resolve_identity(
+                                    "identity",
+                                    {"agent_uuid": "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4", "resume": True},
+                                    ctx,
+                                )
                             _, _, out_ctx = result
                             assert out_ctx.bound_agent_id == "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4"
                             assert out_ctx.identity_result["source"] == "agent_uuid_passthrough"
+                            assert out_ctx.identity_result["core_agent_row_status"] == "active"
                             # resolve_session_identity should NOT have been called
                             mock_resolve.assert_not_called()
+                            status_spy.assert_awaited_once_with("e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4")
+
+    @pytest.mark.asyncio
+    async def test_agent_uuid_passthrough_threads_archived_core_status(self):
+        """PATH 0 passthrough carries core row status for downstream auth."""
+        signals = FakeSignals(ip_ua_fingerprint="192.168.1.1:path0arch")
+        ctx = DispatchContext()
+        uid = "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4"
+        args = {"agent_uuid": uid, "resume": True}
+
+        with patch("src.mcp_handlers.context.get_session_signals", return_value=signals), \
+             patch("src.mcp_handlers.middleware.identity_step._load_binding_from_redis", new_callable=AsyncMock, return_value=None), \
+             patch("src.mcp_handlers.identity.handlers.derive_session_key", new_callable=AsyncMock, return_value="sk-derived"), \
+             patch("src.mcp_handlers.identity.handlers.resolve_session_identity", new_callable=AsyncMock) as mock_resolve, \
+             patch("src.mcp_handlers.identity.handlers._get_agent_status", new_callable=AsyncMock, return_value="archived") as status_spy, \
+             patch("src.mcp_handlers.context.set_session_context", return_value="tok"):
+            _, out_args, out_ctx = await resolve_identity("identity", args, ctx)
+
+        mock_resolve.assert_not_called()
+        status_spy.assert_awaited_once_with(uid)
+        assert out_ctx.identity_result["core_agent_row_status"] == "archived"
+        assert out_args["_middleware_identity_result"]["core_agent_row_status"] == "archived"
 
     @pytest.mark.asyncio
     async def test_agent_uuid_passthrough_populates_sticky_cache(self):
@@ -300,16 +351,53 @@ class TestStickyResolveIdentity:
             with patch("src.mcp_handlers.middleware.identity_step._load_binding_from_redis", new_callable=AsyncMock, return_value=None):
                 with patch("src.mcp_handlers.identity.handlers.derive_session_key", new_callable=AsyncMock, return_value="sk-derived"):
                     with patch("src.mcp_handlers.context.set_session_context", return_value="tok"):
-                        await resolve_identity(
-                            "identity",
-                            {"agent_uuid": "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4"},
-                            ctx,
-                        )
+                        with patch("src.mcp_handlers.identity.handlers._get_agent_status", new_callable=AsyncMock, return_value=None) as status_spy:
+                            await resolve_identity(
+                                "identity",
+                                {"agent_uuid": "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4"},
+                                ctx,
+                            )
 
         # Sticky cache should have the UUID
         cache_key = "sticky:192.168.1.1:path0cache"
         assert cache_key in _transport_identity_cache
         assert _transport_identity_cache[cache_key].agent_uuid == "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4"
+        status_spy.assert_awaited_once_with("e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4")
+
+    @pytest.mark.asyncio
+    async def test_agent_uuid_passthrough_archived_status_rejected_by_auth(self):
+        """PATH 0 archived row status must drive require_registered_agent."""
+        from src.mcp_handlers.utils import require_registered_agent
+
+        signals = FakeSignals(ip_ua_fingerprint="192.168.1.1:path0reject")
+        ctx = DispatchContext()
+        uid = "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4"
+        args = {"agent_uuid": uid, "resume": True}
+
+        with patch("src.mcp_handlers.context.get_session_signals", return_value=signals), \
+             patch("src.mcp_handlers.middleware.identity_step._load_binding_from_redis", new_callable=AsyncMock, return_value=None), \
+             patch("src.mcp_handlers.identity.handlers.derive_session_key", new_callable=AsyncMock, return_value="sk-derived"), \
+             patch("src.mcp_handlers.identity.handlers._get_agent_status", new_callable=AsyncMock, return_value="archived"), \
+             patch("src.mcp_handlers.context.set_session_context", return_value="tok"):
+            _, out_args, _ = await resolve_identity("identity", args, ctx)
+
+        stale_meta = MagicMock()
+        stale_meta.status = "active"
+        stale_meta.label = "StaleActive"
+        server = MagicMock()
+        server.agent_metadata = {uid: stale_meta}
+        server.ensure_metadata_loaded = MagicMock()
+
+        out_args["agent_id"] = uid
+        with patch("src.mcp_handlers.validators.validate_agent_id_format", return_value=(uid, None)), \
+             patch("src.mcp_handlers.validators.validate_agent_id_reserved_names", return_value=(uid, None)), \
+             patch("src.mcp_handlers.context.get_context_agent_id", return_value=None), \
+             patch("src.mcp_handlers.context.get_session_context", return_value={}), \
+             patch("src.mcp_handlers.shared.get_mcp_server", return_value=server):
+            agent_uuid, error = require_registered_agent(out_args)
+
+        assert agent_uuid is None
+        assert "archived" in error.text.lower()
 
     @pytest.mark.asyncio
     async def test_agent_uuid_passthrough_only_for_identity_tools(self):

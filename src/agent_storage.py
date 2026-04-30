@@ -307,7 +307,7 @@ async def update_agent(
             from src.agent_metadata_persistence import mirror_status_to_dict
             mirror_status_to_dict(agent_id, status)
         except Exception as e:
-            logger.debug(f"Status mirror failed for {agent_id}: {e}")
+            logger.debug("Status mirror failed: %s", type(e).__name__)
 
     return True
 
@@ -358,7 +358,10 @@ async def persist_runtime_state(
         try:
             identity = await db.get_identity(agent_id)
         except Exception as e:
-            logger.debug(f"persist_runtime_state: get_identity failed for {agent_id}: {e}")
+            logger.debug(
+                "persist_runtime_state: get_identity failed: %s",
+                type(e).__name__,
+            )
         existing_events: List[Dict[str, Any]] = []
         if identity is not None and getattr(identity, "metadata", None):
             existing_events = list(identity.metadata.get("lifecycle_events") or [])
@@ -410,9 +413,9 @@ async def archive_agent(
         from src.agent_metadata_persistence import mirror_status_to_dict
         mirror_status_to_dict(agent_id, "archived")
     except Exception as e:
-        logger.debug(f"Status mirror failed for archive {agent_id}: {e}")
+        logger.debug("Status mirror failed during archive: %s", type(e).__name__)
 
-    logger.info(f"Archived agent: {agent_id}")
+    logger.info("Archived agent")
     return True
 
 
@@ -437,12 +440,12 @@ async def delete_agent(agent_id: str) -> bool:
         from src.agent_metadata_persistence import mirror_status_to_dict
         mirror_status_to_dict(agent_id, "deleted")
     except Exception as e:
-        logger.debug(f"Status mirror failed for delete {agent_id}: {e}")
+        logger.debug("Status mirror failed during delete: %s", type(e).__name__)
 
     if hasattr(db, "update_agent_fields"):
         await db.update_agent_fields(agent_id=agent_id, status="deleted")
 
-    logger.info(f"Deleted agent: {agent_id}")
+    logger.info("Deleted agent")
     return True
 
 

@@ -404,7 +404,9 @@ async def handle_quick_resume(arguments: Dict[str, Any]) -> Sequence[TextContent
     meta = mcp_server.agent_metadata.get(agent_uuid)
     if meta and getattr(meta, 'total_updates', 0) == 0:
         checks = {"no_void": not void_active}
-        logger.info(f"[SELF_RECOVERY] Skipping strict thresholds for uninitialized agent {agent_uuid[:8]}...")
+        logger.info(
+            "[SELF_RECOVERY] Skipping strict thresholds for uninitialized agent"
+        )
     else:
         checks = {
             "coherence_high": coherence >= QUICK_RESUME_MIN_COHERENCE,

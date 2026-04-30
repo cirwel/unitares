@@ -772,6 +772,21 @@ async def _try_resume_by_agent_uuid_direct(
     return _identity_success_for_request(arguments, payload, agent_uuid=_direct_uuid)
 
 
+def _middleware_identity_for_session(
+    arguments: Dict[str, Any],
+    base_session_key: str,
+) -> Optional[Dict[str, Any]]:
+    """Return dispatch-resolved identity when it belongs to this session."""
+    if not arguments:
+        return None
+    identity = arguments.get("_middleware_identity_result")
+    if not isinstance(identity, dict):
+        return None
+    if arguments.get("_middleware_identity_session_key") != base_session_key:
+        return None
+    return dict(identity)
+
+
 async def _try_resume_by_session_key(
     arguments: Dict[str, Any],
     *,
@@ -780,6 +795,7 @@ async def _try_resume_by_session_key(
     resume: bool,
     token_agent_uuid: Optional[str],
     model_type: Optional[str],
+    resolved_identity: Optional[Dict[str, Any]] = None,
 ) -> "tuple[Optional[Sequence[TextContent]], Optional[Dict[str, Any]]]":
     """STEP 1: Resolve identity under the base session key.
 
@@ -794,10 +810,12 @@ async def _try_resume_by_session_key(
     if force_new:
         return None, None
 
-    existing_identity = await resolve_session_identity(
-        base_session_key, persist=False, resume=resume,
-        token_agent_uuid=token_agent_uuid,
-    )
+    existing_identity = resolved_identity
+    if existing_identity is None:
+        existing_identity = await resolve_session_identity(
+            base_session_key, persist=False, resume=resume,
+            token_agent_uuid=token_agent_uuid,
+        )
 
     # Token-based resume failed — agent not found or not active.
     # S21-a: distinguish session_resolve_miss (PATH 2 fail-closed, no existing
@@ -964,6 +982,7 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
         resume=resume,
         token_agent_uuid=_token_agent_uuid,
         model_type=model_type,
+        resolved_identity=_middleware_identity_for_session(arguments, base_session_key),
     )
     if step1_response is not None:
         return step1_response
@@ -1473,6 +1492,8 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     if arguments.get("continuity_token"):
         _token_agent_uuid = extract_token_agent_uuid(str(arguments["continuity_token"]))
 
+    middleware_identity = _middleware_identity_for_session(arguments, base_session_key)
+
     # STEP 1: Check if an identity already exists for this session (base key)
     # When resume=True (default): reuse existing identity
     # When resume=False: create new identity with predecessor link
@@ -1485,7 +1506,9 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         # not proof of identity. Callers who previously relied on
         # `onboard(name=X, resume=true)` must now pass agent_uuid or
         # continuity_token, or accept a fresh identity via force_new=true.
-        if _token_agent_uuid and resume:
+        if middleware_identity is not None:
+            existing_identity = middleware_identity
+        elif _token_agent_uuid and resume:
             existing_identity = await resolve_session_identity(
                 base_session_key, persist=False, resume=resume,
                 token_agent_uuid=_token_agent_uuid,

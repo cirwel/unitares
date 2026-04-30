@@ -89,7 +89,10 @@ async def handle_resume_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
     )
     if persist_error:
         return persist_error
-    logger.debug(f"PostgreSQL: {'Unstuck' if is_stuck_unstick else 'Resumed'} agent {agent_id}")
+    logger.debug(
+        "PostgreSQL: %s agent",
+        "Unstuck" if is_stuck_unstick else "Resumed",
+    )
 
     response_payload = {
         "success": True,

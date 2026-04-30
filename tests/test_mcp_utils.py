@@ -679,6 +679,64 @@ class TestRequireRegisteredAgent:
         assert "archived" in err.lower()
 
     @patch("src.mcp_handlers.validators.validate_agent_id_reserved_names",
+           return_value=("77777777-7777-4777-8777-777777777777", None))
+    @patch("src.mcp_handlers.validators.validate_agent_id_format",
+           return_value=("77777777-7777-4777-8777-777777777777", None))
+    @patch("src.mcp_handlers.context.get_context_agent_id",
+           return_value="77777777-7777-4777-8777-777777777777")
+    @patch("src.mcp_handlers.shared.get_mcp_server")
+    def test_core_identity_result_registers_agent_without_dict_entry(self, ms, mc, mf, mr):
+        uid = "77777777-7777-4777-8777-777777777777"
+        s = _mock_server({})
+        s.ensure_metadata_loaded = MagicMock()
+        ms.return_value = s
+        identity_result = {
+            "agent_uuid": uid,
+            "agent_id": "Gpt_5_Codex_20260429",
+            "public_agent_id": "Gpt_5_Codex_20260429",
+            "label": "Codex_77777777",
+            "core_agent_row_status": "active",
+        }
+        with patch(
+            "src.mcp_handlers.context.get_session_context",
+            return_value={"identity_result": identity_result},
+        ):
+            args = {"agent_id": uid}
+            u, e = require_registered_agent(args)
+
+        assert u == uid
+        assert e is None
+        assert args["_agent_uuid"] == uid
+        assert args["agent_id"] == "Gpt_5_Codex_20260429"
+
+    @patch("src.mcp_handlers.validators.validate_agent_id_reserved_names",
+           return_value=("88888888-8888-4888-8888-888888888888", None))
+    @patch("src.mcp_handlers.validators.validate_agent_id_format",
+           return_value=("88888888-8888-4888-8888-888888888888", None))
+    @patch("src.mcp_handlers.context.get_context_agent_id", return_value=None)
+    @patch("src.mcp_handlers.shared.get_mcp_server")
+    def test_core_agent_row_status_overrides_stale_active_dict(self, ms, mc, mf, mr):
+        uid = "88888888-8888-4888-8888-888888888888"
+        s = _mock_server({uid: _meta(status="active", label="Old")})
+        s.ensure_metadata_loaded = MagicMock()
+        ms.return_value = s
+        identity_result = {
+            "agent_uuid": uid,
+            "agent_id": uid,
+            "label": "Old",
+            "core_agent_row_status": "archived",
+        }
+        with patch(
+            "src.mcp_handlers.context.get_session_context",
+            return_value={"identity_result": identity_result},
+        ), patch("src.mcp_handlers.support.agent_auth.compute_agent_signature",
+                 return_value={"uuid": None}):
+            u, e = require_registered_agent({"agent_id": uid})
+
+        assert u is None
+        assert "archived" in _parse_tc(e)["error"].lower()
+
+    @patch("src.mcp_handlers.validators.validate_agent_id_reserved_names",
            return_value=("22222222-2222-4222-8222-222222222222", None))
     @patch("src.mcp_handlers.validators.validate_agent_id_format",
            return_value=("22222222-2222-4222-8222-222222222222", None))

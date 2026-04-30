@@ -32,6 +32,34 @@ class TransportBinding:
 
 _transport_identity_cache: Dict[str, TransportBinding] = {}
 
+_MIDDLEWARE_IDENTITY_ARG_KEYS = (
+    "_middleware_identity_session_key",
+    "_middleware_identity_result",
+    "_core_agent_row_status",
+)
+
+
+def _clear_middleware_identity(arguments: Optional[Dict[str, Any]]) -> None:
+    """Remove caller-provided internal identity handoff fields."""
+    if arguments is None:
+        return
+    for key in _MIDDLEWARE_IDENTITY_ARG_KEYS:
+        arguments.pop(key, None)
+
+
+def _attach_middleware_identity(
+    arguments: Dict[str, Any],
+    *,
+    session_key: Optional[str],
+    identity_result: Optional[dict],
+) -> None:
+    """Thread dispatch-time identity resolution to handlers/auth."""
+    _clear_middleware_identity(arguments)
+    if arguments is None or identity_result is None:
+        return
+    arguments["_middleware_identity_session_key"] = session_key
+    arguments["_middleware_identity_result"] = dict(identity_result)
+
 
 def _transport_cache_key(signals) -> Optional[str]:
     """Compute sticky cache key from transport signals.
@@ -134,6 +162,26 @@ async def _persist_binding_to_redis_async(key: str, agent_uuid: str, session_key
 _REDIS_RECOVERY_TIMEOUT = 0.5
 
 
+async def _lookup_core_agent_row_status(agent_uuid: str, source: str) -> Optional[str]:
+    """Best-effort bounded lookup of the persisted lifecycle status."""
+    try:
+        from ..identity.handlers import _get_agent_status
+        return await asyncio.wait_for(
+            _get_agent_status(agent_uuid),
+            timeout=_REDIS_RECOVERY_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[%s] core agent row status lookup timed out after %.3fs for %s...",
+            source,
+            _REDIS_RECOVERY_TIMEOUT,
+            agent_uuid[:8],
+        )
+    except Exception as e:
+        logger.debug(f"[{source}] core agent row status lookup failed: {e}")
+    return None
+
+
 async def _load_binding_from_redis(key: str) -> Optional[TransportBinding]:
     """Try to recover a transport binding from Redis after restart.
 
@@ -217,6 +265,8 @@ def _evict_stale_entries() -> None:
 
 async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     """Extract session identity, resolve onboard pin, bind agent."""
+    _clear_middleware_identity(arguments)
+
     # Unified session key derivation via SessionSignals + derive_session_key()
     from ..context import get_session_signals
     from ..identity.handlers import derive_session_key
@@ -245,21 +295,36 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                 f"[STICKY] Cache hit for {transport_key}: agent={cached.agent_uuid[:8]}... "
                 f"session_key={cached.session_key[:30]}..."
             )
+            core_status = await _lookup_core_agent_row_status(
+                cached.agent_uuid,
+                "STICKY",
+            )
             # Reuse cached binding — set context and return early
             from ..context import set_session_context
             client_hint = arguments.get("client_hint") if arguments else None
+            identity_result = {
+                "agent_uuid": cached.agent_uuid,
+                "source": "sticky_cache",
+                "core_agent_row_status": core_status,
+            }
             context_token = set_session_context(
                 session_key=cached.session_key,
                 client_session_id=client_session_id,
                 agent_id=cached.agent_uuid,
                 client_hint=client_hint,
+                identity_result=identity_result,
             )
             ctx.session_key = cached.session_key
             ctx.client_session_id = client_session_id
             ctx.bound_agent_id = cached.agent_uuid
             ctx.context_token = context_token
             ctx.client_hint = client_hint
-            ctx.identity_result = {"agent_uuid": cached.agent_uuid, "source": "sticky_cache"}
+            ctx.identity_result = identity_result
+            _attach_middleware_identity(
+                arguments,
+                session_key=cached.session_key,
+                identity_result=identity_result,
+            )
             return name, arguments, ctx
 
     # Invalidate cache on force_new
@@ -377,19 +442,31 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
 
         from ..context import set_session_context
         client_hint = arguments.get("client_hint") if arguments else None
+        core_status = await _lookup_core_agent_row_status(_direct_uuid, "PATH0")
+        identity_result = {
+            "agent_uuid": _direct_uuid,
+            "source": "agent_uuid_passthrough",
+            "core_agent_row_status": core_status,
+        }
         context_token = set_session_context(
             session_key=session_key,
             client_session_id=client_session_id,
             agent_id=_direct_uuid,
             client_hint=client_hint,
+            identity_result=identity_result,
         )
         ctx.session_key = session_key
         ctx.client_session_id = client_session_id
         ctx.bound_agent_id = _direct_uuid
         ctx.context_token = context_token
         ctx.client_hint = client_hint
-        ctx.identity_result = {"agent_uuid": _direct_uuid, "source": "agent_uuid_passthrough"}
+        ctx.identity_result = identity_result
         ctx._transport_key = transport_key
+        _attach_middleware_identity(
+            arguments,
+            session_key=session_key,
+            identity_result=identity_result,
+        )
         # Populate sticky cache so subsequent tool calls reuse this UUID
         if transport_key:
             update_transport_binding(transport_key, _direct_uuid, session_key, "agent_uuid_passthrough")
@@ -438,10 +515,11 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                 "get_governance_metrics",
                 "skills",
             }
-            if name in read_only_diagnostic_tools:
+            identity_lifecycle_tools = {"identity", "onboard"}
+            if name in read_only_diagnostic_tools or name in identity_lifecycle_tools:
                 logger.info(
-                    "[DISPATCH] session_resolve_miss for read-only tool %s "
-                    "under %s... — leaving request unbound (no auto-mint)",
+                    "[DISPATCH] session_resolve_miss for %s under %s... "
+                    "— leaving request unbound (no middleware auto-mint)",
                     name, session_key[:20],
                 )
             else:
@@ -514,6 +592,7 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
         agent_id=bound_agent_id,
         client_hint=client_hint,
         spawn_reason=identity_result.get("spawn_reason") if identity_result else None,
+        identity_result=identity_result,
     )
 
     logger.info(
@@ -528,6 +607,11 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     ctx.context_token = context_token
     ctx.client_hint = client_hint
     ctx.identity_result = identity_result
+    _attach_middleware_identity(
+        arguments,
+        session_key=session_key,
+        identity_result=identity_result,
+    )
 
     # --- Populate sticky cache after successful resolution ---
     if transport_key and bound_agent_id:

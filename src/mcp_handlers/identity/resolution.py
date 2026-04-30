@@ -621,6 +621,7 @@ async def resolve_session_identity(
                                 "persisted": persisted,
 
                                 "archived": is_archived,
+                                "core_agent_row_status": agent_status,
 
                                 "source": "redis",
                                 "identity_resolution_outcome": "resumed",
@@ -769,6 +770,7 @@ async def resolve_session_identity(
                     "persisted": True,  # Found in PostgreSQL = persisted
 
                     "archived": is_archived,
+                    "core_agent_row_status": agent_status,
 
                     "source": "postgres",
                     "identity_resolution_outcome": "resumed",
@@ -912,6 +914,7 @@ async def resolve_session_identity(
                         "label": label,
                         "created": False,
                         "persisted": True,
+                        "core_agent_row_status": status,
                         "source": "token_rebind",
                         "identity_resolution_outcome": "resumed",
                     }
@@ -1045,6 +1048,7 @@ async def resolve_session_identity(
                 "label": label,
                 "created": True,
                 "persisted": True,
+                "core_agent_row_status": "active",
                 "source": "created",
                 "spawn_reason": spawn_reason,
                 "identity_resolution_outcome": _created_identity_outcome(

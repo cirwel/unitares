@@ -184,6 +184,78 @@ class TestEphemeralIdentityMarking:
         mock_db.update_session_activity.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", ["identity", "onboard"])
+    async def test_identity_lifecycle_session_miss_does_not_auto_mint_in_middleware(
+        self, tool_name, mock_db,
+    ):
+        """Lifecycle handlers own mint/persist; middleware only threads the miss."""
+        identity_result = {
+            "resume_failed": True,
+            "error": "session_resolve_miss",
+            "session_key": "agent-lifecycle-miss",
+        }
+
+        resolve_mock = AsyncMock(return_value=identity_result)
+        patches = [
+            patch("src.mcp_handlers.context.get_session_signals", return_value=None),
+            patch("src.mcp_handlers.identity.handlers.derive_session_key", new_callable=AsyncMock, return_value="agent-lifecycle-miss"),
+            patch("src.mcp_handlers.identity.handlers.resolve_session_identity", resolve_mock),
+            patch("src.mcp_handlers.context.set_session_context", return_value=MagicMock()),
+            patch("src.db.get_db", return_value=mock_db),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            args = {"client_session_id": "agent-lifecycle-miss"}
+            ctx = DispatchContext()
+            await resolve_identity(tool_name, args, ctx)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        assert resolve_mock.await_count == 1
+        assert ctx.bound_agent_id is None
+        assert args["_middleware_identity_result"] is not identity_result
+        assert args["_middleware_identity_result"]["error"] == "session_resolve_miss"
+        assert args["_middleware_identity_session_key"] == "agent-lifecycle-miss"
+
+    @pytest.mark.asyncio
+    async def test_caller_internal_identity_fields_are_scrubbed_on_resolution_error(
+        self, mock_db,
+    ):
+        """Caller-supplied middleware handoff fields must never survive dispatch."""
+        resolve_mock = AsyncMock(side_effect=RuntimeError("resolver unavailable"))
+        patches = [
+            patch("src.mcp_handlers.context.get_session_signals", return_value=None),
+            patch("src.mcp_handlers.identity.handlers.derive_session_key", new_callable=AsyncMock, return_value="agent-error"),
+            patch("src.mcp_handlers.identity.handlers.resolve_session_identity", resolve_mock),
+            patch("src.mcp_handlers.context.set_session_context", return_value=MagicMock()),
+            patch("src.db.get_db", return_value=mock_db),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            args = {
+                "agent_id": "spoofed-agent",
+                "_middleware_identity_session_key": "spoofed-session",
+                "_middleware_identity_result": {
+                    "agent_uuid": "spoofed-agent",
+                    "core_agent_row_status": "active",
+                },
+                "_core_agent_row_status": "active",
+            }
+            ctx = DispatchContext()
+            await resolve_identity("process_agent_update", args, ctx)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        assert "_middleware_identity_session_key" not in args
+        assert "_middleware_identity_result" not in args
+        assert "_core_agent_row_status" not in args
+        assert ctx.identity_result is None
+
+    @pytest.mark.asyncio
     async def test_kwargs_wrapped_knowledge_store_uses_continuity_token(self, mock_db, monkeypatch):
         """kwargs-wrapped calls must unwrap before identity/alias logic."""
         monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", "test-secret")
