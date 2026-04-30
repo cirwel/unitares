@@ -1915,6 +1915,27 @@ def test_p004_kept_for_real_asyncpg_call_inside_mcp_handler(watcher_module):
     )
 
 
+def test_p004_dropped_for_wait_for_guarded_onboard_pin_helper(watcher_module):
+    """Redis pin helpers are safe when the public wrapper bounds them with wait_for."""
+    f = watcher_module.Finding(
+        pattern="P004",
+        file="/repo/src/mcp_handlers/identity/session.py",
+        line=801,
+        hint="t",
+        severity="high",
+        detected_at="2026-04-29T00:00:00Z",
+        model_used="t",
+    )
+    snippet = {
+        779: "        return await asyncio.wait_for(",
+        780: "            _lookup_onboard_pin_inner(base_fingerprint, refresh_ttl=refresh_ttl),",
+        781: "            timeout=_PIN_REDIS_TIMEOUT,",
+        794: "async def _lookup_onboard_pin_inner(base_fingerprint: str, *, refresh_ttl: bool) -> Optional[str]:",
+        801: "    pin_data = await raw_redis.get(pin_key)",
+    }
+    assert not watcher_module._verify_finding_against_source(f, "", snippet)
+
+
 def test_p001_dropped_when_task_reference_is_assigned(watcher_module):
     """The pattern library explicitly says that assigning create_task() to a
     named variable means the task is stored — NOT fire-and-forget. The

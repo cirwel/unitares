@@ -97,6 +97,10 @@ StreamableHTTP transport deadlocks with asyncpg/Redis async calls. Symptom:
 # SDK's anyio task group. asyncpg calls in REST endpoints do not deadlock.
 async def http_incidents(request):
     events = await query_audit_events_async(...)  # safe — REST handler
+
+# MCP helper whose public entrypoint bounds the async Redis work.
+async def lookup_onboard_pin(fp):
+    return await asyncio.wait_for(_lookup_onboard_pin_inner(fp), timeout=0.5)
 ```
 
 Only flag `await` on asyncpg/Redis in files under `src/mcp_handlers/` or in

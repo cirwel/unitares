@@ -1040,6 +1040,9 @@ _P005_VAR_AWAIT_ACQUIRE = re.compile(
 )
 _P005_VAR_NONE_INIT = re.compile(r"^\s*(\w+)\s*=\s*None\s*$")
 _P005_TRY_HEADER = re.compile(r"^\s*try\s*:\s*$")
+_P004_WAIT_FOR_GUARDED_PIN_HELPER = re.compile(
+    r"^\s*async\s+def\s+(_lookup_onboard_pin_inner|_set_onboard_pin_inner)\s*\("
+)
 
 
 def _is_acquire_inside_try_with_none_init(
@@ -1084,6 +1087,38 @@ def _is_acquire_inside_try_with_none_init(
             # i.e. we must have already seen it on the way down.
             return saw_try
     return False
+
+
+def _is_wait_for_guarded_onboard_pin_helper(
+    flagged_line: int,
+    snippet_lines_by_num: dict[int, str],
+) -> bool:
+    """Suppress P004 for Redis pin helpers guarded by public wait_for wrappers.
+
+    `lookup_onboard_pin()` and `set_onboard_pin()` bound their inner Redis
+    work with `asyncio.wait_for(..., timeout=_PIN_REDIS_TIMEOUT)`. P004's
+    actionable condition is unbounded async Redis/asyncpg in an MCP handler;
+    this shape has the timeout mitigation and regression tests already.
+    """
+    helper_name = None
+    for line_no in range(flagged_line - 1, min(snippet_lines_by_num.keys()) - 1, -1):
+        line = snippet_lines_by_num.get(line_no, "")
+        if not line.strip():
+            continue
+        match = _P004_WAIT_FOR_GUARDED_PIN_HELPER.match(line)
+        if match:
+            helper_name = match.group(1)
+            break
+        if _P003_OTHER_DEF.match(line):
+            return False
+
+    if not helper_name:
+        return False
+
+    ordered_source = "\n".join(
+        snippet_lines_by_num[line_no] for line_no in sorted(snippet_lines_by_num)
+    )
+    return "asyncio.wait_for" in ordered_source and f"{helper_name}(" in ordered_source
 
 
 def _is_inside_get_or_create_monitor(
@@ -1160,6 +1195,21 @@ def _verify_finding_against_source(
         log(
             f"drop {finding.pattern} {finding.file}:{finding.line} — required token "
             f"{required_tokens!r} not on line: {src_line.strip()[:80]}",
+            "warning",
+        )
+        return False
+    # P004 specifically: the onboard-pin Redis helpers in identity/session.py
+    # are deliberately wrapped by their public entrypoints with
+    # asyncio.wait_for(timeout=_PIN_REDIS_TIMEOUT). They are still in
+    # src/mcp_handlers/, but this is the timeout mitigation P004 asks for.
+    if (
+        finding.pattern == "P004"
+        and finding.file.endswith("/src/mcp_handlers/identity/session.py")
+        and _is_wait_for_guarded_onboard_pin_helper(finding.line, snippet_lines_by_num)
+    ):
+        log(
+            f"drop P004 {finding.file}:{finding.line} — onboard-pin Redis helper "
+            "is bounded by public asyncio.wait_for wrapper",
             "warning",
         )
         return False

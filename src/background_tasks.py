@@ -716,6 +716,7 @@ CADENCE_FROM_TAG: dict[str, int] = {
     "cadence.10min": 600,
     "cadence.30min": 1800,
     "cadence.1hr": 3600,
+    "cadence.6hr": 21600,
 }
 
 
@@ -734,6 +735,7 @@ _PERSISTENT_AGENT_INTERVALS = {
     "Vigil": 1800,     # 30 min
     "Lumen": 300,      # 5 min
     "Sentinel": 600,   # 10 min
+    "Watcher": 21600,  # 6 hr; hook-driven, not a 5-minute daemon
 }
 
 _silence_alerted: set[str] = set()

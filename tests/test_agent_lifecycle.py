@@ -220,6 +220,11 @@ class TestExpectedInterval:
         meta = _protection_meta(label="Lumen", tags=[])
         assert _get_expected_interval(meta) == 300
 
+    def test_watcher_label_falls_back_to_hook_cadence(self):
+        """Watcher is hook-driven; autonomous tag must not force 5-minute daemon cadence."""
+        meta = _protection_meta(label="Watcher", tags=["persistent", "autonomous"])
+        assert _get_expected_interval(meta) == 21600
+
     def test_falls_back_to_embodied_default(self):
         meta = _protection_meta(label="SomeEmbodied", tags=["embodied"])
         assert _get_expected_interval(meta) == 300
