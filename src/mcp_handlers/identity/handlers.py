@@ -77,6 +77,60 @@ def _broadcaster():
         return None
 
 
+def _emit_continuity_token_deprecation(
+    *,
+    response_dict: Dict[str, Any],
+    used_token_for_resume: bool,
+    token_str: Optional[str],
+    agent_uuid: str,
+    response_agent_id: str,
+    client_hint: Optional[str] = None,
+    model_type: Optional[str] = None,
+) -> None:
+    """S1-a grace-period surface: warn + audit when a caller resumes across
+    process-instance boundaries via continuity_token.
+
+    Mutates ``response_dict["deprecations"]`` in place (creating the list if
+    absent). The audit emit is best-effort — failures are logged at debug and
+    never propagate.
+
+    Ontology: only cross-process-instance resume is the deprecating path.
+    Intra-session token use (request auth on process_agent_update, mid-session
+    identity() rebind) is the Part-C anti-hijack proof and stays load-bearing.
+    Each caller is responsible for deciding which case it's in via
+    ``used_token_for_resume``. See docs/ontology/s1-continuity-token-retirement.md.
+    """
+    if not used_token_for_resume:
+        return
+    issued_at = extract_token_iat(str(token_str)) if token_str else None
+    dep_block = build_token_deprecation_block(
+        used_token_for_resume=True,
+        token_issued_at=issued_at,
+    )
+    if dep_block is not None:
+        response_dict.setdefault("deprecations", []).append(dep_block)
+    # Audit emit is independent of dep_block presence: today
+    # build_token_deprecation_block always returns a block when used_token_for_resume
+    # is True, but if that contract ever changes (e.g., config-disabled surface,
+    # localized severity gating), grace-period telemetry must still record the
+    # accept event. The two side-effects are deliberately decoupled.
+    try:
+        import time as _time
+        from src.audit_log import audit_logger as _audit
+        _audit.log_continuity_token_deprecated_accept(
+            agent_id=response_agent_id,
+            caller_channel=client_hint,
+            caller_model_type=model_type,
+            issued_at=issued_at if issued_at is not None else 0,
+            accepted_at=int(_time.time()),
+            agent_uuid=agent_uuid,
+        )
+    except Exception as _audit_err:
+        logger.debug(
+            f"[S1-a] deprecated-accept audit write failed (non-fatal): {_audit_err}"
+        )
+
+
 async def _emit_identity_hijack_event(
     direct_uuid: str,
     mode: str,
@@ -1078,9 +1132,31 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
         except Exception as e:
             logger.debug(f"[IDENTITY] Auto-bind failed (non-fatal): {e}")
 
-    # Use lite_response to skip redundant agent_signature (identity already contains all that info)
-    if arguments is None:
-        arguments = {}
+    # S1-a (2026-04-29): grace-period deprecation surface for identity().
+    # Cross-process-instance resume via continuity_token is deprecating;
+    # intra-session use (request auth on process_agent_update etc.) is NOT.
+    # identity() called with continuity_token AND without force_new is the
+    # cross-instance resume case; intra-process callers don't need to pass
+    # the token to identity() (their session is already bound).
+    # Adversarial-input guard: a non-string continuity_token (list/dict/bytes)
+    # would otherwise inflate grace-period telemetry without the caller
+    # actually holding a verifiable token.
+    _id_caller_token = arguments.get("continuity_token")
+    if not isinstance(_id_caller_token, str) or not _id_caller_token:
+        _id_caller_token = None
+    _emit_continuity_token_deprecation(
+        response_dict=response_data,
+        used_token_for_resume=(_id_caller_token is not None) and not force_new,
+        token_str=_id_caller_token,
+        agent_uuid=agent_uuid,
+        response_agent_id=final_agent_id,
+        client_hint=arguments.get("client_hint"),
+        model_type=model_type,
+    )
+
+    # `arguments` was guaranteed non-None at the top of the handler (L850-851);
+    # the `lite_response` flag tells success_response to skip redundant
+    # agent_signature since identity already contains that info.
     arguments["lite_response"] = True
     return success_response(response_data, agent_id=final_agent_id, arguments=arguments)
 
@@ -1176,14 +1252,28 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
 
     client_session_id = arguments.get("client_session_id")
     expected_agent_id = arguments.get("agent_id")
-    if not client_session_id and arguments.get("continuity_token"):
+    # S1-a (2026-04-29): track whether we derived client_session_id from a
+    # continuity_token so the deprecation surface fires for the actual
+    # cross-process-instance resume case. We can't infer this from
+    # `arguments.get("client_session_id")` after the fact because HTTP
+    # middleware (`http_api.py:471-474`) injects client_session_id into
+    # arguments BEFORE dispatch — `arguments.get("client_session_id")` is
+    # truthy on every HTTP call, so a post-facto check would suppress the
+    # warning for the primary fleet caller class.
+    _resolved_from_token = False
+    _bs_caller_token = arguments.get("continuity_token")
+    if not isinstance(_bs_caller_token, str) or not _bs_caller_token:
+        _bs_caller_token = None
+    if not client_session_id and _bs_caller_token:
         from ..context import get_session_signals
         token_signals = get_session_signals()
         client_session_id = normalize_client_session_id(resolve_continuity_token(
-            str(arguments.get("continuity_token")),
+            _bs_caller_token,
             model_type=arguments.get("model_type"),
             user_agent=token_signals.user_agent if token_signals else None,
         ))
+        if client_session_id:
+            _resolved_from_token = True
     if not client_session_id:
         return error_response("client_session_id or continuity_token is required")
     if strict and not expected_agent_id:
@@ -1252,14 +1342,34 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
     except Exception:
         pass
 
-    return success_response({
+    bind_response: Dict[str, Any] = {
         "bound": True,
         "agent_uuid": target_uuid,
         "agent_id": target_agent_id,
         "display_name": target_label,
         "mcp_session_key": mcp_session_key[:20] + "..." if mcp_session_key else None,
         "message": f"MCP session bound to agent '{target_label or target_agent_id}'",
-    })
+    }
+
+    # S1-a (2026-04-29): warn iff the caller's continuity_token actually
+    # produced this binding — the transport-rebind for an already-bound
+    # session (caller passed client_session_id directly) is Role-2 and does
+    # NOT warn. Discriminator is *session pre-existence at the handler
+    # boundary*, tracked via `_resolved_from_token` set above; reading
+    # arguments.get("client_session_id") after dispatch is unsafe because
+    # HTTP middleware injects that field before the handler runs.
+    if _resolved_from_token:
+        _emit_continuity_token_deprecation(
+            response_dict=bind_response,
+            used_token_for_resume=True,
+            token_str=_bs_caller_token,
+            agent_uuid=target_uuid,
+            response_agent_id=target_agent_id,
+            client_hint=arguments.get("client_hint"),
+            model_type=arguments.get("model_type"),
+        )
+
+    return success_response(bind_response)
 
 
 @mcp_tool("onboard", timeout=15.0)
@@ -1930,33 +2040,23 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
     # S1-a (2026-04-24): grace-period deprecation surface. onboard() called
     # with continuity_token AND without force_new=true is the retired
-    # cross-process-instance resume path. Emit a warning in the response and
-    # a grace-period audit event so callers can migrate and operators can
-    # observe the tail. See docs/ontology/s1-continuity-token-retirement.md §4.3 / §6.
-    # `force_new` is set once at the top of this handler (L1180) from arguments
-    # and never reassigned — signal is honest.
+    # cross-process-instance resume path. `force_new` is set once at the top
+    # of this handler (L1180) from arguments and never reassigned — signal is
+    # honest. Non-string token inputs (adversarial list/dict/bytes) would
+    # otherwise inflate grace-period telemetry without holding a real token.
+    # See docs/ontology/s1-continuity-token-retirement.md §4.3 / §6.
     _caller_token = arguments.get("continuity_token")
-    if _caller_token and not force_new:
-        _issued_at = extract_token_iat(str(_caller_token))
-        _dep_block = build_token_deprecation_block(
-            used_token_for_resume=True,
-            token_issued_at=_issued_at,
-        )
-        if _dep_block is not None:
-            result.setdefault("deprecations", []).append(_dep_block)
-        try:
-            import time as _time
-            from src.audit_log import audit_logger as _audit
-            _audit.log_continuity_token_deprecated_accept(
-                agent_id=response_agent_id,
-                caller_channel=client_hint,
-                caller_model_type=model_type,
-                issued_at=_issued_at if _issued_at is not None else 0,
-                accepted_at=int(_time.time()),
-                agent_uuid=agent_uuid,
-            )
-        except Exception as _audit_err:
-            logger.debug(f"[S1-a] deprecated-accept audit write failed (non-fatal): {_audit_err}")
+    if not isinstance(_caller_token, str) or not _caller_token:
+        _caller_token = None
+    _emit_continuity_token_deprecation(
+        response_dict=result,
+        used_token_for_resume=(_caller_token is not None) and not force_new,
+        token_str=_caller_token,
+        agent_uuid=agent_uuid,
+        response_agent_id=response_agent_id,
+        client_hint=client_hint,
+        model_type=model_type,
+    )
 
     # Temporal narrator — contextual time awareness (silence by default)
     try:
