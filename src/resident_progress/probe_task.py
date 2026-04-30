@@ -74,11 +74,18 @@ class ProgressFlatProbe:
         source_outputs = {n: out for n, out, err in results if err is None}
         source_errors = {n: err for n, out, err in results if err is not None}
 
-        # Step 4: heartbeat in parallel
-        async def _hb(agent_uuid):
-            return agent_uuid, await self._heartbeat.evaluate(agent_uuid)
+        # Step 4: heartbeat in parallel. Pass per-resident cadence from
+        # the registry so non-continuous residents (Vigil 30min, Steward
+        # 5min, Chronicler daily) aren't all judged against a 60s default.
+        async def _hb(label, agent_uuid):
+            cfg = RESIDENT_PROGRESS_REGISTRY[label]
+            return agent_uuid, await self._heartbeat.evaluate(
+                agent_uuid, cadence_override_s=cfg.expected_cadence_s,
+            )
 
-        hb_pairs = await asyncio.gather(*[_hb(u) for u in resolved.values()])
+        hb_pairs = await asyncio.gather(*[
+            _hb(label, agent_uuid) for label, agent_uuid in resolved.items()
+        ])
         hb_by_uuid = dict(hb_pairs)
 
         # Step 5: compose resident rows

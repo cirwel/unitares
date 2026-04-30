@@ -56,3 +56,37 @@ async def test_evaluate_returns_error_on_store_exception():
     status = await ev.evaluate("u1")
     assert status.alive is False
     assert "db down" in (status.eval_error or "")
+
+
+@pytest.mark.asyncio
+async def test_cadence_override_supersedes_store_value():
+    # Store says 60s cadence (would mark a 20-min-old update silent),
+    # but caller overrides with 30-min cadence — agent stays alive.
+    now = datetime.now(timezone.utc)
+    store = _FakeMetadataStore({
+        "u1": {"last_update": now - timedelta(minutes=20),
+               "expected_cadence_s": 60},
+    })
+    ev = HeartbeatEvaluator(store, _now=lambda: now)
+    status = await ev.evaluate("u1", cadence_override_s=1800)
+    assert status.alive is True
+    assert status.expected_cadence_s == 1800
+    assert status.in_critical_silence is False
+
+
+@pytest.mark.asyncio
+async def test_cadence_override_used_when_store_has_no_cadence():
+    # Store returns no cadence at all — caller's override is the only
+    # cadence available. Without the override, evaluator must report
+    # not-alive (cadence=None branch).
+    now = datetime.now(timezone.utc)
+    store = _FakeMetadataStore({
+        "u1": {"last_update": now - timedelta(seconds=30)},
+    })
+    ev = HeartbeatEvaluator(store, _now=lambda: now)
+    no_override = await ev.evaluate("u1")
+    assert no_override.alive is False
+    assert no_override.expected_cadence_s is None
+    with_override = await ev.evaluate("u1", cadence_override_s=300)
+    assert with_override.alive is True
+    assert with_override.expected_cadence_s == 300

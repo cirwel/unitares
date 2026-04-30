@@ -27,6 +27,22 @@ def test_registry_entries_have_required_fields():
         }
         assert cfg.window.total_seconds() > 0
         assert cfg.threshold >= 1
+        assert cfg.expected_cadence_s > 0
+
+
+def test_registry_cadences_match_resident_natural_periods():
+    # Each resident has a natural cadence that the heartbeat-liveness
+    # check must respect (alive iff last_update within 3x cadence).
+    # A single global default mislabels every non-continuous resident.
+    cadences = {
+        label: cfg.expected_cadence_s
+        for label, cfg in RESIDENT_PROGRESS_REGISTRY.items()
+    }
+    assert cadences["sentinel"] == 60       # continuous loop
+    assert cadences["steward"] == 300       # 5-min EISV sync
+    assert cadences["vigil"] == 1800        # 30-min launchd cron
+    assert cadences["watcher"] == 21600     # event-driven, 6h window
+    assert cadences["chronicler"] == 86400  # daily
 
 
 def test_resolve_resident_uuid_reads_anchor(tmp_path, monkeypatch):

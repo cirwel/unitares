@@ -64,6 +64,7 @@ def _registry_one_vigil():
             metric="rows_written",
             window=timedelta(minutes=60),
             threshold=1,
+            expected_cadence_s=1800,
         )
     }
 
@@ -236,12 +237,14 @@ async def test_source_error_isolated_per_resident(monkeypatch):
             metric="rows_written",
             window=timedelta(minutes=60),
             threshold=1,
+            expected_cadence_s=1800,
         ),
         "watcher": ResidentConfig(
             source="watcher_findings",
             metric="rows_any",
             window=timedelta(hours=6),
             threshold=1,
+            expected_cadence_s=21600,
         ),
     }
     monkeypatch.setattr(

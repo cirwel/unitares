@@ -442,7 +442,10 @@ async def progress_flat_probe_task(interval_seconds: float | None = None):
         async def get(self, agent_uuid: str):
             # Use get_agent from agent_storage — that's the canonical async
             # identity/metadata fetch.  AgentRecord.last_activity_at maps to
-            # last_update; expected_cadence_s lives in metadata.
+            # last_update. Cadence is supplied by the probe via
+            # cadence_override_s from the registry; we no longer fabricate
+            # a 60s default for residents whose natural cadence is hours
+            # or days.
             try:
                 from src.agent_storage import get_agent
                 record = await get_agent(agent_uuid)
@@ -453,7 +456,6 @@ async def progress_flat_probe_task(interval_seconds: float | None = None):
                     "expected_cadence_s": (
                         record.metadata.get("expected_cadence_s")
                         or record.metadata.get("cadence_s")
-                        or 60
                     ),
                 }
             except Exception:
