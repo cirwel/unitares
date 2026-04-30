@@ -103,8 +103,10 @@ async def ensure_test_database_schema() -> None:
         await _execute_sql_file(conn, "db/postgres/migrations/013_metrics_series.sql")
         await _execute_sql_file(conn, "db/postgres/migrations/014_seed_epoch_2.sql")
         await _execute_sql_file(conn, "db/postgres/migrations/017_substrate_claims.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/018_bootstrap_synthetic_state.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/019_matview_measured_only.sql")
+        # Slots 018 and 019 were renumbered to 022 and 023 in PR #236
+        # (migration-drift triage); the old paths no longer exist.
+        await _execute_sql_file(conn, "db/postgres/migrations/022_bootstrap_synthetic_state.sql")
+        await _execute_sql_file(conn, "db/postgres/migrations/023_matview_measured_only.sql")
         await _execute_sql_file(conn, "db/postgres/migrations/020_progress_flat_telemetry.sql")
         await _execute_sql_file(conn, "db/postgres/migrations/021_seed_epoch_3.sql")
 
