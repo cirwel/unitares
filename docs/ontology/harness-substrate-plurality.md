@@ -1,7 +1,7 @@
 # Harness Substrate Plurality — Ontology Plan
 
 **Created:** April 29, 2026  
-**Last Updated:** April 29, 2026  
+**Last Updated:** April 30, 2026
 **Status:** Draft for review  
 **Companion to:** `docs/ontology/identity.md`, `docs/ontology/plan.md`
 
@@ -238,6 +238,57 @@ KG entries should preserve, where available:
 - whether the write was agent-reported or server-observed
 
 This lets future processes inherit knowledge without inheriting a false personal identity.
+
+### Candidate provenance envelope
+
+**Status:** Candidate, not normative. This envelope captures a candidate core shape for distinguishing identity continuity, local episode, harness/runtime, transport/locus, affordance state, governance mode, and evidence provenance. R6 evaluates whether these fields resolve observed ambiguity in Discord/Hermes/Dispatch/Codex/Claude scenarios.
+
+This consolidates and extends the field sets sketched in § Identity responses, § Process updates, and § KG provenance. It is presented as a single shape so the dimensions can be reasoned about together; exact field names should align with existing API names before implementation.
+
+```text
+agent_uuid            # registry anchor (UUID); called uuid/agent_uuid in existing responses
+label_at_write        # social/cosmetic label observed at write time; not identity proof
+identity_assurance    # tier/source for this write, when available
+client_session_id     # logical UNITARES/Hermes session binding
+session_resolution_source # direct UUID, continuity token, fingerprint fallback, middleware, etc.
+thread_id             # logical conversation/history thread, when available; not lineage ancestry
+episode_id            # local interaction span (e.g. Discord thread, CLI conversation, dispatch session)
+invocation_id         # concrete run/command/subprocess invocation, when distinct from episode
+harness_id            # concrete body/runtime instance mediating action
+harness_type          # hermes, claude-code, codex-cli, dispatch, goose, ...
+process_instance_id   # opaque runtime/process-instance fingerprint; not raw PID or identity proof
+transport             # channel/protocol: cli, discord, mcp-stdio, mcp-http, cron, webhook
+locus                 # situated context: guild_id, channel_id, thread_id, tab_id, profile_name
+affordance_state      # event-time reach/access snapshot: permissions, capability set, transport health
+parent_agent_id       # declared ancestry, when applicable
+spawn_reason          # new_session / subagent / compaction / explicit / cron / dispatch_child / ...
+model_provider        # anthropic / openai / local / ...
+model                 # specific model identifier
+memory_context        # memory/KG/transcript surfaces visible to the writer
+tool_surface          # tool families available to the writer at the time of action
+governance_mode       # explicit / ambient / gated / lifecycle / posthoc
+verification_source   # existing outcome vocabulary: agent_reported_tool_result / server_observation / external_signal; extension candidates include host_observation / hook_derived
+```
+
+**Rationale for the new dimensions:**
+
+The five layers in `identity.md` (process / substrate / role / memory / behavioral) describe *kinds of continuity*. The fields above describe *contextual provenance* — the situated facts surrounding any single governance write. They are orthogonal: an envelope says "this write happened in *this* situation," while the layered taxonomy says "this UUID's continuity holds at *these* layers." Both are needed.
+
+`affordance_state` deserves special note: it captures the dimension elevated by the 2026-04-30 Hermes-on-Discord incident. Same UUID, same harness, same transport, different situated reach in one locus. Without `affordance_state` separate from identity state, "agent unresponsive" collapses five distinct ontological failure modes into one symptom.
+
+`governance_mode` is unexpectedly load-bearing for calibration: a verdict from a gated pre-check should not weight calibration the same way an agent-initiated explicit check-in does. Lifecycle/posthoc writes from parent-hosts such as Dispatch likewise carry different evidence than inner-loop tool-call observations.
+
+**Design risks (open questions):**
+
+- **`episode_id` granularity.** Defined here as "local interaction span." Clean for Discord threads (one thread = one episode). Less clean for CLI: is one Claude invocation an episode, or is a continuous shell session with multiple invocations one episode? Affects whether episodes nest.
+- **`thread_id`, `episode_id`, and `locus.thread_id` separation.** `thread_id` names logical conversation/history lineage, `episode_id` names a local interaction span, and `locus.thread_id` names a transport coordinate such as Discord. The names may need nesting or prefixes before implementation so conversation threads do not collide with Discord threads or lineage ancestry.
+- **`process_instance_id` vs `client_session_id`.** These are not the same thing. Process-instance per `identity.md` is the live runtime/process-instance boundary, while `client_session_id` is a logical session that can span sub-things or be sub-spanned. Both must coexist with clear naming, and `process_instance_id` should be opaque rather than a raw OS PID.
+- **`harness_id` granularity.** A harness has both a type and an instance. `hermes` as a type is too coarse to distinguish Hermes CLI, Hermes Discord gateway, Hermes profile, and Hermes MCP host behavior.
+- **`affordance_state` shape.** Boolean reach? Capability list? Permission diff against expected set? This is the most new-territory field and likely needs its own design pass before it becomes implementable.
+- **`verification_source` / evidence-source vocabulary.** Useful for audit-trail provenance, but care is needed to avoid introducing a second near-equivalent evidence vocabulary. Outcome events already use `agent_reported_tool_result`, `server_observation`, and `external_signal`; any host/hook-derived extension should map onto or extend that existing enum rather than fork it.
+- **Envelope attachment scope and granularity.** Does the envelope attach to every event, or only check-ins/outcomes? Candidate answer: full envelope for major events (onboarding, check-in, tool call, outcome, session start/end); compact envelope or envelope reference for high-volume events; immutable `provenance_id` issued once per episode and referenced by many events in the same episode. Otherwise the schema gets heavy fast.
+
+**Origin breadcrumb:** This envelope was proposed by Mnemos (Hermes-bound) during the 2026-04-30 conversation about distinguishing identity events from affordance events, prompted by a Discord permissions/access-lattice failure that surfaced `locus` and `affordance_state` as missing provenance dimensions. Folded into R6 as candidate, not normative — adoption awaits H1–H5 dogfood signal.
 
 ### Evidence vocabulary
 
