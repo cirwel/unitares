@@ -879,6 +879,128 @@ def _post_resolution_event(
 
 
 # ---------------------------------------------------------------------------
+# Commit-trail scanner — close the loop between operator-side fixes and
+# Watcher's audit trail. CLAUDE.md asks for fingerprints in commit messages
+# but no machinery existed to consume them; clusters were drifting into
+# fixed-but-still-confirmed limbo. Scan recent commits, find fingerprint
+# references, transition matching findings to confirmed with the commit
+# subject as resolution_reason.
+# ---------------------------------------------------------------------------
+
+# Watcher fingerprints are 16 hex chars; accept 8+ to allow short references
+# in commit messages. Anchored at word boundaries so 8-char prefixes don't
+# collide with the start of a commit-SHA mention.
+_FINGERPRINT_RE = re.compile(r"\b([0-9a-f]{8,16})\b")
+
+# git log subject prefixes that indicate a revert. Skipped to avoid auto-
+# resolving a finding whose fix was just rolled back.
+_REVERT_PREFIXES = ("revert ", "revert:", 'revert "', "revert: ")
+
+
+def scan_commits(since: str = "30 days ago", repo_path: Path | None = None) -> int:
+    """Scan recent commits for fingerprint references and resolve matches.
+
+    For each commit in ``git log --since=<since>``, extracts 8-16 char hex
+    sequences from subject and body. Each unique-prefix match against an
+    existing finding is transitioned to ``confirmed`` with reason
+    ``referenced in <sha>: <subject>``.
+
+    Skips:
+      - Findings already with a ``resolution_reason`` set (idempotent).
+      - Findings already in terminal ``dismissed`` state (do not auto-
+        resurrect false positives).
+      - Revert commits (subject starts with ``revert``) — avoid auto-
+        resolving a finding whose fix was reverted.
+      - Ambiguous prefixes that match more than one fingerprint.
+
+    Returns:
+        The number of findings resolved this scan. Always returns 0 on git
+        failure rather than raising, so this is safe to call from a cron.
+    """
+    repo_root = repo_path or PROJECT_ROOT
+    try:
+        result = subprocess.run(
+            ["git", "log", f"--since={since}", "--format=%H%x00%s%x00%b%x1e"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        log("scan_commits: git log timed out", "warning")
+        return 0
+    except FileNotFoundError:
+        log("scan_commits: git not on PATH", "warning")
+        return 0
+    if result.returncode != 0:
+        log(f"scan_commits: git log failed: {result.stderr.strip()}", "warning")
+        return 0
+
+    findings = _iter_findings_raw()
+    if not findings:
+        return 0
+
+    # Map full fingerprint → live status. Updated in-place after each
+    # successful resolve so subsequent commits in the same scan see the
+    # already-resolved state and skip re-emitting events. Only carries
+    # findings in the active queue — confirmed/dismissed/aged_out are
+    # terminal and a coincidental hex match must NOT re-stamp confirmed_at
+    # or re-emit a governance event on the next scan.
+    fp_state: dict[str, str] = {
+        f.get("fingerprint", ""): f.get("status", "open")
+        for f in findings
+        if f.get("fingerprint") and f.get("status", "open") in ("open", "surfaced")
+    }
+    if not fp_state:
+        return 0
+
+    resolved_count = 0
+    commits_seen = 0
+    for record in result.stdout.split("\x1e"):
+        record = record.strip()
+        if not record:
+            continue
+        parts = record.split("\x00", 2)
+        if len(parts) < 3:
+            continue
+        sha, subject, body = parts
+        commits_seen += 1
+        subject_l = subject.lstrip().lower()
+        if any(subject_l.startswith(p) for p in _REVERT_PREFIXES):
+            continue
+
+        text = subject + "\n" + body
+        # Dedup prefixes within a single commit so one mention per finding
+        seen_prefixes: set[str] = set()
+        for prefix in _FINGERPRINT_RE.findall(text):
+            if prefix in seen_prefixes:
+                continue
+            seen_prefixes.add(prefix)
+            matches = [fp for fp in fp_state if fp.startswith(prefix)]
+            if len(matches) != 1:
+                continue
+            full_fp = matches[0]
+            reason = f"referenced in {sha[:8]}: {subject[:80]}"
+            rc = update_finding_status(
+                full_fp,
+                "confirmed",
+                resolver_agent_id="watcher_scan_commits",
+                reason=reason,
+            )
+            if rc == 0:
+                # Drop from active map so a later commit-in-the-same-scan
+                # mentioning the same fingerprint doesn't re-stamp it.
+                del fp_state[full_fp]
+                resolved_count += 1
+
+    print(
+        f"scan complete: {resolved_count} finding(s) resolved across "
+        f"{commits_seen} commit(s) since {since}"
+    )
+    return resolved_count
+
+
+# ---------------------------------------------------------------------------
 # Surfacing coordinator — surface_pending stays here because it also triggers
 # a governance check-in (_do_checkin). The read-only print_unresolved, the
 # shared _format_findings_block, and sweep/compact/escalate all live in
@@ -1651,6 +1773,19 @@ def main() -> int:
         action="store_true",
         help="recompute pattern_floor.json from findings.jsonl and persist atomically",
     )
+    parser.add_argument(
+        "--scan-commits",
+        action="store_true",
+        help="scan recent git commits for fingerprint references and "
+             "auto-resolve matching open/surfaced findings; skips reverts, "
+             "dismissed findings, and findings that already have a resolution_reason",
+    )
+    parser.add_argument(
+        "--scan-since",
+        metavar="GIT_SINCE",
+        default="30 days ago",
+        help='git --since=<value> for --scan-commits (default: "30 days ago")',
+    )
     args = parser.parse_args()
 
     # --- Identity resolution (best-effort) ---
@@ -1680,6 +1815,8 @@ def main() -> int:
         return print_unresolved()
     if args.surface_pending:
         return surface_pending()
+    if args.scan_commits:
+        return 0 if scan_commits(since=args.scan_since) >= 0 else 1
     if args.recompute_floor:
         from agents.watcher.floor_state import recompute_floor
         state = recompute_floor()
