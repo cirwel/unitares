@@ -13,6 +13,33 @@ TaskType = Literal[
     "review", "deployment", "introspection"
 ]
 
+ToolResultKind = Literal["command", "test", "lint", "build", "file_op", "tool_call"]
+
+
+def _infer_tool_result_kind(tool: Any, summary: Any = "") -> str:
+    text = f"{tool or ''} {summary or ''}".strip().lower()
+    tool_text = str(tool or "").lower()
+
+    test_markers = (
+        "pytest", "unittest", "jest", "vitest", "go test", "cargo test",
+        "npm test", "test-cache", "tests",
+    )
+    lint_markers = ("ruff", "flake8", "eslint", "mypy", "pylint", "lint")
+    build_markers = ("build", "make", "cargo build", "npm run build")
+    file_markers = ("apply_patch", "patch", "write_file", "edit_file")
+
+    if any(marker in text for marker in test_markers) or tool_text == "test":
+        return "test"
+    if any(marker in text for marker in lint_markers):
+        return "lint"
+    if any(marker in text for marker in build_markers):
+        return "build"
+    if any(marker in text for marker in file_markers):
+        return "file_op"
+    if tool_text:
+        return "command"
+    return "tool_call"
+
 
 class BootstrapStateParams(BaseModel):
     """Subset of process_agent_update fields accepted as a bootstrap check-in
@@ -112,13 +139,32 @@ class ToolResultEvidence(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["command", "test", "lint", "build", "file_op", "tool_call"]
+    kind: ToolResultKind = Field(
+        default="tool_call",
+        description=(
+            "Tool-result category. If omitted, the server infers it from "
+            "tool/summary and falls back to command or tool_call."
+        ),
+    )
     tool: str = Field(..., max_length=64)
     summary: str = Field(..., max_length=512)
     exit_code: Optional[int] = None
     is_bad: Optional[bool] = None
     prediction_id: Optional[str] = None
     observed_at: Optional[datetime] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_omitted_kind(cls, data):
+        if not isinstance(data, dict):
+            return data
+        if data.get("kind") in (None, ""):
+            data = dict(data)
+            data["kind"] = _infer_tool_result_kind(
+                data.get("tool"),
+                data.get("summary", ""),
+            )
+        return data
 
 
 class ProcessAgentUpdateParams(AgentIdentityMixin):
@@ -260,5 +306,4 @@ class CallModelParams(AgentIdentityMixin):
     max_tokens: float = Field(500, description="Maximum tokens in response. Default: 500")
     temperature: float = Field(0.7, description="Temperature (creativity). Range: 0.0-1.0. Default: 0.7")
     privacy: Literal["local", "auto", "cloud"] = Field("local", description="Privacy mode. Options: local (Ollama, default), auto (system chooses), cloud (external providers)")
-
 

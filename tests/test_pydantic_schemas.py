@@ -180,6 +180,16 @@ class TestToolResultEvidence:
         assert ev.kind == "test"
         assert ev.exit_code is None
 
+    def test_omitted_kind_is_inferred(self):
+        from src.mcp_handlers.schemas.core import ToolResultEvidence
+        ev = ToolResultEvidence(tool="pytest", summary="tests passed", exit_code=0)
+        assert ev.kind == "test"
+
+    def test_omitted_kind_defaults_to_command_when_tool_present(self):
+        from src.mcp_handlers.schemas.core import ToolResultEvidence
+        ev = ToolResultEvidence(tool="curl", summary="health check passed", exit_code=0)
+        assert ev.kind == "command"
+
     def test_rejects_extra_fields(self):
         from pydantic import ValidationError
         from src.mcp_handlers.schemas.core import ToolResultEvidence
@@ -211,6 +221,17 @@ class TestProcessAgentUpdateAcceptsRecentToolResults:
             response_text="ran tests",
             recent_tool_results=[
                 {"kind": "test", "tool": "pytest", "summary": "passed", "exit_code": 0}
+            ],
+        )
+        assert len(params.recent_tool_results) == 1
+        assert params.recent_tool_results[0].kind == "test"
+
+    def test_accepts_evidence_without_kind(self):
+        from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
+        params = ProcessAgentUpdateParams(
+            response_text="ran tests",
+            recent_tool_results=[
+                {"tool": "pytest", "summary": "passed", "exit_code": 0}
             ],
         )
         assert len(params.recent_tool_results) == 1
