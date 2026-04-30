@@ -178,6 +178,30 @@ async def check_reviewer_stuck(session: DialecticSession) -> bool:
         return False  # Can't determine — don't kill the session
 
 
+def _read_proposed_conditions(arguments: Dict[str, Any]) -> List[str]:
+    """Read proposed_conditions, accepting `conditions` as an alias.
+
+    The dialectic tool surface exposes both `proposed_conditions` (used by
+    thesis/antithesis/synthesis) and `conditions` (used by vote). Callers
+    occasionally pass `conditions=[...]` to a synthesis call by mistake —
+    the field is silently dropped, which produces a synthesis message with
+    empty conditions, which trips check_hard_limits at finalize time and
+    leaves the session in a self-contradictory phase=failed /
+    resolution.action=resume terminal state.
+
+    Accept either name to prevent that silent-drop class of bug. A
+    falsy/missing `proposed_conditions` falls back to `conditions`; explicit
+    empty values are preserved as empty.
+    """
+    proposed = arguments.get('proposed_conditions')
+    if proposed:
+        return proposed
+    fallback = arguments.get('conditions')
+    if fallback:
+        return fallback
+    return [] if proposed is None else proposed
+
+
 def _meta_value(meta: Any, key: str, default: Any = None) -> Any:
     """Read a field from metadata regardless of object-vs-dict representation."""
     if meta is None:
@@ -910,13 +934,17 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     recovery=session_not_found_recovery(),
                 )]
 
+        # Resolve proposed_conditions, accepting `conditions` as an alias
+        # to prevent silent data loss from parameter-name confusion.
+        proposed_conditions = _read_proposed_conditions(arguments)
+
         # Create thesis message
         message = DialecticMessage(
             phase="thesis",
             agent_id=agent_id,
             timestamp=datetime.now(timezone.utc).isoformat(),
             root_cause=arguments.get('root_cause'),
-            proposed_conditions=arguments.get('proposed_conditions', []),
+            proposed_conditions=proposed_conditions,
             reasoning=arguments.get('reasoning')
         )
 
@@ -933,7 +961,7 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     agent_id=agent_id,
                     message_type="thesis",
                     root_cause=arguments.get('root_cause'),
-                    proposed_conditions=arguments.get('proposed_conditions', []),
+                    proposed_conditions=proposed_conditions,
                     reasoning=arguments.get('reasoning'),
                 )
                 await pg_update_phase(session_id, session.phase.value)
@@ -1192,12 +1220,45 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
         else:
             agrees = bool(raw_agrees)
 
+        # Resolve proposed_conditions, accepting `conditions` as an alias
+        # to prevent silent data loss from parameter-name confusion.
+        proposed_conditions = _read_proposed_conditions(arguments)
+
+        # Early-fail: synthesis with agrees=True must contribute conditions, OR
+        # there must already be a prior synthesis in transcript that did.
+        # Without this gate, the empty-conditions path slips through to
+        # check_hard_limits at finalize time and leaves the session in a
+        # phase=failed / resolution.action=resume inconsistent terminal state.
+        if agrees and not proposed_conditions:
+            prior_has_conditions = any(
+                getattr(msg, "phase", None) == "synthesis"
+                and getattr(msg, "proposed_conditions", None)
+                for msg in (session.transcript or [])
+            )
+            if not prior_has_conditions:
+                return [error_response(
+                    "Cannot agree (agrees=True) with empty proposed_conditions when no "
+                    "prior synthesis has supplied any. Either pass proposed_conditions=[...] "
+                    "(or its alias `conditions=[...]`) populated with the agreed terms, "
+                    "or set agrees=False to register disagreement instead.",
+                    error_code="EMPTY_AGREEMENT",
+                    error_category="validation_error",
+                    recovery={
+                        "action": (
+                            "Re-submit synthesis with proposed_conditions populated. "
+                            "If you intended to disagree, set agrees=false."
+                        ),
+                        "related_tools": ["dialectic"],
+                    },
+                    arguments=arguments,
+                )]
+
         # Create synthesis message
         message = DialecticMessage(
             phase="synthesis",
             agent_id=agent_id,
             timestamp=datetime.now(timezone.utc).isoformat(),
-            proposed_conditions=arguments.get('proposed_conditions', []),
+            proposed_conditions=proposed_conditions,
             root_cause=arguments.get('root_cause'),
             reasoning=arguments.get('reasoning'),
             agrees=agrees
@@ -1216,9 +1277,9 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     agent_id=agent_id,
                     message_type="synthesis",
                     root_cause=arguments.get('root_cause'),
-                    proposed_conditions=arguments.get('proposed_conditions', []),
+                    proposed_conditions=proposed_conditions,
                     reasoning=arguments.get('reasoning'),
-                    agrees=arguments.get('agrees', False),
+                    agrees=agrees,
                 )
                 if not result.get("converged"):
                     await pg_update_phase(session_id, session.phase.value)
