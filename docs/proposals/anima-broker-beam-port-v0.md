@@ -1,5 +1,5 @@
 ---
-status: DRAFT-v0.4 (S6 ambiguous; S2-S5 PAUSED-pending-decision; pre-ack-pass)
+status: RETIRED 2026-05-01 (operator decision after v0.4; S6 ambiguous → ambiguous-default-treat-as-falsified honored; no v0.5; surviving work re-scoped to Python discipline track — see §10 RETIREMENT entry)
 authored: 2026-04-30
 amended: 2026-05-01 (v0.4 — S6 spike-result fold-in, post-merge of v0.3 PR #275; first S6 verdict withdrawn after council, corrected re-measurement landed at 11:32:43Z)
 amended_prior: 2026-05-01 (v0.3 — S1 fold-in); 2026-04-30 (v0, v0.1, v0.2 same session)
@@ -84,7 +84,9 @@ unblocks: |
 
 # Proposal: Anima Broker BEAM Port v0 (Pi-side coordination kernel)
 
-> **Status: DRAFT-v0.4, post-S6 (ambiguous), council ack-pass on v0.4 complete.** S6 ran on Lumen 2026-05-01 after v0.3 council ack-pass cleared. Result: aggregate distribution-win 50-75% at cost-ratio 7.5-25% — qualitatively ambiguous (axis-weighting variance) on the §9.3.B 70%/20% gate. First S6 verdict was WITHDRAWN after a 3-agent council found four classes of fatal evidence/framing errors (broken shiv artifact, hello-world Elixir comparison, killed Nuitka treated as failure, pre-supplied operator branch menu). Corrected re-measurement at KG `2026-05-01T11:32:43.014879+00:00` superseded the withdrawn `11:02:42`. Per §9.3.B v0.3 ambiguous-default-treat-as-falsified posture, v0.4 holds S2-S5 in PAUSED state pending operator decision (one operational step softer than literal retire-default; see §8.5 v0.4 closing acknowledgment). v0.4 council ack-pass found 1 BLOCK (S2 row leg-menu re-violation) + 1 BLOCK (45.35 MiB unit-convention error re-introducing the withdrawn-S6's B3) + several CONCERNs/NITs/DRIFTs — all addressed via text-tightening before commit, no architectural revisit. Follow-on to `surface-lease-plane-v0.md`. The lease plane is the **Mac-side** first wedge for BEAM/OTP; this RFC is the **Pi-side** second wedge: porting the `anima-creature` broker to a single-node Elixir application that owns Lumen's hardware lifecycle. Both nodes are single-node by design (no Distributed Erlang between them); they coordinate via HTTP and Postgres heartbeat-TTL, the same patterns the Python fleet uses today.
+> **Status: RETIRED 2026-05-01.** Operator decision after v0.4: S6 landed in the ambiguous band (50-75% on the 70% gate); v0.3's "ambiguous defaults to falsified" rule was kept; no v0.5 issues; surviving work re-scoped to a separate **Python discipline track** (typed-absence server fallback, audit.tool_usage, single-writer hardware ownership checks via lsof CI, watchdog/restart/runbook packaging improvements). Nuitka deferred to a later Python-hardening packaging spike, NOT a blocker for this retirement. No new load-bearing leg invoked. Sections below preserve the design content of the port-that-wasn't for archival reference. See §10 RETIREMENT entry for the operator directive in full.
+
+> **(historical, pre-retirement) Status: DRAFT-v0.4, post-S6 (ambiguous), council ack-pass on v0.4 complete.** S6 ran on Lumen 2026-05-01 after v0.3 council ack-pass cleared. Result: aggregate distribution-win 50-75% at cost-ratio 7.5-25% — qualitatively ambiguous (axis-weighting variance) on the §9.3.B 70%/20% gate. First S6 verdict was WITHDRAWN after a 3-agent council found four classes of fatal evidence/framing errors (broken shiv artifact, hello-world Elixir comparison, killed Nuitka treated as failure, pre-supplied operator branch menu). Corrected re-measurement at KG `2026-05-01T11:32:43.014879+00:00` superseded the withdrawn `11:02:42`. Per §9.3.B v0.3 ambiguous-default-treat-as-falsified posture, v0.4 holds S2-S5 in PAUSED state pending operator decision (one operational step softer than literal retire-default; see §8.5 v0.4 closing acknowledgment). v0.4 council ack-pass found 1 BLOCK (S2 row leg-menu re-violation) + 1 BLOCK (45.35 MiB unit-convention error re-introducing the withdrawn-S6's B3) + several CONCERNs/NITs/DRIFTs — all addressed via text-tightening before commit, no architectural revisit. Follow-on to `surface-lease-plane-v0.md`. The lease plane is the **Mac-side** first wedge for BEAM/OTP; this RFC is the **Pi-side** second wedge: porting the `anima-creature` broker to a single-node Elixir application that owns Lumen's hardware lifecycle. Both nodes are single-node by design (no Distributed Erlang between them); they coordinate via HTTP and Postgres heartbeat-TTL, the same patterns the Python fleet uses today.
 
 ## 1. Problem
 
@@ -720,9 +722,9 @@ The §6.2 promotion gate ("no operator KG entry tagged `lumen-broker-port` AND s
 | v0.2.1 | spike scope rescope (pre-experiment) | Splits §9.3 into production deliverables (§9.3.A) vs. spike experiments (§9.3.B); 7 discrete gates with falsification clauses |
 | v0.2.2 | (UNUSED) spike empirical fold-in (post-spike, all gates green) | Reserved for "all gates green" path; not reached — S1 falsified §8.2 |
 | v0.3 | S1 spike-result fold-in; §8.2 falsified; §8.5 honestly re-narrated; S6 promoted; §9.3.A pacing split | Council ack-pass complete (dialectic NO-SHIP first pass with 2 BLOCKs about §8.5 framing — addressed via text-tightening, no architectural revisit); S2-S5 paused pending S6 |
-| v0.4 | S6 spike-result fold-in (ambiguous); first verdict withdrawn after council; corrected verdict in KG; v0.4 lessons added to spike methodology | **CURRENT**; pre-ack-pass; S2-S5 stay PAUSED per §9.3.B v0.3 ambiguous-default-treat-as-falsified posture (v0.4 operationally softens to "PAUSED-pending-decision" rather than literal retire — see §8.5 v0.4 acknowledgment) |
-| v0.5 OR retire-without-amendment | post-operator-decision on S6 ambiguity | v0 may close without an amendment if operator chooses retire-to-Python-discipline or appliance-OS reframing (separate Nerves RFC). v0.5 issues only if operator continues v0 — either by weighting ambiguity as ≥70% (S6 holds, S2-S5 resume) or by invoking an additional load-bearing leg per §8.5 v0.3 |
-| v1.0 | post-Phase-C | Issued after cutover, only if v0 continues at all (i.e., v0.5 is reached AND Phase A-C complete); folds in phase-experience learnings |
+| v0.4 | S6 spike-result fold-in (ambiguous); first verdict withdrawn after council; corrected verdict in KG; v0.4 lessons added to spike methodology | Council ack-pass complete; PR #278 merged 2026-05-01 |
+| **RETIRED** | operator decision 2026-05-01 (post-v0.4) | **v0 closed; no v0.5.** Operator weighed S6 ambiguous-band (50-75% on 70% gate) as not-met; v0.3's "ambiguous defaults to falsified" rule honored; supervision-tree-recovery alone judged insufficient after §8.2 RSS prior collapsed; no new load-bearing leg invoked. Surviving work re-scoped to **Python discipline track** (separate). See §10 RETIREMENT entry below. |
+| v1.0 | (UNREACHABLE — v0 retired) | v1.0 was reserved for post-cutover learnings; with v0 retired, this row is closed without ever being issued. Re-opens only if a future RFC ports the Pi-side broker to BEAM under a new operator-supplied premise. |
 
 - **v0** (2026-04-30) — initial draft. Pre-council. Authored after archaeology session.
 - **v0.1** (2026-04-30, same session) — council pass 1 amendments. Three NO-SHIPs returned. Eight BLOCKs addressed:
@@ -848,3 +850,31 @@ The §6.2 promotion gate ("no operator KG entry tagged `lumen-broker-port` AND s
   Implementation gate stays closed for paused §9.3.A items until operator decides on S6.
 
   KG anchors: corrected S6 verdict `2026-05-01T11:32:43`; withdrawn S6 verdict `2026-05-01T11:02:42` (status=superseded); withdrawal note `2026-05-01T11:22:20`; S1 verdict `2026-05-01T09:29:02`; v0.3 RFC entry `2026-05-01T09:59:41`.
+
+- **RETIRED** (2026-05-01, post-merge of v0.4 PR #278) — **operator decision: v0 closed without v0.5; surviving work re-scoped to Python discipline track.**
+
+  **Operator directive (verbatim summary, 2026-05-01):**
+  1. Do not complete Nuitka now. The shiv result + Elixir RSS falsification is enough for this RFC decision. Nuitka can be a later packaging spike for Python hardening, not a blocker for retiring the BEAM broker port.
+  2. Do not invoke a new load-bearing leg. No substrate-uniformity or supervision-tree recovery added as replacement justification. After §8.2 collapsed, the remaining case is not strong enough for a full Pi-side BEAM port.
+  3. Treat the 70% bar as not met decisively enough to continue. S6 landed in the ambiguous band, and v0.3's rule was "ambiguous defaults to falsified." Keep that.
+  4. Keep the useful Python-side hardening. Re-scope the surviving work into a new Python discipline track:
+     - typed-absence server fallback (was §9.3.A "continue" item; ships independently)
+     - audit.tool_usage write path (was §9.3.A "continue" item; ships independently)
+     - single-writer hardware ownership checks (lsof CI)
+     - watchdog/restart/runbook packaging improvements
+  5. No v0.5 unless there is a real new premise. A v0.5 should only happen if we later choose "Lumen as appliance OS" or get surprising evidence from Python packaging/hardware discipline work.
+
+  **What this RFC's archive value is:** the design content of §1-§7 (problem framing, supervision tree, hardware ownership lines, JSON schema contract, lease-plane cross-link, OPEN questions) and §8 (concerns/counter-arguments) preserves the analysis of *why* the Pi-side BEAM port did not survive its first measurement spike. Future agents proposing a port should read v0-v0.4 first to understand which arguments did not survive S1 (§8.2 RSS estimate) and S6 (§8.5 distribution-leg ambiguity), and to avoid recomputing those falsifications.
+
+  **What stays committed in code (independent value):** the two §9.3.A "continue" items will ship under the Python discipline track:
+  - Server fallback typed-absence path (multi-site refactor per §4.2.2): eliminates `SERVER_GOVERNANCE_FALLBACK_SECONDS` direct-UNITARES code path; prevents BMP280-wedge-class fallback recurrences in the existing Python broker.
+  - `audit.tool_usage` write path: broker telemetry + `error_type='shm_parse'` regression trigger; reusable for any broker writing the SHM envelope.
+
+  **What stays as-is (acknowledged trade-offs):** §1.1 items 2 + 3 — PR #11's hand-rolled `recreate I2C bus handle when multiple sensors fail` and PR #14's periodic 30s D22/D24 OUTPUT-HIGH refresh hack — remain in production. Single-writer-to-hardware enforcement remains code-review-only (PR #45 closed BMP280 wedge; lsof CI to be added under Python discipline track). These are the bugs the OTP-shaped-win argument was meant to fix structurally; "Python + discipline" leaves them as-is. Trade-off named, not papered over.
+
+  **Spike artifacts** at `~/spike-s1/spike/` (Elixir hello-world, S1) and `~/spike-s6/{shiv,nuitka,elixir/realistic}` (S6 measurements) on Lumen are preserved for archival reference and future reproduction.
+
+  **No further amendments planned.** This entry is the canonical retirement record. KG entries: retirement `2026-05-01T12:23:47.750670+00:00` severity=high tag=`v0-retired,lumen-broker-port`; Python discipline track `2026-05-01T12:24:16.916553+00:00` severity=medium tag=`python-discipline-track`.
+
+  Re-opens only if (a) operator authorizes "Lumen becomes an appliance OS" framing (separate Nerves-port RFC, NOT a v0.5 of this one), or (b) surprising evidence emerges from the Python discipline track that re-frames the §8.5 conjunction.
+
