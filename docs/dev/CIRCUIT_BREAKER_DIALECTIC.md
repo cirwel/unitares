@@ -23,6 +23,19 @@ The circuit breaker is a **protective pause**, not a failure. It exists to preve
 
 ---
 
+## Machine R.A.I.N. Pre-Flight
+
+Before quick recovery, dialectic review, or operator escalation, run the short Machine R.A.I.N. loop from [machine-rain-protocol.md](../operations/machine-rain-protocol.md):
+
+1. **Register** the concrete signal.
+2. **Allow** the evidence to remain visible.
+3. **Investigate** the canonical source.
+4. **Next**: choose the smallest stabilizing action.
+
+This is the pre-recovery discipline for contradictions, stale data, failed validation, identity ambiguity, and surface ownership conflict. It does not replace `self_recovery()` or dialectic review; it makes those paths better grounded.
+
+---
+
 ## Dialectic Protocol Overview
 
 Dialectic recovery is a structured review process:
@@ -52,14 +65,14 @@ The dialectic protocol was designed for multi-agent coordination, but ephemeral 
 Key tool:
 - `llm_assisted_dialectic` — runs full thesis→antithesis→synthesis using local LLM
 
-```python
+~~~python
 result = llm_assisted_dialectic(
     root_cause="Agent memory consumption increasing over time",
     proposed_conditions=["Run memory profiler", "Check for circular references"],
     reasoning="Memory leak suspected in state management"
 )
 # Returns: recommendation (RESUME/COOLDOWN/ESCALATE), synthesis, next_steps
-```
+~~~
 
 **Requirements:** Ollama running locally (`ollama serve`)
 

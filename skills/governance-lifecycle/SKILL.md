@@ -14,16 +14,18 @@ source_files:
 
 # Agent Lifecycle
 
+**Last Updated:** 2026-05-01
+
 ## Starting a Session
 
 Choose creation, lineage, or proof-owned resume explicitly:
 
-```
+~~~text
 onboard(force_new=true)                                              # first run / fresh process
 onboard(force_new=true, parent_agent_id="<prior-uuid>",
         spawn_reason="new_session")                                  # fresh process inheriting prior work
 identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true) # same live owner / proof-owned rebind
-```
+~~~
 
 Returns:
 - **UUID**: The server identity anchor for this process instance
@@ -54,13 +56,13 @@ Avoid these patterns:
 
 Call `process_agent_update()` after meaningful work:
 
-```
+~~~text
 process_agent_update(
   response_text: "Brief summary of what you did",
   complexity: 0.0-1.0,   # Task difficulty estimate
   confidence: 0.0-1.0    # How confident you are (be honest)
 )
-```
+~~~
 
 ### When to Check In
 
@@ -103,6 +105,13 @@ Strong ownership proof is better than implicit continuity. If the runtime falls 
 ## Recovery
 
 When you are paused, stuck, or need intervention:
+
+First run the Machine R.A.I.N. loop (`docs/operations/machine-rain-protocol.md`) when the trigger involves contradiction, stale data, failed validation, weak identity assurance, or surface conflict:
+
+1. Register the concrete signal.
+2. Allow the evidence to remain visible.
+3. Investigate the canonical source.
+4. Next: choose the smallest stabilizing action.
 
 | Situation | Tool | Notes |
 |-----------|------|-------|
