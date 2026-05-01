@@ -116,7 +116,7 @@ async def stamp_default_class_tags(
     if default_tags is None:
         return None
 
+    await agent_storage.update_agent(agent_id=agent_uuid, tags=default_tags)
     if meta is not None:
         meta.tags = default_tags
-    await agent_storage.update_agent(agent_id=agent_uuid, tags=default_tags)
     return default_tags

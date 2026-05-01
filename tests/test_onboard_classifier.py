@@ -160,6 +160,22 @@ async def test_explicit_name_takes_precedence_over_meta_label():
 
 
 @pytest.mark.asyncio
+async def test_stamp_does_not_mutate_meta_when_persist_fails():
+    """P011 regression: persist must come before in-memory mutation, so a
+    failed DB write does not leave meta.tags pointing at a value the DB has
+    no record of (which would be clobbered on the next metadata reload).
+    """
+    meta = _make_meta(tags=None)
+    fake_update = AsyncMock(side_effect=RuntimeError("PG unavailable"))
+    with patch("src.agent_storage.update_agent", fake_update):
+        from src.grounding.onboard_classifier import stamp_default_class_tags
+        with pytest.raises(RuntimeError):
+            await stamp_default_class_tags("uuid-1234", "Sentinel", meta=meta)
+    assert meta.tags is None
+    fake_update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_onboard_wrapper_still_calls_through():
     """The thin ``_stamp_default_tags_on_onboard`` wrapper in identity/handlers.py
     must still produce the same end-state for backward compat."""
