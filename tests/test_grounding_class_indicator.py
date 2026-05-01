@@ -8,6 +8,7 @@ from src.grounding.class_indicator import (
     CLASS_EMBODIED,
     CLASS_RESIDENT_PERSISTENT,
     CLASS_EPHEMERAL,
+    CLASS_ENGAGED_EPHEMERAL,
     CLASS_DEFAULT,
 )
 
@@ -66,3 +67,40 @@ def test_meta_without_tags_attribute_is_safe():
     class Bare:
         label = "Lumen"
     assert classify_agent(Bare()) == "Lumen"
+
+
+# S8a Phase-2 additions: engaged_ephemeral is the post-promotion class for
+# previously-ephemeral identities with total_updates >= 3.
+
+def test_engaged_ephemeral_tag_classifies_engaged_ephemeral():
+    assert classify_agent(_meta(tags=["engaged_ephemeral"])) == CLASS_ENGAGED_EPHEMERAL
+
+
+def test_engaged_ephemeral_takes_precedence_over_ephemeral_in_race():
+    """If both tags are present (e.g. concurrent write during the Phase-2
+    sweep), the post-promotion class wins. Defense-in-depth — the sweep
+    UPDATE removes ephemeral atomically, so this state is not expected."""
+    assert (
+        classify_agent(_meta(tags=["ephemeral", "engaged_ephemeral"]))
+        == CLASS_ENGAGED_EPHEMERAL
+    )
+
+
+def test_embodied_still_takes_precedence_over_engaged_ephemeral():
+    """Lumen-style metadata with both embodied and (somehow) engaged_ephemeral
+    should remain embodied — embodied is a structural class, engaged_ephemeral
+    is a session-shape class."""
+    assert (
+        classify_agent(_meta(tags=["embodied", "engaged_ephemeral"]))
+        == CLASS_EMBODIED
+    )
+
+
+def test_engaged_ephemeral_does_not_collide_with_resident_persistent():
+    """An agent tagged engaged_ephemeral + persistent + autonomous shouldn't
+    happen in practice (they're distinct lifecycles), but if it does the
+    engaged_ephemeral wins since it's the more specific shape signal."""
+    assert (
+        classify_agent(_meta(tags=["engaged_ephemeral", "persistent", "autonomous"]))
+        == CLASS_ENGAGED_EPHEMERAL
+    )

@@ -22,6 +22,7 @@ KNOWN_RESIDENT_LABELS = frozenset(
 CLASS_EMBODIED = "embodied"
 CLASS_RESIDENT_PERSISTENT = "resident_persistent"
 CLASS_EPHEMERAL = "ephemeral"
+CLASS_ENGAGED_EPHEMERAL = "engaged_ephemeral"
 CLASS_DEFAULT = "default"
 
 
@@ -30,9 +31,22 @@ def classify_agent(meta: Optional[Any]) -> str:
 
     Resolution order:
       1. Known resident label (Lumen / Vigil / Sentinel / Watcher / Steward).
-      2. Tag-derived: embodied → embodied; ephemeral → ephemeral;
-         persistent + autonomous → resident_persistent.
+      2. Tag-derived: embodied → embodied; engaged_ephemeral → engaged_ephemeral;
+         ephemeral → ephemeral; persistent + autonomous → resident_persistent.
       3. Default — used for session-bounded agents and anything unrecognized.
+
+    Axis note (technical debt — see KG follow-up): ``embodied`` and
+    ``ephemeral`` are *identity-class* claims; ``engaged_ephemeral`` is a
+    *behavior-cohort* claim ("crossed activity threshold") encoded in the
+    same single-tag namespace as a temporary measure. A future schema
+    change will give behavior cohorts their own field; until then the
+    resolution order treats engaged_ephemeral as more specific than the
+    plain ephemeral fallback.
+
+    ``engaged_ephemeral`` is checked before ``ephemeral`` so that during
+    any transient state where both tags coexist (the promotion UPDATE
+    strips ephemeral atomically, but the in-memory cache sync is best
+    effort), the post-promotion class wins.
 
     Returns 'default' if meta is None or carries no class-relevant tags.
     """
@@ -48,6 +62,8 @@ def classify_agent(meta: Optional[Any]) -> str:
 
     if "embodied" in tags:
         return CLASS_EMBODIED
+    if "engaged_ephemeral" in tags:
+        return CLASS_ENGAGED_EPHEMERAL
     if "ephemeral" in tags:
         return CLASS_EPHEMERAL
     if "persistent" in tags and "autonomous" in tags:

@@ -2276,39 +2276,21 @@ async def _create_spawned_edge_bg(
 
 
 async def _stamp_default_tags_on_onboard(agent_uuid: str, name: Optional[str]) -> None:
-    """S8a Phase-1: stamp default class tags on a freshly-created identity.
-
-    Synchronous (not background) because the first `process_agent_update`
-    call can immediately follow `onboard` and the class tag governs
-    class-conditional calibration, trust-tier routing, and
-    archive-orphan-sweep exemptions. If tags aren't persisted before
-    onboard returns, the first check-in classifies as `default` and uses
-    the wrong scale maps.
-
-    Rule (2-branch): resident label → ["persistent", "autonomous"];
-    otherwise → ["ephemeral"]. See src/grounding/onboard_classifier.py.
-
-    Non-fatal on exception — onboard succeeds without the tag stamp, but
-    the agent will be misclassified until a later `update_agent_metadata`
-    call. Caller catches and logs.
+    """Stamp default class tags from the onboard handler. Thin wrapper around
+    ``stamp_default_class_tags`` in ``src.grounding.onboard_classifier``;
+    keeps the original log line shape so onboard-specific log filters keep
+    working. Phase-2 (2026-04-30) added the same stamp call to the
+    auto-create sites in ``src/mcp_handlers/updates/phases.py`` directly,
+    skipping this wrapper.
     """
-    from src import agent_storage
-    from src.grounding.onboard_classifier import default_tags_for_onboard
+    from src.grounding.onboard_classifier import stamp_default_class_tags
 
     meta = mcp_server.agent_metadata.get(agent_uuid)
-    existing_tags = getattr(meta, "tags", None) if meta is not None else None
-    default_tags = default_tags_for_onboard(name, existing_tags=existing_tags)
-    if default_tags is None:
-        return
-
-    # In-memory sync so subsequent reads in the same request see the tags;
-    # DB write so load_metadata_async() reloads don't clobber them.
-    if meta is not None:
-        meta.tags = default_tags
-    await agent_storage.update_agent(agent_id=agent_uuid, tags=default_tags)
-    logger.info(
-        f"[ONBOARD] S8a default-stamp: {agent_uuid[:8]}... tagged {default_tags} (name={name!r})"
-    )
+    stamped = await stamp_default_class_tags(agent_uuid, name, meta=meta)
+    if stamped is not None:
+        logger.info(
+            f"[ONBOARD] S8a default-stamp: {agent_uuid[:8]}... tagged {stamped} (name={name!r})"
+        )
 
 
 async def _seed_genesis_from_parent_bg(child_id: str, parent_id: str):
