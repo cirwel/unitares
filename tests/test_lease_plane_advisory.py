@@ -21,7 +21,7 @@ def _ok_lease_payload(holder_uuid: UUID) -> dict[str, Any]:
     now = datetime.now(UTC).replace(microsecond=0)
     return {
         "lease_id": str(uuid4()),
-        "surface_id": "test:advisory/x",
+        "surface_id": "dialectic:/test_advisory_x",
         "surface_kind": "test",
         "holder_agent_uuid": str(holder_uuid),
         "holder_class": "process_instance",
@@ -63,8 +63,7 @@ def test_acquired_new_runs_block_and_releases():
     block_ran = False
     seen_outcome = None
     with lease_advisory_scope(
-        surface_id="test:advisory/x",
-        surface_kind="test",
+        surface_id="dialectic:/test_advisory_x",
         holder_agent_uuid=holder,
         ttl_s=60,
         intent="unit-test",
@@ -93,8 +92,7 @@ def test_idempotent_outcome_classified_correctly():
     client = LeasePlaneClient(transport=transport)
 
     with lease_advisory_scope(
-        surface_id="test:advisory/x",
-        surface_kind="test",
+        surface_id="dialectic:/test_advisory_x",
         holder_agent_uuid=holder,
         ttl_s=60,
         client=client,
@@ -110,7 +108,7 @@ def test_held_by_other_runs_block_no_release():
             {
                 "ok": False,
                 "error": "held_by_other",
-                "surface_id": "test:advisory/contended",
+                "surface_id": "dialectic:/test_advisory_contended",
                 "blocking_lease_id": str(uuid4()),
                 "held_by_uuid": str(other_holder),
                 "expires_at": (datetime.now(UTC) + timedelta(seconds=30)).isoformat(),
@@ -122,8 +120,7 @@ def test_held_by_other_runs_block_no_release():
 
     block_ran = False
     with lease_advisory_scope(
-        surface_id="test:advisory/contended",
-        surface_kind="test",
+        surface_id="dialectic:/test_advisory_contended",
         holder_agent_uuid=uuid4(),
         ttl_s=60,
         client=client,
@@ -144,8 +141,7 @@ def test_service_unavailable_runs_block_no_release():
 
     block_ran = False
     with lease_advisory_scope(
-        surface_id="test:advisory/down",
-        surface_kind="test",
+        surface_id="dialectic:/test_advisory_down",
         holder_agent_uuid=uuid4(),
         ttl_s=60,
         client=client,
@@ -160,8 +156,7 @@ def test_service_unavailable_runs_block_no_release():
 def test_disabled_client_outcome_is_service_unavailable():
     block_ran = False
     with lease_advisory_scope(
-        surface_id="test:advisory/disabled",
-        surface_kind="test",
+        surface_id="dialectic:/test_advisory_disabled",
         holder_agent_uuid=uuid4(),
         ttl_s=60,
         client=LeasePlaneDisabledClient(),
@@ -187,7 +182,7 @@ def test_caller_exceptions_propagate_and_lease_still_released():
 
     try:
         with lease_advisory_scope(
-            surface_id="test:advisory/raises",
+            surface_id="dialectic:/test_advisory_raises",
             holder_agent_uuid=holder,
             ttl_s=60,
             client=client,
@@ -234,8 +229,7 @@ def test_acquire_raise_classified_as_client_error():
     block_ran = False
     seen_outcome: str | None = None
     with lease_advisory_scope(
-        surface_id="test:advisory/timeout",
-        surface_kind="test",
+        surface_id="dialectic:/test_advisory_timeout",
         holder_agent_uuid=uuid4(),
         ttl_s=60,
         client=client,

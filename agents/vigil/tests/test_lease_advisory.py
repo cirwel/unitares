@@ -78,8 +78,10 @@ async def test_run_cycle_invokes_lease_advisory_with_expected_surface(
     with pytest.raises(_CycleStopMarker):
         await agent.run_cycle(client)
 
-    assert captured["surface_id"] == "vigil:cycle"
-    assert captured["surface_kind"] == "vigil_cycle"
+    assert captured["surface_id"] == "resident:/vigil_cycle"
+    # surface_kind no longer passed (PR 2.5 — derived server-side from scheme prefix
+    # via migration 026's generated column).
+    assert "surface_kind" not in captured
     assert captured["ttl_s"] == 300
     assert captured.get("intent") == "vigil heartbeat cycle"
 

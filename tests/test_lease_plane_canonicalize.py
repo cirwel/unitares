@@ -114,20 +114,52 @@ def test_canonicalize_error_semantics():
     )
 
 
-@pytest.mark.skip(
-    reason="Deferred to PR 2.5 — wiring the AcquireRequest field_validator requires "
-    "migrating production agents (watcher/vigil/sentinel/chronicler/ship.sh) to canonical "
-    "schemes first; otherwise the validator bricks the fleet on first acquire. "
-    "See docs/proposals/surface-lease-plane-phase-a-plan.md PR 2.5."
-)
 def test_acquire_request_rejects_query_string_in_surface_id():
     """RFC v0.8 §7.12.4: ?-bearing surface_id reserved for v1 modifier form;
     v0 callers must use plain canonical form."""
+    from pydantic import ValidationError
+
+    from src.lease_plane import AcquireRequest
+    from uuid import uuid4
+
+    with pytest.raises(ValidationError) as exc_info:
+        AcquireRequest(
+            surface_id="file:///tmp/x.py?canon=inode",
+            holder_agent_uuid=uuid4(),
+            holder_class="process_instance",
+            holder_kind="remote_heartbeat",
+            ttl_s=60,
+        )
+    assert "?" in str(exc_info.value) or "query" in str(exc_info.value).lower(), (
+        f"Expected error message to mention query string, got: {exc_info.value}"
+    )
 
 
-@pytest.mark.skip(
-    reason="Deferred to PR 2.5 — see test_acquire_request_rejects_query_string_in_surface_id."
-)
 def test_acquire_request_surface_id_field_validator_wired():
     """RFC v0.8 §7.12.5: AcquireRequest auto-canonicalizes surface_id at the model boundary.
     Two equivalent inputs must produce the same .surface_id."""
+    from src.lease_plane import AcquireRequest
+    from uuid import uuid4
+
+    holder = uuid4()
+
+    def make(sid: str) -> AcquireRequest:
+        return AcquireRequest(
+            surface_id=sid,
+            holder_agent_uuid=holder,
+            holder_class="process_instance",
+            holder_kind="remote_heartbeat",
+            ttl_s=60,
+        )
+
+    a = make("capture:/win_b,win_a")
+    b = make("capture:/win_a,win_b")
+    assert a.surface_id == b.surface_id, (
+        f"AcquireRequest must auto-canonicalize via field_validator; "
+        f"got {a.surface_id!r} != {b.surface_id!r}"
+    )
+
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        make("not_a_real_scheme:foo")

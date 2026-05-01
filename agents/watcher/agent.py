@@ -914,9 +914,11 @@ def scan_commits(since: str = "30 days ago", repo_path: Path | None = None) -> i
       - Ambiguous prefixes that match more than one fingerprint.
 
     Phase A lease-plane integration: each scan acquires an advisory-mode
-    lease at `surface_id=watcher:scan_commits:<repo_root>`. The lease is
-    *telemetry only* — Watcher proceeds whether the lease is acquired,
-    held by another scanner, or unavailable. RFC v0.5 §6.1.
+    lease at `surface_id=resident:/watcher_scan_commits_<repo_root_sanitized>`
+    (migrated from pre-canonical `watcher:scan_commits:<repo_root>` per RFC
+    v0.8 §7.2.1 canonical scheme list). The lease is *telemetry only* —
+    Watcher proceeds whether the lease is acquired, held by another
+    scanner, or unavailable. RFC v0.5 §6.1.
 
     Returns:
         The number of findings resolved this scan. Always returns 0 on git
@@ -926,10 +928,11 @@ def scan_commits(since: str = "30 days ago", repo_path: Path | None = None) -> i
 
     from src.lease_plane.advisory import lease_advisory_scope, new_holder_uuid
 
-    surface_id = f"watcher:scan_commits:{repo_root}"
+    # Sanitize repo path into a resident:/ surface_id (slashes → underscores).
+    sanitized = str(repo_root).replace("/", "_").strip("_")
+    surface_id = f"resident:/watcher_scan_commits_{sanitized}"
     with lease_advisory_scope(
         surface_id=surface_id,
-        surface_kind="watcher_scan_commits",
         holder_agent_uuid=new_holder_uuid(),
         ttl_s=60,
         intent=f"scan_commits since={since!r}",

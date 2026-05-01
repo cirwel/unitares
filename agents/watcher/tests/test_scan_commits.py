@@ -293,8 +293,10 @@ class TestScanCommitsLeaseAdvisory:
 
         assert result == 1, "Phase A advisory: body must run regardless of lease outcome"
 
-        assert captured["surface_kind"] == "watcher_scan_commits"
-        assert captured["surface_id"].startswith("watcher:scan_commits:")
+        # surface_kind no longer passed (PR 2.5 — derived server-side from scheme prefix
+        # via migration 026's generated column).
+        assert "surface_kind" not in captured
+        assert captured["surface_id"].startswith("resident:/watcher_scan_commits_")
         assert captured["ttl_s"] == 60
         assert "since=" in captured["intent"]
 

@@ -79,7 +79,7 @@ BRANCH=$(git rev-parse --abbrev-ref HEAD)
 # outcome and proceed regardless, and release on EXIT so the lease is
 # returned even if a downstream step (commit, push, PR create) fails.
 LEASE_RESULT=$(python3 "$PROJECT_ROOT/scripts/dev/_ship_lease_advisory.py" acquire \
-    --surface-id="ship.sh:$BRANCH" \
+    --surface-id="resident:/ship_sh_$BRANCH" \
     --surface-kind="ship_sh" \
     --intent="$MESSAGE" \
     --ttl-s=300 2>/dev/null || echo '{"outcome":"client_error","lease_id":null}')
