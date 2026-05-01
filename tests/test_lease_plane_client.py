@@ -60,7 +60,6 @@ def test_acquire_request_rejects_role_holder_class():
     try:
         AcquireRequest(
             surface_id="file:///tmp/a",
-            surface_kind="file",
             holder_agent_uuid=uuid4(),
             holder_class="role",
             holder_kind="remote_heartbeat",
@@ -98,7 +97,6 @@ def test_acquire_ok_parses_idempotent_drift_warning():
     result = LeasePlaneClient(transport=transport).acquire(
         AcquireRequest(
             surface_id="file:///tmp/a",
-            surface_kind="file",
             holder_agent_uuid=holder,
             holder_class="process_instance",
             holder_kind="remote_heartbeat",
@@ -132,7 +130,6 @@ def test_acquire_held_by_other_parses_holder_and_expiry():
     result = LeasePlaneClient(transport=transport).acquire(
         AcquireRequest(
             surface_id="file:///tmp/a",
-            surface_kind="file",
             holder_agent_uuid=uuid4(),
             holder_class="process_instance",
             holder_kind="remote_heartbeat",
@@ -152,7 +149,6 @@ def test_transport_exception_degrades_to_service_unavailable():
     result = LeasePlaneClient(transport=transport).acquire(
         AcquireRequest(
             surface_id="file:///tmp/a",
-            surface_kind="file",
             holder_agent_uuid=uuid4(),
             holder_class="process_instance",
             holder_kind="remote_heartbeat",
@@ -170,7 +166,6 @@ def test_invalid_response_degrades_to_schema_invalid():
     result = LeasePlaneClient(transport=transport).acquire(
         AcquireRequest(
             surface_id="file:///tmp/a",
-            surface_kind="file",
             holder_agent_uuid=uuid4(),
             holder_class="process_instance",
             holder_kind="remote_heartbeat",

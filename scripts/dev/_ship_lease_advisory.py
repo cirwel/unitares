@@ -43,9 +43,12 @@ from src.lease_plane.advisory import (  # noqa: E402
 def _cmd_acquire(args: argparse.Namespace) -> int:
     client: LeasePlaneClient = make_advisory_client()
 
+    # surface_kind dropped per RFC v0.8 §7.2.3 — derived server-side from
+    # surface_id scheme prefix via migration 026's generated column.
+    # args.surface_kind is preserved on the CLI for backwards-compat with
+    # operator scripts but is not passed to AcquireRequest.
     request = AcquireRequest(
         surface_id=args.surface_id,
-        surface_kind=args.surface_kind,
         holder_agent_uuid=uuid4(),
         holder_class="process_instance",
         holder_kind="remote_heartbeat",

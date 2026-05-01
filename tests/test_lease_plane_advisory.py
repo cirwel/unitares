@@ -188,7 +188,6 @@ def test_caller_exceptions_propagate_and_lease_still_released():
     try:
         with lease_advisory_scope(
             surface_id="test:advisory/raises",
-            surface_kind="test",
             holder_agent_uuid=holder,
             ttl_s=60,
             client=client,

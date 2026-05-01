@@ -58,10 +58,22 @@ class LeaseRecord(BaseModel):
 
 
 class AcquireRequest(LeasePlaneModel):
-    """Request body for POST /v1/lease/acquire."""
+    """Request body for POST /v1/lease/acquire.
+
+    `surface_kind` is no longer a request field per RFC v0.8 §7.2.3 — it is
+    derived server-side from the surface_id scheme prefix via migration 026's
+    generated column.
+
+    Note (PR 2): the §7.12.5 Pydantic field_validator that auto-canonicalizes
+    `surface_id` and rejects non-canonical schemes is DEFERRED to PR 2.5.
+    PR 2.5 also migrates production agents (watcher/vigil/sentinel/chronicler/
+    ship.sh advisory) to canonical schemes (`resident:/...`, `file://...`)
+    so the field_validator does not brick the fleet on activation.
+    Today AcquireRequest accepts any surface_id; the canonicalize helper is
+    available for opt-in caller use via `from src.lease_plane.canonicalize`.
+    """
 
     surface_id: str = Field(min_length=1)
-    surface_kind: str = Field(min_length=1)
     holder_agent_uuid: UUID
     holder_class: HolderClass
     holder_kind: HolderKind
