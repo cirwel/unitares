@@ -57,7 +57,8 @@ async def _cleanup(conn):
     )
     await conn.execute(
         "DELETE FROM lease_plane.lease_plane_events WHERE surface_id LIKE 'td:/pr3a%' "
-        "OR surface_id LIKE 'capture:/pr3a%'"
+        "OR surface_id LIKE 'capture:/pr3a%' "
+        "OR surface_id LIKE '%__deprecation_marker__'"
     )
 
 
@@ -319,3 +320,101 @@ def test_deprecate_lock_key_stable_across_processes():
         cmd_resident, capture_output=True, text=True, check=True, cwd=str(project_root),
     ).stdout.strip()
     assert out_resident != out_a, "different kinds must produce different lock keys"
+
+
+@pytest.mark.asyncio
+async def test_deprecate_emits_lease_deprecation_marked_event():
+    """RFC §7.11.3 audit signal contract: Phase 0 mark must emit
+    event_type='lease.deprecation_marked' with deprecation_id payload.
+
+    Pre-PR-6, the migration 027 CHECK accepted this event_type but no code
+    path emitted it — dangling vocabulary surfaced by council NIT."""
+    from scripts.dev import lease_plane_deprecate as cli
+
+    await ensure_test_database_schema()
+    conn = await asyncpg.connect(TEST_DB_URL)
+    try:
+        await _cleanup(conn)
+        rc = await cli.deprecate_cmd(
+            kind="td", session_id="test-cli-marked-event",
+            drain_window_days=30, db_url=TEST_DB_URL,
+        )
+        assert rc == 0
+        depr_id = await conn.fetchval(
+            "SELECT deprecation_id FROM lease_plane.deprecated_schemes WHERE surface_kind='td'"
+        )
+        events = await conn.fetch(
+            "SELECT event_type, payload FROM lease_plane.lease_plane_events "
+            "WHERE event_type='lease.deprecation_marked' AND surface_kind='td'"
+        )
+        assert len(events) == 1, f"Phase 0 must emit one lease.deprecation_marked event; got {len(events)}"
+        import json
+        payload = json.loads(events[0]["payload"])
+        assert payload.get("deprecation_id") == str(depr_id)
+        assert payload.get("kind") == "td"
+        assert payload.get("session_id") == "test-cli-marked-event"
+    finally:
+        await _cleanup(conn)
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_finalize_emits_lease_deprecation_migrated_event():
+    """RFC §7.11.3: Phase 3 finalize must emit event_type='lease.deprecation_migrated'
+    with deprecation_id payload (audit signal that the CHECK migration completed)."""
+    from scripts.dev import lease_plane_deprecate as cli
+
+    await ensure_test_database_schema()
+    conn = await asyncpg.connect(TEST_DB_URL)
+    try:
+        await _cleanup(conn)
+        await cli.deprecate_cmd(
+            kind="td", session_id="test-cli-migrated-event",
+            drain_window_days=30, db_url=TEST_DB_URL,
+        )
+        depr_id = await conn.fetchval(
+            "SELECT deprecation_id FROM lease_plane.deprecated_schemes WHERE surface_kind='td'"
+        )
+        await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL)
+        rc = await cli.deprecation_finalize_cmd(kind="td", db_url=TEST_DB_URL)
+        assert rc == 0
+        events = await conn.fetch(
+            "SELECT event_type, payload FROM lease_plane.lease_plane_events "
+            "WHERE event_type='lease.deprecation_migrated' AND surface_kind='td'"
+        )
+        assert len(events) == 1, f"Phase 3 must emit one lease.deprecation_migrated event; got {len(events)}"
+        import json
+        payload = json.loads(events[0]["payload"])
+        assert payload.get("deprecation_id") == str(depr_id)
+        assert payload.get("kind") == "td"
+    finally:
+        await _cleanup(conn)
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_finalize_idempotent_does_not_double_emit():
+    """Re-running finalize on an already-finalized scheme does NOT emit a
+    second lease.deprecation_migrated event (audit-trail clarity)."""
+    from scripts.dev import lease_plane_deprecate as cli
+
+    await ensure_test_database_schema()
+    conn = await asyncpg.connect(TEST_DB_URL)
+    try:
+        await _cleanup(conn)
+        await cli.deprecate_cmd(
+            kind="td", session_id="test-cli-finalize-idem",
+            drain_window_days=30, db_url=TEST_DB_URL,
+        )
+        await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL)
+        rc1 = await cli.deprecation_finalize_cmd(kind="td", db_url=TEST_DB_URL)
+        rc2 = await cli.deprecation_finalize_cmd(kind="td", db_url=TEST_DB_URL)
+        assert rc1 == 0 and rc2 == 0
+        count = await conn.fetchval(
+            "SELECT count(*) FROM lease_plane.lease_plane_events "
+            "WHERE event_type='lease.deprecation_migrated' AND surface_kind='td'"
+        )
+        assert count == 1, f"finalize must be event-idempotent; got {count} events"
+    finally:
+        await _cleanup(conn)
+        await conn.close()
