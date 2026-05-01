@@ -913,11 +913,31 @@ def scan_commits(since: str = "30 days ago", repo_path: Path | None = None) -> i
         resolving a finding whose fix was reverted.
       - Ambiguous prefixes that match more than one fingerprint.
 
+    Phase A lease-plane integration: each scan acquires an advisory-mode
+    lease at `surface_id=watcher:scan_commits:<repo_root>`. The lease is
+    *telemetry only* — Watcher proceeds whether the lease is acquired,
+    held by another scanner, or unavailable. RFC v0.5 §6.1.
+
     Returns:
         The number of findings resolved this scan. Always returns 0 on git
         failure rather than raising, so this is safe to call from a cron.
     """
     repo_root = repo_path or PROJECT_ROOT
+
+    from src.lease_plane.advisory import lease_advisory_scope, new_holder_uuid
+
+    surface_id = f"watcher:scan_commits:{repo_root}"
+    with lease_advisory_scope(
+        surface_id=surface_id,
+        surface_kind="watcher_scan_commits",
+        holder_agent_uuid=new_holder_uuid(),
+        ttl_s=60,
+        intent=f"scan_commits since={since!r}",
+    ):
+        return _scan_commits_inner(since, repo_root)
+
+
+def _scan_commits_inner(since: str, repo_root: Path) -> int:
     try:
         result = subprocess.run(
             ["git", "log", f"--since={since}", "--format=%H%x00%s%x00%b%x1e"],
