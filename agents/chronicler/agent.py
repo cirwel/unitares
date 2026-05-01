@@ -172,9 +172,9 @@ class ChroniclerAgent(GovernanceAgent):
         """
         from src.lease_plane.advisory import lease_advisory_scope, new_holder_uuid
 
+        # Migrated from "chronicler:scrape" → "resident:/chronicler_scrape" per RFC v0.8 §7.2.1.
         with lease_advisory_scope(
-            surface_id="chronicler:scrape",
-            surface_kind="chronicler_scrape",
+            surface_id="resident:/chronicler_scrape",
             holder_agent_uuid=new_holder_uuid(),
             ttl_s=120,
             intent="chronicler daily scrape",

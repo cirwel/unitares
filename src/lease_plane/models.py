@@ -6,7 +6,9 @@ from datetime import datetime
 from typing import Any, Literal, TypeAlias
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from src.lease_plane.canonicalize import CANONICAL_SCHEMES, canonicalize
 
 HolderClass: TypeAlias = Literal["process_instance", "substrate_earned"]
 HolderKind: TypeAlias = Literal["local_beam", "remote_heartbeat"]
@@ -64,13 +66,10 @@ class AcquireRequest(LeasePlaneModel):
     derived server-side from the surface_id scheme prefix via migration 026's
     generated column.
 
-    Note (PR 2): the §7.12.5 Pydantic field_validator that auto-canonicalizes
-    `surface_id` and rejects non-canonical schemes is DEFERRED to PR 2.5.
-    PR 2.5 also migrates production agents (watcher/vigil/sentinel/chronicler/
-    ship.sh advisory) to canonical schemes (`resident:/...`, `file://...`)
-    so the field_validator does not brick the fleet on activation.
-    Today AcquireRequest accepts any surface_id; the canonicalize helper is
-    available for opt-in caller use via `from src.lease_plane.canonicalize`.
+    `surface_id` auto-canonicalizes via field_validator per RFC v0.8 §7.12.5:
+    rejects NUL bytes, ?-bearing strings (reserved for v1 modifier form per
+    §7.12.4), non-canonical schemes (per §7.2.1 list); auto-canonicalizes
+    via `src.lease_plane.canonicalize`.
     """
 
     surface_id: str = Field(min_length=1)
@@ -81,6 +80,27 @@ class AcquireRequest(LeasePlaneModel):
     holder_pid: str | None = None
     intent: str | None = None
     audit_session: str | None = None
+
+    @field_validator("surface_id", mode="before")
+    @classmethod
+    def _validate_surface_id(cls, v: str) -> str:
+        """Reject invalid scheme, NUL bytes, ?-bearing values; auto-canonicalize."""
+        if not isinstance(v, str):
+            raise ValueError("surface_id must be a string")
+        if "\x00" in v:
+            raise ValueError("NUL byte in surface_id")
+        if "?" in v:
+            raise ValueError(
+                "query string in surface_id reserved for v1 modifier form (RFC §7.12.4); "
+                "use plain canonical form for v0"
+            )
+        scheme = v.split(":", 1)[0]
+        if scheme not in CANONICAL_SCHEMES:
+            raise ValueError(
+                f"surface_id scheme {scheme!r} not in canonical scheme list {CANONICAL_SCHEMES} "
+                f"(RFC §7.2.1)"
+            )
+        return canonicalize(v)
 
 
 class RenewRequest(LeasePlaneModel):

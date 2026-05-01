@@ -100,7 +100,6 @@ def new_holder_uuid() -> uuid.UUID:
 def lease_advisory_scope(
     *,
     surface_id: str,
-    surface_kind: str | None = None,
     holder_agent_uuid: uuid.UUID,
     ttl_s: int,
     intent: str | None = None,
@@ -118,13 +117,10 @@ def lease_advisory_scope(
     the caller's block will propagate normally; the wrapper only ensures
     the lease is released if it was acquired.
 
-    `surface_kind` is accepted for backwards-compat with pre-PR-2 callers
-    (watcher/vigil/sentinel/chronicler agents) but is no longer passed to
-    AcquireRequest — per RFC v0.8 §7.2.3 the server derives surface_kind
-    from the surface_id scheme prefix via migration 026's generated column.
-    The parameter is silently ignored; callers SHOULD remove it.
+    `surface_kind` was a parameter pre-PR-2.5 but has been fully removed —
+    per RFC v0.8 §7.2.3, surface_kind is derived server-side from the
+    surface_id scheme prefix via migration 026's generated column.
     """
-    del surface_kind  # ignored; see docstring
     advisory_client = client or make_advisory_client()
 
     request = AcquireRequest(

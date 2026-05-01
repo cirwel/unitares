@@ -615,9 +615,9 @@ class VigilAgent(GovernanceAgent):
         """
         from src.lease_plane.advisory import lease_advisory_scope, new_holder_uuid
 
+        # Migrated from "vigil:cycle" → "resident:/vigil_cycle" per RFC v0.8 §7.2.1.
         with lease_advisory_scope(
-            surface_id="vigil:cycle",
-            surface_kind="vigil_cycle",
+            surface_id="resident:/vigil_cycle",
             holder_agent_uuid=new_holder_uuid(),
             ttl_s=300,
             intent="vigil heartbeat cycle",

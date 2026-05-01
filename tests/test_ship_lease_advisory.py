@@ -20,7 +20,7 @@ def _ok_lease_payload(holder_uuid: UUID) -> dict[str, Any]:
     now = datetime.now(UTC).replace(microsecond=0)
     return {
         "lease_id": str(uuid4()),
-        "surface_id": "ship.sh:test-branch",
+        "surface_id": "resident:/ship_sh_test-branch",
         "surface_kind": "ship_sh",
         "holder_agent_uuid": str(holder_uuid),
         "holder_class": "process_instance",
@@ -59,7 +59,7 @@ def test_acquire_emits_lease_id_on_acquired_new(capsys, monkeypatch):
     rc = shla.main(
         [
             "acquire",
-            "--surface-id=ship.sh:test-branch",
+            "--surface-id=resident:/ship_sh_test-branch",
             "--surface-kind=ship_sh",
             "--intent=test ship",
             "--ttl-s=300",
@@ -79,7 +79,7 @@ def test_acquire_emits_null_lease_on_held_by_other(capsys, monkeypatch):
             {
                 "ok": False,
                 "error": "held_by_other",
-                "surface_id": "ship.sh:contended",
+                "surface_id": "resident:/ship_sh_contended",
                 "blocking_lease_id": str(uuid4()),
                 "held_by_uuid": str(other),
                 "expires_at": (datetime.now(UTC) + timedelta(seconds=60)).isoformat(),
@@ -93,7 +93,7 @@ def test_acquire_emits_null_lease_on_held_by_other(capsys, monkeypatch):
     rc = shla.main(
         [
             "acquire",
-            "--surface-id=ship.sh:contended",
+            "--surface-id=resident:/ship_sh_contended",
             "--surface-kind=ship_sh",
         ]
     )
@@ -112,7 +112,7 @@ def test_acquire_emits_service_unavailable_on_disabled(capsys, monkeypatch):
     rc = shla.main(
         [
             "acquire",
-            "--surface-id=ship.sh:disabled",
+            "--surface-id=resident:/ship_sh_disabled",
             "--surface-kind=ship_sh",
         ]
     )

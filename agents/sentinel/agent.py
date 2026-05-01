@@ -497,9 +497,9 @@ class SentinelAgent(GovernanceAgent):
         """
         from src.lease_plane.advisory import lease_advisory_scope, new_holder_uuid
 
+        # Migrated from "sentinel:cycle" → "resident:/sentinel_cycle" per RFC v0.8 §7.2.1.
         with lease_advisory_scope(
-            surface_id="sentinel:cycle",
-            surface_kind="sentinel_cycle",
+            surface_id="resident:/sentinel_cycle",
             holder_agent_uuid=new_holder_uuid(),
             ttl_s=300,
             intent="sentinel analysis cycle",
