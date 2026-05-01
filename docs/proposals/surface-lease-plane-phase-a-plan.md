@@ -183,15 +183,33 @@ Scope shipped:
 | §7.11.7 Phase 0 race window — full integration test | (covered by PR 3a's `deprecate_cmd` serializable tx + advisory lock; this PR adds the test) | `test_phase_zero_acquire_race_blocked` | DONE |
 | Sentinel cycle wiring | `agents/sentinel/agent.py::_emit_forced_release_alarms` | (transitively covered — module loads + load_state/save_state + post_finding paths exercised) | DONE |
 
-## PR 4+ — Remaining gates
+## PR 4 — `acquire_with_retry` + `_urllib_transport` HTTP-error coverage (this branch: impl/lease-plane-phase-a-pr4-retry-and-409)
 
-## PR 4+ — Remaining gates
+Closes the last two RFC §9 Phase A test gates that don't depend on Phase B work.
 
-- §7.3.3 `acquire_with_retry()` jittered backoff method
-- §7.3.5 HTTP 409 body-parse test (`test_urllib_transport_parses_409_body`)
-- Phase B prerequisites (payload-shape standardization spec, `unitares_doctor` extension)
+Scope shipped:
+- `LeasePlaneClient.acquire_with_retry()` convenience method (RFC §7.3.3): jittered exponential backoff (floor 100ms, ceiling 5s, full jitter per AWS convention). Honors `retry_after_hint_ms` from the v0.7 §7.3.2 extended `held_by_other` shape as a per-attempt floor. Only `held_by_other` triggers retry; `service_unavailable` / `permission_denied` / `schema_invalid` are terminal.
+- `_urllib_transport` HTTP-error body-parse coverage (RFC §7.3.5): closes live-verifier Finding 9 test-coverage gap. The implementation already correctly parses 409 + body, falls back to `permission_denied` on empty 401/403, and `service_unavailable` on empty 5xx — this PR adds tests proving so.
 
-These are mostly self-contained; pick up after PR 1-3 land.
+### PR 4 — RFC gate → code surface → test name → status table
+
+| Gate | Code | Test | Status |
+|------|------|------|--------|
+| §7.3.3 acquire_with_retry returns OK on first attempt | `src/lease_plane/client.py::LeasePlaneClient.acquire_with_retry` | `test_acquire_with_retry_returns_ok_on_first_attempt` | DONE |
+| §7.3.3 retry on held_by_other until OK | same | `test_acquire_with_retry_retries_on_held_by_other_until_ok` | DONE |
+| §7.3.3 jittered backoff in [100ms, 5s] full jitter | same | `test_acquire_with_retry_jittered_backoff_within_bounds` | DONE |
+| §7.3.3 honors retry_after_hint_ms as per-attempt floor | same | `test_acquire_with_retry_honors_retry_after_hint_as_floor` | DONE |
+| §7.3.3 service_unavailable terminal (no retry) | same | `test_acquire_with_retry_returns_service_unavailable_without_retry` | DONE |
+| §7.3.5 _urllib_transport parses 409 body | `src/lease_plane/client.py::_urllib_transport` HTTPError branch | `test_urllib_transport_parses_409_body` | DONE |
+| §7.3.5 _urllib_transport 401 fallback | same | `test_urllib_transport_401_returns_permission_denied_when_no_body` | DONE |
+| §7.3.5 _urllib_transport 5xx fallback | same | `test_urllib_transport_500_returns_service_unavailable_when_no_body` | DONE |
+
+## PR 5+ — Phase B prerequisites (planned, not yet drafted)
+
+Non-blocking for Phase A; lifts gates surfaced in §9 Phase B prerequisites:
+- Payload-shape standardization pass — commits to writing canonicalized `surface_id` (per §7.12.1) into `audit.tool_usage.payload`, no percent-encoding (per §7.2.8 cross-track).
+- `unitares_doctor.py` extension to lint that no Elixir source mentions a scheme not in the live grammar CHECK.
+- §7.5 `remote_heartbeat` instrumentation (operator action — measure Pi↔Mac heartbeat gap distribution ≥7d before any `remote_heartbeat` Phase B promotion).
 
 ## Reviewer checklist for any Phase A PR
 
