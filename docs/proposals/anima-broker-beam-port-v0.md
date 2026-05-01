@@ -1,8 +1,9 @@
 ---
-status: DRAFT-v0.1 (council pass 1 complete; ack-pass pending)
+status: DRAFT-v0.2 (council pass 1 + ack-pass complete; council-clean, implementation-gate ready)
 authored: 2026-04-30
-amended: 2026-04-30 (v0, v0.1 same session)
+amended: 2026-04-30 (v0, v0.1, v0.2 same session)
 council_pass_1: 2026-04-30
+ack_pass_1: 2026-04-30
 author_session: agent-c9e03e26-33c (claude_code-claude_c9e03e26)
 review_target: |
   Council pass 1 complete (parallel agents, 2026-04-30; same precedent as
@@ -11,11 +12,17 @@ review_target: |
     - feature-dev:code-reviewer: 4 BLOCKs, 7 CONCERNs, 3 NITs — addressed in v0.1
     - live-verifier: 1 BLOCK, 2 DRIFTs, 5 CONCERNs, 15 VERIFIED — addressed in v0.1
 
-  All three council agents returned NO-SHIP for v0. Eight distinct BLOCKs across
-  the panel (with one cross-pollinated — dialectic §2 corollary breakage and
-  code-reviewer §4.2/§3.3 SHM `governance` key fallback name the same wedge from
-  opposite angles). v0.1 addresses all eight; ack-pass on v0.1 amendments is
-  the next gate before promotion past draft.
+  Ack-pass on v0.1 amendments complete (parallel agents, 2026-04-30; scoped to
+  v0.1 amendments only, mirroring surface-lease-plane v0.2.1 ack-pass precedent):
+    - dialectic-knowledge-architect: 4 new BLOCKs, 8 new CONCERNs, 3 NITs, 0 DRIFTs — addressed in v0.2
+    - feature-dev:code-reviewer: 3 new BLOCKs, 11 new CONCERNs, 1 NIT, 1 DRIFT — addressed in v0.2
+    - live-verifier: 0 new BLOCKs, 1 DRIFT, 2 new CONCERNs, 12 VERIFIED, SHIP-with-caveats — addressed in v0.2
+
+  Per the v2.1 precedent, no further ack-pass required after v0.2 unless v0.3+ amendments
+  themselves introduce new gaps. Current state: implementation-gate ready.
+  The 7 new ack-pass BLOCKs concentrated in the v0.1 surface-area additions
+  (bridge process, two-file SHM, supervision-tree split, JSON Schema deliverable);
+  all addressed via text-tightening, no architectural revisit required.
 provenance: |
   Same-session synthesis. v0 was a single-author sketch (claude_code-claude_c9e03e26,
   2026-04-30) written after operator-decision archaeology (KG
@@ -56,7 +63,7 @@ unblocks: |
 
 # Proposal: Anima Broker BEAM Port v0 (Pi-side coordination kernel)
 
-> **Status: DRAFT-v0.1, ack-pass pending.** Follow-on to `surface-lease-plane-v0.md`. The lease plane is the **Mac-side** first wedge for BEAM/OTP. This RFC is the **Pi-side** second wedge: porting the `anima-creature` broker to a single-node Elixir application that owns Lumen's hardware lifecycle. Both nodes are single-node by design (no Distributed Erlang between them); they coordinate via HTTP and Postgres heartbeat-TTL, the same patterns the Python fleet uses today.
+> **Status: DRAFT-v0.2, council-clean, implementation-gate ready.** Follow-on to `surface-lease-plane-v0.md`. The lease plane is the **Mac-side** first wedge for BEAM/OTP. This RFC is the **Pi-side** second wedge: porting the `anima-creature` broker to a single-node Elixir application that owns Lumen's hardware lifecycle. Both nodes are single-node by design (no Distributed Erlang between them); they coordinate via HTTP and Postgres heartbeat-TTL, the same patterns the Python fleet uses today.
 
 ## 1. Problem
 
@@ -98,30 +105,38 @@ Inherit the lease-plane RFC's invariant verbatim:
 
 The v0 corollary "BEAM owns hardware lifecycle, Python anima-mcp server stays in Python" was incorrect about current state. **Today the broker calls `UnitaresBridge.check_in()` (`stable_creature.py:925-998` — live-verified) and computes EISV via `anima_to_eisv()` (`:567`).** The broker is the primary UNITARES caller from the Pi.
 
-The corrected corollary, with explicit process placement:
+The corrected corollary, with explicit process placement (revised v0.2 — addresses dialectic ack-pass BLOCKs on SQLite, identity, UNITARES-call channel):
 
 > **BEAM owns hardware lifecycle.**
 > **Python owns governance + EISV mapping**, on the Pi via a Pi-resident `unitares-bridge` sidecar process; on the Mac via the governance MCP server. Neither is moved into BEAM.
-> **Postgres owns durable truth** on the Mac. **SQLite owns durable truth on the Pi** (`~/.anima/anima.db`); the BEAM broker does NOT hold the SQLite handle — the Python `unitares-bridge` and `anima` server retain it, same as today.
+> **Postgres owns durable truth** on the Mac. **SQLite owns durable truth on the Pi** (`~/.anima/anima.db`); the BEAM broker does NOT hold the SQLite handle. SQLite is opened in **WAL mode with `busy_timeout=5000`** by every reader/writer process; **`unitares-bridge` is the sole writer for governance/EISV state**, **`anima` server is the sole writer for self-model / preferences / learning state**, both processes may read freely. WAL mode + busy_timeout is the explicit concurrency contract; it is not "same as today" hand-wave (today's broker was the only writer; v0 splits writes between bridge and server, which requires the explicit WAL discipline).
+> **Identity is bridge-owned**: the bridge writes identity into its SHM channel (`anima_state_governance.json`); the broker does NOT read identity from disk and does NOT pass identity through its own SHM. This eliminates the broker-stale-snapshot failure mode (broker startup-snapshot vs bridge mid-run rebind).
+> **UNITARES is bridge-only**: the bridge calls `UnitaresBridge.check_in()`. The broker does NOT call UNITARES directly — it emits operational telemetry only (`audit.tool_usage` rows tagged `source=anima-broker` with no governance payload), via a separate channel from the bridge's governance check-ins. Two callers of UNITARES from the Pi (broker and bridge undifferentiated) is the BMP280 wedge in different uniform; v0 forecloses it.
 
 The Pi-side process layout after v0:
 
 ```
-  ┌──────────────────────┐    ┌──────────────────────┐    ┌──────────────────────┐
-  │ anima-broker (BEAM)  │    │ unitares-bridge (py) │    │ anima (py, MCP/HTTP) │
-  │  hardware lifecycle  │───▶│  sensor→EISV→bridge  │    │  MCP API + LEDs      │
-  │  sensors, GPIO, TFT  │SHM │  to UNITARES         │HTTP│                      │
-  │  face, telemetry     │    │  reads SHM, posts    │    │  reads SHM           │
-  └──────────────────────┘    └──────────────────────┘    └──────────────────────┘
+  ┌──────────────────────┐    ┌──────────────────────────┐    ┌──────────────────────┐
+  │ anima-broker (BEAM)  │    │ unitares-bridge (py)     │    │ anima (py, MCP/HTTP) │
+  │  hardware lifecycle  │    │  sensor→EISV→check_in()  │    │  MCP API             │
+  │  sensors, GPIO, TFT  │SHM │  reads anima_state.json  │SHM │  reads both SHM      │
+  │  face, telemetry     │───▶│  writes anima_state_     │───▶│  files; serves to    │
+  │                      │    │    governance.json       │    │  callers             │
+  │  audit.tool_usage    │    │  posts to UNITARES       │    │                      │
+  │  (operational only)  │    │  governance check-in     │    │                      │
+  └──────────────────────┘    └──────────────────────────┘    └──────────────────────┘
             │                            │                           │
             ▼                            ▼                           ▼
-       /dev/i2c-1               UNITARES (Mac:8767)            /dev/spidev0.0
-       /dev/spidev0.0                                          (LED display)
-       GPIO claims                                             AutonomousVoice
-                                                               (broker also)
+       /dev/i2c-1               UNITARES (Mac:8767)             /dev/spidev0.0
+       /dev/spidev0.0           (sole UNITARES caller            (LED display)
+       GPIO claims               from the Pi)
+       (audio out --> see       SQLite (governance/EISV writer)  SQLite (self-model writer)
+        AutonomousVoice                                          AutonomousVoice
+        on broker; see §3.2)                                     (server-side instance,
+                                                                  see §3.2 dual-ownership)
 ```
 
-The `unitares-bridge` Python sidecar is a new service in v0; its responsibility is `anima_to_eisv` mapping + governance check-in. Code is lifted from `stable_creature.py:567,925-998` essentially unchanged. This avoids the three failure modes the v0 corollary was silent about (porting EISV math into BEAM, growing an undocumented Pi process, or moving per-tick computation across Tailscale).
+The `unitares-bridge` Python sidecar is a new service in v0; its responsibility is `anima_to_eisv` mapping + governance check-in. Code is lifted from `stable_creature.py:567,925-998` essentially unchanged (the actual `bridge.check_in()` call is at `:982-989`; the `:925-998` range contains the call plus surrounding scheduling logic). This avoids the three failure modes the v0 corollary was silent about (porting EISV math into BEAM, growing an undocumented Pi process, or moving per-tick computation across Tailscale).
 
 This invariant is non-negotiable. Any future RFC that proposes moving identity issuance, EISV math, KG writes, or calibration into the BEAM node must reopen the threat model and re-justify the polyglot tax.
 
@@ -130,12 +145,12 @@ This invariant is non-negotiable. Any future RFC that proposes moving identity i
 ### 3.1 In scope (v0)
 
 - A new Elixir application running on the Pi, separate process from the Python anima-mcp server.
-- A new Python `unitares-bridge` sidecar process on the Pi (lifts EISV-mapping + UNITARES check-in code from current broker; not part of v0 Elixir port but is part of v0 deployment).
+- A new Python `unitares-bridge` sidecar process on the Pi (lifts EISV-mapping + UNITARES check-in code from current broker; not part of v0 Elixir port but is part of v0 deployment). New systemd unit `unitares-bridge.service` — see §6.3 sketch.
 - OTP supervision tree owning: I2C bus, BMP280 sensor, accelerometer/gyro sensor, TFT display + reset/backlight pins, joystick GPIO, face-state derivation, metacognitive reflection serialization. **Reflection serialization is under top-level supervisor, not HardwareSupervisor** (council nit — it's not hardware).
 - SHM-compatible JSON write to `/dev/shm/anima_state.json` matching the current envelope shape, with the lock-parity contract spelled out in §4.2.
 - Health endpoint over HTTP, bound to `127.0.0.1` (council nit — explicit local-only).
 - OTP application-controlled clean shutdown ordering. The `os._exit` workaround cited in v0 was already removed in `ed1b2f6` (live-verified) — re-framing: BEAM upgrade story is supervisor restart, replacing Python's PartOf= + explicit-systemctl dance.
-- Telemetry emission to UNITARES `audit.tool_usage` via HTTP, same channel the lease plane uses.
+- **Operational telemetry only** to UNITARES `audit.tool_usage` via HTTP (no governance, no EISV — those go through the bridge's `UnitaresBridge.check_in()`). Broker emits `tool_name=anima_broker_tick`, `error_type` populated only on hardware errors. **NEW INSTRUMENTATION**: live-verifier confirmed the anima server currently never writes to `audit.tool_usage` (0 rows). The broker's audit channel is therefore a new write path, not an extension; gated by §9.3 spike requirement.
 - Vanilla Elixir on Raspbian (council closed §7.1).
 
 ### 3.2 Out of scope (v0)
@@ -158,17 +173,19 @@ Replacing per-row promotion with three **atomic bundles** that mirror the actual
 | **B. Display+Face** | TFT display (SPI), face-state derivation, D22/D24 single-owner | Second | Visible regression if wrong. Phase B-display is gated on Phase B-sensors completing. |
 | **C. Reflection+Telemetry** | Metacognitive reflection serialization, UNITARES telemetry forwarder | Third | Pure compute downstream of A+B. No hardware. Could go simultaneously with B. |
 
-**Reserved hardware surface IDs (lease-plane interaction — addresses dialectic CONCERN):**
+**Reserved hardware surface IDs (lease-plane interaction — addresses dialectic CONCERN; revised v0.2 for granularity consistency):**
 
-The lease-plane RFC §3.3 reserves a `td:/op_path` row "for design fit" without registering. This RFC reserves analogous hardware IDs in the surface-ID schema, NOT registered with the Mac-side lease plane in v0:
+The lease-plane RFC §3.3 reserves a `td:/op_path` row "for design fit" without registering. This RFC reserves analogous hardware IDs in the surface-ID schema, NOT registered with the Mac-side lease plane in v0. **All IDs are at device level (not role level) for consistency** — a future RFC can add role tags without renaming the surface IDs:
 
 | Reserved ID | Purpose | Notes |
 |---|---|---|
-| `hw:/i2c-1` | Reservation for I2C bus ownership | If we ever register, the BMP280 wedge becomes a `held_by_other` event the moment any second process opens the bus — the days-to-detect failure becomes seconds. |
-| `hw:/gpio/D22`, `hw:/gpio/D24` | Reservation for shared-pin claims | TFT/joystick |
-| `hw:/spi/tft` | Reservation for SPI display | |
+| `hw:/i2c/i2c-1` | I2C bus 1 ownership | If we ever register, the BMP280 wedge becomes a `held_by_other` event the moment any second process opens the bus — days-to-detect → seconds. |
+| `hw:/gpio/D22` `hw:/gpio/D23` `hw:/gpio/D24` `hw:/gpio/D27` | Per-pin GPIO claims | All four pins the broker actually claims for joystick (D22/D24 also shared with TFT backlight/reset). Symmetric coverage prevents "we reserved only the contended pins" implying a different threat model than single-writer-to-hardware. |
+| `hw:/spi/spidev0.0` | SPI device 0.0 (used by TFT) | Device-level (not role-level) so a future SPI-attached non-TFT device fits without renaming. |
 
-Wiring (round-tripping every hardware lease through the Mac across Tailscale) is correctly out of v0. **Schema reservation only**, so a v0.1+ advisory registration is a wiring change, not a re-design.
+The lease-plane `surface_id` schema (live-verified at `src/lease_plane/models.py:35` — `Field(min_length=1)`, no prefix constraint; DB CHECK constraints in `db/postgres/migrations/024_lease_plane.sql` do not constrain `surface_id` format) accepts any non-empty string, so the `hw:/` prefix is permitted by the existing schema. **No lease-plane RFC change required** for v0 reservation; future advisory registration may introduce a `surface_kind` enum entry, which is a one-row change to that RFC, not a re-design.
+
+Wiring (round-tripping every hardware lease through the Mac across Tailscale) is correctly out of v0. **Schema reservation only.**
 
 ### 3.4 LED honesty (new in v0.1 — addresses dialectic BLOCK §3.2/§7.3)
 
@@ -176,7 +193,7 @@ v0 deferred LED ownership cleanup with the framing "stay split, it's its own RFC
 
 Stated honestly: **nothing structurally prevents an LED-class wedge during v0**. The single-writer-to-hardware discipline is convention, not enforcement, for LEDs specifically. It is the same shape as the BMP280 wedge before PR #45.
 
-The v0.5 fold-in trigger: **any I2C-conflict-class symptom involving LEDs (LED FD held by two processes, or any duplicate-claim incident on the LED bus) between Phase A and Phase C forces LED ownership into v0.5 before cutover**. Operator may also fold LED in voluntarily; this is not a delay until "after cutover."
+The v0.5 fold-in trigger: **any shared-bus-conflict-class symptom involving LEDs (LED FD held by two processes, or any duplicate-claim incident on the SPI/spidev0.0 bus the LEDs share with TFT) between Phase A and Phase C forces LED ownership into v0.5 before cutover**. Operator may also fold LED in voluntarily; this is not a delay until "after cutover." (v0.1 said "I2C-conflict-class" — corrected to "shared-bus-conflict-class" since LEDs are SPI, not I2C.)
 
 This is not refusing scope creep — it is naming the deferred wedge so the v0 promise is honest about what it does and does not structurally fix.
 
@@ -188,14 +205,14 @@ This is not refusing scope creep — it is naming the deferred wedge so the v0 p
 AnimaBroker.Application
 └── AnimaBroker.Supervisor (one_for_one)
     ├── AnimaBroker.I2CHardwareSupervisor (rest_for_one)
-    │   ├── AnimaBroker.I2CBus           (owns /dev/i2c-1; killing this kills sensor children)
+    │   ├── AnimaBroker.I2CBus           (owns /dev/i2c-1; first child)
     │   ├── AnimaBroker.BMP280
     │   └── AnimaBroker.IMU
-    ├── AnimaBroker.SPIHardwareSupervisor (one_for_one)
-    │   ├── AnimaBroker.SPIBus           (owns /dev/spidev0.0)
+    ├── AnimaBroker.SPIHardwareSupervisor (rest_for_one)
+    │   ├── AnimaBroker.SPIBus           (owns /dev/spidev0.0; first child)
     │   └── AnimaBroker.TFTDisplay       (uses GPIOBus for D22/D24 + SPIBus)
-    ├── AnimaBroker.GPIOSupervisor (one_for_one)
-    │   ├── AnimaBroker.GPIOBus          (owns BCM pin claims)
+    ├── AnimaBroker.GPIOSupervisor (rest_for_one)
+    │   ├── AnimaBroker.GPIOBus          (owns BCM pin claims; first child)
     │   └── AnimaBroker.Joystick         (uses GPIOBus for D22/D23/D24/D27)
     ├── AnimaBroker.Reflection           (top-level: not hardware; per dialectic NIT)
     ├── AnimaBroker.SHMWriter            (writes /dev/shm/anima_state.json envelope)
@@ -203,7 +220,7 @@ AnimaBroker.Application
     └── AnimaBroker.Telemetry            (HTTP forwarder to UNITARES audit channel)
 ```
 
-`rest_for_one` only on the I2C tree (where sensor children genuinely depend on a healthy bus). SPI hardware uses `one_for_one` so a TFT crash doesn't restart the entire display tree, and an I2C bus wedge does not force a TFT restart (council CONCERN — different bus, no shared dependency).
+**Restart strategy (revised v0.2 — addresses code-reviewer ack-pass BLOCK §4.1):** `rest_for_one` on **all three** hardware sub-supervisors, with the bus-owner GenServer as first child. Reasoning: every hardware-child holds a handle obtained from the bus-owner; if the bus-owner dies, the child's handle is stale (FD closed at OS level on owner death). v0.1 used `one_for_one` on SPI/GPIO to avoid cascading restarts from TFT/Joystick crashes back into SPIBus/GPIOBus — but that strategy broke the OTHER direction (bus crash leaves child with stale handle). `rest_for_one` correctly restarts only descendants of the dying child: SPIBus death restarts TFTDisplay; TFTDisplay death does NOT restart SPIBus. Symmetric structure across I2C, SPI, and GPIO trees; the v0 single-`HardwareSupervisor` rationale is preserved (children depend on bus health) without conflating buses with each other. An I2C bus wedge does NOT force a TFT restart because they live under different sub-supervisors at the top-level `one_for_one`.
 
 ### 4.2 Wire to Python anima-mcp server (revised v0.1 — addresses code-reviewer BLOCK §4.2 + live-verifier CONCERN)
 
@@ -214,6 +231,7 @@ v0 keeps the **same SHM wire** (`/dev/shm/anima_state.json` JSON envelope). Belo
 - **Temp file path**: `<final>.tmp` (matches Python's `filepath.with_suffix(".tmp")`).
 - **Write sequence**: open lock file in `"a"` mode, fcntl LOCK_EX, write to temp file, `flush()` + `fsync()`, atomic `os.replace(temp, final)` (or NIF equivalent providing `rename(2)` semantics on the same filesystem), fcntl LOCK_UN, close.
 - **Phase B "gating Python's writes"**: when a bundle is promoted, the Python broker's `SharedMemoryClient` instance is replaced with a no-op writer (does not touch lock file, does not write temp file, does not write final). Not a flag check inside `write()` — full replacement to eliminate any race between Python's lock-acquire and Elixir's. Backup channel `/dev/shm/anima_state_python_backup.json` is OUT — Phase B is decisively single-writer.
+- **Startup `.tmp` orphan cleanup (revised v0.2 — addresses code-reviewer ack-pass CONCERN F4):** Elixir broker on startup MUST `unlink` any pre-existing `<final>.tmp` file alongside the existing `clear()` of the final file. Failure mode: broker dies between fsync and rename (mid-write); `.tmp` persists with fresh data, final still has last-good. Without `.tmp` cleanup, next startup may see a stale `.tmp` and behave unpredictably. Symmetric handling for both `anima_state.json.tmp` and `anima_state_governance.json.tmp` (the bridge owns the second; bridge startup cleans its own `.tmp`).
 
 #### 4.2.1 SHM envelope: fields Elixir broker WILL populate in v0
 
@@ -228,23 +246,49 @@ Live-verified envelope at `stable_creature.py:1002-1088` has 15+ top-level keys.
 | `drive_events` | NO | Python `agency` module — out of scope |
 | `eisv` | NO | Python `unitares-bridge` writes this via separate SHM key (see §4.2.2) |
 | `governance` | NO | Python `unitares-bridge` writes this |
-| `identity` | YES (passthrough) | Read from disk — bridge process owns the source of truth, broker reads as snapshot |
+| `identity` | NO | Bridge writes it to `anima_state_governance.json` (revised v0.2 — addresses dialectic ack-pass BLOCK on broker-stale-snapshot of identity). Broker does NOT read identity from disk and does NOT pass it through `anima_state.json`. Server merges identity from the bridge's SHM channel. |
 | `metacognition` | YES | reflection module |
 | `learning`, `experiential` | NO | Python modules — out of scope |
 | `agency_led_brightness` | NO | Python `agency` — out of scope |
 
 #### 4.2.2 Server fallback when Elixir-not-populated keys are missing (revised v0.1 — addresses code-reviewer BLOCK §4.2/§3.3)
 
-Critical: if Elixir broker writes SHM without a `governance` key, the server's `SERVER_GOVERNANCE_FALLBACK_SECONDS=240s` timer triggers and the server begins calling UNITARES directly — re-introducing the pre-PR-#45 architecture violation.
+Critical: if Elixir broker writes SHM without a `governance` key, the server's `SERVER_GOVERNANCE_FALLBACK_SECONDS=240s` timer triggers and the server begins calling UNITARES directly — re-introducing the pre-PR-#45 architecture violation. Live-verified at `server_state.py:58-59` (both threshold constants exist) + `server.py:948-966` + `loop_phases.py:23-47` (`_server_governance_fallback()` calls UNITARES directly).
 
-Resolution: **the `unitares-bridge` Python sidecar (§2.1) writes a parallel SHM file `/dev/shm/anima_state_governance.json`** with `{governance, eisv, drive_events, learning, experiential, agency_led_brightness, last_decision}`. Server's read path is updated (one-line server change) to merge this side-channel into the data dict before the staleness check. Both files are written through their own lock files; both must be fresh for the server to operate normally.
+Resolution: **the `unitares-bridge` Python sidecar (§2.1) writes a parallel SHM file `/dev/shm/anima_state_governance.json`** with `{governance, eisv, identity, drive_events, learning, experiential, agency_led_brightness, last_decision}`. Server's read path is updated to merge this side-channel into the data dict before the staleness check. Both files are written through their own lock files (`<final>.lock` per §4.2 contract).
 
-This makes the server's fallback path explicitly: typed-absence (per lease-plane RFC §4.5 pattern) — when either SHM file is stale/missing, server reports `governance: degraded` to its own callers, NOT direct UNITARES call. The v0.1 decision FORECLOSES the v0 §7.4 option (c) — see §7.4 below.
+**Two-file cross-freshness contract (revised v0.2 — addresses code-reviewer ack-pass BLOCK F1):**
+
+| File | Threshold constant | Trigger |
+|---|---|---|
+| `anima_state.json` (broker) | `SHM_BROKER_STALE_SECONDS = 30s` | Broker writes every ~2s; stale after 30s = broker has died or wedged |
+| `anima_state_governance.json` (bridge) | `SHM_BRIDGE_GOVERNANCE_STALE_SECONDS = 210s` | Bridge writes every ~180s; stale after 210s (matches existing `SHM_GOVERNANCE_STALE_SECONDS`; same constant repurposed) |
+
+Server return shape per state:
+
+| Broker SHM | Bridge SHM | Server returns to MCP callers |
+|---|---|---|
+| Fresh | Fresh | Normal full state |
+| Fresh | Stale | `governance: degraded` (sensor data still served; governance/EISV/identity flagged stale) |
+| Stale | Fresh | `hardware: degraded` (governance still served from last bridge tick; sensor data flagged stale) |
+| Stale | Stale | `degraded: full` (both flagged; server still serves last-known on best-effort basis) |
+| Either missing | — | `degraded: file_missing` with named-channel field |
+
+**Server-side change scope (revised v0.2 — addresses code-reviewer ack-pass CONCERN F5; v0.1 framing of "one-line change" understated):** The actual server-side change is **multi-site, not one-line**. Live trace:
+1. `loop_phases.py:23-47` — `_server_governance_fallback()` is removed (not "kept but bypassed").
+2. `server.py:948-966` — fallback conditional block (`SERVER_GOVERNANCE_FALLBACK_SECONDS` arm) is replaced with typed-absence return shape per the table above.
+3. `server.py:94` — import of `_server_governance_fallback` removed.
+4. `server_state.py:58-59` — `SHM_GOVERNANCE_STALE_SECONDS` repurposed as `SHM_BRIDGE_GOVERNANCE_STALE_SECONDS`; `SERVER_GOVERNANCE_FALLBACK_SECONDS` constant deleted; new constant `SHM_BROKER_STALE_SECONDS = 30s` added.
+5. Downstream callers of `governance_decision_for_display` updated to handle the typed-absence shape (display loop, health endpoint).
+
+This is a moderate-scope refactor (5 sites). **It is the v0 deliverable** (§7.4 frame), with verification gated as a pre-Phase-A spike requirement (§9.3 frame). The two frames are not in tension once "v0 deliverable" is read as "must ship before v0 declares done" and "spike requirement" is read as "verified during the spike." The tracker for this work is §9.3's "Server fallback path verified" item.
+
+This makes the server's fallback path explicitly: typed-absence (per lease-plane RFC §4.5 pattern) — when either SHM file is stale/missing, server reports the appropriate degradation flag to its own callers, NOT direct UNITARES call. The v0.1 decision FORECLOSES the v0 §7.4 option (c) — see §7.4 below.
 
 #### 4.2.3 Other SHM channels (live-verifier CONCERN)
 
-- `/dev/shm/anima_social_boost` — server writes it on user interaction; broker reads. Elixir broker MUST also read this flag (no lock; tiny advisory file). Phase A divergence comparator must factor social-boost-applied state to avoid phantom diffs.
-- `~/.anima/display_brightness.json` — renderer writes brightness preset; broker reads each tick. Same passthrough behavior.
+- `/dev/shm/anima_social_boost` — server writes it on user interaction; broker reads (live-verified at `stable_creature.py:547`, `communication.py:12`). Elixir broker MUST also read this flag. **Staleness model (revised v0.2 — addresses dialectic ack-pass BLOCK on social-boost):** treated as best-effort advisory boolean; **broker treats flag as `unset` if file is missing OR mtime older than `SOCIAL_BOOST_STALE_SECONDS = 10s`**. Lock-free is intentional (single-writer/server, single-reader/broker, advisory boolean — no atomicity-sensitive payload). The lock-free pattern is the explicit exception to the §4.2 lock-parity contract; named here so reviewers don't read it as a regression. Server's social-boost write is fire-and-forget; if server crashes between `open` and `write`, the file is left in an inconsistent state and the broker will fail-closed (treat as unset on parse error). Phase A divergence comparator MUST factor social-boost-applied state — see §6.1 row added.
+- `~/.anima/display_brightness.json` — renderer writes brightness preset; broker reads each tick (live-verified at `renderer.py:119`, `stable_creature.py:500`). Same passthrough behavior.
 
 ### 4.3 Hardware ownership lines
 
@@ -287,13 +331,14 @@ No new public API in v0. The point of v0 is to swap the runtime, not the contrac
 | Structural keys (presence) | exact set | exact match (no missing or extra keys) |
 | Timestamps (`timestamp`, `updated_at`) | EXCLUDED | not compared |
 | Reflection text | EXCLUDED | not compared (subjective; out-of-band review) |
+| Anima during social-boost window | EXCLUDED for ±5s | revised v0.2 — addresses code-reviewer ack-pass DRIFT §4.2.3 vs §6.1. Social-boost flag (`/dev/shm/anima_social_boost`) read at different cadences by Python and Elixir produces phantom anima diffs; comparator drops the 10s window before/after each social-boost flag transition. |
 
 **ASR baseline:** 7-day rolling pre-shadow measurement of the dashboard's `meta_existence_ratio` (alive_ratio) panel. Phase B promotion requires NO statistical drop (Welch's t-test p > 0.05) over 7-day shadow window vs. 7-day pre-shadow baseline.
 
 **Regression triggers** (any one halts Phase A → B promotion):
-- KG `audit.tool_usage` row with structured `error: shm_parse` from anima server.
+- `audit.tool_usage` row with `error_type='shm_parse'` and `agent_id` matching the anima server (live-verified field name; the table has `error_type text` and `payload jsonb` columns; signal lives in `error_type`). **NEW INSTRUMENTATION REQUIRED**: live-verifier confirmed the anima server has zero rows in `audit.tool_usage` today. Adding the write path is a §9.3 spike deliverable, not an existing observable.
 - `meta_existence_ratio` drop > 1 standard deviation from pre-shadow baseline for > 12h.
-- Any operator-flagged hardware-anomaly KG entry tagged `lumen` during the 7-day window.
+- Any operator-flagged hardware-anomaly KG entry tagged `lumen` (broad) OR `lumen-broker-port` (specific to this work — canonical exact-string tag, see §9.4 tag canonicalization) during the 7-day window.
 
 ### 6.2 Phase B — Swap (week 3-5; revised v0.1)
 
@@ -308,12 +353,79 @@ No new public API in v0. The point of v0 is to swap the runtime, not the contrac
 
 **Rollback (per bundle):** Python broker's SharedMemoryClient is restored. Elixir broker is reverted to shadow mode for that bundle. Rollback is per-bundle, not all-or-nothing. **Bundle B/C cannot start until Bundle A is stable** because Display+Face depends on Sensors+Anima as input.
 
-### 6.3 Phase C — Cutover (week 6; revised v0.1 — live-verifier CONCERN)
+### 6.3 Phase C — Cutover (week 6; revised v0.2 — live-verifier + dialectic ack-pass)
 
-- Python broker removed from systemd. The current service file is `anima-broker.service`; the dependent service is `anima.service` (NOT `anima-mcp.service`).
-- Critical step: `anima.service` line 9 has `PartOf=anima-broker.service` (live-verified). Phase C must REPLACE this with `PartOf=anima-broker-elixir.service` (or whatever the Elixir unit name is); not just remove the old line.
-- `stable_creature.py` archived to `_archive/` (per repo convention) for one release cycle.
-- The Python `unitares-bridge` sidecar STAYS (it carries the EISV/governance code).
+**Service file inventory (after Phase C):**
+
+| Unit | Status | Purpose |
+|---|---|---|
+| `anima-broker.service` | Current; renamed to `anima-broker-py.service` and disabled at cutover | Old Python broker; archived (not deleted) for one release cycle |
+| `anima-broker-elixir.service` | New | The Elixir broker (replaces the Python broker on the `PartOf=` chain) |
+| `unitares-bridge.service` | New | Python sidecar; EISV mapping + UNITARES check-in (lifted from `stable_creature.py:567,925-998`) |
+| `anima.service` | Existing; `PartOf=` rewired | MCP server + LEDs (unchanged process); now `PartOf=anima-broker-elixir.service` |
+| `anima-broker-failed.service` | Existing | 60s cool-down on broker failure (live-verified) |
+
+**`unitares-bridge.service` sketch (revised v0.2 — addresses dialectic ack-pass CONCERN on bridge supervision):**
+
+```ini
+[Unit]
+Description=UNITARES Bridge — EISV mapping + governance check-in
+After=network.target anima-broker-elixir.service
+Requires=anima-broker-elixir.service
+PartOf=anima-broker-elixir.service
+
+[Service]
+Type=simple
+User=unitares-anima
+WorkingDirectory=/home/unitares-anima/anima-mcp
+ExecStart=/home/unitares-anima/anima-mcp/.venv/bin/unitares-bridge
+Restart=on-failure
+RestartSec=5
+OnFailure=anima-broker-failed.service
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`PartOf=anima-broker-elixir.service` makes the bridge restart whenever the broker restarts (clean-state coupling). `Requires=` ensures bridge won't start without broker. The bridge does NOT have a `PartOf=` from `anima.service` because `anima.service` reads bridge SHM but does not own its lifecycle.
+
+**Ordered systemd transcript for cutover (revised v0.2 — addresses dialectic ack-pass CONCERN on PartOf= atomicity gap):**
+
+```bash
+# Pre-flight: Elixir broker + bridge units installed and validated independently
+systemctl status anima-broker-elixir.service unitares-bridge.service
+# Both should be: loaded, inactive (disabled but ready)
+
+# Step 1: Stop the existing Python broker (anima.service stops too via PartOf=)
+sudo systemctl stop anima-broker.service
+
+# Step 2: Disable old broker
+sudo systemctl disable anima-broker.service
+
+# Step 3: Edit anima.service.d/override.conf to replace PartOf=
+#   PartOf=anima-broker-elixir.service
+sudo systemctl edit --full anima.service  # or write override file
+
+# Step 4: Reload systemd to pick up edited unit
+sudo systemctl daemon-reload
+
+# Step 5: Enable + start the new broker (bridge auto-starts via Requires=)
+sudo systemctl enable --now anima-broker-elixir.service
+# unitares-bridge.service starts automatically via its Requires=anima-broker-elixir
+
+# Step 6: Start anima.service (now bound to the new broker)
+sudo systemctl start anima.service
+
+# Step 7: Verify
+systemctl status anima-broker-elixir.service unitares-bridge.service anima.service
+```
+
+The fragility v0.1 left implicit (changing `PartOf=` requires `daemon-reload` and does not retroactively apply to running units) is now explicit in the transcript: stop everything → reload → start in dependency order.
+
+**Other Phase C steps:**
+- `stable_creature.py` archived to `_archive/` (per repo convention; live-verified `_archive/` is the convention from `~/projects/_archive/schmidt-proposal-figures/` precedent).
+- Python `unitares-bridge` sidecar STAYS (it carries the EISV/governance code).
+- LED ownership verdict re-checked (§3.4 trigger): if any LED-class wedge symptom appeared during Phase A/B, fold-in happens here BEFORE cutover; otherwise carve-out persists into v0.5.
 
 ## 7. Open RFC questions
 
@@ -348,9 +460,21 @@ Hardware-owning GenServers are deeply stateful (FD, calibration, peripheral hand
 
 **Deploy procedure** must therefore wait for Mac-side governance idle before broker restart, OR be coordinated through the lease plane (Mac-side broker holds a `surface:/lumen-deploy-window` lease that other agents observe). The lease-plane integration is OUT of v0; v0's deploy procedure is "manual coordination — operator chooses deploy window."
 
-### 7.6 Cross-language schema source-of-truth — closed in v0.1 (per code-reviewer)
+### 7.6 Cross-language schema source-of-truth — closed in v0.2 (per code-reviewer ack-pass + live-verifier DRIFT)
 
-**v0 floor:** ship a JSON Schema file (`docs/schemas/anima_state_envelope.v0.json`) that BOTH sides validate against. Python uses `jsonschema`; Elixir uses `ex_json_schema`. Single shared file in the repo. Generated bindings (Pydantic↔Ecto) deferred. Validation is a contract test, not a runtime gate.
+**v0 floor:** ship a JSON Schema file at `unitares/docs/schemas/anima_state_envelope.v0.json` (revised v0.2 — picks unitares repo because the RFC lives there and the schema is governance-cross-fleet, not anima-mcp-only; live-verifier confirmed `docs/schemas/` does not exist in either repo today, so `unitares/docs/schemas/` is the chosen home and creating it is a §9.3 spike deliverable).
+
+**Strictness mode (revised v0.2):** `additionalProperties: true` on the top-level envelope (allow extra keys; Python broker writes 15+ keys including out-of-Elixir-scope ones); `additionalProperties: false` on each named sub-object schema (strict within the keys we DO define). This permits Phase A divergence comparator to ignore unknown top-level keys (Elixir omitting `learning`, `experiential`, etc. is permitted by schema) while catching typos within `readings.*` or `anima.*`.
+
+**Versioning policy:** schema is versioned in the filename (`v0.json`, `v1.json`). Adding a key in v1 requires a new schema file; comparator validates each side against its declared schema version. Phase A comparator runs both v0 and v1 schemas if both Elixir and Python emit envelopes claiming different versions during a transition.
+
+**Validator equivalence (revised v0.2 — addresses code-reviewer ack-pass CONCERN F12):** Python uses `jsonschema` with `format_checker=Draft202012Validator.FORMAT_CHECKER`; Elixir uses `ex_json_schema` with `format_validator: ExJsonSchema.Validator.FormatValidator` (opt-in). Both libraries differ on:
+- `format` keyword: Python validates by default; Elixir is opt-in. v0 explicitly opts both into format validation.
+- Regex flavor: Python `re` vs Elixir `Regex` (PCRE-compatible) — schema avoids regex constructs that differ between flavors (no lookbehinds, no Unicode property escapes; only basic `pattern` constraints).
+
+**Corpus contract test (revised v0.2):** `unitares/tests/test_anima_state_envelope_schema.py` ships with v0 — a fixture corpus of 50+ recorded envelopes (live captures from broker SHM during shadow phase) validated against the schema by both Python and Elixir. Test fails if validators disagree on any corpus entry. This converts "both sides validate" from convention to contract.
+
+Generated bindings (Pydantic↔Ecto) deferred. Validation is a contract test, not a runtime gate.
 
 ### 7.7 D22/D24 refresh removability
 
@@ -390,6 +514,8 @@ Stronger version: *"The Pi-side incident class is single-host single-Pi single-p
 
 The architectural argument is therefore a *style* argument, not a fault-count argument. The distribution argument (appliance-shaped Elixir release) is the stronger leg. The conjunction is what justifies v0; either alone does not.
 
+**What would falsify the distribution leg (revised v0.2 — addresses dialectic ack-pass CONCERN on §8.5 conjunction):** the appliance-shaped-distribution claim collapses if a Python-only path can produce a comparable single-binary tarball — e.g., PyOxidizer / Nuitka / shiv with C-extension bundling for `circuits_*`-equivalents. Operator should know: if the spike (§9.3) discovers that PyOxidizer + a single-writer-discipline linter for hardware claims would deliver 70%+ of the v0 win at 20% of the cost, that finding inverts the ROI — at which point v0's case reduces to "operator decision in KG `2026-04-30T19:30:54.644112+00:00` plus uniform-substrate ergonomics with the Mac BEAM lease plane." That is still a coherent case (substrate uniformity matters for cognitive load), but it is the *actual* case being made, not the harder-to-defeat conjunction. Naming this falsifier explicitly so the operator can re-decide if the spike finds it.
+
 ## 9. Pre-implementation checklist (revised v0.1 — addresses §9 BLOCKs from dialectic and live-verifier)
 
 ### 9.1 Lease-plane substrate status (live-verifier BLOCK)
@@ -408,28 +534,53 @@ The architectural argument is therefore a *style* argument, not a fault-count ar
 - [ ] §7.5 hot-reload — CLOSED out of v0; restart cost named
 - [ ] §7.6 cross-language contract — JSON Schema floor
 
-### 9.3 Spike requirements (must produce evidence before v0.2 implementation gate)
+### 9.3 Phase A pre-flight checklist (revised v0.2 — must produce evidence before Phase A starts; promotes spike output to v0.3 if gaps surface)
 
-- [ ] **Elixir on Pi — single sensor (BMP280) GenServer reading and emitting telemetry.** ~3 days. Promotes RFC to v0.2 if spike surfaces gaps.
+- [ ] **JSON Schema file checked in** at `unitares/docs/schemas/anima_state_envelope.v0.json`. Includes `additionalProperties` discipline per §7.6 strictness model. **PRECONDITION** for the validation round-trip below.
+- [ ] **Cross-language validator corpus contract test** at `unitares/tests/test_anima_state_envelope_schema.py` — 50+ recorded envelopes from broker SHM, validated by both `jsonschema` (Python) and `ex_json_schema` (Elixir) with format-validator opt-in; test fails if validators disagree on any entry.
+- [ ] **Server fallback path: typed-absence implemented and shipped.** Multi-site change per §4.2.2 server-side scope (5 sites: `loop_phases.py`, `server.py:948-966`, `server.py:94`, `server_state.py:58-59`, downstream callers). `SERVER_GOVERNANCE_FALLBACK_SECONDS` direct-UNITARES code path **deleted** (not bypassed). New constant `SHM_BROKER_STALE_SECONDS = 30s` added. Server returns the §4.2.2 typed-absence shape table. Verified by integration test that triggers each of the 5 staleness states and asserts return shape.
+- [ ] **`unitares-bridge.service` systemd unit** installed and validated. Reads `anima_state.json`, computes EISV, writes `anima_state_governance.json`, posts to UNITARES. Includes `first_check_in` startup-disambiguation logic (§9.4).
+- [ ] **`audit.tool_usage` write path** instrumented in anima server. New code path inserts row with `error_type` field for the §6.1 regression trigger. Tested with synthetic SHM parse failure.
+- [ ] **Elixir on Pi — single sensor (BMP280) GenServer** reading and emitting telemetry. ~3 days. Surfaces gaps that promote RFC to v0.3.
 - [ ] **SHM lock parity verified.** Elixir writer acquires `/dev/shm/anima_state.lock` via `:os.cmd("flock ...")` or NIF; round-trip with Python writer over 1000 concurrent acquisitions shows no torn writes.
-- [ ] **Elixir RSS measurement.** Confirm vanilla Elixir resident size on Pi 4 (claim 25-40 MB unverified).
-- [ ] **JSON Schema validation round-trip.** Python writer envelope validates against schema; Elixir writer envelope validates against schema; shared file checked in.
-- [ ] **Server fallback path verified.** anima.service writes typed-absence on stale SHM; SERVER_GOVERNANCE_FALLBACK_SECONDS code path NOT triggered by missing `governance` key (server change deployed and tested before Phase A).
-- [ ] **Phase A divergence comparator.** Code that emits diffs to telemetry, with the §6.1 thresholds as gate logic.
+- [ ] **`.tmp` orphan cleanup** verified on Elixir startup (per §4.2 amendment).
+- [ ] **Elixir RSS measurement** on Pi 4. Confirm vanilla Elixir resident size (claim 25-40 MB unverified).
+- [ ] **Phase A divergence comparator** ships and emits to telemetry, with §6.1 thresholds (including the v0.2 social-boost-window exclusion row) as gate logic.
 
-### 9.4 Crash-recovery and edge cases (code-reviewer CONCERN)
+### 9.4 Crash-recovery and edge cases (revised v0.2 — addresses code-reviewer + dialectic ack-pass CONCERNs)
 
-- [ ] **Elixir startup behavior** — chosen: clear SHM on startup (matches Python broker's `shm_client.clear()` at `stable_creature.py:325`). Stale-from-pre-crash data is NEVER served as live state.
+- [ ] **Elixir broker startup behavior** — clear SHM on startup (matches Python broker's `shm_client.clear()` at `stable_creature.py:325`, live-verified). Also unlinks `<final>.tmp` orphan from any prior crash mid-write. Stale-from-pre-crash data is NEVER served as live state.
+- [ ] **Bridge startup behavior** — `first_check_in = True` reset on bridge restart re-introduces "first check-in" semantics with UNITARES, potentially resetting circuit-breaker / agent session state. **Mitigation**: bridge persists last-check-in timestamp to `~/.anima/unitares_bridge_state.json` on each successful check-in; on startup, if file exists and timestamp is fresh (< 600s), the bridge sets `first_check_in = False` and uses the stored agent_uuid/parent_agent_id from that file. If file is missing or stale, fresh first check-in (per identity.md v2 fresh-instance posture). This makes bridge restart transparent to UNITARES while still honoring fresh-process-instance semantics across longer outages.
+- [ ] **Bridge crash during shadow / Phase B** — Phase A divergence comparator continues with Elixir-only data (broker not affected). Server reports `governance: degraded` per §4.2.2 typed-absence table. Bridge auto-restart via `Restart=on-failure` + `RestartSec=5`; bridge re-reads `anima_state.json` on restart.
 - [ ] **Python broker crash during shadow** — Phase A divergence comparator must tolerate Python broker dying (continue with Elixir-only data; flag as `python_unavailable`).
 - [ ] **Hardware unavailable** — sensor disconnect handler returns `:error` from GenServer.call; SHM envelope shows `readings: {error: "unavailable"}`; server tolerates via `.get()` pattern.
-- [ ] **Malformed SHM** — JSON parse fail in server log; v0 server change adds explicit `shm_parse` error logging for the §6.1 regression trigger.
-- [ ] **Rollback from partially promoted bundle** — v0 deploy procedure requires explicit per-bundle rollback test before promotion.
+- [ ] **Malformed SHM** — JSON parse fail in server log; v0 server change adds explicit `audit.tool_usage` row insertion with `error_type='shm_parse'` for the §6.1 regression trigger.
+- [ ] **Rollback from partially promoted bundle** — v0 deploy procedure requires explicit per-bundle rollback test before promotion. Test: bundle A promoted in test environment → simulate Elixir crash → restore Python broker SHMWriter → verify server returns to normal mode.
+
+#### 9.4.1 KG tag canonicalization (revised v0.2 — addresses code-reviewer ack-pass NIT F14)
+
+The §6.2 promotion gate ("no operator KG entry tagged `lumen-broker-port` AND severity ≥ medium for ≥ 3 days") depends on a negative query. False negatives from typos would silently satisfy the gate. Canonicalization:
+
+- **Canonical tag**: `lumen-broker-port` (exact, hyphenated, lowercase).
+- **Tag schema enforcement** during Phase A/B: `audit.tool_usage` write path includes a tag-vocab check; the tag-validator emits a warning row if it sees `lumen_broker_port`, `lumen-brokerport`, or other near-misses, OR if a KG `discoveries` row tagged with a near-miss is observed.
+- **Promotion gate query**: `SELECT * FROM knowledge.discoveries WHERE 'lumen-broker-port' = ANY(tags) AND severity >= 'medium' AND created_at >= NOW() - INTERVAL '3 days'`. Exact match.
+- The lease-plane RFC's `surface-leases` tag was used informally; this RFC formalizes one tag with one spelling for the duration of the implementation.
 
 ### 9.5 Cross-link
 
-- [ ] Cross-link with `surface-lease-plane-v0.md` Phase A status. **Concrete dependency direction:** Pi RFC Phase A may proceed independently of lease plane Phase A; Pi RFC Phase B (swap) does not require lease plane in any specific phase. The broker's `hw:/` advisory leases are reserved (§3.3) but not registered in v0.
+- [ ] Cross-link with `surface-lease-plane-v0.md` Phase A status. **Concrete dependency direction (revised v0.2 — adds Phase C statement):** Pi RFC Phase A may proceed independently of lease plane Phase A; Pi RFC Phase B (swap) does not require lease plane in any specific phase; **Pi RFC Phase C (cutover) does not require lease plane runtime in any state**. NO phase of the Pi RFC has a runtime dependency on the Mac-side lease plane. The broker's `hw:/` advisory leases are reserved (§3.3) but not registered in v0; future v1 RFC may add registration as a strictly-additive change.
 
 ## 10. Versions / changelog
+
+**Version ladder (revised v0.2 — addresses code-reviewer ack-pass CONCERN F9):**
+
+| Version | Pass | Promotion gate |
+|---|---|---|
+| v0 | initial draft | — |
+| v0.1 | council pass 1 amendments | NO-SHIP returned 3/3; v0.1 addresses 8 BLOCKs from pass 1 |
+| v0.2 | ack-pass on v0.1 amendments | **CURRENT**; addresses 7 new BLOCKs found in v0.1 amendments; council-clean, implementation-gate ready |
+| v0.3 | spike feedback (only if spike surfaces gaps) | Optional; if §9.3 BMP280 GenServer spike surfaces issues, those go in v0.3 |
+| v1.0 | post-Phase-C | Issued after cutover; folds in phase-experience learnings |
 
 - **v0** (2026-04-30) — initial draft. Pre-council. Authored after archaeology session.
 - **v0.1** (2026-04-30, same session) — council pass 1 amendments. Three NO-SHIPs returned. Eight BLOCKs addressed:
@@ -443,3 +594,16 @@ The architectural argument is therefore a *style* argument, not a fault-count ar
   8. §9.1 lease plane runtime status stated explicitly; Phase A NOT gated on lease plane runtime (live-verifier BLOCK).
 
   Plus DRIFT corrections (voice dual-ownership, broker memory ~75-80 MB, `os._exit` already removed in `ed1b2f6`, BMP280 KG citation replaced with concrete anchors), §8.1/§8.5 steelmans, §7.4/§7.1/§7.6 council questions closed, §4.1 supervision tree split (I2C vs SPI vs GPIO), §3.3 hardware surface IDs reserved, provenance block added.
+
+- **v0.2** (2026-04-30, same session) — ack-pass amendments. Two NO-SHIPs + one SHIP-with-caveats returned (live-verifier 12/12 v0.1 line citations VERIFIED, only §7.6 docs/schemas non-existence DRIFT). Seven new BLOCKs addressed via text-tightening (no architectural revisit):
+  1. **§2.1 SQLite handle**: WAL mode + `busy_timeout=5000` discipline; `unitares-bridge` is sole writer for governance/EISV state; `anima` server is sole writer for self-model/preferences/learning; both may read freely (dialectic ack-pass BLOCK).
+  2. **§2.1 identity-key freshness**: identity moved to bridge's SHM channel; broker no longer reads identity from disk (dialectic ack-pass BLOCK).
+  3. **§2.1 UNITARES-call channel split**: bridge is sole UNITARES caller from Pi via `UnitaresBridge.check_in()`; broker emits operational telemetry only (`audit.tool_usage` with `tool_name=anima_broker_tick`, no governance payload) via separate channel (dialectic ack-pass BLOCK).
+  4. **§4.2.3 social-boost SHM staleness**: `SOCIAL_BOOST_STALE_SECONDS = 10s` defined; lock-free pattern explicitly named as best-effort exception to the §4.2 lock-parity contract (dialectic ack-pass BLOCK).
+  5. **§4.2.2 two-file cross-freshness**: `SHM_BROKER_STALE_SECONDS = 30s` + `SHM_BRIDGE_GOVERNANCE_STALE_SECONDS = 210s`; full server return-shape table for all 5 fresh/stale states (code-reviewer ack-pass BLOCK F1).
+  6. **§7.6 + §9.3 JSON Schema gating**: schema file lives in `unitares/docs/schemas/`; `additionalProperties: true` at top level / `false` in sub-objects; corpus contract test as v0 deliverable; format-validator alignment between `jsonschema` and `ex_json_schema`; live-verifier DRIFT on directory-non-existence resolved by naming the canonical home (code-reviewer ack-pass BLOCK F2 + live-verifier DRIFT).
+  7. **§4.1 SPI/GPIO supervisor strategy**: SPIHardwareSupervisor and GPIOSupervisor both moved to `rest_for_one` (was `one_for_one`) so bus-owner death cascades to children with stale handles; symmetric with I2C tree (code-reviewer ack-pass BLOCK F3).
+
+  Plus CONCERN-level changes: §2.1 `:925-998` framing tightened (the actual `bridge.check_in()` is at `:982-989`; the range contains the call); §3.3 hw:/ IDs migrated to device-level granularity (`hw:/spi/spidev0.0`, full GPIO pin set D22/D23/D24/D27); §3.4 trigger reworded "I2C-conflict-class" → "shared-bus-conflict-class" (LEDs are SPI); §4.2 startup `.tmp` orphan cleanup added; §4.2.2 server-side change scope clarified as 5-site refactor (not "one-line"); §4.2.2 server fallback delivery framing reconciled (v0 deliverable + spike requirement + pre-Phase-A — read consistently as "must ship before Phase A starts; verified during spike"); §6.1 social-boost-window exclusion row added to diff thresholds; §6.1 `audit.tool_usage` field clarified (`error_type='shm_parse'`); §6.3 ordered systemd cutover transcript with PartOf= rewiring atomicity; §6.3 `unitares-bridge.service` unit-file sketch; §7.4/§7.6 specifics (strictness mode, validator equivalence, corpus contract test); §8.5 falsification clause for distribution leg; §9.3 Phase A pre-flight checklist rewritten as concrete deliverables (was spike list); §9.4.1 KG tag canonicalization (canonical `lumen-broker-port`, exact-match query); §9.5 Phase C cross-link; §10 explicit version ladder.
+
+  v0.2 NITs not addressed in body but deferred to spike feedback: §2.1 diagram column conflation (LED + AutonomousVoice stacked in same column visually); diagram is correct in legend but column-stacking is cosmetic.
