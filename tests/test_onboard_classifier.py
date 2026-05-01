@@ -54,41 +54,40 @@ class TestDefaultTagsForOnboard:
         assert default_tags_for_onboard("Lumen_abc123", existing_tags=None) == EPHEMERAL_DEFAULT_TAGS
 
 
-def _make_meta(tags=None):
+def _make_meta(tags=None, label=None):
     class _Meta:
         pass
     m = _Meta()
     m.tags = tags
+    m.label = label
     return m
 
 
-async def _run_stamp(name, existing_tags, *, missing_meta=False):
-    meta = None if missing_meta else _make_meta(tags=existing_tags)
+async def _run_stamp(name, existing_tags, *, missing_meta=False, meta_label=None):
+    meta = None if missing_meta else _make_meta(tags=existing_tags, label=meta_label)
     agent_uuid = "uuid-1234"
-    fake_server = MagicMock()
-    fake_server.agent_metadata = {} if missing_meta else {agent_uuid: meta}
     fake_update = AsyncMock()
 
-    with patch(
-        "src.mcp_handlers.identity.handlers.mcp_server", fake_server
-    ), patch("src.agent_storage.update_agent", fake_update):
-        from src.mcp_handlers.identity.handlers import _stamp_default_tags_on_onboard
-        await _stamp_default_tags_on_onboard(agent_uuid, name)
+    with patch("src.agent_storage.update_agent", fake_update):
+        from src.grounding.onboard_classifier import stamp_default_class_tags
+        result = await stamp_default_class_tags(agent_uuid, name, meta=meta)
 
-    return meta, fake_update
+    return meta, fake_update, result
 
 
 @pytest.mark.asyncio
 async def test_stamp_unknown_name_gets_ephemeral_and_persists():
-    meta, fake_update = await _run_stamp("some-agent", existing_tags=None)
+    meta, fake_update, result = await _run_stamp("some-agent", existing_tags=None)
     assert meta.tags == ["ephemeral"]
+    assert result == ["ephemeral"]
     fake_update.assert_awaited_once_with(agent_id="uuid-1234", tags=["ephemeral"])
 
 
 @pytest.mark.asyncio
 async def test_stamp_resident_name_gets_persistent_autonomous():
-    meta, fake_update = await _run_stamp("Sentinel", existing_tags=None)
+    meta, fake_update, result = await _run_stamp("Sentinel", existing_tags=None)
     assert meta.tags == ["persistent", "autonomous"]
+    assert result == ["persistent", "autonomous"]
     fake_update.assert_awaited_once_with(
         agent_id="uuid-1234", tags=["persistent", "autonomous"]
     )
@@ -96,8 +95,9 @@ async def test_stamp_resident_name_gets_persistent_autonomous():
 
 @pytest.mark.asyncio
 async def test_stamp_preexisting_tags_are_not_overwritten():
-    meta, fake_update = await _run_stamp("Sentinel", existing_tags=["custom"])
+    meta, fake_update, result = await _run_stamp("Sentinel", existing_tags=["custom"])
     assert meta.tags == ["custom"]
+    assert result is None
     fake_update.assert_not_awaited()
 
 
@@ -105,5 +105,72 @@ async def test_stamp_preexisting_tags_are_not_overwritten():
 async def test_stamp_missing_metadata_object_still_writes_tags_to_db():
     """Identity with no in-memory metadata entry yet — DB write is still
     source of truth; next load_metadata_async picks it up."""
-    _, fake_update = await _run_stamp("some-agent", existing_tags=None, missing_meta=True)
+    _, fake_update, result = await _run_stamp(
+        "some-agent", existing_tags=None, missing_meta=True
+    )
+    assert result == ["ephemeral"]
     fake_update.assert_awaited_once_with(agent_id="uuid-1234", tags=["ephemeral"])
+
+
+# Phase-2 additions: name=None fallback to meta.label so the auto-create
+# path in src/mcp_handlers/updates/phases.py (recovery branch, where the
+# label is not threaded through as a parameter) still classifies correctly.
+
+@pytest.mark.asyncio
+async def test_stamp_name_none_falls_back_to_meta_label_resident():
+    meta, fake_update, result = await _run_stamp(
+        None, existing_tags=None, meta_label="Sentinel"
+    )
+    assert result == ["persistent", "autonomous"]
+    assert meta.tags == ["persistent", "autonomous"]
+    fake_update.assert_awaited_once_with(
+        agent_id="uuid-1234", tags=["persistent", "autonomous"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_stamp_name_none_falls_back_to_meta_label_unknown():
+    meta, _, result = await _run_stamp(
+        None, existing_tags=None, meta_label="claude_desktop-claude"
+    )
+    assert result == ["ephemeral"]
+    assert meta.tags == ["ephemeral"]
+
+
+@pytest.mark.asyncio
+async def test_stamp_name_none_with_no_label_still_stamps_ephemeral():
+    """The 441-update claude_desktop-claude row would be untagged today
+    if name=None and meta.label=None; we still stamp ``ephemeral`` so the
+    promotion sweep can subsequently lift to session_like."""
+    _, _, result = await _run_stamp(None, existing_tags=None, meta_label=None)
+    assert result == ["ephemeral"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_name_takes_precedence_over_meta_label():
+    """When the caller threads a name explicitly, that wins over meta.label.
+    Protects the onboard path from a stale label clobbering an updated
+    name argument in the same request."""
+    meta = _make_meta(tags=None, label="something_old")
+    fake_update = AsyncMock()
+    with patch("src.agent_storage.update_agent", fake_update):
+        from src.grounding.onboard_classifier import stamp_default_class_tags
+        result = await stamp_default_class_tags("uuid-x", "Sentinel", meta=meta)
+    assert result == ["persistent", "autonomous"]
+
+
+@pytest.mark.asyncio
+async def test_onboard_wrapper_still_calls_through():
+    """The thin ``_stamp_default_tags_on_onboard`` wrapper in identity/handlers.py
+    must still produce the same end-state for backward compat."""
+    meta = _make_meta(tags=None)
+    fake_server = MagicMock()
+    fake_server.agent_metadata = {"uuid-x": meta}
+    fake_update = AsyncMock()
+    with patch(
+        "src.mcp_handlers.identity.handlers.mcp_server", fake_server
+    ), patch("src.agent_storage.update_agent", fake_update):
+        from src.mcp_handlers.identity.handlers import _stamp_default_tags_on_onboard
+        await _stamp_default_tags_on_onboard("uuid-x", "Watcher")
+    assert meta.tags == ["persistent", "autonomous"]
+    fake_update.assert_awaited_once()

@@ -651,6 +651,26 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
             ctx.meta = mcp_server.agent_metadata.get(ctx.agent_id)
             if ctx.meta:
                 ctx.meta.api_key = ctx.api_key
+            # S8a Phase-2: stamp default class tag on the auto-create path so
+            # process_agent_update-first agents land in the same class partition
+            # as onboard-first agents. Without this, the day-7 audit found 72 of
+            # 200 in-window identities untagged (claude_desktop-claude with 441
+            # updates among them). See docs/ontology/s8a-phase2-prep.md.
+            if created_agent:
+                try:
+                    from src.grounding.onboard_classifier import stamp_default_class_tags
+                    stamped = await stamp_default_class_tags(
+                        ctx.agent_id, ctx.label, meta=ctx.meta
+                    )
+                    if stamped is not None:
+                        logger.info(
+                            f"[PROCESS_UPDATE] S8a default-stamp: {ctx.agent_id[:8]}... "
+                            f"tagged {stamped} (label={ctx.label!r})"
+                        )
+                except Exception as stamp_err:
+                    logger.debug(
+                        f"[PROCESS_UPDATE] default-stamp failed (non-fatal): {stamp_err}"
+                    )
         except Exception as e:
             logger.warning(f"PostgreSQL create agent failed: {e}", exc_info=True)
             ctx.meta = await ctx.loop.run_in_executor(
@@ -1048,6 +1068,38 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                 register_minted_agent_in_dict(agent_id, status='active')
             except Exception as hyd_err:
                 logger.debug(f"Phase eager hydration failed for {agent_id}: {hyd_err}")
+            # S8a Phase-2: stamp default class tag on the recovery-create path.
+            # Same rationale as the is_new_agent branch above; this branch
+            # fires when record_agent_state hits a missing-row ValueError.
+            # See docs/ontology/s8a-phase2-prep.md.
+            try:
+                from src.grounding.onboard_classifier import stamp_default_class_tags
+                recovery_meta = mcp_server.agent_metadata.get(agent_id)
+                # Resolve a name explicitly: prefer ctx.label (always set
+                # at phase 1), fall back to meta.label. Without this, a
+                # known resident hitting the recovery path would land as
+                # ``ephemeral`` (council finding 2026-04-30 HIGH#4).
+                recovery_label = (
+                    getattr(ctx, "label", None)
+                    or (recovery_meta.label if recovery_meta else None)
+                )
+                stamped = await stamp_default_class_tags(
+                    agent_id, recovery_label, meta=recovery_meta
+                )
+                if stamped is not None:
+                    logger.info(
+                        f"[PROCESS_UPDATE] S8a default-stamp (recovery): "
+                        f"{agent_id[:8]}... tagged {stamped} (label={recovery_label!r})"
+                    )
+            except Exception as stamp_err:
+                # Recovery path is exactly the case where stamping matters
+                # most — the agent was found missing from PG. Log at
+                # warning so a silently-failed stamp here is visible.
+                logger.warning(
+                    f"[PROCESS_UPDATE] recovery default-stamp failed for "
+                    f"{agent_id[:8]}... (agent will be misclassified until "
+                    f"next stamp): {stamp_err}"
+                )
             await agent_storage.record_agent_state(
                 agent_id=agent_id,
                 E=ctx.metrics_dict.get('E', 0.7),

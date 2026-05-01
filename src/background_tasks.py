@@ -180,6 +180,47 @@ async def concept_extraction_background_task(interval_hours: float = 24.0):
 
 
 # ---------------------------------------------------------------------------
+# S8a Phase-2 class promotion sweep
+# ---------------------------------------------------------------------------
+
+async def class_promotion_sweeper_task(interval_minutes: float = 30.0):
+    """Promote ephemeral identities with ``total_updates >= 3`` to ``engaged_ephemeral``.
+
+    See ``src/grounding/class_promotion.py`` for the rule and
+    ``docs/ontology/s8a-phase2-prep.md`` for the audit that produced the
+    threshold. Cadence is 30min — same as Vigil's launchd cycle. The sweep
+    is monotone, idempotent, and concurrency-safe (CTE with FOR UPDATE
+    SKIP LOCKED + re-check on update), so cadence affects only freshness
+    of the class-conditional partition, not correctness.
+
+    Startup delay 60s to let metadata cache warm. Errors are logged at
+    WARNING (not debug) so a 30-min silent gap is visible to operators.
+    """
+    await asyncio.sleep(60.0)
+    while True:
+        try:
+            from src.grounding.class_promotion import promote_engaged_ephemeral
+            result = await promote_engaged_ephemeral()
+            if result.get("promoted", 0) > 0:
+                logger.info(
+                    f"[CLASS_PROMOTION] {result['promoted']} ephemeral → engaged_ephemeral "
+                    f"(threshold={result['threshold']})"
+                )
+            else:
+                logger.debug(
+                    f"[CLASS_PROMOTION] no promotions (threshold={result['threshold']})"
+                )
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"[CLASS_PROMOTION] Sweep failed (will retry): {e}")
+        try:
+            await asyncio.sleep(interval_minutes * 60)
+        except asyncio.CancelledError:
+            break
+
+
+# ---------------------------------------------------------------------------
 # Materialized view refresh (moved from per-insert to periodic)
 # ---------------------------------------------------------------------------
 
@@ -1189,6 +1230,8 @@ def start_all_background_tasks(connection_tracker, set_ready):
     # _supervised_create_task(startup_kg_lifecycle(), name="kg_lifecycle")
     logger.info("[KG_LIFECYCLE] Disabled — AGE query deadlock under investigation")
     _supervised_create_task(concept_extraction_background_task(), name="concept_extraction")
+    _supervised_create_task(class_promotion_sweeper_task(), name="class_promotion_sweeper")
+    logger.info("[CLASS_PROMOTION] Started ephemeral → engaged_ephemeral sweep (every 30m)")
     _supervised_create_task(periodic_matview_refresh(), name="matview_refresh")
     _supervised_create_task(periodic_partition_maintenance(), name="partition_maintenance")
     # Concurrent identity binding sweeper (#123): marks bindings stale once
