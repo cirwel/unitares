@@ -51,8 +51,9 @@ defmodule UnitaresLeasePlane.Application do
       [
         {Postgrex, postgrex_opts()},
         {Registry, keys: :unique, name: UnitaresLeasePlane.HolderRegistry},
-        UnitaresLeasePlane.LeaseSupervisor
-      ] ++ http_children()
+        UnitaresLeasePlane.LeaseSupervisor,
+        UnitaresLeasePlane.HandoffServer
+      ] ++ worker_children() ++ http_children()
 
     opts = [strategy: :one_for_one, name: UnitaresLeasePlane.Supervisor]
     Supervisor.start_link(children, opts)
@@ -65,6 +66,35 @@ defmodule UnitaresLeasePlane.Application do
 
       [
         {Bandit, plug: UnitaresLeasePlane.HTTPRouter, ip: ip, port: port}
+      ]
+    else
+      []
+    end
+  end
+
+  defp worker_children do
+    if Application.get_env(:lease_plane, :start_workers, true) do
+      [
+        {UnitaresLeasePlane.PeriodicWorker,
+         id: UnitaresLeasePlane.Reaper,
+         name: UnitaresLeasePlane.ReaperScheduler,
+         worker: UnitaresLeasePlane.Reaper,
+         interval_ms: Application.get_env(:lease_plane, :reaper_interval_ms, 30_000),
+         initial_delay_ms: Application.get_env(:lease_plane, :reaper_initial_delay_ms, 1_000)},
+        {UnitaresLeasePlane.PeriodicWorker,
+         id: UnitaresLeasePlane.HandoffTimeout,
+         name: UnitaresLeasePlane.HandoffTimeoutScheduler,
+         worker: UnitaresLeasePlane.HandoffTimeout,
+         interval_ms: Application.get_env(:lease_plane, :handoff_timeout_interval_ms, 5_000),
+         initial_delay_ms:
+           Application.get_env(:lease_plane, :handoff_timeout_initial_delay_ms, 1_000)},
+        {UnitaresLeasePlane.PeriodicWorker,
+         id: UnitaresLeasePlane.AuditOutboxForwarder,
+         name: UnitaresLeasePlane.AuditOutboxForwarderScheduler,
+         worker: UnitaresLeasePlane.AuditOutboxForwarder,
+         interval_ms: Application.get_env(:lease_plane, :audit_outbox_forward_interval_ms, 30_000),
+         initial_delay_ms:
+           Application.get_env(:lease_plane, :audit_outbox_forward_initial_delay_ms, 2_000)}
       ]
     else
       []

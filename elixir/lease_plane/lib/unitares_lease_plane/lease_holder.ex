@@ -37,6 +37,9 @@ defmodule UnitaresLeasePlane.LeaseHolder do
   @spec lease(pid()) :: map()
   def lease(pid), do: GenServer.call(pid, :lease)
 
+  @spec handoff_released(pid()) :: :ok
+  def handoff_released(pid), do: GenServer.cast(pid, :handoff_released)
+
   defp via(lease_id), do: {:via, Registry, {HolderRegistry, {:lease, lease_id}}}
 
   # ---------- callbacks ----------
@@ -55,7 +58,7 @@ defmodule UnitaresLeasePlane.LeaseHolder do
   def handle_call(:renew, _from, state) do
     case Repo.renew(state.lease.lease_id) do
       :ok -> {:reply, :ok, state}
-      {:error, :not_found} -> {:stop, :ttl_expired, {:error, :not_found}, state}
+      {:error, :not_found} -> {:stop, :normal, {:error, :not_found}, mark_released(state)}
       err -> {:reply, err, state}
     end
   end
@@ -68,6 +71,11 @@ defmodule UnitaresLeasePlane.LeaseHolder do
   end
 
   @impl true
+  def handle_cast(:handoff_released, state) do
+    {:stop, :normal, %{state | lease: %{state.lease | released_at: :released}}}
+  end
+
+  @impl true
   def handle_info(:tick, state) do
     case Repo.renew(state.lease.lease_id) do
       :ok ->
@@ -77,7 +85,7 @@ defmodule UnitaresLeasePlane.LeaseHolder do
       {:error, :not_found} ->
         # DB-side release happened (reaper, force-release, manual close) — the
         # canonical truth says we no longer hold this lease. Exit cleanly.
-        {:stop, :ttl_expired, state}
+        {:stop, :normal, mark_released(state)}
 
       {:error, reason} ->
         Logger.warning("lease_plane renew tick failed: #{inspect(reason)}; will retry next tick")
@@ -100,6 +108,8 @@ defmodule UnitaresLeasePlane.LeaseHolder do
     :ok
   end
 
+  def terminate(:ttl_expired, _state), do: :ok
+
   def terminate(reason, %{lease: lease}) do
     # Process is going down without an explicit release — record it.
     case Repo.release(lease.lease_id, "down_local") do
@@ -116,4 +126,6 @@ defmodule UnitaresLeasePlane.LeaseHolder do
   end
 
   defp schedule_tick(ms), do: Process.send_after(self(), :tick, ms)
+
+  defp mark_released(state), do: %{state | lease: %{state.lease | released_at: :released}}
 end

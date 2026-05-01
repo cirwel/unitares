@@ -10,7 +10,7 @@ defmodule UnitaresLeasePlane do
   become source of truth for identity, EISV, KG, or calibration.
   """
 
-  alias UnitaresLeasePlane.{LeaseHolder, LeaseSupervisor, Repo}
+  alias UnitaresLeasePlane.{HandoffServer, LeaseHolder, LeaseSupervisor, Repo}
 
   @doc """
   Acquire a lease for a `local_beam` surface — spawns a `LeaseHolder`
@@ -58,5 +58,17 @@ defmodule UnitaresLeasePlane do
       {:ok, pid} -> LeaseHolder.release(pid, release_reason)
       :error -> Repo.release(lease_id, release_reason)
     end
+  end
+
+  @doc "Offer a lease handoff to another holder UUID."
+  @spec handoff_offer(binary(), binary(), pos_integer()) :: {:ok, binary()} | {:error, term()}
+  def handoff_offer(lease_id, to_holder_agent_uuid, ttl_s) do
+    HandoffServer.offer(lease_id, to_holder_agent_uuid, ttl_s)
+  end
+
+  @doc "Accept a pending handoff by id."
+  @spec handoff_accept(binary()) :: :ok | {:error, term()}
+  def handoff_accept(handoff_id) do
+    HandoffServer.accept(handoff_id)
   end
 end

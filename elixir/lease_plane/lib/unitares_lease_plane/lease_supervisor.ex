@@ -71,6 +71,15 @@ defmodule UnitaresLeasePlane.LeaseSupervisor do
     end
   end
 
+  @doc "Stop a local holder after DB-side handoff accepted the lease."
+  @spec stop_after_handoff(binary()) :: :ok
+  def stop_after_handoff(lease_id) when is_binary(lease_id) do
+    case holder_for(lease_id) do
+      {:ok, pid} -> LeaseHolder.handoff_released(pid)
+      :error -> :ok
+    end
+  end
+
   @doc "How many local_beam holders are currently alive."
   @spec count_holders() :: non_neg_integer()
   def count_holders, do: DynamicSupervisor.count_children(__MODULE__).active

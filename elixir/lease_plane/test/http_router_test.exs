@@ -240,22 +240,59 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
     end
   end
 
-  describe "POST /v1/lease/handoff/{offer,accept} (stubbed)" do
-    test "offer returns 501 service_unavailable until implemented", _ctx do
+  describe "POST /v1/lease/handoff/{offer,accept}" do
+    test "offer returns a handoff_id for an active lease", ctx do
+      acquire = post_json("/v1/lease/acquire", acquire_body(ctx.surface))
+      lease_id = parsed(acquire)["lease"]["lease_id"]
+
       resp =
         post_json("/v1/lease/handoff/offer", %{
-          lease_id: random_uuid(),
+          lease_id: lease_id,
           to_holder_agent_uuid: random_uuid(),
           ttl_s: 30
         })
 
-      assert resp.status == 501
-      assert parsed(resp)["error"] == "service_unavailable"
+      assert resp.status == 200
+      body = parsed(resp)
+      assert body["ok"] == true
+      assert is_binary(body["handoff_id"])
     end
 
-    test "accept returns 501 service_unavailable until implemented", _ctx do
+    test "accept closes the old lease and reacquires for the recipient", ctx do
+      acquire = post_json("/v1/lease/acquire", acquire_body(ctx.surface))
+      old_lease_id = parsed(acquire)["lease"]["lease_id"]
+      to_holder = random_uuid()
+
+      offer =
+        post_json("/v1/lease/handoff/offer", %{
+          lease_id: old_lease_id,
+          to_holder_agent_uuid: to_holder,
+          ttl_s: 45
+        })
+
+      handoff_id = parsed(offer)["handoff_id"]
+      accept = post_json("/v1/lease/handoff/accept", %{handoff_id: handoff_id})
+      assert accept.status == 200
+      assert parsed(accept) == %{"ok" => true}
+
+      status =
+        :get
+        |> conn("/v1/lease/status?surface_id=#{URI.encode_www_form(ctx.surface)}")
+        |> authed()
+        |> HTTPRouter.call(@opts)
+
+      lease = parsed(status)["lease"]
+      assert lease["holder_agent_uuid"] == to_holder
+      assert lease["holder_kind"] == "remote_heartbeat"
+      assert lease["heartbeat_required"] == true
+      assert lease["original_ttl_s"] == 45
+      refute lease["lease_id"] == old_lease_id
+    end
+
+    test "accept of an unknown handoff returns 404", _ctx do
       resp = post_json("/v1/lease/handoff/accept", %{handoff_id: random_uuid()})
-      assert resp.status == 501
+      assert resp.status == 404
+      assert parsed(resp)["error"] == "not_found"
     end
   end
 

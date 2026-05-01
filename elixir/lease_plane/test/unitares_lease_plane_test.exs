@@ -3,7 +3,7 @@ defmodule UnitaresLeasePlaneTest do
 
   import LeaseTestHelpers
 
-  alias UnitaresLeasePlane.{LeaseHolder, LeaseSupervisor, Repo}
+  alias UnitaresLeasePlane.{AuditOutboxForwarder, LeaseHolder, LeaseSupervisor, Reaper, Repo}
 
   setup do
     surface = unique_surface_id("api")
@@ -135,6 +135,90 @@ defmodule UnitaresLeasePlaneTest do
     end
   end
 
+  describe "handoff" do
+    test "offer and accept transfer active lease to a remote-heartbeat holder", ctx do
+      params = local_beam_params(ctx.surface)
+      assert {:ok, lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
+      to_holder = random_uuid()
+
+      assert {:ok, handoff_id} = UnitaresLeasePlane.handoff_offer(lease.lease_id, to_holder, 45)
+      assert :ok = UnitaresLeasePlane.handoff_accept(handoff_id)
+
+      assert {:ok, transferred} = UnitaresLeasePlane.status(ctx.surface)
+      assert transferred.lease_id != lease.lease_id
+      assert transferred.holder_agent_uuid == to_holder
+      assert transferred.holder_kind == "remote_heartbeat"
+      assert transferred.heartbeat_required == true
+      assert transferred.original_ttl_s == 45
+
+      sql =
+        "SELECT release_reason FROM lease_plane.surface_leases " <>
+          "WHERE lease_id = $1 AND released_at IS NOT NULL"
+
+      {:ok, %{rows: [[reason]]}} =
+        Postgrex.query(UnitaresLeasePlane.DB, sql, [uuid_to_binary(lease.lease_id)])
+
+      assert reason == "handoff"
+    end
+
+    test "unknown handoff returns not_found" do
+      assert {:error, :not_found} = UnitaresLeasePlane.handoff_accept(random_uuid())
+    end
+  end
+
+  describe "reaper" do
+    test "releases expired remote heartbeat leases with reaped_remote_ttl", ctx do
+      params = local_beam_params(ctx.surface, ttl_s: 1)
+      assert {:ok, lease, :new} = UnitaresLeasePlane.acquire_remote_heartbeat(params)
+
+      Process.sleep(1100)
+      assert {:ok, %{reaped: reaped}} = Reaper.perform(%{limit: 100})
+      assert reaped >= 1
+      assert {:ok, nil} = UnitaresLeasePlane.status(ctx.surface)
+
+      sql =
+        "SELECT release_reason FROM lease_plane.surface_leases " <>
+          "WHERE lease_id = $1 AND released_at IS NOT NULL"
+
+      {:ok, %{rows: [[reason]]}} =
+        Postgrex.query(UnitaresLeasePlane.DB, sql, [uuid_to_binary(lease.lease_id)])
+
+      assert reason == "reaped_remote_ttl"
+    end
+  end
+
+  describe "audit outbox forwarder" do
+    test "projects lease events into audit.tool_usage and marks them forwarded", ctx do
+      params = local_beam_params(ctx.surface)
+      assert {:ok, _lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
+
+      event_id = acquire_event_id(ctx.surface)
+
+      assert {:ok, %{forwarded: 1, failed: 0}} =
+               AuditOutboxForwarder.perform(%{limit: 10, surface_id: ctx.surface})
+
+      sql = """
+      SELECT tool_name, payload->>'surface_id'
+      FROM audit.tool_usage
+      WHERE payload->>'lease_event_id' = $1
+      """
+
+      {:ok, %{rows: [["lease.acquire", surface_id]]}} =
+        Postgrex.query(UnitaresLeasePlane.DB, sql, [event_id])
+
+      assert surface_id == ctx.surface
+
+      {:ok, %{rows: [[forwarded_at]]}} =
+        Postgrex.query(
+          UnitaresLeasePlane.DB,
+          "SELECT forwarded_at FROM lease_plane.lease_plane_events WHERE event_id = $1",
+          [uuid_to_binary(event_id)]
+        )
+
+      assert %DateTime{} = forwarded_at
+    end
+  end
+
   describe "status/1" do
     test "returns nil for unknown surface" do
       assert {:ok, nil} = UnitaresLeasePlane.status("test:elixir/never-acquired")
@@ -149,5 +233,23 @@ defmodule UnitaresLeasePlaneTest do
       assert fetched.holder_agent_uuid == lease.holder_agent_uuid
       assert fetched.earned_status == "provisional"
     end
+  end
+
+  defp acquire_event_id(surface_id) do
+    {:ok, %{rows: [[event_id]]}} =
+      Postgrex.query(
+        UnitaresLeasePlane.DB,
+        "SELECT event_id::text FROM lease_plane.lease_plane_events WHERE surface_id = $1 AND event_type = 'acquire' ORDER BY ts DESC LIMIT 1",
+        [surface_id]
+      )
+
+    event_id
+  end
+
+  defp uuid_to_binary(
+         <<a::binary-size(8), "-", b::binary-size(4), "-", c::binary-size(4), "-",
+           d::binary-size(4), "-", e::binary-size(12)>>
+       ) do
+    Base.decode16!(a <> b <> c <> d <> e, case: :mixed)
   end
 end

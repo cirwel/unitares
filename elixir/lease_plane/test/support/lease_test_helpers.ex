@@ -13,8 +13,14 @@ defmodule LeaseTestHelpers do
     "test:elixir/#{label}/#{rand}"
   end
 
-  @doc "Cleanup hook — DELETEs rows for a given surface_id from both tables."
+  @doc "Cleanup hook — DELETEs rows for a given surface_id from lease/audit tables."
   def cleanup_surface(surface_id) when is_binary(surface_id) do
+    Postgrex.query!(
+      DB,
+      "DELETE FROM audit.tool_usage WHERE payload->>'surface_id' = $1",
+      [surface_id]
+    )
+
     Postgrex.query!(
       DB,
       "DELETE FROM lease_plane.lease_plane_events WHERE surface_id = $1",

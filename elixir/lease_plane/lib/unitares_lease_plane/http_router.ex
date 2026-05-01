@@ -9,9 +9,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   `schema_invalid` per the typed-absence protocol — there is no leaky 400
   HTML page.
 
-  Handoff (`/v1/lease/handoff/{offer,accept}`) is intentionally not wired
-  here — that work lands in a separate PR (release-and-reacquire pattern,
-  Oban offer-window timer).
+  Handoff (`/v1/lease/handoff/{offer,accept}`) uses the release-and-reacquire
+  pattern: accepting closes the old lease with `release_reason='handoff'` and
+  creates a new remote-heartbeat lease for the recipient.
   """
 
   use Plug.Router
@@ -141,23 +141,47 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
-  # ---------- /v1/lease/handoff/{offer,accept} ----------
-  # Wired in the next PR. Returns service_unavailable so callers see typed-absence,
-  # not a 404 HTML page.
   post "/v1/lease/handoff/offer" do
-    json(conn, 501, %{
-      ok: false,
-      error: "service_unavailable",
-      reason: "handoff not implemented in this build"
-    })
+    case extract_handoff_offer_params(conn.body_params) do
+      {:ok, lease_id, to_holder_agent_uuid, ttl_s} ->
+        case UnitaresLeasePlane.handoff_offer(lease_id, to_holder_agent_uuid, ttl_s) do
+          {:ok, handoff_id} ->
+            json(conn, 200, %{ok: true, handoff_id: handoff_id})
+
+          {:error, :not_found} ->
+            json(conn, 404, %{ok: false, error: "not_found"})
+
+          {:error, reason} ->
+            Logger.error("lease plane handoff offer failed: #{inspect(reason)}")
+            json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+        end
+
+      {:error, detail} ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+    end
   end
 
   post "/v1/lease/handoff/accept" do
-    json(conn, 501, %{
-      ok: false,
-      error: "service_unavailable",
-      reason: "handoff not implemented in this build"
-    })
+    case extract_handoff_accept_params(conn.body_params) do
+      {:ok, handoff_id} ->
+        case UnitaresLeasePlane.handoff_accept(handoff_id) do
+          :ok ->
+            json(conn, 200, %{ok: true})
+
+          {:error, :not_found} ->
+            json(conn, 404, %{ok: false, error: "not_found"})
+
+          {:error, :expired} ->
+            json(conn, 409, %{ok: false, error: "expired"})
+
+          {:error, reason} ->
+            Logger.error("lease plane handoff accept failed: #{inspect(reason)}")
+            json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+        end
+
+      {:error, detail} ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+    end
   end
 
   # ---------- catch-all ----------
@@ -244,6 +268,38 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   end
 
   defp extract_release_params(_), do: {:error, "lease_id required"}
+
+  defp extract_handoff_offer_params(%{} = body) do
+    lease_id = Map.get(body, "lease_id")
+    to_holder_agent_uuid = Map.get(body, "to_holder_agent_uuid")
+    ttl_s = Map.get(body, "ttl_s")
+
+    cond do
+      not (is_binary(lease_id) and byte_size(lease_id) > 0) ->
+        {:error, "lease_id required"}
+
+      not (is_binary(to_holder_agent_uuid) and byte_size(to_holder_agent_uuid) > 0) ->
+        {:error, "to_holder_agent_uuid required"}
+
+      not is_integer(ttl_s) ->
+        {:error, "ttl_s must be an integer"}
+
+      ttl_s <= 0 or ttl_s > 3600 ->
+        {:error, "ttl_s must be in (0, 3600]"}
+
+      true ->
+        {:ok, lease_id, to_holder_agent_uuid, ttl_s}
+    end
+  end
+
+  defp extract_handoff_offer_params(_), do: {:error, "body must be a JSON object"}
+
+  defp extract_handoff_accept_params(%{"handoff_id" => handoff_id})
+       when is_binary(handoff_id) and byte_size(handoff_id) > 0 do
+    {:ok, handoff_id}
+  end
+
+  defp extract_handoff_accept_params(_), do: {:error, "handoff_id required"}
 
   defp present_lease(%{} = lease) do
     %{
