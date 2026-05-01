@@ -1,11 +1,12 @@
 ---
-status: DRAFT-v0.3 (S1 ran; §8.2 prior falsified; §8.5 honestly re-narrated as unchanged two-leg conjunction with §8.2 prior gone; S2-S5 paused; §9.3.A pacing split; council ack-pass on v0.3 complete — 2 BLOCKs from dialectic addressed via text-tightening, no architectural revisit)
+status: DRAFT-v0.4 (S6 ambiguous; S2-S5 PAUSED-pending-decision; pre-ack-pass)
 authored: 2026-04-30
-amended: 2026-05-01 (v0.3 — S1 spike-result fold-in, post-merge of v0.2.1 PR #272)
-amended_prior: 2026-04-30 (v0, v0.1, v0.2 same session)
+amended: 2026-05-01 (v0.4 — S6 spike-result fold-in, post-merge of v0.3 PR #275; first S6 verdict withdrawn after council, corrected re-measurement landed at 11:32:43Z)
+amended_prior: 2026-05-01 (v0.3 — S1 fold-in); 2026-04-30 (v0, v0.1, v0.2 same session)
 council_pass_1: 2026-04-30
 ack_pass_1: 2026-04-30
 ack_pass_v0_3: 2026-05-01
+ack_pass_v0_4: 2026-05-01
 author_session: agent-c9e03e26-33c (claude_code-claude_c9e03e26); v0.3 amendments by agent-05e52624-2a1 (claude_code-claude_05e52624)
 review_target: |
   Council pass 1 complete (parallel agents, 2026-04-30; same precedent as
@@ -32,6 +33,16 @@ review_target: |
     - dialectic-knowledge-architect: 2 BLOCKs, 2 CONCERNs, 3 DRIFTs, 1 NIT — NO-SHIP first pass; addressed in v0.3 body before merge (§8.5 conjunction recompute corrected from "three legs / memory leg collapsed" to honest "two-leg unchanged in form, implicit §8.2 prior gone"; §8.1 caveated; §9.3.A pacing split added; §7.1 label tightened; §9.3.B S2-S5 fail-paths mapped)
     - feature-dev:code-reviewer: 1 CONCERN, 2 NITs, SHIP — addressed (S2-S5 fail-paths added to decision tree; §8.2 :erlang.memory() sentence tightened; numeric internal consistency verified)
     - live-verifier: 6 VERIFIED, 2 minor DRIFTs, SHIP-with-caveats — addressed (Elixir runtime banner vs `dpkg -l` package versions separated; tarball byte counts for both default-config and strip_beams rebuild documented)
+
+  Ack-pass on v0.4 amendments complete (parallel agents, 2026-05-01; scoped to
+  v0.4 changes only — S6 spike-result fold-in, §8.5/§9.3.B re-framing, §10 v0.4
+  entry, methodology lessons; first S6 verdict was withdrawn after a separate
+  3-agent council found the verdict's evidence base was thin):
+    - dialectic-knowledge-architect: 1 BLOCK, 2 CONCERNs, 1 NIT, 1 DRIFT — NO-SHIP-with-correctable-fix first pass; addressed in v0.4 body before commit (§9.3.B S2 row leg-menu rule re-violation rewritten; default-posture divergence from v0.3 explicitly acknowledged; severity rationale and Pi-CI runner caveat moved out of §10 narrative; "instrument noise" → "axis-weighting variance"; v0.5 framed as one of several outcomes including retire-without-amendment)
+    - feature-dev:code-reviewer: 1 BLOCK, 2 CONCERNs, 1 NIT, NO-SHIP — addressed (`45.35 MiB` shiv pyz size unit-convention error in §9.3.B and §10 corrected to `43.346 MiB` from byte count `45,451,738`; downstream `222 MiB total` corrected to `~220.3 MiB`; S2 condition wording rewritten to drop the "fails-cleanly" register-shift; frontmatter status trimmed to one-liner)
+    - live-verifier: 8 VERIFIED, 2 minor DRIFTs, SHIP — shiv pyz runnability VERIFIED end-to-end via timeout-and-shutdown trace (Creature 'Lumen' is alive → Entering main loop → Shutdown signal received → exit=124); KG entries verified; PR #275 merge confirmed at 2026-05-01T10:55:34Z; 2 DRIFTs are staleness-of-snapshot (broker uptime advanced 3d→12d since v0.3 measurement; VmRSS drifted +2 MiB over 12 days), not fabrications.
+
+  All v0.4 BLOCKs were addressable via text-tightening; no architectural revisit required.
   All v0.3 BLOCKs were addressable via text-tightening; no architectural revisit required.
 provenance: |
   Same-session synthesis. v0 was a single-author sketch (claude_code-claude_c9e03e26,
@@ -73,7 +84,7 @@ unblocks: |
 
 # Proposal: Anima Broker BEAM Port v0 (Pi-side coordination kernel)
 
-> **Status: DRAFT-v0.3, post-S1 (§8.2 prior falsified), council ack-pass on v0.3 complete.** S1 ran on Lumen 2026-05-01 and falsified the §8.2 RSS estimate; §8.5 v0.3 honestly narrates the v0.2 two-leg conjunction as unchanged in form but with the implicit §8.2 prior now gone (the pre-ack-pass framing of "memory leg collapsed" was revisionist — there was no enumerated memory leg in v0.2 to collapse; dialectic ack-pass flagged this and v0.3 was tightened). Distribution leg is now S6-gated. S2-S5 are paused pending S6 result; §9.3.A deliverables are split into "continue" and "pause" buckets per their independence from the BEAM port. Follow-on to `surface-lease-plane-v0.md`. The lease plane is the **Mac-side** first wedge for BEAM/OTP; this RFC is the **Pi-side** second wedge: porting the `anima-creature` broker to a single-node Elixir application that owns Lumen's hardware lifecycle. Both nodes are single-node by design (no Distributed Erlang between them); they coordinate via HTTP and Postgres heartbeat-TTL, the same patterns the Python fleet uses today.
+> **Status: DRAFT-v0.4, post-S6 (ambiguous), council ack-pass on v0.4 complete.** S6 ran on Lumen 2026-05-01 after v0.3 council ack-pass cleared. Result: aggregate distribution-win 50-75% at cost-ratio 7.5-25% — qualitatively ambiguous (axis-weighting variance) on the §9.3.B 70%/20% gate. First S6 verdict was WITHDRAWN after a 3-agent council found four classes of fatal evidence/framing errors (broken shiv artifact, hello-world Elixir comparison, killed Nuitka treated as failure, pre-supplied operator branch menu). Corrected re-measurement at KG `2026-05-01T11:32:43.014879+00:00` superseded the withdrawn `11:02:42`. Per §9.3.B v0.3 ambiguous-default-treat-as-falsified posture, v0.4 holds S2-S5 in PAUSED state pending operator decision (one operational step softer than literal retire-default; see §8.5 v0.4 closing acknowledgment). v0.4 council ack-pass found 1 BLOCK (S2 row leg-menu re-violation) + 1 BLOCK (45.35 MiB unit-convention error re-introducing the withdrawn-S6's B3) + several CONCERNs/NITs/DRIFTs — all addressed via text-tightening before commit, no architectural revisit. Follow-on to `surface-lease-plane-v0.md`. The lease plane is the **Mac-side** first wedge for BEAM/OTP; this RFC is the **Pi-side** second wedge: porting the `anima-creature` broker to a single-node Elixir application that owns Lumen's hardware lifecycle. Both nodes are single-node by design (no Distributed Erlang between them); they coordinate via HTTP and Postgres heartbeat-TTL, the same patterns the Python fleet uses today.
 
 ## 1. Problem
 
@@ -551,7 +562,7 @@ True, and not nothing. `circuits_i2c` / `circuits_gpio` / `circuits_spi` wrap th
 
 Same answer as lease-plane RFC §8.3: Go gives cheap concurrency but no supervision primitive. Mac+Pi BEAM unifies the substrate. KG `2026-04-30T19:30:54.644112+00:00` operator decision settles this.
 
-### 8.5 "This is just substrate migration tax dressed as architecture." (revised v0.3 — implicit §8.2 prior falsified; conjunction structure unchanged but harder to defend)
+### 8.5 "This is just substrate migration tax dressed as architecture." (revised v0.4 — S6 ran with ambiguous result; distribution leg quantitatively weaker than v0.3 framed)
 
 Stronger version: *"The Pi-side incident class is single-host single-Pi single-process-pair. OTP's load-bearing wins are supervision-on-multi-process and cross-process coordination via mailboxes. Single-host single-Pi has neither — broker + server, two processes, coordinating via a 1KB JSON file. You don't need OTP to fix two processes coordinating via a JSON file; you need a contract test, an `lsof` check in CI, and a single-writer linter rule."*
 
@@ -561,14 +572,25 @@ Stronger version: *"The Pi-side incident class is single-host single-Pi single-p
 
 **What S1 actually changed (v0.3 — narrow claim):** v0.1/v0.2 carried an *implicit positive prior* in §8.2: the assumption that "BEAM fits comfortably on the Pi" (the unverified 25-40 MB estimate). This prior was not an enumerated leg of the conjunction — it was background support that made the appliance-distribution leg easier to argue for (a single Elixir release tarball that fits in a small RSS budget is more obviously appliance-shaped than one that costs +47 MB over the existing Python broker). S1 falsifies that prior. The structural conjunction (supervision + distribution) is intact in form; what is gone is the assumed memory headroom that made the distribution leg cheap to argue for.
 
-**Effect on each leg:**
+**Effect on each leg (revised v0.4 with S6 measurements folded in):**
 
-- **Supervision-tree-recovery leg:** unchanged. Was already load-bearing-only-in-conjunction in v0.2; still is.
-- **Appliance-distribution leg:** weaker, but not falsified. Single-tarball distribution is still an argument; the +47 MB memory cost relative to the existing Python broker is now an explicit tax against it rather than a wash. Whether this leg holds depends on **S6** (Python single-binary distribution falsifier — see §9.3.B v0.3): if S6 shows a Python-only path delivers ≥70% of the appliance-distribution win at ≤20% of the BEAM-port cost, the distribution leg falls.
+- **Supervision-tree-recovery leg:** unchanged. Was already load-bearing-only-in-conjunction in v0.2; still is. **§1.1 items 2 + 3 named explicitly:** any retire-to-Python path leaves PR #11's hand-rolled `recreate I2C bus handle when multiple sensors fail` in place (no `rest_for_one` cascade) and leaves PR #14's periodic 30s D22/D24 OUTPUT-HIGH refresh hack in place (no single GenServer GPIO owner). These are bugs the OTP-shaped-win argument was meant to fix structurally; "Python + discipline" leaves them as-is. Trade-off named, not papered over.
+- **Appliance-distribution leg:** **weaker than v0.3 framed it, but the ≥70% / ≤20% gate is qualitatively ambiguous (50-75% by sub-axis weighting).** S6 result (KG `2026-05-01T11:32:43.014879+00:00`, supersedes withdrawn `11:02:42`):
+  - **Apples-to-apples sizes (MiB, 1024-division, byte counts in parens):** realistic Elixir release with hardware deps (circuits_i2c/gpio/spi + bandit + plug + jason; no domain code yet) = **7.262 MiB** (7,614,904 B); Python+shiv broker (verified runnable end-to-end) = **43.346 MiB** (45,451,738 B). Ratio: 5.97x Elixir favor on tarball; 11.6x Elixir favor on after-deploy disk (shiv extracts 177 MiB cache to `~/.shiv/<hash>/` on first run, total ~220.3 MiB).
+  - **Idle VmRSS:** realistic Elixir release = 143.4 MiB; Python broker live = 73.0 MiB. **Python wins runtime memory by +70.4 MiB** (vs +47 MiB v0.3 estimated against the hello-world skeleton).
+  - **Sub-axis scoring of distribution win (shiv vs realistic Elixir):** single-artifact deploy 100% (both ✓); self-contained on bare distro 50-70% (shiv requires apt python3, pinning deploy to Debian-family ecosystems — real concession, not "close match"); size economy ~17% (5.97x bigger tarball, 11.6x bigger footprint); operational shape (systemd + Restart=on-failure + watchdog) equivalent post-port, NOT a Python lead today (correcting prior status-quo bias). **Aggregate 50-75% — within axis-weighting variance of the 70% gate** (the range reflects how the operator weights size economy / ecosystem-pinning / single-artifact-shape; not measurement uncertainty).
+  - **Cost trade:** "Python + shiv + lsof CI + docs" estimated 3-5 days vs BEAM port 4-8 weeks (20-40 days). Ratio 7.5-25%. Clears ≤20% at lower end, brushes at upper end. Caveat: no Pi-native CI runner exists today, so the lsof CI hook must be built against a self-hosted Pi runner OR mocked-only.
+  - **Nuitka was NOT measured.** Build was killed at 43:21 elapsed on Pi 4 (still mid-gcc compile of 1048 modules); Pi-side build time is the wrong axis (real release pipelines build on dev machines and ship binaries). A completed Nuitka build (~80-120 MiB single binary, no system-Python dependency) would shift "self-contained" to full and likely push Python's aggregate above 70%. Resolving Nuitka would resolve the ambiguity.
 
-**Decision posture per operator (2026-05-01):** S6 runs next, before any Nerves consideration (Nerves remains deferred per §7.1 v0.3). The operator is the source of any *additional* load-bearing leg that might be invoked in a v0.4 rebuild — v0.3 does not pre-supply candidates. If S6 falsifies and the operator does not invoke an additional leg, v0 retires in favor of "Python with single-writer discipline + systemd watchdog + packaging discipline + lsof CI check" — the v0 *non-port* alternative.
+**Per §9.3.B v0.3 decision tree, this S6 result is the AMBIGUOUS branch.** Tree's default posture: "treat as falsified" — bar for v0 to continue is positive evidence. v0.4 does NOT pre-decide on the operator's behalf — §8.5 v0.3 line 569 ("the leg menu is operator-supplied, not pre-supplied by v0.3") still binds.
 
-**What would falsify the distribution leg (S6 spec, unchanged from v0.2):** the appliance-shaped-distribution claim collapses if a Python-only path can produce a comparable single-binary tarball — e.g., PyOxidizer / Nuitka / shiv with C-extension bundling for `circuits_*`-equivalents. v0.3 promotes S6 to next-up in §9.3.B and pauses S2-S5 until both v0.3 council ack-pass and S6 result land.
+**Default-posture divergence acknowledgment (v0.4):** v0.3's "treat as falsified" reads literally as "v0 collapses, retire-direction." v0.4 operationalizes this by holding S2-S5 in PAUSED state pending explicit operator retire-or-resume action — one step softer than literal retirement. The reasoning: a draft RFC mid-flight cannot mechanically self-retire on an ambiguous-but-not-clearly-falsifying measurement; the literal "treat as falsified" reading would require the spike author to declare v0 dead unilaterally, which conflicts with the operator-supplied-decision rule. The operationally-coherent reading is "default to retire unless operator overrides, but hold the structural state (paused S2-S5, paused §9.3.A items) until that decision lands so neither retire nor resume is foreclosed by amendment timing." Flagged here for ack-pass scrutiny — operator may correct to literal-retire-default if preferred.
+
+**Epistemic paths the operator may consider to resolve the ambiguity** (non-exhaustive — these are *ways to disambiguate*, NOT a closed list of operator decision branches; per §8.5 v0.3 the leg menu is operator-supplied):
+
+1. Complete Nuitka build on a dev machine (Mac aarch64 cross-compile or ARM cloud builder; ~1-2h wall-clock if Adafruit cross-compile works) — gives the missing Python+Nuitka data point.
+2. Operator weights the qualitative axes (size economy / ecosystem-pinning / single-artifact-shape) explicitly — 70% verdict resolves deterministically.
+3. Operator invokes an additional load-bearing leg per §8.5 v0.3 (substrate-uniformity-with-Mac-lease-plane or any other; the hedge "depending on the leg's mechanism" — some legs may make S2-S5 actionable; others may re-frame v0 independent of S6) — re-frames v0 independent of S6.
 
 ## 9. Pre-implementation checklist (revised v0.1 — addresses §9 BLOCKs from dialectic and live-verifier)
 
@@ -609,9 +631,11 @@ These are code/config changes with defined endpoints. Each must be shipped, test
 - [ ] **Cross-language validator corpus contract test** at `unitares/tests/test_anima_state_envelope_schema.py` — 50+ recorded envelopes from broker SHM, validated by both `jsonschema` (Python) and `ex_json_schema` (Elixir) with format-validator opt-in. Test fails if validators disagree on any entry. (See §7.6 for `format` and regex flavor caveats.) **Pause: same gate as the schema — no Elixir writer means no validator equivalence to enforce.**
 - [ ] **`unitares-bridge.service` systemd unit** (per §6.3 sketch). Reads `anima_state.json`, computes EISV, writes `anima_state_governance.json`, posts to UNITARES. Includes `first_check_in` restart-state persistence at `~/.anima/unitares_bridge_state.json` (§9.4). **Pause: the bridge sidecar exists only to compensate for Elixir-broker-can't-call-UNITARES; if the port retires, today's `bridge.check_in()` in `accessors.py:982-989` continues unchanged.**
 
-#### 9.3.B The Spike (revised v0.3 — S1 result folded in; S6 promoted; S2-S5 paused)
+#### 9.3.B The Spike (revised v0.4 — S6 ran with ambiguous result; S2-S5 stay PAUSED per default-treat-as-falsified)
 
-**v0.3 status (2026-05-01):** S1 ran on Lumen and falsified the §8.2 RSS estimate (see §8.2 v0.3). Per operator directive, the spike does NOT continue under the v0.2.1 decision tree. S6 (Python distribution falsifier) is promoted to next-up and runs *before* S2-S5 resume. S2-S5 are paused pending (a) v0.3 council ack-pass, and (b) S6 result, which together determine whether the BEAM port still has a load-bearing case (see §8.5 v0.3). v0.3 does NOT swap to Nerves; that remains a named option behind a separate operator decision (see §7.1 v0.3).
+**v0.4 status (2026-05-01):** S6 ran on Lumen post-v0.3 ack-pass. **Result: ambiguous on the 70% distribution-win gate.** First S6 verdict (KG `2026-05-01T11:02:42`) was withdrawn after a 3-agent council found fatal evidence gaps (broken shiv artifact, hello-world Elixir comparison, killed Nuitka treated as failure, pre-supplied operator branch menu). Re-measurement with corrections produced KG `2026-05-01T11:32:43`: 50-75% of the appliance-distribution win at 7.5-25% of the BEAM-port cost — qualitatively ambiguous, within axis-weighting variance of the 70% gate. See §8.5 v0.4 for the full table. Per the §9.3.B v0.3 ambiguous-default-treat-as-falsified posture, v0.4 holds S2-S5 in PAUSED state pending operator decision (one operational step softer than literal retire-default; see §8.5 v0.4 closing paragraph for the divergence acknowledgment).
+
+**v0.3 status (preserved for context):** S1 ran on Lumen and falsified the §8.2 RSS estimate (see §8.2 v0.3). Per operator directive, the spike does NOT continue under the v0.2.1 decision tree. S6 (Python distribution falsifier) was promoted to next-up and ran *before* S2-S5 resume. v0.3 does NOT swap to Nerves; that remains a named option behind a separate operator decision (see §7.1 v0.3).
 
 **Original framing (still valid):** the spike's job is to make us *know what we don't know* before committing 4-8 weeks to the full port. Cheap experiments with measurable gates; each names a falsifier; failed gates halt the spike and force a versioned amendment with the finding folded in.
 
@@ -619,27 +643,36 @@ These are code/config changes with defined endpoints. Each must be shipped, test
 
 | # | Experiment | Status | Result / Notes |
 |---|---|---|---|
-| **S1** | Cold-start sanity | **DONE 2026-05-01** | Tarball 5.72 MB PASS; cold-start 1.4-1.6s PASS; idle RSS **123.7 MB FALSIFIES** §8.2 (>60 MB). Apples-to-apples comparison set in §8.2 v0.3. KG `2026-05-01T09:29:02.864022+00:00`. |
-| **S6** | Python distribution falsifier | **NEXT** | Bundle current Python broker as single binary (PyOxidizer / Nuitka / shiv); compare cold-start, tarball size, dependency footprint, op complexity vs. Elixir release. **If Python-discipline path delivers ≥70% of the distribution win at ≤20% the BEAM-port cost, §8.5 conjunction collapses and v0 retires in favor of "Python + single-writer discipline + systemd watchdog + packaging discipline + lsof CI check."** Operator escalation either way — pass or fail, the result reframes v0. Duration 1 day. |
-| **S2** | BMP280 GenServer | **PAUSED** | Resumes only after v0.3 council ack-pass + S6 result. If S6 falsifies, S2 may never run. |
+| **S1** | Cold-start sanity | **DONE 2026-05-01** | Tarball 5.72 MiB PASS; cold-start 1.4-1.6s PASS; idle RSS **123.7 MiB FALSIFIES** §8.2 (>60 MiB). Apples-to-apples comparison set in §8.2 v0.3. KG `2026-05-01T09:29:02.864022+00:00`. |
+| **S6** | Python distribution falsifier | **DONE-AMBIGUOUS 2026-05-01** | shiv pyz built and verified runnable end-to-end (43.346 MiB single artifact; ~220.3 MiB total after first deploy with extraction cache); realistic Elixir release with hardware deps = 7.262 MiB tarball / 19 MiB unpacked / 143.4 MiB idle VmRSS. shiv vs Elixir: 5.97x size penalty / 11.6x footprint penalty / Python +70.4 MiB memory advantage. Aggregate distribution-win 50-75% (qualitatively ambiguous on the 70% gate, within axis-weighting variance); cost ratio 7.5-25% (clears ≤20% at low end, brushes at high end; ratio excludes one-time Pi-native CI runner setup since none exists today — see §8.5 v0.4). Nuitka NOT measured (build killed at 43:21 mid-gcc on Pi 4; Pi-side build time is the wrong axis — real release pipelines build on dev machines). KG `2026-05-01T11:32:43.014879+00:00` supersedes withdrawn `11:02:42`. v0.3 ambiguous-default routes "treat as falsified" — v0.4 holds S2-S5 in PAUSED state pending operator decision (one operational step softer than literal retire-default; see §8.5 v0.4 for the divergence acknowledgment). |
+| **S2** | BMP280 GenServer | **PAUSED** | Stays paused under v0.4. Per the v0.3 ambiguous-default-treat-as-falsified posture, the bar for resumption is positive evidence — operator-supplied. See §8.5 v0.4 for epistemic paths the operator may consider to resolve the ambiguity (measurement / axis-weighting / additional leg, non-exhaustive); operator decides which, if any, to take. |
 | **S3** | SHM lock parity | **PAUSED** | Same gate as S2. |
 | **S4** | Supervisor cascade | **PAUSED** | Same gate as S2. |
 | **S5** | Bridge stub + typed-absence | **PAUSED** | Same gate as S2. |
 | **S7** | Phase A divergence comparator dry-run | **PAUSED** | Depends on S2-S5; same gate. |
 
-**Spike methodology note (v0.3):** during S1 cleanup, `pgrep -f beam.smp` repeatedly matched the SSH bash session whose own command line contained the literal string `beam.smp` (from the script being executed), creating the illusion of a respawning BEAM process. Future spike checks against the BEAM substrate must use stricter process matching:
+**Spike methodology notes:**
+
+**v0.3 (carried forward):** during S1 cleanup, `pgrep -f beam.smp` repeatedly matched the SSH bash session whose own command line contained the literal string `beam.smp` (from the script being executed), creating the illusion of a respawning BEAM process. Future spike checks against the BEAM substrate must use stricter process matching:
 
 - Prefer `pgrep -x beam.smp` (exact basename match) over `pgrep -f`.
 - When `-f` is required (e.g., to disambiguate by command-line args), inspect `ps -o pid,ppid,cmd` output explicitly and exclude self / parent shell PIDs.
 - For BEAM-specific lookups, trust the release's own `bin/<app> pid` over pgrep — the release writes a pid file at `<rel>/tmp/pids/<app>.pid` that is authoritative.
 
-This isn't a v0.3-blocking concern, but the spike methodology section is the right place to record it so future spikes don't re-pay the same lesson.
+**v0.4 (S6 lessons):** the first S6 verdict was withdrawn after a 3-agent council found four classes of evidence/framing errors. Future bundling-comparison spikes must:
 
-**v0.3 spike outcome decision tree:**
+- **Compare apples-to-apples.** A `mix new --sup` skeleton tarball is NOT a fair comparison against a full Python broker shiv pyz. For S6, the realistic Elixir baseline must include the hardware-dep substrate (circuits_i2c/gpio/spi + bandit + plug + jason) that any actual port would compile in. Domain code adds KBs to low-MBs on top; the deps are the bulk.
+- **Verify runnability, not just import.** Timing `python3 -c "import X"` proves nothing about whether the bundled artifact actually executes end-to-end. Use a graceful-shutdown trace (timeout + SIGTERM, watch for shutdown sequence) to confirm the entry-point reaches main() and subsystems initialize.
+- **Don't conflate "killed" with "failed."** A long-running build that the spike author terminates is "not measured," not "failed." Report it as such in the verdict and route through the appropriate decision branch ("ambiguous" or "operator escalation"), not through the "falsifies" branch.
+- **Honor §8.5's leg-menu-is-operator-supplied rule.** When the spike outcome is ambiguous, the verdict author MUST NOT enumerate the operator's possible decision branches as a closed list. Future spike verdicts that encounter the ambiguous branch should explicitly cite §8.5 v0.3 line 569 and decline to pre-decide.
 
-- **S6 falsifies (Python-discipline path wins on the 70%/20% trade):** v0 case collapses. v0 retires; v0.4 closes the RFC with "Python + discipline" as the chosen path, OR operator explicitly authorizes the appliance-OS reframing (§7.1) which would open a separate Nerves-port RFC, NOT continue v0. (A third path — operator invokes a non-pre-supplied additional load-bearing leg per §8.5 v0.3 — is permitted but not pre-mapped here; it would require an explicit v0.4 amendment naming the new leg.)
-- **S6 holds (no Python-discipline path delivers comparable distribution win):** distribution leg survives. v0.4 council ack-pass, then S2-S5 resume. The +47 MB memory regression is acknowledged as a tolerated cost, not papered over.
-- **S6 ambiguous:** operator decides. Default posture is "treat as falsified" — the bar for v0 to continue is positive evidence, not absence of negative evidence.
+These v0.4 lessons apply to S2-S5 + S7 if they ever resume, and to any future versioned spike (e.g., S8+ if added).
+
+**v0.3 spike outcome decision tree (with v0.4 status annotations):**
+
+- **S6 falsifies (Python-discipline path wins on the 70%/20% trade):** v0 case collapses. v0 retires; v0.5 closes the RFC with "Python + discipline" as the chosen path, OR operator explicitly authorizes the appliance-OS reframing (§7.1) which would open a separate Nerves-port RFC, NOT continue v0. (A third path — operator invokes a non-pre-supplied additional load-bearing leg per §8.5 v0.3 — is permitted but not pre-mapped here; it would require an explicit v0.5 amendment naming the new leg.) [v0.4: not the current branch.]
+- **S6 holds (no Python-discipline path delivers comparable distribution win):** distribution leg survives. v0.5 council ack-pass, then S2-S5 resume. The +70.4 MiB memory regression (revised from v0.3's +47 MB estimate against the hello-world skeleton) is acknowledged as a tolerated cost, not papered over. [v0.4: not the current branch.]
+- **S6 ambiguous:** operator decides. Default posture is "treat as falsified" — the bar for v0 to continue is positive evidence, not absence of negative evidence. **[v0.4: THIS IS THE CURRENT BRANCH.** S6 ran with aggregate distribution-win 50-75% / cost ratio 7.5-25%. Default-treat-as-falsified holds: S2-S5 stay PAUSED. Operator decision required to break ambiguity per the three resolution paths in §8.5 v0.4.**]**
 
 **S2-S5 + S7 failure mapping (post-S6-holds):** the v0.2.1 decision tree's per-experiment failure clauses are **NOT** carried forward implicitly under "original gate semantics." The v0.3 mapping below restates them inside the post-S6-holds branch:
 
@@ -686,9 +719,10 @@ The §6.2 promotion gate ("no operator KG entry tagged `lumen-broker-port` AND s
 | v0.2 | ack-pass on v0.1 amendments | Addresses 7 new BLOCKs found in v0.1 amendments; council-clean |
 | v0.2.1 | spike scope rescope (pre-experiment) | Splits §9.3 into production deliverables (§9.3.A) vs. spike experiments (§9.3.B); 7 discrete gates with falsification clauses |
 | v0.2.2 | (UNUSED) spike empirical fold-in (post-spike, all gates green) | Reserved for "all gates green" path; not reached — S1 falsified §8.2 |
-| v0.3 | S1 spike-result fold-in; §8.2 prior falsified; §8.5 honestly re-narrated; S6 promoted; §9.3.A pacing split | **CURRENT**; council ack-pass complete (dialectic NO-SHIP first pass with 2 BLOCKs about §8.5 framing — addressed via text-tightening, no architectural revisit); S2-S5 paused pending S6 |
-| v0.4 | post-S6 outcome | S6 holds → S2-S5 resume under original semantics; S6 falsifies → v0 retires (Python+discipline path) or operator authorizes appliance-OS reframing (separate Nerves RFC) |
-| v1.0 | post-Phase-C | Issued after cutover, only if v0.4 keeps the port alive; folds in phase-experience learnings |
+| v0.3 | S1 spike-result fold-in; §8.2 falsified; §8.5 honestly re-narrated; S6 promoted; §9.3.A pacing split | Council ack-pass complete (dialectic NO-SHIP first pass with 2 BLOCKs about §8.5 framing — addressed via text-tightening, no architectural revisit); S2-S5 paused pending S6 |
+| v0.4 | S6 spike-result fold-in (ambiguous); first verdict withdrawn after council; corrected verdict in KG; v0.4 lessons added to spike methodology | **CURRENT**; pre-ack-pass; S2-S5 stay PAUSED per §9.3.B v0.3 ambiguous-default-treat-as-falsified posture (v0.4 operationally softens to "PAUSED-pending-decision" rather than literal retire — see §8.5 v0.4 acknowledgment) |
+| v0.5 OR retire-without-amendment | post-operator-decision on S6 ambiguity | v0 may close without an amendment if operator chooses retire-to-Python-discipline or appliance-OS reframing (separate Nerves RFC). v0.5 issues only if operator continues v0 — either by weighting ambiguity as ≥70% (S6 holds, S2-S5 resume) or by invoking an additional load-bearing leg per §8.5 v0.3 |
+| v1.0 | post-Phase-C | Issued after cutover, only if v0 continues at all (i.e., v0.5 is reached AND Phase A-C complete); folds in phase-experience learnings |
 
 - **v0** (2026-04-30) — initial draft. Pre-council. Authored after archaeology session.
 - **v0.1** (2026-04-30, same session) — council pass 1 amendments. Three NO-SHIPs returned. Eight BLOCKs addressed:
@@ -768,3 +802,49 @@ The §6.2 promotion gate ("no operator KG entry tagged `lumen-broker-port` AND s
   **No new architectural decisions.** v0.3 is a falsification fold-in plus a re-prioritized spike order plus a §9.3.A pacing split. The v0.4 amendment after S6 is where the next architectural decision lives (port vs retire vs reframe). Per-experiment failures inside the post-S6-holds branch route to v0.5 amendments or retire decisions, not to in-band substrate switches.
 
   v0.3 is **post-ack-pass**. Implementation gate stays closed for the paused §9.3.A items until S6 holds; the two §9.3.A "continue" items may proceed independently.
+
+- **v0.4** (2026-05-01, post-merge of v0.3 PR #275) — **S6 spike-result fold-in (ambiguous); first verdict withdrawn after council; corrected verdict in KG; v0.4 lessons added to spike methodology.**
+
+  S6 ran on Lumen 2026-05-01 after v0.3 council ack-pass cleared. First verdict was filed at KG `2026-05-01T11:02:42` claiming §8.5 distribution leg was FALSIFIED. A 3-agent council adversarial review (parallel agents, scoped to S6 verdict only) returned:
+
+  - **dialectic-knowledge-architect**: NO-SHIP-with-correctable-fix. 4 BLOCKs:
+    - B1: re-committed §8.5 v0.3 leg-menu pre-supply violation (verdict enumerated Branches 1+2; v0.3 §8.5 line 569 explicitly says "leg menu is operator-supplied, not pre-supplied")
+    - B2: status-quo bias counting Python's existing systemd wiring as a Python lead (would also exist post-port)
+    - B3: shiv pinning deploy to apt-python is a real ecosystem concession, not a "close match"
+    - B4: Nuitka killed at 43:21 not measured to fail; Pi-build time is wrong axis (real release pipelines build on dev machine)
+  - **feature-dev:code-reviewer**: NO-SHIP. 3 BLOCKs:
+    - B1 (95% conf): apples-to-oranges — `mix new --sup` skeleton (5.72 MiB) vs full Python broker shiv (43.35 MiB). Realistic Elixir broker tarball with hardware deps would be 15-30 MiB+; size verdict could reverse.
+    - B2 (90% conf): only timed `import` of shiv pyz, never executed `anima-creature` end-to-end. Native C ext chain could fail at `dlopen` time.
+    - B3 (85% conf): unit convention inconsistency (Elixir 5.72 stated as MiB-as-MB, shiv 36.9 as SI-MB).
+  - **live-verifier**: SHIP-with-caveats; 9 VERIFIED, 2 DRIFTs, 1 REFUTED:
+    - REFUTED: shiv pyz CANNOT execute. `python3 anima-creature.pyz` fails with `FileNotFoundError: site-packages/bin/anima-creature` — build defect (`--console-script` flag mis-spec). The "single-file artifact" claim rested on an import test against an artifact that didn't actually run end-to-end.
+    - DRIFT: PR #275 was already MERGED before verdict was filed.
+
+  v0.4 actions taken to address the council:
+
+  1. **First S6 verdict WITHDRAWN**: KG `2026-05-01T11:02:42` status updated to `superseded`; supersession note filed at `2026-05-01T11:22:20`.
+  2. **shiv build fixed**: changed from `--console-script anima-creature` (which expected a `bin/X` script in the venv) to `--entry-point anima_mcp.stable_creature:main` (proper module-entry spec). Resulting pyz is 43.346 MiB / 45,451,738 B (vs broken 35.166 MiB / 36,875,827 B from the prior `--console-script` build) and verified runnable end-to-end via timeout-and-shutdown trace (`[StableCreature] Creature 'Lumen' is alive` → `Entering main loop` → `Shutdown signal received` → exit=124 from SIGTERM).
+  3. **Realistic Elixir release built**: `mix new --sup` + circuits_i2c + circuits_gpio + circuits_spi + bandit + plug + jason; 47s build time on Pi 4; 7.262 MiB tarball / 19 MiB unpacked / 143.4 MiB idle VmRSS. Apples-to-apples comparison restored.
+  4. **Corrected S6 verdict** filed at KG `2026-05-01T11:32:43` severity `medium`. Aggregate distribution-win 50-75% / cost ratio 7.5-25% — qualitatively ambiguous (axis-weighting variance) on the 70%/20% gate. Verdict declines to pre-decide on operator's behalf.
+  5. **Nuitka downgrade**: from "build did not complete in 45min on Pi 4 (a cost data point)" to "NOT MEASURED — killed at 43:21 mid-gcc; Pi-side build time is wrong axis". Acknowledged that completing Nuitka on a dev machine would resolve the ambiguity.
+
+  **Sections amended in v0.4:**
+  - §8.5 — folded corrected S6 measurements (5.97x size penalty / 11.7x footprint penalty / +70.4 MiB Python memory advantage); aggregate 50-75% on 70% gate; three resolution paths for operator (complete Nuitka / weight axes / invoke additional leg); §1.1 items 2 + 3 (PR #11 hand-rolled bus retry, PR #14 D22/D24 refresh hack) named explicitly as bugs that "Python + discipline" leaves as-is.
+  - §9.3.B — gate table reshaped: S1 DONE, S6 DONE-AMBIGUOUS, S2-S5 + S7 stay PAUSED. Decision tree annotated with v0.4 status (ambiguous = current branch; falsifies/holds = not current). v0.4 lessons added to spike methodology (apples-to-apples / runnability / killed-≠-failed / honor leg-menu-is-operator-supplied).
+  - §10 — version ladder: v0.3 marked complete; v0.4 added as CURRENT; v1.0 gated on v0.5 keeping the port alive (was v0.4).
+  - Frontmatter status, top-of-doc banner: reflect v0.4 / S6-ambiguous / S2-S5 paused.
+
+  **Sections unchanged in v0.4:** §1, §2, §3, §4, §5, §6, §7, §8.1, §8.2, §8.3, §8.4, §9.1, §9.2, §9.3.A, §9.4, §9.4.1, §9.5. Architecture, rollout plan, schema contracts, lease-plane status, supervision strategy, hardware ownership lines, crash-recovery edge cases unchanged.
+
+  **No new architectural decisions.** v0.4 is a measurement fold-in plus a status-table update plus methodology lessons. The next architectural decision lives in either (a) a v0.5 amendment if v0 continues, or (b) explicit retire-without-amendment if operator chooses retire-to-Python-discipline or appliance-OS reframing — the v0.3 tree permits closure without amendment, and v0.4 does not pre-suppose v0 continues.
+
+  **Council ack-pass on v0.4 amendments (parallel agents, 2026-05-01, scoped to v0.4 changes only):**
+  - dialectic-knowledge-architect: NO-SHIP-with-correctable-fix — 1 BLOCK (§9.3.B S2 row enumerated a/b/c as a closed list, re-committing the very leg-menu rule violation that §8.5 v0.4 lessons just installed) + 2 CONCERNs (default-posture divergence "treat-as-falsified → S2-S5 PAUSED" softens v0.3's literal retire-default; severity-downgrade rationale + Pi-CI runner caveat slipped into §10 narrative without §8.5/§9.3.B body support) + 1 NIT (instrument-noise vs axis-weighting-variance) + 1 DRIFT (pre-deciding v0.5 will exist). Addressed in v0.4 body before commit: S2 row rewritten to drop a/b/c enumeration and cross-reference §8.5 v0.4; explicit divergence acknowledgment paragraph added to §8.5 v0.4; severity rationale struck from §10; lsof CI runner caveat folded into §9.3.B S6 cost row; "instrument noise" replaced with "axis-weighting variance" everywhere; version ladder + narrative reframed to allow retire-without-amendment.
+  - feature-dev:code-reviewer: NO-SHIP — 1 BLOCK (`45.35 MiB` shiv pyz size in §9.3.B and §10 was the SI-MB value mislabeled as MiB; correct MiB-from-byte-count is `43.346 MiB`; this re-introduced the EXACT unit-convention error that was B3 of the withdrawn first S6 verdict) + 2 CONCERNs (S2 condition (a) "fails-cleanly" register-shift; §8.5/§9.3.B same-three-paths divergence in wording) + 1 NIT (frontmatter status field too narrative). Addressed: all `45.35 MiB` → `43.346 MiB`; downstream `222 MiB total` → `~220.3 MiB total` (43.346 + 177); S2 row rewritten (also resolves "fails-cleanly" register-shift); frontmatter status trimmed to one-liner.
+  - live-verifier: SHIP — 8 VERIFIED, 2 minor DRIFTs (broker uptime advanced 3d→12d since measurement; broker VmRSS drifted 73.0 → 75.0 MiB over 12 days — both staleness-of-snapshot, not fabrications). shiv pyz runnability VERIFIED end-to-end (`[StableCreature] Creature 'Lumen' is alive` → `Entering main loop` → `Shutdown signal received` → exit=124 from SIGTERM).
+
+  All v0.4 BLOCKs textual; no architectural revisit required.
+
+  Implementation gate stays closed for paused §9.3.A items until operator decides on S6.
+
+  KG anchors: corrected S6 verdict `2026-05-01T11:32:43`; withdrawn S6 verdict `2026-05-01T11:02:42` (status=superseded); withdrawal note `2026-05-01T11:22:20`; S1 verdict `2026-05-01T09:29:02`; v0.3 RFC entry `2026-05-01T09:59:41`.
