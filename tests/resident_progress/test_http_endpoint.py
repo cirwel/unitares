@@ -77,6 +77,6 @@ async def test_endpoint_status_field_uses_priority_resolver(test_db, monkeypatch
     assert all(
         r["status"] in {
             "OK", "flat-candidate", "silent", "source-error",
-            "unresolved", "startup-grace",
+            "unresolved", "startup-grace", "never-seen",
         } for r in rows
     )
