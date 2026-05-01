@@ -508,6 +508,9 @@ class SentinelAgent(GovernanceAgent):
 
     async def _run_cycle_inner(self) -> CycleResult | None:
         self._cycle_count += 1
+        # Poll forced-release alarms (RFC v0.8 §7.10 + §7.11.5).
+        # Wrapped in try/except so DB unreachable doesn't break the cycle.
+        await self._emit_forced_release_alarms()
         findings = self.fleet.analyze(self_agent_id=self.agent_uuid or "")
         fleet = self.fleet.fleet_summary()
 
@@ -575,6 +578,56 @@ class SentinelAgent(GovernanceAgent):
             confidence=confidence,
             response_mode="compact",
         )
+
+    async def _emit_forced_release_alarms(self) -> None:
+        """Poll lease_plane_events for forced-release alarms; emit findings.
+
+        State: stores last_event_ts as ISO8601 string under
+        `forced_release_alarm.last_event_ts` so successive cycles don't
+        re-emit alarms for already-seen events.
+
+        DB URL: GOVERNANCE_DATABASE_URL env var, default to localhost governance.
+        Failures are logged and swallowed — alarm polling MUST NOT break the
+        Sentinel cycle.
+        """
+        from datetime import datetime
+        from agents.sentinel.forced_release_alarm import poll_forced_release_alarms
+
+        db_url = os.environ.get(
+            "GOVERNANCE_DATABASE_URL",
+            "postgresql://postgres:postgres@localhost:5432/governance",
+        )
+        state = self.load_state()
+        cursor_str = state.get("forced_release_alarm", {}).get("last_event_ts")
+        cursor = datetime.fromisoformat(cursor_str) if cursor_str else None
+        try:
+            alarms, new_cursor = await poll_forced_release_alarms(
+                db_url=db_url, last_event_ts=cursor,
+            )
+        except Exception as e:
+            log(f"forced-release alarm poll failed: {e}")
+            return
+
+        for alarm in alarms:
+            severity_tag = alarm.severity.upper()
+            log(f"FORCED-RELEASE ALARM: [{severity_tag}] {alarm.summary}")
+            if alarm.severity == "high":
+                notify("Sentinel forced-release", alarm.summary)
+            post_finding(
+                event_type="sentinel_forced_release_alarm",
+                severity=alarm.severity,
+                message=alarm.summary,
+                agent_id=self.agent_uuid or "sentinel",
+                agent_name="Sentinel",
+                fingerprint=alarm.fingerprint,
+                extra={"alarm_kind": alarm.kind, **alarm.extra},
+            )
+
+        if new_cursor is not None and new_cursor != cursor:
+            state.setdefault("forced_release_alarm", {})["last_event_ts"] = (
+                new_cursor.isoformat()
+            )
+            self.save_state(state)
 
     async def on_after_checkin(
         self, client: GovernanceClient, checkin_result: CheckinResult, cycle_result: CycleResult,
