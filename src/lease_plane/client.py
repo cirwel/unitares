@@ -8,6 +8,8 @@ handler paths that would block the anyio task group.
 from __future__ import annotations
 
 import json
+import random
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -112,6 +114,60 @@ class LeasePlaneClient:
     def acquire(self, request: AcquireRequest) -> AcquireResult:
         payload = self._request_json("POST", "/v1/lease/acquire", request.model_dump(mode="json"))
         return _parse_acquire(payload)
+
+    def acquire_with_retry(
+        self,
+        request: AcquireRequest,
+        *,
+        max_attempts: int = 5,
+        floor_s: float = 0.1,
+        ceiling_s: float = 5.0,
+        sleep: Callable[[float], None] | None = None,
+        rng: Callable[[], float] | None = None,
+    ) -> AcquireResult:
+        """Acquire with jittered exponential backoff on `held_by_other`.
+
+        RFC v0.8 §7.3.3 contract: floor 100ms, ceiling 5s, full jitter
+        (per AWS Architecture Blog convention). `retry_after_hint_ms` from
+        the server (set in the §7.3.2 extended typed-absence shape) is
+        honored as a per-attempt floor — the wait is at least that long.
+
+        Terminal results (no retry):
+          - AcquireOk
+          - AcquireServiceUnavailable (advisory escape valve)
+          - AcquirePermissionDenied / AcquireSchemaInvalid (caller bug)
+        Only `held_by_other` triggers retry. After max_attempts, the final
+        held_by_other is returned to the caller.
+
+        Args:
+            max_attempts: total acquire attempts including the first (default 5).
+            floor_s: minimum backoff per attempt (default 0.1s = 100ms).
+            ceiling_s: maximum backoff per attempt (default 5.0s).
+            sleep: injectable sleep for test determinism (default time.sleep).
+            rng: injectable [0,1) random for test determinism (default random.random).
+        """
+        from src.lease_plane import (
+            AcquireHeldByOther,
+            AcquireOk,
+        )
+
+        sleep_fn = sleep or time.sleep
+        rand_fn = rng or random.random
+
+        result: AcquireResult = self.acquire(request)
+        attempt = 1
+        while attempt < max_attempts and isinstance(result, AcquireHeldByOther):
+            # Full-jitter exponential backoff. Cap exponent to avoid overflow.
+            exp_cap = min(2 ** min(attempt - 1, 10) * floor_s, ceiling_s)
+            backoff = rand_fn() * exp_cap
+            backoff = max(backoff, floor_s)
+            # retry_after_hint_ms (server-provided) raises the floor for THIS attempt only.
+            hint_floor = (result.retry_after_hint_ms or 0) / 1000.0
+            backoff = max(backoff, hint_floor)
+            sleep_fn(backoff)
+            result = self.acquire(request)
+            attempt += 1
+        return result
 
     def status(self, surface_id: str) -> StatusResult:
         payload = self._request_json("GET", "/v1/lease/status", None, query={"surface_id": surface_id})
