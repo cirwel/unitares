@@ -1,5 +1,5 @@
 ---
-status: DRAFT-v0.2 (council pass 1 + ack-pass complete; council-clean, implementation-gate ready)
+status: DRAFT-v0.2.1 (council pass 1 + ack-pass complete; spike scope rescoped pre-experiment; council-clean, implementation-gate ready)
 authored: 2026-04-30
 amended: 2026-04-30 (v0, v0.1, v0.2 same session)
 council_pass_1: 2026-04-30
@@ -534,18 +534,46 @@ The architectural argument is therefore a *style* argument, not a fault-count ar
 - [ ] §7.5 hot-reload — CLOSED out of v0; restart cost named
 - [ ] §7.6 cross-language contract — JSON Schema floor
 
-### 9.3 Phase A pre-flight checklist (revised v0.2 — must produce evidence before Phase A starts; promotes spike output to v0.3 if gaps surface)
+### 9.3 Pre-Phase-A work (revised v0.2.1 — split into production deliverables vs. spike experiments; the original §9.3 list mixed these and obscured the value of the spike)
 
-- [ ] **JSON Schema file checked in** at `unitares/docs/schemas/anima_state_envelope.v0.json`. Includes `additionalProperties` discipline per §7.6 strictness model. **PRECONDITION** for the validation round-trip below.
-- [ ] **Cross-language validator corpus contract test** at `unitares/tests/test_anima_state_envelope_schema.py` — 50+ recorded envelopes from broker SHM, validated by both `jsonschema` (Python) and `ex_json_schema` (Elixir) with format-validator opt-in; test fails if validators disagree on any entry.
-- [ ] **Server fallback path: typed-absence implemented and shipped.** Multi-site change per §4.2.2 server-side scope (5 sites: `loop_phases.py`, `server.py:948-966`, `server.py:94`, `server_state.py:58-59`, downstream callers). `SERVER_GOVERNANCE_FALLBACK_SECONDS` direct-UNITARES code path **deleted** (not bypassed). New constant `SHM_BROKER_STALE_SECONDS = 30s` added. Server returns the §4.2.2 typed-absence shape table. Verified by integration test that triggers each of the 5 staleness states and asserts return shape.
-- [ ] **`unitares-bridge.service` systemd unit** installed and validated. Reads `anima_state.json`, computes EISV, writes `anima_state_governance.json`, posts to UNITARES. Includes `first_check_in` startup-disambiguation logic (§9.4).
-- [ ] **`audit.tool_usage` write path** instrumented in anima server. New code path inserts row with `error_type` field for the §6.1 regression trigger. Tested with synthetic SHM parse failure.
-- [ ] **Elixir on Pi — single sensor (BMP280) GenServer** reading and emitting telemetry. ~3 days. Surfaces gaps that promote RFC to v0.3.
-- [ ] **SHM lock parity verified.** Elixir writer acquires `/dev/shm/anima_state.lock` via `:os.cmd("flock ...")` or NIF; round-trip with Python writer over 1000 concurrent acquisitions shows no torn writes.
-- [ ] **`.tmp` orphan cleanup** verified on Elixir startup (per §4.2 amendment).
-- [ ] **Elixir RSS measurement** on Pi 4. Confirm vanilla Elixir resident size (claim 25-40 MB unverified).
-- [ ] **Phase A divergence comparator** ships and emits to telemetry, with §6.1 thresholds (including the v0.2 social-boost-window exclusion row) as gate logic.
+The original v0.2 §9.3 mashed together production code that must ship before Phase A with experiments meant to *discover* unknowns. v0.2.1 splits these into two clearly-labeled subsections so each gets the right shape: deliverables get owners and ship dates; spike experiments get hypotheses and discrete go/no-go gates.
+
+#### 9.3.A Production deliverables (must ship before Phase A starts)
+
+These are code/config changes with defined endpoints. Each must be shipped, tested, and visible in the running system before the divergence comparator turns on.
+
+- [ ] **JSON Schema file** at `unitares/docs/schemas/anima_state_envelope.v0.json`. `additionalProperties: true` at top level, `false` in named sub-objects (§7.6 strictness model). **PRECONDITION** for §9.3.A validator test below.
+- [ ] **Cross-language validator corpus contract test** at `unitares/tests/test_anima_state_envelope_schema.py` — 50+ recorded envelopes from broker SHM, validated by both `jsonschema` (Python) and `ex_json_schema` (Elixir) with format-validator opt-in. Test fails if validators disagree on any entry. (See §7.6 for `format` and regex flavor caveats.)
+- [ ] **Server fallback typed-absence path** — multi-site refactor per §4.2.2 (5 sites: `loop_phases.py:23-47`, `server.py:948-966`, `server.py:94`, `server_state.py:58-59`, downstream callers). `SERVER_GOVERNANCE_FALLBACK_SECONDS` direct-UNITARES code path **deleted, not bypassed**. New constant `SHM_BROKER_STALE_SECONDS = 30s`. Verified by integration test that triggers each of the 5 staleness states and asserts the §4.2.2 return-shape table.
+- [ ] **`unitares-bridge.service` systemd unit** (per §6.3 sketch). Reads `anima_state.json`, computes EISV, writes `anima_state_governance.json`, posts to UNITARES. Includes `first_check_in` restart-state persistence at `~/.anima/unitares_bridge_state.json` (§9.4).
+- [ ] **`audit.tool_usage` write path** instrumented in anima server. New code inserts row with `error_type='shm_parse'` on parse failure, and `tool_name=anima_broker_tick` for broker operational telemetry. Live-verifier confirmed the table is currently empty from server (0 rows). Tested with a synthetic SHM parse failure injection.
+
+#### 9.3.B The Spike (~5 days; discrete experiments with go/no-go gates)
+
+The spike is **not** "build a small piece of the broker and ship it." It is a series of cheap experiments designed to surface unknowns the council passes couldn't catch — runtime behavior, library quirks, hardware timing, restart semantics, distribution feasibility. Each experiment ends in a measurable gate. A failed gate halts the spike and forces a v0.3 amendment with the finding folded in.
+
+**Important framing**: the spike's job is to make us *know what we don't know* before committing 4-8 weeks to the full port. The §9.3.A deliverables can proceed in parallel where independent (JSON Schema, audit instrumentation), but the divergence comparator (§9.3.A) can't ship until S3 + S5 below pass.
+
+| # | Experiment | Hypothesis being tested | Duration | Gate (go/no-go) |
+|---|---|---|---|---|
+| **S1** | Cold-start sanity | Vanilla Elixir on Raspbian boots, builds, runs in the Pi 4 resource budget | 0.5 day | Idle RSS ≤ 40 MB (per §8.2 unverified claim); cold-start under 5s; `mix release` produces a tarball under 30 MB. **Falsifies §8.2 if RSS > 60 MB.** |
+| **S2** | BMP280 GenServer | `circuits_i2c` reads BMP280 with parity to Python's `smbus2` | 1 day | Read-latency within ±10% of Python baseline over 1000 reads; zero I2C errors at the same cadence as broker today; sensor handshake succeeds on Pi reboot |
+| **S3** | SHM lock parity | Elixir writer + Python broker can share `/dev/shm/anima_state.lock` via fcntl LOCK_EX without torn writes | 0.5 day | 1000 concurrent acquisitions across two processes (Python writes `anima_state.json`, Elixir writes `anima_state_elixir.json`, both contend on `anima_state.lock`); zero torn writes; Python broker reads Elixir's envelope and parses cleanly via `jsonschema`. **Falsifies §4.2 lock-parity contract if any torn writes appear.** |
+| **S4** | Supervisor cascade | `rest_for_one` correctly restarts BMP280 child when I2CBus dies, with fresh handle | 0.5 day | Kill I2CBus GenServer process; observe BMP280 child restart sequence; cascade completes in ≤ 500ms; sensor reads resume without manual intervention; no FD leak (verify via `lsof -p <pid>`). **Falsifies §4.1 v0.2 supervisor-strategy decision if cascade behavior differs from spec.** |
+| **S5** | Bridge stub + typed-absence | The §4.2.2 two-file freshness table actually behaves the way the RFC names it | 1 day | Minimal Python `unitares-bridge` stub reads `anima_state_elixir.json` and writes `anima_state_governance.json`; refactored anima server (from §9.3.A) reads both; kill bridge → server returns `governance: degraded` per the table within 210s; re-launch bridge → server returns to normal within 30s. **Falsifies §4.2.2 if any of the 5 fresh/stale states deviates from the table.** |
+| **S6** | Distribution falsification | Per §8.5 — does PyOxidizer/Nuitka/shiv deliver ≥70% of the distribution win at ≤20% the cost of the BEAM port? | 1 day | Bundle the current Python broker as a single binary with PyOxidizer (or equivalent); compare cold-start time, tarball size, dependency footprint, op complexity vs. Elixir release. **If PyOxidizer-Python wins at this trade, escalate to operator** — the §8.5 conjunction case collapses; v0 needs reconsideration before committing the remaining 3-7 weeks. |
+| **S7** | Phase A divergence comparator dry-run | Comparator code (§9.3.A item) actually exercises the §6.1 thresholds against real envelopes | 0.5-1 day | Run Python broker + Elixir BMP280 from S2 in parallel for 24h on a development Pi; emit diffs to telemetry; verify §6.1 thresholds (sensor floats ≤ 1% rel, structural keys exact, social-boost-window exclusion) trigger correctly on synthetic disagreements. |
+
+**Spike outcome decision tree:**
+
+- **All 7 gates green**: RFC stays at v0.2.1, Phase A starts. The spike's empirical findings (RSS measured, latency measured, restart timing measured) are folded into §1.1 / §8.2 as live-verified facts; that's a v0.2.2 textual update, not a re-design.
+- **S1, S2, or S3 fails**: hardware/library substrate doesn't actually work — RFC needs v0.3 architectural revisit. Possible outcomes: switch to Nerves (was deferred per §7.1), switch back to Python with discipline-by-convention, or escalate to operator on whether to proceed at all.
+- **S4 fails**: supervisor strategy was wrong despite ack-pass; v0.3 amendment to §4.1.
+- **S5 fails**: two-file freshness table doesn't survive contact; v0.3 amendment to §4.2.2.
+- **S6 falsifies**: §8.5 distribution leg collapses; operator decides whether the *style* argument alone justifies v0 or whether the project ends here. **This is the hardest possible outcome and the one most worth knowing before week 4.**
+- **S7 surfaces issues**: §6.1 thresholds need adjustment; v0.2.2 textual update.
+
+**Why 5 days, not 3:** the v0 estimate of "3 days" treated the spike as just S2 (BMP280 GenServer). The actual unknowns the council passes couldn't catch are spread across S1-S7. Three of those experiments (S5, S6, S7) cannot start until the production deliverables in §9.3.A are at least partially shipped, so the wall-clock is longer than raw experiment days; expect calendar 5-7 days with parallel work.
 
 ### 9.4 Crash-recovery and edge cases (revised v0.2 — addresses code-reviewer + dialectic ack-pass CONCERNs)
 
@@ -578,8 +606,10 @@ The §6.2 promotion gate ("no operator KG entry tagged `lumen-broker-port` AND s
 |---|---|---|
 | v0 | initial draft | — |
 | v0.1 | council pass 1 amendments | NO-SHIP returned 3/3; v0.1 addresses 8 BLOCKs from pass 1 |
-| v0.2 | ack-pass on v0.1 amendments | **CURRENT**; addresses 7 new BLOCKs found in v0.1 amendments; council-clean, implementation-gate ready |
-| v0.3 | spike feedback (only if spike surfaces gaps) | Optional; if §9.3 BMP280 GenServer spike surfaces issues, those go in v0.3 |
+| v0.2 | ack-pass on v0.1 amendments | Addresses 7 new BLOCKs found in v0.1 amendments; council-clean |
+| v0.2.1 | spike scope rescope (pre-experiment) | **CURRENT**; splits §9.3 into production deliverables (§9.3.A) vs. spike experiments (§9.3.B); 7 discrete gates with falsification clauses |
+| v0.2.2 | spike empirical fold-in (post-spike, all gates green) | Live-verified RSS / latency / restart timing folded into §1.1 / §8.2 as facts; no architectural change |
+| v0.3 | spike-found architectural gap | Only if S1-S5 fail or S6 falsifies; would amend the relevant sections |
 | v1.0 | post-Phase-C | Issued after cutover; folds in phase-experience learnings |
 
 - **v0** (2026-04-30) — initial draft. Pre-council. Authored after archaeology session.
@@ -607,3 +637,18 @@ The §6.2 promotion gate ("no operator KG entry tagged `lumen-broker-port` AND s
   Plus CONCERN-level changes: §2.1 `:925-998` framing tightened (the actual `bridge.check_in()` is at `:982-989`; the range contains the call); §3.3 hw:/ IDs migrated to device-level granularity (`hw:/spi/spidev0.0`, full GPIO pin set D22/D23/D24/D27); §3.4 trigger reworded "I2C-conflict-class" → "shared-bus-conflict-class" (LEDs are SPI); §4.2 startup `.tmp` orphan cleanup added; §4.2.2 server-side change scope clarified as 5-site refactor (not "one-line"); §4.2.2 server fallback delivery framing reconciled (v0 deliverable + spike requirement + pre-Phase-A — read consistently as "must ship before Phase A starts; verified during spike"); §6.1 social-boost-window exclusion row added to diff thresholds; §6.1 `audit.tool_usage` field clarified (`error_type='shm_parse'`); §6.3 ordered systemd cutover transcript with PartOf= rewiring atomicity; §6.3 `unitares-bridge.service` unit-file sketch; §7.4/§7.6 specifics (strictness mode, validator equivalence, corpus contract test); §8.5 falsification clause for distribution leg; §9.3 Phase A pre-flight checklist rewritten as concrete deliverables (was spike list); §9.4.1 KG tag canonicalization (canonical `lumen-broker-port`, exact-match query); §9.5 Phase C cross-link; §10 explicit version ladder.
 
   v0.2 NITs not addressed in body but deferred to spike feedback: §2.1 diagram column conflation (LED + AutonomousVoice stacked in same column visually); diagram is correct in legend but column-stacking is cosmetic.
+
+- **v0.2.1** (2026-05-01, post-merge of v0.2 PR #265) — **spike scope rescope (pre-experiment)**. v0.2's §9.3 mashed production deliverables together with spike experiments under one heading; this version splits them into §9.3.A (production deliverables — JSON Schema, server refactor, bridge service, audit instrumentation) and §9.3.B (the actual spike — 7 discrete experiments with go/no-go gates).
+
+  The spike grew from "BMP280 GenServer reads + telemetry, ~3 days" to a 7-experiment ladder (~5 days, ~5-7 calendar days with parallel work):
+  - S1: cold-start sanity (falsifies §8.2 RSS claim if > 60 MB)
+  - S2: BMP280 GenServer (parity with `smbus2`)
+  - S3: SHM lock parity (falsifies §4.2 lock-parity contract if torn writes)
+  - S4: supervisor cascade (falsifies §4.1 v0.2 strategy decision if behavior differs)
+  - S5: bridge stub + typed-absence (falsifies §4.2.2 two-file freshness table)
+  - S6: distribution falsification — does PyOxidizer/Nuitka deliver ≥70% of BEAM's distribution win at ≤20% the cost? If yes, §8.5 conjunction collapses, project rethinks
+  - S7: divergence comparator dry-run (24h sample with §6.1 thresholds active)
+
+  Each experiment names a falsifier explicitly. The spike outcome decision tree (in §9.3.B) maps each gate failure to a specific RFC version bump (v0.2.2 textual fold-in if all green; v0.3 architectural revisit if S4 or S5 fails; operator escalation if S6 falsifies).
+
+  **No architectural change.** This version only restructures §9.3 and adds the v0.2.1, v0.2.2 entries to the version ladder. All other sections unchanged from v0.2.
