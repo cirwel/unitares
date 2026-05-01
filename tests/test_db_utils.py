@@ -116,6 +116,7 @@ async def ensure_test_database_schema() -> None:
         await _execute_sql_file(conn, "db/postgres/migrations/025_lease_plane_invariants.sql")
         await _execute_sql_file(conn, "db/postgres/migrations/026_lease_plane_grammar.sql")
         await _execute_sql_file(conn, "db/postgres/migrations/027_lease_plane_deprecation.sql")
+        await _execute_sql_file(conn, "db/postgres/migrations/028_lease_plane_trigger_fix.sql")
 
         # Ensure partitioned audit tables can accept inserts for current month.
         await _execute_sql_file(conn, "db/postgres/partitions.sql")

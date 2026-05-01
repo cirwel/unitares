@@ -138,17 +138,44 @@ Per-agent migration mapping (committed):
 
 Rationale for splitting from PR 2: the canonicalize.py helper is reviewable independently; coupling it to a fleet-wide surface_id migration risked both reviews stalling on the wider impact. PR 2 shipped the helper; PR 2.5 ships the migration + validator together — atomic landing is the safety contract (validator without migration = bricked fleet; migration without validator = silently inconsistent).
 
-## PR 3 — §7.11 deprecation CLI + Sentinel forced-release alarm (planned, not yet drafted)
+## PR 3a — §7.11 deprecation CLI (this branch: impl/lease-plane-phase-a-pr3a-deprecate-cli)
+
+Scope shipped:
+- `scripts/dev/lease_plane_deprecate.py` standalone Python CLI implementing the 4-phase operator-driven deprecation procedure (RFC §7.11.2):
+  - `deprecate <kind>` — Phase 0: serializable transaction + advisory lock + INSERT into `deprecated_schemes` (idempotent via `ON CONFLICT DO NOTHING`).
+  - `deprecation-sweep <kind>` — Phase 2: idempotent force-release of surviving leases per RFC §7.11.4 predicate (`WHERE released_at IS NULL AND surface_kind = $1 FOR UPDATE SKIP LOCKED`); emits `lease.deprecation_swept` events with `deprecation_id` payload for batch correlation.
+  - `deprecation-finalize <kind>` — Phase 3: records `check_migrated_at` (the actual ALTER TABLE drop is operator-issued in same session per §7.11.2).
+  - `deprecation-status [<kind>]` — operator visibility into `deprecated_schemes` table.
+- Force-release authorization gated on `LEASE_FORCE_RELEASE_TOKEN` from env or `~/.config/cirwel/secrets.env`. `GOVERNANCE_TOKEN` does NOT authorize (RFC §7.10).
+- Migration 028 (`db/postgres/migrations/028_lease_plane_trigger_fix.sql`): drops the now-redundant `surface_kind IS DISTINCT FROM` check from `lease_plane.enforce_immutable_lease_fields()`. Surfaced during PR 3a TDD — after migration 026 made `surface_kind` a generated column, the BEFORE UPDATE trigger sees `NEW.surface_kind = NULL` (generated values populate AFTER triggers fire), bricking ANY UPDATE on `surface_leases` including the §7.11 sweep. `surface_id` immutability is unchanged and transitively guards the derived `surface_kind`.
+
+### PR 3a — RFC gate → code surface → test name → status table
+
+| Gate | Code | Test | Status |
+|------|------|------|--------|
+| §7.11 Phase 0 INSERT into deprecated_schemes | `scripts/dev/lease_plane_deprecate.py::deprecate_cmd` | `test_deprecate_cli_phase_0_inserts_row` | DONE |
+| §7.11 Phase 0 idempotent (ON CONFLICT DO NOTHING) | same | `test_deprecate_cli_idempotent_no_duplicate_row` | DONE |
+| §7.11.1 Phase 0 unknown-kind rejected at catalog FK | same | `test_deprecate_cli_unknown_kind_rejected` | DONE |
+| §7.11.4 sweep predicate idempotent on partial-failure re-run | `deprecation_sweep_cmd` | `test_deprecation_sweep_predicate_idempotent` | DONE |
+| §7.11.3 sweep emits `lease.deprecation_swept` events with deprecation_id | same | `test_deprecation_sweep_emits_lease_deprecation_swept_events` | DONE |
+| §7.11.2 Phase 3 records check_migrated_at | `deprecation_finalize_cmd` | `test_deprecation_finalize_records_check_migrated_at` | DONE |
+| §7.10 sweep requires `LEASE_FORCE_RELEASE_TOKEN`; rejects `GOVERNANCE_TOKEN` | sweep auth path | `test_deprecation_sweep_requires_force_release_token` | DONE |
+| §7.11.7 race-window mitigation (serializable tx + advisory lock) | `deprecate_cmd` SQL | (covered by serializable transaction wrapping in implementation; full concurrent-acquire test deferred to PR 3b once Sentinel alarm + lease acquire path are in scope together) | PARTIAL |
+| Migration 028 trigger fix | `db/postgres/migrations/028_lease_plane_trigger_fix.sql` | (covered transitively by sweep tests — they UPDATE `surface_leases` and would fail without 028) | DONE |
+
+## PR 3b — §7.10/§7.11.5 Sentinel forced-release alarm rule (planned, not yet drafted)
 
 Scope (anticipated):
-- `lease-plane` CLI commands: `deprecate`, `deprecation-sweep`, `deprecation-finalize` (standalone Python CLI in `scripts/dev/`, per operator decision 2026-04-30).
-- `LEASE_FORCE_RELEASE_TOKEN` integration test (covers §7.10 + §7.11 force-release wiring).
-- Phase 2 sweep job with idempotent predicate.
-- Phase 0 race-window mitigation (serializable-tx + advisory lock).
-- **Sentinel forced-release alarm rule** (deferred from PR 1): adds direct lease_plane_events DB access to Sentinel; per-event alarm for ad-hoc `event_type='forced'`, batched-by-`deprecation_id` for `event_type='lease.deprecation_swept'`. Default Sentinel cadence per operator decision 2026-04-30.
-- 6 §7.11 Phase A test gates + 1 §7.10 force-release test + 1 Sentinel alarm wiring test.
+- Adds direct `lease_plane.lease_plane_events` DB access to `agents/sentinel/agent.py` (currently no DB access exists; Sentinel reads fleet state via WebSocket).
+- Per-event alarm rule for `event_type='forced'` AND `event_type != 'lease.deprecation_swept'` (per RFC §7.10 alarm-on-every-event for ad-hoc force-release).
+- Batched alarm rule for `event_type='lease.deprecation_swept'`: groups by `deprecation_id`, emits one summary alarm per batch after `sweep_completed_at` is set on the corresponding `deprecated_schemes` row (per RFC §7.11.5 batch suppression).
+- Polling cadence matches existing Sentinel rules (operator decision 2026-04-30).
+- Tests:
+  - `test_sentinel_force_release_alarm_wired` — per-event alarm fires for ad-hoc forced events.
+  - `test_sentinel_batch_alarm_for_deprecation_sweep` — batched alarm fires once per deprecation_id, not N times.
+  - `test_phase_zero_acquire_race_blocked` (deferred from PR 3a) — full integration test covering the §7.11.7 race window with concurrent acquire attempts during Phase 0 mark.
 
-Rationale: depends on PR 1 (catalog + deprecated_schemes tables must exist) and on operator-runbook content for the CLI documentation. Lands after both.
+Rationale for splitting from PR 3a: Sentinel adding DB access is new architectural surface; coupling it with the deprecation CLI doubles the review burden. PR 3a ships the CLI (operator-facing); PR 3b ships the alarm wiring (telemetry-facing). The events the alarm consumes already exist after PR 3a lands.
 
 ## PR 4+ — Remaining gates
 
