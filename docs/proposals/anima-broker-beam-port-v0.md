@@ -1,10 +1,12 @@
 ---
-status: DRAFT-v0.2.1 (council pass 1 + ack-pass complete; spike scope rescoped pre-experiment; council-clean, implementation-gate ready)
+status: DRAFT-v0.3 (S1 ran; §8.2 prior falsified; §8.5 honestly re-narrated as unchanged two-leg conjunction with §8.2 prior gone; S2-S5 paused; §9.3.A pacing split; council ack-pass on v0.3 complete — 2 BLOCKs from dialectic addressed via text-tightening, no architectural revisit)
 authored: 2026-04-30
-amended: 2026-04-30 (v0, v0.1, v0.2 same session)
+amended: 2026-05-01 (v0.3 — S1 spike-result fold-in, post-merge of v0.2.1 PR #272)
+amended_prior: 2026-04-30 (v0, v0.1, v0.2 same session)
 council_pass_1: 2026-04-30
 ack_pass_1: 2026-04-30
-author_session: agent-c9e03e26-33c (claude_code-claude_c9e03e26)
+ack_pass_v0_3: 2026-05-01
+author_session: agent-c9e03e26-33c (claude_code-claude_c9e03e26); v0.3 amendments by agent-05e52624-2a1 (claude_code-claude_05e52624)
 review_target: |
   Council pass 1 complete (parallel agents, 2026-04-30; same precedent as
   surface-lease-plane-v0.md):
@@ -23,6 +25,14 @@ review_target: |
   The 7 new ack-pass BLOCKs concentrated in the v0.1 surface-area additions
   (bridge process, two-file SHM, supervision-tree split, JSON Schema deliverable);
   all addressed via text-tightening, no architectural revisit required.
+
+  Ack-pass on v0.3 amendments complete (parallel agents, 2026-05-01; scoped to
+  v0.3 changes only — S1 result fold-in, §8.2/§8.5 reframing, §7.1 reopen, §9.3.B
+  decision-tree restructure):
+    - dialectic-knowledge-architect: 2 BLOCKs, 2 CONCERNs, 3 DRIFTs, 1 NIT — NO-SHIP first pass; addressed in v0.3 body before merge (§8.5 conjunction recompute corrected from "three legs / memory leg collapsed" to honest "two-leg unchanged in form, implicit §8.2 prior gone"; §8.1 caveated; §9.3.A pacing split added; §7.1 label tightened; §9.3.B S2-S5 fail-paths mapped)
+    - feature-dev:code-reviewer: 1 CONCERN, 2 NITs, SHIP — addressed (S2-S5 fail-paths added to decision tree; §8.2 :erlang.memory() sentence tightened; numeric internal consistency verified)
+    - live-verifier: 6 VERIFIED, 2 minor DRIFTs, SHIP-with-caveats — addressed (Elixir runtime banner vs `dpkg -l` package versions separated; tarball byte counts for both default-config and strip_beams rebuild documented)
+  All v0.3 BLOCKs were addressable via text-tightening; no architectural revisit required.
 provenance: |
   Same-session synthesis. v0 was a single-author sketch (claude_code-claude_c9e03e26,
   2026-04-30) written after operator-decision archaeology (KG
@@ -63,7 +73,7 @@ unblocks: |
 
 # Proposal: Anima Broker BEAM Port v0 (Pi-side coordination kernel)
 
-> **Status: DRAFT-v0.2, council-clean, implementation-gate ready.** Follow-on to `surface-lease-plane-v0.md`. The lease plane is the **Mac-side** first wedge for BEAM/OTP. This RFC is the **Pi-side** second wedge: porting the `anima-creature` broker to a single-node Elixir application that owns Lumen's hardware lifecycle. Both nodes are single-node by design (no Distributed Erlang between them); they coordinate via HTTP and Postgres heartbeat-TTL, the same patterns the Python fleet uses today.
+> **Status: DRAFT-v0.3, post-S1 (§8.2 prior falsified), council ack-pass on v0.3 complete.** S1 ran on Lumen 2026-05-01 and falsified the §8.2 RSS estimate; §8.5 v0.3 honestly narrates the v0.2 two-leg conjunction as unchanged in form but with the implicit §8.2 prior now gone (the pre-ack-pass framing of "memory leg collapsed" was revisionist — there was no enumerated memory leg in v0.2 to collapse; dialectic ack-pass flagged this and v0.3 was tightened). Distribution leg is now S6-gated. S2-S5 are paused pending S6 result; §9.3.A deliverables are split into "continue" and "pause" buckets per their independence from the BEAM port. Follow-on to `surface-lease-plane-v0.md`. The lease plane is the **Mac-side** first wedge for BEAM/OTP; this RFC is the **Pi-side** second wedge: porting the `anima-creature` broker to a single-node Elixir application that owns Lumen's hardware lifecycle. Both nodes are single-node by design (no Distributed Erlang between them); they coordinate via HTTP and Postgres heartbeat-TTL, the same patterns the Python fleet uses today.
 
 ## 1. Problem
 
@@ -429,9 +439,19 @@ The fragility v0.1 left implicit (changing `PartOf=` requires `daemon-reload` an
 
 ## 7. Open RFC questions
 
-### 7.1 Nerves vs. vanilla Elixir on Raspbian — CLOSED in v0.1 (per code-reviewer)
+### 7.1 Nerves vs. vanilla Elixir on Raspbian — CLOSED in v0.1; remains CLOSED within this RFC in v0.3 (separate-RFC-conditional)
 
-**v0 was indeterminate. v0.1 closes:** vanilla Elixir on Raspbian for v0. Trigger to re-open as a separate Nerves-migration RFC: **second Pi added to the fleet** (where A/B firmware update + cluster management compounds). For one Pi with existing Tailscale + systemd + backup-script management, vanilla Elixir is the right v0 substrate; `circuits_i2c` / `circuits_gpio` / `circuits_spi` are NOT Nerves-exclusive.
+**v0.1 closed:** vanilla Elixir on Raspbian for v0. Trigger to re-open as a separate Nerves-migration RFC: **second Pi added to the fleet**.
+
+**v0.3 update (post-S1):** S1 measured Elixir release idle RSS at 124 MB on Trixie (§8.2). Nerves builds a stripped BEAM image and would plausibly land closer to bare-ERTS (52 MB) — **but v0.3 does NOT re-open Nerves within this RFC's decision space**. The S1 result is not in itself a trigger to switch substrates. Nerves remains a *separately conditional RFC*: it opens only if (a) S6 falsifies AND (b) the operator explicitly authorizes reframing the project as "Lumen becomes an appliance OS." That reframing carries A/B firmware updates, replacement of the existing Tailscale + systemd + backup-script management story, and a wholly different operational shape. v0.3 is not authorized to make that call, and a future v0.4 that proposes a Nerves switch in-band is NOT a legitimate use of v0's amendment process.
+
+**Order of consideration (v0.3 operator directive, 2026-05-01):**
+
+1. Run S6 (Python distribution falsifier) first — see §9.3.B v0.3.
+2. If S6 falsifies, operator decides: (a) accept that v0's case is dead and go "Python + single-writer discipline + watchdog + packaging discipline" instead of porting, OR (b) explicitly authorize the appliance-OS reframing, at which point Nerves becomes a separate RFC.
+3. Do NOT jump from S1's RSS finding directly to "switch to Nerves." That route confuses a substrate measurement with an operational-shape decision.
+
+`circuits_i2c` / `circuits_gpio` / `circuits_spi` remain non-Nerves-exclusive; the substrate switch is real but bounded by the appliance-OS framing decision, not by §8.2 RSS alone.
 
 ### 7.2 SHM JSON envelope: keep, or migrate to typed format
 
@@ -490,13 +510,38 @@ Stronger version: *"Five of six PRs landed in <30 days of operator-developer tim
 - Voice ownership cleanup is in the queue (dual-ownership today, live-verified).
 - LED ownership cleanup is in the queue (§3.4 trigger).
 - Mic/speaker hardware deduplication is in the queue.
-- Lumen-as-appliance distribution (single Elixir release vs. Python+venv) is the load-bearing distribution argument; it does not depend on fault count.
+- Lumen-as-appliance distribution (single Elixir release vs. Python+venv) is the load-bearing distribution argument; it does not depend on fault count. (v0.3: this leg is now gated on S6 — see §8.5 v0.3 and §9.3.B v0.3.)
 
 Concession: the Pi-side architectural argument is **weaker than the Mac-side argument** (where 17+13 concurrency commits over 4+ months is harder to dismiss). The Pi-side case stands on (a) supervision-tree-as-recovery-story for items 2,3 of §1.1, plus (b) appliance-shaped distribution. Each alone is insufficient; the conjunction is.
 
-### 8.2 "BEAM is heavy on a Pi 4."
+### 8.2 "BEAM is heavy on a Pi 4." — FALSIFIED on Pi 4B / Trixie / OTP 27 (revised v0.3)
 
-Live-verified: broker today RSS = 76 MB Python (`/proc/<pid>/status`, 2-day uptime). Server RSS = 158 MB. Vanilla Elixir resident memory ~25-40 MB (NOT live-verified — no Elixir process running on Pi yet). v0 spike must measure Elixir broker's actual RSS as a §9 checklist item.
+**v0.1/v0.2 stance (struck):** "Vanilla Elixir resident memory ~25-40 MB (NOT live-verified — no Elixir process running on Pi yet)."
+
+**v0.3 measured facts (S1 spike, 2026-05-01, Lumen — Pi 4B Rev 1.5, Debian Trixie 13, aarch64, 4 GB; runtime banner: `Elixir 1.18.3 (compiled with Erlang/OTP 27)`, `[erts-15.2.7] [jit]`, 4 schedulers; Debian package versions per `dpkg -l`: `elixir 1.18.3.dfsg-1`, `erlang-base 1:27.3.4.1+dfsg-1+deb13u1`; installed via `apt install elixir` from Trixie main):**
+
+| Process | VmRSS | RssAnon | VmLib | RssShmem | Threads |
+|---|---|---|---|---|---|
+| Bare ERTS (`erl -eval timer:sleep(infinity)`) | **52.1 MB** | 37.8 | 69.0 | 7.4 | 24 |
+| Default `mix release` (mix new --sup + 1 idle GenServer) | **123.7 MB** | 86.0 | 70.7 | 30.5 | 24 |
+| Default release + `strip_beams` + `+S 1:1 +MMscs 0` | **124.9 MB** | 87.2 | 70.7 | 30.5 | 18 |
+| Python broker today (`anima-creature`, 2d21h uptime) | **76.7 MB** | 49.9 | 54.8 | 0 | 8 |
+
+All measured via `/proc/<pid>/status` VmRSS, idle, stable across 30/60/120s readings. BEAM-internal `:erlang.memory().total = 52.5 MB` (queried on the running default release) — i.e. Erlang's own allocator accounting sees the release using essentially the same heap budget as bare ERTS, while OS-level VmRSS for that same release is 123.7 MB. The +71 MB gap is therefore invisible to `:erlang.memory()`: it is shared-library mappings, allocator carveouts, and BEAM file backing that show up in VmRSS but not in Erlang's heap sum. The gap decomposes as RssAnon (+48 MB) and RssShmem (+23 MB); reducing schedulers to 1 had **no measurable effect**, so it is **not per-scheduler arena cost** — it is the OTP boot script's preload set + Elixir runtime libs + initial allocator carveouts.
+
+The 25-40 MB estimate likely came from x86_64 / smaller-OTP environments. On aarch64 / Trixie / OTP 27 / JIT, bare ERTS already lives at 52 MB; a default Elixir release adds another 70+ MB on top.
+
+**S1 gate verdicts (per §9.3.B):**
+
+| Gate | Threshold | Measured | Verdict |
+|---|---|---|---|
+| Tarball size | < 30 MB | 5.72 MB (default config: 6,000,680 B; strip_beams rebuild: 6,000,657 B; both round to 5.72 MB) | PASS ~5x margin |
+| Cold-start | < 5 s | 1.42 / 1.45 / 1.61 s (3 runs) | PASS ~3x margin |
+| Idle RSS | ≤ 40 MB go; > 60 MB falsifies | **123.7 MB** | **FALSIFIES** |
+
+**Honest reading:** Elixir on this Pi clears the cold-start and tarball gates by comfortable margins, but loses the idle-RSS comparison even against the existing Python broker (Elixir release ~124 MB vs. live Python broker 77 MB, a +47 MB regression). The conclusion in v0.1/v0.2 — that the BEAM substrate is comfortably under-budget — does not survive contact with measurement. The §8.2 falsifier threshold is **not re-anchored after the fact**; the §8.5 conjunction is reworked instead (see §8.5 v0.3).
+
+KG anchor: discovery `2026-05-01T09:29:02.864022+00:00` tag `lumen-broker-port` severity `high`.
 
 ### 8.3 "You'd be debugging hardware drivers in BEAM."
 
@@ -506,15 +551,24 @@ True, and not nothing. `circuits_i2c` / `circuits_gpio` / `circuits_spi` wrap th
 
 Same answer as lease-plane RFC §8.3: Go gives cheap concurrency but no supervision primitive. Mac+Pi BEAM unifies the substrate. KG `2026-04-30T19:30:54.644112+00:00` operator decision settles this.
 
-### 8.5 "This is just substrate migration tax dressed as architecture." (steelmanned in v0.1)
+### 8.5 "This is just substrate migration tax dressed as architecture." (revised v0.3 — implicit §8.2 prior falsified; conjunction structure unchanged but harder to defend)
 
 Stronger version: *"The Pi-side incident class is single-host single-Pi single-process-pair. OTP's load-bearing wins are supervision-on-multi-process and cross-process coordination via mailboxes. Single-host single-Pi has neither — broker + server, two processes, coordinating via a 1KB JSON file. You don't need OTP to fix two processes coordinating via a JSON file; you need a contract test, an `lsof` check in CI, and a single-writer linter rule."*
 
-**Honest answer:** the genuine OTP-shaped wins are items 2 (rest_for_one cascade for bus recovery) and 3 (single GenServer-owned GPIO). The other items in §1 are addressed by *any* substrate change with discipline. The OTP-specific value is **supervision-tree-as-recovery-story** as an ergonomic frame: explicit restart strategies, observable child trees, structured upgrade story. That is *one* well-formed argument, not five.
+**Honest answer (v0.1/v0.2 — unchanged):** the genuine OTP-shaped wins are items 2 (rest_for_one cascade for bus recovery) and 3 (single GenServer-owned GPIO). The other items in §1 are addressed by *any* substrate change with discipline. The OTP-specific value is **supervision-tree-as-recovery-story** as an ergonomic frame: explicit restart strategies, observable child trees, structured upgrade story. That is *one* well-formed argument, not five.
 
-The architectural argument is therefore a *style* argument, not a fault-count argument. The distribution argument (appliance-shaped Elixir release) is the stronger leg. The conjunction is what justifies v0; either alone does not.
+**v0.1/v0.2 conjunction (also unchanged in form):** the case for v0 was a **two-leg** conjunction — supervision-tree-recovery + appliance-shaped distribution. Per v0.2 explicitly: *"Each alone is insufficient; the conjunction is."* (§8.1) and *"The conjunction is what justifies v0; either alone does not."* (§8.5 v0.2). v0.3 does NOT re-enumerate this. Supervision-tree-recovery alone was already insufficient pre-S1; that has not changed.
 
-**What would falsify the distribution leg (revised v0.2 — addresses dialectic ack-pass CONCERN on §8.5 conjunction):** the appliance-shaped-distribution claim collapses if a Python-only path can produce a comparable single-binary tarball — e.g., PyOxidizer / Nuitka / shiv with C-extension bundling for `circuits_*`-equivalents. Operator should know: if the spike (§9.3) discovers that PyOxidizer + a single-writer-discipline linter for hardware claims would deliver 70%+ of the v0 win at 20% of the cost, that finding inverts the ROI — at which point v0's case reduces to "operator decision in KG `2026-04-30T19:30:54.644112+00:00` plus uniform-substrate ergonomics with the Mac BEAM lease plane." That is still a coherent case (substrate uniformity matters for cognitive load), but it is the *actual* case being made, not the harder-to-defeat conjunction. Naming this falsifier explicitly so the operator can re-decide if the spike finds it.
+**What S1 actually changed (v0.3 — narrow claim):** v0.1/v0.2 carried an *implicit positive prior* in §8.2: the assumption that "BEAM fits comfortably on the Pi" (the unverified 25-40 MB estimate). This prior was not an enumerated leg of the conjunction — it was background support that made the appliance-distribution leg easier to argue for (a single Elixir release tarball that fits in a small RSS budget is more obviously appliance-shaped than one that costs +47 MB over the existing Python broker). S1 falsifies that prior. The structural conjunction (supervision + distribution) is intact in form; what is gone is the assumed memory headroom that made the distribution leg cheap to argue for.
+
+**Effect on each leg:**
+
+- **Supervision-tree-recovery leg:** unchanged. Was already load-bearing-only-in-conjunction in v0.2; still is.
+- **Appliance-distribution leg:** weaker, but not falsified. Single-tarball distribution is still an argument; the +47 MB memory cost relative to the existing Python broker is now an explicit tax against it rather than a wash. Whether this leg holds depends on **S6** (Python single-binary distribution falsifier — see §9.3.B v0.3): if S6 shows a Python-only path delivers ≥70% of the appliance-distribution win at ≤20% of the BEAM-port cost, the distribution leg falls.
+
+**Decision posture per operator (2026-05-01):** S6 runs next, before any Nerves consideration (Nerves remains deferred per §7.1 v0.3). The operator is the source of any *additional* load-bearing leg that might be invoked in a v0.4 rebuild — v0.3 does not pre-supply candidates. If S6 falsifies and the operator does not invoke an additional leg, v0 retires in favor of "Python with single-writer discipline + systemd watchdog + packaging discipline + lsof CI check" — the v0 *non-port* alternative.
+
+**What would falsify the distribution leg (S6 spec, unchanged from v0.2):** the appliance-shaped-distribution claim collapses if a Python-only path can produce a comparable single-binary tarball — e.g., PyOxidizer / Nuitka / shiv with C-extension bundling for `circuits_*`-equivalents. v0.3 promotes S6 to next-up in §9.3.B and pauses S2-S5 until both v0.3 council ack-pass and S6 result land.
 
 ## 9. Pre-implementation checklist (revised v0.1 — addresses §9 BLOCKs from dialectic and live-verifier)
 
@@ -527,7 +581,7 @@ The architectural argument is therefore a *style* argument, not a fault-count ar
 
 ### 9.2 Council pass items
 
-- [ ] §7.1 Nerves vs. vanilla — CLOSED in v0.1 (vanilla Elixir on Raspbian; trigger named for Nerves)
+- [ ] §7.1 Nerves vs. vanilla — CLOSED in v0; SEPARATE-RFC-CONDITIONAL on S6 + appliance-OS framing (does NOT re-open Nerves within this RFC; v0.3 keeps the door for a future separate Nerves-port RFC, not for an in-band v0.4 substrate switch)
 - [ ] §7.2 SHM envelope schema — JSON Schema in v0 (§7.6); typed migration deferred
 - [ ] §7.3 LED scope — CLOSED in v0.1 (§3.4 honesty + trigger)
 - [ ] §7.4 down-mode behavior — CLOSED in v0.1 (option a; option c foreclosed)
@@ -538,42 +592,65 @@ The architectural argument is therefore a *style* argument, not a fault-count ar
 
 The original v0.2 §9.3 mashed together production code that must ship before Phase A with experiments meant to *discover* unknowns. v0.2.1 splits these into two clearly-labeled subsections so each gets the right shape: deliverables get owners and ship dates; spike experiments get hypotheses and discrete go/no-go gates.
 
-#### 9.3.A Production deliverables (must ship before Phase A starts)
+#### 9.3.A Production deliverables (must ship before Phase A starts; v0.3: pacing split)
 
 These are code/config changes with defined endpoints. Each must be shipped, tested, and visible in the running system before the divergence comparator turns on.
 
-- [ ] **JSON Schema file** at `unitares/docs/schemas/anima_state_envelope.v0.json`. `additionalProperties: true` at top level, `false` in named sub-objects (§7.6 strictness model). **PRECONDITION** for §9.3.A validator test below.
-- [ ] **Cross-language validator corpus contract test** at `unitares/tests/test_anima_state_envelope_schema.py` — 50+ recorded envelopes from broker SHM, validated by both `jsonschema` (Python) and `ex_json_schema` (Elixir) with format-validator opt-in. Test fails if validators disagree on any entry. (See §7.6 for `format` and regex flavor caveats.)
-- [ ] **Server fallback typed-absence path** — multi-site refactor per §4.2.2 (5 sites: `loop_phases.py:23-47`, `server.py:948-966`, `server.py:94`, `server_state.py:58-59`, downstream callers). `SERVER_GOVERNANCE_FALLBACK_SECONDS` direct-UNITARES code path **deleted, not bypassed**. New constant `SHM_BROKER_STALE_SECONDS = 30s`. Verified by integration test that triggers each of the 5 staleness states and asserts the §4.2.2 return-shape table.
-- [ ] **`unitares-bridge.service` systemd unit** (per §6.3 sketch). Reads `anima_state.json`, computes EISV, writes `anima_state_governance.json`, posts to UNITARES. Includes `first_check_in` restart-state persistence at `~/.anima/unitares_bridge_state.json` (§9.4).
-- [ ] **`audit.tool_usage` write path** instrumented in anima server. New code inserts row with `error_type='shm_parse'` on parse failure, and `tool_name=anima_broker_tick` for broker operational telemetry. Live-verifier confirmed the table is currently empty from server (0 rows). Tested with a synthetic SHM parse failure injection.
+**v0.3 pacing split (post-S1):** §9.3.A originally treated all five deliverables as a single batch ("must ship before Phase A starts"). Post-S1, with v0's case gated on S6, two of the deliverables have value *independent* of the BEAM port and may proceed; the other three exist solely to support Phase A and pause until S6 holds.
 
-#### 9.3.B The Spike (~5 days; discrete experiments with go/no-go gates)
+**Continue (independent value, ship regardless of S6 outcome):**
 
-The spike is **not** "build a small piece of the broker and ship it." It is a series of cheap experiments designed to surface unknowns the council passes couldn't catch — runtime behavior, library quirks, hardware timing, restart semantics, distribution feasibility. Each experiment ends in a measurable gate. A failed gate halts the spike and forces a v0.3 amendment with the finding folded in.
+- [ ] **Server fallback typed-absence path** — multi-site refactor per §4.2.2 (5 sites: `loop_phases.py:23-47`, `server.py:948-966`, `server.py:94`, `server_state.py:58-59`, downstream callers). `SERVER_GOVERNANCE_FALLBACK_SECONDS` direct-UNITARES code path **deleted, not bypassed**. New constant `SHM_BROKER_STALE_SECONDS = 30s`. Verified by integration test that triggers each of the 5 staleness states and asserts the §4.2.2 return-shape table. **Independent value: the existing Python broker also benefits — eliminates the §4.3 BMP280-wedge-by-another-name fallback path. Ship without waiting on S6.**
+- [ ] **`audit.tool_usage` write path** instrumented in anima server. New code inserts row with `error_type='shm_parse'` on parse failure, and `tool_name=anima_broker_tick` for broker operational telemetry. Live-verifier confirmed the table is currently empty from server (0 rows). Tested with a synthetic SHM parse failure injection. **Independent value: broker telemetry stands on its own; the §6.1 regression-trigger query is reusable for any broker that writes the SHM envelope. Ship without waiting on S6.**
 
-**Important framing**: the spike's job is to make us *know what we don't know* before committing 4-8 weeks to the full port. The §9.3.A deliverables can proceed in parallel where independent (JSON Schema, audit instrumentation), but the divergence comparator (§9.3.A) can't ship until S3 + S5 below pass.
+**Pause (Phase-A-only value, gated on S6 holding):**
 
-| # | Experiment | Hypothesis being tested | Duration | Gate (go/no-go) |
-|---|---|---|---|---|
-| **S1** | Cold-start sanity | Vanilla Elixir on Raspbian boots, builds, runs in the Pi 4 resource budget | 0.5 day | Idle RSS ≤ 40 MB (per §8.2 unverified claim); cold-start under 5s; `mix release` produces a tarball under 30 MB. **Falsifies §8.2 if RSS > 60 MB.** |
-| **S2** | BMP280 GenServer | `circuits_i2c` reads BMP280 with parity to Python's `smbus2` | 1 day | Read-latency within ±10% of Python baseline over 1000 reads; zero I2C errors at the same cadence as broker today; sensor handshake succeeds on Pi reboot |
-| **S3** | SHM lock parity | Elixir writer + Python broker can share `/dev/shm/anima_state.lock` via fcntl LOCK_EX without torn writes | 0.5 day | 1000 concurrent acquisitions across two processes (Python writes `anima_state.json`, Elixir writes `anima_state_elixir.json`, both contend on `anima_state.lock`); zero torn writes; Python broker reads Elixir's envelope and parses cleanly via `jsonschema`. **Falsifies §4.2 lock-parity contract if any torn writes appear.** |
-| **S4** | Supervisor cascade | `rest_for_one` correctly restarts BMP280 child when I2CBus dies, with fresh handle | 0.5 day | Kill I2CBus GenServer process; observe BMP280 child restart sequence; cascade completes in ≤ 500ms; sensor reads resume without manual intervention; no FD leak (verify via `lsof -p <pid>`). **Falsifies §4.1 v0.2 supervisor-strategy decision if cascade behavior differs from spec.** |
-| **S5** | Bridge stub + typed-absence | The §4.2.2 two-file freshness table actually behaves the way the RFC names it | 1 day | Minimal Python `unitares-bridge` stub reads `anima_state_elixir.json` and writes `anima_state_governance.json`; refactored anima server (from §9.3.A) reads both; kill bridge → server returns `governance: degraded` per the table within 210s; re-launch bridge → server returns to normal within 30s. **Falsifies §4.2.2 if any of the 5 fresh/stale states deviates from the table.** |
-| **S6** | Distribution falsification | Per §8.5 — does PyOxidizer/Nuitka/shiv deliver ≥70% of the distribution win at ≤20% the cost of the BEAM port? | 1 day | Bundle the current Python broker as a single binary with PyOxidizer (or equivalent); compare cold-start time, tarball size, dependency footprint, op complexity vs. Elixir release. **If PyOxidizer-Python wins at this trade, escalate to operator** — the §8.5 conjunction case collapses; v0 needs reconsideration before committing the remaining 3-7 weeks. |
-| **S7** | Phase A divergence comparator dry-run | Comparator code (§9.3.A item) actually exercises the §6.1 thresholds against real envelopes | 0.5-1 day | Run Python broker + Elixir BMP280 from S2 in parallel for 24h on a development Pi; emit diffs to telemetry; verify §6.1 thresholds (sensor floats ≤ 1% rel, structural keys exact, social-boost-window exclusion) trigger correctly on synthetic disagreements. |
+- [ ] **JSON Schema file** at `unitares/docs/schemas/anima_state_envelope.v0.json`. `additionalProperties: true` at top level, `false` in named sub-objects (§7.6 strictness model). **PRECONDITION** for §9.3.A validator test below. **Pause: the schema's only consumer is the cross-language envelope contract; if S6 falsifies, there is no second writer to validate against.**
+- [ ] **Cross-language validator corpus contract test** at `unitares/tests/test_anima_state_envelope_schema.py` — 50+ recorded envelopes from broker SHM, validated by both `jsonschema` (Python) and `ex_json_schema` (Elixir) with format-validator opt-in. Test fails if validators disagree on any entry. (See §7.6 for `format` and regex flavor caveats.) **Pause: same gate as the schema — no Elixir writer means no validator equivalence to enforce.**
+- [ ] **`unitares-bridge.service` systemd unit** (per §6.3 sketch). Reads `anima_state.json`, computes EISV, writes `anima_state_governance.json`, posts to UNITARES. Includes `first_check_in` restart-state persistence at `~/.anima/unitares_bridge_state.json` (§9.4). **Pause: the bridge sidecar exists only to compensate for Elixir-broker-can't-call-UNITARES; if the port retires, today's `bridge.check_in()` in `accessors.py:982-989` continues unchanged.**
 
-**Spike outcome decision tree:**
+#### 9.3.B The Spike (revised v0.3 — S1 result folded in; S6 promoted; S2-S5 paused)
 
-- **All 7 gates green**: RFC stays at v0.2.1, Phase A starts. The spike's empirical findings (RSS measured, latency measured, restart timing measured) are folded into §1.1 / §8.2 as live-verified facts; that's a v0.2.2 textual update, not a re-design.
-- **S1, S2, or S3 fails**: hardware/library substrate doesn't actually work — RFC needs v0.3 architectural revisit. Possible outcomes: switch to Nerves (was deferred per §7.1), switch back to Python with discipline-by-convention, or escalate to operator on whether to proceed at all.
-- **S4 fails**: supervisor strategy was wrong despite ack-pass; v0.3 amendment to §4.1.
-- **S5 fails**: two-file freshness table doesn't survive contact; v0.3 amendment to §4.2.2.
-- **S6 falsifies**: §8.5 distribution leg collapses; operator decides whether the *style* argument alone justifies v0 or whether the project ends here. **This is the hardest possible outcome and the one most worth knowing before week 4.**
-- **S7 surfaces issues**: §6.1 thresholds need adjustment; v0.2.2 textual update.
+**v0.3 status (2026-05-01):** S1 ran on Lumen and falsified the §8.2 RSS estimate (see §8.2 v0.3). Per operator directive, the spike does NOT continue under the v0.2.1 decision tree. S6 (Python distribution falsifier) is promoted to next-up and runs *before* S2-S5 resume. S2-S5 are paused pending (a) v0.3 council ack-pass, and (b) S6 result, which together determine whether the BEAM port still has a load-bearing case (see §8.5 v0.3). v0.3 does NOT swap to Nerves; that remains a named option behind a separate operator decision (see §7.1 v0.3).
 
-**Why 5 days, not 3:** the v0 estimate of "3 days" treated the spike as just S2 (BMP280 GenServer). The actual unknowns the council passes couldn't catch are spread across S1-S7. Three of those experiments (S5, S6, S7) cannot start until the production deliverables in §9.3.A are at least partially shipped, so the wall-clock is longer than raw experiment days; expect calendar 5-7 days with parallel work.
+**Original framing (still valid):** the spike's job is to make us *know what we don't know* before committing 4-8 weeks to the full port. Cheap experiments with measurable gates; each names a falsifier; failed gates halt the spike and force a versioned amendment with the finding folded in.
+
+**Revised gate table (v0.3):**
+
+| # | Experiment | Status | Result / Notes |
+|---|---|---|---|
+| **S1** | Cold-start sanity | **DONE 2026-05-01** | Tarball 5.72 MB PASS; cold-start 1.4-1.6s PASS; idle RSS **123.7 MB FALSIFIES** §8.2 (>60 MB). Apples-to-apples comparison set in §8.2 v0.3. KG `2026-05-01T09:29:02.864022+00:00`. |
+| **S6** | Python distribution falsifier | **NEXT** | Bundle current Python broker as single binary (PyOxidizer / Nuitka / shiv); compare cold-start, tarball size, dependency footprint, op complexity vs. Elixir release. **If Python-discipline path delivers ≥70% of the distribution win at ≤20% the BEAM-port cost, §8.5 conjunction collapses and v0 retires in favor of "Python + single-writer discipline + systemd watchdog + packaging discipline + lsof CI check."** Operator escalation either way — pass or fail, the result reframes v0. Duration 1 day. |
+| **S2** | BMP280 GenServer | **PAUSED** | Resumes only after v0.3 council ack-pass + S6 result. If S6 falsifies, S2 may never run. |
+| **S3** | SHM lock parity | **PAUSED** | Same gate as S2. |
+| **S4** | Supervisor cascade | **PAUSED** | Same gate as S2. |
+| **S5** | Bridge stub + typed-absence | **PAUSED** | Same gate as S2. |
+| **S7** | Phase A divergence comparator dry-run | **PAUSED** | Depends on S2-S5; same gate. |
+
+**Spike methodology note (v0.3):** during S1 cleanup, `pgrep -f beam.smp` repeatedly matched the SSH bash session whose own command line contained the literal string `beam.smp` (from the script being executed), creating the illusion of a respawning BEAM process. Future spike checks against the BEAM substrate must use stricter process matching:
+
+- Prefer `pgrep -x beam.smp` (exact basename match) over `pgrep -f`.
+- When `-f` is required (e.g., to disambiguate by command-line args), inspect `ps -o pid,ppid,cmd` output explicitly and exclude self / parent shell PIDs.
+- For BEAM-specific lookups, trust the release's own `bin/<app> pid` over pgrep — the release writes a pid file at `<rel>/tmp/pids/<app>.pid` that is authoritative.
+
+This isn't a v0.3-blocking concern, but the spike methodology section is the right place to record it so future spikes don't re-pay the same lesson.
+
+**v0.3 spike outcome decision tree:**
+
+- **S6 falsifies (Python-discipline path wins on the 70%/20% trade):** v0 case collapses. v0 retires; v0.4 closes the RFC with "Python + discipline" as the chosen path, OR operator explicitly authorizes the appliance-OS reframing (§7.1) which would open a separate Nerves-port RFC, NOT continue v0. (A third path — operator invokes a non-pre-supplied additional load-bearing leg per §8.5 v0.3 — is permitted but not pre-mapped here; it would require an explicit v0.4 amendment naming the new leg.)
+- **S6 holds (no Python-discipline path delivers comparable distribution win):** distribution leg survives. v0.4 council ack-pass, then S2-S5 resume. The +47 MB memory regression is acknowledged as a tolerated cost, not papered over.
+- **S6 ambiguous:** operator decides. Default posture is "treat as falsified" — the bar for v0 to continue is positive evidence, not absence of negative evidence.
+
+**S2-S5 + S7 failure mapping (post-S6-holds):** the v0.2.1 decision tree's per-experiment failure clauses are **NOT** carried forward implicitly under "original gate semantics." The v0.3 mapping below restates them inside the post-S6-holds branch:
+
+- **S2 fails** (BMP280 read-latency / I2C error / handshake-on-reboot): hardware-library substrate doesn't deliver Python-parity. → v0.5 architectural revisit (likely retire; `circuits_i2c` was the OTP-shaped-win-as-libraries argument).
+- **S3 fails** (torn writes on shared `anima_state.lock`): §4.2 lock-parity contract is broken; two-process SHM coordination doesn't survive Elixir as a writer. → v0.5 architectural revisit (likely retire — kills cross-language SHM strategy).
+- **S4 fails** (rest_for_one cascade timing / FD leak): §4.1 v0.2 supervisor-strategy was wrong despite ack-pass. → v0.5 amendment to §4.1 (not full retire — supervision strategy is fixable inside the BEAM port).
+- **S5 fails** (two-file freshness table behavior deviates): §4.2.2 typed-absence model doesn't hold. → v0.5 amendment to §4.2.2 (also fixable inside the port).
+- **S7 surfaces issues** (§6.1 thresholds trigger spuriously or miss real diffs): threshold-tuning v0.5 textual update.
+- **All S2-S5 + S7 green post-S6-hold:** v0.5 empirical fold-in, Phase A starts.
+
+The v0.2.1 decision tree (S1/S2/S3 fail → switch to Nerves OR back to Python) is **superseded by this v0.3 tree**. The Nerves-vs-Python decision is no longer triggered by individual gate failures; it is gated on (a) the operator's appliance-OS framing decision and (b) S6's distribution-leg verdict. Per-experiment failure paths above route to v0.5 (amendment or retire), not directly to a substrate switch.
 
 ### 9.4 Crash-recovery and edge cases (revised v0.2 — addresses code-reviewer + dialectic ack-pass CONCERNs)
 
@@ -607,10 +684,11 @@ The §6.2 promotion gate ("no operator KG entry tagged `lumen-broker-port` AND s
 | v0 | initial draft | — |
 | v0.1 | council pass 1 amendments | NO-SHIP returned 3/3; v0.1 addresses 8 BLOCKs from pass 1 |
 | v0.2 | ack-pass on v0.1 amendments | Addresses 7 new BLOCKs found in v0.1 amendments; council-clean |
-| v0.2.1 | spike scope rescope (pre-experiment) | **CURRENT**; splits §9.3 into production deliverables (§9.3.A) vs. spike experiments (§9.3.B); 7 discrete gates with falsification clauses |
-| v0.2.2 | spike empirical fold-in (post-spike, all gates green) | Live-verified RSS / latency / restart timing folded into §1.1 / §8.2 as facts; no architectural change |
-| v0.3 | spike-found architectural gap | Only if S1-S5 fail or S6 falsifies; would amend the relevant sections |
-| v1.0 | post-Phase-C | Issued after cutover; folds in phase-experience learnings |
+| v0.2.1 | spike scope rescope (pre-experiment) | Splits §9.3 into production deliverables (§9.3.A) vs. spike experiments (§9.3.B); 7 discrete gates with falsification clauses |
+| v0.2.2 | (UNUSED) spike empirical fold-in (post-spike, all gates green) | Reserved for "all gates green" path; not reached — S1 falsified §8.2 |
+| v0.3 | S1 spike-result fold-in; §8.2 prior falsified; §8.5 honestly re-narrated; S6 promoted; §9.3.A pacing split | **CURRENT**; council ack-pass complete (dialectic NO-SHIP first pass with 2 BLOCKs about §8.5 framing — addressed via text-tightening, no architectural revisit); S2-S5 paused pending S6 |
+| v0.4 | post-S6 outcome | S6 holds → S2-S5 resume under original semantics; S6 falsifies → v0 retires (Python+discipline path) or operator authorizes appliance-OS reframing (separate Nerves RFC) |
+| v1.0 | post-Phase-C | Issued after cutover, only if v0.4 keeps the port alive; folds in phase-experience learnings |
 
 - **v0** (2026-04-30) — initial draft. Pre-council. Authored after archaeology session.
 - **v0.1** (2026-04-30, same session) — council pass 1 amendments. Three NO-SHIPs returned. Eight BLOCKs addressed:
@@ -652,3 +730,41 @@ The §6.2 promotion gate ("no operator KG entry tagged `lumen-broker-port` AND s
   Each experiment names a falsifier explicitly. The spike outcome decision tree (in §9.3.B) maps each gate failure to a specific RFC version bump (v0.2.2 textual fold-in if all green; v0.3 architectural revisit if S4 or S5 fails; operator escalation if S6 falsifies).
 
   **No architectural change.** This version only restructures §9.3 and adds the v0.2.1, v0.2.2 entries to the version ladder. All other sections unchanged from v0.2.
+
+- **v0.3** (2026-05-01, post-merge of v0.2.1 PR #272) — **S1 spike-result fold-in; §8.2 prior falsified; §8.5 honest re-narration of the unchanged two-leg conjunction; S2-S5 paused; §9.3.A pacing split.**
+
+  S1 ran on Lumen 2026-05-01. Empirical findings (KG `2026-05-01T09:29:02.864022+00:00` severity high tag `lumen-broker-port`):
+
+  - Tarball: 5.72 MB (gate <30 MB, **PASS** ~5x margin).
+  - Cold-start: 1.42 / 1.45 / 1.61 s across 3 runs (gate <5 s, **PASS** ~3x margin).
+  - Idle RSS: 123.7 MB stable @ 30/60/120s on Pi 4B / Trixie / aarch64 / OTP 27 / Elixir 1.18 (gate ≤40 MB go, >60 MB falsifies; **FALSIFIES** §8.2).
+
+  Comparison set (apples-to-apples /proc/<pid>/status VmRSS): bare ERTS 52 MB, default Elixir release 124 MB, Python broker today 77 MB. Strip-beams + `+S 1:1 +MMscs 0` did NOT move the needle (124.9 MB vs 123.7 MB), confirming the +71 MB gap from bare ERTS is not per-scheduler arena cost — it is OTP boot script preload + Elixir runtime libs + initial allocator carveouts.
+
+  **Operator directive (2026-05-01):**
+  1. Accept S1 as a real falsification. Do NOT re-anchor §8.2 threshold after the fact.
+  2. Halt S2-S5 under the v0.2.1 decision tree; resume only after v0.3 council ack-pass + S6 result.
+  3. Do NOT jump to Nerves. Nerves is a separate embedded-port RFC unless operator explicitly authorizes "Lumen becomes an appliance OS" — see §7.1 v0.3.
+  4. Run S6 (Python distribution falsifier) next. S6 directly answers whether the appliance-distribution leg of §8.5 still stands.
+  5. Honest framing of v0's case: supervision-tree-recovery alone is not enough — that was already true in v0.2 — and the §8.2 prior that made the appliance-distribution leg cheap to argue for is now gone, so the same two-leg conjunction is harder to defend. The leg menu is operator's call, not pre-supplied by v0.3.
+
+  **Council ack-pass on v0.3 amendments (parallel agents, 2026-05-01, scoped to v0.3 changes only):**
+  - dialectic-knowledge-architect: NO-SHIP first pass — 2 BLOCKs (§8.5 conjunction recompute was revisionist by inventing a "third memory leg" that wasn't in v0.2's two-leg framing; "after the memory leg collapsed" implied a state change that didn't happen) + 2 CONCERNs + 3 DRIFTs. Addressed in v0.3 body before merge: §8.5 rewritten to narrowly state "implicit §8.2 prior falsified" rather than "memory leg collapsed"; supervision-tree-recovery's standing as load-bearing-only-in-conjunction is named as unchanged from v0.2; §8.1 caveated re S6 gating; §9.3.A pacing split added; §7.1 label tightened from "NAMED-OPTION-PENDING" to "CLOSED in v0; SEPARATE-RFC-CONDITIONAL"; §9.3.B decision tree gained explicit S2-S5 + S7 failure mapping inside the post-S6-holds branch.
+  - feature-dev:code-reviewer: SHIP with 1 CONCERN (S2-S5 fail paths missing from new tree — addressed) + 2 NITs (§8.2 `:erlang.memory()` sentence ambiguity — tightened; §9.2 §7.6 row pre-existing CLOSED-label inconsistency — pre-existing from v0.2, deferred). Numeric internal consistency verified across all five `/proc/<pid>/status` rows.
+  - live-verifier: SHIP-with-caveats; 6 VERIFIED + 2 minor DRIFTs (Elixir version-string suffix `dfsg-1`/`27.3.4` not visible in runtime banner — resolved in v0.3 by separating runtime-banner facts from `dpkg -l` package versions; tarball byte count 6,000,680 in original measurement vs 6,000,657 on disk after the strip_beams TEST_B rebuild — resolved by listing both reproducible byte counts in the tarball gate row).
+
+  **Sections amended in v0.3:**
+  - §8.1 — added one parenthetical caveat that the appliance-distribution leg is now S6-gated; otherwise unchanged.
+  - §8.2 — replaced unverified "25-40 MB" estimate with measured facts (52 / 124 / 77 MB comparison set); cited S1 KG anchor; separated runtime-banner Elixir/erts facts from `dpkg -l` package versions; tightened the `:erlang.memory().total = 52.5 MB` sentence to be unambiguous.
+  - §8.5 — explicit honest narration of the v0.2 two-leg conjunction as unchanged in form; S1 falsifies an *implicit positive prior* in §8.2, not an enumerated leg; the appliance-distribution leg is weaker (now gated on S6) but not falsified; supervision-tree-recovery's standing is unchanged from v0.2; "after the memory leg collapsed" causal framing removed; pre-supplied leg menu removed (operator-supplied additional leg framing kept).
+  - §7.1 — relabeled "CLOSED in v0; SEPARATE-RFC-CONDITIONAL on S6 + appliance-OS framing" (replaces v0.3 first-pass "NAMED-OPTION-PENDING" which the dialectic ack-pass flagged as misleading); explicit statement that v0.3 does NOT re-open Nerves within this RFC's decision space.
+  - §9.2 council pass items — §7.1 row updated to match the new §7.1 label.
+  - §9.3.A — pacing split: server-fallback typed-absence path + audit.tool_usage write path continue (independent value); JSON Schema + validator corpus test + unitares-bridge.service systemd unit pause (Phase-A-only value, gated on S6 holding).
+  - §9.3.B — gate table reshaped as a status table (S1 DONE, S6 NEXT, S2-S5 + S7 PAUSED); spike methodology note added (`pgrep -f beam.smp` false-positive lesson with three actionable alternatives); v0.2.1 decision tree explicitly superseded; v0.3 decision tree adds an explicit S2-S5 + S7 failure mapping inside the post-S6-holds branch (S2/S3 fail → retire; S4/S5 fail → v0.5 amendment; S7 fail → threshold-tuning v0.5).
+  - Frontmatter status, top-of-doc banner, §10 version ladder updated to reflect v0.3 as CURRENT and v0.2.2 as UNUSED (the "all gates green" path was not reached).
+
+  **Sections unchanged in v0.3:** §1, §2, §3, §4, §5, §6, §7.2-§7.7 (other than §7.1), §8.3, §8.4, §9.1, §9.4, §9.4.1, §9.5. The architecture, rollout plan, schema contracts, lease-plane status, supervision strategy, hardware ownership lines, and crash-recovery edge cases do not change in v0.3 — what changes is the case for proceeding at all, the pacing of §9.3.A deliverables, and the order of remaining spike experiments.
+
+  **No new architectural decisions.** v0.3 is a falsification fold-in plus a re-prioritized spike order plus a §9.3.A pacing split. The v0.4 amendment after S6 is where the next architectural decision lives (port vs retire vs reframe). Per-experiment failures inside the post-S6-holds branch route to v0.5 amendments or retire decisions, not to in-band substrate switches.
+
+  v0.3 is **post-ack-pass**. Implementation gate stays closed for the paused §9.3.A items until S6 holds; the two §9.3.A "continue" items may proceed independently.
