@@ -241,3 +241,39 @@ def test_urllib_transport_500_returns_service_unavailable_when_no_body():
     ):
         result = _urllib_transport(request)
     assert result == {"ok": False, "error": "service_unavailable"}
+
+
+# ---------- §7.3.3 acquire_with_retry input validation (PR 5 council fix) ----------
+
+
+def test_acquire_with_retry_rejects_max_attempts_below_1():
+    """RFC §7.3.3: max_attempts must be >= 1; pre-PR-5 max_attempts=0 silently
+    fired one HTTP call. Validation now raises ValueError."""
+    holder = uuid4()
+    calls: list[bool] = []
+
+    def transport(_req: LeaseHTTPRequest):
+        calls.append(True)
+        return _ok_lease_payload(holder)
+
+    client = LeasePlaneClient(transport=transport)
+    with pytest.raises(ValueError):
+        client.acquire_with_retry(_make_request(holder), max_attempts=0)
+    assert calls == [], "no HTTP call should have fired with max_attempts=0"
+    with pytest.raises(ValueError):
+        client.acquire_with_retry(_make_request(holder), max_attempts=-1)
+    assert calls == []
+
+
+def test_acquire_with_retry_rejects_floor_exceeding_ceiling():
+    """floor_s must be <= ceiling_s; otherwise backoff bounds are nonsense."""
+    holder = uuid4()
+
+    def transport(_req: LeaseHTTPRequest):
+        return _ok_lease_payload(holder)
+
+    client = LeasePlaneClient(transport=transport)
+    with pytest.raises(ValueError):
+        client.acquire_with_retry(
+            _make_request(holder), max_attempts=3, floor_s=2.0, ceiling_s=1.0,
+        )

@@ -40,7 +40,13 @@ defmodule UnitaresLeasePlane.Repo do
   """
   @spec acquire(map()) ::
           {:ok, lease, :new | :idempotent}
-          | {:error, :held_by_other, %{held_by_uuid: binary(), expires_at: DateTime.t()}}
+          | {:error, :held_by_other,
+             %{
+               held_by_uuid: binary(),
+               expires_at: DateTime.t(),
+               surface_id: binary(),
+               blocking_lease_id: binary()
+             }}
           | {:error, term()}
   def acquire(%{} = p) do
     Postgrex.transaction(DB, fn conn ->
@@ -71,7 +77,17 @@ defmodule UnitaresLeasePlane.Repo do
     if held == p.holder_agent_uuid do
       {:ok, {:ok, existing, :idempotent}}
     else
-      {:ok, {:error, :held_by_other, %{held_by_uuid: held, expires_at: existing.expires_at}}}
+      # PR 5 council BLOCK fix: include surface_id + blocking_lease_id so the
+      # 409 response carries every field the v0.7 §7.3.2 AcquireHeldByOther shape
+      # requires. Without these, Pydantic validation degrades to AcquireSchemaInvalid.
+      {:ok,
+       {:error, :held_by_other,
+        %{
+          held_by_uuid: held,
+          expires_at: existing.expires_at,
+          surface_id: existing.surface_id,
+          blocking_lease_id: existing.lease_id
+        }}}
     end
   end
 

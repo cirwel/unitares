@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -45,6 +46,19 @@ try:
 except ImportError:
     print("error: asyncpg not installed; install with `pip install asyncpg`", file=sys.stderr)
     sys.exit(2)
+
+
+def _lock_key_for_kind(kind: str) -> int:
+    """Deterministic int32-positive advisory-lock key from a scheme kind.
+
+    Python's `hash()` for strings is salted per-process via PYTHONHASHSEED,
+    so two CLI invocations in different shells would otherwise produce
+    different lock keys for the same kind — silently breaking the §7.11.7
+    race-window protection (council BLOCK from PR 1-4 stack review).
+    Use SHA-256 truncated to int32-positive instead.
+    """
+    digest = hashlib.sha256(kind.encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
 
 
 DEFAULT_DB_URL = os.environ.get(
@@ -94,8 +108,8 @@ async def deprecate_cmd(
             )
             return 1
         async with conn.transaction(isolation="serializable"):
-            # Hash the scheme name to a stable int for advisory lock; ensure positive int range.
-            lock_key = abs(hash(kind)) % (2**31 - 1)
+            # Use deterministic SHA-256-derived key (see _lock_key_for_kind for rationale).
+            lock_key = _lock_key_for_kind(kind)
             await conn.execute("SELECT pg_advisory_xact_lock($1)", lock_key)
             await conn.execute(
                 """
