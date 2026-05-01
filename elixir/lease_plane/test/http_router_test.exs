@@ -141,6 +141,21 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert post_json("/v1/lease/acquire", acquire_body(ctx.surface, ttl_s: 4000)).status ==
                422
     end
+
+    test "acquire succeeds without surface_kind in body (v0.7 drift fix; RFC §7.2.3)", ctx do
+      # Post-migration-026, surface_kind is a generated column derived from
+      # split_part(surface_id, ':', 1). The router silently ignores caller-supplied
+      # surface_kind and never includes it in the Repo INSERT. This test verifies
+      # acquire succeeds with surface_kind absent from the body entirely.
+      body = ctx.surface |> acquire_body() |> Map.delete(:surface_kind)
+      resp = post_json("/v1/lease/acquire", body)
+
+      assert resp.status == 200
+      payload = parsed(resp)
+      assert payload["ok"] == true
+      # Server echoes surface_kind from the generated column on the lease record.
+      assert payload["lease"]["surface_kind"] == "dialectic"
+    end
   end
 
   describe "GET /v1/lease/status" do

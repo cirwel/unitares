@@ -79,8 +79,11 @@ def test_acquire_emits_null_lease_on_held_by_other(capsys, monkeypatch):
             {
                 "ok": False,
                 "error": "held_by_other",
+                "surface_id": "ship.sh:contended",
+                "blocking_lease_id": str(uuid4()),
                 "held_by_uuid": str(other),
                 "expires_at": (datetime.now(UTC) + timedelta(seconds=60)).isoformat(),
+                "retry_after_hint_ms": 5000,
             }
         ]
     )

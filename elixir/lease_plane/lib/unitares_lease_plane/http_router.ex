@@ -188,7 +188,12 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   end
 
   defp extract_acquire_params(%{} = body) do
-    required = ["surface_id", "surface_kind", "holder_agent_uuid", "holder_kind", "ttl_s"]
+    # surface_kind dropped from required + params map per RFC v0.8 §7.2.3:
+    # post-migration-026, surface_kind is a generated column derived from
+    # split_part(surface_id, ':', 1). Including it in the Repo INSERT params
+    # would raise `ERROR: column "surface_kind" is a generated column`.
+    # Caller-supplied surface_kind in the body is silently ignored.
+    required = ["surface_id", "holder_agent_uuid", "holder_kind", "ttl_s"]
     missing = Enum.filter(required, fn k -> is_nil(Map.get(body, k)) end)
 
     cond do
@@ -210,7 +215,6 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         {:ok,
          %{
            surface_id: body["surface_id"],
-           surface_kind: body["surface_kind"],
            holder_agent_uuid: body["holder_agent_uuid"],
            holder_class: Map.get(body, "holder_class", "process_instance"),
            holder_kind: body["holder_kind"],

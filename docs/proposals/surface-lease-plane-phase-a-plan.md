@@ -35,9 +35,9 @@ Scope: the two migrations + the three v0.7 drift fixes + the tests that prove on
 | §7.11.1 catalog seeded with 5 schemes (file/dialectic/resident/capture/td) | same migration 027 (`INSERT INTO surface_kind_catalog ...`) | `test_migration_027_surface_kind_catalog_seeded` | TODO |
 | §7.3.2 `AcquireHeldByOther` extended typed-absence shape (v0.7 drift fix 1) | `src/lease_plane/models.py` — add `surface_id`, `blocking_lease_id`, `retry_after_hint_ms` fields | `test_held_by_other_includes_v0_7_extended_fields` | TODO |
 | §7.2.3 router does not accept `surface_kind` in acquire body (v0.7 drift fix 2) | `elixir/lease_plane/lib/unitares_lease_plane/http_router.ex` — drop `"surface_kind"` from required + params map in `extract_acquire_params` | Elixir-side: `test http_router rejects surface_kind in acquire body after migration 026` | TODO |
-| §7.10 + §7.11.5 Sentinel `event_type='forced'` alarm rule wired (v0.7 drift fix 3) | `agents/sentinel/agent.py` — add alarm rule reading `lease_plane_events` for `event_type='forced'`; per-event for ad-hoc, batched-by-`deprecation_id` for `event_type='lease.deprecation_swept'` | `test_sentinel_force_release_alarm_wired` (covers both per-event + batched paths) | TODO |
+| §7.10 + §7.11.5 Sentinel `event_type='forced'` alarm rule wired (v0.7 drift fix 3) | (deferred to PR 3) | (deferred) | DEFERRED — depends on PR 3 force-release CLI to have something to fire on, and on adding direct DB access to Sentinel which is new architectural surface |
 
-**Total: 8 rows. Within ~10-row guidance.**
+**Total: 7 rows in PR 1; one row deferred to PR 3.**
 
 ### Specific implementation notes
 
@@ -100,14 +100,15 @@ Scope (anticipated; will reify when PR 1 lands):
 
 Rationale for separating from PR 1: the helper is a self-contained module with no schema/contract dependency on the migration changes. Reviewing it independently keeps the cognitive load tractable.
 
-## PR 3 — §7.11 deprecation CLI (planned, not yet drafted)
+## PR 3 — §7.11 deprecation CLI + Sentinel forced-release alarm (planned, not yet drafted)
 
 Scope (anticipated):
-- `lease-plane` CLI commands: `deprecate`, `deprecation-sweep`, `deprecation-finalize` (Elixir Mix tasks or Python script — TBD).
+- `lease-plane` CLI commands: `deprecate`, `deprecation-sweep`, `deprecation-finalize` (standalone Python CLI in `scripts/dev/`, per operator decision 2026-04-30).
 - `LEASE_FORCE_RELEASE_TOKEN` integration test (covers §7.10 + §7.11 force-release wiring).
-- Phase 2 sweep Oban job with idempotent predicate.
+- Phase 2 sweep job with idempotent predicate.
 - Phase 0 race-window mitigation (serializable-tx + advisory lock).
-- 6 §7.11 Phase A test gates + 1 §7.10 force-release test.
+- **Sentinel forced-release alarm rule** (deferred from PR 1): adds direct lease_plane_events DB access to Sentinel; per-event alarm for ad-hoc `event_type='forced'`, batched-by-`deprecation_id` for `event_type='lease.deprecation_swept'`. Default Sentinel cadence per operator decision 2026-04-30.
+- 6 §7.11 Phase A test gates + 1 §7.10 force-release test + 1 Sentinel alarm wiring test.
 
 Rationale: depends on PR 1 (catalog + deprecated_schemes tables must exist) and on operator-runbook content for the CLI documentation. Lands after both.
 

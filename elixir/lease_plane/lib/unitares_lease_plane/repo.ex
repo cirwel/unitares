@@ -76,20 +76,23 @@ defmodule UnitaresLeasePlane.Repo do
   end
 
   defp acquire_step(conn, p, nil) do
+    # surface_kind dropped from INSERT column list per RFC v0.8 §7.2.3:
+    # post-migration-026 it is a generated column derived from
+    # split_part(surface_id, ':', 1). Including it here would raise
+    # `ERROR: column "surface_kind" is a generated column`.
     insert_lease_sql = """
     INSERT INTO lease_plane.surface_leases
-      (surface_id, surface_kind, holder_agent_uuid, holder_class,
+      (surface_id, holder_agent_uuid, holder_class,
        holder_kind, holder_pid, heartbeat_required, intent,
        expires_at, original_ttl_s, audit_session, earned_status)
     VALUES
-      ($1, $2, $3, $4, $5, $6, $7, $8,
-       now() + make_interval(secs => $9), $9, $10, 'provisional')
+      ($1, $2, $3, $4, $5, $6, $7,
+       now() + make_interval(secs => $8), $8, $9, 'provisional')
     RETURNING #{@select_lease_columns}
     """
 
     args = [
       p.surface_id,
-      p.surface_kind,
       uuid_to_binary(p.holder_agent_uuid),
       Map.get(p, :holder_class, "process_instance"),
       p.holder_kind,

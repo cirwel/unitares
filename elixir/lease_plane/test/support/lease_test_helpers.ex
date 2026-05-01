@@ -7,10 +7,17 @@ defmodule LeaseTestHelpers do
 
   alias UnitaresLeasePlane.DB
 
-  @doc "Generate a unique surface_id for a single test."
+  @doc """
+  Generate a unique surface_id for a single test.
+
+  Uses the `dialectic:/` canonical scheme (RFC v0.8 §7.2.1) so the surface_id
+  passes migration 026's `surface_id_grammar` CHECK constraint. The label
+  + random suffix become the opaque path portion. Pre-026 callers used
+  `test:elixir/...` which the grammar CHECK rejects.
+  """
   def unique_surface_id(label) when is_binary(label) do
     rand = :crypto.strong_rand_bytes(6) |> Base.url_encode64(padding: false)
-    "test:elixir/#{label}/#{rand}"
+    "dialectic:/test_elixir_#{label}_#{rand}"
   end
 
   @doc "Cleanup hook — DELETEs rows for a given surface_id from both tables."

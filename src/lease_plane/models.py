@@ -128,8 +128,11 @@ class AcquireOk(BaseModel):
 class AcquireHeldByOther(BaseModel):
     ok: Literal[False]
     error: Literal["held_by_other"]
+    surface_id: str
+    blocking_lease_id: UUID
     held_by_uuid: UUID
     expires_at: datetime
+    retry_after_hint_ms: int
 
 
 class AcquirePermissionDenied(BaseModel):

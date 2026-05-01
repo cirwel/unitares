@@ -115,14 +115,18 @@ def test_acquire_ok_parses_idempotent_drift_warning():
 
 def test_acquire_held_by_other_parses_holder_and_expiry():
     holder = uuid4()
+    blocking_lease = uuid4()
     expires_at = datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=30)
 
     def transport(_request: LeaseHTTPRequest):
         return {
             "ok": False,
             "error": "held_by_other",
+            "surface_id": "file:///tmp/a",
+            "blocking_lease_id": str(blocking_lease),
             "held_by_uuid": str(holder),
             "expires_at": expires_at.isoformat(),
+            "retry_after_hint_ms": 5000,
         }
 
     result = LeasePlaneClient(transport=transport).acquire(

@@ -110,8 +110,11 @@ def test_held_by_other_runs_block_no_release():
             {
                 "ok": False,
                 "error": "held_by_other",
+                "surface_id": "test:advisory/contended",
+                "blocking_lease_id": str(uuid4()),
                 "held_by_uuid": str(other_holder),
                 "expires_at": (datetime.now(UTC) + timedelta(seconds=30)).isoformat(),
+                "retry_after_hint_ms": 5000,
             }
         ]
     )

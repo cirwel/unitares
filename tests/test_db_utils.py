@@ -109,6 +109,13 @@ async def ensure_test_database_schema() -> None:
         await _execute_sql_file(conn, "db/postgres/migrations/023_matview_measured_only.sql")
         await _execute_sql_file(conn, "db/postgres/migrations/020_progress_flat_telemetry.sql")
         await _execute_sql_file(conn, "db/postgres/migrations/021_seed_epoch_3.sql")
+        # Surface lease plane (RFC docs/proposals/surface-lease-plane-v0.md):
+        # 024 + 025 build the lease_plane schema + immutability triggers; 026 adds
+        # storage-layer grammar CHECK + generated surface_kind column (PR 1, this branch).
+        await _execute_sql_file(conn, "db/postgres/migrations/024_lease_plane.sql")
+        await _execute_sql_file(conn, "db/postgres/migrations/025_lease_plane_invariants.sql")
+        await _execute_sql_file(conn, "db/postgres/migrations/026_lease_plane_grammar.sql")
+        await _execute_sql_file(conn, "db/postgres/migrations/027_lease_plane_deprecation.sql")
 
         # Ensure partitioned audit tables can accept inserts for current month.
         await _execute_sql_file(conn, "db/postgres/partitions.sql")
