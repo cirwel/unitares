@@ -111,15 +111,34 @@ async def deprecate_cmd(
             # Use deterministic SHA-256-derived key (see _lock_key_for_kind for rationale).
             lock_key = _lock_key_for_kind(kind)
             await conn.execute("SELECT pg_advisory_xact_lock($1)", lock_key)
-            await conn.execute(
+            row = await conn.fetchrow(
                 """
                 INSERT INTO lease_plane.deprecated_schemes
                   (surface_kind, marked_by_session_id, drain_window_days)
                 VALUES ($1, $2, $3)
                 ON CONFLICT (surface_kind) DO NOTHING
+                RETURNING deprecation_id
                 """,
                 kind, session_id, drain_window_days,
             )
+            if row is not None:
+                # Phase 0 audit-event emission (RFC §7.11.3 — closes PR 6
+                # dangling-vocabulary fix). Only emit on first mark; ON CONFLICT
+                # returns NULL row on idempotent re-run, so no double-emit.
+                payload = json.dumps({
+                    "deprecation_id": str(row["deprecation_id"]),
+                    "kind": kind,
+                    "session_id": session_id,
+                    "drain_window_days": drain_window_days,
+                })
+                await conn.execute(
+                    """
+                    INSERT INTO lease_plane.lease_plane_events
+                      (event_type, surface_id, surface_kind, advisory_mode, payload)
+                    VALUES ('lease.deprecation_marked', $1, $2, false, $3::jsonb)
+                    """,
+                    f"{kind}:/__deprecation_marker__", kind, payload,
+                )
         return 0
     finally:
         await conn.close()
@@ -216,7 +235,8 @@ async def deprecation_finalize_cmd(*, kind: str, db_url: str = DEFAULT_DB_URL) -
     try:
         async with conn.transaction():
             row = await conn.fetchrow(
-                "SELECT sweep_completed_at FROM lease_plane.deprecated_schemes WHERE surface_kind = $1",
+                "SELECT deprecation_id, sweep_completed_at, check_migrated_at "
+                "FROM lease_plane.deprecated_schemes WHERE surface_kind = $1",
                 kind,
             )
             if row is None:
@@ -226,12 +246,29 @@ async def deprecation_finalize_cmd(*, kind: str, db_url: str = DEFAULT_DB_URL) -
                 print(f"error: deprecation-sweep has not completed for {kind!r}; "
                       f"run `deprecation-sweep {kind}` first.", file=sys.stderr)
                 return 1
+            already_finalized = row["check_migrated_at"] is not None
             await conn.execute(
                 "UPDATE lease_plane.deprecated_schemes "
                 "SET check_migrated_at = COALESCE(check_migrated_at, now()) "
                 "WHERE surface_kind = $1",
                 kind,
             )
+            if not already_finalized:
+                # Phase 3 audit-event emission (RFC §7.11.3 — closes PR 6
+                # dangling-vocabulary fix). Only emit on first finalize;
+                # re-runs are no-op for both check_migrated_at and the event.
+                payload = json.dumps({
+                    "deprecation_id": str(row["deprecation_id"]),
+                    "kind": kind,
+                })
+                await conn.execute(
+                    """
+                    INSERT INTO lease_plane.lease_plane_events
+                      (event_type, surface_id, surface_kind, advisory_mode, payload)
+                    VALUES ('lease.deprecation_migrated', $1, $2, false, $3::jsonb)
+                    """,
+                    f"{kind}:/__deprecation_marker__", kind, payload,
+                )
         return 0
     finally:
         await conn.close()

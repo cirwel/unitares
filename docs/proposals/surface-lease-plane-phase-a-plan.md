@@ -222,13 +222,28 @@ Three-voice council pass on the PR 1-4 cumulative stack (dialectic, code-reviewe
 
 Race-window test updated (`tests/test_sentinel_forced_release_alarm.py::test_phase_zero_acquire_race_blocked`) to import `_lock_key_for_kind` instead of computing `abs(hash(kind))` locally — the pre-PR-5 test only passed because both holder and CLI ran in the same Python process; now exercises the same helper as production.
 
-## PR 6+ — Deferred council CONCERNs and Phase B prerequisites
+## PR 6 — Deprecation event-vocabulary completeness (this branch: impl/lease-plane-phase-a-pr6-deprecation-events)
+
+Closes the dangling-vocabulary council NIT: migration 027 added `lease.deprecation_marked` and `lease.deprecation_migrated` to the `event_type` CHECK constraint, but no code path emitted them. PR 6 wires both emissions in the CLI, with idempotent guards so re-runs don't double-emit.
+
+### PR 6 — RFC gate → code surface → test name → status table
+
+| Gate | Code | Test | Status |
+|------|------|------|--------|
+| §7.11.3 Phase 0 emits `lease.deprecation_marked` | `scripts/dev/lease_plane_deprecate.py::deprecate_cmd` | `test_deprecate_emits_lease_deprecation_marked_event` | DONE |
+| §7.11.3 Phase 3 emits `lease.deprecation_migrated` | `deprecation_finalize_cmd` | `test_finalize_emits_lease_deprecation_migrated_event` | DONE |
+| Idempotent re-runs do NOT double-emit `lease.deprecation_migrated` | finalize early-return on already-finalized | `test_finalize_idempotent_does_not_double_emit` | DONE |
+
+Phase 0 emission uses `INSERT ... RETURNING deprecation_id` so the `ON CONFLICT DO NOTHING` path correctly returns NULL on idempotent re-marks → no double-emit. Phase 3 captures `check_migrated_at` BEFORE the UPDATE and only emits if it was previously NULL.
+
+The marker events use surface_id `f"{kind}:/__deprecation_marker__"` — distinct from any real lease's surface_id, makes them easy to filter in audit queries.
+
+## PR 7+ — Remaining deferred council CONCERNs and Phase B prerequisites
 
 Bigger council CONCERNs (need design discussion):
 - §7.11.2 Phase 2/3 atomicity rewrite — CLI sub-commands don't enforce same-session atomicity. Either coalesce into `deprecate-and-finalize` super-command or amend RFC §7.11.2.
 - Elixir router server-side canonicalization (split-brain prevention from non-Python callers).
 - Sentinel asyncpg pool wiring (CLAUDE.md anyio pattern; current code opens fresh connection per cycle).
-- `lease.deprecation_marked` and `lease.deprecation_migrated` event-type vocabulary is in CHECK constraint but never emitted by code.
 - §9 RFC test-name reconciliation (named tests semantically covered but not under contracted names).
 
 Phase B prerequisites (non-blocking for Phase A):
