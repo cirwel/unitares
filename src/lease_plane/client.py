@@ -145,11 +145,21 @@ class LeasePlaneClient:
             ceiling_s: maximum backoff per attempt (default 5.0s).
             sleep: injectable sleep for test determinism (default time.sleep).
             rng: injectable [0,1) random for test determinism (default random.random).
+
+        Raises:
+            ValueError: max_attempts < 1, or floor_s > ceiling_s
+                (PR 5 council fix — pre-PR-5 silently fired one HTTP call when max_attempts=0).
         """
-        from src.lease_plane import (
-            AcquireHeldByOther,
-            AcquireOk,
-        )
+        if max_attempts < 1:
+            raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
+        if floor_s > ceiling_s:
+            raise ValueError(
+                f"floor_s ({floor_s}) must be <= ceiling_s ({ceiling_s})"
+            )
+
+        # AcquireHeldByOther is the only retry-triggering result type;
+        # AcquireOk no longer needed here (NIT-1 fix from council pass).
+        from src.lease_plane import AcquireHeldByOther
 
         sleep_fn = sleep or time.sleep
         rand_fn = rng or random.random

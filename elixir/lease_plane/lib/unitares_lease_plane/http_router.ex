@@ -75,12 +75,23 @@ defmodule UnitaresLeasePlane.HTTPRouter do
               drift_warning: []
             })
 
-          {:error, :held_by_other, %{held_by_uuid: uuid, expires_at: expires}} ->
+          {:error, :held_by_other, info} ->
+            # PR 5 council BLOCK fix: emit all 5 fields the v0.7 §7.3.2
+            # AcquireHeldByOther typed-absence shape requires (was 2 pre-PR-5;
+            # missing fields caused production 409s to fail Pydantic validation
+            # → degraded to AcquireSchemaInvalid → acquire_with_retry never retried).
+            now = DateTime.utc_now()
+            remaining_ms =
+              max(0, DateTime.diff(info.expires_at, now, :millisecond))
+            retry_after_hint_ms = min(remaining_ms, 5_000)
             json(conn, 409, %{
               ok: false,
               error: "held_by_other",
-              held_by_uuid: uuid,
-              expires_at: DateTime.to_iso8601(expires)
+              surface_id: Map.get(info, :surface_id),
+              blocking_lease_id: Map.get(info, :blocking_lease_id),
+              held_by_uuid: info.held_by_uuid,
+              expires_at: DateTime.to_iso8601(info.expires_at),
+              retry_after_hint_ms: retry_after_hint_ms
             })
 
           {:error, reason} ->

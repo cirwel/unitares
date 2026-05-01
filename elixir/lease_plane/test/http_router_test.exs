@@ -120,6 +120,14 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert payload["error"] == "held_by_other"
       assert payload["held_by_uuid"] == body_a.holder_agent_uuid
       assert is_binary(payload["expires_at"])
+      # PR 5 council BLOCK fix: 409 body MUST carry the v0.7 §7.3.2 extended
+      # AcquireHeldByOther fields. Without these, the Python Pydantic model
+      # rejects the response and acquire_with_retry never retries.
+      assert payload["surface_id"] == ctx.surface
+      assert is_binary(payload["blocking_lease_id"])
+      assert is_integer(payload["retry_after_hint_ms"])
+      assert payload["retry_after_hint_ms"] >= 0
+      assert payload["retry_after_hint_ms"] <= 5_000
     end
 
     test "holder_class='role' → 422 schema_invalid (rejected before DB)", ctx do

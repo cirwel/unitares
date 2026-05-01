@@ -126,10 +126,12 @@ async def _poll_inner(
         )
     for row in rows:
         alarms.append(_batch_alarm(row))
+        # Cursor advances ONLY based on event ts, not sweep_completed_at.
+        # PR 5 council fix: pre-PR-5 advanced cursor to MAX(last_ts, sweep_completed_at),
+        # which mixes event-stream and table-metadata timestamps — causes
+        # clock-skew/order-of-events fragility.
         if max_ts is None or row["last_ts"] > max_ts:
             max_ts = row["last_ts"]
-        if max_ts is None or row["sweep_completed_at"] > max_ts:
-            max_ts = row["sweep_completed_at"]
 
     return alarms, max_ts
 
