@@ -632,6 +632,7 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
         purpose_str = purpose.strip() if purpose and isinstance(purpose, str) else None
         ctx.api_key = secrets.token_urlsafe(32)
 
+        pg_create_succeeded = False
         try:
             agent_record, created_agent = await agent_storage.get_or_create_agent(
                 agent_id=ctx.agent_id,
@@ -639,6 +640,7 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
                 status='active',
                 purpose=purpose_str,
             )
+            pg_create_succeeded = True
             logger.debug(f"PostgreSQL: Created agent {ctx.agent_id}")
             await ctx.loop.run_in_executor(
                 None,
@@ -677,7 +679,17 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
                 None,
                 lambda: mcp_server.get_or_create_metadata(ctx.agent_id, purpose=purpose_str)
             )
-            ctx.api_key = ctx.meta.api_key if ctx.meta else None
+            if pg_create_succeeded:
+                # PG already has the freshly-generated ctx.api_key — sync the
+                # fallback metadata to match instead of overwriting ctx with a
+                # stale value from the cache. Without this, ctx.api_key gets
+                # silently replaced and the agent's auth desyncs from PG.
+                if ctx.meta:
+                    ctx.meta.api_key = ctx.api_key
+            else:
+                # PG insert never happened; the metadata cache is source of
+                # truth for whatever credential downstream code will see.
+                ctx.api_key = ctx.meta.api_key if ctx.meta else None
     else:
         try:
             agent_record = await agent_storage.get_agent(ctx.agent_id)

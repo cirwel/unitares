@@ -74,6 +74,22 @@ fi
 KIND=$(classify)
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
+# Phase A advisory lease (RFC v0.5 §6.1). Telemetry-only: a held_by_other
+# or service_unavailable outcome MUST NOT block the ship. We log the
+# outcome and proceed regardless, and release on EXIT so the lease is
+# returned even if a downstream step (commit, push, PR create) fails.
+LEASE_RESULT=$(python3 "$PROJECT_ROOT/scripts/dev/_ship_lease_advisory.py" acquire \
+    --surface-id="ship.sh:$BRANCH" \
+    --surface-kind="ship_sh" \
+    --intent="$MESSAGE" \
+    --ttl-s=300 2>/dev/null || echo '{"outcome":"client_error","lease_id":null}')
+LEASE_OUTCOME=$(printf '%s' "$LEASE_RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("outcome",""))')
+LEASE_ID=$(printf '%s' "$LEASE_RESULT" | python3 -c 'import json,sys; v=json.load(sys.stdin).get("lease_id"); print(v if v else "")')
+echo "[ship] lease: $LEASE_OUTCOME"
+if [[ -n "$LEASE_ID" ]]; then
+    trap 'python3 "$PROJECT_ROOT/scripts/dev/_ship_lease_advisory.py" release --lease-id="$LEASE_ID" >/dev/null 2>&1 || true' EXIT
+fi
+
 # Append Watcher-Findings trailer if any unresolved findings touch staged files.
 # COMMIT_MESSAGE is what `git commit -m` sees; MESSAGE stays clean for PR title.
 WATCHER_FPS=$(collect_watcher_fingerprints || true)
