@@ -50,7 +50,6 @@ def test_held_by_other_includes_v0_7_extended_fields():
     result = LeasePlaneClient(transport=transport).acquire(
         AcquireRequest(
             surface_id=surface_id,
-            surface_kind="file",
             holder_agent_uuid=uuid4(),
             holder_class="process_instance",
             holder_kind="remote_heartbeat",

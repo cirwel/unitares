@@ -90,15 +90,47 @@ Currently no rule keyed on `release_reason` or `event_type='forced'` exists in `
 
 The rule needs `lease_plane_events` SELECT access. If Sentinel doesn't already have it, the migration step adds the GRANT.
 
-## PR 2 — §7.12 canonicalization helper (planned, not yet drafted)
+## PR 2 — §7.12 canonicalization helper (this branch: impl/lease-plane-phase-a-pr2-canonicalize)
 
-Scope (anticipated; will reify when PR 1 lands):
-- `src/lease_plane/canonicalize.py` (new) implementing the §7.12.1 server-side rule: tmpfile probe, double-realpath, scheme dispatch, `capture:/` member sorting.
-- Pydantic `field_validator` on `AcquireRequest.surface_id` calling the helper.
-- Helper error semantics (§7.12.2): `CanonicalizeError` exception with `reason` codes.
-- 6 §7.12 Phase A test gates.
+Scope shipped:
+- `src/lease_plane/canonicalize.py` (new) implementing the §7.12.1 server-side rule: tmpfile probe (closes live-verifier DRIFT-3), double-realpath (closes DRIFT-2), per-scheme dispatch, `capture:/` member sorting, `dialectic:/` lowercase, `resident:/` reserved-character rejection.
+- Helper error semantics (§7.12.2): `CanonicalizeError` exception with `reason` codes (`symlink_loop`, `path_too_long`, `invalid_scheme`).
+- AcquireRequest `surface_kind` field removed (closes the v0.7 PR 1 oversight — Elixir router was updated but Python schema wasn't).
+- `lease_advisory_scope()` `surface_kind` parameter softened to optional + ignored (preserves backwards-compat for watcher/vigil/sentinel/chronicler/ship.sh callers without surface_id migration in this PR).
+- 4 of the 6 §7.12 Phase A test gates pass.
 
-Rationale for separating from PR 1: the helper is a self-contained module with no schema/contract dependency on the migration changes. Reviewing it independently keeps the cognitive load tractable.
+Deferred to **PR 2.5** (see new section below):
+- Pydantic `field_validator` on `AcquireRequest.surface_id` (would brick production agents whose surface_ids are non-canonical).
+- 2 of the 6 §7.12 Phase A test gates marked `pytest.mark.skip`.
+
+### PR 2 — RFC gate → code surface → test name → status table
+
+| Gate | Code | Test | Status |
+|------|------|------|--------|
+| §7.12.1 step 4 — tmpfile probe (not pathconf) | `src/lease_plane/canonicalize.py::_detect_case_insensitive` | `test_canonicalize_case_detection_uses_tmpfile_probe` | DONE |
+| §7.12.1 step 2 — double-realpath for /var → /private/var | `canonicalize.py::_canonicalize_file` | `test_canonicalize_resolves_var_to_private_var_on_macos` | DONE |
+| §7.12.1 capture:/ member sorting | `canonicalize.py::_canonicalize_capture` | `test_capture_canonicalizes_member_ordering` | DONE |
+| §7.12.2 helper error semantics (symlink loop, NUL, nonexistent) | `canonicalize.py::canonicalize` | `test_canonicalize_error_semantics` | DONE |
+| §7.12.5 AcquireRequest field_validator wired | (deferred to PR 2.5) | `test_acquire_request_surface_id_field_validator_wired` | SKIPPED |
+| §7.12.4 Pydantic ?-rejection | (deferred to PR 2.5) | `test_acquire_request_rejects_query_string_in_surface_id` | SKIPPED |
+| §7.2.3 Pydantic AcquireRequest drops `surface_kind` (closes PR 1 oversight) | `src/lease_plane/models.py`, `src/lease_plane/advisory.py`, `scripts/dev/_ship_lease_advisory.py` | (covered by 39-test lease-plane regression) | DONE |
+
+## PR 2.5 — Production-agent surface_id migration + AcquireRequest field_validator (planned, not yet drafted)
+
+**Surfaced during PR 2 implementation:** the production agents (watcher, vigil, sentinel, chronicler, ship.sh advisory) use surface_ids like `watcher:scan_commits:<repo>`, `vigil:cycle`, `sentinel:cycle`, `chronicler:scrape`, `ship.sh:test-branch` — none of which match the canonical scheme list (RFC §7.2.1). Wiring the AcquireRequest field_validator now would cause every agent to crash on first acquire with `ValidationError: scheme not in canonical scheme list`.
+
+Scope:
+- Migrate production surface_ids to canonical schemes:
+  - `watcher:scan_commits:X` → `resident:/watcher_scan_commits_X`
+  - `vigil:cycle` → `resident:/vigil_cycle`
+  - `sentinel:cycle` → `resident:/sentinel_cycle`
+  - `chronicler:scrape` → `resident:/chronicler_scrape`
+  - `ship.sh:<branch>` → `resident:/ship_sh_<branch>` (operator-driven, not file-bound)
+- After migration, wire the AcquireRequest `field_validator` on `surface_id` per §7.12.5 — auto-canonicalize at the model boundary; reject NUL bytes, `?`-bearing strings, and non-canonical schemes.
+- Un-skip the 2 deferred test gates: `test_acquire_request_rejects_query_string_in_surface_id` and `test_acquire_request_surface_id_field_validator_wired`.
+- Update `lease_advisory_scope()` to drop `surface_kind` parameter entirely (currently kept as optional+ignored).
+
+Rationale for splitting from PR 2: the canonicalize.py helper is reviewable independently; coupling it to a fleet-wide surface_id migration risks both reviews stalling on the wider impact. PR 2 ships the helper; PR 2.5 ships the migration + validator together (they MUST land atomically — validator without migration = bricked fleet; migration without validator = silently inconsistent).
 
 ## PR 3 — §7.11 deprecation CLI + Sentinel forced-release alarm (planned, not yet drafted)
 
