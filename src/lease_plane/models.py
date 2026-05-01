@@ -164,7 +164,11 @@ class AcquireHeldByOther(BaseModel):
     blocking_lease_id: UUID
     held_by_uuid: UUID
     expires_at: datetime
-    retry_after_hint_ms: int
+    # Defense-in-depth (PR 5 council fix): retry_after_hint_ms defaults to 0
+    # so any emitter that omits the field doesn't degrade to AcquireSchemaInvalid.
+    # surface_id and blocking_lease_id remain REQUIRED — missing them is a real
+    # contract violation that should surface clearly.
+    retry_after_hint_ms: int = 0
 
 
 class AcquirePermissionDenied(BaseModel):

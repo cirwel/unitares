@@ -241,12 +241,19 @@ async def test_phase_zero_acquire_race_blocked():
     """RFC §7.11.7: serializable transaction + advisory lock during deprecate_cmd
     blocks concurrent acquires from racing the Phase 0 mark.
 
-    The CLI's deprecate_cmd holds pg_advisory_xact_lock(hash(kind)). A concurrent
-    pg_advisory_xact_lock attempt on the same key blocks until the deprecate
-    transaction commits.
+    The CLI's deprecate_cmd holds pg_advisory_xact_lock(_lock_key_for_kind(kind)).
+    A concurrent pg_advisory_xact_lock attempt on the same key blocks until the
+    deprecate transaction commits.
+
+    Note (PR 5): test now imports _lock_key_for_kind() — the SHA-256-derived
+    deterministic key. The pre-PR-5 implementation used `abs(hash(kind))` which
+    is salted per-process by PYTHONHASHSEED, so the test passed only by accident
+    (both holder and deprecate_cmd ran in the same process). PR 5 fixes the CLI;
+    this test now uses the same helper as production.
     """
     import asyncio
     from scripts.dev import lease_plane_deprecate as cli
+    from scripts.dev.lease_plane_deprecate import _lock_key_for_kind
 
     await ensure_test_database_schema()
     conn = await asyncpg.connect(TEST_DB_URL)
@@ -254,7 +261,7 @@ async def test_phase_zero_acquire_race_blocked():
         await _cleanup(conn)
 
         kind = "td"
-        lock_key = abs(hash(kind)) % (2**31 - 1)
+        lock_key = _lock_key_for_kind(kind)
 
         # Open a separate connection that holds the SAME advisory lock.
         # While it holds, deprecate_cmd's serializable transaction must wait.

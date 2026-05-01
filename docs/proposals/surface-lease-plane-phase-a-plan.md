@@ -204,9 +204,34 @@ Scope shipped:
 | §7.3.5 _urllib_transport 401 fallback | same | `test_urllib_transport_401_returns_permission_denied_when_no_body` | DONE |
 | §7.3.5 _urllib_transport 5xx fallback | same | `test_urllib_transport_500_returns_service_unavailable_when_no_body` | DONE |
 
-## PR 5+ — Phase B prerequisites (planned, not yet drafted)
+## PR 5 — Council BLOCK fixes from PR 1-4 stack review (this branch: impl/lease-plane-phase-a-pr5-council-fixes)
 
-Non-blocking for Phase A; lifts gates surfaced in §9 Phase B prerequisites:
+Three-voice council pass on the PR 1-4 cumulative stack (dialectic, code-reviewer, live-verifier; adversarial framing per `feedback_council-adversarial-prompt.md`) surfaced 3 BLOCKs and several CONCERNs/NITs. PR 5 fixes the BLOCKs + the small CONCERNs/NITs; bigger CONCERNs (Phase 2/3 atomicity rewrite, Elixir router canonicalization, Sentinel asyncpg pool) deferred to PR 6+.
+
+### PR 5 — RFC gate → code surface → test name → status table
+
+| Gate | Code | Test | Status |
+|------|------|------|--------|
+| BLOCK 1 — Elixir 409 emits all 5 v0.7 §7.3.2 fields | `elixir/lease_plane/lib/unitares_lease_plane/{http_router.ex,repo.ex}` | Elixir test "different holder → 409 held_by_other" extended (operator-verified via `mix test`) | DONE |
+| BLOCK 1 defense-in-depth — `retry_after_hint_ms` defaults to 0 | `src/lease_plane/models.py::AcquireHeldByOther` | (covered by existing AcquireHeldByOther parse tests + new test below) | DONE |
+| BLOCK 2 — CLI advisory lock key deterministic across processes | `scripts/dev/lease_plane_deprecate.py::_lock_key_for_kind` | `test_deprecate_lock_key_stable_across_processes` (subprocess-based) | DONE |
+| BLOCK 3 — restore `earned_status` immutability guard | `db/postgres/migrations/029_lease_plane_earned_status_guard.sql` | `test_migration_029_blocks_earned_status_update`, `test_migration_029_still_allows_release_update` | DONE |
+| CONCERN — `acquire_with_retry` validates `max_attempts >= 1` and `floor_s <= ceiling_s` | `src/lease_plane/client.py::acquire_with_retry` guards | `test_acquire_with_retry_rejects_max_attempts_below_1`, `test_acquire_with_retry_rejects_floor_exceeding_ceiling` | DONE |
+| CONCERN — Sentinel cursor stops advancing to `sweep_completed_at` | `agents/sentinel/forced_release_alarm.py::_poll_inner` | (covered by existing `test_sentinel_force_release_alarm_dedupes_via_cursor`; cursor advance now event-ts only) | DONE |
+| NIT — drop redundant inner import in `acquire_with_retry` | `src/lease_plane/client.py::acquire_with_retry` | (no test; cosmetic) | DONE |
+
+Race-window test updated (`tests/test_sentinel_forced_release_alarm.py::test_phase_zero_acquire_race_blocked`) to import `_lock_key_for_kind` instead of computing `abs(hash(kind))` locally — the pre-PR-5 test only passed because both holder and CLI ran in the same Python process; now exercises the same helper as production.
+
+## PR 6+ — Deferred council CONCERNs and Phase B prerequisites
+
+Bigger council CONCERNs (need design discussion):
+- §7.11.2 Phase 2/3 atomicity rewrite — CLI sub-commands don't enforce same-session atomicity. Either coalesce into `deprecate-and-finalize` super-command or amend RFC §7.11.2.
+- Elixir router server-side canonicalization (split-brain prevention from non-Python callers).
+- Sentinel asyncpg pool wiring (CLAUDE.md anyio pattern; current code opens fresh connection per cycle).
+- `lease.deprecation_marked` and `lease.deprecation_migrated` event-type vocabulary is in CHECK constraint but never emitted by code.
+- §9 RFC test-name reconciliation (named tests semantically covered but not under contracted names).
+
+Phase B prerequisites (non-blocking for Phase A):
 - Payload-shape standardization pass — commits to writing canonicalized `surface_id` (per §7.12.1) into `audit.tool_usage.payload`, no percent-encoding (per §7.2.8 cross-track).
 - `unitares_doctor.py` extension to lint that no Elixir source mentions a scheme not in the live grammar CHECK.
 - §7.5 `remote_heartbeat` instrumentation (operator action — measure Pi↔Mac heartbeat gap distribution ≥7d before any `remote_heartbeat` Phase B promotion).

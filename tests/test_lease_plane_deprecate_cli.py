@@ -286,3 +286,36 @@ async def test_deprecation_sweep_requires_force_release_token(monkeypatch):
     finally:
         await _cleanup(conn)
         await conn.close()
+
+
+def test_deprecate_lock_key_stable_across_processes():
+    """PR 5 council BLOCK fix — advisory lock key must be deterministic across
+    Python invocations. PYTHONHASHSEED randomizes string hash() per-process,
+    silently breaking the §7.11.7 race-window protection. CLI must use a
+    stable hash (e.g., hashlib.sha256) for the advisory-lock key."""
+    import subprocess
+    cmd = [
+        "python3", "-c",
+        "from scripts.dev.lease_plane_deprecate import _lock_key_for_kind; "
+        "print(_lock_key_for_kind('td'))",
+    ]
+    out_a = subprocess.run(
+        cmd, capture_output=True, text=True, check=True, cwd=str(project_root),
+    ).stdout.strip()
+    out_b = subprocess.run(
+        cmd, capture_output=True, text=True, check=True, cwd=str(project_root),
+    ).stdout.strip()
+    assert out_a == out_b, (
+        f"lock key must be stable across Python processes for '{__name__}' to "
+        f"protect §7.11.7 race window; got {out_a!r} vs {out_b!r}"
+    )
+    # Different kinds produce different keys.
+    cmd_resident = [
+        "python3", "-c",
+        "from scripts.dev.lease_plane_deprecate import _lock_key_for_kind; "
+        "print(_lock_key_for_kind('resident'))",
+    ]
+    out_resident = subprocess.run(
+        cmd_resident, capture_output=True, text=True, check=True, cwd=str(project_root),
+    ).stdout.strip()
+    assert out_resident != out_a, "different kinds must produce different lock keys"
