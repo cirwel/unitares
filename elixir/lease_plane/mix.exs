@@ -26,7 +26,9 @@ defmodule UnitaresLeasePlane.MixProject do
     [
       {:postgrex, "~> 0.20"},
       {:jason, "~> 1.4"},
-      {:plug, "~> 1.16"},
+      # Plug 1.18+ — depends on the Plug.Parsers.ParseError shape that
+      # SafeParsers / HTTPRouter both rely on (PR #253 council).
+      {:plug, "~> 1.18"},
       {:bandit, "~> 1.6"}
     ]
   end
