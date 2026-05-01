@@ -1,7 +1,7 @@
 ---
-status: DRAFT-v0.4 (council-clean; cross-linked with parallel ontology-track plan; implementation skeleton captured)
+status: DRAFT-v0.6 (§7.9 + §7.10 promoted Tentative → Resolved; council pass queued on §7.2/§7.3)
 authored: 2026-04-30
-amended: 2026-04-30 (v0.1, v0.2, v0.3, v0.4 same session)
+amended: 2026-04-30 (v0.1, v0.2, v0.3, v0.4, v0.5, v0.6 same session)
 council_pass_1: 2026-04-30
 ack_pass_1: 2026-04-30
 author_session: agent-68437d77-65c (claude_code-claude_68437d77)
@@ -567,23 +567,27 @@ Three options:
 
 **Anti-recursion guard:** the lease plane MUST NOT acquire leases for its own outbox writes (would be a self-deadlock at startup). This is enforced by code: the lease-plane-internal Postgres role does not have `INSERT` privilege on `surface_leases` for `surface_kind='lease_plane'`. Belt-and-braces.
 
-### 7.9 Surface_id renames / re-keying (council finding 4.2)
+### 7.9 Surface_id renames / re-keying (council finding 4.2) — RESOLVED in v0.6
 
 A file rename, dialectic-session ID rotation, or resident relabel changes a surface's canonical ID. Active leases keyed on the old ID become orphans; new acquires on the new ID succeed; the "same surface" is double-leased semantically while the index thinks each entry is unique.
 
-**Tentative:** v0 does not handle this. Active leases on a renamed surface must be explicitly released by the holder and re-acquired against the new ID. If the holder is unaware of the rename (e.g., another agent renamed the file), the orphan lease ages out via TTL. Document the gap in the operator runbook; revisit in a v1 if it becomes a real-world incident.
+**Resolution:** v0 explicitly does not handle rename-aware relocation. Active leases on a renamed surface must be explicitly released by the holder and re-acquired against the new ID. If the holder is unaware of the rename (e.g., another agent renamed the file out from under it), the orphan lease ages out via TTL on its `original_ttl_s` clock — at most 1h per the §4.4 hard cap. The "double-leased semantically" window is bounded by `original_ttl_s` and not surfaced as a caller-facing error.
 
-**Open question:** should `surface_id` be a *content-derived hash* (e.g., file inode + creation timestamp) instead of the literal path, to make renames invisible to the lease layer? This trades simplicity for robustness and probably belongs in v1, not v0.
+**Operator-runbook commitment:** `docs/operations/lease-plane-operator-runbook.md` MUST document the rename-orphan failure mode and the manual-release procedure before Phase A ships. Tracked in §9 checklist.
 
-### 7.10 Force-release authority (council finding 4.3)
+**Deferred to v1 (not v0):** content-derived `surface_id` (e.g., file inode + ctime, dialectic-session content-hash) to make renames invisible to the lease layer. Trades simplicity for robustness; warrants its own RFC. Until then, the rename gap is a *known and bounded* operational hazard, not an unresolved design question.
+
+### 7.10 Force-release authority (council finding 4.3) — RESOLVED in v0.6
 
 `release_reason='forced'` exists in §4.4.1 vocabulary but the RFC didn't specify *who can issue it*. Force-release is a privilege-escalation surface: any caller who can force-release can free another agent's lease and acquire it themselves.
 
-**Tentative:** force-release requires a separate elevated bearer token. Token name conforms to the existing `~/.config/cirwel/secrets.env` convention (noun-first, `_TOKEN` suffix; cf. `ZENODO_TOKEN`, `CLOUDFLARE_API_TOKEN`, `WORKERS_API_TOKEN`): **`LEASE_FORCE_RELEASE_TOKEN`** (closes ack-pass DRIFT: prior `OPERATOR_FORCE_RELEASE_TOKEN` broke the pattern). Operator-only. Logged to `lease_plane_events` with `event_type='forced'` and the operator's session_id, projected to `audit.tool_usage` like any other event. Sentinel alarm fires on every force-release event regardless of context — this is rare enough that an alarm-on-every-event is appropriate, not noisy.
+**Resolution:** force-release requires a separate elevated bearer token. Token name conforms to the existing `~/.config/cirwel/secrets.env` convention (noun-first, `_TOKEN` suffix; cf. `ZENODO_TOKEN`, `CLOUDFLARE_API_TOKEN`, `WORKERS_API_TOKEN`): **`LEASE_FORCE_RELEASE_TOKEN`**. Operator-only. Logged to `lease_plane_events` with `event_type='forced'` and the operator's session_id, projected to `audit.tool_usage` like any other event. Sentinel alarm fires on every force-release event regardless of context — this is rare enough that an alarm-on-every-event is appropriate, not noisy.
 
-**Scope (v0): force-release is local-Mac-only, by design** (closes ack-pass CONCERN: token distribution for remote operator sessions). The token lives at `~/.config/cirwel/secrets.env` mode 600 on the governance MCP host. Off-host force-release (laptop while traveling, remote `:observer` session) is *not supported in v0*; the operator either SSHes to the Mac or waits for the lease's TTL. v1 may revisit this with the Cloudflare-tunnel + `X-Anima-Admin` pattern (cf. `anima-admin-gate.md`) if real-world incidents justify the token-distribution complexity.
+**Scope (v0): force-release is local-Mac-only, by design.** The token lives at `~/.config/cirwel/secrets.env` mode 600 on the governance MCP host. Off-host force-release (laptop while traveling, remote `:observer` session) is *not supported in v0*; the operator either SSHes to the Mac or waits for the lease's TTL. v1 may revisit this with the Cloudflare-tunnel + `X-Anima-Admin` pattern (cf. `anima-admin-gate.md`) if real-world incidents justify the token-distribution complexity.
 
-**Anti-pattern:** the standard MCP bearer token (`GOVERNANCE_TOKEN`) must NOT permit force-release. Confirmed via integration test before Phase A ships.
+**Anti-pattern (test-gated):** the standard MCP bearer token (`GOVERNANCE_TOKEN`) must NOT permit force-release. **Phase A ships only after** an integration test confirms that a force-release request authenticated with `GOVERNANCE_TOKEN` (and any token *other than* `LEASE_FORCE_RELEASE_TOKEN`) is rejected at the contract layer, not just the application layer. This test is a §9 checklist gate.
+
+**Token-rotation note:** `LEASE_FORCE_RELEASE_TOKEN` follows the same rotation cadence as other operator-scoped tokens at `~/.config/cirwel/secrets.env`. No special rotation infrastructure required for v0; rotation is manual operator action followed by `launchctl kickstart` of the lease-plane LaunchAgent to reload the secrets.env.
 
 ## 8. Concerns / counter-arguments / minority views
 
@@ -619,11 +623,12 @@ A Python reference implementation of every endpoint in §5 (`asyncio.Lock` per-s
 
 Required before any `.ex` file is written:
 
-- [ ] Council pass: dialectic-knowledge-architect, feature-dev:code-reviewer, live-verifier (parallel)
-- [ ] §7 open questions all answered (RFC tentative -> RFC committed)
-- [ ] Shelf-Python sketch checked in alongside the Elixir spec — same schema, same API, same return shapes
-- [ ] Operational runbook draft: `docs/operations/lease-plane-operator-runbook.md` (stub created alongside this RFC; needs concrete commands once the service exists)
+- [x] Council pass: dialectic-knowledge-architect, feature-dev:code-reviewer, live-verifier (parallel) — v0.2/v0.3/v0.5
+- [ ] §7 open questions all answered (RFC tentative -> RFC committed) — §7.1/7.4/7.6/7.8 resolved v0.2; §7.5/7.7 resolved v0.2 with operator-action carve-out; **§7.9/7.10 resolved v0.6**; §7.2/7.3 council pass queued v0.6
+- [x] Shelf-Python sketch checked in alongside the Elixir spec — same schema, same API, same return shapes (v0.4)
+- [ ] Operational runbook draft: `docs/operations/lease-plane-operator-runbook.md` (stub created alongside this RFC; needs concrete commands once the service exists). **v0.6 commitment:** runbook MUST cover (a) §7.9 rename-orphan manual-release procedure, and (b) §7.10 `LEASE_FORCE_RELEASE_TOKEN` provisioning + rotation steps.
 - [ ] Sentinel monitoring spec for `/v1/lease/status?surface_id=__healthcheck__`
+- [ ] **Integration test (§7.10 gate):** confirm `GOVERNANCE_TOKEN` cannot force-release; only `LEASE_FORCE_RELEASE_TOKEN` succeeds. Rejection at contract layer, not application layer.
 - [ ] Decision: which exact surface_kind goes first into advisory (probably `dialectic:/`)
 - [ ] Decision on §6.1 promotion-gate criteria — what specifically counts as "the conflict log says 'we would have prevented a real bug here'"
 
@@ -639,6 +644,30 @@ This is a 4-8 week spike. It trades against:
 The technical case is strong (three independent reviewers converged). The strategic case is the operator's call. If shelved, file this RFC as captured-decision so the next session doesn't re-litigate the substrate question from scratch.
 
 ## 11. Versions / changelog
+
+- **v0.6 (2026-04-30, same session):** Promoted §7.9 (surface_id renames) and §7.10 (force-release authority) from *Tentative* to *Resolved*, locking in the v0.2/v0.3 text as committed contract. Council pass queued in parallel on the two remaining open questions (§7.2 surface ID schema; §7.3 conflict semantics on `held_by_other`). Material changes:
+
+  *§7.9 — Resolved:*
+  - "v0 does not handle this" promoted from tentative to *committed scope*. The orphan window is now characterized as bounded (≤ `original_ttl_s`, hard-capped at 1h per §4.4); it is a *known and bounded* operational hazard, not an unresolved design question.
+  - Operator-runbook commitment surfaced explicitly: rename-orphan failure mode + manual-release procedure must land before Phase A. Tracked in §9 checklist.
+  - Content-derived `surface_id` (inode + ctime, dialectic-session content-hash) deferred to v1 RFC; called out by name so future readers don't re-litigate.
+
+  *§7.10 — Resolved:*
+  - `LEASE_FORCE_RELEASE_TOKEN` at `~/.config/cirwel/secrets.env` (mode 600, local-Mac-only, Sentinel-alarm-on-every-event) is the committed mechanism.
+  - Anti-pattern test promoted from "Confirmed via integration test before Phase A ships" prose to a §9 checklist gate: `GOVERNANCE_TOKEN` cannot force-release; only `LEASE_FORCE_RELEASE_TOKEN` succeeds; rejection at the contract layer, not application layer. Phase A blocks on this test passing.
+  - Token-rotation note added: manual operator action + `launchctl kickstart` of the lease-plane LaunchAgent. No special rotation infrastructure for v0.
+
+  *§9 checklist:*
+  - Council-pass and shelf-Python items marked complete with backreferences.
+  - §7-open-questions item annotated with per-§ resolution status; §7.2/§7.3 explicitly named as the remaining queue.
+  - New checklist row added for the §7.10 integration-test gate.
+
+  *Council queue (not yet executed):*
+  - §7.2 (Surface ID schema — typed scheme `file:///`, `dialectic:/`, `td:/`, `resident:/` vs opaque; per-holder cardinality)
+  - §7.3 (Conflict semantics on `held_by_other` — abort default vs wait-with-timeout vs auto-handoff)
+  - Council to be dispatched in parallel: `dialectic-knowledge-architect` + `feature-dev:code-reviewer` + `live-verifier`, adversarial framing per `feedback_council-adversarial-prompt.md`.
+
+  *No schema, contract, or implementation changes.* This version is purely status promotion and council scheduling; no new technical claims beyond what was already in v0.2/v0.3.
 
 - **v0.5 (2026-04-30, same session):** Implementation council on the captured `src/lease_plane/` skeleton (parallel: dialectic-knowledge-architect / feature-dev:code-reviewer / live-verifier; adversarial framing per `feedback_council-adversarial-prompt.md`). One critical bug + four contract-staleness items found and addressed in this revision. Material changes:
 
