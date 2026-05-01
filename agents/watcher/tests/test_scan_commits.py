@@ -15,6 +15,7 @@ Edge cases that need to stay locked down:
 
 from __future__ import annotations
 
+import contextlib
 import json
 
 import pytest
@@ -248,4 +249,71 @@ class TestScanCommitsResilience:
         _seed(watcher_module.FINDINGS_FILE, _seed_finding(fp, status="open"))
         body = f"fixes {fp}\nalso see {fp}"
         make_subprocess_run(_git_log_record("d" * 40, "fix", body))
+        assert watcher_module.scan_commits() == 1
+
+
+class TestScanCommitsLeaseAdvisory:
+    """Phase A advisory lease wiring (RFC v0.5 §6.1).
+
+    These tests verify that `scan_commits` routes through the lease plane's
+    advisory scope, but DO NOT enforce any lease-related behavior — Phase A
+    is telemetry-only. The body of `scan_commits` must run identically
+    whether the lease is acquired, contended, or unavailable.
+    """
+
+    def test_scan_commits_invokes_lease_advisory_with_expected_surface(
+        self, make_subprocess_run, monkeypatch
+    ):
+        """Surface_id must be stable across runs so Phase A telemetry can be
+        correlated. Locking the shape down here so a future refactor that
+        renames the surface gets a noisy test failure instead of silent
+        telemetry drift."""
+        from src.lease_plane import advisory as advisory_module
+
+        captured: dict = {}
+        original_scope = advisory_module.lease_advisory_scope
+
+        @contextlib.contextmanager
+        def _capturing_scope(*args, **kwargs):
+            captured.update(kwargs)
+            with original_scope(*args, **kwargs) as ret:
+                yield ret
+
+        monkeypatch.setattr(advisory_module, "lease_advisory_scope", _capturing_scope)
+
+        fp = "abcd1234ef005678"
+        _seed(watcher_module.FINDINGS_FILE, _seed_finding(fp, status="open"))
+        make_subprocess_run(_git_log_record("d" * 40, "fix", fp))
+
+        # No bearer token in test env, so the wrapper falls back to disabled
+        # client (every acquire → service_unavailable). The body MUST still
+        # run end-to-end.
+        monkeypatch.delenv("LEASE_PLANE_BEARER_TOKEN", raising=False)
+        result = watcher_module.scan_commits()
+
+        assert result == 1, "Phase A advisory: body must run regardless of lease outcome"
+
+        assert captured["surface_kind"] == "watcher_scan_commits"
+        assert captured["surface_id"].startswith("watcher:scan_commits:")
+        assert captured["ttl_s"] == 60
+        assert "since=" in captured["intent"]
+
+    def test_scan_commits_runs_when_lease_held_by_other(
+        self, make_subprocess_run, monkeypatch
+    ):
+        """held_by_other MUST NOT block Phase A — body still runs."""
+        from src.lease_plane import advisory as advisory_module
+
+        @contextlib.contextmanager
+        def _held_by_other_scope(**_kwargs):
+            yield "held_by_other", None
+
+        monkeypatch.setattr(
+            advisory_module, "lease_advisory_scope", _held_by_other_scope
+        )
+
+        fp = "abcd1234ef005678"
+        _seed(watcher_module.FINDINGS_FILE, _seed_finding(fp, status="open"))
+        make_subprocess_run(_git_log_record("d" * 40, "fix", fp))
+
         assert watcher_module.scan_commits() == 1
