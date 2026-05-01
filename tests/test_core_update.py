@@ -1088,6 +1088,53 @@ class TestProcessAgentUpdateExtended:
             mock_server.get_or_create_metadata.assert_called()
 
     # ------------------------------------------------------------------
+    # New agent creation: PG insert succeeds but metadata setup raises.
+    # The freshly-generated api_key (already persisted to PG) must NOT be
+    # silently replaced by the metadata-cache fallback in the except branch.
+    # ------------------------------------------------------------------
+    @pytest.mark.asyncio
+    async def test_new_agent_pg_insert_succeeds_but_meta_setup_fails_keeps_apikey(
+        self, mock_server, mock_monitor,
+    ):
+        """If get_or_create_agent succeeded (api_key is in PG), but a later
+        step in the same try block raised, the recovery branch must preserve
+        the api_key that was just persisted — not overwrite it with whatever
+        api_key the in-memory metadata cache happens to hold.
+        """
+        agent_uuid = "test-uuid-meta-fail"
+        mock_server.agent_metadata = {}
+        mock_server.get_or_create_monitor.return_value = mock_monitor
+        mock_server.monitors = {}
+
+        fallback_meta = _make_metadata(total_updates=1, api_key="stale-cached-key")
+        mock_server.get_or_create_metadata = MagicMock(
+            side_effect=[RuntimeError("metadata setup blew up"), fallback_meta]
+        )
+
+        p = self._common_patches(mock_server, agent_uuid=agent_uuid)
+        # PG insert succeeds — return a real record.
+        p["storage"].get_or_create_agent = AsyncMock(
+            return_value=(MagicMock(api_key="test-key"), True)
+        )
+
+        with self._apply_patches(p):
+            from src.mcp_handlers.core import handle_process_agent_update
+            await handle_process_agent_update({
+                "response_text": "first update",
+                "complexity": 0.5,
+            })
+
+        # PG was given the freshly-generated api_key — capture what we wrote.
+        pg_apikey = p["storage"].get_or_create_agent.call_args.kwargs["api_key"]
+        assert pg_apikey  # sanity: we did pass one
+
+        # The fallback metadata's api_key was "stale-cached-key" before the
+        # call. After recovery, it must be re-stamped to match what's in PG,
+        # so downstream code (and the in-memory cache) agree on the credential.
+        assert fallback_meta.api_key == pg_apikey
+        assert fallback_meta.api_key != "stale-cached-key"
+
+    # ------------------------------------------------------------------
     # Lines 979, 982: Existing agent sync to cache
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
