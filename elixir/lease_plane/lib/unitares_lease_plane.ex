@@ -1,0 +1,62 @@
+defmodule UnitaresLeasePlane do
+  @moduledoc """
+  Surface lease plane v0 — Elixir/OTP coordination kernel.
+
+  Public-API wrappers live here. The contract is documented in
+  `docs/proposals/surface-lease-plane-v0.md` (RFC v0.5).
+
+  Top-level invariant: BEAM owns live coordination, Python owns governance
+  truth, Postgres owns durable truth. Nothing in this module may silently
+  become source of truth for identity, EISV, KG, or calibration.
+  """
+
+  alias UnitaresLeasePlane.{LeaseHolder, LeaseSupervisor, Repo}
+
+  @doc """
+  Acquire a lease for a `local_beam` surface — spawns a `LeaseHolder`
+  GenServer that owns the lease for the lifetime of its process.
+
+  Returns `{:ok, lease, idempotent_flag}` where `idempotent_flag` is `:new`
+  or `:idempotent`, or `{:error, reason}` matching the typed-absence shapes
+  from RFC §4.5.
+  """
+  @spec acquire_local_beam(map()) :: {:ok, map(), :new | :idempotent} | {:error, term()}
+  def acquire_local_beam(%{} = params) do
+    LeaseSupervisor.start_holder(params)
+  end
+
+  @doc """
+  Acquire a lease for a `remote_heartbeat` surface — no BEAM process is
+  spawned; the row is written and the remote client must HTTP-heartbeat
+  before `expires_at` or be reaped.
+  """
+  @spec acquire_remote_heartbeat(map()) :: {:ok, map(), :new | :idempotent} | {:error, term()}
+  def acquire_remote_heartbeat(%{} = params) do
+    Repo.acquire(Map.put(params, :holder_kind, "remote_heartbeat"))
+  end
+
+  @doc "Status by `surface_id`. Returns `{:ok, lease | nil}` or `{:error, reason}`."
+  @spec status(String.t()) :: {:ok, map() | nil} | {:error, term()}
+  def status(surface_id) when is_binary(surface_id), do: Repo.status(surface_id)
+
+  @doc "Renew a lease — extends `expires_at` by the immutable `original_ttl_s`."
+  @spec renew(binary()) :: :ok | {:error, term()}
+  def renew(lease_id) do
+    case LeaseSupervisor.holder_for(lease_id) do
+      {:ok, pid} -> LeaseHolder.renew(pid)
+      :error -> Repo.renew(lease_id)
+    end
+  end
+
+  @doc """
+  Release a lease. Local-BEAM holders should normally let process death do
+  this; calling release/2 directly is the explicit-shutdown path.
+  """
+  @spec release(binary(), String.t()) :: :ok | {:error, term()}
+  def release(lease_id, release_reason \\ "normal") do
+    case LeaseSupervisor.holder_for(lease_id) do
+      {:ok, pid} -> LeaseHolder.release(pid, release_reason)
+      :error -> Repo.release(lease_id, release_reason)
+    end
+  end
+end
