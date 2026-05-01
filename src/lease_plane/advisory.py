@@ -43,9 +43,11 @@ from . import (
 
 __all__ = [
     "AdvisoryOutcome",
+    "acquire_advisory",
     "lease_advisory_scope",
     "make_advisory_client",
     "new_holder_uuid",
+    "release_advisory",
 ]
 
 logger = logging.getLogger(__name__)
@@ -129,18 +131,24 @@ def lease_advisory_scope(
         audit_session=audit_session,
     )
 
-    outcome, lease_id = _acquire_and_classify(advisory_client, request)
+    outcome, lease_id = acquire_advisory(advisory_client, request)
 
     try:
         yield outcome, lease_id
     finally:
         if lease_id is not None:
-            _release_quiet(advisory_client, lease_id)
+            release_advisory(advisory_client, lease_id)
 
 
-def _acquire_and_classify(
+def acquire_advisory(
     client: LeasePlaneClient, request: AcquireRequest
 ) -> tuple[AdvisoryOutcome, uuid.UUID | None]:
+    """Acquire a Phase A advisory lease and classify the outcome.
+
+    Public counterpart to `lease_advisory_scope` for callers that need the
+    acquire-without-context-manager shape (e.g., bash glue calling a CLI).
+    Always non-fatal — never raises from the lease layer.
+    """
     try:
         result = client.acquire(request)
     except Exception as exc:  # defensive — client is supposed to be no-raise
@@ -204,7 +212,12 @@ def _acquire_and_classify(
     return "client_error", None
 
 
-def _release_quiet(client: LeasePlaneClient, lease_id: uuid.UUID) -> None:
+def release_advisory(client: LeasePlaneClient, lease_id: uuid.UUID) -> None:
+    """Release a Phase A advisory lease, swallowing any error.
+
+    Public counterpart to the context manager's exit-time release. Logs
+    the outcome but never raises — Phase A cleanup is best-effort.
+    """
     try:
         result = client.release(ReleaseRequest(lease_id=lease_id, release_reason="normal"))
         logger.info(

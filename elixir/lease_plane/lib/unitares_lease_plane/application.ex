@@ -1,5 +1,33 @@
 defmodule UnitaresLeasePlane.Application do
-  @moduledoc false
+  @moduledoc """
+  OTP entry point for the lease plane.
+
+  ## HTTP bind discipline
+
+  Defaults to IPv4 `127.0.0.1:8788`. The Python contract anchor uses the
+  same dotted-quad literal (`http://127.0.0.1:8788`) so the round-trip is
+  consistent without DNS in the path.
+
+  Note: on macOS Sonoma+ with the default `/etc/hosts`, `localhost`
+  resolves to `::1` (IPv6) before `127.0.0.1`. A client that uses
+  `http://localhost:8788` instead of the dotted-quad will fail with
+  connection refused — Bandit binds the IPv4 socket only.
+
+  Operators who need the IPv6 path can override:
+
+      config :lease_plane, http_ip: {0, 0, 0, 0, 0, 0, 0, 1}
+
+  Or run a second listener on the same port via custom supervision —
+  Bandit child specs are independent. Off-host exposure is intentionally
+  not a built-in option in v0; the bearer-auth fail-closed posture
+  assumes a single trust boundary at `localhost`.
+
+  ## Database URL
+
+  `parse_database_url/1` uses `URI.parse/1` plus `URI.decode/1` on the
+  username and password components so percent-encoded credentials
+  (e.g., `p%40ss` for `p@ss`) survive the round-trip into Postgrex.
+  """
 
   use Application
 
@@ -49,7 +77,7 @@ defmodule UnitaresLeasePlane.Application do
         raise "UNITARES_LEASE_PLANE_DATABASE_URL or :lease_plane database_url config required"
 
     pool_size = Application.get_env(:lease_plane, :pool_size, 4)
-    parsed = parse_url(url)
+    parsed = parse_database_url(url)
 
     [
       hostname: parsed.host,
@@ -62,17 +90,35 @@ defmodule UnitaresLeasePlane.Application do
     ]
   end
 
-  defp parse_url("postgresql://" <> rest) do
-    [creds_host, db] = String.split(rest, "/", parts: 2)
-    [creds, host_port] = String.split(creds_host, "@", parts: 2)
-    [user, pass] = String.split(creds, ":", parts: 2)
+  @doc false
+  # Public for testing only. Parses a libpq-style URL into a Postgrex opts
+  # map, with URI.decode/1 applied to user and password so percent-encoded
+  # credentials (e.g., "p%40ss" for "p@ss") survive into the driver.
+  def parse_database_url("postgresql://" <> _ = url), do: parse_database_url(URI.parse(url))
+  def parse_database_url("postgres://" <> _ = url), do: parse_database_url(URI.parse(url))
 
-    {host, port} =
-      case String.split(host_port, ":", parts: 2) do
-        [h, p] -> {h, String.to_integer(p)}
-        [h] -> {h, 5432}
+  def parse_database_url(%URI{scheme: scheme} = uri) when scheme in ["postgresql", "postgres"] do
+    {user, pass} =
+      case uri.userinfo do
+        nil ->
+          raise ArgumentError, "database_url must include user:password@host"
+
+        userinfo ->
+          case String.split(userinfo, ":", parts: 2) do
+            [u, p] -> {URI.decode(u), URI.decode(p)}
+            [u] -> {URI.decode(u), ""}
+          end
       end
 
-    %{username: user, password: pass, host: host, port: port, database: db}
+    host = uri.host || raise(ArgumentError, "database_url missing host")
+    port = uri.port || 5432
+
+    database =
+      case uri.path do
+        "/" <> db when db != "" -> db
+        _ -> raise ArgumentError, "database_url missing database name"
+      end
+
+    %{username: user, password: pass, host: host, port: port, database: database}
   end
 end

@@ -606,7 +606,25 @@ class VigilAgent(GovernanceAgent):
         return result
 
     async def run_cycle(self, client: GovernanceClient) -> CycleResult | None:
-        """Run one heartbeat cycle."""
+        """Run one heartbeat cycle.
+
+        Phase A advisory lease wraps the cycle so concurrent Vigil instances
+        (rare but possible — operator running --once while launchd cron also
+        fires) surface in telemetry. Outcome does NOT gate execution; held
+        leases proceed normally per RFC v0.5 §6.1.
+        """
+        from src.lease_plane.advisory import lease_advisory_scope, new_holder_uuid
+
+        with lease_advisory_scope(
+            surface_id="vigil:cycle",
+            surface_kind="vigil_cycle",
+            holder_agent_uuid=new_holder_uuid(),
+            ttl_s=300,
+            intent="vigil heartbeat cycle",
+        ):
+            return await self._run_cycle_inner(client)
+
+    async def _run_cycle_inner(self, client: GovernanceClient) -> CycleResult | None:
         findings: List[str] = []
         issues = 0
         prev_state = self.load_state()

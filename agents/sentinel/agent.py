@@ -488,7 +488,25 @@ class SentinelAgent(GovernanceAgent):
     # --- Analysis cycle (SDK pattern: return CycleResult) ---
 
     async def run_cycle(self, client: GovernanceClient = None) -> CycleResult | None:
-        """Run one analysis cycle: detect anomalies, build check-in summary."""
+        """Run one analysis cycle: detect anomalies, build check-in summary.
+
+        Phase A advisory lease wraps the cycle. Sentinel runs continuously
+        (analysis_interval=300s by default), so two concurrent Sentinel
+        instances on the same Mac would surface here as held_by_other.
+        Outcome does NOT gate execution per RFC v0.5 §6.1.
+        """
+        from src.lease_plane.advisory import lease_advisory_scope, new_holder_uuid
+
+        with lease_advisory_scope(
+            surface_id="sentinel:cycle",
+            surface_kind="sentinel_cycle",
+            holder_agent_uuid=new_holder_uuid(),
+            ttl_s=300,
+            intent="sentinel analysis cycle",
+        ):
+            return await self._run_cycle_inner()
+
+    async def _run_cycle_inner(self) -> CycleResult | None:
         self._cycle_count += 1
         findings = self.fleet.analyze(self_agent_id=self.agent_uuid or "")
         fleet = self.fleet.fleet_summary()

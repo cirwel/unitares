@@ -328,7 +328,13 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
       assert result.status == 503
       body = Jason.decode!(result.resp_body)
-      assert body == %{"ok" => false, "error" => "service_unavailable", "reason" => "internal error"}
+
+      assert body == %{
+               "ok" => false,
+               "error" => "service_unavailable",
+               "reason" => "internal error"
+             }
+
       # Verify the leaky inspect string never made it to the wire.
       refute result.resp_body =~ "hunter2"
     end
