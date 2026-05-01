@@ -13,14 +13,34 @@ defmodule UnitaresLeasePlane.Application do
   end
 
   defp start_full do
-    children = [
-      {Postgrex, postgrex_opts()},
-      {Registry, keys: :unique, name: UnitaresLeasePlane.HolderRegistry},
-      UnitaresLeasePlane.LeaseSupervisor
-    ]
+    # Bearer token must be sourced from env at boot. Fails closed (HTTPAuth
+    # returns 503) if absent — never silently open.
+    if token = System.get_env("LEASE_PLANE_BEARER_TOKEN") do
+      Application.put_env(:lease_plane, :bearer_token, token)
+    end
+
+    children =
+      [
+        {Postgrex, postgrex_opts()},
+        {Registry, keys: :unique, name: UnitaresLeasePlane.HolderRegistry},
+        UnitaresLeasePlane.LeaseSupervisor
+      ] ++ http_children()
 
     opts = [strategy: :one_for_one, name: UnitaresLeasePlane.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp http_children do
+    if Application.get_env(:lease_plane, :start_http, true) do
+      port = Application.get_env(:lease_plane, :http_port, 8788)
+      ip = Application.get_env(:lease_plane, :http_ip, {127, 0, 0, 1})
+
+      [
+        {Bandit, plug: UnitaresLeasePlane.HTTPRouter, ip: ip, port: port}
+      ]
+    else
+      []
+    end
   end
 
   defp postgrex_opts do

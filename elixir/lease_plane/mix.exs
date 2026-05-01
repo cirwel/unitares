@@ -25,10 +25,9 @@ defmodule UnitaresLeasePlane.MixProject do
   defp deps do
     [
       {:postgrex, "~> 0.20"},
-      {:jason, "~> 1.4"}
-      # HTTP layer in the next iteration:
-      # {:plug, "~> 1.16"},
-      # {:bandit, "~> 1.6"}
+      {:jason, "~> 1.4"},
+      {:plug, "~> 1.16"},
+      {:bandit, "~> 1.6"}
     ]
   end
 end
