@@ -58,9 +58,31 @@ class KnowledgeDiscoverySource:
 
 
 class WatcherFindingSource(KnowledgeDiscoverySource):
-    """Same as KnowledgeDiscoverySource — Watcher posts via post_finding
-    which lands in knowledge.discoveries. Subclassed only so the source
-    name on snapshot rows is forensically distinct from Vigil's writes.
+    """Counts ``knowledge.discoveries`` rows authored by Watcher's UUID.
+
+    NOTE: ``post_finding`` (Watcher's hot path for high/critical
+    detections) lands in ``event_detector``'s in-memory ring buffer,
+    NOT in ``knowledge.discoveries`` — the Apr 15 commit (fd8f7554)
+    that introduced ``record_event`` deliberately scoped it as
+    ephemeral so periodic re-emitters don't flood the KG. The KG
+    rows that DO show up under Watcher's UUID come from explicit
+    ``leave_note`` calls (rare; 2 lifetime as of 2026-05-01).
+
+    Because Watcher is registered with ``expected_cadence_s=None``
+    (event-driven), its alive flag is synthesized to True
+    unconditionally (PR #248). Combined with a near-zero KG count,
+    this produces ``candidate=True`` on essentially every probe
+    tick. The calibration smoke test
+    (``tests/resident_progress/test_calibration_smoke.py``) exempts
+    event-driven residents from its 50%-ceiling rule for that
+    reason. If that exemption ever needs to go — i.e. a Watcher
+    candidate signal that means something operationally — bridge
+    the ring buffer into the probe at this source class instead
+    of changing the smoke test.
+
+    Subclass kept so the snapshot row's ``source`` column reads
+    ``watcher_findings`` rather than ``kg_writes``, preserving
+    forensic distinguishability from Vigil writes.
     """
     name = "watcher_findings"
 
