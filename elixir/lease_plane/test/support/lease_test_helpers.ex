@@ -16,7 +16,11 @@ defmodule LeaseTestHelpers do
   `test:elixir/...` which the grammar CHECK rejects.
   """
   def unique_surface_id(label) when is_binary(label) do
-    rand = :crypto.strong_rand_bytes(6) |> Base.url_encode64(padding: false)
+    # Lowercase hex so the generated surface_id is already in canonical form
+    # for the dialectic:/ scheme (which lowercases per RFC §7.12.1). Avoids
+    # spurious round-trip-mismatch failures in tests that don't intend to
+    # exercise canonicalization.
+    rand = :crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower)
     "dialectic:/test_elixir_#{label}_#{rand}"
   end
 

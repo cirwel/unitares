@@ -238,11 +238,46 @@ Phase 0 emission uses `INSERT ... RETURNING deprecation_id` so the `ON CONFLICT 
 
 The marker events use surface_id `f"{kind}:/__deprecation_marker__"` — distinct from any real lease's surface_id, makes them easy to filter in audit queries.
 
-## PR 7+ — Remaining deferred council CONCERNs and Phase B prerequisites
+## PR 7 — Elixir router server-side canonicalization + transition_handoff INSERT fix (this branch: impl/lease-plane-phase-a-pr7-elixir-canonicalize)
+
+Closes the council CONCERN named in the prior PR 7+ section: split-brain prevention when non-Python callers (curl, future Hermes/Codex/Elixir clients) hit the lease plane HTTP API directly. Also bundles a one-line surgical fix to `transition_handoff` reacquire INSERT (PR 1 oversight that was masked because migrations 026-029 had never been applied to the live `governance` DB).
+
+**Discovered while running baseline:** migrations 026, 027, 028, 029 existed as files but had never been applied to the live `governance` DB despite being landed in PRs 1, 3a, 5. `core.schema_migrations` only had versions 24, 25. Operator authorized apply at 02:26 local on 2026-05-02; mix tests went from 22/49 failing to 0/49 with the migrations present. The PR 1 `surface_kind`-INSERT-drop fix had been correctly applied to the `acquire` path but missed the `transition_handoff` reacquire path (release-and-reacquire pattern); same RFC gate (§7.2.3) and same root cause, fixed surgically here. KG finding `2026-05-02T08:22:47.029541+00:00` filed for the migration-apply gap.
+
+Scope shipped:
+- `elixir/lease_plane/lib/unitares_lease_plane/canonicalize.ex` (new) — Elixir mirror of `src/lease_plane/canonicalize.py` for the four pure-logic schemes (`dialectic`, `resident`, `capture`, `td`). Top-level rejection for NUL, length > PATH_MAX, and `?` (per RFC §7.12.4 OPERATOR_NOTE 3, mirrors Python `_validate_surface_id`). Per-scheme rules audited against Python row-by-row.
+- `file://` canonicalization deferred — module emits a `Logger.warning` on every ingress as a deferral audit trail. PR 2.5 migrated all production agents (watcher, vigil, sentinel, chronicler, ship.sh) off `file://` to `resident:/`, verified via `grep`.
+- Wired into `http_router.ex::extract_acquire_params` (POST /v1/lease/acquire) and the GET /v1/lease/status query-param handler. On `{:error, reason}` → 422 schema_invalid with reason in body.
+- `repo.ex::transition_handoff` reacquire INSERT drops `surface_kind` from the column list (PR 1 oversight).
+- `lease_test_helpers.ex::unique_surface_id` switched from `Base.url_encode64` (mixed-case) to `Base.encode16(case: :lower)` so generated test surface_ids are already canonical for `dialectic:/` (lowercase) and don't trip round-trip-mismatch in incidental tests.
+
+Three-voice council pass (dialectic-knowledge-architect + feature-dev:code-reviewer + live-verifier) ran with adversarial framing per `feedback_council-adversarial-prompt.md`. Two BLOCKs surfaced and fixed:
+- **Architect B1**: top-level `?` rejection was missing (Elixir only rejected `?` inside `resident:/`; Python rejects at top level). Fixed by adding top-level `?` check with reason `:reserved_query_string`.
+- **Reviewer B1**: `~r/[\s?#&]/u` over-rejected — PCRE `\s` matches `\r`/`\f`/`\v` plus Unicode whitespace; Python rejects exactly `(' ', '\t', '\n')`. Fixed by replacing with `~r/[ \t\n#&]/` (exact mirror, no `u` flag).
+- **Reviewer B2**: HTTP capture test computed `surface_canonical` by hand in a correct-by-coincidence way; cleanup would target wrong row on assertion failure. Fixed by computing via `Canonicalize.canonicalize/1` directly.
+- Live-verifier: 5/5 verifiable claims VERIFIED (migrations applied, grammar CHECK rejects bad scheme, mix test 88 passing pre-fix / 91 post-fix, both surface_leases INSERT paths clean, no production `file://` use, no test-tree base64url remnants).
+
+Plus addressed CONCERNs: file:// `Logger.warning` audit trail (architect C4), `td:/` empty-path parity test (architect C5), byte_size-vs-len divergence doc note (architect C3), capture:/ comma-in-member doc note (architect C6), pattern-match prefix dispatch instead of `binary_part` (architect N2). Two CONCERNs explicitly noted but not coded: capture:/ empty-member-list passthrough (Python agrees, RFC silent — unchanged) and pre-PR-7 row backfill (live-verifier confirmed `surface_leases` is empty, no backfill needed).
+
+### PR 7 — RFC gate → code surface → test name → status table
+
+| Gate | Code | Test | Status |
+|------|------|------|--------|
+| §7.12.1 server-side canonicalization on Elixir router (closes split-brain from non-Python callers) | `elixir/lease_plane/lib/unitares_lease_plane/canonicalize.ex` (new) | `test/canonicalize_test.exs` (38 unit tests covering scheme dispatch, NUL/length/`?` guards, four implemented schemes, file:// deferral, cross-language parity) | DONE |
+| §7.12.4 OPERATOR_NOTE 3 — top-level `?`-rejection (parity with Python `_validate_surface_id`) | `canonicalize.ex::canonicalize/1` top-level guard, reason `:reserved_query_string` | `"rejects ? at top level across ALL schemes (parity with Python _validate_surface_id)"` | DONE |
+| §7.12.1 wire canonicalize into POST /v1/lease/acquire | `http_router.ex::extract_acquire_params` (canonicalize before assembling params; on error → 422 schema_invalid) | `test/http_router_test.exs::"PR 7 — non-canonical scheme → 422 schema_invalid"`, `"PR 7 — capture:/ unsorted members → server stores canonical (sorted)"`, `"PR 7 — dialectic:/ uppercase → server stores canonical (lowercased)"` | DONE |
+| §7.12.1 wire canonicalize into GET /v1/lease/status | `http_router.ex` status route (canonicalize query param; on error → 422) | `test/http_router_test.exs::"GET /v1/lease/status non-canonical scheme → 422 schema_invalid"` | DONE |
+| §7.12.1 step 4 — `file://` realpath/case-fold normalization on Elixir | (deferred — moduledoc + `Logger.warning` on every `file://` ingress as audit trail) | `test/canonicalize_test.exs::"file:// (deferred normalization)"` describe block | DEFERRED — to PR 7.5 (see PR 8+ section below) |
+| §7.2.3 `transition_handoff` reacquire INSERT drops `surface_kind` (PR 1 oversight surfaced when migrations 026-029 hit live DB 2026-05-02) | `repo.ex::transition_handoff` insert column list | `test/http_router_test.exs::"accept closes the old lease and reacquires for the recipient"` (turned green from baseline-failing post-migration) | DONE |
+| Operator: apply migrations 026-029 to live `governance` DB | `db/postgres/migrations/026|027|028|029_*.sql` (already merged in PRs 1, 3a, 5; never run) | `core.schema_migrations` shows versions 24-29; KG finding `2026-05-02T08:22:47.029541+00:00` | DONE (operator action, 2026-05-02 02:26-02:27 local) |
+
+**Total: 7 rows in PR 7. Within the ≤10 methodology cap.**
+
+## PR 8+ — Remaining deferred council CONCERNs and Phase B prerequisites
 
 Bigger council CONCERNs (need design discussion):
 - §7.11.2 Phase 2/3 atomicity rewrite — CLI sub-commands don't enforce same-session atomicity. Either coalesce into `deprecate-and-finalize` super-command or amend RFC §7.11.2.
-- Elixir router server-side canonicalization (split-brain prevention from non-Python callers).
+- §7.12.1 step 4 — `file://` realpath/case-fold normalization on Elixir (PR 7.5). Needs cross-language parity harness for filesystem-state-dependent behavior. PR 7 left a `Logger.warning` audit trail so a future production `file://` call surfaces the deferral.
 - Sentinel asyncpg pool wiring (CLAUDE.md anyio pattern; current code opens fresh connection per cycle).
 - §9 RFC test-name reconciliation (named tests semantically covered but not under contracted names).
 

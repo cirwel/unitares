@@ -20,6 +20,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   require Logger
 
   alias UnitaresLeasePlane
+  alias UnitaresLeasePlane.Canonicalize
 
   plug(:match)
 
@@ -110,17 +111,30 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       nil ->
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: "surface_id required"})
 
-      surface_id ->
-        case UnitaresLeasePlane.status(surface_id) do
-          {:ok, nil} ->
-            json(conn, 200, %{ok: true, lease: nil})
-
-          {:ok, lease} ->
-            json(conn, 200, %{ok: true, lease: present_lease(lease)})
-
+      raw_surface_id ->
+        # PR 7 — server-side canonicalization (RFC v0.8 §7.12.1). Mirrors the
+        # Python field_validator so non-Python callers cannot bypass and
+        # produce split-brain rows.
+        case Canonicalize.canonicalize(raw_surface_id) do
           {:error, reason} ->
-            Logger.error("lease plane status failed: #{inspect(reason)}")
-            json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+            json(conn, 422, %{
+              ok: false,
+              error: "schema_invalid",
+              detail: "surface_id canonicalization failed: #{reason}"
+            })
+
+          {:ok, surface_id} ->
+            case UnitaresLeasePlane.status(surface_id) do
+              {:ok, nil} ->
+                json(conn, 200, %{ok: true, lease: nil})
+
+              {:ok, lease} ->
+                json(conn, 200, %{ok: true, lease: present_lease(lease)})
+
+              {:error, reason} ->
+                Logger.error("lease plane status failed: #{inspect(reason)}")
+                json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+            end
         end
     end
   end
@@ -230,10 +244,24 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     # Caller-supplied surface_kind in the body is silently ignored.
     required = ["surface_id", "holder_agent_uuid", "holder_kind", "ttl_s"]
     missing = Enum.filter(required, fn k -> is_nil(Map.get(body, k)) end)
+    raw_surface_id = Map.get(body, "surface_id")
+
+    # PR 7 — server-side canonicalization (RFC v0.8 §7.12.1). Mirror of the
+    # Python field_validator on AcquireRequest.surface_id; prevents split-brain
+    # from non-Python callers (curl, future Hermes/Codex/Elixir clients).
+    canonical_or_error =
+      if is_binary(raw_surface_id), do: Canonicalize.canonicalize(raw_surface_id), else: nil
 
     cond do
       missing != [] ->
         {:error, "missing required fields: #{Enum.join(missing, ", ")}"}
+
+      not is_binary(raw_surface_id) ->
+        {:error, "surface_id must be a string"}
+
+      match?({:error, _}, canonical_or_error) ->
+        {:error, reason} = canonical_or_error
+        {:error, "surface_id canonicalization failed: #{reason}"}
 
       Map.get(body, "holder_class") not in [nil, "process_instance", "substrate_earned"] ->
         # 'role' and other classes are rejected before the DB CHECK — surface this
@@ -247,9 +275,11 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         {:error, "ttl_s must be in (0, 3600]"}
 
       true ->
+        {:ok, canonical_surface_id} = canonical_or_error
+
         {:ok,
          %{
-           surface_id: body["surface_id"],
+           surface_id: canonical_surface_id,
            holder_agent_uuid: body["holder_agent_uuid"],
            holder_class: Map.get(body, "holder_class", "process_instance"),
            holder_kind: body["holder_kind"],

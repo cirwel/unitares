@@ -268,6 +268,9 @@ defmodule UnitaresLeasePlane.Repo do
     end
   end
 
+  # surface_kind dropped from reacquire INSERT per RFC v0.8 §7.2.3 — generated
+  # from surface_id post-026. PR 1 fixed this for acquire; the handoff path was
+  # missed and surfaced when 026-029 were applied to the live DB on 2026-05-02.
   defp transition_handoff(conn, old_lease, handoff) do
     release_sql = """
     UPDATE lease_plane.surface_leases
@@ -277,12 +280,12 @@ defmodule UnitaresLeasePlane.Repo do
 
     insert_sql = """
     INSERT INTO lease_plane.surface_leases
-      (surface_id, surface_kind, holder_agent_uuid, holder_class,
+      (surface_id, holder_agent_uuid, holder_class,
        holder_kind, holder_pid, heartbeat_required, intent,
        expires_at, original_ttl_s, audit_session, earned_status)
     VALUES
-      ($1, $2, $3, $4, 'remote_heartbeat', NULL, true, $5,
-       now() + make_interval(secs => $6), $6, $7, 'provisional')
+      ($1, $2, $3, 'remote_heartbeat', NULL, true, $4,
+       now() + make_interval(secs => $5), $5, $6, 'provisional')
     RETURNING #{@select_lease_columns}
     """
 
@@ -291,7 +294,6 @@ defmodule UnitaresLeasePlane.Repo do
 
     args = [
       old_lease.surface_id,
-      old_lease.surface_kind,
       uuid_to_binary(handoff.to_holder_agent_uuid),
       old_lease.holder_class,
       intent,

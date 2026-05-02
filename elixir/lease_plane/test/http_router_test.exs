@@ -164,18 +164,80 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       # Server echoes surface_kind from the generated column on the lease record.
       assert payload["lease"]["surface_kind"] == "dialectic"
     end
+
+    test "PR 7 — non-canonical scheme → 422 schema_invalid", _ctx do
+      body = acquire_body("ftp://nope")
+      resp = post_json("/v1/lease/acquire", body)
+
+      assert resp.status == 422
+      payload = parsed(resp)
+      assert payload["error"] == "schema_invalid"
+      assert payload["detail"] =~ "canonicalization failed"
+      assert payload["detail"] =~ "invalid_scheme"
+    end
+
+    test "PR 7 — capture:/ unsorted members → server stores canonical (sorted)" do
+      # Per PR 7 council BLOCK 2 (reviewer): construct surface_canonical via
+      # the Canonicalize helper itself, not by hand. This eliminates the
+      # correct-by-coincidence alphabetical-ordering dependency and ensures
+      # cleanup targets the same row even if canonicalize ever changes.
+      rand = Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
+      surface_in = "capture:/test_zeta_#{rand},test_alpha,test_gamma"
+      {:ok, surface_canonical} = UnitaresLeasePlane.Canonicalize.canonicalize(surface_in)
+      on_exit(fn -> cleanup_surface(surface_canonical) end)
+
+      body = acquire_body(surface_in)
+      resp = post_json("/v1/lease/acquire", body)
+
+      assert resp.status == 200
+      lease = parsed(resp)["lease"]
+      # Canonicalization happened server-side: stored surface_id is sorted.
+      assert lease["surface_id"] == surface_canonical
+      # Ditto for the generated surface_kind column.
+      assert lease["surface_kind"] == "capture"
+    end
+
+    test "PR 7 — dialectic:/ uppercase → server stores canonical (lowercased)" do
+      rand = Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
+      surface_in = "dialectic:/Test_Elixir_PR7_#{rand}"
+      surface_canonical = String.downcase(surface_in)
+      on_exit(fn -> cleanup_surface(surface_canonical) end)
+
+      body = acquire_body(surface_in)
+      resp = post_json("/v1/lease/acquire", body)
+
+      assert resp.status == 200
+      assert parsed(resp)["lease"]["surface_id"] == surface_canonical
+    end
   end
 
   describe "GET /v1/lease/status" do
     test "unknown surface → ok with lease=nil" do
       resp =
         :get
-        |> conn("/v1/lease/status?surface_id=test:elixir/http/never-acquired")
+        |> conn("/v1/lease/status?surface_id=dialectic:/test_elixir_http_never_acquired")
         |> authed()
         |> HTTPRouter.call(@opts)
 
       assert resp.status == 200
       assert parsed(resp)["lease"] == nil
+    end
+
+    test "non-canonical scheme → 422 schema_invalid" do
+      # PR 7 — server-side canonicalization rejects schemes outside the v0.8
+      # canonical list. Pre-PR-7 this would have hit the underlying status
+      # query and returned nil; post-PR-7 it's a typed-absence error.
+      resp =
+        :get
+        |> conn("/v1/lease/status?surface_id=ftp://nope")
+        |> authed()
+        |> HTTPRouter.call(@opts)
+
+      assert resp.status == 422
+      body = parsed(resp)
+      assert body["error"] == "schema_invalid"
+      assert body["detail"] =~ "canonicalization failed"
+      assert body["detail"] =~ "invalid_scheme"
     end
 
     test "active surface → ok with lease record", ctx do
