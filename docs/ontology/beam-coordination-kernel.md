@@ -382,6 +382,18 @@ Rationale:
 
 Current physical path is `elixir/lease_plane/`. Renaming to `services/coordination_kernel/` is packaging hygiene, not an ontology gate.
 
+### Extraction triggers (when to revisit)
+
+The 2026-05-02 decision is correct for the current evidence base — no second lease consumer, R6/S22 dogfood for cross-harness lease semantics not yet started, BEAM-on-unitares premise unclear. The decision is also reversible: cost of extracting *during fast churn* is low (no external consumers to break, breaking-changes-events are free), and the language/tool boundary already exists at the mix/Elixir level. The right time to revisit is when one of these named triggers fires — not vague "when it makes sense":
+
+1. **First non-unitares code path that calls into the LeasePlane API.** Even one line in another repo (Hermes, anima-mcp, an external partner, or a separate operator-managed service) makes the boundary load-bearing. At that moment the in-repo path stops being "internal abstraction" and becomes "private dependency of an external consumer" — the standard signal to extract.
+2. **Phase 2 milestone (handoff semantics) requires multi-process coordination that Hermes or Pi-side actually consumes.** Phase 1 is operator-tooled and unitares-internal; if Phase 2's handoff invariants need to fire from a process that isn't unitares-mcp, the lease plane has graduated past in-repo coupling.
+3. **BEAM-on-unitares premise clarifies** in a way that makes lease_plane the foundation of broader Erlang-native services rather than a single-purpose lease server. If a second OTP application materializes alongside lease_plane (router, presence, broker, etc.) and they want shared infrastructure, the kernel becomes a platform, not a feature.
+
+Soft signals to *watch* but not act on alone: Elixir-vs-Python CI lane friction (solvable in-repo), independent mix.lock divergence, contributor parallelism causing rebase pain.
+
+When any trigger fires, the extraction itself is small: `git mv elixir/lease_plane/ ../unitares-coordination-kernel/`, separate CI workflow, version-pin from the unitares side, document the wire-protocol contract. The mental tax of "this lives in unitares but it's actually its own thing" is the early-warning sign that the trigger is approaching, not the trigger itself.
+
 ## Immediate next action
 
 Run the Phase 1 proof in the existing in-repo OTP app:
