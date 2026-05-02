@@ -298,3 +298,98 @@ async def test_phase_zero_acquire_race_blocked():
     finally:
         await _cleanup(conn)
         await conn.close()
+
+
+# ---------- _poll_sync_forced_release: anyio-asyncio mitigation (CLAUDE.md pattern 2) ----------
+
+
+def test_poll_sync_forced_release_returns_same_tuple_shape_when_no_events():
+    """`_poll_sync_forced_release` must return the same `(alarms, new_cursor)`
+    tuple shape as the async `poll_forced_release_alarms` it wraps. Sync
+    callable so the GovernanceAgent SDK's anyio task group can dispatch it
+    via `loop.run_in_executor` without crossing event loops (per memory
+    `feedback_asyncpg-loop-binding.md`).
+    """
+    from agents.sentinel.agent import _poll_sync_forced_release
+
+    # Use TEST_DB_URL via env so the helper picks it up. Cursor=None to poll
+    # everything; with the 'forced' event_type query and a clean test DB this
+    # returns ([], None or whatever the latest ts is).
+    alarms, new_cursor = _poll_sync_forced_release(TEST_DB_URL, None)
+    assert isinstance(alarms, list)
+    # new_cursor is either None (no events ever) or a datetime (max ts seen).
+    from datetime import datetime as _dt
+    assert new_cursor is None or isinstance(new_cursor, _dt)
+
+
+def test_poll_sync_forced_release_loop_free_thread_succeeds_twice():
+    """Sanity: two consecutive calls from a loop-free thread (the pytest
+    main thread) succeed without leaving a running event loop between them.
+    Confirms `asyncio.run` teardown is clean per call.
+    """
+    from agents.sentinel.agent import _poll_sync_forced_release
+
+    alarms_1, cursor_1 = _poll_sync_forced_release(TEST_DB_URL, None)
+    alarms_2, cursor_2 = _poll_sync_forced_release(TEST_DB_URL, None)
+
+    assert isinstance(alarms_1, list)
+    assert isinstance(alarms_2, list)
+
+
+def test_poll_sync_forced_release_callable_via_run_in_executor():
+    """Council CONCERN 2 (reviewer): the production dispatch path runs
+    `_poll_sync_forced_release` inside a thread launched by
+    `loop.run_in_executor` from inside an `asyncio.run` context — NOT
+    directly from a loop-free pytest thread. This test exercises the
+    actual runtime shape: spin up an outer asyncio loop, dispatch to the
+    default ThreadPoolExecutor, await the result, and dispatch a SECOND
+    time from the same outer loop to verify no asyncpg loop-binding leak
+    between consecutive executor invocations.
+
+    Live-verifier confirmed this empirically pre-merge; this test pins the
+    behavior so a future refactor of `_poll_sync_forced_release` (e.g.,
+    accidentally capturing the outer loop reference) breaks loud.
+    """
+    import asyncio
+    from agents.sentinel.agent import _poll_sync_forced_release
+
+    async def driver():
+        loop = asyncio.get_running_loop()
+        alarms_1, _ = await loop.run_in_executor(
+            None, _poll_sync_forced_release, TEST_DB_URL, None,
+        )
+        alarms_2, _ = await loop.run_in_executor(
+            None, _poll_sync_forced_release, TEST_DB_URL, None,
+        )
+        return alarms_1, alarms_2
+
+    alarms_1, alarms_2 = asyncio.run(driver())
+    assert isinstance(alarms_1, list)
+    assert isinstance(alarms_2, list)
+
+
+def test_poll_sync_forced_release_timeout_propagates(monkeypatch):
+    """Council CONCERN 1 (architect + reviewer convergence): the wrapper
+    bounds executor-thread lifetime via `asyncio.wait_for(..., timeout=30s)`
+    so a wedged asyncpg call doesn't accumulate threads in the default
+    ThreadPoolExecutor. Inject a poll function that sleeps longer than
+    `_POLL_TIMEOUT_S` and verify TimeoutError propagates.
+    """
+    import asyncio
+    from agents.sentinel import agent as agent_mod
+
+    # Override the timeout for fast test execution.
+    monkeypatch.setattr(agent_mod, "_POLL_TIMEOUT_S", 0.2)
+
+    async def _wedged_poll(*, db_url, last_event_ts):
+        await asyncio.sleep(5.0)  # well over the test timeout
+        return [], None
+
+    # Patch the lazy import — the wrapper does
+    # `from agents.sentinel.forced_release_alarm import poll_forced_release_alarms`
+    # inside the function body, so we need to patch the source module.
+    from agents.sentinel import forced_release_alarm
+    monkeypatch.setattr(forced_release_alarm, "poll_forced_release_alarms", _wedged_poll)
+
+    with pytest.raises((asyncio.TimeoutError, TimeoutError)):
+        agent_mod._poll_sync_forced_release(TEST_DB_URL, None)

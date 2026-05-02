@@ -404,6 +404,53 @@ class SitrepGenerator:
 
 
 # ---------------------------------------------------------------------------
+# anyio-asyncio mitigation for forced-release alarm polling
+# ---------------------------------------------------------------------------
+
+_POLL_TIMEOUT_S = 30.0
+
+
+def _poll_sync_forced_release(db_url: str, last_event_ts: "datetime | None"):
+    """Sync wrapper for `poll_forced_release_alarms` to be called via
+    `loop.run_in_executor` (CLAUDE.md anyio mitigation pattern 2).
+
+    Sentinel's cycle runs inside the GovernanceAgent SDK's anyio scope
+    (`unitares_sdk/client.py` wraps MCP calls in `anyio.fail_after`).
+    Awaiting `asyncpg.connect()` directly inside that scope can deadlock —
+    the prior 30h wedge cited at lines 63-69 was this exact pathology.
+    This wrapper runs the asyncpg work on a thread executor with
+    `asyncio.run()`, which creates a fresh inner event loop. Per memory
+    `feedback_asyncpg-loop-binding.md` ("pools/Futures bound to whichever
+    loop is running when awaitable is evaluated"), asyncpg binds to that
+    inner loop, runs to completion, and tears down inside `asyncio.run()` —
+    never crossing the outer anyio loop.
+
+    The inner `asyncio.wait_for(..., timeout=_POLL_TIMEOUT_S)` is
+    defense-in-depth (council CONCERN — architect + reviewer convergence):
+    `loop.run_in_executor` cannot cancel a running thread, so a CYCLE_TIMEOUT
+    cancellation in the outer loop frees the awaiting task but the executor
+    thread keeps running until asyncpg returns. With sustained DB outage
+    that's up to asyncpg's default 60s connect timeout — longer than
+    CYCLE_TIMEOUT (45s), so threads accumulate ~1/cycle and the default
+    ThreadPoolExecutor (~12-14 threads) eventually exhausts. The inner
+    wait_for forces the executor thread itself to release at 30s, well
+    inside CYCLE_TIMEOUT. asyncio.TimeoutError propagates through the
+    caller's existing try/except.
+
+    Returns the same `(alarms, new_cursor)` tuple as
+    `poll_forced_release_alarms`. Exceptions propagate unchanged.
+    """
+    from agents.sentinel.forced_release_alarm import poll_forced_release_alarms
+
+    return asyncio.run(
+        asyncio.wait_for(
+            poll_forced_release_alarms(db_url=db_url, last_event_ts=last_event_ts),
+            timeout=_POLL_TIMEOUT_S,
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
 # Sentinel Agent
 # ---------------------------------------------------------------------------
 
@@ -589,10 +636,21 @@ class SentinelAgent(GovernanceAgent):
         DB URL: GOVERNANCE_DATABASE_URL env var, default to localhost governance.
         Failures are logged and swallowed — alarm polling MUST NOT break the
         Sentinel cycle.
-        """
-        from datetime import datetime
-        from agents.sentinel.forced_release_alarm import poll_forced_release_alarms
 
+        anyio-asyncio mitigation (CLAUDE.md "Known Issue"): the
+        `poll_forced_release_alarms` call does `asyncpg.connect()` + multiple
+        `await conn.fetch(...)`. Sentinel's `run_cycle` runs inside the
+        GovernanceAgent SDK's `run_once`, which is anyio-based. `await`-ing
+        asyncpg directly from inside the anyio task group can deadlock — the
+        prior wedge cited at line 67 (~30h) was this exact pathology.
+        Mitigation: pattern 2 from CLAUDE.md — push the asyncpg call to a
+        thread executor via `_poll_sync_forced_release`, which runs
+        `asyncio.run(...)` in the executor thread. asyncpg binds to that
+        fresh inner loop (per `feedback_asyncpg-loop-binding.md` —
+        loop-binding happens at create time, so a new loop scoped to the
+        executor call is safe), runs to completion, tears down. The outer
+        anyio task group is unblocked throughout.
+        """
         db_url = os.environ.get(
             "GOVERNANCE_DATABASE_URL",
             "postgresql://postgres:postgres@localhost:5432/governance",
@@ -600,9 +658,11 @@ class SentinelAgent(GovernanceAgent):
         state = self.load_state()
         cursor_str = state.get("forced_release_alarm", {}).get("last_event_ts")
         cursor = datetime.fromisoformat(cursor_str) if cursor_str else None
+
+        loop = asyncio.get_running_loop()
         try:
-            alarms, new_cursor = await poll_forced_release_alarms(
-                db_url=db_url, last_event_ts=cursor,
+            alarms, new_cursor = await loop.run_in_executor(
+                None, _poll_sync_forced_release, db_url, cursor,
             )
         except Exception as e:
             log(f"forced-release alarm poll failed: {e}")
