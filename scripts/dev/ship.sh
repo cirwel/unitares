@@ -136,7 +136,12 @@ case "$KIND" in
         git checkout -b "$NEW_BRANCH"
         git commit -m "$COMMIT_MESSAGE"
         git push -u origin "$NEW_BRANCH"
-        PR_URL=$(gh pr create --title "$MESSAGE" --body "Auto-shipped by ship.sh — runtime path. Auto-merge is enabled; CI gate applies.")
+        # GitHub caps PR titles at 256 chars; conventional-commit subjects are
+        # ~72. Use only the first line so multi-line commit messages (subject +
+        # body) don't blow past the GraphQL limit and fail PR creation. See
+        # issue #289 — hit on PR #288 with a long-bodied commit.
+        PR_TITLE=$(printf '%s\n' "$MESSAGE" | head -n1)
+        PR_URL=$(gh pr create --title "$PR_TITLE" --body "Auto-shipped by ship.sh — runtime path. Auto-merge is enabled; CI gate applies.")
         echo "$PR_URL"
         gh pr merge --auto --squash "$PR_URL" || \
             echo "[ship] auto-merge not enabled (branch protection may require manual setup); PR is open"
