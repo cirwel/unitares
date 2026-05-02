@@ -273,11 +273,42 @@ Plus addressed CONCERNs: file:// `Logger.warning` audit trail (architect C4), `t
 
 **Total: 7 rows in PR 7. Within the ≤10 methodology cap.**
 
+## PR 7.5 — `file://` canonicalization in Elixir (this branch: impl/lease-plane-phase-a-pr7-5-elixir-file-canonicalize)
+
+Closes the deferred file:// scheme PR 7 left as a `Logger.warning` stub. Mirrors Python `_canonicalize_file` end-to-end: shell-out to OS `realpath` for symlink resolution and existence-strict mode, double-realpath for the macOS `/var` → `/private/var` idempotency edge (DRIFT-2 in Python), tmpfile probe for case-insensitive FS detection (DRIFT-3 in Python — `pathconf(_PC_CASE_SENSITIVE)` was REFUTED on macOS), `:persistent_term`-cached probe result, lowercase if FS is case-insensitive, trailing-slash strip except for root.
+
+ENOENT (path doesn't exist) handled per RFC §7.12.2 + Python: best-effort canonicalization that resolves intermediate symlinks but appends the missing tail verbatim. Without this, `file:///var/missing/foo` on macOS would canonicalize differently in Elixir (`/var/...`) and Python (`/private/var/...`) — exactly the split-brain class PR 7 + PR 7.5 jointly exist to close.
+
+Three-voice council pass (architect + reviewer + live-verifier) with adversarial framing per `feedback_council-adversarial-prompt.md`. Two BLOCKs surfaced and fixed:
+
+- **BLOCK 1**: dash-prefixed paths could inject GNU realpath flags (`-s` suppresses symlink resolution; `--relative-to=DIR` changes output base). `System.cmd` doesn't go through shell so command injection is safe, but flag injection wasn't. Fixed by prepending `./` to any leading-`-` path before passing to realpath. Also resolves the realpath binary path at compile time via `System.find_executable/1` so a LaunchAgent with sparse PATH gets a load-time error instead of silent `:other` → `:invalid_scheme` failures (architect's framing of B1).
+- **BLOCK 2**: ENOENT branch was returning `path` as-given without resolving intermediate symlinks. Added pure-Elixir `nonstrict_realpath/1` helper (walks back to longest-existing prefix, strict-realpaths it, appends missing tail) — mirrors Python's `os.path.realpath(path)` non-strict behavior.
+
+Plus: `LC_ALL=C` in `System.cmd` env (locale-independent error matching), `Logger.warning` on `:other` errors so operators can diagnose what was swallowed, `:symlink_loop` added to `@type reason`, moduledoc notes for compile-time OS detection assumption + single-FS case-fold assumption.
+
+Live-verifier: 9/10 verifiable claims VERIFIED (1 BLOCKED — no deployed Elixir service to curl-test, expected). All implementation assumptions confirmed live: BSD realpath strict-by-default (`/bin/realpath`), `/var` → `/private/var` idempotency, APFS case-insensitive detection works, `System.tmp_dir!()` returns `/var/folders/...` (the DRIFT-2 path the implementation handles).
+
+### PR 7.5 — RFC gate → code surface → test name → status table
+
+| Gate | Code | Test | Status |
+|------|------|------|--------|
+| §7.12.1 file:// realpath + DRIFT-2 double-realpath | `canonicalize.ex::canonicalize_file/1` + `resolve_realpath/1` | `"resolves an existing file via realpath"`, `"macOS /var resolves to /private/var (DRIFT-2 idempotency)"`, `"follows symlinks to the resolved target"` | DONE |
+| §7.12.1 ELOOP detection (strict realpath fails on cycle) | `resolve_realpath/1` stderr → `:symlink_loop` | `"ELOOP (symlink cycle) → :symlink_loop"` | DONE |
+| §7.12.2 ENOENT pass-through with intermediate-symlink resolution | `canonicalize_file/1` ENOENT branch + `nonstrict_realpath/1` | `"ENOENT → resolves intermediate symlinks, appends missing tail (PR 7.5 BLOCK 2)"` | DONE |
+| §7.12.1 trailing-slash strip + root preservation | `finalize_file/1` | `"trailing / stripped except for root"`, `"root / is preserved (not stripped)"` | DONE |
+| §7.12.1 DRIFT-3 case-fold via tmpfile probe (cached) | `case_insensitive_fs?/0` + `detect_case_insensitive_fs/0` + `:persistent_term` | `"case-fold matches the live FS detection"` | DONE |
+| §7.12 idempotency for file:// scheme | full chain | `"is idempotent — canonicalize(canonicalize(x)) == canonicalize(x)"` | DONE |
+| BLOCK 1 — dash-prefixed path doesn't inject realpath flag | `resolve_realpath/1` `./` prefix guard | `"PR 7.5 BLOCK 1 — leading-`-` path does not get parsed as realpath flag"` | DONE |
+| BLOCK 1 — realpath binary resolved at compile time | `@realpath_bin` via `System.find_executable/1` | (load-time assertion via `raise` if not found) | DONE |
+| Locale-independence (CONCERN B) | `LC_ALL=C` in `System.cmd` env | (covered transitively by all error-class tests) | DONE |
+| Operator visibility into swallowed `:other` errors (CONCERN C3) | `Logger.warning` in `:other` branch | (manual log inspection) | DONE |
+
+**Total: 10 rows in PR 7.5. At the methodology cap.**
+
 ## PR 8+ — Remaining deferred council CONCERNs and Phase B prerequisites
 
 Bigger council CONCERNs (need design discussion):
 - §7.11.2 Phase 2/3 atomicity rewrite — CLI sub-commands don't enforce same-session atomicity. Either coalesce into `deprecate-and-finalize` super-command or amend RFC §7.11.2.
-- §7.12.1 step 4 — `file://` realpath/case-fold normalization on Elixir (PR 7.5). Needs cross-language parity harness for filesystem-state-dependent behavior. PR 7 left a `Logger.warning` audit trail so a future production `file://` call surfaces the deferral.
 - Sentinel asyncpg pool wiring (CLAUDE.md anyio pattern; current code opens fresh connection per cycle).
 - §9 RFC test-name reconciliation (named tests semantically covered but not under contracted names).
 
