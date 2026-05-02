@@ -42,7 +42,7 @@ The April 30 case was unambiguously (1). But the response field name and its boo
 
 | Field | Type | Semantics |
 |---|---|---|
-| `episode_fork_kind` | string enum: `none` / `sibling_locus` / `identity_lineage` | What kind of fork this event represents. **`none`** = first observation under this thread (position == 1). **`sibling_locus`** = same registry UUID, fresh process-instance (or position > 1), no child UUID minted under declared lineage. The April 30 case. **`identity_lineage`** = the current writer's UUID is distinct from a declared `parent_agent_id`, OR (sync-race fallback) `spawn_reason` is in the known-lineage set. |
+| `episode_fork_kind` | string enum: `none` / `sibling_locus` / `identity_lineage` | What kind of fork this event represents. **`none`** = no lineage declaration detected and first observation under this thread (position == 1). **`sibling_locus`** = same registry UUID, fresh process-instance (or position > 1), no child UUID minted under declared lineage. The April 30 case. **`identity_lineage`** = the current writer's UUID is distinct from a declared `parent_agent_id`, OR (sync-race fallback) `spawn_reason` is in the known-lineage set. |
 | `identity_lineage_fork` | boolean | True if and only if `episode_fork_kind == "identity_lineage"`. Redundant with the enum but kept as a fast scalar for callers that only need the boolean discrimination. False in every other case, including `sibling_locus`. |
 
 **v1 had 5 enum values.** v2 collapses to 3 because:
@@ -51,9 +51,9 @@ The April 30 case was unambiguously (1). But the response field name and its boo
 
 ### Deprecated (kept for compat, narrowed documented intent)
 
-`is_fork` (boolean) at `enrichments.py:1518`: currently `position > 1`. Value-equivalent under v2's classifier (proven below). Documented intent re-grounded: `is_fork` indicates "an event that is not the root node of this thread"; `episode_fork_kind` carries the actual ontology distinction. Future deferred decision (post-Phase 1): rename or retire `is_fork`.
+`is_fork` (boolean) at `enrichments.py:1518`: currently `position > 1`. Kept value-compatible. Documented intent re-grounded: `is_fork` indicates "an event that is not the root node of this thread"; `episode_fork_kind` carries the actual ontology distinction. Future deferred decision (post-Phase 1): rename or retire `is_fork`.
 
-**Equivalence proof.** v2's `_classify_fork` returns `"none"` if and only if `position == 1`. So `episode_fork_kind != "none"` ⟺ `position > 1` ⟺ current `is_fork` value. No caller behavior change. The narrowed-intent claim is purely documentary; the field's value is mathematically identical.
+**Compatibility boundary.** `is_fork` remains purely position-based. It is not equivalent to `episode_fork_kind != "none"` in the identity-lineage-at-root case: a fresh child UUID can be position 1 while still being a declared identity-lineage fork. This is exactly why `identity_lineage_fork` exists as a separate scalar. No caller behavior change occurs because `is_fork` keeps its old value.
 
 ## The classifier (v2)
 
@@ -205,7 +205,7 @@ For `_classify_fork` unit tests:
 For `enrich_thread_identity` integration:
 
 10. **Thin thread_context shape addition.** Call `process_agent_update` with a known fixture; assert response.thread_context contains `episode_fork_kind`, `identity_lineage_fork`, `honest_message`, plus preserved `thread_id`, `position`, `is_fork`.
-11. **`is_fork` value equivalence.** For each of cases 1–9, assert `thread_context["is_fork"] == (thread_context["episode_fork_kind"] != "none")`. Catches future regressions in the equivalence claim.
+11. **`is_fork` compatibility.** For each of cases 1–9, assert `thread_context["is_fork"] == (position > 1)`. Separately assert identity-lineage-at-root sets `identity_lineage_fork=true` while leaving legacy `is_fork=false`.
 
 ## Calibration / Phase 1 telemetry
 

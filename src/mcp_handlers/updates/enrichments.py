@@ -9,7 +9,7 @@ enrichment failure never crashes the update.
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from src.logging_utils import get_logger
 
@@ -17,6 +17,8 @@ from .context import UpdateContext
 from .pipeline import enrichment
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = get_logger(__name__)
+
+_LINEAGE_SPAWN_REASONS = frozenset({"new_session", "subagent", "explicit", "compaction"})
 
 # ─── Identity Reminder ─────────────────────────────────────────────────
 
@@ -1506,16 +1508,92 @@ async def enrich_identity_notifications(ctx: UpdateContext) -> None:
 
 # ─── Thread Identity ───────────────────────────────────────────────────
 
+def _classify_fork(
+    position: int,
+    agent_uuid: str,
+    parent_uuid: Optional[str],
+    spawn_reason: Optional[str],
+) -> tuple[str, bool]:
+    """Return the R6 episode-fork kind and identity-lineage boolean."""
+    has_child_uuid = bool(parent_uuid and agent_uuid and agent_uuid != parent_uuid)
+    if has_child_uuid:
+        return ("identity_lineage", True)
+
+    if spawn_reason in _LINEAGE_SPAWN_REASONS and not parent_uuid:
+        logger.warning(
+            "[R6_SYNC_RACE] spawn_reason=%s recognized as lineage but "
+            "parent_agent_id is None on ctx.meta - possible AgentMetadata sync "
+            "failure at handlers.py:1690-1698. Classifying as identity_lineage "
+            "anyway. agent_uuid=%s",
+            spawn_reason,
+            agent_uuid,
+        )
+        return ("identity_lineage", True)
+
+    if position > 1:
+        return ("sibling_locus", False)
+
+    return ("none", False)
+
+
+def _fork_honest_message(
+    episode_fork_kind: str,
+    parent_uuid: Optional[str],
+    spawn_reason: Optional[str],
+) -> str:
+    """Build the thin process_agent_update fork message from R6 v2."""
+    if episode_fork_kind == "sibling_locus":
+        return (
+            "You share a registry UUID with prior process-instances under this "
+            "thread, but you are a distinct subject - fresh process-instance, "
+            "no child UUID minted. Memory access (KG, project files, "
+            "harness-side caches) may be available; whether you have integrated "
+            "it is yours to demonstrate, not asserted."
+        )
+
+    if episode_fork_kind == "identity_lineage":
+        parent_display = parent_uuid or "unknown"
+        spawn_display = spawn_reason or "unknown"
+        return (
+            "You are a distinct subject (a fresh UUID under declared parent "
+            f"{parent_display}, spawn_reason {spawn_display}). Lineage was "
+            "declared at this fork event; whether it becomes confirmed is "
+            "governed by R2's protocol (see provisional_lineage flag and "
+            "downstream R1 evaluation)."
+        )
+
+    return "You are the first observation under this thread. No fork."
+
 @enrichment(order=230)
 def enrich_thread_identity(ctx: UpdateContext) -> None:
     """Provide thread continuity context across sessions (honest forking)."""
     try:
         if ctx.meta and getattr(ctx.meta, "thread_id", None):
-            position = getattr(ctx.meta, "node_index", 1)
+            position = int(getattr(ctx.meta, "node_index", 1) or 1)
+            parent_uuid = getattr(ctx.meta, "parent_agent_id", None)
+            spawn_reason = getattr(ctx.meta, "spawn_reason", None)
+            agent_uuid = (
+                ctx.agent_uuid
+                or getattr(ctx.meta, "agent_uuid", None)
+                or getattr(ctx.meta, "agent_id", "")
+            )
+            episode_fork_kind, identity_lineage_fork = _classify_fork(
+                position,
+                agent_uuid,
+                parent_uuid,
+                spawn_reason,
+            )
             ctx.response_data["thread_context"] = {
                 "thread_id": ctx.meta.thread_id,
                 "position": position,
                 "is_fork": position > 1,
+                "episode_fork_kind": episode_fork_kind,
+                "identity_lineage_fork": identity_lineage_fork,
+                "honest_message": _fork_honest_message(
+                    episode_fork_kind,
+                    parent_uuid,
+                    spawn_reason,
+                ),
             }
     except Exception as e:
         logger.debug(f"Could not enrich thread identity: {e}")
