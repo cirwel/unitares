@@ -135,6 +135,33 @@ def test_acquire_request_rejects_query_string_in_surface_id():
     )
 
 
+def test_acquire_request_rejects_invalid_scheme():
+    """RFC v0.8 §7.2 / §9 — Pydantic field_validator rejects surface_ids whose
+    scheme is not in the canonical list (`AcquireRequest(surface_id='potato:foo', ...)`
+    raises ValidationError).
+
+    The implementation is at `src/lease_plane/models.py::AcquireRequest._validate_surface_id`.
+    This test pins the §9 named gate `test_acquire_request_rejects_invalid_scheme`.
+    """
+    from pydantic import ValidationError
+
+    from src.lease_plane import AcquireRequest
+    from uuid import uuid4
+
+    with pytest.raises(ValidationError) as exc_info:
+        AcquireRequest(
+            surface_id="potato:foo",
+            holder_agent_uuid=uuid4(),
+            holder_class="process_instance",
+            holder_kind="remote_heartbeat",
+            ttl_s=60,
+        )
+    msg = str(exc_info.value)
+    assert "potato" in msg or "scheme" in msg.lower(), (
+        f"Expected error to mention the offending scheme; got: {msg}"
+    )
+
+
 def test_acquire_request_surface_id_field_validator_wired():
     """RFC v0.8 §7.12.5: AcquireRequest auto-canonicalizes surface_id at the model boundary.
     Two equivalent inputs must produce the same .surface_id."""
