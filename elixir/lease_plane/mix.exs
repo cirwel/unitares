@@ -29,7 +29,9 @@ defmodule UnitaresLeasePlane.MixProject do
       # Plug 1.18+ — depends on the Plug.Parsers.ParseError shape that
       # SafeParsers / HTTPRouter both rely on (PR #253 council).
       {:plug, "~> 1.18"},
-      {:bandit, "~> 1.6"}
+      {:bandit, "~> 1.6"},
+      # Property-based testing for Canonicalize. Test-only.
+      {:stream_data, "~> 1.1", only: :test}
     ]
   end
 end
