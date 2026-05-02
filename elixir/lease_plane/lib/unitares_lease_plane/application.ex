@@ -52,7 +52,8 @@ defmodule UnitaresLeasePlane.Application do
         {Postgrex, postgrex_opts()},
         {Registry, keys: :unique, name: UnitaresLeasePlane.HolderRegistry},
         UnitaresLeasePlane.LeaseSupervisor,
-        UnitaresLeasePlane.HandoffServer
+        UnitaresLeasePlane.HandoffServer,
+        UnitaresLeasePlane.SurfaceRegistry
       ] ++ worker_children() ++ http_children()
 
     opts = [strategy: :one_for_one, name: UnitaresLeasePlane.Supervisor]

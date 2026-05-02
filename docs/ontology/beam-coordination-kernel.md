@@ -2,7 +2,7 @@
 
 **Created:** April 30, 2026  
 **Last Updated:** May 2, 2026  
-**Status:** Placement decided; Phase A in progress
+**Status:** Placement decided; Phase 1 in-memory spike implemented
 
 ## Related artifacts (independent convergence, 2026-04-30)
 
@@ -322,13 +322,15 @@ Forwarder behavior:
 
 ### Phase 1 — pure in-memory lease server
 
+Implementation note, 2026-05-02: the pure in-memory spike lives in `elixir/lease_plane/lib/unitares_lease_plane/{surface_registry,lease_process}.ex` with tests in `elixir/lease_plane/test/surface_registry_test.exs`. It intentionally avoids Postgres and the durable lease-plane contract; it proves the hot OTP primitive only.
+
 1. Generate Mix project.
 2. Implement `LeaseProcess` and `SurfaceRegistry` without Postgres.
 3. Add tests for acquire/release/conflict/expiry.
 4. Add typed absence return values.
-5. Expose HTTP endpoints.
+5. HTTP exposure remains on the durable lease-plane router; the in-memory proof is intentionally not a second public API.
 
-Exit criterion: two concurrent requests for the same `surface_id` deterministically produce one acquired lease and one conflict.
+Exit criterion: two concurrent requests for the same `surface_id` deterministically produce one acquired lease and one conflict. Covered by `UnitaresLeasePlane.SurfaceRegistryTest` (50 racing holders, exactly one winner).
 
 ### Phase 2 — Postgres durability
 
@@ -382,11 +384,11 @@ Current physical path is `elixir/lease_plane/`. Renaming to `services/coordinati
 
 ## Immediate next action
 
-Continue Phase A in the existing in-repo OTP app:
+Run the Phase 1 proof in the existing in-repo OTP app:
 
 ```bash
 cd elixir/lease_plane
-mix test
+mix test test/surface_registry_test.exs
 ```
 
 Keep UNITARES integration through the HTTP/API contract and the existing `lease_plane` schema. Do not create `unitares-coordination-kernel` unless a future split has a concrete release-cadence or external-consumer reason.
