@@ -100,7 +100,18 @@ defmodule UnitaresLeasePlane.Repo do
     end
   end
 
-  defp acquire_step(conn, p, nil) do
+  defp acquire_step(conn, p, nil), do: acquire_step_nil(conn, p, 0)
+
+  # Bounded recursion depth for the {:ok, nil} race-loop (council BLOCK C1).
+  # 3 iterations is well above the practical maximum for the triple-race
+  # (winner inserted, winner released, loser re-reads) — anything more
+  # is a flapping pathology and deserves a typed error rather than infinite
+  # recursion.
+  defp acquire_step_nil(_conn, _p, depth) when depth > 3 do
+    {:error, :race_storm}
+  end
+
+  defp acquire_step_nil(conn, p, depth) do
     # surface_kind dropped from INSERT column list per RFC v0.8 §7.2.3:
     # post-migration-026 it is a generated column derived from
     # split_part(surface_id, ':', 1). Including it here would raise
@@ -128,10 +139,54 @@ defmodule UnitaresLeasePlane.Repo do
       Map.get(p, :audit_session)
     ]
 
-    with {:ok, %{rows: [row], columns: cols}} <- Postgrex.query(conn, insert_lease_sql, args),
-         lease = row_to_map(cols, row),
-         :ok <- log_event(conn, "acquire", lease) do
-      {:ok, {:ok, lease, :new}}
+    # Unique savepoint name per call — defends against future refactors that
+    # could cause two acquire_step_nil calls on the same connection (which
+    # would silently rewind state on a shared savepoint name). Council BLOCK 1.
+    savepoint = "acquire_insert_#{:erlang.unique_integer([:positive])}"
+
+    # Savepoint isolates a unique_violation to the INSERT (not the whole tx),
+    # allowing race-recovery via re-read + re-dispatch. Without this,
+    # concurrent acquires on the same surface_id leak raw Postgrex.Error
+    # tuples instead of typed-absence responses — surfaced by
+    # lease_acquire_concurrency_test.exs.
+    Postgrex.query!(conn, "SAVEPOINT #{savepoint}", [])
+
+    case Postgrex.query(conn, insert_lease_sql, args) do
+      {:ok, %{rows: [row], columns: cols}} ->
+        Postgrex.query!(conn, "RELEASE SAVEPOINT #{savepoint}", [])
+        lease = row_to_map(cols, row)
+
+        case log_event(conn, "acquire", lease) do
+          :ok -> {:ok, {:ok, lease, :new}}
+          {:error, e} -> {:error, e}
+        end
+
+      # Match on :unique_violation alone (not constraint name) so a future
+      # rename of `surface_leases_active_unique` doesn't silently leak raw
+      # errors. The `surface_leases` table has only one unique index (the
+      # active-unique partial index from migration 024), so any
+      # unique_violation here is the same race. Council BLOCK 2.
+      {:error, %Postgrex.Error{postgres: %{code: :unique_violation}}} ->
+        Postgrex.query!(conn, "ROLLBACK TO SAVEPOINT #{savepoint}", [])
+        recover_race(conn, p, depth)
+
+      {:error, e} ->
+        Postgrex.query(conn, "ROLLBACK TO SAVEPOINT #{savepoint}", [])
+        {:error, e}
+    end
+  end
+
+  # Race recovery: re-read the winning row and re-dispatch through
+  # acquire_step/3 so the existing-row branch handles same-holder
+  # (idempotent) vs different-holder (held_by_other) uniformly.
+  # If the winner was released between the unique_violation and our
+  # re-read (extreme triple-race), loop the INSERT instead of bailing —
+  # the surface is now free, retry should succeed (council BLOCK C1).
+  defp recover_race(conn, p, depth) do
+    case maybe_existing_active(conn, p.surface_id) do
+      {:ok, %{} = winner} -> acquire_step(conn, p, winner)
+      {:ok, nil} -> acquire_step_nil(conn, p, depth + 1)
+      {:error, e} -> {:error, e}
     end
   end
 
