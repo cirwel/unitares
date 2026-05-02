@@ -171,3 +171,115 @@ def test_main_returns_failure_when_check_fails(doctor, monkeypatch, capsys):
 
     rc = doctor.main(["--json", "--no-color"])
     assert rc == 1
+
+
+# ---------- elixir_deprecated_scheme_lint (RFC §7.11.8 — Phase B prep) ----------
+
+
+class _Proc:
+    """Tiny stand-in for subprocess.CompletedProcess. Tests pass returncode + stdout."""
+
+    def __init__(self, returncode: int, stdout: str = "", stderr: str = ""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_elixir_lint_skips_when_psql_missing(doctor, monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+    result = doctor.check_elixir_deprecated_scheme_lint("postgresql://example", tmp_path)
+    assert result.status == doctor.Status.SKIP
+    assert "psql not on PATH" in result.message
+
+
+def test_elixir_lint_skips_when_deprecated_schemes_table_absent(doctor, monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run",
+                        lambda *a, **kw: _Proc(returncode=1, stderr="relation does not exist"))
+    result = doctor.check_elixir_deprecated_scheme_lint("postgresql://example", tmp_path)
+    assert result.status == doctor.Status.SKIP
+    assert "deprecated_schemes not queryable" in result.message
+
+
+def test_elixir_lint_passes_when_no_deprecated_schemes(doctor, monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run",
+                        lambda *a, **kw: _Proc(returncode=0, stdout=""))
+    result = doctor.check_elixir_deprecated_scheme_lint("postgresql://example", tmp_path)
+    assert result.status == doctor.Status.PASS
+    assert "no deprecated schemes" in result.message
+
+
+def test_elixir_lint_passes_when_psql_returns_trailing_newline_only(doctor, monkeypatch, tmp_path):
+    """Council CONCERN 2: psql -Atq sometimes emits a trailing newline even
+    on zero-row results. The `if line.strip()` guard handles it correctly;
+    this test pins that behavior so a refactor doesn't break the PASS gate.
+    """
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run",
+                        lambda *a, **kw: _Proc(returncode=0, stdout="\n"))
+    result = doctor.check_elixir_deprecated_scheme_lint("postgresql://example", tmp_path)
+    assert result.status == doctor.Status.PASS
+    assert "no deprecated schemes" in result.message
+
+
+def test_elixir_lint_skips_when_no_elixir_directory(doctor, monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run",
+                        lambda *a, **kw: _Proc(returncode=0, stdout="dialectic\n"))
+    result = doctor.check_elixir_deprecated_scheme_lint("postgresql://example", tmp_path)
+    assert result.status == doctor.Status.SKIP
+    assert "no elixir/ directory" in result.message
+
+
+def test_elixir_lint_passes_when_elixir_does_not_mention_deprecated_kind(doctor, monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run",
+                        lambda *a, **kw: _Proc(returncode=0, stdout="dialectic\n"))
+    elixir_dir = tmp_path / "elixir" / "lease_plane" / "lib"
+    elixir_dir.mkdir(parents=True)
+    (elixir_dir / "router.ex").write_text(
+        '''defmodule Router do
+          def dispatch("file://" <> rest), do: rest
+          def dispatch("resident:/" <> rest), do: rest
+        end
+        '''
+    )
+    result = doctor.check_elixir_deprecated_scheme_lint("postgresql://example", tmp_path)
+    assert result.status == doctor.Status.PASS
+    assert "dialectic" in result.message
+
+
+def test_elixir_lint_warns_when_elixir_mentions_deprecated_kind(doctor, monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run",
+                        lambda *a, **kw: _Proc(returncode=0, stdout="dialectic\n"))
+    elixir_dir = tmp_path / "elixir" / "lease_plane" / "lib"
+    elixir_dir.mkdir(parents=True)
+    (elixir_dir / "canonicalize.ex").write_text(
+        '''defmodule Canonicalize do
+          defp dispatch("dialectic:" <> rest), do: rest
+        end
+        '''
+    )
+    result = doctor.check_elixir_deprecated_scheme_lint("postgresql://example", tmp_path)
+    assert result.status == doctor.Status.WARN
+    assert "1 Elixir source mention" in result.message
+    assert "dialectic" in result.message
+    assert "canonicalize.ex" in result.detail
+
+
+def test_elixir_lint_excludes_deps_and_build_dirs(doctor, monkeypatch, tmp_path):
+    """Vendored deps + _build artifacts mention scheme strings (e.g., bandit
+    docs) but they're third-party; lint must skip them to avoid noise."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run",
+                        lambda *a, **kw: _Proc(returncode=0, stdout="dialectic\n"))
+    deps_dir = tmp_path / "elixir" / "lease_plane" / "deps" / "bandit"
+    deps_dir.mkdir(parents=True)
+    (deps_dir / "vendored.ex").write_text('"dialectic:" — incidental string in vendored dep')
+
+    result = doctor.check_elixir_deprecated_scheme_lint("postgresql://example", tmp_path)
+    assert result.status == doctor.Status.PASS, (
+        f"vendored deps/ mentions must not trigger WARN; got {result.status}: {result.message}"
+    )

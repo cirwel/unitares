@@ -235,6 +235,81 @@ def check_schema_migrations(db_url: str, repo_root: Path | None = None) -> Check
                        f"schema at version {version}; registry matches source manifest")
 
 
+def check_elixir_deprecated_scheme_lint(db_url: str, repo_root: Path) -> CheckResult:
+    """Phase B prep (RFC §7.11.8): WARN if any Elixir source mentions a
+    surface_kind currently in lease_plane.deprecated_schemes.
+
+    Phase 0 deprecation marks a kind, Phase 2 sweeps surviving leases, Phase 3
+    finalizes. Between Phase 0 and Phase 3 the operator (and CI) needs a way
+    to verify no Elixir source still bakes the deprecated scheme into pattern
+    matches or hardcoded strings — otherwise the post-Phase-3 grammar CHECK
+    migration breaks the Elixir router on first acquire.
+
+    Match heuristic: `f'"{kind}:'` matches double-quoted scheme prefix
+    literals (`"file:"`, `"dialectic:/"`, etc.) — covers both pattern-match
+    arms (`"dialectic:" <> rest -> ...`) and concatenated string literals.
+    Comments mentioning the kind are also flagged (acceptable false positive;
+    operator review is the recovery path).
+
+    SKIP if psql missing, deprecated_schemes table absent (lease plane not
+    installed), or no `elixir/` directory in the repo. PASS if no kinds are
+    deprecated. PASS if kinds are deprecated but no Elixir source mentions
+    them. WARN with a per-file detail listing if hits exist.
+    """
+    name, mode = "elixir_deprecated_scheme_lint", "local"
+
+    if shutil.which("psql") is None:
+        return CheckResult(name, mode, Status.SKIP, "psql not on PATH")
+
+    proc = subprocess.run(
+        ["psql", db_url, "-Atqc",
+         "SELECT surface_kind FROM lease_plane.deprecated_schemes ORDER BY surface_kind"],
+        capture_output=True, text=True, timeout=5,
+    )
+    if proc.returncode != 0:
+        return CheckResult(
+            name, mode, Status.SKIP,
+            "deprecated_schemes not queryable (lease plane not installed?)",
+        )
+
+    deprecated_kinds = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    if not deprecated_kinds:
+        return CheckResult(name, mode, Status.PASS, "no deprecated schemes")
+
+    elixir_root = repo_root / "elixir"
+    if not elixir_root.is_dir():
+        return CheckResult(name, mode, Status.SKIP, "no elixir/ directory")
+
+    hits: list[str] = []
+    for ex_file in sorted(elixir_root.glob("**/*.ex")):
+        # Skip vendored deps — they're third-party and out of scope.
+        # Path.parts is OS-neutral (council CONCERN 1: string-comparison on
+        # str(Path) breaks on Windows separators; not a live bug since the
+        # repo is macOS-only, but every other check in this file uses Path
+        # operations — keep style consistent).
+        if "deps" in ex_file.parts or "_build" in ex_file.parts:
+            continue
+        try:
+            text = ex_file.read_text(errors="replace")
+        except OSError:
+            continue
+        for kind in deprecated_kinds:
+            if f'"{kind}:' in text:
+                hits.append(f"{ex_file.relative_to(repo_root)}: mentions deprecated {kind!r}")
+
+    if hits:
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"{len(hits)} Elixir source mention(s) of deprecated scheme(s) "
+            f"({', '.join(deprecated_kinds)})",
+            detail="\n".join(hits),
+        )
+    return CheckResult(
+        name, mode, Status.PASS,
+        f"no Elixir source mentions deprecated schemes ({', '.join(deprecated_kinds)})",
+    )
+
+
 def check_anchor_dir() -> CheckResult:
     name, mode = "anchor_directory", "local"
     if ANCHOR_DIR.is_dir():
@@ -387,6 +462,8 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
         Check("governance_database", "local", lambda: check_governance_database(db_url)),
         Check("pg_extensions", "local", lambda: check_pg_extensions(db_url)),
         Check("schema_migrations", "local", lambda: check_schema_migrations(db_url, repo_root)),
+        Check("elixir_deprecated_scheme_lint", "local",
+              lambda: check_elixir_deprecated_scheme_lint(db_url, repo_root)),
         Check("anchor_directory", "local", check_anchor_dir),
         Check("secrets_file", "local", check_secrets_file),
         Check("http_listening", "operator", check_http_listening),
