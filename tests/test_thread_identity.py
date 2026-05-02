@@ -138,6 +138,38 @@ class TestBuildForkContext:
         )
         assert ctx["thread_size"] == 4
 
+    def test_handler_call_site_signature_contract(self):
+        """Pin exact kwargs handlers.py:1946 passes after the 2026-05-02 fix.
+
+        Pre-fix: handler called build_fork_context with agent_uuid= / nodes= which
+        TypeErrored silently inside the bare except, suppressing thread_context for
+        all force_new=true onboard responses (R6 v2 §"Out of R6 scope" prereq).
+        This test ensures the call-site kwargs and the function signature do not
+        drift apart again silently.
+        """
+        thread_info = {
+            "thread_id": "t-abc123def456ab",
+            "thread_position": 2,
+            "parent_agent_id": "uuid-1",
+            "spawn_reason": "subagent",
+        }
+        all_nodes = [
+            {"agent_id": "uuid-1", "thread_position": 1, "label": "parent-label"},
+            {"agent_id": "uuid-2", "thread_position": 2, "label": None},
+        ]
+        # These are the exact kwargs handlers.py:1946-1951 passes post-fix.
+        ctx = build_fork_context(
+            thread_id=thread_info["thread_id"],
+            position=thread_info.get("thread_position", 1),
+            parent_uuid=thread_info.get("parent_agent_id") or None,
+            spawn_reason="subagent",
+            all_nodes=all_nodes,
+        )
+        assert ctx["thread_id"] == "t-abc123def456ab"
+        assert ctx["position"] == 2
+        assert ctx["is_fork"] is True
+        assert ctx["predecessor"]["uuid"] == "uuid-1"
+
     def test_subagent_spawn_reason_in_message(self):
         ctx = build_fork_context(
             thread_id="t-test",

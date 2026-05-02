@@ -1944,10 +1944,11 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             all_nodes = await db.get_thread_nodes(_tid)
             from src.thread_identity import build_fork_context
             thread_context = build_fork_context(
-                agent_uuid=agent_uuid,
                 thread_id=_tid,
-                nodes=all_nodes,
+                position=thread_info.get("thread_position", 1),
+                parent_uuid=thread_info.get("parent_agent_id") or _parent_agent_id,
                 spawn_reason=_spawn_reason,
+                all_nodes=all_nodes,
             )
     except Exception as e:
         logger.debug(f"[THREAD] Could not build thread context: {e}")
