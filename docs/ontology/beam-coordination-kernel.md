@@ -1,8 +1,8 @@
 # BEAM Coordination Kernel Plan
 
 **Created:** April 30, 2026  
-**Last Updated:** April 30, 2026  
-**Status:** Draft
+**Last Updated:** May 2, 2026  
+**Status:** Placement decided; Phase A in progress
 
 ## Related artifacts (independent convergence, 2026-04-30)
 
@@ -10,7 +10,7 @@ This ontology-track plan converged with a parallel proposals-track RFC on the sa
 
 - **`docs/proposals/surface-lease-plane-v0.md` (v0.4)** — proposals-track contract spec. Council-pass-1 + ack-pass complete; status: implementation-gate ready. Defines the Postgres schema (matches `db/postgres/migrations/024_lease_plane.sql` verbatim), the `/v1/lease/*` HTTP API, typed-absence return shapes (matches `src/lease_plane/models.py`), the Phase A advisory → Phase B selective-enforcement rollout, and the §7 open questions.
 
-This plan is the **integration-into-UNITARES framing** (R7 row in `docs/ontology/plan.md`); the RFC is the **contract spec**. Neither subsumes the other. Implementation skeleton (`db/postgres/migrations/024_lease_plane.sql`, `src/lease_plane/`, `tests/test_lease_plane_client.py`) was captured into the repo by commit `b5364d3` after both docs landed; the migration is already applied to the live `governance` database.
+This plan is the **integration-into-UNITARES framing** (R7 row in `docs/ontology/plan.md`); the RFC is the **contract spec**. Neither subsumes the other. Implementation skeleton (`db/postgres/migrations/024_lease_plane.sql`, `src/lease_plane/`, `tests/test_lease_plane_client.py`) was captured into the repo by commit `b5364d3` after both docs landed; the migration is already applied to the live `governance` database. The Elixir/OTP implementation now lives in this repo under `elixir/lease_plane/`.
 
 ---
 
@@ -314,9 +314,10 @@ Forwarder behavior:
 
 1. Confirm Elixir/Mix availability.
 2. If absent, install with Homebrew or asdf.
-3. Create a separate repo or subdirectory only after deciding ownership:
-   - preferred repo: `unitares-coordination-kernel` if it becomes a standalone service;
-   - alternative: `services/coordination_kernel/` inside `unitares` if tightly coupled.
+3. Use an in-repo UNITARES service boundary, not a standalone repository:
+   - repo-placement decision, 2026-05-02: **inside `unitares`**;
+   - current implementation path: `elixir/lease_plane/`;
+   - future packaging target, if the repo adopts a generic service layout: `services/coordination_kernel/`.
 4. Add CI for `mix test` and formatting.
 
 ### Phase 1 — pure in-memory lease server
@@ -366,23 +367,26 @@ Exit criterion: ownership can move without waiting for TTL expiry or creating gh
 - Overcoupling: UNITARES should consume evidence; it should not depend on BEAM runtime for core identity resolution.
 - Split-brain: distributed BEAM clustering is out of scope until single-node semantics are proven.
 
-## First decision needed
+## Repo placement decision
 
-Where should the kernel live?
+Decision, 2026-05-02: keep the coordination kernel inside the `unitares` repo as a service boundary, not in a standalone repository.
 
-Recommendation: start as a separate repo, `unitares-coordination-kernel`, because it is a service boundary with its own runtime, dependencies, CI, and deployment cadence. Keep UNITARES integration through HTTP/MCP and Postgres schema migrations only after the primitive proves itself.
+Rationale:
 
-If the operator wants minimal repo sprawl, start under `unitares/services/coordination_kernel/` and split later.
+- R7 is operationally separate, but its invariants are not independent: the Postgres schema, Python typed-absence contract, Elixir router, Sentinel alarms, and ontology/RFC docs have to move together.
+- The lease plane already writes into a UNITARES-owned schema in the same governance database and emits evidence consumed by UNITARES; splitting the repo would create cross-repo release ordering for one runtime invariant.
+- A process boundary is enough for OTP supervision and deployment isolation. A repo boundary can wait until there is a real independent release cadence or non-UNITARES consumer.
+- This follows the `unitares-core` fold-back lesson: avoid two-repo coordination when the abstraction is load-bearing for the parent system.
+
+Current physical path is `elixir/lease_plane/`. Renaming to `services/coordination_kernel/` is packaging hygiene, not an ontology gate.
 
 ## Immediate next action
 
-Install/confirm Elixir, then spike Phase 1 in a scratch branch/repo:
+Continue Phase A in the existing in-repo OTP app:
 
 ```bash
-brew install elixir
-mix new coordination_kernel --sup
-cd coordination_kernel
+cd elixir/lease_plane
 mix test
 ```
 
-Then implement only in-memory `SurfaceRegistry` + `LeaseProcess` and test conflict/expiry behavior. Do not touch UNITARES production schema until Phase 1 proves the semantics.
+Keep UNITARES integration through the HTTP/API contract and the existing `lease_plane` schema. Do not create `unitares-coordination-kernel` unless a future split has a concrete release-cadence or external-consumer reason.
