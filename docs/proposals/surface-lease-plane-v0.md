@@ -569,13 +569,34 @@ Released rows accumulate indefinitely without explicit pruning. Migration 024 ha
 
 `/v1/lease/status?surface_id=...` and `/v1/lease/release` body must apply the same canonicalization rules as acquire. The Python client helper SHALL apply normalization at the `LeasePlaneClient` method boundary, not at the transport boundary, so all three call paths (acquire/status/release) share the same normalization.
 
-#### 7.2.8 §6.1 promotion-gate criterion 5 cross-reference
+#### 7.2.8 §6.1 promotion-gate criterion 5 cross-reference — RESOLVED in v0.10
 
-§6.1 criterion 5's `payload->>'surface_id' LIKE $1 || ':%'` predicate assumes un-encoded `surface_id` in the audit payload. The payload-shape standardization pass (named in §6.1 as a Phase B prerequisite) MUST commit to writing canonicalized `surface_id` (per §7.2.4) into `audit.tool_usage.payload`, with no percent-encoding. Cross-tracked in §9 checklist.
+§6.1 criterion 5's `payload->>'surface_id' LIKE $1 || ':%'` predicate assumes un-encoded `surface_id` in the audit payload. The payload-shape standardization pass (named in §6.1 as a Phase B prerequisite) committed to writing canonicalized `surface_id` (per §7.12.1) into `audit.tool_usage.payload`, with no percent-encoding.
 
-#### 7.2.9 Forward-compat for unknown schemes
+**Standardized top-level keys** (projected by `UnitaresLeasePlane.Repo.tool_usage_payload/1` in `elixir/lease_plane/lib/unitares_lease_plane/repo.ex`, INSERTed into `audit.tool_usage.payload` by `insert_tool_usage/2`):
 
-Per dialectic CONCERN-3, scheme additions are migrations: a new `surface_kind` requires (a) Postgres migration extending the CHECK constraint, deployed before (b) the BEAM module rollout that begins INSERTing the new scheme. The `unitares_doctor.py` script SHALL be extended to lint that no Elixir source mentions a scheme not in the live CHECK. Tracked in §9 checklist as a Phase B prerequisite, not Phase A.
+| key | source | guarantee |
+|---|---|---|
+| `surface_id` | canonical `lease_plane_events.surface_id` (already canonicalized at acquire time per §7.12.1) | un-encoded; matches `^(file://\|dialectic:/\|resident:/\|capture:/\|td:/)` per migration 026 grammar |
+| `surface_kind` | DB-generated `split_part(surface_id, ':', 1)` | structurally cannot drift from `surface_id` |
+| `lease_id` | event row | UUID text |
+| `lease_event_id` | outbox `event_id` | UUID text — primary join key for retroactive payload audits |
+| `holder_agent_uuid` | event row | UUID text |
+| `holder_class` | event row | `process_instance` \| `substrate_earned` |
+| `advisory_mode` | event row | bool |
+| `earned_status` | event row | `provisional` \| `earned` |
+| `audit_session` | nested `lease_payload.audit_session` lifted | optional |
+| `lease_payload` | full `lease_plane_events.payload` JSONB | nested for completeness |
+
+**Pinned by Elixir test** `test/unitares_lease_plane_test.exs:221` — `"§7.2.8 contract — top-level keys present, surface_id un-encoded, §6.1 LIKE works"`. Asserts every key above is present at the top level (not nested), `surface_id` matches input verbatim, contains no `%` (refutes percent-encoding), `surface_kind` matches the scheme prefix, and the §6.1 criterion-5 LIKE-predicate returns the expected row. Any future regression in `tool_usage_payload/1` shape — including a switch to a nested envelope, percent-encoding for "URL safety," or a key rename — fails the test before merge.
+
+**Why pinned in Elixir, not Python:** the projection happens server-side in BEAM. A Python-side test would either need to spin up the lease plane (already covered by integration paths) or assert against drifted live data (fragile). The Elixir contract test is the cleanest binding.
+
+#### 7.2.9 Forward-compat for unknown schemes — RESOLVED in v0.10
+
+Per dialectic CONCERN-3, scheme additions are migrations: a new `surface_kind` requires (a) Postgres migration extending the CHECK constraint, deployed before (b) the BEAM module rollout that begins INSERTing the new scheme. The `unitares_doctor.py` script was extended to lint that no Elixir source mentions a scheme not in the live CHECK.
+
+**Implementation:** `check_elixir_scheme_grammar_lint` in `scripts/dev/unitares_doctor.py:313`. It (a) reads the live `surface_id_grammar` CHECK constraint via `pg_get_constraintdef()` and parses the alternation list, (b) scans `elixir/lease_plane/lib/unitares_lease_plane/canonicalize.ex` for both the `@canonical_schemes ~w(...)` wordlist and `defp dispatch("<scheme>:..." <> rest)` arms, (c) FAILs with offending scheme(s) if Elixir mentions a scheme not in the grammar; SKIPs if `psql` missing, the constraint is absent (lease plane not installed), or `canonicalize.ex` is absent. Catches the inverse-direction drift from `check_elixir_deprecated_scheme_lint` (which catches schemes deprecated-but-still-mentioned in Elixir).
 
 Scheme deprecation/migration: see §7.11.
 
@@ -1010,8 +1031,8 @@ Each row below is a Phase A blocker. All tests live under `tests/test_lease_plan
 
 #### Phase B prerequisites (v0.7 — non-blocking for Phase A)
 
-- [ ] **§7.2.8** — payload-shape standardization pass spec authored before any surface_kind reaches Phase B candidate status; commits to writing canonicalized `surface_id` (per §7.12.1) into `audit.tool_usage.payload`, no percent-encoding.
-- [ ] **§7.2.9** — `unitares_doctor.py` extended to lint that no Elixir source mentions a scheme not in the live DB CHECK.
+- [x] **§7.2.8** — payload-shape standardization pass spec authored, committed to writing canonicalized `surface_id` (per §7.12.1) into `audit.tool_usage.payload`, no percent-encoding. Implemented by `UnitaresLeasePlane.Repo.tool_usage_payload/1` (`elixir/lease_plane/lib/unitares_lease_plane/repo.ex`); pinned by Elixir test `"§7.2.8 contract — top-level keys present, surface_id un-encoded, §6.1 LIKE works"` (`elixir/lease_plane/test/unitares_lease_plane_test.exs:221`). Resolved v0.10.
+- [x] **§7.2.9** — `unitares_doctor.py` extended to lint that no Elixir source mentions a scheme not in the live DB CHECK. Implemented as `check_elixir_scheme_grammar_lint` (`scripts/dev/unitares_doctor.py:313`). Resolved v0.10.
 - [ ] **§7.11** council pass on the 30-day-drain tentative before any production scheme is deprecated.
 - [ ] **§7.12.4** v1 RFC opening: weigh option (a) new scheme `file-inode://` vs option (b) modifier `?canon=inode` explicitly with the asymmetric-cost framing v0.8 surfaces. v0.8 explicitly does NOT add `?`-banning CHECK in migration 026 — both options remain viable for v1.
 
@@ -1027,6 +1048,24 @@ This is a 4-8 week spike. It trades against:
 The technical case is strong (three independent reviewers converged). The strategic case is the operator's call. If shelved, file this RFC as captured-decision so the next session doesn't re-litigate the substrate question from scratch.
 
 ## 11. Versions / changelog
+
+- **v0.10 (2026-05-03):** §7.2.8 (payload-shape standardization pass) and §7.2.9 (Elixir scheme grammar lint) promoted from Phase B prerequisite checklist items → RESOLVED. Both were already functionally implemented in shipped Phase A code; v0.10 codifies the contract in the RFC and pins the §7.2.8 payload shape with a regression test so it cannot silently drift.
+
+  *§7.2.8 — Resolved (payload-shape standardization, pinned by test):*
+  - **Standardized top-level keys table** added documenting what `UnitaresLeasePlane.Repo.tool_usage_payload/1` projects into `audit.tool_usage.payload`: `surface_id`, `surface_kind`, `lease_id`, `lease_event_id`, `holder_agent_uuid`, `holder_class`, `advisory_mode`, `earned_status`, `audit_session`, `lease_payload` (nested for completeness).
+  - **§6.1 criterion-5 contract pinned** by new Elixir test `"§7.2.8 contract — top-level keys present, surface_id un-encoded, §6.1 LIKE works"` at `elixir/lease_plane/test/unitares_lease_plane_test.exs:221`. Test asserts every documented top-level key is present (not nested), `surface_id` is verbatim with no `%` (refutes percent-encoding), `surface_kind` matches scheme prefix, and the §6.1 LIKE-predicate returns the expected row. Catches future regressions before merge.
+  - **Justification for Elixir-side test placement** added: projection happens server-side in BEAM; a Python contract test would either need to spin up the lease plane (already covered by integration paths) or assert against drifted live data (fragile). The Elixir contract test is the cleanest binding.
+
+  *§7.2.9 — Resolved (Elixir scheme grammar lint already shipped):*
+  - **Implementation referenced**: `check_elixir_scheme_grammar_lint` in `scripts/dev/unitares_doctor.py:313`. Reads live `surface_id_grammar` CHECK constraint via `pg_get_constraintdef()`, parses alternation list, scans `canonicalize.ex` for `@canonical_schemes` wordlist + `defp dispatch("<scheme>:..." <> rest)` arms, FAILs on schemes mentioned by Elixir but not in grammar, SKIPs cleanly when `psql`/constraint/canonicalize.ex absent.
+  - **Inverse-direction relationship to `check_elixir_deprecated_scheme_lint`** documented: deprecated-but-still-mentioned schemes vs. mentioned-but-not-in-grammar schemes are the two scheme-drift directions; both are now covered.
+
+  *§9 checklist:*
+  - Phase B prerequisite rows for §7.2.8 and §7.2.9 marked complete (`[x]`) with implementation + test references.
+  - Phase A plan companion doc — corresponding rows marked DONE.
+
+  *Methodology lesson:*
+  - Same lesson as v0.9 (audit-mining for §7.5): when an "RFC bookkeeping" item is an "X SHALL be implemented before Phase B" carve-out, check whether X is already implemented before scoping work. Both §7.2.8 and §7.2.9 had been silently completed during earlier Phase A PRs without status promotion. The remaining work was bookkeeping + a regression test.
 
 - **v0.9 (2026-05-03):** §7.5 (heartbeat cadence + TTL math) promoted from `PARTIALLY RESOLVED` (operator-action carve-out) → `RESOLVED` for the Pi `remote_heartbeat` path. Resolved by mining the existing `audit.events WHERE event_type='eisv_sync'` audit trail (Steward Pi→Mac sync, n=8452 since 2026-03-15) instead of building purpose-built instrumentation — the audit log already characterizes the Pi↔Mac heartbeat path the same way the §7.5 carve-out's "instrument and wait 7 days" plan would. Material changes:
 

@@ -217,6 +217,45 @@ defmodule UnitaresLeasePlaneTest do
 
       assert %DateTime{} = forwarded_at
     end
+
+    test "§7.2.8 contract — top-level keys present, surface_id un-encoded, §6.1 LIKE works", ctx do
+      params = local_beam_params(ctx.surface)
+      assert {:ok, _lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
+      event_id = acquire_event_id(ctx.surface)
+
+      assert {:ok, %{forwarded: 1, failed: 0}} =
+               AuditOutboxForwarder.perform(%{limit: 10, surface_id: ctx.surface})
+
+      {:ok, %{rows: [[payload]]}} =
+        Postgrex.query(
+          UnitaresLeasePlane.DB,
+          "SELECT payload FROM audit.tool_usage WHERE payload->>'lease_event_id' = $1",
+          [event_id]
+        )
+
+      for key <- ~w(surface_id surface_kind lease_id lease_event_id
+                     holder_agent_uuid holder_class advisory_mode earned_status) do
+        assert Map.has_key?(payload, key),
+               "§7.2.8: payload missing top-level key '#{key}'"
+      end
+
+      assert payload["surface_id"] == ctx.surface
+
+      refute String.contains?(payload["surface_id"], "%"),
+             "§7.2.8: surface_id must not be percent-encoded in audit payload"
+
+      [expected_kind, _] = String.split(ctx.surface, ":", parts: 2)
+      assert payload["surface_kind"] == expected_kind
+
+      {:ok, %{rows: [[1]]}} =
+        Postgrex.query(
+          UnitaresLeasePlane.DB,
+          "SELECT 1 FROM audit.tool_usage " <>
+            "WHERE payload->>'lease_event_id' = $1 " <>
+            "AND payload->>'surface_id' LIKE $2",
+          [event_id, expected_kind <> ":%"]
+        )
+    end
   end
 
   describe "status/1" do
