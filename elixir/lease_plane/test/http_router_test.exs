@@ -9,15 +9,20 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
   @opts HTTPRouter.init([])
   @bearer "test-bearer-token-do-not-use-in-prod"
+  @force_release_token "test-force-release-token-do-not-use-in-prod"
 
   setup do
     Application.put_env(:lease_plane, :bearer_token, @bearer)
+    Application.put_env(:lease_plane, :force_release_token, @force_release_token)
     surface = unique_surface_id("http")
     on_exit(fn -> cleanup_surface(surface) end)
     {:ok, surface: surface}
   end
 
   defp authed(conn), do: put_req_header(conn, "authorization", "Bearer #{@bearer}")
+
+  defp authed_force_release(conn),
+    do: put_req_header(conn, "authorization", "Bearer #{@force_release_token}")
 
   defp acquire_body(surface, opts \\ []) do
     %{
@@ -62,6 +67,22 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
         |> HTTPRouter.call(@opts)
 
       assert resp.status == 401
+    end
+
+    test "lowercase 'bearer' scheme accepted (RFC 7235 §2.1)", ctx do
+      # RFC 7235 says auth scheme tokens are case-insensitive. Several
+      # mainstream HTTP clients (e.g. Python httpx defaults) send lowercase
+      # "bearer". Reject those and you break interoperability for no security
+      # gain. The token value itself is still compared via secure_compare.
+      resp =
+        :post
+        |> conn("/v1/lease/acquire", Jason.encode!(acquire_body(ctx.surface)))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "bearer #{@bearer}")
+        |> HTTPRouter.call(@opts)
+
+      assert resp.status == 200
+      assert parsed(resp)["ok"] == true
     end
 
     test "no expected token configured → 503 fail-closed", ctx do
@@ -532,6 +553,144 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
       # Verify the leaky inspect string never made it to the wire.
       refute result.resp_body =~ "hunter2"
+    end
+  end
+
+  # ---------- /v1/lease/force-release (RFC §7.10) ----------
+  #
+  # Contract-layer enforcement of the elevated-bearer requirement. The regular
+  # LEASE_PLANE_BEARER_TOKEN cannot authorize force-release; only
+  # LEASE_FORCE_RELEASE_TOKEN succeeds. Mutual exclusion is enforced in
+  # HTTPAuth's per-path token mapping.
+
+  describe "POST /v1/lease/force-release — auth (RFC §7.10)" do
+    test "regular bearer → 401 permission_denied", _ctx do
+      resp =
+        :post
+        |> conn("/v1/lease/force-release", Jason.encode!(%{lease_id: random_uuid()}))
+        |> put_req_header("content-type", "application/json")
+        |> authed()
+        |> HTTPRouter.call(@opts)
+
+      assert resp.status == 401
+      payload = parsed(resp)
+      assert payload["error"] == "permission_denied"
+      assert payload["reason"] =~ "force-release"
+    end
+
+    test "missing Authorization header → 401 permission_denied", _ctx do
+      resp =
+        :post
+        |> conn("/v1/lease/force-release", Jason.encode!(%{lease_id: random_uuid()}))
+        |> put_req_header("content-type", "application/json")
+        |> HTTPRouter.call(@opts)
+
+      assert resp.status == 401
+      assert parsed(resp)["error"] == "permission_denied"
+    end
+
+    test "force-release token → 200 happy path", ctx do
+      # Acquire a lease via the regular bearer, then force-release it with the
+      # elevated bearer. The acquire side proves the regular bearer's normal
+      # scope is unaffected; the force-release side proves the elevated path
+      # works end-to-end.
+      acq = post_json("/v1/lease/acquire", acquire_body(ctx.surface))
+      assert acq.status == 200
+      lease_id = parsed(acq)["lease"]["lease_id"]
+
+      resp =
+        :post
+        |> conn("/v1/lease/force-release", Jason.encode!(%{lease_id: lease_id}))
+        |> put_req_header("content-type", "application/json")
+        |> authed_force_release()
+        |> HTTPRouter.call(@opts)
+
+      assert resp.status == 200
+      assert parsed(resp)["ok"] == true
+    end
+
+    test "force-release token cannot authorize /v1/lease/acquire (mutual exclusion)", ctx do
+      # The force-release bearer is operator-only; presenting it on a
+      # non-force-release route must fail. Otherwise the elevated token's
+      # exposure surface widens for no contract-layer reason.
+      resp =
+        :post
+        |> conn("/v1/lease/acquire", Jason.encode!(acquire_body(ctx.surface)))
+        |> put_req_header("content-type", "application/json")
+        |> authed_force_release()
+        |> HTTPRouter.call(@opts)
+
+      assert resp.status == 401
+      assert parsed(resp)["error"] == "permission_denied"
+    end
+
+    test "force-release token unconfigured → 503 fail-closed", _ctx do
+      Application.put_env(:lease_plane, :force_release_token, nil)
+      on_exit(fn ->
+        Application.put_env(:lease_plane, :force_release_token, @force_release_token)
+      end)
+
+      resp =
+        :post
+        |> conn("/v1/lease/force-release", Jason.encode!(%{lease_id: random_uuid()}))
+        |> put_req_header("content-type", "application/json")
+        |> authed_force_release()
+        |> HTTPRouter.call(@opts)
+
+      assert resp.status == 503
+      assert parsed(resp)["error"] == "service_unavailable"
+    end
+
+    test "missing lease_id → 422 schema_invalid", _ctx do
+      resp =
+        :post
+        |> conn("/v1/lease/force-release", Jason.encode!(%{}))
+        |> put_req_header("content-type", "application/json")
+        |> authed_force_release()
+        |> HTTPRouter.call(@opts)
+
+      assert resp.status == 422
+      assert parsed(resp)["error"] == "schema_invalid"
+    end
+
+    test "nonexistent lease → 404 not_found", _ctx do
+      resp =
+        :post
+        |> conn("/v1/lease/force-release", Jason.encode!(%{lease_id: random_uuid()}))
+        |> put_req_header("content-type", "application/json")
+        |> authed_force_release()
+        |> HTTPRouter.call(@opts)
+
+      assert resp.status == 404
+      assert parsed(resp)["error"] == "not_found"
+    end
+  end
+
+  describe "POST /v1/lease/release — release_reason='forced' rejected (RFC §7.10)" do
+    test "release_reason='forced' on /release → 200 permission_denied", ctx do
+      # release_reason='forced' must arrive at /v1/lease/force-release so the
+      # elevated bearer gates it at the contract layer. Accepting it on
+      # /release would route around the §7.10 authority check.
+      acq = post_json("/v1/lease/acquire", acquire_body(ctx.surface))
+      lease_id = parsed(acq)["lease"]["lease_id"]
+
+      resp = post_json("/v1/lease/release", %{lease_id: lease_id, release_reason: "forced"})
+
+      assert resp.status == 200
+      payload = parsed(resp)
+      assert payload["ok"] == false
+      assert payload["error"] == "permission_denied"
+      assert payload["reason"] == "forced_release_requires_force_release_endpoint"
+    end
+
+    test "regular release reasons still succeed on /release", ctx do
+      acq = post_json("/v1/lease/acquire", acquire_body(ctx.surface))
+      lease_id = parsed(acq)["lease"]["lease_id"]
+
+      resp = post_json("/v1/lease/release", %{lease_id: lease_id, release_reason: "normal"})
+
+      assert resp.status == 200
+      assert parsed(resp)["ok"] == true
     end
   end
 end

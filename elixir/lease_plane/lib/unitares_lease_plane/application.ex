@@ -47,6 +47,15 @@ defmodule UnitaresLeasePlane.Application do
       Application.put_env(:lease_plane, :bearer_token, token)
     end
 
+    # RFC §7.10 — separate elevated bearer for force-release (operator-only).
+    # Distinct config key + env var so the regular bearer can't authorize
+    # force-release at the contract layer (HTTPAuth picks the right token by
+    # path). Same fail-closed posture: if absent, force-release endpoint
+    # returns 503.
+    if token = System.get_env("LEASE_FORCE_RELEASE_TOKEN") do
+      Application.put_env(:lease_plane, :force_release_token, token)
+    end
+
     children =
       [
         {Postgrex, postgrex_opts()},

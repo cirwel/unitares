@@ -170,6 +170,36 @@ defmodule UnitaresLeasePlane.HTTPRouter do
             json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
         end
 
+      {:permission_denied, reason} ->
+        # RFC §7.10 — release_reason='forced' must arrive at /v1/lease/force-release
+        # so HTTPAuth gates it with the elevated token. Same envelope shape as
+        # other application-layer policy rejections (cf. holder_class='role').
+        json(conn, 200, %{ok: false, error: "permission_denied", reason: reason})
+
+      {:error, detail} ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+    end
+  end
+
+  # ---------- /v1/lease/force-release (RFC §7.10) ----------
+  # Operator-only. Gated at the contract layer by HTTPAuth's per-path token
+  # check (`:force_release_token`, sourced from `LEASE_FORCE_RELEASE_TOKEN`).
+  # The regular bearer cannot reach this route — see http_auth.ex.
+  post "/v1/lease/force-release" do
+    case extract_force_release_params(conn.body_params) do
+      {:ok, lease_id} ->
+        case UnitaresLeasePlane.force_release(lease_id) do
+          :ok ->
+            json(conn, 200, %{ok: true})
+
+          {:error, :not_found} ->
+            json(conn, 404, %{ok: false, error: "not_found"})
+
+          {:error, reason_atom} ->
+            Logger.error("lease plane force-release failed: #{inspect(reason_atom)}")
+            json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+        end
+
       {:error, detail} ->
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
     end
@@ -315,22 +345,47 @@ defmodule UnitaresLeasePlane.HTTPRouter do
        when is_binary(lease_id) and byte_size(lease_id) > 0 do
     reason = Map.get(body, "release_reason", "normal")
 
-    if reason in [
-         "normal",
-         "down_local",
-         "reaped_after_supervisor_failed",
-         "reaped_local_ttl",
-         "reaped_remote_ttl",
-         "handoff",
-         "forced"
-       ] do
-      {:ok, lease_id, reason}
-    else
-      {:error, "invalid release_reason: #{inspect(reason)}"}
+    cond do
+      # RFC §7.10: force-release requires the elevated bearer at the contract
+      # layer. The /v1/lease/release endpoint is gated by the regular bearer
+      # (HTTPAuth), so accepting release_reason='forced' here would route
+      # around the operator-only authority check. Reject as application-layer
+      # permission_denied with a machine-readable reason that points the
+      # caller at the correct endpoint.
+      reason == "forced" ->
+        {:permission_denied, "forced_release_requires_force_release_endpoint"}
+
+      reason in [
+        "normal",
+        "down_local",
+        "reaped_after_supervisor_failed",
+        "reaped_local_ttl",
+        "reaped_remote_ttl",
+        "handoff"
+      ] ->
+        {:ok, lease_id, reason}
+
+      true ->
+        {:error, "invalid release_reason: #{inspect(reason)}"}
     end
   end
 
   defp extract_release_params(_), do: {:error, "lease_id required"}
+
+  # /v1/lease/force-release takes only lease_id. release_reason is implicit
+  # ('forced') so callers can't accidentally bypass the elevated-bearer gate
+  # by, e.g., passing release_reason='normal'.
+  defp extract_force_release_params(%{} = body) do
+    case Map.get(body, "lease_id") do
+      lease_id when is_binary(lease_id) and byte_size(lease_id) > 0 ->
+        {:ok, lease_id}
+
+      _ ->
+        {:error, "lease_id required"}
+    end
+  end
+
+  defp extract_force_release_params(_), do: {:error, "lease_id required"}
 
   defp extract_handoff_offer_params(%{} = body) do
     lease_id = Map.get(body, "lease_id")
