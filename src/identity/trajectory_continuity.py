@@ -201,11 +201,19 @@ async def score_trajectory_continuity(
     # Side effect: persist the full record to audit.r1_score_audit. Awaited
     # so the score_id is durably present before any caller publishes the
     # redacted KG payload that references it (v3.3-A join-semantics contract).
-    await backend.record_r1_score_audit(_to_audit_record(
+    # If the write fails, we MUST refuse to return a score whose audit row is
+    # absent — otherwise PR 3's KG emission could publish a dangling score_id.
+    persisted = await backend.record_r1_score_audit(_to_audit_record(
         score=score,
         parent_id=claimed_parent_id,
         successor_id=successor_id,
     ))
+    if not persisted:
+        raise RuntimeError(
+            f"R1 audit write failed for score_id={score.score_id}; "
+            f"refusing to return a score whose audit anchor is absent "
+            f"(v3.3-A join-key durability contract)."
+        )
 
     return score
 

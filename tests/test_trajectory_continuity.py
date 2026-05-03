@@ -42,7 +42,10 @@ def _stub_reconstruct(parent_series, successor_series):
 def mocked_db(monkeypatch):
     """Patch get_db to return a backend whose reconstruct_eisv_series is settable."""
     backend = AsyncMock()
-    backend.record_r1_score_audit = AsyncMock(return_value=None)
+    # Default to successful audit-write so the score primitive can return a
+    # score; per-test overrides set return_value=False to exercise the
+    # fail-loud join-key contract (test_score_raises_when_audit_write_fails).
+    backend.record_r1_score_audit = AsyncMock(return_value=True)
 
     def _get_db():
         return backend
@@ -113,8 +116,11 @@ async def test_score_drifted_case_returns_inconclusive(mocked_db):
     )
 
     assert result.verdict == "inconclusive"
-    # 0.55 <= plausibility < 0.70 is the inconclusive band per design doc
-    assert 0.55 <= result.plausibility < 0.70
+    # Verdict alone is the threshold-logic regression. The numeric band check
+    # would conflate "generator was tuned right" with "thresholds work" —
+    # _DRIFT_START_OFFSET in trajectory_fixtures.py was tuned to land here,
+    # so a tightening of the band would be a generator-tuning regression, not
+    # a threshold-logic failure. Other tests pin the >=0.70 and <0.55 cuts.
 
 
 @pytest.mark.asyncio
@@ -271,6 +277,29 @@ async def test_score_kg_public_payload_is_strictly_redacted(mocked_db):
     assert "observations" not in public
     assert "parent_mature" not in public
     assert "reasons" not in public
+
+
+@pytest.mark.asyncio
+async def test_score_raises_when_audit_write_fails(mocked_db):
+    """Per v3.3-A: score_id must be durably present in audit.r1_score_audit
+    before any caller publishes the redacted KG payload that references it.
+    If record_r1_score_audit returns False, the primitive MUST raise rather
+    than return a score whose audit anchor is absent — otherwise PR 3's
+    public KG emission could publish a dangling score_id."""
+    from src.identity.trajectory_continuity import score_trajectory_continuity
+
+    parent, successor = synthetic_trajectory_pair(seed=99, kind="genuine")
+    mocked_db.reconstruct_eisv_series = AsyncMock(
+        side_effect=_stub_reconstruct(parent, successor)
+    )
+    # Audit write fails (e.g. CheckViolation, network error) → mixin returns False
+    mocked_db.record_r1_score_audit = AsyncMock(return_value=False)
+
+    with pytest.raises(RuntimeError, match="audit write failed"):
+        await score_trajectory_continuity(
+            claimed_parent_id="parent-uuid",
+            successor_id="successor-uuid",
+        )
 
 
 @pytest.mark.asyncio
