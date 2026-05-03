@@ -162,12 +162,18 @@ CREATE TABLE IF NOT EXISTS core.agent_state (
     -- Full state snapshot (for complex queries)
     state_json          JSONB NOT NULL DEFAULT '{}'::jsonb,
 
+    -- Epoch (added by migration 007; backported here so base DDL is honest
+    -- under R1 v3.3-F. Bumped when EISV coupling constants, coherence formulas,
+    -- or calibration logic change in a way that invalidates existing rows.)
+    epoch               INTEGER NOT NULL DEFAULT 1,
+
     -- Unique constraint: one state per identity per timestamp
     UNIQUE (identity_id, recorded_at)
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_state_identity_time ON core.agent_state(identity_id, recorded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_state_regime ON core.agent_state(regime) WHERE regime != 'nominal';
+CREATE INDEX IF NOT EXISTS idx_agent_state_epoch ON core.agent_state(epoch);
 
 -- -----------------------------------------------------------------------------
 -- Schema Migrations (track applied migrations)

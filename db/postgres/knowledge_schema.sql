@@ -52,6 +52,10 @@ CREATE TABLE IF NOT EXISTS knowledge.discoveries (
     provenance          JSONB,
     provenance_chain    JSONB,
 
+    -- Epoch (added by migration 007; backported here so base DDL is honest
+    -- under R1 v3.3-F.)
+    epoch               INTEGER NOT NULL DEFAULT 1,
+
     -- Full-text search vector (auto-generated)
     search_vector       TSVECTOR GENERATED ALWAYS AS (
         setweight(to_tsvector('english', coalesce(summary, '')), 'A') ||
@@ -65,6 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_discoveries_type ON knowledge.discoveri
 CREATE INDEX IF NOT EXISTS idx_knowledge_discoveries_status ON knowledge.discoveries(status);
 CREATE INDEX IF NOT EXISTS idx_knowledge_discoveries_created ON knowledge.discoveries(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_knowledge_discoveries_response_to ON knowledge.discoveries(response_to_id) WHERE response_to_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_discoveries_epoch ON knowledge.discoveries(epoch);
 
 -- GIN indexes for array and FTS
 CREATE INDEX IF NOT EXISTS idx_knowledge_discoveries_tags ON knowledge.discoveries USING GIN (tags);
