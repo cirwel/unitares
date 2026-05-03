@@ -81,6 +81,7 @@ data/archives/
 data/backups/
 data/analysis/
 tests/fixtures/
+tests/data/
 data/exports/
 data/mcp_server_sse*.log
 
