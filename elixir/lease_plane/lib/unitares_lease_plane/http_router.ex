@@ -100,6 +100,15 @@ defmodule UnitaresLeasePlane.HTTPRouter do
             json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
         end
 
+      {:permission_denied, reason} ->
+        # RFC §4.4 / §7.3.5 — application-layer typed-absence for policy
+        # rejection (e.g. holder_class="role"). Distinct from the auth-layer
+        # 401 (http_auth.ex) by carrying a machine-readable reason atom and
+        # using the 200 + ok:false envelope per §7.3.5 ("HTTP 409 on
+        # held_by_other; 200 + ok:false otherwise"). The reason field is the
+        # discriminator (e.g. "role_holders_unsupported").
+        json(conn, 200, %{ok: false, error: "permission_denied", reason: reason})
+
       {:error, detail} ->
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
     end
@@ -263,9 +272,18 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         {:error, reason} = canonical_or_error
         {:error, "surface_id canonicalization failed: #{reason}"}
 
+      Map.get(body, "holder_class") == "role" ->
+        # RFC §4.4 line 481: roles cannot hold leases — surface this as
+        # application-layer permission_denied with a machine-readable reason,
+        # NOT as schema_invalid. holder_class is structurally valid; the
+        # rejection is a policy decision, not a malformed request. Closes
+        # §9 gate `test http_router returns 200 on permission_denied`.
+        {:permission_denied, "role_holders_unsupported"}
+
       Map.get(body, "holder_class") not in [nil, "process_instance", "substrate_earned"] ->
-        # 'role' and other classes are rejected before the DB CHECK — surface this
-        # as schema_invalid so the typed-absence error class is precise.
+        # Unknown/unsupported holder_class values (anything that isn't
+        # process_instance, substrate_earned, or the policy-rejected "role")
+        # remain schema_invalid — they're genuinely malformed input.
         {:error, "holder_class must be process_instance or substrate_earned (RFC §7.1)"}
 
       not is_integer(Map.get(body, "ttl_s")) ->

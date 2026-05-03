@@ -130,8 +130,26 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert payload["retry_after_hint_ms"] <= 5_000
     end
 
-    test "holder_class='role' → 422 schema_invalid (rejected before DB)", ctx do
+    test "holder_class='role' → 200 permission_denied (RFC §4.4)", ctx do
+      # RFC §4.4 line 481 + §7.3.5: roles cannot hold leases — application-
+      # layer policy rejection, not schema_invalid. Per §7.3.5 the typed-
+      # absence shape is 200 + ok:false. The previous behavior (422
+      # schema_invalid) was deliberate implementation drift that the §9 gate
+      # `test http_router returns 200 on permission_denied` now closes.
       body = acquire_body(ctx.surface, holder_class: "role")
+      resp = post_json("/v1/lease/acquire", body)
+      assert resp.status == 200
+      payload = parsed(resp)
+      assert payload["ok"] == false
+      assert payload["error"] == "permission_denied"
+      assert payload["reason"] == "role_holders_unsupported"
+    end
+
+    test "holder_class='unknown_class' → 422 schema_invalid", ctx do
+      # Unknown holder_class values that aren't the policy-rejected "role"
+      # remain schema_invalid — they're structurally malformed input, not a
+      # recognized but unsupported policy case.
+      body = acquire_body(ctx.surface, holder_class: "unknown_class")
       resp = post_json("/v1/lease/acquire", body)
       assert resp.status == 422
       assert parsed(resp)["error"] == "schema_invalid"
@@ -172,6 +190,21 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
     # than missing. Coverage overlaps with the in-house tests above; keeping
     # both makes the §9 audit trustworthy without losing the more descriptive
     # names that aid local debugging.
+
+    test "http_router returns 200 on permission_denied", ctx do
+      # RFC §7.3.5 / §9 gate: 200 + ok:false on application-layer
+      # permission_denied. The role-holder rejection path (RFC §4.4) is
+      # the canonical trigger; any future application-layer permission_denied
+      # must follow the same envelope shape.
+      body = acquire_body(ctx.surface, holder_class: "role")
+      resp = post_json("/v1/lease/acquire", body)
+      assert resp.status == 200
+      payload = parsed(resp)
+      assert payload["ok"] == false
+      assert payload["error"] == "permission_denied"
+      assert is_binary(payload["reason"])
+      assert payload["reason"] != ""
+    end
 
     test "http_router returns 409 on held_by_other", ctx do
       # RFC §7.3.5 / §9 gate: HTTP 409 on held_by_other.
