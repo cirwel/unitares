@@ -27,6 +27,7 @@ from .models import (
     AcquireResult,
     AcquireSchemaInvalid,
     AcquireServiceUnavailable,
+    ForceReleaseRequest,
     HandoffAcceptRequest,
     HandoffOfferRequest,
     HeartbeatRequest,
@@ -209,13 +210,14 @@ class LeasePlaneClient:
         payload = self._request_json("POST", "/v1/lease/release", request.model_dump(mode="json"))
         return _parse_simple(payload)
 
-    def force_release(self, request: ReleaseRequest) -> SimpleResult:
-        """Operator-only force-release using LEASE_FORCE_RELEASE_TOKEN (§7.10).
+    def force_release(self, request: ForceReleaseRequest) -> SimpleResult:
+        """Operator-only force-release via POST /v1/lease/force-release (§7.10).
 
-        Pins `release_reason='forced'` on the wire regardless of what the caller
-        set, and authenticates with `config.force_release_token` instead of the
-        standard bearer. If `force_release_token` is unset, returns
-        `permission_denied` without sending — contract-layer rejection.
+        Sends to the dedicated /v1/lease/force-release endpoint (added in PR 1)
+        using LEASE_FORCE_RELEASE_TOKEN. The Elixir router enforces path-level
+        mutual exclusion: the force_release_token is accepted only on this path,
+        and the standard bearer is rejected here. If force_release_token is
+        unset, returns permission_denied without sending — contract-layer rejection.
         """
         if not self.config.force_release_token:
             return SimpleError(
@@ -223,12 +225,10 @@ class LeasePlaneClient:
                 error="permission_denied",
                 reason="force_release_token not configured; force-release requires LEASE_FORCE_RELEASE_TOKEN",
             )
-        body = request.model_dump(mode="json")
-        body["release_reason"] = "forced"
         payload = self._request_json(
             "POST",
-            "/v1/lease/release",
-            body,
+            "/v1/lease/force-release",
+            request.model_dump(mode="json"),
             authorization_token=self.config.force_release_token,
         )
         return _parse_simple(payload)

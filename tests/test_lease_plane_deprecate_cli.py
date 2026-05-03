@@ -11,6 +11,10 @@ Tests the `scripts/dev/lease_plane_deprecate.py` CLI which implements the
 
 Spec: docs/proposals/surface-lease-plane-v0.md §7.11
       docs/proposals/surface-lease-plane-phase-a-plan.md PR 3a
+
+Stage A (PR 2 of 2): sweep force-releases go through POST /v1/lease/force-release
+via LeasePlaneClient, not direct SQL. Tests inject a mock HTTP transport to verify
+correct authorization, HTTP call counts, and audit event emission.
 """
 
 from __future__ import annotations
@@ -47,6 +51,31 @@ def _set_force_release_token(monkeypatch):
     monkeypatch.setenv("LEASE_FORCE_RELEASE_TOKEN", "test-force-release-token-do-not-use-in-prod")
 
 
+@pytest.fixture
+def mock_lease_client():
+    """LeasePlaneClient with a mock transport that records calls and returns ok:True.
+
+    Simulates the Elixir router responding to POST /v1/lease/force-release.
+    Tests that need to verify idempotency must also manually update the DB to
+    reflect the state change that the real Elixir server would make (setting
+    released_at on surface_leases).
+    """
+    from src.lease_plane.client import LeasePlaneClient, LeasePlaneClientConfig, LeaseHTTPRequest
+
+    calls: list = []
+
+    def transport(request: LeaseHTTPRequest):
+        calls.append(request)
+        return {"ok": True}
+
+    client = LeasePlaneClient(
+        LeasePlaneClientConfig(force_release_token="test-force-release-token-do-not-use-in-prod"),
+        transport=transport,
+    )
+    client._mock_calls = calls  # type: ignore[attr-defined]
+    return client
+
+
 async def _cleanup(conn):
     """Reset deprecated_schemes + surface_leases between tests."""
     await conn.execute(
@@ -78,6 +107,21 @@ async def _seed_lease(conn, surface_id: str, ttl_s: int = 60) -> uuid.UUID:
         now + timedelta(seconds=ttl_s), "pr3a-cli-test-seed",
     )
     return lease_id
+
+
+async def _simulate_elixir_release(conn, lease_id: uuid.UUID) -> None:
+    """Simulate the Elixir server marking a lease as released after force-release HTTP call.
+
+    In production the Elixir router owns this write. In tests with a mock HTTP
+    transport we perform it manually to exercise the idempotency predicate
+    (WHERE released_at IS NULL).
+    """
+    await conn.execute(
+        "UPDATE lease_plane.surface_leases "
+        "SET released_at = now(), release_reason = 'forced' "
+        "WHERE lease_id = $1",
+        lease_id,
+    )
 
 
 @pytest.mark.asyncio
@@ -162,9 +206,13 @@ async def test_deprecate_cli_unknown_kind_rejected():
 
 # §9: test_deprecation_sweep_idempotent_on_partial_failure
 @pytest.mark.asyncio
-async def test_deprecation_sweep_predicate_idempotent():
+async def test_deprecation_sweep_predicate_idempotent(mock_lease_client):
     """RFC §7.11.4: sweep predicate `WHERE released_at IS NULL AND surface_kind = $1`
     reaches fixpoint on re-run after partial completion.
+
+    Stage A verification: the sweep makes HTTP force-release calls (not direct SQL
+    updates). After simulating Elixir's DB write, re-run produces zero HTTP calls
+    because the predicate excludes already-released leases.
 
     The §9 alias above lets `audit_rfc_section_9_gates.py` recognize this
     as the RFC-named "idempotent_on_partial_failure" gate — the partial-failure
@@ -177,39 +225,48 @@ async def test_deprecation_sweep_predicate_idempotent():
     conn = await asyncpg.connect(TEST_DB_URL)
     try:
         await _cleanup(conn)
-        # Seed 3 active leases on td:/ scheme.
-        await _seed_lease(conn, "td:/pr3a_a")
-        await _seed_lease(conn, "td:/pr3a_b")
-        await _seed_lease(conn, "td:/pr3a_c")
-        # Mark deprecated.
+        lease_a = await _seed_lease(conn, "td:/pr3a_a")
+        lease_b = await _seed_lease(conn, "td:/pr3a_b")
+        lease_c = await _seed_lease(conn, "td:/pr3a_c")
         await cli.deprecate_cmd(
             kind="td", session_id="test-cli-sweep-idem", drain_window_days=30,
             db_url=TEST_DB_URL,
         )
-        # First sweep: releases all 3.
-        rc1 = await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL)
+
+        # First sweep: should call force-release HTTP endpoint for all 3 leases.
+        rc1 = await cli.deprecation_sweep_cmd(
+            kind="td", db_url=TEST_DB_URL, _lease_client=mock_lease_client
+        )
         assert rc1 == 0
-        unreleased1 = await conn.fetchval(
-            "SELECT count(*) FROM lease_plane.surface_leases "
-            "WHERE surface_kind = 'td' AND released_at IS NULL"
+        assert len(mock_lease_client._mock_calls) == 3, (
+            f"expected 3 HTTP force-release calls; got {len(mock_lease_client._mock_calls)}"
         )
-        assert unreleased1 == 0
-        # Re-run: idempotent fixpoint (zero rows to release).
-        rc2 = await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL)
+        # Verify each call hit the force-release endpoint with the elevated token.
+        for call in mock_lease_client._mock_calls:
+            assert "/v1/lease/force-release" in call.url
+            assert call.headers.get("Authorization") == "Bearer test-force-release-token-do-not-use-in-prod"
+
+        # Simulate Elixir marking all three leases as released (the state change
+        # the real router would perform after handling the HTTP calls).
+        for lease_id in (lease_a, lease_b, lease_c):
+            await _simulate_elixir_release(conn, lease_id)
+
+        # Re-run: idempotent fixpoint — WHERE released_at IS NULL returns zero rows.
+        mock_lease_client._mock_calls.clear()
+        rc2 = await cli.deprecation_sweep_cmd(
+            kind="td", db_url=TEST_DB_URL, _lease_client=mock_lease_client
+        )
         assert rc2 == 0
-        # Verify all 3 leases have release_reason='forced'.
-        forced_count = await conn.fetchval(
-            "SELECT count(*) FROM lease_plane.surface_leases "
-            "WHERE surface_kind = 'td' AND release_reason = 'forced'"
+        assert len(mock_lease_client._mock_calls) == 0, (
+            "re-run after all leases released must make zero HTTP calls (idempotent fixpoint)"
         )
-        assert forced_count == 3
     finally:
         await _cleanup(conn)
         await conn.close()
 
 
 @pytest.mark.asyncio
-async def test_deprecation_sweep_idempotent_on_partial_failure():
+async def test_deprecation_sweep_idempotent_on_partial_failure(mock_lease_client):
     """RFC §7.11.4: operator interrupts mid-sweep (some leases already released
     + already emitted a deprecation_swept event), re-runs, completes without
     double-emitting events for the already-swept leases.
@@ -217,7 +274,7 @@ async def test_deprecation_sweep_idempotent_on_partial_failure():
     The predicate `WHERE released_at IS NULL AND surface_kind = $1` excludes
     leases the prior partial run already closed, so re-running emits an event
     only for the remaining unreleased leases. Final event count == lease count
-    (no doubles), final release_reason='forced' on all leases.
+    (no doubles), exactly one HTTP call for the remaining lease.
     """
     from scripts.dev import lease_plane_deprecate as cli
 
@@ -248,12 +305,7 @@ async def test_deprecation_sweep_idempotent_on_partial_failure():
             (lease_a, "td:/pr3a_partial_a"),
             (lease_b, "td:/pr3a_partial_b"),
         ]:
-            await conn.execute(
-                "UPDATE lease_plane.surface_leases "
-                "SET released_at = now(), release_reason = 'forced' "
-                "WHERE lease_id = $1",
-                lease_id,
-            )
+            await _simulate_elixir_release(conn, lease_id)
             await conn.execute(
                 """
                 INSERT INTO lease_plane.lease_plane_events
@@ -263,21 +315,19 @@ async def test_deprecation_sweep_idempotent_on_partial_failure():
                 lease_id, surface_id, partial_payload,
             )
 
-        # Re-run after the simulated interruption.
-        rc = await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL)
+        # Re-run after the simulated interruption: only lease_c is unreleased.
+        rc = await cli.deprecation_sweep_cmd(
+            kind="td", db_url=TEST_DB_URL, _lease_client=mock_lease_client
+        )
         assert rc == 0
+        assert len(mock_lease_client._mock_calls) == 1, (
+            f"re-run must make exactly 1 HTTP call (for lease_c only); "
+            f"got {len(mock_lease_client._mock_calls)}"
+        )
 
-        # All three leases now released, all with reason='forced'.
-        unreleased = await conn.fetchval(
-            "SELECT count(*) FROM lease_plane.surface_leases "
-            "WHERE surface_kind = 'td' AND released_at IS NULL"
-        )
-        assert unreleased == 0
-        forced_count = await conn.fetchval(
-            "SELECT count(*) FROM lease_plane.surface_leases "
-            "WHERE surface_kind = 'td' AND release_reason = 'forced'"
-        )
-        assert forced_count == 3
+        # Simulate Elixir releasing lease_c.
+        released_lease_id = uuid.UUID(mock_lease_client._mock_calls[0].json_body["lease_id"])
+        await _simulate_elixir_release(conn, released_lease_id)
 
         # Exactly three deprecation_swept events — no double-emit for a or b.
         events = await conn.fetch(
@@ -288,9 +338,13 @@ async def test_deprecation_sweep_idempotent_on_partial_failure():
         event_lease_ids = {row["lease_id"] for row in events}
         assert len(event_lease_ids) == 3, "each lease must appear in exactly one event"
 
-        # A second re-run is also a no-op fixpoint: still three events, all released.
-        rc2 = await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL)
+        # A second re-run is also a no-op fixpoint: still three events, zero HTTP calls.
+        mock_lease_client._mock_calls.clear()
+        rc2 = await cli.deprecation_sweep_cmd(
+            kind="td", db_url=TEST_DB_URL, _lease_client=mock_lease_client
+        )
         assert rc2 == 0
+        assert len(mock_lease_client._mock_calls) == 0, "fixpoint re-run must make zero HTTP calls"
         events_after = await conn.fetchval(
             "SELECT count(*) FROM lease_plane.lease_plane_events "
             "WHERE event_type = 'lease.deprecation_swept' AND surface_kind = 'td'"
@@ -302,9 +356,14 @@ async def test_deprecation_sweep_idempotent_on_partial_failure():
 
 
 @pytest.mark.asyncio
-async def test_deprecation_sweep_emits_lease_deprecation_swept_events():
+async def test_deprecation_sweep_emits_lease_deprecation_swept_events(mock_lease_client):
     """RFC §7.11.3: each swept lease emits an event_type='lease.deprecation_swept'
-    row in lease_plane_events with the deprecation_id for audit correlation."""
+    row in lease_plane_events with the deprecation_id for audit correlation.
+
+    Stage A: Python still emits these audit events after a successful HTTP
+    force-release call. The Elixir router owns the state change; Python owns
+    the deprecation-sweep audit trail.
+    """
     from scripts.dev import lease_plane_deprecate as cli
 
     await ensure_test_database_schema()
@@ -322,7 +381,11 @@ async def test_deprecation_sweep_emits_lease_deprecation_swept_events():
         )
         assert depr_id is not None
 
-        await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL)
+        await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL, _lease_client=mock_lease_client)
+
+        # Two HTTP calls made — one per lease.
+        assert len(mock_lease_client._mock_calls) == 2
+
         # Two events emitted with the matching deprecation_id in payload.
         events = await conn.fetch(
             "SELECT event_type, payload FROM lease_plane.lease_plane_events "
@@ -332,7 +395,6 @@ async def test_deprecation_sweep_emits_lease_deprecation_swept_events():
         assert len(events) == 2
         for ev in events:
             assert ev["event_type"] == "lease.deprecation_swept"
-            # payload jsonb stores deprecation_id for batch correlation.
             import json
             payload = json.loads(ev["payload"])
             assert payload.get("deprecation_id") == str(depr_id)
@@ -342,7 +404,7 @@ async def test_deprecation_sweep_emits_lease_deprecation_swept_events():
 
 
 @pytest.mark.asyncio
-async def test_deprecation_finalize_records_check_migrated_at():
+async def test_deprecation_finalize_records_check_migrated_at(mock_lease_client):
     """`deprecation-finalize` records check_migrated_at on the deprecated_schemes row."""
     from scripts.dev import lease_plane_deprecate as cli
 
@@ -354,7 +416,7 @@ async def test_deprecation_finalize_records_check_migrated_at():
             kind="td", session_id="test-cli-finalize", drain_window_days=30,
             db_url=TEST_DB_URL,
         )
-        await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL)
+        await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL, _lease_client=mock_lease_client)
         rc = await cli.deprecation_finalize_cmd(kind="td", db_url=TEST_DB_URL)
         assert rc == 0
         check_migrated_at = await conn.fetchval(
@@ -465,7 +527,7 @@ async def test_deprecate_emits_lease_deprecation_marked_event():
 
 
 @pytest.mark.asyncio
-async def test_finalize_emits_lease_deprecation_migrated_event():
+async def test_finalize_emits_lease_deprecation_migrated_event(mock_lease_client):
     """RFC §7.11.3: Phase 3 finalize must emit event_type='lease.deprecation_migrated'
     with deprecation_id payload (audit signal that the CHECK migration completed)."""
     from scripts.dev import lease_plane_deprecate as cli
@@ -481,7 +543,7 @@ async def test_finalize_emits_lease_deprecation_migrated_event():
         depr_id = await conn.fetchval(
             "SELECT deprecation_id FROM lease_plane.deprecated_schemes WHERE surface_kind='td'"
         )
-        await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL)
+        await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL, _lease_client=mock_lease_client)
         rc = await cli.deprecation_finalize_cmd(kind="td", db_url=TEST_DB_URL)
         assert rc == 0
         events = await conn.fetch(
@@ -499,7 +561,7 @@ async def test_finalize_emits_lease_deprecation_migrated_event():
 
 
 @pytest.mark.asyncio
-async def test_finalize_idempotent_does_not_double_emit():
+async def test_finalize_idempotent_does_not_double_emit(mock_lease_client):
     """Re-running finalize on an already-finalized scheme does NOT emit a
     second lease.deprecation_migrated event (audit-trail clarity)."""
     from scripts.dev import lease_plane_deprecate as cli
@@ -512,7 +574,7 @@ async def test_finalize_idempotent_does_not_double_emit():
             kind="td", session_id="test-cli-finalize-idem",
             drain_window_days=30, db_url=TEST_DB_URL,
         )
-        await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL)
+        await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL, _lease_client=mock_lease_client)
         rc1 = await cli.deprecation_finalize_cmd(kind="td", db_url=TEST_DB_URL)
         rc2 = await cli.deprecation_finalize_cmd(kind="td", db_url=TEST_DB_URL)
         assert rc1 == 0 and rc2 == 0
@@ -530,7 +592,7 @@ async def test_finalize_idempotent_does_not_double_emit():
 
 
 @pytest.mark.asyncio
-async def test_deprecation_sweep_and_check_migration_atomic_session():
+async def test_deprecation_sweep_and_check_migration_atomic_session(mock_lease_client):
     """RFC §9 named gate (finally implementable post-R1).
 
     Verifies the super-command runs Phase 2 (sweep) and Phase 3 (finalize)
@@ -539,7 +601,8 @@ async def test_deprecation_sweep_and_check_migration_atomic_session():
     invocations; expects exactly one connect() call across both phases.
 
     Also verifies both phases successfully committed (sweep_completed_at
-    AND check_migrated_at populated).
+    AND check_migrated_at populated). HTTP force-release calls for each
+    swept lease are verified via the mock transport call count.
     """
     from scripts.dev import lease_plane_deprecate as cli
 
@@ -551,7 +614,7 @@ async def test_deprecation_sweep_and_check_migration_atomic_session():
             kind="td", session_id="test-cli-atomic-session",
             drain_window_days=30, db_url=TEST_DB_URL,
         )
-        lease_id = await _seed_lease(conn, "td:/pr3a-atomic-session-test")
+        await _seed_lease(conn, "td:/pr3a-atomic-session-test")
 
         real_connect = asyncpg.connect
         connect_calls = []
@@ -562,12 +625,19 @@ async def test_deprecation_sweep_and_check_migration_atomic_session():
 
         import unittest.mock as _mock
         with _mock.patch.object(cli.asyncpg, "connect", side_effect=_counting_connect):
-            rc = await cli.deprecate_and_finalize_cmd(kind="td", db_url=TEST_DB_URL)
+            rc = await cli.deprecate_and_finalize_cmd(
+                kind="td", db_url=TEST_DB_URL, _lease_client=mock_lease_client
+            )
 
         assert rc == 0, "super-command must succeed on happy path"
         assert len(connect_calls) == 1, (
             f"expected exactly one asyncpg.connect call across Phase 2+3; "
             f"got {len(connect_calls)} (proves DB-wire-level same-operator-session)"
+        )
+        # One lease seeded → one HTTP force-release call.
+        assert len(mock_lease_client._mock_calls) == 1, (
+            f"expected one HTTP force-release call for the seeded lease; "
+            f"got {len(mock_lease_client._mock_calls)}"
         )
 
         row = await conn.fetchrow(
@@ -576,23 +646,17 @@ async def test_deprecation_sweep_and_check_migration_atomic_session():
         )
         assert row["sweep_completed_at"] is not None, "Phase 2 must have committed"
         assert row["check_migrated_at"] is not None, "Phase 3 must have committed"
-
-        released = await conn.fetchval(
-            "SELECT released_at FROM lease_plane.surface_leases WHERE lease_id=$1",
-            lease_id,
-        )
-        assert released is not None, "swept lease must be released"
     finally:
         await _cleanup(conn)
         await conn.close()
 
 
 @pytest.mark.asyncio
-async def test_deprecate_and_finalize_phase_3_failure_emits_aborted_event(monkeypatch):
+async def test_deprecate_and_finalize_phase_3_failure_emits_aborted_event(monkeypatch, mock_lease_client):
     """When Phase 3 raises after Phase 2 succeeded, the super-command emits
     a lease.deprecation_aborted event with run_id + reason in payload, and
-    Phase 2's swept rows STAY released (two-tx-one-conn semantics — operator
-    decision 2026-05-02).
+    Phase 2's HTTP force-release calls DID fire (two-tx-one-conn semantics —
+    operator decision 2026-05-02).
     """
     from scripts.dev import lease_plane_deprecate as cli
 
@@ -604,15 +668,22 @@ async def test_deprecate_and_finalize_phase_3_failure_emits_aborted_event(monkey
             kind="td", session_id="test-cli-aborted-emit",
             drain_window_days=30, db_url=TEST_DB_URL,
         )
-        lease_id = await _seed_lease(conn, "td:/pr3a-aborted-test")
+        await _seed_lease(conn, "td:/pr3a-aborted-test")
 
         async def _raising_finalize(*args, **kwargs):
             raise RuntimeError("simulated phase-3 infrastructure failure")
 
         monkeypatch.setattr(cli, "_finalize_inner", _raising_finalize)
 
-        rc = await cli.deprecate_and_finalize_cmd(kind="td", db_url=TEST_DB_URL)
+        rc = await cli.deprecate_and_finalize_cmd(
+            kind="td", db_url=TEST_DB_URL, _lease_client=mock_lease_client
+        )
         assert rc == 3, f"super-command must return 3 on Phase 3 raise; got {rc}"
+
+        # Phase 2 HTTP call did fire — Elixir owns the state change.
+        assert len(mock_lease_client._mock_calls) == 1, (
+            "Phase 2 must have made the force-release HTTP call even when Phase 3 fails"
+        )
 
         events = await conn.fetch(
             "SELECT payload FROM lease_plane.lease_plane_events "
@@ -627,12 +698,6 @@ async def test_deprecate_and_finalize_phase_3_failure_emits_aborted_event(monkey
         assert "run_id" in payload, "aborted event payload must include run_id"
         assert uuid.UUID(payload["run_id"])
 
-        released = await conn.fetchval(
-            "SELECT released_at FROM lease_plane.surface_leases WHERE lease_id=$1",
-            lease_id,
-        )
-        assert released is not None, "Phase 2 work must be preserved on Phase 3 failure"
-
         check_migrated = await conn.fetchval(
             "SELECT check_migrated_at FROM lease_plane.deprecated_schemes WHERE surface_kind='td'"
         )
@@ -643,7 +708,7 @@ async def test_deprecate_and_finalize_phase_3_failure_emits_aborted_event(monkey
 
 
 @pytest.mark.asyncio
-async def test_deprecate_and_finalize_phase_3_failure_then_rerun_finalize_succeeds(monkeypatch):
+async def test_deprecate_and_finalize_phase_3_failure_then_rerun_finalize_succeeds(monkeypatch, mock_lease_client):
     """End-to-end recovery: super-command Phase 3 fails → operator runs
     standalone deprecation-finalize → succeeds and emits lease.deprecation_migrated.
     """
@@ -663,7 +728,9 @@ async def test_deprecate_and_finalize_phase_3_failure_then_rerun_finalize_succee
             raise RuntimeError("first-attempt finalize failure")
 
         monkeypatch.setattr(cli, "_finalize_inner", _raising_finalize)
-        rc1 = await cli.deprecate_and_finalize_cmd(kind="td", db_url=TEST_DB_URL)
+        rc1 = await cli.deprecate_and_finalize_cmd(
+            kind="td", db_url=TEST_DB_URL, _lease_client=mock_lease_client
+        )
         assert rc1 == 3
 
         monkeypatch.undo()
@@ -767,7 +834,7 @@ async def test_deprecate_and_finalize_abort_emission_failure_still_returns_rc_3(
 
 
 @pytest.mark.asyncio
-async def test_deprecate_and_finalize_run_id_correlates_across_events():
+async def test_deprecate_and_finalize_run_id_correlates_across_events(mock_lease_client):
     """Happy path: every event emitted by a single super-command run shares
     the same run_id in payload (Phase 2 sweep events + Phase 3 migrated event).
     Enables audit queries by run_id.
@@ -785,8 +852,13 @@ async def test_deprecate_and_finalize_run_id_correlates_across_events():
         await _seed_lease(conn, "td:/pr3a-run-id-test-1")
         await _seed_lease(conn, "td:/pr3a-run-id-test-2")
 
-        rc = await cli.deprecate_and_finalize_cmd(kind="td", db_url=TEST_DB_URL)
+        rc = await cli.deprecate_and_finalize_cmd(
+            kind="td", db_url=TEST_DB_URL, _lease_client=mock_lease_client
+        )
         assert rc == 0
+
+        # Two leases → two HTTP calls.
+        assert len(mock_lease_client._mock_calls) == 2
 
         events = await conn.fetch(
             """

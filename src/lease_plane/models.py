@@ -124,6 +124,17 @@ class ReleaseRequest(LeasePlaneModel):
     release_reason: ReleaseReason = "normal"
 
 
+class ForceReleaseRequest(LeasePlaneModel):
+    """Request body for POST /v1/lease/force-release (operator-only, §7.10).
+
+    Uses the elevated LEASE_FORCE_RELEASE_TOKEN; the Elixir router rejects any
+    other token at the path level. Only `lease_id` is required — the router
+    pins release_reason='forced' server-side.
+    """
+
+    lease_id: UUID
+
+
 class HandoffOfferRequest(LeasePlaneModel):
     """Request body for POST /v1/lease/handoff/offer.
 

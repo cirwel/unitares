@@ -60,6 +60,10 @@ import sys
 import uuid
 from pathlib import Path
 
+# Lazy import of lease-plane client so the CLI can be imported without the
+# full src/ package on the path (e.g., during argparse-only help invocations).
+# The actual import happens inside _sweep_inner and the sweep commands.
+
 try:
     import asyncpg
 except ImportError:
@@ -204,17 +208,30 @@ async def _sweep_inner(
     kind: str,
     deprecation_id,
     run_id: str | None = None,
+    lease_client,
 ) -> int:
-    """Inner Phase 2 helper: force-release surviving leases on an OPEN conn.
+    """Inner Phase 2 helper: force-release surviving leases via HTTP contract layer.
 
     Caller owns the connection lifecycle. R1: lifted out of `deprecation_sweep_cmd`
     so the new `deprecate_and_finalize_cmd` super-command can call it on a
     connection it already opened (the "same operator session" invariant lives
     here at the DB wire level, not at the CLI subprocess level).
 
+    RFC §7.10 contract: every force-release goes through POST /v1/lease/force-release
+    on the Elixir router using LEASE_FORCE_RELEASE_TOKEN. The Python CLI reads
+    unreleased leases via SQL (read-only) but makes no direct state-changing SQL
+    writes to surface_leases — the Elixir router owns that state change.
+
     Returns the number of leases swept (callers ignore but useful for tests
     + caller-side logging).
+
+    Raises RuntimeError if any individual force-release HTTP call fails — the
+    sweep is aborted and the caller can re-run (idempotency predicate:
+    WHERE released_at IS NULL excludes already-released leases on re-run).
     """
+    from src.lease_plane.models import ForceReleaseRequest
+    from src.lease_plane.client import SimpleOk
+
     async with conn.transaction():
         await conn.execute(
             "UPDATE lease_plane.deprecated_schemes "
@@ -222,26 +239,39 @@ async def _sweep_inner(
             "WHERE surface_kind = $1",
             kind,
         )
-        unreleased = await conn.fetch(
-            """
-            SELECT lease_id, surface_id FROM lease_plane.surface_leases
-            WHERE released_at IS NULL AND surface_kind = $1
-            ORDER BY acquired_at
-            FOR UPDATE SKIP LOCKED
-            """,
-            kind,
+
+    # Read-only: fetch unreleased leases. No FOR UPDATE needed — the HTTP call
+    # is idempotent (Elixir returns already_released on retry), and concurrent
+    # sweeps are prevented by the session-level advisory lock in
+    # deprecate_and_finalize_cmd. Standalone deprecation_sweep_cmd relies on
+    # operator discipline (single operator invocation).
+    unreleased = await conn.fetch(
+        """
+        SELECT lease_id, surface_id FROM lease_plane.surface_leases
+        WHERE released_at IS NULL AND surface_kind = $1
+        ORDER BY acquired_at
+        """,
+        kind,
+    )
+
+    for row in unreleased:
+        # State change via HTTP — §7.10 contract layer. The Elixir router
+        # sets released_at + release_reason='forced' in its own transaction.
+        result = lease_client.force_release(ForceReleaseRequest(lease_id=row["lease_id"]))
+        if not isinstance(result, SimpleOk):
+            raise RuntimeError(
+                f"force-release HTTP call failed for lease {row['lease_id']}: "
+                f"error={getattr(result, 'error', '?')} "
+                f"reason={getattr(result, 'reason', '')!r}"
+            )
+
+        # Emit audit event for this deprecation sweep (Python-side audit trail;
+        # Elixir emits its own lease.released event — these are complementary).
+        payload = _payload_with_run_id(
+            {"deprecation_id": str(deprecation_id), "kind": kind},
+            run_id,
         )
-        for row in unreleased:
-            await conn.execute(
-                "UPDATE lease_plane.surface_leases "
-                "SET released_at = now(), release_reason = 'forced' "
-                "WHERE lease_id = $1",
-                row["lease_id"],
-            )
-            payload = _payload_with_run_id(
-                {"deprecation_id": str(deprecation_id), "kind": kind},
-                run_id,
-            )
+        async with conn.transaction():
             await conn.execute(
                 """
                 INSERT INTO lease_plane.lease_plane_events
@@ -250,17 +280,20 @@ async def _sweep_inner(
                 """,
                 row["lease_id"], row["surface_id"], kind, payload,
             )
-        # COALESCE on sweep_completed_at preserves the original first-completion
-        # timestamp across re-runs (council CONCERN 4 reviewer). Without this, a
-        # rerun overwrites the audit record with the rerun time, drifting the
-        # "when was this deprecation actually swept?" answer.
+
+    # COALESCE on sweep_completed_at preserves the original first-completion
+    # timestamp across re-runs (council CONCERN 4 reviewer). Without this, a
+    # rerun overwrites the audit record with the rerun time, drifting the
+    # "when was this deprecation actually swept?" answer.
+    async with conn.transaction():
         await conn.execute(
             "UPDATE lease_plane.deprecated_schemes "
             "SET sweep_completed_at = COALESCE(sweep_completed_at, now()) "
             "WHERE surface_kind = $1",
             kind,
         )
-        return len(unreleased)
+
+    return len(unreleased)
 
 
 async def deprecation_sweep_cmd(
@@ -268,6 +301,7 @@ async def deprecation_sweep_cmd(
     kind: str,
     db_url: str = DEFAULT_DB_URL,
     run_id: str | None = None,
+    _lease_client=None,
 ) -> int:
     """Phase 2 standalone (escape-hatch) wrapper: idempotent force-release sweep
     (RFC §7.11.4).
@@ -285,14 +319,24 @@ async def deprecation_sweep_cmd(
 
     NOTE (R1): `deprecate-and-finalize` is the canonical operator path for
     Phase 2+3. Use this subcommand only for emergency partial recovery.
+
+    Args:
+        _lease_client: injectable LeasePlaneClient for testing; if None, one is
+            constructed from LEASE_FORCE_RELEASE_TOKEN. Underscore prefix signals
+            this is a test seam, not production API.
     """
-    if not _read_force_release_token():
+    token = _read_force_release_token()
+    if not token:
         print(
             "error: deprecation-sweep requires LEASE_FORCE_RELEASE_TOKEN "
             "(env or ~/.config/cirwel/secrets.env). GOVERNANCE_TOKEN does NOT authorize.",
             file=sys.stderr,
         )
         return 1
+
+    if _lease_client is None:
+        from src.lease_plane.client import LeasePlaneClient, LeasePlaneClientConfig
+        _lease_client = LeasePlaneClient(LeasePlaneClientConfig(force_release_token=token))
 
     conn = await asyncpg.connect(db_url)
     try:
@@ -304,7 +348,7 @@ async def deprecation_sweep_cmd(
             print(f"error: scheme {kind!r} is not marked deprecated; run `deprecate {kind}` first.",
                   file=sys.stderr)
             return 1
-        await _sweep_inner(conn, kind=kind, deprecation_id=depr_id, run_id=run_id)
+        await _sweep_inner(conn, kind=kind, deprecation_id=depr_id, run_id=run_id, lease_client=_lease_client)
         return 0
     finally:
         await conn.close()
@@ -427,6 +471,7 @@ async def deprecate_and_finalize_cmd(
     *,
     kind: str,
     db_url: str = DEFAULT_DB_URL,
+    _lease_client=None,
 ) -> int:
     """R1 canonical Phase 2+3 super-command (RFC §7.11.2 atomicity).
 
@@ -447,14 +492,23 @@ async def deprecate_and_finalize_cmd(
     The §7.11.4 idempotent-sweep predicate makes the rerun safe.
 
     Authorization: same as `deprecation-sweep` (LEASE_FORCE_RELEASE_TOKEN).
+
+    Args:
+        _lease_client: injectable LeasePlaneClient for testing; if None, one is
+            constructed from LEASE_FORCE_RELEASE_TOKEN.
     """
-    if not _read_force_release_token():
+    token = _read_force_release_token()
+    if not token:
         print(
             "error: deprecate-and-finalize requires LEASE_FORCE_RELEASE_TOKEN "
             "(env or ~/.config/cirwel/secrets.env). GOVERNANCE_TOKEN does NOT authorize.",
             file=sys.stderr,
         )
         return 1
+
+    if _lease_client is None:
+        from src.lease_plane.client import LeasePlaneClient, LeasePlaneClientConfig
+        _lease_client = LeasePlaneClient(LeasePlaneClientConfig(force_release_token=token))
 
     run_id = str(uuid.uuid4())
     logger.info(f"[run_id={run_id}] deprecate-and-finalize starting for kind={kind!r}")
@@ -493,7 +547,7 @@ async def deprecate_and_finalize_cmd(
 
         # Phase 2 (own transaction).
         try:
-            swept = await _sweep_inner(conn, kind=kind, deprecation_id=depr_id, run_id=run_id)
+            swept = await _sweep_inner(conn, kind=kind, deprecation_id=depr_id, run_id=run_id, lease_client=_lease_client)
             logger.info(f"[run_id={run_id}] Phase 2 complete: swept {swept} lease(s)")
         except Exception as e:
             # Phase 2 failure: nothing committed beyond the sweep_started_at

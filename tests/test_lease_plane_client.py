@@ -12,6 +12,7 @@ from src.lease_plane import (
     AcquireRequest,
     AcquireSchemaInvalid,
     AcquireServiceUnavailable,
+    ForceReleaseRequest,
     HandoffAcceptRequest,
     HandoffOfferRequest,
     HeartbeatRequest,
@@ -264,7 +265,7 @@ def test_force_release_requires_force_release_token():
 
     config = LeasePlaneClientConfig(bearer_token="governance-token-xyz")
     result = LeasePlaneClient(config=config, transport=transport).force_release(
-        ReleaseRequest(lease_id=uuid4(), release_reason="forced")
+        ForceReleaseRequest(lease_id=uuid4())
     )
 
     assert isinstance(result, SimpleError)
@@ -272,13 +273,15 @@ def test_force_release_requires_force_release_token():
     assert transport_called is False
 
 
-def test_force_release_uses_elevated_token_and_pins_reason():
-    """force_release() sends Authorization: Bearer <force_release_token>
-    (NOT the standard bearer) and pins release_reason='forced' on the wire.
+def test_force_release_uses_elevated_token_and_force_release_endpoint():
+    """force_release() sends to /v1/lease/force-release with the elevated
+    LEASE_FORCE_RELEASE_TOKEN (NOT the standard bearer). The Elixir router
+    sets release_reason='forced' server-side; Python only sends lease_id.
     """
     seen: dict[str, Any] = {}
 
     def transport(request: LeaseHTTPRequest):
+        seen["url"] = request.url
         seen["headers"] = dict(request.headers)
         seen["body"] = request.json_body
         return {"ok": True}
@@ -289,12 +292,15 @@ def test_force_release_uses_elevated_token_and_pins_reason():
     )
     lease_id = uuid4()
     result = LeasePlaneClient(config=config, transport=transport).force_release(
-        ReleaseRequest(lease_id=lease_id, release_reason="normal")
+        ForceReleaseRequest(lease_id=lease_id)
     )
 
     assert isinstance(result, SimpleOk)
+    assert "/v1/lease/force-release" in seen["url"], (
+        f"must POST to /v1/lease/force-release, not /v1/lease/release; url={seen['url']!r}"
+    )
     assert seen["headers"]["Authorization"] == "Bearer elevated-force-release-token"
-    assert seen["body"] == {"lease_id": str(lease_id), "release_reason": "forced"}
+    assert seen["body"] == {"lease_id": str(lease_id)}
 
 
 def test_disabled_client_returns_service_unavailable():
