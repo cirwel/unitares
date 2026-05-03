@@ -38,9 +38,10 @@ class AuditMixin:
                     INSERT INTO audit.r1_score_audit (
                         score_id, parent_id, successor_id, recorded_at,
                         plausibility, components, observations,
-                        parent_mature, reasons, class_tag, calibration_status
+                        parent_mature, reasons, class_tag, calibration_status,
+                        verdict, raw_verdict
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                     """,
                     record["score_id"],
                     record["parent_id"],
@@ -53,6 +54,8 @@ class AuditMixin:
                     list(record["reasons"]),
                     record.get("class_tag"),
                     record["calibration_status"],
+                    record.get("verdict"),
+                    record.get("raw_verdict"),
                 )
                 return True
             except Exception as e:

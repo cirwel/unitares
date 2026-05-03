@@ -244,6 +244,181 @@ class IdentityMixin:
             )
             return bool(result)
 
+    # ------------------------------------------------------------------
+    # R1 v3.3-D: provisional-lineage helpers + v3.3-C calibration_state
+    # ------------------------------------------------------------------
+
+    async def mark_lineage_provisional(
+        self,
+        successor_id: str,
+        score_id: str,
+    ) -> bool:
+        """Stamp a successor's lineage as provisional after an inconclusive score.
+
+        Per v3.3-D: callers using `marks` policy (onboard-time scoring) invoke
+        this to record that the lineage edge is unconfirmed. Trust-tier (S6),
+        R3 baselines, KG provenance, and R2 (PR 4) read this flag and
+        exclude provisional rows from their respective aggregations.
+
+        score_id references the most recent audit.r1_score_audit row that
+        justified this state. provisional_recorded_at stamps now.
+        """
+        async with self.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE core.identities
+                SET provisional_lineage = TRUE,
+                    provisional_score_id = $1,
+                    provisional_recorded_at = now(),
+                    confirmed_at = NULL,
+                    updated_at = now()
+                WHERE agent_id = $2
+                """,
+                score_id, successor_id,
+            )
+            try:
+                rows = int((result or "UPDATE 0").split()[-1])
+            except Exception:
+                rows = 0
+            return rows > 0
+
+    async def confirm_lineage(self, successor_id: str) -> bool:
+        """Promote provisional → confirmed.
+
+        Called by the promotion policy site (per v3.1 §"Caller policy" —
+        promotion uses `blocks`; the promotion gate only fires on a re-score
+        returning `plausible`). Stamps confirmed_at, clears the provisional
+        flag and score_id reference.
+
+        `provisional_recorded_at` is INTENTIONALLY preserved as an audit
+        anchor — it records *when the provisional window began*, which
+        survives confirmation. Consumers reading
+        `(provisional_lineage=False AND provisional_recorded_at IS NOT NULL
+        AND confirmed_at IS NOT NULL)` see "this lineage was once
+        provisional, was confirmed at confirmed_at, originally provisional
+        at provisional_recorded_at." Clearing it would erase that audit
+        trail. (PR 3 council code-reviewer flag — the explicit decision.)
+        """
+        async with self.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE core.identities
+                SET provisional_lineage = FALSE,
+                    provisional_score_id = NULL,
+                    confirmed_at = now(),
+                    updated_at = now()
+                WHERE agent_id = $1
+                """,
+                successor_id,
+            )
+            try:
+                rows = int((result or "UPDATE 0").split()[-1])
+            except Exception:
+                rows = 0
+            return rows > 0
+
+    async def read_r1_calibration_state(self) -> Dict[str, Any]:
+        """Read the R1 calibration_state singleton (v3.3-C).
+
+        Returns the current `calibration_status` and lifecycle timestamps.
+        The score primitive snapshots `calibration_status` onto every audit
+        record at write time; consumers under `calibration_failed` MUST
+        degrade verdict to `inconclusive` (degradation at the consumer
+        layer, but the state read here is what gates it).
+        """
+        async with self.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, calibration_status, seeded_since, earned_at,
+                       failed_at, updated_at
+                FROM core.r1_calibration_state
+                WHERE id = 1
+                """
+            )
+            if row is None:
+                # Pre-migration-032 caller fallback. After 032 is in
+                # production this branch is dead; keeping it avoids surprise
+                # crashes if a fresh DB is missing the seeded singleton.
+                # Logged at WARNING because in steady state this should not
+                # fire — if it does, an operator should investigate
+                # (singleton row deleted by hand, or migration 032 not
+                # applied).
+                logger.warning(
+                    "[R1] core.r1_calibration_state singleton missing — "
+                    "synthesizing fallback 'seeded' state. Either migration "
+                    "032 has not been applied or the singleton row was "
+                    "removed."
+                )
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+                return {
+                    "calibration_status": "seeded",
+                    "seeded_since": now,
+                    "earned_at": None,
+                    "failed_at": None,
+                    "updated_at": now,
+                }
+            return dict(row)
+
+    async def transition_r1_calibration_state(self, new_status: str) -> Dict[str, Any]:
+        """Operator-only: transition the R1 calibration_state singleton.
+
+        Per v3.3-C: transitions are explicit operator actions. This method
+        does not validate operator authority — gate that at the call site
+        (e.g. an admin handler with `X-Anima-Admin` header check).
+
+        Timestamp semantics:
+        - `earned_at` is **idempotent** — stamped only on the first
+          `seeded → earned` transition (`earned_at IS NULL` guard). A later
+          rollback through seeded and back to earned does NOT re-stamp.
+        - `failed_at` is **last-wins** — re-stamped on every transition
+          INTO `calibration_failed`. Recurring calibration loops are
+          expected and the most-recent failure is more useful than the
+          first; this matches the v3.3-C runbook framing of
+          calibration_failed as a recoverable state.
+        - Rollback paths (`earned → seeded`, `calibration_failed →
+          seeded`) update `calibration_status` + `updated_at` only;
+          `earned_at` and `failed_at` are append-only forensic anchors and
+          are never cleared by a rollback. (PR 3 council architect flag —
+          rollback is operator-decided, not in the spec, but defensible.)
+
+        Atomic write+read via `RETURNING *`: a separate read-back would
+        introduce a TOCTOU window where a concurrent operator transition
+        could replace the state between the UPDATE and the SELECT. The
+        returned dict is exactly what was written.
+
+        Returns the post-transition state.
+        """
+        if new_status not in {"seeded", "earned", "calibration_failed"}:
+            raise ValueError(
+                f"invalid calibration_status: {new_status!r} "
+                f"(must be one of: seeded, earned, calibration_failed)"
+            )
+        async with self.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE core.r1_calibration_state
+                SET calibration_status = $1,
+                    earned_at = CASE
+                        WHEN $1 = 'earned' AND earned_at IS NULL THEN now()
+                        ELSE earned_at
+                    END,
+                    failed_at = CASE
+                        WHEN $1 = 'calibration_failed' THEN now()
+                        ELSE failed_at
+                    END,
+                    updated_at = now()
+                WHERE id = 1
+                RETURNING id, calibration_status, seeded_since, earned_at,
+                          failed_at, updated_at
+                """,
+                new_status,
+            )
+        if row is None:
+            # Singleton missing — defer to the read fallback (which logs).
+            return await self.read_r1_calibration_state()
+        return dict(row)
+
     def _row_to_identity(self, row) -> IdentityRecord:
         return IdentityRecord(
             identity_id=row["identity_id"],

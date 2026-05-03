@@ -52,6 +52,32 @@ _DEFAULT_MIN_OBSERVATIONS = 5
 _DEFAULT_WINDOW = timedelta(days=30)
 _DIMENSIONS = ("E", "I", "S", "V")
 
+# Class tags recognized for R1's `class_tag` stamping (v3.3-G). Order matters
+# — most-specific first so calibration analyses can partition without
+# ambiguity. Substrate classes (embodied, persistent) are most specific;
+# engaged_ephemeral is S8a Phase-2's specialized cohort; ephemeral is the
+# Phase-1 default stamp.
+#
+# Stored tags only — `_CLASS_TAG_PRIORITY` mirrors the *atomic* tags written
+# by src/identity/substrate.py SUBSTRATE_CLASS_TAGS, src/grounding/
+# onboard_classifier.py defaults, and src/grounding/class_promotion.py
+# Phase-2 promotion. Derived class labels (e.g. `resident_persistent` =
+# `persistent` + `autonomous`, computed at analysis time) are NOT in this
+# tuple — calibration analyses partitioning by resident cohort must read
+# `class_tag='persistent'` AND join the parent's `metadata->'tags' @> ARRAY['autonomous']`.
+#
+# `session_like` is a *reserved* tag — named in the v3.3-F known-limitation
+# discussion + S8a Phase-2 plan, but no current stamp path emits it. Kept in
+# the priority order so when S8a Phase-2 grows the cohort, the stamp surface
+# is already correct. Until then, this branch is dead code (harmless).
+_CLASS_TAG_PRIORITY = (
+    "embodied",
+    "persistent",
+    "engaged_ephemeral",
+    "session_like",  # reserved; no current stamp path — see comment above
+    "ephemeral",
+)
+
 
 # ---------------------------------------------------------------------------
 # Dataclass — full record returned to internal callers (v3.1 §"Input signature")
@@ -139,6 +165,17 @@ async def score_trajectory_continuity(
         agent_id=successor_id, window=window,
     )
 
+    # v3.3-C: snapshot calibration_state at scoring time. Consumers under
+    # `calibration_failed` degrade verdict to inconclusive (handled below
+    # before the dataclass is built so the audit record matches).
+    cal_state = await backend.read_r1_calibration_state()
+    calibration_status: CalibrationStatus = cal_state.get("calibration_status", "seeded")
+
+    # v3.3-G: read parent's class_tag from metadata at scoring time. Stored
+    # on the audit record so calibration analyses partition on the parent
+    # class state *at scoring time*, not at analysis time.
+    class_tag = await _read_parent_class_tag(backend, claimed_parent_id)
+
     parent_obs = {dim: len(parent_series[dim]) for dim in _DIMENSIONS}
     successor_obs = {dim: len(successor_series[dim]) for dim in _DIMENSIONS}
     observations = {"parent": parent_obs, "successor": successor_obs}
@@ -168,13 +205,29 @@ async def score_trajectory_continuity(
     n_dims_used = len(contributing)
     plausibility = (sum(contributing) / n_dims_used) if contributing else 0.0
 
-    verdict = _classify_verdict(
+    raw_verdict = _classify_verdict(
         plausibility=plausibility,
         successor_total=successor_total,
         parent_mature=parent_mature,
         n_dims_used=n_dims_used,
         min_observations=min_observations,
     )
+    # v3.3-C consumer-degradation: under calibration_failed, the verdict is
+    # forced to `inconclusive` regardless of plausibility. Stamping happens
+    # here (before dataclass + audit write) so the audit row matches what
+    # the consumer-facing primitive returns. raw_verdict is preserved on the
+    # audit row separately (migration 033) for forensic access — threshold
+    # drift in shadow-mode calibration would otherwise make verdict
+    # reconstruction lossy.
+    if calibration_status == "calibration_failed":
+        verdict = "inconclusive"
+        if raw_verdict != "inconclusive":
+            reasons.append(
+                f"verdict degraded from {raw_verdict!r} to 'inconclusive' "
+                f"because calibration_status='calibration_failed' (v3.3-C)"
+            )
+    else:
+        verdict = raw_verdict
     if not parent_mature:
         reasons.append(
             f"parent_mature=False (max parent rows in any dim "
@@ -194,7 +247,7 @@ async def score_trajectory_continuity(
         components=components,
         reasons=reasons,
         parent_mature=parent_mature,
-        calibration_status="seeded",  # v3.3-C: default until operator transitions
+        calibration_status=calibration_status,  # v3.3-C: snapshot at scoring time
         n_dims_used=n_dims_used,
     )
 
@@ -202,11 +255,13 @@ async def score_trajectory_continuity(
     # so the score_id is durably present before any caller publishes the
     # redacted KG payload that references it (v3.3-A join-semantics contract).
     # If the write fails, we MUST refuse to return a score whose audit row is
-    # absent — otherwise PR 3's KG emission could publish a dangling score_id.
+    # absent — otherwise PR 4's KG emission could publish a dangling score_id.
     persisted = await backend.record_r1_score_audit(_to_audit_record(
         score=score,
         parent_id=claimed_parent_id,
         successor_id=successor_id,
+        class_tag=class_tag,
+        raw_verdict=raw_verdict,
     ))
     if not persisted:
         raise RuntimeError(
@@ -245,10 +300,14 @@ def _to_audit_record(
     score: TrajectoryContinuityScore,
     parent_id: str,
     successor_id: str,
+    class_tag: Optional[str] = None,
+    raw_verdict: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Shape the full record for `record_r1_score_audit`. class_tag is left
-    None here; the v3.3-G class-tag stamp will be wired in PR 3 (it requires
-    reading parent's class metadata at scoring time)."""
+    """Shape the full record for `record_r1_score_audit`. class_tag is the
+    parent's class at scoring time (v3.3-G) or None when no recognized class
+    tag is present in the parent's metadata. raw_verdict (migration 033) is
+    the pre-degradation verdict — preserved separately from `verdict` so
+    forensic access has both the original and the consumer-facing values."""
     return {
         "score_id": score.score_id,
         "parent_id": parent_id,
@@ -259,6 +318,44 @@ def _to_audit_record(
         "observations": score.observations,
         "parent_mature": score.parent_mature,
         "reasons": score.reasons,
-        "class_tag": None,
+        "class_tag": class_tag,
         "calibration_status": score.calibration_status,
+        "verdict": score.verdict,
+        "raw_verdict": raw_verdict if raw_verdict is not None else score.verdict,
     }
+
+
+async def _read_parent_class_tag(backend, parent_agent_id: str) -> Optional[str]:
+    """Read the parent's class_tag from `core.identities.metadata.tags` at
+    scoring time (v3.3-G).
+
+    Returns the most-specific recognized class tag per `_CLASS_TAG_PRIORITY`,
+    or None when (a) the parent has no recognized class tag, or (b) the
+    parent identity row doesn't exist yet. Falls back to None on any error
+    so a missing class tag never blocks a score from being recorded.
+    """
+    try:
+        record = await backend.get_identity(parent_agent_id)
+    except Exception as exc:
+        # Narrow swallow — class_tag is a forensic anchor, not a correctness
+        # gate. Log so a calibration-blocking pool issue is visible rather
+        # than silently producing class_tag=NULL on every score.
+        import logging
+        logging.getLogger(__name__).debug(
+            "[R1] _read_parent_class_tag get_identity failed for %s: %s (%s)",
+            parent_agent_id, type(exc).__name__, exc,
+        )
+        return None
+    if record is None:
+        return None
+    metadata = getattr(record, "metadata", None) or {}
+    if not isinstance(metadata, dict):
+        return None
+    tags = metadata.get("tags")
+    if not isinstance(tags, list):
+        return None
+    tag_set = {t for t in tags if isinstance(t, str)}
+    for candidate in _CLASS_TAG_PRIORITY:
+        if candidate in tag_set:
+            return candidate
+    return None
