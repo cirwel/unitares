@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd manifest for the Surface Lease Plane (Elixir/OTP, port 8788).
+
+  Phase A advisory service for shared-surface coordination across the fleet
+  (Watcher, Vigil, Sentinel, Chronicler, Steward, ship.sh, dispatch). Bind
+  defaults to 127.0.0.1:8788; bearer-auth is fail-closed (HTTPAuth → 503
+  if LEASE_PLANE_BEARER_TOKEN is unset). See docs/proposals/surface-lease-plane-v0.md.
+
+  Install (render __VARS__ then load):
+    sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
+        -e "s|__HOME__|$HOME|g" \
+        scripts/ops/com.unitares.lease-plane.plist.template \
+        > ~/Library/LaunchAgents/com.unitares.lease-plane.plist
+    launchctl load ~/Library/LaunchAgents/com.unitares.lease-plane.plist
+
+  Verify (with $LEASE_PLANE_BEARER_TOKEN sourced from ~/.config/cirwel/secrets.env):
+    launchctl list | grep com.unitares.lease-plane
+    tail -f ~/Library/Logs/unitares-lease-plane.log
+    curl -s -H "Authorization: Bearer $LEASE_PLANE_BEARER_TOKEN" \
+         "http://127.0.0.1:8788/v1/lease/status?surface_id=file:///tmp/probe"
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unitares.lease-plane</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__UNITARES_ROOT__/elixir/lease_plane/scripts/start.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__UNITARES_ROOT__/elixir/lease_plane</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/unitares-lease-plane.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/unitares-lease-plane.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
+    </dict>
+</dict>
+</plist>
