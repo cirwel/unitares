@@ -244,6 +244,142 @@ class IdentityMixin:
             )
             return bool(result)
 
+    # ------------------------------------------------------------------
+    # R1 v3.3-D: provisional-lineage helpers + v3.3-C calibration_state
+    # ------------------------------------------------------------------
+
+    async def mark_lineage_provisional(
+        self,
+        successor_id: str,
+        score_id: str,
+    ) -> bool:
+        """Stamp a successor's lineage as provisional after an inconclusive score.
+
+        Per v3.3-D: callers using `marks` policy (onboard-time scoring) invoke
+        this to record that the lineage edge is unconfirmed. Trust-tier (S6),
+        R3 baselines, KG provenance, and R2 (PR 4) read this flag and
+        exclude provisional rows from their respective aggregations.
+
+        score_id references the most recent audit.r1_score_audit row that
+        justified this state. provisional_recorded_at stamps now.
+        """
+        async with self.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE core.identities
+                SET provisional_lineage = TRUE,
+                    provisional_score_id = $1,
+                    provisional_recorded_at = now(),
+                    confirmed_at = NULL,
+                    updated_at = now()
+                WHERE agent_id = $2
+                """,
+                score_id, successor_id,
+            )
+            try:
+                rows = int((result or "UPDATE 0").split()[-1])
+            except Exception:
+                rows = 0
+            return rows > 0
+
+    async def confirm_lineage(self, successor_id: str) -> bool:
+        """Promote provisional → confirmed.
+
+        Called by the promotion policy site (per v3.1 §"Caller policy" —
+        promotion uses `blocks`; the promotion gate only fires on a re-score
+        returning `plausible`). Stamps confirmed_at, clears the provisional
+        flag and score_id reference.
+        """
+        async with self.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE core.identities
+                SET provisional_lineage = FALSE,
+                    provisional_score_id = NULL,
+                    confirmed_at = now(),
+                    updated_at = now()
+                WHERE agent_id = $1
+                """,
+                successor_id,
+            )
+            try:
+                rows = int((result or "UPDATE 0").split()[-1])
+            except Exception:
+                rows = 0
+            return rows > 0
+
+    async def read_r1_calibration_state(self) -> Dict[str, Any]:
+        """Read the R1 calibration_state singleton (v3.3-C).
+
+        Returns the current `calibration_status` and lifecycle timestamps.
+        The score primitive snapshots `calibration_status` onto every audit
+        record at write time; consumers under `calibration_failed` MUST
+        degrade verdict to `inconclusive` (degradation at the consumer
+        layer, but the state read here is what gates it).
+        """
+        async with self.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, calibration_status, seeded_since, earned_at,
+                       failed_at, updated_at
+                FROM core.r1_calibration_state
+                WHERE id = 1
+                """
+            )
+            if row is None:
+                # Pre-migration-032 caller fallback. After 032 is in
+                # production this branch is dead; keeping it avoids surprise
+                # crashes if a fresh DB is missing the seeded singleton.
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+                return {
+                    "calibration_status": "seeded",
+                    "seeded_since": now,
+                    "earned_at": None,
+                    "failed_at": None,
+                    "updated_at": now,
+                }
+            return dict(row)
+
+    async def transition_r1_calibration_state(self, new_status: str) -> Dict[str, Any]:
+        """Operator-only: transition the R1 calibration_state singleton.
+
+        Per v3.3-C: transitions are explicit operator actions. This method
+        does not validate operator authority — gate that at the call site
+        (e.g. an admin handler with `X-Anima-Admin` header check).
+
+        Stamps the appropriate timestamp:
+        - seeded → earned: stamps earned_at
+        - {seeded, earned} → calibration_failed: stamps failed_at
+        - earned → seeded or any rollback: stamps updated_at only
+
+        Returns the post-transition state.
+        """
+        if new_status not in {"seeded", "earned", "calibration_failed"}:
+            raise ValueError(
+                f"invalid calibration_status: {new_status!r} "
+                f"(must be one of: seeded, earned, calibration_failed)"
+            )
+        async with self.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE core.r1_calibration_state
+                SET calibration_status = $1,
+                    earned_at = CASE
+                        WHEN $1 = 'earned' AND earned_at IS NULL THEN now()
+                        ELSE earned_at
+                    END,
+                    failed_at = CASE
+                        WHEN $1 = 'calibration_failed' THEN now()
+                        ELSE failed_at
+                    END,
+                    updated_at = now()
+                WHERE id = 1
+                """,
+                new_status,
+            )
+        return await self.read_r1_calibration_state()
+
     def _row_to_identity(self, row) -> IdentityRecord:
         return IdentityRecord(
             identity_id=row["identity_id"],

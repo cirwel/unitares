@@ -40,12 +40,25 @@ def _stub_reconstruct(parent_series, successor_series):
 
 @pytest.fixture
 def mocked_db(monkeypatch):
-    """Patch get_db to return a backend whose reconstruct_eisv_series is settable."""
+    """Patch get_db to return a backend whose async methods are settable."""
     backend = AsyncMock()
     # Default to successful audit-write so the score primitive can return a
     # score; per-test overrides set return_value=False to exercise the
     # fail-loud join-key contract (test_score_raises_when_audit_write_fails).
     backend.record_r1_score_audit = AsyncMock(return_value=True)
+    # v3.3-C default: calibration_status='seeded'. Per-test overrides exercise
+    # the calibration_failed verdict-degradation path.
+    backend.read_r1_calibration_state = AsyncMock(return_value={
+        "calibration_status": "seeded",
+        "seeded_since": None,
+        "earned_at": None,
+        "failed_at": None,
+        "updated_at": None,
+    })
+    # v3.3-G default: parent has no class metadata → class_tag=None.
+    # Per-test overrides set get_identity to return a record with metadata.tags
+    # containing a recognized class tag.
+    backend.get_identity = AsyncMock(return_value=None)
 
     def _get_db():
         return backend
@@ -54,6 +67,12 @@ def mocked_db(monkeypatch):
     # anyio pattern lazy imports); patch the source module.
     monkeypatch.setattr("src.db.get_db", _get_db)
     return backend
+
+
+def _identity_with_tags(*tags):
+    """Build a minimal identity record stub for class_tag tests."""
+    from types import SimpleNamespace
+    return SimpleNamespace(metadata={"tags": list(tags)})
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +319,178 @@ async def test_score_raises_when_audit_write_fails(mocked_db):
             claimed_parent_id="parent-uuid",
             successor_id="successor-uuid",
         )
+
+
+@pytest.mark.asyncio
+async def test_score_calibration_failed_degrades_verdict_to_inconclusive(mocked_db):
+    """Per v3.3-C: when calibration_status='calibration_failed', the
+    consumer-facing verdict MUST be 'inconclusive' regardless of plausibility.
+    Even a genuine pair with plausibility >= 0.70 returns inconclusive.
+    The original would-be-verdict is captured in `reasons` for forensic
+    access; the audit row's `calibration_status` snapshots 'calibration_failed'
+    so analyses know which scoring window was under degraded calibration."""
+    from src.identity.trajectory_continuity import score_trajectory_continuity
+
+    parent, successor = synthetic_trajectory_pair(seed=60, kind="genuine")
+    mocked_db.reconstruct_eisv_series = AsyncMock(
+        side_effect=_stub_reconstruct(parent, successor)
+    )
+    # Operator has marked calibration as failed
+    mocked_db.read_r1_calibration_state = AsyncMock(return_value={
+        "calibration_status": "calibration_failed",
+        "seeded_since": None,
+        "earned_at": None,
+        "failed_at": None,
+        "updated_at": None,
+    })
+
+    result = await score_trajectory_continuity(
+        claimed_parent_id="parent-uuid",
+        successor_id="successor-uuid",
+    )
+
+    # Verdict degraded despite high plausibility
+    assert result.verdict == "inconclusive"
+    assert result.plausibility >= 0.70  # raw scoring still computed correctly
+    assert result.calibration_status == "calibration_failed"
+    # Reasons names the degradation explicitly
+    assert any("degraded" in r and "calibration_failed" in r for r in result.reasons)
+
+
+@pytest.mark.asyncio
+async def test_score_calibration_earned_does_not_degrade(mocked_db):
+    """Per v3.3-C: under `earned`, verdict is shown without caveat — no
+    degradation, no extra reason added."""
+    from src.identity.trajectory_continuity import score_trajectory_continuity
+
+    parent, successor = synthetic_trajectory_pair(seed=61, kind="genuine")
+    mocked_db.reconstruct_eisv_series = AsyncMock(
+        side_effect=_stub_reconstruct(parent, successor)
+    )
+    mocked_db.read_r1_calibration_state = AsyncMock(return_value={
+        "calibration_status": "earned",
+        "seeded_since": None,
+        "earned_at": None,
+        "failed_at": None,
+        "updated_at": None,
+    })
+
+    result = await score_trajectory_continuity(
+        claimed_parent_id="parent-uuid",
+        successor_id="successor-uuid",
+    )
+
+    assert result.verdict == "plausible"
+    assert result.calibration_status == "earned"
+    assert not any("degraded" in r for r in result.reasons)
+
+
+@pytest.mark.asyncio
+async def test_score_calibration_status_snapshots_at_scoring_time(mocked_db):
+    """The audit row's calibration_status equals the singleton's status at
+    scoring time (not the global current status at analysis time). This is
+    why v3.3-G also stamps class_tag at scoring time — both snapshots make
+    later calibration analyses partition correctly."""
+    from src.identity.trajectory_continuity import score_trajectory_continuity
+
+    parent, successor = synthetic_trajectory_pair(seed=62, kind="genuine")
+    mocked_db.reconstruct_eisv_series = AsyncMock(
+        side_effect=_stub_reconstruct(parent, successor)
+    )
+    mocked_db.read_r1_calibration_state = AsyncMock(return_value={
+        "calibration_status": "earned",
+        "seeded_since": None,
+        "earned_at": None,
+        "failed_at": None,
+        "updated_at": None,
+    })
+
+    result = await score_trajectory_continuity(
+        claimed_parent_id="parent-uuid",
+        successor_id="successor-uuid",
+    )
+
+    # Audit row carries the status that was current at scoring time
+    audit_call = mocked_db.record_r1_score_audit.await_args
+    audit_record = audit_call.kwargs if audit_call.kwargs else audit_call.args[0]
+    assert audit_record["calibration_status"] == "earned"
+    assert result.calibration_status == "earned"
+
+
+@pytest.mark.asyncio
+async def test_score_class_tag_stamped_from_parent_metadata(mocked_db):
+    """Per v3.3-G: the audit row carries the parent's class_tag at scoring
+    time. Reads from `core.identities.metadata.tags` and picks the most-
+    specific recognized tag per _CLASS_TAG_PRIORITY."""
+    from src.identity.trajectory_continuity import score_trajectory_continuity
+
+    parent, successor = synthetic_trajectory_pair(seed=63, kind="genuine")
+    mocked_db.reconstruct_eisv_series = AsyncMock(
+        side_effect=_stub_reconstruct(parent, successor)
+    )
+    # Parent is a substrate-anchored persistent agent (e.g. Vigil)
+    mocked_db.get_identity = AsyncMock(
+        return_value=_identity_with_tags("persistent", "autonomous")
+    )
+
+    await score_trajectory_continuity(
+        claimed_parent_id="parent-uuid",
+        successor_id="successor-uuid",
+    )
+
+    audit_call = mocked_db.record_r1_score_audit.await_args
+    audit_record = audit_call.kwargs if audit_call.kwargs else audit_call.args[0]
+    assert audit_record["class_tag"] == "persistent"
+
+
+@pytest.mark.asyncio
+async def test_score_class_tag_priority_picks_most_specific(mocked_db):
+    """Per v3.3-G ordering: when parent has multiple class tags, the most-
+    specific one is stamped. `engaged_ephemeral` wins over `ephemeral`."""
+    from src.identity.trajectory_continuity import score_trajectory_continuity
+
+    parent, successor = synthetic_trajectory_pair(seed=64, kind="genuine")
+    mocked_db.reconstruct_eisv_series = AsyncMock(
+        side_effect=_stub_reconstruct(parent, successor)
+    )
+    mocked_db.get_identity = AsyncMock(
+        return_value=_identity_with_tags("ephemeral", "engaged_ephemeral")
+    )
+
+    await score_trajectory_continuity(
+        claimed_parent_id="parent-uuid",
+        successor_id="successor-uuid",
+    )
+
+    audit_call = mocked_db.record_r1_score_audit.await_args
+    audit_record = audit_call.kwargs if audit_call.kwargs else audit_call.args[0]
+    assert audit_record["class_tag"] == "engaged_ephemeral"
+
+
+@pytest.mark.asyncio
+async def test_score_class_tag_none_when_parent_has_no_recognized_class(mocked_db):
+    """Parent identity has no recognized class tag (or no metadata.tags at
+    all) → class_tag=None on audit record. Per v3.3-G: NULL is the honest
+    answer when S8a Phase 2 backfill hasn't reached this agent yet."""
+    from src.identity.trajectory_continuity import score_trajectory_continuity
+
+    parent, successor = synthetic_trajectory_pair(seed=65, kind="genuine")
+    mocked_db.reconstruct_eisv_series = AsyncMock(
+        side_effect=_stub_reconstruct(parent, successor)
+    )
+    # Parent has tags but none are recognized class tags
+    mocked_db.get_identity = AsyncMock(
+        return_value=_identity_with_tags("autonomous")
+    )
+
+    await score_trajectory_continuity(
+        claimed_parent_id="parent-uuid",
+        successor_id="successor-uuid",
+    )
+
+    audit_call = mocked_db.record_r1_score_audit.await_args
+    audit_record = audit_call.kwargs if audit_call.kwargs else audit_call.args[0]
+    assert audit_record["class_tag"] is None
 
 
 @pytest.mark.asyncio

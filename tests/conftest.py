@@ -122,6 +122,24 @@ def _isolate_db_backend(monkeypatch):
     mock_backend.reconstruct_eisv_series.return_value = {
         "E": [], "I": [], "S": [], "V": [],
     }
+    # R1 v3.3-D provisional helpers + v3.3-C calibration_state singleton
+    mock_backend.mark_lineage_provisional.return_value = True
+    mock_backend.confirm_lineage.return_value = True
+    mock_backend.read_r1_calibration_state.return_value = {
+        "calibration_status": "seeded",
+        "seeded_since": None,
+        "earned_at": None,
+        "failed_at": None,
+        "updated_at": None,
+    }
+    mock_backend.transition_r1_calibration_state.return_value = {
+        "calibration_status": "seeded",
+        "seeded_since": None,
+        "earned_at": None,
+        "failed_at": None,
+        "updated_at": None,
+    }
+    mock_backend.record_r1_score_audit.return_value = True
     # Audit/tool operations
     mock_backend.append_audit_event.return_value = True
     mock_backend.query_audit_events.return_value = []
