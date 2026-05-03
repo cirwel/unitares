@@ -61,16 +61,18 @@ def coherence(V: float, theta: Theta, params: DynamicsParams) -> float:
         - C1 parameter controls transition steepness
         
     Physical Interpretation:
-        - With V typically in [-0.1, 0.1] (actual operating range due to damping),
-          and C1=3.0, coherence ranges approximately [0.41, 0.59]
-        - Mean V ≈ -0.016 → coherence ≈ 0.48 (accurate for conservative operation)
+        - With V typically in [-0.1, 0.1] (actual operating range due to damping)
+          and C1=1.0 (DEFAULT_THETA), coherence ranges approximately [0.45, 0.55]
+        - Adaptive C1 is bounded [C1_min=0.5, C1_max=1.5]; across that range
+          V=±0.1 yields C in roughly [0.43, 0.57] at the wide end
+        - Mean V ≈ -0.016 with C1=1.0 → coherence ≈ 0.492
         - This reflects genuine thermodynamic state: I slightly > E (information-preserving)
-        - The narrow V range is due to damping (δ=0.25 default, adaptive via governor) and
-          conservative calibration. C1=3.0 provides 6x more differentiation than C1=1.0
-        
+        - The narrow V range is due to damping (δ=0.25 default, adaptive via governor)
+          and conservative calibration
+
     Design Decision (2025-11-27):
         - Removed coherence_scale factor for accuracy
-        - Accept 0.49 coherence as honest thermodynamic signal
+        - Accept ≈0.49 coherence as honest thermodynamic signal
         - Coherence function designed for V ∈ [-2, 2] but dynamics keep V ∈ [-0.1, 0.1]
         - This is correct: system genuinely operates conservatively (I > E)
     """
