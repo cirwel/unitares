@@ -124,9 +124,8 @@ Manual Plexus Zero may use human-readable `repo://unitares/...` aliases in Disco
 | `repo://unitares/docs/proposals/surface-lease-plane-v0.md` | `file:///Users/cirwel/projects/unitares/docs/proposals/surface-lease-plane-v0.md` | Lease-plane contract/RFC | Existing canonical implementation contract |
 | `repo://unitares/docs/proposals/surface-lease-plane-phase-a-plan.md` | `file:///Users/cirwel/projects/unitares/docs/proposals/surface-lease-plane-phase-a-plan.md` | Phase A staging plan | Implementation sequencing |
 | `repo://unitares/docs/ontology/beam-coordination-kernel.md` | `file:///Users/cirwel/projects/unitares/docs/ontology/beam-coordination-kernel.md` | Ontology/integration framing | BEAM sidecar role and non-goals |
-| `repo://unitares/src/lease_plane/<file>` | `file:///Users/cirwel/projects/unitares/src/lease_plane/<file>` | Python client/advisory contract | Choose the exact file before acquiring |
-| `repo://unitares/elixir/lease_plane/<file>` | `file:///Users/cirwel/projects/unitares/elixir/lease_plane/<file>` | BEAM implementation | Choose the exact file before acquiring |
-| `repo://unitares/db/postgres/migrations/<lease-plane-migration>.sql` | `file:///Users/cirwel/projects/unitares/db/postgres/migrations/<lease-plane-migration>.sql` | Durable lease schema | Migrations are high-risk surfaces; use explicit exact-path claims |
+
+The table above lists exact surface IDs only. Wildcards are NOT valid surface IDs — neither in Manual Plexus Zero claims nor in service/API calls. For lease-plane source and migration files (`src/lease_plane/`, `elixir/lease_plane/`, `db/postgres/migrations/*lease_plane*.sql`), pick a specific file path and form an exact `file://` surface ID before claiming. Migrations in particular are high-risk and require exact-path claims with explicit operator notification.
 
 Do not generalize this table into a fleet-wide taxonomy until manual use shows which surfaces actually collide.
 
