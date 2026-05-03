@@ -30,6 +30,26 @@ class LeasePlaneModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+def _validate_substrate_pair(
+    substrate_state: dict[str, Any] | None,
+    substrate_state_observed_at: datetime | None,
+    *,
+    where: str,
+) -> None:
+    """Caller-side enforcement of the migration-034 pair-coherence CHECK.
+
+    Catches partial-pair (one set, the other unset) before the request leaves
+    the client, so the resulting validation error names the field instead of
+    surfacing as an HTTP 422 from the DB CHECK. Mirrors the
+    `substrate_state_observed_pair_coherent` CHECK constraint (RFC §7.13.5).
+    """
+    if (substrate_state is None) != (substrate_state_observed_at is None):
+        raise ValueError(
+            f"{where}: substrate_state and substrate_state_observed_at must "
+            "be both set or both unset (RFC §7.13.5 pair-coherence)"
+        )
+
+
 class LeaseRecord(BaseModel):
     """Active or historical lease row as returned by the lease plane."""
 
@@ -50,12 +70,26 @@ class LeaseRecord(BaseModel):
     release_reason: ReleaseReason | None = None
     audit_session: str | None = None
     earned_status: EarnedStatus = "provisional"
+    # RFC §7.13: resident substrate observation. Optional — only resident:/
+    # leases populate these fields. dict (not arbitrary JSON) so non-object
+    # values fail validation client-side.
+    substrate_state: dict[str, Any] | None = None
+    substrate_state_observed_at: datetime | None = None
 
     @model_validator(mode="after")
     def _holder_kind_matches_heartbeat(self) -> "LeaseRecord":
         expected = self.holder_kind == "remote_heartbeat"
         if self.heartbeat_required is not expected:
             raise ValueError("heartbeat_required must match holder_kind")
+        return self
+
+    @model_validator(mode="after")
+    def _substrate_pair_coherent(self) -> "LeaseRecord":
+        _validate_substrate_pair(
+            self.substrate_state,
+            self.substrate_state_observed_at,
+            where="LeaseRecord",
+        )
         return self
 
 
@@ -80,6 +114,13 @@ class AcquireRequest(LeasePlaneModel):
     holder_pid: str | None = None
     intent: str | None = None
     audit_session: str | None = None
+    # RFC §7.13: optional resident substrate observation. Both fields nullable;
+    # pair-coherence enforced by model_validator (mirrors migration-034 CHECK).
+    # Server-side CHECK also restricts substrate_state to surface_kind='resident'
+    # leases — caller-side rejection happens here for resident:/ AcquireRequests
+    # only when the substrate fields are actually populated.
+    substrate_state: dict[str, Any] | None = None
+    substrate_state_observed_at: datetime | None = None
 
     @field_validator("surface_id", mode="before")
     @classmethod
@@ -102,15 +143,39 @@ class AcquireRequest(LeasePlaneModel):
             )
         return canonicalize(v)
 
+    @model_validator(mode="after")
+    def _substrate_pair_coherent(self) -> "AcquireRequest":
+        _validate_substrate_pair(
+            self.substrate_state,
+            self.substrate_state_observed_at,
+            where="AcquireRequest",
+        )
+        return self
+
 
 class RenewRequest(LeasePlaneModel):
     """Request body for POST /v1/lease/renew.
 
     The renew contract intentionally accepts no ttl_s. The lease plane extends
     by the immutable original_ttl_s stored at acquire time.
+
+    RFC §7.13: optional substrate_state + substrate_state_observed_at fields
+    let resident heartbeats refresh the substrate observation alongside the
+    lease. Both nullable; pair-coherence enforced client-side.
     """
 
     lease_id: UUID
+    substrate_state: dict[str, Any] | None = None
+    substrate_state_observed_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def _substrate_pair_coherent(self) -> "RenewRequest":
+        _validate_substrate_pair(
+            self.substrate_state,
+            self.substrate_state_observed_at,
+            where="RenewRequest",
+        )
+        return self
 
 
 class HeartbeatRequest(RenewRequest):

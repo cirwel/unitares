@@ -95,6 +95,14 @@ defmodule UnitaresLeasePlane.HTTPRouter do
               retry_after_hint_ms: retry_after_hint_ms
             })
 
+          {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint_name: name}}} ->
+            # RFC §7.13.5 typed-error contract. Map any CHECK violation to
+            # HTTP 422 schema_invalid with the constraint name as detail (one
+            # of the four §7.13 substrate_state CHECKs). MUST precede the
+            # generic {:error, reason} arm — falling through to 503 would
+            # mask a writer bug as a transient outage.
+            json(conn, 422, %{ok: false, error: "schema_invalid", detail: name})
+
           {:error, reason} ->
             Logger.error("lease plane acquire failed: #{inspect(reason)}")
             json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
@@ -258,16 +266,58 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   defp renew_or_heartbeat(conn) do
     case Map.get(conn.body_params, "lease_id") do
       lease_id when is_binary(lease_id) and byte_size(lease_id) > 0 ->
-        case UnitaresLeasePlane.renew(lease_id) do
-          :ok ->
-            json(conn, 200, %{ok: true})
+        # RFC §7.13: optional substrate_state + substrate_state_observed_at.
+        # Pair-coherence is enforced server-side by the migration-034 CHECK;
+        # client-side rejection happens in Pydantic for Python callers.
+        substrate_state = Map.get(conn.body_params, "substrate_state")
 
-          {:error, :not_found} ->
-            json(conn, 404, %{ok: false, error: "not_found"})
+        substrate_observed_at =
+          case Map.get(conn.body_params, "substrate_state_observed_at") do
+            nil ->
+              nil
 
-          {:error, reason} ->
-            Logger.error("lease plane renew failed: #{inspect(reason)}")
-            json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+            iso when is_binary(iso) ->
+              case DateTime.from_iso8601(iso) do
+                {:ok, dt, _} -> dt
+                _ -> :invalid_iso
+              end
+
+            _ ->
+              :invalid_iso
+          end
+
+        cond do
+          substrate_observed_at == :invalid_iso ->
+            json(conn, 422, %{
+              ok: false,
+              error: "schema_invalid",
+              detail: "substrate_state_observed_at must be ISO-8601 timestamp"
+            })
+
+          substrate_state != nil and not is_map(substrate_state) ->
+            json(conn, 422, %{
+              ok: false,
+              error: "schema_invalid",
+              detail: "substrate_state must be a JSON object"
+            })
+
+          true ->
+            case UnitaresLeasePlane.renew(lease_id, substrate_state, substrate_observed_at) do
+              :ok ->
+                json(conn, 200, %{ok: true})
+
+              {:error, :not_found} ->
+                json(conn, 404, %{ok: false, error: "not_found"})
+
+              {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint_name: name}}} ->
+                # RFC §7.13.5 typed-error contract for renew CHECK violations.
+                # MUST precede the generic 503 arm.
+                json(conn, 422, %{ok: false, error: "schema_invalid", detail: name})
+
+              {:error, reason} ->
+                Logger.error("lease plane renew failed: #{inspect(reason)}")
+                json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+            end
         end
 
       _ ->
@@ -325,17 +375,52 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       true ->
         {:ok, canonical_surface_id} = canonical_or_error
 
-        {:ok,
-         %{
-           surface_id: canonical_surface_id,
-           holder_agent_uuid: body["holder_agent_uuid"],
-           holder_class: Map.get(body, "holder_class", "process_instance"),
-           holder_kind: body["holder_kind"],
-           ttl_s: body["ttl_s"],
-           intent: Map.get(body, "intent"),
-           audit_session: Map.get(body, "audit_session"),
-           holder_pid: Map.get(body, "holder_pid")
-         }}
+        # RFC §7.13: optional substrate_state + substrate_state_observed_at.
+        # Both nullable; type-checked here. Pair-coherence + resident-kind-only
+        # + sensor.status enforcement happens in the DB CHECKs (typed-error
+        # path returns 422 with constraint_name).
+        substrate_state = Map.get(body, "substrate_state")
+
+        substrate_observed_at =
+          case Map.get(body, "substrate_state_observed_at") do
+            nil ->
+              {:ok, nil}
+
+            iso when is_binary(iso) ->
+              case DateTime.from_iso8601(iso) do
+                {:ok, dt, _} -> {:ok, dt}
+                _ -> {:error, "substrate_state_observed_at must be ISO-8601 timestamp"}
+              end
+
+            _ ->
+              {:error, "substrate_state_observed_at must be ISO-8601 timestamp"}
+          end
+
+        cond do
+          substrate_state != nil and not is_map(substrate_state) ->
+            {:error, "substrate_state must be a JSON object"}
+
+          match?({:error, _}, substrate_observed_at) ->
+            {:error, detail} = substrate_observed_at
+            {:error, detail}
+
+          true ->
+            {:ok, observed_at} = substrate_observed_at
+
+            {:ok,
+             %{
+               surface_id: canonical_surface_id,
+               holder_agent_uuid: body["holder_agent_uuid"],
+               holder_class: Map.get(body, "holder_class", "process_instance"),
+               holder_kind: body["holder_kind"],
+               ttl_s: body["ttl_s"],
+               intent: Map.get(body, "intent"),
+               audit_session: Map.get(body, "audit_session"),
+               holder_pid: Map.get(body, "holder_pid"),
+               substrate_state: substrate_state,
+               substrate_state_observed_at: observed_at
+             }}
+        end
     end
   end
 
@@ -437,7 +522,11 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       release_reason: lease.release_reason,
       audit_session: lease.audit_session,
       original_ttl_s: lease.original_ttl_s,
-      earned_status: lease.earned_status
+      earned_status: lease.earned_status,
+      # RFC §7.13: include substrate columns so callers reading via /v1/lease/status
+      # see what they wrote (PR 1 §7.13.6 touch-list "Elixir router — response shape").
+      substrate_state: Map.get(lease, :substrate_state),
+      substrate_state_observed_at: iso(Map.get(lease, :substrate_state_observed_at))
     }
   end
 

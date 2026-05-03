@@ -117,7 +117,7 @@ class LeasePlaneClient:
         self._transport = transport or _urllib_transport
 
     def acquire(self, request: AcquireRequest) -> AcquireResult:
-        payload = self._request_json("POST", "/v1/lease/acquire", request.model_dump(mode="json"))
+        payload = self._request_json("POST", "/v1/lease/acquire", request.model_dump(mode="json", exclude_none=True))
         return _parse_acquire(payload)
 
     def acquire_with_retry(
@@ -189,11 +189,11 @@ class LeasePlaneClient:
         return _parse_status(payload)
 
     def renew(self, request: RenewRequest) -> SimpleResult:
-        payload = self._request_json("POST", "/v1/lease/renew", request.model_dump(mode="json"))
+        payload = self._request_json("POST", "/v1/lease/renew", request.model_dump(mode="json", exclude_none=True))
         return _parse_simple(payload)
 
     def heartbeat(self, request: HeartbeatRequest) -> SimpleResult:
-        payload = self._request_json("POST", "/v1/lease/heartbeat", request.model_dump(mode="json"))
+        payload = self._request_json("POST", "/v1/lease/heartbeat", request.model_dump(mode="json", exclude_none=True))
         return _parse_simple(payload)
 
     def release(self, request: ReleaseRequest) -> SimpleResult:
@@ -207,7 +207,7 @@ class LeasePlaneClient:
                 error="permission_denied",
                 reason="release_reason='forced' requires force_release(); see RFC §7.10",
             )
-        payload = self._request_json("POST", "/v1/lease/release", request.model_dump(mode="json"))
+        payload = self._request_json("POST", "/v1/lease/release", request.model_dump(mode="json", exclude_none=True))
         return _parse_simple(payload)
 
     def force_release(self, request: ForceReleaseRequest) -> SimpleResult:
@@ -228,17 +228,17 @@ class LeasePlaneClient:
         payload = self._request_json(
             "POST",
             "/v1/lease/force-release",
-            request.model_dump(mode="json"),
+            request.model_dump(mode="json", exclude_none=True),
             authorization_token=self.config.force_release_token,
         )
         return _parse_simple(payload)
 
     def handoff_offer(self, request: HandoffOfferRequest) -> SimpleResult:
-        payload = self._request_json("POST", "/v1/lease/handoff/offer", request.model_dump(mode="json"))
+        payload = self._request_json("POST", "/v1/lease/handoff/offer", request.model_dump(mode="json", exclude_none=True))
         return _parse_simple(payload)
 
     def handoff_accept(self, request: HandoffAcceptRequest) -> SimpleResult:
-        payload = self._request_json("POST", "/v1/lease/handoff/accept", request.model_dump(mode="json"))
+        payload = self._request_json("POST", "/v1/lease/handoff/accept", request.model_dump(mode="json", exclude_none=True))
         return _parse_simple(payload)
 
     def _request_json(
