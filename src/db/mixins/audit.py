@@ -16,6 +16,51 @@ logger = get_logger(__name__)
 class AuditMixin:
     """Audit event operations."""
 
+    async def record_r1_score_audit(self, record: Dict[str, Any]) -> bool:
+        """R1 v3.3-A: persist the full score record to audit.r1_score_audit.
+
+        The public KG carries only the redacted projection (verdict +
+        calibration_status + n_dims_used + score_id); this writer holds the
+        full record (plausibility, components, observations, parent_mature,
+        reasons, class_tag, calibration_status). `score_id` from the input
+        record is used as the public-↔-audit join key per v3.3-A.
+
+        Awaited (not fire-and-forget): callers depend on `score_id` being
+        present in the audit table before publishing the redacted KG payload
+        that references it. Per-call cost is one INSERT; calls fire only on
+        explicit `score_trajectory_continuity` invocations (not on every
+        check-in).
+        """
+        async with self.acquire() as conn:
+            try:
+                await conn.execute(
+                    """
+                    INSERT INTO audit.r1_score_audit (
+                        score_id, parent_id, successor_id, recorded_at,
+                        plausibility, components, observations,
+                        parent_mature, reasons, class_tag, calibration_status
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    """,
+                    record["score_id"],
+                    record["parent_id"],
+                    record["successor_id"],
+                    record["recorded_at"],
+                    record["plausibility"],
+                    json.dumps(record["components"]),
+                    json.dumps(record["observations"]),
+                    record["parent_mature"],
+                    list(record["reasons"]),
+                    record.get("class_tag"),
+                    record["calibration_status"],
+                )
+                return True
+            except Exception as e:
+                logger.error(
+                    f"record_r1_score_audit failed for score_id={record.get('score_id')}: {e}"
+                )
+                return False
+
     async def append_audit_event(self, event: AuditEvent) -> bool:
         async with self.acquire() as conn:
             try:
