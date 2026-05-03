@@ -353,7 +353,7 @@ Bigger council CONCERNs:
 Phase B prerequisites (non-blocking for Phase A):
 - Payload-shape standardization pass — commits to writing canonicalized `surface_id` (per §7.12.1) into `audit.tool_usage.payload`, no percent-encoding (per §7.2.8 cross-track).
 - `unitares_doctor.py` extension to lint that no Elixir source mentions a scheme not in the live grammar CHECK.
-- §7.5 `remote_heartbeat` instrumentation (operator action — measure Pi↔Mac heartbeat gap distribution ≥7d before any `remote_heartbeat` Phase B promotion).
+- ~~§7.5 `remote_heartbeat` instrumentation (operator action — measure Pi↔Mac heartbeat gap distribution ≥7d before any `remote_heartbeat` Phase B promotion).~~ **DONE 2026-05-03 (v0.9):** Pi path resolved by mining 48d of `audit.events WHERE event_type='eisv_sync'` Steward audit trail (n=8452); recommended Pi `original_ttl_s` raised from 180s → 1000s. Mac path remains provisional pending separate measurement of Mac-resident loopback cadence. See RFC §7.5 v0.9 for methodology + numbers.
 
 ## Reviewer checklist for any Phase A PR
 

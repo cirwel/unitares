@@ -333,7 +333,7 @@ Distinct values exist so telemetry can distinguish *which path* released the lea
 
 This closes the in-flight-heartbeat-vs-reaper-sweep race (council finding 4): the reaper's sole predicate is `expires_at < now() AND released_at IS NULL`, applied to all holder kinds uniformly. There is no separate `last_heartbeat_at < threshold` predicate.
 
-Local-BEAM holders also call `lease_renew` from an in-process timer at cadence `original_ttl_s/3` so that a supervisor crash (rare; the supervisor itself is supervised) doesn't leave a corpse lease for longer than `original_ttl_s`. Default local_beam `original_ttl_s` is **30s** (council finding 2 — the prior `90s` window was the ghost-lease problem). Remote_heartbeat default `original_ttl_s` stays at 90s (Pi 180s, §7.5). Hard maximum `original_ttl_s = 3600` enforced by Postgres CHECK constraint.
+Local-BEAM holders also call `lease_renew` from an in-process timer at cadence `original_ttl_s/3` so that a supervisor crash (rare; the supervisor itself is supervised) doesn't leave a corpse lease for longer than `original_ttl_s`. Default local_beam `original_ttl_s` is **30s** (council finding 2 — the prior `90s` window was the ghost-lease problem). Remote_heartbeat defaults: **Mac 90s (provisional, unmeasured); Pi 1000s (measured §7.5, v0.9)**. Hard maximum `original_ttl_s = 3600` enforced by Postgres CHECK constraint.
 
 ### 4.5 Typed-absence protocol
 
@@ -657,11 +657,28 @@ Council finding 2 (code-reviewer) flagged that supervisor-retry-exhausted plus r
 
 Reaper sweep cadence: 30s. Tunable via env, alarmed via Sentinel if reaper falls behind (`SELECT count(*) FROM lease_plane.surface_leases WHERE expires_at < now() - interval '60s' AND released_at IS NULL` should equal 0 in steady state).
 
-### 7.5 Heartbeat cadence + TTL math — PARTIALLY RESOLVED in v0.2
+### 7.5 Heartbeat cadence + TTL math — RESOLVED in v0.9 (Pi measured)
 
 Council finding 4 (code-reviewer): heartbeat must extend `expires_at`, not just touch `last_heartbeat_at`, otherwise the reaper races in-flight heartbeats. **Resolved in §4.4.2:** `lease_renew` and `lease_heartbeat` are aliased and both update `expires_at = now() + ttl` atomically.
 
-Council NIT 4.4 (dialectic-knowledge-architect): defaults of `90s/25s` (Mac) and `180s/60s` (Pi) are hand-tuned guesses, not derived from observed heartbeat-loss telemetry. **OPEN — operator action item before Phase B promotion of any remote_heartbeat surface_kind:** instrument the existing Pi↔Mac heartbeat path (Steward sync, anima-mcp HTTP heartbeats) and measure the actual gap distribution over ≥7 days. Set TTL such that p99 of observed gaps × 1.5 ≤ TTL. If the measured p99 is wildly different from 60s, revisit defaults. Until measured, keep the hand-tuned defaults but treat them as provisional.
+Council NIT 4.4 (dialectic-knowledge-architect): defaults of `90s/25s` (Mac) and `180s/60s` (Pi) were hand-tuned guesses, not derived from observed heartbeat-loss telemetry. **Resolved in v0.9 for the Pi remote_heartbeat path** by mining 48 days of `audit.events WHERE event_type='eisv_sync'` rows (Steward Pi→Mac sync, n=8452 since 2026-03-15) instead of waiting for purpose-built instrumentation; the existing Steward audit trail already characterizes the Pi↔Mac heartbeat path the same way new instrumentation would.
+
+**Measurement window:** 2026-04-22 → 2026-04-29 04:00 UTC-6, the most recent continuous-cadence stretch (n=1839 successful syncs, before the 2026-05-01 operator-induced Steward pause). Wider windows pulling in post-pause data inflate p99 with the pause itself; the chosen window is steady-state.
+
+**Measured gap distribution (Pi → Mac):**
+
+| stat | value |
+|---|---|
+| p50 | 302s (matches Steward's 300s nominal cadence) |
+| p95 | 310s |
+| p99 | **621s** |
+| max (in-window) | 34700s (~9.6h — single tail event, indicates rare extended-loss scenarios that cannot be designed away with TTL alone) |
+
+**Recommended Pi `original_ttl_s` = ⌈p99 × 1.5⌉, rounded for operator legibility = 1000s** (~16.7min). Heartbeat cadence remains `original_ttl_s/3 ≈ 333s`, which is comfortably above Steward's natural 300s cadence (every Steward sync refreshes well within TTL).
+
+**Mac path remains provisional** (90s/25s), unmeasured. Mac residents (Watcher/Sentinel/Vigil) hit the lease plane over loopback rather than via the Pi↔Mac sync path, and their gap distribution is governed by local async-loop scheduling, not Steward telemetry. Phase B promotion of any Mac-resident `remote_heartbeat` surface should similarly mine `audit.events` for the relevant resident's natural cadence before locking defaults — the §7.5 methodology (use existing audit traces; ≥7d window; p99 × 1.5 = TTL; keep heartbeat cadence at TTL/3) is now the standing rule for any remote_heartbeat caller.
+
+**Why audit-mining beats fresh instrumentation here:** the §7.5 carve-out originally said "instrument the existing Pi↔Mac heartbeat path (Steward sync, anima-mcp HTTP heartbeats) and measure the actual gap distribution over ≥7 days." Steward already writes one `event_type='eisv_sync'` audit row per successful sync — that *is* the instrumented heartbeat trace, retroactively. The 7-day waiting period was a measurement-collection assumption that turned out to be unnecessary; we have ~7 weeks of data already.
 
 ### 7.6 Audit wire to UNITARES
 
@@ -947,7 +964,7 @@ A Python reference implementation of every endpoint in §5 (`asyncio.Lock` per-s
 Required before any `.ex` file is written:
 
 - [x] Council pass: dialectic-knowledge-architect, feature-dev:code-reviewer, live-verifier (parallel) — v0.2/v0.3/v0.5/v0.7/v0.8
-- [x] §7 open questions all answered (RFC tentative -> RFC committed) — §7.1/7.4/7.6/7.8 resolved v0.2; §7.5/7.7 resolved v0.2 with operator-action carve-out; §7.9/7.10 resolved v0.6; §7.2/7.3 resolved v0.7; **§7.11/7.12 resolved v0.8** (v0.8 §7.12.4 leaves v1 forward-compat option (a) vs (b) Open, by design)
+- [x] §7 open questions all answered (RFC tentative -> RFC committed) — §7.1/7.4/7.6/7.8 resolved v0.2; §7.7 resolved v0.2 with operator-action carve-out; §7.9/7.10 resolved v0.6; §7.2/7.3 resolved v0.7; §7.11/7.12 resolved v0.8; **§7.5 Pi path resolved v0.9 (measured 2026-05-03; Mac path remains provisional pending Mac-resident measurement)** (v0.8 §7.12.4 leaves v1 forward-compat option (a) vs (b) Open, by design)
 - [x] Shelf-Python sketch checked in alongside the Elixir spec — same schema, same API, same return shapes (v0.4)
 - [x] Operational runbook draft: `docs/operations/lease-plane-operator-runbook.md`. **v0.6 commitment:** runbook MUST cover (a) §7.9 rename-orphan manual-release procedure ✓, and (b) §7.10 `LEASE_FORCE_RELEASE_TOKEN` provisioning + rotation steps ✓. **v0.7 addition:** (c) §7.11 scheme-deprecation 30-day drain procedure ✓ (extensive coverage including SIGKILL recovery + idempotent-rerun guidance). Concrete bash commands and SQL audit queries shipped; "Common operations" section retains TBD entries for post-Phase-A operational lore.
 - [x] Sentinel monitoring spec for `/v1/lease/status?surface_id=__healthcheck__` — committed in `docs/operations/lease-plane-operator-runbook.md` "Health check" section. Probe cadence 30s, 5-min sliding-window alarm thresholds, four typed alarm rules (`lease_plane.unreachable`, `lease_plane.auth_drift`, `lease_plane.db_degraded`, `lease_plane.slow`), explicit non-coverage list (reaper liveness + audit-outbox + per-kind acquire rate are separate signals).
@@ -1010,6 +1027,14 @@ This is a 4-8 week spike. It trades against:
 The technical case is strong (three independent reviewers converged). The strategic case is the operator's call. If shelved, file this RFC as captured-decision so the next session doesn't re-litigate the substrate question from scratch.
 
 ## 11. Versions / changelog
+
+- **v0.9 (2026-05-03):** §7.5 (heartbeat cadence + TTL math) promoted from `PARTIALLY RESOLVED` (operator-action carve-out) → `RESOLVED` for the Pi `remote_heartbeat` path. Resolved by mining the existing `audit.events WHERE event_type='eisv_sync'` audit trail (Steward Pi→Mac sync, n=8452 since 2026-03-15) instead of building purpose-built instrumentation — the audit log already characterizes the Pi↔Mac heartbeat path the same way the §7.5 carve-out's "instrument and wait 7 days" plan would. Material changes:
+
+  - **Pi `remote_heartbeat original_ttl_s`: 180s → 1000s** (~16.7min). Derived from p99 = 621s on n=1839 healthy-window syncs (2026-04-22 → 2026-04-29 04:00 UTC-6, the last continuous-cadence window before the operator-induced Steward pause on 2026-05-01). p99 × 1.5 = 931s, rounded to 1000s for operator legibility. Old 180s default was ~5.4× too tight relative to measured behavior.
+  - **Pi heartbeat cadence: 60s → 333s** (= `original_ttl_s/3`). Comfortably above Steward's natural 300s sync cadence; every Steward sync refreshes well within TTL.
+  - **Mac `remote_heartbeat` defaults unchanged** (90s/25s, marked provisional). Mac residents reach the lease plane over loopback rather than via the Steward sync path, so the Pi measurement does not transfer. Mac promotion to a `remote_heartbeat` Phase B surface should mine the relevant Mac resident's natural audit cadence first; the §7.5 methodology (use existing audit traces; ≥7d window; p99 × 1.5 = TTL; heartbeat = TTL/3) is now the standing rule.
+  - §9 checklist row for §7.5 status updated; Phase A plan §7.5 Phase-B-prereq row marked DONE.
+  - **Methodology lesson recorded:** when an "operator action" RFC carve-out asks for instrumentation + measurement window, check whether the audit log is already the instrument before building anything new.
 
 - **v0.8 (2026-04-30, same session):** §7.11 (deprecation procedure) and §7.12 (canonicalization + v1 content-addressing forward-compat) promoted Tentative → Resolved. Council pass run in parallel (dialectic-knowledge-architect / feature-dev:code-reviewer / live-verifier; adversarial framing per `feedback_council-adversarial-prompt.md`). Three-voice convergence on three top issues; multiple two-voice and single-voice findings folded in. Material changes:
 
