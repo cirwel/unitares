@@ -15,11 +15,11 @@ Status: live. First public commit 2025-12-04. For architecture details, see [doc
 
 Most AI agents fly blind: they can't tell when they're thrashing, drifting, or overconfident until a human notices. UNITARES is a runtime layer that lets agents **see their own state and regulate themselves** — slow down when disorder spikes, ask for review when integrity drops, hand off when they're running on fumes.
 
-Each check-in returns a verdict (`proceed` / `guide` / `pause` / `reject`) and guidance, so agents can adjust *before* external circuit breakers fire. Humans and peer agents read the same underlying state, so one signal serves three consumers: agents regulating themselves, humans watching dashboards, peers coordinating. The state model is detailed below in [How state works](#how-state-works-eisv).
+Each check-in returns a verdict (`proceed` / `guide` / `pause` / `reject`) and guidance, so agents can adjust *before* external circuit breakers fire. Humans and peer agents read the same underlying state, so one signal serves three consumers: agents regulating themselves, humans watching dashboards, peers coordinating. The four state variables — energy, integrity, entropy, valence (collectively **EISV**) — are detailed below in [How state works](#how-state-works-eisv).
 
 Circuit breakers and kill switches are still there — they're just the last line of defense, not the first.
 
-Running continuously in production since November 2025 with 6,200+ passing tests; line coverage for the default `make test` / CI measurement (`src/`, `agents/sdk`, and `agents/`) is typically **~76%**. The project enforces a **25%** minimum (`--cov-fail-under=25`, passed by `make test`, `scripts/dev/test-cache.sh`, and CI — not by bare `pytest` defaults). Long-run trajectories are stored in PostgreSQL + AGE; the state model is derived from what agents actually do (EMA-smoothed observations, not model predictions).
+Running continuously in production since November 2025. Long-run trajectories are stored in PostgreSQL + AGE; the state model is derived from what agents actually do (EMA-smoothed observations, not model predictions). Test counts and coverage gates are in the [Production snapshot](#production-snapshot).
 
 **Try it** (one command, no Postgres/AGE on the host required):
 
@@ -40,12 +40,11 @@ That brings up Postgres 17 + Apache AGE + pgvector + Redis + the governance serv
 | Redis (session cache) | `6379` | `redis://localhost:6379/0` |
 | Anima MCP (Pi-side, separate repo, optional) | `8766` | `http://lumen.local:8766/mcp/` |
 
-| | |
-|--|--|
-| **What it does** | Give agents live readings of their own state (**EISV**) plus a verdict (`proceed` / `guide` / `pause` / `reject`), so they can regulate themselves — and share the state with humans and peers through the dashboard and knowledge graph. |
-| **Workflow** | `onboard(force_new=true)` → `process_agent_update()` → `get_governance_metrics()`; use `parent_agent_id` for fresh-process lineage — details in [Getting Started](docs/guides/START_HERE.md). |
-| **Transports** | MCP on `/mcp/` (Streamable HTTP) · REST on `/v1/tools/call` · Dashboard on `/dashboard` |
-| **Stack** | Python 3.12+ · PostgreSQL + AGE + pgvector · Redis (optional) |
+**Workflow:** `onboard(force_new=true)` → `process_agent_update()` → `get_governance_metrics()`. Use `parent_agent_id` for fresh-process lineage — details in [Getting Started](docs/guides/START_HERE.md).
+
+**Transports:** MCP on `/mcp/` (Streamable HTTP) · REST on `/v1/tools/call` · Dashboard on `/dashboard`
+
+**Stack:** Python 3.12+ · PostgreSQL + AGE + pgvector · Redis (optional)
 
 ---
 
@@ -84,7 +83,7 @@ The agent reads its own metrics and adjusts *before* external controls have to f
 
 ## Production snapshot
 
-As of April 2026 (single-operator deployment — self-traffic, not external adoption). Headline: **94K+ governance events · 2,574 process-instances onboarded · 2,226 active in the last 7 days**.
+As of April 2026 (single-operator deployment — self-traffic, not external adoption). Headline: **94K+ governance events processed · ≈51K in the last 7 days**.
 
 <details>
 <summary><strong>Full metrics table</strong></summary>
