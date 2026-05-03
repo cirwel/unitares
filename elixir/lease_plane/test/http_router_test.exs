@@ -165,6 +165,46 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert payload["lease"]["surface_kind"] == "dialectic"
     end
 
+    # --- §9 RFC named-gate tests (mirroring docs/proposals/surface-lease-plane-v0.md §9) ---
+    #
+    # These pin the gates by their §9-named description so the audit
+    # (scripts/dev/audit_rfc_section_9_gates.py) reports them as exact rather
+    # than missing. Coverage overlaps with the in-house tests above; keeping
+    # both makes the §9 audit trustworthy without losing the more descriptive
+    # names that aid local debugging.
+
+    test "http_router returns 409 on held_by_other", ctx do
+      # RFC §7.3.5 / §9 gate: HTTP 409 on held_by_other.
+      body_a = acquire_body(ctx.surface)
+      body_b = acquire_body(ctx.surface, holder_agent_uuid: random_uuid())
+
+      assert post_json("/v1/lease/acquire", body_a).status == 200
+      resp = post_json("/v1/lease/acquire", body_b)
+      assert resp.status == 409
+      assert parsed(resp)["error"] == "held_by_other"
+    end
+
+    test "http_router rejects surface_kind in acquire body after migration 026", ctx do
+      # RFC §7.2.3 / §9 gate: post-migration-026, surface_kind is a generated
+      # column derived from split_part(surface_id, ':', 1). The router silently
+      # ignores caller-supplied surface_kind in the body — the caller's value
+      # cannot override the generated column ("rejected" in the take-effect
+      # sense, even though no 4xx is returned). See http_router.ex:240-244.
+      body =
+        ctx.surface
+        |> acquire_body()
+        |> Map.put(:surface_kind, "lying_kind_does_not_match_scheme")
+
+      resp = post_json("/v1/lease/acquire", body)
+
+      assert resp.status == 200
+      payload = parsed(resp)
+      assert payload["ok"] == true
+      # The generated column wins; the body's "lying_kind_does_not_match_scheme"
+      # is dropped before the INSERT.
+      assert payload["lease"]["surface_kind"] == "dialectic"
+    end
+
     test "PR 7 — non-canonical scheme → 422 schema_invalid", _ctx do
       body = acquire_body("ftp://nope")
       resp = post_json("/v1/lease/acquire", body)
