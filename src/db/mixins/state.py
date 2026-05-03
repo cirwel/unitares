@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 from ..base import AgentStateRecord
@@ -313,6 +314,67 @@ class StateMixin:
                     GovernanceConfig.CURRENT_EPOCH,
                 )
             return [self._row_to_agent_state(r) for r in rows]
+
+    async def reconstruct_eisv_series(
+        self,
+        agent_id: str,
+        window: timedelta,
+        *,
+        epoch: Optional[int] = None,
+    ) -> Dict[str, List[float]]:
+        """Reconstruct per-dimension EISV series for an agent over a window.
+
+        R1 helper consumed by `score_trajectory_continuity` (PR 2). Returns
+        `{'E': [...], 'I': [...], 'S': [...], 'V': [...]}` ordered by
+        `recorded_at` ascending. Empty list per dimension when no rows in
+        window — caller (the score primitive) handles exclusion-from-average
+        per design doc §v3.3-H.C4.
+
+        Filters:
+        - `epoch = GovernanceConfig.CURRENT_EPOCH` (default; pass explicitly to
+          override for replay/historical analysis). Mirrors the same filter
+          shape used in `get_latest_agent_state` and `get_all_latest_agent_states`.
+        - `synthetic = false` — bootstrap rows are claimed-genesis anchors, not
+          earned trajectory. R1 plausibility is about earned trajectory shape,
+          so synthetic anchors must not inflate similarity scores. (Same posture
+          as `get_all_latest_agent_states` per onboard-bootstrap-checkin §4.1.)
+
+        Dimension key 'V' maps to SQL column 'volatility' per the project
+        convention; see `_row_to_agent_state` for the analogous Python field
+        name 'void' ↔ SQL 'volatility'. R1 uses the user-facing 'V' label
+        (matches paper terminology and identity.md ontology lexicon).
+
+        See: docs/ontology/r1-verify-lineage-claim.md §v3.1 'New helper',
+             §v3.3-A 'audit-only persistence' (consumes this output),
+             §v3.3-F 'epoch column reference'.
+        """
+        if epoch is None:
+            from config.governance_config import GovernanceConfig
+            epoch = GovernanceConfig.CURRENT_EPOCH
+
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT s.entropy, s.integrity, s.stability_index, s.volatility,
+                       s.recorded_at
+                FROM core.agent_state s
+                JOIN core.identities i ON i.identity_id = s.identity_id
+                WHERE i.agent_id = $1
+                  AND s.epoch = $2
+                  AND s.synthetic = false
+                  AND s.recorded_at >= NOW() - $3::interval
+                ORDER BY s.recorded_at ASC
+                """,
+                agent_id, epoch, window,
+            )
+
+        series: Dict[str, List[float]] = {"E": [], "I": [], "S": [], "V": []}
+        for row in rows:
+            series["E"].append(float(row["entropy"]))
+            series["I"].append(float(row["integrity"]))
+            series["S"].append(float(row["stability_index"]))
+            series["V"].append(float(row["volatility"]))
+        return series
 
     async def get_recent_cross_agent_activity(
         self,
