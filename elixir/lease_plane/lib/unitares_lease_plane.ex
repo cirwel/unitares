@@ -39,12 +39,30 @@ defmodule UnitaresLeasePlane do
   @spec status(String.t()) :: {:ok, map() | nil} | {:error, term()}
   def status(surface_id) when is_binary(surface_id), do: Repo.status(surface_id)
 
-  @doc "Renew a lease — extends `expires_at` by the immutable `original_ttl_s`."
+  @doc """
+  Renew a lease — extends `expires_at` by the immutable `original_ttl_s`.
+
+  RFC §7.13: optional `substrate_state` (jsonb) and `substrate_observed_at`
+  (DateTime) update the substrate columns when both are provided. Both NULL
+  (default) leaves the columns at their current value (COALESCE pattern in
+  `Repo.renew/3`). Local-BEAM holders skip substrate path — substrate state
+  is a remote_heartbeat concern (residents are remote_heartbeat holders);
+  if a future local_beam holder needs substrate updates, the LeaseHolder
+  GenServer will need an `update_substrate` API.
+  """
   @spec renew(binary()) :: :ok | {:error, term()}
-  def renew(lease_id) do
+  @spec renew(binary(), map() | nil, DateTime.t() | nil) :: :ok | {:error, term()}
+  def renew(lease_id, substrate_state \\ nil, substrate_observed_at \\ nil) do
     case LeaseSupervisor.holder_for(lease_id) do
-      {:ok, pid} -> LeaseHolder.renew(pid)
-      :error -> Repo.renew(lease_id)
+      {:ok, pid} ->
+        # local_beam holder: substrate path not wired (PR 1 scope is
+        # remote_heartbeat-via-Repo). LeaseHolder.renew/1 ignores substrate
+        # arguments. RFC §7.13 PR 1 explicitly does not extend the local_beam
+        # path; future PRs will if a local_beam resident appears.
+        LeaseHolder.renew(pid)
+
+      :error ->
+        Repo.renew(lease_id, substrate_state, substrate_observed_at)
     end
   end
 

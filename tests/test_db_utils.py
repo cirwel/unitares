@@ -118,6 +118,16 @@ async def ensure_test_database_schema() -> None:
         await _execute_sql_file(conn, "db/postgres/migrations/027_lease_plane_deprecation.sql")
         await _execute_sql_file(conn, "db/postgres/migrations/028_lease_plane_trigger_fix.sql")
         await _execute_sql_file(conn, "db/postgres/migrations/029_lease_plane_earned_status_guard.sql")
+        await _execute_sql_file(conn, "db/postgres/migrations/030_lease_plane_aborted_event.sql")
+        # Migrations 031-033 are R1-related (provisional lineage, calibration_state,
+        # score_audit verdict cols). Required so 034 lands on the same baseline as
+        # production. See db/postgres/migrations/ for descriptions.
+        await _execute_sql_file(conn, "db/postgres/migrations/031_r1_provisional_lineage.sql")
+        await _execute_sql_file(conn, "db/postgres/migrations/032_r1_calibration_state.sql")
+        await _execute_sql_file(conn, "db/postgres/migrations/033_r1_score_audit_verdict_cols.sql")
+        # Migration 034: substrate_state columns for §7.13 resident heartbeat surface
+        # (RFC v0.11). Adds 2 NULLABLE columns + 4 CHECK constraints + freshness index.
+        await _execute_sql_file(conn, "db/postgres/migrations/034_lease_plane_substrate_state.sql")
 
         # Ensure partitioned audit tables can accept inserts for current month.
         await _execute_sql_file(conn, "db/postgres/partitions.sql")

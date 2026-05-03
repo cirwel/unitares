@@ -28,7 +28,8 @@ defmodule UnitaresLeasePlane.Repo do
   holder_agent_uuid::text AS holder_agent_uuid,
   holder_class, holder_kind, holder_pid, heartbeat_required, intent,
   acquired_at, expires_at, last_heartbeat_at, released_at, release_reason,
-  audit_session, original_ttl_s, earned_status
+  audit_session, original_ttl_s, earned_status,
+  substrate_state, substrate_state_observed_at
   """
 
   # ---------- acquire ----------
@@ -116,14 +117,22 @@ defmodule UnitaresLeasePlane.Repo do
     # post-migration-026 it is a generated column derived from
     # split_part(surface_id, ':', 1). Including it here would raise
     # `ERROR: column "surface_kind" is a generated column`.
+    # RFC §7.13: substrate_state and substrate_state_observed_at are optional
+    # nullable columns. Both default to NULL via Map.get/3; the migration-034
+    # pair-coherence CHECK enforces both-set-or-both-null at storage layer.
+    substrate_state = Map.get(p, :substrate_state)
+    substrate_observed_at = Map.get(p, :substrate_state_observed_at)
+
     insert_lease_sql = """
     INSERT INTO lease_plane.surface_leases
       (surface_id, holder_agent_uuid, holder_class,
        holder_kind, holder_pid, heartbeat_required, intent,
-       expires_at, original_ttl_s, audit_session, earned_status)
+       expires_at, original_ttl_s, audit_session, earned_status,
+       substrate_state, substrate_state_observed_at)
     VALUES
       ($1, $2, $3, $4, $5, $6, $7,
-       now() + make_interval(secs => $8), $8, $9, 'provisional')
+       now() + make_interval(secs => $8), $8, $9, 'provisional',
+       $10::jsonb, $11::timestamptz)
     RETURNING #{@select_lease_columns}
     """
 
@@ -136,7 +145,9 @@ defmodule UnitaresLeasePlane.Repo do
       p.holder_kind == "remote_heartbeat",
       Map.get(p, :intent),
       p.ttl_s,
-      Map.get(p, :audit_session)
+      Map.get(p, :audit_session),
+      substrate_state,
+      substrate_observed_at
     ]
 
     # Unique savepoint name per call — defends against future refactors that
@@ -210,21 +221,37 @@ defmodule UnitaresLeasePlane.Repo do
   @doc """
   Aliases renew + heartbeat per RFC §4.4.2. Always extends by the
   immutable `original_ttl_s`; never accepts caller-supplied ttl.
+
+  RFC §7.13: optional `substrate_state` (jsonb) and `substrate_state_observed_at`
+  (DateTime) update the substrate columns when both are provided. Both NULL
+  (default) leaves the columns at their current value (COALESCE pattern).
+  Pair-coherence is enforced server-side by `substrate_state_observed_pair_coherent`
+  CHECK and client-side by Pydantic; passing exactly one is undefined behavior
+  and surfaces as a CHECK violation if the existing column is NULL.
   """
   @spec renew(binary()) :: :ok | {:error, term()}
-  def renew(lease_id) do
+  @spec renew(binary(), map() | nil, DateTime.t() | nil) :: :ok | {:error, term()}
+  def renew(lease_id, substrate_state \\ nil, substrate_observed_at \\ nil) do
     sql = """
     UPDATE lease_plane.surface_leases
     SET expires_at = now() + make_interval(secs => original_ttl_s),
         last_heartbeat_at = CASE WHEN heartbeat_required THEN now()
-                                 ELSE last_heartbeat_at END
+                                 ELSE last_heartbeat_at END,
+        substrate_state =
+          COALESCE($2::jsonb, substrate_state),
+        substrate_state_observed_at =
+          COALESCE($3::timestamptz, substrate_state_observed_at)
     WHERE lease_id = $1 AND released_at IS NULL
     RETURNING #{@select_lease_columns}
     """
 
     case Postgrex.transaction(DB, fn conn ->
            with {:ok, %{rows: [row], columns: cols}} <-
-                  Postgrex.query(conn, sql, [uuid_to_binary(lease_id)]),
+                  Postgrex.query(conn, sql, [
+                    uuid_to_binary(lease_id),
+                    substrate_state,
+                    substrate_observed_at
+                  ]),
                 lease = row_to_map(cols, row),
                 :ok <- log_event(conn, "renew", lease) do
              :ok
