@@ -950,6 +950,288 @@ v0.7 tentatively chose option (a) (new scheme `file-inode://`). v0.8 council CON
 4. Rejects NUL bytes per §7.12.2.
 5. Returns the canonical form (Pydantic auto-canonicalizes; this trades visibility-of-drift for caller convenience). Operator note: this hides bugs where callers pass non-canonical and don't realize. v0.8 picks auto-canonicalize for UX; if drift becomes a debug problem, switch to validate-only-and-reject in v1.
 
+### 7.13 Resident heartbeat surface — substrate-state separation from monitor_decision — TENTATIVE in v0.11 (revised post-council)
+
+#### 7.13.1 Motivation
+
+The 2026-05-01 Steward auto-pause incident (KG discovery 2026-05-03T20:12:19; root-cause council 2026-05-03) exposed a class of bugs that no amount of monitor_decision tuning can fix: residents report substrate state through the same EISV pipeline that gates *agent* decisions. Steward's CPU-idle sensor was anti-correlated by construction (`alpha = 1.0 - beta`), the mapper routed alpha to I and beta to E, and on an idle Pi the resulting V_ss = 0.19 sat past the 0.15 void threshold. `src/monitor_decision.py:94` (Priority 2: `void_active=true` → pause) fired and Steward stopped syncing.
+
+The interim fix bundle (move alpha to E, raise resident void threshold, add `VOID_THRESHOLD_BY_CLASS` map) is mathematically insufficient — anima baseline asymmetry alone (clarity > warmth) gives V_ss ≈ 0.19, still past 0.15. The deeper architectural issue is that **residents are reporting substrate liveness, not agent intent**. They have no business going through `monitor_decision`'s pause/proceed gate at all.
+
+The lease plane is the right place to absorb this signal because it already has a per-resident addressable surface (`resident:/sentinel`, `resident:/steward`, etc., per §3.3) and a heartbeat-based liveness model (§7.5). What it lacks is a structurally separate field for the resident's substrate sample.
+
+#### 7.13.1.1 Ontology test (added v0.11 post-council, refined v0.11.2)
+
+The agent-state vs substrate-state distinction is **intrinsic, not a routing rule**. Two-clause test (revised v0.11.2 to address ack-pass B-NEW-1's "self-observation" gap):
+
+> 1. A datum is **substrate state** iff the writer is *observing* (sampling, measuring, instrumenting) a system at a chosen moment in time, regardless of whether the observed system is the writer's own internals.
+>
+> 2. A datum is **agent state** iff it describes the writer's *disposition* — what it has decided, what it intends, what it is deliberating, what readiness it is self-reporting. Disposition is not observation: a queue depth at time T is observation; "I cannot accept more work" is disposition.
+
+The test resolves on the act, not the subject. A resident sampling its own asyncio loop is doing observation (substrate), even though the subject is itself. A resident announcing "I am about to pause" is reporting disposition (agent). The 2026-05-01 incident class is specifically about observations being routed through a disposition-consuming gate (`monitor_decision`); the gate makes sense for disposition (the agent is asking governance to react to its self-report) and breaks for observation (the agent is just reporting what's there).
+
+Worked examples (v0.11.2 revised — Lumen added per ack-pass; Steward asyncio row reclassified per the test):
+
+| writer | datum | classification | reasoning |
+|---|---|---|---|
+| Steward | Pi anima EISV (warmth/clarity/presence/stability) | **substrate** | observation of an external system |
+| Steward | Steward's own asyncio loop queue depth, sync error rate | **substrate** | self-observation IS observation, not disposition (revised v0.11.2 per ack-pass B-NEW-1) |
+| Steward | "Steward sync is degraded; I am stopping at next cycle" | **agent** | disposition (self-report of intent/readiness) |
+| Watcher | edit-pattern findings on a tracked file | **substrate** | observation of external state |
+| Watcher | Watcher's own scan-cycle latency, dropped events | **substrate** | self-observation |
+| Sentinel | observed conflict counts on lease plane | **substrate** | observation |
+| Sentinel | Sentinel's own alarm-rule firing rate | **substrate** | self-observation |
+| Sentinel | "I am muting alarms because I'm in degraded mode" | **agent** | disposition |
+| Lumen (Pi-embodied) | warmth/clarity/presence/stability | **substrate** | Lumen as writer is sampling Lumen-as-substrate; the test resolves on the act of observation, not on whether subject and writer overlap |
+| Lumen | "I am withdrawing attention from this surface" | **agent** | disposition |
+| any | "I am about to pause" | **agent** | disposition, definitionally |
+
+If a resident emits a value that passes clause 1 (it's an observation), it belongs in `substrate_state` and MUST NOT be consumed by any decision class that can pause the writer (see §7.13.3 normative rule). If it passes clause 2 (it's disposition), it belongs in `agent_state` (writes through `process_agent_update` or its successor) and is consumed by `monitor_decision`.
+
+**Two known edge cases accepted with explicit deferral (v0.11.3 per ack-pass architect C-A + C-C):**
+
+- **C-A: Derived statistics (e.g., "my p99 sync error rate over the last hour") are observations under clause 1, but a future writer may reasonably ask whether a derived statistic is an "observation" or a "self-summary." Both readings are defensible; the v0.11.3 RFC accepts the ambiguity rather than forcing a tighter clause-1 wording that might exclude legitimate cases. If a future incident is caused by a derived-statistic miscategorization, the test is amended in the post-incident RFC pass.**
+- **C-C: The §7.13.3 operator exemption uses reviewer judgment to distinguish "automated decision class" from "operator-on-pager." A precise rubric (e.g., "automated iff the code path can issue an action without a human ack within the same loop iteration") would tighten this. v0.11.3 accepts reviewer-judgment-at-review-time and defers the rubric to a follow-up pass triggered by a real ambiguity case.**
+
+#### 7.13.1.2 Sensor-meta-state placement (added v0.11 post-council, addressing architect B2)
+
+A third class — sensor-meta-state — is neither substrate nor agent: "my CPU sensor returned NaN," "my probe timed out," "I am running in degraded-sensor mode." This is metadata about the writer's act of observation, not about the substrate or the writer's own disposition.
+
+**Decision (v0.11.2 — strengthened from v0.11 RECOMMENDED to CHECK-enforced after ack-pass B-NEW-2):** sensor-meta-state SHALL live under a reserved sub-key `substrate_state.sensor` of the substrate_state JSON object, **and the sensor sub-key MUST be present whenever `substrate_state` is set, with at minimum a string-valued `status` field**. Reasoning: the v0.11 draft made the sub-key RECOMMENDED, which re-creates the unenforced-doc-claim pattern that produced the 2026-05-01 layer-1 doc-lie. CHECK enforcement at the storage boundary makes "writer omitted sensor.status" a typed-error caller bug rather than a silent gap that propagates to readers.
+
+Reserved shape (CHECK-enforced minimum + RECOMMENDED extensions):
+
+```json
+{
+  "E": 0.36, "I": 0.81, "S": 0.22, "V": 0.07,
+  "sensor": {
+    "status": "healthy" | "degraded" | "failed",
+    "reason": "<short string, RECOMMENDED iff status != healthy>",
+    "last_healthy_observed_at": "<ISO-8601, RECOMMENDED iff status != healthy>"
+  }
+}
+```
+
+CHECK-enforced minimum (migration 034 — see §7.13.5): `substrate_state -> 'sensor' ->> 'status' IS NOT NULL` whenever `substrate_state IS NOT NULL`. The `reason` and `last_healthy_observed_at` fields remain RECOMMENDED rather than CHECK-enforced because they are conditional on `status != 'healthy'` and a CHECK encoding the conditional dependency would couple the schema too tightly to today's vocabulary; reader-side tooling that depends on them MUST handle their absence gracefully.
+
+Future tooling that wants to alarm on "all residents whose sensors are degraded" reads `substrate_state -> 'sensor' ->> 'status' = 'degraded'` against the substrate-freshness index defined in §7.13.5. This closes the unowned-class gap that produced the 2026-05-01 incident's layer-1 doc-lie pattern (CPU sensor labeled "Memory headroom" in CLAUDE.md).
+
+#### 7.13.2 Wire shape — dedicated columns, not payload overload
+
+Two new nullable columns on `lease_plane.surface_leases` (migration 034 — see §7.13.5):
+
+```sql
+ALTER TABLE lease_plane.surface_leases
+  ADD COLUMN substrate_state            jsonb       NULL,
+  ADD COLUMN substrate_state_observed_at timestamptz NULL;
+```
+
+**Why dedicated columns, not `intent` or `payload`:**
+
+- `intent` is human-readable author intent ("launchd plist validation", "deprecation sweep") and is referenced in operator runbooks and audit reviews. Overloading it with structured telemetry makes both uses worse.
+- `payload jsonb` (when added in a later RFC iteration) would be a generic catch-all whose schema callers can't depend on. Substrate state IS queryable liveness telemetry — the §6.1 promotion-gate pattern (`payload->>'<key>' LIKE ...`) extends naturally to `substrate_state ->> '<key>'`. Keeping it in a typed-shape column makes that contract pinnable in tests (parallels §7.2.8).
+- The separation from `monitor_decision` should be **structural** — a different column, written by a different code path, consumed by a different reader. Operators and future agents reading the schema see two distinct data flows, not one column with overloaded semantics.
+
+**`substrate_state_observed_at` distinct from `last_heartbeat_at`:** the heartbeat timestamp is when the lease was last refreshed; the substrate-state timestamp is when the resident **sampled** the underlying substrate. They diverge whenever the resident keeps the lease alive but cannot freshly sample (sensor unavailable, slow probe, etc.). Stale state is a reader concern (apply resident's natural cadence + tolerance); the writer always overwrites with the latest sample.
+
+**Update path:** extend `acquire` and `lease_renew`/`lease_heartbeat` HTTP endpoints to accept optional `substrate_state` (jsonb) and `substrate_state_observed_at` (ISO-8601 timestamp) fields. Existing callers omit them; new resident callers populate them. Same call-site, no separate `report_substrate_state` endpoint — the heartbeat IS the natural state-observation moment for residents.
+
+**Schema for `substrate_state` JSON:** intentionally not enumerated in the RFC. Each resident reports what's appropriate for its substrate. Strong RECOMMENDATION: residents that compute EISV-equivalent telemetry SHOULD emit `{"E": ..., "I": ..., "S": ..., "V": ...}` keys at top level so future readers can align. Free-form fields permitted alongside. The point is decoupling from `monitor_decision`, **not** enforcing a uniform schema.
+
+#### 7.13.3 What `substrate_state` is *not*
+
+- **Not an agent state vector.** The `core.agent_state` table remains the canonical store for agent EISV; `monitor_decision` continues reading from there for non-resident agents. Residents will stop writing to `core.agent_state` once their port lands (§7.13.6).
+- **Not a metrics replacement.** PromEx remains the live operational metrics surface (§7.6). `substrate_state` is durable, queryable, and per-resident-addressable; PromEx is sample-and-forget and aggregate.
+- **Not consumed by any *automated* decision class that can pause an agent.** This is a normative **MUST**, not a current-system claim. The rule scopes to **automated** consumers: `monitor_decision` (the originator of the 2026-05-01 incident), any future `monitor_*_decision` module, any handler returning `action: pause` based on inputs, any Sentinel alarm rule whose action escalates automatically to a pause, and any future RFC-defined module of the same shape. **Adding a new automated consumer of `substrate_state` to any decision class with pause authority requires an RFC amendment** to §7.13. Without that amendment, a reviewer MUST block the change. This rule exists to prevent re-creating the 2026-05-01 incident class with a different label by routing substrate state through a renamed-but-isomorphic gate.
+
+  **Operator exemption (added v0.11.2 per ack-pass C-NEW-3):** the human operator IS a consumer of substrate_state for the purpose of operator-paced canary classification (§7.13.4) and, more broadly, for any pause-policy decision the operator personally makes. The exemption is explicit because the operator can pause agents, and §7.13.4's classification step ("substrate-class void-pause vs. infrastructure-class") requires the operator to read `substrate_state` (or its absence) in deciding whether the next operator-paced step is safe. The operator is not an "automated decision class": every operator action is logged, reviewable, and reversible at human cadence. The MUST applies to code paths, not to humans.
+
+  Reading `substrate_state` for telemetry, dashboards, observability alarms (non-pausing), debugging, retroactive analysis, the §7.13 freshness index, writers' own self-inspection, and operator-paced policy decisions is all permitted and intended.
+
+#### 7.13.4 Steward canary plan
+
+Steward (Pi→Mac eisv_sync) ports first, alone, before any other resident. Rationale:
+
+- **Already the operational unblock.** Steward auto-paused 2026-05-01 and remains paused as of v0.11 authoring. Porting Steward gives the operator immediate signal that the new path works without coordinating five residents at once.
+- **Cleanest "resident heartbeat" shape.** Steward's loop (`eisv_sync_task` in `unitares-pi-plugin/src/unitares_pi_plugin/handlers.py:1211`) already samples Pi state at a fixed cadence (300s) and writes a single `audit.events WHERE event_type='eisv_sync'` row per sample via `audit_logger.log_eisv_sync()` (call sites: `handlers.py:614, 1146`). Steward does NOT currently emit through `process_agent_update`; it writes directly to `audit.events`. Mapping that to `lease.acquire(surface_id='resident:/steward', substrate_state={...})` + `lease.renew(...)` is direct: add lease-plane emission as a net-new write path alongside the existing direct audit write (NOT as an adaptation of `process_agent_update`).
+- **Concrete failure mode.** Steward's failure mode (silent pause via void) is the canonical incident this RFC addresses. Validation of the canary is "Steward stays running through one full sustained-operation cycle with non-trivial substrate variation."
+
+**Canary expansion criterion (v0.11.2 — fully reworked after ack-pass BLOCK-B + Claims 10 + 11):**
+
+The v0.11 first draft pointed the criterion at `lease_plane.surface_leases.substrate_state`, but that column is overwritten on every renew and has no history — a stddev query returns NULL or a single-value variance, not a window distribution. The §7.13.4 dual-run authority assignment makes `audit.events WHERE event_type='eisv_sync'` the authoritative source during canary, and **the criterion queries that path** (it has the time-series shape the criterion needs).
+
+The operator may approve expansion to the remaining four residents (Watcher / Sentinel / Vigil / Chronicler) when ALL of the following hold against a 7-day measurement window selected by the operator:
+
+| sub-criterion | operational definition | source |
+|---|---|---|
+| Sustained operation | ≥ 6.5 of the 7 days have at least 1 row per Steward's nominal cadence interval (300s); brief (<6h) Pi reboots or planned-maintenance windows are exempt and named by the operator at the time | `audit.events WHERE event_type='eisv_sync' AND agent_id='<steward_uuid>'` rows over the window |
+| Non-trivial substrate variation (with partial-flatline detection, v0.11.3 per ack-pass C-D) | (i) `stddev((payload->'eisv_mapped'->>'V')::float) ≥ 0.005` over the full 7-day window, AND (ii) `stddev` of every rolling 24-hour sub-window within the 7-day window also ≥ 0.005. **Floor calibrated to live data** (added v0.11.2 per ack-pass Claim 11): the §7.5 v0.9 measurement window (2026-04-22 → 2026-04-29 04:00, n=1840 syncs, live-verified twice) shows pre-pause stddev(V) = 0.00935. The 0.005 floor is ≈ 50% of that observed baseline. **Sub-window requirement** (added v0.11.3): the 7-day-only stddev passes if Steward operates normally for 6 days then flatlines for 1 day; requiring every 24h sub-window to also clear 0.005 catches partial-flatline failure modes that the cumulative metric masks | `audit.events WHERE event_type='eisv_sync'` (`payload->'eisv_mapped'->>'V'` per the live schema; verified) |
+| No substrate-class void-pause | Zero rows in `audit.events` matching `event_type='auto_attest' AND (payload->>'decision')='pause' AND (payload->>'void_active')::boolean = true AND agent_id = '<steward_uuid>'` over the window. **Predicate reworked** (v0.11.2 per ack-pass Claim 10) and **verified live in v0.11.3 ack-pass**: 221 rows in the corpus over the last 60 days satisfy `decision='pause' AND void_active='true'`, confirming the predicate matches in principle. Note: although `void_active` is computed inside `details` in `governance_monitor.py:991`, `log_auto_attest` flattens it into the top-level payload (verified by the 221-row return). 26% of `decision='pause'` rows have `void_active=false` (77/298 over 60 days) — those are non-substrate-class pauses (e.g., coherence-below-critical, high-risk-verdict, LOW-basin per `monitor_decision.py:43-58` priority order) and the predicate correctly excludes them | `audit.events` |
+| Infrastructure-class pauses are exempt | A Steward pause caused by DB outage, cert expiry, network partition, or any non-substrate-class root cause does NOT count against the criterion. The operator MUST classify each pause at the time it happens (writing the classification to a structured operator log entry referenced by timestamp); ambiguous classifications block expansion until resolved | operator log + `audit.events` `payload->>'reason'`. Note: this step is the operator-as-consumer case explicitly exempted in §7.13.3 |
+
+Each subsequent resident port is a separate operator-decision, not a single batch flip.
+
+**Dual-run authority during canary (addressing architect C4):**
+
+During canary, Steward writes substrate samples to **both** paths:
+
+1. `lease_plane.surface_leases.substrate_state` (new path, observational-only during canary)
+2. `audit.events WHERE event_type='eisv_sync'` (existing path, **authoritative during canary**)
+
+If the two paths disagree about a substrate sample (timing, content, presence/absence), `audit.events` is treated as ground truth for any reader that asks "what did Steward observe at time T." This authority assignment exists to prevent silent divergence: a downstream reader that picked the wrong source would either reproduce the 2026-05-01 incident class (substrate flowing into a pause gate) or mask a new bug. The lease-plane path is intentionally observational-only until it has been validated against the existing path's traffic for the full 7-day canary window.
+
+Authority **flips** at PR 8 (post-canary): `audit.events WHERE event_type='eisv_sync'` writes stop, and `lease_plane.surface_leases.substrate_state` becomes authoritative.
+
+**Flip mechanism (v0.11.2; deployment surface specified v0.11.3 per ack-pass code-reviewer NIT + architect N-B).** The flip is per-resident, gated by an explicit per-resident config flag. The v0.11 first draft said "removes the `audit_logger.log_eisv_sync()` call sites" but those call sites in `unitares-pi-plugin/src/unitares_pi_plugin/handlers.py:614 (manual sync handler `handle_pi_sync_eisv`), :1146 (Steward periodic loop body `sync_eisv_once`)` are not per-resident-conditional today — a code-level removal would flip authority for ALL `eisv_sync` writers simultaneously. PR 8 instead adds a config check `AUDIT_EISV_SYNC_ENABLED_RESIDENTS` gating the existing call sites, so each resident's flip is independent.
+
+**Config surface:** `AUDIT_EISV_SYNC_ENABLED_RESIDENTS` is an environment variable read by the Pi-side launchd plist that runs the unitares-pi-plugin process (the same mechanism that already injects `LEASE_PLANE_BEARER_TOKEN` etc.). Format: comma-separated list of resident names whose `eisv_sync` writes are STILL ENABLED, e.g., `AUDIT_EISV_SYNC_ENABLED_RESIDENTS="steward,watcher"`. **Default-deny when the variable is unset OR a resident name is missing from the list** (architect N-B): missing key means "no audit-write," which is the safer default once the lease plane substrate-state path is the authoritative source. Per-resident flip = remove that resident's name from the env var + `launchctl kickstart -k` the plist, no code change. Removal of the call sites entirely happens only when ALL residents have flipped and the env var is empty across two operator-validation cycles (a final cleanup PR after the last per-resident flip).
+
+**Each subsequent resident port carries its own dual-run window** with the same authority assignment. Watcher's PR 4 ports Watcher to lease-plane substrate_state, leaves Watcher's existing telemetry path authoritative until Watcher's individual canary criterion is met, and only then flips Watcher's per-resident config flag. Same for Sentinel/Vigil/Chronicler.
+
+This preserves the §7.5 v0.9 measurement methodology (audit-mining for heartbeat gap distribution) for the duration of the canary, and gives the operator a parallel-run signal if the new lease-plane path silently breaks.
+
+#### 7.13.5 Migration 034
+
+```sql
+-- 034_lease_plane_substrate_state.sql
+
+ALTER TABLE lease_plane.surface_leases
+  ADD COLUMN substrate_state             jsonb       NULL,
+  ADD COLUMN substrate_state_observed_at timestamptz NULL;
+
+-- Freshness queries: "show me all residents with stale substrate state"
+-- become an indexed scan over the partial index. The substrate_state_must_be_object
+-- CHECK below makes "IS NOT NULL → is object" a structural guarantee, so the
+-- index predicate doesn't need a redundant jsonb_typeof guard (NIT-1 from ack-pass).
+CREATE INDEX idx_surface_leases_substrate_freshness
+  ON lease_plane.surface_leases (substrate_state_observed_at DESC)
+  WHERE substrate_state IS NOT NULL;
+
+-- Defensive CHECK 1: pair-coherence. If substrate_state is set, observed_at
+-- must also be set (and vice versa). Prevents partial-write states that
+-- confuse readers. Triggers as :check_violation; mapped to typed-absence
+-- error 422 schema_invalid by the renew/heartbeat handler (NOT 503; see
+-- the response-shape note below — addresses code-reviewer CONCERN-2).
+ALTER TABLE lease_plane.surface_leases
+  ADD CONSTRAINT substrate_state_observed_pair_coherent
+  CHECK (
+    (substrate_state IS NULL AND substrate_state_observed_at IS NULL)
+    OR
+    (substrate_state IS NOT NULL AND substrate_state_observed_at IS NOT NULL)
+  );
+
+-- Defensive CHECK 2: substrate_state is meaningful only on resident:/ leases.
+-- A non-resident writer that accidentally populates substrate_state is a
+-- caller bug; the DB rejects the write at the storage boundary. Addresses
+-- live-verifier CONCERN. surface_kind is the DB-generated column from
+-- migration 026 (split_part(surface_id, ':', 1)), so this CHECK is
+-- structurally bound to surface_id and cannot drift.
+ALTER TABLE lease_plane.surface_leases
+  ADD CONSTRAINT substrate_state_only_on_resident_kind
+  CHECK (
+    substrate_state IS NULL OR surface_kind = 'resident'
+  );
+
+-- jsonb-shape guard (addresses architect Q2 partial resolution + code-reviewer
+-- CONCERN-1): substrate_state, when set, MUST be a JSON object (not array,
+-- string, number, or bare null).
+ALTER TABLE lease_plane.surface_leases
+  ADD CONSTRAINT substrate_state_must_be_object
+  CHECK (
+    substrate_state IS NULL OR jsonb_typeof(substrate_state) = 'object'
+  );
+
+-- Sensor sub-key minimum shape (added v0.11.2; vocabulary enforced v0.11.3 per
+-- ack-pass C-B + numeric-passes-CHECK CONCERN): when substrate_state is set,
+-- the 'sensor' sub-key MUST be a JSON object with a string-typed 'status'
+-- field whose value is one of 'healthy', 'degraded', 'failed'. Closes the
+-- unenforced-doc-claim pattern at TWO levels: presence (status field exists)
+-- AND vocabulary (status value is in the documented enum). The v0.11.2 draft
+-- only enforced presence, leaving a writer free to ship status='ok' or
+-- status=123 — re-creating the doc-lie pattern at the value-vocabulary level.
+-- Uses '->' (not '->>') for status to get jsonb_typeof checking, then '->>'
+-- for the value comparison.
+ALTER TABLE lease_plane.surface_leases
+  ADD CONSTRAINT substrate_state_has_sensor_status
+  CHECK (
+    substrate_state IS NULL
+    OR (
+      jsonb_typeof(substrate_state -> 'sensor') = 'object'
+      AND jsonb_typeof(substrate_state -> 'sensor' -> 'status') = 'string'
+      AND (substrate_state -> 'sensor' ->> 'status')
+          IN ('healthy', 'degraded', 'failed')
+    )
+  );
+```
+
+Migration is purely additive (NULLABLE columns + index + three CHECK constraints). No backfill. No dual-mode period. Existing rows have both columns NULL and remain valid under all three CHECKs. Phase A traffic continues with no changes.
+
+**Trigger interaction (addresses code-reviewer BLOCK-2):** the existing `enforce_immutable_lease_fields` trigger (created in `db/postgres/migrations/024_lease_plane.sql:49-69`, fires `BEFORE UPDATE`) guards `holder_kind`, `holder_class`, and `original_ttl_s`. It does NOT guard the new substrate columns and remains safe under the new write path. Resident heartbeats (cadence 300s × 5 residents = ~1,440 trigger invocations/day worst case) fire the trigger as overhead; the trigger function is short and predicate-only, no measurable cost. Future extensions to the trigger MUST explicitly opt out of guarding substrate_state columns or migration 034 has to be revisited.
+
+**Response-shape contract for CHECK violations (v0.11.2 — typed-error spec made implementable, addresses code-reviewer BLOCK-A):** the `lease_renew`/`lease_heartbeat` Elixir handler MUST catch the Postgrex error pattern `%Postgrex.Error{postgres: %{code: :check_violation, constraint_name: name}}` (Postgrex exposes the violated constraint name in `postgres.constraint_name`; libpq populates it for CHECK violations) and return HTTP 422 with the typed-absence shape:
+
+```elixir
+{:ok, false, error: "schema_invalid", detail: name}
+```
+
+`name` is the verbatim constraint name string — one of `"substrate_state_observed_pair_coherent"`, `"substrate_state_only_on_resident_kind"`, `"substrate_state_must_be_object"`, `"substrate_state_has_sensor_status"`. Callers parse `detail` to know which contract was violated.
+
+The catch MUST happen at the **router layer** (`http_router.ex` `renew_or_heartbeat/1` and `acquire/1`), not in `repo.ex` — `repo.ex` already propagates the raw `%Postgrex.Error{}` via `{:error, e}` (see existing pattern at `repo.ex:173`). Adding the catch in the router preserves the existing repo error-propagation shape and keeps the typed-error mapping in one place.
+
+It MUST NOT fall through to the generic `Plug.ErrorHandler.handle_errors` 503 path — that masking would let a writer bug appear as a transient lease-plane outage and silently stop substrate updates.
+
+**Determinism note (revised v0.11.3 per ack-pass code-reviewer BLOCK):** when a write violates two CHECKs simultaneously (e.g., a non-resident lease writing non-object jsonb), PostgreSQL evaluates check constraints in OID order; under same-transaction definition order this matches the order in migration 034, but the order across non-same-transaction states (post-migration retry, in-place restore from backup) is **not guaranteed by the SQL standard or PG documentation**. Earlier drafts claimed determinism; v0.11.3 retracts that claim. Callers MUST tolerate any of the four constraint names appearing in `detail` for a multi-violation request; the §9 test gate (c) MUST verify that `detail` contains a valid constraint name (one of the four), NOT pin a specific name. This is acceptable because the Pydantic field_validator in `AcquireRequest` (§7.13.6 PR 1 touch list) catches most malformed requests client-side before they reach the DB; the DB-side typed error is for the rare case where a caller bypasses Pydantic. This handler change is part of PR 1 (see §7.13.6).
+
+**No grammar or scheme changes.** `resident:/` already exists in the migration-026 grammar CHECK and in canonicalize.ex; this RFC adds substrate-state columns to the table all leases live in, without touching the surface-id grammar.
+
+#### 7.13.6 Implementation arc (informational; not RFC contract)
+
+The implementation arc downstream of v0.11 RFC convergence:
+
+1. **PR 1 — Migration 034 + Pydantic models + Elixir router/Repo extension.** Multi-site change; the RFC enumerates the touch list explicitly so the PR cannot ship a half-extended path that silently drops `substrate_state` (addresses code-reviewer BLOCK-1):
+
+   | site | file | change |
+   |---|---|---|
+   | Migration | `db/postgres/migrations/034_lease_plane_substrate_state.sql` | New file. Adds 2 NULLABLE columns + freshness index + 3 CHECK constraints per §7.13.5. |
+   | Elixir Repo SQL — renew | `elixir/lease_plane/lib/unitares_lease_plane/repo.ex` (`renew/1`, lines ~215-239) | UPDATE SQL extended to write `substrate_state` and `substrate_state_observed_at` from request params. Hardcoded UPDATE today; explicit column list change required. |
+   | Elixir Repo SQL — column projection | `elixir/lease_plane/lib/unitares_lease_plane/repo.ex` (`@select_lease_columns`, lines ~26-32) | Add `substrate_state, substrate_state_observed_at` to the SELECT projection so all lease-returning paths see the new columns. |
+   | Elixir router — acquire | `elixir/lease_plane/lib/unitares_lease_plane/http_router.ex` (`extract_acquire_params`) | Accept optional `substrate_state` (jsonb decoded from request body) + `substrate_state_observed_at` (ISO-8601 string parsed to timestamptz). Both default to NULL. |
+   | Elixir router — renew | `elixir/lease_plane/lib/unitares_lease_plane/http_router.ex` (`renew_or_heartbeat/1`, lines ~258-276) | Same optional-params extension as acquire. |
+   | Elixir router — response shape | `elixir/lease_plane/lib/unitares_lease_plane/http_router.ex` (`present_lease/1`, lines ~422-442) | Include `substrate_state`, `substrate_state_observed_at` in the response map so callers reading via `/v1/lease/status` see what they wrote. |
+   | Elixir router — typed-error path | `elixir/lease_plane/lib/unitares_lease_plane/http_router.ex` (acquire/renew handlers + repo error mapping) | Catch `%Postgrex.Error{postgres: %{code: :check_violation}}` and return HTTP 422 typed-absence per §7.13.5 response-shape contract. NOT 503. |
+   | Pydantic — acquire | `src/lease_plane/models.py` (`AcquireRequest`) | Add `substrate_state: dict | None = None` and `substrate_state_observed_at: datetime | None = None`, with field_validators rejecting non-object jsonb and rejecting partial-pair (one set, other unset) caller-side before HTTP. |
+   | Pydantic — renew/heartbeat | `src/lease_plane/models.py` (`RenewRequest`/`HeartbeatRequest`, lines ~106-117) | Same extension as AcquireRequest. |
+   | Pydantic — lease record | `src/lease_plane/models.py` (`LeaseRecord`) | Add `substrate_state: dict | None = None` and `substrate_state_observed_at: datetime | None = None` so client-side reads see populated fields. |
+   | Outbox event projection | `elixir/lease_plane/lib/unitares_lease_plane/repo.ex` (`tool_usage_payload/1`) | **NO change** — substrate_state is intentionally NOT projected into `audit.tool_usage.payload` (see Q5 resolution in §7.13.7). Documented as an explicit non-change in the PR description. |
+   | New §9 Phase B test gate | `tests/test_lease_plane_substrate_state.py` (Python) + `elixir/lease_plane/test/unitares_lease_plane_test.exs` (Elixir, audit-projection contract pinned analogous to §7.2.8) | Required tests: (a) `acquire(substrate_state={...})` persists; (b) `renew(substrate_state={...})` persists (regression test for BLOCK-1); (c) CHECK violations return 422 not 503 with `detail` containing one of the four valid constraint names — test asserts `detail in {"substrate_state_observed_pair_coherent", "substrate_state_only_on_resident_kind", "substrate_state_must_be_object", "substrate_state_has_sensor_status"}`, NOT a specific name (per typed-error determinism note in §7.13.5); (d) substrate_state on a non-resident lease is rejected by `substrate_state_only_on_resident_kind`; (e) substrate_state without a `sensor.status` sub-key OR with a `status` value not in `{"healthy","degraded","failed"}` is rejected by `substrate_state_has_sensor_status` (added v0.11.2 with the new CHECK; vocabulary tightened v0.11.3); (f) `present_lease/1` (status path) returns substrate_state + substrate_state_observed_at after renew with substrate_state — guards against partial implementation that updates Repo SQL but not router response shape (added v0.11.2 per ack-pass CONCERN-2); (g) class-aware void-threshold test confirming residents are exempted, **marked `pytest.mark.xfail(strict=True, reason="gates on PR 3 landing")`** (corrected v0.11.3 per ack-pass code-reviewer CONCERN — parking a test in PR 1 without xfail breaks CI; xfail-strict flips to pass when PR 3 lands, surfacing both the dependency and the resolution); (h) reader-side handling: query rows with `sensor.status='degraded'` and assert tooling handles NULL `last_healthy_observed_at` gracefully (added v0.11.3 per ack-pass architect N-A — covers the conditional-RECOMMENDED-fields gap). |
+
+2. **PR 2 — Steward port (unitares-pi-plugin side).** Steward currently emits substrate samples via `audit_logger.log_eisv_sync()` from `unitares-pi-plugin/src/unitares_pi_plugin/handlers.py:614 (manual sync handler) and :1146 (Steward periodic loop body)`, called from `eisv_sync_task` at `handlers.py:1211`, started by `__init__.py:95`. PR 2 adds a **net-new** lease-plane emission path alongside the existing direct audit write — it does NOT adapt `process_agent_update` (Steward does not currently use `process_agent_update`; the path simply does not exist).
+
+   The new emission calls `lease.acquire(surface_id='resident:/steward', holder_agent_uuid=<STEWARD_UUID>, substrate_state={...}, substrate_state_observed_at=...)` once on Steward startup, then `lease.renew(...)` on every subsequent 300s sync cycle. Continues writing `eisv_sync` audit events (dual-run, with `audit.events` authoritative per §7.13.4).
+
+   **`<STEWARD_UUID>` MUST be the substrate-earned hardcoded UUID** for Steward (per `docs/ontology/identity.md` substrate-anchored identity pattern + `CLAUDE.md` "Substrate-anchored agents... may use a hardcoded UUID across restarts"), **not a freshly minted process-instance UUID** (added v0.11.2 per ack-pass CONCERN-3). The reason: `acquire` is idempotent on `(surface_id, holder_agent_uuid)`; a fresh per-restart UUID would hit `held_by_other` against the prior Steward's still-valid lease (TTL 1000s per §7.5 v0.9 = ~17min wait), locking Steward out of its own lease for up to 17 minutes on every launchd restart. The hardcoded substrate-earned UUID makes restart re-acquire idempotent. **PR 2 introduces a "Resident UUIDs" section to CLAUDE.md and records Steward's UUID there as the first entry** (corrected v0.11.3 per ack-pass live-verifier REFUTED — the section does not exist today; CLAUDE.md only documents the *pattern* in identity.md, not specific UUID values).
+3. **PR 3 — Class-aware void threshold.** Add `VOID_THRESHOLD_BY_CLASS` map keyed on agent class (`resident` vs other), and thread the agent-class lookup into `config.get_void_threshold(history, adaptive=True)` (defined in `config/governance_config.py:219` as `@staticmethod` on `GovernanceConfig`; **parameter name is `history`, not `V_history`** — corrected v0.11.3 per ack-pass live-verifier REFUTED) so `src/monitor_void.py:21` (the call from `check_void_state`) can return a per-class threshold. The 2026-05-03 Steward incident memory specifically notes that "the originally proposed runtime override is bypassed by `check_void_state`" — the fix has to land at `config.get_void_threshold` rather than at the call site. Test (in §9 row above): a resident-class agent with V_ss = 0.19 does NOT trip `check_void_state`, while a non-resident agent at the same V_ss DOES trip it. **This PR is interim safety net** — it closes the void-pause path even before all residents have ported to lease-plane substrate_state. **Sunset condition (architect N1):** PR 3's class-aware threshold logic SHALL be removed in PR 8 (or its successor) once all residents are emitting substrate_state via the lease plane and no resident remains in the `monitor_decision` pipeline. Carrying it indefinitely encodes "residents have a different threshold for the same broken pipeline" as if that were the bug — the bug was the mapping, not the threshold.
+4. **PRs 4–7 — Remaining residents port** (one per PR, post-canary): Watcher, Sentinel, Vigil, Chronicler. Order matches mass-of-pause-risk per resident (operator picks). Each PR replicates PR 2's shape: net-new lease-plane emission alongside existing telemetry path, dual-run, observational-only on the new path until that resident's individual canary criterion is met.
+5. **PR 8 — Steward `eisv_sync` audit dual-write removal + dual-run authority flip.** Only after ≥7 sustained-operation days post-canary, per §7.13.4 expansion criterion. Per resident, not bundled. Removes the `audit_logger.log_eisv_sync()` call in `handlers.py:614, 1146`; flips authoritative source from `audit.events WHERE event_type='eisv_sync'` to `lease_plane.surface_leases.substrate_state`. Also triggers PR 3 sunset for that resident's class.
+
+PRs 1–3 are required before any production resident is paused via the new path. PR 4+ are operator-paced. PR 3 is interim safety; PR 8 is the proper closure.
+
+#### 7.13.7 Open questions and council-pass resolutions
+
+**Resolved in v0.11 post-council:**
+
+- **Q1 — RESOLVED in favor of the dedicated `substrate_state_observed_at` column** (architect N2). The trade is asymmetric: one column + CHECK is cheap; semantic clarity is expensive to recover later. `last_heartbeat_at` is when the lease was refreshed (proves liveness of the writer); `substrate_state_observed_at` is when the writer sampled the substrate (proves freshness of what the writer reported). They diverge whenever the writer is alive but the substrate observation is stale (slow probe, sensor failure, retry path). Conflating them would silently mask sensor-meta-state failures of the kind §7.13.1.2 exists to surface.
+
+- **Q3 — RESOLVED in favor of operator-judgment-with-machine-readable-evidence** (architect C2). §7.13.4 makes each sub-criterion a precise SQL query against existing tables (heartbeat history, substrate variation stddev, substrate-class void-pause count, infrastructure-class pause exemption tagging). The operator runs those queries (or a follow-up runbook script reads them) and then makes the call. Pure operator-judgment was ambiguous; pure automation would either over-fit the criterion or require operator override anyway when an unexpected pause class appears.
+
+- **Q5 — RESOLVED as N/A by §6.1's existing carve-out + structural placement** (architect C3, code-reviewer CONCERN-3; v0.11.2 dropped the load-volume rationalization per ack-pass C-NEW-4). `substrate_state` lives on `lease_plane.surface_leases` (the lease row itself), NOT in `audit.tool_usage.payload` (the §7.2.8 projection). §6.1 criterion 5 is about audit-side LIKE-predicates against the projected payload; it is the wrong query shape for substrate state. The implementation arc PR 1 explicitly does NOT extend `tool_usage_payload/1` to include `substrate_state`. Future tooling that wants resident-substrate audit history queries `lease_plane.surface_leases` directly (current value) or `audit.events WHERE event_type='eisv_sync'` (during the dual-run canary, per §7.13.4). This is a deliberate structural decoupling: substrate-state telemetry and lease-event audit serve different consumers and live on different tables.
+
+**Still open for council Q&A (genuinely undecided):**
+
+- **Q2.** Should `substrate_state` JSON have any *additional* enforced shape beyond "MUST be a JSON object" (now enforced by migration 034's `substrate_state_must_be_object` CHECK)? E.g., MUST have `{E, I, S, V}` keys, MUST include `sensor.status`. The §7.13.1.2 reserved shape is RECOMMENDED but not CHECK-enforced. Trade: future-readability vs. caller flexibility. Defaulting to "no further enforcement" means a misbehaving writer can ship `substrate_state = {"oops": null}` and pass all DB constraints, with the bug only surfacing at reader-side tooling. Defaulting to "enforce {E, I, S, V}" couples the schema to today's substrate model and forecloses non-EISV substrate sensors (e.g., a future resident reporting only `{cpu_idle_pct: 0.7, sensor: {...}}`).
+
+- **Q4.** Beyond the dual-run authority assignment in §7.13.4 (audit.events authoritative during canary, lease-plane observational), is there a class of bug that the dual-run *itself* introduces? E.g., a dual-write transaction that fails on one path and succeeds on the other leaves disagreeing snapshots. Specifically: should each Steward sync wrap the audit write + lease.renew in a single application-level transaction with rollback on partial failure, or accept that the two paths can drift by ≤1 cycle and let the operator detect via §7.13.4 monitoring?
+
 ## 8. Concerns / counter-arguments / minority views
 
 ### 8.1 "BEAM has nil too. Null bugs aren't OTP-shaped."
@@ -1035,6 +1317,7 @@ Each row below is a Phase A blocker. All tests live under `tests/test_lease_plan
 - [x] **§7.2.9** — `unitares_doctor.py` extended to lint that no Elixir source mentions a scheme not in the live DB CHECK. Implemented as `check_elixir_scheme_grammar_lint` (`scripts/dev/unitares_doctor.py:313`). Resolved v0.10.
 - [ ] **§7.11** council pass on the 30-day-drain tentative before any production scheme is deprecated.
 - [ ] **§7.12.4** v1 RFC opening: weigh option (a) new scheme `file-inode://` vs option (b) modifier `?canon=inode` explicitly with the asymmetric-cost framing v0.8 surfaces. v0.8 explicitly does NOT add `?`-banning CHECK in migration 026 — both options remain viable for v1.
+- [ ] **§7.13** Migration 034 ships (substrate_state + substrate_state_observed_at columns + pair-coherence CHECK + freshness index). Required before any resident port. Tracks v0.11 RFC convergence; no code lands until council passes.
 
 ## 10. Runway tradeoff (operator decision, not technical)
 
@@ -1048,6 +1331,58 @@ This is a 4-8 week spike. It trades against:
 The technical case is strong (three independent reviewers converged). The strategic case is the operator's call. If shelved, file this RFC as captured-decision so the next session doesn't re-litigate the substrate question from scratch.
 
 ## 11. Versions / changelog
+
+- **v0.11 (2026-05-03, drafted + revised three times same day across three council passes):** §7.13 added — Resident heartbeat surface + substrate-state separation from `monitor_decision`. Triggered by 2026-05-01 Steward auto-pause incident (KG discovery 2026-05-03T20:12:19; root-cause council 2026-05-03). **TENTATIVE → operator-merge-decision** (v1 BLOCK → v0.11.2 BLOCK → v0.11.3 ack-pass converged: architect CONCERN-ONLY explicit "ship after C-B+C-D"; live-verifier CONCERN-ONLY with key live claims verified; code-reviewer 1 BLOCK on a precise determinism claim, fixed in v0.11.3). No further automated council passes scheduled — operator decides whether to merge or run a fourth pass.
+
+  **Council pass v1 (parallel, adversarial framing per `feedback_council-adversarial-prompt.md`): BLOCK on 5 items, hard CONCERN on 5.** All folded into v0.11 first revision.
+
+  **v0.11.2 ack-pass (parallel, adversarial framing): BLOCK on 6 items introduced by the v0.11 amendments themselves** — exactly the v0.3 precedent pattern (amendments introduce new bugs). All 6 BLOCKs + remaining hard CONCERNs folded in this v0.11.2 revision:
+
+  - Ontology test refined (revised v0.11.2 per ack-pass B-NEW-1) to a two-clause **observation vs disposition** test, resolving on the writer's *act* not the *subject*. The "Steward asyncio loop health" worked-example row reclassified from agent → substrate (self-observation IS observation). Lumen row added (writer = Pi-embodied substrate; test resolves cleanly via the act/subject separation).
+  - Sensor sub-key promoted from RECOMMENDED → CHECK-enforced (`substrate_state_has_sensor_status` constraint requires `substrate_state -> 'sensor' ->> 'status'` to be present whenever `substrate_state IS NOT NULL`). Closes the unenforced-doc-claim pattern that produced the 2026-05-01 layer-1 doc-lie.
+  - Typed-error spec made implementable (per ack-pass BLOCK-A): `Postgrex.Error{postgres: %{code: :check_violation, constraint_name: name}}` is the catch shape; `name` is the verbatim constraint string as `detail`. Catch happens at router layer, not repo. CHECK firing-order note added.
+  - Canary criterion fully reworked (per ack-pass BLOCK-B + Claims 10 + 11): the v0.11 first draft pointed at `lease_plane.surface_leases` (mutable overwrite column, no history → query unexecutable) and used `payload->>'sub_action'='void_pause'` (key doesn't exist in live `auto_attest` rows) and `stddev(V) ≥ 0.02` (2.1× the live corpus stddev of 0.00935 → never satisfied). Reworked: queries `audit.events WHERE event_type='eisv_sync'` (the dual-run authoritative source), uses real keys `decision='pause' AND void_active=true`, lowers floor to 0.005 (≈ 50% of live baseline, achievable but rules out flatline failure). All numbers calibrated against live data via live-verifier.
+  - Operator exemption clause added to §7.13.3 normative MUST (per ack-pass C-NEW-3): the human operator IS a permitted consumer of substrate_state for operator-paced canary classification; the MUST applies to automated decision classes only.
+  - Steward identity pattern specified in PR 2 (per ack-pass CONCERN-3): hardcoded substrate-earned UUID required; fresh per-restart UUID would cause 17min `held_by_other` lockout against Steward's own prior lease (TTL 1000s).
+  - PR 8 dual-run flip mechanism specified (per ack-pass C-NEW-1): per-resident config flag (`AUDIT_EISV_SYNC_ENABLED_RESIDENTS`) gates each removal; final cleanup PR after the last per-resident flip.
+  - §9 test gates expanded: status-after-renew assertion (per ack-pass CONCERN-2) and sensor.status CHECK assertion (per the new sensor-sub-key enforcement).
+  - Q5 rationale tightened — dropped the load-volume clause (per ack-pass C-NEW-4) leaving the structural argument standing alone.
+  - Index predicate simplified — `jsonb_typeof` guard removed (per ack-pass NIT-1) since the `substrate_state_must_be_object` CHECK makes it redundant.
+
+  **v0.11.3 ack-pass (parallel, adversarial framing): architect CONCERN-ONLY (explicit "ship after C-B+C-D"); live-verifier CONCERN-ONLY (stddev=0.00935 confirmed, predicate `decision='pause' AND void_active=true` verified live with 221 matching rows, log_eisv_sync sites confirmed at handlers.py:614 manual + :1146 periodic); code-reviewer BLOCK on one item — CHECK-evaluation-order determinism claim was unverified.** All BLOCK + CONCERN findings folded in v0.11.3:
+
+  - Sensor `status` value vocabulary CHECK-enforced (v0.11.3 per ack-pass C-B + numeric-passes-CHECK CONCERN): `substrate_state_has_sensor_status` now enforces `IN ('healthy', 'degraded', 'failed')` AND `jsonb_typeof = 'string'`. Closes the doc-lie pattern at the value-vocabulary level (v0.11.2 only enforced presence, leaving `status: "ok"` or `status: 123` to silently pass the DB).
+  - Determinism claim retracted (v0.11.3 per ack-pass code-reviewer BLOCK): the v0.11.2 text claimed PG returns the first-failing constraint deterministically based on OID order. PG does evaluate in OID order in same-transaction-state, but the SQL standard does not guarantee it across migration retries / restores. Callers MUST tolerate any of the four constraint names; §9 test gate (c) verifies `detail` is in the set, not pinned to a specific name.
+  - Canary partial-flatline detection added (v0.11.3 per ack-pass C-D): non-trivial-variation criterion now requires both 7-day stddev ≥ 0.005 AND every 24h sub-window stddev ≥ 0.005. Catches "operates normally for 6 days then flatlines for 1" failure mode the cumulative metric misses.
+  - Parameter name corrected (v0.11.3 per ack-pass live-verifier REFUTED): `config.get_void_threshold(history, adaptive=True)` — parameter is `history`, not `V_history`. Earlier draft used the wrong keyword.
+  - Steward UUID section provenance corrected (v0.11.3 per ack-pass live-verifier REFUTED): CLAUDE.md does NOT have a "resident UUIDs" section today; PR 2 introduces it as a new section, not as an addition to existing entries.
+  - Parked test (g) marked `pytest.mark.xfail(strict=True, reason="gates on PR 3 landing")` (v0.11.3 per ack-pass code-reviewer CONCERN): prevents PR 1 CI from breaking on a feature PR 3 will deliver; xfail-strict flips to pass when PR 3 lands.
+  - Test (h) added: reader-side handling of NULL `last_healthy_observed_at` when `status='degraded'` (v0.11.3 per ack-pass architect N-A — covers the conditional-RECOMMENDED-fields gap).
+  - `AUDIT_EISV_SYNC_ENABLED_RESIDENTS` deployment surface specified (v0.11.3 per ack-pass code-reviewer NIT + architect N-B): env var read by Pi-side launchd plist, comma-separated list of enabled-residents, default-deny when key missing. Per-resident flip = env var edit + `launchctl kickstart -k`, no code change.
+  - Live-verifier 60-day predicate-shape note added to §7.13.4 (v0.11.3): `void_active` is computed inside `details` in `governance_monitor.py:991` but `log_auto_attest` flattens it to top-level (verified by 221-row return). 26% of `decision='pause'` rows have `void_active=false` and correctly fall outside the substrate-class predicate.
+  - Lumen redundant note removed (v0.11.3 per ack-pass architect N-C): Lumen worked-example row passes the test cleanly; the prose note was re-litigating without adding new content.
+  - Two architect CONCERNs accepted with explicit deferral (v0.11.3): C-A (derived-statistic ambiguity in clause 1) and C-C (operator-exemption rubric) accepted as known-residual with explicit deferral language at the end of §7.13.1.1. Both are quality-of-judgment items rather than implementation blockers; trigger for re-opening is a real ambiguity case.
+
+  *Material contents (v0.11 as revised):*
+
+  - **Wire shape** — two new nullable columns on `lease_plane.surface_leases`: `substrate_state jsonb` and `substrate_state_observed_at timestamptz`. **Three CHECK constraints** (revised from one per code-reviewer CONCERN-1 + live-verifier CONCERN): pair-coherence; resident-kind-only (substrate_state forbidden on non-resident leases); jsonb-object-only (rejects bare null/scalar). **Freshness index** (`WHERE substrate_state IS NOT NULL AND jsonb_typeof(substrate_state) = 'object'`) — `jsonb_typeof` guard added per code-reviewer CONCERN-1.
+  - **Ontology test added (§7.13.1.1, addresses architect B1)** — substrate vs agent is intrinsic, not routing-defined. Substrate = sensor for an external system; agent = writer's own internal disposition. Worked-examples table for all five residents.
+  - **Sensor-meta-state placement added (§7.13.1.2, addresses architect B2)** — reserved sub-key `substrate_state.sensor` with `{status, reason, last_healthy_observed_at}` shape. Closes the unowned-class gap from the 2026-05-01 incident's layer-1 doc-lie pattern.
+  - **Normative consumer rule (§7.13.3, addresses architect C1)** — substrate_state MUST NOT be consumed by any decision class that can pause an agent. Adding a new pause-authority consumer requires an RFC amendment. Reading for telemetry/dashboards/non-pausing alarms is permitted.
+  - **Dual-run authority assignment (§7.13.4, addresses architect C4)** — `audit.events WHERE event_type='eisv_sync'` is **authoritative** during canary; `lease_plane.surface_leases.substrate_state` is observational-only. Authority flips per-resident at PR 8 post-canary.
+  - **Canary criterion operationally precise (§7.13.4, addresses architect C5)** — sustained-operation defined as ≥6.5/7 days with ≥1 sync per 300s nominal cadence; non-trivial variation defined as `stddev(V) ≥ 0.02`; substrate-class void-pause defined as `event_type='auto_attest' AND payload->>'sub_action'='void_pause'`; infrastructure-class pauses operator-tagged and exempted.
+  - **Steward emission path corrected (§7.13.4 + §7.13.6, addresses live-verifier BLOCK)** — Steward currently writes via `audit_logger.log_eisv_sync()` at `unitares-pi-plugin/src/unitares_pi_plugin/handlers.py:614, 1146`, NOT via `process_agent_update`. PR 2 adds lease-plane emission as a **net-new** write path alongside the existing direct audit write.
+  - **PR 1 enumerated touch sites (§7.13.6, addresses code-reviewer BLOCK-1)** — explicit table of 11 code-touch sites: migration, Repo SQL (renew + @select_lease_columns), router (acquire + renew + present_lease + typed-error path), Pydantic (AcquireRequest + RenewRequest + LeaseRecord), outbox (NO change, documented as explicit non-change), and §9 test gates. Prevents shipping a half-extended path that silently drops substrate_state on renew.
+  - **Typed-error response contract for CHECK violations (§7.13.5, addresses code-reviewer CONCERN-2)** — handler MUST catch `:check_violation` and return HTTP 422 typed-absence; MUST NOT fall through to 503. Prevents writer bugs being masked as transient outages.
+  - **PR 3 sunset condition (§7.13.6 + architect N1)** — `VOID_THRESHOLD_BY_CLASS` is interim safety net, removed at PR 8 once all residents have ported. Carrying it indefinitely encodes the wrong root cause.
+  - **PR 3 file/line corrected (§7.13.6, addresses live-verifier BLOCK)** — old draft cited `monitor_void.py:909`; that file is 48 lines. Real threading point is `config.get_void_threshold(...)` called from `src/monitor_void.py:21` (`check_void_state`). Memory note "the originally proposed runtime override is bypassed by `check_void_state`" forced the fix to land at `config`, not at the call site.
+  - **Migration 034** — purely additive: NULLABLE columns + 3 CHECKs + freshness index. No backfill. No grammar/scheme changes (`resident:/` already exists in migration-026 grammar — verified live).
+
+  *Open questions for v0.11.x re-pass (resolved Q1, Q3, Q5; still genuinely open Q2, Q4):*
+  - **Q2** Should `substrate_state` JSON have any *additional* enforced shape beyond "MUST be an object"? Trade: future-readability vs. caller flexibility for non-EISV future substrate sensors.
+  - **Q4** Dual-run transaction shape — wrap audit write + lease.renew in single application-level transaction with rollback on partial failure, or accept ≤1-cycle drift and detect via §7.13.4 monitoring?
+
+  - **§9 checklist** — new Phase B prerequisite row added for migration 034 (kept; references v0.11 RFC convergence).
 
 - **v0.10 (2026-05-03):** §7.2.8 (payload-shape standardization pass) and §7.2.9 (Elixir scheme grammar lint) promoted from Phase B prerequisite checklist items → RESOLVED. Both were already functionally implemented in shipped Phase A code; v0.10 codifies the contract in the RFC and pins the §7.2.8 payload shape with a regression test so it cannot silently drift.
 
