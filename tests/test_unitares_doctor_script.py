@@ -283,3 +283,114 @@ def test_elixir_lint_excludes_deps_and_build_dirs(doctor, monkeypatch, tmp_path)
     assert result.status == doctor.Status.PASS, (
         f"vendored deps/ mentions must not trigger WARN; got {result.status}: {result.message}"
     )
+
+
+# ---------- elixir_scheme_grammar_lint (RFC §7.11.8 inverse — Phase B prep) ----------
+
+
+_GRAMMAR_CHECK_DEF = (
+    "CHECK ((surface_id ~ '^(file://|dialectic:/|resident:/|capture:/|td:/)'::text))"
+)
+
+
+def _write_canonicalize(tmp_path: Path, body: str) -> None:
+    canonicalize = (
+        tmp_path / "elixir" / "lease_plane" / "lib"
+        / "unitares_lease_plane" / "canonicalize.ex"
+    )
+    canonicalize.parent.mkdir(parents=True)
+    canonicalize.write_text(body)
+
+
+def test_grammar_lint_skips_when_psql_missing(doctor, monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+    result = doctor.check_elixir_scheme_grammar_lint("postgresql://example", tmp_path)
+    assert result.status == doctor.Status.SKIP
+    assert "psql not on PATH" in result.message
+
+
+def test_grammar_lint_skips_when_constraint_absent(doctor, monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run",
+                        lambda *a, **kw: _Proc(returncode=0, stdout=""))
+    result = doctor.check_elixir_scheme_grammar_lint("postgresql://example", tmp_path)
+    assert result.status == doctor.Status.SKIP
+    assert "surface_id_grammar" in result.message
+
+
+def test_grammar_lint_skips_when_canonicalize_ex_missing(doctor, monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run",
+                        lambda *a, **kw: _Proc(returncode=0, stdout=_GRAMMAR_CHECK_DEF))
+    result = doctor.check_elixir_scheme_grammar_lint("postgresql://example", tmp_path)
+    assert result.status == doctor.Status.SKIP
+    assert "canonicalize.ex" in result.message
+
+
+def test_grammar_lint_passes_when_elixir_matches_grammar(doctor, monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run",
+                        lambda *a, **kw: _Proc(returncode=0, stdout=_GRAMMAR_CHECK_DEF))
+    _write_canonicalize(tmp_path, '''defmodule Canonicalize do
+      @canonical_schemes ~w(file dialectic resident capture td)
+      defp dispatch("file://" <> rest), do: rest
+      defp dispatch("dialectic:/" <> rest), do: rest
+      defp dispatch("resident:/" <> rest), do: rest
+      defp dispatch("capture:/" <> rest), do: rest
+      defp dispatch("td:/" <> rest), do: rest
+    end
+    ''')
+    result = doctor.check_elixir_scheme_grammar_lint("postgresql://example", tmp_path)
+    assert result.status == doctor.Status.PASS, result.message
+    for scheme in ("file", "dialectic", "resident", "capture", "td"):
+        assert scheme in result.message
+
+
+def test_grammar_lint_fails_when_dispatch_arm_not_in_grammar(doctor, monkeypatch, tmp_path):
+    """Inverse drift: Elixir ships a dispatch arm for `foo:/` but the
+    migration-026 CHECK doesn't allow it. Every acquire would 422 in prod."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run",
+                        lambda *a, **kw: _Proc(returncode=0, stdout=_GRAMMAR_CHECK_DEF))
+    _write_canonicalize(tmp_path, '''defmodule Canonicalize do
+      @canonical_schemes ~w(file dialectic resident capture td)
+      defp dispatch("file://" <> rest), do: rest
+      defp dispatch("foo:/" <> rest), do: rest
+    end
+    ''')
+    result = doctor.check_elixir_scheme_grammar_lint("postgresql://example", tmp_path)
+    assert result.status == doctor.Status.FAIL
+    assert "foo" in result.message
+    assert "foo" in result.detail
+    assert "Grammar allows" in result.detail
+
+
+def test_grammar_lint_fails_when_wordlist_has_extra_scheme(doctor, monkeypatch, tmp_path):
+    """The `@canonical_schemes ~w(...)` wordlist is itself a scheme declaration
+    surface — adding a scheme there without a matching grammar update is the
+    same drift class as adding a dispatch arm."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run",
+                        lambda *a, **kw: _Proc(returncode=0, stdout=_GRAMMAR_CHECK_DEF))
+    _write_canonicalize(tmp_path, '''defmodule Canonicalize do
+      @canonical_schemes ~w(file dialectic resident capture td bar)
+    end
+    ''')
+    result = doctor.check_elixir_scheme_grammar_lint("postgresql://example", tmp_path)
+    assert result.status == doctor.Status.FAIL
+    assert "bar" in result.message
+
+
+def test_grammar_lint_reports_all_drifting_schemes_sorted(doctor, monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run",
+                        lambda *a, **kw: _Proc(returncode=0, stdout=_GRAMMAR_CHECK_DEF))
+    _write_canonicalize(tmp_path, '''defmodule Canonicalize do
+      defp dispatch("zeta:/" <> rest), do: rest
+      defp dispatch("alpha:/" <> rest), do: rest
+    end
+    ''')
+    result = doctor.check_elixir_scheme_grammar_lint("postgresql://example", tmp_path)
+    assert result.status == doctor.Status.FAIL
+    # Sorted: alpha before zeta.
+    assert result.message.index("alpha") < result.message.index("zeta")

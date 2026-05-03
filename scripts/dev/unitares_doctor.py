@@ -310,6 +310,112 @@ def check_elixir_deprecated_scheme_lint(db_url: str, repo_root: Path) -> CheckRe
     )
 
 
+def check_elixir_scheme_grammar_lint(db_url: str, repo_root: Path) -> CheckResult:
+    """Phase B prep (RFC §7.11.8 inverse): FAIL if canonicalize.ex mentions a
+    surface scheme NOT in the live `surface_id_grammar` CHECK constraint.
+
+    Catches the inverse drift from `elixir_deprecated_scheme_lint`. That lint
+    catches schemes deprecated-but-still-mentioned in Elixir; this one catches
+    schemes mentioned-by-Elixir-but-not-in-grammar. If Elixir ships a
+    `dispatch("foo:/" <> rest)` arm but the migration-026 CHECK doesn't allow
+    `foo:/`, every acquire of that scheme fails the storage-layer constraint
+    and the Elixir router 422s on first traffic — silent until then.
+
+    Sources of truth:
+      - Grammar: live `pg_constraint.surface_id_grammar` regex, parsed for
+        the alternation list and reduced to scheme names.
+      - Elixir mentions: `elixir/lease_plane/lib/unitares_lease_plane/canonicalize.ex`.
+        Extracts both the `@canonical_schemes ~w(...)` wordlist and `defp
+        dispatch("<scheme>:..." <> rest)` arms.
+
+    SKIP if psql missing, surface_id_grammar absent (lease plane not
+    installed), or canonicalize.ex absent. PASS if Elixir-mentioned schemes
+    are a subset of grammar schemes. FAIL with the offending scheme(s)
+    otherwise.
+    """
+    name, mode = "elixir_scheme_grammar_lint", "local"
+
+    if shutil.which("psql") is None:
+        return CheckResult(name, mode, Status.SKIP, "psql not on PATH")
+
+    proc = subprocess.run(
+        ["psql", db_url, "-Atqc",
+         "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+         "WHERE conname = 'surface_id_grammar'"],
+        capture_output=True, text=True, timeout=5,
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return CheckResult(
+            name, mode, Status.SKIP,
+            "surface_id_grammar constraint not queryable (lease plane not installed?)",
+        )
+
+    constraint_def = proc.stdout.strip()
+    # Extract the alternation body, e.g. `file://|dialectic:/|resident:/|capture:/|td:/`.
+    m = re.search(r"\^\(([^)]+)\)", constraint_def)
+    if not m:
+        return CheckResult(
+            name, mode, Status.SKIP,
+            "could not parse scheme list from surface_id_grammar constraint",
+            detail=constraint_def,
+        )
+    grammar_schemes: set[str] = set()
+    for alt in m.group(1).split("|"):
+        scheme = alt.split(":", 1)[0].strip()
+        if scheme:
+            grammar_schemes.add(scheme)
+
+    canonicalize_path = (
+        repo_root / "elixir" / "lease_plane" / "lib"
+        / "unitares_lease_plane" / "canonicalize.ex"
+    )
+    if not canonicalize_path.is_file():
+        return CheckResult(name, mode, Status.SKIP, "canonicalize.ex not present")
+
+    try:
+        text = canonicalize_path.read_text(errors="replace")
+    except OSError as exc:
+        return CheckResult(name, mode, Status.SKIP,
+                           "canonicalize.ex unreadable", detail=str(exc))
+
+    # scheme -> short site descriptor used in FAIL detail.
+    elixir_mentions: dict[str, str] = {}
+
+    # 1. Wordlist: `@canonical_schemes ~w(file dialectic resident capture td)`.
+    for match in re.finditer(r"@canonical_schemes\s+~w\(([^)]+)\)", text):
+        for scheme in match.group(1).split():
+            if scheme:
+                elixir_mentions.setdefault(scheme, "@canonical_schemes wordlist")
+
+    # 2. Dispatch arms: `defp dispatch("<scheme>:..." <> rest)`. Scheme name is
+    #    everything before the first `:`. Covers `"file://"`, `"dialectic:/"`,
+    #    `"resident:/"`, `"capture:/"`, `"td:/"` consistently.
+    for match in re.finditer(
+        r'defp\s+dispatch\(\s*"([a-z][a-z0-9_-]*):', text
+    ):
+        scheme = match.group(1)
+        elixir_mentions.setdefault(scheme, f'defp dispatch("{scheme}:..." <> rest)')
+
+    drift = sorted(s for s in elixir_mentions if s not in grammar_schemes)
+    if drift:
+        detail_lines = [f"  {s}: {elixir_mentions[s]}" for s in drift]
+        detail_lines.append(
+            f"\nGrammar allows: {', '.join(sorted(grammar_schemes))}"
+        )
+        return CheckResult(
+            name, mode, Status.FAIL,
+            f"{len(drift)} Elixir scheme(s) not in grammar CHECK: "
+            f"{', '.join(drift)}",
+            detail="\n".join(detail_lines),
+        )
+
+    return CheckResult(
+        name, mode, Status.PASS,
+        f"canonicalize.ex schemes match grammar "
+        f"({', '.join(sorted(grammar_schemes))})",
+    )
+
+
 def check_anchor_dir() -> CheckResult:
     name, mode = "anchor_directory", "local"
     if ANCHOR_DIR.is_dir():
@@ -464,6 +570,8 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
         Check("schema_migrations", "local", lambda: check_schema_migrations(db_url, repo_root)),
         Check("elixir_deprecated_scheme_lint", "local",
               lambda: check_elixir_deprecated_scheme_lint(db_url, repo_root)),
+        Check("elixir_scheme_grammar_lint", "local",
+              lambda: check_elixir_scheme_grammar_lint(db_url, repo_root)),
         Check("anchor_directory", "local", check_anchor_dir),
         Check("secrets_file", "local", check_secrets_file),
         Check("http_listening", "operator", check_http_listening),
