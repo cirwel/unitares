@@ -52,6 +52,31 @@ class TestP005ContextManagedSuppression:
         assert _verify_finding_against_source(_make(2), "", snippet) is False
 
 
+class TestP005AcquireWrapperSuppression:
+    """Pass-through `acquire()` wrappers transfer ownership; they don't consume."""
+
+    def test_pool_backend_acquire_passthrough_dropped(self):
+        # Mirrors /tmp/r1_verify.py's PoolBackend.acquire wrapper that simply
+        # returns the pool's acquire context manager to callers.
+        snippet = {
+            22: "class PoolBackend(PostgresBackend):",
+            23: "    def __init__(self, pool):",
+            24: "        self._pool = pool",
+            25: "",
+            26: "    def acquire(self):",
+            27: "        return self._pool.acquire()",
+        }
+        assert _verify_finding_against_source(_make(27), "", snippet) is False
+
+    def test_mismatched_passthrough_wrapper_name_kept(self):
+        # Keep precision: only same-name factory/pass-through wrappers drop.
+        snippet = {
+            10: "def get_conn(self):",
+            11: "    return self._pool.acquire()",
+        }
+        assert _verify_finding_against_source(_make(11), "", snippet) is True
+
+
 class TestP005RealLeaksKept:
     """Bare acquires without a context manager must NOT be dropped here."""
 
