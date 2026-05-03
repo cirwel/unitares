@@ -306,6 +306,127 @@ async def test_phase_zero_acquire_race_blocked():
         await conn.close()
 
 
+# ---------- conflict_held_by_other: per-cycle batched alarms (RFC §7.11.5) ----------
+
+
+@pytest.mark.asyncio
+async def test_sentinel_conflict_alarm_batched_per_surface():
+    """N conflict_held_by_other events on the same surface in one cycle
+    produce ONE summary alarm with count=N — not N per-event alarms."""
+    from agents.sentinel.forced_release_alarm import poll_forced_release_alarms
+
+    await ensure_test_database_schema()
+    conn = await asyncpg.connect(TEST_DB_URL)
+    try:
+        await _cleanup(conn)
+        for _ in range(4):
+            await _emit_event(
+                conn, event_type="conflict_held_by_other",
+                surface_id="td:/pr3b_conflict_same",
+            )
+
+        alarms, _ = await poll_forced_release_alarms(
+            db_url=TEST_DB_URL, last_event_ts=None,
+        )
+        conflict = [a for a in alarms if a.kind == "conflict_batch"]
+        assert len(conflict) == 1, (
+            f"expected 1 conflict_batch alarm, got {len(conflict)}"
+        )
+        assert conflict[0].extra["count"] == 4
+        assert conflict[0].extra["surface_id"] == "td:/pr3b_conflict_same"
+        # And no ad_hoc alarms for these events.
+        ad_hoc_for_conflict = [
+            a for a in alarms if a.kind == "ad_hoc"
+            and a.extra.get("surface_id") == "td:/pr3b_conflict_same"
+        ]
+        assert ad_hoc_for_conflict == [], (
+            f"conflict_held_by_other must not produce per-event alarms; got {ad_hoc_for_conflict}"
+        )
+    finally:
+        await _cleanup(conn)
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_sentinel_conflict_alarm_separate_per_surface():
+    """Conflicts on different surfaces produce one alarm per surface."""
+    from agents.sentinel.forced_release_alarm import poll_forced_release_alarms
+
+    await ensure_test_database_schema()
+    conn = await asyncpg.connect(TEST_DB_URL)
+    try:
+        await _cleanup(conn)
+        for sid in ("td:/pr3b_conflict_x", "td:/pr3b_conflict_y", "td:/pr3b_conflict_z"):
+            await _emit_event(
+                conn, event_type="conflict_held_by_other", surface_id=sid,
+            )
+
+        alarms, _ = await poll_forced_release_alarms(
+            db_url=TEST_DB_URL, last_event_ts=None,
+        )
+        conflict = [a for a in alarms if a.kind == "conflict_batch"]
+        surface_ids = {a.extra["surface_id"] for a in conflict}
+        assert surface_ids == {
+            "td:/pr3b_conflict_x", "td:/pr3b_conflict_y", "td:/pr3b_conflict_z",
+        }, f"expected one alarm per surface; got {surface_ids}"
+        assert all(a.extra["count"] == 1 for a in conflict)
+    finally:
+        await _cleanup(conn)
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_sentinel_conflict_alarm_dedupes_via_cursor():
+    """Re-polling with the cursor returned by a previous poll yields zero new
+    conflict_batch alarms — and a fresh conflict on the same surface AFTER
+    the cursor produces a new alarm with a distinct fingerprint."""
+    from agents.sentinel.forced_release_alarm import poll_forced_release_alarms
+
+    await ensure_test_database_schema()
+    conn = await asyncpg.connect(TEST_DB_URL)
+    try:
+        await _cleanup(conn)
+        await _emit_event(
+            conn, event_type="conflict_held_by_other",
+            surface_id="td:/pr3b_conflict_dedupe",
+        )
+
+        first_alarms, cursor = await poll_forced_release_alarms(
+            db_url=TEST_DB_URL, last_event_ts=None,
+        )
+        first_conflict = [a for a in first_alarms if a.kind == "conflict_batch"]
+        assert len(first_conflict) == 1
+        first_fp = first_conflict[0].fingerprint
+
+        # Re-poll with cursor: no new alarms.
+        second_alarms, cursor2 = await poll_forced_release_alarms(
+            db_url=TEST_DB_URL, last_event_ts=cursor,
+        )
+        second_conflict = [a for a in second_alarms if a.kind == "conflict_batch"]
+        assert second_conflict == [], (
+            f"cursor dedup failed; got {len(second_conflict)} re-emitted conflict alarms"
+        )
+
+        # New conflict on the same surface AFTER the cursor → new alarm with
+        # a distinct fingerprint (fingerprint includes max_ts so successive
+        # bursts on the same surface stay distinguishable downstream).
+        await _emit_event(
+            conn, event_type="conflict_held_by_other",
+            surface_id="td:/pr3b_conflict_dedupe",
+        )
+        third_alarms, _ = await poll_forced_release_alarms(
+            db_url=TEST_DB_URL, last_event_ts=cursor2,
+        )
+        third_conflict = [a for a in third_alarms if a.kind == "conflict_batch"]
+        assert len(third_conflict) == 1
+        assert third_conflict[0].fingerprint != first_fp, (
+            "second-cycle conflict on same surface must have a distinct fingerprint"
+        )
+    finally:
+        await _cleanup(conn)
+        await conn.close()
+
+
 # ---------- _poll_sync_forced_release: anyio-asyncio mitigation (CLAUDE.md pattern 2) ----------
 
 
