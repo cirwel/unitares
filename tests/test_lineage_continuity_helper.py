@@ -146,11 +146,20 @@ async def test_reconstruct_eisv_series_uses_current_epoch_when_unspecified():
 
     assert len(captured_args) == 1
     args = captured_args[0]
-    # Args order per helper SQL: (agent_id, epoch, window)
+    # Args order per helper SQL: (agent_id, epoch, window). Lock all three
+    # positions so a parameter-order refactor surfaces in this test.
     assert args[0] == "test-uuid"
     assert args[1] == GovernanceConfig.CURRENT_EPOCH
+    assert args[2] == timedelta(days=30)
 
 
 def _row(**fields):
-    """Build a dict-like row stub matching asyncpg.Record attribute access."""
+    """Build a dict-like row stub.
+
+    Returns a plain dict supporting subscript access (`row["entropy"]`) only,
+    which matches how `reconstruct_eisv_series` reads asyncpg Records. asyncpg
+    Records also support attribute-style access (`row.entropy`); if a future
+    author adds attribute-style access to the production code, this helper
+    must change accordingly.
+    """
     return fields
