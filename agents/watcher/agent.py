@@ -1185,9 +1185,48 @@ _P005_VAR_AWAIT_ACQUIRE = re.compile(
 )
 _P005_VAR_NONE_INIT = re.compile(r"^\s*(\w+)\s*=\s*None\s*$")
 _P005_TRY_HEADER = re.compile(r"^\s*try\s*:\s*$")
+_P005_RETURN_RESOURCE_FACTORY = re.compile(
+    r"^\s*return\s+\S+\.(acquire|cursor|connect|lock)\s*\("
+)
+_P005_RESOURCE_FACTORY_DEF = re.compile(
+    r"^\s*(?:async\s+)?def\s+(acquire|cursor|connect|lock)\s*\("
+)
 _P004_WAIT_FOR_GUARDED_PIN_HELPER = re.compile(
     r"^\s*async\s+def\s+(_lookup_onboard_pin_inner|_set_onboard_pin_inner)\s*\("
 )
+
+
+def _is_resource_factory_passthrough(
+    flagged_line: int,
+    snippet_lines_by_num: dict[int, str],
+    lookback: int = 8,
+) -> bool:
+    """Detect same-name wrappers that return a resource factory to callers.
+
+    Shape:
+        def acquire(self):
+            return self._pool.acquire()
+
+    The wrapper does not await, enter, or assign the acquire result; it transfers
+    the context-manager/resource factory to the caller. P005 should evaluate the
+    eventual caller site, not the pass-through wrapper itself.
+    """
+    src_line = snippet_lines_by_num.get(flagged_line, "")
+    return_match = _P005_RETURN_RESOURCE_FACTORY.match(src_line)
+    if not return_match:
+        return False
+    returned_method = return_match.group(1)
+
+    for line_no in range(flagged_line - 1, flagged_line - lookback - 1, -1):
+        line = snippet_lines_by_num.get(line_no, "")
+        if not line.strip() or _looks_like_comment(line):
+            continue
+        wrapper_match = _P005_RESOURCE_FACTORY_DEF.match(line)
+        if wrapper_match:
+            return wrapper_match.group(1) == returned_method
+        if _P003_OTHER_DEF.match(line) or _P003_CACHE_FUNC_HEADER.match(line):
+            return False
+    return False
 
 
 def _is_acquire_inside_try_with_none_init(
@@ -1452,6 +1491,19 @@ def _verify_finding_against_source(
         log(
             f"drop P005 {finding.file}:{finding.line} — context-managed acquire "
             f"(async with / with): {src_line.strip()[:80]}",
+            "warning",
+        )
+        return False
+    # P005 specifically: a same-name wrapper like `def acquire(...): return
+    # self._pool.acquire()` transfers the context manager/resource factory to
+    # the caller. The wrapper itself does not await, enter, assign, or consume
+    # the resource, so the eventual caller site is where P005 should fire.
+    if finding.pattern == "P005" and _is_resource_factory_passthrough(
+        finding.line, snippet_lines_by_num
+    ):
+        log(
+            f"drop P005 {finding.file}:{finding.line} — same-name resource "
+            f"factory pass-through: {src_line.strip()[:80]}",
             "warning",
         )
         return False
