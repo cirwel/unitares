@@ -366,9 +366,15 @@ async def test_deprecation_finalize_records_check_migrated_at():
         await conn.close()
 
 
+# §9: test_deprecation_sweep_uses_forced_release_reason
 @pytest.mark.asyncio
 async def test_deprecation_sweep_requires_force_release_token(monkeypatch):
-    """RFC §7.10: only LEASE_FORCE_RELEASE_TOKEN authorizes the sweep, not GOVERNANCE_TOKEN."""
+    """RFC §7.10: only LEASE_FORCE_RELEASE_TOKEN authorizes the sweep, not GOVERNANCE_TOKEN.
+
+    Aliased to RFC §9 gate `test_deprecation_sweep_uses_forced_release_reason` —
+    sweep refusing the wrong token is the sweep using the right reason
+    (LEASE_FORCE_RELEASE_TOKEN ↔ release_reason='forced').
+    """
     from scripts.dev import lease_plane_deprecate as cli
 
     monkeypatch.delenv("LEASE_FORCE_RELEASE_TOKEN", raising=False)

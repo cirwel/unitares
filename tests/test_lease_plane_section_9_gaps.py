@@ -1,26 +1,28 @@
 """
-§9 reconciliation gap-fill — closes 4 named RFC §9 gates that the
-audit script reported as missing entirely (no test of any name covers
-the gate semantically).
+§9 reconciliation gap-fill — closes RFC §9 named gates that the audit
+script reported as missing entirely (no test of any name covers the
+gate semantically).
 
-Audit baseline (post-§9-reconciliation alias annotations):
-  17 exact / 1 variant / 10 missing → after this file: 21 / 1 / 6
-(6 alias annotations bumped 5 from variant→exact + 1 missing→exact;
-this file's 4 gap-fills bring exact from 17 to 21.)
+Audit progression:
+  PR #295 baseline: 17 exact / 1 variant / 10 missing
+  After PR #295:    21 exact / 1 variant /  6 missing (this file's first 4 gap-fills)
+  After this PR:    28 exact / 0 variant /  0 missing
 
-The 4 gates filled here are mechanical post-PR-7-storage tests:
-they exercise the migration-026 grammar CHECK, the Pydantic
+This PR closes the residual 1 variant + 1 missing on the Python side:
+  - `test_deprecation_sweep_uses_forced_release_reason` — variant→exact
+    via `# §9: ...` alias annotation on the existing
+    `test_deprecation_sweep_requires_force_release_token` (in
+    `test_lease_plane_deprecate_cli.py`).
+  - `test_force_release_rejects_governance_token` — missing→exact via
+    the new test below, pinning the `_read_force_release_token`
+    choke-point function so all force-release callers (sweep, R1
+    `deprecate-and-finalize`, future force-release surfaces) inherit
+    the credential boundary without per-caller integration tests.
+
+The 4 original gates filled here are mechanical post-PR-7-storage
+tests: they exercise the migration-026 grammar CHECK, the Pydantic
 field_validator's invalid-scheme rejection, and the
-post-migration-026 `surface_kind` generated-column behavior. None of
-these required fixture-heavy infrastructure beyond what the
-existing PR 1+ tests already established.
-
-The remaining 7 missing gates need either FS-touching test
-infrastructure (file:// canonicalization) or fresh test code (§9
-deprecation-sweep release_reason vocabulary check, force-release
-GOVERNANCE_TOKEN rejection outside deprecation context, 3 Elixir
-gates that require an .exs test tree we don't yet have for those
-specific scenarios). Tracked in `phase-a-plan.md` PR 8+ section.
+post-migration-026 `surface_kind` generated-column behavior.
 """
 
 from __future__ import annotations
@@ -182,4 +184,53 @@ def test_acquire_request_has_no_surface_kind_field():
     assert "surface_kind" not in fields, (
         f"AcquireRequest.model_fields must not include surface_kind "
         f"post-migration-026; got fields: {list(fields)}"
+    )
+
+
+# ---------- §9: test_force_release_rejects_governance_token ----------
+
+
+def test_force_release_rejects_governance_token(monkeypatch, tmp_path):
+    """RFC §7.10: the force-release credential boundary is exclusive —
+    `LEASE_FORCE_RELEASE_TOKEN` is the only authorizer; `GOVERNANCE_TOKEN`
+    must NOT grant force-release authority anywhere it is checked.
+
+    `test_deprecation_sweep_requires_force_release_token` covers the sweep
+    wrapper specifically. This test pins the choke-point function
+    `_read_force_release_token` directly so any future caller (R1
+    `deprecate-and-finalize`, future force-release CLI surfaces, the
+    `lease_plane.advisory` preflight hook) inherits the boundary without
+    needing its own integration test.
+    """
+    from scripts.dev.lease_plane_deprecate import _read_force_release_token
+
+    # Isolate from the operator's real ~/.config/cirwel/secrets.env by
+    # repointing HOME at an empty tmp dir.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("LEASE_FORCE_RELEASE_TOKEN", raising=False)
+
+    # Case 1: GOVERNANCE_TOKEN in env, nothing else.
+    monkeypatch.setenv("GOVERNANCE_TOKEN", "should-not-authorize-force-release")
+    assert _read_force_release_token() is None, (
+        "GOVERNANCE_TOKEN in env must not satisfy LEASE_FORCE_RELEASE_TOKEN"
+    )
+
+    # Case 2: GOVERNANCE_TOKEN in secrets.env (no LEASE_FORCE_RELEASE_TOKEN).
+    monkeypatch.delenv("GOVERNANCE_TOKEN", raising=False)
+    secrets_dir = tmp_path / ".config" / "cirwel"
+    secrets_dir.mkdir(parents=True)
+    (secrets_dir / "secrets.env").write_text(
+        'GOVERNANCE_TOKEN="should-not-authorize-force-release"\n'
+        "OTHER_VAR=irrelevant\n"
+    )
+    assert _read_force_release_token() is None, (
+        "GOVERNANCE_TOKEN in secrets.env must not satisfy "
+        "LEASE_FORCE_RELEASE_TOKEN; the credential boundary is exclusive"
+    )
+
+    # Sanity: the function CAN find a real LEASE_FORCE_RELEASE_TOKEN —
+    # otherwise the negative cases above would pass for the wrong reason.
+    monkeypatch.setenv("LEASE_FORCE_RELEASE_TOKEN", "real-force-release-token")
+    assert _read_force_release_token() == "real-force-release-token", (
+        "positive control: env LEASE_FORCE_RELEASE_TOKEN must still be read"
     )
