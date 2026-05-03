@@ -46,6 +46,10 @@ from .models import (
 class LeasePlaneClientConfig:
     base_url: str = "http://127.0.0.1:8788"
     bearer_token: str | None = None
+    # §7.10: force-release requires a separate elevated token, sourced from
+    # ~/.config/cirwel/secrets.env as LEASE_FORCE_RELEASE_TOKEN. Used only by
+    # force_release(); release() rejects release_reason='forced' regardless.
+    force_release_token: str | None = None
     timeout_s: float = 1.0
 
 
@@ -192,7 +196,41 @@ class LeasePlaneClient:
         return _parse_simple(payload)
 
     def release(self, request: ReleaseRequest) -> SimpleResult:
+        # §7.10 contract-layer rejection: force-release MUST go through
+        # force_release(), which uses LEASE_FORCE_RELEASE_TOKEN. The standard
+        # release path uses the regular bearer (LEASE_PLANE_BEARER_TOKEN /
+        # GOVERNANCE_TOKEN) and must not accept release_reason='forced'.
+        if request.release_reason == "forced":
+            return SimpleError(
+                ok=False,
+                error="permission_denied",
+                reason="release_reason='forced' requires force_release(); see RFC §7.10",
+            )
         payload = self._request_json("POST", "/v1/lease/release", request.model_dump(mode="json"))
+        return _parse_simple(payload)
+
+    def force_release(self, request: ReleaseRequest) -> SimpleResult:
+        """Operator-only force-release using LEASE_FORCE_RELEASE_TOKEN (§7.10).
+
+        Pins `release_reason='forced'` on the wire regardless of what the caller
+        set, and authenticates with `config.force_release_token` instead of the
+        standard bearer. If `force_release_token` is unset, returns
+        `permission_denied` without sending — contract-layer rejection.
+        """
+        if not self.config.force_release_token:
+            return SimpleError(
+                ok=False,
+                error="permission_denied",
+                reason="force_release_token not configured; force-release requires LEASE_FORCE_RELEASE_TOKEN",
+            )
+        body = request.model_dump(mode="json")
+        body["release_reason"] = "forced"
+        payload = self._request_json(
+            "POST",
+            "/v1/lease/release",
+            body,
+            authorization_token=self.config.force_release_token,
+        )
         return _parse_simple(payload)
 
     def handoff_offer(self, request: HandoffOfferRequest) -> SimpleResult:
@@ -210,6 +248,7 @@ class LeasePlaneClient:
         json_body: dict[str, Any] | None,
         *,
         query: dict[str, str] | None = None,
+        authorization_token: str | None = None,
     ) -> Mapping[str, Any]:
         url = self.config.base_url.rstrip("/") + path
         if query:
@@ -218,8 +257,9 @@ class LeasePlaneClient:
         headers = {"Accept": "application/json"}
         if json_body is not None:
             headers["Content-Type"] = "application/json"
-        if self.config.bearer_token:
-            headers["Authorization"] = f"Bearer {self.config.bearer_token}"
+        token = authorization_token if authorization_token is not None else self.config.bearer_token
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
 
         request = LeaseHTTPRequest(
             method=method,

@@ -220,11 +220,80 @@ def test_release_sends_reason_and_parses_not_holder():
         return {"ok": False, "error": "not_holder"}
 
     result = LeasePlaneClient(transport=transport).release(
-        ReleaseRequest(lease_id=lease_id, release_reason="forced")
+        ReleaseRequest(lease_id=lease_id, release_reason="handoff")
     )
 
     assert isinstance(result, SimpleError)
     assert result.error == "not_holder"
+    assert seen["body"] == {"lease_id": str(lease_id), "release_reason": "handoff"}
+
+
+def test_force_release_rejects_governance_token():
+    """RFC §7.10 contract gate: a release() call with reason='forced' must be
+    rejected at the contract layer when the caller is authenticated only with
+    the standard bearer (LEASE_PLANE_BEARER_TOKEN / GOVERNANCE_TOKEN-equivalent),
+    not just at the application layer. The transport must not be invoked.
+    """
+    transport_called = False
+
+    def transport(_request: LeaseHTTPRequest):
+        nonlocal transport_called
+        transport_called = True
+        return {"ok": True}
+
+    config = LeasePlaneClientConfig(bearer_token="governance-token-xyz")
+    result = LeasePlaneClient(config=config, transport=transport).release(
+        ReleaseRequest(lease_id=uuid4(), release_reason="forced")
+    )
+
+    assert isinstance(result, SimpleError)
+    assert result.error == "permission_denied"
+    assert transport_called is False, "release() must reject before sending"
+
+
+def test_force_release_requires_force_release_token():
+    """force_release() refuses to send without LEASE_FORCE_RELEASE_TOKEN
+    configured. Contract-layer rejection — transport never called.
+    """
+    transport_called = False
+
+    def transport(_request: LeaseHTTPRequest):
+        nonlocal transport_called
+        transport_called = True
+        return {"ok": True}
+
+    config = LeasePlaneClientConfig(bearer_token="governance-token-xyz")
+    result = LeasePlaneClient(config=config, transport=transport).force_release(
+        ReleaseRequest(lease_id=uuid4(), release_reason="forced")
+    )
+
+    assert isinstance(result, SimpleError)
+    assert result.error == "permission_denied"
+    assert transport_called is False
+
+
+def test_force_release_uses_elevated_token_and_pins_reason():
+    """force_release() sends Authorization: Bearer <force_release_token>
+    (NOT the standard bearer) and pins release_reason='forced' on the wire.
+    """
+    seen: dict[str, Any] = {}
+
+    def transport(request: LeaseHTTPRequest):
+        seen["headers"] = dict(request.headers)
+        seen["body"] = request.json_body
+        return {"ok": True}
+
+    config = LeasePlaneClientConfig(
+        bearer_token="standard-bearer",
+        force_release_token="elevated-force-release-token",
+    )
+    lease_id = uuid4()
+    result = LeasePlaneClient(config=config, transport=transport).force_release(
+        ReleaseRequest(lease_id=lease_id, release_reason="normal")
+    )
+
+    assert isinstance(result, SimpleOk)
+    assert seen["headers"]["Authorization"] == "Bearer elevated-force-release-token"
     assert seen["body"] == {"lease_id": str(lease_id), "release_reason": "forced"}
 
 
@@ -290,7 +359,7 @@ def test_simple_unknown_error_preserves_raw_string_in_reason():
         return {"ok": False, "error": "wormhole_collapsed"}
 
     result = LeasePlaneClient(transport=transport).release(
-        ReleaseRequest(lease_id=uuid4(), release_reason="forced")
+        ReleaseRequest(lease_id=uuid4(), release_reason="normal")
     )
 
     assert isinstance(result, SimpleError)

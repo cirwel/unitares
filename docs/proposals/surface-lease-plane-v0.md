@@ -967,7 +967,7 @@ Each row below is a Phase A blocker. All tests live under `tests/test_lease_plan
 - [ ] **§7.3.3 — `acquire_with_retry()` honors backoff** — jittered exponential, floor 100ms, ceiling 5s. Test name: `test_acquire_with_retry_jittered_backoff`.
 - [ ] **§7.3.5 — HTTP 409 on `held_by_other`; 200 + ok:false otherwise** — Elixir router behavior. Test names (Elixir-side): `test http_router returns 409 on held_by_other`, `test http_router returns 200 on permission_denied`.
 - [ ] **§7.3.5 — `_urllib_transport` HTTP-error body-parse path** — currently uncovered (live-verifier finding). Test name: `test_urllib_transport_parses_409_body`.
-- [ ] **§7.10 — `GOVERNANCE_TOKEN` cannot force-release** (already gated v0.6; restated): only `LEASE_FORCE_RELEASE_TOKEN` succeeds; rejection at contract layer. Test name: `test_force_release_rejects_governance_token`.
+- [x] **§7.10 — `GOVERNANCE_TOKEN` cannot force-release** (already gated v0.6; restated): only `LEASE_FORCE_RELEASE_TOKEN` succeeds; rejection at contract layer. Test name: `test_force_release_rejects_governance_token`. (Python contract layer closed in `tests/test_lease_plane_client.py`; Elixir router-side rejection tracked separately as Phase A Elixir gate.)
 
 #### Phase A test gates (v0.8 — bundles §7.11 + §7.12 council BLOCKs)
 
