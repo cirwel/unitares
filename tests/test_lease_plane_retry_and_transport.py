@@ -117,8 +117,13 @@ def test_acquire_with_retry_retries_on_held_by_other_until_ok():
     assert len(sleeps) == 2  # two backoffs before the third (successful) attempt
 
 
+# §9: test_acquire_with_retry_jittered_backoff
 def test_acquire_with_retry_jittered_backoff_within_bounds():
-    """Backoff is jittered exponential — floor 100ms, ceiling 5s, full jitter (RFC §7.3.3)."""
+    """Backoff is jittered exponential — floor 100ms, ceiling 5s, full jitter (RFC §7.3.3).
+
+    The longer name is the descriptive form; the §9 alias above lets
+    `audit_rfc_section_9_gates.py` recognize this as the RFC-named gate.
+    """
     holder = uuid4()
     sleeps: list[float] = []
     # Always return held_by_other so we exhaust attempts and observe all sleeps.

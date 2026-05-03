@@ -160,10 +160,17 @@ async def test_deprecate_cli_unknown_kind_rejected():
         await conn.close()
 
 
+# §9: test_deprecation_sweep_idempotent_on_partial_failure
 @pytest.mark.asyncio
 async def test_deprecation_sweep_predicate_idempotent():
     """RFC §7.11.4: sweep predicate `WHERE released_at IS NULL AND surface_kind = $1`
-    reaches fixpoint on re-run after partial completion."""
+    reaches fixpoint on re-run after partial completion.
+
+    The §9 alias above lets `audit_rfc_section_9_gates.py` recognize this
+    as the RFC-named "idempotent_on_partial_failure" gate — the partial-failure
+    semantics are exactly what the predicate guarantees, and the test name
+    elides the long suffix.
+    """
     from scripts.dev import lease_plane_deprecate as cli
 
     await ensure_test_database_schema()

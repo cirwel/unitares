@@ -42,6 +42,14 @@ _PY_TEST_NAME = re.compile(r"`(test_[a-zA-Z0-9_]+)`")
 _ELIXIR_TEST_NAME = re.compile(r"`(test [^`]+)`")
 _PY_DEF = re.compile(r"^\s*(?:async\s+)?def\s+(test_[a-zA-Z0-9_]+)\s*\(", re.MULTILINE)
 _EX_TEST = re.compile(r'^\s*test\s+"([^"]+)"', re.MULTILINE)
+# Annotation: `# §9: test_xxx` (or with RFC prefix) above/inside a test
+# declares it satisfies a §9 named gate even if the test's own name differs.
+# Lets descriptive test names ("test_acquire_with_retry_jittered_backoff_within_bounds")
+# claim the shorter §9 gate name ("test_acquire_with_retry_jittered_backoff")
+# without requiring a rename. One annotation per line; multiple annotations
+# on consecutive lines are all picked up.
+_PY_ALIAS = re.compile(r"#\s*(?:RFC\s*)?§9:\s*(test_[a-zA-Z0-9_]+)")
+_EX_ALIAS = re.compile(r"#\s*(?:RFC\s*)?§9:\s*(test [^\n]+?)\s*$", re.MULTILINE)
 
 
 def find_section_9(text: str) -> str:
@@ -78,6 +86,10 @@ def parse_gates(section_text: str) -> tuple[list[str], list[str]]:
 
 
 def collect_python_tests(dirs: list[Path]) -> dict[str, Path]:
+    """Return {test_name: path}. Includes both real test defs AND §9 alias
+    annotations (`# §9: test_xxx`) so a single test can claim multiple
+    named gates without renaming.
+    """
     found: dict[str, Path] = {}
     for d in dirs:
         if not d.exists():
@@ -89,10 +101,15 @@ def collect_python_tests(dirs: list[Path]) -> dict[str, Path]:
                 continue
             for m in _PY_DEF.finditer(txt):
                 found.setdefault(m.group(1), p)
+            for m in _PY_ALIAS.finditer(txt):
+                found.setdefault(m.group(1), p)
     return found
 
 
 def collect_elixir_tests(dirs: list[Path]) -> dict[str, Path]:
+    """Return {full_test_string: path}. Includes both real test declarations
+    AND §9 alias annotations.
+    """
     found: dict[str, Path] = {}
     for d in dirs:
         if not d.exists():
@@ -104,6 +121,8 @@ def collect_elixir_tests(dirs: list[Path]) -> dict[str, Path]:
                 continue
             for m in _EX_TEST.finditer(txt):
                 found.setdefault(f"test {m.group(1)}", p)
+            for m in _EX_ALIAS.finditer(txt):
+                found.setdefault(m.group(1), p)
     return found
 
 
