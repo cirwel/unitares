@@ -1,7 +1,7 @@
 """
 Sentinel forced-release alarm rule (RFC v0.8 §7.10 + §7.11.5).
 
-Polls `lease_plane.lease_plane_events` for two distinct event classes:
+Polls `lease_plane.lease_plane_events` for three distinct event classes:
 
   - Ad-hoc forced releases (`event_type='forced'`): one alarm per event.
     Per RFC §7.10 alarm-on-every-event semantic — operator-typed force-release
@@ -11,6 +11,13 @@ Polls `lease_plane.lease_plane_events` for two distinct event classes:
     alarms grouped by `deprecation_id`, one summary per completed batch.
     Per RFC §7.11.5 batch suppression — bulk sweeps could otherwise fire
     hundreds of alarms in minutes, drowning the channel.
+
+  - Held-by-other conflicts (`event_type='conflict_held_by_other'`): batched
+    per cycle by `surface_id`, one summary per surface. Held-by-other is the
+    advisory-mode normal-operation outcome (dispatch preflight + worker
+    acquire on a busy surface), not a fault — but a sustained burst on one
+    surface still warrants an operator signal. Per RFC §7.11.5 framing:
+    higher-frequency events get batched per cycle, not per event.
 
 Cursor state: callers persist `last_event_ts` so successive polls don't
 re-emit alarms for already-seen events.
@@ -36,13 +43,14 @@ except ImportError:  # pragma: no cover — surfaces at first call site
 class ForcedReleaseAlarm:
     """One alarm produced by `poll_forced_release_alarms`.
 
-    `kind` is `"ad_hoc"` (per-event for `event_type='forced'`) or
-    `"deprecation_batch"` (one per completed deprecation_id).
-    `extra` carries the discriminator fields (event_id, lease_id, surface_id,
-    or deprecation_id + count) used for fingerprinting and downstream display.
+    `kind` is `"ad_hoc"` (per-event for `event_type='forced'`),
+    `"deprecation_batch"` (one per completed deprecation_id), or
+    `"conflict_batch"` (one per surface_id per cycle for held-by-other bursts).
+    `extra` carries the discriminator fields used for fingerprinting and
+    downstream display.
     """
 
-    kind: str  # "ad_hoc" | "deprecation_batch"
+    kind: str  # "ad_hoc" | "deprecation_batch" | "conflict_batch"
     severity: str  # "high" | "medium"
     summary: str
     fingerprint: str
@@ -133,6 +141,31 @@ async def _poll_inner(
         if max_ts is None or row["last_ts"] > max_ts:
             max_ts = row["last_ts"]
 
+    # 3. Held-by-other conflicts: group by surface_id within this poll cycle,
+    #    one alarm per surface. Per RFC §7.11.5: higher-frequency events get
+    #    batched per cycle (not per deprecation_id, since there's no batch
+    #    identity to span cycles for). Cursor advances on event ts only.
+    conflict_query = """
+        SELECT
+            surface_id, surface_kind,
+            count(event_id) AS event_count,
+            min(ts) AS first_ts, max(ts) AS last_ts
+        FROM lease_plane.lease_plane_events
+        WHERE event_type = 'conflict_held_by_other'
+        {ts_filter}
+        GROUP BY surface_id, surface_kind
+    """
+    if last_event_ts is None:
+        rows = await conn.fetch(conflict_query.format(ts_filter=""))
+    else:
+        rows = await conn.fetch(
+            conflict_query.format(ts_filter="AND ts > $1"), last_event_ts,
+        )
+    for row in rows:
+        alarms.append(_conflict_alarm(row))
+        if max_ts is None or row["last_ts"] > max_ts:
+            max_ts = row["last_ts"]
+
     return alarms, max_ts
 
 
@@ -150,6 +183,31 @@ def _ad_hoc_alarm(row) -> ForcedReleaseAlarm:
             "lease_id": str(row["lease_id"]) if row["lease_id"] else None,
             "surface_id": surface_id,
             "surface_kind": row["surface_kind"],
+        },
+    )
+
+
+def _conflict_alarm(row) -> ForcedReleaseAlarm:
+    """Build a per-surface batched alarm for held-by-other conflicts.
+
+    Fingerprint includes max_ts so a later cycle producing more conflicts on
+    the same surface yields a distinct alarm — without that, downstream
+    dedup would suppress the second burst.
+    """
+    surface_id = row["surface_id"]
+    count = row["event_count"]
+    last_ts = row["last_ts"]
+    return ForcedReleaseAlarm(
+        kind="conflict_batch",
+        severity="medium",
+        summary=f"held-by-other conflicts: {surface_id} (count={count})",
+        fingerprint=f"forced_release:conflict_batch:{surface_id}:{last_ts.isoformat()}",
+        extra={
+            "surface_id": surface_id,
+            "surface_kind": row["surface_kind"],
+            "count": count,
+            "first_ts": row["first_ts"].isoformat() if row["first_ts"] else None,
+            "last_ts": last_ts.isoformat() if last_ts else None,
         },
     )
 
