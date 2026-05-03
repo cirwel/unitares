@@ -31,7 +31,33 @@ TBD. Graceful stop releases all *local-holder* leases (the BEAM-monitored ones) 
 
 ## Health check
 
-TBD. Sentinel will monitor `GET /v1/lease/status?surface_id=__healthcheck__` (RFC §7.7). Alarm fires if unreachable for >5min.
+Sentinel monitors the lease plane via `GET /v1/lease/status?surface_id=__healthcheck__` (RFC §7.7).
+
+**What the probe is**
+
+`__healthcheck__` is a sentinel surface_id reserved for liveness — the lease plane never holds a real lease against it. A successful probe returns `{"ok": true, "lease": null}` with HTTP 200, proving:
+1. Bandit/Plug router is up
+2. `HTTPAuth` plug accepts the configured `LEASE_PLANE_BEARER_TOKEN`
+3. The Postgres `governance` connection is alive (status query touches `lease_plane.surface_leases`)
+
+**Sentinel alarm rules**
+
+| Condition | Alarm | Action |
+|-----------|-------|--------|
+| 0 successful probes in last 5 min | `lease_plane.unreachable` | Check `launchctl list com.unitares.lease-plane`; restart via `launchctl kickstart -k system/com.unitares.lease-plane` |
+| HTTP 401 on probe | `lease_plane.auth_drift` | Sentinel's bearer token diverged from the lease plane's; re-source `~/.config/cirwel/secrets.env` and `launchctl kickstart` Sentinel |
+| HTTP 503 sustained | `lease_plane.db_degraded` | Postgres flapping; check `pg_isready -h localhost -p 5432` |
+| Probe latency > 1s sustained | `lease_plane.slow` | Postgres lock contention or backlog; inspect `pg_stat_activity` for stuck transactions on `lease_plane.surface_leases` |
+
+**Probe cadence**: every 30s (matches reaper sweep cadence — no point probing more often than the system's own internal pulse). Alarm thresholds use sliding 5-min windows so a single transient blip doesn't page.
+
+**What the probe does NOT cover**
+
+- Reaper liveness (separate alarm: stale `expires_at < now() - interval '60s' AND released_at IS NULL` count > 0)
+- Audit-outbox forwarding (separate alarm: `lease_plane_events WHERE forwarded_at IS NULL` count growing unboundedly)
+- Per-surface_kind acquire success rate (telemetry, not a binary alarm)
+
+The healthcheck probe is a binary "is the front door open" signal. Functional health lives in the supplemental rules above.
 
 ## Live introspection (the BEAM superpower)
 
@@ -186,6 +212,142 @@ Postgres. Once the stuck backend is gone, rerun `deprecate-and-finalize <kind>`
 — Phase 2 will sweep zero rows (idempotent predicate) and Phase 3 will
 finalize cleanly.
 
+## LEASE_FORCE_RELEASE_TOKEN — provisioning and rotation (RFC §7.10)
+
+Force-release is a separate authority from regular lease access. It uses its own bearer token, **never** the standard `LEASE_PLANE_BEARER_TOKEN` or `GOVERNANCE_TOKEN`. Spec rationale: a caller with the regular bearer can free its own leases; a caller with the elevated token can free *anyone's* leases. The two privileges are distinct and the tokens must not collapse.
+
+**Where the token lives**
+
+```
+~/.config/cirwel/secrets.env    # mode 600, local-Mac-only
+LEASE_FORCE_RELEASE_TOKEN=<32-byte-random-hex>
+```
+
+This follows the existing `~/.config/cirwel/secrets.env` convention (noun-first, `_TOKEN` suffix; cf. `ZENODO_TOKEN`, `CLOUDFLARE_API_TOKEN`). Mode 600. v0 is **local-Mac-only by design** — there is no off-host force-release path. If the operator is travelling, they SSH to the Mac or wait for the lease's TTL.
+
+**Initial provisioning**
+
+```bash
+# 1. Generate a fresh 32-byte hex token (no Anthropic-style 'sk-' prefix; this is internal)
+TOKEN=$(openssl rand -hex 32)
+
+# 2. Add to secrets.env (preserve existing keys; do NOT overwrite the file)
+printf 'LEASE_FORCE_RELEASE_TOKEN=%s\n' "$TOKEN" >> ~/.config/cirwel/secrets.env
+
+# 3. Verify mode is still 600
+chmod 600 ~/.config/cirwel/secrets.env
+ls -la ~/.config/cirwel/secrets.env
+
+# 4. Reload the lease-plane LaunchAgent so it picks up the new env
+launchctl kickstart -k system/com.unitares.lease-plane
+
+# 5. Confirm the lease plane is back up
+curl -fsS -H "Authorization: Bearer $LEASE_PLANE_BEARER_TOKEN" \
+  http://127.0.0.1:8788/v1/lease/status?surface_id=__healthcheck__
+```
+
+**Rotation cadence**
+
+Same as other operator-scoped tokens at `~/.config/cirwel/secrets.env`. No special rotation infrastructure for v0 — it's manual:
+
+```bash
+# 1. Rotate
+NEW_TOKEN=$(openssl rand -hex 32)
+sed -i.bak "s/^LEASE_FORCE_RELEASE_TOKEN=.*$/LEASE_FORCE_RELEASE_TOKEN=$NEW_TOKEN/" ~/.config/cirwel/secrets.env
+rm ~/.config/cirwel/secrets.env.bak
+
+# 2. Reload
+launchctl kickstart -k system/com.unitares.lease-plane
+
+# 3. Update any local Python clients that had the old token cached
+# (LeasePlaneClientConfig.force_release_token — see src/lease_plane/client.py)
+```
+
+**Recovery from accidental token leak**
+
+If the token appears in shell history, a screenshot, a pasted log, or anywhere outside `secrets.env`:
+
+1. Rotate immediately (steps above)
+2. Audit the force-release event log for unexpected entries:
+   ```sql
+   SELECT lease_id, surface_id, ts, payload
+   FROM lease_plane.lease_plane_events
+   WHERE event_type = 'forced'
+     AND ts > now() - interval '24 hours'
+   ORDER BY ts DESC;
+   ```
+3. If unexpected force-releases appear, file a `multi-agent-git-reset-incident.md`-style incident note
+
+**What invalidates a token**: only changing the value in `secrets.env` and restarting the lease plane. There is no revocation list, no JWT-style expiry — the lease plane reads `Application.get_env(:lease_plane, :force_release_bearer_token)` once at boot.
+
+## Renames and orphan leases (RFC §7.9)
+
+A file rename, dialectic-session ID rotation, or resident relabel changes a surface's canonical `surface_id`. v0 explicitly does **not** handle rename-aware relocation. Active leases keyed on the old ID become *orphan leases* — the index thinks each entry is unique, but the underlying surface is the same.
+
+**Failure mode**
+
+Agent A holds `file:///Users/cirwel/x.py`. Operator (or another tool) renames `x.py` → `y.py`. Agent A's lease still references `file:///Users/cirwel/x.py` — that path no longer exists. Agent B can now `acquire(file:///Users/cirwel/y.py)` and succeed; the "same surface semantically" is double-leased. The orphan ages out via TTL on its `original_ttl_s` clock — at most 1h per RFC §4.4 hard cap.
+
+**Detection**
+
+```sql
+-- Orphan candidates: file:// leases pointing at non-existent paths.
+-- Run as the operator (paths must be readable by the running shell).
+SELECT lease_id, surface_id, holder_agent_uuid, acquired_at
+FROM lease_plane.surface_leases
+WHERE released_at IS NULL
+  AND surface_kind = 'file'
+ORDER BY acquired_at;
+```
+
+For each row, check if the path exists:
+
+```bash
+psql -h localhost -d governance -t -A -c \
+  "SELECT replace(surface_id, 'file://', '') FROM lease_plane.surface_leases \
+   WHERE released_at IS NULL AND surface_kind = 'file'" \
+  | while read path; do
+      [ -e "$path" ] || echo "ORPHAN: $path"
+    done
+```
+
+**Manual release (operator path)**
+
+If an orphan is blocking work and waiting for TTL is unacceptable:
+
+```bash
+# Force-release with the elevated token. The release_reason='forced' in the
+# audit record makes this distinguishable from natural release.
+curl -fsS -X POST \
+  -H "Authorization: Bearer $LEASE_FORCE_RELEASE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"lease_id":"<lease-uuid-from-query-above>","release_reason":"forced"}' \
+  http://127.0.0.1:8788/v1/lease/release
+```
+
+Or via the Python client (preferred — contract-layer rejection if the token is misconfigured):
+
+```python
+from src.lease_plane import (
+    LeasePlaneClient, LeasePlaneClientConfig, ReleaseRequest,
+)
+import os
+config = LeasePlaneClientConfig(
+    bearer_token=os.environ["LEASE_PLANE_BEARER_TOKEN"],
+    force_release_token=os.environ["LEASE_FORCE_RELEASE_TOKEN"],
+)
+client = LeasePlaneClient(config=config)
+result = client.force_release(ReleaseRequest(
+    lease_id="<lease-uuid>",
+    release_reason="normal",  # pinned to 'forced' on the wire automatically
+))
+print(result)  # SimpleOk on success, SimpleError otherwise
+```
+
+**Why no automatic rename detection in v0**
+
+Content-derived `surface_id` (e.g., file inode + ctime, dialectic-session content-hash) would make renames invisible to the lease layer, but it trades simplicity for robustness and warrants its own RFC. v0 treats the rename gap as a *known and bounded* operational hazard, not an unresolved design question. v1 may revisit.
+
 ## Common operations
 
 TBD. Will include:
@@ -194,7 +356,6 @@ TBD. Will include:
 - **Promote a surface kind from advisory to enforcement** (config flag flip, no restart needed; documented in RFC §6.2)
 - **Demote a surface kind back to advisory** (single config flag flip; the reversal must be cheap, never a code change)
 - **Inspect the audit-outbox backlog** (`SELECT count(*) FROM lease_plane_events WHERE forwarded_at IS NULL`)
-- **Force-release a lease the operator knows is corpse-held** (last-resort manual override; logged to audit with `release_reason='operator_forced'`)
 
 ## Hot code reload (the BEAM thing that matters operationally)
 
