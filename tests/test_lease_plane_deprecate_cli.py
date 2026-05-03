@@ -202,6 +202,99 @@ async def test_deprecation_sweep_predicate_idempotent():
 
 
 @pytest.mark.asyncio
+async def test_deprecation_sweep_idempotent_on_partial_failure():
+    """RFC §7.11.4: operator interrupts mid-sweep (some leases already released
+    + already emitted a deprecation_swept event), re-runs, completes without
+    double-emitting events for the already-swept leases.
+
+    The predicate `WHERE released_at IS NULL AND surface_kind = $1` excludes
+    leases the prior partial run already closed, so re-running emits an event
+    only for the remaining unreleased leases. Final event count == lease count
+    (no doubles), final release_reason='forced' on all leases.
+    """
+    from scripts.dev import lease_plane_deprecate as cli
+
+    await ensure_test_database_schema()
+    conn = await asyncpg.connect(TEST_DB_URL)
+    try:
+        await _cleanup(conn)
+        # Three leases on td:/ — three is enough to distinguish "all", "some", "none".
+        lease_a = await _seed_lease(conn, "td:/pr3a_partial_a")
+        lease_b = await _seed_lease(conn, "td:/pr3a_partial_b")
+        await _seed_lease(conn, "td:/pr3a_partial_c")
+
+        await cli.deprecate_cmd(
+            kind="td", session_id="test-cli-partial", drain_window_days=30,
+            db_url=TEST_DB_URL,
+        )
+        depr_id = await conn.fetchval(
+            "SELECT deprecation_id FROM lease_plane.deprecated_schemes WHERE surface_kind = 'td'"
+        )
+
+        # Simulate partial-failure state: lease_a + lease_b were already released
+        # and emitted their deprecation_swept events before the prior sweep was
+        # interrupted (operator hit ^C; process killed; transient DB blip mid-loop).
+        # lease_c remains active, awaiting the re-run.
+        import json
+        partial_payload = json.dumps({"deprecation_id": str(depr_id), "kind": "td"})
+        for lease_id, surface_id in [
+            (lease_a, "td:/pr3a_partial_a"),
+            (lease_b, "td:/pr3a_partial_b"),
+        ]:
+            await conn.execute(
+                "UPDATE lease_plane.surface_leases "
+                "SET released_at = now(), release_reason = 'forced' "
+                "WHERE lease_id = $1",
+                lease_id,
+            )
+            await conn.execute(
+                """
+                INSERT INTO lease_plane.lease_plane_events
+                  (event_type, lease_id, surface_id, surface_kind, advisory_mode, payload)
+                VALUES ('lease.deprecation_swept', $1, $2, 'td', false, $3::jsonb)
+                """,
+                lease_id, surface_id, partial_payload,
+            )
+
+        # Re-run after the simulated interruption.
+        rc = await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL)
+        assert rc == 0
+
+        # All three leases now released, all with reason='forced'.
+        unreleased = await conn.fetchval(
+            "SELECT count(*) FROM lease_plane.surface_leases "
+            "WHERE surface_kind = 'td' AND released_at IS NULL"
+        )
+        assert unreleased == 0
+        forced_count = await conn.fetchval(
+            "SELECT count(*) FROM lease_plane.surface_leases "
+            "WHERE surface_kind = 'td' AND release_reason = 'forced'"
+        )
+        assert forced_count == 3
+
+        # Exactly three deprecation_swept events — no double-emit for a or b.
+        events = await conn.fetch(
+            "SELECT lease_id FROM lease_plane.lease_plane_events "
+            "WHERE event_type = 'lease.deprecation_swept' AND surface_kind = 'td'"
+        )
+        assert len(events) == 3, f"expected 3 events (one per lease, no doubles); got {len(events)}"
+        event_lease_ids = {row["lease_id"] for row in events}
+        assert len(event_lease_ids) == 3, "each lease must appear in exactly one event"
+
+        # A second re-run is also a no-op fixpoint: still three events, all released.
+        rc2 = await cli.deprecation_sweep_cmd(kind="td", db_url=TEST_DB_URL)
+        assert rc2 == 0
+        events_after = await conn.fetchval(
+            "SELECT count(*) FROM lease_plane.lease_plane_events "
+            "WHERE event_type = 'lease.deprecation_swept' AND surface_kind = 'td'"
+        )
+        assert events_after == 3, "fixpoint re-run must not emit additional events"
+    finally:
+        await _cleanup(conn)
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_deprecation_sweep_emits_lease_deprecation_swept_events():
     """RFC §7.11.3: each swept lease emits an event_type='lease.deprecation_swept'
     row in lease_plane_events with the deprecation_id for audit correlation."""
