@@ -107,6 +107,26 @@ def mcp_tool(
                 return result
             except asyncio.TimeoutError:
                 logger.warning(f"Tool '{tool_name}' timed out after {timeout}s")
+                # Wave 0 step 2A (RFC roadmap §86): emit coordination_failure
+                # via the SYNC audit_logger path. Avoids the anyio task-group
+                # conflict (CLAUDE.md "Known Issue") that would deadlock if we
+                # awaited asyncpg from inside the wrapper's except clause.
+                # emit_coordination_failure_sync is failure-safe by contract —
+                # never raises — so it cannot mask the original TimeoutError
+                # that the response below reports to the caller.
+                from src.coordination_failure_emit import (
+                    emit_coordination_failure_sync,
+                )
+                emit_coordination_failure_sync(
+                    service="governance_mcp",
+                    event_type="coordination_failure.mcp_handler_timeout.tool_decorator",
+                    payload={
+                        "tool_name": tool_name,
+                        "timeout_s": timeout,
+                        "elapsed_s": round(time.time() - start_time, 3),
+                    },
+                    agent_id=arguments.get("agent_id") if isinstance(arguments, dict) else None,
+                )
                 return [error_response(
                     f"Tool '{tool_name}' timed out after {timeout} seconds.",
                     recovery={

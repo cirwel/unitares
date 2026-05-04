@@ -198,6 +198,53 @@ class TestDecoratorExecution:
         text = result[0].text if hasattr(result[0], 'text') else str(result[0])
         assert "timed out" in text.lower()
 
+    @pytest.mark.asyncio
+    async def test_timeout_emits_coordination_failure_event(self):
+        """Wave 0 step 2A: when @mcp_tool wrapper hits TimeoutError, it MUST
+        call emit_coordination_failure_sync with the tool_decorator sub-type
+        before returning the error_response. Verifies the wire — emit fires
+        with correct event_type, payload, and agent_id extracted from arguments."""
+        from unittest.mock import patch
+
+        @mcp_tool("test_emit_on_timeout", timeout=0.05)
+        async def handle_test_emit_on_timeout(arguments):
+            await asyncio.sleep(5)
+            return []
+
+        with patch("src.coordination_failure_emit.emit_coordination_failure_sync") as mock_emit:
+            result = await handle_test_emit_on_timeout({"agent_id": "test-uuid-1234"})
+
+        # Wrapper still returns the error response — emit doesn't change behavior
+        assert len(result) == 1
+        text = result[0].text if hasattr(result[0], 'text') else str(result[0])
+        assert "timed out" in text.lower()
+
+        # Emit was called with the correct envelope
+        mock_emit.assert_called_once()
+        call_kwargs = mock_emit.call_args.kwargs
+        assert call_kwargs["service"] == "governance_mcp"
+        assert call_kwargs["event_type"] == "coordination_failure.mcp_handler_timeout.tool_decorator"
+        assert call_kwargs["payload"]["tool_name"] == "test_emit_on_timeout"
+        assert call_kwargs["payload"]["timeout_s"] == 0.05
+        assert "elapsed_s" in call_kwargs["payload"]
+        assert call_kwargs["agent_id"] == "test-uuid-1234"
+
+    @pytest.mark.asyncio
+    async def test_timeout_emit_handles_arguments_without_agent_id(self):
+        """When arguments dict has no agent_id, emit passes None — column is nullable."""
+        from unittest.mock import patch
+
+        @mcp_tool("test_no_agent_id_on_timeout", timeout=0.05)
+        async def handle_test_no_agent_id(arguments):
+            await asyncio.sleep(5)
+            return []
+
+        with patch("src.coordination_failure_emit.emit_coordination_failure_sync") as mock_emit:
+            await handle_test_no_agent_id({})
+
+        mock_emit.assert_called_once()
+        assert mock_emit.call_args.kwargs["agent_id"] is None
+
 
 class TestGetToolMetadata:
 
