@@ -1,7 +1,7 @@
 ---
-status: DRAFT-v0.8 (§7.11 + §7.12 resolved; v1 forward-compat for content-addressing left Open by design; pre-existing v0.7 implementation drift surfaced as named §9 gates)
+status: v0.11+ (Phase A SHIPPED 2026-05-03 via PR #305; post-Phase-A amendments: §7.5 v0.9 Pi remote_heartbeat TTL, §7.2.8/9 v0.10 payload-shape + scheme grammar, §7.13 v0.11 substrate-state separation; §7.13.3 v0.11.3 reviewer-judgment-at-review-time accepted)
 authored: 2026-04-30
-amended: 2026-04-30 (v0.1–v0.8 same session)
+amended: 2026-04-30 (v0.1–v0.8 same session); 2026-05-02 (v0.9 §7.5); 2026-05-02 (v0.10 §7.2.8/9); 2026-05-03 (v0.11 §7.13 substrate-state separation)
 council_pass_1: 2026-04-30
 ack_pass_1: 2026-04-30
 author_session: agent-68437d77-65c (claude_code-claude_68437d77)

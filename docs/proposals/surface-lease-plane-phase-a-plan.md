@@ -1,9 +1,11 @@
 ---
-status: PLANNING (PR 1 scope frozen)
+status: COMPLETE (Phase A shipped 2026-05-03 — PR #305; service `com.unitares.lease-plane` running on `127.0.0.1:8788` via launchd)
 target_branch: impl/lease-plane-phase-a
 based_on: docs/lease-plane-v0.8 (commit 31ada78)
-rfc_baseline: docs/proposals/surface-lease-plane-v0.md @ v0.8
+rfc_baseline: docs/proposals/surface-lease-plane-v0.md @ v0.11+ (post-Phase-A amendments: §7.5 v0.9, §7.2.8/9 v0.10, §7.13 v0.11)
 authored: 2026-04-30
+phase_a_complete: 2026-05-03
+follow_on: docs/proposals/beam-footprint-roadmap-v0.md (Read A — what BEAM does next, post-Phase-A)
 ---
 
 # Surface Lease Plane — Phase A Implementation Plan
