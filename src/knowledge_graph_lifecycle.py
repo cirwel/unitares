@@ -179,17 +179,17 @@ class KnowledgeGraphLifecycle:
     async def _batch_update_status(
         self, graph, discovery_ids: List[str], new_status: str, now: datetime
     ):
-        """Update status in both AGE graph and PG knowledge.discoveries table."""
+        """Update status through the active KG backend and canonical PG table."""
         updated_at = now.isoformat()
 
-        # Update AGE graph (primary)
+        # Update the selected KG backend.
         for discovery_id in discovery_ids:
             await graph.update_discovery(discovery_id, {
                 "status": new_status,
                 "updated_at": updated_at,
             })
 
-        # Sync to PG knowledge.discoveries (best-effort)
+        # Keep the canonical PG table aligned when an alternate backend is active.
         try:
             from src.db.postgres_backend import get_postgres_backend
             db = await get_postgres_backend()

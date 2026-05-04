@@ -5,8 +5,8 @@ Provides DiscoveryNode/ResponseTo data types used by all backends,
 and get_knowledge_graph() factory for backend selection.
 
 Backends:
-- AGE (PostgreSQL + Apache AGE) - primary, configured via UNITARES_KNOWLEDGE_BACKEND=age
-- PostgreSQL FTS - fallback, configured via UNITARES_KNOWLEDGE_BACKEND=postgres
+- PostgreSQL FTS - canonical/default, configured via UNITARES_KNOWLEDGE_BACKEND=postgres
+- AGE (PostgreSQL + Apache AGE) - optional graph backend, configured via UNITARES_KNOWLEDGE_BACKEND=age
 """
 
 from dataclasses import dataclass, field

@@ -20,7 +20,7 @@ data/
 
 ## Primary Storage
 
-As of v2.6.0, PostgreSQL is the primary backend for agents, dialectic sessions, and knowledge graph (AGE). SQLite (`governance.db`) remains for some legacy state but is not the source of truth.
+As of v2.6.0, PostgreSQL is the primary backend for agents, dialectic sessions, and the knowledge graph. The KG uses PostgreSQL FTS by default; AGE remains available for explicit graph traversal work. SQLite (`governance.db`) remains for some legacy state but is not the source of truth.
 
 ## Tracked in Git
 

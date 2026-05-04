@@ -77,7 +77,8 @@ services:
       DB_BACKEND: postgres
       DB_AGE_GRAPH: governance_graph
       REDIS_URL: redis://redis:6379/0
-      UNITARES_KNOWLEDGE_BACKEND: age
+      # PostgreSQL is the canonical KG store; AGE is an explicit graph-feature opt-in.
+      UNITARES_KNOWLEDGE_BACKEND: postgres
       UNITARES_DIALECTIC_BACKEND: postgres
       # Optional: pick embedding backend. Default falls back to PG FTS if
       # sentence-transformers / model not available at runtime.

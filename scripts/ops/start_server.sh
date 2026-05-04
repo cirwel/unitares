@@ -9,7 +9,7 @@
 # Key Environment Variables (set in .env):
 #   DB_BACKEND=postgres           - Database backend
 #   UNITARES_I_DYNAMICS=linear    - v4.2-P: Prevents I-channel boundary saturation
-#   UNITARES_KNOWLEDGE_BACKEND=age - Apache AGE graph backend
+#   UNITARES_KNOWLEDGE_BACKEND=postgres - Canonical KG backend
 
 set -e
 

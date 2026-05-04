@@ -69,19 +69,19 @@ The main runtime DB backend is controlled by `DB_BACKEND`, but the **knowledge g
 
 | Backend | Value | Description |
 |---------|-------|-------------|
-| **AGE** (recommended) | `age` | PostgreSQL + Apache AGE graph database |
-| **PostgreSQL FTS** | `postgres` | Native PostgreSQL with tsvector full-text search |
+| **PostgreSQL FTS** (recommended) | `postgres` | Canonical KG store using native PostgreSQL with tsvector full-text search |
+| **AGE** | `age` | Apache AGE graph backend for graph-specific traversal experiments |
 | **Auto** (default) | `auto` | Uses PostgreSQL FTS when `DB_BACKEND=postgres` |
 
 ```bash
-# Recommended: Use AGE for graph operations
-export UNITARES_KNOWLEDGE_BACKEND=age
-
-# Alternative: PostgreSQL FTS (no AGE dependency)
+# Recommended: PostgreSQL FTS canonical store
 export UNITARES_KNOWLEDGE_BACKEND=postgres
 
 # Auto-select based on DB_BACKEND setting
 export UNITARES_KNOWLEDGE_BACKEND=auto
+
+# Optional: AGE graph backend for graph-specific traversal work
+export UNITARES_KNOWLEDGE_BACKEND=age
 ```
 
 **Note:** When `UNITARES_KNOWLEDGE_BACKEND=auto` (default), the system will:
