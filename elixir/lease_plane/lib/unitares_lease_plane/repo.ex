@@ -77,7 +77,31 @@ defmodule UnitaresLeasePlane.Repo do
   defp acquire_step(conn, p, %{holder_agent_uuid: held} = existing)
        when is_binary(held) do
     if held == p.holder_agent_uuid do
-      {:ok, {:ok, existing, :idempotent}}
+      # RFC §7.13: idempotent re-acquire from the same holder MUST update
+      # substrate_state when caller provided new substrate fields. Without
+      # this, SDK-based residents (Vigil/Sentinel/Watcher/Chronicler) using
+      # run_once never see substrate updates: each cycle creates a fresh
+      # GovernanceClient → fresh _LeaseCache → always calls acquire (not
+      # renew) → idempotent-acquire returned the existing row unchanged.
+      # Only Steward avoided this because PR #4's lease_substrate.py uses
+      # a module-global cache that persists across cycles. Caught
+      # 2026-05-04 multi-resident canary debug: Sentinel had a substrate
+      # row from cycle 1 stuck at 23:52:05 even though subsequent cycles
+      # ran successfully. Substrate-less acquires (legacy callers + tests)
+      # are unchanged: skip the UPDATE and return existing as before.
+      substrate_state = Map.get(p, :substrate_state)
+      substrate_observed_at = Map.get(p, :substrate_state_observed_at)
+
+      if not is_nil(substrate_state) or not is_nil(substrate_observed_at) do
+        update_substrate_on_idempotent(
+          conn,
+          existing,
+          substrate_state,
+          substrate_observed_at
+        )
+      else
+        {:ok, {:ok, existing, :idempotent}}
+      end
     else
       # PR 5 council BLOCK fix: include surface_id + blocking_lease_id so the
       # 409 response carries every field the v0.7 §7.3.2 AcquireHeldByOther shape
@@ -199,6 +223,63 @@ defmodule UnitaresLeasePlane.Repo do
       {:ok, nil} -> acquire_step_nil(conn, p, depth + 1)
       {:error, e} -> {:error, e}
     end
+  end
+
+  # Idempotent re-acquire from same holder + caller-provided substrate fields:
+  # COALESCE-update substrate columns on the existing row. Mirrors the
+  # COALESCE pattern in renew/3 — caller-omitted fields preserve existing
+  # values; caller-provided fields overwrite. Returns the refreshed lease
+  # with `:idempotent` so the caller-side response shape stays the same.
+  defp update_substrate_on_idempotent(conn, existing, substrate_state, substrate_observed_at) do
+    sql = """
+    UPDATE lease_plane.surface_leases
+    SET substrate_state =
+          COALESCE($2::jsonb, substrate_state),
+        substrate_state_observed_at =
+          COALESCE($3::timestamptz, substrate_state_observed_at)
+    WHERE lease_id = $1 AND released_at IS NULL
+    RETURNING #{@select_lease_columns}
+    """
+
+    args = [
+      uuid_to_binary(existing.lease_id),
+      substrate_state,
+      substrate_observed_at
+    ]
+
+    case Postgrex.query(conn, sql, args) do
+      {:ok, %{rows: [row], columns: cols}} ->
+        refreshed = row_to_map(cols, row)
+        {:ok, {:ok, refreshed, :idempotent}}
+
+      # Lease was released between the maybe_existing_active read and our UPDATE
+      # (race against the reaper). Fall through to acquire_step_nil so the
+      # caller still gets a fresh acquire instead of a confusing :not_found.
+      {:ok, %{rows: []}} ->
+        acquire_step_nil(conn, p_from_existing(existing, substrate_state, substrate_observed_at), 0)
+
+      {:error, e} ->
+        {:error, e}
+    end
+  end
+
+  # Reconstruct the acquire params map from an existing-lease snapshot when
+  # the idempotent UPDATE races against a release. The original acquire `p`
+  # isn't in scope here, so synthesize from the existing row + caller fields.
+  # Only used in the rare race-recovery path above.
+  defp p_from_existing(existing, substrate_state, substrate_observed_at) do
+    %{
+      surface_id: existing.surface_id,
+      holder_agent_uuid: existing.holder_agent_uuid,
+      holder_class: existing.holder_class,
+      holder_kind: existing.holder_kind,
+      holder_pid: existing.holder_pid,
+      ttl_s: existing.original_ttl_s,
+      intent: existing.intent,
+      audit_session: existing.audit_session,
+      substrate_state: substrate_state,
+      substrate_state_observed_at: substrate_observed_at
+    }
   end
 
   # ---------- status ----------

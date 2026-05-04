@@ -194,6 +194,78 @@ defmodule UnitaresLeasePlaneTest do
       # Substrate stays nil — substrate-less renew doesn't write substrate columns.
       assert refreshed.substrate_state == nil
     end
+
+    test "idempotent re-acquire with substrate UPDATEs the existing row (regression for SDK-resident multi-cycle path)" do
+      # SDK-based residents (Vigil/Sentinel/Watcher/Chronicler) use run_once
+      # which builds a fresh GovernanceClient per cycle. The client's
+      # _substrate_lease_cache resets each cycle, so substrate emission
+      # always calls acquire — never renew. Pre-fix, idempotent acquire
+      # returned the existing row unchanged, so subsequent cycles' substrate
+      # observations were silently dropped. Caught 2026-05-04 multi-resident
+      # canary debug: Sentinel had a substrate row from cycle 1 stuck while
+      # subsequent cycles ran. Fix: idempotent acquire COALESCE-updates
+      # substrate columns when caller provided them.
+
+      surface = "resident:/test_elixir_idempotent_substrate_#{:erlang.unique_integer([:positive])}"
+      on_exit(fn -> cleanup_surface(surface) end)
+
+      params = local_beam_params(surface, ttl_s: 60)
+      params_with_substrate_v1 = Map.merge(params, %{
+        substrate_state: %{
+          "E" => 0.5,
+          "I" => 0.5,
+          "S" => 0.0,
+          "V" => 0.05,
+          "sensor" => %{"status" => "healthy"}
+        },
+        substrate_state_observed_at: DateTime.utc_now()
+      })
+
+      assert {:ok, lease, :new} =
+               UnitaresLeasePlane.acquire_local_beam(params_with_substrate_v1)
+      first_observed_at = lease.substrate_state_observed_at
+      assert lease.substrate_state["V"] == 0.05
+
+      # Cycle 2: same holder, same surface, NEW substrate values.
+      observed_at_2 = DateTime.add(DateTime.utc_now(), 1, :second)
+      params_with_substrate_v2 = Map.merge(params, %{
+        substrate_state: %{
+          "E" => 0.7,
+          "I" => 0.3,
+          "S" => 0.2,
+          "V" => 0.15,
+          "sensor" => %{"status" => "degraded"}
+        },
+        substrate_state_observed_at: observed_at_2
+      })
+
+      assert {:ok, refreshed, :idempotent} =
+               UnitaresLeasePlane.acquire_local_beam(params_with_substrate_v2)
+      # New substrate values overwrote the old (THE BUG WAS: refreshed.substrate_state["V"] == 0.05)
+      assert refreshed.substrate_state["V"] == 0.15
+      assert refreshed.substrate_state["sensor"]["status"] == "degraded"
+      # observed_at advanced
+      assert DateTime.compare(refreshed.substrate_state_observed_at, first_observed_at) == :gt
+
+      # SELECT confirms the row in DB matches the response (not a phantom in-memory update)
+      {:ok, from_db} = UnitaresLeasePlane.status(surface)
+      assert from_db.substrate_state["V"] == 0.15
+    end
+
+    test "idempotent re-acquire WITHOUT substrate is unchanged (legacy callers preserved)" do
+      surface = "resident:/test_elixir_idempotent_no_substrate_#{:erlang.unique_integer([:positive])}"
+      on_exit(fn -> cleanup_surface(surface) end)
+
+      params = local_beam_params(surface, ttl_s: 60)
+      assert {:ok, _lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
+
+      # Re-acquire WITHOUT substrate fields — must take the legacy idempotent
+      # path that returns the existing row unchanged (no UPDATE, no observable
+      # behavior change for callers that never used substrate).
+      assert {:ok, refreshed, :idempotent} = UnitaresLeasePlane.acquire_local_beam(params)
+      assert refreshed.substrate_state == nil
+      assert refreshed.substrate_state_observed_at == nil
+    end
   end
 
   describe "handoff" do
