@@ -141,6 +141,11 @@ def _isolate_db_backend(monkeypatch):
         "updated_at": None,
     }
     mock_backend.record_r1_score_audit.return_value = True
+    # R1 v3.3-A public KG emission target — `kg_add_discovery` is fired
+    # at the end of every score_trajectory_continuity call to publish the
+    # redacted public node. Returns None on the real path; AsyncMock
+    # leak-prevention requires an explicit stub.
+    mock_backend.kg_add_discovery.return_value = None
     # Audit/tool operations
     mock_backend.append_audit_event.return_value = True
     mock_backend.query_audit_events.return_value = []

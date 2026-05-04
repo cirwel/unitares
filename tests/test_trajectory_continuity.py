@@ -517,3 +517,149 @@ async def test_score_dataclass_internal_caller_surface_unchanged(mocked_db):
     for field in ("plausibility", "verdict", "observations", "components",
                   "reasons", "parent_mature", "score_id", "calibration_status"):
         assert hasattr(result, field), f"missing {field}"
+
+
+# ---------------------------------------------------------------------------
+# v3.3-A public KG emission (closes PR 2's deferred work)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_score_emits_public_kg_node_after_audit(mocked_db):
+    """Per v3.3-A: score_trajectory_continuity publishes a redacted node to
+    the public KG via `kg_add_discovery`, joined to the audit row by
+    score_id."""
+    import json
+    from src.identity.trajectory_continuity import score_trajectory_continuity
+
+    mocked_db.kg_add_discovery = AsyncMock(return_value=None)
+    parent, successor = synthetic_trajectory_pair(seed=60, kind="genuine")
+    mocked_db.reconstruct_eisv_series = AsyncMock(
+        side_effect=_stub_reconstruct(parent, successor)
+    )
+
+    score = await score_trajectory_continuity(
+        claimed_parent_id="parent-uuid",
+        successor_id="successor-uuid",
+    )
+
+    mocked_db.kg_add_discovery.assert_awaited_once()
+    # Inspect the DiscoveryNode that was passed
+    (node,), _kw = mocked_db.kg_add_discovery.call_args
+    assert node.type == "trajectory_continuity_score"
+    assert node.agent_id == "successor-uuid"
+    assert node.id.startswith("r1_score:")
+    # Strict redaction: details JSON has ONLY the four allowed fields
+    public = json.loads(node.details)
+    assert set(public.keys()) == {"verdict", "calibration_status", "n_dims_used", "score_id"}
+    assert public["score_id"] == score.score_id
+    assert public["verdict"] == score.verdict
+    # Tags are observability-only; they MAY duplicate verdict/calibration but
+    # the source-of-truth shape lives in `details`.
+    assert "r1" in node.tags
+    assert "trajectory_continuity" in node.tags
+
+
+@pytest.mark.asyncio
+async def test_score_kg_node_id_is_deterministic_per_pair(mocked_db):
+    """Per v3.2-D dedupe-by-pair: the node id MUST be deterministic from
+    (parent_id, successor_id). Re-scoring the same pair produces the same
+    id, so ON CONFLICT (id) DO UPDATE in `kg_add_discovery` overwrites
+    rather than appends."""
+    from src.identity.trajectory_continuity import score_trajectory_continuity
+
+    mocked_db.kg_add_discovery = AsyncMock(return_value=None)
+    parent, successor = synthetic_trajectory_pair(seed=61, kind="genuine")
+    mocked_db.reconstruct_eisv_series = AsyncMock(
+        side_effect=_stub_reconstruct(parent, successor)
+    )
+
+    await score_trajectory_continuity(
+        claimed_parent_id="parent-uuid", successor_id="successor-uuid",
+    )
+    await score_trajectory_continuity(
+        claimed_parent_id="parent-uuid", successor_id="successor-uuid",
+    )
+
+    assert mocked_db.kg_add_discovery.await_count == 2
+    first_id = mocked_db.kg_add_discovery.call_args_list[0][0][0].id
+    second_id = mocked_db.kg_add_discovery.call_args_list[1][0][0].id
+    assert first_id == second_id
+    # Each score has a fresh score_id (audit retains all); the node id is
+    # the dedupe key, NOT the score_id.
+    first_payload = mocked_db.kg_add_discovery.call_args_list[0][0][0].details
+    second_payload = mocked_db.kg_add_discovery.call_args_list[1][0][0].details
+    assert first_payload != second_payload  # score_id differs across calls
+
+
+@pytest.mark.asyncio
+async def test_score_kg_node_id_differs_across_pairs(mocked_db):
+    """Different (parent, successor) pairs must produce different node ids
+    so dedupe-by-pair is per-pair, not global."""
+    from src.identity.trajectory_continuity import score_trajectory_continuity
+
+    mocked_db.kg_add_discovery = AsyncMock(return_value=None)
+    parent, successor = synthetic_trajectory_pair(seed=62, kind="genuine")
+    mocked_db.reconstruct_eisv_series = AsyncMock(
+        side_effect=_stub_reconstruct(parent, successor)
+    )
+
+    await score_trajectory_continuity(
+        claimed_parent_id="parent-A", successor_id="successor-1",
+    )
+    await score_trajectory_continuity(
+        claimed_parent_id="parent-B", successor_id="successor-1",
+    )
+    await score_trajectory_continuity(
+        claimed_parent_id="parent-A", successor_id="successor-2",
+    )
+
+    ids = [
+        mocked_db.kg_add_discovery.call_args_list[i][0][0].id
+        for i in range(3)
+    ]
+    assert len(set(ids)) == 3, "expected 3 distinct node ids for 3 distinct pairs"
+
+
+@pytest.mark.asyncio
+async def test_score_kg_emission_failure_is_non_fatal(mocked_db):
+    """Per v3.3-A: audit is the durable record; KG is observability. A KG
+    emission failure MUST NOT propagate — the score still returns and the
+    audit row is durably written."""
+    from src.identity.trajectory_continuity import score_trajectory_continuity
+
+    mocked_db.kg_add_discovery = AsyncMock(side_effect=RuntimeError("kg pool down"))
+    parent, successor = synthetic_trajectory_pair(seed=63, kind="genuine")
+    mocked_db.reconstruct_eisv_series = AsyncMock(
+        side_effect=_stub_reconstruct(parent, successor)
+    )
+
+    # Must not raise
+    score = await score_trajectory_continuity(
+        claimed_parent_id="parent-uuid", successor_id="successor-uuid",
+    )
+
+    assert score is not None
+    # Audit was still attempted + persisted (record_r1_score_audit default True)
+    mocked_db.record_r1_score_audit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_score_kg_emission_skipped_when_audit_fails(mocked_db):
+    """Per v3.3-A join-key durability contract: if audit write fails, the
+    score primitive raises BEFORE KG emission — the public node must not
+    reference an absent audit row."""
+    from src.identity.trajectory_continuity import score_trajectory_continuity
+
+    mocked_db.record_r1_score_audit = AsyncMock(return_value=False)
+    mocked_db.kg_add_discovery = AsyncMock(return_value=None)
+    parent, successor = synthetic_trajectory_pair(seed=64, kind="genuine")
+    mocked_db.reconstruct_eisv_series = AsyncMock(
+        side_effect=_stub_reconstruct(parent, successor)
+    )
+
+    with pytest.raises(RuntimeError, match="audit write failed"):
+        await score_trajectory_continuity(
+            claimed_parent_id="parent-uuid", successor_id="successor-uuid",
+        )
+
+    mocked_db.kg_add_discovery.assert_not_awaited()

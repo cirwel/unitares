@@ -34,6 +34,7 @@ that gating lives at the consumer layer (PR 3), not here.
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -51,6 +52,12 @@ _THRESHOLD_UNSUPPORTED = 0.55
 _DEFAULT_MIN_OBSERVATIONS = 5
 _DEFAULT_WINDOW = timedelta(days=30)
 _DIMENSIONS = ("E", "I", "S", "V")
+
+# UUIDv5 namespace for the public KG node ID per (parent, successor) pair.
+# Stable across processes — derived from NAMESPACE_OID + a fixed name. The
+# resulting node ID is `f"r1_score:{uuid5(...)}"`; ON CONFLICT (id) DO UPDATE
+# in `kg_add_discovery` gives v3.2-D dedupe-by-pair for free.
+_R1_KG_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_OID, "unitares.r1.trajectory_continuity_score")
 
 # Class tags recognized for R1's `class_tag` stamping (v3.3-G). Order matters
 # — most-specific first so calibration analyses can partition without
@@ -121,6 +128,87 @@ def _build_public_payload(score: TrajectoryContinuityScore) -> Dict[str, Any]:
         "n_dims_used": score.n_dims_used,
         "score_id": score.score_id,
     }
+
+
+def _public_kg_node_id(parent_id: str, successor_id: str) -> str:
+    """Deterministic node ID per (parent, successor) pair.
+
+    Per v3.2-D dedupe-by-pair: the N-th score for the same pair overwrites
+    the (N-1)-th in the public KG. ON CONFLICT (id) DO UPDATE in
+    `kg_add_discovery` (`src/db/mixins/knowledge_graph.py:82`) gives this
+    semantics for free as long as the id is deterministic from the pair.
+
+    Prefix `r1_score:` makes the id self-describing in logs/queries; the
+    UUIDv5 suffix is the deterministic-and-stable part.
+    """
+    return f"r1_score:{uuid.uuid5(_R1_KG_NAMESPACE, f'{parent_id}:{successor_id}')}"
+
+
+async def _emit_public_kg_node(
+    score: TrajectoryContinuityScore,
+    *,
+    parent_id: str,
+    successor_id: str,
+) -> bool:
+    """Publish the v3.3-A redacted score to the public KG.
+
+    Closes PR 2's deferred KG emission (commit 83e70aa: "KG public emission
+    deferred to PR 3 alongside consumer patches" — PR 3 stayed score-side,
+    so this is the actual write path).
+
+    Per v3.3-A:
+    - Public payload is exactly `{verdict, calibration_status, n_dims_used,
+      score_id}` — `_build_public_payload` produces this shape.
+    - Audit table is the canonical record; the public node is its redacted
+      projection joined by `score_id`.
+
+    Per v3.2-D:
+    - Dedupe by (parent_id, successor_id). N-th score overwrites (N-1)-th.
+      Achieved via deterministic node id + existing ON CONFLICT path.
+
+    Fail-soft contract: emission is observability, not a durability gate.
+    A failure here logs at warn but does not propagate — the audit row is
+    already written by the time we reach this helper, which is what
+    consumers needing forensic access read.
+
+    Returns True on successful write, False otherwise (so tests can assert
+    the side-effect path without parsing logs).
+    """
+    try:
+        from src.db import get_db
+        from src.knowledge_graph import DiscoveryNode
+        backend = get_db()
+
+        public = _build_public_payload(score)
+        node = DiscoveryNode(
+            id=_public_kg_node_id(parent_id, successor_id),
+            agent_id=successor_id,
+            type="trajectory_continuity_score",
+            summary=(
+                f"R1 lineage score: verdict={public['verdict']} "
+                f"calibration={public['calibration_status']} "
+                f"n_dims={public['n_dims_used']}"
+            ),
+            details=json.dumps(public),
+            tags=[
+                "r1",
+                "trajectory_continuity",
+                f"verdict:{public['verdict']}",
+                f"calibration:{public['calibration_status']}",
+            ],
+            severity="low",
+            status="open",
+        )
+        await backend.kg_add_discovery(node)
+        return True
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "[R1] public KG emission failed for score_id=%s parent=%s "
+            "successor=%s: %s",
+            score.score_id, parent_id[:8], successor_id[:8], exc,
+        )
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +357,13 @@ async def score_trajectory_continuity(
             f"refusing to return a score whose audit anchor is absent "
             f"(v3.3-A join-key durability contract)."
         )
+
+    # v3.3-A public KG emission: redacted projection of the audit row,
+    # dedupe-by-pair via deterministic node id (v3.2-D). Fail-soft — audit
+    # is the durable record; this is the public observability surface.
+    await _emit_public_kg_node(
+        score, parent_id=claimed_parent_id, successor_id=successor_id,
+    )
 
     return score
 
