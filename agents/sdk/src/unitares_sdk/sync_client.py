@@ -67,6 +67,10 @@ class SyncGovernanceClient:
         self.client_session_id: str | None = None
         self.continuity_token: str | None = None
         self.agent_uuid: str | None = None
+        # RFC §7.13: see UnitaresClient docstring. Same shape, sync mirror.
+        self.resident_name: str | None = None
+        from unitares_sdk._substrate import _LeaseCache
+        self._substrate_lease_cache = _LeaseCache()
 
         # Lazy async client for mcp transport
         self._async_client = None
@@ -119,6 +123,8 @@ class SyncGovernanceClient:
         args.update(kwargs)
         raw = self.call_tool("onboard", args)
         self._capture_identity(raw)
+        # RFC §7.13: capture resident name for substrate emission (mirrors UnitaresClient).
+        self.resident_name = name
         return OnboardResult.model_validate(raw)
 
     def identity(
@@ -171,6 +177,20 @@ class SyncGovernanceClient:
         if metrics:
             result_data.setdefault("coherence", metrics.get("coherence"))
             result_data.setdefault("risk", metrics.get("risk"))
+
+        # RFC §7.13: emit substrate observation alongside process_agent_update
+        # (mirrors UnitaresClient.checkin). Failure observational-only.
+        try:
+            from unitares_sdk._substrate import emit_substrate_observation
+            if self.resident_name and self.agent_uuid and metrics:
+                emit_substrate_observation(
+                    resident_name=self.resident_name,
+                    holder_uuid=self.agent_uuid,
+                    metrics=metrics,
+                    cache=self._substrate_lease_cache,
+                )
+        except Exception as exc:  # noqa: BLE001 — observational-only by contract
+            logger.debug("[SDK] substrate emit failed (observational-only): %r", exc)
 
         return CheckinResult.model_validate(result_data)
 

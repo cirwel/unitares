@@ -77,6 +77,15 @@ class GovernanceClient:
         self.client_session_id: str | None = None
         self.continuity_token: str | None = None
         self.agent_uuid: str | None = None
+        # RFC §7.13: resident name captured on onboard so post-checkin
+        # substrate emission can build surface_id = "resident:/<name>".
+        # Stays None for non-resident callers; substrate emission skips
+        # silently in that case.
+        self.resident_name: str | None = None
+        # Cached lease handle for substrate emission. Per-client-instance
+        # so concurrent residents don't share state.
+        from unitares_sdk._substrate import _LeaseCache
+        self._substrate_lease_cache = _LeaseCache()
 
         # MCP transport state
         self._session: ClientSession | None = None
@@ -226,6 +235,10 @@ class GovernanceClient:
 
         raw = await self.call_tool("onboard", args)
         self._capture_identity(raw)
+        # RFC §7.13: capture resident name so subsequent checkins can emit
+        # substrate observations to lease_plane.surface_leases. Non-resident
+        # names are stored too but substrate emission filters them out.
+        self.resident_name = name
         return OnboardResult.model_validate(raw)
 
     async def identity(
@@ -302,6 +315,24 @@ class GovernanceClient:
         if metrics:
             result_data.setdefault("coherence", metrics.get("coherence"))
             result_data.setdefault("risk", metrics.get("risk"))
+
+        # RFC §7.13: emit substrate observation to lease_plane.surface_leases
+        # alongside the existing process_agent_update path. Failure does NOT
+        # fail the checkin — RFC §7.13.4 dual-run-authority assignment makes
+        # audit.events authoritative until each resident's individual canary
+        # completes (PR 8 env-var gate). Skipped silently for non-resident
+        # callers (matched against KNOWN_RESIDENT_NAMES in _substrate.py).
+        try:
+            from unitares_sdk._substrate import emit_substrate_observation
+            if self.resident_name and self.agent_uuid and metrics:
+                emit_substrate_observation(
+                    resident_name=self.resident_name,
+                    holder_uuid=self.agent_uuid,
+                    metrics=metrics,
+                    cache=self._substrate_lease_cache,
+                )
+        except Exception as exc:  # noqa: BLE001 — observational-only by contract
+            logger.debug("[SDK] substrate emit failed (observational-only): %r", exc)
 
         return CheckinResult.model_validate(result_data)
 
