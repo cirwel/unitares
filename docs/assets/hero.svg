@@ -24,25 +24,71 @@
       <stop offset="0%" stop-color="#8b5cf6"/>
       <stop offset="100%" stop-color="#6e40c9"/>
     </linearGradient>
-    <filter id="glow">
-      <feGaussianBlur stdDeviation="3" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-    <filter id="soft-glow">
-      <feGaussianBlur stdDeviation="8" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
   </defs>
 
   <!-- Background -->
   <rect width="900" height="280" rx="12" fill="url(#bg)"/>
   <rect width="900" height="280" rx="12" fill="none" stroke="#30363d" stroke-width="1"/>
+
+  <!-- EISV state vector — top right.
+       Crisp version: no gaussian-blur filters (which made the prior
+       diamond look fogged), darker stroke ringing each node for clear
+       definition against the background, slightly larger geometry. -->
+  <g transform="translate(660, 140)" shape-rendering="geometricPrecision">
+    <!-- Orbital ring -->
+    <ellipse cx="0" cy="10" rx="92" ry="84" fill="none" stroke="#30363d"
+             stroke-width="1" opacity="0.5" stroke-dasharray="3 5"/>
+
+    <!-- Diamond connection lines -->
+    <g stroke="#3d4655" stroke-width="1.5" opacity="0.75">
+      <line x1="0" y1="-60" x2="-65" y2="20"/>
+      <line x1="0" y1="-60" x2="65" y2="20"/>
+      <line x1="-65" y1="20" x2="0" y2="80"/>
+      <line x1="65" y1="20" x2="0" y2="80"/>
+    </g>
+
+    <!-- Cross axes (faint) -->
+    <g stroke="#3d4655" stroke-width="1" opacity="0.35">
+      <line x1="-65" y1="20" x2="65" y2="20"/>
+      <line x1="0" y1="-60" x2="0" y2="80"/>
+    </g>
+
+    <!-- E (top) — Energy -->
+    <circle cx="0" cy="-60" r="22" fill="url(#node-e)" stroke="#0d1117" stroke-width="2"/>
+    <text x="0" y="-54" text-anchor="middle"
+          font-family="system-ui, -apple-system, sans-serif"
+          font-size="17" font-weight="800" fill="#ffffff">E</text>
+    <text x="0" y="-93" text-anchor="middle"
+          font-family="system-ui, -apple-system, sans-serif"
+          font-size="9" font-weight="600" fill="#8b949e" letter-spacing="1.4">ENERGY</text>
+
+    <!-- I (left) — Integrity -->
+    <circle cx="-65" cy="20" r="22" fill="url(#node-i)" stroke="#0d1117" stroke-width="2"/>
+    <text x="-65" y="26" text-anchor="middle"
+          font-family="system-ui, -apple-system, sans-serif"
+          font-size="17" font-weight="800" fill="#ffffff">I</text>
+    <text x="-65" y="56" text-anchor="middle"
+          font-family="system-ui, -apple-system, sans-serif"
+          font-size="9" font-weight="600" fill="#8b949e" letter-spacing="1.4">INTEGRITY</text>
+
+    <!-- S (right) — Entropy -->
+    <circle cx="65" cy="20" r="22" fill="url(#node-s)" stroke="#0d1117" stroke-width="2"/>
+    <text x="65" y="26" text-anchor="middle"
+          font-family="system-ui, -apple-system, sans-serif"
+          font-size="17" font-weight="800" fill="#ffffff">S</text>
+    <text x="65" y="56" text-anchor="middle"
+          font-family="system-ui, -apple-system, sans-serif"
+          font-size="9" font-weight="600" fill="#8b949e" letter-spacing="1.4">ENTROPY</text>
+
+    <!-- V (bottom) — Valence -->
+    <circle cx="0" cy="80" r="22" fill="url(#node-v)" stroke="#0d1117" stroke-width="2"/>
+    <text x="0" y="86" text-anchor="middle"
+          font-family="system-ui, -apple-system, sans-serif"
+          font-size="17" font-weight="800" fill="#ffffff">V</text>
+    <text x="0" y="115" text-anchor="middle"
+          font-family="system-ui, -apple-system, sans-serif"
+          font-size="9" font-weight="600" fill="#8b949e" letter-spacing="1.4">VALENCE</text>
+  </g>
 
   <!-- Text content -->
   <g transform="translate(60, 0)">
