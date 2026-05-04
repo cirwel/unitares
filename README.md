@@ -4,18 +4,16 @@
   <img alt="UNITARES — Self-regulating AI agents" src="docs/assets/hero.svg" width="100%">
 </picture>
 
-[![Tests](https://github.com/CIRWEL/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/CIRWEL/unitares/actions/workflows/tests.yml)
+[![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
 
 Status: live. First public commit 2025-12-04. For architecture details, see [docs/UNIFIED_ARCHITECTURE.md](docs/UNIFIED_ARCHITECTURE.md).
 
-**UNITARES is a runtime governance layer for heterogeneous AI-agent fleets.** It tracks continuous agent state, calibrates by class, detects drift, and issues governance interventions with auditable provenance.
+Most AI agents fly blind: they can't tell when they're thrashing, drifting, or overconfident until a human notices. Unitares is a runtime layer that lets agents **see their own state and regulate themselves** — slow down when disorder spikes, ask for review when integrity drops, hand off when they're running on fumes.
 
-Most AI agents fly blind: they can't tell when they're thrashing, drifting, or overconfident until a human notices. UNITARES is a runtime layer that lets agents **see their own state and regulate themselves** — slow down when disorder spikes, ask for review when integrity drops, hand off when they're running on fumes.
-
-Each check-in returns a verdict (`proceed` / `guide` / `pause` / `reject`) and guidance, so agents can adjust *before* external circuit breakers fire. Humans and peer agents read the same underlying state, so one signal serves three consumers: agents regulating themselves, humans watching dashboards, peers coordinating. The four state variables — energy, integrity, entropy, valence (collectively **EISV**) — are detailed below in [How state works](#how-state-works-eisv).
+Each check-in returns a verdict (`proceed` / `guide` / `pause` / `reject`) and guidance, so agents can adjust *before* external circuit breakers fire. Humans and peer agents read the same underlying state, so one signal serves three consumers: agents regulating themselves, humans watching dashboards, peers coordinating.
 
 Circuit breakers and kill switches are still there — they're just the last line of defense, not the first.
 
@@ -24,7 +22,7 @@ Running continuously in production since November 2025. Long-run trajectories ar
 **Try it** (one command, no Postgres/AGE on the host required):
 
 ```bash
-git clone https://github.com/CIRWEL/unitares.git && cd unitares
+git clone https://github.com/cirwel/unitares.git && cd unitares
 docker compose up
 # then point any MCP client at http://localhost:8767/mcp/
 ```
@@ -50,7 +48,7 @@ That brings up Postgres 17 + Apache AGE + pgvector + Redis + the governance serv
 ## The self-regulation loop
 
 1. **Agent acts** — tool call, response, decision.
-2. **UNITARES updates state** — four numbers that summarize how it's going.
+2. **Unitares updates state** — four numbers that summarize how it's going.
 3. **Agent reads its own state back** in the check-in response.
 4. **Agent applies its own policy** — proceed, narrow scope, ask for review, or stop.
 
@@ -66,7 +64,7 @@ elif result["metrics"]["energy"] < 0.2:
     agent.stop_and_summarize()      # avoid thrashing
 ```
 
-The agent reads its own metrics and adjusts *before* external controls have to fire. Humans see the same state on the dashboard; peer agents read it over the API. UNITARES isn't an output validator (guardrails, evals) or a behavioral sandbox (permissions, container limits) — it's a state layer the agent itself can read.
+The agent reads its own metrics and adjusts *before* external controls have to fire. Humans see the same state on the dashboard; peer agents read it over the API. Unitares isn't an output validator (guardrails, evals) or a behavioral sandbox (permissions, container limits) — it's a state layer the agent itself can read.
 
 ## What makes the signal trustworthy
 
@@ -76,7 +74,7 @@ The agent reads its own metrics and adjusts *before* external controls have to f
 
 **Trajectory as identity.** Long-run EISV patterns answer continuity questions ("still the same agent?") and surface drift no single check-in could see.
 
-**Peer review when needed.** When an agent's confidence and the system's assessment disagree, UNITARES can run a short adversarial review with peer agents — or with an LLM when no peers are around — before anything halts.
+**Peer review when needed.** When an agent's confidence and the system's assessment disagree, Unitares can run a short adversarial review with peer agents — or with an LLM when no peers are around — before anything halts.
 
 ---
 
@@ -102,7 +100,7 @@ As of April 2026 (single-operator deployment — self-traffic, not external adop
 *What these numbers are good for:* a stress test that the pipeline holds up under sustained volume. *What they are not:* evidence of product-market traction. External adoption is the open question.
 
 <p align="center">
-  <img src="docs/assets/dashboard.png" width="80%" alt="UNITARES dashboard — stats overview with fleet coherence, agent count, discoveries, and system health"/>
+  <img src="docs/assets/dashboard.png" width="80%" alt="Unitares dashboard — stats overview with fleet coherence, agent count, discoveries, and system health"/>
 </p>
 
 <details>
@@ -184,7 +182,7 @@ Two supported paths. Pick one.
 Zero host dependencies beyond Docker. Brings up Postgres+AGE+pgvector, Redis, and the governance server in one command.
 
 ```bash
-git clone https://github.com/CIRWEL/unitares.git
+git clone https://github.com/cirwel/unitares.git
 cd unitares
 cp .env.example .env       # optional — defaults work
 docker compose up
@@ -198,7 +196,7 @@ To override credentials or host-side ports (e.g. you already have Postgres on `5
 Lower overhead, faster iteration, what the maintainer runs in production. Requires PostgreSQL 16+ with Apache AGE + pgvector compiled and installed (examples use PostgreSQL 17). Redis optional (session cache only).
 
 ```bash
-git clone https://github.com/CIRWEL/unitares.git
+git clone https://github.com/cirwel/unitares.git
 cd unitares
 pip install -r requirements-full.txt
 
@@ -222,9 +220,9 @@ Agent identity: save `agent_uuid` from `onboard()` as an anchor; declare fresh-p
 
 ---
 
-## How state works (EISV)
+## How state works
 
-Agents emit text and tool results; they rarely expose a stable notion of internal condition. UNITARES exposes four continuous variables any client can report and any observer can read:
+Agents emit text and tool results; they rarely expose a stable notion of internal condition. Unitares exposes four continuous variables any client can report and any observer can read:
 
 | Variable | Range | What it tracks |
 |----------|-------|----------------|
@@ -300,17 +298,17 @@ Three files at the repo root orient different AI CLIs. Human readers can skip th
 
 ## Related Projects
 
-- [**Lumen / anima-mcp**](https://github.com/CIRWEL/anima-mcp) — Embodied agent on Raspberry Pi
-- [**unitares-governance-plugin**](https://github.com/CIRWEL/unitares-governance-plugin) — Installable client adapters for Codex and Claude
-- [**unitares-discord-bridge**](https://github.com/CIRWEL/unitares-discord-bridge) — Discord presence and governance events
-- [**eisv-lumen**](https://github.com/CIRWEL/eisv-lumen) — Governance benchmark (21K trajectories on HuggingFace)
-- [**unitares-paper-v6**](https://github.com/CIRWEL/unitares-paper-v6) — Companion paper *Information-Theoretic Governance of Heterogeneous Agent Fleets* (Wang, 2026); concept DOI [10.5281/zenodo.19647159](https://doi.org/10.5281/zenodo.19647159)
+- [**Lumen / anima-mcp**](https://github.com/cirwel/anima-mcp) — Embodied agent on Raspberry Pi
+- [**unitares-governance-plugin**](https://github.com/cirwel/unitares-governance-plugin) — Installable client adapters for Codex and Claude
+- [**unitares-discord-bridge**](https://github.com/cirwel/unitares-discord-bridge) — Discord presence and governance events
+- [**eisv-lumen**](https://github.com/cirwel/eisv-lumen) — Governance benchmark (21K trajectories on HuggingFace)
+- [**unitares-paper-v6**](https://github.com/cirwel/unitares-paper-v6) — Companion paper *Information-Theoretic Governance of Heterogeneous Agent Fleets* (Wang, 2026); concept DOI [10.5281/zenodo.19647159](https://doi.org/10.5281/zenodo.19647159)
 
 This `unitares` repo is the governance server/runtime. Plugin-side `.codex-plugin/`, `hooks/`, `skills/`, and `commands/` content belongs to the companion adapter repo, not as canonical copies here.
 
 ## Citation
 
-Kenny Wang ([ORCID 0009-0006-7544-2374](https://orcid.org/0009-0006-7544-2374)), CIRWEL Systems. If you build on this work, please cite — see [`CITATION.cff`](CITATION.cff).
+Kenny Wang ([ORCID 0009-0006-7544-2374](https://orcid.org/0009-0006-7544-2374)), cirwel Systems. If you build on this work, please cite — see [`CITATION.cff`](CITATION.cff).
 
 ```bibtex
 @misc{wang2026unitares,
@@ -327,4 +325,4 @@ Kenny Wang ([ORCID 0009-0006-7544-2374](https://orcid.org/0009-0006-7544-2374)),
 
 **Apache License 2.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Covers server, dashboard, tooling, and the ODE dynamics engine in `governance_core/`. Attribution requested per the NOTICE file (Apache §4(d)) for redistributions and derivative works.
 
-Built by [@CIRWEL](https://github.com/CIRWEL)
+Built by [@cirwel](https://github.com/cirwel)
