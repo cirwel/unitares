@@ -38,7 +38,6 @@ That brings up Postgres 17 + Apache AGE + pgvector + Redis + the governance serv
 | Governance MCP server | `8767` | `http://localhost:8767/mcp/` |
 | Postgres + AGE + pgvector | `5432` | `postgresql://postgres:postgres@localhost:5432/governance` |
 | Redis (session cache) | `6379` | `redis://localhost:6379/0` |
-| Anima MCP (Pi-side, separate repo, optional) | `8766` | `http://lumen.local:8766/mcp/` |
 
 **Workflow:** `onboard(force_new=true)` → `process_agent_update()` → `get_governance_metrics()`. Use `parent_agent_id` for fresh-process lineage — details in [Getting Started](docs/guides/START_HERE.md).
 
