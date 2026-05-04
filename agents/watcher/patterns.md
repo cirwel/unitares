@@ -322,6 +322,37 @@ False-positive sweep 2026-04-14: flagged four SDK-typed call sites in
 All four are typed pydantic models from `agents.sdk` — no nested envelope
 exists. Required-token constraint added to prevent recurrence.
 
+False-positive sweep 2026-05-04: seven findings on the SDK envelope-parsing
+code in `agents/sdk/src/unitares_sdk/{client.py,sync_client.py}` (fingerprints
+`f5d5a59c`, `85890889`, `3a77f756`, `1492d4d7`, `f1ce4e8d`, `ceed748b`,
+`46b7705f`). The SDK's `_rest_call` (sync_client.py:330,340) already does the
+correct two-layer check (outer `data["success"]` + `result.get("isError")`)
+and unwraps before returning; `_raise_for_tool_failure` is then called on the
+already-unwrapped inner result, so its single `raw.get("success") is False`
+check is semantically the inner-layer check. Four FP shapes flagged in one
+batch:
+
+1. **Path-traversal chained `.get()`** — `raw.get("a", {}).get("b", {}).get("value")`
+   for option-extraction; no `success` token on the cited line.
+2. **Function signatures and import statements** — flagged as the
+   "representative" line for a finding whose actual `success` reference
+   lives elsewhere in the same function.
+3. **Unrelated-line attribution** — kwargs (`method="POST"`), bare `try:`
+   blocks; cited line carries no semantic content.
+4. **Already-unwrapped-result check** — single-layer `success` check on
+   inner result that the caller has already validated outer-envelope for.
+
+Six of these seven *should* have been dropped by the required-token filter
+at `agent.py:1431-1438` since their cited lines do not contain `"success"`.
+That they were not dropped suggests the cited line drifted between
+detection time and filter time (file edits shifted line numbers; the filter
+re-reads `src_line` from current disk state, not the snapshot at detection).
+Persisting `src_line` alongside the fingerprint — and replaying the
+required-token check against the stored snippet at chime time — would close
+this gap and harden the entire detector pipeline, not just P016. Two
+sweeps in three weeks is enough evidence that the rule's own escape hatch
+(move to experimental) is on the table if the storage fix doesn't ship.
+
 **Why this is in the active library and not experimental:** the shape is
 reasonably lexical — the model can spot a conditional on one success flag
 that ignores a nested success flag in the same response object. If Qwen3
