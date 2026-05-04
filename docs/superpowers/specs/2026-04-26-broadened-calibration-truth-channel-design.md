@@ -1,7 +1,7 @@
 # Broadened Tactical Truth Channel + Per-Channel Calibration
 
 **Date:** 2026-04-26
-**Status:** Council-reviewed; awaiting operator sign-off
+**Status:** SHIPPED — `HARD_EXOGENOUS_TYPES` lives in `src/mcp_handlers/observability/outcome_events.py`; `tactical_bin_stats_by_channel` lives in `src/calibration.py`. Companion plan was retired in PR #334 once code shipped.
 **Author:** Claude (with Kenny)
 **Revision:** 2 (incorporates dialectic-knowledge-architect, feature-dev:code-reviewer, and live-verifier feedback)
 
