@@ -436,6 +436,164 @@ class IdentityMixin:
             return await self.read_r1_calibration_state()
         return dict(row)
 
+    # ------------------------------------------------------------------
+    # R2: lineage lifecycle helpers (migration 035)
+    #
+    # Extends the R1 helpers above with the demote / archive / eval-stamp
+    # transitions and the forward-only chain counter. The state machine
+    # itself lives in src/identity/lineage_lifecycle.py (PR 2); these
+    # helpers are the storage primitives it composes.
+    #
+    # Convention matches the R1 block: each method inlines the asyncpg
+    # "UPDATE N" parsing rather than calling out to a shared helper, so
+    # the row-affected semantics are obvious at the call site.
+    # ------------------------------------------------------------------
+
+    async def declare_lineage(self, successor_id: str) -> bool:
+        """R2: stamp lineage_declared_at when parent_agent_id is first set.
+
+        Idempotent — only stamps if NULL. Caller is the onboard handler
+        (PR 3) after parent_agent_id is written and the cross-role
+        pre-check has passed.
+        """
+        async with self.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE core.identities
+                SET lineage_declared_at = COALESCE(lineage_declared_at, now()),
+                    updated_at = now()
+                WHERE agent_id = $1
+                """,
+                successor_id,
+            )
+            try:
+                rows = int((result or "UPDATE 0").split()[-1])
+            except Exception:
+                rows = 0
+            return rows > 0
+
+    async def demote_lineage(self, successor_id: str, *, reason: str) -> bool:
+        """R2: provisional/confirmed → demoted.
+
+        Clears parent_agent_id, stamps lineage_demoted_at, clears the
+        provisional flag and confirmed_at, and resets chain_obs_count
+        to 0 (clawback for the confirmed → demoted path). `reason` is
+        accepted by the caller for the audit event payload — the column
+        carries timestamps, not free-text.
+        """
+        # `reason` is intentionally consumed by the caller's audit
+        # emission — kept in the signature so call sites must name a
+        # reason explicitly.
+        del reason
+        async with self.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE core.identities
+                SET parent_agent_id = NULL,
+                    provisional_lineage = FALSE,
+                    provisional_score_id = NULL,
+                    confirmed_at = NULL,
+                    lineage_demoted_at = now(),
+                    chain_obs_count = 0,
+                    updated_at = now()
+                WHERE agent_id = $1
+                """,
+                successor_id,
+            )
+            try:
+                rows = int((result or "UPDATE 0").split()[-1])
+            except Exception:
+                rows = 0
+            return rows > 0
+
+    async def archive_lineage(self, successor_id: str) -> bool:
+        """R2: grace-window expiration.
+
+        Stamps lineage_archived_at, clears the provisional flag and
+        provisional_score_id, but **retains parent_agent_id** as an
+        inert audit anchor (the declaration happened; we just stopped
+        being able to verify it before the grace window closed).
+        """
+        async with self.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE core.identities
+                SET provisional_lineage = FALSE,
+                    provisional_score_id = NULL,
+                    lineage_archived_at = now(),
+                    updated_at = now()
+                WHERE agent_id = $1
+                """,
+                successor_id,
+            )
+            try:
+                rows = int((result or "UPDATE 0").split()[-1])
+            except Exception:
+                rows = 0
+            return rows > 0
+
+    async def increment_chain_obs_count(self, successor_id: str) -> int:
+        """R2: post-promotion forward-only counter.
+
+        Returns the new value after the increment. No-op (returns 0)
+        when the row is not in the confirmed state — the counter only
+        advances for lineage edges that have cleared promotion. The
+        confirmed-state guard lives in the WHERE clause so this is one
+        atomic UPDATE; no read-modify-write window.
+        """
+        async with self.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE core.identities
+                SET chain_obs_count = chain_obs_count + 1,
+                    updated_at = now()
+                WHERE agent_id = $1
+                  AND confirmed_at IS NOT NULL
+                  AND provisional_lineage = FALSE
+                RETURNING chain_obs_count
+                """,
+                successor_id,
+            )
+            return int(row["chain_obs_count"]) if row is not None else 0
+
+    async def stamp_lineage_eval(self, successor_id: str) -> None:
+        """R2: cadence guard. Called after every R1 eval (PR 2 FSM
+        + PR 4 sweeper) to avoid hot-loop re-evaluation of the same
+        edge inside the sweeper cycle window."""
+        async with self.acquire() as conn:
+            await conn.execute(
+                "UPDATE core.identities "
+                "SET lineage_last_eval_at = now() "
+                "WHERE agent_id = $1",
+                successor_id,
+            )
+
+    async def are_lineages_provisional(
+        self, agent_ids: List[str]
+    ) -> Dict[str, bool]:
+        """R2: batch read of provisional_lineage for many agents.
+
+        Architect-flagged in the R1 PR 4a council as the primitive that
+        keeps the sweeper and chain-walker from running N+1
+        is_lineage_provisional() calls. Missing agents are reported as
+        not-provisional (matches the single-agent helper's contract).
+        """
+        if not agent_ids:
+            return {}
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT agent_id, provisional_lineage "
+                "FROM core.identities "
+                "WHERE agent_id = ANY($1::text[])",
+                agent_ids,
+            )
+        out: Dict[str, bool] = {
+            row["agent_id"]: bool(row["provisional_lineage"]) for row in rows
+        }
+        for aid in agent_ids:
+            out.setdefault(aid, False)
+        return out
+
     def _row_to_identity(self, row) -> IdentityRecord:
         return IdentityRecord(
             identity_id=row["identity_id"],

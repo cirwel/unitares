@@ -131,6 +131,11 @@ async def ensure_test_database_schema() -> None:
         # Migration 035: Wave 0 coordination_events instrumentation table.
         # See docs/proposals/beam-footprint-roadmap-v0.md.
         await _execute_sql_file(conn, "db/postgres/migrations/035_coordination_events.sql")
+        # Migration 036: R2 lineage lifecycle columns + sweeper-friendly partial index.
+        # Adds lineage_declared_at, lineage_demoted_at, lineage_archived_at,
+        # lineage_last_eval_at, chain_obs_count to core.identities. Required for
+        # the R2 provisional → confirmed/demoted/archived FSM (PR 1).
+        await _execute_sql_file(conn, "db/postgres/migrations/036_r2_lineage_lifecycle.sql")
 
         # Ensure partitioned audit tables can accept inserts for current month.
         await _execute_sql_file(conn, "db/postgres/partitions.sql")
