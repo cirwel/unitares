@@ -133,6 +133,67 @@ defmodule UnitaresLeasePlaneTest do
 
       assert {:error, :not_found} = Repo.renew(lease.lease_id)
     end
+
+    test "renew/3 with substrate persists for local_beam-held leases (regression for 2026-05-04 canary)" do
+      # Bug caught by canary smoke test post-PR-322: HTTP /v1/lease/acquire
+      # always spawns a local_beam holder via acquire_local_beam, so every
+      # SDK-emitted resident substrate update hits LeaseSupervisor.holder_for
+      # and would dispatch to LeaseHolder.renew/1 — which has no substrate
+      # path. The substrate update was silently dropped (200 OK from renew,
+      # but DB unchanged). This test pins the fix: when substrate is
+      # provided, renew/3 routes through Repo.renew/3 unconditionally.
+      #
+      # Uses a fresh resident:/ surface (not ctx.surface, which is dialectic:/
+      # via the LeaseTestHelpers default) because migration-034's
+      # substrate_state_only_on_resident_kind CHECK forbids substrate writes
+      # on non-resident leases.
+      surface = "resident:/test_elixir_substrate_renew_#{:erlang.unique_integer([:positive])}"
+      on_exit(fn -> cleanup_surface(surface) end)
+
+      params = local_beam_params(surface, ttl_s: 60)
+      assert {:ok, _lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
+
+      {:ok, before} = UnitaresLeasePlane.status(surface)
+      assert before.substrate_state == nil
+      assert before.substrate_state_observed_at == nil
+
+      observed_at = DateTime.utc_now()
+      assert :ok =
+               UnitaresLeasePlane.renew(
+                 before.lease_id,
+                 %{
+                   "E" => 0.7,
+                   "I" => 0.3,
+                   "S" => 0.1,
+                   "V" => 0.4,
+                   "sensor" => %{"status" => "degraded"}
+                 },
+                 observed_at
+               )
+
+      {:ok, after_renew} = UnitaresLeasePlane.status(surface)
+      assert after_renew.substrate_state["E"] == 0.7
+      assert after_renew.substrate_state["sensor"]["status"] == "degraded"
+      assert DateTime.compare(after_renew.substrate_state_observed_at, observed_at) == :eq
+    end
+
+    test "renew/3 without substrate keeps fast-path (LeaseHolder.renew unchanged)", ctx do
+      # Sibling test to the regression above. Substrate-less renews continue
+      # to use the LeaseHolder fast-path so the existing in-process timer
+      # logic stays in effect — the fix only re-routes when substrate is
+      # provided.
+      params = local_beam_params(ctx.surface, ttl_s: 60)
+      assert {:ok, lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
+      original_expiry = lease.expires_at
+
+      Process.sleep(1100)
+      assert :ok = UnitaresLeasePlane.renew(lease.lease_id)
+
+      {:ok, refreshed} = UnitaresLeasePlane.status(ctx.surface)
+      assert DateTime.compare(refreshed.expires_at, original_expiry) == :gt
+      # Substrate stays nil — substrate-less renew doesn't write substrate columns.
+      assert refreshed.substrate_state == nil
+    end
   end
 
   describe "handoff" do

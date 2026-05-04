@@ -53,16 +53,28 @@ defmodule UnitaresLeasePlane do
   @spec renew(binary()) :: :ok | {:error, term()}
   @spec renew(binary(), map() | nil, DateTime.t() | nil) :: :ok | {:error, term()}
   def renew(lease_id, substrate_state \\ nil, substrate_observed_at \\ nil) do
-    case LeaseSupervisor.holder_for(lease_id) do
-      {:ok, pid} ->
-        # local_beam holder: substrate path not wired (PR 1 scope is
-        # remote_heartbeat-via-Repo). LeaseHolder.renew/1 ignores substrate
-        # arguments. RFC §7.13 PR 1 explicitly does not extend the local_beam
-        # path; future PRs will if a local_beam resident appears.
-        LeaseHolder.renew(pid)
-
-      :error ->
-        Repo.renew(lease_id, substrate_state, substrate_observed_at)
+    # When the caller supplies substrate fields, route through Repo.renew/3
+    # unconditionally — LeaseHolder.renew/1 has no path for substrate, and
+    # silently dropping substrate updates was a real bug caught by the
+    # 2026-05-04 canary smoke test (200 OK from renew but DB unchanged).
+    # The HTTP /v1/lease/acquire endpoint always spawns a local_beam holder
+    # via UnitaresLeasePlane.acquire_local_beam (per http_router.ex:70), so
+    # ALL HTTP-acquired leases (including SDK-emitted resident substrate
+    # updates from PR #330) hit the LeaseSupervisor.holder_for fast-path
+    # below and would otherwise drop substrate writes silently.
+    #
+    # The fast-path through LeaseHolder.renew remains for substrate-less
+    # renews — they extend expires_at via the holder's in-process timer
+    # logic rather than via a fresh DB UPDATE. Once all residents have
+    # ported and PR 8's call sites all carry substrate, the fast-path is
+    # dead code that the final cleanup PR can remove.
+    if not is_nil(substrate_state) or not is_nil(substrate_observed_at) do
+      Repo.renew(lease_id, substrate_state, substrate_observed_at)
+    else
+      case LeaseSupervisor.holder_for(lease_id) do
+        {:ok, pid} -> LeaseHolder.renew(pid)
+        :error -> Repo.renew(lease_id)
+      end
     end
   end
 
