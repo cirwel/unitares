@@ -601,6 +601,52 @@ class IdentityMixin:
                 successor_id,
             )
 
+    async def read_lineage_state(
+        self, successor_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """R2 PR 2: single-query read of the columns the lineage FSM
+        needs to compute the next transition.
+
+        Returns a dict with keys:
+            parent_agent_id, provisional_lineage, confirmed_at,
+            lineage_declared_at, lineage_demoted_at,
+            lineage_archived_at, lineage_last_eval_at, chain_obs_count
+        or ``None`` if no row exists for ``successor_id``.
+
+        Single-query so the FSM driver in
+        `src/identity/lineage_lifecycle.py` reads a consistent snapshot
+        before deciding whether to skip on cadence, short-circuit on
+        grace expiration, score, promote, or demote.
+        """
+        async with self.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT parent_agent_id,
+                       provisional_lineage,
+                       confirmed_at,
+                       lineage_declared_at,
+                       lineage_demoted_at,
+                       lineage_archived_at,
+                       lineage_last_eval_at,
+                       chain_obs_count
+                  FROM core.identities
+                 WHERE agent_id = $1
+                """,
+                successor_id,
+            )
+        if row is None:
+            return None
+        return {
+            "parent_agent_id": row["parent_agent_id"],
+            "provisional_lineage": bool(row["provisional_lineage"]),
+            "confirmed_at": row["confirmed_at"],
+            "lineage_declared_at": row["lineage_declared_at"],
+            "lineage_demoted_at": row["lineage_demoted_at"],
+            "lineage_archived_at": row["lineage_archived_at"],
+            "lineage_last_eval_at": row["lineage_last_eval_at"],
+            "chain_obs_count": int(row["chain_obs_count"] or 0),
+        }
+
     async def are_lineages_provisional(
         self, agent_ids: List[str]
     ) -> Dict[str, bool]:

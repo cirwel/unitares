@@ -135,6 +135,12 @@ def _isolate_db_backend(monkeypatch):
     mock_backend.increment_chain_obs_count.return_value = 0
     mock_backend.stamp_lineage_eval.return_value = None
     mock_backend.are_lineages_provisional.return_value = {}
+    # R2 PR 2 — lineage FSM single-query read. Default to None so tests
+    # that don't seed a provisional/confirmed row exercise the
+    # `no_parent` skip path. Per the R2 plan §"Test 10 (meta)" this
+    # explicit stub avoids the AsyncMock auto-child coroutine-leak
+    # pattern noted in R1 v3.2-E.
+    mock_backend.read_lineage_state.return_value = None
     mock_backend.read_r1_calibration_state.return_value = {
         "calibration_status": "seeded",
         "seeded_since": None,
