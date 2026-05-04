@@ -619,8 +619,63 @@ class UNITARESMonitor:
         self.state.update_count += 1
     
     def check_void_state(self) -> bool:
-        """Checks if system is in void state: |V| > threshold."""
-        return _check_void_state(self.state)
+        """Checks if system is in void state: |V| > threshold.
+
+        RFC §7.13.6 PR 3 (interim safety net): resolves agent class once per
+        monitor instance and passes it through so resident-class agents get
+        the wider VOID_THRESHOLD_BY_CLASS override. Lookup is cached on the
+        instance after first call. Failure to resolve is non-fatal — falls
+        back to the default adaptive threshold.
+
+        This wiring is scheduled for sunset at PR 8 once all residents have
+        ported to lease-plane substrate_state and no resident remains in
+        the monitor_decision pipeline.
+        """
+        if not hasattr(self, "_resolved_agent_class"):
+            self._resolved_agent_class = self._resolve_agent_class()
+        return _check_void_state(self.state, agent_class=self._resolved_agent_class)
+
+    def _resolve_agent_class(self):
+        """Best-effort lookup of this agent's class for void-threshold override.
+
+        Returns None on any failure so the void-threshold falls back to
+        adaptive default. Lookup is cached by `check_void_state` after first
+        call to amortize the cost across check cycles.
+
+        Resolution order:
+          1. `state.agent_class` if pre-populated by an upstream loader.
+          2. `agent_id` literal match against KNOWN_RESIDENT_LABELS — catches
+             residents constructed with a label string as agent_id.
+          3. Synthetic meta from `state.label`/`state.tags` if upstream loaders
+             populated those fields.
+
+        For PR 3 this is intentionally narrow — full DB-backed lookup is a
+        future wiring item. The hot path stays sync.
+        """
+        explicit = getattr(self.state, "agent_class", None)
+        if explicit:
+            return explicit
+
+        try:
+            from src.grounding.class_indicator import (
+                KNOWN_RESIDENT_LABELS,
+                classify_agent,
+            )
+        except Exception:
+            return None
+
+        if self.agent_id in KNOWN_RESIDENT_LABELS:
+            return self.agent_id
+
+        synthetic_meta = type("StateMeta", (), {
+            "label": getattr(self.state, "label", None),
+            "tags": getattr(self.state, "tags", None) or [],
+        })()
+        try:
+            cls = classify_agent(synthetic_meta)
+            return cls if cls != "default" else None
+        except Exception:
+            return None
 
     def _calculate_void_frequency(self) -> float:
         """Calculate void frequency from V history."""

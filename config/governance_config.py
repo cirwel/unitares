@@ -4,7 +4,7 @@ All concrete decision points implemented - no placeholders!
 """
 
 from dataclasses import dataclass
-from typing import Dict, Tuple, Optional, List
+from typing import ClassVar, Dict, Tuple, Optional, List
 class _LazyNumpy:
     def __getattr__(self, name):
         import numpy
@@ -214,23 +214,59 @@ class GovernanceConfig:
     # Adaptive threshold using rolling statistics
     VOID_ADAPTIVE_WINDOW = 100     # Last N observations for statistics
     VOID_THRESHOLD_SIGMA = 2.0     # Threshold = mean + 2σ
-    
+
+    # Class-aware void thresholds (RFC v0.11 §7.13.6 PR 3 — interim safety net).
+    # Closes the void-pause path for resident-class agents BEFORE all residents
+    # have ported to lease-plane substrate_state (PRs 4-7). Sunsets at PR 8 per
+    # §7.13.6 once no resident remains in the monitor_decision pipeline.
+    #
+    # The 2026-05-01 Steward auto-pause incident showed V_ss ≈ 0.19 was
+    # mathematically inevitable given Steward's substrate sample shape — past
+    # the standard 0.15 INITIAL threshold, easily into the void_active path.
+    # 0.30 (= VOID_THRESHOLD_MAX) for residents widens the gate enough to clear
+    # the observed substrate-asymmetry baseline while still being a real bound.
+    #
+    # Class names match `src/grounding/class_indicator.py::classify_agent`
+    # output. KNOWN_RESIDENT_LABELS plus tag-derived `embodied` and
+    # `resident_persistent` get the wider threshold; everything else (default,
+    # ephemeral, engaged_ephemeral) keeps standard behavior.
+    VOID_THRESHOLD_BY_CLASS: ClassVar[dict[str, float]] = {
+        "Lumen": 0.30,
+        "Vigil": 0.30,
+        "Sentinel": 0.30,
+        "Watcher": 0.30,
+        "Steward": 0.30,
+        "Chronicler": 0.30,
+        "embodied": 0.30,
+        "resident_persistent": 0.30,
+    }
+
     @staticmethod
-    def get_void_threshold(history: np.ndarray, 
-                          adaptive: bool = True) -> float:
+    def get_void_threshold(history: np.ndarray,
+                          adaptive: bool = True,
+                          agent_class: str | None = None) -> float:
         """
         Computes void detection threshold.
-        
-        If adaptive=True:
-            threshold = mean(|V|) + 2σ(|V|) over last 100 observations
-        Else:
-            threshold = VOID_THRESHOLD_INITIAL
-            
-        Clamped to [VOID_THRESHOLD_MIN, VOID_THRESHOLD_MAX]
+
+        If `agent_class` is in VOID_THRESHOLD_BY_CLASS (RFC §7.13.6 PR 3),
+        returns the class-specific override regardless of `adaptive`. The
+        override is a fixed value — not adaptive — because the residents this
+        targets have substrate-state baseline asymmetries that the adaptive
+        window would never widen enough to accommodate. Future readers MUST
+        understand: this is interim safety pinned at PR 3, scheduled for
+        sunset at PR 8 once residents no longer flow through monitor_decision.
+
+        Otherwise falls back to existing behavior:
+        - adaptive=True: mean(|V|) + 2σ(|V|) over last 100 obs, clamped
+          to [VOID_THRESHOLD_MIN, VOID_THRESHOLD_MAX]
+        - adaptive=False: VOID_THRESHOLD_INITIAL
         """
+        if agent_class and agent_class in GovernanceConfig.VOID_THRESHOLD_BY_CLASS:
+            return GovernanceConfig.VOID_THRESHOLD_BY_CLASS[agent_class]
+
         if not adaptive or len(history) < 10:
             return GovernanceConfig.VOID_THRESHOLD_INITIAL
-        
+
         # Use last N observations
         recent = np.abs(history[-GovernanceConfig.VOID_ADAPTIVE_WINDOW:])
         recent = recent[~np.isnan(recent)]
@@ -238,16 +274,16 @@ class GovernanceConfig:
             return GovernanceConfig.VOID_THRESHOLD_INITIAL
         mean_V = np.mean(recent)
         std_V = np.std(recent)
-        
+
         threshold = mean_V + GovernanceConfig.VOID_THRESHOLD_SIGMA * std_V
-        
+
         # Clamp to safe range
         threshold = np.clip(
             threshold,
             GovernanceConfig.VOID_THRESHOLD_MIN,
             GovernanceConfig.VOID_THRESHOLD_MAX
         )
-        
+
         return threshold
     
     # =================================================================
