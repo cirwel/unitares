@@ -319,26 +319,37 @@ async def test_substrate_state_visible_in_select_after_renew():
         await conn.close()
 
 
-# (g) class-aware void-threshold test — parked, marked xfail-strict until PR 3
-@pytest.mark.xfail(
-    strict=True,
-    reason="gates on PR 3 (VOID_THRESHOLD_BY_CLASS class-aware monitor_void.check_void_state); "
-    "RFC §7.13.6 PR 3. xfail-strict will flip to pass when PR 3 lands.",
-)
-@pytest.mark.asyncio
-async def test_resident_class_exempted_from_void_threshold():
+# (g) class-aware void-threshold test — flipped to live by PR 3
+def test_resident_class_exempted_from_void_threshold():
     """§7.13 gate (g): a resident-class agent with V_ss = 0.19 does NOT trip
     check_void_state, while a non-resident agent at the same V_ss DOES trip it.
-    Confirms the PR 3 class-aware threshold lookup wires through correctly."""
-    # Parked: requires PR 3's VOID_THRESHOLD_BY_CLASS implementation.
-    # The test body below is the assertion shape that PR 3 must satisfy.
-    from src.config.governance_config import config  # noqa: F401  (PR 3 import)
+    Confirms the PR 3 class-aware threshold lookup wires through correctly.
 
-    # PR 3 expectations (test body sketched, will live or fail strictly when PR 3 lands):
-    # threshold_resident = config.get_void_threshold_by_class("resident", history)
-    # threshold_default = config.get_void_threshold_by_class("agent", history)
-    # assert threshold_resident > threshold_default
-    raise NotImplementedError("PR 3 not yet landed")
+    Originally parked as xfail(strict=True) waiting on PR 3's
+    VOID_THRESHOLD_BY_CLASS map landing. PR 3 ships with this lit up.
+    Detailed PR 3 unit tests live in tests/test_void_threshold_class_aware.py;
+    this gate is the §9-checklist contract pin showing the class lookup
+    threads through end-to-end from the §7.13 RFC perspective."""
+    import numpy as np
+
+    from config.governance_config import config
+
+    # Standard adaptive path with low-variance history clamps to MIN (0.10).
+    # The 2026-05-01 incident showed Steward V_ss ≈ 0.19, well past 0.15
+    # INITIAL — would trip the void_pause path. Resident override (0.30)
+    # clears it.
+    history = np.array([0.05] * 100)
+    threshold_default = config.get_void_threshold(history, adaptive=True)
+    threshold_resident = config.get_void_threshold(
+        history, adaptive=True, agent_class="Steward"
+    )
+    assert threshold_resident > threshold_default
+    assert threshold_resident == 0.30
+    assert 0.19 < threshold_resident, "Steward V_ss must clear resident threshold"
+    assert 0.19 > threshold_default, (
+        "Steward V_ss must trip the default threshold — the whole point of the "
+        "interim safety net is the gap between these two"
+    )
 
 
 # (h) reader-side: degraded status with NULL last_healthy_observed_at handled
