@@ -275,6 +275,19 @@ class GovernanceClient:
 
         raw = await self.call_tool("identity", args)
         self._capture_identity(raw)
+        # RFC §7.13: capture resident name from identity() too — substrate-
+        # anchored residents (Vigil/Sentinel/Watcher/Chronicler) resume via
+        # identity() across restarts and never call onboard(), so without
+        # this fixup self.resident_name stayed None and the post-checkin
+        # substrate emission silently skipped. Caught 2026-05-04 on the
+        # canary multi-resident probe (only Steward had a substrate row
+        # because Steward is in-process and skipped this code path).
+        # Resolution order: explicit name kwarg → raw response 'label' field
+        # if the server includes it → leave None (caller may set explicitly).
+        if name:
+            self.resident_name = name
+        elif isinstance(raw, dict) and raw.get("label"):
+            self.resident_name = raw["label"]
         return IdentityResult.model_validate(raw)
 
     # --- Check-in ---

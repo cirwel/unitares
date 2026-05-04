@@ -142,6 +142,14 @@ class SyncGovernanceClient:
         args.update(kwargs)
         raw = self.call_tool("identity", args)
         self._capture_identity(raw)
+        # RFC §7.13: capture resident name from identity() too (mirrors UnitaresClient).
+        # Substrate-anchored residents resume via identity() across restarts and
+        # never call onboard(); without this the post-checkin substrate emission
+        # silently skipped because resident_name stayed None.
+        if name:
+            self.resident_name = name
+        elif isinstance(raw, dict) and raw.get("label"):
+            self.resident_name = raw["label"]
         return IdentityResult.model_validate(raw)
 
     # --- Check-in ---

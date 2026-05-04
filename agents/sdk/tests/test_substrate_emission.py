@@ -249,7 +249,12 @@ def test_first_emit_does_acquire_with_correct_surface(cache):
     from src.lease_plane.models import AcquireOk, LeaseRecord
 
     client = MagicMock()
-    client.acquire.return_value = AcquireOk(LeaseRecord(uuid4()))
+    _mock_lease = MagicMock()
+    _mock_lease.lease_id = uuid4()
+    _mock_ok = MagicMock(spec=AcquireOk)
+    _mock_ok.lease = _mock_lease
+    _mock_ok.idempotent = False
+    client.acquire.return_value = _mock_ok
 
     result = emit_substrate_observation(
         resident_name="Vigil",
@@ -278,8 +283,13 @@ def test_subsequent_emits_use_renew(cache):
 
     lease_id = uuid4()
     client = MagicMock()
-    client.acquire.return_value = AcquireOk(LeaseRecord(lease_id))
-    client.renew.return_value = SimpleOk()
+    _mock_lease = MagicMock()
+    _mock_lease.lease_id = lease_id
+    _mock_ok = MagicMock(spec=AcquireOk)
+    _mock_ok.lease = _mock_lease
+    _mock_ok.idempotent = False
+    client.acquire.return_value = _mock_ok
+    client.renew.return_value = MagicMock(spec=SimpleOk)
 
     for _ in range(3):
         assert emit_substrate_observation(
@@ -324,8 +334,13 @@ def test_renew_failure_resets_cache_for_reacquire(cache):
     from src.lease_plane.models import AcquireOk, LeaseRecord, SimpleError, SimpleOk
 
     client = MagicMock()
-    client.acquire.return_value = AcquireOk(LeaseRecord(uuid4()))
-    client.renew.side_effect = [SimpleError(), SimpleOk()]
+    _mock_lease = MagicMock()
+    _mock_lease.lease_id = uuid4()
+    _mock_ok = MagicMock(spec=AcquireOk)
+    _mock_ok.lease = _mock_lease
+    _mock_ok.idempotent = False
+    client.acquire.return_value = _mock_ok
+    client.renew.side_effect = [MagicMock(spec=SimpleError), MagicMock(spec=SimpleOk)]
 
     assert emit_substrate_observation(
         resident_name="Chronicler",
@@ -347,7 +362,12 @@ def test_renew_failure_resets_cache_for_reacquire(cache):
     assert cache.lease_id is None  # reset
 
     # Cycle 3: re-acquire
-    client.acquire.return_value = AcquireOk(LeaseRecord(uuid4()))
+    _mock_lease = MagicMock()
+    _mock_lease.lease_id = uuid4()
+    _mock_ok = MagicMock(spec=AcquireOk)
+    _mock_ok.lease = _mock_lease
+    _mock_ok.idempotent = False
+    client.acquire.return_value = _mock_ok
     assert emit_substrate_observation(
         resident_name="Chronicler",
         holder_uuid=HOLDER_UUID,
@@ -383,7 +403,12 @@ def test_each_resident_gets_distinct_surface_id(cache):
     for name in ("Vigil", "Sentinel", "Watcher", "Chronicler"):
         local_cache = _LeaseCache()
         client = MagicMock()
-        client.acquire.return_value = AcquireOk(LeaseRecord(uuid4()))
+        _mock_lease = MagicMock()
+        _mock_lease.lease_id = uuid4()
+        _mock_ok = MagicMock(spec=AcquireOk)
+        _mock_ok.lease = _mock_lease
+        _mock_ok.idempotent = False
+        client.acquire.return_value = _mock_ok
         emit_substrate_observation(
             resident_name=name,
             holder_uuid=HOLDER_UUID,

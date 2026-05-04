@@ -313,6 +313,57 @@ class TestKwargsPassthrough:
         assert "spawn_reason" not in args
 
     @pytest.mark.asyncio
+    async def test_identity_captures_resident_name_from_kwarg(self):
+        """RFC §7.13 (regression for 2026-05-04 multi-resident canary):
+        identity() MUST capture resident_name like onboard() does. Without
+        this, substrate-anchored residents (Vigil/Sentinel/Watcher/Chronicler)
+        that resume via identity() never set resident_name and the
+        post-checkin substrate emission silently skips."""
+        session = AsyncMock()
+        session.call_tool = AsyncMock(return_value=make_mcp_result({
+            "success": True,
+            "client_session_id": "sid-1",
+            "uuid": "u-1",
+        }))
+        client = make_client_with_session(session)
+
+        await client.identity(name="Sentinel", agent_uuid="some-uuid", resume=True)
+        assert client.resident_name == "Sentinel"
+
+    @pytest.mark.asyncio
+    async def test_identity_captures_resident_name_from_response_label(self):
+        """If caller doesn't pass name kwarg, fall back to label field on the
+        identity response. Lets the SDK still capture the name on UUID-only
+        resume calls when the server includes label in the response."""
+        session = AsyncMock()
+        session.call_tool = AsyncMock(return_value=make_mcp_result({
+            "success": True,
+            "client_session_id": "sid-1",
+            "uuid": "u-1",
+            "label": "Vigil",
+        }))
+        client = make_client_with_session(session)
+
+        await client.identity(agent_uuid="some-uuid", resume=True)
+        assert client.resident_name == "Vigil"
+
+    @pytest.mark.asyncio
+    async def test_identity_resident_name_stays_none_when_unresolvable(self):
+        """No name kwarg AND no label in response → resident_name stays None.
+        This is the non-resident caller path; substrate emission gates on
+        non-None resident_name."""
+        session = AsyncMock()
+        session.call_tool = AsyncMock(return_value=make_mcp_result({
+            "success": True,
+            "client_session_id": "sid-1",
+            "uuid": "u-1",
+        }))
+        client = make_client_with_session(session)
+
+        await client.identity(agent_uuid="some-uuid", resume=True)
+        assert client.resident_name is None
+
+    @pytest.mark.asyncio
     async def test_identity_forwards_parent_agent_id_and_spawn_reason(self):
         """Typed lineage params also flow through identity() for creation fallthrough."""
         session = AsyncMock()

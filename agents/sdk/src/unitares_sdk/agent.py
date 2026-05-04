@@ -288,7 +288,14 @@ class GovernanceAgent:
             if self.continuity_token and not client.continuity_token:
                 client.continuity_token = self.continuity_token
             try:
-                await client.identity(agent_uuid=self.agent_uuid, resume=True)
+                # Pass name=self.name so the SDK captures resident_name even
+                # when resuming via UUID (RFC §7.13 substrate emission needs
+                # resident_name to build surface_id = "resident:/<name>").
+                # Without this, residents that resume via UUID never set
+                # resident_name and substrate emission skips.
+                await client.identity(
+                    name=self.name, agent_uuid=self.agent_uuid, resume=True
+                )
                 self._sync_from_client(client)
                 self._save_session()
                 logger.info("%s: resumed via UUID %s", self.name, self.agent_uuid[:12])
