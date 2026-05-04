@@ -1,5 +1,5 @@
 ---
-status: AUDIT — control surface for Phase 3a + Phase 3b
+status: SHIPPED — Phase 3 sites implemented; audit retained as historical control surface (see parent `onboard-bootstrap-checkin.md` SHIPPED status)
 authored: 2026-04-25
 of: onboard-bootstrap-checkin.md (v2.1)
 phase: 3 (split into 3a + 3b per Kenny's directive 2026-04-25)

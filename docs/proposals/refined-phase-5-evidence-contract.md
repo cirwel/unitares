@@ -1,6 +1,6 @@
 # Refined Phase-5 Evidence Contract
 
-**Status:** Draft v2 (2026-04-26)
+**Status:** SHIPPED — Phase 5 bootstrap-only observability query path landed via PR #188 (paired with `onboard-bootstrap-checkin.md`).
 **Predecessor:** Calibration "honest absence" PR — surfaced the signal-starvation problem this spec resolves the supply side of.
 
 ## Revisions

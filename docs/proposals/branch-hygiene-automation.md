@@ -1,6 +1,6 @@
 # Branch Hygiene Automation
 
-**Status:** PROPOSAL (revised after council review 2026-04-26)
+**Status:** PARTIAL — Phase 1 dry-run branch sweep shipped via PR #197 (Vigil hygiene). Subsequent phases remain proposal.
 **Author:** Claude (b47c38ac)
 **Reviewers:** dialectic-knowledge-architect, feature-dev:code-reviewer
 

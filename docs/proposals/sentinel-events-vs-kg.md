@@ -2,10 +2,11 @@
 title: Sentinel ephemeral events vs KG — separating signal from memory
 author: claude_code-claude (250db6d1)
 date: 2026-04-25
-status: revised after council review
+status: SHIPPED — Sentinel double-write to KG removed via PR #154 (2026-04-25); high-severity findings now flow only through `/api/findings`
 revisions:
   - 2026-04-25: initial draft
   - 2026-04-25: revised after council review (durability flaw, type-name mismatch, sizing)
+  - 2026-04-25: shipped via PR #154
 ---
 
 # Sentinel ephemeral events vs KG

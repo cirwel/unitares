@@ -1,8 +1,9 @@
 ---
-status: PROPOSED-v2.1 (ack-clean, ready for implementation)
+status: SHIPPED — Phase 5 bootstrap-only observability query path landed via PR #188 (2026-04-25); Phase 3 site list audited in companion `onboard-bootstrap-checkin.filter-audit.md`
 authored: 2026-04-25
 amended: 2026-04-25
 ack_passed: 2026-04-25
+shipped: 2026-04-25
 author_session: agent-b9b3e789-9c7 (Claude Opus 4.7 / claude_code, parent 14d4a73c)
 review_target: dialectic-knowledge-architect + feature-dev:code-reviewer (parallel, 2026-04-25)
 amendment_basis: |

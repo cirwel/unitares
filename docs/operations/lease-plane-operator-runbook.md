@@ -1,6 +1,6 @@
 # Surface Lease Plane Operator Runbook
 
-Status: **STUB — service does not exist yet.** This runbook is shipped alongside the v0 RFC (`docs/proposals/surface-lease-plane-v0.md`) so the operator-facing surface is visible before any code lands. Concrete commands and ports get filled in when the service ships.
+Status: **LIVE — Phase A shipped 2026-05-03 (PR #305).** Service `com.unitares.lease-plane` runs on `127.0.0.1:8788` via launchd. Bearer-auth fail-closed (HTTPAuth → 503 if `LEASE_PLANE_BEARER_TOKEN` is unset). See `docs/proposals/surface-lease-plane-v0.md` (v0.11+) for the contract spec; this runbook covers operations.
 
 The audience is Kenny (operator-as-reviewer, not author). This runbook teaches what the BEAM node does, not Elixir-the-language. PRs will read clearly enough without prior fluency once these terms are familiar.
 
@@ -23,11 +23,35 @@ It does not own EISV, calibration, KG, or identity issuance. Those stay in Pytho
 
 ## Start
 
-TBD. Likely a launchd plist (`com.unitares.lease-plane`), matching the pattern for Vigil / Sentinel / Chronicler. Service should start automatically on boot and after upgrades.
+Render the plist template and load it (one-time install):
+
+```bash
+sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
+    -e "s|__HOME__|$HOME|g" \
+    scripts/ops/com.unitares.lease-plane.plist.template \
+    > ~/Library/LaunchAgents/com.unitares.lease-plane.plist
+launchctl load ~/Library/LaunchAgents/com.unitares.lease-plane.plist
+```
+
+Service auto-starts on boot (`RunAtLoad=true`, `KeepAlive=true`, `ThrottleInterval=10`). Verify:
+
+```bash
+launchctl list | grep com.unitares.lease-plane
+tail -f ~/Library/Logs/unitares-lease-plane.log
+
+# Health probe (sources LEASE_PLANE_BEARER_TOKEN from ~/.config/cirwel/secrets.env)
+curl -s -H "Authorization: Bearer $LEASE_PLANE_BEARER_TOKEN" \
+     "http://127.0.0.1:8788/v1/lease/status?surface_id=file:///tmp/probe"
+```
 
 ## Stop
 
-TBD. Graceful stop releases all *local-holder* leases (the BEAM-monitored ones) by writing release rows. *Remote-holder* leases are unaffected and continue to be tracked via Postgres heartbeat-TTL until their holders re-heartbeat or expire naturally.
+Graceful stop releases all *local-holder* leases (the BEAM-monitored ones) by writing release rows. *Remote-holder* leases are unaffected and continue to be tracked via Postgres heartbeat-TTL until their holders re-heartbeat or expire naturally.
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.unitares.lease-plane.plist
+# Re-load with launchctl load to restart
+```
 
 ## Health check
 

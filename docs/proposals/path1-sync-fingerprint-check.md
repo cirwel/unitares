@@ -1,6 +1,6 @@
 # PATH 1 Sync-Path Fingerprint Check
 
-**Status:** proposal — revised after code review (parallel-dict approach adopted; FALLBACK overwrite gap closed)
+**Status:** SHIPPED — `sync_fingerprint` lives in `src/mcp_handlers/identity/shared.py`; design ref'd from commit `b69fcd1f`.
 **Author:** Claude_20260425 · **Date:** 2026-04-25
 **Closes:** the residual sync-path half of KG `2026-04-20T00:57:45.655488` (PATH 1 hijack via `agent-{uuid12}` prefix-bind).
 **Related:** [`uuid-leak-audit.md`](./uuid-leak-audit.md) recommended closing PATH 1 as the leverage move.
