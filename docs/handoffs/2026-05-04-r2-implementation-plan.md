@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Implementation status (2026-05-05):** Phase 1 shipped in #357 as a single squashed merge containing PR slices 0-5 plus council fixes. This handoff is retained as the implementation record and no longer represents open Phase 1 work. The live migration slot is **036** because slot 035 was taken by `coordination_events` while this branch was in flight.
+
 **Goal:** Implement plan-row R2 — turn `parent_agent_id` declarations into verified continuity claims via the provisional → confirmed/demoted/archived FSM specified in `docs/ontology/r2-honest-memory-integration.md`.
 
 **Architecture:** Column-on-`core.identities` storage extending R1's already-shipped lineage columns; FSM driven by R1's `score_trajectory_continuity`; anyio-safe via `create_tracked_task` deferred dispatch from `process_agent_update` + a 30-min sweeper that mirrors `class_promotion_sweeper_task`. Phase 1 (storage + audit, no enforcement) lands first; Phase 2 (downstream consumers) sequences after Phase 1 telemetry.
@@ -39,11 +41,11 @@ The R2 design doc proposes 7 new columns. Reconciliation:
 | PR | Title | Surface | Notes |
 |---|---|---|---|
 | 0 | Doc reconciliation + plan.md R2 row | `docs/ontology/r2-honest-memory-integration.md`, `docs/ontology/plan.md` | Single-doc; opens the implementation row. |
-| 1 | Migration 035 + storage helpers | `db/postgres/migrations/035_r2_lineage_lifecycle.sql`, `src/db/mixins/identity.py` | Storage only, no FSM. |
-| 2 | FSM core + audit events | `src/identity/lineage_lifecycle.py` (new), `src/db/mixins/identity.py`, `tests/test_lineage_integration.py` (new) | `_evaluate_lineage_for` + transitions; not yet wired to triggers. |
-| 3 | Cross-role pre-check + onboard wiring | `src/mcp_handlers/identity/handlers.py`, `src/mcp_handlers/schemas/identity.py` | `lineage_cross_role_rejected` + `provisional_lineage`/`lineage_state` in `onboard()` and `identity()` responses. |
-| 4 | Sweeper task | `src/background_tasks.py`, `src/identity/lineage_lifecycle.py` | `lineage_eval_sweeper_task` (30min cadence, 6h re-eval, 30d grace). |
-| 5 | Check-in trigger | `src/mcp_handlers/handlers.py` (or wherever `process_agent_update` dispatches) | Fire-and-forget `create_tracked_task(_evaluate_lineage_for(...))`. |
+| 1 | Migration 036 + storage helpers | `db/postgres/migrations/036_r2_lineage_lifecycle.sql`, `src/db/mixins/identity.py` | Shipped in #357; slot 035 was already claimed by coordination events. |
+| 2 | FSM core + audit events | `src/identity/lineage_lifecycle.py`, `src/db/mixins/identity.py`, `tests/test_lineage_lifecycle.py` | Shipped in #357. |
+| 3 | Cross-role pre-check + onboard wiring | `src/mcp_handlers/identity/handlers.py`, `src/services/identity_payloads.py` | Shipped in #357; includes `lineage_cross_role_rejected` plus `provisional_lineage` / `lineage_state` on `onboard()` and `identity()` responses. |
+| 4 | Sweeper task | `src/background_tasks.py`, `src/identity/lineage_lifecycle.py` | Shipped in #357; `lineage_eval_sweeper_task` runs on a 30min cadence with 6h re-eval guard. |
+| 5 | Check-in trigger | `src/mcp_handlers/updates/phases.py` | Shipped in #357; fire-and-forget `create_tracked_task(evaluate_lineage_for(...))` after process updates. |
 | 6 | (Future, separate row) Phase 2 downstream wiring | Trust-tier (S6), KG provenance (S7), R3 baselines, dashboard | **Not in this plan.** Sequences after ≥4 weeks Phase 1 telemetry. |
 
 Each PR gets a 3-agent council pass (architect + reviewer + live-verifier) per [`feedback_council-also-for-implementation.md`](../../.claude/projects/-Users-cirwel/memory/feedback_council-also-for-implementation.md). All PRs run `./scripts/dev/test-cache.sh` before commit.
@@ -65,7 +67,7 @@ Add reconciliation note before the columns table:
 `provisional_lineage`, `provisional_score_id`, `provisional_recorded_at`, and
 `confirmed_at` on `core.identities`. R2 reuses these. `lineage_promoted_at`
 in the table below is satisfied by R1's existing `confirmed_at` — R2 does
-not introduce a duplicate column. Migration 035 adds only the genuinely new
+not introduce a duplicate column. Migration 036 adds only the genuinely new
 columns: `lineage_declared_at`, `lineage_demoted_at`, `lineage_archived_at`,
 `lineage_last_eval_at`, `chain_obs_count`.
 ```
@@ -94,10 +96,10 @@ git commit -m "docs(r2): open implementation row + reconcile storage columns wit
 
 ---
 
-## PR 1 — Migration 035 + storage helpers
+## PR 1 — Migration 036 + storage helpers
 
 **Files:**
-- Create: `db/postgres/migrations/035_r2_lineage_lifecycle.sql`
+- Create: `db/postgres/migrations/036_r2_lineage_lifecycle.sql`
 - Modify: `src/db/mixins/identity.py` (extend after line 318 — after `confirm_lineage`)
 - Test: `tests/db/test_lineage_lifecycle_storage.py` (new)
 
@@ -214,12 +216,12 @@ The fixtures `seeded_pair`, `confirmed_pair`, `confirmed_pair_with_obs` go in `t
 
 Expected: FAIL — columns don't exist; `demote_lineage`, `archive_lineage`, `increment_chain_obs_count` not defined on backend.
 
-### Step 3: Write migration 035
+### Step 3: Write migration 036
 
-- [ ] Create `db/postgres/migrations/035_r2_lineage_lifecycle.sql`:
+- [ ] Create `db/postgres/migrations/036_r2_lineage_lifecycle.sql`:
 
 ```sql
--- Migration 035: R2 lineage lifecycle columns on core.identities
+-- Migration 036: R2 lineage lifecycle columns on core.identities
 --
 -- Extends R1 PR #306 (migration 031) which already shipped
 -- provisional_lineage, provisional_score_id, provisional_recorded_at,
@@ -248,7 +250,7 @@ CREATE INDEX IF NOT EXISTS idx_identities_provisional_eval
     WHERE provisional_lineage = TRUE OR confirmed_at IS NOT NULL;
 
 INSERT INTO core.schema_migrations (version, name, applied_at)
-VALUES (35, 'r2_lineage_lifecycle', NOW())
+VALUES (36, 'r2_lineage_lifecycle', NOW())
 ON CONFLICT (version) DO NOTHING;
 ```
 
@@ -435,7 +437,7 @@ async def confirmed_pair_with_obs(db_backend, confirmed_pair):
 - [ ] Run migration locally:
 
 ```bash
-psql -h localhost -U postgres -d governance -f db/postgres/migrations/035_r2_lineage_lifecycle.sql
+psql -h localhost -U postgres -d governance -f db/postgres/migrations/036_r2_lineage_lifecycle.sql
 ```
 
 - [ ] Run tests:
@@ -461,11 +463,11 @@ Expected: 5 passing.
 - [ ] Commit:
 
 ```bash
-git add db/postgres/migrations/035_r2_lineage_lifecycle.sql \
+git add db/postgres/migrations/036_r2_lineage_lifecycle.sql \
         src/db/mixins/identity.py \
         tests/db/test_lineage_lifecycle_storage.py \
         tests/db/conftest.py
-git commit -m "feat(r2): PR 1 — migration 035 + storage helpers (declare/demote/archive/chain_obs/eval-stamp/batch-provisional)"
+git commit -m "feat(r2): PR 1 — migration 036 + storage helpers (declare/demote/archive/chain_obs/eval-stamp/batch-provisional)"
 ```
 
 ---

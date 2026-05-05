@@ -1,30 +1,32 @@
 # R2 — Honest memory integration
 
-**Status:** Design doc, revision pass 2.
+**Status:** Design doc v2; Phase 1 runtime implementation shipped 2026-05-05 in #357.
 **Scope:** Plan row R2 (`docs/ontology/plan.md`). Defines the structural posture: what a fresh process reads when declaring inheritance, what counts as "integration" (vs. mere reference), what behavior change is required before identity-under-the-lineage-chain becomes confirmed.
 **Author:** agent `eee3bea8-7353-48a9-bea6-a6e912992f6c` (claude_code), 2026-05-02.
-**Builds on (design dependency only — see §"Implementation status of dependencies"):** R1 v3.2 (`r1-verify-lineage-claim.md`) provides the trajectory-similarity gate; R2 specifies the protocol that wraps it.
+**Builds on (design dependency only — see §"Implementation status"):** R1 v3.2 (`r1-verify-lineage-claim.md`) provides the trajectory-similarity gate; R2 specifies the protocol that wraps it.
 
 **Revision history:**
 - v1 (2026-05-02 morning) — single-channel, R1-as-integration-test, recommendation A (retroactive trust-tier crediting). Reviewed by parallel three-agent council (`dialectic-knowledge-architect` + `feature-dev:code-reviewer` + `live-verifier`). All three returned "withhold pending v2." Convergent forcing items: (1) asymmetry-claim violated by recommendation A's interpretive rewrite of parent's history; (2) axiom #12 conflation between "trajectory similarity" and "memory operative on behavior" (R1 explicitly disclaims being an integration test, R2 v1 conscripted it as one); (3) multi-generation chain semantics unspecified; (4) R1 is entirely unimplemented in master so all "R1 provides X" claims are forward references, not callable code; (5) `provisional_lineage` column does not exist in any schema (R2 v1 said "reuses, does not re-introduce" — false premise); (6) check-in-triggered evaluation as described would deadlock under the anyio-asyncio conflict (CLAUDE.md). Plus substantive findings on cross-role lineage silently demoting, demote-vs-fork interpretive-rewrite symmetry, FSM gaps, audit-write-path gaps, identity-vs-onboard-response gaps, subject-identity language slips.
-- **v2 (2026-05-02 afternoon) — current.** Forcing items addressed via the strategic calls listed at end of v1 council writeup. Substantive items addressed in-line. Remaining items surfaced as open questions for Kenny.
+- **v2 (2026-05-02 afternoon).** Forcing items addressed via the strategic calls listed at end of v1 council writeup. Substantive items addressed in-line. Remaining items surfaced as open questions for Kenny.
+- **Phase 1 implementation (2026-05-05, #357) — current runtime.** Storage helpers, migration 036, FSM/audit events, cross-role pre-check, `onboard()` / `identity()` response fields, 30-minute sweeper, and `process_agent_update` trigger shipped. Phase 2 downstream consumers remain deferred until telemetry matures.
 
 ---
 
-## Implementation status of dependencies
+## Implementation status
 
-R2 is design-dependent on R1 v3.2 and on the substrate-attestation work shipped under S19 (2026-04-26). Verified at runtime via three-agent council pass 2026-05-02:
+R2 is design-dependent on R1 v3.2 and on the substrate-attestation work shipped under S19 (2026-04-26). The table below reflects the live repo after #357, superseding the 2026-05-02 pre-implementation dependency check.
 
-| Surface R2 references | Status today (2026-05-02) | Implication for R2 |
+| Surface R2 references | Status today (2026-05-05) | Implication for R2 |
 |---|---|---|
-| `score_trajectory_continuity` (R1 callable) | **Does not exist.** Not in 33-tool MCP catalogue. R1 implementation row not yet opened (per `plan.md` 2026-05-01). | R2 references must be tagged "proposed: R1 will provide." R2 implementation cannot land until R1 implementation lands. |
-| `reconstruct_eisv_series` (R1 helper) | Does not exist as MCP tool; would be internal helper. | Same. R2 calls it only via the sweeper / background-task path, not from agent-facing surfaces. |
-| `provisional_lineage` column | **Does not exist** in `core.identities`, `core.agents`, or any other table. No `lineage_edges` table exists. | R2 introduces the column (or jointly with R1 implementation row, whichever lands first). Storage decision specified in §"Storage" below — *no longer deferred*. |
-| `class_promotion_sweeper_task` (cadence reference) | Exists at `src/background_tasks.py:186`; runs under `_supervised_create_task` outside anyio handler context; emits log lines, no audit events per cycle. | Sweeper-pattern reference is grounded. R2's lineage sweeper inherits the same audit-only-on-state-transition convention (see §"Observability"). |
-| `lineage_*` audit event types | None of R2's four proposed names collide with the 38 existing event types. | Naming-collision risk = none. |
-| `parent_agent_id` storage | Present on both `core.identities` (text, nullable) and `core.agents` (text, nullable). | R2 storage extends `core.identities` (canonical lineage table) — see §"Storage." |
+| `score_trajectory_continuity` (R1 callable) | Shipped in `src/identity/trajectory_continuity.py`. | R2 FSM calls it from `src/identity/lineage_lifecycle.py`, outside the anyio handler context. |
+| R1 EISV-series reconstruction | Internal to the R1 scorer; not exposed as an MCP tool. | R2 consumes only the scorer boundary, not the reconstruction helper directly. |
+| `provisional_lineage` / R1 lineage columns | Shipped by R1 PR #306 (migration 031): `provisional_lineage`, `provisional_score_id`, `provisional_recorded_at`, `confirmed_at`. | R2 reuses these; `confirmed_at` satisfies the design's earlier `lineage_promoted_at` name. |
+| R2 lifecycle columns | Shipped by #357 (migration 036): `lineage_declared_at`, `lineage_demoted_at`, `lineage_archived_at`, `lineage_last_eval_at`, `chain_obs_count`. | Phase 1 storage source of truth is now live on `core.identities`. |
+| `class_promotion_sweeper_task` (cadence reference) | Exists in `src/background_tasks.py`; R2 adds sibling `lineage_eval_sweeper_task`. | R2 inherits the same background-task pattern and audit-only-on-transition convention. |
+| `lineage_*` audit event types | Shipped by #357: `lineage_declared`, `lineage_cross_role_rejected`, `lineage_promoted`, `lineage_demoted`, `lineage_grace_expired`. | Audit writes record storage-confirmed transitions; empty sweeper cycles remain quiet. |
+| `parent_agent_id` storage | Present on both `core.identities` and `core.agents`; R2 treats `core.identities` as canonical. | Cross-role rejection clears the declared edge before it becomes a lineage claim. |
 
-This table replaces v1's "reuses R1 v3.2-B's flag" framing, which conflated design-dependency with code-dependency. R2 is honest about the fact that *both* R1 and R2 add new runtime surfaces, and that R2's implementation row sequences after R1's.
+Phase 1 is intentionally not the downstream consumer flip. Trust-tier S6, KG provenance S7, R3 baselines, and dashboard interpretation remain deferred to Phase 2 after the shadow-mode telemetry gate in §"Shadow-mode calibration path" is met.
 
 ---
 
@@ -229,19 +231,19 @@ The forward-only trust-tier policy means clawback is bounded: only the *chain's*
 
 ## Storage (v2 — no longer deferred)
 
-R2 introduces the following columns on `core.identities` (canonical lineage table). Migration is part of R2's implementation row (or jointly with R1 implementation row, whichever lands first):
+R2 uses the following columns on `core.identities` (canonical lineage table). R1 shipped the provisional/promotion subset; R2 Phase 1 shipped the lifecycle subset in migration 036:
 
-**Reconciliation (2026-05-04):** R1 PR #306 (migration 031) already shipped `provisional_lineage`, `provisional_score_id`, `provisional_recorded_at`, and `confirmed_at` on `core.identities`. R2 reuses these. `lineage_promoted_at` in the table below is satisfied by R1's existing `confirmed_at` — R2 does not introduce a duplicate column. R2's implementation row (migration 035) adds only the genuinely new columns: `lineage_declared_at`, `lineage_demoted_at`, `lineage_archived_at`, `lineage_last_eval_at`, `chain_obs_count`. See `docs/handoffs/2026-05-04-r2-implementation-plan.md`.
+**Reconciliation (2026-05-05):** R1 PR #306 (migration 031) already shipped `provisional_lineage`, `provisional_score_id`, `provisional_recorded_at`, and `confirmed_at` on `core.identities`. R2 reuses these. `lineage_promoted_at` in the table below is satisfied by R1's existing `confirmed_at` — R2 does not introduce a duplicate column. R2's Phase 1 implementation (#357, migration 036) added the genuinely new columns: `lineage_declared_at`, `lineage_demoted_at`, `lineage_archived_at`, `lineage_last_eval_at`, `chain_obs_count`. See `docs/handoffs/2026-05-04-r2-implementation-plan.md`.
 
 | Column | Type | Default | Purpose | Status |
 |---|---|---|---|---|
 | `provisional_lineage` | BOOLEAN NOT NULL | `false` | True from declaration until promotion or until edge is removed. | Shipped by R1 #306 (migration 031) |
-| `lineage_declared_at` | TIMESTAMPTZ | `NULL` | Timestamp of `parent_agent_id` first set. | R2 to add (migration 035) |
+| `lineage_declared_at` | TIMESTAMPTZ | `NULL` | Timestamp of `parent_agent_id` first set. | Shipped by #357 (migration 036) |
 | ~~`lineage_promoted_at`~~ → `confirmed_at` | TIMESTAMPTZ | `NULL` | Set on `provisional → confirmed`. | Shipped by R1 #306 as `confirmed_at` |
-| `lineage_demoted_at` | TIMESTAMPTZ | `NULL` | Set on `* → demoted`; cleared on re-declaration. | R2 to add (migration 035) |
-| `lineage_archived_at` | TIMESTAMPTZ | `NULL` | Set on grace expiration. | R2 to add (migration 035) |
-| `lineage_last_eval_at` | TIMESTAMPTZ | `NULL` | Updated by sweeper or check-in trigger to enforce cadence guards. | R2 to add (migration 035) |
-| `chain_obs_count` | INTEGER NOT NULL | `0` | Forward-only counter for chain trust-tier accrual. Incremented on each post-promotion check-in. Reset to 0 on confirmed→demoted clawback. | R2 to add (migration 035) |
+| `lineage_demoted_at` | TIMESTAMPTZ | `NULL` | Set on `* → demoted`; cleared on re-declaration. | Shipped by #357 (migration 036) |
+| `lineage_archived_at` | TIMESTAMPTZ | `NULL` | Set on grace expiration. | Shipped by #357 (migration 036) |
+| `lineage_last_eval_at` | TIMESTAMPTZ | `NULL` | Updated by sweeper or check-in trigger to enforce cadence guards. | Shipped by #357 (migration 036) |
+| `chain_obs_count` | INTEGER NOT NULL | `0` | Forward-only counter for chain trust-tier accrual. Incremented on each post-promotion check-in. Reset to 0 on confirmed→demoted clawback. | Shipped by #357 (migration 036) |
 
 **Schema decision rationale:** column-on-`core.identities` is simpler than a separate `lineage_edges` table. The `parent_agent_id` field already lives on `core.identities`; co-locating the lineage state machine there avoids JOINs on every read. A separate table would only be justified if multi-parent or multi-edge-per-pair semantics arise; v1 has neither. Revisit if R3's lineage-chain queries (S7) need a distinct edge table for graph-aware indexing.
 
