@@ -1088,19 +1088,30 @@ async def main():
     parser.add_argument("--interval", type=int, default=1800, help="Daemon interval (seconds)")
     args = parser.parse_args()
 
-    # NOTE: with_hygiene is intentionally NOT exposed as a CLI flag.
-    # It gates the propose-only stale-opens sweep AND the act-on-candidates
-    # auto-archive (`_run_aged_candidate_archive`). The 2026-04-19 vigil-
-    # aggression incident showed that auto-mutation of agent/KG state can
-    # hide bugs; the policy is "explicit code change, not flag flip" so
-    # operators never accidentally enable it. To turn it on, edit this
-    # construction with `with_hygiene=True` and review the implications.
+    # with_hygiene activates two stale-open behaviors (gated under one flag):
+    #
+    #   1. _run_stale_opens_sweep — propose-only; surfaces oldest stale opens
+    #      in cycle findings. No mutation.
+    #   2. _run_aged_candidate_archive — auto-archives candidate_for_archive
+    #      entries past VIGIL_AUTO_ARCHIVE_AGE_DAYS (default 90 days inactive).
+    #      Capped at VIGIL_AUTO_ARCHIVE_MAX_PER_CYCLE per run (default 20).
+    #      Reversible (status mutation, not deletion).
+    #
+    # Activated 2026-05-05 after PR #352 cleared the existing 106-entry
+    # backlog and shipped the symmetric _score_discovery classifier (a6e3f871).
+    # The 2026-04-19 vigil-aggression incident concerned auto-archive of
+    # *agents*; this flag governs *KG discoveries* only — orphan-agent sweep
+    # remains operator-only.
+    #
+    # Intentionally NOT a CLI flag: changes that affect resident-agent
+    # behavior should be code-reviewed in PRs, not silently flipped.
     agent = VigilAgent(
         mcp_url=args.url,
         label=args.label,
         heartbeat_interval=args.interval,
         with_tests=args.with_tests,
         with_audit=not args.no_audit,
+        with_hygiene=True,
         force_new=args.force_new,
     )
 
