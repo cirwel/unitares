@@ -69,10 +69,29 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
     # Resume the agent (if paused - skip if discovery dispute)
     status_changed = False
     if meta.status == "paused":
+        resume_reason = f"Resumed via dialectic synthesis: {resolution.root_cause}"
         meta.status = "active"
         meta.paused_at = None
-        meta.add_lifecycle_event("resumed", f"Resumed via dialectic synthesis: {resolution.root_cause}")
+        meta.add_lifecycle_event("resumed", resume_reason)
         status_changed = True
+
+        # P011: persist runtime-state mutations so paused_at=None and the
+        # lifecycle event survive reload (Watcher #81b876bf, #a8b049c8, #9cf3ec6a).
+        try:
+            from src import agent_storage
+            await agent_storage.persist_runtime_state(
+                agent_id,
+                paused_at=None,
+                append_lifecycle_event={
+                    "event": "resumed",
+                    "timestamp": datetime.now().isoformat(),
+                    "reason": resume_reason,
+                },
+            )
+        except Exception as e:
+            logger.warning(
+                f"persist_runtime_state(resumed) failed for {agent_id[:8]}...: {e}"
+            )
 
         # PostgreSQL: Update status (single source of truth)
         try:

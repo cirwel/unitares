@@ -986,8 +986,26 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
                     )
                     missing_ids = [did for did, _ in fused if did not in pool]
                     if missing_ids:
-                        for nid in missing_ids[:30]:
-                            doc = await graph.get_discovery(nid)
+                        # Parallel fetch of neighbor docs not already in the
+                        # semantic+FTS pool. Sequential `await` here was the
+                        # in-handler floor on the 60× KG-call amplification
+                        # measured 2026-05-04 (per-call 21–71ms, in-handler
+                        # ~4,464ms). Each get_discovery does 2 PG round-trips
+                        # (row + backlinks); 30 × 2 = 60 sequential awaits is
+                        # what asyncio.gather collapses to ~pool-size waves.
+                        # Same shape as PR #350/#360 — Python-fixable.
+                        capped = missing_ids[:30]
+                        results = await _asyncio.gather(
+                            *(graph.get_discovery(nid) for nid in capped),
+                            return_exceptions=True,
+                        )
+                        for nid, doc in zip(capped, results):
+                            if isinstance(doc, Exception):
+                                logger.debug(
+                                    f"[KG_SEARCH] neighbor fetch failed for "
+                                    f"{nid[:8]}...: {doc}"
+                                )
+                                continue
                             if doc is not None:
                                 pool[nid] = doc
 

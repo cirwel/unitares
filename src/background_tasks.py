@@ -221,6 +221,83 @@ async def class_promotion_sweeper_task(interval_minutes: float = 30.0):
 
 
 # ---------------------------------------------------------------------------
+# R2 PR 4 — lineage-eval sweeper
+# ---------------------------------------------------------------------------
+
+
+async def _lineage_eval_sweep_once() -> dict[str, int]:
+    """Run a single lineage-eval sweep cycle.
+
+    Pulled out of ``lineage_eval_sweeper_task`` so the inner cycle can
+    be unit-tested without spinning the infinite loop. Returns a dict
+    with ``candidates`` (count selected) and ``transitions`` (count of
+    FSM evals that produced a state change), used by the caller for
+    log-level decision-making.
+
+    Per-eval exceptions are caught and logged at WARNING but do not
+    abort the cycle — one badly-shaped row should not starve the rest.
+    """
+    from src.db import get_db
+    from src.identity.lineage_lifecycle import evaluate_lineage_for
+
+    backend = get_db()
+    candidates = await backend.select_lineage_eval_candidates()
+    transitions = 0
+    for successor_id in candidates:
+        try:
+            outcome = await evaluate_lineage_for(successor_id)
+            if outcome.transition is not None:
+                transitions += 1
+        except Exception as exc:
+            logger.warning(
+                "[R2_SWEEPER] eval failed for %s: %s",
+                successor_id[:8], exc,
+            )
+    return {"candidates": len(candidates), "transitions": transitions}
+
+
+async def lineage_eval_sweeper_task(interval_minutes: float = 30.0):
+    """R2: re-evaluate provisional and confirmed lineage edges.
+
+    Mirrors ``class_promotion_sweeper_task``: runs outside the anyio
+    context (asyncio task, no anyio handler context), so direct
+    ``await`` on asyncpg is safe. Per the design doc §Observability,
+    the sweeper itself emits no audit events on cycles with zero
+    transitions — only state transitions emit, and those are handled
+    inside ``evaluate_lineage_for``.
+
+    Startup delay 60s to let metadata cache warm. Errors at the cycle
+    boundary are logged at WARNING (not debug) so a 30-minute silent
+    gap is visible to operators.
+
+    See: docs/ontology/r2-honest-memory-integration.md §"Evaluation
+    triggers" and §"Observability"
+    """
+    await asyncio.sleep(60.0)
+    while True:
+        try:
+            result = await _lineage_eval_sweep_once()
+            if result["transitions"] > 0:
+                logger.info(
+                    f"[R2_SWEEPER] cycle complete: {result['candidates']} candidates, "
+                    f"{result['transitions']} transition(s)"
+                )
+            else:
+                logger.debug(
+                    f"[R2_SWEEPER] cycle complete: {result['candidates']} candidates, "
+                    f"no transitions"
+                )
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"[R2_SWEEPER] Sweep failed (will retry): {e}")
+        try:
+            await asyncio.sleep(interval_minutes * 60)
+        except asyncio.CancelledError:
+            break
+
+
+# ---------------------------------------------------------------------------
 # Materialized view refresh (moved from per-insert to periodic)
 # ---------------------------------------------------------------------------
 
@@ -1306,6 +1383,11 @@ def start_all_background_tasks(connection_tracker, set_ready):
     _supervised_create_task(concept_extraction_background_task(), name="concept_extraction")
     _supervised_create_task(class_promotion_sweeper_task(), name="class_promotion_sweeper")
     logger.info("[CLASS_PROMOTION] Started ephemeral → engaged_ephemeral sweep (every 30m)")
+    _supervised_create_task(
+        lineage_eval_sweeper_task(),
+        name="r2_lineage_eval_sweeper",
+    )
+    logger.info("[R2_SWEEPER] Started lineage-eval sweep (every 30m, 6h re-eval guard)")
     _supervised_create_task(periodic_matview_refresh(), name="matview_refresh")
     _supervised_create_task(periodic_partition_maintenance(), name="partition_maintenance")
     # Concurrent identity binding sweeper (#123): marks bindings stale once

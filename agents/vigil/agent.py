@@ -53,7 +53,10 @@ ANIMA_PROJECT = Path(os.getenv("ANIMA_PROJECT", str(project_root.parent / "anima
 SESSION_FILE = Path.home() / ".unitares" / "anchors" / "vigil.json"
 LEGACY_SESSION_FILE = project_root / ".vigil_session"
 STATE_FILE = project_root / ".vigil_state"
-LOG_FILE = Path.home() / "Library" / "Logs" / "unitares-vigil.log"
+LOG_FILE = Path(os.getenv(
+    "VIGIL_LOG_FILE",
+    str(Path.home() / "Library" / "Logs" / "unitares-vigil.log"),
+))
 MAX_LOG_LINES = 500
 
 # Test timeout

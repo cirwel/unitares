@@ -1,13 +1,189 @@
 # BEAM Footprint Roadmap
 
 **Created:** May 3, 2026
-**Last Updated:** May 5, 2026 (v0.2 — PR #350 verdict landed; destination reopens per v0.1 conditionality)
-**Status:** v0.2 — destination is OPEN. v0.1's A′ destination commitment was provisional and conditional on PR #350's post-fix data; the data landed and resolved as Python-fixable (architect council C3 was right). v0.1's body is preserved below as historical record alongside v0; neither v0's Read A nor v0.1's A′ is the current destination. Read the V0.2 RESOLUTION block first.
-**Council pass v0.1 (2026-05-04):** dialectic-knowledge-architect (2B/4C/3D/4N), feature-dev:code-reviewer (2B/3C/2D/2N), live-verifier (7 VERIFIED, 6 DRIFT, 0 REFUTED, 1 SOURCE_ONLY) — all findings folded inline. Architect C3 + reviewer C3 both flagged "v0.1 destination committed pre-experiment"; the v0.1 conditionality block was the fold for that finding, and v0.2 is the realization of it.
+**Last Updated:** May 5, 2026 (v0.3 — operator-decision migration commit; supersedes v0.2)
+**Status:** v0.3 — destination is **A′ (committed, operator-decision-driven, 2026-05-05)**. Stateful coordination ports to BEAM in waves; stateless computation (numpy ODE, embeddings, LLM SDK calls) stays Python and is called from BEAM via Ports / HTTP. v0.2 had reopened the destination after PR #350's verdict; v0.3 closes it again on operator call after four Python-fixable PRs (#350 / #354 / #360 / #361) closed every measured floor without moving the user-visible ~11s p50 per-turn overhead. **Read the V0.3 RESOLUTION block first.** v0 / v0.1 / v0.2 bodies preserved as historical record.
+**Council pass v0.1 (2026-05-04):** dialectic-knowledge-architect (2B/4C/3D/4N), feature-dev:code-reviewer (2B/3C/2D/2N), live-verifier (7 VERIFIED, 6 DRIFT, 0 REFUTED, 1 SOURCE_ONLY) — all findings folded inline. Architect C3 + reviewer C3 both flagged "v0.1 destination committed pre-experiment"; the v0.1 conditionality block was the fold for that finding, and v0.2 was the realization of it.
+**Council pass v0.3:** none on the migration call itself — that's an operator decision after a multi-session debate, and adversarial review of the call after operator commitment is the relitigation pattern v0.3 is trying to end. Council passes ARE expected on technical scope (Wave 1 supervisor topology, BEAM↔Python boundary contracts, identity-state migration) once those land as RFCs.
 
 ---
 
-## V0.2 RESOLUTION 2026-05-05 — verdict landed; destination reopens
+## V0.3 RESOLUTION 2026-05-05 — operator-decision migration commit; A′ binds
+
+**Read this before any other section.**
+
+**Operator decision:** Kenny, 2026-05-05, this session. Verbatim: "yea i don't want to fight anymore, lets make elixir happen." Honest reading: not capitulation under measurement, not a panic flip — a strategic call to stop iterating on Python-side floors that resolve cleanly individually but don't move the user-visible per-turn overhead.
+
+**The data context that frames the decision:**
+
+| Floor | PR | Pre-fix | Post-fix | Classification |
+|---|---|---|---|---|
+| `force=True` on 6 observe sub-handlers | #350 | 17,062ms cold + 15,000ms+ timeout under load | 167–182ms steady-state | sequential awaits — Python-fixable |
+| Force-reload audit across 18 more sites | #354 | (same shape latent) | (sites dropped or kept with explicit comment) | same — Python-fixable |
+| Cold-start metadata load (~3000 agents) | #360 | 17,062ms first call after restart | expected sub-second; per-agent provisional fetch + sequential cache.set replaced | sequential awaits — Python-fixable |
+| KG hybrid_rrf neighbor fan-out (`get_discovery` × 30) | #361 | ~3000ms in-handler floor (60× amplification candidate surface) | gather() within pool — expected ~150–300ms | sequential awaits — Python-fixable |
+
+**What the data DOES say:** every measured floor today resolved as sequential awaits in our own loops, not anyio scheduler interaction. The substrate-tax-as-anyio-coupling hypothesis is at its weakest in the project's history.
+
+**What the data does NOT say (the honest unknown that v0.3 is committing past):** the ODE itself (`process_update_authenticated_async`, the 7s remainder of the locked phase per memory `project_locked-phase-floor-is-the-ode.md`, 2026-05-04) is unprofiled. If that 7s is numpy ODE solve / per-tick monitor mutation, BEAM relocates the same compute. If it's PG-round-trip serialization through the agent lock, BEAM's actor model dissolves it architecturally (per-agent process, no shared lock, supervisor-restart on failure).
+
+**Why migrate anyway, eyes-open:**
+
+1. **Architectural ceiling.** Even with every Python floor closed, `execute_locked_update` serializes per-agent through a shared mutex by design. Under self-traffic the lock IS the bottleneck — not the awaits inside it. BEAM's per-agent process model (one GenServer per `agent_id`, mailbox-serialized, no shared lock) dissolves the ceiling rather than raising it. The Python-side fixes optimize the floor; the user pain is the ceiling.
+2. **Three-anyio-mitigation accumulation.** CLAUDE.md documents three substrate-tax workarounds (cached snapshot, run_in_executor, tight wait_for). Today's PRs add a fourth shape (sequential-awaits-in-our-own-loop) that's distinct from anyio coupling but lives in the same complexity budget. The operator's read: if the substrate keeps generating distinct shapes that all need workarounds, that's substrate-shaped evidence even when each individual shape isn't.
+3. **Lease plane already proves the boundary.** Phase A (PR #305, 2026-05-03) ships the BEAM↔Python contract pattern — bearer-auth, fail-closed, REST surface. That pattern survives v0.2's destination revert and stays load-bearing under v0.3. We're not designing a boundary; we're scaling a boundary that already works.
+4. **Substrate-migration status-quo-bias accountability.** Memory `feedback_substrate-migration-status-quo-bias.md` warns I "reliably resist substrate migrations across sessions." v0.3 is the moment that pole flips with operator authorization, not a moment I'm authoring around the warning. The pole-flip is documented here so future-me reads the rationale before re-litigating from cold.
+
+**v0.3 inherits A′'s technical scope from v0.1 verbatim.** No re-derivation. The cut is stateful-coordinating to BEAM, stateless-computing stays Python. See §"v0.1 cut: stateful-coordinating vs stateless-computing" below for the per-surface test (still load-bearing). The MCP SDK gate framing (§"MCP SDK gate (v0.1)") still applies — the transport layer stays Python until an Elixir SDK closes the gate.
+
+**Sequencing:**
+
+- **Wave 1 — Sentinel-on-BEAM.** Smallest first ship. Already framed as substrate-fit-not-bug-fix in v0.1 §"Wave 1." Reuses lease-plane bearer-auth pattern from #305. Lowest blast radius — Sentinel is read-mostly, no agent-state mutation on the BEAM side. Profile-the-ODE work happens in parallel with Wave 1 implementation; the profile result informs Wave 3 sequencing but does NOT gate Wave 1.
+- **Wave 2 (lease-integration boundary hardening + Wave 0 schema extension)** — keep as-is. Force=True audit completed in #354; remaining Wave 2 scope is contract-hardening, which is right work regardless and feeds Wave 3.
+- **Wave 3 — handler dispatch + identity middleware + dialectic resolution.** Largest port. Gets its own RFC and council passes (technical scope, not migration-decision). Sequencing depends on Wave 1 evidence + ODE profile result. If the ODE is PG-bound: Wave 3 dissolves the lock structurally, biggest win. If the ODE is numpy compute: Wave 3 still moves coordination off the lock but the per-call cost stays similar; Wave 3 ships anyway because the lock-dissolution is the architectural goal.
+
+**Profile-the-ODE work** is the load-bearing data point for Wave 3 sequencing. Concrete next probe: `cProfile` or line-level timing inside `process_update_authenticated_async` against the running governance MCP. Operator-authorized (process-restart class, low blast radius for instrumentation builds). The profile result lands in a v0.3.1 amendment block, not a destination revert — destination is committed under v0.3.
+
+**What v0.3 ISN'T:**
+
+- A retraction of #350 / #354 / #360 / #361. Those PRs are correct on their merits. The Python-fixable surfaces stay fixed; we're not rolling them back. They become the cleanup pass before the migration starts, not wasted effort.
+- A v0.1 redux with weaker conditionality. v0.1's "destination committed pre-experiment" was an honest mistake the council caught. v0.3's "destination committed post-experiment, post-cleanup, on operator call" is a different epistemic posture — measurements happened, fixes shipped, the shape stayed structurally limited, operator made a strategic call. That's not the same pattern.
+- A retraction of CLAUDE.md's substrate-tax framing. The four documented patterns still describe real bug classes that need workarounds while we're still on the substrate. The framing stays load-bearing during the migration period and gets phased out per-surface as Wave 3 lands.
+- A commitment to a timeline. Migration is wave-sequenced with checkpoints. Each wave gets its own RFC + council on technical scope. Operator can pause / redirect / amend at any wave boundary.
+
+**Stop signs for v0.3 (mirroring v0.1's pattern, retuned):**
+
+1. **Wave 1 ships and Sentinel-on-BEAM produces measurable contention or coordination failure that DOESN'T exist on Sentinel-as-Python today** → architectural premise wrong, RFC for v0.4 (revert or radically rescope).
+2. **ODE profile lands and 6+ of the 7s is numpy/embedding compute** → Wave 3's lock-dissolution argument weakens; bring it back to council before committing scope. Wave 1 still ships.
+3. **MCP SDK gate stays unmet through Wave 3 timeline** → transport layer migration stalls indefinitely, but coordination-layer Wave 3 can still ship per A′ — the gate was a v0.1-era binary that v0.3 keeps but does not let block coordination work.
+
+**Memory anchors:**
+
+- `feedback_substrate-migration-status-quo-bias.md` — the pole-flip is documented here.
+- `project_locked-phase-floor-is-the-ode.md` — load-bearing for the "ODE-profile is the unknown" framing.
+- `project_substrate-question-governance-mcp.md` — gets a v0.3-decision update entry.
+
+**Files / artifacts:**
+
+- This file: V0.3 RESOLUTION at top, V0.3.1 AMENDMENT (council fold) immediately below, v0.2 / v0.1 / v0 preserved further down.
+- v0.3 amendment commits as part of the migration kickoff — NOT bundled with code; doc-first so future-me reads the rationale before any port code.
+- Wave 1 RFC follows in `docs/proposals/beam-wave-1-sentinel.md` (to be created when Wave 1 implementation starts).
+
+---
+
+## V0.3.1 AMENDMENT 2026-05-05 — council fold (architect / reviewer / live-verifier)
+
+**Read this with V0.3 RESOLUTION above.** Three council lanes ran in parallel after V0.3 was drafted, scoped adversarial-on-technical-detail (NOT on the migration decision, which v0.3 closed). Convergent finding across all three lanes: **V0.3's "Sentinel is read-mostly" framing is wrong**, and the doc had several other load-bearing gaps. v0.3.1 folds the council findings inline; v0.3's destination commitment is unchanged.
+
+### B1 (architect + reviewer + verifier — 3-lane convergence) — Sentinel is NOT read-mostly
+
+The "lowest blast radius" framing in V0.3 §Sequencing is technically correct *for the agent-state DB layer* but mis-stated as a general property. Sentinel actually owns:
+
+1. **File-backed cycle state** at `~/.unitares/anchors/.sentinel_state` via `agents/sentinel/agent.py:492-509, 695-699` (`load_state()` / `save_state()`). Carries the `forced_release_alarm.last_event_ts` cursor that fences alarm-replay.
+2. **Findings emit channel** via `post_finding(...)` for `sentinel_finding`, `sentinel_forced_release_alarm`, and `lease_plane_phase_b_transition` events (`agents/sentinel/agent.py:596, 681, 733`). Every active dashboard/Discord-bridge subscriber is downstream.
+3. **Python-runtime-specific anyio mitigations** (`agents/sentinel/agent.py:449-453`): `_poll_sync_forced_release` uses `asyncio.run()` inside a thread executor specifically to escape the anyio loop. Pattern does not exist in BEAM and needs a clean async polling replacement.
+4. **Lease-advisory scope** holding `resident:/sentinel_cycle` for 300s (`agents/sentinel/agent.py:549-554`) — mutation against the lease plane, the very surface BEAM owns.
+
+**Fold:** V0.3 §Sequencing Wave 1 framing now reads as **"Sentinel is read-mostly on the agent-state DB layer; owns atomic-write cycle state (`STATE_FILE`), findings-emit channel, lease-advisory scope, and Python-runtime-specific anyio mitigations. Lowest blast radius for agent-state DB; Wave 1 RFC must enumerate these four surfaces explicitly with cutover semantics."** Wave 1 RFC (to be drafted) is the work artifact for this; v0.3.1 names the requirement.
+
+### B2 (reviewer) — Three unnamed lock invariants Wave 3 must preserve
+
+`src/mcp_handlers/updates/phases.py` `execute_locked_update` enforces three invariants today that V0.3's "GenServer dissolves the lock structurally" claim does not name:
+
+1. **api_key PG/cache reconciliation** (`phases.py:659-716`) — atomic against concurrent `get_agent` reads under GenServer model.
+2. **thread_id / node_index monotonic advancement** (`phases.py:756-782`) — PG write must remain synchronous within message handler; fire-and-forget loses thread lineage on crash mid-sequence.
+3. **previous_void_active read-then-use-then-write capture** (`phases.py:734-741`) — must remain a single mailbox message, not split across two GenServer calls.
+
+**Fold:** Wave 3 RFC (when drafted) MUST include §"Lock-invariant inventory" enumerating these three plus any others it identifies, stating which become GenServer-internal synchronous message steps vs. which can be relaxed.
+
+### B3 (architect) — Missing §"State ownership and rollback during transition"
+
+V0.3 inherits A′'s Ports/HTTP boundary pattern from lease plane Phase A (#305) but does not specify, for any wave, who owns each piece of state during cutover. Lease plane sidestepped this because greenfield — no Python predecessor holding state. Every Wave 1+ surface has a Python predecessor.
+
+**Fold (added inline as new §"State ownership and rollback during transition" — implemented as part of this amendment):**
+
+For each migrating surface, the corresponding Wave RFC MUST cover:
+
+- **Single source of truth per state surface** during the transition window (Python-side, BEAM-side, or shadow-mode dual-write with one canonical reader).
+- **Cutover semantics** — direct flip / shadow-mode-then-flip / dual-write-then-converge. Default presumption: shadow mode for ≥1 cycle of meaningful traffic before flip.
+- **State format compatibility** — if BEAM writes the same on-disk file (`.sentinel_state`, `sentinel.json` session anchor), schema MUST be backwards-compatible with the Python reader OR a documented migration shim is provided. Default: BEAM does NOT modify the Python-readable format until Wave-N+1 explicitly changes the canonical reader.
+- **Rollback procedure** — named launchctl/systemd command sequence, state-file restoration step, and explicit acknowledgement of which side keeps writing during the rollback window.
+
+This subsection is now binding on every Wave RFC.
+
+### B4 (reviewer) — No Wave 1 rollback path
+
+Specific instance of B3. Wave 1 RFC for Sentinel-on-BEAM MUST include §"Rollback procedure" covering at minimum:
+
+- (a) `.sentinel_state` format versioning OR migration shim so Python `load_state()` (`agents/sentinel/agent.py:492`) can read what BEAM wrote without zeroing the alarm cursor.
+- (b) Explicit statement that the BEAM process will NOT modify `sentinel.json` session anchor format beyond what Python `GovernanceAgent` expects (interaction with `refuse_fresh_onboard=True` at `agents/sentinel/agent.py:476` — modifying it bricks Python rollback).
+- (c) Named command sequence (launchctl stop / unload / load Python plist) that restores prior state without corrupting the alarm cursor.
+
+### B5 (verifier REFUTED) — MCP SDK gate is OUT OF DATE
+
+V0.1 framed the MCP SDK gate as "no production Elixir MCP SDK exists." That premise is dead as of 2026-05-05. hex.pm now has at minimum:
+
+- `mcp_elixir_sdk` 1.0.1 — name match for "Elixir MCP SDK"
+- `hermes_mcp` 0.14.1 — 14 minor versions, active development
+- Plus: `ex_mcp` 0.9.1, `erlmcp` 0.3.1, `emcp` 0.3.4, `gen_mcp` 0.8.0, `elixir_mcp` 0.1.1, `elixir_mcp_server` 0.1.0
+
+**Fold:** §"MCP SDK gate (v0.1)" text below now reads "as of v0.1 there was no production Elixir MCP SDK; as of v0.3.1 (2026-05-05) `mcp_elixir_sdk` 1.0.1 and `hermes_mcp` 0.14.1 exist on hex.pm at non-trivial version numbers — operator should evaluate fitness before citing absence as a gate condition. The transport layer is no longer structurally pinned to Python by SDK absence." This MATERIALLY STRENGTHENS the migration case, not weakens it — the gate v0.1 named is no longer holding.
+
+### C1 (architect) — ODE profile timing
+
+V0.3 says ODE profile happens in parallel with Wave 1 implementation. Architect refines: the profile data must land before Wave 1's **exit criteria** are written, not before Wave 1 starts. Otherwise Wave 1's "BEAM dissolved the ceiling" claim cannot be distinguished from "Sentinel was cheap to port."
+
+**Fold:** Wave 1 exit-criteria authorship gates on ODE profile result. Wave 1 implementation can proceed in parallel; the exit-criteria document is what blocks.
+
+### C2 (architect) — Dialectic stateful/stateless split
+
+V0.3 lists dialectic resolution in the "stateful-coordinating, ports to BEAM" column (inherited from v0.1's cut). Architect: `src/dialectic_protocol.py:162` imports numpy. Dialectic is plausibly BOTH stateful-coordinating (resolution timing, participant lifecycle) AND stateless-computing (numerical synthesis math).
+
+**Fold:** Dialectic flagged as "TBD per Wave 3 RFC" rather than monolithically committed to BEAM. Wave 3 RFC must split it explicitly.
+
+### C3 (reviewer) — Lease plane Phase A is advisory-only; Wave 3 needs Phase B
+
+V0.3 says "Lease plane already proves the boundary." Reviewer correction: Phase A contract is advisory mode — failed acquire MUST NOT block the caller's normal operation. Pattern generalizes for Sentinel (Wave 1) cleanly but NOT for Wave 3 handler dispatch, which requires Python MCP to stop accepting writes for an agent while its BEAM GenServer is mid-update. That's Phase B enforcement. Phase B eligibility for `dialectic:/` opens 2026-05-16 per lease plane RFC; **no Phase B window is named for `resident:/` surfaces.**
+
+**Fold:** Wave 3 RFC MUST address opening a `resident:/` Phase B window OR specify a different enforcement-grade boundary mechanism. Wave 1 stays unaffected (Sentinel is fine on Phase A advisory).
+
+### C4 (reviewer) — Test strategy under migration
+
+V0.3 doesn't specify a minimum test bar before Wave 1 ships. 8329-test Python suite cannot cover BEAM-side code or the cross-runtime boundary.
+
+**Fold:** Wave 1 RFC MUST include §"Test strategy" with at minimum:
+
+- (a) ExUnit test driving fixture EISV event stream, asserting BEAM Sentinel emits correct `post_finding` shape
+- (b) Decision on whether the 8329 Python tests remain the acceptance gate for the Python side during migration
+- (c) Named integration test proving `resident:/sentinel_cycle` lease round-trip works end-to-end across runtimes
+
+### Stop sign #4 (architect) — boundary substrate-tax
+
+Added to V0.3 §Stop signs:
+
+> **4. Wave 0 instrumentation post-Wave-1 shows Ports/HTTP boundary accruing >1 distinct workaround pattern** → boundary design is wrong, halt before Wave 3. The four-anyio-mitigation argument that motivated v0.3 applies recursively to the boundary itself; if the migration replicates the substrate-tax shape one level out, the migration is not solving the problem.
+
+### What V0.3.1 changes vs V0.3
+
+- §Sequencing Wave 1: "read-mostly on agent-state DB" qualifier added, four state surfaces enumerated.
+- §Stop signs: #4 added.
+- §"State ownership and rollback during transition": new subsection (binding on all Wave RFCs).
+- §"MCP SDK gate (v0.1)": text updated with hex.pm reality (gate dissolved).
+- Wave 1 RFC requirements explicit: state-ownership matrix, rollback procedure, test strategy.
+- Wave 3 RFC requirements explicit: lock-invariant inventory, dialectic split, Phase B enforcement gate.
+
+### What V0.3.1 does NOT change
+
+- Migration commitment unchanged. Operator decision stands.
+- Wave sequencing unchanged (Wave 1 → Wave 2 → Wave 3).
+- A′ technical scope unchanged (stateful-coordinating to BEAM, stateless-computing stays Python).
+- ODE profile parallel-to-Wave-1 framing unchanged (only the exit-criteria authorship gates on it, per C1 fold).
+
+---
+
+## V0.2 RESOLUTION 2026-05-05 — verdict landed; destination reopens *(SUPERSEDED by V0.3 RESOLUTION above; preserved as historical record)*
+
+**This block is preserved for historical record.** v0.2 reopened the destination after PR #350's Python-fixable verdict. v0.3 (above) closes it on operator decision after three more Python-fixable PRs (#354, #360, #361) closed the remaining measured floors without moving user-visible per-turn overhead.
 
 **Read this before any other section.**
 

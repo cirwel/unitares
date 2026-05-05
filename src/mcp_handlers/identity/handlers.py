@@ -572,11 +572,18 @@ def _build_identity_diag_payload_for_request(
     label: Optional[str],
     status: str,
     identity_resolution_outcome: Optional[str] = None,
+    provisional_lineage: bool = False,
+    lineage_state: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the standard identity-success diag payload for `arguments` + `model_type`.
 
     Extracted from handle_identity_adapter so per-PATH resolvers can produce
     the same payload shape without the inner-function closure.
+
+    Fast-path callers (monitor cache, archived warning) MUST omit
+    ``lineage_state`` (default ``None``) — those paths skip the DB read
+    that would derive it. Slow paths derive via
+    ``derive_lineage_state(read_lineage_state(uuid))``.
     """
     from .shared import make_client_session_id
 
@@ -603,6 +610,8 @@ def _build_identity_diag_payload_for_request(
         continuity_token=continuity_token,
         identity_status=status,
         identity_resolution_outcome=identity_resolution_outcome,
+        provisional_lineage=provisional_lineage,
+        lineage_state=lineage_state,
     )
 
 
@@ -806,6 +815,22 @@ async def _try_resume_by_agent_uuid_direct(
         set_session_resolution_source("agent_uuid_direct")
     except Exception:
         pass
+    # R2 PR 3: surface provisional_lineage + lineage_state on the slow
+    # PATH 0 resume. Slow path is already DB-bound, so the
+    # `read_lineage_state` read is in budget and lets us derive
+    # lineage_state from the same row (single round-trip, consistent
+    # snapshot). Council fix: identity() now matches onboard()'s
+    # field surface.
+    _r2_prov = False
+    _r2_state: Optional[str] = None
+    try:
+        _row = await get_db().read_lineage_state(_direct_uuid)
+        if isinstance(_row, dict):
+            _r2_prov = bool(_row.get("provisional_lineage"))
+            from src.identity.lineage_lifecycle import derive_lineage_state
+            _r2_state = derive_lineage_state(_row)
+    except Exception:
+        pass
     payload = _build_identity_diag_payload_for_request(
         arguments, model_type,
         agent_uuid=_direct_uuid,
@@ -813,6 +838,8 @@ async def _try_resume_by_agent_uuid_direct(
         label=label,
         status="resumed",
         identity_resolution_outcome="resumed",
+        provisional_lineage=_r2_prov,
+        lineage_state=_r2_state,
     )
     payload.update({
         "resumed": True,
@@ -927,6 +954,23 @@ async def _try_resume_by_session_key(
         if success:
             label = arguments.get("name")
 
+    # R2 PR 3: surface provisional_lineage + lineage_state at top level.
+    # Slow path is already DB-bound here (label set, etc.), so the row
+    # read is in budget. The fast resume paths above (monitor cache,
+    # archived warning) default to False / None — those callers can
+    # re-query via `identity()` slow path if they need the flag.
+    # Council fix: identity() now matches onboard()'s field surface.
+    _r2_prov = False
+    _r2_state: Optional[str] = None
+    try:
+        _row = await get_db().read_lineage_state(agent_uuid)
+        if isinstance(_row, dict):
+            _r2_prov = bool(_row.get("provisional_lineage"))
+            from src.identity.lineage_lifecycle import derive_lineage_state
+            _r2_state = derive_lineage_state(_row)
+    except Exception:
+        pass
+
     payload = _build_identity_diag_payload_for_request(
         arguments, model_type,
         agent_uuid=agent_uuid,
@@ -934,6 +978,8 @@ async def _try_resume_by_session_key(
         label=label,
         status="resumed",
         identity_resolution_outcome=existing_identity.get("identity_resolution_outcome") or "resumed",
+        provisional_lineage=_r2_prov,
+        lineage_state=_r2_state,
     )
     payload.update({
         "resumed": True,
@@ -1168,6 +1214,23 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
         except Exception as e:
             logger.debug(f"[IDENTITY] Stable session bind failed (non-fatal): {e}")
 
+    # R2 PR 3 council fix: derive provisional_lineage + lineage_state
+    # from the persisted row so identity()'s primary response surface
+    # matches onboard()'s. Single read, single derive — fast paths that
+    # already returned earlier never reach this site.
+    _r2_prov_main = False
+    _r2_state_main: Optional[str] = None
+    try:
+        _row_main = await get_db().read_lineage_state(agent_uuid)
+        if isinstance(_row_main, dict):
+            _r2_prov_main = bool(_row_main.get("provisional_lineage"))
+            from src.identity.lineage_lifecycle import derive_lineage_state
+            _r2_state_main = derive_lineage_state(_row_main)
+    except Exception as _e_lineage:
+        logger.debug(
+            f"[R2] read_lineage_state in identity() main path failed (non-fatal): {_e_lineage}"
+        )
+
     response_data = build_identity_response_data(
         agent_uuid=agent_uuid,
         agent_id=final_agent_id,
@@ -1182,6 +1245,8 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
         resumed=False if result.get("created") else (True if result.get("source") else None),
         session_continuity=result.get("session_continuity"),
         verbose=verbose,
+        provisional_lineage=_r2_prov_main,
+        lineage_state=_r2_state_main,
     )
 
     # Auto-bind: automatically perform session binding so agents don't need a separate bind_session call
@@ -1695,6 +1760,14 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
     # STEP 2: Handle resume flag (explicit consent to resume existing identity)
     # (resume was extracted earlier at STEP 1)
+    # R2 PR 3 default — overridden by the created_fresh_identity and
+    # force_new branches below when they run the cross-role pre-check.
+    # The resume branch (an existing identity, no fresh declaration)
+    # leaves it as "no_lineage_declared" by design: this onboard call
+    # is not declaring a new lineage edge, so no PR 3 audit fires and
+    # the response surfaces lineage_state=None / provisional_lineage
+    # read from the row (the existing row's prior FSM state survives).
+    _lineage_for_response: Optional[str] = "no_lineage_declared"
     if resume and existing_identity and not existing_identity.get("created"):
         # User explicitly chose to resume - use existing identity
         agent_uuid = existing_identity.get("agent_uuid")
@@ -1746,27 +1819,45 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             else:
                 logger.debug(f"[ONBOARD] Fresh identity {agent_uuid[:8]}... was already persisted")
 
-            # Create SPAWNED edge in AGE graph (non-blocking)
+            # R2 PR 3: cross-role pre-check + lineage_declared audit.
+            # If the pre-check rejects (class mismatch), parent_agent_id
+            # is cleared and the downstream lineage tasks are skipped —
+            # there's no lineage edge to score, edge to draw, or genesis
+            # to seed once the cross-role envelope vetoed it.
             if _parent_agent_id:
-                from src.background_tasks import create_tracked_task
-                create_tracked_task(
-                    _create_spawned_edge_bg(agent_uuid, _parent_agent_id, _spawn_reason),
-                    name="spawned_edge",
+                _r2_state, _ = await _r2_pre_check_and_declare(
+                    agent_uuid,
+                    _parent_agent_id,
+                    name,
+                    mcp_server.agent_metadata.get(agent_uuid),
                 )
-                # Q2 reseed: seed child's genesis from parent's trajectory_current
-                # so tier<=1 agents with lineage get a meaningful baseline rather
-                # than comparing their first 10 samples against themselves.
-                create_tracked_task(
-                    _seed_genesis_from_parent_bg(agent_uuid, _parent_agent_id),
-                    name="seed_genesis_from_parent",
-                )
-                # R1 v3.3-D `marks` policy: score declared lineage and stamp
-                # provisional on inconclusive verdicts. Fire-and-forget — onboard
-                # response must not block on the per-dim DTW + audit write.
-                create_tracked_task(
-                    _score_lineage_continuity_bg(agent_uuid, _parent_agent_id),
-                    name="score_lineage_continuity",
-                )
+                if _r2_state == "rejected_cross_role":
+                    _parent_agent_id = None
+                    _lineage_for_response = "rejected_cross_role"
+                else:
+                    _lineage_for_response = "provisional"
+                    from src.background_tasks import create_tracked_task
+                    # Create SPAWNED edge in AGE graph (non-blocking)
+                    create_tracked_task(
+                        _create_spawned_edge_bg(agent_uuid, _parent_agent_id, _spawn_reason),
+                        name="spawned_edge",
+                    )
+                    # Q2 reseed: seed child's genesis from parent's trajectory_current
+                    # so tier<=1 agents with lineage get a meaningful baseline rather
+                    # than comparing their first 10 samples against themselves.
+                    create_tracked_task(
+                        _seed_genesis_from_parent_bg(agent_uuid, _parent_agent_id),
+                        name="seed_genesis_from_parent",
+                    )
+                    # R1 v3.3-D `marks` policy: score declared lineage and stamp
+                    # provisional on inconclusive verdicts. Fire-and-forget — onboard
+                    # response must not block on the per-dim DTW + audit write.
+                    create_tracked_task(
+                        _score_lineage_continuity_bg(agent_uuid, _parent_agent_id),
+                        name="score_lineage_continuity",
+                    )
+            else:
+                _lineage_for_response = "no_lineage_declared"
 
             # Cache with the adjusted session_key (may include model suffix)
             await _cache_session(session_key, agent_uuid, display_agent_id=agent_id)
@@ -1828,25 +1919,40 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                     meta.spawn_reason = _spawn_reason
                 except Exception as e:
                     logger.debug(f"[ONBOARD] Could not sync parent to metadata (force_new branch): {e}")
-                try:
-                    from src.background_tasks import create_tracked_task
-                    create_tracked_task(
-                        _create_spawned_edge_bg(agent_uuid, _parent_agent_id, _spawn_reason),
-                        name="spawned_edge",
-                    )
-                    # Q2 reseed: mirror the created_fresh_identity branch.
-                    create_tracked_task(
-                        _seed_genesis_from_parent_bg(agent_uuid, _parent_agent_id),
-                        name="seed_genesis_from_parent",
-                    )
-                    # R1 v3.3-D `marks` policy: mirror the created_fresh_identity
-                    # branch. See _score_lineage_continuity_bg for contract.
-                    create_tracked_task(
-                        _score_lineage_continuity_bg(agent_uuid, _parent_agent_id),
-                        name="score_lineage_continuity",
-                    )
-                except Exception as e:
-                    logger.debug(f"[ONBOARD] Could not schedule SPAWNED edge (force_new branch): {e}")
+                # R2 PR 3: cross-role pre-check + lineage_declared audit.
+                # Mirrors the created_fresh_identity branch above.
+                _r2_state, _ = await _r2_pre_check_and_declare(
+                    agent_uuid,
+                    _parent_agent_id,
+                    name,
+                    mcp_server.agent_metadata.get(agent_uuid),
+                )
+                if _r2_state == "rejected_cross_role":
+                    _parent_agent_id = None
+                    _lineage_for_response = "rejected_cross_role"
+                else:
+                    _lineage_for_response = "provisional"
+                    try:
+                        from src.background_tasks import create_tracked_task
+                        create_tracked_task(
+                            _create_spawned_edge_bg(agent_uuid, _parent_agent_id, _spawn_reason),
+                            name="spawned_edge",
+                        )
+                        # Q2 reseed: mirror the created_fresh_identity branch.
+                        create_tracked_task(
+                            _seed_genesis_from_parent_bg(agent_uuid, _parent_agent_id),
+                            name="seed_genesis_from_parent",
+                        )
+                        # R1 v3.3-D `marks` policy: mirror the created_fresh_identity
+                        # branch. See _score_lineage_continuity_bg for contract.
+                        create_tracked_task(
+                            _score_lineage_continuity_bg(agent_uuid, _parent_agent_id),
+                            name="score_lineage_continuity",
+                        )
+                    except Exception as e:
+                        logger.debug(f"[ONBOARD] Could not schedule SPAWNED edge (force_new branch): {e}")
+            else:
+                _lineage_for_response = "no_lineage_declared"
         except Exception as e:
             logger.error(f"onboard() failed to create identity: {e}")
             return error_response(f"Failed to create identity: {e}")
@@ -2088,6 +2194,36 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         except Exception as e:
             logger.debug(f"Could not add tool_mode info: {e}")
 
+    # R2 PR 3: read the post-pre-check lineage state from the row so
+    # the response surfaces both the per-call decision (lineage_state)
+    # and the persisted column (provisional_lineage). On the resume
+    # branch these come from the existing row; on the fresh/forced
+    # branches they reflect what _r2_pre_check_and_declare just stamped.
+    # `isinstance(..., dict)` guards against test backends that return
+    # AsyncMock auto-children instead of None (per the conftest leak-
+    # detection contract noted at L143 — bare get() on a Mock surfaces
+    # a coroutine that the response builder never awaits).
+    _r2_provisional_lineage = False
+    try:
+        _r2_lineage_row = await get_db().read_lineage_state(agent_uuid)
+        if isinstance(_r2_lineage_row, dict):
+            _r2_provisional_lineage = bool(_r2_lineage_row.get("provisional_lineage"))
+            # Resume branch fallback: if the row already has a parent and
+            # the FSM hasn't moved it to a terminal state, surface the
+            # row's lineage state in the response. The fresh/forced
+            # branches set _lineage_for_response explicitly above and
+            # we honor that — only override when this onboard call was
+            # the resume branch (no fresh declaration this call).
+            # Council fix: delegated to `derive_lineage_state` so the
+            # cascade lives in one place (shared with identity()).
+            if _lineage_for_response == "no_lineage_declared" and _r2_lineage_row.get("parent_agent_id"):
+                from src.identity.lineage_lifecycle import derive_lineage_state
+                _derived = derive_lineage_state(_r2_lineage_row)
+                if _derived is not None:
+                    _lineage_for_response = _derived
+    except Exception as e:
+        logger.debug(f"[R2] read_lineage_state failed (non-fatal): {e}")
+
     result = build_onboard_response_data(
         agent_uuid=agent_uuid,
         structured_agent_id=response_agent_id,
@@ -2107,6 +2243,8 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         identity_resolution_outcome=identity_resolution_outcome,
         system_activity=_get_system_evidence() if verbose else None,
         tool_mode_info=tool_mode_info,
+        lineage_state=_lineage_for_response,
+        provisional_lineage=_r2_provisional_lineage,
     )
 
     # Bootstrap check-in (onboard-bootstrap-checkin §3.5). Conditional on
@@ -2393,6 +2531,178 @@ async def _seed_genesis_from_parent_bg(child_id: str, parent_id: str):
             )
     except Exception as e:
         logger.debug(f"seed_genesis_from_parent scheduling failed (non-fatal): {e}")
+
+
+async def _r2_pre_check_and_declare(
+    agent_uuid: str,
+    parent_id: str,
+    name: Optional[str],
+    meta: Optional[Any],
+) -> tuple[str, Optional[Dict[str, Any]]]:
+    """R2 PR 3 — cross-role pre-check + lineage_declared emission.
+
+    Returns ``(lineage_state, rejection_details)``:
+      - ``("provisional", None)`` — declaration accepted; the row's
+        ``lineage_declared_at`` was stamped (idempotent), the
+        ``lineage_declared`` audit fired. Caller continues with
+        existing lineage dispatches (R1 score, SPAWNED edge,
+        genesis seed).
+      - ``("rejected_cross_role", details)`` — class mismatch.
+        ``parent_agent_id`` was cleared from ``core.identities`` and
+        from in-memory metadata; ``lineage_cross_role_rejected`` audit
+        fired. Caller MUST skip the downstream lineage dispatches —
+        they would re-declare the lineage we just rejected.
+      - ``("provisional", None)`` is also returned on the orphan/charitable
+        accept path (parent or successor without a class tag).
+
+    The class for the cross-role check is derived from the same
+    classifier the onboard handler uses to stamp default tags later
+    (`default_tags_for_onboard`). The classifier returns ``None`` when
+    the caller already supplied tags; in that case we use the caller-
+    supplied tags directly. The first tag is the "primary class" for
+    envelope-comparison purposes (see
+    ``src/grounding/onboard_classifier.py``).
+
+    All DB and audit failures are caught + logged; this helper does
+    NOT propagate exceptions. The lineage state returned reflects what
+    actually committed: if `declare_lineage` raises, we still return
+    ``"provisional"`` because the cross-role check passed and the
+    caller should still dispatch (the FSM will pick up the missing
+    declaration on the next sweep — `read_lineage_state` will return
+    the row regardless).
+
+    Awaiting DB calls from inside the handler matches the pattern
+    already established in the surrounding onboard flow (e.g.
+    ``set_agent_label`` at L1810, ``ensure_agent_persisted`` at
+    L1680). Per CLAUDE.md the anyio-asyncpg deadlock is a concern
+    for *new* MCP handlers; the onboard handler's existing posture
+    on this is the precedent we follow.
+    """
+    from src.identity.lineage_lifecycle import (
+        pre_check_cross_role,
+        _emit_audit,
+    )
+    from src.grounding.onboard_classifier import default_tags_for_onboard
+    from src.db import get_db
+
+    # Determine the successor's would-be primary class. The classifier
+    # returns None when existing_tags is non-empty (caller-asserted
+    # class) — in that branch use the caller's tags directly so the
+    # check still runs with a real class, not a None.
+    existing_tags = getattr(meta, "tags", None) if meta is not None else None
+    successor_tags = default_tags_for_onboard(name, existing_tags)
+    if successor_tags is None and existing_tags:
+        successor_tags = list(existing_tags)
+    successor_class = successor_tags[0] if successor_tags else None
+
+    rejection = await pre_check_cross_role(parent_id, successor_class)
+    backend = get_db()
+
+    if rejection is not None:
+        # Clear parent_agent_id AND spawn_reason from the storage row
+        # first so the downstream FSM never reads them back. PR 3
+        # council fix (reviewer #2): the original rejection path only
+        # cleared parent_agent_id; spawn_reason became asymmetric.
+        # `clear_lineage_declaration` keeps both columns in sync.
+        try:
+            await backend.clear_lineage_declaration(agent_uuid)
+        except Exception as e:
+            logger.warning(
+                f"[R2] cross-role: failed to clear lineage declaration for "
+                f"{agent_uuid[:8]}...: {e}"
+            )
+        # Clear in-memory metadata so the same handler call's response
+        # reflects the rejection (e.g. predecessor block omitted).
+        # Council fix: also clear spawn_reason for symmetry with the
+        # storage-side clear above.
+        if meta is not None:
+            try:
+                meta.parent_agent_id = None
+                meta.spawn_reason = None
+            except Exception:
+                pass
+        # Emit audit event. _emit_audit is fail-soft inside; this
+        # outer try is defense-in-depth against import-time errors.
+        try:
+            await _emit_audit(
+                "lineage_cross_role_rejected",
+                agent_uuid,
+                details={
+                    **rejection,
+                    "claimed_parent_id": parent_id,
+                },
+            )
+        except Exception as e:
+            logger.warning(
+                f"[R2] cross-role audit emit failed for "
+                f"{agent_uuid[:8]}...: {e}"
+            )
+        logger.info(
+            f"[R2] Cross-role rejected: {agent_uuid[:8]}... -> "
+            f"{parent_id[:8]}... (parent={rejection['parent_class']}, "
+            f"successor={rejection['successor_class']})"
+        )
+        return "rejected_cross_role", rejection
+
+    # PR 3 council fix (architect F1): if the row is already in a
+    # terminal state (archived after grace expiry, or demoted), the
+    # FSM's terminal-state guard would permanently skip evaluation
+    # even after `declare_lineage` stamps a fresh
+    # `lineage_declared_at` — `lineage_archived_at` /
+    # `lineage_demoted_at` are still set, so the FSM short-circuits
+    # to `skipped_reason="terminal_state"` and the lineage is
+    # silently dead while the response surfaces "provisional".
+    # Reset terminal markers atomically here so re-onboarding actually
+    # re-enters the FSM with a clean slate. Audit anchor for the prior
+    # terminal state survives in `audit.events` (lineage_grace_expired
+    # / lineage_demoted from the FSM's prior tick).
+    try:
+        existing_state = await backend.read_lineage_state(agent_uuid)
+        if existing_state and (
+            existing_state.get("lineage_archived_at") is not None
+            or existing_state.get("lineage_demoted_at") is not None
+        ):
+            try:
+                reset = await backend.reset_lineage_for_redeclaration(agent_uuid)
+                if reset:
+                    logger.info(
+                        f"[R2] reset_lineage_for_redeclaration: cleared terminal "
+                        f"state for {agent_uuid[:8]}... (re-declaring lineage to "
+                        f"{parent_id[:8]}...)"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"[R2] reset_lineage_for_redeclaration failed: {e}"
+                )
+    except Exception as e:
+        logger.debug(
+            f"[R2] read_lineage_state pre-redeclare check failed (non-fatal): {e}"
+        )
+
+    # Accept path — stamp lineage_declared_at (idempotent) + emit
+    # the lineage_declared audit. The FSM (PR 2) and sweeper (PR 4)
+    # use lineage_declared_at as the grace-window anchor; an unstamped
+    # row would archive immediately on first eval.
+    try:
+        await backend.declare_lineage(agent_uuid)
+    except Exception as e:
+        logger.warning(
+            f"[R2] declare_lineage failed for {agent_uuid[:8]}...: {e}"
+        )
+    try:
+        await _emit_audit(
+            "lineage_declared",
+            agent_uuid,
+            details={
+                "parent_id": parent_id,
+                "successor_class": successor_class,
+            },
+        )
+    except Exception as e:
+        logger.warning(
+            f"[R2] declare audit emit failed for {agent_uuid[:8]}...: {e}"
+        )
+    return "provisional", None
 
 
 async def _score_lineage_continuity_bg(child_id: str, parent_id: str) -> None:

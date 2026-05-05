@@ -231,15 +231,17 @@ The forward-only trust-tier policy means clawback is bounded: only the *chain's*
 
 R2 introduces the following columns on `core.identities` (canonical lineage table). Migration is part of R2's implementation row (or jointly with R1 implementation row, whichever lands first):
 
-| Column | Type | Default | Purpose |
-|---|---|---|---|
-| `provisional_lineage` | BOOLEAN NOT NULL | `false` | True from declaration until promotion or until edge is removed. |
-| `lineage_declared_at` | TIMESTAMPTZ | `NULL` | Timestamp of `parent_agent_id` first set. |
-| `lineage_promoted_at` | TIMESTAMPTZ | `NULL` | Set on `provisional → confirmed`. |
-| `lineage_demoted_at` | TIMESTAMPTZ | `NULL` | Set on `* → demoted`; cleared on re-declaration. |
-| `lineage_archived_at` | TIMESTAMPTZ | `NULL` | Set on grace expiration. |
-| `lineage_last_eval_at` | TIMESTAMPTZ | `NULL` | Updated by sweeper or check-in trigger to enforce cadence guards. |
-| `chain_obs_count` | INTEGER NOT NULL | `0` | Forward-only counter for chain trust-tier accrual. Incremented on each post-promotion check-in. Reset to 0 on confirmed→demoted clawback. |
+**Reconciliation (2026-05-04):** R1 PR #306 (migration 031) already shipped `provisional_lineage`, `provisional_score_id`, `provisional_recorded_at`, and `confirmed_at` on `core.identities`. R2 reuses these. `lineage_promoted_at` in the table below is satisfied by R1's existing `confirmed_at` — R2 does not introduce a duplicate column. R2's implementation row (migration 035) adds only the genuinely new columns: `lineage_declared_at`, `lineage_demoted_at`, `lineage_archived_at`, `lineage_last_eval_at`, `chain_obs_count`. See `docs/handoffs/2026-05-04-r2-implementation-plan.md`.
+
+| Column | Type | Default | Purpose | Status |
+|---|---|---|---|---|
+| `provisional_lineage` | BOOLEAN NOT NULL | `false` | True from declaration until promotion or until edge is removed. | Shipped by R1 #306 (migration 031) |
+| `lineage_declared_at` | TIMESTAMPTZ | `NULL` | Timestamp of `parent_agent_id` first set. | R2 to add (migration 035) |
+| ~~`lineage_promoted_at`~~ → `confirmed_at` | TIMESTAMPTZ | `NULL` | Set on `provisional → confirmed`. | Shipped by R1 #306 as `confirmed_at` |
+| `lineage_demoted_at` | TIMESTAMPTZ | `NULL` | Set on `* → demoted`; cleared on re-declaration. | R2 to add (migration 035) |
+| `lineage_archived_at` | TIMESTAMPTZ | `NULL` | Set on grace expiration. | R2 to add (migration 035) |
+| `lineage_last_eval_at` | TIMESTAMPTZ | `NULL` | Updated by sweeper or check-in trigger to enforce cadence guards. | R2 to add (migration 035) |
+| `chain_obs_count` | INTEGER NOT NULL | `0` | Forward-only counter for chain trust-tier accrual. Incremented on each post-promotion check-in. Reset to 0 on confirmed→demoted clawback. | R2 to add (migration 035) |
 
 **Schema decision rationale:** column-on-`core.identities` is simpler than a separate `lineage_edges` table. The `parent_agent_id` field already lives on `core.identities`; co-locating the lineage state machine there avoids JOINs on every read. A separate table would only be justified if multi-parent or multi-edge-per-pair semantics arise; v1 has neither. Revisit if R3's lineage-chain queries (S7) need a distinct edge table for graph-aware indexing.
 
