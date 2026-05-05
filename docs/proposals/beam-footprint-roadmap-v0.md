@@ -1,8 +1,44 @@
 # BEAM Footprint Roadmap
 
 **Created:** May 3, 2026
-**Last Updated:** May 3, 2026
-**Status:** Draft v0 — Read A roadmap (control plane → BEAM, intelligence plane stays Python) for unitares post-Phase-A
+**Last Updated:** May 4, 2026 (amendment — see below)
+**Status:** Draft v0 — Read A roadmap (control plane → BEAM, intelligence plane stays Python) for unitares post-Phase-A — **central premise partially falsified 2026-05-04, see AMENDMENT block before reading further**
+
+---
+
+## AMENDMENT 2026-05-04 — falsifying measurement on governance-MCP path
+
+**Read this before any other section.** A measurement on the governance-MCP request path on 2026-05-04 falsifies a load-bearing premise of v0.
+
+**The measurement.** KG calls that complete in 21–71ms standalone run at ~4,464ms in-handler — a ~60× amplification, with the floor sub-100ms and the rest in scheduling / pool-acquisition / event-loop contention. The amplification is, by definition, in the substrate-coupling layer, not in Postgres or Cypher.
+
+**What this falsifies.** v0 cites PR #290 (Sentinel-loop call site, ">400 cycles since restart with zero failures") as evidence the asyncpg/anyio bug class is closed and uses that to declare Wave 1's BEAM motivation "dead" (§"Wave 1 — Why first — the honest motivation") and to re-anchor the roadmap on substrate-fit-not-bug-fix grounds (§"Convergent evidence behind the substitution"). The 2026-05-04 measurement says the bug class is alive on a different surface — same coupling, different call path. PR #290 closed it at *one site*, not at the bug-class level. The conflation drove the Read-A-as-stable-destination conclusion.
+
+**What this does NOT do.**
+
+- It does not by itself argue Read B (full rewrite). The operator's stated destination ("full BEAM nervous system") and the substrate-migration-enthusiasm-bias check from §"Operator-consent framing" both still apply.
+- It does not invalidate the lease-plane Phase A or the control-plane / intelligence-plane cut. Those stand on their own evidence.
+- It does not retire Wave 0 — Wave 0's measurement infrastructure is exactly what makes amendments like this one possible, and is more clearly load-bearing now, not less.
+
+**What it does change.**
+
+- Sections that depend on "bug class closed" — specifically the bullet on line 17 ("Wave 1's central premise was stale"), the bullet on line 19 ("the asyncpg/anyio bug class … was closed in production"), the §"Wave 1 — Why first" claim "**That motivation is dead**", and the supporting citations on lines 219, 227, 230 — should be re-read as scoped-to-Sentinel-loop, not bug-class-closure.
+- The "Read A as stable destination, not a way-station to Read B" framing in §"What this document is" depends on the falsified premise. It is not automatically wrong (substrate fit, supervision discipline, and operator cost are all independent arguments), but it no longer carries the "and the bug class is fixed anyway" wind that the original framing leaned on.
+- Wave 1's exit criterion ("zero coordination-class incidents in the Wave-0 instrumentation feed for 14 days") is now also a probe of whether the bug class has substrate-shaped recurrence on a BEAM-resident service, not just a parity check. The same wave will produce the comparison data Read B's case rests on.
+
+**What's needed.**
+
+- Operator decision on whether v0's strategic conclusion holds, weakens, or flips given the new measurement. This amendment does not pre-decide; it re-opens a question v0 closed prematurely.
+- A separate amendment or v0.1 that re-states Wave 1's BEAM motivation honestly (substrate-fit AND live bug class on governance-MCP path, not substrate-fit-only-because-bug-class-is-fixed).
+- CLAUDE.md §"Substrate Tax: anyio-asyncio Coupling" (updated 2026-05-04) is the operational counterpart to this amendment — it tells in-repo agents the patterns are workarounds, not architecture.
+
+**Source — and why this is on-mission for Wave 0, not adjacent to it.** v0 explicitly frames Wave 0 as the measurement infrastructure that makes later waves' exit criteria evaluable: "Without Wave 0, no later wave's 'exit criterion' can be honestly evaluated and no Read B trigger can fire on evidence rather than vibes" (§"Wave 0 — coordination_events"). The 2026-05-04 measurement is the first round of exactly that evidence:
+
+- **Wave 0 channel proper.** PRs #342 (foundation) + #345 (step 2A: MCP decorator timeout chokepoint emit) + #348 (caller agent_id + session_id context fallback) produced 6 `coordination_failure.mcp_handler_timeout.tool_decorator` events in the 8.5h after #345 merged. 100% concentration on two consolidated tools (`observe`, `list_agents`); cascade pairs at 15:15:00.83/.93 and 18:57:37/41 suggesting in-handler contention; one 22.6s elapsed-past-15s outlier indicating cancellation propagation friction (an asyncio/anyio coupling tell). These are the substrate-coupling fingerprint, captured by the channel the roadmap said would capture it. The data is truncated at the 15s decorator wall, so the channel sees the symptom but not the magnitude.
+- **Probe alongside.** A parallel Claude session, looking for the unscoped magnitude, measured 21–71ms standalone vs ~4,464ms in-handler on KG calls — the ~60× number cited above. This is the same coupling, measured at a different boundary (per-call latency rather than per-handler timeout).
+- **Wave 0 is producing the experiment, too.** PR #348's planned follow-up — drop `force=True` on `observe(action=aggregate|anomalies)` so the 3221-await `load_metadata_async` loop comes off the request path — is a Wave 0–enabled experiment. Post-fix coordination_failure rate is the verdict on whether the in-handler floor was the await loop (Python-fixable in-place) or the substrate-coupling floor (substrate-shaped). The signal will land on the same Wave 0 channel that surfaced the problem.
+
+The amendment is what Wave 0 was for. The signal arrived earlier than the roadmap anticipated because step 2A was a low-risk wire and an unrelated probe converged on the same answer the channel was about to surface. Per `feedback_substrate-migration-status-quo-bias.md` ("ask 'what falsifying evidence would update you?' early"), this is exactly the falsifying-evidence shape the roadmap should fold in rather than route around.
 
 ---
 
@@ -12,11 +48,11 @@ The operator stated 2026-04-30 (~13:30 local) and again 2026-05-03 that the goal
 
 The operator should explicitly confirm or override this substitution before the roadmap is treated as binding. Drafting a roadmap that quietly translates "fully migrate" into "hybrid that keeps Python permanently" is the substrate-migration enthusiasm bias — exact mirror of the resistance bias in `feedback_substrate-migration-status-quo-bias.md`. Naming it does not absolve it; operator consent does.
 
-**Convergent evidence behind the substitution (2026-05-03):**
+**Convergent evidence behind the substitution (2026-05-03 — partially falsified 2026-05-04, see AMENDMENT block above):**
 
-- 3-agent council (`dialectic-knowledge-architect` + `feature-dev:code-reviewer` + `live-verifier`) on the prior draft of this roadmap rejected its diplomatic third-position framing and surfaced that Wave 1's central premise (asyncpg/anyio as live bug class) was stale.
+- 3-agent council (`dialectic-knowledge-architect` + `feature-dev:code-reviewer` + `live-verifier`) on the prior draft of this roadmap rejected its diplomatic third-position framing and surfaced that Wave 1's central premise (asyncpg/anyio as live bug class) was stale. **[Falsified 2026-05-04: bug class is alive on governance-MCP path, ~60× amplification. The council's surfacing was correct against the prior draft's *wording*, but the underlying bug class is not stale.]**
 - Independent third-party (Perplexity computer task, 2026-05-03): "I would not do a wholesale Python-to-Elixir/Erlang rewrite. The better path is: keep Python for ML, research code, model evaluation, data tooling, and fast iteration; move only the orchestration layer, agent supervision, long-running services, distributed coordination, queues, process lifecycles, telemetry, and fault-boundary logic onto BEAM."
-- Live source check: the asyncpg/anyio bug class cited as primary motivation in earlier drafts was closed in production 2026-05-02 by PR #290 (`agents/sentinel/agent.py:413-450`); `phase-a-plan.md:347` confirms ">400 cycles since restart with zero asyncpg/anyio failures."
+- Live source check: the asyncpg/anyio bug class cited as primary motivation in earlier drafts was closed in production 2026-05-02 by PR #290 (`agents/sentinel/agent.py:413-450`); `phase-a-plan.md:347` confirms ">400 cycles since restart with zero asyncpg/anyio failures." **[Scope correction 2026-05-04: PR #290 closed it for the Sentinel-loop call site only, not at the bug-class level. The same coupling is alive on the governance-MCP request path, measured 2026-05-04.]**
 
 If the operator wants Read B (full UNITARES rewrite in Elixir) regardless, this roadmap does not block it — but Read B requires a separate edit to `docs/ontology/beam-coordination-kernel.md` to amend the first non-goal ("Do not rewrite UNITARES in Elixir"), and that edit is the operator's call, not this document's.
 
@@ -113,9 +149,9 @@ Stability discipline: `event_type` extends by adding new dotted namespaces, neve
 
 ### Why first — the honest motivation
 
-The earlier draft pitched Sentinel-on-BEAM as the cure for the asyncpg/anyio bug class. **That motivation is dead.** PR #290 closed that CONCERN 2026-05-02; `agents/sentinel/agent.py:413-450` runs `asyncio.run(asyncio.wait_for(poll_forced_release_alarms(...), 30s))` inside a `loop.run_in_executor` call; `phase-a-plan.md:347` records ">400 cycles since restart with zero asyncpg/anyio failures."
+The earlier draft pitched Sentinel-on-BEAM as the cure for the asyncpg/anyio bug class. **That motivation is *not* dead — see AMENDMENT 2026-05-04 at top of doc.** PR #290 closed the CONCERN at one call site (`agents/sentinel/agent.py:413-450` runs `asyncio.run(asyncio.wait_for(poll_forced_release_alarms(...), 30s))` inside a `loop.run_in_executor` call; `phase-a-plan.md:347` records ">400 cycles since restart with zero asyncpg/anyio failures"), but the same bug class is alive on the governance-MCP request path with ~60× amplification (measured 2026-05-04). For Wave 1 specifically, the Sentinel-loop call site IS mitigated, so the original "structural fit, not bug fix" reframing below remains the right argument *for Sentinel itself* — but it should not be read as evidence that the bug class is closed in the system.
 
-Sentinel-on-BEAM's real motivation, with that pitch retired:
+Sentinel-on-BEAM's real motivation (with the original pitch scoped, not retired):
 
 1. **Substrate fit, not bug fix.** A continuous fleet monitor with rule-based anomaly detection over event streams *is* the GenServer-per-rule-under-DynamicSupervisor shape. The Python implementation works (post-PR-#290), but the structural fit argues OTP supervision will hold under classes of failure the current mitigation pattern cannot cover (executor thread-pool exhaustion at sustained DB outage; cascading rule failure; alarm-handler crash without restart policy).
 2. **Launchd → OTP supervision is a real upgrade.** Launchd restarts a crashed process; OTP can isolate failures within a process, restart subtrees, and apply explicit restart strategies. For a fleet monitor whose individual rules can fail independently, this is structurally better fault containment than what launchd offers.

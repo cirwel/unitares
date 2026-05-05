@@ -104,11 +104,13 @@ This section is operator-protective, not session-protective. The deeper fix is o
 - Do not run DROP/TRUNCATE/DELETE on the governance database without explicit user approval
 - Do not include Co-Authored-By lines in commit messages
 
-## Known Issue: anyio-asyncio Conflict
+## Substrate Tax: anyio-asyncio Coupling
 
-The MCP SDK's anyio task group conflicts with asyncpg/Redis async operations. MCP tool handlers that `await` DB calls can deadlock.
+The MCP SDK runs handlers inside an anyio task group. asyncpg and Redis run on Python's asyncio. When a handler `await`s DB/Redis work, the two scheduler models can interact in ways that hold connections across unrelated awaits and amplify latency by orders of magnitude. Measured 2026-05-04 on the governance-MCP request path: KG calls that complete in 21–71ms standalone run at **~4,464ms in-handler** — a ~60× amplification, with the floor sub-100ms and the rest in scheduling / pool-acquisition / event-loop contention. The Sentinel-loop call site (`agents/sentinel/agent.py:413-450`) is mitigated to ">400 cycles, zero failures" via PR #290, but that fix is one workaround at one site, not closure of the bug class.
 
-**Mitigated (Option F):** `health_check` reads a cached snapshot produced by a background probe task. No DB calls in the handler path. Any *new* MCP handler that needs DB access must use one of three patterns:
+**These are workarounds, not architecture.** The patterns below accreted from incidents — three over the last year, with new variants emerging on different surfaces (current example: the load_metadata_async N-await loop on observe handlers, see PR #348 follow-up). The bug class is structural to anyio + asyncio + asyncpg / Redis on a shared event loop and does not exist on substrates with per-process scheduling and protocol-level connection checkout (e.g., BEAM / db_connection). The honest open question — whether/how the governance-MCP surface gets ported — lives in `docs/proposals/beam-footprint-roadmap-v0.md` (read its 2026-05-04 amendment, not the original "bug class closed" framing).
+
+When you write a new MCP handler that needs DB access, pick one of the three patterns below. **Do not treat their accumulation as progress.** Each new pattern is evidence the substrate tax is growing, which is data the open-question doc cares about — surface it there if a fourth shape emerges, don't just add it.
 
 1. **Read cached data** populated by a background task (e.g., `health_check` reads `deep_health_probe_task`'s snapshot; sticky identity reads a cache pre-warmed by `transport_binding_cache_warmup`).
 2. **`run_in_executor` with a sync client** — see `verify_agent_ownership` dispatch at `src/agent_loop_detection.py:374` (synchronous DB-touching function pushed to an executor thread so the anyio task group stays unblocked). The same pattern is used externally by `call_pi_tool` in the `unitares_pi_plugin` package.
