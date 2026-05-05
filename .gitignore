@@ -108,6 +108,8 @@ data/sequential_calibration_state.json
 # Audit logs (may contain sensitive information)
 data/audit_log.jsonl
 data/tool_usage.jsonl
+data/audit_log_archive/
+data/tool_usage_archive/
 
 # Runtime data
 data/logs/

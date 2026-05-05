@@ -142,7 +142,7 @@ Same as v1, with explicit acknowledgement these are deferred *not* because they'
 
 | Channel | What it would measure | Prerequisite |
 |---|---|---|
-| **KG cite-and-extend** | Successor's KG writes within window cite or build on ≥ N of parent's entries | None blocking; deferred for v1 to maintain single-channel discipline. Could land as v1.1 if the open question on it (below) goes that way. |
+| **KG cite-and-extend** | Successor's KG writes within window cite or build on ≥ N of parent's entries | Selected as R5 v0.1's first shadow channel in `docs/ontology/r5-memory-deepening-reality.md`; runtime R2 gating still deferred until telemetry matures. |
 | **Calibration-envelope match** | Successor's per-agent calibration curve falls within parent's confidence envelope | Per-agent calibration storage (R1 deferred C3). |
 | **Decision-distribution overlap** | Successor's decision distribution overlaps parent's | Persistent per-agent decision log (R1 deferred C4). |
 | **Forced re-derivation** (R5's domain) | Successor independently reproduces N of parent's KG conclusions from raw inputs | R5 — out of scope for R2; this is the integration-vs-replay discriminator. |
@@ -327,7 +327,7 @@ R2 design proceeds in parallel with R1 implementation. R2 implementation sequenc
 
 1. **Cross-role lineage: reject vs. flag-and-allow?** v2 picks reject for clean audit semantics. Flag-and-allow preserves operator visibility into "X tried to claim Y's lineage despite role mismatch" (potentially surfacing attempted reclassification). Recommendation: **reject in v1**; revisit if Phase 1 telemetry shows operator wants the attempted-cross-role signal preserved.
 
-2. **KG cite-and-extend as v1.1 supplemental channel?** Has no blocking prerequisite. Adding *any* channel orthogonal to trajectory similarity tightens the necessary-but-not-sufficient gap and directly attacks the council's axiom-#12-conflation finding. Recommendation: **defer to v1.1**, after Phase 1 trajectory-only telemetry establishes a baseline. Surface now so it doesn't get lost.
+2. **KG cite-and-extend as v1.1 supplemental channel?** **Partially resolved 2026-05-05:** `docs/ontology/r5-memory-deepening-reality.md` selects KG cite-and-extend as R5 v0.1's first shadow channel. Runtime R2 gating remains deferred until Phase 1 trajectory-only telemetry establishes a baseline.
 
 3. **Confirmed → demoted: clawback (current rec) vs. fork?** v2 picks demote-with-clawback. Demote is operationally simpler but does erase the chain counter that accrued during the validly-confirmed period (the council's interpretive-rewrite concern, accepted as the price of the simpler protocol). Fork preserves the pre-divergence segment as still-valid-for-its-time and starts a new fork-point edge for post-divergence behavior. Fork is more honest under axiom #3 but adds data-model complexity (multi-edge per pair, fork-point timestamps, chain-counter splits). Recommendation: **demote-with-clawback in v1**, escalate to fork in v1.1 if demotion oscillation pathology surfaces in Phase 1 telemetry.
 
