@@ -189,6 +189,51 @@ class TestOperatorResumePersistsRuntimeState:
             assert event and event.get("event") == "operator_resumed"
 
 
+class TestExecuteResolutionPersistsRuntimeState:
+    @pytest.mark.asyncio
+    async def test_execute_resolution_persists_paused_at_and_lifecycle_event(self):
+        from src.dialectic_protocol import Resolution
+
+        meta = make_agent_meta(status="paused", paused_at="2026-04-16T10:00:00+00:00")
+
+        session = MagicMock()
+        session.paused_agent_id = AGENT_ID
+        session.discovery_id = None
+        session.session_id = "sess-1"
+        session.dispute_type = None
+
+        resolution = Resolution(
+            action="resume",
+            conditions=[],
+            root_cause="agreed root cause",
+            reasoning="merged reasoning",
+            signature_a="sig_a",
+            signature_b="sig_b",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+
+        mock_server = make_mock_server()
+        mock_server.agent_metadata = {AGENT_ID: meta}
+        mock_server.load_metadata_async = AsyncMock(return_value=None)
+
+        mock_storage = MagicMock()
+        mock_storage.update_agent = AsyncMock(return_value=True)
+        mock_storage.persist_runtime_state = AsyncMock(return_value=True)
+
+        with patch("src.mcp_handlers.dialectic.resolution.mcp_server", mock_server), \
+             patch("src.agent_storage", mock_storage):
+            from src.mcp_handlers.dialectic.resolution import execute_resolution
+            await execute_resolution(session, resolution)
+
+        mock_storage.persist_runtime_state.assert_awaited_once()
+        kwargs = mock_storage.persist_runtime_state.await_args.kwargs
+        assert kwargs.get("paused_at") is None, \
+            "execute_resolution must persist paused_at=None so it survives force-reload (P011)"
+        event = kwargs.get("append_lifecycle_event")
+        assert event and event.get("event") == "resumed"
+        assert "agreed root cause" in event.get("reason", "")
+
+
 class TestPersistRuntimeStateContract:
     """Contract tests for the new agent_storage.persist_runtime_state helper."""
 
