@@ -57,8 +57,9 @@ async def handle_update_agent_metadata(arguments: Dict[str, Any]) -> Sequence[Te
     if error:
         return [error]
 
-    # Reload metadata from PostgreSQL (async)
-    await mcp_server.load_metadata_async(force=True)
+    # Wave 2 audit: force=True dropped per PR #350 precedent. Pre-mutation
+    # existence check; in-memory cache is fresh enough.
+    await mcp_server.load_metadata_async()
 
     if agent_id not in mcp_server.agent_metadata:
         return agent_not_found_error(agent_id)
@@ -177,8 +178,9 @@ async def handle_archive_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
     # require_registered_agent sets this after validating registration
     agent_uuid = resolve_agent_uuid(arguments, agent_id)
 
-    # Reload metadata from PostgreSQL (async)
-    await mcp_server.load_metadata_async(force=True)
+    # Wave 2 audit: force=True dropped per PR #350 precedent. Pre-mutation
+    # existence check; in-memory cache is fresh enough.
+    await mcp_server.load_metadata_async()
 
     if agent_uuid not in mcp_server.agent_metadata:
         return agent_not_found_error(agent_id)
@@ -282,8 +284,9 @@ async def handle_delete_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
     # Use authoritative UUID for internal lookups
     agent_uuid = resolve_agent_uuid(arguments, agent_id)
 
-    # Reload metadata from PostgreSQL (async)
-    await mcp_server.load_metadata_async(force=True)
+    # Wave 2 audit: force=True dropped per PR #350 precedent. Pre-mutation
+    # existence check; in-memory cache is fresh enough.
+    await mcp_server.load_metadata_async()
 
     if agent_uuid not in mcp_server.agent_metadata:
         return agent_not_found_error(agent_id)

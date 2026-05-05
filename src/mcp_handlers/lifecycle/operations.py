@@ -50,8 +50,9 @@ async def handle_resume_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
 
     agent_uuid = resolve_agent_uuid(arguments, agent_id)
 
-    # Reload metadata from PostgreSQL (async)
-    await mcp_server.load_metadata_async(force=True)
+    # Wave 2 audit: force=True dropped per PR #350 precedent. Pre-mutation
+    # existence + status check; in-memory cache is fresh enough.
+    await mcp_server.load_metadata_async()
 
     if agent_uuid not in mcp_server.agent_metadata:
         return agent_not_found_error(agent_id)
@@ -566,7 +567,9 @@ async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[
     if max_age_hours < 0.1:
         return [error_response("max_age_hours must be at least 0.1 (6 minutes)")]
 
-    await mcp_server.load_metadata_async(force=True)
+    # Wave 2 audit: force=True dropped per PR #350 precedent. Fleet-wide
+    # archival sweep; in-memory cache is fresh enough for status filtering.
+    await mcp_server.load_metadata_async()
 
     archived_agents = []
 
@@ -634,7 +637,10 @@ async def handle_archive_orphan_agents(arguments: Dict[str, Any]) -> Sequence[Te
     low_update_hours = min(max(max_age_hours / 2, 1.0), max_age_hours)
     unlabeled_hours = max_age_hours
 
-    await mcp_server.load_metadata_async(force=True)
+    # Wave 2 audit: force=True dropped per PR #350 precedent. Fleet-wide
+    # orphan archival sweep; in-memory cache is fresh enough for the
+    # threshold-based classification.
+    await mcp_server.load_metadata_async()
 
     # Initializing agents (0 updates) are never archived — see
     # classify_for_archival. The old tier-1 zero_update_hours sweep is gone.

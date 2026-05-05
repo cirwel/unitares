@@ -109,7 +109,12 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
 
             # For ANTITHESIS phase: try reviewer re-assignment
             if phase in ("antithesis", "ANTITHESIS") and reviewer_agent_id:
-                await mcp_server.load_metadata_async(force=True)
+                # Wave 2 audit: force=True dropped per PR #350 precedent. This
+                # is a periodic resolver that fired on every session × phase;
+                # force-reload at each iteration was N×3221 awaits. If the
+                # reviewer was paused, the regular write path already updated
+                # the in-memory cache; if not, the next iteration sees it.
+                await mcp_server.load_metadata_async()
                 reviewer_meta = mcp_server.agent_metadata.get(reviewer_agent_id)
                 reviewer_gone = not reviewer_meta or getattr(reviewer_meta, 'status', None) == "paused"
 

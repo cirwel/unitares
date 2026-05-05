@@ -151,6 +151,13 @@ async def handle_check_continuity_health(arguments: Dict[str, Any]) -> Sequence[
         try:
             cache_age = time.time() - mcp_server._metadata_cache_state.get("last_load_time", 0)
             if cache_age > mcp_server.EXPLORATION_CACHE_TTL:
+                # Wave 2 audit: force=True KEPT here. This is the one TTL-gated
+                # cache-refresh use case where force=True is structurally required
+                # — load_metadata_async() returns early if metadata is already
+                # loaded, so without force the admin handler can never refresh
+                # the cache against external writes. Cost (3221 sequential
+                # cache.set awaits) is bounded because the gate fires only when
+                # cache_age > EXPLORATION_CACHE_TTL, not per call.
                 await mcp_server.load_metadata_async(force=True)
         except (AttributeError, TypeError):
             pass

@@ -1603,8 +1603,15 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                             await get_metadata_cache().invalidate(agent_uuid)
                         except Exception:
                             pass
+                        # Wave 2 audit: force=True dropped per PR #350 precedent.
+                        # The in-memory mutation 10 lines above (status='active',
+                        # archived_at=None) is the actual consistency mechanism;
+                        # the cache invalidation above covers external readers.
+                        # The full PG reload here was redundant belt-and-suspenders
+                        # and triggered 3221 sequential cache.set awaits per onboard
+                        # of an archived agent.
                         try:
-                            await srv.load_metadata_async(force=True)
+                            await srv.load_metadata_async()
                         except Exception:
                             pass
                         logger.info(f"[ONBOARD] Auto-unarchived agent {agent_uuid[:8]}...")

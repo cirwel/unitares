@@ -43,8 +43,9 @@ async def handle_direct_resume_if_safe(arguments: Dict[str, Any]) -> Sequence[Te
     # Use authoritative UUID for internal lookups
     agent_uuid = resolve_agent_uuid(arguments, agent_id)
 
-    # Reload metadata from PostgreSQL (async)
-    await mcp_server.load_metadata_async(force=True)
+    # Wave 2 audit: force=True dropped per PR #350 precedent. Pre-resume
+    # existence + status check; in-memory cache is fresh enough.
+    await mcp_server.load_metadata_async()
 
     meta = mcp_server.agent_metadata.get(agent_uuid)
     if not meta:

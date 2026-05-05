@@ -598,7 +598,9 @@ async def _auto_initiate_dialectic_recovery(agent_id: str, reason: str) -> None:
             logger.warning(f"Cannot auto-initiate dialectic for '{agent_id}': no API key")
             return
 
-        await load_metadata_async(force=True)
+        # Wave 2 audit: force=True dropped per PR #350 precedent. Reviewer
+        # selection scans the in-memory fleet; cache is fresh enough.
+        await load_metadata_async()
         reviewer = await select_reviewer(
             paused_agent_id=agent_id,
             metadata=agent_metadata,

@@ -171,8 +171,9 @@ async def apply_condition(parsed: ParsedCondition, agent_id: str, mcp_server) ->
         "changes": {}
     }
     
-    # Load metadata from PostgreSQL (async)
-    await mcp_server.load_metadata_async(force=True)
+    # Wave 2 audit: force=True dropped per PR #350 precedent. Single-agent
+    # existence check; in-memory cache is fresh enough.
+    await mcp_server.load_metadata_async()
     
     if agent_id not in mcp_server.agent_metadata:
         result["status"] = "failed"
