@@ -14,6 +14,7 @@ Usage:
 """
 
 import inspect
+import time
 from typing import Callable, List, NamedTuple
 
 from src.logging_utils import get_logger
@@ -46,8 +47,16 @@ def enrichment(order: int):
 
 
 async def run_enrichment_pipeline(ctx) -> None:
-    """Run every registered enrichment in order. Each is fail-safe."""
+    """Run every registered enrichment in order. Each is fail-safe.
+
+    Per-step wall-clock is recorded so the [enrichment_phases] log line
+    can attribute slow check-ins to a specific enrichment. The pipeline
+    runs serially today; this instrumentation is the prerequisite for
+    deciding which enrichments are safe to parallelize.
+    """
+    timings: List[tuple[str, int]] = []
     for entry in _ENRICHMENTS:
+        start = time.perf_counter()
         try:
             if entry.is_async:
                 await entry.fn(ctx)
@@ -55,6 +64,11 @@ async def run_enrichment_pipeline(ctx) -> None:
                 entry.fn(ctx)
         except Exception as exc:
             logger.debug(f"Enrichment {entry.name} failed: {exc}")
+        timings.append((entry.name, int((time.perf_counter() - start) * 1000)))
+
+    if timings:
+        rendered = " ".join(f"{name}={ms}ms" for name, ms in timings)
+        logger.info(f"[enrichment_phases] {rendered}")
 
 
 def get_enrichment_count() -> int:
