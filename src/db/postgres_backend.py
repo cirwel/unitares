@@ -45,6 +45,97 @@ logger = get_logger(__name__)
 POOL_CLOSE_TIMEOUT_SECONDS = 10.0
 
 
+def _hash_db_url(db_url: str) -> str:
+    """Short non-reversible tag for the connection target. Hashes the full
+    URL — including any embedded credentials — so the emitted payload never
+    leaks the password/user/host that observers could replay."""
+    import hashlib
+    return hashlib.sha256(db_url.encode("utf-8")).hexdigest()[:12]
+
+
+def _emit_bootstrap_coord_failure(
+    db_url: str,
+    error_class: str,
+    *,
+    timeout_s: float,
+) -> None:
+    """Wave 0 step 2B (RFC roadmap §86): emit
+    `coordination_failure.asyncpg_connect_error.bootstrap` when `_create_pool`
+    fails to bring up the asyncpg pool.
+
+    Failure-safe by contract — a raising emit must NOT mask the original
+    ConnectionError that the caller is about to raise. `emit_coordination_
+    failure_sync` swallows its own errors, but we wrap defensively so a
+    surprise ImportError or environment hiccup at this site can never
+    swap the user-facing exception."""
+    try:
+        from uuid import uuid4
+
+        from src.coordination_failure_emit import emit_coordination_failure_sync
+
+        emit_coordination_failure_sync(
+            service="governance_mcp",
+            event_type="coordination_failure.asyncpg_connect_error.bootstrap",
+            payload={
+                "error_class": error_class,
+                "db_url_hash": _hash_db_url(db_url),
+                "timeout_s": timeout_s,
+                "attempt": 1,
+                "incident_id": str(uuid4()),
+            },
+            agent_id=None,
+        )
+    except Exception as exc:  # noqa: BLE001 — observability MUST NOT mask the real bug
+        logger.warning(
+            "[coord-events] bootstrap emit raised — original ConnectionError "
+            "will still propagate: %r",
+            exc,
+        )
+
+
+def _emit_runtime_coord_failure(
+    *,
+    error_class: str,
+    pool_size: int,
+    pool_max: int,
+    pool_idle: int,
+    timeout_s: float,
+) -> None:
+    """Wave 0 step 2B (RFC roadmap §86): emit
+    `coordination_failure.asyncpg_connect_error.runtime` when an established
+    pool fails to deliver a connection. Same failure-safety contract as the
+    bootstrap helper above."""
+    try:
+        from uuid import uuid4
+
+        from src.coordination_failure_emit import emit_coordination_failure_sync
+        from src.mcp_handlers.context import (
+            get_context_agent_id,
+            get_context_session_key,
+        )
+
+        emit_coordination_failure_sync(
+            service="governance_mcp",
+            event_type="coordination_failure.asyncpg_connect_error.runtime",
+            payload={
+                "error_class": error_class,
+                "pool_size": pool_size,
+                "pool_max": pool_max,
+                "pool_idle": pool_idle,
+                "timeout_s": timeout_s,
+                "incident_id": str(uuid4()),
+            },
+            agent_id=get_context_agent_id(),
+            session_id=get_context_session_key(),
+        )
+    except Exception as exc:  # noqa: BLE001 — observability MUST NOT mask the real bug
+        logger.warning(
+            "[coord-events] runtime emit raised — original ConnectionError "
+            "will still propagate: %r",
+            exc,
+        )
+
+
 class PostgresBackend(
     IdentityMixin,
     AgentMixin,
@@ -201,12 +292,14 @@ class PostgresBackend(
                 )
             return await ExecutorPool.create(_create_factory)
         except asyncio.TimeoutError:
+            _emit_bootstrap_coord_failure(self._db_url, "TimeoutError", timeout_s=5.0)
             raise ConnectionError(
                 f"PostgreSQL connection timeout after 5s. "
                 f"Is PostgreSQL running on {self._db_url}? "
                 f"Check: psql -d {self._db_url.split('/')[-1]}"
             )
         except Exception as e:
+            _emit_bootstrap_coord_failure(self._db_url, type(e).__name__, timeout_s=5.0)
             raise ConnectionError(
                 f"Failed to connect to PostgreSQL at {self._db_url}: {e}. "
                 f"Is PostgreSQL running?"
@@ -239,6 +332,13 @@ class PostgresBackend(
                     return ctx_self.conn
                 except asyncio.TimeoutError:
                     logger.error(f"Connection pool timeout after {acquire_timeout}s. Pool size: {pool.get_size()}, free: {pool.get_idle_size()}")
+                    _emit_runtime_coord_failure(
+                        error_class="TimeoutError",
+                        pool_size=pool.get_size(),
+                        pool_max=pool.get_max_size(),
+                        pool_idle=pool.get_idle_size(),
+                        timeout_s=acquire_timeout,
+                    )
                     raise ConnectionError(
                         f"PostgreSQL connection pool exhausted. "
                         f"Current pool: {pool.get_size()}/{pool.get_max_size()}. "
