@@ -165,8 +165,10 @@ class TestBootstrapEmit:
 class TestRuntimeEmit:
     """When pool exists and `pool.acquire(timeout=...)` times out, the
     backend translates to a `ConnectionError("pool exhausted")`. That
-    branch MUST also emit `coordination_failure.asyncpg_connect_error.runtime`
-    before raising."""
+    branch emits a coordination_failure event before raising. Wave 0 step
+    2C-2 (post-council) splits the event_type by saturation: this test
+    pins the substrate-side path (idle capacity OR pool not at max) — the
+    saturation case lives in tests/test_wave_0_2c_2_executor_pool_exhaustion.py."""
 
     @pytest.mark.asyncio
     async def test_acquire_timeout_emits_runtime_event(self):
@@ -176,9 +178,12 @@ class TestRuntimeEmit:
         mock_pool = AsyncMock()
         mock_pool.acquire = AsyncMock(side_effect=asyncio.TimeoutError())
         mock_pool.release = AsyncMock()
-        mock_pool.get_size = MagicMock(return_value=25)
+        # Non-saturation: idle > 0 means a connection should have been
+        # available — the timeout is substrate-side, not pool exhaustion.
+        # Keeps this test on the asyncpg_connect_error.runtime contract.
+        mock_pool.get_size = MagicMock(return_value=10)
         mock_pool.get_max_size = MagicMock(return_value=25)
-        mock_pool.get_idle_size = MagicMock(return_value=0)
+        mock_pool.get_idle_size = MagicMock(return_value=3)
         backend._pool = mock_pool
 
         with patch(
@@ -194,9 +199,9 @@ class TestRuntimeEmit:
         assert kwargs["event_type"] == RUNTIME_EVENT_TYPE
         payload = kwargs["payload"]
         assert payload["error_class"] == "TimeoutError"
-        assert payload["pool_size"] == 25
+        assert payload["pool_size"] == 10
         assert payload["pool_max"] == 25
-        assert payload["pool_idle"] == 0
+        assert payload["pool_idle"] == 3
         assert "incident_id" in payload
         assert len(payload["incident_id"]) == 36
 

@@ -101,10 +101,27 @@ def _emit_runtime_coord_failure(
     pool_idle: int,
     timeout_s: float,
 ) -> None:
-    """Wave 0 step 2B (RFC roadmap §86): emit
-    `coordination_failure.asyncpg_connect_error.runtime` when an established
-    pool fails to deliver a connection. Same failure-safety contract as the
-    bootstrap helper above."""
+    """Wave 0 steps 2B + 2C-2 (RFC roadmap §86): emit a coordination_failure
+    when an established pool fails to deliver a connection. Picks the
+    event_type by the saturation discriminator (post-council reshape):
+
+      pool_size == pool_max AND pool_idle == 0
+        → `coordination_failure.executor_pool_exhaustion.acquire_timeout`
+          (the pool is full and nothing's coming back — true saturation)
+
+      otherwise
+        → `coordination_failure.asyncpg_connect_error.runtime`
+          (idle capacity exists OR pool can grow — the timeout is
+          substrate-side, not saturation; reserves the asyncpg_connect_error
+          family for substrate-unreachable semantics per architect F10)
+
+    Same failure-safety contract as the bootstrap helper above."""
+    saturated = pool_size == pool_max and pool_idle == 0
+    event_type = (
+        "coordination_failure.executor_pool_exhaustion.acquire_timeout"
+        if saturated
+        else "coordination_failure.asyncpg_connect_error.runtime"
+    )
     try:
         from uuid import uuid4
 
@@ -116,7 +133,7 @@ def _emit_runtime_coord_failure(
 
         emit_coordination_failure_sync(
             service="governance_mcp",
-            event_type="coordination_failure.asyncpg_connect_error.runtime",
+            event_type=event_type,
             payload={
                 "error_class": error_class,
                 "pool_size": pool_size,
