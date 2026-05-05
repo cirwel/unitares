@@ -806,9 +806,16 @@ _supervised_tasks: list = []
 
 
 def _on_background_task_done(task: asyncio.Task) -> None:
-    """Callback for background task completion — logs crashes and removes from supervised list."""
+    """Callback for background task completion — logs crashes, emits a
+    coordination_failure event for cancellations, and removes the task
+    from the supervised list.
+
+    The cancellation emit is Wave 0 step 2C-1 (RFC roadmap §86): per the
+    v0.2 scoping doc §2, the OUTER supervisor is the single point that
+    sees every supervised-task cancellation, so one emit here covers all
+    background tasks without per-site instrumentation."""
     if task.cancelled():
-        pass
+        _emit_background_task_cancellation(task.get_name())
     else:
         exc = task.exception()
         if exc:
@@ -821,6 +828,35 @@ def _on_background_task_done(task: asyncio.Task) -> None:
         _supervised_tasks.remove(task)
     except ValueError:
         pass
+
+
+def _emit_background_task_cancellation(task_name: str) -> None:
+    """Failure-safe emit for `coordination_failure.anyio_cancellation.background_task`.
+
+    The inner function is failure-safe by contract; the outer try/except
+    is defense-in-depth so an ImportError at the wire-up site cannot break
+    the supervisor's bookkeeping (the `_supervised_tasks.remove(...)` that
+    follows in `_on_background_task_done`)."""
+    try:
+        from uuid import uuid4
+
+        from src.coordination_failure_emit import emit_coordination_failure_sync
+
+        emit_coordination_failure_sync(
+            service="governance_mcp",
+            event_type="coordination_failure.anyio_cancellation.background_task",
+            payload={
+                "task_name": task_name,
+                "incident_id": str(uuid4()),
+            },
+            agent_id=None,
+        )
+    except Exception as exc:  # noqa: BLE001 — observability MUST NOT mask the real bug
+        logger.warning(
+            "[coord-events] background_task cancellation emit raised — "
+            "supervisor bookkeeping continues: %r",
+            exc,
+        )
 
 
 # ---------------------------------------------------------------------------
