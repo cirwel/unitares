@@ -299,6 +299,10 @@ async def resolve_session_identity(
 
     spawn_reason: Optional[str] = None,
 
+    thread_id: Optional[str] = None,
+
+    thread_position: Optional[int] = None,
+
 ) -> Dict[str, Any]:
 
     """
@@ -328,6 +332,11 @@ async def resolve_session_identity(
                      agent_id generation.
 
         force_new: If True, ignore existing binding and create fresh identity.
+
+        thread_id: Thread this agent belongs to, when the caller has claimed
+                   membership before persistence.
+
+        thread_position: Node position in the thread, when already claimed.
 
         resume: If True, reuse existing identity from cache/DB (PATH 1/2).
 
@@ -977,6 +986,8 @@ async def resolve_session_identity(
                 label=label,  # Set auto-label at creation time
                 parent_agent_id=parent_agent_id,
                 spawn_reason=spawn_reason,
+                thread_id=thread_id,
+                thread_position=thread_position,
             )
 
             if label:
@@ -991,6 +1002,11 @@ async def resolve_session_identity(
                 "model_type": model_type,
                 "total_updates": 0,  # Initialize counter for persistence
             }
+            if thread_id:
+                identity_metadata["thread_id"] = thread_id
+            if thread_position is not None:
+                identity_metadata["thread_position"] = thread_position
+                identity_metadata["node_index"] = thread_position
             if label:
                 identity_metadata["label"] = label
             await db.upsert_identity(
@@ -1014,6 +1030,8 @@ async def resolve_session_identity(
                     public_agent_id=agent_id,
                     parent_agent_id=parent_agent_id,
                     spawn_reason=spawn_reason,
+                    thread_id=thread_id,
+                    node_index=thread_position or 1,
                 )
             except Exception as e:
                 logger.warning(f"Eager dict hydration failed for {agent_uuid[:8]}: {e}")
@@ -1051,6 +1069,8 @@ async def resolve_session_identity(
                 "core_agent_row_status": "active",
                 "source": "created",
                 "spawn_reason": spawn_reason,
+                "thread_id": thread_id,
+                "thread_position": thread_position,
                 "identity_resolution_outcome": _created_identity_outcome(
                     force_new=force_new,
                     spawn_reason=spawn_reason,

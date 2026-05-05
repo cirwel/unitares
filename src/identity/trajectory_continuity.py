@@ -22,8 +22,8 @@ Non-goals (explicit per spec):
 Side effects:
 - Awaited write to `audit.r1_score_audit` (full record) — score_id is the
   join key into the redacted public KG payload (v3.3-A)
-- Public KG emission is via `_build_public_payload` here; the actual KG write
-  is wired in PR 3 alongside consumer patches
+- Public KG emission writes the redacted `_build_public_payload` projection to
+  `knowledge.discoveries`; audit remains the durable full record
 
 Calibration status: every score record stamps `calibration_status='seeded'` by
 default until operator transitions the lifecycle to `earned` or
@@ -226,10 +226,9 @@ async def score_trajectory_continuity(
     declared parent's, over the given window.
 
     See module docstring for the full contract. Returns a
-    `TrajectoryContinuityScore` dataclass. Side effect: awaited write to
-    `audit.r1_score_audit` (the public KG emission is built but the actual
-    write lives in PR 3 — `_build_public_payload(score)` produces the
-    redacted shape callers can use today).
+    `TrajectoryContinuityScore` dataclass. Side effects: awaited write to
+    `audit.r1_score_audit`, followed by fail-soft public KG emission of the
+    redacted `_build_public_payload(score)` projection.
 
     Threshold cuts (v3.1, seeded — calibration is shadow-mode work in PR 3+):
     - successor < min_observations rows OR parent_mature=False → inconclusive

@@ -60,6 +60,8 @@ def mock_db():
     db.find_agent_by_label = AsyncMock(return_value=None)
     db.update_agent_fields = AsyncMock(return_value=True)
     db.get_agent_thread_info = AsyncMock(return_value=None)
+    db.create_or_get_thread = AsyncMock(return_value={"thread_id": "t-test", "created": True})
+    db.claim_thread_position = AsyncMock(return_value=1)
     db.get_thread_nodes = AsyncMock(return_value=[])
     db.get_active_sessions_for_identity = AsyncMock(return_value=[])
     db.get_last_inactive_session = AsyncMock(return_value=None)
@@ -2179,6 +2181,78 @@ class TestHandleOnboardV2:
         assert identity_kwargs.get("parent_agent_id") == parent_uuid, (
             f"parent_agent_id must reach core.identities on force_new; got {identity_kwargs!r}"
         )
+
+    @pytest.mark.asyncio
+    async def test_onboard_force_new_parent_joins_parent_thread(
+        self, patch_onboard_deps, mock_db, mock_redis,
+    ):
+        """force_new with declared parent should persist into the parent's thread.
+
+        R6 response shape depends on `core.agents.thread_id/thread_position`.
+        A fresh process-instance that declares a parent is a new node in that
+        parent's thread, not a root in a session-derived thread.
+        """
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        mock_redis.get.return_value = None
+        mock_db.get_session.return_value = None
+        mock_db.find_agent_by_label.return_value = None
+        mock_db.get_identity.return_value = SimpleNamespace(identity_id="new-ident", metadata={})
+
+        parent_uuid = "da300b4a-5320-480d-bac3-d029cd062842"
+        parent_thread_id = "t-parent-thread"
+
+        async def thread_info(agent_id):
+            if agent_id == parent_uuid:
+                return {
+                    "thread_id": parent_thread_id,
+                    "thread_position": 1,
+                    "parent_agent_id": None,
+                    "spawn_reason": "new_session",
+                }
+            return {
+                "thread_id": parent_thread_id,
+                "thread_position": 2,
+                "parent_agent_id": parent_uuid,
+                "spawn_reason": "new_session",
+            }
+
+        mock_db.get_agent_thread_info.side_effect = thread_info
+        mock_db.claim_thread_position.return_value = 2
+        mock_db.get_thread_nodes.return_value = [
+            {
+                "agent_id": parent_uuid,
+                "thread_position": 1,
+                "label": "parent-label",
+            },
+        ]
+
+        result = await handle_onboard_v2({
+            "client_session_id": "onboard-force-parent-thread",
+            "force_new": True,
+            "parent_agent_id": parent_uuid,
+            "spawn_reason": "new_session",
+        })
+        data = parse_result(result)
+
+        assert data["success"] is True
+        assert data["is_new"] is True
+
+        mock_db.create_or_get_thread.assert_awaited_with(parent_thread_id)
+        agent_kwargs = mock_db.upsert_agent.await_args_list[0].kwargs
+        assert agent_kwargs.get("thread_id") == parent_thread_id
+        assert agent_kwargs.get("thread_position") == 2
+
+        identity_kwargs = mock_db.upsert_identity.await_args_list[0].kwargs
+        metadata = identity_kwargs.get("metadata")
+        assert metadata["thread_id"] == parent_thread_id
+        assert metadata["thread_position"] == 2
+        assert metadata["node_index"] == 2
+
+        thread_context = data["thread_context"]
+        assert thread_context["thread_id"] == parent_thread_id
+        assert thread_context["position"] == 2
+        assert thread_context["predecessor"]["uuid"] == parent_uuid
 
     @pytest.mark.asyncio
     async def test_onboard_with_model_type_gemini(self, patch_onboard_deps, mock_db, mock_redis):

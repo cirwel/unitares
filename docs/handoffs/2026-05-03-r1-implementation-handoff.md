@@ -54,10 +54,12 @@ Remaining call sites:
 | Call site | Policy on `inconclusive` | Where to wire |
 |---|---|---|
 | ~~`onboard`~~ | ~~`marks`~~ | ~~`src/mcp_handlers/identity/handlers.py`~~ ✅ shipped #321 |
-| Trust-tier promotion | `blocks` (refuse promotion) | Whichever path is being added under the S6 promotion work — no current promotion path triggers R1 |
-| Orphan archival re-classification | `blocks` | Orphan-archival job (path TBD during impl) |
+| Trust-tier promotion | `blocks` (refuse promotion) | `src/identity/r1_maintenance.py::sweep_provisional_lineage` + `scripts/migration/r1_lineage_maintenance.py promote-provisional` ✅ shipped 2026-05-05 |
+| Orphan archival re-classification | `blocks` | `sweep_provisional_lineage` reports `unsupported` as `orphan_candidate`; destructive lineage-edge removal remains intentionally unwired until a removal primitive is specified |
 
-`confirm_lineage` still has no caller — the promotion-path code that would clear `provisional_lineage` does not exist. **Operator-facing consequence:** every fresh agent declaring lineage at onboard is now marked provisional and pinned to tier=1 via PR 4a's gate; lineage-claiming agents stay tier=1 indefinitely until promotion is wired.
+`confirm_lineage` now has an operator-facing caller. Running `python scripts/migration/r1_lineage_maintenance.py promote-provisional --apply` re-scores provisional lineage claims; plausible scores clear `provisional_lineage` via `confirm_lineage`, inconclusive scores block, and unsupported scores are reported as orphan candidates. Important operational detail: evaluation calls `score_trajectory_continuity`, so it writes the normal R1 audit/KG score records even without `--apply`; `--apply` controls only the confirmation mutation.
+
+First live run, 2026-05-05: 3 provisional rows evaluated, 1 confirmed, 2 blocked as inconclusive, 0 orphan candidates.
 
 ### 4.2 Remaining v3.3-D consumers
 
@@ -76,10 +78,12 @@ PR 2's commit message stated: *"KG public emission (the actual write to AGE) def
 
 #324 closes this — adds `_emit_public_kg_node` inside `score_trajectory_continuity` that publishes the redacted payload to `knowledge.discoveries` via `kg_add_discovery`. Deterministic node id `r1_score:{uuid5(...)}` per (parent, successor) pair; existing ON CONFLICT (id) DO UPDATE gives v3.2-D dedupe-by-pair. v3.3-I corrected the target from AGE to PG-FTS; #324 follows that correction.
 
-What #324 does NOT pick up (still open after it lands):
+What #324 did not pick up, now partially closed:
 
-- 30-day TTL archival of public nodes per v3.2-D second clause — needs a partition-maintenance hook.
-- Re-scoring at promotion or orphan paths — those call sites do not exist yet.
+- 30-day TTL archival of public nodes per v3.2-D second clause — operator-facing sweep shipped 2026-05-05: `python scripts/migration/r1_lineage_maintenance.py archive-public-kg --apply`.
+- Re-scoring at promotion/orphan paths — operator-facing re-score sweep shipped 2026-05-05; unsupported lineage is reported as `orphan_candidate`, but destructive edge removal is still pending an explicit primitive/spec.
+
+First public-KG TTL dry-run, 2026-05-05: 0 stale R1 score nodes.
 
 ### 4.4 Performance follow-up (non-blocking)
 

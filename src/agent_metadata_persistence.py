@@ -425,6 +425,8 @@ def register_minted_agent_in_dict(
     structured_id: str | None = None,
     parent_agent_id: str | None = None,
     spawn_reason: str | None = None,
+    thread_id: str | None = None,
+    node_index: int = 1,
     api_key: str = "",
 ) -> bool:
     """Hydrate `agent_metadata` immediately after a fresh `core.identities` mint.
@@ -459,6 +461,8 @@ def register_minted_agent_in_dict(
         agent_uuid=agent_uuid,
         parent_agent_id=parent_agent_id,
         spawn_reason=spawn_reason,
+        thread_id=thread_id,
+        node_index=node_index,
         api_key=api_key,
     )
     return True

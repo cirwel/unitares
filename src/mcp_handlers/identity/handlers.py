@@ -236,6 +236,56 @@ from .resolution import (
     resolve_session_identity,
 )
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
+
+
+async def _assign_thread_for_new_agent(
+    *,
+    arguments: Dict[str, Any],
+    session_key: str,
+    agent_uuid: Optional[str],
+    parent_agent_id: Optional[str],
+    spawn_reason: Optional[str],
+    thread_id_hint: Optional[str],
+) -> tuple[Optional[str], Optional[int], Optional[str]]:
+    """Claim thread membership for a newly minted agent.
+
+    Policy: explicit thread_id wins; otherwise a declared parent's thread is
+    inherited; otherwise derive a thread from the current session key.
+    """
+    from src.thread_identity import generate_thread_id, infer_spawn_reason
+
+    db = get_db()
+    thread_id = thread_id_hint
+
+    if not thread_id and parent_agent_id:
+        try:
+            parent_thread = await db.get_agent_thread_info(parent_agent_id)
+            if parent_thread and parent_thread.get("thread_id"):
+                thread_id = parent_thread["thread_id"]
+        except Exception as e:
+            logger.debug(f"[THREAD] Could not read parent thread (non-fatal): {e}")
+
+    if not thread_id:
+        thread_id = generate_thread_id(session_key)
+
+    await db.create_or_get_thread(thread_id)
+    thread_position = await db.claim_thread_position(thread_id)
+
+    existing_nodes = await db.get_thread_nodes(thread_id)
+    prior_nodes = [
+        n for n in existing_nodes
+        if not agent_uuid or n.get("agent_id") != agent_uuid
+    ]
+    if not spawn_reason:
+        spawn_reason = infer_spawn_reason(arguments, prior_nodes)
+
+    logger.info(
+        f"[THREAD] Agent {(agent_uuid or 'pending')[:8]}... -> thread {thread_id[:12]} "
+        f"position {thread_position} reason={spawn_reason}"
+    )
+    return thread_id, thread_position, spawn_reason
+
+
 # =============================================================================
 # SYSTEM EVIDENCE HELPER (real data for onboard response)
 # =============================================================================
@@ -1662,23 +1712,13 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             _thread_id = None
             _thread_position = None
             try:
-                from src.thread_identity import generate_thread_id, infer_spawn_reason
-                db = get_db()
-
-                _thread_id = _thread_id_hint or generate_thread_id(session_key)
-                await db.create_or_get_thread(_thread_id)
-                _thread_position = await db.claim_thread_position(_thread_id)
-
-                # Get existing nodes to infer spawn reason
-                existing_nodes = await db.get_thread_nodes(_thread_id)
-                # Exclude self (just claimed position but not yet persisted)
-                prior_nodes = [n for n in existing_nodes if n.get("agent_id") != agent_uuid]
-                if not _spawn_reason:
-                    _spawn_reason = infer_spawn_reason(arguments, prior_nodes)
-
-                logger.info(
-                    f"[THREAD] Agent {agent_uuid[:8]}... -> thread {_thread_id[:12]} "
-                    f"position {_thread_position} reason={_spawn_reason}"
+                _thread_id, _thread_position, _spawn_reason = await _assign_thread_for_new_agent(
+                    arguments=arguments,
+                    session_key=session_key,
+                    agent_uuid=agent_uuid,
+                    parent_agent_id=_parent_agent_id,
+                    spawn_reason=_spawn_reason,
+                    thread_id_hint=_thread_id_hint,
                 )
             except Exception as e:
                 logger.debug(f"[THREAD] Could not assign thread (non-fatal): {e}")
@@ -1746,6 +1786,20 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         # lineage. parent_agent_id / spawn_reason are now threaded through so
         # the create path mirrors ensure_agent_persisted's write.
         try:
+            _thread_id = None
+            _thread_position = None
+            try:
+                _thread_id, _thread_position, _spawn_reason = await _assign_thread_for_new_agent(
+                    arguments=arguments,
+                    session_key=session_key,
+                    agent_uuid=None,
+                    parent_agent_id=_parent_agent_id,
+                    spawn_reason=_spawn_reason,
+                    thread_id_hint=_thread_id_hint,
+                )
+            except Exception as e:
+                logger.debug(f"[THREAD] Could not assign thread (non-fatal): {e}")
+
             identity = await resolve_session_identity(
                 session_key,
                 persist=True,  # Onboard always persists (it's an explicit "I am here" action)
@@ -1754,6 +1808,8 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 force_new=force_new,
                 parent_agent_id=_parent_agent_id,
                 spawn_reason=_spawn_reason,
+                thread_id=_thread_id,
+                thread_position=_thread_position,
             )
             agent_uuid = identity["agent_uuid"]
             agent_id = identity.get("agent_id", agent_uuid)
