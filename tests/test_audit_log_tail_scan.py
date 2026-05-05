@@ -215,3 +215,51 @@ class TestToolUsageTailScan:
         # Tracker init creates parent dir; remove the file so .exists() is False.
         kept, archive_path = tracker.rotate_log(max_age_days=7)
         assert kept is None and archive_path is None
+
+
+# ---------------------------------------------------------------------------
+# Mixed tz-aware / tz-naive timestamps — pre-existing bug
+# ---------------------------------------------------------------------------
+
+class TestMixedTimezoneTimestamps:
+    """Audit entries written across the system's lifetime mix tz-aware and
+    tz-naive timestamps. ``datetime.now()`` is naive; without normalisation,
+    comparing one against the other raises ``TypeError`` and the rotation /
+    skip-rate paths return error dicts (or no-op) on the first aware entry.
+    Real-world failure: ``rotate_log`` returned ``(None, None)`` on the live
+    1.3GB audit_log because the very first entry it hit was tz-aware.
+    """
+
+    @pytest.fixture
+    def mixed_audit(self, tmp_path):
+        log_file = tmp_path / "audit.jsonl"
+        recent_naive = datetime.now().isoformat()
+        recent_aware = datetime.now().astimezone().isoformat()  # has tz offset
+        old_naive = (datetime.now() - timedelta(days=30)).isoformat()
+        old_aware = (datetime.now() - timedelta(days=30)).astimezone().isoformat()
+        entries = [
+            {"timestamp": old_naive, "agent_id": "a", "event_type": "lambda1_skip", "confidence": 0.4, "details": {}},
+            {"timestamp": old_aware, "agent_id": "a", "event_type": "auto_attest", "confidence": 0.9, "details": {}},
+            {"timestamp": recent_naive, "agent_id": "a", "event_type": "lambda1_skip", "confidence": 0.5, "details": {}},
+            {"timestamp": recent_aware, "agent_id": "a", "event_type": "auto_attest", "confidence": 0.95, "details": {}},
+        ]
+        _write_jsonl(log_file, entries)
+        return AuditLogger(log_file=log_file)
+
+    def test_skip_rate_handles_mixed_tz(self, mixed_audit):
+        metrics = mixed_audit.get_skip_rate_metrics(window_hours=1)
+        # Only the recent entries (one of each type) should count, regardless of tz form.
+        assert metrics["total_skips"] == 1
+        assert metrics["total_updates"] == 1
+
+    def test_query_handles_mixed_tz(self, mixed_audit):
+        cutoff = (datetime.now() - timedelta(hours=1)).isoformat()
+        recent = mixed_audit.query_audit_log(start_time=cutoff, limit=100)
+        assert len(recent) == 2  # one naive, one aware, both within the window
+
+    def test_rotate_log_handles_mixed_tz(self, mixed_audit):
+        kept, archive = mixed_audit.rotate_log(max_age_days=7)
+        # Without the fix this returned (None, None); with normalisation we keep
+        # the two recent entries and archive the two old ones.
+        assert kept == 2
+        assert archive is not None and archive.exists()

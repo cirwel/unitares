@@ -19,6 +19,22 @@ from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+def _parse_ts_naive(ts: str) -> datetime:
+    """Parse an ISO timestamp and strip tzinfo for naive-naive comparison.
+
+    Audit entries written across the lifetime of the system mix tz-naive and
+    tz-aware timestamps; comparing one against ``datetime.now()`` (naive) raises
+    ``TypeError``. Normalising both sides to naive lets rotation / window
+    queries work uniformly. The wall-clock semantic is preserved: callers that
+    care about UTC vs local already established that convention upstream when
+    they wrote the entry.
+    """
+    parsed = datetime.fromisoformat(ts)
+    if parsed.tzinfo is not None:
+        parsed = parsed.replace(tzinfo=None)
+    return parsed
+
+
 def _iter_jsonl_reverse(path: Path, chunk_size: int = 65536) -> Iterator[str]:
     """Yield non-empty lines from a JSONL file in reverse order, lazily.
 
@@ -620,8 +636,8 @@ class AuditLogger:
                 for line in f:
                     try:
                         entry_dict = json.loads(line.strip())
-                        entry_time = datetime.fromisoformat(entry_dict['timestamp'])
-                        
+                        entry_time = _parse_ts_naive(entry_dict['timestamp'])
+
                         if entry_time < cutoff_time:
                             # Archive old entry
                             with open(archived_file, 'a') as af:
@@ -629,7 +645,7 @@ class AuditLogger:
                         else:
                             # Keep recent entry
                             recent_entries.append(line)
-                    except (json.JSONDecodeError, KeyError):
+                    except (json.JSONDecodeError, KeyError, ValueError):
                         continue
             
             # Rewrite log file with only recent entries
@@ -662,8 +678,8 @@ class AuditLogger:
         results = []
 
         try:
-            start_dt = datetime.fromisoformat(start_time) if start_time else None
-            end_dt = datetime.fromisoformat(end_time) if end_time else None
+            start_dt = _parse_ts_naive(start_time) if start_time else None
+            end_dt = _parse_ts_naive(end_time) if end_time else None
 
             for line in _iter_jsonl_reverse(self.log_file):
                 if len(results) >= limit:
@@ -671,7 +687,7 @@ class AuditLogger:
                 try:
                     entry_dict = json.loads(line)
                     entry_ts = entry_dict.get('timestamp')
-                    entry_time = datetime.fromisoformat(entry_ts) if entry_ts else None
+                    entry_time = _parse_ts_naive(entry_ts) if entry_ts else None
 
                     if start_dt and entry_time is not None and entry_time < start_dt:
                         break
@@ -716,7 +732,7 @@ class AuditLogger:
             for line in _iter_jsonl_reverse(self.log_file):
                 try:
                     entry_dict = json.loads(line)
-                    entry_time = datetime.fromisoformat(entry_dict['timestamp'])
+                    entry_time = _parse_ts_naive(entry_dict['timestamp'])
 
                     if entry_time < cutoff_time:
                         break

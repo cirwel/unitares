@@ -18,7 +18,7 @@ import sys
 
 # Import structured logging
 from src.logging_utils import get_logger
-from src.audit_log import _iter_jsonl_reverse
+from src.audit_log import _iter_jsonl_reverse, _parse_ts_naive
 logger = get_logger(__name__)
 
 
@@ -119,7 +119,7 @@ class ToolUsageTracker:
             for line in _iter_jsonl_reverse(self.log_file):
                 try:
                     entry_dict = json.loads(line)
-                    entry_time = datetime.fromisoformat(entry_dict['timestamp'])
+                    entry_time = _parse_ts_naive(entry_dict['timestamp'])
 
                     if entry_time < cutoff_time:
                         break
@@ -155,7 +155,7 @@ class ToolUsageTracker:
                         if entry_agent_id not in agent_tool_counts:
                             agent_tool_counts[entry_agent_id] = {}
                         agent_tool_counts[entry_agent_id][tool] = agent_tool_counts[entry_agent_id].get(tool, 0) + 1
-                except (json.JSONDecodeError, KeyError):
+                except (json.JSONDecodeError, KeyError, ValueError):
                     continue
         except Exception as e:
             logger.error(f"Error reading tool usage log: {e}")
@@ -210,13 +210,13 @@ class ToolUsageTracker:
                 for line in f:
                     try:
                         entry_dict = json.loads(line.strip())
-                        entry_time = datetime.fromisoformat(entry_dict['timestamp'])
+                        entry_time = _parse_ts_naive(entry_dict['timestamp'])
                         if entry_time < cutoff_time:
                             with open(archived_file, 'a') as af:
                                 af.write(line)
                         else:
                             recent_lines.append(line)
-                    except (json.JSONDecodeError, KeyError):
+                    except (json.JSONDecodeError, KeyError, ValueError):
                         continue
 
             with open(self.log_file, 'w') as f:
