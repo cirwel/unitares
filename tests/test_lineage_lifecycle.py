@@ -430,6 +430,177 @@ async def test_conftest_read_lineage_state_default_returns_none():
 
 
 # ---------------------------------------------------------------------------
+# 11. Council fix 1b: terminal-state short-circuit at top of FSM
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_terminal_state_short_circuits_fsm(mocked_score, captured_audit):
+    """If `read_lineage_state` returns a row already in a terminal
+    state (archived or demoted), the FSM short-circuits with
+    skipped_reason='terminal_state' WITHOUT calling R1, touching
+    storage, or emitting an audit event.
+
+    Catches the bug where a stale check-in trigger could fire R1 on an
+    archived row, then call confirm_lineage and (pre-WHERE-guard) flip
+    a terminal row into a corrupt dual-stamped state."""
+    from src.db import get_db
+    backend = get_db()
+    archived_row = _provisional_row(
+        declared_at=datetime.now(timezone.utc) - timedelta(hours=2),
+    )
+    archived_row["lineage_archived_at"] = datetime.now(timezone.utc)
+    archived_row["provisional_lineage"] = False  # archive_lineage clears this
+    backend.read_lineage_state = AsyncMock(return_value=archived_row)
+    mocked_score["score"] = _build_score("plausible", plausibility=0.85)
+
+    outcome = await lineage_lifecycle.evaluate_lineage_for(SUCCESSOR)
+
+    assert outcome.skipped_reason == "terminal_state"
+    assert outcome.terminal_state is None
+    assert outcome.transition is None
+    assert outcome.r1_verdict is None
+    # R1 must not be called for terminal rows.
+    assert mocked_score["calls"] == 0
+    # No storage transitions, no cadence stamp.
+    backend.confirm_lineage.assert_not_awaited()
+    backend.demote_lineage.assert_not_awaited()
+    backend.archive_lineage.assert_not_awaited()
+    backend.stamp_lineage_eval.assert_not_awaited()
+    assert captured_audit == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_state_short_circuits_fsm_demoted(
+    mocked_score, captured_audit,
+):
+    """Symmetric: a demoted row also short-circuits."""
+    from src.db import get_db
+    backend = get_db()
+    demoted_row = _provisional_row(
+        declared_at=datetime.now(timezone.utc) - timedelta(hours=2),
+    )
+    demoted_row["lineage_demoted_at"] = datetime.now(timezone.utc)
+    demoted_row["provisional_lineage"] = False
+    backend.read_lineage_state = AsyncMock(return_value=demoted_row)
+    mocked_score["score"] = _build_score("unsupported", plausibility=0.10)
+
+    outcome = await lineage_lifecycle.evaluate_lineage_for(SUCCESSOR)
+
+    assert outcome.skipped_reason == "terminal_state"
+    assert mocked_score["calls"] == 0
+    backend.demote_lineage.assert_not_awaited()
+    assert captured_audit == []
+
+
+# ---------------------------------------------------------------------------
+# 12. Council fix 2: storage helper guard-skip degrades outcome to skipped
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_confirm_lineage_no_op_returns_skipped_not_confirmed(
+    mocked_score, captured_audit,
+):
+    """If `confirm_lineage` returns False (its WHERE guard fired due to
+    a concurrent archive/demote landing between read and write), the
+    FSM must NOT report `terminal_state="confirmed"` and must NOT emit
+    a `lineage_promoted` audit. Outcome carries
+    skipped_reason='confirm_skipped_terminal_state'.
+
+    Stamping cadence still happens — the row was scored, so the
+    cadence guard should fire on the next tick."""
+    from src.db import get_db
+    backend = get_db()
+    backend.read_lineage_state = AsyncMock(return_value=_provisional_row(
+        declared_at=datetime.now(timezone.utc) - timedelta(hours=2),
+    ))
+    backend.confirm_lineage = AsyncMock(return_value=False)
+    mocked_score["score"] = _build_score("plausible", plausibility=0.85)
+
+    outcome = await lineage_lifecycle.evaluate_lineage_for(SUCCESSOR)
+
+    assert outcome.terminal_state is None
+    assert outcome.transition is None
+    assert outcome.skipped_reason == "confirm_skipped_terminal_state"
+    assert outcome.r1_verdict == "plausible"
+    backend.confirm_lineage.assert_awaited_once_with(SUCCESSOR)
+    backend.stamp_lineage_eval.assert_awaited_once_with(SUCCESSOR)
+    assert not any(c["event_type"] == "lineage_promoted" for c in captured_audit)
+
+
+@pytest.mark.asyncio
+async def test_demote_lineage_no_op_returns_skipped_not_demoted(
+    mocked_score, captured_audit,
+):
+    """Symmetric to the confirm-skip test: if `demote_lineage` returns
+    False (WHERE guard fired), the FSM must NOT report
+    `terminal_state="demoted"` and must NOT emit `lineage_demoted`."""
+    from src.db import get_db
+    backend = get_db()
+    backend.read_lineage_state = AsyncMock(return_value=_provisional_row(
+        declared_at=datetime.now(timezone.utc) - timedelta(hours=2),
+    ))
+    backend.demote_lineage = AsyncMock(return_value=False)
+    mocked_score["score"] = _build_score("unsupported", plausibility=0.10)
+
+    outcome = await lineage_lifecycle.evaluate_lineage_for(SUCCESSOR)
+
+    assert outcome.terminal_state is None
+    assert outcome.transition is None
+    assert outcome.skipped_reason == "demote_skipped_terminal_state"
+    assert outcome.r1_verdict == "unsupported"
+    backend.demote_lineage.assert_awaited_once()
+    backend.stamp_lineage_eval.assert_awaited_once_with(SUCCESSOR)
+    assert not any(c["event_type"] == "lineage_demoted" for c in captured_audit)
+
+
+# ---------------------------------------------------------------------------
+# 13. Council fix 3: R1 exception → skipped + cadence stamp (no tight loop)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_r1_exception_returns_skipped_and_stamps_eval(
+    monkeypatch, captured_audit,
+):
+    """If `score_trajectory_continuity` raises (e.g. its internal audit
+    write fails per `trajectory_continuity.py` ~line 355), the FSM
+    must:
+    - return outcome with skipped_reason='r1_error'
+    - NOT transition the row
+    - NOT emit an audit event
+    - stamp `lineage_last_eval_at` so the cadence guard prevents
+      tight-looping on persistent errors
+
+    Catches `Exception` (not `BaseException`), so `CancelledError`
+    still propagates."""
+    from src.db import get_db
+    backend = get_db()
+    backend.read_lineage_state = AsyncMock(return_value=_provisional_row(
+        declared_at=datetime.now(timezone.utc) - timedelta(hours=2),
+    ))
+
+    async def raising_score(parent_id, successor_id, *, min_observations=5):
+        raise RuntimeError("simulated R1 audit failure")
+
+    monkeypatch.setattr(
+        lineage_lifecycle, "score_trajectory_continuity", raising_score,
+    )
+
+    outcome = await lineage_lifecycle.evaluate_lineage_for(SUCCESSOR)
+
+    assert outcome.skipped_reason == "r1_error"
+    assert outcome.terminal_state is None
+    assert outcome.transition is None
+    assert outcome.r1_verdict is None
+    backend.stamp_lineage_eval.assert_awaited_with(SUCCESSOR)
+    backend.confirm_lineage.assert_not_awaited()
+    backend.demote_lineage.assert_not_awaited()
+    assert captured_audit == []
+
+
+# ---------------------------------------------------------------------------
 # DB-touching: read_lineage_state shape against live postgres
 # ---------------------------------------------------------------------------
 

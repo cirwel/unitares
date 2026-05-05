@@ -298,6 +298,15 @@ class IdentityMixin:
         provisional, was confirmed at confirmed_at, originally provisional
         at provisional_recorded_at." Clearing it would erase that audit
         trail. (PR 3 council code-reviewer flag — the explicit decision.)
+
+        WHERE guard `lineage_archived_at IS NULL AND lineage_demoted_at
+        IS NULL` prevents flipping a row already in a terminal state into
+        a corrupt dual-stamped (e.g. archived AND confirmed) shape. This
+        mirrors the guards on `demote_lineage` and `archive_lineage` —
+        terminal states are absorbing on the storage layer regardless
+        of which path the FSM takes to reach them. Returns False (rows=0)
+        on a no-op so the FSM caller can distinguish a successful confirm
+        from a guard-skip and degrade its outcome accordingly.
         """
         async with self.acquire() as conn:
             result = await conn.execute(
@@ -308,6 +317,8 @@ class IdentityMixin:
                     confirmed_at = now(),
                     updated_at = now()
                 WHERE agent_id = $1
+                  AND lineage_archived_at IS NULL
+                  AND lineage_demoted_at IS NULL
                 """,
                 successor_id,
             )

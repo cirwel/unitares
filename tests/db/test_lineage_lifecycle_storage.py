@@ -393,6 +393,66 @@ async def test_clawback_chain_counter_resets_to_zero(
 
 
 # ---------------------------------------------------------------------------
+# confirm_lineage — WHERE guard against terminal rows (PR 2 council fix 1a)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_confirm_lineage_no_op_for_archived_row(
+    live_postgres_backend, seeded_pair,
+):
+    """confirm_lineage must NOT flip a row that's already archived.
+    Without the WHERE guard a stale check-in trigger could produce a
+    corrupt dual-stamped (archived AND confirmed) row."""
+    backend = live_postgres_backend
+    ok_archive = await backend.archive_lineage(seeded_pair.successor_id)
+    assert ok_archive is True
+
+    ok_confirm = await backend.confirm_lineage(seeded_pair.successor_id)
+    assert ok_confirm is False  # WHERE guard fired
+
+    async with backend.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT lineage_archived_at, confirmed_at, provisional_lineage "
+            "FROM core.identities WHERE agent_id = $1",
+            seeded_pair.successor_id,
+        )
+    # Archive timestamp preserved; no confirmed_at written.
+    assert row["lineage_archived_at"] is not None
+    assert row["confirmed_at"] is None
+    # Provisional flag was cleared by archive_lineage; confirm_lineage
+    # must not have re-touched it (would have been a no-op anyway here,
+    # but the invariant is "no UPDATE on terminal rows").
+    assert row["provisional_lineage"] is False
+
+
+@pytest.mark.asyncio
+async def test_confirm_lineage_no_op_for_demoted_row(
+    live_postgres_backend, seeded_pair,
+):
+    """Symmetric: confirm_lineage must NOT flip a demoted row.
+    Pre-fix, an FSM with a stale read could call confirm on a row
+    concurrently demoted, producing a corrupt dual-stamped state."""
+    backend = live_postgres_backend
+    ok_demote = await backend.demote_lineage(
+        seeded_pair.successor_id, reason="r1_unsupported",
+    )
+    assert ok_demote is True
+
+    ok_confirm = await backend.confirm_lineage(seeded_pair.successor_id)
+    assert ok_confirm is False  # WHERE guard fired
+
+    async with backend.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT lineage_demoted_at, confirmed_at "
+            "FROM core.identities WHERE agent_id = $1",
+            seeded_pair.successor_id,
+        )
+    assert row["lineage_demoted_at"] is not None
+    assert row["confirmed_at"] is None
+
+
+# ---------------------------------------------------------------------------
 # stamp_lineage_eval — cadence guard
 # ---------------------------------------------------------------------------
 
