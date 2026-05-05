@@ -477,11 +477,24 @@ def transform_inputs(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
 
 # ─── Phase 4: Locked Update ────────────────────────────────────────────
 
-async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
-    """Prepare agent state, run policy checks, ensure agent exists, call ODE update.
+async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
+    """Build agent_state inputs and policy warnings *before* the agent lock.
 
-    Must be called inside the agent lock context manager.
-    Returns an early-exit error response, or None to continue.
+    Lifted out of execute_locked_update because every step here is read-only
+    against the per-agent lock invariant: ctx.agent_state is the call-local
+    input dict (not yet persisted), the behavioral sensor reads monitor
+    history but cannot corrupt it, and policy validators are pure CPU on
+    request fields. Running these unlocked drops the locked-phase floor by
+    ~80% of its 7s steady-state cost (per [checkin_phases] log analysis
+    2026-05-04: behavioral_sensor + policy together dominate locked_update
+    when the call is on a recurring agent).
+
+    Race-window analysis: the behavioral sensor reads monitor.state at
+    time T, then the lock is acquired and the ODE may see monitor.state
+    advanced by 1 tick from a concurrent call. The sensor's computed
+    EISV is therefore at most 1 tick stale — well within sensor noise
+    (rolling-window over 3+ history points), and the ODE itself still
+    runs against the locked, current state.
     """
     mcp_server = ctx.mcp_server
     import numpy as np
@@ -625,6 +638,17 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
                 "POLICY REMINDER: Creating test scripts? They belong in tests/ directory.\n"
                 "See AI_ASSISTANT_GUIDE.md for details."
             )
+
+
+async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
+    """Ensure agent exists, run agent-state mutations, call ODE update.
+
+    Must be called inside the agent lock context manager.
+    Caller must have already invoked prepare_unlocked_inputs(ctx) so
+    ctx.agent_state and ctx.policy_warnings are populated.
+    Returns an early-exit error response, or None to continue.
+    """
+    mcp_server = ctx.mcp_server
 
     # Ensure agent exists
     if ctx.is_new_agent:

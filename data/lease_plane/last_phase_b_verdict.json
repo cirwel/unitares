@@ -1,0 +1,26 @@
+{
+  "dialectic": {
+    "criteria_status": {
+      "1": "FAIL",
+      "2": "PASS",
+      "3": "FAIL",
+      "4": "NOT_YET_EVALUABLE",
+      "5": "NOT_APPLICABLE",
+      "6": "NOT_YET_EVALUABLE"
+    },
+    "evaluated_at": "2026-05-05T02:18:43.486016+00:00",
+    "promotable": false
+  },
+  "file": {
+    "criteria_status": {
+      "1": "FAIL",
+      "2": "PASS",
+      "3": "FAIL",
+      "4": "NOT_YET_EVALUABLE",
+      "5": "NOT_YET_EVALUABLE",
+      "6": "NOT_YET_EVALUABLE"
+    },
+    "evaluated_at": "2026-05-05T02:18:43.752501+00:00",
+    "promotable": false
+  }
+}

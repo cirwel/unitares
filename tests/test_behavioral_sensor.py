@@ -388,13 +388,17 @@ class TestBehavioralSensorInjection:
     @pytest.mark.asyncio
     async def test_tool_tracker_failure_still_computes_sensor(self):
         """Tool usage tracker raising doesn't prevent behavioral sensor injection."""
-        from src.mcp_handlers.updates.phases import execute_locked_update
+        from src.mcp_handlers.updates.phases import (
+            execute_locked_update,
+            prepare_unlocked_inputs,
+        )
         monitor = self._make_mock_monitor(n=10)
         ctx = self._make_ctx(monitor)
 
         with self._patch_execute_locked_deps(), \
              patch("src.tool_usage_tracker.get_tool_usage_tracker", side_effect=RuntimeError("tracker down")), \
              patch("src.db.get_db", return_value=None):
+            await prepare_unlocked_inputs(ctx)
             result = await execute_locked_update(ctx)
 
         assert result is None  # no early exit = success
@@ -403,7 +407,10 @@ class TestBehavioralSensorInjection:
     @pytest.mark.asyncio
     async def test_db_outcomes_failure_still_computes_sensor(self):
         """get_recent_outcomes raising doesn't prevent behavioral sensor injection."""
-        from src.mcp_handlers.updates.phases import execute_locked_update
+        from src.mcp_handlers.updates.phases import (
+            execute_locked_update,
+            prepare_unlocked_inputs,
+        )
         monitor = self._make_mock_monitor(n=10)
         ctx = self._make_ctx(monitor)
 
@@ -414,6 +421,7 @@ class TestBehavioralSensorInjection:
              patch("src.tool_usage_tracker.get_tool_usage_tracker",
                    return_value=MagicMock(get_usage_stats=MagicMock(return_value={"total_calls": 0}))), \
              patch("src.db.get_db", return_value=mock_db):
+            await prepare_unlocked_inputs(ctx)
             result = await execute_locked_update(ctx)
 
         assert result is None
@@ -422,7 +430,10 @@ class TestBehavioralSensorInjection:
     @pytest.mark.asyncio
     async def test_compute_behavioral_raises_no_sensor_injected(self):
         """If compute_behavioral_sensor_eisv itself raises, update succeeds without sensor."""
-        from src.mcp_handlers.updates.phases import execute_locked_update
+        from src.mcp_handlers.updates.phases import (
+            execute_locked_update,
+            prepare_unlocked_inputs,
+        )
 
         monitor = self._make_mock_monitor(n=10)
         ctx = self._make_ctx(monitor)
@@ -430,6 +441,7 @@ class TestBehavioralSensorInjection:
         with self._patch_execute_locked_deps(), \
              patch("src.behavioral_sensor.compute_behavioral_sensor_eisv", side_effect=RuntimeError("boom")), \
              patch("src.db.get_db", return_value=None):
+            await prepare_unlocked_inputs(ctx)
             result = await execute_locked_update(ctx)
 
         assert result is None  # update still succeeds
@@ -445,7 +457,10 @@ class TestBehavioralSensorInjection:
     @pytest.mark.asyncio
     async def test_explicit_sensor_data_eisv_routed_to_agent_state(self):
         """When sensor_data["eisv"] is in the payload, it lands in agent_state["sensor_eisv"]."""
-        from src.mcp_handlers.updates.phases import execute_locked_update
+        from src.mcp_handlers.updates.phases import (
+            execute_locked_update,
+            prepare_unlocked_inputs,
+        )
 
         monitor = MagicMock()
         monitor.state.decision_history = []
@@ -456,6 +471,7 @@ class TestBehavioralSensorInjection:
 
         with self._patch_execute_locked_deps(), \
              patch("src.db.get_db", return_value=None):
+            await prepare_unlocked_inputs(ctx)
             result = await execute_locked_update(ctx)
 
         assert result is None
@@ -464,7 +480,10 @@ class TestBehavioralSensorInjection:
     @pytest.mark.asyncio
     async def test_no_sensor_data_means_no_sensor_eisv(self):
         """When the payload carries no sensor_data, agent_state lacks sensor_eisv."""
-        from src.mcp_handlers.updates.phases import execute_locked_update
+        from src.mcp_handlers.updates.phases import (
+            execute_locked_update,
+            prepare_unlocked_inputs,
+        )
 
         monitor = MagicMock()
         monitor.state.decision_history = []
@@ -472,10 +491,99 @@ class TestBehavioralSensorInjection:
 
         with self._patch_execute_locked_deps(), \
              patch("src.db.get_db", return_value=None):
+            await prepare_unlocked_inputs(ctx)
             result = await execute_locked_update(ctx)
 
         assert result is None
         assert ctx.agent_state.get("sensor_eisv") is None
+
+
+class TestPrepareUnlockedInputsContract:
+    """Lock surface-shrink contract: prepare_unlocked_inputs alone must produce
+    everything the locked phase used to compute itself — agent_state with all
+    inputs, policy_warnings, sensor_eisv when applicable.
+
+    This test exists so a future refactor that accidentally moves work back
+    into the lock fails loudly here instead of silently regressing the broker
+    timeout. Per the [checkin_phases] log analysis on 2026-05-04, the locked
+    phase had a 7s steady-state floor; lifting these inputs out drops it.
+    """
+
+    def _make_mock_monitor(self, n=10):
+        monitor = MagicMock()
+        monitor.state.decision_history = ["proceed"] * n
+        monitor.state.coherence_history = [0.5] * n
+        monitor.state.regime_history = ["high"] * n
+        monitor.state.E_history = [0.7] * n
+        monitor.state.I_history = [0.6] * n
+        monitor.state.S_history = [0.3] * n
+        monitor.state.V_history = [0.1] * n
+        monitor._last_drift_vector = MagicMock(norm=0.2)
+        monitor._last_continuity_metrics = MagicMock(complexity_divergence=0.15)
+        return monitor
+
+    def _make_ctx(self, monitor=None, sensor_data=None):
+        from src.mcp_handlers.updates.context import UpdateContext
+        mcp_server = MagicMock()
+        mcp_server.monitors = {"test-agent": monitor} if monitor else {}
+        arguments = {"client_session_id": "test-session"}
+        if sensor_data is not None:
+            arguments["sensor_data"] = sensor_data
+        return UpdateContext(
+            agent_id="test-agent",
+            agent_uuid="test-agent",
+            arguments=arguments,
+            response_text="test response",
+            complexity=0.5,
+            ethical_drift=[0.0, 0.0, 0.0],
+            is_new_agent=False,
+            meta=MagicMock(),
+            loop=AsyncMock(),
+            mcp_server=mcp_server,
+        )
+
+    @pytest.mark.asyncio
+    async def test_populates_agent_state_inputs(self):
+        from src.mcp_handlers.updates.phases import prepare_unlocked_inputs
+        ctx = self._make_ctx()
+        with patch("src.db.get_db", return_value=None):
+            await prepare_unlocked_inputs(ctx)
+        # ODE inputs are ready before the lock is acquired
+        assert ctx.agent_state["response_text"] == "test response"
+        assert ctx.agent_state["complexity"] == 0.5
+        assert "parameters" in ctx.agent_state
+        assert "ethical_drift" in ctx.agent_state
+
+    @pytest.mark.asyncio
+    async def test_populates_policy_warnings(self):
+        from src.mcp_handlers.updates.phases import prepare_unlocked_inputs
+        ctx = self._make_ctx()
+        with patch("src.db.get_db", return_value=None):
+            await prepare_unlocked_inputs(ctx)
+        # Policy warnings are computed unlocked (pure CPU on response_text)
+        assert isinstance(ctx.policy_warnings, list)
+
+    @pytest.mark.asyncio
+    async def test_behavioral_sensor_runs_unlocked(self):
+        """Behavioral sensor injection happens before the lock when monitor has history."""
+        from src.mcp_handlers.updates.phases import prepare_unlocked_inputs
+        monitor = self._make_mock_monitor(n=10)
+        ctx = self._make_ctx(monitor=monitor)
+        with patch("src.db.get_db", return_value=None), \
+             patch("src.tool_usage_tracker.get_tool_usage_tracker",
+                   return_value=MagicMock(get_usage_stats=MagicMock(return_value={"total_calls": 0}))):
+            await prepare_unlocked_inputs(ctx)
+        assert "sensor_eisv" in ctx.agent_state
+
+    @pytest.mark.asyncio
+    async def test_explicit_sensor_data_routed_unlocked(self):
+        """Caller-supplied sensor_data["eisv"] lands in agent_state before the lock."""
+        from src.mcp_handlers.updates.phases import prepare_unlocked_inputs
+        explicit = {"E": 0.9, "I": 0.8, "S": 0.1, "V": 0.0}
+        ctx = self._make_ctx(sensor_data={"eisv": explicit})
+        with patch("src.db.get_db", return_value=None):
+            await prepare_unlocked_inputs(ctx)
+        assert ctx.agent_state["sensor_eisv"] == explicit
 
 
 # ══════════════════════════════════════════════════

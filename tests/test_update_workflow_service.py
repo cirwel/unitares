@@ -141,6 +141,7 @@ async def test_run_process_update_workflow_happy_path():
          patch("src.mcp_handlers.updates.phases.handle_onboarding_and_resume", new=AsyncMock(return_value=None)), \
          patch("src.mcp_handlers.updates.phases.transform_inputs", return_value=None), \
          patch("src.mcp_handlers.updates.phases.execute_locked_update", new=AsyncMock(return_value=None)), \
+         patch("src.mcp_handlers.updates.phases.prepare_unlocked_inputs", new=AsyncMock()), \
          patch("src.mcp_handlers.updates.phases.execute_post_update_effects", new=AsyncMock()), \
          patch("src.mcp_handlers.updates.pipeline.run_enrichment_pipeline", new=AsyncMock()), \
          patch("src.mcp_handlers.response_formatter.format_response", return_value={"status": "formatted"}), \
@@ -188,6 +189,7 @@ async def test_run_process_update_workflow_timeout_uses_lock_error_category():
     with patch("src.mcp_handlers.updates.phases.resolve_identity_and_guards", new=AsyncMock(return_value=None)), \
          patch("src.mcp_handlers.updates.phases.handle_onboarding_and_resume", new=AsyncMock(return_value=None)), \
          patch("src.mcp_handlers.updates.phases.transform_inputs", return_value=None), \
+         patch("src.mcp_handlers.updates.phases.prepare_unlocked_inputs", new=AsyncMock()), \
          patch("src.lock_cleanup.cleanup_stale_state_locks", return_value={"cleaned": 0}):
         result = await run_process_update_workflow(ctx)
 
@@ -235,6 +237,7 @@ async def test_enrichment_runs_outside_lock():
          patch("src.mcp_handlers.updates.phases.handle_onboarding_and_resume", new=AsyncMock(return_value=None)), \
          patch("src.mcp_handlers.updates.phases.transform_inputs", return_value=None), \
          patch("src.mcp_handlers.updates.phases.execute_locked_update", new=AsyncMock(return_value=None)), \
+         patch("src.mcp_handlers.updates.phases.prepare_unlocked_inputs", new=AsyncMock()), \
          patch("src.mcp_handlers.updates.phases.execute_post_update_effects", new=AsyncMock()), \
          patch("src.mcp_handlers.updates.pipeline.run_enrichment_pipeline", new=AsyncMock(side_effect=fake_enrichment)), \
          patch("src.mcp_handlers.response_formatter.format_response", return_value={"status": "formatted"}), \
@@ -284,6 +287,7 @@ async def test_post_update_effects_run_outside_lock():
          patch("src.mcp_handlers.updates.phases.handle_onboarding_and_resume", new=AsyncMock(return_value=None)), \
          patch("src.mcp_handlers.updates.phases.transform_inputs", return_value=None), \
          patch("src.mcp_handlers.updates.phases.execute_locked_update", new=AsyncMock(return_value=None)), \
+         patch("src.mcp_handlers.updates.phases.prepare_unlocked_inputs", new=AsyncMock()), \
          patch("src.mcp_handlers.updates.phases.execute_post_update_effects", new=AsyncMock(side_effect=fake_post_effects)), \
          patch("src.mcp_handlers.updates.pipeline.run_enrichment_pipeline", new=AsyncMock()), \
          patch("src.mcp_handlers.response_formatter.format_response", return_value={"status": "formatted"}), \

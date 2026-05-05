@@ -23,6 +23,7 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
         execute_locked_update,
         execute_post_update_effects,
         handle_onboarding_and_resume,
+        prepare_unlocked_inputs,
         resolve_identity_and_guards,
         transform_inputs,
     )
@@ -58,6 +59,9 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
         _tick("transform")
         if early_exit:
             return early_exit
+
+        await prepare_unlocked_inputs(ctx)
+        _tick("prepare_unlocked")
 
         try:
             async with ctx.mcp_server.lock_manager.acquire_agent_lock_async(ctx.agent_id, timeout=5.0, max_retries=3):
