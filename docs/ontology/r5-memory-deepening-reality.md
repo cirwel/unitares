@@ -94,7 +94,7 @@ Do not enable that conjunct until there is enough shadow data to evaluate false 
 ## Implementation Sequence
 
 1. **PR 0: this spec + plan update.** No runtime behavior.
-2. **PR 1: read-only scorer.** Add `src/identity/memory_integration.py` with `score_memory_integration(..., channel="kg_cite_extend")`. Query existing KG rows only; no schema migration.
+2. **PR 1: read-only scorer.** Add an R5 memory-integration module with `score_memory_integration(..., channel="kg_cite_extend")`. Query existing KG rows only; no schema migration.
 3. **PR 2: tests.** Unit tests with synthetic parent/successor discoveries covering strong, weak, absent, insufficient-parent-memory, and inconclusive cases.
 4. **PR 3: operator surface.** Add an explicit script or diagnostic action for shadow scoring. Do not call from the R2 hot path.
 5. **PR 4: optional audit table.** Only if shadow operation needs durable score history. Candidate table name: `audit.r5_memory_integration_audit`.
