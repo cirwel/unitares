@@ -209,6 +209,156 @@ class TestRunGroundskeeper:
 
 
 # =============================================================================
+# Tests: _run_aged_candidate_archive (KG hygiene v2 — act-on-candidates)
+# =============================================================================
+
+def _audit_with_top_stale(top_stale: List[Dict[str, Any]]) -> AuditResult:
+    return AuditResult(
+        success=True,
+        audit={
+            "buckets": {
+                "healthy": 0, "aging": 0,
+                "stale": 0, "candidate_for_archive": len(top_stale),
+            },
+            "top_stale": top_stale,
+        },
+    )
+
+
+class TestRunAgedCandidateArchive:
+    """Tests for the auto-archive bridge between audit and lifecycle cleanup."""
+
+    @pytest.mark.asyncio
+    async def test_skipped_when_hygiene_off(self):
+        """Default state: hygiene off → no audit, no archive calls."""
+        agent = _make_agent()
+        agent.with_hygiene = False
+        client = AsyncMock()
+        result = await agent._run_aged_candidate_archive(client)
+        assert result["auto_archive_run"] is False
+        assert result["archived"] == 0
+        client.audit_knowledge.assert_not_called()
+        client.call_tool.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_archives_aged_candidates(self):
+        """With hygiene on: aged candidate_for_archive entries get archived."""
+        agent = _make_agent()
+        agent.with_hygiene = True
+        client = AsyncMock()
+        client.audit_knowledge = AsyncMock(return_value=_audit_with_top_stale([
+            {"id": "2025-01-01T00:00:00", "bucket": "candidate_for_archive", "last_activity_days": 120},
+            {"id": "2025-01-02T00:00:00", "bucket": "candidate_for_archive", "last_activity_days": 100},
+        ]))
+        client.call_tool = AsyncMock(return_value={"success": True})
+        result = await agent._run_aged_candidate_archive(client)
+        assert result["auto_archive_run"] is True
+        assert result["archived"] == 2
+        assert result["candidates_seen"] == 2
+        assert client.call_tool.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_skips_below_threshold(self):
+        """Entries with age below threshold (default 90d) are not touched."""
+        agent = _make_agent()
+        agent.with_hygiene = True
+        client = AsyncMock()
+        client.audit_knowledge = AsyncMock(return_value=_audit_with_top_stale([
+            {"id": "x", "bucket": "candidate_for_archive", "last_activity_days": 60},
+            {"id": "y", "bucket": "candidate_for_archive", "last_activity_days": 89},
+        ]))
+        client.call_tool = AsyncMock(return_value={"success": True})
+        result = await agent._run_aged_candidate_archive(client)
+        assert result["candidates_seen"] == 0
+        assert result["archived"] == 0
+        client.call_tool.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_other_buckets(self):
+        """Stale/aging/healthy entries are not touched even if very old."""
+        agent = _make_agent()
+        agent.with_hygiene = True
+        client = AsyncMock()
+        client.audit_knowledge = AsyncMock(return_value=_audit_with_top_stale([
+            {"id": "stale-x", "bucket": "stale", "last_activity_days": 200},
+            {"id": "aging-y", "bucket": "aging", "last_activity_days": 200},
+        ]))
+        client.call_tool = AsyncMock(return_value={"success": True})
+        result = await agent._run_aged_candidate_archive(client)
+        assert result["candidates_seen"] == 0
+        client.call_tool.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_caps_at_max_per_cycle(self, monkeypatch):
+        """Cap respected: only N entries archived per cycle even if more eligible."""
+        monkeypatch.setenv("VIGIL_AUTO_ARCHIVE_MAX_PER_CYCLE", "3")
+        agent = _make_agent()
+        agent.with_hygiene = True
+        client = AsyncMock()
+        client.audit_knowledge = AsyncMock(return_value=_audit_with_top_stale([
+            {"id": f"e{i}", "bucket": "candidate_for_archive", "last_activity_days": 120}
+            for i in range(10)
+        ]))
+        client.call_tool = AsyncMock(return_value={"success": True})
+        result = await agent._run_aged_candidate_archive(client)
+        assert result["candidates_seen"] == 3
+        assert result["archived"] == 3
+        assert client.call_tool.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_high_sev_falls_back_to_closed(self):
+        """High-severity rejection on archive triggers retry with status=closed."""
+        agent = _make_agent()
+        agent.with_hygiene = True
+        client = AsyncMock()
+        client.audit_knowledge = AsyncMock(return_value=_audit_with_top_stale([
+            {"id": "hi-sev", "bucket": "candidate_for_archive", "last_activity_days": 120},
+        ]))
+        client.call_tool = AsyncMock(side_effect=[
+            {"success": False, "error": "Permission denied: Cannot set status 'archived' on high-severity discovery 'hi-sev'."},
+            {"success": True},
+        ])
+        result = await agent._run_aged_candidate_archive(client)
+        assert result["archived"] == 1
+        assert client.call_tool.call_count == 2
+        # Second call must be the closed fallback
+        second_call_args = client.call_tool.call_args_list[1]
+        assert second_call_args.args[1]["status"] == "closed"
+
+    @pytest.mark.asyncio
+    async def test_per_entry_failure_does_not_poison_rest(self):
+        """A failure on one entry doesn't stop the rest of the batch."""
+        agent = _make_agent()
+        agent.with_hygiene = True
+        client = AsyncMock()
+        client.audit_knowledge = AsyncMock(return_value=_audit_with_top_stale([
+            {"id": "ok-1", "bucket": "candidate_for_archive", "last_activity_days": 120},
+            {"id": "boom", "bucket": "candidate_for_archive", "last_activity_days": 120},
+            {"id": "ok-2", "bucket": "candidate_for_archive", "last_activity_days": 120},
+        ]))
+        client.call_tool = AsyncMock(side_effect=[
+            {"success": True},
+            Exception("transient"),
+            {"success": True},
+        ])
+        result = await agent._run_aged_candidate_archive(client)
+        assert result["archived"] == 2
+        assert any("boom" in e for e in result["errors"])
+
+    @pytest.mark.asyncio
+    async def test_audit_failure_returns_clean_summary(self):
+        """Audit failure surfaces in errors but doesn't raise."""
+        agent = _make_agent()
+        agent.with_hygiene = True
+        client = AsyncMock()
+        client.audit_knowledge = AsyncMock(return_value=AuditResult(success=False))
+        client.call_tool = AsyncMock()
+        result = await agent._run_aged_candidate_archive(client)
+        assert result["archived"] == 0
+        client.call_tool.assert_not_called()
+
+
+# =============================================================================
 # Tests: with_audit flag
 # =============================================================================
 

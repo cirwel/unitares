@@ -503,6 +503,133 @@ class VigilAgent(GovernanceAgent):
 
         return summary
 
+    async def _run_aged_candidate_archive(
+        self, client: GovernanceClient,
+    ) -> Dict[str, Any]:
+        """Auto-archive KG entries that have sat in candidate_for_archive too long.
+
+        Closes the gap between the audit (which classifies aged-open entries
+        as archive candidates) and ``cleanup_knowledge`` (which only acts on
+        the lifecycle ladder — resolved→archived, ephemeral→archived, etc.,
+        never on entries still in ``open`` status). Without this step, the
+        candidate_for_archive bucket grows monotonically because authors
+        rarely close conversational/exploration entries when sessions end.
+
+        Conservative by design — exists in tension with the 2026-04-19
+        vigil-aggression posture (auto-archive was once hiding initializing-
+        agent bugs). Safeguards:
+
+          - Gated on ``with_hygiene`` (default False; matches the
+            propose-only sweep — operator opts in explicitly).
+          - Only acts on bucket=``candidate_for_archive``. ``_score_discovery``
+            already excludes permanent types/tags via its policy check, and
+            the bucket itself requires last_activity_days > 30 days with no
+            responses or related links.
+          - Requires last_activity_days > VIGIL_AUTO_ARCHIVE_AGE_DAYS
+            (default 90, i.e., 3x the bucket-entry threshold) — extra margin
+            so a freshly-classified entry gets weeks of grace before action.
+          - Caps at VIGIL_AUTO_ARCHIVE_MAX_PER_CYCLE per run (default 20).
+          - High-severity entries fall back to status="closed" — the
+            server's cross-agent permission guard rejects ``archived`` for
+            high-sev (observed empirically, handled gracefully).
+          - Per-entry try/except: one failure doesn't poison the rest.
+          - Reversible: status mutation only, never deletion. Archived rows
+            remain searchable with ``include_cold=true``.
+        """
+        summary: Dict[str, Any] = {
+            "auto_archive_run": False,
+            "candidates_seen": 0,
+            "archived": 0,
+            "errors": [],
+        }
+
+        if not self.with_hygiene:
+            return summary
+
+        threshold_days = int(os.getenv("VIGIL_AUTO_ARCHIVE_AGE_DAYS", "90"))
+        max_per_cycle = int(os.getenv("VIGIL_AUTO_ARCHIVE_MAX_PER_CYCLE", "20"))
+
+        try:
+            result = await asyncio.wait_for(
+                client.audit_knowledge(scope="open", top_n=max_per_cycle * 3),
+                timeout=15.0,
+            )
+        except asyncio.TimeoutError:
+            summary["errors"].append("audit_timeout")
+            log("auto-archive: audit timed out after 15s; skipping cycle")
+            return summary
+        except Exception as e:
+            summary["errors"].append(f"audit_failed: {type(e).__name__}")
+            log(f"auto-archive: audit failed ({type(e).__name__}: {e}); skipping cycle")
+            return summary
+
+        if not getattr(result, "success", False):
+            return summary
+
+        audit_data = getattr(result, "audit", None) or {}
+        if not isinstance(audit_data, dict):
+            return summary
+
+        top_stale = audit_data.get("top_stale", []) or []
+        eligible = [
+            e for e in top_stale
+            if e.get("bucket") == "candidate_for_archive"
+            and e.get("last_activity_days", 0) > threshold_days
+        ][:max_per_cycle]
+
+        summary["auto_archive_run"] = True
+        summary["candidates_seen"] = len(eligible)
+
+        for entry in eligible:
+            eid = entry.get("id")
+            if not eid:
+                continue
+            archived_ok = False
+            try:
+                raw = await asyncio.wait_for(
+                    client.call_tool("knowledge", {
+                        "action": "update",
+                        "discovery_id": eid,
+                        "status": "archived",
+                    }),
+                    timeout=10.0,
+                )
+                if isinstance(raw, dict) and raw.get("success"):
+                    archived_ok = True
+                elif isinstance(raw, dict) and "high-severity" in (raw.get("error") or "").lower():
+                    raw2 = await asyncio.wait_for(
+                        client.call_tool("knowledge", {
+                            "action": "update",
+                            "discovery_id": eid,
+                            "status": "closed",
+                        }),
+                        timeout=10.0,
+                    )
+                    if isinstance(raw2, dict) and raw2.get("success"):
+                        archived_ok = True
+                    else:
+                        summary["errors"].append(f"{eid[:24]}: high-sev close failed")
+                else:
+                    err = (raw.get("error") if isinstance(raw, dict) else None) or "unknown"
+                    summary["errors"].append(f"{eid[:24]}: {err[:80]}")
+            except Exception as e:
+                summary["errors"].append(f"{eid[:24]}: {type(e).__name__}")
+
+            if archived_ok:
+                summary["archived"] += 1
+                log(
+                    f"AUTO_ARCHIVE: {eid} "
+                    f"(age={entry.get('last_activity_days')}d)"
+                )
+
+        if summary["archived"] > 0:
+            log(
+                f"AUTO_ARCHIVE: archived {summary['archived']}/{len(eligible)} "
+                f"aged candidate_for_archive entries (>{threshold_days}d inactive)"
+            )
+
+        return summary
+
     async def _run_stale_opens_sweep(
         self, client: GovernanceClient, top_n: int = 20,
     ) -> List[Dict[str, Any]]:
@@ -736,6 +863,17 @@ class VigilAgent(GovernanceAgent):
                 findings.append(
                     f"stale_open: {item.get('id', '?')[:12]} \"{summary_short}\" age={age_days}d"
                 )
+
+        # --- 4.5a. KG hygiene v2: act on aged candidate_for_archive (optional) ---
+        # Bridges the audit→cleanup gap: cleanup_knowledge only walks the
+        # lifecycle ladder (resolved→archived, etc.) and never touches open
+        # entries, so the candidate_for_archive bucket grew unbounded.
+        auto_archive = await self._run_aged_candidate_archive(client)
+        if auto_archive.get("archived", 0) > 0:
+            findings.append(
+                f"hygiene: auto-archived {auto_archive['archived']} aged "
+                f"candidate(s) of {auto_archive.get('candidates_seen', 0)}"
+            )
 
         # --- 4.6. Watcher calibration floor (24h gated) ---
         # Recompute pattern_floor.json from findings.jsonl so the surface
