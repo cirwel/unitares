@@ -1,9 +1,169 @@
 # Wave 1 RFC: Sentinel-on-BEAM
 
-**Status:** v0.1.1, 2026-05-05. Council pass complete; binding amendment block follows. v0.1 draft body preserved below as historical record — **read V0.1.1 AMENDMENT first** for the binding spec.
+**Status:** v0.1.2, 2026-05-05. Surface 1 council pass shipped corrections; binding amendment blocks below. **Read v0.1.2 AMENDMENT first**, then v0.1.1, then v0.1 body as historical record.
 **Parent:** `docs/proposals/beam-footprint-roadmap-v0.md` v0.3 / v0.3.1 (operator-decision migration commit + council fold).
 **Sibling:** `docs/proposals/surface-lease-plane-v0.md` (Phase A complete, BEAM service running on `127.0.0.1:8788`).
+**Bootstrap shipped:** PR #373 — `elixir/sentinel/` skeleton + `AtomicWrite` helper.
 **Council pass v0.1.1 (2026-05-05):** dialectic-knowledge-architect (3B/1C/1N), feature-dev:code-reviewer (3B/2C), live-verifier (3 VERIFIED, 1 DRIFT — line numbers, 0 REFUTED). Six BLOCKs, three CONCERNs, one NIT, one DRIFT — all folded inline below.
+**Council pass v0.1.2 (2026-05-05):** Surface 1 design council. Architect (2B/3C/1N), reviewer (2 Critical/2 Important), live-verifier (4 VERIFIED, 3 REFUTED, 1 PARTIAL, 1 SOURCE_ONLY). Three BLOCKs, four CONCERNs, several factual REFUTEDs against v0.1.1's Surface 1 prose — all folded in the v0.1.2 amendment block below.
+
+---
+
+## V0.1.2 AMENDMENT 2026-05-05 — Surface 1 council fold (binding spec)
+
+**Read this first if you're touching Surface 1.** v0.1.1 §Surface 1 prose contained three BLOCK-level errors that the live-verifier caught against the actual `agents/sentinel/agent.py` source. v0.1.2 corrects them. This amendment IS the binding spec for Surface 1; the v0.1.1 §Surface 1 paragraph is superseded on every point of conflict.
+
+### B1 (verifier-grounded) — STATE_FILE path correction
+
+v0.1.1 Surface 1 (line 211) said `~/.unitares/anchors/.sentinel_state`. **This is wrong.**
+
+**Actual path** (verified by live-verifier reading `agents/sentinel/agent.py:61`):
+
+```python
+STATE_FILE = project_root / ".sentinel_state"
+```
+
+where `project_root = Path(__file__).parent.parent.parent` resolves to `/Users/cirwel/projects/unitares/.sentinel_state`. Anchors directory at `~/.unitares/anchors/` holds `chronicler.json`, `sentinel.json`, `steward.json`, `vigil.json`, `watcher.json` — **not** `.sentinel_state`.
+
+**Fold (binding):**
+
+- BEAM Sentinel MUST resolve `STATE_FILE` from a config-supplied absolute path, NOT `Path.expand("~/.unitares/anchors/.sentinel_state")`. Recommended config key: `:unitares_sentinel, :state_file_path` with default sourced from `UNITARES_SENTINEL_STATE_FILE` env var. Production launchd plist sets the env var to whatever `agents/sentinel/agent.py:61` resolves to.
+- The shadow file is at the same directory: same path with `.beam` suffix appended (e.g., `<project_root>/.sentinel_state.beam`).
+- Cross-runtime parity: when the Python sentinel's path-resolution logic ever moves (e.g., out of project root), both the launchd env var and the BEAM config key must update together.
+
+### B2 (architect) — Boot logic: max-on-boot, not first-boot-Python
+
+v0.1.1 implied "first boot reads Python's file, all subsequent boots read BEAM's." Architect BLOCK-1: this is a silent correctness bug. If BEAM crashes mid-shadow, on restart it would re-read Python's possibly-stale cursor and regress its own de-dup fence — re-emitting alarms it had already passed.
+
+**Fold (binding):**
+
+- Boot logic: read **both** `STATE_FILE` and `STATE_FILE.beam` if both exist; pick the cursor with the larger `forced_release_alarm.last_event_ts` (ISO-8601 strings compare lexicographically when zero-padded with timezone — Python writes `datetime.isoformat()` with UTC offset, verified by live-verifier).
+- If only one file exists, read that one.
+- If neither exists, return `%{}` (matches Python's `load_state` fallback at `agents/sentinel/agent.py:501`).
+- Empty cursor (`{}`) is treated as "older than any ISO-8601 timestamp" by the max-rule.
+
+### B3 (architect) — Cutover-merge protocol pinned
+
+v0.1.1 said "Cutover flips canonical reader from Python's file to BEAM's file" without defining merge semantics. Three protocols compatible with that text; architect BLOCK-2 forced a choice.
+
+**Fold (binding):** **Max wins** — composes cleanly with B2's boot rule and removes coordination requirement at cutover.
+
+- At cutover, BEAM Sentinel re-reads both files one final time, picks the max cursor, persists to `STATE_FILE.beam`, and stops reading `STATE_FILE`.
+- Python Sentinel is unloaded via `launchctl unload <python plist>` first; the cutover script then signals BEAM Sentinel to enter "canonical" mode (mechanism: a config flag in `STATE_FILE.beam` itself — `{"runtime": "beam_canonical", ...}` — readable by both runtimes for forensic clarity).
+- Rollback: re-load Python Sentinel; remove `runtime` flag (or set to `"python_canonical"`); BEAM Sentinel reads the flag on next cycle and stops writing to `STATE_FILE.beam`.
+
+### C1 (architect) — fsync trade-off explicit, not NIT-ranked
+
+v0.1.1 §B1 reviewer ranked fsync absence as NIT (correct for `sentinel.json` — regenerable from PG). For Surface 1's `.sentinel_state`, the same NIT-ranking is wrong: this file is a **de-dup fence with no upstream re-derivation path**. The `lease_plane_events` table carries event timestamps, not "already-alarmed" flags. Power-loss between cycle N's `save_state` and the rename-durability moment means cycle N+1 re-emits N's alarms.
+
+**Fold (binding):**
+
+- Surface 1 acknowledges duplicate alarm fire on power-loss as **accepted** (downstream dashboard de-dup absorbs it; alarm fingerprint includes the underlying event_id so server-side `/api/findings` dedup catches duplicates within the dedup window).
+- B2's max-on-boot rule mitigates the more common case (clean restart): the surviving file's cursor is preserved.
+- If a future incident shows alarm-replay impact >1 per quarter, revisit by adding `:fsync_after_rename` option to `AtomicWrite.write/2`. For now, accept the NIT-ranking on the Python side carries forward.
+
+### C2 (architect) — Cursor divergence observability during shadow
+
+v0.1.1 had no comparator. Architect CONCERN-3: the only signal of mismatch is double-emit at cutover, which is exactly the symptom shadow is supposed to prevent.
+
+**Fold (binding):**
+
+- Surface 1 PR includes a `mix sentinel.cursor_diff` Mix task that prints both files' cursors + their delta. Operator runs ad-hoc during shadow window.
+- Optional follow-up: `sentinel_shadow_drift` finding emitted once per cycle when `|python_cursor − beam_cursor| > 1 cycle interval`. Severity `info`. Defer to second Surface 1 PR if first PR scope is already at the threshold.
+
+### B4 (reviewer) — `HOME` env var must be set in BOTH plists
+
+Reviewer Critical-2 (verifier-grounded): the existing Python Sentinel plist at `scripts/ops/com.unitares.sentinel.plist` does NOT set `HOME` in `EnvironmentVariables`. The lease-plane plist (`com.unitares.lease-plane.plist:34`) DOES. Python Sentinel's `STATE_FILE` resolution doesn't use `Path.home()` so the gap is dormant — but `SESSION_FILE` (line 59) DOES use `Path.home()`, relying on passwd-database fallback. BEAM's `Path.expand("~")` reads `HOME` only and returns the literal `"~"` if unset.
+
+**Fold (binding):**
+
+- Surface 1 PR amends `scripts/ops/com.unitares.sentinel.plist` to add `<key>HOME</key><string>/Users/cirwel</string>` (matching lease-plane convention).
+- The future BEAM Sentinel plist MUST set `HOME` explicitly. Include this in the PR that lands the BEAM plist.
+- This is preventive — Surface 1's `STATE_FILE` resolution per B1 above doesn't use `Path.expand("~")`, but Surface 5 (SESSION_FILE) does, and the `HOME` gap is a landmine for any code path that drifts toward tilde-expansion.
+
+### C3 (reviewer) — String-keyed map contract pinned
+
+`Jason.decode/1` produces string-keyed maps; `Jason.encode!/1` normalizes atom keys to strings on write. A BEAM caller using atom keys (`%{forced_release_alarm: ...}`) gets a silent round-trip-through-disk surprise: subsequent reads return `%{"forced_release_alarm" => ...}` (string keys), and `state[:forced_release_alarm]` returns `nil`.
+
+**Fold (binding):**
+
+- `UnitaresSentinel.CycleState` enforces string-keyed maps at the boundary. Either: (a) typespec `@type t :: %{String.t() => term()}` + a runtime check that raises on atom keys, or (b) call `state |> Jason.encode!() |> Jason.decode!()` to normalize before persisting. (b) is simpler; (a) is faster.
+- ExUnit tests pin: an atom-keyed input round-trips and the caller sees string keys back.
+
+### C4 (architect) — Schema-compat enforced via Tier 2 contract test
+
+v0.1.1 §Test strategy listed Tier 2 as "cross-runtime contract tests" generically. v0.1.2 specifies the Surface 1 contract test concretely.
+
+**Fold (binding):**
+
+- Tier 2 fixture committed: a Python-written `.sentinel_state` blob (use `agents/sentinel/agent.py:save_state` to generate, snapshot byte-for-byte). BEAM `CycleState.load/0` MUST round-trip it without losing `forced_release_alarm.last_event_ts`.
+- Symmetric direction: a BEAM-written `.sentinel_state.beam` blob committed as fixture. Python `load_state` MUST read it without raising and MUST recover the cursor.
+- Either side losing the cursor is a CI failure.
+
+### Verifier REFUTED — `forced_release_alarm.last_event_ts` cursor read sites
+
+v0.1.1 said "RFC mentions lines 597, 682, 734 for finding emit sites" — implying three cursor-read sites. **Verifier-confirmed:** there is **one** cursor-read site at `agents/sentinel/agent.py:663`:
+
+```python
+cursor_str = state.get("forced_release_alarm", {}).get("last_event_ts")
+```
+
+Lines 597, 682, 734 are post_finding emit sites for `sentinel_finding`, `sentinel_forced_release_alarm`, and `lease_plane_phase_b_transition` respectively — they emit, they don't read the cursor.
+
+**Fold:** Surface 1 BEAM-side `CycleState` exposes a single read accessor (`get_last_event_ts/0`) and a single write accessor (`update_last_event_ts/1`). The cycle worker (later PR) is the only caller. Mirroring Python's single-read-site discipline.
+
+### Verifier REFUTED — fsync absence in Python's `atomic_write`
+
+v0.1.1 didn't claim Python's helper called fsync, but the council inquiry surfaced it. Verified at `agents/sdk/src/unitares_sdk/utils.py:30-35`:
+
+- Line 30: `tempfile.mkstemp(...)` — creates 0o600 by default
+- Line 32: `os.fchmod(fd, mode)` — explicit fchmod to 0o600
+- Line 35: `os.replace(...)` — atomic replace (not `os.rename`)
+- **No `os.fsync(fd)`** anywhere in the function
+
+BEAM `AtomicWrite.write/2` matches: chmod 0o600, no fsync. C1 above accepts this.
+
+### Verifier REFUTED — line range for `load_state` fall-through
+
+v0.1.1 said "try / except: pass / return {} pattern at lines 499-501." Verifier-corrected:
+
+- Lines 492-501 contain `load_state`. The `try` body is two lines (496-498), with an `isinstance(data, dict)` guard at line 497 that v0.1.1 omitted.
+- The `except Exception: pass` is at lines 499-500; `return {}` is at line 501. RFC's "499-501" is structurally correct but understates the body.
+
+**Fold:** BEAM `CycleState.load/0` mirrors the Python isinstance guard: after `Jason.decode`, check `is_map(decoded)` (Elixir's analogue) before returning; on non-map decode results, fall through to `%{}`.
+
+### N1 (reviewer) — `save/1` exception contract: log-and-continue, not raise
+
+Python's `save_state` swallows write failures (`agents/sentinel/agent.py:506-508`); a `save_state` exception does NOT crash the cycle. BEAM's `AtomicWrite.write/2` re-raises on failure. If `CycleState.save/1` propagates the exception, BEAM Sentinel becomes more brittle than Python on ENOSPC / readonly-fs / etc.
+
+**Fold (binding):**
+
+- `CycleState.save/1` wraps `AtomicWrite.write/2` in `try/rescue`, logs at `:logger.warning`, returns `:ok` either way. The cycle worker continues regardless.
+- Distinct from `AtomicWrite.write/2` itself, which retains its raise-on-failure contract for callers that DO want to know.
+
+### What v0.1.2 changes vs v0.1.1
+
+- §Surface 1 path corrected (B1)
+- §Surface 1 boot rule: max-on-boot (B2)
+- §Surface 1 cutover-merge protocol: max wins (B3)
+- §Surface 1 fsync trade-off explicit (C1)
+- §Surface 1 cursor-divergence observability requirement (C2)
+- §Boundary `HOME` env var binding for both plists (B4)
+- §Surface 1 string-key contract pinned (C3)
+- §Test strategy Tier 2 contract test for Surface 1 spelled out (C4)
+- Cursor read site corrected from "597, 682, 734" to "663" (verifier REFUTED)
+- Python `atomic_write` fsync absence noted; BEAM matches (verifier REFUTED on fsync claim)
+- `load_state` line-range corrected to include isinstance guard (verifier REFUTED)
+- `CycleState.save/1` exception contract: log-and-continue (N1)
+
+### What v0.1.2 does NOT change
+
+- v0.1.1 binding spec for Surfaces 2–5 is unchanged.
+- Migration commitment (operator decision under v0.3) unchanged.
+- Wave 1 = Sentinel-on-BEAM unchanged.
+- Sibling Elixir app at `elixir/sentinel/` unchanged (PR #373 already shipped this).
+- 4 stop signs unchanged.
+- Exit criteria gate on ODE profile unchanged.
 
 ---
 
