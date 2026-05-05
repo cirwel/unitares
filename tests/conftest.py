@@ -1,13 +1,31 @@
 """
 Pytest configuration and fixtures for unitares tests.
 """
+import os
 import pytest
 import pytest_asyncio
+import tempfile
 import warnings
 import sys
 import asyncio
 from collections import defaultdict, deque
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+
+# Redirect Vigil's log file to a temp path BEFORE any test imports the agent
+# module. The agent's LOG_FILE is resolved at module-import time from the
+# VIGIL_LOG_FILE env var, so this must happen before the first
+# `from agents.vigil.agent import …` anywhere in the test suite.
+#
+# Without this, tests that mock client.audit_knowledge to raise
+# (e.g. RuntimeError("boom")) and call _run_stale_opens_sweep through a real
+# VigilAgent log "stale-opens sweep failed (boom); continuing cycle" to the
+# operator's production Vigil log at ~/Library/Logs/unitares-vigil.log —
+# observed in the wild as a steady stream of test-injected noise.
+os.environ.setdefault(
+    "VIGIL_LOG_FILE",
+    str(Path(tempfile.gettempdir()) / "unitares-vigil-test.log"),
+)
 
 # Filter ResourceWarnings globally before any imports
 warnings.filterwarnings("ignore", category=ResourceWarning)
