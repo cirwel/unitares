@@ -7,6 +7,7 @@
 #
 # Usage:
 #   ./scripts/dev/test-cache.sh              # default: pytest tests/ agents/ -q --tb=short -x
+#   ./scripts/dev/test-cache.sh --staged     # hash staged Python commit candidate
 #   ./scripts/dev/test-cache.sh --fresh      # ignore cache, force run
 #   ./scripts/dev/test-cache.sh -- -k "test_foo"  # extra pytest args after --
 
@@ -18,29 +19,118 @@ _cache_mtime() {
 }
 
 CACHE_DIR=".test-cache"
+CACHE_VERSION="v2"
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
 # --- parse args ---
 FRESH=false
+STAGED=false
 PYTEST_EXTRA=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --fresh) FRESH=true; shift ;;
+        --staged) STAGED=true; shift ;;
         --)      shift; PYTEST_EXTRA=("$@"); break ;;
         *)       PYTEST_EXTRA+=("$1"); shift ;;
     esac
 done
 
+_hash_worktree_python() {
+    python3 - <<'PY'
+import hashlib
+import subprocess
+
+patterns = ["src/*.py", "tests/*.py", "agents/*.py"]
+proc = subprocess.run(
+    ["git", "ls-files", "-z", "--", *patterns],
+    check=True,
+    stdout=subprocess.PIPE,
+)
+paths = sorted(p.decode("utf-8") for p in proc.stdout.split(b"\0") if p)
+h = hashlib.sha256()
+h.update(b"worktree-python-v1\0")
+for path in paths:
+    h.update(path.encode("utf-8", "surrogateescape"))
+    h.update(b"\0")
+    try:
+        with open(path, "rb") as fh:
+            h.update(fh.read())
+    except FileNotFoundError:
+        h.update(b"<deleted>")
+    h.update(b"\0")
+print(h.hexdigest())
+PY
+}
+
+_hash_staged_python() {
+    python3 - <<'PY'
+import hashlib
+import subprocess
+
+patterns = ["src/*.py", "tests/*.py", "agents/*.py"]
+proc = subprocess.run(
+    ["git", "ls-files", "-s", "-z", "--", *patterns],
+    check=True,
+    stdout=subprocess.PIPE,
+)
+records = sorted(r for r in proc.stdout.split(b"\0") if r)
+h = hashlib.sha256()
+h.update(b"staged-python-v1\0")
+for record in records:
+    h.update(record)
+    h.update(b"\0")
+print(h.hexdigest())
+PY
+}
+
+_hash_pytest_args() {
+    python3 - "$@" <<'PY'
+import hashlib
+import sys
+
+h = hashlib.sha256()
+for arg in sys.argv[1:]:
+    h.update(arg.encode("utf-8", "surrogateescape"))
+    h.update(b"\0")
+print(h.hexdigest())
+PY
+}
+
+_print_staged_dirty_python() {
+    git diff --name-only -- 'src/*.py' 'tests/*.py' 'agents/*.py'
+    git ls-files --others --exclude-standard -- 'src/*.py' 'tests/*.py' 'agents/*.py'
+}
+
 # --- compute tree hash ---
-TREE_HASH=$(git ls-files -- 'src/*.py' 'tests/*.py' 'agents/*.py' | sort | xargs cat | shasum -a 256 | cut -d' ' -f1)
-CACHE_FILE="$CACHE_DIR/$TREE_HASH"
+HASH_MODE="worktree"
+if [[ "$STAGED" == true ]]; then
+    HASH_MODE="staged"
+    DIRTY_PYTHON=$(_print_staged_dirty_python)
+    if [[ -n "$DIRTY_PYTHON" ]]; then
+        echo "[test-cache] --staged refused: unstaged or untracked Python files would affect pytest:" >&2
+        echo "$DIRTY_PYTHON" >&2
+        echo "[test-cache] stash them, stage them, or use a clean worktree before validating the staged tree." >&2
+        exit 4
+    fi
+    TREE_HASH=$(_hash_staged_python)
+else
+    TREE_HASH=$(_hash_worktree_python)
+fi
+
+PYTEST_ARGS_HASH=$(_hash_pytest_args "${PYTEST_EXTRA[@]}")
+CACHE_KEY=$(printf '%s\0%s\0%s\0%s\0' "$CACHE_VERSION" "$HASH_MODE" "$TREE_HASH" "$PYTEST_ARGS_HASH" | shasum -a 256 | cut -d' ' -f1)
+CACHE_FILE="$CACHE_DIR/$CACHE_KEY"
+CACHE_LABEL="$HASH_MODE tree $TREE_HASH"
+if [[ ${#PYTEST_EXTRA[@]} -gt 0 ]]; then
+    CACHE_LABEL="$CACHE_LABEL args $PYTEST_ARGS_HASH"
+fi
 
 # --- cache hit (fast path, no lock) ---
 if [[ "$FRESH" == false && -f "$CACHE_FILE" ]]; then
     AGE_SECS=$(( $(date +%s) - $(_cache_mtime "$CACHE_FILE") ))
     AGE_MIN=$(( AGE_SECS / 60 ))
-    echo "[test-cache] HIT — tree $TREE_HASH (cached ${AGE_MIN}m ago)"
+    echo "[test-cache] HIT — $CACHE_LABEL (cached ${AGE_MIN}m ago)"
     cat "$CACHE_FILE"
     exit 0
 fi
@@ -84,14 +174,14 @@ trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
 if [[ "$FRESH" == false && -f "$CACHE_FILE" ]]; then
     AGE_SECS=$(( $(date +%s) - $(_cache_mtime "$CACHE_FILE") ))
     AGE_MIN=$(( AGE_SECS / 60 ))
-    echo "[test-cache] HIT (post-lock) — tree $TREE_HASH (cached ${AGE_MIN}m ago)"
+    echo "[test-cache] HIT (post-lock) — $CACHE_LABEL (cached ${AGE_MIN}m ago)"
     cat "$CACHE_FILE"
     exit 0
 fi
 
 # --- cache miss: run pytest ---
 mkdir -p "$CACHE_DIR"
-echo "[test-cache] MISS — tree $TREE_HASH, running pytest..."
+echo "[test-cache] MISS — $CACHE_LABEL, running pytest..."
 
 # Prefer env override; otherwise `python3` on PATH (Linux CI + typical macOS).
 PYTHON="${UNITARES_PYTHON:-python3}"
@@ -108,7 +198,7 @@ set -e
 if [[ $EXIT_CODE -eq 0 ]]; then
     # cache only passing results — tail gives the summary line
     tail -5 "$TMPOUT" > "$CACHE_FILE"
-    echo "[test-cache] CACHED — tree $TREE_HASH"
+    echo "[test-cache] CACHED — $CACHE_LABEL"
 else
     echo "[test-cache] FAILED (exit $EXIT_CODE) — not cached"
 fi
