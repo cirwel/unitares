@@ -248,7 +248,6 @@ def main():
         print("  - Use relative links: [text](docs/path.md)")
         print("  - Add language tags to code blocks: ```python")
         print("  - Remove agent attribution from headers (tracked in git)")
-        print("\n  See: docs/dev/MARKDOWN_PROLIFERATION_POLICY.md")
     
     if args.strict and total_issues > 0:
         return 1

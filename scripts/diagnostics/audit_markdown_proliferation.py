@@ -21,7 +21,7 @@ from typing import Dict, List, Tuple, Set
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-# Approved markdown files (from policy) - updated 2026-04-04
+# Approved markdown files for the legacy proliferation audit.
 APPROVED_FILES = {
     'README.md',
     'docs/CHANGELOG.md',
@@ -35,7 +35,6 @@ APPROVED_FILES = {
     'docs/operations/contract-drift-playbook.md',
     'docs/dev/CANONICAL_SOURCES.md',
     'docs/dev/CIRCUIT_BREAKER_DIALECTIC.md',
-    'docs/dev/MARKDOWN_PROLIFERATION_POLICY.md',
     'docs/dev/TOOL_REGISTRATION.md',
     'docs/dev/validation-roadmap.md',
     'scripts/README.md',

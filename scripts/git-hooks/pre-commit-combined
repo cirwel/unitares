@@ -88,8 +88,7 @@ if [ -n "$NEW_MARKDOWN_FILES" ]; then
 
     if [ $VIOLATIONS -gt 0 ]; then
         echo ""
-        echo "❌ Markdown proliferation policy violation!"
-        echo "   See: docs/dev/MARKDOWN_PROLIFERATION_POLICY.md"
+        echo "❌ Markdown placement heuristic violation!"
         echo ""
         echo "   Options:"
         echo "   1. Consolidate into existing doc"

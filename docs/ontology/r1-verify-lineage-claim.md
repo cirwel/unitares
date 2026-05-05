@@ -479,3 +479,57 @@ Single-channel design (v3.1) unchanged. Normative shape (v3.2) preserved; tighte
 | v3.3 amendment | ✅ this section |
 
 **The R1 implementation row may open against v3.3.**
+
+---
+
+## Amendment v3.4 (2026-05-05) — orphan-candidate demotion primitive
+
+The 2026-05-05 R1 maintenance follow-up shipped a promotion/TTL sweep that reported `unsupported` provisional scores as `orphan_candidate` but intentionally did not remove lineage edges. That was the right default while no explicit destructive primitive was named.
+
+R2 Phase 1 has since supplied the storage primitive R1 needs: `demote_lineage(successor_id, reason=...)` on `src/db/mixins/identity.py`. It clears the declared parent edge, clears provisional/confirmed state, stamps `lineage_demoted_at`, resets `chain_obs_count`, and has terminal-state WHERE guards. R1 should use that primitive rather than invent a second edge-removal path.
+
+### Decision
+
+`sweep_provisional_lineage` remains report-only by default:
+
+- `verdict="plausible"` + `apply=false` → `would_confirm`
+- `verdict="plausible"` + `apply=true` → `confirm_lineage`
+- `verdict="unsupported"` + `apply_orphans=false` → `orphan_candidate`
+- `verdict="unsupported"` + `apply_orphans=true` → `demote_lineage(successor_id, reason="r1_unsupported")`
+- `verdict="inconclusive"` → `blocked_inconclusive`
+
+The destructive action is deliberately controlled by a separate flag, `apply_orphans`, not by `apply`. Confirming a plausible lineage and demoting an unsupported lineage are different operator choices; a caller may want one without the other.
+
+### Audit semantics
+
+If `demote_lineage` succeeds, the maintenance path emits the same lifecycle event class used by the R2 FSM:
+
+```text
+event_type = "lineage_demoted"
+agent_id = successor_id
+details = {
+  parent_id,
+  score_id,
+  reason: "r1_unsupported",
+  source: "r1_maintenance",
+  plausibility?  # present when the score object exposes it
+}
+```
+
+If the storage helper's WHERE guard returns false, the result is `orphan_demote_failed` and no audit event is emitted. This mirrors the R2 FSM convention: audit events record storage-confirmed transitions, not attempted transitions.
+
+### CLI surface
+
+`scripts/migration/r1_lineage_maintenance.py promote-provisional` gains:
+
+```text
+--apply-orphans
+```
+
+Without it, unsupported rows continue to be reported only. With it, unsupported rows are demoted through `demote_lineage`. The existing `--apply` flag continues to control only `confirm_lineage` for plausible rows.
+
+### Non-goals
+
+- No direct AGE edge deletion in R1 maintenance. SQL `core.identities` remains the source of truth; graph projection/cleanup belongs to S7/R2 downstream work.
+- No automatic demotion from the normal hot path beyond the existing R2 FSM. This is an operator maintenance action.
+- No demotion on `inconclusive`; the row remains provisional or proceeds to the grace-expiration archive path.

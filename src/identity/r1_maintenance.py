@@ -4,11 +4,13 @@ Operator-facing helpers for the R1 follow-up work that sits outside the
 onboard hot path:
 
 - re-score provisional lineage claims and confirm only plausible ones;
+- optionally demote unsupported lineage claims via the existing R2
+  lineage lifecycle primitive;
 - archive stale public R1 KG nodes after the v3.2-D 30-day TTL.
 
-The promotion sweep intentionally does not remove unsupported lineage edges.
-R1 names that as the orphan-archival path, but no destructive lineage-removal
-primitive exists yet. Unsupported scores are reported as orphan candidates.
+The promotion sweep intentionally does not remove unsupported lineage edges
+unless the caller passes ``apply_orphans=True``. Unsupported scores are
+reported as orphan candidates by default.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from src.identity.trajectory_continuity import score_trajectory_continuity
 
 
 ScoreFn = Callable[[str, str], Awaitable[Any]]
+AuditFn = Callable[["ProvisionalLineageCandidate", Any], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -32,9 +35,11 @@ class ProvisionalLineageCandidate:
 async def sweep_provisional_lineage(
     *,
     apply: bool = False,
+    apply_orphans: bool = False,
     limit: Optional[int] = None,
     db: Any = None,
     score_fn: ScoreFn = score_trajectory_continuity,
+    audit_fn: Optional[AuditFn] = None,
 ) -> dict[str, Any]:
     """Re-score provisional lineage claims and optionally confirm plausible ones.
 
@@ -51,6 +56,8 @@ async def sweep_provisional_lineage(
         "would_confirm": 0,
         "blocked_inconclusive": 0,
         "orphan_candidates": 0,
+        "orphan_demoted": 0,
+        "orphan_demote_failed": 0,
         "confirm_failed": 0,
     }
 
@@ -76,8 +83,18 @@ async def sweep_provisional_lineage(
                 item["action"] = "would_confirm"
                 counts["would_confirm"] += 1
         elif verdict == "unsupported":
-            item["action"] = "orphan_candidate"
-            counts["orphan_candidates"] += 1
+            if apply_orphans:
+                ok = await backend.demote_lineage(
+                    candidate.successor_id,
+                    reason="r1_unsupported",
+                )
+                if ok:
+                    await (audit_fn or _emit_orphan_demoted_audit)(candidate, score)
+                item["action"] = "orphan_demoted" if ok else "orphan_demote_failed"
+                counts["orphan_demoted" if ok else "orphan_demote_failed"] += 1
+            else:
+                item["action"] = "orphan_candidate"
+                counts["orphan_candidates"] += 1
         else:
             item["action"] = "blocked_inconclusive"
             counts["blocked_inconclusive"] += 1
@@ -86,15 +103,41 @@ async def sweep_provisional_lineage(
 
     return {
         "apply": apply,
+        "apply_orphans": apply_orphans,
         "limit": limit,
         "candidate_count": len(candidates),
         **counts,
         "results": results,
         "note": (
             "Evaluation calls score_trajectory_continuity and therefore writes "
-            "R1 audit/KG score records; apply only controls confirm_lineage."
+            "R1 audit/KG score records; apply controls confirm_lineage, and "
+            "apply_orphans separately controls demote_lineage for unsupported "
+            "lineage."
         ),
     }
+
+
+async def _emit_orphan_demoted_audit(
+    candidate: ProvisionalLineageCandidate,
+    score: Any,
+) -> None:
+    """Emit the lifecycle audit event for operator-applied orphan demotion."""
+    from src.identity.lineage_lifecycle import _emit_audit
+
+    details = {
+        "parent_id": candidate.parent_id,
+        "score_id": getattr(score, "score_id", None),
+        "reason": "r1_unsupported",
+        "source": "r1_maintenance",
+    }
+    plausibility = getattr(score, "plausibility", None)
+    if plausibility is not None:
+        details["plausibility"] = plausibility
+    await _emit_audit(
+        "lineage_demoted",
+        candidate.successor_id,
+        details=details,
+    )
 
 
 async def archive_stale_public_r1_scores(

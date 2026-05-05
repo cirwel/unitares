@@ -67,7 +67,6 @@ def validate_file_path_policy(file_path: str) -> Tuple[Optional[str], Optional[T
             'docs/operations/contract-drift-playbook.md',
             'docs/dev/CANONICAL_SOURCES.md',
             'docs/dev/CIRCUIT_BREAKER_DIALECTIC.md',
-            'docs/dev/MARKDOWN_PROLIFERATION_POLICY.md',
             'docs/dev/TOOL_REGISTRATION.md',
             'docs/dev/validation-roadmap.md',
             'scripts/README.md',

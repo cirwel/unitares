@@ -4,8 +4,9 @@
 Subcommands:
 
 1. ``promote-provisional`` — re-score provisional lineage claims. Plausible
-   scores call ``confirm_lineage`` only when ``--apply`` is passed. The score
-   evaluation itself writes the normal R1 audit/KG records.
+   scores call ``confirm_lineage`` only when ``--apply`` is passed. Unsupported
+   scores call ``demote_lineage`` only when ``--apply-orphans`` is passed. The
+   score evaluation itself writes the normal R1 audit/KG records.
 
 2. ``archive-public-kg`` — archive stale public R1 KG score nodes after the
    v3.2-D TTL. Defaults to dry-run; pass ``--apply`` to update statuses.
@@ -40,6 +41,14 @@ async def main() -> int:
         action="store_true",
         help="Call confirm_lineage for plausible scores. Scoring always writes R1 audit/KG records.",
     )
+    promote.add_argument(
+        "--apply-orphans",
+        action="store_true",
+        help=(
+            "Call demote_lineage(reason='r1_unsupported') for unsupported scores. "
+            "Without this flag unsupported rows are reported only."
+        ),
+    )
     promote.add_argument("--limit", type=int, default=None, help="Limit candidates evaluated.")
 
     archive = sub.add_parser(
@@ -53,7 +62,11 @@ async def main() -> int:
     args = parser.parse_args()
 
     if args.command == "promote-provisional":
-        result = await sweep_provisional_lineage(apply=args.apply, limit=args.limit)
+        result = await sweep_provisional_lineage(
+            apply=args.apply,
+            apply_orphans=args.apply_orphans,
+            limit=args.limit,
+        )
     else:
         result = await archive_stale_public_r1_scores(
             ttl_days=args.ttl_days,

@@ -36,7 +36,6 @@ REQUIRED_STATUS_PREFIX = {
     "docs/dev/TOOL_REGISTRATION.md": "Status:",
     "docs/operations/contract-drift-playbook.md": "Status:",
     "docs/dev/validation-roadmap.md": "Status:",
-    "docs/dev/MARKDOWN_PROLIFERATION_POLICY.md": "Status:",
 }
 
 MAX_LINES = {
