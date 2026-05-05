@@ -322,3 +322,112 @@ async def test_sweep_once_empty_candidate_list(monkeypatch):
     result = await background_tasks._lineage_eval_sweep_once()
     assert result == {"candidates": 0, "transitions": 0}
     assert called["n"] == 0
+
+
+# ---------------------------------------------------------------------------
+# PR 4 council fixes — clear_lineage_declaration full reset
+# ---------------------------------------------------------------------------
+
+
+@live_db
+@pytest.mark.asyncio
+async def test_clear_lineage_declaration_clears_provisional_state(
+    live_postgres_backend,
+):
+    """PR 4 council fix: ``clear_lineage_declaration`` must also clear
+    ``provisional_lineage`` (and the rest of the lineage-state fields)
+    so a cross-role-rejected row doesn't hot-loop in the sweeper's
+    candidate set.
+
+    Bug: PR 3's ``clear_lineage_declaration`` only cleared
+    ``parent_agent_id`` and ``spawn_reason``. A row left with
+    ``parent_agent_id=NULL AND provisional_lineage=TRUE`` matched the
+    sweeper's WHERE filter every cycle, and the FSM's ``no_parent``
+    short-circuit returned without stamping ``lineage_last_eval_at``
+    — hot loop forever.
+    """
+    from tests.db.conftest import _cleanup, _uuid_suffix
+
+    suffix = _uuid_suffix()
+    pid = "r2-pr4-clear-prov-parent-" + suffix
+    sid = "r2-pr4-clear-prov-succ-" + suffix
+    try:
+        async with live_postgres_backend.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO core.agents (id, api_key) VALUES ($1, 'test-key'), "
+                "($2, 'test-key') ON CONFLICT (id) DO NOTHING",
+                pid, sid,
+            )
+            await conn.execute(
+                "INSERT INTO core.identities (agent_id, api_key_hash, status) "
+                "VALUES ($1, 'test-hash', 'active')",
+                pid,
+            )
+            await conn.execute(
+                "INSERT INTO core.identities "
+                "(agent_id, api_key_hash, status, parent_agent_id, "
+                " spawn_reason, provisional_lineage, provisional_score_id, "
+                " confirmed_at, lineage_declared_at) "
+                "VALUES ($1, 'test-hash', 'active', $2, 'subagent', TRUE, "
+                " '00000000-0000-0000-0000-000000000abc'::uuid, now(), now())",
+                sid, pid,
+            )
+        ok = await live_postgres_backend.clear_lineage_declaration(sid)
+        assert ok is True
+        async with live_postgres_backend.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT parent_agent_id, spawn_reason, provisional_lineage, "
+                "       provisional_score_id, confirmed_at, lineage_declared_at "
+                "  FROM core.identities WHERE agent_id = $1",
+                sid,
+            )
+        assert row["parent_agent_id"] is None
+        assert row["spawn_reason"] is None
+        assert row["provisional_lineage"] is False
+        assert row["provisional_score_id"] is None
+        assert row["confirmed_at"] is None
+        assert row["lineage_declared_at"] is None
+    finally:
+        await _cleanup(live_postgres_backend, [pid, sid])
+
+
+@live_db
+@pytest.mark.asyncio
+async def test_cross_role_rejected_row_excluded_from_sweeper_candidates(
+    live_postgres_backend,
+):
+    """End-to-end: a row that was cross-role-rejected (parent cleared
+    via ``clear_lineage_declaration``) must NOT appear in sweeper
+    candidates. This is the user-visible end-state of the PR 4 fix —
+    the sweeper's WHERE filter naturally excludes the row because
+    ``provisional_lineage=FALSE AND confirmed_at IS NULL`` after the
+    full reset."""
+    from tests.db.conftest import _cleanup, _uuid_suffix
+
+    suffix = _uuid_suffix()
+    pid = "r2-pr4-rejected-parent-" + suffix
+    sid = "r2-pr4-rejected-succ-" + suffix
+    try:
+        async with live_postgres_backend.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO core.agents (id, api_key) VALUES ($1, 'test-key'), "
+                "($2, 'test-key') ON CONFLICT (id) DO NOTHING",
+                pid, sid,
+            )
+            await conn.execute(
+                "INSERT INTO core.identities (agent_id, api_key_hash, status) "
+                "VALUES ($1, 'test-hash', 'active')",
+                pid,
+            )
+            await conn.execute(
+                "INSERT INTO core.identities "
+                "(agent_id, api_key_hash, status, parent_agent_id, "
+                " provisional_lineage) "
+                "VALUES ($1, 'test-hash', 'active', $2, TRUE)",
+                sid, pid,
+            )
+        await live_postgres_backend.clear_lineage_declaration(sid)
+        candidates = await live_postgres_backend.select_lineage_eval_candidates()
+        assert sid not in candidates
+    finally:
+        await _cleanup(live_postgres_backend, [pid, sid])

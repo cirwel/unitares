@@ -544,6 +544,18 @@ class IdentityMixin:
         the rejection surface stays consistent with the rest of the
         lineage helpers in this mixin.
 
+        PR 4 council fix: also clears all lineage-state fields
+        (``provisional_lineage``, ``provisional_score_id``,
+        ``confirmed_at``, ``lineage_declared_at``) so a cross-role-
+        rejected row produces a clean fresh-identity row with no
+        residual lineage state. Without this, a row with
+        ``parent_agent_id=NULL AND provisional_lineage=TRUE`` would
+        match the sweeper's candidate WHERE filter every cycle, and
+        the FSM's ``no_parent`` short-circuit returns without
+        stamping ``lineage_last_eval_at`` — a hot loop forever. Full
+        reset makes the sweeper's filter naturally exclude the row
+        (``provisional_lineage=FALSE AND confirmed_at IS NULL``).
+
         Returns True if a row was updated, False otherwise.
         """
         async with self.acquire() as conn:
@@ -552,6 +564,10 @@ class IdentityMixin:
                 UPDATE core.identities
                 SET parent_agent_id = NULL,
                     spawn_reason = NULL,
+                    provisional_lineage = FALSE,
+                    provisional_score_id = NULL,
+                    confirmed_at = NULL,
+                    lineage_declared_at = NULL,
                     updated_at = now()
                 WHERE agent_id = $1
                 """,
@@ -716,25 +732,45 @@ class IdentityMixin:
         Uses ``make_interval(hours => $1)`` rather than
         ``($1 || ' hours')::interval`` — the former is type-safe (integer
         parameter, no string concatenation).
+
+        PR 4 council fix: uses ``FOR UPDATE SKIP LOCKED`` so two
+        concurrent sweeper instances (e.g., during a deploy overlap)
+        don't double-evaluate the same row and produce duplicate
+        ``audit.r1_score_audit`` entries plus duplicate
+        ``lineage_promoted``/``lineage_demoted`` audit events. Matches
+        the ``class_promotion_sweeper_task`` precedent in
+        ``background_tasks.py``. ``FOR UPDATE`` requires a transaction;
+        the lock is released when the ``async with conn.transaction()``
+        block exits (right after ``fetch()`` returns) — short-lived,
+        just the SELECT. The actual eval happens after the lock is
+        released, so two instances racing in the same micro-window can
+        still both run R1 on the same row, but the first instance will
+        stamp ``lineage_last_eval_at`` before the second instance's
+        next sweeper tick. This is a meaningful collision-risk
+        reduction matching the existing precedent; holding the lock
+        through eval would require restructuring the sweeper's
+        per-candidate loop and is deferred.
         """
         async with self.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT agent_id
-                  FROM core.identities
-                 WHERE parent_agent_id IS NOT NULL
-                   AND lineage_archived_at IS NULL
-                   AND lineage_demoted_at IS NULL
-                   AND (provisional_lineage = TRUE OR confirmed_at IS NOT NULL)
-                   AND (
-                       lineage_last_eval_at IS NULL
-                    OR lineage_last_eval_at < now() - make_interval(hours => $1)
-                   )
-                 ORDER BY lineage_last_eval_at NULLS FIRST
-                 LIMIT $2
-                """,
-                int(sweep_cadence_hours), int(limit),
-            )
+            async with conn.transaction():
+                rows = await conn.fetch(
+                    """
+                    SELECT agent_id
+                      FROM core.identities
+                     WHERE parent_agent_id IS NOT NULL
+                       AND lineage_archived_at IS NULL
+                       AND lineage_demoted_at IS NULL
+                       AND (provisional_lineage = TRUE OR confirmed_at IS NOT NULL)
+                       AND (
+                           lineage_last_eval_at IS NULL
+                        OR lineage_last_eval_at < now() - make_interval(hours => $1)
+                       )
+                     ORDER BY lineage_last_eval_at NULLS FIRST
+                     LIMIT $2
+                     FOR UPDATE SKIP LOCKED
+                    """,
+                    int(sweep_cadence_hours), int(limit),
+                )
         return [r["agent_id"] for r in rows]
 
     async def read_lineage_state(
