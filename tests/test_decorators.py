@@ -231,7 +231,8 @@ class TestDecoratorExecution:
 
     @pytest.mark.asyncio
     async def test_timeout_emit_handles_arguments_without_agent_id(self):
-        """When arguments dict has no agent_id, emit passes None — column is nullable."""
+        """When arguments dict has no agent_id and no session context, emit
+        passes None — column is nullable."""
         from unittest.mock import patch
 
         @mcp_tool("test_no_agent_id_on_timeout", timeout=0.05)
@@ -244,6 +245,99 @@ class TestDecoratorExecution:
 
         mock_emit.assert_called_once()
         assert mock_emit.call_args.kwargs["agent_id"] is None
+        assert mock_emit.call_args.kwargs["session_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_timeout_emit_falls_back_to_context_agent_id(self):
+        """For consolidated tools like observe(action=aggregate) that carry no
+        agent_id arg, the decorator MUST fall back to the session contextvar.
+        Without this, ~100% of timeouts attribute to NULL agent_id (observed
+        empirically across 6 events post-2A merge)."""
+        from unittest.mock import patch
+        from src.mcp_handlers.context import set_session_context, reset_session_context
+
+        @mcp_tool("test_ctx_fallback", timeout=0.05)
+        async def handle_test_ctx_fallback(arguments):
+            await asyncio.sleep(5)
+            return []
+
+        token = set_session_context(
+            session_key="caller-session-key",
+            client_session_id="client-1",
+            agent_id="caller-uuid-from-ctx",
+        )
+        try:
+            with patch("src.coordination_failure_emit.emit_coordination_failure_sync") as mock_emit:
+                await handle_test_ctx_fallback({})  # no agent_id in args
+        finally:
+            reset_session_context(token)
+
+        mock_emit.assert_called_once()
+        assert mock_emit.call_args.kwargs["agent_id"] == "caller-uuid-from-ctx"
+        assert mock_emit.call_args.kwargs["session_id"] == "caller-session-key"
+
+    @pytest.mark.asyncio
+    async def test_timeout_emit_arguments_agent_id_wins_over_context(self):
+        """When arguments dict supplies an explicit agent_id, it takes precedence
+        over the contextvar — the explicit target trumps the bound caller."""
+        from unittest.mock import patch
+        from src.mcp_handlers.context import set_session_context, reset_session_context
+
+        @mcp_tool("test_args_wins", timeout=0.05)
+        async def handle_test_args_wins(arguments):
+            await asyncio.sleep(5)
+            return []
+
+        token = set_session_context(
+            session_key="caller-session",
+            client_session_id="client-1",
+            agent_id="caller-uuid",
+        )
+        try:
+            with patch("src.coordination_failure_emit.emit_coordination_failure_sync") as mock_emit:
+                await handle_test_args_wins({"agent_id": "explicit-target-uuid"})
+        finally:
+            reset_session_context(token)
+
+        mock_emit.assert_called_once()
+        assert mock_emit.call_args.kwargs["agent_id"] == "explicit-target-uuid"
+        # session_id still comes from context regardless
+        assert mock_emit.call_args.kwargs["session_id"] == "caller-session"
+
+    @pytest.mark.asyncio
+    async def test_timeout_emit_surfaces_action_in_payload(self):
+        """Consolidated tools dispatch via arguments['action']; surfacing it in
+        payload lets downstream filters distinguish observe(action=aggregate)
+        timeouts from observe(action=agent) timeouts without payload archaeology."""
+        from unittest.mock import patch
+
+        @mcp_tool("test_action_payload", timeout=0.05)
+        async def handle_test_action_payload(arguments):
+            await asyncio.sleep(5)
+            return []
+
+        with patch("src.coordination_failure_emit.emit_coordination_failure_sync") as mock_emit:
+            await handle_test_action_payload({"action": "aggregate"})
+
+        mock_emit.assert_called_once()
+        assert mock_emit.call_args.kwargs["payload"]["action"] == "aggregate"
+
+    @pytest.mark.asyncio
+    async def test_timeout_emit_omits_action_key_when_absent(self):
+        """Non-consolidated tools (no 'action' arg) don't leak a phantom action
+        key — payload stays minimal."""
+        from unittest.mock import patch
+
+        @mcp_tool("test_no_action_key", timeout=0.05)
+        async def handle_test_no_action_key(arguments):
+            await asyncio.sleep(5)
+            return []
+
+        with patch("src.coordination_failure_emit.emit_coordination_failure_sync") as mock_emit:
+            await handle_test_no_action_key({"some_other_arg": "x"})
+
+        mock_emit.assert_called_once()
+        assert "action" not in mock_emit.call_args.kwargs["payload"]
 
 
 class TestGetToolMetadata:

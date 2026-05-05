@@ -117,15 +117,36 @@ def mcp_tool(
                 from src.coordination_failure_emit import (
                     emit_coordination_failure_sync,
                 )
+                from src.mcp_handlers.context import (
+                    get_context_agent_id,
+                    get_context_session_key,
+                )
+
+                # Caller agent_id: prefer arguments-supplied (target/explicit) but
+                # fall back to the session contextvar so consolidated tools like
+                # observe(action=aggregate) — which carry no agent_id arg — still
+                # attribute to the bound caller. Without the fallback, ~100% of
+                # observed timeouts since 2A merged had agent_id NULL.
+                args_agent_id = (
+                    arguments.get("agent_id") if isinstance(arguments, dict) else None
+                )
+                effective_agent_id = args_agent_id or get_context_agent_id()
+                session_id = get_context_session_key()
+
+                emit_payload: Dict[str, Any] = {
+                    "tool_name": tool_name,
+                    "timeout_s": timeout,
+                    "elapsed_s": round(time.time() - start_time, 3),
+                }
+                if isinstance(arguments, dict) and arguments.get("action"):
+                    emit_payload["action"] = arguments["action"]
+
                 emit_coordination_failure_sync(
                     service="governance_mcp",
                     event_type="coordination_failure.mcp_handler_timeout.tool_decorator",
-                    payload={
-                        "tool_name": tool_name,
-                        "timeout_s": timeout,
-                        "elapsed_s": round(time.time() - start_time, 3),
-                    },
-                    agent_id=arguments.get("agent_id") if isinstance(arguments, dict) else None,
+                    payload=emit_payload,
+                    agent_id=effective_agent_id,
+                    session_id=session_id,
                 )
                 return [error_response(
                     f"Tool '{tool_name}' timed out after {timeout} seconds.",

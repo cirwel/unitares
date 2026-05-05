@@ -54,6 +54,7 @@ def emit_coordination_failure_sync(
     event_type: str,
     payload: dict[str, Any] | None = None,
     agent_id: str | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Emit a coordination-failure event via the sync `audit_logger._write_entry` path.
 
@@ -73,6 +74,9 @@ def emit_coordination_failure_sync(
                     documented sub-namespaces.
         payload: event-specific structure. Stored under details.payload.
         agent_id: optional UNITARES UUID when agent-attributable.
+        session_id: optional session_key for cross-event correlation. Persists to
+                    audit.events.session_id column (text, indexed via session
+                    pattern). Decorator passes get_context_session_key().
     """
     if not isinstance(event_type, str) or not event_type.startswith("coordination_failure."):
         logger.warning(
@@ -99,6 +103,7 @@ def emit_coordination_failure_sync(
                 "service": effective_service,
                 "payload": payload or {},
             },
+            session_id=session_id,
         )
         audit_logger._write_entry(entry)
     except Exception as exc:  # noqa: BLE001 — observability MUST NOT mask the real bug

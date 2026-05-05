@@ -151,3 +151,34 @@ def test_emit_handles_none_agent_id():
             agent_id=None,
         )
     assert fake_entry_cls.call_args.kwargs["agent_id"] is None
+
+
+def test_emit_passes_session_id_to_audit_entry():
+    """session_id flows through to AuditEntry so it lands on audit.events.session_id.
+    Without this, every coord-failure event has a NULL session column and cross-event
+    correlation in the same caller session is impossible."""
+    fake_logger = MagicMock()
+    with patch("src.audit_log.audit_logger", fake_logger), \
+         patch("src.audit_log.AuditEntry") as fake_entry_cls:
+        emit_coordination_failure_sync(
+            service="governance_mcp",
+            event_type="coordination_failure.mcp_handler_timeout.tool_decorator",
+            payload={"tool_name": "x"},
+            agent_id="some-uuid",
+            session_id="session-key-abc",
+        )
+    assert fake_entry_cls.call_args.kwargs["session_id"] == "session-key-abc"
+
+
+def test_emit_session_id_defaults_to_none():
+    """When caller omits session_id (e.g., out-of-context emit path), AuditEntry
+    receives session_id=None — column is nullable."""
+    fake_logger = MagicMock()
+    with patch("src.audit_log.audit_logger", fake_logger), \
+         patch("src.audit_log.AuditEntry") as fake_entry_cls:
+        emit_coordination_failure_sync(
+            service="governance_mcp",
+            event_type="coordination_failure.mcp_handler_timeout.tool_decorator",
+            payload={"tool_name": "x"},
+        )
+    assert fake_entry_cls.call_args.kwargs["session_id"] is None
