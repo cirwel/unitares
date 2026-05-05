@@ -150,8 +150,11 @@ async def check_reviewer_stuck(session: DialecticSession) -> bool:
     if not reviewer_id:
         return False  # No reviewer assigned yet — not stuck, just unassigned
 
-    # Reload metadata from PostgreSQL (async)
-    await mcp_server.load_metadata_async(force=True)
+    # Wave 2 audit: force=True dropped per PR #350 precedent. The reviewer's
+    # status (paused/active) is updated via the regular lifecycle write paths
+    # which propagate to the in-memory dict. If the cache is briefly stale
+    # for this one reviewer, the next stuck-check iteration sees the truth.
+    await mcp_server.load_metadata_async()
 
     reviewer_meta = mcp_server.agent_metadata.get(reviewer_id)
     if not reviewer_meta:
@@ -338,7 +341,9 @@ async def _validate_explicit_reviewer_candidate(
     candidate_id: str,
 ) -> Optional[Sequence[TextContent]]:
     """Validate a concrete reviewer assignment target."""
-    await mcp_server.load_metadata_async(force=True)
+    # Wave 2 audit: force=True dropped per PR #350 precedent. Single-agent
+    # existence check; in-memory cache is fresh enough for validation.
+    await mcp_server.load_metadata_async()
     candidate_meta = mcp_server.agent_metadata.get(candidate_id)
     if not candidate_meta:
         return [error_response(
@@ -540,7 +545,9 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
         reviewer_agent_id = agent_uuid
     elif reviewer_mode == "auto":
         # Auto-select a reviewer from eligible agents
-        await mcp_server.load_metadata_async(force=True)
+        # Wave 2 audit: force=True dropped per PR #350 precedent. Reviewer
+        # selection scans the in-memory fleet; cache is fresh enough.
+        await mcp_server.load_metadata_async()
         try:
             reviewer_agent_id = await select_reviewer(
                 paused_agent_id=agent_uuid,
@@ -1455,7 +1462,9 @@ async def handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextCo
             return validation_error
     else:
         # Auto-select a replacement
-        await mcp_server.load_metadata_async(force=True)
+        # Wave 2 audit: force=True dropped per PR #350 precedent. Reviewer
+        # selection scans the in-memory fleet; cache is fresh enough.
+        await mcp_server.load_metadata_async()
         exclude = [session.paused_agent_id]
         if old_reviewer_id:
             exclude.append(old_reviewer_id)
@@ -1521,7 +1530,9 @@ async def _initiate_quorum(session: DialecticSession) -> Optional[Dict[str, Any]
         Dict with reviewer_ids, scores, and deadline if quorum formed.
         None if fewer than 3 eligible reviewers.
     """
-    await mcp_server.load_metadata_async(force=True)
+    # Wave 2 audit: force=True dropped per PR #350 precedent. Quorum
+    # selection scans the in-memory fleet; cache is fresh enough.
+    await mcp_server.load_metadata_async()
     metadata = mcp_server.agent_metadata or {}
 
     reviewers = await select_quorum_reviewers(session, metadata)
@@ -1667,7 +1678,9 @@ async def handle_submit_quorum_vote(arguments: Dict[str, Any]) -> Sequence[TextC
             return [error_response(f"Agent '{agent_id}' has already voted in this session")]
 
         # Get authority weight for this voter
-        await mcp_server.load_metadata_async(force=True)
+        # Wave 2 audit: force=True dropped per PR #350 precedent. Single-agent
+        # weight read; in-memory cache is fresh enough.
+        await mcp_server.load_metadata_async()
         voter_meta = mcp_server.agent_metadata.get(agent_uuid) or mcp_server.agent_metadata.get(agent_id)
         meta_dict = {}
         if voter_meta and not isinstance(voter_meta, str):

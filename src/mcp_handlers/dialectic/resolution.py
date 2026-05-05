@@ -29,9 +29,12 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
     """
     agent_id = session.paused_agent_id
     
-    # Load agent metadata from PostgreSQL (async)
-    await mcp_server.load_metadata_async(force=True)
-    
+    # Wave 2 audit: force=True dropped per PR #350 precedent. In-memory
+    # cache is kept current by process_agent_update / onboard / background
+    # load paths; force-reload here triggered 3221 sequential per-agent
+    # cache.set awaits (~16s) on every resolution call.
+    await mcp_server.load_metadata_async()
+
     if agent_id not in mcp_server.agent_metadata:
         raise ValueError(f"Agent '{agent_id}' not found")
     
