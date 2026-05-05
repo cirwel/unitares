@@ -97,7 +97,15 @@ This is not cosmetic. It tells agents whether a doc is meant to explain the whol
 
 ## Stale Material
 
-If a document is mainly a completed plan, one-time incident writeup, migration narrative, session artifact, or obsolete architecture explanation — delete it or mark it inline as historical. Do not maintain a parallel archive tree.
+If a document is mainly a completed plan, one-time incident writeup, migration narrative, session artifact, or obsolete architecture explanation — delete it from the public tree or mark it inline as historical. Do not maintain a parallel *public* archive tree.
+
+The repository's `.gitignore` already encodes the operator's split between public docs and local-only working notes:
+
+- `docs/archive/` — retired/superseded proposals kept locally for the operator's records, not surfaced publicly. The frontmatter banner on the retired doc is sufficient public signal; the body of a rejected proposal serves no public purpose and noises the active proposals/ directory.
+- `docs/handoffs/` — date-stamped session-to-session handoffs. Pinned to their moment by definition; aged-out handoffs only confuse external readers. Specific handoffs may be force-added to the public tree when they crystallize into permanent contracts (e.g., `2026-05-03-r1-implementation-handoff.md`).
+- `docs/INTERNAL_CONFIG.md` — operator-specific configuration not meant for forks.
+
+Retiring a proposal: move the file to `docs/archive/` (which is gitignored), and `git rm` the public copy. The file stays on the operator's disk; the public repo loses a 400-line RFC that proposes work nobody should implement.
 
 ## Relationship To Knowledge Storage
 
