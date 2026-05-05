@@ -640,6 +640,45 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
             )
 
 
+async def _persist_thread_identity_async(agent_uuid: str, metadata: dict) -> None:
+    """Fire-and-forget thread-identity metadata persist. Eventual consistency
+    is fine: in-memory ctx.meta is the source of truth within this process,
+    PG copy is for cross-process visibility. Errors are swallowed because
+    failure here doesn't change governance correctness — next session will
+    re-derive thread_id/node_index from in-memory state.
+
+    Same shape as PR #360's `_hydrate_metadata_cache_async`: sequential
+    awaits in our own loop, moved out of the critical section so the agent
+    lock isn't held across a PG UPDATE roundtrip. Classification: NOT an
+    anyio/asyncio coupling pattern — just lock-holding-too-long. See
+    `docs/proposals/beam-footprint-roadmap-v0.md` v0.2 RESOLUTION.
+    """
+    try:
+        from src.db import get_db
+        db = get_db()
+        await db.update_identity_metadata(agent_uuid, metadata=metadata, merge=True)
+        logger.info(
+            f"Thread identity persisted (deferred) for {agent_uuid[:8]}... "
+            f"-> thread {metadata.get('thread_id', '')[:8]}... "
+            f"(node {metadata.get('node_index')})"
+        )
+    except Exception as e:
+        logger.debug(f"Could not persist thread identity (deferred): {e}")
+
+
+async def _persist_inferred_purpose_async(agent_id: str, purpose: str) -> None:
+    """Fire-and-forget purpose persist. Same rationale as
+    `_persist_thread_identity_async` — in-memory `meta.purpose` is the
+    process-local source of truth; PG copy is for cross-process visibility.
+    Failure here doesn't change governance correctness.
+    """
+    try:
+        await agent_storage.update_agent(agent_id, purpose=purpose)
+        logger.debug(f"Auto-inferred purpose '{purpose}' persisted (deferred) for {agent_id[:12]}...")
+    except Exception as e:
+        logger.debug(f"Could not persist inferred purpose (deferred): {e}")
+
+
 async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
     """Ensure agent exists, run agent-state mutations, call ODE update.
 
@@ -765,21 +804,26 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
                 ctx.meta.node_index = (getattr(ctx.meta, "node_index", None) or 1) + 1
             ctx.meta.active_session_key = ctx.session_key
             
+            # Fire-and-forget: PG metadata persist doesn't need to hold the
+            # agent lock. In-memory ctx.meta has already been mutated above
+            # and is the process-local source of truth; PG copy is for
+            # cross-process visibility. Same pattern as PR #360.
             try:
-                from src.db import get_db
-                db = get_db()
-                await db.update_identity_metadata(
-                    ctx.agent_uuid,
-                    metadata={
-                        "thread_id": ctx.meta.thread_id,
-                        "node_index": ctx.meta.node_index,
-                        "active_session_key": ctx.meta.active_session_key
-                    },
-                    merge=True
+                _thread_metadata_snapshot = {
+                    "thread_id": ctx.meta.thread_id,
+                    "node_index": ctx.meta.node_index,
+                    "active_session_key": ctx.meta.active_session_key,
+                }
+                asyncio.create_task(
+                    _persist_thread_identity_async(ctx.agent_uuid, _thread_metadata_snapshot)
                 )
-                logger.info(f"Thread identity updated for {ctx.agent_uuid[:8]}... -> thread {ctx.meta.thread_id[:8]}... (node {ctx.meta.node_index})")
+            except RuntimeError:
+                # No running loop — extremely unusual for this code path
+                # since we're inside an async handler. Swallow per the
+                # PR #360 precedent.
+                pass
             except Exception as e:
-                logger.debug(f"Could not persist thread identity: {e}")
+                logger.debug(f"Could not schedule thread identity persist: {e}")
 
     # Per-agent anomaly detection: add entropy if current signals deviate from baseline
     try:
@@ -850,7 +894,10 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
     # Cache monitor reference for Phase 5 and Phase 6 (guaranteed to exist post-ODE)
     ctx.monitor = mcp_server.monitors.get(ctx.agent_id)
 
-    # Auto-infer purpose from response_text if agent has none
+    # Auto-infer purpose from response_text if agent has none.
+    # In-memory mutation stays inside the lock (cheap); PG persist moves
+    # to fire-and-forget so the agent lock isn't held across a PG UPDATE
+    # roundtrip. Same pattern as PR #360.
     try:
         meta = ctx.meta
         if meta and not getattr(meta, 'purpose', None) and ctx.response_text:
@@ -858,10 +905,13 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
             if inferred:
                 meta.purpose = inferred
                 try:
-                    await agent_storage.update_agent(ctx.agent_id, purpose=inferred)
-                    logger.debug(f"Auto-inferred purpose '{inferred}' for {ctx.agent_id[:12]}...")
+                    asyncio.create_task(
+                        _persist_inferred_purpose_async(ctx.agent_id, inferred)
+                    )
+                except RuntimeError:
+                    pass
                 except Exception as e:
-                    logger.debug(f"Could not persist inferred purpose: {e}")
+                    logger.debug(f"Could not schedule inferred purpose persist: {e}")
     except Exception as e:
         logger.debug(f"Purpose inference skipped: {e}")
 
