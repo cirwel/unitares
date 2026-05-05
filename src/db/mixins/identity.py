@@ -658,6 +658,48 @@ class IdentityMixin:
             "chain_obs_count": int(row["chain_obs_count"] or 0),
         }
 
+    async def read_class_tag(self, agent_id: str) -> Optional[str]:
+        """R2 PR 3: read primary class tag from `metadata.tags[0]`.
+
+        Returns ``None`` if the row is missing, ``metadata`` is null,
+        or ``tags`` is empty/absent. Used by R2's cross-role pre-check
+        in ``src.identity.lineage_lifecycle.pre_check_cross_role`` —
+        consumers of class info elsewhere already use the
+        ``agent_metadata`` cache.
+
+        The value returned is the *first* element of ``tags``. The
+        S8a convention is that the class is stamped first
+        (``ephemeral``, ``persistent``, ...); modifier tags
+        (``autonomous``, ``cadence.24hr``) follow. Two identities
+        whose first tags match are considered same-role for the
+        cross-role envelope check.
+        """
+        async with self.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT metadata FROM core.identities WHERE agent_id = $1",
+                agent_id,
+            )
+        if row is None:
+            return None
+        metadata = row["metadata"]
+        if metadata is None:
+            return None
+        # asyncpg returns JSONB as dict by default. Defensive: handle
+        # the str case in case a custom codec ever wraps the
+        # connection (mirrors the `_row_to_identity` shape below at
+        # line ~699).
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except Exception:
+                return None
+        if not isinstance(metadata, dict):
+            return None
+        tags = metadata.get("tags")
+        if not tags or not isinstance(tags, list):
+            return None
+        return str(tags[0])
+
     async def are_lineages_provisional(
         self, agent_ids: List[str]
     ) -> Dict[str, bool]:

@@ -141,6 +141,12 @@ def _isolate_db_backend(monkeypatch):
     # explicit stub avoids the AsyncMock auto-child coroutine-leak
     # pattern noted in R1 v3.2-E.
     mock_backend.read_lineage_state.return_value = None
+    # R2 PR 3 — cross-role pre-check reads `metadata.tags[0]`. Default
+    # to None so the charitable orphan branch fires by default in unit
+    # tests that don't seed a class tag (per the helper's contract:
+    # missing class on either side → accept). Explicit stub avoids the
+    # AsyncMock auto-child coroutine-leak pattern.
+    mock_backend.read_class_tag.return_value = None
     mock_backend.read_r1_calibration_state.return_value = {
         "calibration_status": "seeded",
         "seeded_since": None,

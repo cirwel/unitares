@@ -141,6 +141,47 @@ async def _emit_audit(
         )
 
 
+async def pre_check_cross_role(
+    parent_id: str,
+    successor_class: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """R2 PR 3: cross-role envelope check.
+
+    Returns ``None`` if same-role (declaration may proceed); returns a
+    rejection dict ``{parent_class, successor_class, reason}`` if
+    cross-role.
+
+    Charitable default: if either side has no class tag (orphan path
+    before S8a backfill completes, or a parent that was created
+    pre-S8a), treat as same-role and allow. This avoids false
+    rejections on the rolling backfill window.
+
+    The cross-role envelope is enforced at declaration time so a
+    misclassified spawn can't anchor a parent's lineage to a
+    different role's identity surface (an ephemeral process must
+    not declare a substrate-anchored Lumen as parent, etc.). See:
+    docs/ontology/r2-honest-memory-integration.md §"Cross-role
+    pre-check".
+
+    Caller is the onboard handler: a rejection here clears
+    parent_agent_id from the row, emits ``lineage_cross_role_rejected``,
+    and skips the downstream lineage tasks (R1 score, SPAWNED edge,
+    genesis seed). The accept path stamps ``lineage_declared_at``
+    and emits ``lineage_declared``; both are PR 3's audit additions.
+    """
+    backend = get_db()
+    parent_class = await backend.read_class_tag(parent_id)
+    if parent_class is None or successor_class is None:
+        return None
+    if parent_class == successor_class:
+        return None
+    return {
+        "parent_class": parent_class,
+        "successor_class": successor_class,
+        "reason": "role_envelope_mismatch",
+    }
+
+
 async def evaluate_lineage_for(
     successor_id: str,
     *,

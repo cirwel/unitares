@@ -21,6 +21,7 @@ def build_identity_response_data(
     session_continuity: Optional[Dict[str, Any]],
     verbose: bool,
     identity_resolution_outcome: Optional[str] = None,
+    provisional_lineage: bool = False,
 ) -> Dict[str, Any]:
     """Build the identity() response payload."""
     response_data = {
@@ -39,6 +40,10 @@ def build_identity_response_data(
     }
     if identity_resolution_outcome:
         response_data["identity_resolution_outcome"] = identity_resolution_outcome
+    # R2 PR 3: surface persisted lineage flag at top level so callers
+    # don't need a follow-up read to detect provisional edges. See
+    # docs/ontology/r2-honest-memory-integration.md.
+    response_data["provisional_lineage"] = bool(provisional_lineage)
     # S1-a: surface ownership_proof_version at top level (see build_onboard_response_data).
     if continuity_support.get("ownership_proof_version") is not None:
         response_data["ownership_proof_version"] = continuity_support["ownership_proof_version"]
@@ -92,6 +97,7 @@ def build_identity_diag_payload(
     continuity_token: Optional[str],
     identity_status: str,
     identity_resolution_outcome: Optional[str] = None,
+    provisional_lineage: bool = False,
 ) -> Dict[str, Any]:
     """Build the lightweight identity diagnostic payload used by fast-return paths."""
     payload = {
@@ -110,6 +116,8 @@ def build_identity_diag_payload(
     }
     if identity_resolution_outcome:
         payload["identity_resolution_outcome"] = identity_resolution_outcome
+    # R2 PR 3: persisted-lineage flag (see build_identity_response_data).
+    payload["provisional_lineage"] = bool(provisional_lineage)
     if continuity_token:
         payload["continuity_token"] = continuity_token
     return payload
@@ -135,6 +143,8 @@ def build_onboard_response_data(
     system_activity: Optional[dict],
     tool_mode_info: Optional[dict],
     identity_resolution_outcome: Optional[str] = None,
+    lineage_state: Optional[str] = None,
+    provisional_lineage: bool = False,
 ) -> dict:
     """Build the onboard() response payload."""
     next_calls = [
@@ -229,6 +239,15 @@ def build_onboard_response_data(
     # rely on verbose=True. See docs/ontology/s1-continuity-token-retirement.md §4.5.
     if continuity_support.get("ownership_proof_version") is not None:
         result["ownership_proof_version"] = continuity_support["ownership_proof_version"]
+    # R2 PR 3 (2026-05-04): surface honest-memory lineage state at top
+    # level. `lineage_state` ∈ {"provisional", "rejected_cross_role",
+    # "no_lineage_declared", None}; `provisional_lineage` mirrors the
+    # storage column so downstream gates (trust-tier, KG provenance,
+    # R3 baselines) can be derived from the response without a follow-up
+    # query. See docs/ontology/r2-honest-memory-integration.md.
+    if lineage_state is not None:
+        result["lineage_state"] = lineage_state
+    result["provisional_lineage"] = bool(provisional_lineage)
 
     if verbose:
         result["welcome_message"] = welcome_message
