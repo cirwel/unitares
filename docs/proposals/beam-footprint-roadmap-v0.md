@@ -1,15 +1,67 @@
 # BEAM Footprint Roadmap
 
 **Created:** May 3, 2026
-**Last Updated:** May 4, 2026 (v0.1 — council pass complete, all findings folded inline; destination conditional on PR #350 verdict per V0.1 DESTINATION block)
-**Status:** v0.1 (PROVISIONAL until PR #350 post-fix verdict + operator confirmation of Wave 2 rescope). Destination shifted from Read A (v0) to A′ (stateful-coordinating → BEAM, stateless-computing → Python; MCP SDK as explicit external-dependency gate). v0's Read A is preserved below for historical record but is **not** the current destination; read the V0.1 DESTINATION block first.
-**Council pass v0.1 (2026-05-04):** dialectic-knowledge-architect (2B/4C/3D/4N), feature-dev:code-reviewer (2B/3C/2D/2N), live-verifier (7 VERIFIED, 6 DRIFT, 0 REFUTED, 1 SOURCE_ONLY) — all findings folded inline; see §"Sources of the v0.1 destination shift" for per-lane detail. Wave 2 was structurally rescoped from "audit pipeline + lease integration" to "force=True cleanup + lease-integration hardening + Wave 0 schema extension" per reviewer council B1 + architect council C4.
+**Last Updated:** May 5, 2026 (v0.2 — PR #350 verdict landed; destination reopens per v0.1 conditionality)
+**Status:** v0.2 — destination is OPEN. v0.1's A′ destination commitment was provisional and conditional on PR #350's post-fix data; the data landed and resolved as Python-fixable (architect council C3 was right). v0.1's body is preserved below as historical record alongside v0; neither v0's Read A nor v0.1's A′ is the current destination. Read the V0.2 RESOLUTION block first.
+**Council pass v0.1 (2026-05-04):** dialectic-knowledge-architect (2B/4C/3D/4N), feature-dev:code-reviewer (2B/3C/2D/2N), live-verifier (7 VERIFIED, 6 DRIFT, 0 REFUTED, 1 SOURCE_ONLY) — all findings folded inline. Architect C3 + reviewer C3 both flagged "v0.1 destination committed pre-experiment"; the v0.1 conditionality block was the fold for that finding, and v0.2 is the realization of it.
 
 ---
 
-## V0.1 DESTINATION 2026-05-04 — A′ replaces Read A
+## V0.2 RESOLUTION 2026-05-05 — verdict landed; destination reopens
 
-**Read this before any other section, including the AMENDMENT block.**
+**Read this before any other section.**
+
+PR #350 (merged 2026-05-05T03:28Z) dropped `force=True` from 6 observe sub-handlers, removing the per-call 3221-await loop on the request path. Per v0.1 §"Conditionality on PR #350's post-fix verdict," the experiment was: does the in-handler floor close (Python-fixable in-place) or persist (substrate-coupling)?
+
+**Today's data (2026-05-05, ~05:00 UTC, post-restart probe):**
+
+| Handler | Pre-fix | Cold-start (first call after restart) | Steady-state (subsequent calls) |
+|---|---|---|---|
+| observe(action=aggregate) | ~2,864ms (council live-verifier) / 15,000ms+ timeout under load | 17,062ms (one coord_failure event recorded) | 167–182ms (5 runs) |
+| observe(action=anomalies) | (timeout under load) | not measured | 92–95ms (3 runs) |
+
+**Verdict: Python-fixable.** Steady-state observe handlers are now sub-200ms. The 60× amplification floor was the 3221-await loop, not anyio/asyncio coupling at the substrate layer. v0.1's strongest single piece of falsifying evidence resolves as a Python-side anti-pattern that PR #350 closed for these specific handlers.
+
+**Per v0.1's own conditionality, the destination commitment reverts to a question.** v0.2 is that revert.
+
+**What v0.2 IS:**
+
+- The destination is OPEN. Neither Read A (v0) nor A′ (v0.1) is currently committed-to. The Wave structure (Sentinel → force=True audit + lease-integration → handler dispatch + identity + dialectic) is preserved because that work is right regardless of destination — it eliminates the substrate-tax surface where it currently bites without pre-deciding the larger question.
+- A formal record that v0.1's enthusiasm-pole-bias check (which architect C3 + reviewer C3 both flagged) was correct. v0.1 was committed pre-experiment; the experiment ran; the prediction the council warned against materialized; v0.2 is the discipline closing the loop.
+- A live recommendation: continue accumulating Wave 0 channel data on the OTHER ~24 force=True sites (Wave 2 scope) before any further destination commitment. Those sites still bypass the cache (force=True is the bypass) and may still produce steady-state amplification. Today's verdict tells us about observe specifically; it does NOT generalize across the other force-reload-bearing surfaces.
+
+**What v0.2 ISN'T:**
+
+- A return to v0's Read A. v0's "bug class closed" premise (PR #290 fixed Sentinel-loop call site) is still narrow. Today's data doesn't restore Read A's load-bearing claim; it just means the case for moving past Read A is not as strong as v0.1 said it was. Both v0 and v0.1 had load-bearing premises that didn't survive contact with new evidence; v0.2 commits to neither and waits for more data.
+- A retraction of the substrate-tax framing in CLAUDE.md / AGENTS.md. The four documented mitigation patterns (cached snapshot, run_in_executor, tight wait_for, force=True N-await) are still real. The asymptote argument (workarounds keep accreting) still applies if more patterns emerge. CLAUDE.md's "do not treat pattern-accumulation as progress" stance survives.
+- A retraction of Wave 0 itself. Wave 0 just did the job it was designed for: surfaced a measurement, the measurement drove a destination commitment, the commitment was conditional on follow-up data, the follow-up data ran, the commitment resolved. That's the discipline working.
+
+**What v0.2 keeps from v0.1:**
+
+- The §"v0.1 cut" framing (stateful-coordinating vs stateless-computing) as the right *test* per surface, even though v0.1 used it to pre-decide a destination prematurely. The test stays useful for evaluating individual port decisions (Sentinel → BEAM still passes the test; observe handlers staying Python passes the test post-fix).
+- The §"MCP SDK gate" — still the right binary if/when destination questions reopen. Three named conditions, NOT-closure list, named owner.
+- Wave 1 (Sentinel-on-BEAM) — substrate-fit argument stands; today's verdict doesn't move it.
+- Wave 2 (force=True audit + lease-integration + Wave 0 schema extension) — the work is right regardless of destination. The ~24 remaining force=True sites are still substrate-tax surfaces that need site-by-site treatment; PR #350 established the playbook.
+- Wave 3 (handler dispatch + identity + dialectic) — deferred indefinitely until Wave 2 produces its data. The doc no longer leans on "Wave 3 is where governance MCP coordination ports" as a destination claim; Wave 3 is one possible future, not the committed path.
+- The conditionality discipline. v0.2 itself is conditional on more Wave 0 data: if the other ~24 force=True sites produce steady-state amplification under load (post-Wave-2 cleanup), v0.3 may re-open A′; if they also resolve as Python-fixable, the destination genuinely is "stay Python with periodic substrate-tax cleanup," and v0.3 closes the question in that direction.
+
+**Source of the v0.2 resolution.**
+
+- **2026-05-05 verdict probe** (this session). Restarted governance MCP at 04:55 UTC after operator authorization (process-restart blast radius across active sessions). Pulled local master from 5615bc22 → 60fe16bb (PR #350's merge commit; local master had been stale 1.5h post-merge, requiring `git pull` before restart for the fix to actually be live in the running process). Probed observe(action=aggregate) and observe(action=anomalies) via curl against `localhost:8767/mcp/`; timed each via `python3 -c 'import time;print(time.time())'` deltas. Cold-start first call: 17,062ms (audit.events coord_failure recorded). Subsequent 5 aggregate + 3 anomalies probes: 92–182ms. No further coord_failure events.
+- **v0.1's own conditionality block** (folded from architect council C3 + reviewer council C3). The conditionality WAS the fold; v0.2 is the conditionality firing on real data. This is the discipline doing what it was designed to do.
+- **Memory anchors:** `feedback_substrate-migration-status-quo-bias.md` (cuts both ways), `feedback_verify-construction-lifecycle.md` (lazy vs eager — relevant to "cold-start tax stays even with force=True dropped"), `feedback_running-process-vs-master-commit.md` (the "long-lived resident may have stale code" pattern fired today: process restart didn't deploy the fix because local master was stale).
+
+**What's needed.**
+
+- v0.2 lands (this commit). No council pass required for v0.2 itself — it's a step-down from v0.1's commitment, which is the conservatively-safer move; the council finding that drove it was already addressed in the v0.1 fold; further adversarial review has diminishing returns when the change is "commit less, not more."
+- Wave 2 begins (force=True audit across the ~24 sites). PR #350 established the playbook (drop / replace with single-agent fetch / keep with explicit-comment justification). Doing this site-by-site is the right work and will produce the next round of Wave 0 data.
+- Memory project entry updated to reflect the resolution.
+
+---
+
+## V0.1 DESTINATION 2026-05-04 — A′ replaces Read A *(SUPERSEDED by V0.2 RESOLUTION 2026-05-05; preserved as historical record)*
+
+**This block is preserved for historical record. It is NOT the current destination.** v0.1's destination commitment was conditional on PR #350's post-fix data per the Conditionality block below; that data landed 2026-05-05 and resolved as Python-fixable, reverting the destination to a question per the conditionality's own discipline. See V0.2 RESOLUTION above.
 
 After the 2026-05-04 falsifying measurement (see AMENDMENT block below) and a substantive operator/agent dialogue on what the data actually argues for, **the destination of this roadmap is A′, not Read A.** Operator decision: 2026-05-04, this session.
 
