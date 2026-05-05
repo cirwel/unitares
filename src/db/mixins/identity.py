@@ -334,6 +334,27 @@ class IdentityMixin:
                 return False
             return bool(row["provisional_lineage"])
 
+    async def get_provisional_lineage_set(self, agent_ids: list[str]) -> set[str]:
+        """Batch counterpart of is_lineage_provisional.
+
+        Returns the subset of agent_ids whose `provisional_lineage = TRUE`.
+        One query for N agents instead of N queries — used by the
+        cold-start metadata load path so trust-tier resolution can pass
+        `prefetched_provisional` and skip per-agent fetchrow.
+        """
+        if not agent_ids:
+            return set()
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT agent_id FROM core.identities
+                WHERE agent_id = ANY($1::text[])
+                  AND provisional_lineage = TRUE
+                """,
+                agent_ids,
+            )
+            return {row["agent_id"] for row in rows}
+
     async def read_r1_calibration_state(self) -> Dict[str, Any]:
         """Read the R1 calibration_state singleton (v3.3-C).
 

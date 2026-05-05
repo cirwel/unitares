@@ -86,8 +86,14 @@ async def _load_metadata_from_postgres_async() -> dict:
     """
     Load agent metadata from PostgreSQL into AgentMetadata dict.
 
-    PostgreSQL-native loading path for agent metadata.
-    Returns dict of agent_id -> AgentMetadata.
+    Cold-start path: shaped to avoid per-agent awaits. With ~3000 agents
+    the prior per-agent provisional-lineage fetch + per-agent
+    `metadata_cache.set` produced a ~17s first-call tax on observe (see
+    `docs/proposals/beam-footprint-roadmap-v0.md` v0.2 RESOLUTION). Now:
+    bulk PG reads up front (list_agents, get_identities_batch,
+    get_provisional_lineage_set), per-agent computation is sync
+    (compute_trust_tier with prefetched_provisional), and redis
+    hydration is fire-and-forget after the in-memory dict is ready.
     """
     from src import agent_storage
 
@@ -99,13 +105,6 @@ async def _load_metadata_from_postgres_async() -> dict:
 
     result = {}
     now = datetime.now(timezone.utc).isoformat()
-
-    metadata_cache = None
-    try:
-        from src.cache import get_metadata_cache
-        metadata_cache = get_metadata_cache()
-    except Exception:
-        pass
 
     for agent in agents:
         meta = AgentMetadata(
@@ -146,43 +145,46 @@ async def _load_metadata_from_postgres_async() -> dict:
         )
         result[agent.agent_id] = meta
 
-        if metadata_cache:
-            try:
-                await metadata_cache.set(agent.agent_id, meta.to_dict(), ttl=300)
-            except Exception as e:
-                logger.debug(f"Failed to cache metadata for {agent.agent_id[:8]}...: {e}")
+    agent_ids = list(result.keys())
 
-    # Hydrate agent profiles from stored identity metadata
+    # Single batch identity read shared by profile hydration + trust-tier
+    # resolution. Replaces two get_identities_batch calls and removes the
+    # per-agent provisional fetchrow that was the dominant cold-start cost.
+    identities: dict = {}
+    provisional_set: set = set()
     try:
-        from src.agent_profile import hydrate_profile
         from src.db import get_db
         db = get_db()
-        agent_ids = list(result.keys())
-        identities = await db.get_identities_batch(agent_ids)
-        if isinstance(identities, dict):
-            hydrated = 0
-            for aid, identity in identities.items():
-                if identity and identity.metadata and "profile" in identity.metadata:
-                    hydrate_profile(aid, identity.metadata["profile"])
-                    hydrated += 1
-            if hydrated:
-                logger.debug(f"Hydrated {hydrated} agent profiles from PostgreSQL")
-    except Exception as e:
-        logger.debug(f"Agent profile hydration skipped: {e}")
-
-    # Batch-load trust tiers (S6 Option B: substrate-earned routing)
-    try:
-        from src.identity.trust_tier_routing import resolve_trust_tier
-        from src.db import get_db
-        db = get_db()
-        agent_ids = list(result.keys())
-        identities = await db.get_identities_batch(agent_ids)
+        identities = await db.get_identities_batch(agent_ids) or {}
         if not isinstance(identities, dict):
             logger.debug(
-                "Batch trust tier load expected dict from get_identities_batch, got %s",
+                "get_identities_batch expected dict, got %s",
                 type(identities).__name__,
             )
             identities = {}
+        provisional_set = await db.get_provisional_lineage_set(agent_ids)
+    except Exception as e:
+        logger.debug(f"Identity batch read skipped: {e}")
+
+    # Profile hydration (sync in-memory writes once identities are fetched)
+    try:
+        from src.agent_profile import hydrate_profile
+        hydrated = 0
+        for aid, identity in identities.items():
+            if identity and identity.metadata and "profile" in identity.metadata:
+                hydrate_profile(aid, identity.metadata["profile"])
+                hydrated += 1
+        if hydrated:
+            logger.debug(f"Hydrated {hydrated} agent profiles from PostgreSQL")
+    except Exception as e:
+        logger.debug(f"Agent profile hydration skipped: {e}")
+
+    # Trust-tier resolution. With prefetched_provisional + prefetched_tags
+    # the resolve_trust_tier hot path is sync (compute_trust_tier or
+    # evaluate_substrate_earned), so the per-agent await yields one event
+    # loop tick each — no I/O blocking the cold-start.
+    try:
+        from src.identity.trust_tier_routing import resolve_trust_tier
         for aid, identity in identities.items():
             if identity and identity.metadata and "trajectory_current" in identity.metadata:
                 _meta = result.get(aid)
@@ -191,6 +193,7 @@ async def _load_metadata_from_postgres_async() -> dict:
                     identity.metadata,
                     prefetched_tags=getattr(_meta, "tags", None) if _meta else None,
                     prefetched_label=getattr(_meta, "label", None) if _meta else None,
+                    prefetched_provisional=(aid in provisional_set),
                 )
                 result[aid].trust_tier = tier_info.get("name", "unknown")
                 result[aid].trust_tier_num = tier_info.get("tier", 0)
@@ -198,6 +201,31 @@ async def _load_metadata_from_postgres_async() -> dict:
         logger.debug(f"Batch trust tier load skipped: {e}")
 
     return result
+
+
+async def _hydrate_metadata_cache_async(snapshot: dict) -> None:
+    """Fire-and-forget redis cache hydration after the in-memory dict is
+    populated. Sequential `await metadata_cache.set` for ~3000 agents was
+    the dominant cold-start cost; doing it after `_metadata_loaded=True`
+    means observe handlers don't block on it. Errors are swallowed —
+    redis is a cross-process optimization, not the source of truth.
+    """
+    try:
+        from src.cache import get_metadata_cache
+        metadata_cache = get_metadata_cache()
+    except Exception:
+        return
+    if metadata_cache is None:
+        return
+    set_count = 0
+    for agent_id, meta in snapshot.items():
+        try:
+            await metadata_cache.set(agent_id, meta.to_dict(), ttl=300)
+            set_count += 1
+        except Exception as e:
+            logger.debug(f"Failed to cache metadata for {agent_id[:8]}...: {e}")
+    if set_count:
+        logger.debug(f"Hydrated metadata cache for {set_count} agents (deferred)")
 
 
 def _parse_metadata_dict(data: dict) -> dict:
@@ -295,6 +323,14 @@ async def load_metadata_async(force: bool = False) -> None:
         _model._metadata_loaded = True
         _metadata_loaded_event.set()
         logger.debug(f"Loaded {len(agent_metadata)} agents from PostgreSQL (async)")
+        # Redis cache hydration is fire-and-forget — happens after the
+        # in-memory dict is ready and the loaded event is set, so cold-
+        # start observe calls don't block on it. Snapshot the dict so
+        # later mutations don't race the hydration loop.
+        try:
+            asyncio.create_task(_hydrate_metadata_cache_async(dict(result)))
+        except RuntimeError:
+            pass
     except Exception as e:
         logger.error(f"Could not load metadata from PostgreSQL: {e}", exc_info=True)
         _metadata_loaded_event.set()
