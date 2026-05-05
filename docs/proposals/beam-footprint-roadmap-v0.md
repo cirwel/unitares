@@ -65,9 +65,119 @@
 
 **Files / artifacts:**
 
-- This file: V0.3 RESOLUTION at top, v0.2 / v0.1 / v0 preserved below.
+- This file: V0.3 RESOLUTION at top, V0.3.1 AMENDMENT (council fold) immediately below, v0.2 / v0.1 / v0 preserved further down.
 - v0.3 amendment commits as part of the migration kickoff — NOT bundled with code; doc-first so future-me reads the rationale before any port code.
 - Wave 1 RFC follows in `docs/proposals/beam-wave-1-sentinel.md` (to be created when Wave 1 implementation starts).
+
+---
+
+## V0.3.1 AMENDMENT 2026-05-05 — council fold (architect / reviewer / live-verifier)
+
+**Read this with V0.3 RESOLUTION above.** Three council lanes ran in parallel after V0.3 was drafted, scoped adversarial-on-technical-detail (NOT on the migration decision, which v0.3 closed). Convergent finding across all three lanes: **V0.3's "Sentinel is read-mostly" framing is wrong**, and the doc had several other load-bearing gaps. v0.3.1 folds the council findings inline; v0.3's destination commitment is unchanged.
+
+### B1 (architect + reviewer + verifier — 3-lane convergence) — Sentinel is NOT read-mostly
+
+The "lowest blast radius" framing in V0.3 §Sequencing is technically correct *for the agent-state DB layer* but mis-stated as a general property. Sentinel actually owns:
+
+1. **File-backed cycle state** at `~/.unitares/anchors/.sentinel_state` via `agents/sentinel/agent.py:492-509, 695-699` (`load_state()` / `save_state()`). Carries the `forced_release_alarm.last_event_ts` cursor that fences alarm-replay.
+2. **Findings emit channel** via `post_finding(...)` for `sentinel_finding`, `sentinel_forced_release_alarm`, and `lease_plane_phase_b_transition` events (`agents/sentinel/agent.py:596, 681, 733`). Every active dashboard/Discord-bridge subscriber is downstream.
+3. **Python-runtime-specific anyio mitigations** (`agents/sentinel/agent.py:449-453`): `_poll_sync_forced_release` uses `asyncio.run()` inside a thread executor specifically to escape the anyio loop. Pattern does not exist in BEAM and needs a clean async polling replacement.
+4. **Lease-advisory scope** holding `resident:/sentinel_cycle` for 300s (`agents/sentinel/agent.py:549-554`) — mutation against the lease plane, the very surface BEAM owns.
+
+**Fold:** V0.3 §Sequencing Wave 1 framing now reads as **"Sentinel is read-mostly on the agent-state DB layer; owns atomic-write cycle state (`STATE_FILE`), findings-emit channel, lease-advisory scope, and Python-runtime-specific anyio mitigations. Lowest blast radius for agent-state DB; Wave 1 RFC must enumerate these four surfaces explicitly with cutover semantics."** Wave 1 RFC (to be drafted) is the work artifact for this; v0.3.1 names the requirement.
+
+### B2 (reviewer) — Three unnamed lock invariants Wave 3 must preserve
+
+`src/mcp_handlers/updates/phases.py` `execute_locked_update` enforces three invariants today that V0.3's "GenServer dissolves the lock structurally" claim does not name:
+
+1. **api_key PG/cache reconciliation** (`phases.py:659-716`) — atomic against concurrent `get_agent` reads under GenServer model.
+2. **thread_id / node_index monotonic advancement** (`phases.py:756-782`) — PG write must remain synchronous within message handler; fire-and-forget loses thread lineage on crash mid-sequence.
+3. **previous_void_active read-then-use-then-write capture** (`phases.py:734-741`) — must remain a single mailbox message, not split across two GenServer calls.
+
+**Fold:** Wave 3 RFC (when drafted) MUST include §"Lock-invariant inventory" enumerating these three plus any others it identifies, stating which become GenServer-internal synchronous message steps vs. which can be relaxed.
+
+### B3 (architect) — Missing §"State ownership and rollback during transition"
+
+V0.3 inherits A′'s Ports/HTTP boundary pattern from lease plane Phase A (#305) but does not specify, for any wave, who owns each piece of state during cutover. Lease plane sidestepped this because greenfield — no Python predecessor holding state. Every Wave 1+ surface has a Python predecessor.
+
+**Fold (added inline as new §"State ownership and rollback during transition" — implemented as part of this amendment):**
+
+For each migrating surface, the corresponding Wave RFC MUST cover:
+
+- **Single source of truth per state surface** during the transition window (Python-side, BEAM-side, or shadow-mode dual-write with one canonical reader).
+- **Cutover semantics** — direct flip / shadow-mode-then-flip / dual-write-then-converge. Default presumption: shadow mode for ≥1 cycle of meaningful traffic before flip.
+- **State format compatibility** — if BEAM writes the same on-disk file (`.sentinel_state`, `sentinel.json` session anchor), schema MUST be backwards-compatible with the Python reader OR a documented migration shim is provided. Default: BEAM does NOT modify the Python-readable format until Wave-N+1 explicitly changes the canonical reader.
+- **Rollback procedure** — named launchctl/systemd command sequence, state-file restoration step, and explicit acknowledgement of which side keeps writing during the rollback window.
+
+This subsection is now binding on every Wave RFC.
+
+### B4 (reviewer) — No Wave 1 rollback path
+
+Specific instance of B3. Wave 1 RFC for Sentinel-on-BEAM MUST include §"Rollback procedure" covering at minimum:
+
+- (a) `.sentinel_state` format versioning OR migration shim so Python `load_state()` (`agents/sentinel/agent.py:492`) can read what BEAM wrote without zeroing the alarm cursor.
+- (b) Explicit statement that the BEAM process will NOT modify `sentinel.json` session anchor format beyond what Python `GovernanceAgent` expects (interaction with `refuse_fresh_onboard=True` at `agents/sentinel/agent.py:476` — modifying it bricks Python rollback).
+- (c) Named command sequence (launchctl stop / unload / load Python plist) that restores prior state without corrupting the alarm cursor.
+
+### B5 (verifier REFUTED) — MCP SDK gate is OUT OF DATE
+
+V0.1 framed the MCP SDK gate as "no production Elixir MCP SDK exists." That premise is dead as of 2026-05-05. hex.pm now has at minimum:
+
+- `mcp_elixir_sdk` 1.0.1 — name match for "Elixir MCP SDK"
+- `hermes_mcp` 0.14.1 — 14 minor versions, active development
+- Plus: `ex_mcp` 0.9.1, `erlmcp` 0.3.1, `emcp` 0.3.4, `gen_mcp` 0.8.0, `elixir_mcp` 0.1.1, `elixir_mcp_server` 0.1.0
+
+**Fold:** §"MCP SDK gate (v0.1)" text below now reads "as of v0.1 there was no production Elixir MCP SDK; as of v0.3.1 (2026-05-05) `mcp_elixir_sdk` 1.0.1 and `hermes_mcp` 0.14.1 exist on hex.pm at non-trivial version numbers — operator should evaluate fitness before citing absence as a gate condition. The transport layer is no longer structurally pinned to Python by SDK absence." This MATERIALLY STRENGTHENS the migration case, not weakens it — the gate v0.1 named is no longer holding.
+
+### C1 (architect) — ODE profile timing
+
+V0.3 says ODE profile happens in parallel with Wave 1 implementation. Architect refines: the profile data must land before Wave 1's **exit criteria** are written, not before Wave 1 starts. Otherwise Wave 1's "BEAM dissolved the ceiling" claim cannot be distinguished from "Sentinel was cheap to port."
+
+**Fold:** Wave 1 exit-criteria authorship gates on ODE profile result. Wave 1 implementation can proceed in parallel; the exit-criteria document is what blocks.
+
+### C2 (architect) — Dialectic stateful/stateless split
+
+V0.3 lists dialectic resolution in the "stateful-coordinating, ports to BEAM" column (inherited from v0.1's cut). Architect: `src/dialectic_protocol.py:162` imports numpy. Dialectic is plausibly BOTH stateful-coordinating (resolution timing, participant lifecycle) AND stateless-computing (numerical synthesis math).
+
+**Fold:** Dialectic flagged as "TBD per Wave 3 RFC" rather than monolithically committed to BEAM. Wave 3 RFC must split it explicitly.
+
+### C3 (reviewer) — Lease plane Phase A is advisory-only; Wave 3 needs Phase B
+
+V0.3 says "Lease plane already proves the boundary." Reviewer correction: Phase A contract is advisory mode — failed acquire MUST NOT block the caller's normal operation. Pattern generalizes for Sentinel (Wave 1) cleanly but NOT for Wave 3 handler dispatch, which requires Python MCP to stop accepting writes for an agent while its BEAM GenServer is mid-update. That's Phase B enforcement. Phase B eligibility for `dialectic:/` opens 2026-05-16 per lease plane RFC; **no Phase B window is named for `resident:/` surfaces.**
+
+**Fold:** Wave 3 RFC MUST address opening a `resident:/` Phase B window OR specify a different enforcement-grade boundary mechanism. Wave 1 stays unaffected (Sentinel is fine on Phase A advisory).
+
+### C4 (reviewer) — Test strategy under migration
+
+V0.3 doesn't specify a minimum test bar before Wave 1 ships. 8329-test Python suite cannot cover BEAM-side code or the cross-runtime boundary.
+
+**Fold:** Wave 1 RFC MUST include §"Test strategy" with at minimum:
+
+- (a) ExUnit test driving fixture EISV event stream, asserting BEAM Sentinel emits correct `post_finding` shape
+- (b) Decision on whether the 8329 Python tests remain the acceptance gate for the Python side during migration
+- (c) Named integration test proving `resident:/sentinel_cycle` lease round-trip works end-to-end across runtimes
+
+### Stop sign #4 (architect) — boundary substrate-tax
+
+Added to V0.3 §Stop signs:
+
+> **4. Wave 0 instrumentation post-Wave-1 shows Ports/HTTP boundary accruing >1 distinct workaround pattern** → boundary design is wrong, halt before Wave 3. The four-anyio-mitigation argument that motivated v0.3 applies recursively to the boundary itself; if the migration replicates the substrate-tax shape one level out, the migration is not solving the problem.
+
+### What V0.3.1 changes vs V0.3
+
+- §Sequencing Wave 1: "read-mostly on agent-state DB" qualifier added, four state surfaces enumerated.
+- §Stop signs: #4 added.
+- §"State ownership and rollback during transition": new subsection (binding on all Wave RFCs).
+- §"MCP SDK gate (v0.1)": text updated with hex.pm reality (gate dissolved).
+- Wave 1 RFC requirements explicit: state-ownership matrix, rollback procedure, test strategy.
+- Wave 3 RFC requirements explicit: lock-invariant inventory, dialectic split, Phase B enforcement gate.
+
+### What V0.3.1 does NOT change
+
+- Migration commitment unchanged. Operator decision stands.
+- Wave sequencing unchanged (Wave 1 → Wave 2 → Wave 3).
+- A′ technical scope unchanged (stateful-coordinating to BEAM, stateless-computing stays Python).
+- ODE profile parallel-to-Wave-1 framing unchanged (only the exit-criteria authorship gates on it, per C1 fold).
 
 ---
 
