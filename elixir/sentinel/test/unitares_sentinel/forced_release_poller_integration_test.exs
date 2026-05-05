@@ -123,4 +123,45 @@ defmodule UnitaresSentinel.ForcedReleasePollerIntegrationTest do
     refute File.exists?(ctx.state_file <> ".beam"),
            "persist: false must not create the shadow file"
   end
+
+  # Council fold: reviewer Critical-1 (PR #376). persist_cursor was building
+  # from %{} on every tick, silently erasing the v0.1.2 §B3 runtime flag and
+  # any other sibling keys. This test pins the contract: an existing
+  # `runtime: "beam_canonical"` flag in the shadow file MUST survive a tick
+  # that persists a new cursor.
+  test "tick preserves existing runtime flag in shadow file", ctx do
+    shadow_path = ctx.state_file <> ".beam"
+
+    # Pre-stage the shadow file with the cutover flag and an old cursor.
+    File.write!(
+      shadow_path,
+      ~s({"runtime": "beam_canonical", "forced_release_alarm": {"last_event_ts": "2026-05-01T00:00:00.000000+00:00"}})
+    )
+
+    # Insert a new event so the tick has something to advance to.
+    surface_id = ctx.surface_prefix <> "/runtime_preserve"
+    {_event_id, event_ts} = H.insert_forced_event(surface_id)
+
+    prior = DateTime.add(event_ts, -1, :second)
+
+    _ =
+      ForcedReleasePoller.tick(
+        prior_cursor: prior,
+        db: UnitaresSentinel.DB,
+        persist: true,
+        state_path: shadow_path
+      )
+
+    # Re-read the shadow file directly (bypass max-on-boot canonical merge
+    # by using a non-existent canonical path).
+    raw = File.read!(shadow_path)
+    decoded = Jason.decode!(raw)
+
+    assert decoded["runtime"] == "beam_canonical",
+           "runtime flag must survive cycle-worker tick (was: #{inspect(decoded)})"
+
+    # Cursor still advanced.
+    assert get_in(decoded, ["forced_release_alarm", "last_event_ts"]) ==
+             DateTime.to_iso8601(event_ts)
+  end
 end
