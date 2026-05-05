@@ -36,6 +36,9 @@ Design notes:
       30s server-side ceiling and drops token counts; direct Ollama is the
       natural path for a local-LLM pattern scanner.
     - Env-configurable: WATCHER_MODEL, WATCHER_TIMEOUT, WATCHER_OLLAMA_URL.
+    - Findings-state mutations acquire the lease-plane surface for
+      data/watcher. Default is advisory; set WATCHER_FINDINGS_LEASE_MODE=enforce
+      to block on held_by_other / unavailable lease outcomes.
     - Findings are append-only; lifecycle (resolved/dismissed/aged-out) happens
       via the surface hook and explicit user action.
 """
@@ -50,6 +53,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from collections.abc import Callable
 from dataclasses import asdict, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -115,6 +119,12 @@ OLLAMA_URL = os.environ.get(
 )
 DEFAULT_MODEL = os.environ.get("WATCHER_MODEL", "qwen3-coder-next:latest")
 DEFAULT_TIMEOUT = int(os.environ.get("WATCHER_TIMEOUT", "90"))
+
+WATCHER_FINDINGS_LEASE_MODE_ENV = "WATCHER_FINDINGS_LEASE_MODE"
+WATCHER_FINDINGS_LEASE_TTL_ENV = "WATCHER_FINDINGS_LEASE_TTL_S"
+WATCHER_FINDINGS_LEASE_DEFAULT_TTL_S = 120
+WATCHER_FINDINGS_LEASE_BLOCK_RC = 3
+_LEASE_ACQUIRED_OUTCOMES = {"acquired_new", "acquired_idempotent"}
 
 # How many lines of context to include when no explicit region is given.
 # Qwen3-Coder-Next (the current default detector) has a 256K context window,
@@ -312,6 +322,174 @@ def _make_identity_client():
     """Create a SyncGovernanceClient for identity resolution."""
     from unitares_sdk import SyncGovernanceClient
     return SyncGovernanceClient(rest_url=GOV_REST_URL, transport="rest", timeout=30)
+
+
+# ---------------------------------------------------------------------------
+# Lease-plane guard for Watcher findings mutations
+# ---------------------------------------------------------------------------
+
+
+def _watcher_findings_surface_id() -> str:
+    """Canonical lease surface for the local Watcher state directory."""
+    return f"file://{STATE_DIR}"
+
+
+def _watcher_findings_lease_mode() -> str:
+    raw = os.environ.get(
+        WATCHER_FINDINGS_LEASE_MODE_ENV,
+        os.environ.get("WATCHER_LEASE_MODE", "advisory"),
+    )
+    mode = raw.strip().lower()
+    if mode in ("", "advisory", "advise", "phase_a", "phase-a"):
+        return "advisory"
+    if mode in ("enforce", "enforced", "required", "phase_b", "phase-b"):
+        return "enforce"
+    if mode in ("off", "disable", "disabled", "none"):
+        return "off"
+    log(
+        f"{WATCHER_FINDINGS_LEASE_MODE_ENV}: unknown mode {raw!r}; "
+        "falling back to advisory",
+        "warning",
+    )
+    return "advisory"
+
+
+def _watcher_findings_lease_ttl_s() -> int:
+    raw = os.environ.get(
+        WATCHER_FINDINGS_LEASE_TTL_ENV,
+        str(WATCHER_FINDINGS_LEASE_DEFAULT_TTL_S),
+    )
+    try:
+        ttl_s = int(raw)
+    except ValueError:
+        log(
+            f"{WATCHER_FINDINGS_LEASE_TTL_ENV}: invalid value {raw!r}; "
+            f"using {WATCHER_FINDINGS_LEASE_DEFAULT_TTL_S}s",
+            "warning",
+        )
+        return WATCHER_FINDINGS_LEASE_DEFAULT_TTL_S
+    if ttl_s <= 0 or ttl_s > 3600:
+        log(
+            f"{WATCHER_FINDINGS_LEASE_TTL_ENV}: out of range {ttl_s}; "
+            f"using {WATCHER_FINDINGS_LEASE_DEFAULT_TTL_S}s",
+            "warning",
+        )
+        return WATCHER_FINDINGS_LEASE_DEFAULT_TTL_S
+    return ttl_s
+
+
+def _watcher_findings_holder_uuid(agent_id: str | None):
+    """Use the operator/Watcher UUID when valid; otherwise mint a process UUID."""
+    from uuid import UUID
+
+    from src.lease_plane.advisory import new_holder_uuid
+
+    identity = get_watcher_identity() or {}
+    for candidate in (agent_id, identity.get("agent_uuid")):
+        if not candidate:
+            continue
+        try:
+            return UUID(candidate)
+        except ValueError:
+            log(f"watcher lease: invalid holder UUID {candidate!r}; ignoring", "warning")
+    return new_holder_uuid()
+
+
+def _run_with_watcher_findings_lease(
+    intent: str,
+    mutation: Callable[[], int],
+    *,
+    holder_agent_id: str | None = None,
+) -> int:
+    """Run a Watcher state mutation under the lease plane.
+
+    Default mode is Phase A advisory: the mutation still runs when the lease
+    plane is unavailable or contended. Setting WATCHER_FINDINGS_LEASE_MODE to
+    `enforce` promotes this one surface to Phase B-style caller enforcement.
+    """
+    mode = _watcher_findings_lease_mode()
+    if mode == "off":
+        return mutation()
+
+    from src.lease_plane import (
+        AcquireHeldByOther,
+        AcquireOk,
+        AcquirePermissionDenied,
+        AcquireRequest,
+        AcquireSchemaInvalid,
+        AcquireServiceUnavailable,
+    )
+    from src.lease_plane.advisory import make_advisory_client, release_advisory
+
+    client = make_advisory_client()
+    lease_id = None
+    surface_id = _watcher_findings_surface_id()
+    audit_session = (get_watcher_identity() or {}).get("client_session_id") or None
+
+    try:
+        result = client.acquire(
+            AcquireRequest(
+                surface_id=surface_id,
+                holder_agent_uuid=_watcher_findings_holder_uuid(holder_agent_id),
+                holder_class="process_instance",
+                holder_kind="remote_heartbeat",
+                ttl_s=_watcher_findings_lease_ttl_s(),
+                intent=intent,
+                audit_session=audit_session,
+            )
+        )
+    except Exception as exc:  # defensive; LeasePlaneClient should be no-raise
+        outcome = "client_error"
+        detail = f"client_error err={exc!r}"
+    else:
+        if isinstance(result, AcquireOk):
+            outcome = "acquired_idempotent" if result.idempotent else "acquired_new"
+            detail = f"{outcome} lease_id={result.lease.lease_id}"
+            lease_id = result.lease.lease_id
+        elif isinstance(result, AcquireHeldByOther):
+            outcome = "held_by_other"
+            detail = (
+                f"held_by_other held_by={result.held_by_uuid} "
+                f"blocking_lease={result.blocking_lease_id} "
+                f"expires_at={result.expires_at.isoformat()} "
+                f"retry_after_hint_ms={result.retry_after_hint_ms}"
+            )
+        elif isinstance(result, AcquirePermissionDenied):
+            outcome = "permission_denied"
+            detail = f"permission_denied reason={result.reason}"
+        elif isinstance(result, AcquireSchemaInvalid):
+            outcome = "schema_invalid"
+            detail = f"schema_invalid detail={result.detail}"
+        elif isinstance(result, AcquireServiceUnavailable):
+            outcome = "service_unavailable"
+            detail = "service_unavailable"
+        else:
+            outcome = "client_error"
+            detail = f"unrecognized_result result={result!r}"
+
+    if outcome == "held_by_other":
+        print(
+            f"warning: watcher findings lease {detail} for {surface_id}",
+            file=sys.stderr,
+        )
+    if mode == "enforce" and outcome not in _LEASE_ACQUIRED_OUTCOMES:
+        print(
+            f"error: watcher findings mutation blocked: {detail} "
+            f"surface={surface_id} intent={intent!r}",
+            file=sys.stderr,
+        )
+        log(
+            f"watcher findings mutation blocked by lease: {detail} "
+            f"surface={surface_id} intent={intent!r}",
+            "warning",
+        )
+        return WATCHER_FINDINGS_LEASE_BLOCK_RC
+
+    try:
+        return mutation()
+    finally:
+        if lease_id is not None:
+            release_advisory(client, lease_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1833,7 +2011,7 @@ def list_findings(only_open: bool = False) -> int:
     return 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="UNITARES Watcher bug-pattern agent")
     parser.add_argument("--file", help="file to scan")
     parser.add_argument("--region", help="line range within file, e.g. L10-L40")
@@ -1923,7 +2101,7 @@ def main() -> int:
         default="30 days ago",
         help='git --since=<value> for --scan-commits (default: "30 days ago")',
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # --- Identity resolution (best-effort) ---
     try:
@@ -1937,21 +2115,47 @@ def main() -> int:
     if args.list_findings:
         return list_findings(only_open=args.only_open)
     if args.resolve:
-        return update_finding_status(
-            args.resolve, "confirmed", resolver_agent_id=args.agent_id, reason=args.reason
+        return _run_with_watcher_findings_lease(
+            f"resolve {args.resolve}",
+            lambda: update_finding_status(
+                args.resolve,
+                "confirmed",
+                resolver_agent_id=args.agent_id,
+                reason=args.reason,
+            ),
+            holder_agent_id=args.agent_id,
         )
     if args.dismiss:
-        return update_finding_status(
-            args.dismiss, "dismissed", resolver_agent_id=args.agent_id, reason=args.reason
+        return _run_with_watcher_findings_lease(
+            f"dismiss {args.dismiss}",
+            lambda: update_finding_status(
+                args.dismiss,
+                "dismissed",
+                resolver_agent_id=args.agent_id,
+                reason=args.reason,
+            ),
+            holder_agent_id=args.agent_id,
         )
     if args.sweep_stale:
-        return sweep_stale_findings()
+        return _run_with_watcher_findings_lease(
+            "sweep stale findings",
+            sweep_stale_findings,
+            holder_agent_id=args.agent_id,
+        )
     if args.compact:
-        return compact_findings(max_age_days=args.compact_days)
+        return _run_with_watcher_findings_lease(
+            f"compact findings older than {args.compact_days}d",
+            lambda: compact_findings(max_age_days=args.compact_days),
+            holder_agent_id=args.agent_id,
+        )
     if args.print_unresolved:
         return print_unresolved()
     if args.surface_pending:
-        return surface_pending()
+        return _run_with_watcher_findings_lease(
+            "surface pending findings",
+            surface_pending,
+            holder_agent_id=args.agent_id,
+        )
     if args.scan_commits:
         return 0 if scan_commits(since=args.scan_since) >= 0 else 1
     if args.recompute_floor:
