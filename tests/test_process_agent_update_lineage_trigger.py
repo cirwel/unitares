@@ -219,3 +219,62 @@ async def test_r2_post_update_increment_failure_still_dispatches():
     assert any(
         n and n.startswith("r2_lineage_eval_") for n in dispatched
     ), f"expected r2_lineage_eval_* dispatch, got {dispatched!r}"
+
+
+@pytest.mark.asyncio
+async def test_r2_post_update_orphan_meta_skips_db_read():
+    """Fast-path: ctx.meta.parent_agent_id is None → skip DB roundtrip entirely."""
+    from src.mcp_handlers.updates.phases import _r2_post_update_hook
+    from types import SimpleNamespace
+
+    ctx = SimpleNamespace()
+    ctx.agent_id = "agent-orphan-12345"
+    ctx.meta = SimpleNamespace(parent_agent_id=None)
+
+    backend_mock = MagicMock()
+    backend_mock.read_lineage_state = AsyncMock(return_value=None)
+
+    with patch("src.db.get_db", return_value=backend_mock):
+        await _r2_post_update_hook(ctx)
+
+    # DB read NOT called — fast-path skipped it
+    backend_mock.read_lineage_state.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_r2_post_update_no_meta_attr_skips_db_read():
+    """Defensive: ctx without meta attribute → skip cleanly (no AttributeError)."""
+    from src.mcp_handlers.updates.phases import _r2_post_update_hook
+    from types import SimpleNamespace
+
+    ctx = SimpleNamespace()
+    ctx.agent_id = "agent-no-meta-12345"
+    # ctx.meta intentionally not set
+
+    backend_mock = MagicMock()
+    backend_mock.read_lineage_state = AsyncMock()
+
+    with patch("src.db.get_db", return_value=backend_mock):
+        await _r2_post_update_hook(ctx)
+
+    backend_mock.read_lineage_state.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_r2_post_update_meta_with_parent_falls_through_to_db_read():
+    """Cache says lineage exists → still do DB roundtrip for source of truth."""
+    from src.mcp_handlers.updates.phases import _r2_post_update_hook
+    from types import SimpleNamespace
+
+    ctx = SimpleNamespace()
+    ctx.agent_id = "agent-with-parent-12345"
+    ctx.meta = SimpleNamespace(parent_agent_id="parent-x")
+
+    backend_mock = MagicMock()
+    # DB says no lineage (cache stale) — hook should handle gracefully
+    backend_mock.read_lineage_state = AsyncMock(return_value=None)
+
+    with patch("src.db.get_db", return_value=backend_mock):
+        await _r2_post_update_hook(ctx)
+
+    backend_mock.read_lineage_state.assert_awaited_once_with("agent-with-parent-12345")

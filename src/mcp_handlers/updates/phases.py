@@ -863,6 +863,14 @@ async def _r2_post_update_hook(ctx: UpdateContext) -> None:
     ``process_agent_update`` response.
     """
     agent_id = ctx.agent_id
+    # Fast-path: most agents are orphan. Skip the DB roundtrip if the
+    # in-memory metadata has no parent_agent_id. The cache is set at
+    # onboard (PR 3 wiring) and reliably populated for declared-lineage
+    # agents in this process. The DB read remains the source of truth
+    # but we avoid hitting it for the orphan-majority case.
+    meta = getattr(ctx, "meta", None)
+    if not (meta is not None and getattr(meta, "parent_agent_id", None)):
+        return
     try:
         from src.db import get_db
         backend = get_db()
@@ -879,6 +887,9 @@ async def _r2_post_update_hook(ctx: UpdateContext) -> None:
             try:
                 await backend.increment_chain_obs_count(agent_id)
             except Exception as e:
+                # Counter miscount is recoverable — sweeper will reconcile
+                # chain_obs_count on the next scheduled eval (≤6h). Keep at
+                # debug to avoid log noise on transient UPDATE failures.
                 logger.debug(
                     f"[R2] increment_chain_obs_count failed for "
                     f"{agent_id[:8]}...: {e}"
@@ -892,13 +903,19 @@ async def _r2_post_update_hook(ctx: UpdateContext) -> None:
                 name=f"r2_lineage_eval_{agent_id[:8]}",
             )
         except Exception as e:
-            logger.debug(
+            # Dispatch failure means R2 governance is silently degraded for
+            # this agent — FSM never runs for this check-in, lineage state
+            # stays stale until the sweeper picks it up (up to 6h later).
+            # Worth operator attention.
+            logger.warning(
                 f"[R2] lineage eval dispatch failed for "
                 f"{agent_id[:8]}...: {e}"
             )
     except Exception as e:
-        logger.debug(
-            f"[R2] post-update lineage hook skipped for "
+        # Outer read failure means DB issue or schema drift — both warrant
+        # operator attention, not silent debug.
+        logger.warning(
+            f"[R2] post-update lineage hook failed for "
             f"{agent_id[:8]}...: {e}"
         )
 
