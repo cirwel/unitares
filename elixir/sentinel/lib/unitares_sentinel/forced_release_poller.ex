@@ -93,17 +93,81 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
     prior_cursor = Keyword.get(opts, :prior_cursor)
     persist? = Keyword.get(opts, :persist, false)
 
-    rows = query_forced_rows(db, prior_cursor)
-    {alarms, new_cursor} = Logic.build_alarms(rows, prior_cursor)
+    case query_ad_hoc_rows_in_transaction(db, prior_cursor) do
+      {:ok, rows} ->
+        {alarms, new_cursor} = Logic.build_alarms(rows, prior_cursor)
 
-    if persist? and new_cursor != nil do
-      persist_cursor(new_cursor, opts)
+        # Persist only on actual advance (not every nil-cursor tick), to avoid
+        # needless file writes that would also bump the file's mtime and
+        # confuse `mix sentinel.cursor_diff` operators tracking activity.
+        # Use DateTime.compare/2 (not `!=`) because two DateTime structs with
+        # the same instant but different `:microsecond` precision tuples
+        # would compare unequal by struct identity. Architect #3 in PR #378
+        # council fold.
+        if persist? and new_cursor != nil and not same_cursor?(new_cursor, prior_cursor) do
+          persist_cursor(new_cursor, opts)
+        end
+
+        {alarms, new_cursor}
+
+      {:error, reason} ->
+        # v0.1.3 §B6 all-or-nothing cursor advance — covers the `{:error, _}`
+        # return class (real DB errors: connection drop mid-transaction,
+        # constraint violation, server-side rollback, query-level error).
+        # The cursor MUST NOT advance and the persist MUST NOT happen.
+        # Returning `{[], prior_cursor}` preserves both invariants.
+        #
+        # The other failure class is process exit (e.g. `:noproc` if the
+        # registered Postgrex name doesn't exist). That bypasses this match
+        # arm entirely — the GenServer dies, the supervisor restarts it,
+        # `init/1` re-reads the cursor from disk, and the on-disk cursor
+        # was never advanced (because no successful tick wrote it). Both
+        # paths preserve the §B6 invariant; only this path returns cleanly.
+        # Mirrors Python's caught-exception early return at agent.py:671-673
+        # where save_state is never reached on poll failure.
+        Logger.warning(
+          "ForcedReleasePoller.tick: transaction failed — #{inspect(reason)} — cursor unchanged"
+        )
+
+        {[], prior_cursor}
     end
-
-    {alarms, new_cursor}
   end
 
-  defp query_forced_rows(db, prior_cursor) do
+  defp same_cursor?(nil, nil), do: true
+  defp same_cursor?(nil, _), do: false
+  defp same_cursor?(_, nil), do: false
+
+  defp same_cursor?(%DateTime{} = a, %DateTime{} = b),
+    do: DateTime.compare(a, b) == :eq
+
+  # v0.1.3 §B5 single-Postgrex-connection-per-tick binding. The transaction
+  # wrapper checks out one connection from the pool and runs all queries
+  # against it. With one query (this PR), the snapshot consistency is
+  # trivial; it matters when the next PR adds the deprecation_batch and
+  # conflict_batch queries — they MUST share one snapshot to avoid the
+  # multi-connection lost-event class (architect #2 in the v0.1.3 council).
+  #
+  # File I/O (CycleState.save) MUST happen OUTSIDE this function so the
+  # connection is returned to the pool before the file write. Holding a
+  # DB connection across file I/O is the BEAM-side analogue of the
+  # anyio-asyncio coupling pattern documented in CLAUDE.md.
+  #
+  # NAMING — `_ad_hoc_` in the function name is deliberate: this function
+  # only runs the ad_hoc class query. The next PR REPLACES it with
+  # `query_all_rows_in_transaction/2` returning a tagged map (per-class
+  # row lists). Naming this scope-explicit signals to the next-PR diff
+  # reviewer that the rename is intentional, not a refactor accident.
+  # Architect lead finding in the PR #378 council fold.
+  defp query_ad_hoc_rows_in_transaction(db, prior_cursor) do
+    Postgrex.transaction(db, fn conn ->
+      case query_forced_rows(conn, prior_cursor) do
+        {:ok, rows} -> rows
+        {:error, e} -> Postgrex.rollback(conn, e)
+      end
+    end)
+  end
+
+  defp query_forced_rows(conn, prior_cursor) do
     sql = """
     SELECT event_id::text AS event_id,
            ts,
@@ -116,16 +180,9 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
     ORDER BY ts
     """
 
-    case Postgrex.query(db, sql, [prior_cursor]) do
-      {:ok, %{rows: rows, columns: cols}} ->
-        Enum.map(rows, &row_to_map(cols, &1))
-
-      {:error, e} ->
-        Logger.warning(
-          "ForcedReleasePoller.query_forced_rows: #{inspect(e)} — returning empty rows"
-        )
-
-        []
+    case Postgrex.query(conn, sql, [prior_cursor]) do
+      {:ok, %{rows: rows, columns: cols}} -> {:ok, Enum.map(rows, &row_to_map(cols, &1))}
+      {:error, _} = err -> err
     end
   end
 
@@ -141,6 +198,15 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
     # the v0.1.2 §B3 `runtime: "beam_canonical"` cutover flag. Load the
     # existing state first, then update only the cursor, preserving every
     # other key.
+    #
+    # OPT-KEY ASYMMETRY (load=:shadow, save=:path) is intentional:
+    # `CycleState.load/1` reads BOTH the canonical (Python) file and the
+    # shadow (BEAM) file for max-on-boot semantics — `:shadow` overrides
+    # the BEAM-side path while canonical resolves from config.
+    # `CycleState.save/2` writes ONE file — `:path` is that target. The
+    # asymmetry follows the "load is two-file, save is one-file" semantic
+    # split in CycleState; harmonizing the keys would force one side or
+    # the other to lie about its file-count semantics.
     save_opts =
       case Keyword.get(opts, :state_path) do
         nil -> []
@@ -185,7 +251,14 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
       db: db,
       cursor: cursor,
       interval_ms: interval_ms,
-      jitter_ms: jitter_ms
+      jitter_ms: jitter_ms,
+      # v0.1.3 §C2 tick-skip guard. Under self-scheduling (next :tick is
+      # only enqueued AFTER the current tick returns), this flag will never
+      # actually be true at message-arrival time — BEAM serializes handle_*
+      # callbacks per process. The guard exists to defend against external
+      # `send(pid, :tick)` from tests or operator scripts that bypass the
+      # scheduler discipline. Option 1 of the v0.1.3 §C2 binding.
+      running?: false
     }
 
     Process.send_after(self(), :tick, initial_delay_ms + sample_jitter(jitter_ms))
@@ -193,7 +266,21 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
   end
 
   @impl true
+  def handle_info(:tick, %{running?: true} = state) do
+    # v0.1.3 §C2 guard fires: a :tick message arrived while the previous
+    # tick body was still executing. Under serialized handle_info this is
+    # only reachable when an external sender bypasses the scheduler.
+    Logger.warning(
+      "ForcedReleasePoller: skipping :tick — previous tick still in flight (mailbox guard)"
+    )
+
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info(:tick, state) do
+    state = %{state | running?: true}
+
     # Council fold: architect #2 (PR #376). Re-read the file cursor each tick
     # and use max(in-memory, file). Defends against an operator (or a future
     # cursor_repair task) writing the shadow file between ticks; without this,
@@ -208,7 +295,7 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
     # simultaneous boots (architect #5).
     Process.send_after(self(), :tick, state.interval_ms + sample_jitter(state.jitter_ms))
 
-    {:noreply, %{state | cursor: new_cursor}}
+    {:noreply, %{state | running?: false, cursor: new_cursor}}
   end
 
   # Symmetric ±jitter_ms uniform sample. Non-negative result clamp avoids
