@@ -161,6 +161,65 @@ def _compute_staleness_warning(discovery, current_server_version: str) -> Option
     return None
 
 
+async def _build_s7_provenance_chain_with_fallback(
+    agent_id: str,
+    meta: Optional[Any],
+    lineage_fn,
+) -> Optional[list[dict[str, Any]]]:
+    """Build S7 provenance chain from DB, falling back to metadata on errors."""
+    try:
+        from src.identity.provenance_chain import build_lineage_provenance_chain
+
+        chain = await build_lineage_provenance_chain(agent_id)
+        return chain or None
+    except Exception as lineage_error:
+        logger.debug(
+            "Could not capture authoritative provenance chain: %s",
+            lineage_error,
+        )
+
+    try:
+        parent_agent_id = getattr(meta, "parent_agent_id", None) if meta else None
+        if not parent_agent_id:
+            return None
+
+        lineage = lineage_fn(agent_id)  # [oldest_ancestor, ..., parent, self]
+        if len(lineage) <= 1:
+            return None
+        provenance_chain = []
+        for ancestor_id in lineage[:-1]:
+            ancestor_meta = mcp_server.agent_metadata.get(ancestor_id)
+            if ancestor_meta:
+                provenance_chain.append(
+                    {
+                        "agent_id": ancestor_id,
+                        "relationship": "ancestor",
+                        "spawn_reason": ancestor_meta.spawn_reason,
+                        "created_at": ancestor_meta.created_at,
+                        "lineage_depth": len(provenance_chain),
+                        "source": "agent_metadata_fallback",
+                    }
+                )
+
+        if parent_agent_id:
+            parent_meta = mcp_server.agent_metadata.get(parent_agent_id)
+            if parent_meta:
+                provenance_chain.append(
+                    {
+                        "agent_id": parent_agent_id,
+                        "relationship": "direct_parent",
+                        "spawn_reason": getattr(meta, "spawn_reason", None),
+                        "created_at": parent_meta.created_at,
+                        "lineage_depth": len(provenance_chain),
+                        "source": "agent_metadata_fallback",
+                    }
+                )
+        return provenance_chain or None
+    except Exception as fallback_error:
+        logger.debug("Could not capture fallback provenance chain: %s", fallback_error)
+        return None
+
+
 async def _discovery_not_found(discovery_id: str, graph) -> TextContent:
     """Build a 'not found' error with prefix-match suggestions.
 
@@ -501,6 +560,7 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
         try:
             from ..identity.shared import _get_lineage  # Import lineage function
 
+            meta = None
             if agent_id in mcp_server.agent_metadata:
                 meta = mcp_server.agent_metadata[agent_id]
 
@@ -551,38 +611,11 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
                 if writer_session:
                     provenance["writer_session_id_at_write"] = writer_session
 
-                # CAPTURE PROVENANCE CHAIN: Full lineage context
-                try:
-                    lineage = _get_lineage(agent_id)  # [oldest_ancestor, ..., parent, self]
-                    if len(lineage) > 1:  # Has ancestors
-                        provenance_chain = []
-                        for ancestor_id in lineage[:-1]:  # Exclude self
-                            ancestor_meta = mcp_server.agent_metadata.get(ancestor_id)
-                            if ancestor_meta:
-                                chain_entry = {
-                                    "agent_id": ancestor_id,
-                                    "relationship": "ancestor",
-                                    "spawn_reason": ancestor_meta.spawn_reason,
-                                    "created_at": ancestor_meta.created_at,
-                                    "lineage_depth": len(provenance_chain)  # Distance from root
-                                }
-                                provenance_chain.append(chain_entry)
-
-                        # Add immediate parent context
-                        if meta.parent_agent_id:
-                            parent_meta = mcp_server.agent_metadata.get(meta.parent_agent_id)
-                            if parent_meta:
-                                parent_entry = {
-                                    "agent_id": meta.parent_agent_id,
-                                    "relationship": "direct_parent",
-                                    "spawn_reason": meta.spawn_reason,
-                                    "created_at": parent_meta.created_at,
-                                    "lineage_depth": len(provenance_chain)
-                                }
-                                provenance_chain.append(parent_entry)
-                except Exception as lineage_error:
-                    logger.debug(f"Could not capture provenance chain: {lineage_error}")
-                    # Non-critical - continue without chain
+            provenance_chain = await _build_s7_provenance_chain_with_fallback(
+                agent_id,
+                meta,
+                _get_lineage,
+            )
         except Exception as e:
             logger.debug(f"Could not capture provenance: {e}")  # Non-critical
 

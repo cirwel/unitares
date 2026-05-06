@@ -614,14 +614,27 @@ class TestStoreKnowledgeGraphAdditional:
         parent_meta.created_at = "2026-01-01T00:00:00"
         mock_mcp_server.agent_metadata["parent-id"] = parent_meta
 
-        # Set current agent's parent
+        # The authoritative DB snapshot should be attempted even when
+        # in-memory metadata has not been hydrated with parentage.
         current_meta = mock_mcp_server.agent_metadata[registered_agent]
-        current_meta.parent_agent_id = "parent-id"
+        current_meta.parent_agent_id = None
 
         from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
 
-        with patch("src.mcp_handlers.identity.shared._get_lineage",
-                    return_value=["parent-id", registered_agent]):
+        authoritative_chain = [{
+            "schema": "s7.lineage_link.v1",
+            "source": "core.identities",
+            "parent_agent_id": "parent-id",
+            "successor_agent_id": registered_agent,
+            "relationship": "lineage_parent",
+            "lineage_state": "confirmed",
+            "provisional_lineage": False,
+            "aggregation_eligible_at_write": True,
+        }]
+        with patch(
+            "src.identity.provenance_chain.build_lineage_provenance_chain",
+            AsyncMock(return_value=authoritative_chain),
+        ):
             result = await handle_store_knowledge_graph({
                 "agent_id": registered_agent,
                 "summary": "Lineage test",
@@ -630,10 +643,40 @@ class TestStoreKnowledgeGraphAdditional:
             data = parse_result(result)
             assert data["success"] is True
             discovery = mock_graph.add_discovery.await_args.args[0]
-            assert discovery.provenance_chain is not None
-            assert discovery.provenance_chain[0]["agent_id"] == "parent-id"
-            assert discovery.provenance_chain[0]["relationship"] == "ancestor"
-            assert discovery.provenance_chain[-1]["relationship"] == "direct_parent"
+            assert discovery.provenance_chain == authoritative_chain
+
+    @pytest.mark.asyncio
+    async def test_store_provenance_chain_falls_back_when_db_snapshot_fails(
+        self, patch_common, registered_agent
+    ):
+        mock_mcp_server, mock_graph = patch_common
+        parent_meta = MagicMock()
+        parent_meta.spawn_reason = "split"
+        parent_meta.created_at = "2026-01-01T00:00:00"
+        mock_mcp_server.agent_metadata["parent-id"] = parent_meta
+        current_meta = mock_mcp_server.agent_metadata[registered_agent]
+        current_meta.parent_agent_id = "parent-id"
+        current_meta.spawn_reason = "new_session"
+
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        with patch(
+            "src.identity.provenance_chain.build_lineage_provenance_chain",
+            AsyncMock(side_effect=RuntimeError("db unavailable")),
+        ), patch(
+            "src.mcp_handlers.identity.shared._get_lineage",
+            return_value=["parent-id", registered_agent],
+        ):
+            result = await handle_store_knowledge_graph({
+                "agent_id": registered_agent,
+                "summary": "Lineage fallback test",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        discovery = mock_graph.add_discovery.await_args.args[0]
+        assert discovery.provenance_chain[-1]["relationship"] == "direct_parent"
+        assert discovery.provenance_chain[-1]["source"] == "agent_metadata_fallback"
 
 
 # ============================================================================
