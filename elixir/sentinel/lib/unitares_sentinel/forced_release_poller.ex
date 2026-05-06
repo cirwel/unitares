@@ -93,9 +93,10 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
     prior_cursor = Keyword.get(opts, :prior_cursor)
     persist? = Keyword.get(opts, :persist, false)
 
-    case query_ad_hoc_rows_in_transaction(db, prior_cursor) do
-      {:ok, rows} ->
-        {alarms, new_cursor} = Logic.build_alarms(rows, prior_cursor)
+    case query_all_rows_in_transaction(db, prior_cursor) do
+      {:ok, %{ad_hoc: ad_hoc, deprecation: dep, conflict: conf}} ->
+        {alarms, new_cursor} =
+          Logic.build_all_alarms(ad_hoc, dep, conf, prior_cursor)
 
         # Persist only on actual advance (not every nil-cursor tick), to avoid
         # needless file writes that would also bump the file's mtime and
@@ -152,16 +153,17 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
   # DB connection across file I/O is the BEAM-side analogue of the
   # anyio-asyncio coupling pattern documented in CLAUDE.md.
   #
-  # NAMING — `_ad_hoc_` in the function name is deliberate: this function
-  # only runs the ad_hoc class query. The next PR REPLACES it with
-  # `query_all_rows_in_transaction/2` returning a tagged map (per-class
-  # row lists). Naming this scope-explicit signals to the next-PR diff
-  # reviewer that the rename is intentional, not a refactor accident.
-  # Architect lead finding in the PR #378 council fold.
-  defp query_ad_hoc_rows_in_transaction(db, prior_cursor) do
+  # v0.1.3 §B5 single-Postgrex-connection-per-tick: all three queries
+  # share one snapshot. If ANY query returns {:error, _}, Postgrex.rollback
+  # is called → outer transaction returns {:error, _} → §B6 all-or-nothing
+  # cursor advance kicks in (no partial advance possible).
+  defp query_all_rows_in_transaction(db, prior_cursor) do
     Postgrex.transaction(db, fn conn ->
-      case query_forced_rows(conn, prior_cursor) do
-        {:ok, rows} -> rows
+      with {:ok, ad_hoc} <- query_forced_rows(conn, prior_cursor),
+           {:ok, dep} <- query_deprecation_batch_rows(conn, prior_cursor),
+           {:ok, conf} <- query_conflict_batch_rows(conn, prior_cursor) do
+        %{ad_hoc: ad_hoc, deprecation: dep, conflict: conf}
+      else
         {:error, e} -> Postgrex.rollback(conn, e)
       end
     end)
@@ -185,6 +187,69 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
       {:error, _} = err -> err
     end
   end
+
+  # v0.1.3 §B2 asymmetry: filter on `ds.sweep_completed_at`, NOT `e.ts`.
+  # Cursor still advances on max(e.last_ts) via Logic.build_deprecation_batch_alarms.
+  # Mirrors agents/sentinel/forced_release_alarm.py:113-134.
+  defp query_deprecation_batch_rows(conn, prior_cursor) do
+    sql = """
+    SELECT
+      ds.deprecation_id::text AS deprecation_id,
+      ds.surface_kind,
+      ds.sweep_completed_at,
+      count(e.event_id) AS event_count,
+      min(e.ts) AS first_ts,
+      max(e.ts) AS last_ts
+    FROM lease_plane.lease_plane_events e
+    JOIN lease_plane.deprecated_schemes ds
+      ON ds.deprecation_id::text = e.payload->>'deprecation_id'
+    WHERE e.event_type = 'lease.deprecation_swept'
+      AND ds.sweep_completed_at IS NOT NULL
+      AND ($1::timestamptz IS NULL OR ds.sweep_completed_at > $1)
+    GROUP BY ds.deprecation_id, ds.surface_kind, ds.sweep_completed_at
+    """
+
+    case Postgrex.query(conn, sql, [prior_cursor]) do
+      {:ok, %{rows: rows, columns: cols}} ->
+        {:ok, Enum.map(rows, &row_to_map(cols, &1)) |> Enum.map(&coerce_event_count/1)}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # GROUP BY surface_id within this poll cycle. Mirrors
+  # agents/sentinel/forced_release_alarm.py:148-167.
+  defp query_conflict_batch_rows(conn, prior_cursor) do
+    sql = """
+    SELECT
+      surface_id,
+      surface_kind,
+      count(event_id) AS event_count,
+      min(ts) AS first_ts,
+      max(ts) AS last_ts
+    FROM lease_plane.lease_plane_events
+    WHERE event_type = 'conflict_held_by_other'
+      AND ($1::timestamptz IS NULL OR ts > $1)
+    GROUP BY surface_id, surface_kind
+    """
+
+    case Postgrex.query(conn, sql, [prior_cursor]) do
+      {:ok, %{rows: rows, columns: cols}} ->
+        {:ok, Enum.map(rows, &row_to_map(cols, &1)) |> Enum.map(&coerce_event_count/1)}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # Postgrex returns count() as Decimal — coerce to integer for shape parity
+  # with Python's asyncpg int return.
+  defp coerce_event_count(%{event_count: %Decimal{} = d} = row) do
+    %{row | event_count: Decimal.to_integer(d)}
+  end
+
+  defp coerce_event_count(row), do: row
 
   defp row_to_map(columns, row) do
     columns
