@@ -7,11 +7,13 @@ only and does not affect R2 lineage promotion or demotion.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 from uuid import uuid4
 
+from src.db import get_db
 from src.knowledge_graph import get_knowledge_graph
 
 
@@ -42,6 +44,7 @@ KNOWN_RESPONSE_TYPES = (
     | NON_INTEGRATING_RESPONSE_TYPES
 )
 EXCLUDED_MEMORY_STATUSES = frozenset({"archived", "cold"})
+LINEAGE_PAIR_STATES = frozenset({"provisional", "confirmed", "all"})
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,26 @@ class MemoryIntegrationScore:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class MemoryIntegrationLineagePair:
+    successor_id: str
+    parent_id: str
+    lineage_state: Literal["provisional", "confirmed"]
+    lineage_declared_at: Optional[Any] = None
+    confirmed_at: Optional[Any] = None
+    chain_obs_count: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "successor_id": self.successor_id,
+            "parent_id": self.parent_id,
+            "lineage_state": self.lineage_state,
+            "lineage_declared_at": _serialize_value(self.lineage_declared_at),
+            "confirmed_at": _serialize_value(self.confirmed_at),
+            "chain_obs_count": self.chain_obs_count,
+        }
 
 
 async def score_memory_integration(
@@ -225,6 +248,110 @@ async def score_memory_integration(
     )
 
 
+async def select_memory_integration_lineage_pairs(
+    *,
+    lineage_state: str = "provisional",
+    limit: int = 25,
+    db: Optional[Any] = None,
+) -> list[MemoryIntegrationLineagePair]:
+    """Select lineage pairs for read-only R5 shadow sampling."""
+    if lineage_state not in LINEAGE_PAIR_STATES:
+        raise ValueError(
+            "lineage_state must be one of "
+            + ", ".join(sorted(LINEAGE_PAIR_STATES))
+        )
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+
+    backend = db or get_db()
+    async with backend.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT agent_id AS successor_id,
+                   parent_agent_id AS parent_id,
+                   CASE
+                     WHEN provisional_lineage = TRUE THEN 'provisional'
+                     ELSE 'confirmed'
+                   END AS lineage_state,
+                   lineage_declared_at,
+                   confirmed_at,
+                   chain_obs_count
+              FROM core.identities
+             WHERE parent_agent_id IS NOT NULL
+               AND lineage_archived_at IS NULL
+               AND lineage_demoted_at IS NULL
+               AND (
+                    $1 = 'all'
+                 OR ($1 = 'provisional' AND provisional_lineage = TRUE)
+                 OR ($1 = 'confirmed'
+                     AND provisional_lineage = FALSE
+                     AND confirmed_at IS NOT NULL)
+               )
+             ORDER BY
+               CASE WHEN provisional_lineage = TRUE THEN 0 ELSE 1 END,
+               lineage_last_eval_at NULLS FIRST,
+               lineage_declared_at NULLS FIRST,
+               confirmed_at NULLS LAST,
+               agent_id
+             LIMIT $2
+            """,
+            lineage_state,
+            int(limit),
+        )
+
+    return [_row_to_lineage_pair(row) for row in rows]
+
+
+async def score_memory_integration_batch(
+    *,
+    lineage_state: str = "provisional",
+    limit: int = 25,
+    db: Optional[Any] = None,
+    graph: Optional[Any] = None,
+    **score_kwargs: Any,
+) -> dict[str, Any]:
+    """Run R5 shadow scoring over selected lineage pairs.
+
+    Read-only: pair selection reads core.identities and scoring reads KG rows.
+    No audit/KG/R2 state is written.
+    """
+    pairs = await select_memory_integration_lineage_pairs(
+        lineage_state=lineage_state,
+        limit=limit,
+        db=db,
+    )
+    verdict_counts: dict[str, int] = {}
+    items: list[dict[str, Any]] = []
+
+    for pair in pairs:
+        score = await score_memory_integration(
+            pair.parent_id,
+            pair.successor_id,
+            graph=graph,
+            **score_kwargs,
+        )
+        verdict_counts[score.verdict] = verdict_counts.get(score.verdict, 0) + 1
+        items.append(
+            {
+                "pair": pair.to_dict(),
+                "score": score.to_dict(),
+            }
+        )
+
+    return {
+        "lineage_state": lineage_state,
+        "limit": limit,
+        "pair_count": len(pairs),
+        "verdict_counts": verdict_counts,
+        "items": items,
+        "note": (
+            "R5 shadow batch is read-only: it selects lineage pairs from "
+            "core.identities and scores existing KG response_to links. It "
+            "does not write audit rows, KG rows, or R2 lineage state."
+        ),
+    }
+
+
 async def _load_agent_discoveries(
     graph: Any,
     agent_id: str,
@@ -287,13 +414,37 @@ def _response_type(row: Any) -> Optional[str]:
 
 
 def _get_field(row: Any, name: str) -> Any:
-    if isinstance(row, dict):
+    if isinstance(row, Mapping):
         return row.get(name)
+    try:
+        return row[name]
+    except (KeyError, TypeError, IndexError):
+        pass
     return getattr(row, name, None)
 
 
 def _dedupe(values: list[str]) -> list[str]:
     return list(dict.fromkeys(values))
+
+
+def _row_to_lineage_pair(row: Any) -> MemoryIntegrationLineagePair:
+    lineage_state = str(_get_field(row, "lineage_state") or "")
+    if lineage_state not in {"provisional", "confirmed"}:
+        raise ValueError(f"Unexpected lineage_state from DB: {lineage_state}")
+    return MemoryIntegrationLineagePair(
+        successor_id=str(_get_field(row, "successor_id")),
+        parent_id=str(_get_field(row, "parent_id")),
+        lineage_state=lineage_state,  # type: ignore[arg-type]
+        lineage_declared_at=_get_field(row, "lineage_declared_at"),
+        confirmed_at=_get_field(row, "confirmed_at"),
+        chain_obs_count=int(_get_field(row, "chain_obs_count") or 0),
+    )
+
+
+def _serialize_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return _ensure_aware(value).isoformat()
+    return value
 
 
 def _build_reasons(

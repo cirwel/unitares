@@ -53,6 +53,8 @@ Public signature: `async def score_memory_integration(parent_id, successor_id, *
 
 The `graph`, `now`, and `max_discoveries` parameters are operator/test controls; the normal path uses the configured KG backend and current UTC time.
 
+Batch shadow sampling is also available via `score_memory_integration_batch(...)` and `scripts/diagnostics/score_r5_memory_integration.py --lineage-state provisional|confirmed|all`.
+
 Return shape:
 
 | Field | Meaning |
@@ -100,9 +102,25 @@ Do not enable that conjunct until there is enough shadow data to evaluate false 
 1. **PR 0: this spec + plan update.** Done 2026-05-05. No runtime behavior.
 2. **PR 1: read-only scorer.** Done 2026-05-06 in `src/identity/memory_integration.py`. Queries existing KG rows only; no schema migration.
 3. **PR 2: tests.** Done 2026-05-06 in `tests/test_memory_integration.py`. Synthetic coverage: strong, weak, absent, insufficient-parent-memory, inconclusive, and archived-parent exclusion.
-4. **PR 3: operator surface.** Done 2026-05-06 via `scripts/diagnostics/score_r5_memory_integration.py`. Read-only shadow scoring; not called from the R2 hot path.
+4. **PR 3: operator surface.** Done 2026-05-06 via `scripts/diagnostics/score_r5_memory_integration.py`. Supports single-pair scoring and batch sampling over provisional/confirmed lineage pairs. Read-only shadow scoring; not called from the R2 hot path.
 5. **PR 4: optional audit table.** Only if shadow operation needs durable score history. Candidate table name: `audit.r5_memory_integration_audit`.
 6. **PR 5: R2 v1.1 decision.** After telemetry, decide whether to add R5 as a conjunct to R2 promotion or keep it advisory.
+
+## Shadow Sample 2026-05-06
+
+First live read-only sample used:
+
+- `scripts/diagnostics/score_r5_memory_integration.py --lineage-state provisional --limit 10 --max-discoveries 200`
+- `scripts/diagnostics/score_r5_memory_integration.py --lineage-state confirmed --limit 10 --max-discoveries 200`
+
+Results:
+
+| Lineage state | Pairs scored | Verdicts |
+|---|---:|---|
+| `provisional` | 4 | 3 `insufficient_parent_memory`, 1 `absent` |
+| `confirmed` | 3 | 3 `insufficient_parent_memory` |
+
+Interpretation: the first corpus is too sparse to justify a durable R5 audit table or any R2 promotion conjunct. Most parent agents do not yet have enough eligible KG memory artifacts under the seeded `min_parent_discoveries=3` rule. The lone `absent` result is useful as a proof of the query path, not as policy evidence.
 
 ## Non-Goals
 
