@@ -4,7 +4,9 @@ defmodule UnitaresSentinel.Application do
 
   The supervisor starts with no children in :test mode (`config/test.exs`).
   Runtime mode starts Postgrex, the Finch HTTP client pool used by Surface 2
-  findings emission, and the poller when `:start_poller` is enabled.
+  findings emission, the in-memory fleet state process, the `/ws/eisv`
+  consumer when `:start_websocket` is enabled, and the poller when
+  `:start_poller` is enabled.
 
   Mirrors the `:start_application` gate that `UnitaresLeasePlane.Application`
   uses (`elixir/lease_plane/lib/unitares_lease_plane/application.ex`) so
@@ -23,7 +25,10 @@ defmodule UnitaresSentinel.Application do
   end
 
   defp start_full do
-    children = postgrex_children() ++ finch_children() ++ poller_children()
+    children =
+      postgrex_children() ++
+        finch_children() ++ fleet_state_children() ++ websocket_children() ++ poller_children()
+
     Supervisor.start_link(children, strategy: :one_for_one, name: UnitaresSentinel.Supervisor)
   end
 
@@ -46,6 +51,28 @@ defmodule UnitaresSentinel.Application do
   defp finch_children do
     if Application.get_env(:unitares_sentinel, :start_finch, true) do
       [{Finch, name: UnitaresSentinel.Finch}]
+    else
+      []
+    end
+  end
+
+  defp fleet_state_children do
+    if Application.get_env(:unitares_sentinel, :start_fleet_state, true) do
+      [UnitaresSentinel.FleetState]
+    else
+      []
+    end
+  end
+
+  defp websocket_children do
+    if Application.get_env(:unitares_sentinel, :start_websocket, false) do
+      [
+        {UnitaresSentinel.EISVWebSocket,
+         url: Application.get_env(:unitares_sentinel, :websocket_url),
+         reconnect_ms: Application.get_env(:unitares_sentinel, :websocket_reconnect_ms, 10_000),
+         fleet_state:
+           Application.get_env(:unitares_sentinel, :fleet_state_name, UnitaresSentinel.FleetState)}
+      ]
     else
       []
     end

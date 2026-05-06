@@ -23,10 +23,11 @@ defmodule UnitaresSentinel do
   ## Bootstrap status
 
   This module + its `Application` supervisor are the minimum scaffold per
-  the §Bootstrap spec (B5 reviewer fold). The cycle worker, Surface 2
+  the §Bootstrap spec (B5 reviewer fold). The `/ws/eisv` ingest boundary,
+  cycle worker, Surface 2
   forced-release alarm findings client, Surface 3 lease-advisory wrapper,
   Surface 4 runtime timeout, and Surface 5 session anchor reader/backup
-  boundary are wired; WebSocket ingester and full fleet `sentinel_finding`
-  parity land in follow-up PRs.
+  boundary are wired; full fleet `sentinel_finding` parity lands in follow-up
+  PRs.
   """
 end
