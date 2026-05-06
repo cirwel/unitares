@@ -27,7 +27,7 @@ defmodule UnitaresSentinel do
   cycle worker, Surface 2
   forced-release alarm findings client, Surface 3 lease-advisory wrapper,
   Surface 4 runtime timeout, and Surface 5 session anchor reader/backup
-  boundary are wired; full fleet `sentinel_finding` parity lands in follow-up
-  PRs.
+  boundary and fleet-analysis finding reducer are wired; full runtime
+  `sentinel_finding` emission parity lands in follow-up PRs.
   """
 end

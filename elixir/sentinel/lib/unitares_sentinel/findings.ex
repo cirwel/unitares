@@ -29,6 +29,16 @@ defmodule UnitaresSentinel.Findings do
     |> post_json(opts)
   end
 
+  @doc """
+  POST one fleet analysis finding as a `sentinel_finding` event.
+  """
+  @spec post_finding(map(), keyword()) :: boolean()
+  def post_finding(finding, opts \\ []) when is_map(finding) do
+    finding
+    |> finding_body(opts)
+    |> post_json(opts)
+  end
+
   @doc false
   @spec alarm_body(UnitaresSentinel.ForcedReleasePoller.Logic.alarm(), keyword()) :: map()
   def alarm_body(alarm, opts \\ []) when is_map(alarm) do
@@ -46,6 +56,36 @@ defmodule UnitaresSentinel.Findings do
     |> Map.get(:extra, %{})
     |> stringify_keys()
     |> Map.merge(base, fn _key, _extra_value, base_value -> base_value end)
+  end
+
+  @doc false
+  @spec finding_body(map(), keyword()) :: map()
+  def finding_body(finding, opts \\ []) when is_map(finding) do
+    finding_type = map_fetch!(finding, :type)
+    violation_class = map_get(finding, :violation_class, "")
+    agent_id = agent_id(opts)
+
+    %{
+      "type" => Keyword.get(opts, :event_type, "sentinel_finding"),
+      "severity" => map_fetch!(finding, :severity),
+      "message" => map_fetch!(finding, :summary),
+      "agent_id" => agent_id,
+      "agent_name" => agent_name(opts),
+      "fingerprint" => compute_fingerprint(["sentinel", finding_type, violation_class, agent_id]),
+      "violation_class" => violation_class,
+      "finding_type" => finding_type
+    }
+  end
+
+  @doc false
+  @spec compute_fingerprint(Enumerable.t()) :: String.t()
+  def compute_fingerprint(parts) do
+    parts
+    |> Enum.map(&to_string/1)
+    |> Enum.join("|")
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 16)
   end
 
   @doc false
@@ -134,5 +174,15 @@ defmodule UnitaresSentinel.Findings do
       {key, value} when is_atom(key) -> {Atom.to_string(key), value}
       {key, value} when is_binary(key) -> {key, value}
     end)
+  end
+
+  defp map_fetch!(map, key) when is_atom(key) do
+    Map.fetch!(map, key)
+  rescue
+    KeyError -> Map.fetch!(map, Atom.to_string(key))
+  end
+
+  defp map_get(map, key, default) when is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key), default)
   end
 end
