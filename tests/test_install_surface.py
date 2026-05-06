@@ -72,6 +72,7 @@ def test_no_operator_specific_defaults(relpath: str, pattern: str, rationale: st
 # Plist templates must use placeholder substitution, not live paths.
 PLIST_TEMPLATES = [
     "scripts/ops/com.unitares.sentinel.plist.template",
+    "scripts/ops/com.unitares.sentinel-beam.plist.template",
     "scripts/ops/com.unitares.vigil.plist.template",
     "scripts/ops/com.unitares.gateway-mcp.plist.template",
     "scripts/ops/com.unitares.governance-backup.plist.template",
@@ -96,3 +97,23 @@ def test_plist_template_uses_placeholders(relpath: str) -> None:
     assert "__UNITARES_ROOT__" in content or "__HOME__" in content, (
         f"plist template has no __UNITARES_ROOT__ or __HOME__ placeholder: {relpath}"
     )
+
+
+def test_beam_sentinel_launchd_entrypoint_is_cutover_ready() -> None:
+    relpath = "elixir/sentinel/scripts/start.sh"
+    content = _read(relpath)
+    required_env = [
+        "UNITARES_SENTINEL_START_APPLICATION",
+        "UNITARES_SENTINEL_START_POSTGREX",
+        "UNITARES_SENTINEL_START_FINCH",
+        "UNITARES_SENTINEL_START_FLEET_STATE",
+        "UNITARES_SENTINEL_START_WEBSOCKET",
+        "UNITARES_SENTINEL_START_FLEET_FINDING_EMITTER",
+        "UNITARES_SENTINEL_START_POLLER",
+        "UNITARES_SENTINEL_EMIT_FINDINGS",
+        "UNITARES_SENTINEL_EMIT_CHECKINS",
+    ]
+    for name in required_env:
+        assert name in content, f"{relpath} must set {name} for launchd cutover"
+    assert "/Users/" not in content, f"{relpath} must be operator-neutral"
+    assert (REPO / relpath).stat().st_mode & 0o111, f"{relpath} must be executable"

@@ -125,7 +125,7 @@ PR #376's `query_forced_rows` swallows DB errors and returns `[]` (logging at `:
 - Surface 2 (findings emit) cutover protocol unchanged.
 - Surface 3 (lease-advisory acquire) unchanged.
 - The 30s tick interval + ±5s jitter from PR #376's council fold is unchanged — adding two more queries per tick does not change the tick rate.
-- The `runtime: "beam_canonical"` cutover flag (v0.1.2 §B3) is read by `CycleState.load/1`'s short-circuit; the writer is still unowned (separate `mix sentinel.cutover` PR, not in scope here).
+- The `runtime: "beam_canonical"` cutover flag (v0.1.2 §B3) is read by `CycleState.load/1`'s short-circuit; the writer is owned by `mix sentinel.cutover` / `mix sentinel.rollback`.
 
 ### C1 (reviewer Important-5 + architect) — Test minimums
 
@@ -164,12 +164,12 @@ Rejected because:
 
 Recorded so future RFC passes (v0.2.x scope) can reconsider the hybrid against post-cutover failure-mode data, with explicit acknowledgment that the rejection was made in a pre-cutover context.
 
-### What's deferred to a follow-up RFC amendment (v0.1.4+)
+### Follow-up status
 
-- **Cutover flag writer.** `mix sentinel.cutover --to=beam` and `mix sentinel.rollback --to=python` operator scripts. Architect #4 from PR #376 council. Belongs in its own RFC pass because rollback semantics + dual-runtime safety windows need their own design.
-- **Surface 2 findings emit binding.** Once Surface 2 lands the alarm-emit path, the alarm shape may need `finding_type` / `violation_class` fields for downstream dedup. Architect #3 from PR #376 council flagged this as a forward-compat concern. Surface 2 ALSO MUST move cursor persistence into post-emit callback per §B4 above — that's the at-least-once recovery for the Surface-1-only at-most-once gap.
-- **First-boot lookback bound.** Three-class first-boot poll with `last_event_ts=nil` fetches everything in `lease_plane_events`. Python pays this once; BEAM's first cutover boot pays it again. Bind a first-boot LIMIT or a lookback window in v0.1.4 (architect concern).
-- **Phase-B promotion port.** Wave 2 scope per §C3.
+- **Cutover flag writer:** shipped as `mix sentinel.cutover --to=beam` and `mix sentinel.rollback --to=python`.
+- **Surface 2 findings emit binding:** shipped through the BEAM findings emitter and post-emit cursor advancement path.
+- **First-boot lookback bound:** shipped as `UNITARES_SENTINEL_FIRST_BOOT_LOOKBACK_SECONDS`, defaulting to seven days.
+- **Remaining deferred item:** Phase-B promotion port. Wave 2 scope per §C3.
 
 ---
 

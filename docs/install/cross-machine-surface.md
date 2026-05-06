@@ -59,6 +59,7 @@ Option 2 is cleanest for cross-machine portability. Not applied in this PR becau
 | `com.unitares.chronicler.plist.template` | Tracked template using `__UNITARES_ROOT__`, `__HOME__` | OK — reference pattern |
 | `com.unitares.ipv6-loopback-proxy.plist.template` | ✅ Resolved in this PR | `__UNITARES_ROOT__` + `__PYTHON3__` placeholders applied |
 | `com.unitares.sentinel.plist.template` | ✅ Added in this PR | Sanitized template created |
+| `com.unitares.sentinel-beam.plist.template` | ✅ Added in Wave 1 cutover PR | Sanitized BEAM Sentinel cutover target |
 | `com.unitares.vigil.plist.template` | ✅ Added in this PR | Sanitized template created |
 | `com.unitares.gateway-mcp.plist.template` | ✅ Added in this PR | Sanitized template created |
 | `com.unitares.governance-backup.plist.template` | ✅ Added in this PR | Sanitized template created |
