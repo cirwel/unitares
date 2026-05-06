@@ -119,6 +119,10 @@ def test_assess_s22_h5_coverage_rejects_unsituated_entry():
     assert assessment["non_comparable_entries"][0]["canonical_harness"] == "hermes"
 
 
+def test_kg_query_avoids_optional_discovery_confidence_column():
+    assert "d.confidence" not in KG_S22_SQL
+
+
 @pytest.mark.asyncio
 async def test_collect_s22_h5_entries_reads_state_and_kg_sources():
     conn = MagicMock()

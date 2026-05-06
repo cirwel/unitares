@@ -46,7 +46,6 @@ SELECT
         'type', d.type,
         'status', d.status,
         'tags', d.tags,
-        'confidence', d.confidence,
         'response_to_id', d.response_to_id,
         'response_type', d.response_type
     ) AS state_json
