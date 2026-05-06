@@ -838,6 +838,27 @@ class TestRecordAgentState:
         assert state_json["verdict"] == "safe"
 
     @pytest.mark.asyncio
+    async def test_provenance_context_in_state_json(self):
+        identity = _make_identity()
+        db = _mock_db(get_identity=identity, record_agent_state=1)
+        context = {
+            "schema": "s22.write_context.v1",
+            "harness_type": "codex-cli",
+            "comparison_key": "h5-bounded-task",
+        }
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import record_agent_state
+            await record_agent_state(
+                "agent-1",
+                E=0.5, I=0.5, S=0.5, V=0.0,
+                regime="nominal", coherence=1.0,
+                provenance_context=context,
+            )
+
+        state_json = db.record_agent_state.call_args.kwargs["state_json"]
+        assert state_json["provenance_context"] == context
+
+    @pytest.mark.asyncio
     async def test_optional_fields_omitted_when_none(self):
         identity = _make_identity()
         db = _mock_db(get_identity=identity, record_agent_state=1)

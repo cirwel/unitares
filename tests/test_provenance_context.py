@@ -21,6 +21,9 @@ def test_build_s22_write_context_prefers_explicit_values():
             "locus": {"workspace": "/repo"},
             "affordance_state": {"shell": True},
             "identity_lineage_fork": "true",
+            "comparison_key": "h5-bounded-task",
+            "task_label": "H5 bounded task",
+            "task_outcome": "passed",
             "episode_id": "episode-1",
             "invocation_id": "run-1",
             "process_instance_id": "opaque-process",
@@ -47,6 +50,9 @@ def test_build_s22_write_context_prefers_explicit_values():
     assert context["spawn_reason"] == "new_session"
     assert context["thread_id"] == "thread-uuid"
     assert context["identity_lineage_fork"] is True
+    assert context["comparison_key"] == "h5-bounded-task"
+    assert context["task_label"] == "H5 bounded task"
+    assert context["task_outcome"] == "passed"
     assert context["governance_mode"] == "explicit"
 
 

@@ -1224,6 +1224,7 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
             verdict=ctx.metrics_dict.get('verdict', 'continue'),
             action=(ctx.result.get('decision') or {}).get('sub_action')
                 or (ctx.result.get('decision') or {}).get('action'),
+            provenance_context=ctx.agent_state.get("provenance_context"),
         )
         logger.debug(f"PostgreSQL: Recorded state for {agent_id}")
     except ValueError:
@@ -1288,6 +1289,7 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                 verdict=ctx.metrics_dict.get('verdict', 'continue'),
                 action=(ctx.result.get('decision') or {}).get('sub_action')
                     or (ctx.result.get('decision') or {}).get('action'),
+                provenance_context=ctx.agent_state.get("provenance_context"),
             )
             logger.debug(f"PostgreSQL: Created agent and recorded state for {agent_id}")
         except Exception as create_error:

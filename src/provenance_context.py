@@ -26,6 +26,9 @@ _STRING_FIELDS: dict[str, tuple[str, ...]] = {
     "memory_context": ("memory_context",),
     "governance_mode": ("governance_mode",),
     "verification_source": ("verification_source",),
+    "comparison_key": ("comparison_key",),
+    "task_label": ("task_label", "task"),
+    "task_outcome": ("task_outcome", "outcome"),
     "parent_agent_id": ("parent_agent_id",),
     "spawn_reason": ("spawn_reason",),
 }

@@ -38,7 +38,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from src.db import get_db
 from src.db.base import IdentityRecord, AgentStateRecord
@@ -535,6 +535,7 @@ async def record_agent_state(
     phi: Optional[float] = None,
     verdict: Optional[str] = None,
     action: Optional[str] = None,
+    provenance_context: Optional[Mapping[str, Any]] = None,
 ) -> int:
     """
     Record agent EISV state to PostgreSQL.
@@ -576,6 +577,8 @@ async def record_agent_state(
         state_json["verdict"] = verdict
     if action is not None:
         state_json["action"] = action
+    if provenance_context:
+        state_json["provenance_context"] = dict(provenance_context)
 
     state_id = await db.record_agent_state(
         identity_id=identity.identity_id,

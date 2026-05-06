@@ -354,7 +354,14 @@ Resolved when:
 - `process_agent_update` can record optional harness/model/transport/tool-surface metadata
 - KG writes can expose that metadata in provenance
 - identity responses explicitly distinguish UUID, label, harness, and assurance
-- at least Hermes, Claude Code, and Codex CLI have one comparable recorded task entry
+- at least Hermes, Claude Code, and Codex CLI have one comparable recorded task entry sharing the same `comparison_key`
+
+Durable H5 gate:
+
+- `process_agent_update` persists S22 write context under `core.agent_state.state_json.provenance_context`
+- KG writes expose S22 write context under `knowledge.discoveries.provenance.s22_context`
+- H5 task entries should include `comparison_key` or `task_label`; `task_outcome` is optional but encouraged
+- `scripts/diagnostics/s22_h5_comparable_entries.py` is the read-only acceptance check for the Hermes/Claude Code/Codex CLI task set
 
 ## Non-goals
 
@@ -369,7 +376,7 @@ Resolved when:
 1. Review this document against `identity.md` for contradictions.
 2. If accepted, add R6/S22 rows to `docs/ontology/plan.md`.
 3. Run H4 as the first canonical experiment because it already has positive dogfood evidence.
-4. Run H5 next: same bounded task across Hermes, Claude Code, and Codex CLI.
+4. Run H5 next: same bounded task across Hermes, Claude Code, and Codex CLI, using the same `comparison_key` on each write.
 5. Promote concrete schema changes only after at least two harnesses expose the same need.
 
 ## Definition of done
