@@ -49,9 +49,19 @@ class ToolUsageTracker:
     
     def __init__(self, log_file: Optional[Path] = None):
         if log_file is None:
-            project_root = Path(__file__).parent.parent
-            log_file = project_root / "data" / "tool_usage.jsonl"
-        
+            # UNITARES_TOOL_USAGE_LOG lets test/integration harnesses redirect
+            # the singleton to a tmp file. Without it, subprocess-spawned
+            # mcp_server.py instances (e.g. CLI integration tests) read the
+            # developer-machine data/tool_usage.jsonl on every process_update
+            # call — observed at 1.09M lines / 177MB on dev box, dominating
+            # any test that triggers a single update.
+            env_path = os.environ.get("UNITARES_TOOL_USAGE_LOG")
+            if env_path:
+                log_file = Path(env_path)
+            else:
+                project_root = Path(__file__).parent.parent
+                log_file = project_root / "data" / "tool_usage.jsonl"
+
         self.log_file = log_file
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
     

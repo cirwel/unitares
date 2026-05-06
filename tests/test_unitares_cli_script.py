@@ -99,6 +99,11 @@ def mcp_test_server(tmp_path_factory):
     # secret is configured. Provide a deterministic test secret so the
     # CLI tests can assert on the token field.
     env.setdefault("UNITARES_CONTINUITY_TOKEN_SECRET", "pytest-fixture-secret")
+    # Redirect the tool-usage tracker to a fresh tmp file so the subprocess
+    # server doesn't read the developer-machine data/tool_usage.jsonl
+    # (~1M lines / 177MB) on every process_update — that file is parsed
+    # line-by-line by get_usage_stats and dominates CLI test wall-clock.
+    env["UNITARES_TOOL_USAGE_LOG"] = str(state_dir / "tool_usage.jsonl")
 
     proc = subprocess.Popen(
         [sys.executable, str(REPO_ROOT / "src" / "mcp_server.py"),

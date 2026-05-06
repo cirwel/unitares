@@ -336,13 +336,35 @@ def _neutralize_metadata_loading(monkeypatch):
     """
     Prevent ensure_metadata_loaded() from trying to connect to PostgreSQL.
 
-    Sets _metadata_loaded = True in agent_state so the fast-path returns
-    immediately. Tests that need to exercise metadata loading should
-    explicitly set _metadata_loaded = False and mock load_metadata_async.
+    The canonical state lives on ``src.agent_metadata_model`` (the
+    ``_model`` reference inside ``agent_metadata_persistence``). Patching
+    ``agent_state._metadata_loaded`` alone is a no-op because that name is
+    only an import-time copy of the bool — assigning to it does not
+    propagate back to ``agent_metadata_model``. Pre-2026-05-06 the fixture
+    only patched ``agent_state``, so every code path that hit
+    ``require_registered_agent`` (e.g. all dialectic submit handlers) blocked
+    for the full 5.0s ``_metadata_loaded_event.wait(timeout=5.0)`` ceiling
+    inside ``ensure_metadata_loaded()``. Three suite tests sat at exactly
+    5.01s for that reason.
+
+    Patch the canonical module *and* pre-set the threading event so any
+    handler that reaches ``ensure_metadata_loaded`` returns on the fast
+    path. Tests that need to exercise the loader explicitly clear these
+    in-place (see ``_isolate_identity_state`` teardown).
     """
     try:
-        import src.agent_state as agent_state
-        monkeypatch.setattr(agent_state, '_metadata_loaded', True)
+        import src.agent_metadata_model as amm
+        monkeypatch.setattr(amm, '_metadata_loaded', True, raising=False)
+        monkeypatch.setattr(amm, '_metadata_loading', False, raising=False)
+        amm._metadata_loaded_event.set()
+
+        # Keep the legacy patch on agent_state for any code that introspects
+        # via that re-exported name (defensive — not currently the hot path).
+        try:
+            import src.agent_state as agent_state
+            monkeypatch.setattr(agent_state, '_metadata_loaded', True, raising=False)
+        except Exception:
+            pass
     except Exception as exc:
         import warnings
         warnings.warn(f"test cleanup failed: {exc}", stacklevel=2)
