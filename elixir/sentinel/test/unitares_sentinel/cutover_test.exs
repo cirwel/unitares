@@ -48,6 +48,20 @@ defmodule UnitaresSentinel.CutoverTest do
              "2026-05-05T03:00:00Z"
   end
 
+  test "cutover_to_beam parses mixed ISO precision before max-cursor merge", ctx do
+    # Raw string comparison would pick the older "Z" cursor because "Z" sorts
+    # above "." after the whole-second prefix.
+    write_state(ctx.canonical, "2026-05-05T02:00:00Z")
+    write_state(ctx.shadow, "2026-05-05T02:00:00.000001+00:00")
+
+    {:ok, result} = Cutover.cutover_to_beam(canonical: ctx.canonical, shadow: ctx.shadow)
+
+    assert result.cursor == "2026-05-05T02:00:00.000001+00:00"
+
+    assert get_in(decode!(ctx.shadow), ["forced_release_alarm", "last_event_ts"]) ==
+             "2026-05-05T02:00:00.000001+00:00"
+  end
+
   test "rollback_to_python copies max cursor back to canonical and marks shadow", ctx do
     write_state(ctx.canonical, "2026-05-05T01:00:00Z")
     write_state(ctx.shadow, "2026-05-05T04:00:00Z", %{"runtime" => "beam_canonical"})

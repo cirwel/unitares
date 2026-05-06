@@ -105,10 +105,10 @@ defmodule UnitaresSentinel.Cutover do
   defp pick_max(canonical, %{} = shadow) when map_size(shadow) == 0, do: canonical
 
   defp pick_max(canonical, shadow) do
-    canonical_cursor = CycleState.get_last_event_ts(canonical) || ""
-    shadow_cursor = CycleState.get_last_event_ts(shadow) || ""
+    canonical_cursor = CycleState.get_last_event_ts(canonical)
+    shadow_cursor = CycleState.get_last_event_ts(shadow)
 
-    if canonical_cursor >= shadow_cursor do
+    if CycleState.compare_cursor(canonical_cursor, shadow_cursor) in [:gt, :eq] do
       canonical
     else
       shadow

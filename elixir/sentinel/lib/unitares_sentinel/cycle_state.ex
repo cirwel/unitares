@@ -17,9 +17,8 @@ defmodule UnitaresSentinel.CycleState do
   ## Boot semantics (v0.1.2 §B2 — max-on-boot)
 
   `load/1` reads both files when both exist and returns the state with
-  the larger `forced_release_alarm.last_event_ts` (ISO-8601 lex compare,
-  valid because Python writes UTC-offset isoformat). Empty cursors are
-  treated as older than any timestamp.
+  the larger `forced_release_alarm.last_event_ts` after ISO-8601 parsing.
+  Empty cursors are treated as older than any timestamp.
 
   ## Cutover (v0.1.2 §B3 — max wins)
 
@@ -142,6 +141,21 @@ defmodule UnitaresSentinel.CycleState do
   @spec get_runtime(t()) :: String.t() | nil
   def get_runtime(state) when is_map(state), do: Map.get(state, @runtime_key)
 
+  @doc false
+  @spec compare_cursor(String.t() | nil, String.t() | nil) :: :lt | :eq | :gt
+  def compare_cursor(nil, nil), do: :eq
+  def compare_cursor(nil, cursor) when is_binary(cursor), do: :lt
+  def compare_cursor(cursor, nil) when is_binary(cursor), do: :gt
+
+  def compare_cursor(a, b) when is_binary(a) and is_binary(b) do
+    with {:ok, a_dt, _} <- DateTime.from_iso8601(a),
+         {:ok, b_dt, _} <- DateTime.from_iso8601(b) do
+      DateTime.compare(a_dt, b_dt)
+    else
+      _ -> lex_compare(a, b)
+    end
+  end
+
   @doc """
   Resolve the canonical (Python) STATE_FILE path from config / env var.
 
@@ -198,13 +212,21 @@ defmodule UnitaresSentinel.CycleState do
   defp pick_max(canonical, %{} = shadow) when map_size(shadow) == 0, do: canonical
 
   defp pick_max(canonical_state, shadow_state) do
-    canonical_cursor = get_last_event_ts(canonical_state) || ""
-    shadow_cursor = get_last_event_ts(shadow_state) || ""
+    canonical_cursor = get_last_event_ts(canonical_state)
+    shadow_cursor = get_last_event_ts(shadow_state)
 
-    if canonical_cursor >= shadow_cursor do
+    if compare_cursor(canonical_cursor, shadow_cursor) in [:gt, :eq] do
       canonical_state
     else
       shadow_state
+    end
+  end
+
+  defp lex_compare(a, b) do
+    cond do
+      a > b -> :gt
+      a < b -> :lt
+      true -> :eq
     end
   end
 end
