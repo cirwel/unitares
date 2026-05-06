@@ -2,17 +2,17 @@
 description: "Manual UNITARES governance check-in after meaningful work"
 ---
 
-Before calling tools, check for `.unitares/session.json` in the current workspace.
+Before calling tools, check the local workspace cache inventory.
 
 Use the shared helper in this repo:
 
-- `scripts/client/session_cache.py get session`
+- `scripts/client/session_cache.py list`
 
-If the cache contains `uuid`, treat it as the local identity anchor for attribution, not proof that the current process owns that UUID.
+If the newest entry contains `parent_agent_id`, treat it as local lineage context for attribution, not proof that the current process owns that UUID.
 
 If current binding is unclear, call `identity()` first to inspect the active binding.
 
-If you must rebind to a cached UUID, include the matching `continuity_token`: `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)`.
+If you must rebind to a cached UUID, include a matching current in-process `continuity_token`: `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)`. Do not use legacy cache files as token sources.
 
 If this is a fresh process and no ownership proof is available, use `/governance-start` to mint a fresh identity with `parent_agent_id=<cached uuid>` rather than bare UUID resume.
 
@@ -25,7 +25,7 @@ Inputs:
 - `response_text`: concise summary of what was actually accomplished
 - `complexity`: estimate `0.0-1.0`
 - `confidence`: honest estimate `0.0-1.0`
-- include `continuity_token` when available for ownership proof, otherwise rely on the active session binding or `client_session_id` when the client needs explicit continuity data
+- include `continuity_token` only when it is current in-process ownership proof, otherwise rely on the active session binding or `client_session_id` when the client needs explicit continuity data
 - use `response_mode="mirror"` by default for Codex
 
 Guidelines:

@@ -4,13 +4,13 @@ description: "Create or declare lineage for a UNITARES session in Codex"
 
 Under the identity ontology v2 (`docs/ontology/identity.md`), a fresh process-instance mints fresh governance-identity. Lineage is declared via `parent_agent_id`, not resumed via token. This command starts a session in that posture.
 
-Start by checking for a local workspace cache in `.unitares/session.json`.
+Start by checking the local workspace cache inventory.
 
 Use the shared helper in this repo:
 
-- `scripts/client/session_cache.py get session`
+- `scripts/client/session_cache.py list`
 
-If the cache contains a `uuid`, treat it as a lineage candidate, not ownership proof. Ignore any `continuity_token` field for startup; tokens are only for same-live-owner proof paths and in-process calls.
+If the newest entry contains `parent_agent_id`, treat it as a lineage candidate, not ownership proof. Ignore any legacy `continuity_token` field for startup; tokens are only for same-live-owner proof paths and in-process calls.
 
 Call `onboard()` against UNITARES using the strongest honest mode:
 
@@ -25,18 +25,18 @@ Do not use `onboard(continuity_token=...)` as cross-process resume except when d
 
 After a successful `identity()` or `onboard()` response:
 
-- create or update `.unitares/session.json` using `scripts/client/session_cache.py set session --merge --stamp`
+- create or update a slotted cache using `scripts/client/session_cache.py set session --slot <client_session_id-or-codex-session-id> --merge --stamp`
 - keep it compact and machine-readable JSON
 - include:
+  - `schema_version: 2`
   - `server_url` when known
   - `uuid`
   - `agent_id`
   - `display_name`
   - `client_session_id`
-  - `continuity_token` only if the server returned one; keep it for in-process proof-owned calls, not startup resume
   - `session_resolution_source`
-  - `continuity_token_supported`
   - `updated_at`
+- do not write `continuity_token` or `continuity_token_supported` to the cache
 
 When reporting back:
 

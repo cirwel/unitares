@@ -2,15 +2,15 @@
 description: "Show current UNITARES governance state and operator-relevant diagnostics"
 ---
 
-Start by checking for `.unitares/session.json` in the current workspace.
+Start by checking the local workspace cache inventory.
 
 Use the shared helper in this repo:
 
-- `scripts/client/session_cache.py get session`
+- `scripts/client/session_cache.py list`
 
-If the cache contains `uuid`, treat it as a local identity anchor and lineage candidate.
+If the newest entry contains `parent_agent_id`, treat it as a local lineage candidate.
 
-Do not verify by bare UUID resume. If you need to test ownership of a cached UUID, call `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)` only when a matching current token is available.
+Do not verify by bare UUID resume. If you need to test ownership of a cached UUID, call `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)` only when a matching current in-process token is available. Do not use legacy cache files as token sources.
 
 If no proof-owned UUID rebind is available, call `identity()` to inspect current binding. Use `/governance-start` to create a fresh process identity with `parent_agent_id=<cached uuid>` if this process should inherit prior work.
 
@@ -46,7 +46,7 @@ If `health_check()` is used, also show:
 
 Call `list_process_bindings()` (optionally with `agent_uuid=<uuid>`) to show live execution-context bindings for the agent. When `concurrent_binding_detected` is true, surface the `bindings[]` tuples — each row is `{host_id, pid, pid_start_time, transport, tty, last_seen}` — so the operator can see which contexts are siphoning the same UUID. See issue #123.
 
-If the live identity differs from `.unitares/session.json`, refresh the local cache with the latest `uuid`, identity fields, and continuity data using `scripts/client/session_cache.py set session --merge --stamp`.
+If the live identity differs from the cache inventory, refresh the local slotted cache with the latest `uuid`, identity fields, and `schema_version: 2` using `scripts/client/session_cache.py set session --slot <client_session_id-or-codex-session-id> --merge --stamp`. Do not write `continuity_token` to the cache.
 
 Do not dump raw JSON unless the user explicitly asks for it.
 Prefer a short interpreted summary.
