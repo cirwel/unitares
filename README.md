@@ -308,7 +308,7 @@ This `unitares` repo is the governance server/runtime. Plugin-side `.codex-plugi
 
 ## Citation
 
-Kenny Wang ([ORCID 0009-0006-7544-2374](https://orcid.org/0009-0006-7544-2374)), cirwel Systems. If you build on this work, please cite — see [`CITATION.cff`](CITATION.cff).
+Kenny Wang ([ORCID 0009-0006-7544-2374](https://orcid.org/0009-0006-7544-2374)), CIRWEL Systems. If you build on this work, please cite — see [`CITATION.cff`](CITATION.cff).
 
 ```bibtex
 @misc{wang2026unitares,
