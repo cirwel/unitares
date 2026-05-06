@@ -6,17 +6,24 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
   duplicate `sentinel_finding` emission, so production cutover must stop the
   Python Sentinel before enabling this GenServer.
 
-  It is not the full governance check-in loop yet. It analyzes the BEAM
-  `FleetState`, skips self-observations, and emits fleet findings to
-  `/api/findings` using the Python-compatible `Findings.post_finding/2`
-  contract.
+  The governance check-in path is present but opt-in. It analyzes the BEAM
+  `FleetState`, skips self-observations for finding emission, emits fleet
+  findings to `/api/findings`, and can build/post the Python-compatible
+  `process_agent_update` summary only when `:emit_checkins` is enabled.
   """
 
   use GenServer
 
   require Logger
 
-  alias UnitaresSentinel.{Findings, FleetAnalysis, FleetState, LeaseAdvisory}
+  alias UnitaresSentinel.{
+    CycleSummary,
+    Findings,
+    FleetAnalysis,
+    FleetState,
+    GovernanceCheckin,
+    LeaseAdvisory
+  }
 
   @default_interval_ms 300_000
   @default_initial_delay_ms 5_000
@@ -28,7 +35,9 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
   @type tick_result :: %{
           fleet_findings: [map()],
           self_findings: [map()],
-          posted_count: non_neg_integer()
+          posted_count: non_neg_integer(),
+          checkin: map(),
+          checkin_result: {:ok, map()} | {:error, term()} | nil
         }
 
   @doc false
@@ -72,7 +81,35 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
         0
       end
 
-    %{fleet_findings: fleet_findings, self_findings: self_findings, posted_count: posted_count}
+    checkin =
+      CycleSummary.build(
+        cycle_count: Keyword.get(opts, :cycle_count, 1),
+        snapshot: snapshot,
+        ws_connected?: Keyword.get(opts, :ws_connected?, Keyword.get(opts, :ws_connected, false)),
+        fleet_findings: fleet_findings,
+        self_findings: self_findings
+      )
+
+    checkin_result =
+      if Keyword.get(
+           opts,
+           :emit_checkins,
+           Keyword.get(
+             opts,
+             :emit_checkin,
+             Application.get_env(:unitares_sentinel, :emit_checkins, false)
+           )
+         ) do
+        GovernanceCheckin.checkin(checkin, Keyword.get(opts, :checkin_opts, []))
+      end
+
+    %{
+      fleet_findings: fleet_findings,
+      self_findings: self_findings,
+      posted_count: posted_count,
+      checkin: checkin,
+      checkin_result: checkin_result
+    }
   end
 
   @impl true
@@ -129,6 +166,7 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
           Application.get_env(:unitares_sentinel, :lease_advisory_enabled, true)
         ),
       lease_opts: Keyword.get(opts, :lease_opts, []),
+      cycle_count: Keyword.get(opts, :cycle_count, 0),
       running?: false,
       last_result: nil
     }
@@ -152,7 +190,9 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
       case await_runtime_tick(state) do
         {:ok, result} ->
           schedule_next_tick(state)
-          {:noreply, %{state | running?: false, last_result: result}}
+
+          {:noreply,
+           %{state | running?: false, last_result: result, cycle_count: state.cycle_count + 1}}
 
         :timeout ->
           Logger.warning(
@@ -167,8 +207,8 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
     end
   end
 
-  defp await_runtime_tick(%{tick_timeout_ms: timeout_ms, opts: opts}) do
-    task = Task.async(fn -> tick(opts) end)
+  defp await_runtime_tick(%{tick_timeout_ms: timeout_ms, opts: opts, cycle_count: cycle_count}) do
+    task = Task.async(fn -> tick(Keyword.put(opts, :cycle_count, cycle_count + 1)) end)
     Process.unlink(task.pid)
 
     case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do

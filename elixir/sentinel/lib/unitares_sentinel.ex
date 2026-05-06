@@ -27,8 +27,8 @@ defmodule UnitaresSentinel do
   cycle worker, Surface 2
   forced-release alarm findings client, Surface 3 lease-advisory wrapper,
   Surface 4 runtime timeout, and Surface 5 session anchor reader/backup
-  boundary, fleet-analysis finding reducer, and opt-in runtime
-  `sentinel_finding` emitter are wired; governance `process_agent_update`
-  check-in parity lands in follow-up PRs.
+  boundary, fleet-analysis finding reducer, opt-in runtime
+  `sentinel_finding` emitter, and opt-in `process_agent_update` REST
+  check-in boundary are wired.
   """
 end

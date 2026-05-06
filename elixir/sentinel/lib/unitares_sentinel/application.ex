@@ -4,10 +4,11 @@ defmodule UnitaresSentinel.Application do
 
   The supervisor starts with no children in :test mode (`config/test.exs`).
   Runtime mode starts Postgrex, the Finch HTTP client pool used by Surface 2
-  findings emission, the in-memory fleet state process, the `/ws/eisv`
-  consumer when `:start_websocket` is enabled, the fleet finding emitter when
-  `:start_fleet_finding_emitter` is enabled, and the poller when
-  `:start_poller` is enabled.
+  findings/check-in emission, the in-memory fleet state process, the
+  `/ws/eisv` consumer when `:start_websocket` is enabled, the fleet finding
+  emitter when `:start_fleet_finding_emitter` is enabled, and the poller when
+  `:start_poller` is enabled. Governance check-ins remain gated by
+  `:emit_checkins` inside the emitter.
 
   Mirrors the `:start_application` gate that `UnitaresLeasePlane.Application`
   uses (`elixir/lease_plane/lib/unitares_lease_plane/application.ex`) so

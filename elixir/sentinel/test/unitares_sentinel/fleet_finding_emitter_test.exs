@@ -58,6 +58,58 @@ defmodule UnitaresSentinel.FleetFindingEmitterTest do
     assert body["violation_class"] == "CON"
   end
 
+  test "tick can opt in to governance check-in emission" do
+    parent = self()
+
+    analysis_fun = fn _snapshot, _analysis_opts -> [fleet_finding(), self_finding()] end
+
+    checkin_http_post = fn url, body, _headers, timeout_ms ->
+      send(parent, {:checkin_posted, url, body, timeout_ms})
+
+      {:ok, 200,
+       Jason.encode!(%{
+         "success" => true,
+         "result" => %{"decision" => %{"action" => "proceed"}}
+       })}
+    end
+
+    result =
+      FleetFindingEmitter.tick(
+        snapshot: %{active_agents: 2, agents: %{}, events: []},
+        analysis_fun: analysis_fun,
+        emit_findings: false,
+        emit_checkins: true,
+        cycle_count: 4,
+        ws_connected?: false,
+        checkin_opts: [
+          url: "http://example.test/v1/tools/call",
+          timeout_ms: 123,
+          http_post: checkin_http_post,
+          agent_id: "sentinel-test"
+        ]
+      )
+
+    assert result.posted_count == 0
+    assert result.checkin.response_mode == "compact"
+    assert {:ok, %{"decision" => %{"action" => "proceed"}}} = result.checkin_result
+
+    assert_receive {:checkin_posted, url, body, timeout_ms}
+    assert url == "http://example.test/v1/tools/call"
+    assert timeout_ms == 123
+    assert body["name"] == "process_agent_update"
+
+    args = body["arguments"]
+    assert args["agent_id"] == "sentinel-test"
+    assert args["response_mode"] == "compact"
+    assert_in_delta args["complexity"], 0.45, 0.000_001
+    assert_in_delta args["confidence"], 0.6, 0.000_001
+
+    assert args["response_text"] ==
+             "Sentinel analysis: Cycle 4 | Fleet: 2 agents | WS: DISCONNECTED | " <>
+               "[HIGH] [CON] Coordinated coherence drop: Agent A(-0.20), Agent B(-0.20) | " <>
+               "[SELF] Sentinel entropy outlier (z=2.8, S=1.000)"
+  end
+
   test "GenServer wraps runtime tick in advisory lease acquire and release" do
     parent = self()
     lease_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"

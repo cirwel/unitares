@@ -34,7 +34,11 @@ config :unitares_sentinel,
   findings_timeout_ms: 3_000,
   findings_agent_id: System.get_env("UNITARES_SENTINEL_AGENT_ID") || "sentinel",
   findings_agent_name: "Sentinel",
-  emit_findings: true
+  emit_findings: true,
+  emit_checkins: false,
+  governance_tools_url:
+    System.get_env("UNITARES_GOVERNANCE_TOOLS_URL") || "http://localhost:8767/v1/tools/call",
+  governance_checkin_timeout_ms: 45_000
 
 if File.exists?("config/#{config_env()}.exs") do
   import_config "#{config_env()}.exs"
