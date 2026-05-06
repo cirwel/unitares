@@ -24,8 +24,9 @@ defmodule UnitaresSentinel do
 
   This module + its `Application` supervisor are the minimum scaffold per
   the §Bootstrap spec (B5 reviewer fold). The cycle worker, Surface 2
-  forced-release alarm findings client, and Surface 3 lease-advisory wrapper
-  are wired; WebSocket ingester and full fleet `sentinel_finding` parity land
-  in follow-up PRs.
+  forced-release alarm findings client, Surface 3 lease-advisory wrapper,
+  Surface 4 runtime timeout, and Surface 5 session anchor reader/backup
+  boundary are wired; WebSocket ingester and full fleet `sentinel_finding`
+  parity land in follow-up PRs.
   """
 end

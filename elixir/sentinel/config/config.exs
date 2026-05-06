@@ -12,6 +12,8 @@ config :unitares_sentinel,
       System.get_env("UNITARES_LEASE_PLANE_DATABASE_URL") ||
       "postgresql://postgres:postgres@localhost:5432/governance",
   pool_size: 2,
+  session_file_path: System.get_env("UNITARES_SENTINEL_SESSION_FILE"),
+  legacy_session_file_path: System.get_env("UNITARES_SENTINEL_LEGACY_SESSION_FILE"),
   poller_interval_ms: 30_000,
   poller_initial_delay_ms: 1_000,
   poller_tick_timeout_ms: 30_000,
