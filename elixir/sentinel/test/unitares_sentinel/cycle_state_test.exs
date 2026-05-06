@@ -54,6 +54,7 @@ defmodule UnitaresSentinel.CycleStateTest do
     )
 
     state = CycleState.load(canonical: ctx.canonical, shadow: ctx.shadow)
+
     assert get_in(state, ["forced_release_alarm", "last_event_ts"]) ==
              "2026-05-04T00:00:00.000000+00:00"
   end
@@ -70,8 +71,28 @@ defmodule UnitaresSentinel.CycleStateTest do
     )
 
     state = CycleState.load(canonical: ctx.canonical, shadow: ctx.shadow)
+
     assert get_in(state, ["forced_release_alarm", "last_event_ts"]) ==
              "2026-05-05T12:00:00.000000+00:00"
+  end
+
+  test "max-on-boot parses mixed ISO precision before comparing", ctx do
+    # Regression: raw string comparison ranks trailing "Z" above fractional
+    # ".000001+00:00", choosing the older whole-second cursor.
+    File.write!(
+      ctx.canonical,
+      ~s({"forced_release_alarm": {"last_event_ts": "2026-05-05T02:00:00Z"}})
+    )
+
+    File.write!(
+      ctx.shadow,
+      ~s({"forced_release_alarm": {"last_event_ts": "2026-05-05T02:00:00.000001+00:00"}})
+    )
+
+    state = CycleState.load(canonical: ctx.canonical, shadow: ctx.shadow)
+
+    assert get_in(state, ["forced_release_alarm", "last_event_ts"]) ==
+             "2026-05-05T02:00:00.000001+00:00"
   end
 
   test "max-on-boot: only python file exists — python wins", ctx do
@@ -81,6 +102,7 @@ defmodule UnitaresSentinel.CycleStateTest do
     )
 
     state = CycleState.load(canonical: ctx.canonical, shadow: ctx.shadow)
+
     assert get_in(state, ["forced_release_alarm", "last_event_ts"]) ==
              "2026-05-03T13:56:34.479878+00:00"
   end
@@ -92,6 +114,7 @@ defmodule UnitaresSentinel.CycleStateTest do
     )
 
     state = CycleState.load(canonical: ctx.canonical, shadow: ctx.shadow)
+
     assert get_in(state, ["forced_release_alarm", "last_event_ts"]) ==
              "2026-05-04T01:02:03.456789+00:00"
   end
@@ -110,6 +133,7 @@ defmodule UnitaresSentinel.CycleStateTest do
     )
 
     state = CycleState.load(canonical: ctx.canonical, shadow: ctx.shadow)
+
     assert get_in(state, ["forced_release_alarm", "last_event_ts"]) ==
              "2026-05-04T00:00:00.000000+00:00"
   end
@@ -129,6 +153,7 @@ defmodule UnitaresSentinel.CycleStateTest do
     # Must NOT be %{} — the sibling data has to survive boot.
     assert get_in(state, ["forced_release_alarm", "first_seen_at"]) ==
              "2026-05-04T00:00:00+00:00"
+
     assert Map.get(state, "runtime") == "shadow"
   end
 
@@ -165,6 +190,7 @@ defmodule UnitaresSentinel.CycleStateTest do
     # Shadow wins despite older cursor — the runtime flag is load-bearing.
     assert get_in(state, ["forced_release_alarm", "last_event_ts"]) ==
              "2026-05-04T00:00:00.000000+00:00"
+
     assert CycleState.get_runtime(state) == "beam_canonical"
   end
 
@@ -183,6 +209,7 @@ defmodule UnitaresSentinel.CycleStateTest do
     )
 
     state = CycleState.load(canonical: ctx.canonical, shadow: ctx.shadow)
+
     assert get_in(state, ["forced_release_alarm", "last_event_ts"]) ==
              "2026-05-10T00:00:00.000000+00:00"
   end
@@ -196,7 +223,8 @@ defmodule UnitaresSentinel.CycleStateTest do
   # Schema binding (v0.1.1 §Surface 1, retained in v0.1.2).
   # ---------------------------------------------------------------------------
 
-  test "schema binding: forced_release_alarm.last_event_ts stays top-level ISO-8601 string", ctx do
+  test "schema binding: forced_release_alarm.last_event_ts stays top-level ISO-8601 string",
+       ctx do
     state = %{"forced_release_alarm" => %{"last_event_ts" => "2026-05-05T12:34:56.789012+00:00"}}
     :ok = CycleState.save(state, path: ctx.shadow)
 
@@ -252,7 +280,10 @@ defmodule UnitaresSentinel.CycleStateTest do
     File.touch!(Path.join(ctx.shadow, "hold"))
 
     # Must NOT raise — Python's save_state swallows; BEAM matches.
-    assert CycleState.save(%{"forced_release_alarm" => %{"last_event_ts" => "2026-05-05T00:00:00+00:00"}}, path: ctx.shadow) == :ok
+    assert CycleState.save(
+             %{"forced_release_alarm" => %{"last_event_ts" => "2026-05-05T00:00:00+00:00"}},
+             path: ctx.shadow
+           ) == :ok
   end
 
   # Council fold: reviewer Important-3. Encoding errors are caller-side bugs,
@@ -285,6 +316,7 @@ defmodule UnitaresSentinel.CycleStateTest do
 
   test "update_last_event_ts/2 sets the cursor under the canonical key path", _ctx do
     updated = CycleState.update_last_event_ts(%{}, "2026-05-05T01:23:45.678901+00:00")
+
     assert get_in(updated, ["forced_release_alarm", "last_event_ts"]) ==
              "2026-05-05T01:23:45.678901+00:00"
   end
@@ -293,7 +325,9 @@ defmodule UnitaresSentinel.CycleStateTest do
     state = %{"forced_release_alarm" => %{"sibling_key" => "preserve_me"}}
     updated = CycleState.update_last_event_ts(state, "2026-05-05T01:23:45+00:00")
     assert get_in(updated, ["forced_release_alarm", "sibling_key"]) == "preserve_me"
-    assert get_in(updated, ["forced_release_alarm", "last_event_ts"]) == "2026-05-05T01:23:45+00:00"
+
+    assert get_in(updated, ["forced_release_alarm", "last_event_ts"]) ==
+             "2026-05-05T01:23:45+00:00"
   end
 
   # ---------------------------------------------------------------------------
@@ -313,6 +347,7 @@ defmodule UnitaresSentinel.CycleStateTest do
     # Cursor MUST be recoverable from the Python fixture without loss.
     cursor = CycleState.get_last_event_ts(state)
     assert is_binary(cursor), "Python fixture cursor must be a binary string"
+
     assert String.match?(cursor, ~r/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/),
            "Python fixture cursor must be ISO-8601 (got: #{inspect(cursor)})"
   end
