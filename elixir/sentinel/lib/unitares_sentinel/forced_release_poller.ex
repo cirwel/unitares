@@ -14,6 +14,11 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
   explicit callers; the GenServer is the runtime writer that emits and then
   persists.
 
+  First runtime boot is bounded: if both the in-memory cursor and file cursor
+  are absent, the GenServer polls from `:first_boot_lookback_seconds` ago
+  instead of scanning the full historical `lease_plane_events` table. Explicit
+  `tick(prior_cursor: nil)` calls keep their manual "fetch all" semantics.
+
   ## Phase-B promotion scope
 
   Python feeds `conflict_batch` alarms into `_emit_phase_b_transitions/2`.
@@ -67,7 +72,8 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
           persist: boolean(),
           state_path: Path.t() | nil,
           emit_findings: boolean(),
-          findings_opts: keyword()
+          findings_opts: keyword(),
+          first_boot_lookback_seconds: non_neg_integer()
         ]
 
   # ---- Public tick API --------------------------------------------------
@@ -327,6 +333,13 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
         Application.get_env(:unitares_sentinel, :poller_jitter_ms, 5_000)
       )
 
+    first_boot_lookback_seconds =
+      Keyword.get(
+        opts,
+        :first_boot_lookback_seconds,
+        Application.get_env(:unitares_sentinel, :first_boot_lookback_seconds, 7 * 24 * 60 * 60)
+      )
+
     cursor = load_cursor_from_state()
 
     state = %{
@@ -334,6 +347,7 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
       cursor: cursor,
       interval_ms: interval_ms,
       jitter_ms: jitter_ms,
+      first_boot_lookback_seconds: first_boot_lookback_seconds,
       emit_findings?:
         Keyword.get(
           opts,
@@ -375,7 +389,11 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
     # cursor_repair task) writing the shadow file between ticks; without this,
     # the GenServer would clobber the operator's edit on the next tick.
     file_cursor = load_cursor_from_state()
-    effective_prior = max_cursor(state.cursor, file_cursor)
+
+    effective_prior =
+      state.cursor
+      |> max_cursor(file_cursor)
+      |> apply_first_boot_lookback(state)
 
     {alarms, new_cursor} =
       tick(prior_cursor: effective_prior, db: state.db, persist: false)
@@ -408,6 +426,13 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
   defp max_cursor(%DateTime{} = a, %DateTime{} = b) do
     if DateTime.compare(a, b) == :gt, do: a, else: b
   end
+
+  defp apply_first_boot_lookback(nil, %{first_boot_lookback_seconds: seconds})
+       when is_integer(seconds) and seconds > 0 do
+    DateTime.utc_now() |> DateTime.add(-seconds, :second)
+  end
+
+  defp apply_first_boot_lookback(cursor, _state), do: cursor
 
   defp emit_findings(_alarms, %{emit_findings?: false}), do: :ok
 

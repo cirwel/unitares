@@ -1,5 +1,11 @@
 import Config
 
+first_boot_lookback_seconds =
+  case System.get_env("UNITARES_SENTINEL_FIRST_BOOT_LOOKBACK_SECONDS") do
+    nil -> 7 * 24 * 60 * 60
+    raw -> String.to_integer(raw)
+  end
+
 config :unitares_sentinel,
   database_url:
     System.get_env("UNITARES_SENTINEL_DATABASE_URL") ||
@@ -8,6 +14,7 @@ config :unitares_sentinel,
   pool_size: 2,
   poller_interval_ms: 30_000,
   poller_initial_delay_ms: 1_000,
+  first_boot_lookback_seconds: first_boot_lookback_seconds,
   findings_url: System.get_env("UNITARES_FINDINGS_URL") || "http://localhost:8767/api/findings",
   findings_timeout_ms: 3_000,
   findings_agent_id: System.get_env("UNITARES_SENTINEL_AGENT_ID") || "sentinel",

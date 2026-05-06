@@ -93,4 +93,49 @@ defmodule UnitaresSentinel.ForcedReleasePollerFindingsTest do
 
     GenServer.stop(pid)
   end
+
+  test "GenServer first boot bounds nil cursor by lookback window", ctx do
+    parent = self()
+    now = DateTime.utc_now()
+    old_surface = ctx.surface_prefix <> "/old_backfill"
+    new_surface = ctx.surface_prefix <> "/within_lookback"
+
+    {old_event_id, _old_ts} = H.insert_forced_event(old_surface, DateTime.add(now, -120, :second))
+    {new_event_id, _new_ts} = H.insert_forced_event(new_surface, DateTime.add(now, -10, :second))
+
+    http_post = fn _url, body, _headers, _timeout_ms ->
+      cond do
+        body["event_id"] == old_event_id ->
+          send(parent, {:posted_old_backfill, body})
+
+        body["event_id"] == new_event_id ->
+          send(parent, {:posted_within_lookback, body})
+
+        true ->
+          :ok
+      end
+
+      {:ok, 200, ~s({"success":true,"deduped":false})}
+    end
+
+    {:ok, pid} =
+      ForcedReleasePoller.start_link(
+        name: :"test_first_boot_lookback_#{System.unique_integer([:positive])}",
+        db: UnitaresSentinel.DB,
+        interval_ms: 60_000,
+        initial_delay_ms: 60_000,
+        jitter_ms: 0,
+        first_boot_lookback_seconds: 60,
+        emit_findings: true,
+        findings_opts: [http_post: http_post]
+      )
+
+    send(pid, :tick)
+
+    assert_receive {:posted_within_lookback, body}, 2_000
+    assert body["event_id"] == new_event_id
+    refute_receive {:posted_old_backfill, _body}, 200
+
+    GenServer.stop(pid)
+  end
 end
