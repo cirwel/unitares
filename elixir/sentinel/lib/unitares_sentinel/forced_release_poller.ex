@@ -1,6 +1,7 @@
 defmodule UnitaresSentinel.ForcedReleasePoller do
   @moduledoc """
-  Surface 1 cycle worker plus Surface 2 forced-release findings emission.
+  Surface 1 cycle worker plus Surface 2 forced-release findings emission and
+  Surface 3 Phase A lease advisory.
 
   Reads the cursor from `CycleState`, queries `lease_plane.lease_plane_events`
   for all three forced-release alarm classes, builds alarms via
@@ -18,6 +19,10 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
   are absent, the GenServer polls from `:first_boot_lookback_seconds` ago
   instead of scanning the full historical `lease_plane_events` table. Explicit
   `tick(prior_cursor: nil)` calls keep their manual "fetch all" semantics.
+
+  Runtime GenServer ticks are wrapped in the advisory lease scope
+  `resident:/sentinel_cycle`, matching Python `SentinelAgent.run_cycle/1`.
+  Advisory outcomes never gate polling, findings emission, or cursor advance.
 
   ## Phase-B promotion scope
 
@@ -64,7 +69,7 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
 
   require Logger
 
-  alias UnitaresSentinel.{CycleState, Findings, ForcedReleasePoller.Logic}
+  alias UnitaresSentinel.{CycleState, Findings, ForcedReleasePoller.Logic, LeaseAdvisory}
 
   @type opts :: [
           prior_cursor: DateTime.t() | nil,
@@ -73,6 +78,8 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
           state_path: Path.t() | nil,
           emit_findings: boolean(),
           findings_opts: keyword(),
+          lease_advisory: boolean(),
+          lease_opts: keyword(),
           first_boot_lookback_seconds: non_neg_integer()
         ]
 
@@ -355,6 +362,13 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
           Application.get_env(:unitares_sentinel, :emit_findings, true)
         ),
       findings_opts: Keyword.get(opts, :findings_opts, []),
+      lease_advisory?:
+        Keyword.get(
+          opts,
+          :lease_advisory,
+          Application.get_env(:unitares_sentinel, :lease_advisory_enabled, true)
+        ),
+      lease_opts: Keyword.get(opts, :lease_opts, []),
       # v0.1.3 §C2 tick-skip guard. Under self-scheduling (next :tick is
       # only enqueued AFTER the current tick returns), this flag will never
       # actually be true at message-arrival time — BEAM serializes handle_*
@@ -383,7 +397,17 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
   @impl true
   def handle_info(:tick, state) do
     state = %{state | running?: true}
+    lease = acquire_runtime_lease(state)
 
+    try do
+      next_state = run_runtime_tick(state)
+      {:noreply, next_state}
+    after
+      release_runtime_lease(lease, state)
+    end
+  end
+
+  defp run_runtime_tick(state) do
     # Council fold: architect #2 (PR #376). Re-read the file cursor each tick
     # and use max(in-memory, file). Defends against an operator (or a future
     # cursor_repair task) writing the shadow file between ticks; without this,
@@ -408,8 +432,19 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
     # simultaneous boots (architect #5).
     Process.send_after(self(), :tick, state.interval_ms + sample_jitter(state.jitter_ms))
 
-    {:noreply, %{state | running?: false, cursor: new_cursor}}
+    %{state | running?: false, cursor: new_cursor}
   end
+
+  defp acquire_runtime_lease(%{lease_advisory?: false}),
+    do: %{outcome: :service_unavailable, lease_id: nil}
+
+  defp acquire_runtime_lease(%{lease_opts: lease_opts}),
+    do: LeaseAdvisory.acquire_cycle(lease_opts)
+
+  defp release_runtime_lease(_lease, %{lease_advisory?: false}), do: :ok
+
+  defp release_runtime_lease(lease, %{lease_opts: lease_opts}),
+    do: LeaseAdvisory.release(lease, lease_opts)
 
   # Symmetric ±jitter_ms uniform sample. Non-negative result clamp avoids
   # ever scheduling a tick into the past if jitter_ms ever exceeds interval_ms

@@ -138,4 +138,86 @@ defmodule UnitaresSentinel.ForcedReleasePollerFindingsTest do
 
     GenServer.stop(pid)
   end
+
+  test "GenServer wraps runtime tick with advisory acquire and release", ctx do
+    parent = self()
+    shadow_path = ctx.state_file <> ".beam"
+    prior = ~U[2030-01-02 00:00:00.000000Z]
+    event_ts = DateTime.add(prior, 1, :second)
+    surface_id = ctx.surface_prefix <> "/lease_advisory"
+    lease_id = "33333333-3333-3333-3333-333333333333"
+    holder_uuid = "44444444-4444-4444-4444-444444444444"
+
+    File.write!(
+      ctx.state_file,
+      ~s({"forced_release_alarm":{"last_event_ts":"#{DateTime.to_iso8601(prior)}"}})
+    )
+
+    {event_id, _returned_ts} = H.insert_forced_event(surface_id, event_ts)
+
+    lease_http_post = fn url, body, _headers, _timeout_ms ->
+      cond do
+        String.ends_with?(url, "/v1/lease/acquire") ->
+          send(parent, {:lease_acquire, body})
+
+          {:ok, 200,
+           Jason.encode!(%{
+             ok: true,
+             idempotent: false,
+             lease: %{lease_id: lease_id},
+             drift_warning: []
+           })}
+
+        String.ends_with?(url, "/v1/lease/release") ->
+          send(parent, {:lease_release, body, File.exists?(shadow_path)})
+          {:ok, 200, ~s({"ok":true})}
+      end
+    end
+
+    findings_http_post = fn _url, body, _headers, _timeout_ms ->
+      if body["event_id"] == event_id do
+        send(parent, {:posted_target_alarm, body, File.exists?(shadow_path)})
+      end
+
+      {:ok, 200, ~s({"success":true,"deduped":false})}
+    end
+
+    {:ok, pid} =
+      ForcedReleasePoller.start_link(
+        name: :"test_lease_advisory_#{System.unique_integer([:positive])}",
+        db: UnitaresSentinel.DB,
+        interval_ms: 60_000,
+        initial_delay_ms: 60_000,
+        jitter_ms: 0,
+        lease_advisory: true,
+        lease_opts: [
+          base_url: "http://lease.test",
+          bearer_token: "test-token",
+          holder_agent_uuid: holder_uuid,
+          http_post: lease_http_post
+        ],
+        emit_findings: true,
+        findings_opts: [http_post: findings_http_post]
+      )
+
+    send(pid, :tick)
+
+    assert_receive {:lease_acquire, acquire_body}, 2_000
+    assert acquire_body["surface_id"] == "resident:/sentinel_cycle"
+    assert acquire_body["holder_agent_uuid"] == holder_uuid
+    assert acquire_body["holder_class"] == "process_instance"
+    assert acquire_body["holder_kind"] == "remote_heartbeat"
+    assert acquire_body["ttl_s"] == 300
+    assert acquire_body["intent"] == "sentinel analysis cycle"
+
+    assert_receive {:posted_target_alarm, body, persisted_before_post?}, 2_000
+    assert body["event_id"] == event_id
+    refute persisted_before_post?
+
+    assert_receive {:lease_release, release_body, persisted_before_release?}, 2_000
+    assert release_body == %{"lease_id" => lease_id, "release_reason" => "normal"}
+    assert persisted_before_release?
+
+    GenServer.stop(pid)
+  end
 end

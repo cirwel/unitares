@@ -9,6 +9,7 @@ config :unitares_sentinel,
   start_postgrex: false,
   start_poller: false,
   start_finch: false,
+  lease_advisory_enabled: false,
   database_url:
     System.get_env("UNITARES_SENTINEL_DATABASE_URL") ||
       System.get_env("UNITARES_LEASE_PLANE_DATABASE_URL") ||
