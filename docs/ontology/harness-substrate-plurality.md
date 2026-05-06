@@ -1,7 +1,7 @@
 # Harness Substrate Plurality — Ontology Plan
 
 **Created:** April 29, 2026  
-**Last Updated:** April 30, 2026
+**Last Updated:** May 6, 2026
 **Status:** Draft for review  
 **Companion to:** `docs/ontology/identity.md`, `docs/ontology/plan.md`
 
@@ -205,6 +205,12 @@ Recommended response annotation:
   "assurance": "strong"
 }
 ```
+
+**Implementation note (2026-05-06):** identity/onboard payload builders now
+emit `identity_context.schema = "s22.identity_response.v1"` plus top-level
+`identity_assurance`. The context explicitly marks UUID as the registry anchor,
+`agent_id` as a public/structured handle, `display_name` as social/cosmetic,
+and harness/model fields as descriptive context rather than identity proof.
 
 ### Process updates
 

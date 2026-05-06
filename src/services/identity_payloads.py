@@ -6,6 +6,28 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 
+S22_IDENTITY_RESPONSE_SCHEMA = "s22.identity_response.v1"
+
+_STRONG_IDENTITY_SOURCES = {
+    "continuity_token",
+    "client_session_id",
+    "explicit_client_session_id",
+    "explicit_client_session_id_scoped",
+    "mcp_session_id",
+    "x_session_id",
+    "oauth_client_id",
+    "agent_uuid_direct",
+    "agent_uuid_direct_fastpath",
+}
+
+_MEDIUM_IDENTITY_SOURCES = {
+    "x_client_id",
+    "pinned_onboard_session",
+    "context_mcp_session_id",
+    "context_session_key",
+}
+
+
 def build_identity_response_data(
     *,
     agent_uuid: str,
@@ -23,8 +45,19 @@ def build_identity_response_data(
     identity_resolution_outcome: Optional[str] = None,
     provisional_lineage: bool = False,
     lineage_state: Optional[str] = None,
+    client_hint: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the identity() response payload."""
+    identity_context = build_identity_response_context(
+        agent_uuid=agent_uuid,
+        agent_id=agent_id,
+        display_name=display_name,
+        session_resolution_source=continuity_source,
+        identity_status=identity_status,
+        identity_resolution_outcome=identity_resolution_outcome,
+        client_hint=client_hint,
+        model_type=model_type,
+    )
     response_data = {
         "uuid": agent_uuid,
         "agent_id": agent_id,
@@ -33,6 +66,8 @@ def build_identity_response_data(
         "session_resolution_source": continuity_source,
         "continuity_token_supported": continuity_support.get("enabled", False),
         "identity_status": identity_status,
+        "identity_context": identity_context,
+        "identity_assurance": identity_context["identity_assurance"],
         "bound_identity": {
             "uuid": agent_uuid,
             "agent_id": agent_id,
@@ -106,8 +141,20 @@ def build_identity_diag_payload(
     identity_resolution_outcome: Optional[str] = None,
     provisional_lineage: bool = False,
     lineage_state: Optional[str] = None,
+    client_hint: Optional[str] = None,
+    model_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the lightweight identity diagnostic payload used by fast-return paths."""
+    identity_context = build_identity_response_context(
+        agent_uuid=agent_uuid,
+        agent_id=agent_id,
+        display_name=display_name,
+        session_resolution_source=continuity_source,
+        identity_status=identity_status,
+        identity_resolution_outcome=identity_resolution_outcome,
+        client_hint=client_hint,
+        model_type=model_type,
+    )
     payload = {
         "uuid": agent_uuid,
         "agent_id": agent_id,
@@ -116,6 +163,8 @@ def build_identity_diag_payload(
         "session_resolution_source": continuity_source,
         "continuity_token_supported": continuity_support.get("enabled", False),
         "identity_status": identity_status,
+        "identity_context": identity_context,
+        "identity_assurance": identity_context["identity_assurance"],
         "bound_identity": {
             "uuid": agent_uuid,
             "agent_id": agent_id,
@@ -160,6 +209,17 @@ def build_onboard_response_data(
     provisional_lineage: bool = False,
 ) -> dict:
     """Build the onboard() response payload."""
+    identity_status = "created" if is_new else ("reactivated" if was_archived else "resumed")
+    identity_context = build_identity_response_context(
+        agent_uuid=agent_uuid,
+        agent_id=structured_agent_id,
+        display_name=agent_label,
+        session_resolution_source=continuity_source,
+        identity_status=identity_status,
+        identity_resolution_outcome=identity_resolution_outcome,
+        client_hint=client_hint,
+        model_type=None,
+    )
     next_calls = [
         {
             "tool": "process_agent_update",
@@ -242,6 +302,8 @@ def build_onboard_response_data(
         "client_session_id": stable_session_id,
         "session_resolution_source": continuity_source,
         "continuity_token_supported": continuity_support.get("enabled", False),
+        "identity_context": identity_context,
+        "identity_assurance": identity_context["identity_assurance"],
         "date_context": {"date": datetime.now().strftime("%Y-%m-%d"), "source": "mcp-server"},
         "next_step": "Call process_agent_update with response_text describing your work",
     }
@@ -322,3 +384,140 @@ def build_onboard_response_data(
         }
 
     return result
+
+
+def build_identity_response_context(
+    *,
+    agent_uuid: str,
+    agent_id: str,
+    display_name: Optional[str],
+    session_resolution_source: Optional[str],
+    identity_status: Optional[str],
+    identity_resolution_outcome: Optional[str] = None,
+    client_hint: Optional[str] = None,
+    model_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build S22 response annotation for identity/onboard payloads.
+
+    This is response-shape metadata, not an authentication decision. It makes
+    the ontology explicit for clients: UUID is the registry anchor; agent_id
+    is a public/structured handle in identity responses; display_name is
+    social/cosmetic; harness/model context is descriptive; assurance is the
+    strength of the session-resolution signal.
+    """
+    source_key = _normalize_source(session_resolution_source)
+    identity_assurance = _identity_assurance_from_source(source_key)
+    continuity_claim = _continuity_claim(
+        source_key,
+        identity_status=identity_status,
+        identity_resolution_outcome=identity_resolution_outcome,
+    )
+
+    context = {
+        "schema": S22_IDENTITY_RESPONSE_SCHEMA,
+        "identity_is": "uuid",
+        "label_is": "social_or_cosmetic",
+        "agent_id_is": "public_structured_handle",
+        "harness_is": "context_not_identity_proof",
+        "continuity_claim": continuity_claim,
+        "identity_assurance": identity_assurance,
+        "registry": {
+            "uuid": agent_uuid,
+            "role": "registry_anchor",
+            "is_identity_key": True,
+        },
+        "public_handle": {
+            "agent_id": agent_id,
+            "role": "public_structured_handle",
+            "is_identity_key": False,
+        },
+        "label": {
+            "display_name": display_name,
+            "role": "social_or_cosmetic",
+            "is_identity_key": False,
+        },
+        "harness_context": {
+            "harness_type": _normalize_optional_text(client_hint) or "unknown",
+            "model": _normalize_optional_text(model_type),
+            "role": "descriptive_context",
+            "is_identity_proof": False,
+        },
+    }
+    if identity_status:
+        context["identity_status"] = identity_status
+    if identity_resolution_outcome:
+        context["identity_resolution_outcome"] = identity_resolution_outcome
+    return context
+
+
+def _identity_assurance_from_source(source_key: str) -> Dict[str, Any]:
+    if source_key in _STRONG_IDENTITY_SOURCES:
+        return {
+            "tier": "strong",
+            "score": 1.0,
+            "session_source": source_key,
+            "trajectory_confidence": None,
+            "reason": "cryptographic, explicit stable session, or direct UUID proof path",
+        }
+    if source_key in _MEDIUM_IDENTITY_SOURCES:
+        return {
+            "tier": "medium",
+            "score": 0.7,
+            "session_source": source_key,
+            "trajectory_confidence": None,
+            "reason": "session continuity source with weaker explicit proof",
+        }
+    return {
+        "tier": "weak",
+        "score": 0.35,
+        "session_source": source_key,
+        "trajectory_confidence": None,
+        "reason": "heuristic, fallback, or unknown session source",
+    }
+
+
+def _continuity_claim(
+    source_key: str,
+    *,
+    identity_status: Optional[str],
+    identity_resolution_outcome: Optional[str],
+) -> str:
+    outcome = _normalize_source(identity_resolution_outcome)
+    status = _normalize_source(identity_status)
+    if outcome == "minted_after_resume_miss":
+        return "fresh_uuid_minted_after_resume_miss"
+    if outcome == "minted_force_new":
+        return "fresh_uuid_minted_by_force_new"
+    if outcome == "minted_fresh" or status == "created":
+        return "fresh_uuid_minted"
+    if source_key == "continuity_token":
+        return "resumed_by_continuity_token"
+    if source_key in {"agent_uuid_direct", "agent_uuid_direct_fastpath"}:
+        return source_key.replace("agent_uuid", "resumed_by_uuid")
+    if source_key in {
+        "client_session_id",
+        "explicit_client_session_id",
+        "explicit_client_session_id_scoped",
+    }:
+        return "resumed_by_explicit_session"
+    if source_key in {"mcp_session_id", "x_session_id", "oauth_client_id", "x_client_id"}:
+        return "resumed_by_transport_session"
+    if source_key == "pinned_onboard_session":
+        return "resumed_by_recent_onboard_pin"
+    if status == "reactivated":
+        return "resumed_archived_identity_reactivated"
+    if status == "resumed":
+        return "resumed_source_unknown"
+    return "heuristic_or_fallback_resolution"
+
+
+def _normalize_source(value: Optional[str]) -> str:
+    text = _normalize_optional_text(value)
+    return text.lower() if text else "unknown"
+
+
+def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None

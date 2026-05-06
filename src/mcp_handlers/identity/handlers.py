@@ -616,6 +616,8 @@ def _build_identity_diag_payload_for_request(
         identity_resolution_outcome=identity_resolution_outcome,
         provisional_lineage=provisional_lineage,
         lineage_state=lineage_state,
+        client_hint=arguments.get("client_hint"),
+        model_type=model_type,
     )
 
 
@@ -1251,6 +1253,7 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
         verbose=verbose,
         provisional_lineage=_r2_prov_main,
         lineage_state=_r2_state_main,
+        client_hint=arguments.get("client_hint"),
     )
 
     # Auto-bind: automatically perform session binding so agents don't need a separate bind_session call
