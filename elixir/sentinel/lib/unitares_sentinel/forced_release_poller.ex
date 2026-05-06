@@ -24,6 +24,10 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
   `resident:/sentinel_cycle`, matching Python `SentinelAgent.run_cycle/1`.
   Advisory outcomes never gate polling, findings emission, or cursor advance.
 
+  The runtime tick body runs inside a `Task` with a 30s budget by default.
+  This is the BEAM-side replacement for Python's anyio/asyncio escape hatch:
+  no anyio loop exists here, but the cycle still gets a hard runtime bound.
+
   ## Phase-B promotion scope
 
   Python feeds `conflict_batch` alarms into `_emit_phase_b_transitions/2`.
@@ -80,6 +84,7 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
           findings_opts: keyword(),
           lease_advisory: boolean(),
           lease_opts: keyword(),
+          tick_timeout_ms: pos_integer(),
           first_boot_lookback_seconds: non_neg_integer()
         ]
 
@@ -369,6 +374,12 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
           Application.get_env(:unitares_sentinel, :lease_advisory_enabled, true)
         ),
       lease_opts: Keyword.get(opts, :lease_opts, []),
+      tick_timeout_ms:
+        Keyword.get(
+          opts,
+          :tick_timeout_ms,
+          Application.get_env(:unitares_sentinel, :poller_tick_timeout_ms, 30_000)
+        ),
       # v0.1.3 §C2 tick-skip guard. Under self-scheduling (next :tick is
       # only enqueued AFTER the current tick returns), this flag will never
       # actually be true at message-arrival time — BEAM serializes handle_*
@@ -400,10 +411,34 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
     lease = acquire_runtime_lease(state)
 
     try do
-      next_state = run_runtime_tick(state)
-      {:noreply, next_state}
+      case await_runtime_tick(state) do
+        {:ok, next_state} ->
+          {:noreply, next_state}
+
+        :timeout ->
+          Logger.warning(
+            "ForcedReleasePoller: runtime tick exceeded #{state.tick_timeout_ms}ms — cursor unchanged"
+          )
+
+          schedule_next_tick(state)
+          {:noreply, %{state | running?: false}}
+      end
     after
       release_runtime_lease(lease, state)
+    end
+  end
+
+  defp await_runtime_tick(%{tick_timeout_ms: timeout_ms} = state) do
+    task = Task.async(fn -> run_runtime_tick(state) end)
+
+    # Keep task exits observable via Task.yield/2 while letting the caller's
+    # `after` cleanup release the advisory lease before propagating the exit.
+    Process.unlink(task.pid)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, next_state} -> {:ok, next_state}
+      {:exit, reason} -> exit(reason)
+      nil -> :timeout
     end
   end
 
@@ -430,9 +465,13 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
 
     # Jitter the next tick to avoid Python/BEAM lockstep races after
     # simultaneous boots (architect #5).
-    Process.send_after(self(), :tick, state.interval_ms + sample_jitter(state.jitter_ms))
+    schedule_next_tick(state)
 
     %{state | running?: false, cursor: new_cursor}
+  end
+
+  defp schedule_next_tick(state) do
+    Process.send_after(self(), :tick, state.interval_ms + sample_jitter(state.jitter_ms))
   end
 
   defp acquire_runtime_lease(%{lease_advisory?: false}),

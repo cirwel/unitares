@@ -17,6 +17,8 @@ defmodule UnitaresSentinel.ForcedReleasePollerStructureTest do
 
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias UnitaresSentinel.ForcedReleasePoller
   alias SentinelTestHelpers, as: H
 
@@ -199,5 +201,59 @@ defmodule UnitaresSentinel.ForcedReleasePollerStructureTest do
     assert Process.alive?(pid), "tick after guard clear must not crash the GenServer"
 
     GenServer.stop(pid)
+  end
+
+  test "GenServer releases advisory lease before propagating runtime task exits" do
+    capture_log(fn ->
+      parent = self()
+      fake_db = :"nonexistent_db_#{System.unique_integer([:positive])}"
+      lease_id = "66666666-6666-6666-6666-666666666666"
+
+      lease_http_post = fn url, body, _headers, _timeout_ms ->
+        cond do
+          String.ends_with?(url, "/v1/lease/acquire") ->
+            send(parent, {:lease_acquire, body})
+
+            {:ok, 200,
+             Jason.encode!(%{
+               ok: true,
+               idempotent: false,
+               lease: %{lease_id: lease_id},
+               drift_warning: []
+             })}
+
+          String.ends_with?(url, "/v1/lease/release") ->
+            send(parent, {:lease_release, body})
+            {:ok, 200, ~s({"ok":true})}
+        end
+      end
+
+      {:ok, pid} =
+        GenServer.start(
+          ForcedReleasePoller,
+          [
+            db: fake_db,
+            interval_ms: 60_000,
+            initial_delay_ms: 60_000,
+            jitter_ms: 0,
+            tick_timeout_ms: 1_000,
+            lease_advisory: true,
+            lease_opts: [
+              base_url: "http://lease.test",
+              bearer_token: "test-token",
+              http_post: lease_http_post
+            ]
+          ],
+          name: :"test_task_exit_release_#{System.unique_integer([:positive])}"
+        )
+
+      ref = Process.monitor(pid)
+      send(pid, :tick)
+
+      assert_receive {:lease_acquire, _acquire_body}, 2_000
+      assert_receive {:lease_release, release_body}, 2_000
+      assert release_body == %{"lease_id" => lease_id, "release_reason" => "normal"}
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2_000
+    end)
   end
 end

@@ -220,4 +220,83 @@ defmodule UnitaresSentinel.ForcedReleasePollerFindingsTest do
 
     GenServer.stop(pid)
   end
+
+  test "GenServer runtime task timeout preserves cursor and releases advisory lease", ctx do
+    parent = self()
+    shadow_path = ctx.state_file <> ".beam"
+    prior = ~U[2030-01-03 00:00:00.000000Z]
+    event_ts = DateTime.add(prior, 1, :second)
+    surface_id = ctx.surface_prefix <> "/runtime_timeout"
+    lease_id = "55555555-5555-5555-5555-555555555555"
+
+    File.write!(
+      ctx.state_file,
+      ~s({"forced_release_alarm":{"last_event_ts":"#{DateTime.to_iso8601(prior)}"}})
+    )
+
+    {event_id, _returned_ts} = H.insert_forced_event(surface_id, event_ts)
+
+    lease_http_post = fn url, body, _headers, _timeout_ms ->
+      cond do
+        String.ends_with?(url, "/v1/lease/acquire") ->
+          send(parent, {:lease_acquire, body})
+
+          {:ok, 200,
+           Jason.encode!(%{
+             ok: true,
+             idempotent: false,
+             lease: %{lease_id: lease_id},
+             drift_warning: []
+           })}
+
+        String.ends_with?(url, "/v1/lease/release") ->
+          send(parent, {:lease_release, body, File.exists?(shadow_path)})
+          {:ok, 200, ~s({"ok":true})}
+      end
+    end
+
+    findings_http_post = fn _url, body, _headers, _timeout_ms ->
+      if body["event_id"] == event_id do
+        send(parent, {:finding_emit_started, body})
+        Process.sleep(5_000)
+      end
+
+      {:ok, 200, ~s({"success":true,"deduped":false})}
+    end
+
+    {:ok, pid} =
+      ForcedReleasePoller.start_link(
+        name: :"test_runtime_timeout_#{System.unique_integer([:positive])}",
+        db: UnitaresSentinel.DB,
+        interval_ms: 60_000,
+        initial_delay_ms: 60_000,
+        jitter_ms: 0,
+        tick_timeout_ms: 25,
+        lease_advisory: true,
+        lease_opts: [
+          base_url: "http://lease.test",
+          bearer_token: "test-token",
+          http_post: lease_http_post
+        ],
+        emit_findings: true,
+        findings_opts: [http_post: findings_http_post]
+      )
+
+    send(pid, :tick)
+
+    assert_receive {:lease_acquire, _acquire_body}, 2_000
+    assert_receive {:finding_emit_started, body}, 2_000
+    assert body["event_id"] == event_id
+
+    assert_receive {:lease_release, release_body, persisted_before_release?}, 2_000
+    assert release_body == %{"lease_id" => lease_id, "release_reason" => "normal"}
+    refute persisted_before_release?, "timed-out runtime task must not advance the cursor"
+
+    state = :sys.get_state(pid)
+    refute state.running?
+    assert DateTime.compare(state.cursor, prior) == :eq
+    refute File.exists?(shadow_path)
+
+    GenServer.stop(pid)
+  end
 end
