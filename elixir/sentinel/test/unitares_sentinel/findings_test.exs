@@ -34,6 +34,54 @@ defmodule UnitaresSentinel.FindingsTest do
     assert body["surface_kind"] == "dialectic"
   end
 
+  test "finding_body mirrors Python sentinel_finding shape and fingerprint" do
+    body =
+      Findings.finding_body(
+        %{
+          type: "coordinated_degradation",
+          violation_class: "BEH",
+          severity: "high",
+          summary: "3 agents drifting in lockstep"
+        },
+        agent_id: "sentinel-test-uuid",
+        agent_name: "Sentinel"
+      )
+
+    assert body["type"] == "sentinel_finding"
+    assert body["severity"] == "high"
+    assert body["message"] == "3 agents drifting in lockstep"
+    assert body["agent_id"] == "sentinel-test-uuid"
+    assert body["agent_name"] == "Sentinel"
+    assert body["violation_class"] == "BEH"
+    assert body["finding_type"] == "coordinated_degradation"
+    assert body["fingerprint"] == "da9b8e957ab6971e"
+  end
+
+  test "post_finding returns true only for accepted non-deduped response" do
+    http_post = fn url, body, headers, timeout_ms ->
+      assert url == "http://example.test/api/findings"
+      assert body["type"] == "sentinel_finding"
+      assert body["finding_type"] == "verdict_shift"
+      assert {"Content-Type", "application/json"} in headers
+      assert timeout_ms == 123
+
+      {:ok, 200, ~s({"success":true,"deduped":false})}
+    end
+
+    assert Findings.post_finding(
+             %{
+               type: "verdict_shift",
+               violation_class: "ENT",
+               severity: "high",
+               summary: "Pause rate 40% in last 10min (2/5)"
+             },
+             url: "http://example.test/api/findings",
+             timeout_ms: 123,
+             agent_id: "sentinel-test-uuid",
+             http_post: http_post
+           )
+  end
+
   test "post_alarm returns true only for accepted non-deduped response" do
     http_post = fn url, body, headers, timeout_ms ->
       assert url == "http://example.test/api/findings"
