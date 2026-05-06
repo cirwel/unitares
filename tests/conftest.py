@@ -299,6 +299,38 @@ def _isolate_db_backend(monkeypatch):
     storage_module._db_ready_cache.clear()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_tool_usage_tracker(tmp_path_factory):
+    """
+    Redirect the tool_usage_tracker singleton to a session-scoped tmp file.
+
+    governance_monitor.process_update() calls get_tool_usage_tracker().get_usage_stats()
+    every cycle as part of dual-log complexity grounding. The default singleton
+    points at <repo>/data/tool_usage.jsonl, which on developer machines accumulates
+    to hundreds of MB / millions of entries — get_usage_stats() reads and json.loads()
+    every line on each call.
+
+    Measured cost (2026-05-06 dev box, 176MB / 1.09M-line tool_usage.jsonl):
+      - Default tracker: 2779 ms / process_update
+      - Tmp tracker:        0.3 ms / process_update  (~9000x speedup)
+
+    Tests that legitimately exercise the tracker construct ToolUsageTracker
+    directly with their own log_file (test_tool_usage_tracker.py), or patch
+    get_tool_usage_tracker via unittest.mock.patch — both override this default.
+
+    Session scope is safe because the tracker has no cross-test state we read;
+    the file is only ever appended to and we never assert on its contents here.
+    """
+    import src.tool_usage_tracker as tut
+    tmp_log = tmp_path_factory.mktemp("tool_usage") / "tool_usage.jsonl"
+    original = tut._tool_usage_tracker
+    tut._tool_usage_tracker = tut.ToolUsageTracker(log_file=tmp_log)
+    try:
+        yield tut._tool_usage_tracker
+    finally:
+        tut._tool_usage_tracker = original
+
+
 @pytest.fixture(autouse=True)
 def _neutralize_metadata_loading(monkeypatch):
     """

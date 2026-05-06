@@ -41,7 +41,7 @@ _hash_worktree_python() {
 import hashlib
 import subprocess
 
-patterns = ["src/*.py", "tests/*.py", "agents/*.py"]
+patterns = ["src/*.py", "tests/*.py", "agents/*.py", "governance_core/*.py", "pyproject.toml"]
 proc = subprocess.run(
     ["git", "ls-files", "-z", "--", *patterns],
     check=True,
@@ -68,7 +68,7 @@ _hash_staged_python() {
 import hashlib
 import subprocess
 
-patterns = ["src/*.py", "tests/*.py", "agents/*.py"]
+patterns = ["src/*.py", "tests/*.py", "agents/*.py", "governance_core/*.py", "pyproject.toml"]
 proc = subprocess.run(
     ["git", "ls-files", "-s", "-z", "--", *patterns],
     check=True,
@@ -98,8 +98,8 @@ PY
 }
 
 _print_staged_dirty_python() {
-    git diff --name-only -- 'src/*.py' 'tests/*.py' 'agents/*.py'
-    git ls-files --others --exclude-standard -- 'src/*.py' 'tests/*.py' 'agents/*.py'
+    git diff --name-only -- 'src/*.py' 'tests/*.py' 'agents/*.py' 'governance_core/*.py' 'pyproject.toml'
+    git ls-files --others --exclude-standard -- 'src/*.py' 'tests/*.py' 'agents/*.py' 'governance_core/*.py' 'pyproject.toml'
 }
 
 # --- compute tree hash ---
