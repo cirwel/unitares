@@ -323,6 +323,13 @@ This is not merely DX. Evidence shape is part of how a harness describes action.
 | H7 | Tool-surface perturbation | Hermes | Same task with different toolsets; compare behavior and confidence |
 | H8 | Transport perturbation | Hermes CLI + gateway/cron | Same identity claim across interactive and non-interactive bodies |
 
+Operator helper:
+
+- `scripts/diagnostics/r6_dogfood.py --experiment h1|h3` emits read-only payload templates for the remaining controlled Hermes dogfood passes.
+- `--assess --comparison-key <key>` reads existing S22 write-context rows and reports whether the selected experiment has enough structured evidence.
+- H1 acceptance checks for one Hermes identity with two distinct model labels on the same comparison key.
+- H3 acceptance checks for distinct UNITARES identities sharing one Hermes memory-context label on the same comparison key.
+
 ## Proposed plan rows
 
 This document suggests adding one research row and one system row to `docs/ontology/plan.md` if accepted.
