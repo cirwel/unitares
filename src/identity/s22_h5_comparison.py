@@ -331,6 +331,11 @@ def _coerce_mapping(value: Any) -> dict[str, Any]:
             return {}
         if isinstance(parsed, Mapping):
             return dict(parsed)
+    try:
+        # asyncpg.Record is mapping-like but does not register as Mapping.
+        return dict(value)
+    except (TypeError, ValueError):
+        pass
     return {}
 
 

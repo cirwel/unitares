@@ -15,6 +15,17 @@ from src.identity.s22_h5_comparison import (
 )
 
 
+class _RecordLike:
+    def __init__(self, data):
+        self._data = data
+
+    def keys(self):
+        return self._data.keys()
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+
 def _row(harness: str, comparison_key: str = "h5-bounded-task", **extra):
     context = {
         "schema": "s22.write_context.v1",
@@ -63,6 +74,15 @@ def test_normalize_entry_reads_state_json_context():
     assert entry.canonical_harness == "codex-cli"
     assert entry.comparison_key == "h5-task"
     assert entry.task_outcome == "proceed"
+    assert entry.is_comparable is True
+
+
+def test_normalize_entry_accepts_asyncpg_record_like_rows():
+    entry = normalize_s22_h5_entry(_RecordLike(_row("codex-cli")))
+
+    assert entry is not None
+    assert entry.canonical_harness == "codex-cli"
+    assert entry.comparison_key == "h5-bounded-task"
     assert entry.is_comparable is True
 
 
