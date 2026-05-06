@@ -274,6 +274,55 @@ def assess_s22_h5_coverage(
     }
 
 
+def build_s22_h5_missing_payloads(
+    assessment: Mapping[str, Any],
+    *,
+    comparison_key: Optional[str] = None,
+    task_label: str = "Run S22 H5 coverage diagnostic",
+    task_outcome: str = "diagnostic-complete",
+) -> list[dict[str, Any]]:
+    """Build ready-to-send process_agent_update payloads for missing H5 entries."""
+    target_key = _clean_text(comparison_key)
+    comparison_sets = tuple(
+        item
+        for item in assessment.get("comparison_sets", ())
+        if isinstance(item, Mapping)
+    )
+    if not target_key:
+        target_key = _best_comparison_key(comparison_sets)
+    if not target_key:
+        return []
+
+    missing = _missing_harnesses_for_key(
+        comparison_sets,
+        target_key,
+        assessment.get("missing_comparable_harnesses", ()),
+    )
+    payloads = []
+    for harness in missing:
+        payloads.append({
+            "name": "process_agent_update",
+            "arguments": {
+                "response_text": (
+                    "S22 H5 comparable task entry recorded for "
+                    f"{target_key} via {harness}."
+                ),
+                "task_type": "testing",
+                "complexity": 0.2,
+                "confidence": 0.8,
+                "harness_type": harness,
+                "comparison_key": target_key,
+                "task_label": task_label,
+                "task_outcome": task_outcome,
+                "tool_surface": ["mcp:unitares"],
+                "governance_mode": "explicit",
+                "verification_source": "harness_self_report",
+                "response_mode": "minimal",
+            },
+        })
+    return payloads
+
+
 def normalize_s22_harness(value: Any) -> Optional[str]:
     text = _clean_text(value)
     if not text:
@@ -293,6 +342,51 @@ def normalize_s22_harness(value: Any) -> Optional[str]:
         "chatgpt-codex": "codex-cli",
     }
     return aliases.get(normalized, normalized)
+
+
+def _best_comparison_key(comparison_sets: Sequence[Mapping[str, Any]]) -> Optional[str]:
+    ranked = sorted(
+        comparison_sets,
+        key=lambda item: (
+            -_safe_int(item.get("entry_count")),
+            _clean_text(item.get("comparison_key")) or "",
+        ),
+    )
+    if not ranked:
+        return None
+    return _clean_text(ranked[0].get("comparison_key"))
+
+
+def _missing_harnesses_for_key(
+    comparison_sets: Sequence[Mapping[str, Any]],
+    target_key: str,
+    fallback_missing: Any,
+) -> list[str]:
+    for item in comparison_sets:
+        if _clean_text(item.get("comparison_key")) == target_key:
+            return sorted(
+                harness
+                for harness in (
+                    normalize_s22_harness(value)
+                    for value in item.get("missing_harnesses", ())
+                )
+                if harness
+            )
+    return sorted(
+        harness
+        for harness in (
+            normalize_s22_harness(value)
+            for value in (fallback_missing or ())
+        )
+        if harness
+    )
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _ensure_entry(entry: S22H5Entry | Mapping[str, Any]) -> S22H5Entry:

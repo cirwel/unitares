@@ -9,6 +9,7 @@ from src.identity.s22_h5_comparison import (
     AGENT_STATE_S22_SQL,
     KG_S22_SQL,
     assess_s22_h5_coverage,
+    build_s22_h5_missing_payloads,
     collect_s22_h5_entries,
     normalize_s22_h5_entry,
     normalize_s22_harness,
@@ -125,6 +126,32 @@ def test_assess_s22_h5_coverage_reports_missing_harness():
     assert assessment["decision"] == "incomplete"
     assert assessment["reason"] == "missing_required_harness_entries"
     assert assessment["missing_comparable_harnesses"] == ["claude-code"]
+
+
+def test_build_missing_payloads_for_target_comparison_key():
+    assessment = assess_s22_h5_coverage([
+        _row("codex-cli", "s22-h5-2026-05-06"),
+    ])
+
+    payloads = build_s22_h5_missing_payloads(
+        assessment,
+        comparison_key="s22-h5-2026-05-06",
+    )
+
+    assert [payload["name"] for payload in payloads] == [
+        "process_agent_update",
+        "process_agent_update",
+    ]
+    assert [
+        payload["arguments"]["harness_type"] for payload in payloads
+    ] == ["claude-code", "hermes"]
+    for payload in payloads:
+        args = payload["arguments"]
+        assert args["comparison_key"] == "s22-h5-2026-05-06"
+        assert args["task_label"] == "Run S22 H5 coverage diagnostic"
+        assert args["task_outcome"] == "diagnostic-complete"
+        assert args["tool_surface"] == ["mcp:unitares"]
+        assert args["response_mode"] == "minimal"
 
 
 def test_assess_s22_h5_coverage_rejects_unsituated_entry():

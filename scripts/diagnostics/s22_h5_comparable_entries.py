@@ -26,6 +26,7 @@ from src.db import close_db
 from src.identity.s22_h5_comparison import (
     DEFAULT_REQUIRED_HARNESSES,
     assess_s22_h5_coverage,
+    build_s22_h5_missing_payloads,
     collect_s22_h5_entries,
 )
 
@@ -59,6 +60,24 @@ async def main() -> int:
         action="store_true",
         help="Print the full assessment payload as JSON.",
     )
+    parser.add_argument(
+        "--show-missing-payloads",
+        action="store_true",
+        help=(
+            "Include process_agent_update payload templates for missing "
+            "required harness entries. Read-only; does not call the tool."
+        ),
+    )
+    parser.add_argument(
+        "--task-label",
+        default="Run S22 H5 coverage diagnostic",
+        help="Task label to include in missing-entry payload templates.",
+    )
+    parser.add_argument(
+        "--task-outcome",
+        default="diagnostic-complete",
+        help="Task outcome to include in missing-entry payload templates.",
+    )
     args = parser.parse_args()
 
     try:
@@ -76,6 +95,13 @@ async def main() -> int:
         )
         if args.comparison_key:
             assessment["target_comparison_key"] = args.comparison_key
+        if args.show_missing_payloads:
+            assessment["missing_payloads"] = build_s22_h5_missing_payloads(
+                assessment,
+                comparison_key=args.comparison_key,
+                task_label=args.task_label,
+                task_outcome=args.task_outcome,
+            )
     finally:
         await close_db()
 
@@ -119,6 +145,10 @@ def _print_text_report(assessment: dict) -> None:
 
     for recommendation in assessment.get("recommendations", []):
         print(f"recommendation: {recommendation}")
+
+    for payload in assessment.get("missing_payloads", []):
+        harness = payload.get("arguments", {}).get("harness_type", "unknown")
+        print(f"missing payload for {harness}: {json.dumps(payload, sort_keys=True)}")
 
 
 if __name__ == "__main__":
