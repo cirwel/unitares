@@ -1,6 +1,6 @@
 # S7 - KG Provenance Lineage Schema
 
-**Status:** Schema decision v0.1 + persistence round-trip + authoritative snapshot builder shipped. No migration.
+**Status:** Schema decision v0.1 + persistence round-trip + authoritative snapshot builder + aggregation helper shipped. No migration.
 **Last Updated:** 2026-05-06
 **Scope:** Plan row S7 (`docs/ontology/plan.md`). Defines how KG discoveries should represent writer identity, lineage state, and chain aggregation without treating UUID continuity or declared parentage as automatically confirmed.
 **Builds on:** R1 provisional-lineage marking, R2 Phase 1 lineage lifecycle, R3 trust-tier annotation, R5 KG cite-and-extend, R6/S22 provenance envelope vocabulary.
@@ -33,6 +33,7 @@ The runtime does not yet use them consistently for S7:
 - `src/db/mixins/knowledge_graph.py::kg_add_discovery` now inserts and conflict-updates `provenance_chain`.
 - `src/storage/knowledge_graph_postgres.py::_dict_to_discovery` now hydrates `provenance_chain`.
 - The current chain builder lives at `src/identity/provenance_chain.py`. It walks `core.identities` via `read_lineage_state`, emits S7 `lineage_link.v1` records with R2 lifecycle columns, orders links root-to-writer, and stops with explicit reasons for missing parents, cycles, or max-depth cutoffs. The KG handler falls back to metadata-derived ancestry only when the authoritative DB snapshot path errors.
+- The read-side aggregation helper also lives at `src/identity/provenance_chain.py`. It evaluates `as_written` from the immutable snapshot and `current_valid` by rereading `core.identities`, excluding provisional links by default and clawing back demoted, archived, missing, or reparented links.
 
 So S7 does not need a new table first. It needs the existing JSONB column to carry an ontology-correct chain snapshot and a query policy for current-valid aggregation.
 
@@ -107,8 +108,8 @@ Provisional links are never included in default lineage-attributed aggregation. 
 1. **PR 0: this schema decision.** Doc-only. No runtime behavior.
 2. **PR 1: persistence round-trip.** Done 2026-05-06. `DiscoveryNode.provenance_chain` is passed by the single-store KG handler, inserted by the PostgreSQL backend, hydrated on read, and covered by unit tests. No schema migration; the column already exists.
 3. **PR 2: authoritative snapshot builder.** Done 2026-05-06 in `src/identity/provenance_chain.py`. It walks `core.identities`, records R2 lifecycle columns per link, serializes timestamps, marks aggregation eligibility, and stops with `chain_stop_reason` instead of fabricating missing ancestry.
-4. **PR 3: aggregation helper.** Next. Add a read helper that can answer `as_written` vs `current_valid`, excluding provisional links by default. This is the first place lineage-attributed KG counts should use the new contract.
-5. **PR 4: S22 merge point.** Add harness/model/transport/tool-surface fields to `provenance` once S22 field names are settled. Keep lineage links in `provenance_chain`; do not mix harness facts into chain links.
+4. **PR 3: aggregation helper.** Done 2026-05-06 in `src/identity/provenance_chain.py`. `evaluate_lineage_chain_aggregation` answers `as_written` vs `current_valid`; `aggregate_lineage_attribution` produces lineage-attributed counts without flipping existing stats endpoints. Provisional links are excluded by default and require explicit opt-in.
+5. **PR 4: S22 merge point.** Next. Add harness/model/transport/tool-surface fields to `provenance` once S22 field names are settled. Keep lineage links in `provenance_chain`; do not mix harness facts into chain links.
 6. **PR 5: indexing decision.** Add JSONB or generated-column indexes only after query volume shows they are needed.
 
 ## Non-Goals
