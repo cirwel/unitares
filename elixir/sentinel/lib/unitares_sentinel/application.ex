@@ -5,7 +5,8 @@ defmodule UnitaresSentinel.Application do
   The supervisor starts with no children in :test mode (`config/test.exs`).
   Runtime mode starts Postgrex, the Finch HTTP client pool used by Surface 2
   findings emission, the in-memory fleet state process, the `/ws/eisv`
-  consumer when `:start_websocket` is enabled, and the poller when
+  consumer when `:start_websocket` is enabled, the fleet finding emitter when
+  `:start_fleet_finding_emitter` is enabled, and the poller when
   `:start_poller` is enabled.
 
   Mirrors the `:start_application` gate that `UnitaresLeasePlane.Application`
@@ -27,7 +28,9 @@ defmodule UnitaresSentinel.Application do
   defp start_full do
     children =
       postgrex_children() ++
-        finch_children() ++ fleet_state_children() ++ websocket_children() ++ poller_children()
+        finch_children() ++
+        fleet_state_children() ++
+        websocket_children() ++ fleet_finding_emitter_children() ++ poller_children()
 
     Supervisor.start_link(children, strategy: :one_for_one, name: UnitaresSentinel.Supervisor)
   end
@@ -72,6 +75,24 @@ defmodule UnitaresSentinel.Application do
          reconnect_ms: Application.get_env(:unitares_sentinel, :websocket_reconnect_ms, 10_000),
          fleet_state:
            Application.get_env(:unitares_sentinel, :fleet_state_name, UnitaresSentinel.FleetState)}
+      ]
+    else
+      []
+    end
+  end
+
+  defp fleet_finding_emitter_children do
+    if Application.get_env(:unitares_sentinel, :start_fleet_finding_emitter, false) do
+      [
+        {UnitaresSentinel.FleetFindingEmitter,
+         fleet_state:
+           Application.get_env(:unitares_sentinel, :fleet_state_name, UnitaresSentinel.FleetState),
+         interval_ms: Application.get_env(:unitares_sentinel, :analysis_interval_ms, 300_000),
+         initial_delay_ms:
+           Application.get_env(:unitares_sentinel, :analysis_initial_delay_ms, 5_000),
+         jitter_ms: Application.get_env(:unitares_sentinel, :analysis_jitter_ms, 5_000),
+         tick_timeout_ms:
+           Application.get_env(:unitares_sentinel, :analysis_tick_timeout_ms, 45_000)}
       ]
     else
       []

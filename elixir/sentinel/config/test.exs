@@ -11,6 +11,7 @@ config :unitares_sentinel,
   start_finch: false,
   start_fleet_state: false,
   start_websocket: false,
+  start_fleet_finding_emitter: false,
   lease_advisory_enabled: false,
   database_url:
     System.get_env("UNITARES_SENTINEL_DATABASE_URL") ||
