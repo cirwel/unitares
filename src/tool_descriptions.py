@@ -34,6 +34,30 @@ _IDENTITY_DESCRIPTION_OVERRIDES = {
     ),
 }
 
+_DESCRIPTION_APPENDICES = {
+    "process_agent_update": (
+        "\n\nS22 PROVENANCE FIELDS (optional, descriptive, not identity proof):\n"
+        "- harness_type / harness: normalized harness family such as "
+        "\"codex-cli\", \"claude-code\", or \"hermes\"\n"
+        "- model_provider, model, transport, memory_context, tool_surface: "
+        "situating metadata for the write\n"
+        "- comparison_key, task_label, task_outcome: H5 fields for recording "
+        "the same bounded task across harnesses\n"
+        "\n"
+        "Example H5 provenance fields:\n"
+        "{\n"
+        "  \"harness_type\": \"codex-cli\",\n"
+        "  \"model_provider\": \"openai\",\n"
+        "  \"model\": \"gpt-5\",\n"
+        "  \"transport\": \"codex-cli\",\n"
+        "  \"tool_surface\": [\"terminal\", \"mcp:unitares\"],\n"
+        "  \"comparison_key\": \"s22-h5-2026-05-06\",\n"
+        "  \"task_label\": \"Run S22 H5 coverage diagnostic\",\n"
+        "  \"task_outcome\": \"diagnostic-complete\"\n"
+        "}"
+    ),
+}
+
 
 def _load_descriptions() -> dict:
     with open(_DESCRIPTIONS_FILE, encoding="utf-8") as f:
@@ -41,6 +65,9 @@ def _load_descriptions() -> dict:
     # Keep the large legacy JSON stable while overriding fast-moving identity
     # teaching text close to the S1-a implementation.
     descriptions.update(_IDENTITY_DESCRIPTION_OVERRIDES)
+    for tool_name, appendix in _DESCRIPTION_APPENDICES.items():
+        if tool_name in descriptions:
+            descriptions[tool_name] = f"{descriptions[tool_name]}{appendix}"
     return descriptions
 
 

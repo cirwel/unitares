@@ -226,6 +226,24 @@ class TestProcessAgentUpdateAcceptsRecentToolResults:
         assert len(params.recent_tool_results) == 1
         assert params.recent_tool_results[0].kind == "test"
 
+    def test_accepts_s22_h5_provenance_fields(self):
+        from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
+        params = ProcessAgentUpdateParams(
+            response_text="ran H5 diagnostic",
+            harness_type="codex-cli",
+            model_provider="openai",
+            model="gpt-5",
+            transport="codex-cli",
+            tool_surface=["terminal", "mcp:unitares"],
+            comparison_key="s22-h5-2026-05-06",
+            task_label="Run S22 H5 coverage diagnostic",
+            task_outcome="diagnostic-complete",
+        )
+        assert params.harness_type == "codex-cli"
+        assert params.comparison_key == "s22-h5-2026-05-06"
+        assert params.task_label == "Run S22 H5 coverage diagnostic"
+        assert params.task_outcome == "diagnostic-complete"
+
     def test_accepts_evidence_without_kind(self):
         from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
         params = ProcessAgentUpdateParams(
