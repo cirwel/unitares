@@ -281,12 +281,23 @@ class Resolution:
         conditions: List of merged conditions for resumption
         root_cause: Agreed understanding of the root cause
         reasoning: Combined reasoning from both agents
-        signature_a: Agent A's cryptographic signature (API key hash)
-        signature_b: Agent B's cryptographic signature (API key hash)
+        signature_a: Agent A's cryptographic signature
+        signature_b: Agent B's cryptographic signature
         timestamp: ISO timestamp of resolution creation
+        signature_version: Attestation scheme version. v1 (legacy, broken):
+            both signatures over the same last-synthesis-message; reviewer's
+            "signature" was over a message they never wrote. v2 (current):
+            each signature is over the canonical resolution payload (action +
+            conditions + root_cause + reasoning + timestamp), independently
+            signed with each agent's api_key. v2 signatures verify via
+            verify_signatures(); v1 cannot be verified because the source
+            message was not preserved.
 
-    The resolution is cryptographically signed by both agents to ensure
-    authenticity and prevent tampering.
+    The v2 attestation closes council 2026-05-06 NEW-2 — until then the
+    bilateral cryptographic claim was effectively single-signer-with-two-
+    keys. New sessions land at v2; the 31 historical v1 resolutions remain
+    on disk with signature_version=1 and verify_signatures() returning
+    False (intentionally — they are not provably bilateral).
     """
     action: str  # ResolutionAction
     conditions: List[str]
@@ -295,6 +306,7 @@ class Resolution:
     signature_a: str  # Agent A's signature
     signature_b: str  # Agent B's signature
     timestamp: str
+    signature_version: int = 1  # v2 = canonical-payload bilateral; default 1 for backward-compat decode of legacy on-disk rows
 
     def to_dict(self) -> Dict:
         """
@@ -317,6 +329,72 @@ class Resolution:
         """
         resolution_json = json.dumps(self.to_dict(), sort_keys=True)
         return hashlib.sha256(resolution_json.encode()).hexdigest()
+
+    def canonical_payload(self) -> bytes:
+        """The deterministic byte-string both agents independently sign in v2.
+
+        Excludes the signature fields themselves (signature_a, signature_b,
+        signature_version) so verification can compare against signatures
+        computed at finalization time. Lists are sorted for determinism so
+        the same set of conditions always hashes identically regardless of
+        merge ordering.
+        """
+        payload = {
+            "action": self.action,
+            "conditions": sorted(self.conditions or []),
+            "root_cause": self.root_cause,
+            "reasoning": self.reasoning,
+            "timestamp": self.timestamp,
+        }
+        return json.dumps(payload, sort_keys=True).encode("utf-8")
+
+    @staticmethod
+    def compute_signature(payload: bytes, api_key: str) -> str:
+        """SHA-256 of canonical_payload || ":" || api_key. Hex digest.
+
+        Symmetric scheme — verifier needs the api_key to recompute. The
+        secrecy property is "an attacker without the api_key cannot forge a
+        signature for a payload that another agent will accept." It is NOT a
+        public-key signature; do not treat this as non-repudiation. For
+        non-repudiation we'd need DPoP / asymmetric keys (decided shelved
+        2026-04-19; see docs/ontology/identity.md and project memory
+        identity-audit-2026-04-19).
+        """
+        if not api_key:
+            return ""
+        return hashlib.sha256(payload + b":" + api_key.encode("utf-8")).hexdigest()
+
+    def verify_signatures(self, api_key_a: str, api_key_b: str) -> bool:
+        """Verify both agents signed the canonical payload with their keys.
+
+        Returns False (not raises) when verification is not possible, in any
+        of the following cases:
+
+        - signature_version != 2 (legacy v1 attestation cannot be verified
+          because the source message was not preserved at the resolution
+          level).
+        - Either signature on the resolution is empty (unsigned).
+        - Either api_key is empty (cannot recompute the expected signature).
+
+        This makes "unverifiable" returnable as False rather than as a
+        vacuous-True when both sides happen to be empty. Callers can branch
+        on signature_version + signature emptiness to distinguish "legacy",
+        "single-signer (LLM-assisted)", and "verifiable bilateral".
+        """
+        if self.signature_version != 2:
+            return False
+        if not self.signature_a or not self.signature_b:
+            return False
+        if not api_key_a or not api_key_b:
+            return False
+        payload = self.canonical_payload()
+        expected_a = self.compute_signature(payload, api_key_a)
+        expected_b = self.compute_signature(payload, api_key_b)
+        # Threat model: in-process trusted callers verifying their own
+        # resolutions. Python str== short-circuits which leaks length info
+        # in adversarial settings; if we ever expose verify to untrusted
+        # callers switch to hmac.compare_digest.
+        return self.signature_a == expected_a and self.signature_b == expected_b
 
 
 @dataclass
@@ -796,18 +874,27 @@ class DialecticSession:
         return False
 
     def finalize_resolution(self,
-                           signature_a: str,
-                           signature_b: str) -> Resolution:
+                           api_key_a: str,
+                           api_key_b: str) -> Resolution:
         """
-        Create final signed resolution from agreed synthesis.
-        Intelligently merges proposals from both agents.
+        Create final v2-attested resolution from agreed synthesis.
+        Intelligently merges proposals from both agents and independently
+        signs the canonical payload with each agent's api_key.
+
+        Council 2026-05-06 NEW-2: previously this method took already-
+        computed signature_a/signature_b strings, and the only caller
+        (handle_submit_synthesis) computed both as last_msg.sign(api_key_X) —
+        meaning the reviewer's "signature" was over a message they never
+        wrote. v2 attestation moves signing into this method so both
+        signatures are guaranteed to be over the same canonical payload,
+        each with their own api_key.
 
         Args:
-            signature_a: Agent A's signature (API key hash)
-            signature_b: Agent B's signature (API key hash)
+            api_key_a: Paused agent's api_key
+            api_key_b: Reviewer's api_key (or empty string if unavailable)
 
         Returns:
-            Signed Resolution object with merged conditions
+            v2-attested Resolution with bilateral signatures
         """
         if self.phase != DialecticPhase.RESOLVED:
             raise ValueError(f"Cannot finalize in phase {self.phase.value}")
@@ -880,18 +967,29 @@ class DialecticSession:
                 else:
                     raise ValueError("No valid synthesis messages found")
 
-        resolution = Resolution(
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+        # Build the prototype with empty signatures, compute the canonical
+        # payload bytes, then sign with each agent's own api_key. This
+        # guarantees both signatures are over the same payload (closes
+        # NEW-2) — previously each was over its own last synthesis message
+        # and they happened to share the last one (single-signer-two-keys).
+        proto = Resolution(
             action=ResolutionAction.RESUME.value,
             conditions=merged["conditions"],
             root_cause=merged["root_cause"],
             reasoning=merged["reasoning"],
-            signature_a=signature_a,
-            signature_b=signature_b,
-            timestamp=datetime.now(timezone.utc).isoformat()
+            signature_a="",
+            signature_b="",
+            timestamp=timestamp,
+            signature_version=2,
         )
+        payload = proto.canonical_payload()
+        proto.signature_a = Resolution.compute_signature(payload, api_key_a)
+        proto.signature_b = Resolution.compute_signature(payload, api_key_b)
 
-        self.resolution = resolution
-        return resolution
+        self.resolution = proto
+        return proto
 
     def check_hard_limits(self, resolution: Resolution) -> tuple[bool, Optional[str]]:
         """

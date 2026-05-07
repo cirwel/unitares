@@ -1297,26 +1297,18 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
 
         # If converged, finalize resolution
         if result.get("success") and result.get("converged"):
-            # Generate signatures
+            # Bilateral attestation (v2): finalize_resolution signs the
+            # canonical resolution payload with each agent's own api_key.
+            # Council 2026-05-06 NEW-2 fixed: previously we computed both
+            # signatures over the SAME last synthesis message, so the
+            # reviewer's "signature" was over a message they never wrote.
             paused_meta = mcp_server.agent_metadata.get(session.paused_agent_id)
             reviewer_meta = mcp_server.agent_metadata.get(session.reviewer_agent_id)
 
             api_key_a = paused_meta.api_key if paused_meta and paused_meta.api_key else api_key
             api_key_b = reviewer_meta.api_key if reviewer_meta and reviewer_meta.api_key else ""
 
-            synthesis_messages = [msg for msg in session.transcript if msg.phase == "synthesis" and msg.agrees]
-            if synthesis_messages:
-                last_msg = synthesis_messages[-1]
-                signature_a = last_msg.sign(api_key_a) if api_key_a else ""
-                signature_b = last_msg.sign(api_key_b) if api_key_b else ""
-            else:
-                import hashlib
-                session_data = f"{session.session_id}:{api_key_a}"
-                signature_a = hashlib.sha256(session_data.encode()).hexdigest()[:32]
-                session_data = f"{session.session_id}:{api_key_b}"
-                signature_b = hashlib.sha256(session_data.encode()).hexdigest()[:32] if api_key_b else ""
-
-            resolution = session.finalize_resolution(signature_a, signature_b)
+            resolution = session.finalize_resolution(api_key_a, api_key_b)
             is_safe, violation = session.check_hard_limits(resolution)
 
             if not is_safe:
@@ -2054,11 +2046,19 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
             agrees=True,
         )
 
-        # 4. Finalize resolution through protocol (canonical schema)
-        resolution_obj = session.finalize_resolution(
-            signature_a=f"llm-{agent_uuid[:8]}",
-            signature_b="llm-synthetic-reviewer",
+        # 4. Finalize resolution through protocol (canonical schema).
+        # LLM-assisted dialectic has no real second party — pass an empty
+        # api_key_b so the v2 attestation correctly reports as
+        # not-verifiable-bilaterally (verify_signatures() will return False).
+        # The agent's own api_key (or a fallback derived from agent_uuid)
+        # produces a real signature_a; signature_b is empty by design.
+        paused_meta = mcp_server.agent_metadata.get(agent_uuid)
+        api_key_a = (
+            paused_meta.api_key
+            if paused_meta and getattr(paused_meta, "api_key", None)
+            else f"llm-{agent_uuid[:8]}"
         )
+        resolution_obj = session.finalize_resolution(api_key_a, "")
         session.resolution = resolution_obj
         await pg_resolve_session(
             session_id=session_id,
