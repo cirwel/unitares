@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# doc_audit.sh — Check all three UNITARES repos for stale docs.
+# doc_audit.sh — Check all three Unitares repos for stale docs.
 # Run manually: bash scripts/dev/doc_audit.sh
 
 set -euo pipefail
@@ -11,17 +11,36 @@ ANIMA_DIR="${ANIMA_DIR:-$GOV_DIR/../anima-mcp}"
 STALE=0
 note() { echo "  $1"; }
 warn() { echo "  STALE: $1"; STALE=$((STALE + 1)); }
+collect_tests() {
+  local dir="$1"
+  shift
+  (
+    cd "$dir" &&
+      python3 -m pytest "$@" --collect-only -q 2>/dev/null || true
+  ) |
+    grep -oE '[0-9]+ tests collected' |
+    tail -1 |
+    grep -oE '^[0-9]+' || true
+}
 
 # --- unitares ---
 echo "=== unitares ==="
 if [ -d "$GOV_DIR/tests" ]; then
-  gov_tests=$(cd "$GOV_DIR" && python3 -m pytest tests/ --collect-only -q 2>/dev/null | tail -1 | grep -oE '[0-9]+' | head -1)
-  gov_readme_tests=$(grep -oE '[0-9,]+ tests' "$GOV_DIR/README.md" | head -1 | tr -d ',')
-  readme_num=$(echo "$gov_readme_tests" | grep -oE '[0-9]+')
-  if [ "$gov_tests" != "$readme_num" ]; then
-    warn "README says $readme_num tests, actual: $gov_tests"
+  gov_tests=$(collect_tests "$GOV_DIR")
+  readme_num=$(
+    grep -oE '[0-9,]+\+? collected' "$GOV_DIR/README.md" |
+      head -1 |
+      grep -oE '[0-9,]+' |
+      tr -d ',' || true
+  )
+  if [ -z "$gov_tests" ]; then
+    warn "Could not collect Unitares test count"
+  elif [ -z "$readme_num" ]; then
+    warn "README test-count wording not found"
+  elif [ "$gov_tests" -lt "$readme_num" ]; then
+    warn "README says at least $readme_num collected tests, actual: $gov_tests"
   else
-    note "Test count OK ($gov_tests)"
+    note "Test count OK ($gov_tests collected; README floor $readme_num)"
   fi
 fi
 
@@ -31,9 +50,13 @@ note "Registered @mcp_tool count: $gov_tools"
 # --- eisv-lumen ---
 echo "=== eisv-lumen ==="
 if [ -d "$EISV_DIR/tests" ]; then
-  eisv_tests=$(cd "$EISV_DIR" && python3 -m pytest tests/ --collect-only -q 2>/dev/null | tail -1 | grep -oE '[0-9]+' | head -1)
-  eisv_badge=$(grep -oE 'tests-[0-9]+' "$EISV_DIR/README.md" | grep -oE '[0-9]+')
-  if [ "$eisv_tests" != "$eisv_badge" ]; then
+  eisv_tests=$(collect_tests "$EISV_DIR" tests/)
+  eisv_badge=$(grep -oE 'tests-[0-9]+' "$EISV_DIR/README.md" | grep -oE '[0-9]+' || true)
+  if [ -z "$eisv_tests" ]; then
+    warn "Could not collect eisv-lumen test count"
+  elif [ -z "$eisv_badge" ]; then
+    warn "README badge test count not found"
+  elif [ "$eisv_tests" != "$eisv_badge" ]; then
     warn "README badge says $eisv_badge tests, actual: $eisv_tests"
   else
     note "Test badge OK ($eisv_tests)"
@@ -65,11 +88,17 @@ fi
 echo "=== skills docs ==="
 SKILLS_DIR="$HOME/.claude/skills/unitares-governance"
 if [ -f "$SKILLS_DIR/SKILL.md" ]; then
-  threshold=$(grep -oE 'Critical threshold at [0-9]+\.[0-9]+' "$SKILLS_DIR/SKILL.md" | grep -oE '[0-9]+\.[0-9]+')
-  if [ "$threshold" = "0.45" ]; then
-    note "Coherence threshold OK (0.45)"
+  if grep -q 'thresholds.*field' "$SKILLS_DIR/SKILL.md" && grep -q 'do not hardcode' "$SKILLS_DIR/SKILL.md"; then
+    note "Coherence threshold guidance OK (live thresholds)"
   else
-    warn "SKILL.md coherence threshold is $threshold, expected 0.45"
+    threshold=$(grep -oE 'Critical threshold at [0-9]+\.[0-9]+' "$SKILLS_DIR/SKILL.md" | grep -oE '[0-9]+\.[0-9]+' || true)
+    if [ "$threshold" = "0.45" ]; then
+      note "Coherence threshold OK (0.45)"
+    elif [ -z "$threshold" ]; then
+      warn "SKILL.md coherence threshold not found"
+    else
+      warn "SKILL.md coherence threshold is $threshold, expected 0.45"
+    fi
   fi
 fi
 
