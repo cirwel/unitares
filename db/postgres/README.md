@@ -1,6 +1,6 @@
 # PostgreSQL + Apache AGE Setup
 
-This directory contains the schema and setup files for migrating to PostgreSQL with Apache AGE extension.
+This directory contains the schema, migrations, and setup files for the PostgreSQL backend with Apache AGE available for graph-specific traversal work.
 
 ## Files
 
@@ -164,12 +164,18 @@ Schema versions are tracked in `core.schema_migrations`:
 SELECT version, name, applied_at FROM core.schema_migrations ORDER BY version;
 ```
 
+The table below is a milestone summary, not the full migration ledger. See `db/postgres/migrations/` for every numbered migration; the current checked-in series runs through `036_r2_lineage_lifecycle.sql`.
+
 | Version | Migration | Description |
 |---------|-----------|-------------|
 | 1 | `initial_schema` | Core tables (agents, sessions, dialectic) |
 | 2 | `knowledge_schema` | Knowledge graph tables for PostgreSQL FTS |
 | 3 | `dialectic_messages` | Dialectic messages table (migrated from SQLite) |
 | 15 | `agent_process_bindings` | Concurrent identity binding invariant (#123): `core.agent_process_bindings` + `allow_rebind_after_exit` / `allow_concurrent_contexts` flags on `core.agents` |
+| 24 | `lease_plane` | Surface lease-plane contract anchor |
+| 31 | `r1_provisional_lineage` | R1 provisional-lineage columns and audit table |
+| 35 | `coordination_events` | Wave 0 coordination-event instrumentation |
+| 36 | `r2_lineage_lifecycle` | R2 lineage lifecycle columns |
 
 The health check returns `schema_version` from this table.
 
@@ -185,14 +191,12 @@ The `/health_check` tool returns a three-tier aggregate status:
 
 The response includes a `status_breakdown` field showing counts per status type.
 
-## Migration Phases
+## Current Storage Posture
 
-1. **Phase 1**: PostgreSQL tables for agents and sessions
-2. **Phase 2**: Install AGE, create graph, dual-write discoveries
-3. **Phase 3**: Backfill historical discoveries to graph
-4. **Phase 4**: Cut over reads to AGE
-5. **Phase 5**: Remove JSON/SQLite knowledge graph paths
-6. **Phase 6**: Migrate dialectic sessions/messages to PostgreSQL (current state)
+1. PostgreSQL is the canonical runtime store for agents, identities, sessions, dialectic, audit events, outcome events, and resident/coordination telemetry.
+2. Knowledge graph reads/writes default to PostgreSQL FTS (`UNITARES_KNOWLEDGE_BACKEND=postgres` or `auto` with `DB_BACKEND=postgres`).
+3. Apache AGE remains available for explicit graph traversal experiments; it is not the default KG read path.
+4. SQLite/JSON files under `data/` are legacy or local runtime artifacts, not the source of truth for current production state.
 
 ## Troubleshooting
 

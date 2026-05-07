@@ -723,18 +723,38 @@ async def periodic_telemetry_rotation(interval_hours: float = 24.0):
         await asyncio.sleep(interval_hours * 3600)
 
 
-async def periodic_audit_log_rotation(interval_hours: float = 168.0):
-    """Rotate audit_log.jsonl weekly. Data is fully duplicated in PostgreSQL."""
+async def periodic_audit_log_rotation(interval_hours: float = 24.0):
+    """Rotate audit_log.jsonl daily. Data is fully duplicated in PostgreSQL.
+
+    Trim window matches the default 7-day query horizon for ``get_skip_rate_metrics``
+    and ``query_audit_log`` callers — there is no reason to keep older data hot in
+    JSONL when Postgres has the durable copy.
+    """
     await asyncio.sleep(180.0)
     while True:
         try:
             from src.audit_log import get_audit_log
             audit = get_audit_log()
-            kept, archive_path = audit.rotate_log(max_age_days=30)
+            kept, archive_path = audit.rotate_log(max_age_days=7)
             if archive_path:
                 logger.info(f"[ROTATION] Audit log rotated: {kept} entries kept, archived to {archive_path}")
         except Exception as e:
             logger.debug(f"[ROTATION] Audit log rotation skipped: {e}")
+        await asyncio.sleep(interval_hours * 3600)
+
+
+async def periodic_tool_usage_rotation(interval_hours: float = 24.0):
+    """Rotate tool_usage.jsonl daily. No Postgres mirror, so we keep 30 days hot."""
+    await asyncio.sleep(240.0)
+    while True:
+        try:
+            from src.tool_usage_tracker import get_tool_usage_tracker
+            tracker = get_tool_usage_tracker()
+            kept, archive_path = tracker.rotate_log(max_age_days=30)
+            if archive_path:
+                logger.info(f"[ROTATION] Tool usage log rotated: {kept} entries kept, archived to {archive_path}")
+        except Exception as e:
+            logger.debug(f"[ROTATION] Tool usage log rotation skipped: {e}")
         await asyncio.sleep(interval_hours * 3600)
 
 
@@ -806,9 +826,16 @@ _supervised_tasks: list = []
 
 
 def _on_background_task_done(task: asyncio.Task) -> None:
-    """Callback for background task completion — logs crashes and removes from supervised list."""
+    """Callback for background task completion — logs crashes, emits a
+    coordination_failure event for cancellations, and removes the task
+    from the supervised list.
+
+    The cancellation emit is Wave 0 step 2C-1 (RFC roadmap §86): per the
+    v0.2 scoping doc §2, the OUTER supervisor is the single point that
+    sees every supervised-task cancellation, so one emit here covers all
+    background tasks without per-site instrumentation."""
     if task.cancelled():
-        pass
+        _emit_background_task_cancellation(task.get_name())
     else:
         exc = task.exception()
         if exc:
@@ -821,6 +848,35 @@ def _on_background_task_done(task: asyncio.Task) -> None:
         _supervised_tasks.remove(task)
     except ValueError:
         pass
+
+
+def _emit_background_task_cancellation(task_name: str) -> None:
+    """Failure-safe emit for `coordination_failure.anyio_cancellation.background_task`.
+
+    The inner function is failure-safe by contract; the outer try/except
+    is defense-in-depth so an ImportError at the wire-up site cannot break
+    the supervisor's bookkeeping (the `_supervised_tasks.remove(...)` that
+    follows in `_on_background_task_done`)."""
+    try:
+        from uuid import uuid4
+
+        from src.coordination_failure_emit import emit_coordination_failure_sync
+
+        emit_coordination_failure_sync(
+            service="governance_mcp",
+            event_type="coordination_failure.anyio_cancellation.background_task",
+            payload={
+                "task_name": task_name,
+                "incident_id": str(uuid4()),
+            },
+            agent_id=None,
+        )
+    except Exception as exc:  # noqa: BLE001 — observability MUST NOT mask the real bug
+        logger.warning(
+            "[coord-events] background_task cancellation emit raised — "
+            "supervisor bookkeeping continues: %r",
+            exc,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1419,6 +1475,7 @@ def start_all_background_tasks(connection_tracker, set_ready):
 
     _supervised_create_task(periodic_telemetry_rotation(), name="telemetry_rotation")
     _supervised_create_task(periodic_audit_log_rotation(), name="audit_log_rotation")
+    _supervised_create_task(periodic_tool_usage_rotation(), name="tool_usage_rotation")
     _supervised_create_task(periodic_server_log_rotation(), name="server_log_rotation")
     logger.info("[ROTATION] Started periodic log/telemetry rotation tasks")
 

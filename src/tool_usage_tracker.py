@@ -18,6 +18,7 @@ import sys
 
 # Import structured logging
 from src.logging_utils import get_logger
+from src.audit_log import _iter_jsonl_reverse, _parse_ts_naive
 logger = get_logger(__name__)
 
 
@@ -115,48 +116,47 @@ class ToolUsageTracker:
         total_calls = 0
 
         try:
-            with open(self.log_file, 'r') as f:
-                for line in f:
-                    try:
-                        entry_dict = json.loads(line.strip())
-                        entry_time = datetime.fromisoformat(entry_dict['timestamp'])
+            for line in _iter_jsonl_reverse(self.log_file):
+                try:
+                    entry_dict = json.loads(line)
+                    entry_time = _parse_ts_naive(entry_dict['timestamp'])
 
-                        if entry_time < cutoff_time:
-                            continue
+                    if entry_time < cutoff_time:
+                        break
 
-                        tool = entry_dict['tool_name']
-                        entry_agent_id = entry_dict.get('agent_id')
-                        success = entry_dict.get('success', True)
+                    tool = entry_dict['tool_name']
+                    entry_agent_id = entry_dict.get('agent_id')
+                    success = entry_dict.get('success', True)
 
-                        # Filter out removed/deprecated tools
-                        if tool in self.REMOVED_TOOLS:
-                            continue
-
-                        # Apply filters
-                        if tool_name and tool != tool_name:
-                            continue
-                        if agent_id and entry_agent_id != agent_id:
-                            continue
-
-                        # Count usage
-                        tool_counts[tool] = tool_counts.get(tool, 0) + 1
-                        total_calls += 1
-
-                        if success:
-                            tool_success_counts[tool] = tool_success_counts.get(tool, 0) + 1
-                        else:
-                            tool_error_counts[tool] = tool_error_counts.get(tool, 0) + 1
-                            error_type = entry_dict.get('error_type')
-                            if error_type:
-                                tool_error_counts[f"{tool}:{error_type}"] = tool_error_counts.get(f"{tool}:{error_type}", 0) + 1
-
-                        # Track per-agent usage
-                        if entry_agent_id:
-                            if entry_agent_id not in agent_tool_counts:
-                                agent_tool_counts[entry_agent_id] = {}
-                            agent_tool_counts[entry_agent_id][tool] = agent_tool_counts[entry_agent_id].get(tool, 0) + 1
-                    except (json.JSONDecodeError, KeyError):
+                    # Filter out removed/deprecated tools
+                    if tool in self.REMOVED_TOOLS:
                         continue
+
+                    # Apply filters
+                    if tool_name and tool != tool_name:
+                        continue
+                    if agent_id and entry_agent_id != agent_id:
+                        continue
+
+                    # Count usage
+                    tool_counts[tool] = tool_counts.get(tool, 0) + 1
+                    total_calls += 1
+
+                    if success:
+                        tool_success_counts[tool] = tool_success_counts.get(tool, 0) + 1
+                    else:
+                        tool_error_counts[tool] = tool_error_counts.get(tool, 0) + 1
+                        error_type = entry_dict.get('error_type')
+                        if error_type:
+                            tool_error_counts[f"{tool}:{error_type}"] = tool_error_counts.get(f"{tool}:{error_type}", 0) + 1
+
+                    # Track per-agent usage
+                    if entry_agent_id:
+                        if entry_agent_id not in agent_tool_counts:
+                            agent_tool_counts[entry_agent_id] = {}
+                        agent_tool_counts[entry_agent_id][tool] = agent_tool_counts[entry_agent_id].get(tool, 0) + 1
+                except (json.JSONDecodeError, KeyError, ValueError):
+                    continue
         except Exception as e:
             logger.error(f"Error reading tool usage log: {e}")
             return {"error": str(e)}
@@ -189,6 +189,44 @@ class ToolUsageTracker:
             "agent_usage": agent_tool_counts if agent_id else None
         }
     
+    def rotate_log(self, max_age_days: int = 7):
+        """Archive entries older than ``max_age_days`` and rewrite the live log.
+
+        Mirrors :meth:`AuditLogger.rotate_log`. Returns ``(kept, archive_path)``
+        on success, ``(None, None)`` on failure. Designed for periodic
+        background-task rotation; safe to run while writers append.
+        """
+        if not self.log_file.exists():
+            return None, None
+
+        cutoff_time = datetime.now() - timedelta(days=max_age_days)
+        archive_dir = self.log_file.parent / "tool_usage_archive"
+        archive_dir.mkdir(exist_ok=True)
+        archived_file = archive_dir / f"tool_usage_{datetime.now().strftime('%Y%m%d')}.jsonl"
+        recent_lines: List[str] = []
+
+        try:
+            with open(self.log_file, 'r') as f:
+                for line in f:
+                    try:
+                        entry_dict = json.loads(line.strip())
+                        entry_time = _parse_ts_naive(entry_dict['timestamp'])
+                        if entry_time < cutoff_time:
+                            with open(archived_file, 'a') as af:
+                                af.write(line)
+                        else:
+                            recent_lines.append(line)
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        continue
+
+            with open(self.log_file, 'w') as f:
+                f.writelines(recent_lines)
+
+            return len(recent_lines), archived_file
+        except Exception as e:
+            logger.warning(f"Could not rotate tool_usage log: {e}", exc_info=True)
+            return None, None
+
     def get_unused_tools(self, all_tools: List[str], window_hours: int = 24 * 30) -> List[str]:
         """
         Identify tools that haven't been used in the time window.

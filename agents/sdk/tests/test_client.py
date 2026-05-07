@@ -172,6 +172,56 @@ class TestMCPParsing:
         )
         assert result["success"] is False
 
+    def test_isError_true_raises(self):
+        # Dogfood pulse 2026-05-03 regression: after a governance restart
+        # the MCP layer returned isError=true with a textual error, but the
+        # SDK silently parsed empty content and proceeded.
+        @dataclass
+        class FakeErrorResult:
+            content: list
+            isError: bool
+
+        with pytest.raises(GovernanceConnectionError, match="boom"):
+            GovernanceClient._parse_mcp_result(
+                FakeErrorResult(
+                    content=[FakeTextContent(text="boom")],
+                    isError=True,
+                )
+            )
+
+
+class TestCaptureIdentitySkipsFailures:
+    def test_skips_extraction_on_inner_failure(self):
+        # Even if a failure response contains a stale uuid field, we must
+        # not silently overwrite identity state from it.
+        client = GovernanceClient()
+        client._capture_identity({
+            "success": False,
+            "error": "governance restarted",
+            "uuid": "u-stale",
+            "continuity_token": "tok-stale",
+        })
+        assert client.agent_uuid is None
+        assert client.continuity_token is None
+
+
+class TestOnboardFailureSurfaces:
+    @pytest.mark.asyncio
+    async def test_onboard_inner_failure_raises(self):
+        # Before the fix, onboard() never called _raise_for_tool_failure,
+        # so a {success: False} response left the client with a None uuid
+        # and proceeded as if onboarding succeeded.
+        session = AsyncMock()
+        session.call_tool = AsyncMock(return_value=make_mcp_result({
+            "success": False,
+            "error": "governance restarted",
+        }))
+        client = make_client_with_session(session)
+
+        with pytest.raises(GovernanceConnectionError, match="governance restarted"):
+            await client.onboard("TestAgent")
+        assert client.agent_uuid is None
+
 
 # --- Tool name mapping ---
 

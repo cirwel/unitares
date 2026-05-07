@@ -1,9 +1,333 @@
 # Wave 1 RFC: Sentinel-on-BEAM
 
-**Status:** v0.1.1, 2026-05-05. Council pass complete; binding amendment block follows. v0.1 draft body preserved below as historical record — **read V0.1.1 AMENDMENT first** for the binding spec.
+**Status:** v0.1.3, 2026-05-05. Surface 1 cycle worker (PR #376) shipped + flagged a binding architectural constraint for the next layer. **Read v0.1.3 AMENDMENT first**, then v0.1.2, then v0.1.1, then v0.1 body as historical record.
 **Parent:** `docs/proposals/beam-footprint-roadmap-v0.md` v0.3 / v0.3.1 (operator-decision migration commit + council fold).
 **Sibling:** `docs/proposals/surface-lease-plane-v0.md` (Phase A complete, BEAM service running on `127.0.0.1:8788`).
+**Bootstrap shipped:** PR #373 — `elixir/sentinel/` skeleton + `AtomicWrite` helper.
+**Surface 1 shipped:** PR #375 (`CycleState` shadow file) + PR #376 (`ForcedReleasePoller` cycle worker, ad_hoc class only).
 **Council pass v0.1.1 (2026-05-05):** dialectic-knowledge-architect (3B/1C/1N), feature-dev:code-reviewer (3B/2C), live-verifier (3 VERIFIED, 1 DRIFT — line numbers, 0 REFUTED). Six BLOCKs, three CONCERNs, one NIT, one DRIFT — all folded inline below.
+**Council pass v0.1.2 (2026-05-05):** Surface 1 design council. Architect (2B/3C/1N), reviewer (2 Critical/2 Important), live-verifier (4 VERIFIED, 3 REFUTED, 1 PARTIAL, 1 SOURCE_ONLY). Three BLOCKs, four CONCERNs, several factual REFUTEDs against v0.1.1's Surface 1 prose — all folded in the v0.1.2 amendment block below.
+**Council pass v0.1.3 (2026-05-05):** PR #376 implementation council + v0.1.3 doc council. Architect lead finding: cursor topology constraint for the next PR. Doc-council second pass (architect, reviewer, live-verifier in parallel) returned 1 verifier REFUTED on the deprecation_batch filter column (would have actively misdirected the implementer), 5 architect-level structural concerns (cursor-vs-emit ordering, single-connection per tick, partial-failure semantics, phase-B coupling, tick-overlap), and 3 reviewer concerns (row-shape under-constrained, hybrid topology rationale incomplete, test-surface hand-wavy). All folded into the v0.1.3 amendment block as §B1–§B6, §C1–§C3, §N1 below.
+
+---
+
+## V0.1.3 AMENDMENT 2026-05-05 — Cycle worker poller topology (binding spec)
+
+**Read this first if you're adding the deprecation_batch or conflict_batch query classes to the cycle worker.** PR #376's architect-lead finding: the next PR cannot ship as sibling pollers writing the same cursor key. v0.1.3 picks the topology before code lands.
+
+### B1 (architect, PR #376 council) — Single-cursor topology binding
+
+**Source of constraint.** Python's `agents/sentinel/forced_release_alarm.py:87` (`_poll_inner`) advances **one** `forced_release_alarm.last_event_ts` cursor across **all three** event classes in a single pass. The cursor advances to `max(ts)` over every row seen — ad_hoc, deprecation_batch, conflict_batch — no per-class tracking.
+
+PR #376 ships ad_hoc-only. The cursor is shared with whatever ships next. Three sibling `*Poller` GenServers each writing `forced_release_alarm.last_event_ts` would mean: poller A advances past T, then poller B's next query filters `ts > T`, **silently skipping any rows older than T that B hadn't yet read**. Lost events, no alarm, no backpressure.
+
+### Topology decision (binding)
+
+Three valid topologies were evaluated; the council fold pins **(1) Combined poller**:
+
+| # | Topology | Pros | Cons | Pick |
+|---|----------|------|------|------|
+| 1 | **Combined** — one GenServer (`ForcedReleasePoller`), three SQL passes per tick, one cursor advance | Matches Python `_poll_inner` parity exactly; simplest refactor of PR #376; no cross-runtime schema migration; cleanest cutover semantics | Any single query class hitting transient DB issue degrades the whole tick (Python has same property — this is parity, not new failure mode) | ✅ |
+| 2 | Per-class cursor keys (`forced_release_alarm.last_event_ts.{ad_hoc,deprecation,conflict}`) | Independent failure isolation per class | Requires Python-compat read shim — Python's `agent.py:663` reads the single key; would need migration of Python writer + reader OR BEAM reads union of keys (write-amplification + cross-runtime drift surface) | ❌ |
+| 3 | Coordinator + workers — fan-out to 3 worker processes, fan-in on a single cursor advance | Cleanest topology if independent scheduling matters | Most code; coordination overhead unjustified for 30s-tick polling; over-engineered for the actual workload | ❌ |
+
+### Implementation binding (next PR scope)
+
+The combined topology means the next PR is a **refactor** of `UnitaresSentinel.ForcedReleasePoller`, not a new sibling module:
+
+1. **Module name preserved.** `ForcedReleasePoller` stays — "polls forced-release alarms" reads cleanly as a category over all three classes (ad_hoc + deprecation_batch + conflict_batch are all "forced release"-adjacent in the Python source).
+2. **`Logic.build_alarms/2` extends.** The pure module gains `build_deprecation_batch_alarms/2` and `build_conflict_batch_alarms/2`. A new top-level `Logic.build_all_alarms/4` takes the three row lists + prior_cursor and returns `{combined_alarms, new_cursor}` where `new_cursor = max(...)` across all three.
+3. **`tick/1` runs three queries with class-specific filter columns** — see §B2 below for the binding correction.
+4. **Single Postgrex connection per tick** — see §B5 below for the snapshot-consistency requirement.
+5. **All-or-nothing cursor advance** — see §B6 below for partial-failure semantics.
+
+### B2 (verifier-grounded REFUTED + reviewer Critical-1) — Per-class filter column correction
+
+**v0.1.3 §B1 prose said "each query has its own `ts > $1` filter against the shared cursor." This is wrong for the deprecation_batch query.** Verifier-confirmed against `agents/sentinel/forced_release_alarm.py:133`: Python's deprecation_batch query filters on `AND ds.sweep_completed_at > $1` — the sweep-metadata timestamp on `lease_plane.deprecated_schemes`, NOT `e.ts > $1` on the events table.
+
+The RFC corrects to:
+
+| Class | Filter clause | Cursor advance source |
+|-------|--------------|------------------------|
+| ad_hoc (`event_type='forced'`) | `AND ts > $1` (events table) | `row.ts` |
+| deprecation_batch (`event_type='lease.deprecation_swept'`) | `AND ds.sweep_completed_at > $1` (joined deprecated_schemes table) | `row.last_ts` (max event ts within the batch) |
+| conflict_batch (`event_type='conflict_held_by_other'`) | `AND ts > $1` (events table) | `row.last_ts` (max event ts within the GROUP BY) |
+
+**Critical asymmetry:** the deprecation_batch FILTER uses `sweep_completed_at` (avoids re-emitting already-completed batches), but the cursor ADVANCE uses `last_ts` (event-stream parity with the other two classes — never mix event-stream and table-metadata timestamps in the cursor; PR 5 council fix in Python at `agents/sentinel/forced_release_alarm.py:137-142`).
+
+The next PR MUST reproduce this asymmetry. A test that proves it: insert a completed sweep batch where `sweep_completed_at > prior_cursor` but every individual event ts is `<= prior_cursor` — the batch alarm MUST emit, and the cursor MUST advance to `max(event.ts)` from that batch (not to `sweep_completed_at`).
+
+### B3 (reviewer Critical-2) — Row shape definitions for new query classes
+
+PR #376's `Logic.@type row` defines five fields (`event_id`, `ts`, `lease_id`, `surface_id`, `surface_kind`) — that's the ad_hoc class's `SELECT` projection. The two new classes have different projections; the RFC binds them so a reviewer of the next PR has a row-shape contract to enforce.
+
+**`@type deprecation_batch_row`** (mirrors `agents/sentinel/forced_release_alarm.py:113-126` SELECT):
+
+```elixir
+%{
+  required(:deprecation_id) => binary(),  # uuid::text
+  required(:surface_kind) => binary(),
+  required(:sweep_completed_at) => DateTime.t(),
+  required(:event_count) => non_neg_integer(),
+  required(:first_ts) => DateTime.t(),
+  required(:last_ts) => DateTime.t()
+}
+```
+
+**`@type conflict_batch_row`** (mirrors `agents/sentinel/forced_release_alarm.py:148-157` SELECT):
+
+```elixir
+%{
+  required(:surface_id) => binary(),
+  required(:surface_kind) => binary(),
+  required(:event_count) => non_neg_integer(),
+  required(:first_ts) => DateTime.t(),
+  required(:last_ts) => DateTime.t()
+}
+```
+
+The corresponding alarm shapes mirror Python's `_batch_alarm` (line 215) and `_conflict_alarm` (line 190): `kind: "deprecation_batch" | "conflict_batch"`, `severity: "medium"`, fingerprint formulas exactly as Python writes them (binding for cross-runtime fingerprint dedup during shadow window — see §C1 below for the contract test requirement).
+
+### B4 (architect lead finding) — Cursor-advance vs emit ordering (cross-Surface known regression)
+
+Python persists the cursor AFTER post_finding (`agents/sentinel/agent.py:695-699`). PR #376's `tick/1` persists the cursor BEFORE returning alarms, because there is no emitter yet — the returned alarms go to /dev/null today.
+
+This is a known regression from at-least-once → at-most-once for the Surface-1-only window. It is harmless until Surface 2 wires an emitter, at which point a crash between `tick/1` return and the emit-loop completion drops alarms permanently.
+
+**Binding for Surface 2 PR (not this PR):** Surface 2 MUST move cursor persistence into a post-emit callback. The shape: `tick/1` returns `{alarms, candidate_cursor}` without persisting; Surface 2's emit loop POSTs each alarm; only after the emit loop completes (success path) does Surface 2 call `CycleState.save/2` with the candidate cursor. Mirror Python's ordering at `agent.py:695-699`.
+
+**Binding for the v0.1.3 cycle worker PR:** keep PR #376's pre-emit persist. Adding two more query classes triples the alarm-loss surface during the gap, but the gap is the same gap — Surface 2 closes it for all three classes at once. Do NOT add per-class emit hooks in the v0.1.3 PR; that path leads to inconsistent persistence semantics across classes.
+
+### B5 (architect #2) — Single Postgrex connection per tick
+
+The amendment originally said "single SQL transaction not required — Python doesn't transact." That rationale was wrong. Python uses ONE connection (`asyncpg.connect` once at line 80, three sequential `await conn.fetch` calls, single `conn.close` at line 84) — that's serial-on-one-connection read isolation, not transactional, but it does mean queries 1/2/3 see monotonically advancing committed state.
+
+BEAM's Postgrex pool checks out a connection per `Postgrex.query/3` call by default. Three calls may snapshot three different points in committed history. Combined with the single-cursor advance, this creates a real lost-event class:
+
+- Query 1 (ad_hoc) snapshots at T0
+- A row R commits at T0 < T_R < T1 (any event class)
+- Query 2 (deprecation_batch) snapshots at T1
+- Query 3 (conflict_batch) snapshots at T2
+- Cursor advances to `max(...)` ≥ T_R
+- An ad_hoc row committed at T0 < T_R but visible only to a snapshot ≥ T_R is now permanently filtered out of the next tick
+
+**Binding:** the next PR MUST run all three queries inside `Postgrex.transaction/2` (or check out a single connection via `Postgrex.transaction(DB, fn conn -> ... end)`) so all three queries share one snapshot. Cursor advance correctness depends on this.
+
+### B6 (architect partial-failure) — All-or-nothing cursor advance
+
+PR #376's `query_forced_rows` swallows DB errors and returns `[]` (logging at `:warning`). Generalized to three queries, this would mean: query 2 errors → returns `[]` → cursor advances based on queries 1 and 3 → next tick filters `ts > $cursor` for query 2's class → events live during the failure window are now `ts ≤ cursor` and never seen.
+
+**Binding:** if any of the three queries returns `{:error, _}`, the tick MUST NOT advance the cursor. The pre-existing `Logger.warning` stays for ad_hoc-style isolated DB blips, but the cursor branch must check all three results before persisting. Python's behavior is "exception propagates; cursor not written" (`agents/sentinel/forced_release_alarm.py:80-84` has no try/except around the three `conn.fetch` calls; an exception propagates to the caller and `save_state` is never reached — `agent.py:695-699`). BEAM matches.
+
+### What this AMENDMENT does NOT change
+
+- v0.1.2 binding for Surface 1's `CycleState` is unchanged.
+- Surface 2 (findings emit) cutover protocol unchanged.
+- Surface 3 (lease-advisory acquire) unchanged.
+- The 30s tick interval + ±5s jitter from PR #376's council fold is unchanged — adding two more queries per tick does not change the tick rate.
+- The `runtime: "beam_canonical"` cutover flag (v0.1.2 §B3) is read by `CycleState.load/1`'s short-circuit; the writer is owned by `mix sentinel.cutover` / `mix sentinel.rollback`.
+
+### C1 (reviewer Important-5 + architect) — Test minimums
+
+PR #376 shipped 7 pure-logic + 5 integration. The next PR must AT LEAST MATCH per-class:
+
+- **Pure-logic tests (per class):** at minimum 7 tests per class (cursor-no-regress, multi-row max-ts, fingerprint uniqueness, nil-tolerance for nullable columns, empty-rows-empty-cursor, etc.). Total floor: **21 pure-logic** across all three classes.
+- **Integration tests (per class):** at minimum 5 tests per class (no-op-on-empty, new-event-detection, past-cursor-exclusion, persistence round-trip, persist:false suppression). Total floor: **15 integration** across all three classes.
+- **Cross-class tests:** at least one integration test inserting events of all three types in one fixture window, asserting cursor advances to `max(...)` across all and only the alarms for that fixture window are emitted.
+- **§B2 asymmetry test:** at least one integration test pinning the `sweep_completed_at` filter vs `last_ts` advance asymmetry — completed sweep batch with `sweep_completed_at > prior_cursor` but all event ts `≤ prior_cursor`.
+- **§B6 partial-failure test:** at least one test simulating one-of-three query failure (e.g., revoke schema permissions on `deprecated_schemes` mid-test, or use a fixture-injection path) and asserting cursor does NOT advance.
+
+### C2 (architect overlap) — Tick-skip-if-still-running guard
+
+PR #376 schedules the next `:tick` via `Process.send_after` after each tick completes — but if a tick takes longer than `interval_ms + jitter_ms`, `Process.send_after` enqueues another `:tick` regardless. With three queries per tick + GROUP BY on potentially-large tables, tick-overlap risk is non-trivial.
+
+**Binding:** the next PR MUST add a tick-skip guard. Two options, implementer's discretion:
+
+1. Wrap the tick body in a `:running?` boolean state; on `:tick` message, if `state.running?`, log and skip. Schedule next via `send_after` regardless.
+2. Use `Process.cancel_timer/1` + only-one-outstanding-`:tick` discipline.
+
+Either is acceptable. Add an ExUnit test that drives a slow tick (mock the DB query) and confirms the second `:tick` message does not start a parallel run.
+
+### C3 (architect phase-B coupling) — Phase B promotion stays Python-side in Wave 1
+
+Python's `agent.py:701` feeds `conflict_surface_kinds` (from conflict_batch alarms) into `_emit_phase_b_transitions`. That promotion evaluator lives at `agents/sentinel/phase_b_promotion.py` and is NOT being ported in Wave 1.
+
+**Binding:** the BEAM cycle worker emits conflict_batch alarms with the same fingerprint formula as Python (per §B3 above), but does NOT trigger phase-B promotion. During shadow mode, Python continues to drive phase-B transitions; after cutover (v0.1.4+ scope), phase-B promotion is a Wave 2 RFC concern. Document this scope cut in the cycle worker's moduledoc so a future implementer doesn't accidentally wire it.
+
+### N1 (reviewer Important-3) — Topology hybrid (per-class + legacy=min) recorded for completeness
+
+The hybrid was rejected, but the rationale should be recorded. Hybrid: BEAM writes per-class keys (`forced_release_alarm.last_event_ts.{ad_hoc,deprecation,conflict}`) AND a legacy aggregate key (`forced_release_alarm.last_event_ts = min(per_class)`). Python reads only the legacy key — never skips events because it always polls from the lag of the slowest class.
+
+Rejected because:
+- **Pre-cutover:** the combined topology already gives Python parity (one cursor, one source-of-truth shape). Hybrid adds write amplification + a contract surface that Python doesn't enforce or validate.
+- **Post-cutover:** the failure-isolation argument for hybrid (transient DB error on one class doesn't block the other two) genuinely improves on combined-poller. But §B6's "all-or-nothing cursor advance" is an explicit semantic choice for at-most-once-per-tick correctness; hybrid would require revisiting that semantic to be useful.
+
+Recorded so future RFC passes (v0.2.x scope) can reconsider the hybrid against post-cutover failure-mode data, with explicit acknowledgment that the rejection was made in a pre-cutover context.
+
+### Follow-up status
+
+- **Cutover flag writer:** shipped as `mix sentinel.cutover --to=beam` and `mix sentinel.rollback --to=python`.
+- **Surface 2 findings emit binding:** shipped through the BEAM findings emitter and post-emit cursor advancement path.
+- **First-boot lookback bound:** shipped as `UNITARES_SENTINEL_FIRST_BOOT_LOOKBACK_SECONDS`, defaulting to seven days.
+- **Remaining deferred item:** Phase-B promotion port. Wave 2 scope per §C3.
+
+---
+
+## V0.1.2 AMENDMENT 2026-05-05 — Surface 1 council fold (binding spec)
+
+**Read this first if you're touching Surface 1.** v0.1.1 §Surface 1 prose contained three BLOCK-level errors that the live-verifier caught against the actual `agents/sentinel/agent.py` source. v0.1.2 corrects them. This amendment IS the binding spec for Surface 1; the v0.1.1 §Surface 1 paragraph is superseded on every point of conflict.
+
+### B1 (verifier-grounded) — STATE_FILE path correction
+
+v0.1.1 Surface 1 (line 211) said `~/.unitares/anchors/.sentinel_state`. **This is wrong.**
+
+**Actual path** (verified by live-verifier reading `agents/sentinel/agent.py:61`):
+
+```python
+STATE_FILE = project_root / ".sentinel_state"
+```
+
+where `project_root = Path(__file__).parent.parent.parent` resolves to `/Users/cirwel/projects/unitares/.sentinel_state`. Anchors directory at `~/.unitares/anchors/` holds `chronicler.json`, `sentinel.json`, `steward.json`, `vigil.json`, `watcher.json` — **not** `.sentinel_state`.
+
+**Fold (binding):**
+
+- BEAM Sentinel MUST resolve `STATE_FILE` from a config-supplied absolute path, NOT `Path.expand("~/.unitares/anchors/.sentinel_state")`. Recommended config key: `:unitares_sentinel, :state_file_path` with default sourced from `UNITARES_SENTINEL_STATE_FILE` env var. Production launchd plist sets the env var to whatever `agents/sentinel/agent.py:61` resolves to.
+- The shadow file is at the same directory: same path with `.beam` suffix appended (e.g., `<project_root>/.sentinel_state.beam`).
+- Cross-runtime parity: when the Python sentinel's path-resolution logic ever moves (e.g., out of project root), both the launchd env var and the BEAM config key must update together.
+
+### B2 (architect) — Boot logic: max-on-boot, not first-boot-Python
+
+v0.1.1 implied "first boot reads Python's file, all subsequent boots read BEAM's." Architect BLOCK-1: this is a silent correctness bug. If BEAM crashes mid-shadow, on restart it would re-read Python's possibly-stale cursor and regress its own de-dup fence — re-emitting alarms it had already passed.
+
+**Fold (binding):**
+
+- Boot logic: read **both** `STATE_FILE` and `STATE_FILE.beam` if both exist; pick the cursor with the larger `forced_release_alarm.last_event_ts` (ISO-8601 strings compare lexicographically when zero-padded with timezone — Python writes `datetime.isoformat()` with UTC offset, verified by live-verifier).
+- If only one file exists, read that one.
+- If neither exists, return `%{}` (matches Python's `load_state` fallback at `agents/sentinel/agent.py:501`).
+- Empty cursor (`{}`) is treated as "older than any ISO-8601 timestamp" by the max-rule.
+
+### B3 (architect) — Cutover-merge protocol pinned
+
+v0.1.1 said "Cutover flips canonical reader from Python's file to BEAM's file" without defining merge semantics. Three protocols compatible with that text; architect BLOCK-2 forced a choice.
+
+**Fold (binding):** **Max wins** — composes cleanly with B2's boot rule and removes coordination requirement at cutover.
+
+- At cutover, BEAM Sentinel re-reads both files one final time, picks the max cursor, persists to `STATE_FILE.beam`, and stops reading `STATE_FILE`.
+- Python Sentinel is unloaded via `launchctl unload <python plist>` first; the cutover script then signals BEAM Sentinel to enter "canonical" mode (mechanism: a config flag in `STATE_FILE.beam` itself — `{"runtime": "beam_canonical", ...}` — readable by both runtimes for forensic clarity).
+- Rollback: re-load Python Sentinel; remove `runtime` flag (or set to `"python_canonical"`); BEAM Sentinel reads the flag on next cycle and stops writing to `STATE_FILE.beam`.
+
+### C1 (architect) — fsync trade-off explicit, not NIT-ranked
+
+v0.1.1 §B1 reviewer ranked fsync absence as NIT (correct for `sentinel.json` — regenerable from PG). For Surface 1's `.sentinel_state`, the same NIT-ranking is wrong: this file is a **de-dup fence with no upstream re-derivation path**. The `lease_plane_events` table carries event timestamps, not "already-alarmed" flags. Power-loss between cycle N's `save_state` and the rename-durability moment means cycle N+1 re-emits N's alarms.
+
+**Fold (binding):**
+
+- Surface 1 acknowledges duplicate alarm fire on power-loss as **accepted** (downstream dashboard de-dup absorbs it; alarm fingerprint includes the underlying event_id so server-side `/api/findings` dedup catches duplicates within the dedup window).
+- B2's max-on-boot rule mitigates the more common case (clean restart): the surviving file's cursor is preserved.
+- If a future incident shows alarm-replay impact >1 per quarter, revisit by adding `:fsync_after_rename` option to `AtomicWrite.write/2`. For now, accept the NIT-ranking on the Python side carries forward.
+
+### C2 (architect) — Cursor divergence observability during shadow
+
+v0.1.1 had no comparator. Architect CONCERN-3: the only signal of mismatch is double-emit at cutover, which is exactly the symptom shadow is supposed to prevent.
+
+**Fold (binding):**
+
+- Surface 1 PR includes a `mix sentinel.cursor_diff` Mix task that prints both files' cursors + their delta. Operator runs ad-hoc during shadow window.
+- Optional follow-up: `sentinel_shadow_drift` finding emitted once per cycle when `|python_cursor − beam_cursor| > 1 cycle interval`. Severity `info`. Defer to second Surface 1 PR if first PR scope is already at the threshold.
+
+### B4 (reviewer) — `HOME` env var must be set in BOTH plists
+
+Reviewer Critical-2 (verifier-grounded): the existing Python Sentinel plist at `scripts/ops/com.unitares.sentinel.plist` does NOT set `HOME` in `EnvironmentVariables`. The lease-plane plist (`com.unitares.lease-plane.plist:34`) DOES. Python Sentinel's `STATE_FILE` resolution doesn't use `Path.home()` so the gap is dormant — but `SESSION_FILE` (line 59) DOES use `Path.home()`, relying on passwd-database fallback. BEAM's `Path.expand("~")` reads `HOME` only and returns the literal `"~"` if unset.
+
+**Fold (binding):**
+
+- Surface 1 PR amends `scripts/ops/com.unitares.sentinel.plist` to add `<key>HOME</key><string>/Users/cirwel</string>` (matching lease-plane convention).
+- The future BEAM Sentinel plist MUST set `HOME` explicitly. Include this in the PR that lands the BEAM plist.
+- This is preventive — Surface 1's `STATE_FILE` resolution per B1 above doesn't use `Path.expand("~")`, but Surface 5 (SESSION_FILE) does, and the `HOME` gap is a landmine for any code path that drifts toward tilde-expansion.
+
+### C3 (reviewer) — String-keyed map contract pinned
+
+`Jason.decode/1` produces string-keyed maps; `Jason.encode!/1` normalizes atom keys to strings on write. A BEAM caller using atom keys (`%{forced_release_alarm: ...}`) gets a silent round-trip-through-disk surprise: subsequent reads return `%{"forced_release_alarm" => ...}` (string keys), and `state[:forced_release_alarm]` returns `nil`.
+
+**Fold (binding):**
+
+- `UnitaresSentinel.CycleState` enforces string-keyed maps at the boundary. Either: (a) typespec `@type t :: %{String.t() => term()}` + a runtime check that raises on atom keys, or (b) call `state |> Jason.encode!() |> Jason.decode!()` to normalize before persisting. (b) is simpler; (a) is faster.
+- ExUnit tests pin: an atom-keyed input round-trips and the caller sees string keys back.
+
+### C4 (architect) — Schema-compat enforced via Tier 2 contract test
+
+v0.1.1 §Test strategy listed Tier 2 as "cross-runtime contract tests" generically. v0.1.2 specifies the Surface 1 contract test concretely.
+
+**Fold (binding):**
+
+- Tier 2 fixture committed: a Python-written `.sentinel_state` blob (use `agents/sentinel/agent.py:save_state` to generate, snapshot byte-for-byte). BEAM `CycleState.load/0` MUST round-trip it without losing `forced_release_alarm.last_event_ts`.
+- Symmetric direction: a BEAM-written `.sentinel_state.beam` blob committed as fixture. Python `load_state` MUST read it without raising and MUST recover the cursor.
+- Either side losing the cursor is a CI failure.
+
+### Verifier REFUTED — `forced_release_alarm.last_event_ts` cursor read sites
+
+v0.1.1 said "RFC mentions lines 597, 682, 734 for finding emit sites" — implying three cursor-read sites. **Verifier-confirmed:** there is **one** cursor-read site at `agents/sentinel/agent.py:663`:
+
+```python
+cursor_str = state.get("forced_release_alarm", {}).get("last_event_ts")
+```
+
+Lines 597, 682, 734 are post_finding emit sites for `sentinel_finding`, `sentinel_forced_release_alarm`, and `lease_plane_phase_b_transition` respectively — they emit, they don't read the cursor.
+
+**Fold:** Surface 1 BEAM-side `CycleState` exposes a single read accessor (`get_last_event_ts/0`) and a single write accessor (`update_last_event_ts/1`). The cycle worker (later PR) is the only caller. Mirroring Python's single-read-site discipline.
+
+### Verifier REFUTED — fsync absence in Python's `atomic_write`
+
+v0.1.1 didn't claim Python's helper called fsync, but the council inquiry surfaced it. Verified at `agents/sdk/src/unitares_sdk/utils.py:30-35`:
+
+- Line 30: `tempfile.mkstemp(...)` — creates 0o600 by default
+- Line 32: `os.fchmod(fd, mode)` — explicit fchmod to 0o600
+- Line 35: `os.replace(...)` — atomic replace (not `os.rename`)
+- **No `os.fsync(fd)`** anywhere in the function
+
+BEAM `AtomicWrite.write/2` matches: chmod 0o600, no fsync. C1 above accepts this.
+
+### Verifier REFUTED — line range for `load_state` fall-through
+
+v0.1.1 said "try / except: pass / return {} pattern at lines 499-501." Verifier-corrected:
+
+- Lines 492-501 contain `load_state`. The `try` body is two lines (496-498), with an `isinstance(data, dict)` guard at line 497 that v0.1.1 omitted.
+- The `except Exception: pass` is at lines 499-500; `return {}` is at line 501. RFC's "499-501" is structurally correct but understates the body.
+
+**Fold:** BEAM `CycleState.load/0` mirrors the Python isinstance guard: after `Jason.decode`, check `is_map(decoded)` (Elixir's analogue) before returning; on non-map decode results, fall through to `%{}`.
+
+### N1 (reviewer) — `save/1` exception contract: log-and-continue, not raise
+
+Python's `save_state` swallows write failures (`agents/sentinel/agent.py:506-508`); a `save_state` exception does NOT crash the cycle. BEAM's `AtomicWrite.write/2` re-raises on failure. If `CycleState.save/1` propagates the exception, BEAM Sentinel becomes more brittle than Python on ENOSPC / readonly-fs / etc.
+
+**Fold (binding):**
+
+- `CycleState.save/1` wraps `AtomicWrite.write/2` in `try/rescue`, logs at `:logger.warning`, returns `:ok` either way. The cycle worker continues regardless.
+- Distinct from `AtomicWrite.write/2` itself, which retains its raise-on-failure contract for callers that DO want to know.
+
+### What v0.1.2 changes vs v0.1.1
+
+- §Surface 1 path corrected (B1)
+- §Surface 1 boot rule: max-on-boot (B2)
+- §Surface 1 cutover-merge protocol: max wins (B3)
+- §Surface 1 fsync trade-off explicit (C1)
+- §Surface 1 cursor-divergence observability requirement (C2)
+- §Boundary `HOME` env var binding for both plists (B4)
+- §Surface 1 string-key contract pinned (C3)
+- §Test strategy Tier 2 contract test for Surface 1 spelled out (C4)
+- Cursor read site corrected from "597, 682, 734" to "663" (verifier REFUTED)
+- Python `atomic_write` fsync absence noted; BEAM matches (verifier REFUTED on fsync claim)
+- `load_state` line-range corrected to include isinstance guard (verifier REFUTED)
+- `CycleState.save/1` exception contract: log-and-continue (N1)
+
+### What v0.1.2 does NOT change
+
+- v0.1.1 binding spec for Surfaces 2–5 is unchanged.
+- Migration commitment (operator decision under v0.3) unchanged.
+- Wave 1 = Sentinel-on-BEAM unchanged.
+- Sibling Elixir app at `elixir/sentinel/` unchanged (PR #373 already shipped this).
+- 4 stop signs unchanged.
+- Exit criteria gate on ODE profile unchanged.
 
 ---
 

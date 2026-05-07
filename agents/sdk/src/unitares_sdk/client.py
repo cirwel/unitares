@@ -180,7 +180,14 @@ class GovernanceClient:
             try:
                 with anyio.fail_after(effective_timeout):
                     result = await self._session.call_tool(tool_name, injected_args)
-                return self._parse_mcp_result(result)
+                raw = self._parse_mcp_result(result)
+                # Centralized failure check. The MCP transport can succeed at
+                # the HTTP layer but carry a structured tool failure inside
+                # the JSON payload. Without this check, callers like onboard()
+                # and identity() would silently extract empty identity fields
+                # from a failure response (dogfood pulse 2026-05-03 regression).
+                self._raise_for_tool_failure(tool_name, raw)
+                return raw
 
             except TimeoutError:
                 last_error = GovernanceTimeoutError(
@@ -482,7 +489,16 @@ class GovernanceClient:
         return args
 
     def _capture_identity(self, raw: dict) -> None:
-        """Extract and store session ID, continuity token, and UUID from a response."""
+        """Extract and store session ID, continuity token, and UUID from a response.
+
+        Skips extraction when the response declares failure — extracted
+        fields would be None and would silently overwrite nothing while
+        hiding the upstream error. call_tool() already raises in that case;
+        this is a defensive guard for callers that pass arbitrary dicts.
+        """
+        if raw.get("success") is False:
+            return
+
         sid = self._extract_session_id(raw)
         token = self._extract_continuity_token(raw)
         uuid = self._extract_uuid(raw)
@@ -530,7 +546,23 @@ class GovernanceClient:
 
     @staticmethod
     def _parse_mcp_result(result: Any) -> dict:
-        """Parse MCP tool result content blocks into a merged dict."""
+        """Parse MCP tool result content blocks into a merged dict.
+
+        Raises GovernanceConnectionError when the MCP layer marked the
+        call as an error (result.isError). HTTP-level success does not
+        imply tool-level success: the streamable_http transport can wrap
+        a structured failure in an otherwise-200 response.
+        """
+        if getattr(result, "isError", False):
+            error_text = ""
+            for content in getattr(result, "content", []) or []:
+                if hasattr(content, "text"):
+                    error_text = content.text
+                    break
+            raise GovernanceConnectionError(
+                f"MCP tool returned isError=true: {error_text or 'no detail'}"
+            )
+
         final: dict = {}
         raw_texts: list[str] = []
         json_parsed = False

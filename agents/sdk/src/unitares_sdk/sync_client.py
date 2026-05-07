@@ -428,6 +428,12 @@ class SyncGovernanceClient:
         return args
 
     def _capture_identity(self, raw: dict) -> None:
+        # See GovernanceClient._capture_identity for why this short-circuits
+        # on declared failure. call_tool() raises in that case, but external
+        # callers may pass arbitrary dicts.
+        if raw.get("success") is False:
+            return
+
         from unitares_sdk.client import GovernanceClient
 
         sid = GovernanceClient._extract_session_id(raw)

@@ -1,6 +1,6 @@
 # Scripts Directory
 
-**Last Updated:** 2026-04-11
+**Last Updated:** 2026-05-06
 
 > **Note:** Most functionality is available via MCP tools. Scripts are for CLI-only interfaces, operations, and maintenance.
 >
@@ -14,7 +14,7 @@
 |--------|-------------|
 | `bump_epoch.py` | Bump governance epoch |
 | `check_ci_python_version_sync.py` | Verify CI Python version matches project |
-| `doc_audit.sh` | Check all three UNITARES repos for stale docs |
+| `doc_audit.sh` | Check all three Unitares repos for stale docs |
 | `test-cache.sh` | Tree-hash pytest cache (skips if tests already passed against this exact working tree) |
 | `update_docs_tool_count.py` | Update tool counts in documentation |
 | `version_manager.py` | Version management utilities |
@@ -30,16 +30,15 @@ The bulk of operational scripts live in `scripts/ops/`.
 
 | Script | Description |
 |--------|-------------|
-| `heartbeat_agent.py` | Periodic heartbeat agent for health monitoring |
 | `mcp_agent.py` | Autonomous MCP agent |
 | `operator_agent.py` | Operator-level agent with elevated permissions |
-| `governance_cli.sh` | Governance CLI wrapper |
+| `enroll_resident.py` | Enroll resident identity anchors |
 
 ### Server Lifecycle
 
 | Script / file | Description |
 |----------------|-------------|
-| `ops/com.unitares.governance-backup.plist` | LaunchAgent template: daily DB backup at 03:00 (copy to `~/Library/LaunchAgents/`, adjust paths) |
+| `ops/com.unitares.governance-backup.plist.template` | LaunchAgent template: daily DB backup at 03:00 (copy to `~/Library/LaunchAgents/`, adjust paths) |
 | `start_unitares.sh` | Start the governance MCP server |
 | `stop_unitares.sh` | Stop the governance MCP server |
 | `start_server.sh` | Alternative server start |
@@ -64,9 +63,8 @@ The bulk of operational scripts live in `scripts/ops/`.
 | Script | Description |
 |--------|-------------|
 | `emergency_fix_postgres.sh` | Emergency PostgreSQL fixes |
-| `fix_database_connections.sh` | Fix connection pool issues |
-| `cleanup_stale_connections.sh` | Clean stale database connections |
 | `cleanup_stale.sh` | General stale data cleanup |
+| `backfill_calibration.py` | Calibration maintenance/backfill helper |
 
 ### Git & CI
 

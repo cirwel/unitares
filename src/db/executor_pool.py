@@ -30,6 +30,44 @@ CLOSE_TIMEOUT_SECONDS = 10.0
 THREAD_JOIN_TIMEOUT_SECONDS = 2.0
 
 
+def _emit_executor_loop_died(sub_type: str, *, error_class: str | None) -> None:
+    """Failure-safe emit for `coordination_failure.executor_loop_died.<sub_type>`.
+
+    Wave 0 follow-up to PR #369's reshape: the original §2.executor_loop
+    scoping under `anyio_cancellation` was structurally wrong (no main
+    coroutine to receive cancel; CPython #105836 prevents anyio teardown
+    from propagating cancel across `run_coroutine_threadsafe`). The honest
+    failure class for this loop is "the loop died" — premature `run_forever()`
+    return or uncaught exception in `_run_loop` — a different family.
+
+    `sub_type` is one of: "uncaught", "premature_return".
+
+    Same failure-safety contract as the postgres_backend coord-failure
+    helpers — wraps the inner emit in try/except so neither an ImportError
+    nor an emit-side bug can mask the original exception (`raise` follows
+    in `_run_loop` for the uncaught path)."""
+    try:
+        from uuid import uuid4
+
+        from src.coordination_failure_emit import emit_coordination_failure_sync
+
+        emit_coordination_failure_sync(
+            service="governance_mcp",
+            event_type=f"coordination_failure.executor_loop_died.{sub_type}",
+            payload={
+                "error_class": error_class,
+                "incident_id": str(uuid4()),
+            },
+            agent_id=None,
+        )
+    except Exception as exc:  # noqa: BLE001 — observability MUST NOT mask the real bug
+        logger.warning(
+            "[coord-events] executor_loop_died emit raised — original "
+            "exception (if any) will still propagate: %r",
+            exc,
+        )
+
+
 async def _await_on_loop(target: Any, loop: asyncio.AbstractEventLoop) -> Any:
     """Schedule on `loop` (a different thread's loop) and await the result.
 
@@ -222,7 +260,22 @@ class ExecutorPool:
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
         self._loop_ready.set()
-        self._loop.run_forever()
+        try:
+            self._loop.run_forever()
+        except BaseException as exc:
+            # Uncaught exception in the executor loop thread. Daemon threads
+            # die silently when the parent process exits, so without this
+            # emit a structural failure here would only surface as missing
+            # behavior elsewhere. Re-raise so the thread dies visibly.
+            _emit_executor_loop_died("uncaught", error_class=type(exc).__name__)
+            raise
+        else:
+            # `run_forever()` returned normally. If the operator initiated
+            # shutdown via `close()`, `_closed_flag` is True and this is
+            # expected teardown. Otherwise the loop exited unexpectedly —
+            # that's a structural bug worth flagging.
+            if not self._closed_flag:
+                _emit_executor_loop_died("premature_return", error_class=None)
 
     def acquire(self, timeout: Any = None) -> _AcquireContext:
         return _AcquireContext(self._raw_pool, self._loop, timeout=timeout)

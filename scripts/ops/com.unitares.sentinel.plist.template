@@ -55,6 +55,14 @@
         <string>__UNITARES_ROOT__</string>
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+        <!-- HOME required for Path.home() resolution (SESSION_FILE at
+             agents/sentinel/agent.py:59). Lease-plane plist sets HOME;
+             sentinel was missing it, leaving Python on a passwd-database
+             fallback that BEAM's Path.expand("~") does NOT share. Surface 1
+             council fold (RFC v0.1.2 §B4) — preventive against any code
+             path that drifts toward tilde-expansion. -->
+        <key>HOME</key>
+        <string>__HOME__</string>
     </dict>
 </dict>
 </plist>

@@ -1,6 +1,6 @@
 # unitares-sdk
 
-Build your own UNITARES resident agent. A resident is a long-running (or
+Build your own Unitares resident agent. A resident is a long-running (or
 scheduled) process that checks in to governance, carries an EISV state
 vector, and participates in the shared knowledge graph. Vigil, Sentinel,
 and Chronicler are reference implementations.

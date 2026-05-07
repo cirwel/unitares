@@ -1,6 +1,6 @@
 # agents/
 
-Reference implementations of UNITARES governance agents. These are **not** part of the public contract — the public contract is [`unitares-sdk`](sdk/) (published as its own package). Treat the code under `vigil/`, `sentinel/`, and `watcher/` as examples of how to build a resident agent, not as load-bearing governance internals.
+Reference implementations of Unitares governance agents. These are **not** part of the public contract — the public contract is [`unitares-sdk`](sdk/) (published as its own package). Treat the code under `vigil/`, `sentinel/`, and `watcher/` as examples of how to build a resident agent, not as load-bearing governance internals.
 
 ## Layout
 

@@ -9,7 +9,7 @@ import json
 import sys
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, Iterator, List, Optional
 from dataclasses import dataclass, asdict
 import fcntl
 import os
@@ -17,6 +17,55 @@ import os
 # Import structured logging
 from src.logging_utils import get_logger
 logger = get_logger(__name__)
+
+
+def _parse_ts_naive(ts: str) -> datetime:
+    """Parse an ISO timestamp and strip tzinfo for naive-naive comparison.
+
+    Audit entries written across the lifetime of the system mix tz-naive and
+    tz-aware timestamps; comparing one against ``datetime.now()`` (naive) raises
+    ``TypeError``. Normalising both sides to naive lets rotation / window
+    queries work uniformly. The wall-clock semantic is preserved: callers that
+    care about UTC vs local already established that convention upstream when
+    they wrote the entry.
+    """
+    parsed = datetime.fromisoformat(ts)
+    if parsed.tzinfo is not None:
+        parsed = parsed.replace(tzinfo=None)
+    return parsed
+
+
+def _iter_jsonl_reverse(path: Path, chunk_size: int = 65536) -> Iterator[str]:
+    """Yield non-empty lines from a JSONL file in reverse order, lazily.
+
+    Append-only JSONL files have monotonic-ish timestamps: callers that want a
+    recent time window can read from the tail and `break` when they cross the
+    cutoff, turning O(file) scans into O(window). Empty lines are skipped so a
+    trailing newline is harmless.
+    """
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        pos = f.tell()
+        if pos == 0:
+            return
+        leftover = b""
+        while pos > 0:
+            read_size = min(chunk_size, pos)
+            pos -= read_size
+            f.seek(pos)
+            chunk = f.read(read_size)
+            data = chunk + leftover
+            lines = data.split(b"\n")
+            if pos > 0:
+                leftover = lines[0]
+                lines = lines[1:]
+            else:
+                leftover = b""
+            for line in reversed(lines):
+                if line:
+                    yield line.decode("utf-8", errors="replace")
+        if leftover:
+            yield leftover.decode("utf-8", errors="replace")
 
 
 @dataclass
@@ -587,8 +636,8 @@ class AuditLogger:
                 for line in f:
                     try:
                         entry_dict = json.loads(line.strip())
-                        entry_time = datetime.fromisoformat(entry_dict['timestamp'])
-                        
+                        entry_time = _parse_ts_naive(entry_dict['timestamp'])
+
                         if entry_time < cutoff_time:
                             # Archive old entry
                             with open(archived_file, 'a') as af:
@@ -596,7 +645,7 @@ class AuditLogger:
                         else:
                             # Keep recent entry
                             recent_entries.append(line)
-                    except (json.JSONDecodeError, KeyError):
+                    except (json.JSONDecodeError, KeyError, ValueError):
                         continue
             
             # Rewrite log file with only recent entries
@@ -627,40 +676,36 @@ class AuditLogger:
             return []
         
         results = []
-        
+
         try:
-            start_dt = datetime.fromisoformat(start_time) if start_time else None
-            end_dt = datetime.fromisoformat(end_time) if end_time else None
-            
-            with open(self.log_file, 'r') as f:
-                for line in f:
-                    if len(results) >= limit:
+            start_dt = _parse_ts_naive(start_time) if start_time else None
+            end_dt = _parse_ts_naive(end_time) if end_time else None
+
+            for line in _iter_jsonl_reverse(self.log_file):
+                if len(results) >= limit:
+                    break
+                try:
+                    entry_dict = json.loads(line)
+                    entry_ts = entry_dict.get('timestamp')
+                    entry_time = _parse_ts_naive(entry_ts) if entry_ts else None
+
+                    if start_dt and entry_time is not None and entry_time < start_dt:
                         break
-                    
-                    try:
-                        entry_dict = json.loads(line.strip())
-                        
-                        # Apply filters
-                        if agent_id and entry_dict.get('agent_id') != agent_id:
-                            continue
-                        
-                        if event_type and entry_dict.get('event_type') != event_type:
-                            continue
-                        
-                        if start_dt or end_dt:
-                            entry_time = datetime.fromisoformat(entry_dict['timestamp'])
-                            if start_dt and entry_time < start_dt:
-                                continue
-                            if end_dt and entry_time > end_dt:
-                                continue
-                        
-                        results.append(entry_dict)
-                    except (json.JSONDecodeError, KeyError):
+
+                    if agent_id and entry_dict.get('agent_id') != agent_id:
                         continue
+                    if event_type and entry_dict.get('event_type') != event_type:
+                        continue
+                    if end_dt and entry_time is not None and entry_time > end_dt:
+                        continue
+
+                    results.append(entry_dict)
+                except (json.JSONDecodeError, KeyError):
+                    continue
         except Exception as e:
             logger.warning(f"Could not query audit log: {e}", exc_info=True)
             return []
-        
+
         return results
     
     def get_skip_rate_metrics(self, agent_id: Optional[str] = None, 
@@ -684,26 +729,25 @@ class AuditLogger:
         confidence_count = 0
         
         try:
-            with open(self.log_file, 'r') as f:
-                for line in f:
-                    try:
-                        entry_dict = json.loads(line.strip())
-                        entry_time = datetime.fromisoformat(entry_dict['timestamp'])
-                        
-                        if entry_time < cutoff_time:
-                            continue
-                        
-                        if agent_id and entry_dict['agent_id'] != agent_id:
-                            continue
-                        
-                        if entry_dict['event_type'] == 'lambda1_skip':
-                            total_skips += 1
-                            confidence_sum += entry_dict['confidence']
-                            confidence_count += 1
-                        elif entry_dict['event_type'] == 'auto_attest':
-                            total_updates += 1
-                    except (json.JSONDecodeError, KeyError):
+            for line in _iter_jsonl_reverse(self.log_file):
+                try:
+                    entry_dict = json.loads(line)
+                    entry_time = _parse_ts_naive(entry_dict['timestamp'])
+
+                    if entry_time < cutoff_time:
+                        break
+
+                    if agent_id and entry_dict['agent_id'] != agent_id:
                         continue
+
+                    if entry_dict['event_type'] == 'lambda1_skip':
+                        total_skips += 1
+                        confidence_sum += entry_dict['confidence']
+                        confidence_count += 1
+                    elif entry_dict['event_type'] == 'auto_attest':
+                        total_updates += 1
+                except (json.JSONDecodeError, KeyError):
+                    continue
         except Exception as e:
             logger.warning(f"Could not read audit log: {e}", exc_info=True)
             return {"error": str(e)}
@@ -729,3 +773,8 @@ class AuditLogger:
 
 # Global audit logger instance
 audit_logger = AuditLogger()
+
+
+def get_audit_log() -> AuditLogger:
+    """Return the process-global :class:`AuditLogger` instance."""
+    return audit_logger

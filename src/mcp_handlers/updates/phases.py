@@ -618,6 +618,20 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
             logger.debug(f"Behavioral sensor skipped for {ctx.agent_id}: {e}")
             pass  # Fail-safe: ODE runs open-loop if anything fails
 
+    # Pre-load behavioral baseline outside the agent lock. `ensure_baseline_loaded`
+    # has an in-memory cache (`_baselines` dict) — calling it here primes the
+    # cache so the in-lock anomaly check at `execute_locked_update` (this file's
+    # ~line 833) hits the cache instead of waiting on a cold-start PG roundtrip.
+    # Same fix-shape as PR #360's `_hydrate_metadata_cache_async` — moves a
+    # sequential PG await out of the critical section without changing
+    # semantics. Failure is non-fatal; the in-lock anomaly block has its own
+    # try/except that just skips entropy injection if the baseline isn't ready.
+    try:
+        from src.agent_behavioral_baseline import ensure_baseline_loaded
+        await ensure_baseline_loaded(ctx.agent_id)
+    except Exception as e:
+        logger.debug(f"Baseline preload skipped for {ctx.agent_id}: {e}")
+
     # Policy checks
     from ..validators import (
         validate_file_path_policy,

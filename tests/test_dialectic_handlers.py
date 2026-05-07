@@ -905,16 +905,19 @@ class TestHandleSubmitSynthesis:
         assert data["success"] is False
 
     @pytest.mark.asyncio
-    async def test_synthesis_third_party_mediator(
+    async def test_synthesis_rejects_non_participant(
         self, mock_server, mock_pg_add_message, mock_pg_update_phase,
         mock_save_session, mock_context_agent,
     ):
-        """Third-party mediator can submit synthesis (resolves if agrees=True)."""
+        """Non-participants are rejected from submit_synthesis. The
+        appointed_mediator_id field was a ghost (never set anywhere); removing
+        it closes the privilege-escalation surface where any registered agent
+        could mutate a session in_memory and drive synthesis to convergence.
+        """
         from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
 
         session = _make_session(phase=DialecticPhase.SYNTHESIS)
         session.synthesis_round = 1
-        session.appointed_mediator_id = "agent-mediator"
 
         with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
                    return_value=session), \
@@ -922,13 +925,14 @@ class TestHandleSubmitSynthesis:
              mock_context_agent:
             result = await handle_submit_synthesis({
                 "session_id": session.session_id,
-                "agent_id": "agent-mediator",
+                "agent_id": "agent-not-a-participant",
                 "proposed_conditions": ["Test"],
                 "api_key": "key",
             })
 
         data = parse_result(result)
-        assert data["success"] is True
+        assert data["success"] is False
+        assert "not a participant" in data.get("error", "").lower()
 
     @pytest.mark.asyncio
     async def test_max_rounds_exceeded(

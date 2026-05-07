@@ -1,6 +1,27 @@
-# Wave 0 step 2 — coordination-failure call-site scoping (v0.2 post-council)
+# Wave 0 step 2 — coordination-failure call-site scoping (v0.3 post-2A-pivot)
 
 **Purpose:** scope the four `coordination_failure.*` emit families for `audit.coordination_events` (PR #342). v0.1 of this doc went out for council review (3-agent: dialectic-knowledge-architect, feature-dev:code-reviewer, live-verifier in parallel, adversarial framing). Council returned **1 BLOCK + 2 CONCERN-ONLY with near-BLOCK items** plus 4 factual REFUTED claims. v0.2 folds every finding.
+
+**v0.3 pivot inheritance (read this first if you're picking up 2C-2 or later):**
+
+The v0.2 prescriptions for §1.bootstrap (stderr + Chronicler sweeper), §1.runtime (direct asyncpg → `audit.coordination_events`), §3 (polling pending-counter on `ExecutorPool`), and §2.executor_loop (wrap a "main coroutine") are all **superseded by the 2A pivot** (PR #345) and downstream 3-agent council folds.
+
+What actually shipped:
+
+| Section | Original v0.2 design | What shipped (and where) |
+|---|---|---|
+| §1.bootstrap | stderr structured line + Chronicler sweeper (Wave 0 step 3) | Sync emit via `emit_coordination_failure_sync` → `audit_logger._write_entry` JSONL fallback (PR #366, Wave 0 step 2B) |
+| §1.runtime | direct asyncpg → `audit.coordination_events` | Sync emit via same path; **2C-2 carved saturation out of `runtime`** into `executor_pool_exhaustion.acquire_timeout` (post-council reshape) |
+| §2.background_task | wrap individual CancelledError catches | **Single emit at the OUTER supervisor done-callback** `_on_background_task_done` (PR #368, Wave 0 step 2C-1) |
+| §2.executor_loop | wrap "main coroutine" + shutdown-flag discriminator | **Deferred** — `ExecutorPool._run_loop` is `loop.run_forever()` with no main coroutine; anyio teardown cannot propagate cancel across `run_coroutine_threadsafe` (CPython #105836). If ever wired, the family should be **`executor_loop_died.*`**, not `anyio_cancellation.executor_loop` (different failure class — premature `run_forever()` return / uncaught exception in `_run_loop`, NOT cancellation) |
+| §3 | polling pending-counter + 30s check task | **Replaced** by event-driven saturation discriminator at the existing 2B wire site: when `pool_size == pool_max AND pool_idle == 0` at TimeoutError, emit `executor_pool_exhaustion.acquire_timeout`; otherwise stay on `asyncpg_connect_error.runtime` (PR for 2C-2). Drops the polling counter entirely — council BLOCKED it on counter-leak (production uses `__await__` path, `__aexit__` never fires; CancelledError in `__aenter__` strands the counter), threshold-unreachable (default `DB_POSTGRES_MAX_CONN=25` makes pending>50 structurally unreachable), and redundancy with 2B's already-shipped acquire-timeout emit |
+| §4.tool_decorator | direct asyncpg in decorator | Sync emit (PR #345, Wave 0 step 2A — original pivot) |
+
+The dedicated `audit.coordination_events` table from PR #342 stays unused for now; everything writes to `audit.events` with namespaced `event_type` strings. Wave 0 step 3 (Chronicler projection into the dedicated table) remains an option if/when a separate replay surface is genuinely needed.
+
+The body below documents the v0.2 prescriptions as historical context. **Do not implement them as written** without checking against the v0.3 table above.
+
+---
 
 **Read this with:** `docs/proposals/beam-footprint-roadmap-v0.md` §86–110 (envelope spec), `src/coordination_events.py` (emitter from #342), the v0.1 council reports (in PR #342 thread).
 
