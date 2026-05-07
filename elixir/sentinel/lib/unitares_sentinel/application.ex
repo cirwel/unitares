@@ -17,6 +17,8 @@ defmodule UnitaresSentinel.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
     if Application.get_env(:unitares_sentinel, :start_application, true) do
@@ -84,19 +86,46 @@ defmodule UnitaresSentinel.Application do
 
   defp fleet_finding_emitter_children do
     if Application.get_env(:unitares_sentinel, :start_fleet_finding_emitter, false) do
-      [
-        {UnitaresSentinel.FleetFindingEmitter,
-         fleet_state:
-           Application.get_env(:unitares_sentinel, :fleet_state_name, UnitaresSentinel.FleetState),
-         interval_ms: Application.get_env(:unitares_sentinel, :analysis_interval_ms, 300_000),
-         initial_delay_ms:
-           Application.get_env(:unitares_sentinel, :analysis_initial_delay_ms, 5_000),
-         jitter_ms: Application.get_env(:unitares_sentinel, :analysis_jitter_ms, 5_000),
-         tick_timeout_ms:
-           Application.get_env(:unitares_sentinel, :analysis_tick_timeout_ms, 45_000)}
-      ]
+      [{UnitaresSentinel.FleetFindingEmitter, fleet_finding_emitter_opts()}]
     else
       []
+    end
+  end
+
+  @doc false
+  # Public for the runtime-boundary regression test.
+  def fleet_finding_emitter_opts do
+    [
+      fleet_state:
+        Application.get_env(:unitares_sentinel, :fleet_state_name, UnitaresSentinel.FleetState),
+      interval_ms: Application.get_env(:unitares_sentinel, :analysis_interval_ms, 300_000),
+      initial_delay_ms:
+        Application.get_env(:unitares_sentinel, :analysis_initial_delay_ms, 5_000),
+      jitter_ms: Application.get_env(:unitares_sentinel, :analysis_jitter_ms, 5_000),
+      tick_timeout_ms: Application.get_env(:unitares_sentinel, :analysis_tick_timeout_ms, 45_000)
+    ]
+    |> maybe_add_checkin_anchor()
+  end
+
+  defp maybe_add_checkin_anchor(opts) do
+    if Application.get_env(:unitares_sentinel, :emit_checkins, false) do
+      Keyword.put(opts, :checkin_opts, sentinel_checkin_opts())
+    else
+      opts
+    end
+  end
+
+  defp sentinel_checkin_opts do
+    case UnitaresSentinel.SessionAnchor.load() do
+      {:ok, anchor} ->
+        [anchor: anchor]
+
+      {:error, reason} ->
+        Logger.warning(
+          "Sentinel governance check-ins enabled but session anchor could not be loaded: #{inspect(reason)}"
+        )
+
+        []
     end
   end
 
