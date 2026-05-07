@@ -182,3 +182,169 @@ def test_emit_session_id_defaults_to_none():
             payload={"tool_name": "x"},
         )
     assert fake_entry_cls.call_args.kwargs["session_id"] is None
+
+
+# ============================================================================
+# Wave 2 §"audit.coordination_events routing fix" — dedicated-table dual-write
+# ============================================================================
+#
+# Pre-Wave-2: events landed only in audit.events (a generic table) under a
+# `coordination_failure.*` event_type namespace. The dedicated
+# audit.coordination_events table existed (PR #342, migration 035) but was
+# empty because production deliberately didn't write to it — direct
+# asyncpg-await from the @mcp_tool decorator's except clause was BLOCKED by
+# council on anyio task-group deadlock grounds. Wave 2's routing fix is
+# fire-and-forget dual-write: the sync audit.events path stays intact, and
+# the dedicated table is populated in parallel via loop.create_task. These
+# tests pin (1) the dual-write fires when an event loop is reachable,
+# (2) it's silent when no loop is reachable (CLI / executor thread without
+# captured loop), and (3) failure on the dedicated-table side never raises.
+
+
+@pytest.mark.asyncio
+async def test_emit_schedules_dual_write_when_loop_running():
+    """Happy path: in async context, emit_coordination_failure_sync schedules
+    a coroutine that calls coordination_events.emit_event with the same
+    service/event_type/payload/agent_id. The audit.events sync write happens
+    first (failure-safe truth), then the dedicated-table coroutine is
+    scheduled on the running loop."""
+    import asyncio
+
+    import asyncpg
+
+    fake_logger = MagicMock()
+    seen_calls = []
+
+    async def fake_emit_event(pool, **kwargs):
+        seen_calls.append(kwargs)
+        return "fake-uuid"
+
+    # spec=asyncpg.Pool so the isinstance gate in
+    # _emit_to_coordination_events_async accepts the test pool. Without
+    # spec=, the gate would correctly reject a bare MagicMock.
+    fake_db = MagicMock()
+    fake_db._pool = MagicMock(spec=asyncpg.Pool)
+    fake_db.init = MagicMock()  # not awaited because _pool is set
+
+    with patch("src.audit_log.audit_logger", fake_logger), \
+         patch("src.audit_log.AuditEntry"), \
+         patch("src.coordination_events.emit_event", side_effect=fake_emit_event), \
+         patch("src.db.get_db", return_value=fake_db):
+        emit_coordination_failure_sync(
+            service="governance_mcp",
+            event_type="coordination_failure.mcp_handler_timeout.tool_decorator",
+            payload={"tool_name": "process_agent_update"},
+            agent_id="some-uuid",
+        )
+        # Dedicated-table write is scheduled, not awaited. Yield to let the
+        # scheduled task run before the patches unwind.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    # audit.events path still primary.
+    fake_logger._write_entry.assert_called_once()
+    # Dedicated-table path also fired with the same envelope.
+    assert len(seen_calls) == 1, (
+        f"Wave 2 dual-write must fire once on the running loop; got {len(seen_calls)} calls"
+    )
+    call = seen_calls[0]
+    assert call["service"] == "governance_mcp"
+    assert call["event_type"] == "coordination_failure.mcp_handler_timeout.tool_decorator"
+    assert call["payload"] == {"tool_name": "process_agent_update"}
+    assert call["agent_id"] == "some-uuid"
+
+
+def test_emit_dual_write_silent_when_no_loop_reachable():
+    """No running loop AND no captured main loop → dedicated-table write is
+    dropped silently. emit_coordination_failure_sync must still complete
+    successfully (audit.events write is the durable path)."""
+    fake_logger = MagicMock()
+
+    # Force the captured-loop fallback path to also be unavailable.
+    class _StubAuditLogger:
+        _event_loop = None
+
+    with patch("src.audit_log.audit_logger", fake_logger), \
+         patch("src.audit_log.AuditEntry"), \
+         patch("src.audit_log.AuditLogger", _StubAuditLogger), \
+         patch("src.coordination_events.emit_event") as fake_emit:
+        # MUST NOT raise.
+        emit_coordination_failure_sync(
+            service="governance_mcp",
+            event_type="coordination_failure.mcp_handler_timeout.tool_decorator",
+            payload={},
+        )
+
+    # Sync truth path landed.
+    fake_logger._write_entry.assert_called_once()
+    # Dedicated-table path was never invoked.
+    fake_emit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_emit_dual_write_swallows_pool_acquisition_failure():
+    """If get_db()/pool acquisition fails (DB down at the moment of emit),
+    the dedicated-table coroutine logs WARNING and returns. The audit.events
+    row is already durable; dropping the dedicated-table write is acceptable
+    by the failure-safe contract."""
+    import asyncio
+
+    fake_logger = MagicMock()
+    fake_db = MagicMock()
+    fake_db._pool = None
+
+    async def fake_init():
+        # Simulate db.init() also failing — pool stays None.
+        raise RuntimeError("db down")
+
+    fake_db.init = fake_init
+
+    with patch("src.audit_log.audit_logger", fake_logger), \
+         patch("src.audit_log.AuditEntry"), \
+         patch("src.coordination_events.emit_event") as fake_emit, \
+         patch("src.db.get_db", return_value=fake_db):
+        emit_coordination_failure_sync(  # MUST NOT raise
+            service="governance_mcp",
+            event_type="coordination_failure.mcp_handler_timeout.tool_decorator",
+            payload={},
+        )
+        # Let the scheduled task run + hit the swallowed exception.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    # audit.events still landed.
+    fake_logger._write_entry.assert_called_once()
+    # emit_event itself never reached (pool unavailable).
+    fake_emit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_emit_dual_write_swallows_emit_event_exception():
+    """If coordination_events.emit_event itself raises (e.g., schema drift,
+    transient PG error), the failure is logged at WARNING and swallowed.
+    Pins the contract that a dedicated-table failure never propagates."""
+    import asyncio
+
+    import asyncpg
+
+    fake_logger = MagicMock()
+    fake_db = MagicMock()
+    fake_db._pool = MagicMock(spec=asyncpg.Pool)
+
+    async def raising_emit(pool, **kwargs):
+        raise RuntimeError("connection lost mid-write")
+
+    with patch("src.audit_log.audit_logger", fake_logger), \
+         patch("src.audit_log.AuditEntry"), \
+         patch("src.coordination_events.emit_event", side_effect=raising_emit), \
+         patch("src.db.get_db", return_value=fake_db):
+        emit_coordination_failure_sync(  # MUST NOT raise
+            service="governance_mcp",
+            event_type="coordination_failure.mcp_handler_timeout.tool_decorator",
+            payload={},
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    # audit.events still landed.
+    fake_logger._write_entry.assert_called_once()
