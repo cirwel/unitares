@@ -1199,17 +1199,13 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
         # a compensating allow-list, any registered agent could drive a
         # synthesis to convergence and trigger resolution execution — a real
         # privilege escalation surface. The allow-list is: the paused agent,
-        # the assigned reviewer, any quorum reviewer (if escalated), and an
-        # appointed mediator if one has been set.
+        # the assigned reviewer, and any quorum reviewer (if escalated).
         eligible = set()
         if getattr(session, "paused_agent_id", None):
             eligible.add(session.paused_agent_id)
         if getattr(session, "reviewer_agent_id", None):
             eligible.add(session.reviewer_agent_id)
         eligible.update(getattr(session, "quorum_reviewer_ids", []) or [])
-        appointed_mediator = getattr(session, "appointed_mediator_id", None)
-        if appointed_mediator:
-            eligible.add(appointed_mediator)
         agent_uuid = resolve_agent_uuid(arguments, agent_id)
         if agent_id not in eligible and (not agent_uuid or agent_uuid not in eligible):
             return [error_response(
