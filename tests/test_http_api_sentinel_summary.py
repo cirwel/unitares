@@ -170,3 +170,83 @@ class TestRobustness:
     def test_missing_severity_falls_under_question_mark(self):
         out = _sentinel_summary_from_events([_event(severity=None)], now=NOW)
         assert out["by_severity"] == {"?": 1}
+
+
+class TestAlarmEventsSurface:
+    """Forced-release alarm follow-up to PR #398 (2026-05-06).
+
+    Pre-fix: alarms posted with `type="sentinel_forced_release_alarm"` were
+    400'd by the /api/findings suffix gate, so the dashboard never saw them.
+    PR #398 renamed the type to `sentinel_alarm_finding` so it satisfies the
+    `_finding` suffix. This test class pins the aggregator's contract so
+    alarms ride into the panel along with fleet-analysis findings — without
+    this, fixing the suffix gate alone leaves alarms invisible.
+    """
+
+    def _alarm(self, **kwargs):
+        base = {
+            "type": "sentinel_alarm_finding",
+            "severity": "high",
+            "message": "forced release: dialectic:/x (lease lease-1)",
+            "agent_id": "sentinel-uuid",
+            "agent_name": "Sentinel",
+            "fingerprint": "forced_release:ad_hoc:event-1",
+            "alarm_kind": "ad_hoc",
+            "timestamp": NOW.isoformat(),
+            "event_id": 100,
+        }
+        base.update(kwargs)
+        return base
+
+    def test_alarms_count_toward_total(self):
+        """Mixed stream: 2 fleet findings + 1 alarm → total 3."""
+        events = [
+            _event(event_id=1),
+            _event(event_id=2),
+            self._alarm(event_id=3),
+        ]
+        out = _sentinel_summary_from_events(events, now=NOW)
+        assert out["total"] == 3, (
+            "alarm events must count toward the panel's total — otherwise "
+            "the suffix-gate fix leaves them silently invisible"
+        )
+
+    def test_alarms_appear_in_recent_stream(self):
+        out = _sentinel_summary_from_events([self._alarm()], now=NOW)
+        assert len(out["recent"]) == 1
+        row = out["recent"][0]
+        assert row["message"] == "forced release: dialectic:/x (lease lease-1)"
+        assert row["severity"] == "high"
+
+    def test_alarm_finding_type_falls_back_to_alarm_kind(self):
+        """Alarms don't carry `finding_type` (only `alarm_kind`), so the
+        recent-stream `finding_type` must fall back to alarm_kind. Otherwise
+        the dashboard finding_type column shows null for every alarm row.
+        """
+        out = _sentinel_summary_from_events(
+            [self._alarm(alarm_kind="conflict_batch")],
+            now=NOW,
+        )
+        assert out["recent"][0]["finding_type"] == "conflict_batch"
+
+    def test_explicit_finding_type_wins_over_alarm_kind(self):
+        """If a future producer sets both fields, finding_type wins — we
+        only fall back when finding_type is absent. Pinning this stops a
+        later refactor from silently swapping precedence.
+        """
+        out = _sentinel_summary_from_events(
+            [self._alarm(finding_type="custom", alarm_kind="ad_hoc")],
+            now=NOW,
+        )
+        assert out["recent"][0]["finding_type"] == "custom"
+
+    def test_alarm_severity_aggregates_with_findings(self):
+        """One high alarm + one warning finding → by_severity {high:1, warning:1}.
+        Severities mix freely — no separate alarm bucket.
+        """
+        events = [
+            _event(event_id=1, severity="warning"),
+            self._alarm(event_id=2, severity="high"),
+        ]
+        out = _sentinel_summary_from_events(events, now=NOW)
+        assert out["by_severity"] == {"warning": 1, "high": 1}

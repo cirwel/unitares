@@ -1501,14 +1501,18 @@ def _sentinel_summary_from_events(
     events, now=None, window_hours=_SENTINEL_DEFAULT_WINDOW_HOURS,
     recent_limit=_SENTINEL_DEFAULT_RECENT_LIMIT,
 ):
-    """Aggregate sentinel_finding events into dashboard-ready shape.
+    """Aggregate sentinel_finding and sentinel_alarm_finding events into
+    dashboard-ready shape.
 
     Pure function so tests can feed parsed-dict events and assert on the
     output without standing up Starlette or the event_detector singleton.
 
-    Unlike Watcher, sentinel findings have no open/closed lifecycle — they're
-    transient fleet-state signals. The aggregator surfaces severity + violation
-    class counts and a chronological stream, not an actionable queue.
+    Two event shapes are accepted: fleet-analysis findings (carry
+    `finding_type` + `violation_class`) and forced-release alarms (carry
+    `alarm_kind`, no violation class assigned in taxonomy yet). Stream
+    entries fall back `finding_type` to `alarm_kind` so the dashboard panel
+    has a non-null finding_type column for alarm rows. Sentinel findings
+    have no open/closed lifecycle — they're transient fleet-state signals.
     """
     from collections import Counter, defaultdict
     from datetime import datetime, timedelta, timezone
@@ -1569,7 +1573,9 @@ def _sentinel_summary_from_events(
             "timestamp": e.get("timestamp"),
             "severity": e.get("severity"),
             "violation_class": e.get("violation_class"),
-            "finding_type": e.get("finding_type"),
+            # Alarm events don't carry finding_type — fall back to alarm_kind
+            # so the dashboard panel doesn't show a blank cell.
+            "finding_type": e.get("finding_type") or e.get("alarm_kind"),
             "message": e.get("message"),
             "agent_id": e.get("agent_id"),
             "event_id": e.get("event_id"),
@@ -1588,13 +1594,15 @@ def _sentinel_summary_from_events(
 
 
 async def http_sentinel_summary(request):
-    """GET /v1/sentinel/summary — aggregate recent sentinel_finding events
-    for the dashboard panel.
+    """GET /v1/sentinel/summary — aggregate recent sentinel_finding and
+    sentinel_alarm_finding events for the dashboard panel.
 
     Reads from event_detector's in-memory ring buffer (same source that
     powers the live event stream). Transient across governance-mcp
     restarts by design — sentinel findings are fleet-state signals, not a
-    historical backlog."""
+    historical backlog. Both fleet-analysis findings and forced-release
+    alarms are surfaced together so the panel reflects the full Sentinel
+    output stream (Surface 2 + Surface 3 + Surface 4)."""
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     if not _check_http_auth(request, http_api_token=http_api_token):
         return _http_unauthorized()
@@ -1612,9 +1620,16 @@ async def http_sentinel_summary(request):
     recent_limit = max(1, min(recent_limit, 500))
 
     from src.event_detector import event_detector
-    events = event_detector.get_recent_events(
+    # Fetch both Sentinel emit shapes. Pre-2026-05-06 the alarm path's
+    # `type` was `sentinel_forced_release_alarm` and got 400'd at the gate
+    # (#398); now that it lands as `sentinel_alarm_finding`, the panel
+    # also has to look it up here or alarms remain invisible.
+    events = list(event_detector.get_recent_events(
         event_type="sentinel_finding", limit=500,
-    )
+    ))
+    events.extend(event_detector.get_recent_events(
+        event_type="sentinel_alarm_finding", limit=500,
+    ))
 
     summary = _sentinel_summary_from_events(
         events, window_hours=window_hours, recent_limit=recent_limit,
