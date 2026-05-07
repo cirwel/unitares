@@ -1016,6 +1016,7 @@ class TestKnowledgeGraphOperations:
             "related_to": [],
             "response_to": None,
             "provenance": None,
+            "provenance_chain": None,
             "timestamp": _now().isoformat(),
         }
         defaults.update(kwargs)
