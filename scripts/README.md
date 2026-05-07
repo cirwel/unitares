@@ -18,6 +18,7 @@
 | `test-cache.sh` | Tree-hash pytest cache (skips if tests already passed against this exact working tree) |
 | `update_docs_tool_count.py` | Update tool counts in documentation |
 | `version_manager.py` | Version management utilities |
+| `with_checkin.py` | Run a command and emit a best-effort `process_agent_update` check-in with command outcome evidence |
 
 ---
 
