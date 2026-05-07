@@ -1,6 +1,6 @@
 # Data Directory
 
-Runtime data for UNITARES Governance. Everything here is generated at runtime and **not tracked in git** (except this README, `.gitkeep`, and `agent_metadata.example.json`).
+Runtime data for Unitares governance. Everything here is generated at runtime and **not tracked in git** (except this README, `.gitkeep`, and `agent_metadata.example.json`).
 
 ## Structure
 
@@ -20,7 +20,7 @@ data/
 
 ## Primary Storage
 
-As of v2.6.0, PostgreSQL is the primary backend for agents, dialectic sessions, and the knowledge graph. The KG uses PostgreSQL FTS by default; AGE remains available for explicit graph traversal work. SQLite (`governance.db`) remains for some legacy state but is not the source of truth.
+Since v2.6.0, PostgreSQL is the primary backend for agents, dialectic sessions, and the knowledge graph. The KG uses PostgreSQL FTS by default; AGE remains available for explicit graph traversal work. SQLite (`governance.db`) remains for some legacy state but is not the source of truth.
 
 ## Tracked in Git
 

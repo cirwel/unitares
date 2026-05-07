@@ -24,7 +24,7 @@ If `UNITARES_HTTP_API_TOKEN` is configured, provide the token either as:
 - `?token=<token>` in the dashboard URL
 - `localStorage.unitares_api_token`
 
-`authFetch()` and `DashboardAPI` attach the bearer token for dashboard REST and tool calls.
+The `authFetch` helper and `DashboardAPI` attach the bearer token for dashboard REST and tool calls.
 
 ## Current Surfaces
 
@@ -47,7 +47,7 @@ If `UNITARES_HTTP_API_TOKEN` is configured, provide the token either as:
 - **Frontend:** static `index.html`, `styles.css`, and JS modules in `dashboard/`.
 - **Charts:** Chart.js for dashboard charts; the `/phase` page uses D3.
 - **Tool calls:** `DashboardAPI.callTool()` posts to `/v1/tools/call`.
-- **REST calls:** direct dashboard endpoints use `authFetch()`.
+- **REST calls:** direct dashboard endpoints use the `authFetch` helper.
 - **Live updates:** `/ws/eisv` streams EISV and broadcaster events. The UI falls back to polling where needed.
 - **Refresh cadence:** full dashboard refresh every 30 seconds; API client cache defaults to 25 seconds.
 - **Static-file guard:** `tests/test_dashboard_static_allowlist.py` ensures every `/dashboard/*.js` reference in `index.html` is allowlisted by `src/http_api.py`.

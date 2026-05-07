@@ -80,20 +80,20 @@ The agent reads its own metrics and adjusts *before* external controls have to f
 
 ## Production snapshot
 
-As of April 2026 (single-operator deployment — self-traffic, not external adoption). Headline: **94K+ governance events processed · ≈51K in the last 7 days**.
+As of May 6, 2026 (single-operator deployment — self-traffic, not external adoption). Headline: **351K+ governance events processed · ≈94K in the last 7 days**.
 
 <details>
 <summary><strong>Full metrics table</strong></summary>
 
 | Metric | Value |
 |--------|-------|
-| Agents onboarded | 2,574 total process-instances — overwhelmingly ephemeral CLI sessions from one operator's workstation plus a handful of long-running resident agents (launchd crons, Pi-side Lumen) |
-| Distinct external (non-resident) agents | ~56 over a 3-week post-grounding window |
-| Unique agents active (last 7 days) | 2,226 |
-| Governance events processed | 94,000+ (≈51K in the last 7 days) |
-| Knowledge graph discoveries | 578 |
+| Agents onboarded | 3,660 total process-instances — overwhelmingly ephemeral CLI sessions from one operator's workstation plus a handful of long-running resident agents (launchd crons, Pi-side Lumen) |
+| Distinct event-emitting identities (last 21 days) | 1,144 total; mostly ephemeral local CLI sessions, not external adoption |
+| Unique agents active (last 7 days) | 135 distinct event emitters |
+| Governance events processed | 351,000+ (≈94K in the last 7 days) |
+| Knowledge graph discoveries | 860 |
 | V operating range | Active agents often within [-0.1, 0.1] |
-| Tests | 6,200+ passing · ~76% line coverage (25% min gate) |
+| Tests | 8,500+ collected · smoke/pre-push subset plus 25% min coverage gate |
 
 </details>
 
