@@ -463,6 +463,52 @@ class TestRunAgedCandidateArchive:
 
 
 # =============================================================================
+# Tests: watcher --scan-commits wiring
+# =============================================================================
+
+class TestGroundskeeperScanCommits:
+    """Watcher --scan-commits is called each cycle and exceptions don't propagate."""
+
+    @pytest.mark.asyncio
+    async def test_scan_commits_argv(self, monkeypatch):
+        """subprocess.run must be called with --scan-commits in argv."""
+        calls = []
+
+        class _FakeResult:
+            returncode = 0
+            stdout = "resolved 0"
+            stderr = ""
+
+        def _fake_run(args, **kwargs):
+            calls.append(list(args))
+            return _FakeResult()
+
+        monkeypatch.setattr(_hb_module.subprocess, "run", _fake_run)
+
+        agent = _make_agent()
+        client = _make_mock_client()
+        await agent._run_groundskeeper(client)
+
+        scan_calls = [c for c in calls if "--scan-commits" in c]
+        assert len(scan_calls) == 1
+        assert any("watcher" in str(a) and "agent.py" in str(a) for a in scan_calls[0])
+
+    @pytest.mark.asyncio
+    async def test_scan_commits_exception_does_not_propagate(self, monkeypatch):
+        """A crash in subprocess.run must not raise out of _run_groundskeeper."""
+
+        def _raise(*args, **kwargs):
+            raise RuntimeError("watcher exploded")
+
+        monkeypatch.setattr(_hb_module.subprocess, "run", _raise)
+
+        agent = _make_agent()
+        client = _make_mock_client()
+        result = await agent._run_groundskeeper(client)
+        assert isinstance(result, dict)
+
+
+# =============================================================================
 # Tests: with_audit flag
 # =============================================================================
 
