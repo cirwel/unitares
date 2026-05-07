@@ -339,18 +339,104 @@ def _check_protocol_version(payload: Mapping[str, Any], path: str) -> None:
     )
 
 
+# Wave 2 §"Lease-integration boundary hardening" — Phase B (error translation
+# table). One declarative dict per endpoint family that maps the BEAM-emitted
+# `error` discriminant to the typed Pydantic result model. Adding a new error
+# variant means: add the typed model in models.py, add the discriminant here,
+# done. The previous if-else chain meant an undocumented variant silently
+# degraded to `service_unavailable` — the new design surfaces unknowns
+# explicitly via `_unknown_error_fallback` so a Python ↔ BEAM mapping drift
+# becomes a visible reason string instead of a swallowed misclassification.
+#
+# `BEAM_EMITTED_ACQUIRE_ERRORS` etc. enumerate the discriminants the Elixir
+# router actually emits today (per `elixir/lease_plane/lib/unitares_lease_plane/
+# {http_router,http_auth}.ex`). The contract tests in
+# `tests/test_lease_plane_error_translation.py` assert that every BEAM-side
+# discriminant has a Python mapping; drift catches at test time before it
+# silently degrades errors in production.
+_ACQUIRE_ERROR_PARSERS: dict[str, type] = {
+    "held_by_other": AcquireHeldByOther,
+    "permission_denied": AcquirePermissionDenied,
+    "schema_invalid": AcquireSchemaInvalid,
+    "service_unavailable": AcquireServiceUnavailable,
+}
+
+_STATUS_ERROR_PARSERS: dict[str, type] = {
+    "schema_invalid": StatusSchemaInvalid,
+    "service_unavailable": StatusServiceUnavailable,
+}
+
+# `_parse_simple` covers renew/heartbeat/release/handoff_offer/handoff_accept/
+# force_release. The BEAM router emits the first six; `not_holder` and
+# `already_released` are reserved for future server-side semantics (see
+# surface_registry.ex `:not_holder` return — currently caught by the generic
+# `{:error, reason}` arm and surfaces as `service_unavailable`, but the
+# typed model accepts them so a future router map-through doesn't require a
+# coordinated client deploy).
+_SIMPLE_ACCEPTED_ERRORS: frozenset[str] = frozenset({
+    "not_found",
+    "expired",
+    "not_holder",
+    "already_released",
+    "permission_denied",
+    "schema_invalid",
+    "service_unavailable",
+})
+
+# Authoritative BEAM-emitted error sets per endpoint family. Mirrors the
+# `elixir/lease_plane/lib/unitares_lease_plane/http_router.ex` discriminants
+# and the `http_auth.ex` 401 paths. Synced by the contract tests.
+BEAM_EMITTED_ACQUIRE_ERRORS: frozenset[str] = frozenset({
+    "held_by_other",
+    "permission_denied",
+    "schema_invalid",
+    "service_unavailable",
+})
+
+BEAM_EMITTED_STATUS_ERRORS: frozenset[str] = frozenset({
+    # /v1/lease/status emits service_unavailable on internal error and
+    # schema_invalid on missing/invalid surface_id. 404 returns ok:true with
+    # lease=null (typed-absence shape), not an error envelope.
+    "schema_invalid",
+    "service_unavailable",
+})
+
+BEAM_EMITTED_SIMPLE_ERRORS: frozenset[str] = frozenset({
+    # renew / heartbeat / release / handoff_offer / handoff_accept /
+    # force_release. `expired` is renew-specific (409); `not_found` is the
+    # 404 across all simple-shaped endpoints; `permission_denied` covers
+    # both auth-layer 401 and force-release token mismatch.
+    "not_found",
+    "expired",
+    "permission_denied",
+    "schema_invalid",
+    "service_unavailable",
+})
+
+
+def _unknown_error_fallback(payload: Mapping[str, Any]) -> str:
+    """Build a `reason` string that names the unknown discriminant. Pre-Phase-B
+    these were silently coerced to `service_unavailable` with no signal —
+    the operator had to dig through Elixir router logs to find the actual
+    discriminant. Naming it in the Python-side reason makes drift visible."""
+    raw = payload.get("error")
+    if raw is None:
+        return "missing error discriminant in BEAM response"
+    return f"unrecognized error discriminant: {raw!r} (BEAM/Python registry drift?)"
+
+
 def _parse_acquire(payload: Mapping[str, Any]) -> AcquireResult:
     try:
         if payload.get("ok") is True:
             return AcquireOk.model_validate(payload)
-        error = payload.get("error")
-        if error == "held_by_other":
-            return AcquireHeldByOther.model_validate(payload)
-        if error == "permission_denied":
-            return AcquirePermissionDenied.model_validate(payload)
-        if error == "schema_invalid":
-            return AcquireSchemaInvalid.model_validate(payload)
-        return AcquireServiceUnavailable.model_validate({"ok": False, "error": "service_unavailable"})
+        model_cls = _ACQUIRE_ERROR_PARSERS.get(payload.get("error"))
+        if model_cls is None:
+            return AcquireServiceUnavailable.model_validate({
+                "ok": False,
+                "error": "service_unavailable",
+                "reason": _unknown_error_fallback(payload),
+            })
+        return model_cls.model_validate(payload)
     except ValidationError as exc:
         return AcquireSchemaInvalid(ok=False, error="schema_invalid", detail=exc.errors())
 
@@ -359,9 +445,14 @@ def _parse_status(payload: Mapping[str, Any]) -> StatusResult:
     try:
         if payload.get("ok") is True:
             return StatusOk.model_validate(payload)
-        if payload.get("error") == "schema_invalid":
-            return StatusSchemaInvalid.model_validate(payload)
-        return StatusServiceUnavailable.model_validate({"ok": False, "error": "service_unavailable"})
+        model_cls = _STATUS_ERROR_PARSERS.get(payload.get("error"))
+        if model_cls is None:
+            return StatusServiceUnavailable.model_validate({
+                "ok": False,
+                "error": "service_unavailable",
+                "reason": _unknown_error_fallback(payload),
+            })
+        return model_cls.model_validate(payload)
     except ValidationError as exc:
         return StatusSchemaInvalid(ok=False, error="schema_invalid", detail=exc.errors())
 
@@ -371,20 +462,12 @@ def _parse_simple(payload: Mapping[str, Any]) -> SimpleResult:
         if payload.get("ok") is True:
             return SimpleOk.model_validate(payload)
         error = payload.get("error")
-        if error in {
-            "not_found",
-            "expired",
-            "not_holder",
-            "already_released",
-            "permission_denied",
-            "schema_invalid",
-            "service_unavailable",
-        }:
+        if error in _SIMPLE_ACCEPTED_ERRORS:
             return SimpleError.model_validate(payload)
         return SimpleError(
             ok=False,
             error="service_unavailable",
-            reason=f"unrecognized error: {error!r}" if error is not None else "missing error discriminant",
+            reason=_unknown_error_fallback(payload),
         )
     except ValidationError as exc:
         return SimpleError(ok=False, error="schema_invalid", detail=exc.errors())

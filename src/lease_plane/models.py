@@ -262,6 +262,13 @@ class AcquireSchemaInvalid(BaseModel):
 class AcquireServiceUnavailable(BaseModel):
     ok: Literal[False]
     error: Literal["service_unavailable"]
+    # Phase B (Wave 2 boundary hardening): the client may surface a reason
+    # here when an unknown error discriminant from the BEAM gets coerced
+    # to service_unavailable — the human-readable string names the actual
+    # discriminant so registry-drift becomes visible instead of swallowed.
+    # None on the legitimate service-unavailable path (advisory escape
+    # valve, transport failure, server 503 with no reason).
+    reason: str | None = None
 
 
 AcquireResult: TypeAlias = (
@@ -287,6 +294,10 @@ class StatusSchemaInvalid(BaseModel):
 class StatusServiceUnavailable(BaseModel):
     ok: Literal[False]
     error: Literal["service_unavailable"]
+    # Phase B (Wave 2 boundary hardening): same semantics as
+    # AcquireServiceUnavailable.reason — surfaces the unknown discriminant
+    # name when registry drift coerces a BEAM error to service_unavailable.
+    reason: str | None = None
 
 
 StatusResult: TypeAlias = StatusOk | StatusSchemaInvalid | StatusServiceUnavailable
