@@ -12,6 +12,7 @@ from src.dialectic_protocol import DialecticSession, Resolution
 from src.logging_utils import get_logger
 from ..support.condition_parser import parse_condition, apply_condition
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
+from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
 logger = get_logger(__name__)
 
 async def execute_resolution(session: DialecticSession, resolution: Resolution) -> Dict[str, Any]:
@@ -151,13 +152,47 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
         "applied_conditions": applied_conditions,
         "resolution_hash": resolution.hash()
     }
-    
+
     # Add discovery update info if present
     if session.discovery_id:
         result["discovery_id"] = session.discovery_id
         result["discovery_updated"] = discovery_updated
         if discovery_updated:
             result["discovery_status"] = "resolved" if resolution.action == "resume" else "open"
-    
+
+    # Emit outcome_event so downstream calibration / back-tests can correlate
+    # resumption with subsequent agent state. dialectic_resolved is neutral
+    # (process succeeded); whether conditions hold up is a separate later test.
+    # Failure isolation: emit failure must not break resolution execution.
+    try:
+        applied_count = sum(
+            1 for c in applied_conditions
+            if isinstance(c, dict) and c.get("status") != "failed"
+        )
+        await _record_outcome_event_inline({
+            "agent_id": agent_id,
+            "outcome_type": "dialectic_resolved",
+            "is_bad": False,
+            "outcome_score": 1.0,
+            "decision_action": "proceed",
+            "detail": {
+                "dialectic_session_id": session.session_id,
+                "session_type": getattr(session, "session_type", None),
+                "root_cause": resolution.root_cause,
+                "conditions": resolution.conditions,
+                "conditions_applied": applied_count,
+                "conditions_total": len(applied_conditions),
+                "synthesis_round": session.synthesis_round,
+                "resolution_hash": resolution.hash(),
+                "discovery_id": session.discovery_id,
+                "status_changed": status_changed,
+            },
+        })
+    except Exception as e:
+        logger.warning(
+            f"outcome_event emit on dialectic_resolved failed for "
+            f"session {session.session_id}: {e}"
+        )
+
     return result
 

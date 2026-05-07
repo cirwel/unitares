@@ -20,7 +20,11 @@ logger = get_logger(__name__)
 # Outcome types that are considered "bad" by default
 BAD_OUTCOME_TYPES = {"test_failed", "tool_rejected", "drawing_abandoned", "task_failed"}
 GOOD_OUTCOME_TYPES = {"test_passed", "drawing_completed", "task_completed"}
-NEUTRAL_OUTCOME_TYPES = {"trajectory_validated"}  # is_bad determined by score
+# dialectic_resolved is neutral: agreement was reached, but whether the
+# resolution holds up under the agreed conditions is a separate later test.
+# Recording it closes the dialectic→outcome_events tracking gap so downstream
+# back-tests can correlate resumption with subsequent agent state.
+NEUTRAL_OUTCOME_TYPES = {"trajectory_validated", "dialectic_resolved"}  # is_bad determined by score
 VALID_OUTCOME_TYPES = BAD_OUTCOME_TYPES | GOOD_OUTCOME_TYPES | NEUTRAL_OUTCOME_TYPES
 
 _HARD_EXOGENOUS_DETAIL_KEYS = (
