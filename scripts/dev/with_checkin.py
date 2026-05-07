@@ -118,6 +118,8 @@ def infer_workflow(argv: list[str]) -> str:
             return "push"
     if first in {"pytest", "tox"}:
         return "test"
+    if first == "test-cache.sh":
+        return "test"
     if first in {"python", "python3"} and len(lowered) > 2:
         if lowered[1] == "-m" and lowered[2] in {"pytest", "unittest"}:
             return "test"

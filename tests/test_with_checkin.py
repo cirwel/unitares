@@ -17,6 +17,8 @@ SPEC.loader.exec_module(with_checkin)
 def test_infer_workflow_for_common_commands():
     assert with_checkin.infer_workflow(["python3", "-m", "pytest", "tests"]) == "test"
     assert with_checkin.infer_workflow(["pytest", "tests"]) == "test"
+    assert with_checkin.infer_workflow(["./scripts/dev/test-cache.sh"]) == "test"
+    assert with_checkin.infer_workflow(["scripts/dev/test-cache.sh", "--staged"]) == "test"
     assert with_checkin.infer_workflow(["make", "smoke"]) == "test"
     assert with_checkin.infer_workflow(["mix", "test"]) == "test"
     assert with_checkin.infer_workflow(["git", "commit", "-m", "msg"]) == "commit"
