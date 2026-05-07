@@ -54,11 +54,56 @@ COORDINATION_FAILURE_ANYIO_CANCELLATION = "coordination_failure.anyio_cancellati
 COORDINATION_FAILURE_EXECUTOR_POOL_EXHAUSTION = "coordination_failure.executor_pool_exhaustion"
 COORDINATION_FAILURE_MCP_HANDLER_TIMEOUT = "coordination_failure.mcp_handler_timeout"
 
+# Wave 2 schema extension (RFC roadmap §"Wave 2 — Wave 0 schema extension"):
+# `coordination_failure.beam_python_boundary.*` namespace. Lays down the
+# typed constants before Wave 3's handler-dispatch port so Wave 3's exit
+# criterion #3 ("no new substrate-tax pattern at the Python-handler-body
+# boundary") becomes measurable. Two directional subtypes — failures
+# travelling either way across the BEAM/Python REST boundary — match the
+# architect council C5 finding that subtype discrimination belongs in the
+# event_type contract, not in a payload subtype enum.
+#
+# Documented payload shape (per Stability discipline §"event_type extends
+# only by adding new dotted namespaces"; payload contract pinned at landing):
+#
+#   python_to_beam_request_failed:
+#     payload = {
+#       "endpoint": str,           # BEAM endpoint URL or stable identifier
+#       "method": str,             # GET/POST/etc
+#       "error_class": str,        # "timeout" | "connect_error" | "non_200" |
+#                                  # "decode_error" | "other"
+#       "status_code": int | None, # populated when error_class == "non_200"
+#       "elapsed_ms": int | None,  # wall-clock from request start
+#     }
+#
+#   beam_to_python_request_failed:
+#     payload = {
+#       "endpoint": str,           # governance-mcp endpoint identifier
+#       "method": str,
+#       "error_class": str,        # same enum as python_to_beam
+#       "status_code": int | None,
+#       "elapsed_ms": int | None,
+#     }
+#
+# Wire-up call sites land in Wave 3 (or earlier if Wave 2 §"Lease-integration
+# boundary hardening" produces them first). Adding new subtypes — e.g.,
+# `coordination_failure.beam_python_boundary.contract_violation` — extends
+# this section AND the WAVE_0_EVENT_TYPES set in the same PR; never silently.
+COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_PYTHON_TO_BEAM_REQUEST_FAILED = (
+    "coordination_failure.beam_python_boundary.python_to_beam_request_failed"
+)
+COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_BEAM_TO_PYTHON_REQUEST_FAILED = (
+    "coordination_failure.beam_python_boundary.beam_to_python_request_failed"
+)
+
 WAVE_0_EVENT_TYPES: frozenset[str] = frozenset({
     COORDINATION_FAILURE_ASYNCPG_CONNECT_ERROR,
     COORDINATION_FAILURE_ANYIO_CANCELLATION,
     COORDINATION_FAILURE_EXECUTOR_POOL_EXHAUSTION,
     COORDINATION_FAILURE_MCP_HANDLER_TIMEOUT,
+    # Wave 2 extension — see the docstring above the constants.
+    COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_PYTHON_TO_BEAM_REQUEST_FAILED,
+    COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_BEAM_TO_PYTHON_REQUEST_FAILED,
 })
 
 # Cached emitter context — git_commit and host don't change at runtime.

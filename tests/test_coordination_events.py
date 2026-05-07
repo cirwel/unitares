@@ -43,6 +43,8 @@ if not can_connect_to_test_db():
 from src.coordination_events import (  # noqa: E402
     COORDINATION_FAILURE_ANYIO_CANCELLATION,
     COORDINATION_FAILURE_ASYNCPG_CONNECT_ERROR,
+    COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_BEAM_TO_PYTHON_REQUEST_FAILED,
+    COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_PYTHON_TO_BEAM_REQUEST_FAILED,
     COORDINATION_FAILURE_EXECUTOR_POOL_EXHAUSTION,
     COORDINATION_FAILURE_MCP_HANDLER_TIMEOUT,
     WAVE_0_EVENT_TYPES,
@@ -91,17 +93,56 @@ def test_validate_event_type_accepts_all_wave_0_constants():
 
 
 def test_event_type_constants_match_documented_set():
-    """Drift guard: WAVE_0_EVENT_TYPES MUST equal the four documented values.
-    If you add a new event_type to the module, also extend the migration's
-    regex CHECK and the dashboard panel — drift between code and DB CHECK
-    becomes silent rejection."""
+    """Drift guard: WAVE_0_EVENT_TYPES MUST equal the documented values.
+    If you add a new event_type to the module, also extend this set, the
+    migration's regex CHECK (when needed), and the dashboard panel — drift
+    between code and DB CHECK becomes silent rejection.
+
+    The Wave 2 schema extension (RFC roadmap) added the
+    `coordination_failure.beam_python_boundary.*` namespace. The migration's
+    existing regex `^(coordination_failure)(\\.[a-z_]+)+$` already accepts
+    multi-segment subtypes — no migration follow-up was needed for that
+    extension. Future families (e.g., `coordination_recovery.*`) WILL
+    require a migration.
+    """
     expected = {
         "coordination_failure.asyncpg_connect_error",
         "coordination_failure.anyio_cancellation",
         "coordination_failure.executor_pool_exhaustion",
         "coordination_failure.mcp_handler_timeout",
+        # Wave 2 extension — directional cross-runtime request failures.
+        "coordination_failure.beam_python_boundary.python_to_beam_request_failed",
+        "coordination_failure.beam_python_boundary.beam_to_python_request_failed",
     }
     assert WAVE_0_EVENT_TYPES == expected
+
+
+def test_beam_python_boundary_constants_pass_validation():
+    """Both Wave 2 boundary subtypes pass the client-side regex validator
+    (which mirrors the migration's CHECK). Wire-up sites land in Wave 3,
+    but the constants are stable referents from this PR forward."""
+    _validate_event_type(
+        COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_PYTHON_TO_BEAM_REQUEST_FAILED
+    )
+    _validate_event_type(
+        COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_BEAM_TO_PYTHON_REQUEST_FAILED
+    )
+
+
+def test_beam_python_boundary_constants_have_canonical_dotted_form():
+    """The strings themselves carry the structure: family . namespace . direction.
+    Pin the literal forms here so a future rename can't slip through silently —
+    Wave 3 wire-up sites will look up these constants by name, but downstream
+    audit consumers (Chronicler projection, dashboard) match on the literal
+    event_type column. Renaming would silently break replay."""
+    assert (
+        COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_PYTHON_TO_BEAM_REQUEST_FAILED
+        == "coordination_failure.beam_python_boundary.python_to_beam_request_failed"
+    )
+    assert (
+        COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_BEAM_TO_PYTHON_REQUEST_FAILED
+        == "coordination_failure.beam_python_boundary.beam_to_python_request_failed"
+    )
 
 
 def test_validate_event_type_rejects_unknown_family():
@@ -315,6 +356,65 @@ async def test_emit_event_explicit_ts_passes_through(pool):
     assert abs((row["ts"] - event_ts).total_seconds()) < 0.001
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM audit.coordination_events WHERE event_id = $1", event_id)
+
+
+@pytest.mark.asyncio
+async def test_beam_python_boundary_types_pass_db_check_constraint(pool):
+    """Live-DB regression for the Wave 2 schema extension: both directional
+    boundary subtypes pass migration 035's `event_type` regex CHECK and
+    write a row with the dotted three-segment shape preserved.
+
+    The migration's existing regex `^(coordination_failure)(\\.[a-z_]+)+$`
+    repeats the `\\.[a-z_]+` group, so multi-segment subtypes like
+    `coordination_failure.beam_python_boundary.python_to_beam_request_failed`
+    pass without a new migration. This test pins that — if a future
+    migration tightens the regex (e.g., to `\\.[a-z_]+\\.[a-z_]+` flat),
+    the CHECK would silently start rejecting these and the test catches it
+    before Wave 3 wire-up sites land in production."""
+    await _cleanup(pool)
+
+    payload = {
+        "endpoint": "http://127.0.0.1:8788/v1/lease/acquire",
+        "method": "POST",
+        "error_class": "timeout",
+        "status_code": None,
+        "elapsed_ms": 2050,
+    }
+    e1 = await emit_event(
+        pool,
+        service="governance_mcp",
+        event_type=COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_PYTHON_TO_BEAM_REQUEST_FAILED,
+        payload=payload,
+        agent_id=_TEST_AGENT_ID,
+    )
+    e2 = await emit_event(
+        pool,
+        service="sentinel",
+        event_type=COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_BEAM_TO_PYTHON_REQUEST_FAILED,
+        payload={
+            "endpoint": "/api/findings",
+            "method": "POST",
+            "error_class": "non_200",
+            "status_code": 503,
+            "elapsed_ms": 142,
+        },
+    )
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT event_type, service FROM audit.coordination_events "
+            "WHERE event_id IN ($1, $2) ORDER BY event_type",
+            e1, e2,
+        )
+    by_type = {r["event_type"]: r["service"] for r in rows}
+    assert by_type[
+        COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_BEAM_TO_PYTHON_REQUEST_FAILED
+    ] == "sentinel"
+    assert by_type[
+        COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_PYTHON_TO_BEAM_REQUEST_FAILED
+    ] == "governance_mcp"
+
+    await _cleanup(pool)
 
 
 @pytest.mark.asyncio
