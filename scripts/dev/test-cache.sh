@@ -118,7 +118,7 @@ else
     TREE_HASH=$(_hash_worktree_python)
 fi
 
-PYTEST_ARGS_HASH=$(_hash_pytest_args "${PYTEST_EXTRA[@]}")
+PYTEST_ARGS_HASH=$(_hash_pytest_args ${PYTEST_EXTRA[@]+"${PYTEST_EXTRA[@]}"})
 CACHE_KEY=$(printf '%s\0%s\0%s\0%s\0' "$CACHE_VERSION" "$HASH_MODE" "$TREE_HASH" "$PYTEST_ARGS_HASH" | shasum -a 256 | cut -d' ' -f1)
 CACHE_FILE="$CACHE_DIR/$CACHE_KEY"
 CACHE_LABEL="$HASH_MODE tree $TREE_HASH"
