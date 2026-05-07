@@ -22,6 +22,19 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# Source operator secrets (LEASE_PLANE_BEARER_TOKEN, etc.) so the lease-advisory
+# helper below can authenticate. The lease plane fails closed without a token,
+# which surfaces as "lease: service_unavailable" — harmless per RFC v0.5 §6.1
+# (Phase A is non-fatal) but obscures real outages. Sourcing is best-effort:
+# missing file is fine, agents on hosts without the secrets still ship.
+SECRETS_FILE="${HOME}/.config/cirwel/secrets.env"
+if [[ -f "$SECRETS_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$SECRETS_FILE"
+    set +a
+fi
+
 RUNTIME_PATTERNS=(
     '^agents/'
     '^src/mcp_handlers/'
