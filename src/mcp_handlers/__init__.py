@@ -86,7 +86,6 @@ from .dialectic.handlers import (
     handle_submit_thesis,
     handle_submit_antithesis,
     handle_submit_synthesis,
-    handle_submit_quorum_vote,
     handle_llm_assisted_dialectic,
 )
 # Self-Recovery - Simplified recovery without external reviewers (Jan 2026)

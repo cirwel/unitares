@@ -205,9 +205,6 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     "submit_synthesis": ToolAlias(
         old_name="submit_synthesis", new_name="dialectic", reason="consolidated",
         migration_note="Use dialectic(action='synthesis', session_id='...')", inject_action="synthesis"),
-    "submit_quorum_vote": ToolAlias(
-        old_name="submit_quorum_vote", new_name="dialectic", reason="consolidated",
-        migration_note="Use dialectic(action='vote', session_id='...', vote='resume')", inject_action="vote"),
     "reassign_reviewer": ToolAlias(
         old_name="reassign_reviewer", new_name="dialectic", reason="consolidated",
         migration_note="Use dialectic(action='reassign', session_id='...')", inject_action="reassign"),

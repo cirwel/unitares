@@ -890,8 +890,6 @@ class TestHandleSubmitSynthesis:
 
         with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
                    return_value=session), \
-             patch(f"{DIALECTIC}._initiate_quorum", new_callable=AsyncMock,
-                   return_value=None), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent:
             result = await handle_submit_synthesis({
@@ -948,8 +946,6 @@ class TestHandleSubmitSynthesis:
 
         with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
                    return_value=session), \
-             patch(f"{DIALECTIC}._initiate_quorum", new_callable=AsyncMock,
-                   return_value=None), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_context_agent:
             result = await handle_submit_synthesis({
@@ -960,8 +956,11 @@ class TestHandleSubmitSynthesis:
             })
 
         data = parse_result(result)
-        # Session escalated or conservative default
-        assert data["success"] is False or data.get("autonomous_resolution") is True
+        # Quorum-escalation path retired; max-rounds always applies the
+        # conservative default (FAILED phase, autonomous_resolution=True).
+        assert data["success"] is False
+        assert data.get("autonomous_resolution") is True
+        assert data.get("resolution_type") == "conservative_default"
 
     @pytest.mark.asyncio
     async def test_convergence_with_resolution(
@@ -1088,40 +1087,6 @@ class TestHandleSubmitSynthesis:
         assert data["success"] is False
         assert "participant" in data["error"].lower(), (
             f"expected participant-set rejection, got: {data}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_synthesis_accepts_quorum_reviewer(
-        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
-        mock_save_session, mock_context_agent,
-    ):
-        """Quorum reviewers are legitimate participants once escalation has
-        assigned them; the gate must allow their synthesis submission."""
-        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
-
-        session = _make_session(phase=DialecticPhase.SYNTHESIS)
-        session.synthesis_round = 1
-        # Simulate: session has been escalated to quorum voting, and an
-        # assigned quorum reviewer submits a synthesis proposal.
-        session.quorum_reviewer_ids = ["agent-active"]
-
-        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
-                   return_value=session), \
-             mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
-             mock_context_agent:
-            result = await handle_submit_synthesis({
-                "session_id": session.session_id,
-                "agent_id": "agent-active",
-                "proposed_conditions": ["Merged quorum condition"],
-                "root_cause": "test",
-                "reasoning": "on the quorum",
-                "agrees": False,
-                "api_key": "key123",
-            })
-
-        data = parse_result(result)
-        assert data["success"] is True, (
-            f"quorum reviewer must be accepted, got: {data}"
         )
 
     # ------------------------------------------------------------------
@@ -1313,56 +1278,6 @@ class TestHandleSubmitSynthesis:
             f"prior synthesis with conditions should bypass early-fail, got: {data}"
         )
 
-
-# ============================================================================
-# Deadlock guards: any direct ``await get_db()`` in a dialectic handler path
-# must not hang the anyio task group. CLAUDE.md rule: new MCP handlers that
-# need DB access must use ``run_in_executor`` or ``asyncio.wait_for`` with a
-# tight timeout and graceful degradation. The three sites covered:
-#   1448: ``_initiate_quorum`` phase persist
-#   1533: ``handle_submit_quorum_vote`` reviewer-id fallback read
-#   1646: ``handle_submit_quorum_vote`` post-vote result persist
-# ============================================================================
-
-
-class TestDeadlockGuards:
-    """Regression guards for the anyio/asyncpg deadlock pattern."""
-
-    @pytest.mark.asyncio
-    async def test_initiate_quorum_tolerates_get_db_deadlock(
-        self, mock_server, mock_save_session,
-    ):
-        """``_initiate_quorum`` must complete within a bounded time even if
-        ``get_db`` hangs. Before the guard, a stuck asyncpg pool would
-        deadlock the whole handler; after the guard, the except path logs a
-        warning and the function returns in-memory state."""
-        import asyncio as _asyncio
-        from src.mcp_handlers.dialectic.handlers import _initiate_quorum
-
-        # Seed some eligible reviewers so _initiate_quorum gets past the
-        # select_quorum_reviewers short-circuit.
-        mock_server.agent_metadata = {
-            f"reviewer-{i}": _make_agent_meta(status="active")
-            for i in range(5)
-        }
-
-        async def _never_returns():
-            await _asyncio.sleep(60)  # intentionally longer than any handler budget
-            return None  # pragma: no cover
-
-        session = _make_session(phase=DialecticPhase.ANTITHESIS)
-
-        with patch(f"{DIALECTIC}.select_quorum_reviewers", new_callable=AsyncMock,
-                   return_value=[(f"reviewer-{i}", 1.0) for i in range(3)]), \
-             patch("src.db.get_db", side_effect=_never_returns), \
-             mock_save_session:
-            # Bound the test's own patience to prove the handler has its own
-            # timeout. If the fix works the call returns quickly; if it doesn't,
-            # this wait_for fires and the test fails with a clear reason.
-            result = await _asyncio.wait_for(_initiate_quorum(session), timeout=5.0)
-
-        assert result is not None, "quorum must still form even if PG persist hangs"
-        assert len(result["reviewer_ids"]) == 3
 
 class TestHandleListDialecticSessions:
     """Tests for handle_list_dialectic_sessions handler."""
@@ -1841,275 +1756,3 @@ class TestGetDialecticNextSteps:
         assert any("human" in s.lower() for s in steps)
 
 
-# ============================================================================
-# select_quorum_reviewers
-# ============================================================================
-
-class TestSelectQuorumReviewers:
-    """Tests for select_quorum_reviewers from reviewer.py."""
-
-    @pytest.fixture(autouse=True)
-    def _enable_autoselect(self, monkeypatch):
-        # Quorum auto-select is gated off by default (ghost-reviewer fix);
-        # these tests exercise the filter logic and opt in via the env flag.
-        monkeypatch.setenv("UNITARES_AUTOSELECT_REVIEWER", "1")
-
-    @pytest.mark.asyncio
-    async def test_disabled_by_default(self, monkeypatch):
-        """When the env flag is unset, quorum selection returns [] immediately."""
-        from src.mcp_handlers.dialectic.reviewer import select_quorum_reviewers
-        monkeypatch.delenv("UNITARES_AUTOSELECT_REVIEWER", raising=False)
-        session = _make_session(phase=DialecticPhase.ESCALATED)
-        metadata = {f"agent-{i}": _make_agent_meta() for i in range(8)}
-        result = await select_quorum_reviewers(session, metadata)
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_not_enough_agents(self):
-        """Returns empty list when fewer than 3 candidates exist."""
-        from src.mcp_handlers.dialectic.reviewer import select_quorum_reviewers
-        session = _make_session(phase=DialecticPhase.ESCALATED)
-        metadata = {
-            "agent-paused": _make_agent_meta(),
-            "agent-reviewer": _make_agent_meta(),
-            "agent-c": _make_agent_meta(),
-        }
-        with patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
-                    new_callable=AsyncMock, return_value=False), \
-             patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
-                    new_callable=AsyncMock, return_value=False):
-            result = await select_quorum_reviewers(session, metadata)
-        # Only agent-c is eligible (paused and reviewer excluded)
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_correct_filtering(self):
-        """Filters out paused agent, reviewer, and inactive agents."""
-        from src.mcp_handlers.dialectic.reviewer import select_quorum_reviewers
-        session = _make_session(phase=DialecticPhase.ESCALATED)
-        metadata = {
-            "agent-paused": _make_agent_meta(),
-            "agent-reviewer": _make_agent_meta(),
-            "agent-c": _make_agent_meta(),
-            "agent-d": _make_agent_meta(),
-            "agent-e": _make_agent_meta(),
-            "agent-f": _make_agent_meta(status="inactive"),
-        }
-        with patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
-                    new_callable=AsyncMock, return_value=False), \
-             patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
-                    new_callable=AsyncMock, return_value=False):
-            result = await select_quorum_reviewers(session, metadata)
-        ids = [r[0] for r in result]
-        assert "agent-paused" not in ids
-        assert "agent-reviewer" not in ids
-        assert "agent-f" not in ids
-        assert len(result) == 3  # c, d, e
-
-    @pytest.mark.asyncio
-    async def test_deterministic_top_n(self):
-        """Returns top N by authority score, not random."""
-        from src.mcp_handlers.dialectic.reviewer import select_quorum_reviewers
-        session = _make_session(phase=DialecticPhase.ESCALATED)
-        metadata = {
-            "agent-paused": _make_agent_meta(),
-            "agent-reviewer": _make_agent_meta(),
-        }
-        # Add 5 candidates with distinct review records
-        for i, name in enumerate(["a", "b", "c", "d", "e"]):
-            meta = _make_agent_meta()
-            meta.total_reviews = 10
-            meta.successful_reviews = 10 - i  # a has best track record
-            meta.tags = []
-            metadata[f"agent-{name}"] = meta
-
-        with patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
-                    new_callable=AsyncMock, return_value=False), \
-             patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
-                    new_callable=AsyncMock, return_value=False):
-            result1 = await select_quorum_reviewers(session, metadata)
-            result2 = await select_quorum_reviewers(session, metadata)
-        # Same order both times (deterministic)
-        assert [r[0] for r in result1] == [r[0] for r in result2]
-        # Scores descending
-        scores = [r[1] for r in result1]
-        assert scores == sorted(scores, reverse=True)
-
-    @pytest.mark.asyncio
-    async def test_empty_metadata(self):
-        from src.mcp_handlers.dialectic.reviewer import select_quorum_reviewers
-        session = _make_session(phase=DialecticPhase.ESCALATED)
-        result = await select_quorum_reviewers(session, {})
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_none_metadata(self):
-        from src.mcp_handlers.dialectic.reviewer import select_quorum_reviewers
-        session = _make_session(phase=DialecticPhase.ESCALATED)
-        result = await select_quorum_reviewers(session, None)
-        assert result == []
-
-
-# ============================================================================
-# handle_submit_quorum_vote
-# ============================================================================
-
-class TestSubmitQuorumVote:
-    """Tests for the handle_submit_quorum_vote handler."""
-
-    HANDLER_MODULE = "src.mcp_handlers.dialectic.handlers"
-
-    def _mock_db(self, quorum_reviewer_ids=None):
-        """Create a mock DB that returns quorum_reviewer_ids."""
-        mock_db = AsyncMock()
-        row = {"quorum_reviewer_ids": quorum_reviewer_ids or []}
-        mock_db.fetchrow = AsyncMock(return_value=row)
-        mock_db.execute = AsyncMock()
-        return mock_db
-
-    @pytest.mark.asyncio
-    async def test_missing_session_id(self):
-        from src.mcp_handlers.dialectic.handlers import handle_submit_quorum_vote
-        mock_srv = _make_mock_server({"voter-1": _make_agent_meta()})
-        with patch(f"{self.HANDLER_MODULE}.mcp_server", mock_srv), \
-             patch(f"{self.HANDLER_MODULE}.require_registered_agent",
-                   return_value=("voter-1", None)):
-            result = parse_result(await handle_submit_quorum_vote({
-                "vote": "resume",
-                "reasoning": "ok",
-            }))
-        assert result["success"] is False
-        assert "session_id" in result["error"].lower()
-
-    @pytest.mark.asyncio
-    async def test_wrong_phase(self):
-        from src.mcp_handlers.dialectic.handlers import handle_submit_quorum_vote
-        session = _make_session(phase=DialecticPhase.SYNTHESIS)
-        mock_srv = _make_mock_server({"voter-1": _make_agent_meta()})
-        with patch(f"{self.HANDLER_MODULE}.mcp_server", mock_srv), \
-             patch(f"{self.HANDLER_MODULE}.require_registered_agent",
-                   return_value=("voter-1", None)), \
-             patch(f"{self.HANDLER_MODULE}.load_session",
-                   new_callable=AsyncMock, return_value=session):
-            result = parse_result(await handle_submit_quorum_vote({
-                "session_id": session.session_id,
-                "vote": "resume",
-                "reasoning": "ok",
-            }))
-        assert result["success"] is False
-        assert "quorum_voting" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_agent_not_in_quorum(self):
-        from src.mcp_handlers.dialectic.handlers import handle_submit_quorum_vote
-        session = _make_session(phase=DialecticPhase.QUORUM_VOTING)
-        mock_srv = _make_mock_server({"voter-1": _make_agent_meta()})
-        mock_db = self._mock_db(["other-agent-1", "other-agent-2", "other-agent-3"])
-        with patch(f"{self.HANDLER_MODULE}.mcp_server", mock_srv), \
-             patch(f"{self.HANDLER_MODULE}.require_registered_agent",
-                   return_value=("voter-1", None)), \
-             patch(f"{self.HANDLER_MODULE}.load_session",
-                   new_callable=AsyncMock, return_value=session), \
-             patch("src.db.get_db", new_callable=AsyncMock, return_value=mock_db):
-            result = parse_result(await handle_submit_quorum_vote({
-                "session_id": session.session_id,
-                "vote": "resume",
-                "reasoning": "ok",
-            }))
-        assert result["success"] is False
-        assert "not in the quorum" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_duplicate_vote(self):
-        from src.mcp_handlers.dialectic.handlers import handle_submit_quorum_vote
-        session = _make_session(phase=DialecticPhase.QUORUM_VOTING)
-        # Pre-add a vote from voter-1
-        session.transcript.append(DialecticMessage(
-            phase="quorum_vote",
-            agent_id="voter-1",
-            timestamp=datetime.now().isoformat(),
-            observed_metrics={"vote": "resume", "authority_weight": 0.8},
-        ))
-        mock_srv = _make_mock_server({"voter-1": _make_agent_meta()})
-        mock_db = self._mock_db(["voter-1", "voter-2", "voter-3"])
-        with patch(f"{self.HANDLER_MODULE}.mcp_server", mock_srv), \
-             patch(f"{self.HANDLER_MODULE}.require_registered_agent",
-                   return_value=("voter-1", None)), \
-             patch(f"{self.HANDLER_MODULE}.load_session",
-                   new_callable=AsyncMock, return_value=session), \
-             patch("src.db.get_db", new_callable=AsyncMock, return_value=mock_db):
-            result = parse_result(await handle_submit_quorum_vote({
-                "session_id": session.session_id,
-                "vote": "resume",
-                "reasoning": "ok",
-            }))
-        assert result["success"] is False
-        assert "already voted" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_vote_recorded_awaiting_more(self):
-        """First vote is recorded, status is awaiting_more_votes."""
-        from src.mcp_handlers.dialectic.handlers import handle_submit_quorum_vote
-        session = _make_session(phase=DialecticPhase.QUORUM_VOTING)
-        mock_srv = _make_mock_server({"voter-1": _make_agent_meta()})
-        mock_db = self._mock_db(["voter-1", "voter-2", "voter-3", "voter-4"])
-        with patch(f"{self.HANDLER_MODULE}.mcp_server", mock_srv), \
-             patch(f"{self.HANDLER_MODULE}.require_registered_agent",
-                   return_value=("voter-1", None)), \
-             patch(f"{self.HANDLER_MODULE}.load_session",
-                   new_callable=AsyncMock, return_value=session), \
-             patch(f"{self.HANDLER_MODULE}.save_session",
-                   new_callable=AsyncMock), \
-             patch(f"{self.HANDLER_MODULE}.pg_add_message",
-                   new_callable=AsyncMock), \
-             patch("src.db.get_db", new_callable=AsyncMock, return_value=mock_db):
-            result = parse_result(await handle_submit_quorum_vote({
-                "session_id": session.session_id,
-                "vote": "resume",
-                "reasoning": "looks good",
-            }))
-        assert result["success"] is True
-        assert result["vote_recorded"] is True
-        assert result["status"] == "awaiting_more_votes"
-
-    @pytest.mark.asyncio
-    async def test_tally_triggers_on_third_vote(self):
-        """Tally triggers when 3 votes are received."""
-        from src.mcp_handlers.dialectic.handlers import handle_submit_quorum_vote
-        session = _make_session(phase=DialecticPhase.QUORUM_VOTING)
-        # Pre-add 2 resume votes
-        for vid in ("voter-1", "voter-2"):
-            session.transcript.append(DialecticMessage(
-                phase="quorum_vote", agent_id=vid,
-                timestamp=datetime.now().isoformat(),
-                observed_metrics={"vote": "resume", "authority_weight": 0.8},
-                reasoning="ok",
-            ))
-        mock_srv = _make_mock_server({
-            "voter-3": _make_agent_meta(),
-            "agent-paused": _make_agent_meta(status="paused"),
-        })
-        mock_db = self._mock_db(["voter-1", "voter-2", "voter-3", "voter-4", "voter-5"])
-        with patch(f"{self.HANDLER_MODULE}.mcp_server", mock_srv), \
-             patch(f"{self.HANDLER_MODULE}.require_registered_agent",
-                   return_value=("voter-3", None)), \
-             patch(f"{self.HANDLER_MODULE}.load_session",
-                   new_callable=AsyncMock, return_value=session), \
-             patch(f"{self.HANDLER_MODULE}.save_session",
-                   new_callable=AsyncMock), \
-             patch(f"{self.HANDLER_MODULE}.pg_add_message",
-                   new_callable=AsyncMock), \
-             patch(f"{self.HANDLER_MODULE}.pg_resolve_session",
-                   new_callable=AsyncMock), \
-             patch(f"{self.HANDLER_MODULE}.execute_resolution",
-                   new_callable=AsyncMock, return_value={"success": True}), \
-             patch("src.db.get_db", new_callable=AsyncMock, return_value=mock_db):
-            result = parse_result(await handle_submit_quorum_vote({
-                "session_id": session.session_id,
-                "vote": "resume",
-                "reasoning": "ok",
-            }))
-        assert result["success"] is True
-        assert "quorum_result" in result
-        assert result["quorum_result"]["achieved_supermajority"] is True
-        assert result["quorum_result"]["action"] == "resume"

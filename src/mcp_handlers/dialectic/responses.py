@@ -230,14 +230,3 @@ def default_escalate_steps() -> List[str]:
     ]
 
 
-def next_step_quorum_initiated(count: int) -> str:
-    """Next-step guidance after quorum voting is initiated."""
-    return f"Quorum of {count} reviewers assigned. Each should submit_quorum_vote."
-
-
-def default_quorum_steps() -> List[str]:
-    return [
-        "Quorum reviewers should call submit_quorum_vote with their vote",
-        "Voting closes when all reviewers vote or 3+ votes are in",
-        "A 2/3 authority-weighted supermajority decides the outcome",
-    ]

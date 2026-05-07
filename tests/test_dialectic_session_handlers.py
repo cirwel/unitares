@@ -321,7 +321,7 @@ class TestReconstructSessionFromDict:
     def test_reconstruction_with_all_phases(self):
         from src.mcp_handlers.dialectic.session import _reconstruct_session_from_dict
 
-        for phase_value in ["thesis", "antithesis", "synthesis", "resolved", "escalated", "failed"]:
+        for phase_value in ["thesis", "antithesis", "synthesis", "resolved", "failed"]:
             data = _make_session_dict(phase=phase_value)
             session = _reconstruct_session_from_dict(f"sess_{phase_value}", data)
             assert session is not None

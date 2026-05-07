@@ -108,20 +108,6 @@ class SubmitSynthesisParams(AgentIdentityMixin):
             self.agrees = self.agrees.lower() in ('true', '1', 'yes')
         return self
 
-class SubmitQuorumVoteParams(AgentIdentityMixin):
-    """
-    Submit a quorum vote on an escalated dialectic session
-    """
-    session_id: str = Field(..., description="Dialectic session ID")
-    vote: Literal["resume", "block", "cooldown"] = Field(
-        ..., description="Vote action: resume the agent, block permanently, or cooldown"
-    )
-    reasoning: str = Field(..., description="Explanation for your vote")
-    conditions: Optional[List[str]] = Field(
-        default=None, description="Conditions for resumption (relevant if vote is 'resume')"
-    )
-
-
 class LlmAssistedDialecticParams(AgentIdentityMixin):
     """
     Run LLM-assisted dialectic recovery
@@ -132,7 +118,7 @@ class LlmAssistedDialecticParams(AgentIdentityMixin):
 
 class DialecticParams(AgentIdentityMixin):
     """Parameters for dialectic"""
-    action: Literal["get", "list", "request", "thesis", "antithesis", "synthesis", "vote", "reassign"] = Field(..., description="Operation: get, list, request, thesis, antithesis, synthesis, vote, reassign")
+    action: Literal["get", "list", "request", "thesis", "antithesis", "synthesis", "reassign"] = Field(..., description="Operation: get, list, request, thesis, antithesis, synthesis, reassign")
     session_id: Optional[str] = Field(None, description="Dialectic session ID")
     agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get or list)")
     status: Optional[str] = Field(None, description="Filter by phase (for action=list)")

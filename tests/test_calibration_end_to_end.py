@@ -163,7 +163,7 @@ async def test_disagreement_calibration():
                 dispute_type="verification"
             )
             session.created_at = datetime.now()
-            session.phase = DialecticPhase.ESCALATED  # Max rounds exceeded
+            session.phase = DialecticPhase.FAILED  # Max rounds exceeded (ESCALATED retired)
             session.synthesis_round = 6  # Exceeded max rounds
             session.max_synthesis_rounds = 5
             
@@ -287,7 +287,7 @@ async def test_both_paths_together():
                 dispute_type="verification"
             )
             session2.created_at = datetime.now()
-            session2.phase = DialecticPhase.ESCALATED
+            session2.phase = DialecticPhase.FAILED  # ESCALATED retired
             session2.transcript.append(DialecticMessage(
                 phase="synthesis",
                 agent_id="test_agent_both_2",

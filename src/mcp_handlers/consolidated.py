@@ -70,7 +70,6 @@ from .dialectic.handlers import (
     handle_submit_thesis,
     handle_submit_antithesis,
     handle_submit_synthesis,
-    handle_submit_quorum_vote,
     handle_reassign_reviewer,
 )
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -237,11 +236,10 @@ handle_dialectic = action_router(
         "thesis": handle_submit_thesis,
         "antithesis": handle_submit_antithesis,
         "synthesis": handle_submit_synthesis,
-        "vote": handle_submit_quorum_vote,
         "reassign": handle_reassign_reviewer,
     },
     timeout=60.0,
-    description="Dialectic operations: get, list, request, thesis, antithesis, synthesis, vote, reassign",
+    description="Dialectic operations: get, list, request, thesis, antithesis, synthesis, reassign",
     default_action="list",
     examples=[
         "dialectic(action='list')",

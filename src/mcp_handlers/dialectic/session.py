@@ -124,10 +124,6 @@ def _reconstruct_session_from_dict(session_id: str, session_data: Dict) -> Optio
             session._max_synthesis_wait = session.MAX_SYNTHESIS_WAIT
             session._max_total_time = session.MAX_TOTAL_TIME
 
-        # Restore quorum fields
-        session.quorum_reviewer_ids = session_data.get("quorum_reviewer_ids", []) or []
-        session.quorum_deadline = session_data.get("quorum_deadline")
-
         return session
     except Exception as e:
         logger.error(f"Error reconstructing session {session_id}: {e}", exc_info=True)
@@ -144,7 +140,7 @@ async def save_session(session: DialecticSession) -> None:
     try:
         from src.dialectic_db import update_session_phase_async as pg_update_phase
         from src.dialectic_db import resolve_session_async as pg_resolve_session
-        if session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED, DialecticPhase.ESCALATED):
+        if session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED):
             resolution_dict = session.resolution.to_dict() if session.resolution else None
             status = session.phase.value if session.phase == DialecticPhase.RESOLVED else "failed"
             await pg_resolve_session(
@@ -202,7 +198,7 @@ async def load_all_sessions() -> int:
             if not full:
                 continue
             session = _reconstruct_session_from_dict(session_id, full)
-            if session and session.phase not in [DialecticPhase.RESOLVED, DialecticPhase.FAILED, DialecticPhase.ESCALATED]:
+            if session and session.phase not in [DialecticPhase.RESOLVED, DialecticPhase.FAILED]:
                 ACTIVE_SESSIONS[session_id] = session
                 loaded_count += 1
         if loaded_count > 0:

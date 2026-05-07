@@ -19,9 +19,6 @@ from src.dialectic_protocol import (
     Resolution,
     DialecticPhase,
     ResolutionAction,
-    QuorumVote,
-    QuorumResult,
-    tally_quorum_votes,
 )
 from src.mcp_handlers.dialectic.session import _reconstruct_session_from_dict
 
@@ -41,18 +38,16 @@ class TestDialecticPhase:
     def test_resolved_value(self):
         assert DialecticPhase.RESOLVED.value == "resolved"
 
-    def test_quorum_voting_value(self):
-        assert DialecticPhase.QUORUM_VOTING.value == "quorum_voting"
-
     def test_all_phases(self):
         phases = [p.value for p in DialecticPhase]
         assert "thesis" in phases
         assert "antithesis" in phases
         assert "synthesis" in phases
         assert "resolved" in phases
-        assert "escalated" in phases
         assert "failed" in phases
-        assert "quorum_voting" in phases
+        # ESCALATED + QUORUM_VOTING retired; 0/47 historical uses (council 2026-05-06)
+        assert "escalated" not in phases
+        assert "quorum_voting" not in phases
 
 
 # ============================================================================
@@ -602,7 +597,9 @@ class TestDialecticProtocolFlow:
         result = session.submit_synthesis(self._synthesis_msg("agent-a"), "key-a")
         assert result["success"] is False
         assert "Max synthesis rounds exceeded" in result["error"]
-        assert session.phase == DialecticPhase.ESCALATED
+        # ESCALATED retired; max-rounds now routes to FAILED with action="failed_max_rounds"
+        assert session.phase == DialecticPhase.FAILED
+        assert result.get("action") == "failed_max_rounds"
 
     def test_convergence_single_agrees(self):
         """Single synthesis with agrees=True resolves. No fourth phase."""
@@ -632,128 +629,3 @@ class TestDialecticProtocolFlow:
         assert d["session_id"] is not None
 
 
-# ============================================================================
-# QuorumVote and tally_quorum_votes
-# ============================================================================
-
-class TestQuorumVote:
-
-    def test_create(self):
-        v = QuorumVote(
-            agent_id="a1", vote="resume", authority_weight=0.8,
-            reasoning="looks good",
-        )
-        assert v.vote == "resume"
-        assert v.authority_weight == 0.8
-
-    def test_to_dict(self):
-        v = QuorumVote(
-            agent_id="a1", vote="block", authority_weight=0.5,
-            reasoning="unsafe", conditions=["halt"],
-        )
-        d = v.to_dict()
-        assert d["agent_id"] == "a1"
-        assert d["vote"] == "block"
-        assert d["conditions"] == ["halt"]
-
-
-class TestTallyQuorumVotes:
-
-    def _vote(self, agent_id, vote, weight):
-        return QuorumVote(
-            agent_id=agent_id, vote=vote, authority_weight=weight,
-            reasoning="test",
-        )
-
-    def test_empty_votes(self):
-        result = tally_quorum_votes([])
-        assert result.action == "no_supermajority"
-        assert result.achieved_supermajority is False
-        assert result.total_weight == 0.0
-
-    def test_unanimous_resume(self):
-        votes = [
-            self._vote("a1", "resume", 0.8),
-            self._vote("a2", "resume", 0.7),
-            self._vote("a3", "resume", 0.6),
-        ]
-        result = tally_quorum_votes(votes)
-        assert result.action == "resume"
-        assert result.achieved_supermajority is True
-        assert result.margin == 1.0
-        assert result.vote_counts == {"resume": 3}
-
-    def test_unanimous_block(self):
-        votes = [
-            self._vote("a1", "block", 0.9),
-            self._vote("a2", "block", 0.8),
-            self._vote("a3", "block", 0.7),
-        ]
-        result = tally_quorum_votes(votes)
-        assert result.action == "block"
-        assert result.achieved_supermajority is True
-
-    def test_two_thirds_supermajority(self):
-        """2 out of 3 equal-weight votes = 2/3 exactly."""
-        votes = [
-            self._vote("a1", "resume", 1.0),
-            self._vote("a2", "resume", 1.0),
-            self._vote("a3", "block", 1.0),
-        ]
-        result = tally_quorum_votes(votes)
-        assert result.action == "resume"
-        assert result.achieved_supermajority is True
-        assert abs(result.margin - 2/3) < 0.01
-
-    def test_split_no_supermajority(self):
-        """Even split = no supermajority."""
-        votes = [
-            self._vote("a1", "resume", 1.0),
-            self._vote("a2", "block", 1.0),
-            self._vote("a3", "cooldown", 1.0),
-        ]
-        result = tally_quorum_votes(votes)
-        assert result.action == "no_supermajority"
-        assert result.achieved_supermajority is False
-
-    def test_authority_weighted_edge(self):
-        """High-authority resume voter outweighs two low-authority block voters."""
-        votes = [
-            self._vote("a1", "resume", 0.9),
-            self._vote("a2", "resume", 0.8),
-            self._vote("a3", "block", 0.1),
-            self._vote("a4", "block", 0.1),
-        ]
-        result = tally_quorum_votes(votes)
-        # resume weight: 1.7, total: 1.9, fraction = ~89%
-        assert result.action == "resume"
-        assert result.achieved_supermajority is True
-
-    def test_authority_weighted_no_supermajority(self):
-        """One high-authority block voter prevents resume supermajority."""
-        votes = [
-            self._vote("a1", "resume", 0.4),
-            self._vote("a2", "resume", 0.4),
-            self._vote("a3", "block", 0.9),
-        ]
-        result = tally_quorum_votes(votes)
-        # resume weight: 0.8, total: 1.7, fraction = ~47% < 67%
-        assert result.achieved_supermajority is False
-
-    def test_zero_weight_votes(self):
-        """All zero-weight votes = no supermajority."""
-        votes = [
-            self._vote("a1", "resume", 0.0),
-            self._vote("a2", "resume", 0.0),
-        ]
-        result = tally_quorum_votes(votes)
-        assert result.action == "no_supermajority"
-        assert result.achieved_supermajority is False
-
-    def test_result_to_dict(self):
-        votes = [self._vote("a1", "resume", 0.8)]
-        result = tally_quorum_votes(votes)
-        d = result.to_dict()
-        assert "action" in d
-        assert "votes" in d
-        assert "total_weight" in d

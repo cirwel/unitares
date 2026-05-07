@@ -105,7 +105,6 @@ TOOL_ORDER = [
     "submit_thesis",
     "submit_antithesis",
     "submit_synthesis",
-    "submit_quorum_vote",
     "archive_agent",
     "update_agent_metadata",
     "archive_old_test_agents",
