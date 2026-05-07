@@ -79,7 +79,8 @@ from .session import (
     ACTIVE_SESSIONS,
     SESSION_STORAGE_DIR,
     _SESSION_METADATA_CACHE,
-    _CACHE_TTL
+    _CACHE_TTL,
+    get_session_lock,
 )
 
 # Session metadata cache for fast lookups (re-exported for backward compatibility)
@@ -1175,202 +1176,210 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
         if agent_error:
             return agent_error
 
-        # Always reload from disk to get latest state
-        session = await load_session(session_id)
-        if session:
-            ACTIVE_SESSIONS[session_id] = session
-        else:
-            session = ACTIVE_SESSIONS.get(session_id)
-            if not session:
-                return [error_response(
-                    f"Session '{session_id}' not found",
-                    recovery=session_not_found_recovery(),
-                )]
+        # NEW-1 (council 2026-05-06): serialize phase transitions per-session.
+        # Without this, two concurrent submit_synthesis calls with agrees=True
+        # both pass the SYNTHESIS-phase check on their own in-memory copies,
+        # both call finalize_resolution, and the second pg_resolve_session
+        # overwrites the first.
+        session_lock = await get_session_lock(session_id)
+        async with session_lock:
 
-        # Participant-set eligibility gate. The sibling handlers
-        # (submit_thesis / submit_antithesis) pass enforce_session_ownership=True
-        # to _resolve_dialectic_agent_id; submit_synthesis intentionally relaxes
-        # that check to support the "third-party synthesizer" pattern. Without
-        # a compensating allow-list, any registered agent could drive a
-        # synthesis to convergence and trigger resolution execution — a real
-        # privilege escalation surface. The allow-list is: the paused agent
-        # and the assigned reviewer.
-        eligible = set()
-        if getattr(session, "paused_agent_id", None):
-            eligible.add(session.paused_agent_id)
-        if getattr(session, "reviewer_agent_id", None):
-            eligible.add(session.reviewer_agent_id)
-        agent_uuid = resolve_agent_uuid(arguments, agent_id)
-        if agent_id not in eligible and (not agent_uuid or agent_uuid not in eligible):
-            return [error_response(
-                f"Agent '{agent_id}' is not a participant in this dialectic session.",
-                recovery=(
-                    "Only the paused agent or the assigned reviewer "
-                    "may submit synthesis."
-                ),
-            )]
-
-        # Coerce agrees to bool (MCP tools may send "true"/"false" strings)
-        raw_agrees = arguments.get('agrees', False)
-        if isinstance(raw_agrees, str):
-            agrees = raw_agrees.lower() in ('true', '1', 'yes')
-        else:
-            agrees = bool(raw_agrees)
-
-        # Resolve proposed_conditions, accepting `conditions` as an alias
-        # to prevent silent data loss from parameter-name confusion.
-        proposed_conditions = _read_proposed_conditions(arguments)
-
-        # Early-fail: synthesis with agrees=True must contribute conditions, OR
-        # there must already be a prior synthesis in transcript that did.
-        # Without this gate, the empty-conditions path slips through to
-        # check_hard_limits at finalize time and leaves the session in a
-        # phase=failed / resolution.action=resume inconsistent terminal state.
-        if agrees and not proposed_conditions:
-            prior_has_conditions = any(
-                getattr(msg, "phase", None) == "synthesis"
-                and getattr(msg, "proposed_conditions", None)
-                for msg in (session.transcript or [])
-            )
-            if not prior_has_conditions:
-                return [error_response(
-                    "Cannot agree (agrees=True) with empty proposed_conditions when no "
-                    "prior synthesis has supplied any. Either pass proposed_conditions=[...] "
-                    "(or its alias `conditions=[...]`) populated with the agreed terms, "
-                    "or set agrees=False to register disagreement instead.",
-                    error_code="EMPTY_AGREEMENT",
-                    error_category="validation_error",
-                    recovery={
-                        "action": (
-                            "Re-submit synthesis with proposed_conditions populated. "
-                            "If you intended to disagree, set agrees=false."
-                        ),
-                        "related_tools": ["dialectic"],
-                    },
-                    arguments=arguments,
-                )]
-
-        # Create synthesis message
-        message = DialecticMessage(
-            phase="synthesis",
-            agent_id=agent_id,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            proposed_conditions=proposed_conditions,
-            root_cause=arguments.get('root_cause'),
-            reasoning=arguments.get('reasoning'),
-            agrees=agrees
-        )
-
-        # Submit to session
-        result = session.submit_synthesis(message, api_key)
-
-        if result.get("success"):
-            # Persist synthesis message to PostgreSQL
-            # NOTE: Defer phase update for converged sessions until after finalize_resolution
-            # succeeds, to avoid "resolved" phase in PG without a resolution if finalize fails.
-            try:
-                await pg_add_message(
-                    session_id=session_id,
-                    agent_id=agent_id,
-                    message_type="synthesis",
-                    root_cause=arguments.get('root_cause'),
-                    proposed_conditions=proposed_conditions,
-                    reasoning=arguments.get('reasoning'),
-                    agrees=agrees,
-                )
-                if not result.get("converged"):
-                    await pg_update_phase(session_id, session.phase.value)
-            except Exception as e:
-                logger.warning(f"Could not update PostgreSQL after synthesis: {e}")
-
-            # Persist to JSON
-            try:
-                await save_session(session)
-            except Exception as e:
-                logger.warning(f"Could not save session after synthesis: {e}")
-
-        # If converged, finalize resolution
-        if result.get("success") and result.get("converged"):
-            # Bilateral attestation (v2): finalize_resolution signs the
-            # canonical resolution payload with each agent's own api_key.
-            # Council 2026-05-06 NEW-2 fixed: previously we computed both
-            # signatures over the SAME last synthesis message, so the
-            # reviewer's "signature" was over a message they never wrote.
-            paused_meta = mcp_server.agent_metadata.get(session.paused_agent_id)
-            reviewer_meta = mcp_server.agent_metadata.get(session.reviewer_agent_id)
-
-            api_key_a = paused_meta.api_key if paused_meta and paused_meta.api_key else api_key
-            api_key_b = reviewer_meta.api_key if reviewer_meta and reviewer_meta.api_key else ""
-
-            resolution = session.finalize_resolution(api_key_a, api_key_b)
-            is_safe, violation = session.check_hard_limits(resolution)
-
-            if not is_safe:
-                # Safety violation: mark session as FAILED (not RESOLVED)
-                session.phase = DialecticPhase.FAILED
-                result["action"] = "block"
-                result["success"] = False
-                result["reason"] = f"Safety violation: {violation}"
-                try:
-                    await pg_resolve_session(session_id=session_id, resolution={"action": "block", "reason": violation}, status="failed")
-                except Exception as e:
-                    logger.warning(f"Could not resolve session in PostgreSQL: {e}")
+            # Always reload from disk to get latest state
+            session = await load_session(session_id)
+            if session:
+                ACTIVE_SESSIONS[session_id] = session
             else:
-                result["action"] = "resume"
-                result["resolution"] = resolution.to_dict()
-
+                session = ACTIVE_SESSIONS.get(session_id)
+                if not session:
+                    return [error_response(
+                        f"Session '{session_id}' not found",
+                        recovery=session_not_found_recovery(),
+                    )]
+    
+            # Participant-set eligibility gate. The sibling handlers
+            # (submit_thesis / submit_antithesis) pass enforce_session_ownership=True
+            # to _resolve_dialectic_agent_id; submit_synthesis intentionally relaxes
+            # that check to support the "third-party synthesizer" pattern. Without
+            # a compensating allow-list, any registered agent could drive a
+            # synthesis to convergence and trigger resolution execution — a real
+            # privilege escalation surface. The allow-list is: the paused agent
+            # and the assigned reviewer.
+            eligible = set()
+            if getattr(session, "paused_agent_id", None):
+                eligible.add(session.paused_agent_id)
+            if getattr(session, "reviewer_agent_id", None):
+                eligible.add(session.reviewer_agent_id)
+            agent_uuid = resolve_agent_uuid(arguments, agent_id)
+            if agent_id not in eligible and (not agent_uuid or agent_uuid not in eligible):
+                return [error_response(
+                    f"Agent '{agent_id}' is not a participant in this dialectic session.",
+                    recovery=(
+                        "Only the paused agent or the assigned reviewer "
+                        "may submit synthesis."
+                    ),
+                )]
+    
+            # Coerce agrees to bool (MCP tools may send "true"/"false" strings)
+            raw_agrees = arguments.get('agrees', False)
+            if isinstance(raw_agrees, str):
+                agrees = raw_agrees.lower() in ('true', '1', 'yes')
+            else:
+                agrees = bool(raw_agrees)
+    
+            # Resolve proposed_conditions, accepting `conditions` as an alias
+            # to prevent silent data loss from parameter-name confusion.
+            proposed_conditions = _read_proposed_conditions(arguments)
+    
+            # Early-fail: synthesis with agrees=True must contribute conditions, OR
+            # there must already be a prior synthesis in transcript that did.
+            # Without this gate, the empty-conditions path slips through to
+            # check_hard_limits at finalize time and leaves the session in a
+            # phase=failed / resolution.action=resume inconsistent terminal state.
+            if agrees and not proposed_conditions:
+                prior_has_conditions = any(
+                    getattr(msg, "phase", None) == "synthesis"
+                    and getattr(msg, "proposed_conditions", None)
+                    for msg in (session.transcript or [])
+                )
+                if not prior_has_conditions:
+                    return [error_response(
+                        "Cannot agree (agrees=True) with empty proposed_conditions when no "
+                        "prior synthesis has supplied any. Either pass proposed_conditions=[...] "
+                        "(or its alias `conditions=[...]`) populated with the agreed terms, "
+                        "or set agrees=False to register disagreement instead.",
+                        error_code="EMPTY_AGREEMENT",
+                        error_category="validation_error",
+                        recovery={
+                            "action": (
+                                "Re-submit synthesis with proposed_conditions populated. "
+                                "If you intended to disagree, set agrees=false."
+                            ),
+                            "related_tools": ["dialectic"],
+                        },
+                        arguments=arguments,
+                    )]
+    
+            # Create synthesis message
+            message = DialecticMessage(
+                phase="synthesis",
+                agent_id=agent_id,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                proposed_conditions=proposed_conditions,
+                root_cause=arguments.get('root_cause'),
+                reasoning=arguments.get('reasoning'),
+                agrees=agrees
+            )
+    
+            # Submit to session
+            result = session.submit_synthesis(message, api_key)
+    
+            if result.get("success"):
+                # Persist synthesis message to PostgreSQL
+                # NOTE: Defer phase update for converged sessions until after finalize_resolution
+                # succeeds, to avoid "resolved" phase in PG without a resolution if finalize fails.
                 try:
-                    execution_result = await execute_resolution(session, resolution)
-                    result["execution"] = execution_result
-                    if execution_result.get("success"):
-                        result["next_step"] = next_step_resumed()
-                    else:
-                        result["next_step"] = next_step_resume_not_applied(
-                            execution_result.get("warning")
-                        )
-
-                    # Execution succeeded - mark resolved in PG
+                    await pg_add_message(
+                        session_id=session_id,
+                        agent_id=agent_id,
+                        message_type="synthesis",
+                        root_cause=arguments.get('root_cause'),
+                        proposed_conditions=proposed_conditions,
+                        reasoning=arguments.get('reasoning'),
+                        agrees=agrees,
+                    )
+                    if not result.get("converged"):
+                        await pg_update_phase(session_id, session.phase.value)
+                except Exception as e:
+                    logger.warning(f"Could not update PostgreSQL after synthesis: {e}")
+    
+                # Persist to JSON
+                try:
+                    await save_session(session)
+                except Exception as e:
+                    logger.warning(f"Could not save session after synthesis: {e}")
+    
+            # If converged, finalize resolution
+            if result.get("success") and result.get("converged"):
+                # Bilateral attestation (v2): finalize_resolution signs the
+                # canonical resolution payload with each agent's own api_key.
+                # Council 2026-05-06 NEW-2 fixed: previously we computed both
+                # signatures over the SAME last synthesis message, so the
+                # reviewer's "signature" was over a message they never wrote.
+                paused_meta = mcp_server.agent_metadata.get(session.paused_agent_id)
+                reviewer_meta = mcp_server.agent_metadata.get(session.reviewer_agent_id)
+    
+                api_key_a = paused_meta.api_key if paused_meta and paused_meta.api_key else api_key
+                api_key_b = reviewer_meta.api_key if reviewer_meta and reviewer_meta.api_key else ""
+    
+                resolution = session.finalize_resolution(api_key_a, api_key_b)
+                is_safe, violation = session.check_hard_limits(resolution)
+    
+                if not is_safe:
+                    # Safety violation: mark session as FAILED (not RESOLVED)
+                    session.phase = DialecticPhase.FAILED
+                    result["action"] = "block"
+                    result["success"] = False
+                    result["reason"] = f"Safety violation: {violation}"
                     try:
-                        await pg_resolve_session(session_id=session_id, resolution=resolution.to_dict(), status="resolved")
+                        await pg_resolve_session(session_id=session_id, resolution={"action": "block", "reason": violation}, status="failed")
                     except Exception as e:
                         logger.warning(f"Could not resolve session in PostgreSQL: {e}")
-                except Exception as e:
-                    # Execution failed - mark FAILED, not resolved
-                    session.phase = DialecticPhase.FAILED
-                    result["success"] = False
-                    result["execution_error"] = str(e)
-                    result["next_step"] = next_step_execution_failed(e)
+                else:
+                    result["action"] = "resume"
+                    result["resolution"] = resolution.to_dict()
+    
                     try:
-                        await pg_resolve_session(session_id=session_id, resolution=resolution.to_dict(), status="failed")
-                    except Exception as pg_e:
-                        logger.warning(f"Could not mark failed session in PostgreSQL: {pg_e}")
-
-            # Update calibration from dialectic outcome
-            try:
-                if result.get("action") == "resume":
-                    await update_calibration_from_dialectic(session)
-                elif not is_safe:
-                    await update_calibration_from_dialectic_disagreement(session)
-            except Exception as cal_e:
-                logger.debug(f"Calibration update after dialectic: {cal_e}")
-
-            # Always invalidate cache after convergence (success or failure)
-            for aid in (session.paused_agent_id, session.reviewer_agent_id):
-                if aid and aid in _SESSION_METADATA_CACHE:
-                    del _SESSION_METADATA_CACHE[aid]
-
-            await save_session(session)
-
-        elif not result.get("success"):
-            # Max rounds exceeded — apply conservative default. The quorum-voting
-            # escalation path was retired (council 2026-05-06: 0 sessions ever
-            # escalated to quorum across 47 historical sessions / 6 months).
-            result["autonomous_resolution"] = True
-            result["resolution_type"] = "conservative_default"
-            result["next_step"] = next_step_no_consensus()
-            result["cooldown_until"] = (datetime.now() + timedelta(hours=1)).isoformat()
-
-        return success_response(result)
+                        execution_result = await execute_resolution(session, resolution)
+                        result["execution"] = execution_result
+                        if execution_result.get("success"):
+                            result["next_step"] = next_step_resumed()
+                        else:
+                            result["next_step"] = next_step_resume_not_applied(
+                                execution_result.get("warning")
+                            )
+    
+                        # Execution succeeded - mark resolved in PG
+                        try:
+                            await pg_resolve_session(session_id=session_id, resolution=resolution.to_dict(), status="resolved")
+                        except Exception as e:
+                            logger.warning(f"Could not resolve session in PostgreSQL: {e}")
+                    except Exception as e:
+                        # Execution failed - mark FAILED, not resolved
+                        session.phase = DialecticPhase.FAILED
+                        result["success"] = False
+                        result["execution_error"] = str(e)
+                        result["next_step"] = next_step_execution_failed(e)
+                        try:
+                            await pg_resolve_session(session_id=session_id, resolution=resolution.to_dict(), status="failed")
+                        except Exception as pg_e:
+                            logger.warning(f"Could not mark failed session in PostgreSQL: {pg_e}")
+    
+                # Update calibration from dialectic outcome
+                try:
+                    if result.get("action") == "resume":
+                        await update_calibration_from_dialectic(session)
+                    elif not is_safe:
+                        await update_calibration_from_dialectic_disagreement(session)
+                except Exception as cal_e:
+                    logger.debug(f"Calibration update after dialectic: {cal_e}")
+    
+                # Always invalidate cache after convergence (success or failure)
+                for aid in (session.paused_agent_id, session.reviewer_agent_id):
+                    if aid and aid in _SESSION_METADATA_CACHE:
+                        del _SESSION_METADATA_CACHE[aid]
+    
+                await save_session(session)
+    
+            elif not result.get("success"):
+                # Max rounds exceeded — apply conservative default. The quorum-voting
+                # escalation path was retired (council 2026-05-06: 0 sessions ever
+                # escalated to quorum across 47 historical sessions / 6 months).
+                result["autonomous_resolution"] = True
+                result["resolution_type"] = "conservative_default"
+                result["next_step"] = next_step_no_consensus()
+                result["cooldown_until"] = (datetime.now() + timedelta(hours=1)).isoformat()
+    
+            return success_response(result)
 
     except Exception as e:
         return [error_response(f"Error submitting synthesis: {str(e)}")]

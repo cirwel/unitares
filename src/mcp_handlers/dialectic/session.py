@@ -35,6 +35,39 @@ ACTIVE_SESSIONS: Dict[str, DialecticSession] = {}
 _SESSION_METADATA_CACHE: Dict[str, Dict] = {}
 _CACHE_TTL = 60.0  # Cache TTL in seconds (1 minute)
 
+# Per-session asyncio locks for serializing phase transitions. Council 2026-05-06
+# NEW-1: handle_submit_synthesis loads → mutates → writes without a row-level
+# lock; concurrent synthesis calls with agrees=True from both participants can
+# both pass the SYNTHESIS-phase check on their own in-memory copies and both
+# call finalize_resolution, with the second pg_resolve_session overwriting the
+# first. In-process asyncio.Lock per session_id serializes the critical region
+# without adding a new asyncpg await (per CLAUDE.md "Substrate Tax" guidance,
+# new DB awaits in MCP handlers are accreted workarounds, not progress).
+#
+# Single-process MCP deployment makes this sufficient. If/when multi-process
+# lands, this gets replaced by a postgres advisory lock or SELECT FOR UPDATE
+# pattern. Track that decision via the open-question doc, not by accreting
+# more in-process state.
+_SESSION_LOCKS: Dict[str, asyncio.Lock] = {}
+_SESSION_LOCKS_DICT_LOCK = asyncio.Lock()
+
+
+async def get_session_lock(session_id: str) -> asyncio.Lock:
+    """Return the lock for `session_id`, creating it if absent.
+
+    The dict-of-locks itself is guarded by `_SESSION_LOCKS_DICT_LOCK` to make
+    lazy creation safe under concurrent first-acquires. Locks are not actively
+    pruned — sessions terminate, traffic doesn't grow indefinitely. If memory
+    becomes a concern, prune RESOLVED/FAILED entries on save_session.
+    """
+    async with _SESSION_LOCKS_DICT_LOCK:
+        lock = _SESSION_LOCKS.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _SESSION_LOCKS[session_id] = lock
+        return lock
+
+
 UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT = os.getenv("UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT", "1").strip().lower() not in (
     "0",
     "false",
