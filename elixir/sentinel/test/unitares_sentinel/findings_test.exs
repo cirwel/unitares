@@ -23,7 +23,7 @@ defmodule UnitaresSentinel.FindingsTest do
   test "alarm_body mirrors Python forced-release post_finding shape" do
     body = Findings.alarm_body(alarm(), agent_id: "sentinel-test", agent_name: "Sentinel")
 
-    assert body["type"] == "sentinel_forced_release_alarm"
+    assert body["type"] == "sentinel_alarm_finding"
     assert body["severity"] == "high"
     assert body["message"] == "forced release: dialectic:/x (lease lease-1)"
     assert body["agent_id"] == "sentinel-test"
@@ -32,6 +32,34 @@ defmodule UnitaresSentinel.FindingsTest do
     assert body["alarm_kind"] == "ad_hoc"
     assert body["event_id"] == "event-1"
     assert body["surface_kind"] == "dialectic"
+  end
+
+  # Regression for the http_api.py /api/findings suffix gate
+  # (`_FINDING_TYPE_SUFFIX = "_finding"`, src/http_api.py:1090). Pre-fix the
+  # alarm `type` was `"sentinel_forced_release_alarm"`, which fails the
+  # suffix check and was silently 400'd at the HTTP boundary — a Sentinel
+  # forced-release alarm at 16:46:44 on 2026-05-06 surfaced this bug. Pin the
+  # contract in this layer; finding/alarm bodies must produce a `_finding`-
+  # suffixed `type` so the governance gateway accepts them. The granular
+  # alarm kind continues to ride in the `alarm_kind` field for downstream
+  # consumers.
+  test "alarm_body and finding_body types satisfy /api/findings suffix gate" do
+    alarm_body = Findings.alarm_body(alarm())
+    assert String.ends_with?(alarm_body["type"], "_finding"),
+           "alarm_body type must end in _finding (governance /api/findings gate); got #{inspect(alarm_body["type"])}"
+    assert alarm_body["alarm_kind"] == "ad_hoc",
+           "alarm_kind must still carry the granular kind so downstream consumers don't lose signal"
+
+    finding_body =
+      Findings.finding_body(%{
+        type: "coordinated_degradation",
+        violation_class: "BEH",
+        severity: "high",
+        summary: "regression body"
+      })
+
+    assert String.ends_with?(finding_body["type"], "_finding"),
+           "finding_body type must end in _finding (governance /api/findings gate); got #{inspect(finding_body["type"])}"
   end
 
   test "finding_body mirrors Python sentinel_finding shape and fingerprint" do
@@ -85,7 +113,7 @@ defmodule UnitaresSentinel.FindingsTest do
   test "post_alarm returns true only for accepted non-deduped response" do
     http_post = fn url, body, headers, timeout_ms ->
       assert url == "http://example.test/api/findings"
-      assert body["type"] == "sentinel_forced_release_alarm"
+      assert body["type"] == "sentinel_alarm_finding"
       assert {"Content-Type", "application/json"} in headers
       assert timeout_ms == 123
 

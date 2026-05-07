@@ -679,7 +679,7 @@ class SentinelAgent(GovernanceAgent):
             if alarm.severity == "high":
                 notify("Sentinel forced-release", alarm.summary)
             post_finding(
-                event_type="sentinel_forced_release_alarm",
+                event_type="sentinel_alarm_finding",
                 severity=alarm.severity,
                 message=alarm.summary,
                 agent_id=self.agent_uuid or "sentinel",

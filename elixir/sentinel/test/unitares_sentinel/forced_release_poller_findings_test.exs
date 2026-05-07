@@ -79,7 +79,7 @@ defmodule UnitaresSentinel.ForcedReleasePollerFindingsTest do
     refute persisted_before_post?,
            "cursor must not be written until after the Surface 2 emit loop completes"
 
-    assert body["type"] == "sentinel_forced_release_alarm"
+    assert body["type"] == "sentinel_alarm_finding"
     assert body["alarm_kind"] == "ad_hoc"
     assert body["fingerprint"] == "forced_release:ad_hoc:#{event_id}"
 

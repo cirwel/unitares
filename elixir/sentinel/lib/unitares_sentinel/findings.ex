@@ -20,7 +20,12 @@ defmodule UnitaresSentinel.Findings do
              {:ok, non_neg_integer(), String.t()} | {:error, term()})
 
   @doc """
-  POST one forced-release alarm as a `sentinel_forced_release_alarm` finding.
+  POST one forced-release alarm as a `sentinel_alarm_finding` event.
+
+  The `_finding` suffix is required by the governance `/api/findings`
+  gateway (see `_FINDING_TYPE_SUFFIX` in `src/http_api.py`). The granular
+  alarm kind (`ad_hoc` / `deprecation_batch` / `conflict_batch`) rides in
+  the `alarm_kind` field for downstream consumers.
   """
   @spec post_alarm(UnitaresSentinel.ForcedReleasePoller.Logic.alarm(), keyword()) :: boolean()
   def post_alarm(alarm, opts \\ []) when is_map(alarm) do
@@ -43,7 +48,7 @@ defmodule UnitaresSentinel.Findings do
   @spec alarm_body(UnitaresSentinel.ForcedReleasePoller.Logic.alarm(), keyword()) :: map()
   def alarm_body(alarm, opts \\ []) when is_map(alarm) do
     base = %{
-      "type" => Keyword.get(opts, :event_type, "sentinel_forced_release_alarm"),
+      "type" => Keyword.get(opts, :event_type, "sentinel_alarm_finding"),
       "severity" => Map.fetch!(alarm, :severity),
       "message" => Map.fetch!(alarm, :summary),
       "agent_id" => agent_id(opts),
