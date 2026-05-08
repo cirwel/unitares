@@ -722,7 +722,7 @@ def _make_raw_entry(
     fingerprint: str,
     *,
     pattern: str = "P001",
-    file: str = "/tmp/seeded.py",
+    file: str = str(Path(__file__).resolve()),
     line: int = 10,
     status: str = "open",
     detected_at: str = "2026-04-11T00:00:00Z",
@@ -1364,6 +1364,41 @@ def test_surface_pending_transitions_open_to_surfaced(watcher_module):
     assert after["open____00000000"] == "surfaced"
     # Already-surfaced findings stay surfaced (no-op on them)
     assert after["surfac__00000000"] == "surfaced"
+
+
+def test_surface_pending_auto_sweeps_stale_before_chime(watcher_module, tmp_path, capsys):
+    """surface_pending must drop findings whose target file has vanished
+    *before* computing the chime — closes the 2026-05-07 dogfood failure
+    mode where 36% of open findings were dangling against deleted worktree
+    paths and inflating chime severity rankings.
+    """
+    real = tmp_path / "real.py"
+    real.write_text("print('hi')\n")
+    missing = tmp_path / "deleted-worktree" / "ghost.py"  # never created
+
+    _seed_findings(
+        watcher_module,
+        [
+            _make_raw_entry("real____00000000", file=str(real), status="open"),
+            _make_raw_entry("ghost___00000000", file=str(missing), status="open"),
+        ],
+    )
+
+    rc = watcher_module.surface_pending()
+    assert rc == 0
+
+    after = {f["fingerprint"]: f["status"] for f in watcher_module._iter_findings_raw()}
+    # Real-file finding survives and gets surfaced
+    assert after["real____00000000"] == "surfaced"
+    # Stale finding is gone — auto-sweep dropped it before the chime ran
+    assert "ghost___00000000" not in after
+
+    # Sweep must be silent: chime stdout contains the real finding only,
+    # not "dropped N findings" CLI text.
+    captured = capsys.readouterr()
+    assert "ghost.py" not in captured.out
+    assert "dropped" not in captured.out
+    assert str(real) in captured.out
 
 
 def test_surface_pending_only_prints_when_there_are_new_open_findings(
@@ -2651,10 +2686,18 @@ class TestWatcherCheckin:
     """Check-in appended to surface_pending()."""
 
     def _write_findings(self, watcher_module, findings: list[dict]):
-        """Helper: write findings to the isolated findings.jsonl."""
+        """Helper: write findings to the isolated findings.jsonl.
+
+        Rewrites the ``file`` field on each entry to point at this test
+        file so the auto-sweep on ``surface_pending`` doesn't drop them.
+        Tests that exercise the sweep itself use ``_seed_findings`` +
+        ``_make_raw_entry(file=...)`` instead.
+        """
+        real_path = str(Path(__file__).resolve())
         watcher_module.FINDINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         with watcher_module.FINDINGS_FILE.open("w") as f:
             for finding in findings:
+                finding = {**finding, "file": real_path}
                 f.write(json.dumps(finding) + "\n")
 
     def test_checkin_posts_summary_after_surface(self, watcher_module, monkeypatch):
@@ -2967,14 +3010,17 @@ class TestWatcherLifecycleIntegration:
         from agents.watcher import agent as real_watcher
         monkeypatch.setattr(real_watcher, "_watcher_identity", watcher_module.get_watcher_identity())
 
-        # 2. Simulate a finding being persisted
+        # 2. Simulate a finding being persisted. File must actually exist
+        # on disk so the auto-sweep on surface_pending doesn't drop it.
+        test_code_path = tmp_path / "test_code.py"
+        test_code_path.write_text("# placeholder\n")
         watcher_module.FINDINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         finding = {
             "fingerprint": "integ00000000000",
             "status": "open",
             "severity": "high",
             "pattern": "P004",
-            "file": str(tmp_path / "test_code.py"),
+            "file": str(test_code_path),
             "line": 42,
             "hint": "asyncpg in handler",
             "violation_class": "REC",

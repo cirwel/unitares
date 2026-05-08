@@ -380,17 +380,20 @@ def update_finding_status(
     return 0
 
 
-def sweep_stale_findings() -> int:
-    """Drop findings whose target file no longer exists on disk.
+def _sweep_stale_quiet() -> int:
+    """Drop findings whose target file no longer exists. Quiet variant.
 
-    This is the "the file got deleted or renamed" cleanup — we don't want
-    the surface hook to keep nagging you about a file that isn't there
-    anymore. Open/surfaced findings get aged_out via this path too because
-    there's no code to evaluate.
+    Returns the count dropped. Logs to the watcher log when non-zero but
+    never prints — safe to call from chime/SessionStart paths where
+    stdout becomes part of the agent context. Called by ``surface_pending``
+    (chime) so the chime never shows findings against deleted paths
+    without the operator having to remember to run --sweep-stale.
+
+    Same logic as ``sweep_stale_findings``, factored so the CLI variant
+    can stay print-y while the auto-call-site stays silent.
     """
     findings = _iter_findings_raw()
     if not findings:
-        print("(no findings to sweep)")
         return 0
 
     kept: list[dict[str, Any]] = []
@@ -403,12 +406,35 @@ def sweep_stale_findings() -> int:
             dropped += 1
 
     if dropped == 0:
-        print(f"(nothing to sweep: {len(findings)} findings, all target files present)")
         return 0
 
     _write_findings_atomic(kept)
-    log(f"sweep_stale_findings: dropped {dropped} findings for missing files")
-    print(f"ok: dropped {dropped} finding(s) with missing target files, kept {len(kept)}")
+    log(f"sweep_stale_findings (auto): dropped {dropped} findings for missing files")
+    return dropped
+
+
+def sweep_stale_findings() -> int:
+    """Drop findings whose target file no longer exists on disk.
+
+    CLI variant: prints a human-readable summary. The chime/auto-call
+    path uses ``_sweep_stale_quiet`` instead — same drop logic, no stdout.
+
+    This is the "the file got deleted or renamed" cleanup — we don't want
+    the surface hook to keep nagging you about a file that isn't there
+    anymore. Open/surfaced findings get aged_out via this path too because
+    there's no code to evaluate.
+    """
+    findings = _iter_findings_raw()
+    if not findings:
+        print("(no findings to sweep)")
+        return 0
+
+    total = len(findings)
+    dropped = _sweep_stale_quiet()
+    if dropped == 0:
+        print(f"(nothing to sweep: {total} findings, all target files present)")
+        return 0
+    print(f"ok: dropped {dropped} finding(s) with missing target files, kept {total - dropped}")
     return 0
 
 
