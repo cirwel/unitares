@@ -1,11 +1,261 @@
 # Wave 3 RFC: handler dispatch + identity middleware + dialectic resolution → BEAM
 
-**Status:** v0.1-draft, 2026-05-08. Pre-council. Author: claude-wave3-rfc (UUID `326aadf6-66d0-4a92-a6e1-255ca8db3cdc`). No code lands until council pass closes.
+**Status:** v0.1.1, 2026-05-08. Council pass complete (architect / reviewer / live-verifier in parallel). **Read v0.1.1 AMENDMENT below first**, then v0.1 body as historical record. No code lands until v0.1.1 closes (operator decision: proceed-to-implementation, second-council-on-v0.1.1, or v0.2-redraft).
 **Parent:** `docs/proposals/beam-footprint-roadmap-v0.md` v0.3 / v0.3.1 (operator-decision migration commit + council fold).
 **Sibling, completed:** `docs/proposals/beam-wave-1-sentinel.md` (Sentinel-on-BEAM Surface 1+2 shipped, Surface 3 in flight).
 **Sibling, completed:** `docs/proposals/surface-lease-plane-v0.md` Phase A + Wave 2 hardening (#412/#414/#417/#418/#419) — boundary contract is firm.
 **Wave 0 channel:** `coordination_failure.beam_python_boundary.*` constants exist (#408) but are typed-but-unused; Wave 3 wires them at call sites so exit criterion #3 ("no new substrate-tax pattern at the Python-handler-body boundary") is measurable.
 **Operator-protective single-writer surfaces:** Identity / onboarding (per `CLAUDE.md` "Before Starting Work on a Single-Writer Surface") spans this entire RFC. Branch from this RFC's head before any parallel work.
+
+---
+
+## V0.1.1 AMENDMENT 2026-05-08 — council fold (architect / reviewer / live-verifier)
+
+**Read this with v0.1 body below.** Three council lanes ran in parallel after v0.1-draft was committed. Findings: architect 3 BLOCK / 4 CONCERN / 2 NIT; reviewer 2 BLOCK / 5 CONCERN / 1 NIT; verifier 39 VERIFIED / 7 DRIFT / 4 REFUTED / 2 SOURCE_ONLY. Architect bottom-line was "v0.2 redraft, not v0.1.1 amendment-fold" — the fold below is structurally heavy enough to be a redraft-in-amendment-form for the four sections architect named (§0, §2 invariant 5, §5.3, §4) plus reviewer's two BLOCKs (§2 invariant 6, §3 Surface H), with the remaining CONCERNs added inline. **Where v0.1.1 conflicts with v0.1 body below, v0.1.1 governs.**
+
+### Author bias acknowledgment (operator-relevant)
+
+Architect's lanes 1 and 3 named the documented author bias (`feedback_substrate-migration-status-quo-bias.md`) as actively shaping v0.1's §0 and §5.3. That diagnosis is accepted: v0.1's disconfirmer (A) was structurally a post-hoc footnote (BLOCK §0-1), and v0.1's `_has_recently_reviewed` "KEEP TOGETHER" classification used "PG round-trip dominates" — the exact status-quo reasoning the bias predicts (BLOCK §5-1). The bias-positive diagnosis is more important than the specific findings; v0.1.1 corrects the named cases but operator should treat the whole RFC with the bias caveat in mind.
+
+### B1 (architect §0-1) — Disconfirmer (A) ODE-floor MUST be a pre-implementation hard gate
+
+V0.1's §8 criterion 4 read "if the floor IS the ODE, Wave 3 closes as a structural success but operator-acknowledged user-visible-metric miss." That is sunk-cost protection masquerading as objectivity. Wave 1 RFC's §C1 fold (parent roadmap line 132-137) requires Wave 1's exit-criteria authorship to gate on ODE profile result; Wave 3 must do the same — and stronger, because Wave 3 is the largest blast-radius port.
+
+**Binding spec:** ODE profile against the still-Python `governance_core/phase_aware.py` and `governance_core/stability.py` math path lands BEFORE Wave 3 implementation starts. If the profile shows the per-turn `process_agent_update` floor (defined as the asymptotic minimum p99 over a 7-day production sample) is dominated by ODE compute (>60% of the floor attributable to `governance_core/` synchronous math), Wave 3 halts and roadmap re-opens. The current §8 criterion 4 is replaced: ODE profile is a Go-gate prerequisite, not a post-hoc check.
+
+### B2 (architect §2-1) — Cross-agent commit protocol for invariant 5
+
+V0.1's §2 invariant 5 said "internal-message at the *session* GenServer." That's the topology, not the contract. The session GenServer must coordinate two agent GenServers (paused + reviewer); `execute_resolution` (`resolution.py:74-75`) writes to BOTH agents' state (status→active, paused_at=None). Session-GenServer serialization doesn't atomically span both agents.
+
+**Binding spec:** Wave 3 implements the session resolution as a **session-supervisor saga**: the session GenServer atomically owns both per-agent GenServers' write-side mailboxes during the SYNTHESIS→RESOLVED transition window. Implementation pattern:
+1. Session GenServer issues `GenServer.call(:reserve_for_session_resolution, session_id)` to both per-agent GenServers; both must ACK before proceeding. Either NACK rolls back (compensating action: release reservation on the ACK-ed side, leave session in SYNTHESIS).
+2. Session GenServer issues `GenServer.call(:apply_resolution, resolution_payload)` to both per-agent GenServers; both must complete the agent-state mutation in their mailbox handler.
+3. Session GenServer commits PG row (`pg_resolve_session`) only after both agents ACK the apply step. PG commit failure triggers compensating reverts on both agent GenServers.
+
+This is a 2PC variant on the session-supervisor pattern. The session-keyed GenServer becomes a transactional coordinator, not just a serializer. Test: two concurrent `submit_synthesis(agrees=True)` calls from paused + reviewer must produce exactly one `pg_resolve_session` write and exactly one set of agent-state mutations on each side.
+
+### B3 (architect §3-1) — Surface D divergence-detection contract
+
+V0.1's §3.1 row D prescribed shadow→flip→dual-write→BEAM-only without naming what divergence-detection runs during shadow. PG `ON CONFLICT` is data-survival not divergence-detection.
+
+**Binding spec:** During the shadow window, BEAM writes to a parallel `core.identities_shadow` table (DDL: identical schema to `core.identities` plus a `shadow_write_at TIMESTAMPTZ` column). A comparator query runs hourly via launchctl (`com.unitares.wave3-shadow-divergence-check`) joining `core.identities` and `core.identities_shadow` on `agent_uuid`, emitting `coordination_failure.beam_python_boundary.shadow_divergence` events for every row where the two writers produced non-equivalent state (excluding `shadow_write_at` itself, which is expected to differ). Shadow window cannot close until 7 consecutive days of zero divergence events. The migration that adds `core.identities_shadow` ships as a separate PR before Wave 3 implementation begins; same pattern for `core.agents_shadow`.
+
+### B4 (architect §5-1) — `_has_recently_reviewed` reclassified as BEAM coordination
+
+V0.1's §5.3 KEPT `_has_recently_reviewed` (`reviewer.py:55-119`) Python-side because "PG round-trip dominates." That reasoning is exactly status-quo bias: it ignores the Python→BEAM→Python boundary cost that Wave 3 introduces.
+
+**Binding spec:** `_has_recently_reviewed` ports to BEAM as part of the dialectic session-keyed GenServer's reviewer-selection coordination. The PG round-trip remains (BEAM does Postgrex query directly), the boundary crossing disappears. If a future profile shows the Postgrex query is dominantly slower than asyncpg under realistic concurrency (which is itself a substrate-disconfirmer signal — see §0 v0.1.1), reconsider; the default classification is port-to-BEAM.
+
+### B5 (architect Open-1) — §4 recommendation flipped to option (α) lease-plane Phase B
+
+V0.1's §4 recommended option (β) PG advisory lock over option (α) extending lease-plane Phase B. Architect: option (β) introduces a coordination mechanism residents have no precedent for (lock leakage on connection death, contention with PG vacuum, observability gap, 50ms hard latency floor under contention), where option (α) extends an existing pattern Sentinel/Vigil/Chronicler/Steward already learn for `dialectic:/`.
+
+**Binding spec:** §4 recommendation flips to **option (α)**: amend `surface-lease-plane-v0.md` to open a `resident:/` Phase B promotion window aligned with Wave 3's canary advance schedule. The Phase B amendment ships as a separate PR (against the lease-plane RFC) before Wave 3 implementation begins. Residents (Sentinel, Vigil, Chronicler, in-process Steward) update fail-closed-on-deny semantics in a window that precedes Wave 3 cutover by ≥7 days, with their own per-resident PR + test pass. Option (β) is preserved in v0.1 §4 below as an explicit alternative the council passed on; if the lease-plane Phase B amendment hits substantive resistance (e.g., resident maintainers reject in review), option (β) is the documented fallback.
+
+### B6 (reviewer BLOCK-1) — Invariant 6 baseline cache: BEAM owns own GenServer-state cache, PG-fetched per agent on first BEAM observation
+
+V0.1's §2 invariant 6 left the decision open. Reviewer: `_baseline_cache` (`governance_core/ethical_drift.py:418`) is a Python module-level OrderedDict; BEAM as a separate OS process has its own memory space. There is no shared cache across the boundary.
+
+**Binding spec:** Wave 3 BEAM handler dispatch maintains its own per-BEAM-GenServer baseline cache as part of agent GenServer state. On first observation of a new agent, BEAM fetches baseline from PG (`get_baseline_or_none` becomes a Postgrex query); subsequent observations within the same BEAM GenServer's lifetime hit the in-state cache. Python's `_baseline_cache` continues to exist for the still-Python compute paths (governance_core math callers); the two caches are independent and PG is the authoritative replica for both. Anomaly detection at `phases.py:856-899` is therefore not silently degraded — BEAM has its own baseline available the moment the GenServer is initialized for that agent. Cost: an extra PG query per agent per BEAM-process lifetime (bounded; not per-request). This is an explicit choice over options (a) "every preload crosses boundary" and (c) "anomaly detection excluded from BEAM port"; both rejected (a for boundary cost, c for surface scope creep).
+
+### B7 (reviewer BLOCK-2) — Surface H reclassified as Redis feature-flag, not direct-flip
+
+V0.1's §3.1 Surface H said "Direct flip — config-only. Env var change applies to both sides at restart." Reviewer: BEAM and Python read config at different times (BEAM at OTP start, Python per-request via `config.governance_config`); a 1–30 second window of disagreement during plist reloads is a real operational footgun on a security gate.
+
+**Binding spec:** Identity honesty mode (`identity_strict_mode`, `ipua_pin_check_mode`) moves to a shared Redis feature-flag key (`governance:feature_flag:identity_strict_mode`, `governance:feature_flag:ipua_pin_check_mode`) read per-request by both BEAM and Python. Default value matches current env-var default; the env var becomes the bootstrap default, the Redis key is the runtime-mutable source. Single-key change applies atomically to both runtimes within Redis read latency (~ms, not seconds). Migration: ship the Redis-flag-reader before Wave 3 implementation; Python reads Redis-then-env-fallback during the migration window; once both sides read Redis, the env var becomes init-only.
+
+### C1 (architect §0-2) — Disconfirmers (A) and (C) collapsed
+
+V0.1 §0 listed (A) ODE-floor and (C) in-place Python remediation as orthogonal disconfirmers. Both probe "where does the per-turn time go?" — false plurality.
+
+**Binding spec:** §0 v0.1.1 collapses (A) and (C) into a single **disconfirmer (A′) "user-visible-metric headroom"** with two measurement paths: (A′.1) ODE profile shows >60% of `process_agent_update` p99 floor in `governance_core/` math (per B1 above); (A′.2) any in-place Python fix shipped during Wave 3 implementation window brings `process_agent_update` p99 to <2.0s (threshold per C2 below) without porting. Either path firing halts Wave 3.
+
+### C2 (architect §0-3) — Disconfirmer thresholds anchored
+
+V0.1 §0 cited p50<50ms / p99<250ms boundary cost and <1.5s p99 process_agent_update without source-citation.
+
+**Binding spec:** Updated thresholds with anchors:
+- **Boundary cost** (disconfirmer B): p50 < lease-plane Phase A measured p50 × 2; p99 < lease-plane Phase A measured p99 × 3. Lease-plane Phase A actuals are read from the Wave 0 channel before Wave 3 implementation; the multipliers reflect Wave 3's heavier per-call payload (full request marshalling vs lease ack).
+- **`process_agent_update` p99** (disconfirmer A′.2): < 2.0s (corrected from v0.1's invented 1.5s). Anchor: per `project_locked-update-overhead-fix.md`, current per-turn overhead is ~5.0s post-#372; PR #3 deferred-pending-benchmark targets sub-5s. 2.0s reflects "in-place fixes brought it to 40% of current" — a defensible bar; tighter thresholds need a documented Python-fix path that gets there.
+
+Council should challenge any threshold without an anchor sentence. v0.1's invented numbers are now explicit.
+
+### C3 (architect §0-4) — Disconfirmer (F) opportunity-cost
+
+V0.1 §0 listed only technical disconfirmers. Wave 3 is "the largest single port the BEAM-footprint roadmap names" and Kenny's solo-founder calendar carries paper v6.9.1, HLH instrumentation, R2 Phase 2 telemetry-gated work, +#371 executor_loop_died, locked_update PR #3, and ongoing dispatch/Lumen work.
+
+**Binding spec:** New **disconfirmer (F) "opportunity cost":** if Wave 3 implementation (after RFC closes) is projected to consume more than (Wave 1's elapsed time × 3) calendar-weeks before the 21-day production-traffic exit criterion can begin, and any of {paper deadline, fellowship application, HLH, R2 Phase 2 gate} would be sacrificed by that consumption, the operator's call is "right port, wrong time" → defer. This is a non-technical disconfirmer, intentionally; it does not have a runtime measurement, but the operator's go-decision must explicitly check it at the gate.
+
+### C4 (architect §0-5) — Disconfirmer (G) dialectic-quality regression
+
+V0.1 §0 missed dialectic-quality regression. §5's two HTTP boundary calls per session (synthesize + select_reviewer) could regress dialectic resolution rates without showing up in the Python suite.
+
+**Binding spec:** New **disconfirmer (G) "dialectic-quality":** during canary, dialectic session-resolution rate (resolved / (resolved + failed + escalated) over a 14-day window) must not regress more than 5% against the pre-Wave-3 baseline. Reviewer-reassignment rate must not increase more than 20%. Either breach halts canary advance. Baseline is computed from the trailing 30 days of pre-Wave-3 production sessions and pinned in §"Exit criteria" before Wave 3 implementation begins.
+
+### C5 (architect §3-3) — Surface A ContextVar marshalling cost
+
+V0.1 §3.1 row A said ContextVars stay Python at the dispatch boundary without acknowledging that BEAM-side cache lookups need the context shipped per-request. **Binding spec:** Surface A description amended — "BEAM message handler receives a marshalled context-payload as part of the wire envelope on each request; payload size and serialization cost are part of disconfirmer (B)'s budget. Wave 3 implementation must measure the marshalled context-payload's bytes-per-request and add it to the boundary-cost dashboard."
+
+### C6 (architect §5-2) — Endpoint shapes specified; collapse to single endpoint
+
+V0.1 §5.6 named two endpoints (`/v1/dialectic/synthesize`, `/v1/dialectic/select_reviewer`) without schemas, idempotency, or timeout posture.
+
+**Binding spec:** Collapsed to a single endpoint **`POST /v1/dialectic/compute`** with `mode: "synthesize" | "select_reviewer"` discriminator. Request schema:
+```json
+{
+  "mode": "synthesize" | "select_reviewer",
+  "session_id": "<UUID, idempotency key>",
+  "round": <int, idempotency key for synthesize>,
+  "input": {...mode-specific bounded compute input...}
+}
+```
+Response schema:
+```json
+{
+  "result": {...mode-specific output...},
+  "elapsed_ms": <int>,
+  "cache_hit": <bool>
+}
+```
+Idempotency: `(session_id, round, mode)` tuple is the cache key; same input within a 60s window returns cached result. Timeout: BEAM applies `asyncio.wait_for(..., timeout=2.0s)` equivalent; on timeout, BEAM emits `coordination_failure.beam_python_boundary.beam_to_python_request_failed` with `error_class="timeout"` and fails the synthesis round (does not retry — retry policy lives in the session GenServer's saga, not at the boundary call).
+
+### C7 (architect Open-2) — §10.1 post-Wave-3 boundary topology
+
+V0.1's §10 listed what stays Python without diagramming the steady-state topology. The Wave 3 close-state has structurally 2 boundary crossings per `process_agent_update` call.
+
+**Binding spec:** New §10.1 added (in this amendment block as the binding spec, since v0.1 §10 lacks it):
+
+```
+MCP request
+    ↓
+Python MCP transport (unmarshal request envelope)
+    ↓ [boundary crossing 1: Python→BEAM via Ports/HTTP]
+BEAM handler dispatch (route, identity middleware, dialectic coordination)
+    ↓ [boundary crossing 2: BEAM→Python for governance_core math + LLM SDK calls]
+Python governance_core compute (ODE, stability, phase_aware) + LLM SDK
+    ↑ [boundary crossing 3: Python→BEAM with compute result]
+BEAM continues handler dispatch (audit emit, response shape)
+    ↑ [boundary crossing 4: BEAM→Python for response serialization]
+Python MCP transport (marshal response envelope)
+    ↓
+MCP response
+```
+
+Per-call: 4 boundary crossings, of which 2 are request-shape-marshalling (1 + 4) and 2 are compute round-trips (2 + 3). Disconfirmer (B)'s budget is 4× per-crossing cost. If real-world topology compresses (e.g., handlers that don't touch governance_core math skip crossings 2+3), budget per-call accordingly. The disconfirmer (B) budget MUST be set against measured-not-estimated per-crossing cost from lease-plane Phase A baseline (per C2).
+
+### C8 (reviewer CONCERN-4) — `make_boundary_payload` enforcement helper
+
+V0.1 §6.2 said "lint failure" on null `error_class` without naming an enforcement mechanism.
+
+**Binding spec:** Add `governance_core/coordination_events_helpers.py::make_boundary_payload(endpoint, method, error_class, status_code, elapsed_ms) -> dict` that raises `ValueError` on None/empty/missing `error_class`. All `coordination_failure.beam_python_boundary.*` emissions MUST go through this helper; direct dict construction is prohibited. PR-time check: grep for the event_type constants in non-helper code is a CI lint failure. Same pattern applies to BEAM emissions (Elixir-side helper module).
+
+### C9 (architect Open-6) — Audit-coordination-events wiring is in-scope, named explicitly
+
+V0.1's §5.4 said "Wave 3 wires dialectic state transitions to `audit.coordination_events`" but §10 didn't acknowledge this as in-scope.
+
+**Binding spec:** §10 in-scope list updated (v0.1.1 governs over v0.1): dialectic state-transition wiring to `audit.coordination_events` is part of Wave 3 because BEAM is the new writer and the table was greenfield (per Wave 2 #4, PR #403 created the dual-write fix; dialectic was not previously wired). If wiring proves invasive, it ships as a separate post-Wave-3 PR — but Wave 3 RFC owns the design.
+
+### C10 (reviewer CONCERN-1) — Invariant 2 names `build_fork_context`/onboard-payload as accepted-staleness consumer
+
+V0.1's invariant 2 (thread_id/node_index relaxation) said "document tolerant consumers" without naming them. Reviewer: `db/mixins/thread.py:84-101` `get_agent_thread_info` → `src/thread_identity.py:129` `build_fork_context` → `src/services/identity_payloads.py:268,275` is a non-tolerant consumer (agent's own onboard response).
+
+**Binding spec:** §2 invariant 2 amended: "ACCEPTED INCONSISTENCY WINDOW — agent's onboard response may report `node_index` from the previous session's PG-persist if the fire-and-forget `_persist_thread_identity_async` (`phases.py:670-693`) hasn't completed before the next onboard call. Operator-acknowledged risk; mitigation = Wave 3 BEAM session-keyed GenServer can synchronously persist within the session-resolution saga (per B2) since the saga already crosses the boundary. Decision deferred to implementation: re-tighten thread_id persist as part of B2's saga, OR document the staleness window in the onboard response itself."
+
+### C11 (reviewer CONCERN-2) — §3.2 rollback gap closed via 503 circuit-breaker
+
+V0.1 §3.2 had a zero-request gap between BEAM-stop and Python-load that produced 500s on the synchronous path.
+
+**Binding spec:** Python MCP transport gains a circuit-breaker: when proxying to BEAM yields connection-refused or timeout, transport returns HTTP 503 with body `{"ok": false, "error": "governance_temporarily_unavailable", "reason": "handler_dispatch_unavailable"}` and a `Retry-After: 5` header. Clients (Watcher, Sentinel, SDK consumers) gain matching retry-on-503 logic before Wave 3 cutover. Rollback procedure step 3 amended: "stop BEAM writes first; transport returns 503 during the gap; restore Python writers; transport resumes 200." Gap is bounded by operator's plist-load latency; clients absorb via retry. Stop sign #7 v0.1.1: 503 rate during cutover/rollback exceeding 1% of requests for >60s halts the procedure.
+
+### C12 (reviewer CONCERN-3) — IPUA pin integration test
+
+V0.1 cited the contract test at `tests/test_identity_path2_ipua_pin.py` lines 219-250, but the test pins helper-level behavior, not the request-pipeline integration.
+
+**Binding spec:** Add a new integration test `tests/integration/test_identity_path2_ipua_pin_pipeline.py` that drives the full `handle_onboard_v2` call path with `agent_id` in `arguments` and asserts the strict-mode passthrough invariant holds end-to-end. Test lands BEFORE Wave 3 implementation begins (prerequisite PR). Wave 3 BEAM identity middleware port reuses the same integration test against the BEAM-side dispatch entry.
+
+### C13 (reviewer CONCERN-5) — §7.1(c) "byte-identical" defined; golden-capture fixture is a prereq PR
+
+V0.1 §7.1(c) said "byte-identical" without testable definition. Reviewer: existing tests do not capture full serialized response bytes; serialization order, whitespace, float-vs-int precision categories not covered.
+
+**Binding spec:** §7.1(c) amended:
+- "Byte-identical" defined concretely as: same JSON field-set, same value types (int stays int, float stays float — no implicit coercion), same nested dict ordering (Python 3.7+ dict insertion-order preserved), same float precision (12 decimal digits). String-byte equality is NOT required.
+- A golden-capture fixture lands as a prereq PR before Wave 3 implementation: `tests/fixtures/wave3_response_golden/` containing 50+ captured responses across the full handler surface (process_agent_update, identity, onboard, dialectic_*, knowledge_*, observe, etc.) under deterministic input fixtures. Fixture-comparison test `tests/integration/test_wave_3_response_parity.py` runs the same fixture inputs against BEAM-side dispatch and asserts the JSON-equivalence definition above against each golden response.
+- Pre-cutover gate: 100% golden-response parity on the captured fixture set. Failure of any golden response halts cutover.
+
+### N1 (architect Open-4) — §0 framing tone
+
+V0.1's §0 final paragraph claimed "§Exit criteria makes Wave 3's go-decision conditional on disconfirmers." Architect: §8 didn't deliver this strongly until v0.1.1's B1/C1/C2/C3/C4 corrections.
+
+**Binding spec:** §0 framing rewritten in v0.1.1's §0-replacement (next subsection). The new framing acknowledges v0.1's overclaim and structures the gate strength to match the rhetoric.
+
+### N2 (architect §3-2 + reviewer NIT-1) — §3.2 duplicate
+
+V0.1 has `### 3.2 Rollback procedure (named)` at line 109 and again at line 123. Mechanical error.
+
+**Binding spec:** Below this amendment block, the second §3.2 (lines 123-131 in v0.1) is to be deleted. Recorded here for traceability; the mechanical edit lands as a separate small commit immediately following this fold.
+
+### Verifier corrections — REFUTED + DRIFT errata table
+
+| # | v0.1 cite | Correct value | Verifier finding |
+|---|------------|----------------|--------------------|
+| 1 | `coordination_events.py:35` (§5.4) | Module docstring lines 1-22 (`audit.coordination_events` first named at line 1, "stop or proceed to BEAM port" at 6); first SQL usage at line 233 | REFUTED: line 35 is `from uuid import UUID, uuid4` |
+| 2 | `session.py:440-530` Surface F read (§3) | `session.py:769-797` `lookup_onboard_pin` (with `_PIN_REDIS_TIMEOUT = 0.5s` at line 28) | REFUTED: line 440 is a return annotation, off ~330 lines |
+| 3 | `dialectic_protocol.py:162` numpy import (§§2, 5 prose) | Line 163: `import numpy as np` | REFUTED: line 162 is blank |
+| 4 | Surface E continuity-token HMAC payload field names (§3) | Actual fields: `v`, `opv`, `sid`, `aid` (not `agent_uuid`), `mf`, `ch` (not `chh`), `iat`, `exp` | REFUTED: two field names wrong, two fields missing in description |
+| 5 | `handlers.py:335-412` `_apply_reviewer_reassignment` (§5.1) | `handlers.py:368-412`. Lines 335-366 are `_validate_explicit_reviewer_candidate` (different function) | DRIFT |
+| 6 | `phases.py:670-707` persist helper (§2 invariant 2) | `phases.py:670-693` `_persist_thread_identity_async`; 696+ is `_persist_inferred_purpose_async` | DRIFT |
+| 7 | `resolution.py:667-1088` Surface D PATH 3 write (§3) | `resolution.py:950-1116` (PATH 3 starts at 950) | DRIFT |
+| 8 | `background_tasks.py` `load_agent_metadata` Surface G write (§3) | Function does not exist; correct name is `background_metadata_load` at `background_tasks.py:343` | DRIFT (REFUTED on name, real symbol) |
+| 9 | `agent_auth.py:309-377` `require_registered_agent` Surface G read (§3) | `agent_auth.py:309-515` (function ends at 515) | DRIFT |
+| 10 | `dialectic_protocol.py:464-524` `DialecticSession.__init__` (§5.1) | `__init__` body 464-512; `_generate_session_id` 513-524 | DRIFT |
+| 11 | `persistence.py:175-200` Redis SETEX with NX (§3 Surface C write) | Range is correct for the Redis write block; `NX` flag (`mint_guard`) is in inner `_cache_session_redis_write` at 206+ | SOURCE_ONLY (range correct, NX in inner function) |
+| 12 | `context.py:131-147` "(read)" classification (§3 Surface A) | 141-147 contains `update_context_agent_id` (a writer) | SOURCE_ONLY (description mismatch, not error) |
+
+The corrections are errata — they don't change RFC structure; they correct cite values. They land as a separate small commit immediately following this fold.
+
+### v0.1.1 §0 replacement — Falsifying-evidence question, corrected
+
+> **What evidence would update us away from porting handler dispatch + identity middleware + dialectic resolution to BEAM?**
+
+v0.1's §0 was author-bias-contaminated (per the acknowledgment above). v0.1.1's disconfirmer set:
+
+- **(A′) User-visible-metric headroom** (collapsed from v0.1's A + C). Two paths: (A′.1) ODE profile lands pre-implementation per B1, shows >60% of `process_agent_update` p99 floor in `governance_core/` math → halt. (A′.2) Any in-place Python fix during implementation window brings `process_agent_update` p99 below 2.0s without porting → halt.
+- **(B) Boundary cost ≥ substrate tax removed.** `coordination_failure.beam_python_boundary.*` channel (Wave 2 #3, wired in §6) shows sustained per-call boundary cost p50 ≥ lease-plane-Phase-A-p50 × 2 OR p99 ≥ lease-plane-Phase-A-p99 × 3 over 14-day Wave 1 window. Anchored to measured Phase A baseline per C2.
+- **(D) MCP SDK gate reverses.** Hands-on spike on `mcp_elixir_sdk` 1.0.1 or `hermes_mcp` 0.14.1 shows production-disqualifying failure (broken-on-Anthropic-streaming, MCP-spec drift, no maintainer responsiveness). Doubles disconfirmer (B)'s budget per C7's 4-crossing topology.
+- **(E) State-ownership cutover structurally unsafe.** Identity middleware port surfaces irreducible per-request semantics that can't be moved to GenServer state without replicating coordination at the boundary.
+- **(F) Opportunity cost.** Per C3: Wave 3 implementation projected calendar-weeks > (Wave 1 elapsed × 3) AND any of {paper deadline, fellowship, HLH, R2 Phase 2} sacrificed → defer.
+- **(G) Dialectic-quality regression.** Per C4: dialectic resolution rate regresses >5% OR reviewer-reassignment rate increases >20% over 14-day canary window → halt.
+
+§8 Exit criteria are amended in v0.1.1's §8 amendment (next): each disconfirmer has a measurable check that gates the Go decision. The "structural success but user-visible miss" escape hatch is removed.
+
+### v0.1.1 §8 replacement — Exit criteria, evidence-bearing
+
+1. Wave 2 has closed (satisfied per Wave 2 handoff 2026-05-08).
+2. Handler dispatch on BEAM has served production governance MCP traffic for ≥21 days continuous.
+3. Wave 0 channel shows zero coordination-class incidents attributable to handler dispatch over the 21-day window AND no new substrate-tax pattern at the Python-handler-body boundary.
+4. **(B1 / A′.1 hard gate)** ODE profile lands BEFORE Wave 3 implementation starts; result shows <60% of `process_agent_update` p99 floor in `governance_core/` math. Failure → halt and roadmap re-opens.
+5. **(B / boundary cost gate)** `coordination_failure.beam_python_boundary.*` p50 < lease-plane-Phase-A-p50 × 2 AND p99 < lease-plane-Phase-A-p99 × 3 over 21-day window. Sustained breach halts.
+6. **(A′.2 / in-place-fix gate)** if any Python in-place fix shipped during implementation window brought `process_agent_update` p99 below 2.0s without porting, operator decides whether Wave 3 still closes or whether the next port should be reconsidered.
+7. **(F / opportunity cost gate)** operator's go-decision explicitly checks F at the gate; written acknowledgment that none of {paper, fellowship, HLH, R2 Phase 2} was sacrificed for Wave 3 calendar.
+8. **(G / dialectic quality gate)** session-resolution rate regression ≤5% AND reviewer-reassignment rate increase ≤20% vs pre-Wave-3 baseline (baseline pinned in §"Exit criteria" prior to implementation).
+9. Operator-led behavioral parity: existing Watcher / Sentinel / SDK clients hit governance MCP with no behavioral diff (REST contract preserved per C13's golden-capture definition).
+10. ExUnit + Python + integration + golden-response-parity test classes all green at gate.
+
+### Council recommendation
+
+Architect's bottom line was "v0.2 redraft, not v0.1.1 amendment-fold." This amendment block is a redraft-in-amendment-form for the four sections architect named (§0, §2 invariant 5, §5.3, §4) plus reviewer's two BLOCKs (§2 invariant 6, §3 Surface H), with CONCERNs added inline. **Operator decision:**
+
+(α) Proceed with v0.1.1 as binding, schedule second council pass on v0.1.1, then implementation. Recommended.
+(β) Treat v0.1.1 as transitional and v0.2-redraft to a clean document before any further council work.
+(γ) Halt Wave 3 RFC at v0.1.1 pending external pre-condition (e.g., ODE profile lands and disconfirmer A′.1 fires; or operator-runway-check fires F; or B5 lease-plane Phase B amendment hits resistance).
+
+Author recommends (α): the four BLOCKs are corrected in this amendment, the document gains structural baggage but stays auditable, and operator can decide on implementation start once a second-council confirms the v0.1.1 shape.
+
+---
+
+## V0.1 (preserved as historical record below — superseded by V0.1.1 amendment above where they conflict)
+
+Status from v0.1-draft, 2026-05-08. Pre-council. Author: claude-wave3-rfc (UUID `326aadf6-66d0-4a92-a6e1-255ca8db3cdc`). The v0.1 sections below are kept verbatim for traceability; the v0.1.1 amendment above is binding.
 
 ---
 
@@ -120,14 +370,7 @@ Following the pattern proven by Wave 1 (Sentinel had `.sentinel_state.pre-beam-*
     - Surface D (PG canonical): ≤1-request inconsistency window at flip moment; ON CONFLICT absorbs
     - Surface H (config gates): instantaneous on env-var revert
 
-### 3.2 Rollback procedure (named)
-
-Following the pattern proven by Wave 1 (Sentinel had `.sentinel_state.pre-beam-*` snapshot files; runtime checkout per landmine #1 in the Wave 2 handoff):
-
-1. **Snapshot before flip.** For every PG table touched by the Wave 3 BEAM service, `pg_dump` the table-set into `~/backups/governance/wave-3-pre-cutover-<ISO8601>/`.
-2. **Plist swap.** New plist `com.unitares.handler-dispatch-beam.plist` lives in `scripts/ops/`. Cutover flips the BEAM service on; rollback unloads the BEAM plist and reloads the Python-only `com.unitares.governance-mcp.plist`.
-3. **Single writer during rollback.** During the rollback window the BEAM service is stopped first, then the Python service is restored — no period of dual-write to the same canonical surface.
-4. **Schema rollback.** Any new migration shipped with Wave 3 MUST have a paired DOWN migration that restores the prior shape; tested on a `governance_test` snapshot before the cutover migration runs in production.
+> *§3.2 duplicate (formerly at lines ~373-380 of v0.1) deleted per V0.1.1 §N2; canonical §3.2 is the immediately-preceding subsection. v0.1.1 §C11 also amends step 3 to add a 503 circuit-breaker.*
 
 ---
 
