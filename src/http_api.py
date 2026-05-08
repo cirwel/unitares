@@ -858,6 +858,7 @@ async def http_dashboard_static(request):
         "dialectic.js", "eisv-charts.js", "timeline.js",
         "residents.js", "fleet-metrics.js", "watcher.js", "sentinel.js",
         "vigil.js", "resident-progress.js",
+        "system-health.js",
         "styles.css", "dashboard.js",
         "phase.js",
     ]

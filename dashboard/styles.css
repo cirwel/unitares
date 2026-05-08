@@ -5671,3 +5671,143 @@ main {
 .rp-status-error    { background: rgba(220,80,80,0.20);  color: #f08080; }
 .rp-status-unresolved { background: rgba(120,120,140,0.15); color: #909098; }
 .rp-status-init     { background: rgba(120,120,140,0.10); color: #909098; }
+
+/* ---------------------------------------------------------------------- */
+/* System Health panel — Wave 2 Phase C.5 (#418) deep-health surface.     */
+/* Reuses the .panel container; provides its own counts + grid layout.    */
+/* ---------------------------------------------------------------------- */
+
+.system-health-counts {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.system-health-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+}
+.system-health-stat-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+}
+.system-health-stat-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.system-health-overall {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 14px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: 12px;
+}
+
+.system-health-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+}
+.system-health-row {
+    display: grid;
+    grid-template-columns: 200px 100px 1fr;
+    gap: 12px;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.02);
+    border-left: 3px solid transparent;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+}
+.system-health-row-name {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+.system-health-row-status {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+}
+.system-health-row-detail {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Status colors — match the runtime_queries vocabulary. Distinct from the
+   severity scale (.sentinel-stat-sev-*) so operators don't conflate
+   "service unreachable" with "high-severity finding". */
+.system-health-status-healthy {
+    border-left-color: #7fdc8f;
+}
+.system-health-status-healthy .system-health-row-status,
+.system-health-status-healthy.system-health-overall,
+.system-health-status-healthy .system-health-stat-value {
+    color: #7fdc8f;
+}
+
+.system-health-status-warning {
+    border-left-color: #f1c860;
+}
+.system-health-status-warning .system-health-row-status,
+.system-health-status-warning.system-health-overall,
+.system-health-status-warning .system-health-stat-value {
+    color: #f1c860;
+}
+
+.system-health-status-unavailable {
+    border-left-color: #909098;
+}
+.system-health-status-unavailable .system-health-row-status,
+.system-health-status-unavailable.system-health-overall,
+.system-health-status-unavailable .system-health-stat-value {
+    color: #a8a8b4;
+}
+
+.system-health-status-error {
+    border-left-color: #f08080;
+}
+.system-health-status-error .system-health-row-status,
+.system-health-status-error.system-health-overall,
+.system-health-status-error .system-health-stat-value {
+    color: #f08080;
+}
+
+.system-health-status-unknown {
+    border-left-color: rgba(255,255,255,0.1);
+}
+.system-health-status-unknown .system-health-row-status,
+.system-health-status-unknown.system-health-overall {
+    color: var(--text-secondary);
+}
+
+.system-health-empty {
+    padding: 20px;
+    text-align: center;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.system-health-meta-stale {
+    color: #f08080;
+    font-weight: 500;
+}

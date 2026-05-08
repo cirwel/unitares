@@ -34,6 +34,7 @@
     <script src="/dashboard/watcher.js"></script>
     <script src="/dashboard/sentinel.js"></script>
     <script src="/dashboard/vigil.js"></script>
+    <script src="/dashboard/system-health.js"></script>
 </head>
 
 <body>
@@ -84,6 +85,7 @@
         <a href="#watcher-section" class="section-nav-item" data-section="watcher-section">Watcher</a>
         <a href="#sentinel-section" class="section-nav-item" data-section="sentinel-section">Sentinel</a>
         <a href="#vigil-section" class="section-nav-item" data-section="vigil-section">Vigil</a>
+        <a href="#system-health-section" class="section-nav-item" data-section="system-health-section">Health</a>
         <a href="/phase" style="margin-left:auto; opacity:0.6; padding:6px 14px; border-radius:20px; font-size:0.8rem; font-weight:500; color:var(--text-secondary); text-decoration:none; white-space:nowrap;">Phase Space &rarr;</a>
     </nav>
 
@@ -633,6 +635,46 @@
             <div class="vigil-stream" id="vigil-writes"></div>
             <div class="fleet-metrics-meta">
                 <span id="vigil-meta" class="fleet-metrics-scrape-status"></span>
+            </div>
+        </div>
+
+        <!-- System Health — surfaces the deep-health snapshot built by
+             deep_health_probe_task (every 30s) and read from a cached
+             in-memory snapshot at /health/deep. Each row is one check
+             from src/services/runtime_queries.get_health_check_data:
+             primary_db / audit_db / redis_cache / knowledge_graph /
+             calibration / lease_plane / etc. The lease_plane row is
+             Wave 2 Phase C.5 (#418), routing the BEAM↔Python boundary
+             into the operator-visible surface. -->
+        <div class="panel" id="system-health-section">
+            <div class="panel-header">
+                <h2>System Health</h2>
+                <div class="panel-controls">
+                    <span id="system-health-overall" class="system-health-overall system-health-status-unknown">—</span>
+                    <button id="system-health-refresh" class="panel-button" type="button">Refresh</button>
+                </div>
+            </div>
+            <div class="system-health-counts">
+                <div class="system-health-stat system-health-status-healthy">
+                    <span class="system-health-stat-label">healthy</span>
+                    <span class="system-health-stat-value" id="system-health-count-healthy">—</span>
+                </div>
+                <div class="system-health-stat system-health-status-warning">
+                    <span class="system-health-stat-label">warning</span>
+                    <span class="system-health-stat-value" id="system-health-count-warning">—</span>
+                </div>
+                <div class="system-health-stat system-health-status-unavailable">
+                    <span class="system-health-stat-label">unavailable</span>
+                    <span class="system-health-stat-value" id="system-health-count-unavailable">—</span>
+                </div>
+                <div class="system-health-stat system-health-status-error">
+                    <span class="system-health-stat-label">error</span>
+                    <span class="system-health-stat-value" id="system-health-count-error">—</span>
+                </div>
+            </div>
+            <div class="system-health-grid" id="system-health-grid"></div>
+            <div class="fleet-metrics-meta">
+                <span id="system-health-meta" class="fleet-metrics-scrape-status"></span>
             </div>
         </div>
 
