@@ -6,9 +6,8 @@ defmodule UnitaresLeasePlane.HTTPRouter.HealthTest do
   - 200 with `{ok: true, status: "ok"}` envelope
   - `protocol_version` injected by the shared `json/3` helper
   - Bearer auth applies (consistent with other /v1/* routes)
-  - Missing/wrong bearer → 401 (auth-layer 401 still does NOT carry
-    protocol_version per the documented Phase A gap; pinned in
-    `protocol_version_test.exs`)
+  - Missing/wrong bearer → 401 (auth-layer 401 carries protocol_version
+    too as of Phase A.5; pinned in `protocol_version_test.exs`)
   - GET-only — POST returns 404 (Plug.Router won't match a different verb)
 
   The Python test (`tests/test_lease_plane_health_check.py`) pins the

@@ -84,9 +84,19 @@ defmodule UnitaresLeasePlane.HTTPAuth do
   end
 
   defp send_json(conn, status, body) do
+    # Wave 2 §"Lease-integration boundary hardening" — Phase A.5 follow-on
+    # to #412. The router's `json/3` helper injects `protocol_version` on
+    # every response; this auth-layer helper has to do the same so a Python
+    # client probing /v1/health (or any auth-gated endpoint) doesn't see an
+    # envelope-shape mismatch on 401/503 vs 200. Pre-Phase-A.5 the auth 401
+    # body was missing `protocol_version` and the Phase A test pinned that
+    # gap (`refute Map.has_key?(decoded, "protocol_version")` on the 401
+    # path). Phase A.5 closes the gap; that test inverts.
+    versioned = Map.put(body, :protocol_version, UnitaresLeasePlane.HTTPRouter.protocol_version())
+
     conn
     |> put_resp_content_type("application/json")
-    |> send_resp(status, Jason.encode!(body))
+    |> send_resp(status, Jason.encode!(versioned))
     |> halt()
   end
 end

@@ -90,16 +90,11 @@ defmodule UnitaresLeasePlane.HTTPRouter.ProtocolVersionTest do
     assert decoded["protocol_version"] == HTTPRouter.protocol_version()
   end
 
-  test "401 permission_denied response carries protocol_version", ctx do
-    # Auth-layer 401 is emitted by http_auth.ex, not the typed-error router
-    # arm. Pre-Wave-2 the auth response did not go through the json/3 helper
-    # — it built its body inline. If a future refactor adds protocol_version
-    # to the auth layer too, update this test to assert it. Today the auth
-    # 401 path SKIPS the router's json/3 helper (Plug.Conn.send_resp is
-    # called directly with a JSON-encoded literal body), so we only assert
-    # the JSON envelope shape — NOT protocol_version. The gap is documented
-    # for a follow-up; the contract Wave 2 §A wedge ships covers the typed
-    # response shapes.
+  test "401 permission_denied response carries protocol_version (Phase A.5)", ctx do
+    # Phase A.5 (this PR's predecessor for the auth-layer follow-on) routes
+    # the auth-layer 401/503 bodies through a versioned wrapper so the
+    # envelope shape matches every other response. Pre-Phase-A.5 this test
+    # `refute`d the field's presence and documented the gap.
     resp =
       :post
       |> conn("/v1/lease/acquire", Jason.encode!(%{
@@ -114,11 +109,57 @@ defmodule UnitaresLeasePlane.HTTPRouter.ProtocolVersionTest do
       |> HTTPRouter.call(@opts)
 
     assert resp.status == 401
-    # Documented gap: protocol_version is NOT yet emitted on auth-layer 401.
-    # Phase A of the boundary-hardening series ships the typed-error contract
-    # surfaces only.
     decoded = parsed(resp)
-    refute Map.has_key?(decoded, "protocol_version")
+    assert decoded["error"] == "permission_denied"
+    assert decoded["protocol_version"] == HTTPRouter.protocol_version()
+  end
+
+  test "401 missing-Authorization-header response carries protocol_version (Phase A.5)", ctx do
+    # The other auth-failure path: no Authorization header at all (vs wrong
+    # token above). Both go through the same send_json helper, so both must
+    # carry protocol_version post-Phase-A.5.
+    resp =
+      :post
+      |> conn("/v1/lease/acquire", Jason.encode!(%{
+           surface_id: ctx.surface,
+           holder_agent_uuid: random_uuid(),
+           holder_kind: "local_beam",
+           holder_class: "process_instance",
+           ttl_s: 30
+         }))
+      |> put_req_header("content-type", "application/json")
+      |> HTTPRouter.call(@opts)
+
+    assert resp.status == 401
+    decoded = parsed(resp)
+    assert decoded["protocol_version"] == HTTPRouter.protocol_version()
+  end
+
+  test "503 token-not-configured response carries protocol_version (Phase A.5)", ctx do
+    # The fail-closed path when no bearer token is configured at all.
+    # Auth plug returns 503 service_unavailable — must also be versioned.
+    Application.put_env(:lease_plane, :bearer_token, nil)
+
+    resp =
+      :post
+      |> conn("/v1/lease/acquire", Jason.encode!(%{
+           surface_id: ctx.surface,
+           holder_agent_uuid: random_uuid(),
+           holder_kind: "local_beam",
+           holder_class: "process_instance",
+           ttl_s: 30
+         }))
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", "Bearer anything")
+      |> HTTPRouter.call(@opts)
+
+    # Restore for sibling tests.
+    Application.put_env(:lease_plane, :bearer_token, @bearer)
+
+    assert resp.status == 503
+    decoded = parsed(resp)
+    assert decoded["error"] == "service_unavailable"
+    assert decoded["protocol_version"] == HTTPRouter.protocol_version()
   end
 
   test "happy path response shape is unchanged apart from the new field", ctx do
