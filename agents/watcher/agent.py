@@ -93,6 +93,7 @@ from agents.watcher.findings import (
     _label_for_other_worktree,
     _partition_findings_by_scope,
     _resolve_session_scope_root,
+    _sweep_stale_quiet,
     _write_findings_atomic,
     compact_findings,
     escalate,
@@ -1044,7 +1045,14 @@ def surface_pending() -> int:
     high-severity queue drains. This prevents the silent-drop bug where
     medium findings were previously marked surfaced without the user ever
     seeing them.
+
+    Auto-sweep on entry: drops findings whose target file no longer
+    exists before computing the chime. Closes the failure mode observed
+    on 2026-05-07 dogfood — 36% of open findings (48/132) were dangling
+    against deleted worktree paths, inflating chime severity rankings.
+    Quiet so it doesn't pollute the chime block stdout.
     """
+    _sweep_stale_quiet()
     all_findings = _iter_findings_raw()
     open_findings = [f for f in all_findings if f.get("status", "open") == "open"]
 
