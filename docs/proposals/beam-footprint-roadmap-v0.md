@@ -181,6 +181,77 @@ Added to V0.3 §Stop signs:
 
 ---
 
+## V0.3.2 AMENDMENT 2026-05-09 — Wave 3 substrate re-litigation (scope question, not destination revert)
+
+**Summary.** Wave 3 RFC has gone through four iterations (v0.1 → v0.1.1 → v0.1.2 → v0.2 → v0.3). Each iteration's council pass surfaced a fresh substrate-tax bias signature in the redraft itself — five across four iterations as of 2026-05-09. The v0.3 council architect lane invoked v0.3's own §15 escalation rule: *"if v0.3 surfaces a sixth bias signature, that's evidence the substrate question itself needs re-litigation rather than redraft mechanics."* It did. This amendment opens that re-litigation at the parent-roadmap altitude — **not as a destination revert** (A′ stands; operator decision 2026-05-05 unchanged) but as a scope question on Wave 3 specifically.
+
+### Bias-signature accumulation across Wave 3 redrafts (council-evidenced)
+
+| Iteration | Bias signature surfaced | Council source |
+|------------|--------------------------|------------------|
+| v0.1 | §0 disconfirmer set is post-hoc rationalization; §5.3 `_has_recently_reviewed` KEPT-Python on "PG round-trip dominates" reasoning | architect lane (2026-05-08) |
+| v0.1.1 | §B6 cache-invalidation defense recreates substrate tax; §B8(iii) lunge-at-first-association on single-process; §8 criterion 6 sunk-cost protection | architect Lane 1 of v0.1.1 council |
+| v0.1.2 | §C2 anchored-to-baseline-that-doesn't-exist (lease-plane Phase A had zero rows); architect predicted "if v0.1.2 produces another structural delta, v0.2 redraft becomes mandatory" | verifier DRIFT #3 + architect explicit warning |
+| v0.2 | §10 versioned-baseline + §4 advisory-lock added sustained PG-coordination load to the substrate Wave 3 exists to relieve | architect lane (2026-05-09) — declared mandatory v0.3-redraft-from-scratch |
+| v0.3 | §10 reconciliation loop is structurally same PG-as-arbiter pattern, slower cadence; perpetual periodic full-table SELECT against the substrate, "should never happen in steady state" justification = canonical conservative-substrate-bias-with-prettier-prose | architect lane (2026-05-09) — invoked substrate-re-litigation discipline |
+
+The redraft pattern produced a new bias signature at every cycle. That is not a property of any individual redraft — it is structural to **what is being ported**. Wave 3's three surfaces (handler dispatch + identity middleware + dialectic resolution) all hold state whose canonical form lives in PostgreSQL: identity rows in `core.identities`/`core.agents`, dialectic state in `core.dialectic_sessions`, audit emissions in `audit.coordination_events`. Any BEAM port of these surfaces must coordinate against PG truth. Each redraft chose a different mechanism for that coordination (per-observe versioned reads, ETS+reconciliation, advisory locks); each mechanism was a fresh shape of "PG-as-arbiter," and each surfaced as a bias signature.
+
+This is the architect's load-bearing finding from v0.3 council: the PG-coordination load is not a redraft defect, it is intrinsic to porting *these* surfaces.
+
+### Independent calendar finding (verifier, 2026-05-09)
+
+Live-verifier discovered Wave 1 actual elapsed is **~2 days**, not the v0.3 estimate of "~3 weeks." Git log: Wave 1 first commit `2026-05-05 11:39`, last Wave-1-tagged commit `2026-05-07 01:12`. Wave 3 v0.3's disconfirmer (E) "Wave 1 × 3 calendar cap" is therefore **~6 days**, not ~9 weeks. Wave 3 v0.3 has 10 prereq PRs (each requiring its own council pass), and PR #6 alone needs ≥14 days of Phase A measurement before disconfirmer (B) thresholds can be set.
+
+**The calendar gate is structurally infeasible at current Wave 1 measurement.** This finding is independent of the bias-signature analysis — it is git arithmetic. Even if v0.3's structural bias issue is resolved, the prereq stack cannot ship inside (E)'s cap.
+
+### What re-litigation does NOT mean
+
+- **Not a destination revert.** A′ (operator-decision migration commit, 2026-05-05) stands. The substrate-migration call is not re-opened. The pole-flip rationale in V0.3 RESOLUTION above remains load-bearing.
+- **Not a Wave 1 / Wave 2 reversal.** Wave 1 (Sentinel-on-BEAM) shipped Surface 1+2 successfully; Wave 2 boundary hardening landed clean. Both stand.
+- **Not a v0.4 redraft of Wave 3.** Per v0.3 §15's own discipline, another redraft cycle is the wrong shape of move. Five bias signatures across four iterations is data; producing a sixth in v0.4 is just continuing the experiment.
+
+### What re-litigation DOES open
+
+The question for operator decision: **is Wave 3 (handler dispatch + identity middleware + dialectic resolution) the right shape of port given (a) the bias-signature accumulation pattern and (b) the calendar reality?**
+
+Specific options:
+
+**(α) Defer Wave 3 RFC pending Wave 1 burn-in + Phase A measurement.** Don't iterate further on Wave 3 RFC text right now. Ship the prereqs that aren't Wave-3-specific (lease-plane Phase A latency instrumentation, the ODE profile, the boundary-event helpers). Let those produce evidence over ≥14 days. Re-attempt Wave 3 RFC with measurement in hand, not before. The bias signatures may have been at least partly an artifact of designing without the data the design depends on.
+
+**(β) Scope-reduce Wave 3 to the smallest port that doesn't tangle with PG-resident identity state.** Concrete shape: port **only dialectic resolution coordination** (the session-keyed GenServer + saga from v0.3 §9) — that surface has the cleanest PG boundary (writes to `core.dialectic_sessions` are sparse; the saga state is its own table). Defer handler dispatch and identity middleware to a later wave once the Wave 1+2 pattern produces more substrate evidence. Smaller blast radius, smaller PG-coordination footprint.
+
+**(γ) Replace Wave 3 with a structurally different port.** The roadmap §"v0.1 cut" classified surfaces as stateful-coordinating vs stateless-computing. The current Wave 3 surfaces are all stateful-coordinating-with-PG-canonical. Are there *other* stateful-coordinating surfaces that don't have PG-canonical state? E.g., the `_baseline_cache` in `governance_core/ethical_drift.py:418` is process-local memory only — porting *just that* to BEAM as ETS would be a clean substrate-fit-not-PG-arbiter port, no shadow tables or sagas needed. That's a different Wave 3.
+
+**(δ) Operator override — proceed with v0.3 implementation regardless of council BLOCK.** The bias signatures are real but possibly noise from over-recursive council framing; the calendar gate is real but possibly resolvable by extending (E)'s cap explicitly. If (δ), then minimum surgical work: fix the three implementation-blocking REFUTEDs from v0.3 verifier (regex `[a-z_]+` rejects `503_emission` event_type — change to `[a-z][a-z0-9_]*` or rename event; seed `'false'` invalid for `identity_strict_mode` — should be `'log'`; seed `'enforced'` invalid for `ipua_pin_check_mode` — should be `'strict'`); specify the cache-miss `BaselineWriter.warm/1` path; replace v0.3 §10.3 reconciliation loop with a PG-trigger-based out-of-band-write detector; pin (E)'s "Wave 1 elapsed" to the corrected ~2 days with explicit rationale for whether the cap stays at ×3 or expands.
+
+### What the operator should weigh
+
+- **Do you trust the bias-signature pattern as signal?** Each was found by the same architect-lane prompt; the prompt asked for bias signatures, so it found bias signatures. That's a real possibility. But the verifier's calendar arithmetic is independent — Wave 1 elapsed × 3 = ~6 days is hard data, not framing.
+- **Is there evidence that *would* close the question?** The architect's diagnosis is structural (Wave 3 surfaces need PG-resident state). That's empirically testable: can you write a Wave 3 design that doesn't add ANY new PG-coordination load? If yes, the bias signatures were redraft-artifact. If no, they're structural.
+- **Wave 0 is producing data right now.** The lease-plane Phase A baseline that v0.3 (B) depends on currently doesn't exist (`audit.coordination_events` has 0 rows; `127.0.0.1:8788` connection-refused at v0.3 council time). Designing Wave 3 RFC against that absence repeatedly produces "anchored to TBD" structures that the council marks as bias signatures. Reversing the order — measure first, then design — may resolve the pattern at zero substrate-question cost.
+
+### v0.1.x / v0.2 / v0.3 branches
+
+Preserved as reference history:
+- `wave-3-rfc-draft` — v0.1 + v0.1.1 + v0.1.2 commits (council folds in amendment-stack form)
+- `wave-3-rfc-v0.2` — v0.2 single-commit redraft from v0.1.2 tip
+- `wave-3-rfc-v0.3` — v0.3 single-commit redraft from v0.2 tip
+
+Each is referenceable for the architectural decisions tried at that iteration. None should be merged to master pending re-litigation outcome.
+
+### What this amendment does NOT change
+
+- A′ destination commitment.
+- Wave 1 (shipped) or Wave 2 (in progress).
+- The MCP SDK gate framing.
+- The lease-plane v0 RFC or its Phase A.
+- The Wave 0 channel design (`audit.coordination_events`) or its CHECK constraint scope.
+
+What it changes: Wave 3 sequencing is on hold pending operator decision among (α)/(β)/(γ)/(δ). Until that decision lands, no v0.4 redraft, no implementation work on Wave-3-specific prereqs. The non-Wave-3-specific prereqs (lease-plane Phase A latency instrumentation, ODE profile, boundary-event helpers) can ship independently because they're useful regardless of Wave 3's eventual shape.
+
+---
+
 ## V0.2 RESOLUTION 2026-05-05 — verdict landed; destination reopens *(SUPERSEDED by V0.3 RESOLUTION above; preserved as historical record)*
 
 **This block is preserved for historical record.** v0.2 reopened the destination after PR #350's Python-fixable verdict. v0.3 (above) closes it on operator decision after three more Python-fixable PRs (#354, #360, #361) closed the remaining measured floors without moving user-visible per-turn overhead.
