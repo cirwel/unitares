@@ -102,7 +102,11 @@ defmodule UnitaresSentinel.Application do
       initial_delay_ms:
         Application.get_env(:unitares_sentinel, :analysis_initial_delay_ms, 5_000),
       jitter_ms: Application.get_env(:unitares_sentinel, :analysis_jitter_ms, 5_000),
-      tick_timeout_ms: Application.get_env(:unitares_sentinel, :analysis_tick_timeout_ms, 45_000)
+      tick_timeout_ms: Application.get_env(:unitares_sentinel, :analysis_tick_timeout_ms, 45_000),
+      # Distinct surface from ForcedReleasePoller's resident:/sentinel_cycle so
+      # the two GenServers don't collide as held_by_other when their tick
+      # windows overlap (KG 2026-05-08T02:14:43.822544+00:00).
+      lease_opts: [surface_id: "resident:/sentinel_fleet_emit"]
     ]
     |> maybe_add_checkin_anchor()
   end

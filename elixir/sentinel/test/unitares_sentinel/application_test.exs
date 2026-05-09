@@ -21,6 +21,12 @@ defmodule UnitaresSentinel.ApplicationTest do
     :ok
   end
 
+  test "fleet finding emitter uses its own lease surface, distinct from sentinel_cycle" do
+    opts = SentinelApplication.fleet_finding_emitter_opts()
+
+    assert opts[:lease_opts][:surface_id] == "resident:/sentinel_fleet_emit"
+  end
+
   test "fleet finding emitter carries the Sentinel anchor when check-ins are enabled" do
     path =
       Path.join(System.tmp_dir!(), "sentinel-anchor-#{System.unique_integer([:positive])}.json")
