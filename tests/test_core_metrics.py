@@ -1388,10 +1388,12 @@ class TestEdgeCases:
             from src.mcp_handlers.core import handle_get_governance_metrics
             result = await handle_get_governance_metrics({"lite": True})
             data = _parse(result)
-            # mode and basin come from interpret_state, which returns
-            # {"health": "healthy", "mode": "convergent", "basin": "stable"}
-            assert data.get("mode") == "convergent"
-            assert data.get("basin") == "stable"
+            # mode and basin are wrapped with glossary entries (#428) — the
+            # raw value lives at .value, with peer keys "meaning" /
+            # "next_action" / range etc. when known. Unknown values still
+            # surface .value with a "meaning: unknown..." fallback.
+            assert data.get("mode", {}).get("value") == "convergent"
+            assert data.get("basin", {}).get("value") == "stable"
 
 
 # ============================================================================
