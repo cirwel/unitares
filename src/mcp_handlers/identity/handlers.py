@@ -995,7 +995,7 @@ async def _try_resume_by_session_key(
     return _identity_success_for_request(arguments, payload, agent_uuid=agent_uuid), existing_identity
 
 
-@mcp_tool("identity", timeout=10.0)
+@mcp_tool("identity", timeout=10.0, requires_identity="pre_onboard")
 async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     IDENTITY - Who am I? Auto-creates identity if first call.
@@ -1363,7 +1363,7 @@ async def _perform_session_bind(
     return bound_info
 
 
-@mcp_tool("bind_session", timeout=5.0)
+@mcp_tool("bind_session", timeout=5.0, requires_identity="pre_onboard")
 async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Bind current MCP session to an existing agent identity.
@@ -1513,7 +1513,7 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
     return success_response(bind_response)
 
 
-@mcp_tool("onboard", timeout=15.0)
+@mcp_tool("onboard", timeout=15.0, requires_identity="pre_onboard")
 async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     ONBOARD - Single entry point for new agents.

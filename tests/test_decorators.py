@@ -18,6 +18,7 @@ from src.mcp_handlers.decorators import (
     get_tool_timeout,
     get_tool_description,
     get_tool_metadata,
+    get_tool_identity_requirement,
     is_tool_deprecated,
     is_tool_hidden,
     list_registered_tools,
@@ -354,3 +355,90 @@ class TestGetToolMetadata:
 
     def test_unknown_tool_no_description(self):
         assert get_tool_description("totally_nonexistent") == ""
+
+
+class TestRequiresIdentity:
+    """The requires_identity attribute (#425) declares per-tool identity-bootstrap
+    behavior. Default is 'required'; pre_onboard tools may run without a bound
+    identity. The attribute is the source of truth that the dispatch middleware
+    consumes."""
+
+    def test_default_is_required(self):
+        @mcp_tool("test_default_identity_tool")
+        async def handle_test_default_identity_tool(arguments):
+            return []
+
+        assert _TOOL_DEFINITIONS["test_default_identity_tool"].requires_identity == "required"
+        assert get_tool_identity_requirement("test_default_identity_tool") == "required"
+
+    def test_explicit_pre_onboard(self):
+        @mcp_tool("test_pre_onboard_tool", requires_identity="pre_onboard")
+        async def handle_test_pre_onboard_tool(arguments):
+            return []
+
+        assert get_tool_identity_requirement("test_pre_onboard_tool") == "pre_onboard"
+
+    def test_explicit_scoped(self):
+        @mcp_tool("test_scoped_tool", requires_identity="scoped")
+        async def handle_test_scoped_tool(arguments):
+            return []
+
+        assert get_tool_identity_requirement("test_scoped_tool") == "scoped"
+
+    def test_invalid_requires_identity_raises(self):
+        with pytest.raises(ValueError, match="requires_identity must be one of"):
+            @mcp_tool("test_bad_value", requires_identity="anonymous")
+            async def handle_test_bad_value(arguments):
+                return []
+
+    def test_unknown_tool_defaults_to_required(self):
+        # Fail-closed: tools not in the registry must be treated as
+        # identity-required by middleware (otherwise an unregistered handler
+        # could surface as pre-onboard exempt).
+        assert get_tool_identity_requirement("totally_nonexistent_tool") == "required"
+
+    def test_function_attribute_attached(self):
+        @mcp_tool("test_attr_attached", requires_identity="pre_onboard")
+        async def handle_test_attr_attached(arguments):
+            return []
+
+        assert handle_test_attr_attached._mcp_requires_identity == "pre_onboard"
+
+
+class TestPreOnboardToolsClassification:
+    """Verify the canonical PRE_ONBOARD set is correctly declared on the
+    handlers themselves (not just the test). These tools must run pre-onboard
+    or the agent cannot inspect the protocol surface to decide what to call."""
+
+    EXPECTED_PRE_ONBOARD = {
+        "health_check",
+        "list_tools",
+        "describe_tool",
+        "get_governance_metrics",
+        "skills",
+        "identity",
+        "onboard",
+        "bind_session",
+    }
+
+    def test_all_canonical_pre_onboard_tools_are_declared(self):
+        # Trigger handler registration by importing the modules.
+        import src.mcp_handlers  # noqa: F401
+
+        for name in self.EXPECTED_PRE_ONBOARD:
+            actual = get_tool_identity_requirement(name)
+            assert actual == "pre_onboard", (
+                f"Tool {name!r} should be requires_identity='pre_onboard' but is {actual!r}. "
+                f"Either fix the handler decorator or update this test if the canonical set changed."
+            )
+
+    def test_write_tools_are_required(self):
+        import src.mcp_handlers  # noqa: F401
+
+        # Sample of write-bearing tools that must require identity.
+        for name in ("process_agent_update", "leave_note", "knowledge"):
+            actual = get_tool_identity_requirement(name)
+            assert actual == "required", (
+                f"Write-bearing tool {name!r} must be requires_identity='required' "
+                f"to gate at the middleware boundary; got {actual!r}."
+            )

@@ -110,7 +110,7 @@ def _assess_thermodynamic_significance(
     }
 
 
-@mcp_tool("get_governance_metrics", timeout=10.0)
+@mcp_tool("get_governance_metrics", timeout=10.0, requires_identity="pre_onboard")
 async def handle_get_governance_metrics(arguments: ToolArgumentsDict) -> Sequence[TextContent]:
     """Get current governance state and metrics for an agent without updating state.
 

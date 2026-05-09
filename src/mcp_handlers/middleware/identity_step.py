@@ -507,19 +507,22 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
         # leave the lineage-declaration bleed open.
         if (identity_result.get("resume_failed")
                 and identity_result.get("error") == "session_resolve_miss"):
-            read_only_diagnostic_tools = {
-                "health_check",
-                "get_server_info",
-                "list_tools",
-                "describe_tool",
-                "get_governance_metrics",
-                "skills",
-            }
-            identity_lifecycle_tools = {"identity", "onboard"}
-            if name in read_only_diagnostic_tools or name in identity_lifecycle_tools:
+            # #425: identity-requirement is now a per-tool attribute on the
+            # tool registry (`requires_identity` on the @mcp_tool decorator).
+            # pre_onboard tools are exempt from auto-mint at this layer; the
+            # request proceeds unbound. Behavior matches the prior hardcoded
+            # allowlist exactly — switching to attribute lookup so adding a
+            # new pre_onboard tool no longer requires editing this file.
+            # The previous allowlist {health_check, get_server_info,
+            # list_tools, describe_tool, get_governance_metrics, skills,
+            # identity, onboard, bind_session} now lives as decorator
+            # arguments on those handlers.
+            from src.mcp_handlers.decorators import get_tool_identity_requirement
+            if get_tool_identity_requirement(name) == "pre_onboard":
                 logger.info(
                     "[DISPATCH] session_resolve_miss for %s under %s... "
-                    "— leaving request unbound (no middleware auto-mint)",
+                    "— leaving request unbound (no middleware auto-mint, "
+                    "tool declared requires_identity=pre_onboard)",
                     name, session_key[:20],
                 )
             else:

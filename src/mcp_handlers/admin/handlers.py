@@ -17,7 +17,7 @@ from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 
 logger = get_logger(__name__)
 
-@mcp_tool("get_server_info", timeout=10.0, rate_limit_exempt=True, register=False)
+@mcp_tool("get_server_info", timeout=10.0, rate_limit_exempt=True, register=False, requires_identity="pre_onboard")
 async def handle_get_server_info(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Get MCP server version, process information, and health status"""
     import time
@@ -282,7 +282,7 @@ def set_workspace_last_agent(mcp_server, agent_id: str) -> None:
     except Exception:
         pass  # Non-critical
 
-@mcp_tool("health_check", timeout=5.0, rate_limit_exempt=True)
+@mcp_tool("health_check", timeout=5.0, rate_limit_exempt=True, requires_identity="pre_onboard")
 async def handle_health_check(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Read the most recent cached health snapshot.
 

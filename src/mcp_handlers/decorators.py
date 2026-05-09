@@ -30,6 +30,17 @@ class ToolDefinition:
     hidden: bool = False
     superseded_by: Optional[str] = None
     rate_limit_exempt: bool = False
+    # Identity-bootstrap declaration (#425). One of:
+    #   "required"     — default; tool needs a bound identity.
+    #   "pre_onboard"  — protocol-inspection or identity-lifecycle tool;
+    #                    callable without a bound identity.
+    #   "scoped"       — admin-token gated; separate auth path.
+    # The attribute is *informational* in this PR — middleware does not
+    # yet branch on it. Replacing the hardcoded read-only-tool allowlist
+    # at identity_step.py with attribute lookup, and replacing auto-mint
+    # with typed-refusal for "required" tools, is a separate behavior
+    # change that needs explicit rollout review.
+    requires_identity: str = "required"
 
 _TOOL_DEFINITIONS: Dict[str, ToolDefinition] = {}
 
@@ -42,7 +53,8 @@ def mcp_tool(
     deprecated: bool = False,
     hidden: bool = False,
     superseded_by: Optional[str] = None,
-    register: bool = True
+    register: bool = True,
+    requires_identity: str = "required",
 ):
     """
     Decorator for MCP tool handlers with auto-registration and timeout protection.
@@ -79,6 +91,12 @@ def mcp_tool(
         tool_name = name or func.__name__.replace('handle_', '')
         tool_description = description or (func.__doc__ and func.__doc__.strip().split('\n')[0].strip()) or ""
 
+        if requires_identity not in ("required", "pre_onboard", "scoped"):
+            raise ValueError(
+                f"Tool {tool_name!r}: requires_identity must be one of "
+                f"'required', 'pre_onboard', 'scoped'; got {requires_identity!r}"
+            )
+
         # Attach metadata to function for introspection
         func._mcp_tool_name = tool_name
         func._mcp_timeout = timeout
@@ -86,6 +104,7 @@ def mcp_tool(
         func._mcp_deprecated = deprecated
         func._mcp_hidden = hidden
         func._mcp_superseded_by = superseded_by
+        func._mcp_requires_identity = requires_identity
 
         @wraps(func)
         async def wrapper(arguments: Dict[str, Any]):
@@ -175,6 +194,7 @@ def mcp_tool(
                 hidden=hidden,
                 superseded_by=superseded_by,
                 rate_limit_exempt=rate_limit_exempt,
+                requires_identity=requires_identity,
             )
 
         return wrapper
@@ -223,6 +243,17 @@ def is_tool_hidden(tool_name: str) -> bool:
     """Check if a tool is hidden from list_tools."""
     td = _TOOL_DEFINITIONS.get(tool_name)
     return td.hidden if td else False
+
+
+def get_tool_identity_requirement(tool_name: str) -> str:
+    """Get the identity requirement for a tool: 'required', 'pre_onboard', or 'scoped'.
+
+    Defaults to 'required' for unknown tools (fail-closed). Used by the
+    identity-bootstrap middleware to decide whether the tool may run
+    without a bound identity.
+    """
+    td = _TOOL_DEFINITIONS.get(tool_name)
+    return td.requires_identity if td else "required"
 
 
 def get_tool_definition(tool_name: str) -> Optional[ToolDefinition]:
