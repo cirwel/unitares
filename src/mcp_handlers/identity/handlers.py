@@ -1666,6 +1666,40 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 # core.agents). Caller-provided values are preserved.
                 if not _spawn_reason:
                     _spawn_reason = "auto_onboard_no_session"
+
+                # #425 Path B: when STRICT_IDENTITY_REQUIRED is on, refuse
+                # bare onboard() (no parent_agent_id and no force_new=True)
+                # because the caller hasn't declared lineage intent. Either
+                # path is fine — declared lineage or explicit force_new —
+                # but the implicit auto_onboard_no_session mint violates
+                # the ontology's "lineage declared, not auto-minted" rule.
+                # Default off; gated by env flag for staged rollout.
+                from src.mcp_handlers.identity_bootstrap import is_strict_identity_required
+                if (is_strict_identity_required()
+                        and not _parent_agent_id
+                        and not force_new):
+                    logger.info(
+                        "[ONBOARD] STRICT_IDENTITY_REQUIRED=true and bare "
+                        "onboard() (no parent_agent_id, no force_new=true) "
+                        "— refusing rather than auto-minting "
+                        "auto_onboard_no_session (#425 Path B)"
+                    )
+                    # success_response is imported at module level (line 22).
+                    # Do NOT re-import here — it shadows the module binding
+                    # for the entire function scope and breaks every other
+                    # success_response call in handle_onboard_v2.
+                    return success_response({
+                        "status": "lineage_declaration_required",
+                        "tool": "onboard",
+                        "hint": (
+                            "Bare onboard() is ambiguous — pass "
+                            "parent_agent_id=<prior UUID> to continue prior "
+                            "work, OR force_new=true to confirm a fresh "
+                            "process-instance with no lineage."
+                        ),
+                        "ontology_ref": "docs/ontology/identity.md",
+                        "rollout_flag": "STRICT_IDENTITY_REQUIRED",
+                    })
                 logger.info(
                     "[ONBOARD] No existing session for session_key=%s... "
                     "minting fresh in-memory identity (spawn_reason=%s)",

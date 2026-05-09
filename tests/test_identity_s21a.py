@@ -487,9 +487,9 @@ class TestStrictIdentityRequiredFlag:
         assert retry_idx != -1
         retry_window = source[retry_idx:retry_idx + 3500]
 
-        assert 'os.getenv("STRICT_IDENTITY_REQUIRED"' in retry_window, (
-            "Strict-mode branch must be gated on STRICT_IDENTITY_REQUIRED env var "
-            "for staged rollout."
+        assert 'is_strict_identity_required' in retry_window, (
+            "Strict-mode branch must call the shared is_strict_identity_required() "
+            "helper so all auto-mint paths use one gate (#425)."
         )
         assert '"status": "identity_required"' in retry_window, (
             "Typed-refusal must carry status='identity_required' so callers "
@@ -504,15 +504,127 @@ class TestStrictIdentityRequiredFlag:
             "removing this would break existing callers before rollout."
         )
 
-    def test_default_is_false(self):
+    def test_helper_default_is_false(self):
+        # Verify the shared helper itself defaults to False when env unset —
+        # belt-and-suspenders against a future commit that flips the default
+        # before residents are migrated.
         import os
-        # No env var set means default-off. Belt-and-suspenders against a
-        # future commit that flips the default before residents are migrated.
+        from src.mcp_handlers.identity_bootstrap import is_strict_identity_required
+
+        prior = os.environ.pop("STRICT_IDENTITY_REQUIRED", None)
+        try:
+            assert is_strict_identity_required() is False
+        finally:
+            if prior is not None:
+                os.environ["STRICT_IDENTITY_REQUIRED"] = prior
+
+    def test_helper_truthy_values(self):
+        import os
+        from src.mcp_handlers.identity_bootstrap import is_strict_identity_required
+
+        prior = os.environ.get("STRICT_IDENTITY_REQUIRED")
+        try:
+            for val in ("1", "true", "TRUE", "yes", "Yes", "on"):
+                os.environ["STRICT_IDENTITY_REQUIRED"] = val
+                assert is_strict_identity_required() is True, f"value {val!r} should be truthy"
+            for val in ("0", "false", "no", "off", "", "garbage"):
+                os.environ["STRICT_IDENTITY_REQUIRED"] = val
+                assert is_strict_identity_required() is False, f"value {val!r} should be falsy"
+        finally:
+            if prior is None:
+                os.environ.pop("STRICT_IDENTITY_REQUIRED", None)
+            else:
+                os.environ["STRICT_IDENTITY_REQUIRED"] = prior
+
+
+class TestStrictModeMintPathClosure:
+    """#425 Paths B/C/D/E: source-level guards that each auto-mint path
+    checks the shared is_strict_identity_required() helper before minting.
+
+    Source-level rather than runtime because the runtime test surface (mocking
+    the full dispatch + PG + Redis stack for each path) is heavy and brittle,
+    and the regression risk we want to catch is "someone removes the gate" —
+    a substring assertion on the file catches that cleanly.
+
+    Each test names the path letter from the #425 council scan so the
+    failure message points at the source-of-truth issue.
+    """
+
+    @staticmethod
+    def _read(rel_path: str) -> str:
         from pathlib import Path
-        src_path = (Path(__file__).parent.parent
-                    / "src" / "mcp_handlers" / "middleware" / "identity_step.py")
-        source = src_path.read_text()
-        assert 'os.getenv("STRICT_IDENTITY_REQUIRED", "false")' in source, (
-            "Default value of STRICT_IDENTITY_REQUIRED must be 'false' in os.getenv. "
-            "Default-on would break callers across the fleet without staged rollout."
+        return (Path(__file__).parent.parent / rel_path).read_text()
+
+    def test_path_b_onboard_auto_onboard_no_session_gated(self):
+        # Path B: onboard()'s auto_onboard_no_session branch should refuse
+        # in strict mode if neither parent_agent_id nor force_new=True is
+        # passed. Caller must declare lineage intent.
+        source = self._read("src/mcp_handlers/identity/handlers.py")
+        idx = source.find("auto_onboard_no_session")
+        assert idx != -1
+        window = source[idx:idx + 3000]
+        assert "is_strict_identity_required" in window, (
+            "Path B (#425): the auto_onboard_no_session branch must check "
+            "is_strict_identity_required() before minting. Without this gate, "
+            "bare onboard() continues to violate the lineage-declaration ontology."
         )
+        assert "lineage_declaration_required" in window, (
+            "Path B's strict-mode refusal must use status='lineage_declaration_required' "
+            "to distinguish from the generic identity_required (the caller HAS an identity "
+            "intent, just hasn't declared lineage)."
+        )
+        assert "parent_agent_id" in window and "force_new" in window, (
+            "Path B's hint must mention both parent_agent_id and force_new so the caller "
+            "can pick the right resolution."
+        )
+
+    def test_path_c_process_agent_update_self_create_gated(self):
+        # Path C: process_agent_update self-create at the get_or_create_agent
+        # call should refuse in strict mode. There are multiple `if
+        # ctx.is_new_agent:` blocks in phases.py; we want the one in
+        # `prepare_unlocked_inputs` that calls get_or_create_agent (the
+        # self-create branch), not the onboarding-guidance branch in
+        # resolve_identity_and_guards.
+        source = self._read("src/mcp_handlers/updates/phases.py")
+        idx = source.find("get_or_create_agent")
+        assert idx != -1
+        # Pre-window: the gate must precede the get_or_create_agent call.
+        pre_window = source[max(0, idx - 2500):idx]
+        assert "is_strict_identity_required" in pre_window, (
+            "Path C (#425): process_agent_update's self-create branch must check "
+            "is_strict_identity_required() before calling get_or_create_agent."
+        )
+        assert "Path C" in pre_window, (
+            "Path C's strict block must reference '#425 Path C' in a comment so future "
+            "audits can map symptom back to issue."
+        )
+
+    def test_path_d_record_agent_state_recovery_gated(self):
+        # Path D: record_agent_state recovery should refuse in strict mode
+        # if the agent isn't in PG. Missing-row at this layer indicates an
+        # upstream orphan; fail loud.
+        source = self._read("src/mcp_handlers/updates/phases.py")
+        idx = source.find("Agent {agent_id} not found, creating")
+        assert idx != -1
+        # Pre-window: gate must come BEFORE the create_agent call.
+        pre_window = source[max(0, idx - 1500):idx + 500]
+        assert "is_strict_identity_required" in pre_window, (
+            "Path D (#425): record_agent_state's recovery branch must check "
+            "is_strict_identity_required() before calling create_agent."
+        )
+        assert "Path D" in pre_window, "Path D strict block must reference '#425 Path D'."
+
+    def test_path_e_stdio_heartbeat_gated(self):
+        # Path E: stdio heartbeat should skip metadata creation for unknown
+        # agent_id in strict mode (don't create metadata for unregistered).
+        source = self._read("src/mcp_server_std.py")
+        idx = source.find("def inject_lightweight_heartbeat")
+        assert idx != -1
+        window = source[idx:idx + 2500]
+        assert "is_strict_identity_required" in window, (
+            "Path E (#425): inject_lightweight_heartbeat must check "
+            "is_strict_identity_required() before calling get_or_create_metadata "
+            "for an unknown agent_id. This path runs OUTSIDE the middleware so "
+            "the dispatch allowlist doesn't reach it."
+        )
+        assert "Path E" in window, "Path E strict block must reference '#425 Path E'."

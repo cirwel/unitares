@@ -534,8 +534,8 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                 # a structured success-shape, not an MCP error: error
                 # responses invite retry-with-mint catch paths and would
                 # reintroduce the leak.
-                strict_mode = os.getenv("STRICT_IDENTITY_REQUIRED", "false").lower() in ("1", "true", "yes")
-                if strict_mode:
+                from src.mcp_handlers.identity_bootstrap import is_strict_identity_required
+                if is_strict_identity_required():
                     logger.info(
                         "[DISPATCH] session_resolve_miss for %s... "
                         "— STRICT_IDENTITY_REQUIRED=true; returning typed "
