@@ -35,9 +35,13 @@ async def test_neighbor_fetch_runs_concurrently():
 
     With a 50ms simulated per-call latency, sequential execution takes
     ≥1500ms. Concurrent execution finishes in ~50ms (one wave). We
-    assert <500ms — generous enough to absorb event-loop noise but tight
-    enough to fail if the gather() were ever reverted to a sequential
-    `for await` loop.
+    assert <1000ms — well under sequential 1500ms even on a slow CI
+    runner, while still failing if the gather() were ever reverted to a
+    sequential `for await` loop. The original 500ms threshold flaked on
+    contended GitHub runners (observed 543ms and 655ms in PR #435 reruns)
+    even though the gather() shape was unchanged; the source-level
+    assertion below pins the actual concurrency contract regardless of
+    wall-clock noise.
     """
     from src.mcp_handlers.knowledge import handlers
 
@@ -78,7 +82,7 @@ async def test_neighbor_fetch_runs_concurrently():
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
     assert len(pool) == 30
-    assert elapsed_ms < 500, \
+    assert elapsed_ms < 1000, \
         f"neighbor fetch took {elapsed_ms:.1f}ms — gather() not running concurrently?"
 
     # Source-level pin: the handler must use asyncio.gather, not a plain
