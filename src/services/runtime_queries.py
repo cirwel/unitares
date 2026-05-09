@@ -335,11 +335,19 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         })
         if public_agent_id != agent_id:
             lite_metrics["agent_uuid"] = agent_id
+        # Wrap mode / basin with glossary entries (#428). Bare values are
+        # opaque to a cold agent; the explain_* helpers attach `meaning`
+        # at point-of-use.
+        from src.governance_glossary import (
+            explain_basin,
+            explain_mode,
+            explain_verdict,
+        )
         if "state" in standardized_metrics:
-            lite_metrics["mode"] = standardized_metrics["state"].get("mode")
-            lite_metrics["basin"] = standardized_metrics["state"].get("basin")
+            lite_metrics["mode"] = explain_mode(standardized_metrics["state"].get("mode"))
+            lite_metrics["basin"] = explain_basin(standardized_metrics["state"].get("basin"))
         if is_uninitialized:
-            lite_metrics["verdict"] = "uninitialized"
+            lite_metrics["verdict"] = explain_verdict("uninitialized")
             lite_metrics["guidance"] = "Submit one check-in to activate governance."
             lite_metrics["next_action"] = {
                 "tool": "process_agent_update",
