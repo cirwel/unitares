@@ -247,36 +247,57 @@ This lets future processes inherit knowledge without inheriting a false personal
 
 ### Candidate provenance envelope
 
-**Status:** Candidate, not normative. This envelope captures a candidate core shape for distinguishing identity continuity, local episode, harness/runtime, transport/locus, affordance state, governance mode, and evidence provenance. R6 evaluates whether these fields resolve observed ambiguity in Discord/Hermes/Dispatch/Codex/Claude scenarios.
+**Status:** Mixed — see status legend below per field. The original framing presented this envelope as a single candidate shape; the 2026-05-08 envelope-coverage audit on R6 H1/H3 + S22 H5 keys partitions the fields into promoted / fork-discriminator / optional / candidate-deferred groups. The legend reflects that audit.
+
+**Status legend (2026-05-08, after Hermes-driven R6 H1/H3 dogfood):**
+
+- **promoted-core** — present at 7/7 across the keyed comparable rows on at least one of the two persistence stores; the S22 write context is the source of truth for these.
+- **fork-discriminator** — newly persisted to durable provenance on 2026-05-08 (this revision); response-shape promotion shipped in R6 v2/v2.1 but durable persistence was 0/7 until now.
+- **optional** — populated when meaningful, not required at every write.
+- **candidate** — held for targeted dogfood (gateway / Discord / cron / H7 / H8) before promotion is justified.
 
 This consolidates and extends the field sets sketched in § Identity responses, § Process updates, and § KG provenance. It is presented as a single shape so the dimensions can be reasoned about together; exact field names should align with existing API names before implementation.
 
 ```text
-agent_uuid            # registry anchor (UUID); called uuid/agent_uuid in existing responses
+# promoted-core (server-stamped or required at the structured comparable-task call site)
+schema                # s22.write_context.v1 — versioned envelope tag
+context_source        # process_agent_update / knowledge.store / ...
+harness_type          # hermes, claude-code, codex-cli, dispatch, goose, ...
+transport             # channel/protocol: cli, discord, mcp-stdio, mcp-http, cron, webhook
+model_provider        # anthropic / openai / local / ...
+model                 # specific model identifier
+tool_surface          # tool families available to the writer at the time of action
+comparison_key        # opt-in pair-data key (e.g. r6-h1-2026-05-08, s22-h5-...)
+task_label            # human-readable label for the comparable task
+task_outcome          # short outcome string for the comparable task
+governance_mode       # explicit / ambient / gated / lifecycle / posthoc
+
+# fork-discriminator (durable as of 2026-05-08; server-authoritative classification)
+episode_fork_kind     # none / sibling_locus / identity_lineage; what kind of fork this event represents
+identity_lineage_fork # boolean: true only when a distinct child UUID exists with parent_agent_id + spawn_reason
+
+# optional (populated when meaningful)
+memory_context        # memory/KG/transcript surfaces visible to the writer
+verification_source   # existing outcome vocabulary: agent_reported_tool_result / server_observation / external_signal; extension candidates include host_observation / hook_derived
+thread_id             # logical conversation/history thread, when available; not lineage ancestry
+session_resolution_source # direct UUID, continuity token, fingerprint fallback, middleware, etc.
+parent_agent_id       # declared ancestry, when applicable
+spawn_reason          # new_session / subagent / compaction / explicit / cron / dispatch_child / ...
+
+# candidate-deferred (held for H7/H8/Discord/gateway dogfood before promotion)
+agent_uuid            # registry anchor (UUID); already derivable from joined identity row
 label_at_write        # social/cosmetic label observed at write time; not identity proof
 identity_assurance    # tier/source for this write, when available
 client_session_id     # logical UNITARES/Hermes session binding
-session_resolution_source # direct UUID, continuity token, fingerprint fallback, middleware, etc.
-thread_id             # logical conversation/history thread, when available; not lineage ancestry
 episode_id            # local interaction span (e.g. Discord thread, CLI conversation, dispatch session)
-episode_fork_kind     # none / sibling_locus / continuation / compaction / identity_lineage; names what kind of fork this event represents
-identity_lineage_fork # boolean: true only when a distinct child UUID exists with parent_agent_id + spawn_reason
 invocation_id         # concrete run/command/subprocess invocation, when distinct from episode
 harness_id            # concrete body/runtime instance mediating action
-harness_type          # hermes, claude-code, codex-cli, dispatch, goose, ...
 process_instance_id   # opaque runtime/process-instance fingerprint; not raw PID or identity proof
-transport             # channel/protocol: cli, discord, mcp-stdio, mcp-http, cron, webhook
 locus                 # situated context: guild_id, channel_id, thread_id, tab_id, profile_name
 affordance_state      # event-time reach/access snapshot: permissions, capability set, transport health
-parent_agent_id       # declared ancestry, when applicable
-spawn_reason          # new_session / subagent / compaction / explicit / cron / dispatch_child / ...
-model_provider        # anthropic / openai / local / ...
-model                 # specific model identifier
-memory_context        # memory/KG/transcript surfaces visible to the writer
-tool_surface          # tool families available to the writer at the time of action
-governance_mode       # explicit / ambient / gated / lifecycle / posthoc
-verification_source   # existing outcome vocabulary: agent_reported_tool_result / server_observation / external_signal; extension candidates include host_observation / hook_derived
 ```
+
+Coverage diagnostic: `scripts/diagnostics/s22_candidate_envelope_coverage.py` reports per-field populated/total ratios across `core.agent_state.state_json.provenance_context` and `knowledge.discoveries.provenance.s22_context`, optionally filtered by `--comparison-key`. Use it before any future envelope-promotion decision rather than ad-hoc SQL.
 
 **Rationale for the new dimensions:**
 

@@ -46,8 +46,16 @@ def build_s22_write_context(
     meta: Optional[Any] = None,
     context_source: str,
     default_governance_mode: Optional[str] = None,
+    episode_fork_kind: Optional[str] = None,
+    identity_lineage_fork: Optional[bool] = None,
 ) -> dict[str, Any]:
-    """Build a compact S22 context from explicit args plus request contextvars."""
+    """Build a compact S22 context from explicit args plus request contextvars.
+
+    ``episode_fork_kind`` and ``identity_lineage_fork`` accept server-side R6
+    classification (see ``src.thread_identity.classify_episode_fork``). When
+    provided they override any client-supplied values in ``arguments`` —
+    fork-kind is a server-authoritative determination, not a client claim.
+    """
     context: dict[str, Any] = {}
 
     for target_key, aliases in _STRING_FIELDS.items():
@@ -64,9 +72,14 @@ def build_s22_write_context(
         if isinstance(value, Mapping):
             context[key] = dict(value)
 
-    identity_lineage_fork = arguments.get("identity_lineage_fork")
+    arg_lineage_fork = arguments.get("identity_lineage_fork")
+    if arg_lineage_fork is not None:
+        context["identity_lineage_fork"] = _coerce_bool(arg_lineage_fork)
+
+    if episode_fork_kind is not None:
+        context["episode_fork_kind"] = episode_fork_kind
     if identity_lineage_fork is not None:
-        context["identity_lineage_fork"] = _coerce_bool(identity_lineage_fork)
+        context["identity_lineage_fork"] = bool(identity_lineage_fork)
 
     _merge_meta_defaults(context, meta)
     _merge_request_context_defaults(context)

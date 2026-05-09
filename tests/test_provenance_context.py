@@ -80,3 +80,38 @@ def test_build_s22_write_context_empty_without_signals_or_explicit_fields():
     )
 
     assert context == {}
+
+
+def test_build_s22_write_context_persists_server_classified_fork_fields():
+    """R6 v2 fork discriminators must land in the durable provenance_context.
+
+    Plan-row R6/S22 follow-up: response-shape promotion shipped 2026-05-02/05
+    via thread_context, but the persisted S22 envelope had 0/7 coverage on
+    these fields per the 2026-05-08 envelope audit. Server-side classification
+    is authoritative; explicit kwargs override any client-supplied value.
+    """
+    context = build_s22_write_context(
+        {
+            "harness_type": "hermes",
+            "identity_lineage_fork": "false",  # client claim — server must override
+        },
+        context_source="process_agent_update",
+        episode_fork_kind="identity_lineage",
+        identity_lineage_fork=True,
+    )
+
+    assert context["episode_fork_kind"] == "identity_lineage"
+    assert context["identity_lineage_fork"] is True
+
+
+def test_build_s22_write_context_kwargs_optional_when_no_fork_classified():
+    """When the call site has no meta (e.g. early process_agent_update path with
+    no agent_metadata entry yet), classification is skipped and the kwargs are
+    omitted — the helper must not stamp ``None`` values into the envelope."""
+    context = build_s22_write_context(
+        {"harness_type": "hermes"},
+        context_source="process_agent_update",
+    )
+
+    assert "episode_fork_kind" not in context
+    assert "identity_lineage_fork" not in context
