@@ -297,7 +297,9 @@ class TestGetGovernanceMetrics:
             result = await handle_get_governance_metrics({"client_session_id": "agent-missing"})
 
             data = json.loads(result[0].text)
-            assert data["verdict"] == "unbound"
+            # #428: verdict is wrapped with meaning + next_action at the
+            # response surface. The bare value lives at .value.
+            assert data["verdict"]["value"] == "unbound"
             assert data["next_action"]["tool"] == "identity"
             mock_mcp_server.get_or_create_monitor.assert_not_called()
 
