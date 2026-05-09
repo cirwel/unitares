@@ -460,3 +460,59 @@ class TestS21BSpawnReasonPlumbing:
         assert db.upsert_agent.call_args.kwargs["spawn_reason"] == "dispatch_auto_mint"
         assert db.upsert_identity.call_args.kwargs["spawn_reason"] == "dispatch_auto_mint"
         assert in_memory["agent-s21b-force-new"]["spawn_reason"] == "dispatch_auto_mint"
+
+
+# ---------------------------------------------------------------------------
+# #425 — STRICT_IDENTITY_REQUIRED env flag for staged rollout of typed-refusal
+# ---------------------------------------------------------------------------
+
+class TestStrictIdentityRequiredFlag:
+    """When STRICT_IDENTITY_REQUIRED=true, the dispatch retry replaces the
+    auto-mint else branch with a typed-refusal response. Default is off so
+    rollout is staged: local → Lumen → dispatch → flip default. The refusal
+    is a structured success-shape (not an MCP error) so callers can't catch
+    it and retry into the auto-mint path."""
+
+    def test_strict_branch_present_in_source(self):
+        """Source-level guard: the typed-refusal block must coexist with
+        the auto-mint block, gated by os.getenv. If a future refactor drops
+        either branch, this test fails before the production behavior
+        regresses."""
+        from pathlib import Path
+        src_path = (Path(__file__).parent.parent
+                    / "src" / "mcp_handlers" / "middleware" / "identity_step.py")
+        source = src_path.read_text()
+
+        retry_idx = source.find("session_resolve_miss")
+        assert retry_idx != -1
+        retry_window = source[retry_idx:retry_idx + 3500]
+
+        assert 'os.getenv("STRICT_IDENTITY_REQUIRED"' in retry_window, (
+            "Strict-mode branch must be gated on STRICT_IDENTITY_REQUIRED env var "
+            "for staged rollout."
+        )
+        assert '"status": "identity_required"' in retry_window, (
+            "Typed-refusal must carry status='identity_required' so callers "
+            "can structurally distinguish it from a success or error."
+        )
+        assert '"hint":' in retry_window and 'onboard()' in retry_window, (
+            "Typed-refusal must hint at the next action (onboard call)."
+        )
+        # Auto-mint branch must still exist for non-strict mode (default).
+        assert 'spawn_reason="dispatch_auto_mint"' in retry_window, (
+            "Default-off path must still fall through to auto-mint; "
+            "removing this would break existing callers before rollout."
+        )
+
+    def test_default_is_false(self):
+        import os
+        # No env var set means default-off. Belt-and-suspenders against a
+        # future commit that flips the default before residents are migrated.
+        from pathlib import Path
+        src_path = (Path(__file__).parent.parent
+                    / "src" / "mcp_handlers" / "middleware" / "identity_step.py")
+        source = src_path.read_text()
+        assert 'os.getenv("STRICT_IDENTITY_REQUIRED", "false")' in source, (
+            "Default value of STRICT_IDENTITY_REQUIRED must be 'false' in os.getenv. "
+            "Default-on would break callers across the fleet without staged rollout."
+        )

@@ -1,6 +1,7 @@
 """Step 1: Resolve Session Identity."""
 
 import asyncio
+import os
 import time as _time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
@@ -526,6 +527,34 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                     name, session_key[:20],
                 )
             else:
+                # #425 contract: when STRICT_IDENTITY_REQUIRED is on, return
+                # a typed-refusal response instead of auto-minting an
+                # ephemeral identity. Default off for staged rollout —
+                # local → Lumen → dispatch → flip default. The refusal is
+                # a structured success-shape, not an MCP error: error
+                # responses invite retry-with-mint catch paths and would
+                # reintroduce the leak.
+                strict_mode = os.getenv("STRICT_IDENTITY_REQUIRED", "false").lower() in ("1", "true", "yes")
+                if strict_mode:
+                    logger.info(
+                        "[DISPATCH] session_resolve_miss for %s... "
+                        "— STRICT_IDENTITY_REQUIRED=true; returning typed "
+                        "refusal (no auto-mint).",
+                        session_key[:20],
+                    )
+                    from src.mcp_handlers.response_base import success_response
+                    return success_response({
+                        "status": "identity_required",
+                        "tool": name,
+                        "tool_class": "required",
+                        "hint": (
+                            "Call onboard() first to mint a governance identity. "
+                            "If continuing prior work, pass parent_agent_id to "
+                            "declare lineage; otherwise pass force_new=true."
+                        ),
+                        "ontology_ref": "docs/ontology/identity.md",
+                        "rollout_flag": "STRICT_IDENTITY_REQUIRED",
+                    })
                 logger.info(
                     "[DISPATCH] session_resolve_miss for %s... — minting "
                     "ephemeral dispatch identity (S21-a, spawn_reason="

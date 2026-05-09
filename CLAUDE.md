@@ -122,6 +122,19 @@ When you write a new MCP handler that needs DB access, pick one of the three pat
 
 - Knowledge graph AGE tests require a live AGE connection (errors, not failures, when unavailable)
 
+## STRICT_IDENTITY_REQUIRED (#425 staged rollout)
+
+`STRICT_IDENTITY_REQUIRED=true` flips the dispatch middleware from auto-minting an ephemeral identity for non-`pre_onboard` tools to returning a typed-refusal response (`status: identity_required`). Default is `false` so existing callers (residents, dispatch workers, plugins doing bare `onboard()`) keep working. Per-tool identity requirements are declared via `requires_identity=` on the `@mcp_tool` decorator (see `src/mcp_handlers/decorators.py`).
+
+Rollout sequence:
+
+1. Local dev (your shell) → set the flag, run a session through, watch for typed refusals where you expected work.
+2. Lumen (Pi) → flag the Pi env, observe resident agents (vigil/sentinel/watcher/chronicler) for refusals at scheduled boundaries; fix offenders by adding `parent_agent_id` to their bootstrap.
+3. Dispatch (the Discord bridge / dispatch worker) → flag, observe per-thread agent spawns.
+4. Flip the default in code only after all three burn-ins are clean for ≥1 week.
+
+When investigating a typed-refusal, the response carries `tool`, `hint`, `ontology_ref`, and `rollout_flag` so the cause is structurally identifiable.
+
 ## Minimal Agent Workflow
 
 Per identity.md v2 ontology, fresh process-instances mint fresh identity. Lineage is declared, not resumed via token.
