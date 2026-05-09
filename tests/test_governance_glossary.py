@@ -159,3 +159,40 @@ class TestAnnotateDriftComponents:
         result = annotate_drift_components(drift)
         assert result["norm"] == {"value": 0.42}
         assert result["norm_squared"] == {"value": 0.176}
+
+
+class TestGlossaryAppliedToMonitorResult:
+    """Source-level guards that monitor_result.py uses the glossary helpers
+    to wrap ethical_drift and behavioral.assessment.verdict. Regression
+    catch if a future refactor removes the wrapping and bare values leak
+    back into agent-facing payloads.
+    """
+
+    @staticmethod
+    def _read(rel_path: str) -> str:
+        from pathlib import Path
+        return (Path(__file__).parent.parent / rel_path).read_text()
+
+    def test_ethical_drift_wrapped_via_helper(self):
+        source = self._read("src/monitor_result.py")
+        # The build_result block constructing ethical_drift must call
+        # annotate_drift_components — bare per-component float values
+        # would lose the meaning/range/ideal context.
+        idx = source.find("'ethical_drift'")
+        assert idx != -1
+        window = source[max(0, idx - 200):idx + 600]
+        assert "annotate_drift_components" in window, (
+            "monitor_result.py must wrap ethical_drift via annotate_drift_components(). "
+            "Bare per-component float values surface to agents without explanation."
+        )
+
+    def test_behavioral_verdict_wrapped_via_helper(self):
+        source = self._read("src/monitor_result.py")
+        idx = source.find("'verdict': ")
+        assert idx != -1
+        window = source[max(0, idx - 200):idx + 200]
+        assert "explain_verdict" in window, (
+            "monitor_result.py must wrap behavioral_assessment.verdict via "
+            "explain_verdict() so the agent gets meaning + next_action with "
+            "the verdict label."
+        )
