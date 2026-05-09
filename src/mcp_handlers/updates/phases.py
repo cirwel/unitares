@@ -13,6 +13,7 @@ import asyncio
 import os
 import re
 import secrets
+import time
 from datetime import datetime
 from typing import Any, Optional, Sequence
 
@@ -20,6 +21,7 @@ from mcp.types import TextContent
 
 from src.logging_utils import get_logger
 from src import agent_storage
+from src.perf_monitor import record_ms as _perf_record_ms
 
 from .context import UpdateContext
 from ..utils import error_response
@@ -975,9 +977,15 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
     except Exception as e:
         logger.debug(f"Anomaly detection skipped for {ctx.agent_id}: {e}")
 
-    # Execute ODE update
+    # Execute ODE update — timed for Wave 3 RFC §0 disconfirmer (A′.1).
+    # See docs/proposals/beam-wave-3-handler-dispatch.md §B1.2 — A′.1 measures
+    # whether >60% of process_agent_update p99 floor lives in this call.
+    # The surrounding [checkin_phases] log line in update_workflow_service.py
+    # already captures locked_update_total + total_ms; this wrap captures the
+    # ODE-only time so A′.1 = ode_call_ms / total_ms is computable.
     ctx.agent_state["task_type"] = ctx.task_type
 
+    _ode_start = time.perf_counter()
     try:
         ctx.result = await mcp_server.process_update_authenticated_async(
             agent_id=ctx.agent_id,
@@ -994,6 +1002,8 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
     except Exception as e:
         logger.error(f"Unexpected error in process_update_authenticated_async: {e}", exc_info=True)
         raise Exception(f"Error processing update: {str(e)}") from e
+    finally:
+        _perf_record_ms("phases.ode_call_ms", (time.perf_counter() - _ode_start) * 1000)
 
     # Cache monitor reference for Phase 5 and Phase 6 (guaranteed to exist post-ODE)
     ctx.monitor = mcp_server.monitors.get(ctx.agent_id)

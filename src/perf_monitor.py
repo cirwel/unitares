@@ -5,7 +5,7 @@ Design goals:
 - Zero external deps
 - Very low overhead
 - Safe for multi-threaded access
-- Snapshot returns compact summary (count/avg/p95/max)
+- Snapshot returns compact summary (count/avg/p50/p95/p99/max/last)
 """
 
 from __future__ import annotations
@@ -22,12 +22,13 @@ class PerfStats:
     avg_ms: float
     p50_ms: float
     p95_ms: float
+    p99_ms: float
     max_ms: float
     last_ms: float
 
 
 class PerfMonitor:
-    def __init__(self, max_samples_per_op: int = 200):
+    def __init__(self, max_samples_per_op: int = 1000):
         self._lock = threading.Lock()
         self._samples: Dict[str, Deque[float]] = defaultdict(lambda: deque(maxlen=max_samples_per_op))
 
@@ -73,6 +74,7 @@ class PerfMonitor:
                 avg_ms=avg,
                 p50_ms=pct(50),
                 p95_ms=pct(95),
+                p99_ms=pct(99),
                 max_ms=s_sorted[-1],
                 last_ms=s[-1],
             )
@@ -81,6 +83,7 @@ class PerfMonitor:
                 "avg_ms": round(stats.avg_ms, 3),
                 "p50_ms": round(stats.p50_ms, 3),
                 "p95_ms": round(stats.p95_ms, 3),
+                "p99_ms": round(stats.p99_ms, 3),
                 "max_ms": round(stats.max_ms, 3),
                 "last_ms": round(stats.last_ms, 3),
                 "sample_window": len(s_sorted),

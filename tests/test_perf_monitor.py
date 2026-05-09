@@ -21,16 +21,17 @@ from src.perf_monitor import PerfStats, PerfMonitor, record_ms, snapshot
 class TestPerfStats:
 
     def test_creation(self):
-        s = PerfStats(count=10, avg_ms=5.0, p50_ms=4.5, p95_ms=9.0, max_ms=10.0, last_ms=6.0)
+        s = PerfStats(count=10, avg_ms=5.0, p50_ms=4.5, p95_ms=9.0, p99_ms=9.8, max_ms=10.0, last_ms=6.0)
         assert s.count == 10
         assert s.avg_ms == 5.0
         assert s.p50_ms == 4.5
         assert s.p95_ms == 9.0
+        assert s.p99_ms == 9.8
         assert s.max_ms == 10.0
         assert s.last_ms == 6.0
 
     def test_frozen(self):
-        s = PerfStats(count=1, avg_ms=1.0, p50_ms=1.0, p95_ms=1.0, max_ms=1.0, last_ms=1.0)
+        s = PerfStats(count=1, avg_ms=1.0, p50_ms=1.0, p95_ms=1.0, p99_ms=1.0, max_ms=1.0, last_ms=1.0)
         with pytest.raises(AttributeError):
             s.count = 2
 
@@ -101,6 +102,7 @@ class TestPerfMonitorSnapshot:
         assert "avg_ms" in entry
         assert "p50_ms" in entry
         assert "p95_ms" in entry
+        assert "p99_ms" in entry
         assert "max_ms" in entry
         assert "last_ms" in entry
         assert "sample_window" in entry
@@ -122,6 +124,7 @@ class TestPerfMonitorSnapshot:
         assert snap["op"]["avg_ms"] == 7.5
         assert snap["op"]["p50_ms"] == 7.5
         assert snap["op"]["p95_ms"] == 7.5
+        assert snap["op"]["p99_ms"] == 7.5
         assert snap["op"]["max_ms"] == 7.5
 
     def test_snapshot_multiple_ops(self):

@@ -758,6 +758,7 @@ class TestPerfMonitor:
             avg_ms=10.5,
             p50_ms=9.0,
             p95_ms=20.0,
+            p99_ms=24.0,
             max_ms=50.0,
             last_ms=12.0
         )
@@ -766,6 +767,7 @@ class TestPerfMonitor:
         assert stats.avg_ms == 10.5
         assert stats.p50_ms == 9.0
         assert stats.p95_ms == 20.0
+        assert stats.p99_ms == 24.0
         assert stats.max_ms == 50.0
         assert stats.last_ms == 12.0
 
