@@ -41,6 +41,11 @@ RUNTIME_PATTERNS=(
     '^src/mcp_server'
     '^src/core\.py$'
     '^src/background_tasks\.py$'
+    # BEAM substrate (Sentinel, lease plane, future apps under elixir/) is
+    # runtime: every change wants a CI-gated PR, not direct push. Without
+    # this, a fix to elixir/sentinel/ falls through to "other" and ships
+    # without a rollback artifact (see PR #446 — opened manually).
+    '^elixir/'
 )
 
 classify() {
