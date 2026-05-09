@@ -12,16 +12,48 @@ from typing import Dict, Any, Optional, Tuple, List
 from mcp.types import TextContent
 from .utils import error_response
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
+from src.logging_utils import get_logger
+
+logger = get_logger(__name__)
 PARAM_ALIASES: Dict[str, Dict[str, str]] = {'store_knowledge_graph': {'discovery': 'summary', 'insight': 'summary', 'finding': 'summary', 'content': 'details', 'text': 'summary', 'message': 'summary', 'note': 'summary', 'learning': 'summary', 'observation': 'summary', 'type': 'discovery_type', 'kind': 'discovery_type', 'category': 'discovery_type'}, 'leave_note': {'discovery': 'summary', 'insight': 'summary', 'finding': 'summary', 'text': 'summary', 'note': 'summary', 'content': 'summary', 'message': 'summary', 'learning': 'summary'}, 'search_knowledge_graph': {'search': 'query', 'term': 'query', 'text': 'query', 'find': 'query'}, 'process_agent_update': {'text': 'response_text', 'message': 'response_text', 'update': 'response_text', 'content': 'response_text', 'work': 'response_text', 'summary': 'response_text'}, 'identity': {'label': 'name', 'display_name': 'name', 'nickname': 'name'}, 'agent': {'op': 'action'}}
 
 def apply_param_aliases(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-    """Apply parameter aliases - convert intuitive names to canonical ones."""
+    """Apply parameter aliases - convert intuitive names to canonical ones.
+
+    Collision policy: when both an alias and its canonical key are present,
+    the canonical value wins and the alias is dropped (warning logged if the
+    values differ). The previous one-pass implementation let dict-iteration
+    order decide, which silently clobbered an explicit canonical value —
+    e.g. leave_note(summary=..., content=...) overwrote summary with content
+    because content aliases to summary.
+    """
     aliases = PARAM_ALIASES.get(tool_name)
     if not aliases:
         return arguments
-    result = {}
+    result: Dict[str, Any] = {}
+    # Pass 1: copy non-aliased keys verbatim. Canonical values supplied
+    # directly land here untouched regardless of dict iteration order.
     for key, value in arguments.items():
-        canonical = aliases.get(key, key)
+        if key not in aliases:
+            result[key] = value
+    # Pass 2: apply aliases only where the canonical slot is unfilled.
+    for key, value in arguments.items():
+        if key not in aliases:
+            continue
+        canonical = aliases[key]
+        if canonical in result:
+            if result[canonical] != value:
+                # canonical is sourced from the static PARAM_ALIASES values
+                # (no taint from arguments). The aliased key itself is not
+                # logged — caller-supplied keys could in principle contain
+                # sensitive identifiers, and CodeQL's clear-text-logging
+                # rule (correctly) treats arguments.items() as tainted.
+                logger.warning(
+                    "apply_param_aliases(%r): an alias collided with canonical %r; "
+                    "keeping canonical, dropping alias value",
+                    tool_name, canonical,
+                )
+            continue
         result[canonical] = value
     return result
 # Legacy generic validators removed (Pydantic schemas now handle types, enums, and bounds)
