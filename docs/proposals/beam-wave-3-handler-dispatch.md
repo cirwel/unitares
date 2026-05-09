@@ -9,6 +9,215 @@
 
 ---
 
+## V0.1.2 AMENDMENT 2026-05-08 — second council fold (post-v0.1.1)
+
+**Read with v0.1.1 below.** Second council pass (architect / reviewer / live-verifier in parallel) was run on v0.1.1 per operator-decision (α). Findings: architect 3 BLOCK / 14 CONCERN / NIT; reviewer 2 BLOCK / 5 CONCERN / 1 NIT; verifier 18 VERIFIED / 3 DRIFT / 3 negative-claim VERIFIED. Council unanimous verdict: v0.1.2 amendment (narrow), not v0.2 redraft. Architect explicit: "if v0.1.2 produces another structural delta, v0.2 redraft becomes mandatory."
+
+**Bias-persistence acknowledgment.** v0.1.1's bias acknowledgment was earnest for the named cases but architect's lane 1 found three fresh bias signatures in v0.1.1 itself — B6 (cache-invalidation defense recreates substrate tax), B8(iii) (lunge-at-first-association on single-process), §8 criterion 6 (sunk-cost protection in new shape). Verifier added a fourth: C2's "anchored to lease-plane Phase A measured baseline" was claimed-anchored to a baseline that doesn't exist (zero rows in `audit.coordination_events` across all partitions). The pattern is not "this author won't migrate"; it's "this author defends conservative-substrate posture in surface-specific ways, and migrates the defense across folds." Operator should weight v0.1.2's structural completeness against this pattern; if v0.1.2 surfaces a fifth bias signature on third council pass, v0.2-redraft-from-scratch is the discipline to break the cycle.
+
+**Where v0.1.2 conflicts with v0.1.1 below, v0.1.2 governs.**
+
+### B1.2 (architect Lane-1 B1 + Lane-2 (G)) — Anchor "before implementation starts" to git-event; anchor (B1) 60% threshold
+
+v0.1.1 §B1's "before implementation starts" was escape-hatchable. (G) and B1's 60% threshold lacked anchors.
+
+**Binding spec:**
+- **B1 git-event anchor:** ODE profile commit must land on master before any commit on `wave-3-rfc-draft` (or successor branch) introduces a file under `elixir/handler_dispatch/` or any new `elixir/` tree. CI lint check enforces (script: `scripts/dev/check-wave3-ode-prereq.sh`).
+- **B1 60% threshold anchor:** chosen as the threshold at which "more than half the floor is in `governance_core/` math, so porting the layer above the math cannot reduce the floor." Defensible vs higher (50% would be ambiguous between port-helps and port-doesn't) or lower (75% would fail to halt cases where the math is still the dominant cost). Council should challenge this anchor sentence; current text is the author's judgment, not a measurement.
+- **(G) thresholds re-anchored to historical variance:** resolution-rate regression triggers if mean over the 14-day canary window falls more than 1σ below the trailing-30-day mean (computed from `core.dialectic_sessions` rows pre-Wave-3-implementation). Reviewer-reassignment rate triggers at >2σ above trailing-30-day mean. Both baselines (mean + σ) pinned in §"Exit criteria" prior to implementation start; the pinning commit is itself a Wave 3 prereq.
+
+### B2.2 (architect B2 + reviewer CONCERN-5) — Saga gains PG-persistent state and per-step idempotency
+
+v0.1.1's saga was 2PC-shaped but lacked durability under PG-commit failure (architect: phantom reads + observers) AND under GenServer crash-restart (reviewer: agents in RESOLVED-state-not-PG-committed).
+
+**Binding spec:** Wave 3 introduces a new PG table `coordination.session_resolution_sagas`:
+
+```sql
+CREATE TABLE coordination.session_resolution_sagas (
+    saga_id UUID PRIMARY KEY,
+    session_id UUID NOT NULL REFERENCES core.dialectic_sessions(session_id),
+    status TEXT NOT NULL CHECK (status IN ('reserved', 'applied', 'committed', 'reverted')),
+    paused_agent_id UUID NOT NULL,
+    reviewer_agent_id UUID NOT NULL,
+    resolution_payload_json JSONB NOT NULL,
+    resolution_payload_hash TEXT NOT NULL,  -- for idempotency
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (session_id, resolution_payload_hash)
+);
+```
+
+Saga sequence:
+1. Session GenServer INSERTs saga row with `status='reserved'`, then issues `GenServer.call(:reserve_for_session_resolution, {session_id, saga_id})` to both agent GenServers. Idempotent: agent GenServer keys on `(session_id, saga_id)`; re-call with same key returns ACK if already reserved.
+2. Both agents ACK reservation → session GenServer UPDATEs saga to `status='applied'` AND issues `GenServer.call(:apply_resolution, {session_id, saga_id, payload, hash})` to both. Idempotent on `(session_id, hash)`; re-call returns ACK if already applied.
+3. Both agents ACK apply → session GenServer commits `pg_resolve_session` AND UPDATEs saga to `status='committed'` in a single PG transaction.
+
+Crash-restart recovery: session GenServer init reads any pending saga rows for its session_id. If status='applied' and PG commit not done → re-issue step 3 (idempotent at PG layer via `ON CONFLICT (session_id) DO NOTHING` on resolution INSERT). If status='reserved' and either agent doesn't have the saga active → UPDATE saga to `status='reverted'`, issue compensating `GenServer.call(:revert_reservation, {session_id, saga_id})` to both agents (idempotent: revert-of-non-existent-reservation is a no-op ACK).
+
+Phantom-read mitigation (architect Lane-1 B2 issue 1): observers reading agent state via `audit.coordination_events` consumers OR `load_session_as_dict` MUST treat agent state as "in-flight" if a non-committed saga exists for the agent's active session. The query for "is this agent's state stable for downstream consumption" becomes:
+
+```sql
+SELECT NOT EXISTS (
+    SELECT 1 FROM coordination.session_resolution_sagas
+    WHERE (paused_agent_id = $1 OR reviewer_agent_id = $1)
+      AND status IN ('reserved', 'applied')
+) AS is_stable;
+```
+
+Observers that don't accept stale-with-rollback semantics call this gate; observers that do (dashboard read paths) may proceed and re-read on the next polling cycle.
+
+### B3.2 (architect B3 + reviewer BLOCK-1) — Comparator query specified; event_type co-lands
+
+v0.1.1's B3 comparator was unspecified; the new event_type wasn't registered in `WAVE_0_EVENT_TYPES`.
+
+**Binding spec:**
+- **B3 prereq PR (single PR, co-lands ALL of):**
+  - `db/postgres/migrations/0NN_identities_shadow.sql` — DDL for `core.identities_shadow` (schema = `core.identities` + `shadow_write_at TIMESTAMPTZ`).
+  - `src/coordination_events.py` — adds constant `COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_SHADOW_DIVERGENCE = "coordination_failure.beam_python_boundary.shadow_divergence"` and adds it to `WAVE_0_EVENT_TYPES`.
+  - `tests/test_coordination_events.py::test_event_type_constants_match_documented_set` — updated expected set.
+  - `scripts/ops/wave-3-shadow-divergence-check.sql` — comparator query (below).
+  - `scripts/ops/com.unitares.wave3-shadow-divergence-check.plist` — launchctl hourly trigger.
+- **Comparator query (binding):**
+
+  ```sql
+  -- core.identities_shadow row count check
+  SELECT
+      i.agent_uuid,
+      i.api_key IS DISTINCT FROM s.api_key AS api_key_diff,
+      i.label IS DISTINCT FROM s.label AS label_diff,
+      i.public_agent_id IS DISTINCT FROM s.public_agent_id AS public_id_diff,
+      i.status IS DISTINCT FROM s.status AS status_diff,
+      i.parent_agent_id IS DISTINCT FROM s.parent_agent_id AS lineage_diff,
+      i.provisional_lineage IS DISTINCT FROM s.provisional_lineage AS provisional_diff,
+      i.confirmed_at IS DISTINCT FROM s.confirmed_at AS confirmed_diff
+  FROM core.identities i
+  JOIN core.identities_shadow s USING (agent_uuid)
+  WHERE i.api_key IS DISTINCT FROM s.api_key
+     OR i.label IS DISTINCT FROM s.label
+     OR i.public_agent_id IS DISTINCT FROM s.public_agent_id
+     OR i.status IS DISTINCT FROM s.status
+     OR i.parent_agent_id IS DISTINCT FROM s.parent_agent_id
+     OR i.provisional_lineage IS DISTINCT FROM s.provisional_lineage
+     OR i.confirmed_at IS DISTINCT FROM s.confirmed_at;
+  ```
+
+  `IS DISTINCT FROM` handles NULL semantics correctly. `shadow_write_at` is intentionally excluded. Each non-empty row emits one `shadow_divergence` event with payload `{agent_uuid, divergent_columns: [list]}`.
+
+- **Load-amplification step before 7-day clock starts** (architect Lane-1 B3 final paragraph): shadow window includes ≥1 cycle of replay against captured production traffic at 2× rate (synthetic load via `scripts/ops/wave3-shadow-replay.sh`). The 7-day-zero-divergence clock starts AFTER replay completes with zero events.
+
+### B5.2 (reviewer CONCERN-3) — Lease-plane Phase B is operator criteria-eval, not a PR
+
+v0.1.1 §B5 said "Phase B amendment ships as separate PR." Reviewer: `surface-lease-plane-v0.md` §6.1 already specifies Phase B promotion criteria for any surface_kind, §6.2 specifies the promotion mechanism as "single config flag flip; no code change."
+
+**Binding spec:** B5 is reduced to: operator evaluates `resident:/` against §6.1 criteria. If satisfied → flip the flag (no PR, no RFC amendment). If unsatisfied (e.g., <14 days advisory telemetry on residents at evaluation time) → the unmet criterion becomes the timer, not a Wave 3 RFC blocker. This reduces the named prereq PR count from 6 to 5 (verifier-confirmed).
+
+### B6.2 (architect B6 + reviewer BLOCK-2) — Cache invalidation via Redis pub-sub
+
+v0.1.1 §B6 endorsed two independent caches with no invalidation. Reviewer traced the actual Python write path at `phases.py:1314-1325`; architect read this as the substrate-tax pattern recreated.
+
+**Binding spec:**
+- Python `phases.py` baseline write path (find write site near 1314-1325 in current master; line numbers will drift) gains a fire-and-forget call to `_publish_baseline_invalidation(agent_id)` after `db.save_agent_baseline(...)`. Helper publishes to Redis channel `governance:baseline:invalidate` with payload `{agent_id, written_at, source: "python"}`.
+- BEAM session GenServer init subscribes to `governance:baseline:invalidate`. On message receive: invalidate the in-state cached baseline for the named agent_id. Next observation triggers PG re-fetch (per B6's per-first-observation pattern, re-applied post-invalidate).
+- Redis pub-sub down: BEAM falls back to per-update PG re-fetch (substrate-tax shape acknowledged in this fallback path; the fallback is bounded by Redis-down event duration, not steady-state).
+- Python's `_baseline_cache` continues with its existing LRU eviction; both caches now converge on PG via the invalidation channel.
+
+This explicitly rejects v0.1.1's "two independent caches accepted" posture and chooses cache-coherence-via-pub-sub. Acknowledged trade-off: every baseline write adds a Redis publish (cheap, fire-and-forget); BEAM gains a Redis subscription (one per BEAM application, not per GenServer).
+
+### B7.2 (architect B7 + reviewer CONCERN-1) — Redis feature-flag with cache + pub-sub invalidation; Elixir-side timeout fallback
+
+v0.1.1 §B7 had Python `asyncio.wait_for` contamination in BEAM spec; per-request Redis read regression; no Redis-down posture.
+
+**Binding spec:**
+- Both BEAM and Python read flag value at startup, cache locally per-process. Subscribe to Redis channel `governance:feature_flag:invalidate` for invalidation messages (payload: `{key, new_value, written_at}`).
+- Python: subscription via existing Redis client; invalidation handler updates in-process cached value.
+- BEAM: subscription via Redix Pub-Sub with `Process.send/3` to the GenServer holding the cached value. BEAM's timeout posture: `GenServer.call(flag_server, :get_strict_mode, 100)` with try/catch; on `:exit, :timeout` fall back to last-known-good cached value.
+- Redis-down: both runtimes use last-known-good cached value (from prior Redis read or env-var bootstrap default). Health check at `/health/deep` adds a `redis_pubsub_lag` row; lag >60s emits a `coordination_failure.redis_pubsub_lag` event (this event_type also lands in the B3 prereq PR's WAVE_0_EVENT_TYPES update).
+- Bootstrap: env var as default before first Redis read succeeds. Once Redis reachable, env var becomes init-only (per v0.1.1).
+
+### B8.2 (architect Lane-1 B8 + reviewer CONCERN-5 + reviewer CONCERN-2) — Flip recommendation to (ii); JSON snapshot single-writer
+
+v0.1.1 §B8 recommended (iii) GenServer-process-registry on the assumption of permanent single-BEAM-node. Architect: parent roadmap line 554 names MCP transport as a Post-Wave-3 candidate "if MCP SDK gate closes" — multi-node BEAM is a real possibility within Wave 3's lifetime; (iii) requires a coordinated re-port if multi-node ships. Reviewer: (iii) lacks idempotency under crash-restart. Reviewer CONCERN-2: JSON snapshot write race.
+
+**Binding spec:**
+- **Recommendation flipped to (ii) SELECT FOR UPDATE** on `core.dialectic_sessions` row at the start of any phase-mutating message handler. Releases on transaction commit. Safer default: doesn't break under multi-node BEAM. (iii) becomes the optimization, taken later if profiling shows row-level lock contends.
+- Verify (ii) safety against the `updated_at` trigger at `db/postgres/schema.sql:157` (architect noted FOR UPDATE + trigger + concurrent reads can deadlock under PG MVCC; council should confirm trigger doesn't acquire its own conflicting locks before B8.2 (ii) is final).
+- **JSON snapshot single-writer:** during shadow window, BEAM does NOT write `data/dialectic_sessions/<session_id>.json`. Python continues. Post-flip: BEAM writes, Python stops. The shadow-window flag is a boot-time config on BEAM (`UNITARES_DIALECTIC_BEAM_WRITES_JSON=0` during shadow, default `1` post-flip). No `-beam.json` suffix; no merge step; single writer always. Operator tooling reading the file path is undisturbed.
+- B8 saga idempotency under crash-restart: covered by B2.2's PG saga state (above). (iii) recommendation drop makes the crash-restart concern moot — SELECT FOR UPDATE releases on transaction abort, no in-flight state survives across the restart boundary.
+
+### C2.2 (verifier DRIFT #3) — Disconfirmer (B) anchor explicitly TBD; Wave 0 step 5 prereq added
+
+v0.1.1 §C2 anchored disconfirmer (B) thresholds to "lease-plane Phase A measured p50/p99." Verifier: `audit.coordination_events` has zero rows across all partitions; lease-plane has never written to it. The anchor was performative.
+
+**Binding spec:**
+- v0.1.2 explicitly acknowledges: lease-plane Phase A latency baseline does not exist as of 2026-05-08. v0.1.1's claim of anchoring was the third bias signature in this RFC.
+- **New Wave 0 step 5 prereq PR:** lease-plane Phase A latency instrumentation. Adds `coordination_failure.beam_python_boundary.lease_plane_request` event_type (informational, not failure) emitted by Python lease-plane client on every request to `127.0.0.1:8788`, with payload `{endpoint, method, status_code, elapsed_ms}`. Runs for ≥14 days before disconfirmer (B) thresholds can be set.
+- Disconfirmer (B) text amended: "p50 < lease-plane Phase A measured p50 × 2 over 14-day window AND p99 < lease-plane Phase A measured p99 × 3 over 14-day window. **Phase A baseline computed from `audit.coordination_events` rows produced by Wave 0 step 5 instrumentation; if step 5 has not produced ≥14 days of data at Wave 3 implementation start, Wave 3 halts on missing measurement.**"
+- Note: this adds the 6th prereq PR back (the 5th if you count B5.2 reduction), bringing total to 6 prereq PRs. Operator runway implication captured by disconfirmer (F).
+
+### C7.2 (architect Lane-3 §C7) — Reconcile prose vs diagram
+
+v0.1.1 §C7 prose said "structurally 2 boundary crossings per process_agent_update call" but diagram shows 4.
+
+**Binding spec:** §C7 prose corrected — "Per call: up to 4 boundary crossings worst-case (dialectic-touching + governance_core math), 2 best-case (no dialectic + no governance_core math). Disconfirmer (B) budget at 4× per-crossing cost is correctly worst-case-anchored." The diagram is correct; the prose count was wrong.
+
+### C13.2 (reviewer CONCERN-4) — Timestamp masking spec
+
+v0.1.1 §C13 had no masking for non-deterministic fields. 100% parity gate would fail on every timestamp.
+
+**Binding spec:** golden-capture fixture-comparison test masks any JSON key matching the regex `(.*_at|.*_time.*|.*_ms|server_time|processing_time_ms|elapsed_ms|server_time|created)`. Masking applies before equivalence comparison; masked fields are excluded from byte-identity check. Capture script (`scripts/dev/wave3-capture-goldens.sh` — also new in C13 prereq PR) applies the same masking when saving goldens. Specific known fields documented inline so future field additions to handler responses are caught at capture-time; if a handler adds a new non-deterministic field that doesn't match the regex, the golden capture script fails noisily (lint-style assertion).
+
+### C-F.2 (architect Lane-2 (F)) — "Sacrificed" defined
+
+v0.1.1 (F) had honor-system gate; "sacrificed" undefined.
+
+**Binding spec:** "Sacrificed" defined as: calendar-week slip on any of {paper deadline, fellowship application, HLH, R2 Phase 2 gate} exceeds 25% of the original deadline window OR the operator's written go-decision document explicitly notes the slip and accepts it. Artifact: `docs/proposals/wave-3-go-decision-2026-MM-DD.md` written by operator at gate; document includes a §"Calendar reasoning" section enumerating each of the four named items with current slip vs original target. Without the document, gate (F) is unsatisfied.
+
+### CA-prime.2 (architect Lane-2 (A′)) — Partial-fix joint behavior worked example
+
+v0.1.1 (A′) collapsed (A)+(C) but didn't work through partial-fix cases.
+
+**Binding spec:** Worked example added as §0 footnote: "Example: PR #3 lands during Wave 3 implementation window, brings p99 to 3.0s (between current ~5.0s and threshold 2.0s). ODE share rises from ~50% to ~65% because the non-ODE part shrank. (A′.1) — ODE share above 60% — fires; (A′.2) — p99 below 2.0s — does not fire. **(A′.1) firing alone halts Wave 3 implementation;** the rising ODE share specifically indicates the remaining floor is not in the layer Wave 3 ports. Operator may override with written analysis but the default is halt." This establishes (A′.1) as the dominant gate when ODE share rises, regardless of (A′.2).
+
+### §8.2 — Criterion 6 escape hatch removed
+
+v0.1.1 §8 criterion 6 said "operator decides whether Wave 3 still closes or whether the next port should be reconsidered" post-shipment.
+
+**Binding spec:** Criterion 6 rewritten — "**(A′.2 / in-place-fix gate)** if any Python in-place fix shipped during implementation window brings `process_agent_update` p99 below 2.0s before Wave 3 implementation reaches canary-100%, Wave 3 halts. The 'operator decides post-shipment' framing is removed; the gate fires pre-canary-100%, not post-shipment." Sunk-cost protection eliminated.
+
+### Master HEAD update + housekeeping
+
+- Verifier DRIFT #2: master moved during this session from `b34dd7ad` to `c575f30c`. The collision check earlier in session noted `a15aadc5` between (master continued advancing while council ran). RFC's stated base hash is informational only; no rebase required for a docs-only branch.
+- Verifier DRIFT #1: branch age string in v0.1.1 §B8 ("17h old") is now ~24-27h. Annotated as point-in-time.
+- B8 v0.3.2 retirement: parent roadmap will gain a one-line index entry "Wave-N RFC authors: enumerate session-keyed coordination surfaces explicitly per Wave 3 §B8 pattern" — preserves the cross-RFC visibility v0.3.2 provided. Lands in a separate small commit on `wave-3-rfc-draft` immediately following this fold.
+
+### Updated prereq PR count
+
+| # | PR | Source | Status |
+|---|-----|--------|--------|
+| 1 | `core.identities_shadow` migration + `shadow_divergence` event_type + `WAVE_0_EVENT_TYPES` update + comparator query + launchctl trigger | B3.2 | named |
+| 2 | Redis feature-flag reader (BEAM + Python) + pub-sub invalidation | B7.2 | named |
+| 3 | `governance_core/coordination_events_helpers.py::make_boundary_payload` + Elixir-side equivalent | C8 (v0.1.1, unchanged) | named |
+| 4 | IPUA pin integration test (`tests/integration/test_identity_path2_ipua_pin_pipeline.py`) | C12 (v0.1.1, unchanged) | named |
+| 5 | Golden-capture fixture + capture script + masking spec + parity test | C13.2 | named |
+| 6 | Wave 0 step 5 lease-plane Phase A latency instrumentation (≥14d data before disconfirmer (B) anchors) | C2.2 (NEW) | named |
+| 7 | `coordination.session_resolution_sagas` migration + saga state machine | B2.2 (NEW) | named |
+| 8 | `phases.py` baseline-write `_publish_baseline_invalidation` helper + Redis publish | B6.2 (NEW) | named |
+
+Eight prereq PRs (B5.2 confirmed not a PR). Operator runway implication: per disconfirmer (F), if these eight + their council passes consume more than (Wave 1 elapsed × 3) calendar-weeks, halt and re-evaluate.
+
+### Council recommendation for v0.1.2
+
+**Operator decision (next):**
+- **(α′)** Schedule third council pass on v0.1.2; if it returns clean, proceed to implementation prereq PRs in dependency order.
+- **(β′)** Treat v0.1.1+v0.1.2 cumulative weight as exceeding the threshold architect named; do v0.2 redraft now from a fresh-doc baseline that incorporates everything but doesn't carry v0.1 historical record.
+- **(γ′)** Halt Wave 3 RFC at v0.1.2 pending external pre-condition (e.g., disconfirmer A′.1 fires when ODE profile lands, or runway-check fires F).
+
+Author recommends (α′) — the v0.1.2 fold addresses every named convergent finding; bias-persistence is acknowledged but not load-bearing for the v0.1.2 spec itself; one more council pass confirms whether the cycle closes or v0.2 redraft becomes mandatory.
+
+If third council finds a fifth bias signature (any new "claimed-anchor" or "defends-status-quo-on-substrate" finding in v0.1.2 specifically), the discipline is to escalate to (β′) v0.2-redraft-from-scratch.
+
+---
+
 ## V0.1.1 AMENDMENT 2026-05-08 — council fold (architect / reviewer / live-verifier)
 
 **Read this with v0.1 body below.** Three council lanes ran in parallel after v0.1-draft was committed. Findings: architect 3 BLOCK / 4 CONCERN / 2 NIT; reviewer 2 BLOCK / 5 CONCERN / 1 NIT; verifier 39 VERIFIED / 7 DRIFT / 4 REFUTED / 2 SOURCE_ONLY. Architect bottom-line was "v0.2 redraft, not v0.1.1 amendment-fold" — the fold below is structurally heavy enough to be a redraft-in-amendment-form for the four sections architect named (§0, §2 invariant 5, §5.3, §4) plus reviewer's two BLOCKs (§2 invariant 6, §3 Surface H), with the remaining CONCERNs added inline. **Where v0.1.1 conflicts with v0.1 body below, v0.1.1 governs.**
