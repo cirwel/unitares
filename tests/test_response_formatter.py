@@ -485,7 +485,11 @@ class TestFormatMirror:
         data = _sample_response()
         data["decision"]["action"] = "pause"
         result = _format_mirror(data, saved_trust_tier=None)
-        assert result["verdict"] == "pause"
+        # #428: verdict is now wrapped with meaning + next_action at the
+        # response surface. The raw value lives at .value.
+        assert result["verdict"]["value"] == "pause"
+        assert "Needs attention" in result["verdict"]["meaning"]
+        assert "next_action" in result["verdict"]
 
     def test_calibration_insight_inverted(self):
         data = _sample_response()

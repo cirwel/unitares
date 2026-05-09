@@ -125,9 +125,14 @@ async def handle_get_governance_metrics(arguments: ToolArgumentsDict) -> Sequenc
         except Exception:
             bound_agent_id = None
         if not bound_agent_id:
+            # #428: wrap the bare "unbound" string with meaning + next_action.
+            # The peer next_action below carries the same hint with a tool +
+            # example; the wrapped verdict carries the canonical glossary
+            # entry so the two surfaces can't drift.
+            from src.governance_glossary import explain_verdict
             return success_response({
                 "status": "⚪ unbound",
-                "verdict": "unbound",
+                "verdict": explain_verdict("unbound"),
                 "guidance": "Establish identity before reading agent metrics.",
                 "next_action": {
                     "tool": "identity",

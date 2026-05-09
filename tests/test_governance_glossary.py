@@ -196,3 +196,51 @@ class TestGlossaryAppliedToMonitorResult:
             "explain_verdict() so the agent gets meaning + next_action with "
             "the verdict label."
         )
+
+
+class TestGlossaryAppliedToResponseFormatter:
+    """Source-level guards that the agent-facing response surface
+    (mirror, compact, unbound branch) wraps the verdict via the helper.
+    Most agent-noticeable surface for #428 — every check-in returns a
+    verdict; without wrapping the agent has to consult docs to act on it.
+    """
+
+    @staticmethod
+    def _read(rel_path: str) -> str:
+        from pathlib import Path
+        return (Path(__file__).parent.parent / rel_path).read_text()
+
+    def test_mirror_format_wraps_verdict(self):
+        source = self._read("src/mcp_handlers/response_formatter.py")
+        idx = source.find("def _format_mirror")
+        assert idx != -1
+        end = source.find("\ndef ", idx + 1)
+        window = source[idx:end if end != -1 else len(source)]
+        assert "explain_verdict" in window, (
+            "response_formatter._format_mirror must wrap verdict via "
+            "explain_verdict() at the response surface — mirror is the "
+            "highest-traffic agent-facing path."
+        )
+
+    def test_compact_metrics_wraps_verdict(self):
+        source = self._read("src/mcp_handlers/response_formatter.py")
+        idx = source.find("compact_metrics = {")
+        assert idx != -1
+        window = source[max(0, idx - 300):idx + 600]
+        assert "explain_verdict" in window, (
+            "compact_metrics must wrap verdict via explain_verdict() — "
+            "this is the response_mode='compact' agent surface."
+        )
+
+    def test_unbound_verdict_wrapped_in_core(self):
+        # The "unbound" verdict surfaces when get_governance_metrics is
+        # called against a session with no bound identity.
+        source = self._read("src/mcp_handlers/core.py")
+        idx = source.find('"verdict": ')
+        assert idx != -1
+        window = source[max(0, idx - 300):idx + 200]
+        assert "explain_verdict" in window, (
+            "core.py unbound branch must wrap the bare 'unbound' verdict "
+            "via explain_verdict() so an unbound agent gets the next-action "
+            "hint without consulting docs."
+        )

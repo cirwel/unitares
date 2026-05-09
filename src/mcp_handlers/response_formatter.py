@@ -174,7 +174,12 @@ def _format_mirror(response_data: dict, saved_trust_tier: Optional[str], meta: A
     decision = response_data.get("decision", {}) if isinstance(response_data.get("decision"), dict) else {}
     metrics = response_data.get("metrics", {}) if isinstance(response_data.get("metrics"), dict) else {}
 
-    verdict = decision.get("action", "continue")
+    # #428: wrap the verdict with meaning + next_action at the response
+    # surface. Internal consumers read decision["action"] / metrics["verdict"]
+    # as bare strings; only the agent-facing payload key is wrapped.
+    from src.governance_glossary import explain_verdict
+    verdict_raw = decision.get("action", "continue")
+    verdict = explain_verdict(verdict_raw)
 
     # Collect mirror signals from enrichment-produced data
     mirror_signals = list(response_data.get("_mirror_signals", []))
@@ -352,6 +357,10 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
     if canonical_risk is None:
         canonical_risk = metrics.get("risk_score")
 
+    # #428: wrap verdict with meaning + next_action at the response surface.
+    # The bare metrics["verdict"] is preserved for internal readers; this is
+    # a new dict consumed only by the agent-facing payload.
+    from src.governance_glossary import explain_verdict
     compact_metrics = {
         "E": metrics.get("E"),
         "I": metrics.get("I"),
@@ -360,7 +369,7 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         "coherence": metrics.get("coherence"),
         "risk_score": canonical_risk,
         "phi": metrics.get("phi"),
-        "verdict": metrics.get("verdict"),
+        "verdict": explain_verdict(metrics.get("verdict")),
         "lambda1": metrics.get("lambda1"),
         "health_status": metrics.get("health_status"),
         "health_message": metrics.get("health_message"),
