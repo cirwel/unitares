@@ -93,14 +93,18 @@ def build_result(
     # Concrete Ethical Drift
     if monitor._last_drift_vector:
         dv = monitor._last_drift_vector
-        result['ethical_drift'] = {
+        # #428: wrap each component with meaning + range + ideal at point-of-use.
+        # `norm` and `norm_squared` aren't drift dimensions; they pass through
+        # with just `value` via the helper.
+        from src.governance_glossary import annotate_drift_components
+        result['ethical_drift'] = annotate_drift_components({
             'calibration_deviation': dv.calibration_deviation,
             'complexity_divergence': dv.complexity_divergence,
             'coherence_deviation': dv.coherence_deviation,
             'stability_deviation': dv.stability_deviation,
             'norm': dv.norm,
             'norm_squared': dv.norm_squared,
-        }
+        })
 
         try:
             record_drift(
@@ -142,11 +146,15 @@ def build_result(
 
     # Behavioral EISV
     if behavioral_assessment is not None:
+        # #428: wrap the behavioral verdict so the agent gets meaning +
+        # next_action alongside the bare label. Pattern matches
+        # ethical_drift wrapping above.
+        from src.governance_glossary import explain_verdict
         result['behavioral'] = {
             'state': monitor._behavioral_state.to_dict(),
             'assessment': {
                 'health': behavioral_assessment.health,
-                'verdict': behavioral_assessment.verdict,
+                'verdict': explain_verdict(behavioral_assessment.verdict),
                 'risk': behavioral_assessment.risk,
                 'coherence': behavioral_assessment.coherence,
                 'components': behavioral_assessment.components,
