@@ -145,6 +145,11 @@ Default happy path:
 2. `process_agent_update(response_text=..., complexity=..., client_session_id=...)` for in-process check-ins
 3. On a future process-instance, repeat step 1 with the new prior UUID — do not auto-resume
 
+Discovering the prior UUID for step 1:
+
+- **Plugin-loaded sessions** are the canonical path. The `unitares-governance-plugin` SessionStart banner surfaces the cached workspace UUID as a lineage candidate (S11, plugin PR #17); Codex sessions get the same hint via `commands/governance-start.md` (S11-a).
+- **Server-only sessions** (working directly inside this repo without the plugin's hook chain) have no pre-onboard discovery surface. Onboarding without `parent_agent_id` mints honestly as `lineage_state: no_lineage_declared`. The onboard response still returns `thread_context.predecessor.uuid` when a session-resolved predecessor exists — record it and declare it on the **next** fresh process-instance, not retroactively against the just-minted UUID.
+
 Identity rules:
 
 - A fresh process-instance is a fresh agent. Process-instance boundaries are honored.
@@ -152,5 +157,6 @@ Identity rules:
 - `continuity_token` is being narrowed (S1 in `docs/ontology/plan.md`) — present-day external clients can still resume with it, but plugin-internal flows declare lineage instead.
 - Substrate-anchored agents (Lumen, the long-lived residents) earn cross-process continuity via the substrate-earned identity pattern in `docs/ontology/identity.md` — they may use a hardcoded UUID across restarts.
 - Arg-less `onboard()` with no proof signal triggers the v2 fresh-instance gate — the server flips `force_new=true` and emits a `[FRESH_INSTANCE]` log line (S13).
+- Lineage is declared at onboard time and is one-shot. A UUID minted without `parent_agent_id` stays unlineaged for its lifetime — record any observed predecessor UUID for the next fresh process-instance instead.
 
 <!-- END SHARED CONTRACT -->
