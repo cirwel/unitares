@@ -85,3 +85,60 @@ def test_rejects_invalid_type_prefix(client):
         "agent_id": "a", "agent_name": "n", "fingerprint": "fp",
     })
     assert r.status_code == 400
+
+
+def test_accepted_finding_calls_broadcaster_for_persistence(client, monkeypatch):
+    """Accepted findings must reach broadcaster.broadcast_event so _persist_event
+    writes them to audit.events. Without this, a server restart empties the
+    in-memory ring buffer and all findings are lost.
+    Regression for phase-2 fix (KG discovery 2026-04-25T10:49:00.729859)."""
+    from src.broadcaster import broadcaster_instance
+
+    broadcast_calls = []
+
+    async def _capture(event_type, agent_id=None, payload=None):
+        broadcast_calls.append({"event_type": event_type, "agent_id": agent_id})
+
+    monkeypatch.setattr(broadcaster_instance, "broadcast_event", _capture)
+
+    payload = {
+        "type": "sentinel_finding",
+        "severity": "high",
+        "message": "fleet coherence dipped",
+        "agent_id": "sentinel-01",
+        "agent_name": "Sentinel",
+        "fingerprint": "persist-regression-fp",
+    }
+    r = client.post("/api/findings", json=payload)
+    assert r.status_code == 200
+    assert r.json()["deduped"] is False
+
+    assert len(broadcast_calls) == 1, "broadcast_event must fire once per accepted finding"
+    assert broadcast_calls[0]["event_type"] == "sentinel_finding"
+    assert broadcast_calls[0]["agent_id"] == "sentinel-01"
+
+    # Simulate restart: clear the in-memory ring buffer
+    event_detector.clear_events()
+    assert event_detector._recent_events == []
+    # The finding survives in audit.events because broadcast_event → _persist_event was called.
+
+
+def test_deduped_finding_skips_broadcaster(client, monkeypatch):
+    """Deduped findings must not trigger a redundant broadcast_event call."""
+    from src.broadcaster import broadcaster_instance
+
+    broadcast_calls = []
+
+    async def _capture(event_type, agent_id=None, payload=None):
+        broadcast_calls.append(event_type)
+
+    monkeypatch.setattr(broadcaster_instance, "broadcast_event", _capture)
+
+    payload = {
+        "type": "sentinel_finding", "severity": "high", "message": "m",
+        "agent_id": "a", "agent_name": "n", "fingerprint": "dedup-broadcast-fp",
+    }
+    client.post("/api/findings", json=payload)
+    client.post("/api/findings", json=payload)  # deduped
+
+    assert len(broadcast_calls) == 1  # only the first accepted posting

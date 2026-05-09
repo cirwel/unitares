@@ -1860,6 +1860,12 @@ async def http_record_finding(request):
 
         from src.event_detector import event_detector
         stored = event_detector.record_event(payload)
+        if stored is not None:
+            await broadcaster_instance.broadcast_event(
+                event_type=stored["type"],
+                agent_id=stored.get("agent_id"),
+                payload=stored,
+            )
         return JSONResponse({
             "success": True,
             "deduped": stored is None,
