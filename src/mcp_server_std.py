@@ -322,6 +322,21 @@ async def inject_lightweight_heartbeat(
         load_metadata()
 
         if agent_id not in agent_metadata:
+            # #425 Path E: when STRICT_IDENTITY_REQUIRED is on, do NOT
+            # auto-create metadata for an unknown agent. Heartbeat for
+            # an unbound agent_id is itself a side-effect of an upstream
+            # auto-mint that the contract refuses; minting metadata here
+            # would re-introduce the leak outside the middleware. Default
+            # off; gated by env flag for staged rollout.
+            from src.mcp_handlers.identity_bootstrap import is_strict_identity_required
+            if is_strict_identity_required():
+                logger.debug(
+                    "[HEARTBEAT] STRICT_IDENTITY_REQUIRED=true and "
+                    "agent_id %s... not in metadata cache — skipping "
+                    "heartbeat (#425 Path E)",
+                    (agent_id or "")[:12],
+                )
+                return
             get_or_create_metadata(agent_id)
 
         meta = agent_metadata.get(agent_id)

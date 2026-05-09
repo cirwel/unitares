@@ -787,6 +787,31 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
 
     # Ensure agent exists
     if ctx.is_new_agent:
+        # #425 Path C: when STRICT_IDENTITY_REQUIRED is on, refuse to
+        # auto-create the agent here — process_agent_update should not
+        # mint identity. Caller must onboard() first. Default off; gated
+        # by env flag for staged rollout.
+        from src.mcp_handlers.identity_bootstrap import is_strict_identity_required
+        if is_strict_identity_required():
+            logger.info(
+                "[PROCESS_UPDATE] STRICT_IDENTITY_REQUIRED=true and "
+                "agent %s... not in PG — refusing to auto-create "
+                "(#425 Path C)",
+                (ctx.agent_id or "")[:12],
+            )
+            from src.mcp_handlers.response_base import success_response
+            return success_response({
+                "status": "identity_required",
+                "tool": "process_agent_update",
+                "tool_class": "required",
+                "hint": (
+                    "Agent is not registered. Call onboard() first to "
+                    "mint identity, then retry the update."
+                ),
+                "ontology_ref": "docs/ontology/identity.md",
+                "rollout_flag": "STRICT_IDENTITY_REQUIRED",
+            })
+
         purpose = ctx.arguments.get("purpose")
         purpose_str = purpose.strip() if purpose and isinstance(purpose, str) else None
         ctx.api_key = secrets.token_urlsafe(32)
@@ -1319,6 +1344,22 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
         )
         logger.debug(f"PostgreSQL: Recorded state for {agent_id}")
     except ValueError:
+        # #425 Path D: when STRICT_IDENTITY_REQUIRED is on, do NOT auto-
+        # create on the recovery path. The agent should have onboarded
+        # explicitly; missing-row at this layer means something went
+        # wrong upstream (orphan agent, race, or upstream auto-mint that
+        # was correctly refused). Fail loud rather than silently mint.
+        # Default off; gated by env flag for staged rollout.
+        from src.mcp_handlers.identity_bootstrap import is_strict_identity_required
+        if is_strict_identity_required():
+            logger.warning(
+                "[PROCESS_UPDATE] STRICT_IDENTITY_REQUIRED=true and "
+                "agent %s... missing from PG at record_agent_state — "
+                "skipping self-create (#425 Path D); state for this "
+                "update will not be recorded.",
+                (agent_id or "")[:12],
+            )
+            return
         logger.debug(f"Agent {agent_id} not found, creating...")
         try:
             await agent_storage.create_agent(
