@@ -82,6 +82,10 @@
 
     function getInactiveBadgeHtml(agent) {
         if (agent._stuck) return '';  // already has stuck badge
+        // Event-driven residents (Watcher) fire on external triggers — there is
+        // no scheduled cadence between events, so silence-since-last-update is
+        // the wrong liveness signal. The server flags these from the registry.
+        if (agent && agent.event_driven === true) return '';
         var staleness = getAgentStaleness(agent);
         if (staleness.ageMs > 3600000) {  // >1 hour
             return '<span class="inactive-badge" title="No check-in for over 1 hour">Inactive</span>';

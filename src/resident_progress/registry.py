@@ -49,6 +49,21 @@ RESIDENT_PROGRESS_REGISTRY: dict[str, ResidentConfig] = {
 }
 
 
+def is_event_driven_label(label: str | None) -> bool:
+    """True iff `label` is a known resident registered with no scheduled cadence.
+
+    Event-driven residents (Watcher) fire on external triggers — there is no
+    heartbeat between events, so liveness/silence semantics don't apply. Surfaces
+    that decide "is this agent inactive?" must consult this rather than infer
+    from silence-since-last-update; otherwise a quiet-but-healthy event-driven
+    resident gets badged as inactive between firings.
+    """
+    if not label:
+        return False
+    cfg = RESIDENT_PROGRESS_REGISTRY.get(label.lower())
+    return cfg is not None and cfg.expected_cadence_s is None
+
+
 def resolve_resident_uuid(label: str) -> str | None:
     """Read ~/.unitares/anchors/<label>.json and return the agent_uuid, or None."""
     path = ANCHOR_DIR / f"{label}.json"

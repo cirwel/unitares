@@ -207,3 +207,45 @@ async def test_residents_use_broadcaster_event_when_it_is_newer(monkeypatch):
     assert lumen["last_checkin_at"] == "2026-04-28T10:06:04+00:00"
     assert lumen["last_checkin_source"] == "broadcaster_eisv"
     assert lumen["metadata_last_update"] == "2026-04-28T10:01:56+00:00"
+
+
+@pytest.mark.asyncio
+async def test_residents_event_driven_flag_authoritative_for_watcher():
+    """Endpoint exposes event_driven from the registry, not from a heuristic.
+
+    Watcher's pill was rendering as silent/healthy between firings because the
+    dashboard inferred event-driven from "no last_checkin_at AND >=12h threshold,"
+    which Watcher doesn't satisfy (it does check in per fire). Surfacing the
+    registry signal directly is the source fix.
+    """
+    from src import http_api
+
+    request = SimpleNamespace(
+        headers={},
+        query_params={},
+        url=SimpleNamespace(path="/v1/residents"),
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+    server = SimpleNamespace(agent_metadata={
+        "uuid-watcher": _resident_meta(
+            label="Watcher",
+            last_update="2026-04-28T10:06:04+00:00",
+            tags=[],
+        ),
+        "uuid-vigil": _resident_meta(
+            label="Vigil",
+            last_update="2026-04-28T10:06:04+00:00",
+            tags=[],
+        ),
+    })
+
+    http_api.broadcaster_instance.event_history.clear()
+
+    with patch("src.mcp_handlers.shared.lazy_mcp_server", server), \
+            patch("src.http_api._recent_writes_for_agent", AsyncMock(return_value=[])):
+        resp = await http_api.http_residents(request)
+
+    data = json.loads(resp.body.decode())
+    by_label = {r["label"]: r for r in data["residents"]}
+    assert by_label["Watcher"]["event_driven"] is True
+    assert by_label["Vigil"]["event_driven"] is False

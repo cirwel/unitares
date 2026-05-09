@@ -2240,10 +2240,13 @@ async def http_residents(request):
                     status = "healthy"
 
             flat = _extract_eisv_fields(latest) if latest else None
+            from src.resident_progress.registry import is_event_driven_label
+            event_driven = is_event_driven_label(label)
             residents.append({
                 "label": label,
                 "agent_id": agent_id,
                 "status": status,
+                "event_driven": event_driven,
                 "silence_seconds": round(silence_seconds, 1) if silence_seconds is not None else None,
                 "silence_threshold_seconds": silence_threshold,
                 "last_checkin_at": last_checkin_str,

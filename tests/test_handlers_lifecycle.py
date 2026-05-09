@@ -137,6 +137,26 @@ class TestListAgentsLite:
             assert "recent-agent" in ids
             assert "old-agent" not in ids
 
+    @pytest.mark.asyncio
+    async def test_event_driven_flag_set_for_watcher(self, mock_mcp_server):
+        # The dashboard's "Inactive" badge in agents.js gates on this flag —
+        # without it Watcher gets badged Inactive between hook firings.
+        mock_mcp_server.agent_metadata = {
+            "uuid-watcher": make_agent_meta(label="watcher"),
+            "uuid-vigil": make_agent_meta(label="vigil"),
+            "uuid-anon": make_agent_meta(label="not-a-resident"),
+        }
+
+        with patch_lifecycle_server(mock_mcp_server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({"lite": True})
+
+            data = json.loads(result[0].text)
+            by_id = {a["id"]: a for a in data["agents"]}
+            assert by_id["uuid-watcher"]["event_driven"] is True
+            assert by_id["uuid-vigil"]["event_driven"] is False
+            assert by_id["uuid-anon"]["event_driven"] is False
+
 
 # ============================================================================
 # archive_agent

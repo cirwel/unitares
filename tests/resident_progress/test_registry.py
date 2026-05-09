@@ -9,6 +9,7 @@ import pytest
 from src.resident_progress.registry import (
     RESIDENT_PROGRESS_REGISTRY,
     ResidentConfig,
+    is_event_driven_label,
     resolve_resident_uuid,
 )
 
@@ -92,3 +93,27 @@ def test_resolve_resident_uuid_returns_none_on_malformed_anchor(tmp_path, monkey
         "src.resident_progress.registry.ANCHOR_DIR", tmp_path
     )
     assert resolve_resident_uuid("vigil") is None
+
+
+def test_is_event_driven_label_only_true_for_watcher():
+    # Watcher has expected_cadence_s=None — that's the canonical event-driven
+    # marker. Every other resident has a positive cadence and is heartbeat-driven.
+    # If this test fails after a registry edit, audit dashboard surfaces
+    # (residents.js, agents.js) — they consume this flag to suppress
+    # "Inactive" badges and pick the right pill style.
+    assert is_event_driven_label("watcher") is True
+    for label in ("vigil", "steward", "chronicler", "sentinel"):
+        assert is_event_driven_label(label) is False, label
+
+
+def test_is_event_driven_label_handles_unknown_and_empty():
+    assert is_event_driven_label(None) is False
+    assert is_event_driven_label("") is False
+    assert is_event_driven_label("not-a-resident") is False
+
+
+def test_is_event_driven_label_is_case_insensitive():
+    # Dashboard surfaces normalize labels case-insensitively elsewhere
+    # (_DEFAULT_RESIDENT_SILENCE_SECONDS.get(label.lower(), ...)). Stay consistent.
+    assert is_event_driven_label("Watcher") is True
+    assert is_event_driven_label("WATCHER") is True

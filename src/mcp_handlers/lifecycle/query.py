@@ -121,6 +121,7 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
 
                 label = getattr(meta, 'label', None)
                 public_id = getattr(meta, 'public_agent_id', None) or getattr(meta, 'structured_id', None)
+                from src.resident_progress.registry import is_event_driven_label
                 agents.append({
                     "id": agent_id,
                     # display_name (user-chosen) takes precedence; agent_id is fallback
@@ -133,6 +134,7 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                     "trust_tier": getattr(meta, 'trust_tier', None),
                     "parent_agent_id": getattr(meta, 'parent_agent_id', None),
                     "spawn_reason": getattr(meta, 'spawn_reason', None),
+                    "event_driven": is_event_driven_label(label),
                 })
             # Sort: labeled first, then by most recent activity
             agents.sort(key=lambda x: (0 if x.get("label") else 1, -(x.get("updates") or 0), x.get("last_update", "") or ""), reverse=False)
@@ -275,6 +277,7 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                 else:
                     inferred_status = "archived"  # Old activity = archived
 
+            from src.resident_progress.registry import is_event_driven_label
             agent_info = {
                 "agent_id": agent_id,
                 "label": getattr(meta, 'label', None),
@@ -287,6 +290,7 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                 "notes": meta.notes if meta.notes else "",
                 "parent_agent_id": getattr(meta, 'parent_agent_id', None),
                 "spawn_reason": getattr(meta, 'spawn_reason', None),
+                "event_driven": is_event_driven_label(getattr(meta, 'label', None)),
             }
 
             # Lazy load metrics only if requested (optimization)

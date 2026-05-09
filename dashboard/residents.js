@@ -85,11 +85,16 @@
     // Pill rendering (compact status strip — see renderCard)
     // ---------------------------------------------------------------------
 
-    // An agent with a very long silence threshold (>12h) and no check-in
-    // history is operating as event-driven — it never calls process_agent_update
-    // by design. Treating it as "unknown" makes operators worry; surface it
-    // distinctly instead. The threshold boundary is a heuristic, not a contract.
+    // Server marks event-driven residents authoritatively from the registry
+    // (expected_cadence_s=None ⇒ event_driven=true). The previous heuristic
+    // (>=12h threshold AND no last_checkin_at) misclassified Watcher: Watcher
+    // does check in per fire, so last_checkin_at is set and the heuristic
+    // returned false — leaving the pill to render as silent/healthy depending
+    // on time-since-fire. Trust the server flag; fall back to the old heuristic
+    // only for older servers that don't return it.
     function isEventDriven(resident) {
+        if (resident.event_driven === true) return true;
+        if (resident.event_driven === false) return false;
         if (resident.last_checkin_at) return false;
         var th = resident.silence_threshold_seconds;
         return th != null && th >= 12 * 3600;
