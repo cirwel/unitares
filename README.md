@@ -37,6 +37,13 @@ That brings up Postgres 17 + Apache AGE + pgvector + Redis + the governance serv
 | Postgres + AGE + pgvector | `5432` | `postgresql://postgres:postgres@localhost:5432/governance` |
 | Redis (session cache) | `6379` | `redis://localhost:6379/0` |
 
+Additional services (started via launchd, not bundled into `docker compose up`):
+
+| Service | Port | Endpoint |
+|---|---|---|
+| Gateway MCP (reduced surface) | `8768` | `http://localhost:8768/mcp/` |
+| Surface lease plane (bearer-auth) | `8788` | `http://localhost:8788/v1/lease/*` |
+
 **Workflow:** `onboard(force_new=true)` → `process_agent_update()` → `get_governance_metrics()`. Use `parent_agent_id` for fresh-process lineage — details in [Getting Started](docs/guides/START_HERE.md).
 
 **Transports:** MCP on `/mcp/` (Streamable HTTP) · REST on `/v1/tools/call` · Dashboard on `/dashboard`
