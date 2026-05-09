@@ -173,6 +173,31 @@ class TestRunGroundskeeper:
         assert result["note_suppressed"] is True
 
     @pytest.mark.asyncio
+    async def test_groundskeeper_suppresses_when_only_archived_differs(self):
+        """Backlog flat, archived oscillating between 0 and 1 — must suppress.
+
+        Regression: the two-key (stale, archived) dedup let oscillation
+        through. Observed pattern in production was 4 stale / 0 archived
+        flip-flopping with 4 stale / 1 archived every 30 minutes, producing
+        a fresh KG row each tick. The persistent backlog is 4 in both
+        states; archived is per-cycle progress, not state. Now we compare
+        stale_found only.
+        """
+        agent = _make_agent()
+        client = _make_mock_client(
+            audit_result=AuditResult(
+                success=True,
+                audit={"buckets": {"healthy": 2, "stale": 1, "candidate_for_archive": 3}},
+            ),
+            cleanup_result=CleanupResult(success=True, cleaned=0),
+        )
+        prev = {"groundskeeper_stale": 4, "groundskeeper_archived": 1}
+        result = await agent._run_groundskeeper(client, prev_state=prev)
+
+        client.leave_note.assert_not_called()
+        assert result["note_suppressed"] is True
+
+    @pytest.mark.asyncio
     async def test_groundskeeper_posts_note_on_change(self):
         """When numbers differ from prev_state, leave_note must fire."""
         agent = _make_agent()

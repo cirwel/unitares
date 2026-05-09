@@ -441,8 +441,14 @@ class VigilAgent(GovernanceAgent):
         Operators can still invoke ``archive_orphan_agents`` manually.
 
         ``prev_state`` is the previous cycle's state dict; when supplied, the
-        summary KG note is suppressed if (stale_found, archived) is unchanged
-        from the prior cycle. Local log + findings still surface every cycle.
+        summary KG note is suppressed if ``stale_found`` (the persistent
+        backlog count) is unchanged from the prior cycle. We deliberately
+        ignore ``archived`` here — that's per-cycle progress that flips
+        between 0 and 1 as new entries arrive and Vigil archives them, and
+        comparing both keys defeated dedup whenever the backlog stayed flat
+        but archived oscillated (observed pattern: 4/0 → 4/1 → 4/0 → 4/1
+        producing a fresh KG row every 30 min). Local log + findings still
+        surface every cycle.
         """
         summary: Dict[str, Any] = {
             "audit_run": False,
@@ -487,9 +493,10 @@ class VigilAgent(GovernanceAgent):
                 f"{summary['archived']} archived"
             )
             prev = prev_state or {}
+            # Compare only the persistent backlog count. The archived count
+            # is per-cycle progress, not state, and oscillates (see docstring).
             unchanged = (
                 prev.get("groundskeeper_stale") == summary["stale_found"]
-                and prev.get("groundskeeper_archived") == summary["archived"]
             )
             if unchanged and prev:
                 summary["note_suppressed"] = True
