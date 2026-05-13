@@ -226,23 +226,48 @@ class TestProcessAgentUpdateAcceptsRecentToolResults:
         assert len(params.recent_tool_results) == 1
         assert params.recent_tool_results[0].kind == "test"
 
-    def test_accepts_s22_h5_provenance_fields(self):
+    def test_accepts_s22_h5_agent_knowable_fields(self):
+        """ProcessAgentUpdateParams keeps only the 4 agent-knowable S22 fields.
+
+        Per KG 2026-05-09T13:03 (43a2cbf9): the 14 harness/server-knowable
+        S22 fields (harness, harness_id, harness_type, transport, model,
+        model_provider, tool_surface, governance_mode, verification_source,
+        episode_id, invocation_id, process_instance_id, locus,
+        affordance_state) are filled server-side by build_s22_write_context
+        and were removed from the agent-callable schema. The 4 kept fields
+        are author-of-intent facts only the agent can supply.
+        """
         from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
         params = ProcessAgentUpdateParams(
             response_text="ran H5 diagnostic",
-            harness_type="codex-cli",
-            model_provider="openai",
-            model="gpt-5",
-            transport="codex-cli",
-            tool_surface=["terminal", "mcp:unitares"],
             comparison_key="s22-h5-2026-05-06",
             task_label="Run S22 H5 coverage diagnostic",
             task_outcome="diagnostic-complete",
+            memory_context="MEMORY.md + KG search results",
         )
-        assert params.harness_type == "codex-cli"
         assert params.comparison_key == "s22-h5-2026-05-06"
         assert params.task_label == "Run S22 H5 coverage diagnostic"
         assert params.task_outcome == "diagnostic-complete"
+        assert params.memory_context == "MEMORY.md + KG search results"
+
+    def test_dropped_s22_fields_no_longer_on_model(self):
+        """The 14 dropped S22 fields must not be declared on the schema.
+
+        Regression for KG 2026-05-09T13:03: keep the agent-facing schema
+        from re-accreting fields that only the harness can honestly know.
+        """
+        from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
+        dropped = {
+            "harness", "harness_id", "harness_type", "transport",
+            "model", "model_provider", "tool_surface", "governance_mode",
+            "verification_source", "episode_id", "invocation_id",
+            "process_instance_id", "locus", "affordance_state",
+        }
+        declared = set(ProcessAgentUpdateParams.model_fields.keys())
+        assert dropped.isdisjoint(declared), (
+            f"S22 fields that should be harness-filled are still declared: "
+            f"{sorted(dropped & declared)}"
+        )
 
     def test_accepts_evidence_without_kind(self):
         from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
