@@ -7,6 +7,21 @@
 **Wave 0 channel:** `audit.coordination_events` exists with `event_type ~ '^(coordination_failure)(\.[a-z_]+)+$'` CHECK constraint; zero rows as of 2026-05-09. The constraint scopes the table to failure events only — informational latency lives in the parallel channel introduced in §6.
 **Single-writer surface:** Identity / onboarding (per `CLAUDE.md` "Before Starting Work on a Single-Writer Surface") spans this entire RFC plus its prereq PRs. Branch from this RFC's head before any parallel work.
 
+## What changed in v0.3.2 (vs v0.3.1)
+
+v0.3 council (architect + code-reviewer + live-verifier) returned three CONCERNs, zero BLOCKs. Per §15 contract — no BLOCK + no new bias signature in §10 — this is not v0.4 substrate re-litigation territory. Mechanical findings landed as v0.3.1; design-decision findings are folded here as v0.3.2 against operator selection (2026-05-13).
+
+10. **§10.2 cold-ETS startup race closed both ways** (code-reviewer BUG 2). New `Unitares.HandlerDispatch.Readiness` GenServer gates handler dispatch on both writers signalling `:writer_warm`; cold reads can't happen mid-init through the dispatch path. Belt-and-suspenders: surfaces that bypass dispatch (observers, dashboards) get a documented `:cold` return contract — never `nil`, always `{:ok, value}` or `:cold`. ExUnit test `cold_ets_contract_test.exs` lands in new PR #8a alongside the contract.
+11. **§3.2 503-rate denominator named** (code-reviewer BUG 4). Transport emits `measurement.governance_mcp.request` to `audit.coordination_measurements` on every request accepted for proxying. Numerator + denominator share one source; rate is restart-recoverable from PG history. No process-memory counter; no cross-table join.
+12. **§9.3 recovery SELECT made explicit** (code-reviewer BUG 3). Exact query in §9.3; explicit filter discipline (`state NOT IN ('reverted')`); `pg_committed` included for crash-between-commit-and-ACK recovery.
+13. **§14 PR #8 split + PR #6 14-day mechanical gate** (code-reviewer BUG 5). PR #8 splits into 8a (BaselineWriter stub + Readiness + cold-ETS contract test, lands with #2) and 8b (wiring + reconciliation, gated on PR #6 14-day data window via `check-wave3-prereq-data-window.sh` CI lint). §11.5 is now mechanically enforced, not policy-enforced.
+14. **§0(D) operator-led red-team forcing function** (architect CONCERN on self-referentiality). (D)'s measurement source is no longer "§3 surface-by-surface analysis at gate" reading the same §3 the RFC wrote. Operator-led red-team session before gate, with live-verifier lane, written to dated artifact, MUST enumerate non-surfaces as well as surfaces. Gate halts on artifact missing, 9th surface found, or any of the eight not re-derivable from live code by the verifier.
+15. **§5.2 boundary-cost audit bundled into PR #1** (architect latent-v0.4 bias-trap flag). Same workstream as ODE profile; output `docs/handoffs/wave-3-section-5-2-boundary-audit-<date>.md`; reclassifications fold into §5.3 in a v0.3.x patch. Catches the under-counting habit before any BEAM code lands.
+
+## What changed in v0.3.1 (vs v0.3)
+
+v0.3 council mechanical findings (file:line drifts, missing §8 columns, present-tense framing for not-yet-existing files). See [PR #457 comment](https://github.com/cirwel/unitares/pull/457) for the full council synthesis.
+
 ## What changed in v0.3 (vs v0.2)
 
 The v0.2 three-lane council returned: architect BLOCK on three structural items, code-reviewer CONCERN on four surgical items, live-verifier APPROVE with three minor line-drift items. The architect's load-bearing finding was that v0.2's §10 (versioned baselines + reconciliation) and §4 (advisory lock) added sustained PG-coordination load to the very substrate Wave 3 exists to relieve — the fifth bias signature across four iterations. v0.3 corrects all three architect items, all four code-reviewer items, and the three drifts.
@@ -45,7 +60,7 @@ Note on threshold derivations: the numerical anchors below ((A.1)'s 60%, (A.2)'s
 
 **(C) MCP SDK gate reverses.** Hands-on spike on `mcp_elixir_sdk` 1.0.1 or `hermes_mcp` 0.14.1 shows production-disqualifying failure (broken-on-Anthropic-streaming, MCP-spec drift, no maintainer responsiveness). Doubles disconfirmer (B)'s budget per §6.6's 4-crossing topology. **Measurement source:** spike result, recorded in `docs/handoffs/wave-3-mcp-sdk-spike-<date>.md` artifact before implementation gate. (Was (D) in v0.2.)
 
-**(D) State-ownership cutover structurally unsafe.** Identity middleware port (§3) surfaces irreducible per-request semantics that can't be moved to GenServer state without replicating coordination at the boundary. **Measurement source:** §3 surface-by-surface analysis at gate; if any new "irreducible" surface is found beyond the eight in §3.1, gate halts. (Was (E) in v0.2.)
+**(D) State-ownership cutover structurally unsafe.** Identity middleware port (§3) surfaces irreducible per-request semantics that can't be moved to GenServer state without replicating coordination at the boundary. **Measurement source:** operator-led red-team session before the implementation gate, with the live-verifier lane participating, written up in `docs/handoffs/wave-3-state-ownership-redteam-<date>.md`. The artifact MUST enumerate both surfaces and non-surfaces — i.e., name every identity-middleware coordination shape considered, including the eight in §3.1, and state for each whether it is reducible to GenServer state. The forcing function is "find a 9th surface OR explicitly mark the eight as exhaustive after independent re-derivation." Gate halts if the artifact is missing, if any 9th surface surfaces, or if any of the eight cannot be re-derived from the live code by the verifier lane. (Was (E) in v0.2. Architect CONCERN on self-referentiality closed in v0.3.2 by the operator-led red-team forcing function — the gate now reads independent re-derivation, not the same §3 the RFC already wrote.)
 
 **(E) Opportunity cost.** Wave 3 implementation projected calendar-weeks > (Wave 1 elapsed × 3) AND any of {paper deadline, fellowship application, HLH, R2 Phase 2 gate} would be sacrificed. "Sacrificed" defined as: calendar-week slip on any named item exceeds 25% of original deadline window. **No acceptance-memo escape hatch.** Re-opening the gate requires re-scoping Wave 3, not a written acceptance of the slip. Wave 1's elapsed time is concretely named in §14 (currently estimated ~3 weeks; pinned to actual at gate). **Measurement source:** `docs/proposals/wave-3-go-decision-<date>.md` artifact written by operator at gate, with §"Calendar reasoning" section enumerating each named item with current slip vs original target. (Was (F) in v0.2.)
 
@@ -120,7 +135,7 @@ Identity middleware decomposes into eight state surfaces.
 
 1. **Snapshot before flip.** `pg_dump` `core.identities`, `core.agents`, `core.identities_shadow`, `core.agents_shadow`, `core.dialectic_sessions`, `core.dialectic_messages`, `coordination.session_resolution_sagas`, `core.feature_flags` into `~/backups/governance/wave-3-pre-cutover-<ISO8601>/`.
 2. **Plist swap.** New plist `com.unitares.handler-dispatch-beam.plist` in `scripts/ops/`. Cutover loads BEAM; rollback unloads BEAM and reloads `com.unitares.governance-mcp.plist`.
-3. **503 circuit-breaker for the gap.** Python MCP transport, when proxying to BEAM, returns HTTP 503 with body `{"ok": false, "error": "governance_temporarily_unavailable", "reason": "handler_dispatch_unavailable", "retry_after_seconds": 5}` and `Retry-After: 5` header on connection-refused or timeout. **Halt mechanism (per stop sign #7):** the transport emits `measurement.governance_mcp.503_emission` to `audit.coordination_measurements` on every 503 it returns; a sliding-window aggregator over the last 60s reads that table once per 15s and emits `coordination_failure.governance_mcp.cutover_503_rate_breach` if the count exceeds 1% of total request volume in the same window. **Halt direction:** when the breach event fires, the operator completes step 3 (restore Python writers) before stopping; BEAM is unloaded last. Do not stop mid-procedure with neither runtime accepting writes. **Client retry policy:** SDK consumers (Watcher, Sentinel, dispatch worker, plugin SessionStart paths) must honor `Retry-After` OR the body's `retry_after_seconds` field; the prereq PR (#10) adds matching retry logic to each named consumer. Clients without retry-on-503 fail through to the calling layer and are not the rollback procedure's responsibility.
+3. **503 circuit-breaker for the gap.** Python MCP transport, when proxying to BEAM, returns HTTP 503 with body `{"ok": false, "error": "governance_temporarily_unavailable", "reason": "handler_dispatch_unavailable", "retry_after_seconds": 5}` and `Retry-After: 5` header on connection-refused or timeout. **Halt mechanism (per stop sign #7):** the transport emits two events to `audit.coordination_measurements` — `measurement.governance_mcp.503_emission` on every 503 returned, and `measurement.governance_mcp.request` on every request *accepted for proxying* (the denominator). Same emission point, same table, partition-aligned. A sliding-window aggregator over the last 60s reads both events once per 15s, computes `count(503_emission) / count(request)`, and emits `coordination_failure.governance_mcp.cutover_503_rate_breach` if the rate exceeds 1% in the window. Numerator and denominator share one source (`audit.coordination_measurements`), so the rate is restart-recoverable from PG history within the 60s window — no process-memory counter. **Halt direction:** when the breach event fires, the operator completes step 3 (restore Python writers) before stopping; BEAM is unloaded last. Do not stop mid-procedure with neither runtime accepting writes. **Client retry policy:** SDK consumers (Watcher, Sentinel, dispatch worker, plugin SessionStart paths) must honor `Retry-After` OR the body's `retry_after_seconds` field; the prereq PR (#10) adds matching retry logic to each named consumer. Clients without retry-on-503 fail through to the calling layer and are not the rollback procedure's responsibility.
 4. **Schema rollback.** Every new migration ships a paired DOWN migration; tested on `governance_test` snapshot before cutover migration runs in production.
 5. **Per-surface windows:** A/E/H instantaneous; B/C/G ≤2h staleness (TTL); D ≤1-request inconsistency at flip moment (shadow + dual-write window keeps it bounded); F instantaneous.
 
@@ -500,7 +515,20 @@ The two-step apply gives crash recovery a deterministic ordering — `paused_age
 
 ### 9.3 Crash recovery rules
 
-Session GenServer init reads any pending saga row for its `session_id` (the partial unique index guarantees at most one):
+Session GenServer init reads the most recent non-terminal saga row for its `session_id`. The exact recovery query (committed in §14 PR #7 stubs):
+
+```sql
+SELECT saga_id, state, paused_agent_id, reviewer_agent_id, created_at
+FROM coordination.session_resolution_sagas
+WHERE session_id = $1
+  AND state IN ('reserved', 'paused_agent_applied', 'both_agents_applied', 'reverting', 'pg_committed')
+ORDER BY created_at DESC
+LIMIT 1;
+```
+
+The partial unique index `idx_saga_one_pending_per_session` guarantees at most one row with `state IN ('reserved', 'paused_agent_applied', 'both_agents_applied', 'reverting')`, so the `LIMIT 1` is structurally redundant for those states but defensive against operator-introduced anomaly. `pg_committed` is included so a crash between PG commit and BEAM in-process ACK is recoverable; `reverted` is explicitly excluded so a fresh retry on the same session cleanly INSERTs a new `reserved` row without colliding. **Filter discipline:** never recover on `state IN ('reverted')` — that's the terminal-already-undone state; doing so re-issues compensating reverts against already-clean agents.
+
+Recovery action by state:
 
 | Saga state on init | Recovery action |
 |---------------------|------------------|
@@ -587,8 +615,22 @@ On BEAM application boot, BaselineWriter and FeatureFlagWriter each run a single
 # BaselineWriter.init/1:
 rows = Postgrex.query!(repo, "SELECT agent_id, stats FROM core.agent_behavioral_baselines", [])
 Enum.each(rows, fn [agent_id, stats] -> :ets.insert(:agent_baselines, {agent_id, stats}) end)
+GenServer.cast(Unitares.HandlerDispatch.Readiness, {:writer_warm, __MODULE__})
 ```
 One-shot at startup; bounded by N agents (small for unitares-scale). Subsequent reads are ETS-only until the writer GenServer mutates.
+
+**Readiness gate (default contract).** Handler dispatch is structurally gated on both writers signalling `:writer_warm`. The application supervision tree includes a `Unitares.HandlerDispatch.Readiness` GenServer that holds an MFA-set state `%{BaselineWriter => false, FeatureFlagWriter => false}` and refuses dispatch (returns `{:error, :not_ready}` to the transport adapter) until both flip true. Cold reads cannot happen mid-init — the boot-time window between `:ets.new` and bulk SELECT completing is invisible to handlers. The transport returns the same `503 governance_temporarily_unavailable` body during the readiness window as during full cutover (§3.2), so consumers honor the same `Retry-After`. Boot latency cost: bounded by the slower of the two writers (typically <1s at unitares-scale; bulk SELECT over ~10² agents).
+
+**Nil-return contract (belt-and-suspenders for surfaces that legitimately tolerate stale reads).** Some BEAM surfaces — observers, dashboards, debug tooling — may bypass the readiness gate (calling ETS directly without going through handler dispatch). For those, `:ets.lookup(:agent_baselines, agent_id)` returning `[]` MUST be treated as a stale-read signal, not a fatal one. The contract:
+
+```elixir
+case :ets.lookup(:agent_baselines, agent_id) do
+  [{^agent_id, baseline}] -> {:ok, baseline}
+  [] -> :cold  # caller decides: skip, default, or trigger warm/1
+end
+```
+
+Call sites that pattern-match on `:cold` are documented in `elixir/handler_dispatch/test/cold_ets_contract_test.exs` (PR #8 deliverable). Call sites that go through the readiness gate and STILL get `:cold` indicate a writer-side bug — emit `coordination_failure.beam_python_boundary.ets_pg_divergence` and let stop sign #11 catch it.
 
 ### 10.3 Slow reconciliation (PG → ETS divergence detector)
 
@@ -701,18 +743,19 @@ All ten prereq PRs land BEFORE any commit in `elixir/handler_dispatch/` or any n
 
 | # | PR | Creates / modifies | Depends on |
 |---|-----|---------------------|------------|
-| 1 | ODE profile + shadow DDL + comparator + event_types | `db/postgres/migrations/0NN_identities_shadow.sql`, `db/postgres/migrations/0NN_agents_shadow.sql`, `src/coordination_events.py` (shadow_divergence, ets_pg_divergence, cutover_503_rate_breach constants), `tests/test_coordination_events.py`, `scripts/ops/wave-3-shadow-divergence-check.sql`, `scripts/ops/com.unitares.wave3-shadow-divergence-check.plist`, `scripts/ops/wave3-shadow-replay.sh`, ODE profile commit | — |
+| 1 | ODE profile + shadow DDL + comparator + event_types + §5.2 boundary-cost audit | `db/postgres/migrations/0NN_identities_shadow.sql`, `db/postgres/migrations/0NN_agents_shadow.sql`, `src/coordination_events.py` (shadow_divergence, ets_pg_divergence, cutover_503_rate_breach, governance_mcp_request denominator constants), `tests/test_coordination_events.py`, `scripts/ops/wave-3-shadow-divergence-check.sql`, `scripts/ops/com.unitares.wave3-shadow-divergence-check.plist`, `scripts/ops/wave3-shadow-replay.sh`, ODE profile commit. **§5.2 audit deliverable** (v0.3.2 fold of architect CONCERN on under-counting habit): for every helper in §5.2's "stays Python" table, profile boundary-vs-compute cost on the live request mix; reclassify to PORTS-to-BEAM any helper where boundary crossing dominates compute (the `_compare_against_timeout` pattern). Output written into `docs/handoffs/wave-3-section-5-2-boundary-audit-<date>.md`; reclassifications fold into §5.3 in a v0.3.x patch. CI gate `scripts/dev/check-wave3-ode-prereq.sh` enforces the audit artifact exists before any commit in `elixir/handler_dispatch/`. | — |
 | 2 | FeatureFlagWriter (BEAM ETS + GenServer) + `core.feature_flags` migration | `db/postgres/migrations/0NN_core_feature_flags.sql`, `elixir/handler_dispatch/lib/feature_flag_writer.ex`, boundary endpoint `POST /v1/feature_flag/get` for Python reads during transition, ExUnit tests for ETS-PG single-writer invariant | #1 (event_type set) |
 | 3 | `coordination_events_helpers.py` + Elixir helper + CI lint | `governance_core/coordination_events_helpers.py` (`make_boundary_payload`, `make_measurement_payload`), Elixir helper module, `scripts/dev/check-boundary-event-helpers.sh` (CI lint) | — |
 | 4 | IPUA pin integration test | `tests/integration/test_identity_path2_ipua_pin_pipeline.py` | — |
 | 5 | Golden-capture fixture + capture script + masking + parity test | `tests/fixtures/wave3_response_golden/` (50+), `scripts/dev/wave3-capture-goldens.sh`, `tests/integration/test_wave_3_response_parity.py` | — |
 | 6 | Lease-plane Phase A latency instrumentation + measurement table + retention | `db/postgres/migrations/0NN_audit_coordination_measurements.sql`, `src/lease_plane_client.py` (emit `measurement.lease_plane.request`), `scripts/ops/wave-0-channel-report.sh` (read both tables), `scripts/ops/wave-0-partition-roll.sh` + plist (90-day retention). Runs ≥14 days before disconfirmer (B) thresholds set | #3 (`make_measurement_payload`) |
 | 7 | Saga DDL + state machine | `db/postgres/migrations/0NN_coordination_session_resolution_sagas.sql` (CREATE SCHEMA + CREATE TABLE + partial unique index), Python interface stubs for tests | — |
-| 8 | BaselineWriter (BEAM ETS + GenServer) | `elixir/handler_dispatch/lib/baseline_writer.ex`, boundary endpoint `POST /v1/baseline/get` for Python reads during transition, slow-reconciliation cron, ExUnit tests for ETS-PG single-writer invariant + reconciliation divergence detection | #2 (FeatureFlagWriter pattern) |
+| 8a | BaselineWriter stub + Readiness GenServer + cold-ETS contract test | `elixir/handler_dispatch/lib/baseline_writer.ex` (skeleton: GenServer scaffolding, `:writer_warm` signal, no PG read yet), `elixir/handler_dispatch/lib/readiness.ex` (the readiness gate from §10.2), `elixir/handler_dispatch/test/cold_ets_contract_test.exs` (the `:cold` return contract; matches §10.2 belt-and-suspenders spec). No production wiring; allows the §10.2 invariants to ship and be tested before measurement data accrues. | #2 (FeatureFlagWriter pattern) |
+| 8b | BaselineWriter wiring + boundary endpoint + slow-reconciliation cron | Wires `BaselineWriter` to PG (bulk SELECT on init, write path per §10.1), boundary endpoint `POST /v1/baseline/get` for Python reads during transition, slow-reconciliation cron, ExUnit tests for ETS-PG single-writer invariant + reconciliation divergence detection. **Gated on PR #6 14-day window**: `scripts/dev/check-wave3-prereq-data-window.sh` (CI lint, added in this PR) verifies ≥14 days of `measurement.lease_plane.request` rows in `audit.coordination_measurements` before this PR can merge. Enforces criterion §11.5 mechanically rather than as a Go-decision document obligation. | #6 (14-day data), #8a |
 | 9 | Dialectic baseline pinning artifact | `docs/handoffs/wave-3-dialectic-baseline-<date>.md` with mean + σ for resolution rate and reassignment rate over trailing 30 days from `core.dialectic_sessions` | — |
 | 10 | SDK consumer retry-on-503 (Watcher/Sentinel/dispatch worker/plugin) + 503-emission measurement | Consumer-side retry logic honoring `Retry-After` or `retry_after_seconds`, `src/mcp_transport.py` emits `measurement.governance_mcp.503_emission` on every 503, sliding-window 503-rate aggregator + breach event emitter | #1, #6 |
 
-PR #1 lands first (it's the disconfirmer A.1 anchor). PRs 2–10 land in dependency order shown. PR #6 must run ≥14 days before disconfirmer (B) thresholds can be set; if Wave 3 implementation gate is reached before PR #6 has 14 days of data, gate halts (per criterion #5).
+PR #1 lands first (it's the disconfirmer A.1 anchor AND the §5.2 boundary-cost audit anchor). PRs 2–7, 8a, 9–10 land in dependency order shown. PR #8b is gated on PR #6 producing ≥14 days of `measurement.lease_plane.request` rows; CI lint `check-wave3-prereq-data-window.sh` enforces this mechanically rather than relying on Go-decision documentation. If the Wave 3 implementation gate is reached before PR #6 has 14 days of data, both criterion §11.5 AND the CI lint halt the impl branch.
 
 Per disconfirmer (E): if these ten + their council passes consume more than (Wave 1 elapsed × 3) calendar-weeks, halt and re-evaluate. Wave 1 elapsed time is concretely named in PR #9's gate document.
 
