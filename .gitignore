@@ -183,6 +183,7 @@ scripts/archive/
 .vigil_state
 .sentinel_session
 .sentinel_state
+.sentinel_state.*
 .watcher_session
 .watcher_session.*
 
