@@ -11,11 +11,11 @@
 
 Status: live. First public commit 2025-12-04. For architecture details, see [docs/UNIFIED_ARCHITECTURE.md](docs/UNIFIED_ARCHITECTURE.md).
 
-Most AI agents fly blind: they can't tell when they're thrashing, drifting, or overconfident until a human notices. Unitares is a runtime layer that lets agents **see their own state and regulate themselves** — slow down when disorder spikes, ask for review when integrity drops, hand off when they're running on fumes.
+Multi-agent fleets fly blind. The agent-identity layer tells you *who* is calling. The evaluation layer tells you *whether a model is good enough to deploy*. Neither tells you **what the fleet is actually doing right now, whether it's still coherent, or whether it's drifting from its anchor**. That layer is what Unitares is.
 
-Each check-in returns a verdict (`proceed` / `guide` / `pause` / `reject`) and guidance, so agents can adjust *before* external circuit breakers fire. Humans and peer agents read the same underlying state, so one signal serves three consumers: agents regulating themselves, humans watching dashboards, peers coordinating.
+Unitares is a runtime telemetry and coordination layer for heterogeneous AI-agent fleets. Agents check in, the system tracks a four-channel state vector (energy, integrity, structure, valence), and each check-in returns a verdict (`proceed` / `guide` / `pause` / `reject`) — so agents regulate themselves *before* external circuit breakers fire. Humans read the same state on a dashboard; peer agents read it over the API.
 
-Circuit breakers and kill switches are still there — they're just the last line of defense, not the first.
+Slow down when disorder spikes, ask for review when integrity drops, hand off when running on fumes. Circuit breakers and kill switches are still there — they're just the last line of defense, not the first.
 
 Running continuously in production since November 2025. Long-run trajectories are stored in PostgreSQL + AGE; the state model is derived from what agents actually do (EMA-smoothed observations, not model predictions). Test counts and coverage gates are in the [Production snapshot](#production-snapshot).
 
