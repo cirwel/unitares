@@ -357,6 +357,73 @@ class TestAddDiscovery:
         assert mock_db.graph_query.await_count >= 5
 
     @pytest.mark.asyncio
+    async def test_sync_discovery_edges_drops_missing_dst_ids(self, caplog):
+        """Regression: dst_ids absent from knowledge.discoveries must be
+        filtered before INSERT, not allowed to trip the FK constraint.
+
+        Reproduces KG 2026-05-10T00:58:42 (d0832eaf): AGE→PG canonical flip
+        left orphan Discovery nodes in AGE. find_similar returned the
+        orphan IDs into related_to, and the unguarded INSERT into
+        knowledge.discovery_edges hit discovery_edges_dst_id_fkey,
+        rolling back the entire tagged write so tags landed empty even on
+        the underlying discovery row.
+        """
+        kg, _ = make_kg_with_mock_db()
+
+        conn = AsyncMock()
+        conn.execute = AsyncMock()
+        # Only "live-parent" exists in knowledge.discoveries.
+        # "dead-parent" is an AGE orphan — must be filtered.
+        conn.fetch = AsyncMock(return_value=[{"id": "live-parent"}])
+        conn.executemany = AsyncMock()
+
+        discovery = make_discovery(
+            related_to=["live-parent", "dead-parent"],
+        )
+
+        import logging
+        with caplog.at_level(logging.WARNING):
+            await kg._sync_discovery_edges(
+                conn,
+                discovery,
+                datetime(2026, 5, 13, 12, 0, 0),
+            )
+
+        # The INSERT must have fired with only the live edge.
+        assert conn.executemany.await_count == 1
+        inserted_rows = conn.executemany.await_args.args[1]
+        inserted_dst_ids = [row[1] for row in inserted_rows]
+        assert inserted_dst_ids == ["live-parent"]
+
+        # Drift must surface as a warning the operator can act on.
+        assert any(
+            "dropping" in rec.getMessage() and "dead-parent" in rec.getMessage()
+            for rec in caplog.records
+        ), f"expected dead-parent drop warning, got: {[r.getMessage() for r in caplog.records]}"
+
+    @pytest.mark.asyncio
+    async def test_sync_discovery_edges_all_dst_missing_skips_insert(self):
+        """When every dst_id is an orphan, INSERT must not run at all."""
+        kg, _ = make_kg_with_mock_db()
+
+        conn = AsyncMock()
+        conn.execute = AsyncMock()
+        conn.fetch = AsyncMock(return_value=[])  # all dst_ids are orphans
+        conn.executemany = AsyncMock()
+
+        discovery = make_discovery(
+            related_to=["orphan-a", "orphan-b"],
+        )
+        await kg._sync_discovery_edges(
+            conn,
+            discovery,
+            datetime(2026, 5, 13, 12, 0, 0),
+        )
+
+        # The DELETE always runs; the INSERT must not.
+        assert conn.executemany.await_count == 0
+
+    @pytest.mark.asyncio
     async def test_add_discovery_with_tags(self):
         """Should create TAGGED edges for each tag."""
         kg, mock_db = make_kg_with_mock_db()

@@ -220,21 +220,52 @@ class KnowledgeGraphAGE:
             )
 
         if edge_rows:
-            await conn.executemany(
+            # Filter out dst_ids that have no row in knowledge.discoveries.
+            # AGE and the PG table can drift (AGE→PG canonical flip on
+            # 2026-05-04 left 4 AGE-only Discovery nodes; find_similar
+            # returned those IDs into related_to, and the unguarded INSERT
+            # below tripped the discovery_edges_dst_id_fkey FK constraint,
+            # rolling back the entire tagged write. Tags landed empty even
+            # on the underlying discovery row that did get inserted earlier
+            # in the transaction (KG 2026-05-10T00:58:42 by d0832eaf). The
+            # orphans on the live DB were cleaned up out-of-band; this
+            # guard makes future drift survivable instead of write-fatal.
+            dst_ids = {row[1] for row in edge_rows}
+            existing = await conn.fetch(
                 """
-                INSERT INTO knowledge.discovery_edges (
-                    src_id, dst_id, edge_type, response_type, weight,
-                    created_at, created_by, metadata
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                ON CONFLICT (src_id, dst_id, edge_type) DO UPDATE SET
-                    response_type = EXCLUDED.response_type,
-                    weight = EXCLUDED.weight,
-                    created_at = EXCLUDED.created_at,
-                    created_by = EXCLUDED.created_by,
-                    metadata = EXCLUDED.metadata
+                SELECT id FROM knowledge.discoveries
+                WHERE id = ANY($1::text[])
                 """,
-                edge_rows,
+                list(dst_ids),
             )
+            existing_set = {r["id"] for r in existing}
+            missing = dst_ids - existing_set
+            if missing:
+                logger.warning(
+                    "_sync_discovery_edges: dropping %d edge(s) to missing "
+                    "dst_id(s) for src_id=%r — drift between graph backend and "
+                    "knowledge.discoveries. Missing: %s",
+                    len(missing),
+                    discovery.id,
+                    sorted(missing),
+                )
+                edge_rows = [row for row in edge_rows if row[1] in existing_set]
+            if edge_rows:
+                await conn.executemany(
+                    """
+                    INSERT INTO knowledge.discovery_edges (
+                        src_id, dst_id, edge_type, response_type, weight,
+                        created_at, created_by, metadata
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    ON CONFLICT (src_id, dst_id, edge_type) DO UPDATE SET
+                        response_type = EXCLUDED.response_type,
+                        weight = EXCLUDED.weight,
+                        created_at = EXCLUDED.created_at,
+                        created_by = EXCLUDED.created_by,
+                        metadata = EXCLUDED.metadata
+                    """,
+                    edge_rows,
+                )
 
     async def _sync_updated_discovery_row(
         self,
