@@ -495,9 +495,10 @@ class TestFormatMirror:
         data = _sample_response()
         data["learning_context"] = {
             "calibration": {
-                "insight": "INVERTED CALIBRATION: High confidence correlates with LOWER accuracy.",
+                "insight": "INVERTED CALIBRATION: High confidence correlates with LOWER trajectory health.",
                 "total_decisions": 15,
-                "overall_accuracy": 0.65,
+                "trajectory_health": 0.65,
+                "overall_accuracy": 0.65,  # legacy alias from strategic bins
             }
         }
         result = _format_mirror(data, saved_trust_tier=None)
@@ -509,23 +510,34 @@ class TestFormatMirror:
         # into thinking they had accumulated history.
         assert any("fleet" in s.lower() for s in result["mirror"]), \
             "INVERTED calibration signal must be labeled fleet-wide"
+        assert not any("accuracy" in s.lower() for s in result["mirror"]), \
+            "Mirror must not call strategic trajectory-health bins accuracy"
+        assert any("trajectory health" in s.lower() for s in result["mirror"])
 
-    def test_calibration_insight_normal(self):
+    def test_calibration_insight_normal_labels_strategic_bins_as_trajectory_health(self):
         data = _sample_response()
         data["learning_context"] = {
             "calibration": {
                 "insight": "Well calibrated",
                 "total_decisions": 20,
-                "overall_accuracy": 0.82,
+                "trajectory_health": 0.82,
+                "overall_accuracy": 0.82,  # legacy alias from strategic bins
+                "high_confidence_trajectory_health": 0.91,
+                "low_confidence_trajectory_health": 0.74,
             }
         }
         result = _format_mirror(data, saved_trust_tier=None)
-        assert any("82%" in s for s in result["mirror"])
+        signal = next(s for s in result["mirror"] if "fleet calibration" in s.lower())
+        assert "82%" in signal
+        assert "trajectory health" in signal.lower()
+        assert "high-conf health" in signal.lower()
+        assert "low-conf health" in signal.lower()
+        assert "accuracy" not in signal.lower()
         # Same scope concern as the inverted case — the 20 decisions are
         # fleet-wide, not per-agent. Label must match the dashboard, which
         # renders the same singleton under a "Fleet-wide" header.
-        assert any("fleet" in s.lower() for s in result["mirror"]), \
-            "Calibration accuracy signal must be labeled fleet-wide"
+        assert "fleet" in signal.lower(), \
+            "Calibration trajectory-health signal must be labeled fleet-wide"
 
     def test_complexity_divergence_question(self):
         data = _sample_response()

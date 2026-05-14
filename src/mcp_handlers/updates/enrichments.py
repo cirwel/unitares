@@ -993,40 +993,52 @@ async def enrich_learning_context(ctx: UpdateContext) -> None:
             total = sum(s['count'] for s in bin_stats.values())
 
             if total >= 10:
-                total_correct = sum(s.get('actual_correct', 0) for s in bin_stats.values())
-                overall_accuracy = total_correct / total if total > 0 else 0
+                total_healthy = sum(s.get('actual_correct', 0) for s in bin_stats.values())
+                trajectory_health = total_healthy / total if total > 0 else 0
 
                 high_conf_bins = ['0.7-0.8', '0.8-0.9', '0.9-1.0']
                 low_conf_bins = ['0.0-0.5', '0.5-0.7']
 
                 high_conf_total = sum(bin_stats.get(b, {}).get('count', 0) for b in high_conf_bins)
-                high_conf_correct = sum(bin_stats.get(b, {}).get('actual_correct', 0) for b in high_conf_bins)
-                high_conf_accuracy = high_conf_correct / high_conf_total if high_conf_total > 0 else 0
+                high_conf_healthy = sum(bin_stats.get(b, {}).get('actual_correct', 0) for b in high_conf_bins)
+                high_conf_trajectory_health = high_conf_healthy / high_conf_total if high_conf_total > 0 else 0
 
                 low_conf_total = sum(bin_stats.get(b, {}).get('count', 0) for b in low_conf_bins)
-                low_conf_correct = sum(bin_stats.get(b, {}).get('actual_correct', 0) for b in low_conf_bins)
-                low_conf_accuracy = low_conf_correct / low_conf_total if low_conf_total > 0 else 0
+                low_conf_healthy = sum(bin_stats.get(b, {}).get('actual_correct', 0) for b in low_conf_bins)
+                low_conf_trajectory_health = low_conf_healthy / low_conf_total if low_conf_total > 0 else 0
 
                 # Require sufficient samples in BOTH groups before comparing
                 min_per_group = 5
                 if high_conf_total < min_per_group or low_conf_total < min_per_group:
                     cal_insight = None  # Insufficient per-group data — don't claim inversion
-                elif high_conf_accuracy < low_conf_accuracy - 0.2:
-                    cal_insight = "INVERTED CALIBRATION: High confidence correlates with LOWER accuracy. Consider being more humble."
-                elif abs(high_conf_accuracy - low_conf_accuracy) < 0.1:
-                    cal_insight = "Well calibrated - confidence matches outcomes"
+                elif high_conf_trajectory_health < low_conf_trajectory_health - 0.2:
+                    cal_insight = (
+                        "INVERTED CALIBRATION: High confidence correlates with "
+                        "LOWER trajectory health. Consider being more humble."
+                    )
+                elif abs(high_conf_trajectory_health - low_conf_trajectory_health) < 0.1:
+                    cal_insight = "Well calibrated - confidence tracks trajectory health"
                 else:
                     cal_insight = f"Calibration data available ({total} decisions auto-evaluated)"
 
                 if cal_insight is not None:
                     learning_context["calibration"] = {
                         "total_decisions": total,
-                        "overall_accuracy": round(overall_accuracy, 2),
-                        "high_confidence_accuracy": round(high_conf_accuracy, 2),
-                        "low_confidence_accuracy": round(low_conf_accuracy, 2),
+                        "trajectory_health": round(trajectory_health, 2),
+                        "high_confidence_trajectory_health": round(high_conf_trajectory_health, 2),
+                        "low_confidence_trajectory_health": round(low_conf_trajectory_health, 2),
+                        # Legacy aliases retained for downstream clients that still
+                        # read strategic trajectory bins under their old names.
+                        "overall_accuracy": round(trajectory_health, 2),
+                        "high_confidence_accuracy": round(high_conf_trajectory_health, 2),
+                        "low_confidence_accuracy": round(low_conf_trajectory_health, 2),
                         "insight": cal_insight,
-                        "source": "auto-collected from trajectory outcomes (no human input required)"
+                        "source": (
+                            "auto-collected from trajectory outcomes "
+                            "(strategic health; no human input required)"
+                        ),
                     }
+
         except Exception as e:
             logger.debug(f"Could not fetch calibration data: {e}")
 

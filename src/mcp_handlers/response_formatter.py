@@ -204,13 +204,26 @@ def _format_mirror(response_data: dict, saved_trust_tier: Optional[str], meta: A
             # must match so agents don't mistake fleet trends for personal
             # history. See 2026-04-14 dogfood finding.
             if "INVERTED" in insight.upper():
-                mirror_signals.insert(0, "Fleet confidence trending inverted (high conf -> lower accuracy across the fleet)")
+                mirror_signals.insert(
+                    0,
+                    "Fleet confidence trending inverted "
+                    "(high conf -> lower trajectory health across the fleet)",
+                )
             elif cal.get("total_decisions", 0) >= 10:
+                trajectory_health = cal.get("trajectory_health", cal.get("overall_accuracy", 0))
+                high_conf_health = cal.get(
+                    "high_confidence_trajectory_health",
+                    cal.get("high_confidence_accuracy", "?"),
+                )
+                low_conf_health = cal.get(
+                    "low_confidence_trajectory_health",
+                    cal.get("low_confidence_accuracy", "?"),
+                )
                 mirror_signals.append(
-                    f"Fleet calibration: {cal.get('overall_accuracy', 0):.0%} accuracy over "
+                    f"Fleet calibration: {trajectory_health:.0%} trajectory health over "
                     f"{cal['total_decisions']} fleet-wide decisions "
-                    f"(high-conf: {cal.get('high_confidence_accuracy', '?')}, "
-                    f"low-conf: {cal.get('low_confidence_accuracy', '?')})"
+                    f"(high-conf health: {high_conf_health}, "
+                    f"low-conf health: {low_conf_health})"
                 )
 
     # 3. Complexity divergence — suppress on first few check-ins (no baseline)
