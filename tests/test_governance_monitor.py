@@ -9,6 +9,7 @@ import pytest
 import numpy as np
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 from unittest.mock import patch, MagicMock
@@ -1621,6 +1622,24 @@ class TestStatePersistence:
         with open(state_file, 'r') as f:
             loaded = json.load(f)
         assert loaded is not None
+
+    def test_save_and_load_roundtrip_preserves_created_at(self, tmp_path, monkeypatch):
+        """Persisted monitor state should preserve original creation time."""
+        import src._imports as imports_module
+
+        monkeypatch.setattr(imports_module, "_project_root", tmp_path)
+        original_created_at = datetime(2024, 1, 2, 3, 4, 5, 678901)
+
+        mon = UNITARESMonitor("test-created-at", load_state=False)
+        mon.created_at = original_created_at
+        mon.save_persisted_state()
+
+        state_file = tmp_path / "data" / "agents" / "test-created-at_state.json"
+        saved = json.loads(state_file.read_text())
+        assert saved["created_at_iso"] == original_created_at.isoformat()
+
+        reloaded = UNITARESMonitor("test-created-at", load_state=True)
+        assert reloaded.created_at == original_created_at
 
     def test_load_nonexistent_state(self):
         """Loading nonexistent state should return None."""

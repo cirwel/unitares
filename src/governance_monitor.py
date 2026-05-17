@@ -263,6 +263,17 @@ class UNITARESMonitor:
                 beh_data = data.pop('behavioral_eisv', None)
                 if beh_data:
                     self._behavioral_state = BehavioralEISV.from_dict(beh_data)
+                # Restore created_at if persisted; otherwise __init__ will fall
+                # back to now() for older state files that predate this field.
+                created_at_iso = data.pop('created_at_iso', None)
+                if created_at_iso:
+                    try:
+                        self.created_at = datetime.fromisoformat(created_at_iso)
+                    except (TypeError, ValueError) as e:
+                        logger.warning(
+                            f"Could not parse created_at_iso for {self.agent_id} "
+                            f"({created_at_iso!r}): {e}; falling back to now()",
+                        )
                 # Restore last_update if persisted; otherwise leave the in-memory
                 # value (set in __init__) intact. last_update lives on the monitor,
                 # not on GovernanceState, so it's handled here as a side effect —
@@ -294,6 +305,10 @@ class UNITARESMonitor:
             state_data = self.state.to_dict_with_history()
             # Include behavioral EISV state for persistence
             state_data['behavioral_eisv'] = self._behavioral_state.to_dict_with_history()
+            # Persist created_at so agent age/maturity survives process restarts.
+            created_at = getattr(self, 'created_at', None)
+            if created_at is not None:
+                state_data['created_at_iso'] = created_at.isoformat()
             # Persist last_update so cross-restart gaps integrate against the real
             # prior check-in time, not the lazy-init wall-clock.
             state_data['last_update_iso'] = self.last_update.isoformat()
