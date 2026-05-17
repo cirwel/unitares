@@ -157,6 +157,12 @@ class UNITARESMonitor:
         self._prev_confidence: Optional[float] = None
         self._prev_checkin_time: Optional[float] = None  # monotonic time of last check-in
 
+        # Gap-recovery: bumped to GAP_RECOVERY_CYCLES when wall-clock dt
+        # saturates DT_MAX (e.g., MacBook clamshell sleep-wake). While > 0,
+        # 'pause' decisions are downgraded to 'proceed' and logged separately
+        # via audit_logger.log_attest_gap_suppressed. Decrements each cycle.
+        self._gap_recovery_cycles_remaining: int = 0
+
         # Tactical prediction registry: open (confidence, id) pairs awaiting an
         # outcome. Minted at check-in time, consumed when an outcome references
         # the id. Enables exact filtration for the sequential calibration lane
@@ -850,10 +856,18 @@ class UNITARESMonitor:
         # scaling can represent. Above this threshold a 17h gap and a 30h
         # gap integrate identically — operator-visible signal that decay
         # is no longer gap-proportional. See task #7 for semantics decision.
+        #
+        # We also arm the gap-recovery window here. The next N attestations
+        # may run on stale/transient state (e.g., MacBook clamshell sleep-wake
+        # produced false high-risk verdicts on Lumen/Sentinel/Watcher 2026-05-08
+        # to 2026-05-12); during the window we downgrade 'pause' decisions
+        # so the circuit breaker doesn't trip on a sleep-wake artifact.
         if scaled_dt > config.DT_MAX:
+            self._gap_recovery_cycles_remaining = config.GAP_RECOVERY_CYCLES
             logger.info(
                 f"[DT_MAX saturation] {self.agent_id}: elapsed={elapsed_seconds:.1f}s "
-                f"clipped to dt={config.DT_MAX} (linear scaling would give {scaled_dt:.2f})"
+                f"clipped to dt={config.DT_MAX} (linear scaling would give {scaled_dt:.2f}); "
+                f"arming gap-recovery for {config.GAP_RECOVERY_CYCLES} cycles"
             )
 
         # === DUAL-LOG GROUNDING (Patent: Dual-Log Architecture) ===
@@ -1068,13 +1082,24 @@ class UNITARESMonitor:
             oscillation_state=oscillation_state
         )
 
+        # Pre-flag gap-suppression so calibration, audit, and history can record
+        # the *original* verdict truthfully — the actual decision mutation
+        # happens after those recording paths so calibration doesn't learn from
+        # a synthetic 'proceed' that the operator never intended.
+        gap_suppression_pending = (
+            self._gap_recovery_cycles_remaining > 0
+            and decision.get('action') == 'pause'
+        )
+
         trajectory_validation = self._run_calibration_recording(
             confidence=confidence,
             decision=decision,
             drift_vector=drift_vector,
         )
-        
-        # Log decision via audit logger (for accountability and transparency)
+
+        # Log decision via audit logger (for accountability and transparency).
+        # Records the un-suppressed decision so operators can later analyze
+        # whether suppression masked real drift; gap_suppressed flag in details.
         audit_logger.log_auto_attest(
             agent_id=self.agent_id,
             confidence=confidence,
@@ -1086,6 +1111,7 @@ class UNITARESMonitor:
                 'coherence': float(self.state.coherence),
                 'void_active': void_active,
                 'unitares_verdict': unitares_verdict,
+                'gap_suppressed': gap_suppression_pending,
                 'beh_obs': [round(beh_E_obs, 4), round(beh_I_obs, 4), round(beh_S_obs, 4)],
                 'drift': {
                     'emotional': round(drift_vector.calibration_deviation, 4),
@@ -1105,7 +1131,7 @@ class UNITARESMonitor:
                 },
             }
         )
-        
+
         # Track decision history for governance auditing
         self.state.decision_history.append(decision.get('sub_action', decision['action']))
         if len(self.state.decision_history) > config.HISTORY_WINDOW:
@@ -1119,6 +1145,14 @@ class UNITARESMonitor:
             self.state.verdict_history.append(unitares_verdict)
             if len(self.state.verdict_history) > config.HISTORY_WINDOW:
                 self.state.verdict_history = self.state.verdict_history[-config.HISTORY_WINDOW:]
+
+        # Gap-recovery suppression: applied last so recording paths above saw
+        # the original 'pause'. This mutates decision['action'] to 'proceed'
+        # for downstream enforcement (circuit breaker in agent_loop_detection),
+        # records a dedicated audit event, and decrements the counter.
+        decision = self._maybe_gap_suppress(
+            decision, elapsed_seconds, risk_score, confidence
+        )
         
         # Determine overall status using health thresholds (aligned with health_checker)
         # Use same thresholds as health_checker for consistency: risk_healthy_max=0.35, risk_moderate_max=0.60
@@ -1185,6 +1219,39 @@ class UNITARESMonitor:
     def _compute_drift_vector(self, grounded_agent_state, agent_state, confidence, task_type, continuity_metrics):
         """Compute concrete ethical drift vector from measurable signals."""
         return _compute_drift_vector_impl(self, grounded_agent_state, agent_state, confidence, task_type, continuity_metrics)
+
+    def _maybe_gap_suppress(self, decision: Dict, elapsed_seconds: float,
+                             risk_score: float,
+                             confidence: Optional[float] = None) -> Dict:
+        """Suppress 'pause' decisions in the post-gap recovery window.
+
+        Triggered by DT_MAX-saturating wall-clock gaps (e.g., MacBook clamshell
+        sleep-wake). When the counter is non-zero and the decision is 'pause',
+        downgrade to 'proceed', annotate the decision dict, and emit a
+        dedicated audit event. Decrements the counter on every call while the
+        window is open. Returns the (possibly modified) decision dict.
+        """
+        if self._gap_recovery_cycles_remaining <= 0:
+            return decision
+        if decision.get('action') == 'pause':
+            original_reason = decision.get('reason', 'pause')
+            decision['original_action'] = 'pause'
+            decision['gap_suppressed'] = True
+            decision['action'] = 'proceed'
+            decision['reason'] = (
+                f"gap-suppressed (was: {original_reason}); "
+                f"cycles_remaining={self._gap_recovery_cycles_remaining - 1}"
+            )
+            audit_logger.log_attest_gap_suppressed(
+                agent_id=self.agent_id,
+                elapsed_seconds=elapsed_seconds,
+                risk_score=risk_score,
+                confidence=confidence if confidence is not None else getattr(self, 'current_confidence', None),
+                original_reason=original_reason,
+                cycles_remaining=self._gap_recovery_cycles_remaining - 1,
+            )
+        self._gap_recovery_cycles_remaining -= 1
+        return decision
 
     def _compute_phi_and_risk(self, grounded_agent_state, agent_state, task_type):
         """Compute phi objective, UNITARES verdict, risk score with task-type adjustments."""

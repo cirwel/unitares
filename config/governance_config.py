@@ -687,6 +687,16 @@ class GovernanceConfig:
     DT = 0.1         # Base timestep for integration (seconds)
     DT_EXPECTED_INTERVAL = 15.0  # Expected check-in cadence (seconds)
     DT_MAX = 1.0     # Euler stability cap (max single-step dt)
+
+    # Gap-recovery: when wall-clock dt exceeds the band that linear scaling
+    # can represent (scaled_dt > DT_MAX), the next N attestations may run
+    # on stale/transient state — for example, a MacBook clamshell sleep-wake
+    # leaves the governance-MCP process with one cached attest cycle and
+    # then a wake-window attest that arrives with discontinuous EMA inputs.
+    # In that window we downgrade 'pause' decisions to 'proceed' (the next
+    # cycle's verdict will catch genuine high-risk states). Evidence in
+    # knowledge graph discovery 2026-05-15T14:27:26.894282+00:00.
+    GAP_RECOVERY_CYCLES = 2
     
     # History window for metrics
     HISTORY_WINDOW = 1000  # Keep last 1000 updates for statistics

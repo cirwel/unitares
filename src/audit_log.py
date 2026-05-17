@@ -110,6 +110,32 @@ class AuditLogger:
         )
         self._write_entry(entry)
     
+    def log_attest_gap_suppressed(self, agent_id: str, elapsed_seconds: float,
+                                   risk_score: float, original_reason: str,
+                                   cycles_remaining: int,
+                                   confidence: float = None):
+        """Log a 'pause' decision suppressed by the gap-recovery window.
+
+        Emitted when an attestation runs in the N cycles immediately after
+        a DT_MAX-saturating wall-clock gap. The original 'pause' decision is
+        downgraded to 'proceed' on the assumption that the inputs reflect a
+        sleep-wake transient rather than real drift. Cycle counter decrements
+        until the recovery window closes and normal pause semantics resume.
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="attest_gap_suppressed",
+            confidence=float(confidence) if confidence is not None else 0.0,
+            details={
+                "elapsed_seconds": round(elapsed_seconds, 1),
+                "risk_score": risk_score,
+                "original_reason": original_reason,
+                "cycles_remaining": cycles_remaining,
+            }
+        )
+        self._write_entry(entry)
+
     def log_auto_attest(self, agent_id: str, confidence: float, ci_passed: bool,
                        risk_score: float, decision: str, details: Dict = None):
         """Log an auto-attestation event"""
