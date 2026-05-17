@@ -1484,17 +1484,21 @@ class TestCacheSession:
         Watcher P004 fingerprint ee881e2a — regression guard.
         """
         import asyncio
-        import time
         from src.mcp_handlers.identity.handlers import _cache_session
         from src.mcp_handlers.identity import persistence
 
-        # Force a short timeout so the test doesn't wait half a second.
+        # Force a short timeout so the test does not rely on the default
+        # handler budget, then bound the whole call with a CI-tolerant guard.
         original_timeout = persistence._REDIS_WRITE_TIMEOUT
 
         mock_cache = AsyncMock()
+        cancelled = asyncio.Event()
 
         async def _never_returns(*_a, **_kw):
-            await asyncio.sleep(10)
+            try:
+                await asyncio.sleep(10)
+            finally:
+                cancelled.set()
 
         mock_cache.bind = AsyncMock(side_effect=_never_returns)
 
@@ -1502,14 +1506,12 @@ class TestCacheSession:
             persistence._REDIS_WRITE_TIMEOUT = 0.05
             with patch("src.mcp_handlers.identity.persistence._redis_cache", None), \
                  patch("src.cache.get_session_cache", return_value=mock_cache):
-                start = time.monotonic()
                 # Must not raise, must return promptly.
-                await _cache_session("sess-deadlock", "uuid-deadlock")
-                elapsed = time.monotonic() - start
-            assert elapsed < 0.5, (
-                f"_cache_session should honor _REDIS_WRITE_TIMEOUT; "
-                f"took {elapsed:.3f}s"
-            )
+                await asyncio.wait_for(
+                    _cache_session("sess-deadlock", "uuid-deadlock"),
+                    timeout=1.0,
+                )
+            assert cancelled.is_set()
         finally:
             persistence._REDIS_WRITE_TIMEOUT = original_timeout
 
@@ -1517,14 +1519,17 @@ class TestCacheSession:
     async def test_cache_session_raw_setex_deadlock_times_out(self, mock_raw_redis):
         """Same guard on the raw-Redis branch (display_agent_id != uuid)."""
         import asyncio
-        import time
         from src.mcp_handlers.identity.handlers import _cache_session
         from src.mcp_handlers.identity import persistence
 
         original_timeout = persistence._REDIS_WRITE_TIMEOUT
+        cancelled = asyncio.Event()
 
         async def _never_returns(*_a, **_kw):
-            await asyncio.sleep(10)
+            try:
+                await asyncio.sleep(10)
+            finally:
+                cancelled.set()
 
         mock_raw_redis.setex = AsyncMock(side_effect=_never_returns)
 
@@ -1538,17 +1543,15 @@ class TestCacheSession:
             with patch("src.mcp_handlers.identity.persistence._redis_cache", None), \
                  patch("src.cache.get_session_cache", return_value=mock_cache), \
                  patch("src.cache.redis_client.get_redis", new=_get_raw):
-                start = time.monotonic()
-                await _cache_session(
-                    "sess-setex-deadlock",
-                    "uuid-setex",
-                    display_agent_id="Claude_Code_20260420",
+                await asyncio.wait_for(
+                    _cache_session(
+                        "sess-setex-deadlock",
+                        "uuid-setex",
+                        display_agent_id="Claude_Code_20260420",
+                    ),
+                    timeout=1.0,
                 )
-                elapsed = time.monotonic() - start
-            assert elapsed < 0.5, (
-                f"Raw-Redis setex path should honor _REDIS_WRITE_TIMEOUT; "
-                f"took {elapsed:.3f}s"
-            )
+            assert cancelled.is_set()
         finally:
             persistence._REDIS_WRITE_TIMEOUT = original_timeout
 
