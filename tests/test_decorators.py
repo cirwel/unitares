@@ -229,6 +229,13 @@ class TestDecoratorExecution:
         assert call_kwargs["payload"]["timeout_s"] == 0.05
         assert "elapsed_s" in call_kwargs["payload"]
         assert call_kwargs["agent_id"] == "test-uuid-1234"
+        # Wave 0 step 2 dedup contract: every coordination_failure event carries
+        # an incident_id UUID for §129 dedup. The decorator emit site was the
+        # one gap (see docs/proposals/wave-1-window-evaluation-2026-05-18.md).
+        import uuid as _uuid
+        incident_id = call_kwargs["payload"]["incident_id"]
+        assert isinstance(incident_id, str)
+        _uuid.UUID(incident_id)  # raises if not a valid UUID
 
     @pytest.mark.asyncio
     async def test_timeout_emit_handles_arguments_without_agent_id(self):

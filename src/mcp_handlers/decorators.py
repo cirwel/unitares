@@ -152,10 +152,17 @@ def mcp_tool(
                 effective_agent_id = args_agent_id or get_context_agent_id()
                 session_id = get_context_session_key()
 
+                from uuid import uuid4
+
                 emit_payload: Dict[str, Any] = {
                     "tool_name": tool_name,
                     "timeout_s": timeout,
                     "elapsed_s": round(time.time() - start_time, 3),
+                    # Wave 0 step 2 dedup contract (wave-0-step-2-call-site-scoping.md §"Dedup contract"):
+                    # §129 evaluates `COUNT(DISTINCT payload->>'incident_id')`. The other four wired
+                    # emit sites carry this field; this site was the gap (see
+                    # docs/proposals/wave-1-window-evaluation-2026-05-18.md Caveat 1).
+                    "incident_id": str(uuid4()),
                 }
                 if isinstance(arguments, dict) and arguments.get("action"):
                     emit_payload["action"] = arguments["action"]
