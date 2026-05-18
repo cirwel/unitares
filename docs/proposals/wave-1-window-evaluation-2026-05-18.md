@@ -103,9 +103,19 @@ The 16× drop in agent_state writes between T+6 and T+7 means the second half of
 
 Order-of-magnitude check on the decorator emitter alone: 203 fires on T+0 under ~840-writes/day load. Normalized to T+7→T+13's ~51-writes/day load (and assuming linear scaling, which is the most generous assumption for a coupling bug), the expected count over 7 days is ~85 events. Observed: 0. The gap *could* be real abatement, but it could also be other things: load not linear, the locked_update perf fix (PR #372, merged the same afternoon) reduced timeout pressure below the 15s threshold, or the bug shifted to a non-instrumented surface (Caveat 2 path 3).
 
-### Caveat 4 — `audit.coordination_events` exists but is empty
+### Caveat 4 — `audit.coordination_events` is wired but production-untested
 
-A dedicated partitioned table `audit.coordination_events` (with partitions through 2026-06) is registered in the schema with shape identical to `audit.events`. It has **zero rows** across all partitions; it has never received a write. Production emits route to `audit.events` filtered by `event_type LIKE 'coordination_failure.%'`. This is the schema-routing drift the roadmap notes at line 308 — consistent with the bug class itself blocking the dedicated-table path — but worth surfacing here because any future re-wiring of emit sites must commit explicitly to one sink or the other. The current ambiguity invites a future PR landing emits to the empty table and silently leaving §129's query against `audit.events` returning 0 for a different reason.
+**Amended 2026-05-18 after this doc shipped.** The original Caveat 4 framed this as a "routing ambiguity" that needed resolution. That framing was wrong; the resolution shipped 11 days before this doc was written and I missed it.
+
+PR #403 (`feat(wave-2): dual-write coordination_failure events to dedicated audit.coordination_events table`, merged 2026-05-07) added a fire-and-forget dual-write in `src/coordination_failure_emit.py:121–192`. Every coordination_failure emit now writes to BOTH `audit.events` (sync, failure-safe truth — §129 query target) AND `audit.coordination_events` (async, dedicated replay surface). The dual-write has 166 lines of unit tests in `tests/test_coordination_failure_emit.py`.
+
+`audit.coordination_events` is empty not because the routing is broken, but because **zero coordination_failure events fired in production between PR #403 (2026-05-07 01:26) and now**. The same emit silence that left §129's query at 0 also left the dedicated table at 0 — both numbers have the same cause, not separate causes. The dual-write architecture is intentionally bi-target.
+
+What this means operationally: the dual-write is wired but has had zero production exercise. The next coordination_failure event that fires will land in both tables, at which point we will learn whether the production wire actually works under the asyncpg-await-from-decorator constraint that motivated the fire-and-forget pattern. Until then, the empty dedicated table is the expected state, not a finding.
+
+The original Caveat 4's recommendation ("commit to one audit sink") is moot.
+
+The process failure that produced this caveat is in the "Lessons" section below.
 
 ## Process finding — the dedup field shipped missing at the one site that fires most
 
@@ -137,10 +147,21 @@ If these three hold, condition 1 has been honestly tested at representative load
 
 ## Recommended follow-ups (priority order)
 
-1. **One-site fix**: add `incident_id` to `src/mcp_handlers/decorators.py:163` emit payload. Smallest possible PR; restores criterion-evaluability for any future window.
-2. **Commit to one audit sink**: either backfill the doc to declare `audit.events` canonical and deprecate `audit.coordination_events`, or wire all emits to the dedicated table. Either is fine; the current both-and is the avoidable mistake.
-3. **Run a representative-load window**: once (1) lands and the operator returns from Mercor, the next 14-day window with ≥500 writes/day average is the real §129 evaluation.
+1. **One-site fix**: add `incident_id` to `src/mcp_handlers/decorators.py:163` emit payload. Smallest possible PR; restores criterion-evaluability for any future window. **Shipped 2026-05-18 as PR #463.**
+2. ~~Commit to one audit sink~~ — withdrawn. Caveat 4 was wrong; the sink question was resolved by PR #403 on 2026-05-07. The dual-write is the design; both tables are intentional. Next coordination_failure fire will exercise it for real.
+3. **Run a representative-load window**: once the operator returns from Mercor, the next 14-day window with ≥500 writes/day average is the real §129 evaluation.
 4. **(Independent of this doc)** Conditions 2 and 3 still need their own evaluation before any Wave 1 close. They are not in scope here.
+
+## Lessons (added 2026-05-18 after Caveat 4 amendment)
+
+This doc was council-passed (architect + reviewer + live-verifier in parallel) and still shipped with a load-bearing factual error in Caveat 4: the "routing ambiguity" had been resolved 11 days earlier by PR #403. The dual-write code is in the same file (`src/coordination_failure_emit.py`) as the decorator-emit codepath I cited correctly elsewhere; a `grep coordination_events src/` from any of three lanes would have caught it.
+
+Two process gaps:
+
+1. **Author**: did not run a "what recent PRs touched this surface" check before claiming a design ambiguity exists. The doc's other claims (line numbers, payload shapes, raw counts) were verified against source; the negative claim ("ambiguity exists, needs resolution") was asserted without verification.
+2. **Council**: all three lanes examined the doc's positive claims. The verifier confirmed the dedicated table is empty (true), but did not check whether code wrote to it. None of the lanes ran `git log --oneline --since='3 weeks' src/coordination_failure_emit.py` or equivalent. The council pattern protects against fabrication of currently-non-existent things; it does not currently protect against ignorance of recently-existent things.
+
+Concrete remediation already taken: this caveat is amended. A memory entry on "before asserting a design ambiguity, grep source + check recent git history for resolution PRs" will be added separately.
 
 A note on the bias the author is operating under: `feedback_substrate-migration-status-quo-bias` flags that I reliably resist substrate migrations across sessions. The "Recommended follow-ups" above all keep the work on the Python side; the symmetric reading would be that 13 days into a 14-day window the dedup field was missing at the one site that fires most, and the substrate-tax surface produced the iteration cost that made that miss possible — which is itself a substrate-question data point. The falsifier section above is the structural answer; the recommended follow-ups are the operational answer. The operator should weigh both.
 
