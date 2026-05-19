@@ -251,7 +251,7 @@ class TestDecisionSubAction:
         assert decision['action'] == 'pause'
         assert decision['sub_action'] == 'coherence_pause'
 
-    def test_monitor_decision_cirs_block(self):
+    def test_monitor_decision_cirs_block_resonance(self):
         state = MagicMock()
         state.E = 0.8
         state.I = 0.8
@@ -262,14 +262,67 @@ class TestDecisionSubAction:
         state.coherence_history = []
 
         oi_state = MagicMock()
-        oi_state.oi = 0.9
+        oi_state.oi = 3.5
         oi_state.flips = 5
+        oi_state.resonant = True
 
         decision = monitor_make_decision(
             state=state, risk_score=0.1,
             response_tier='hard_block', oscillation_state=oi_state
         )
         assert decision['sub_action'] == 'cirs_block'
+        assert 'resonance' in decision['reason'].lower()
+        assert decision['nearest_edge'] == 'oscillation'
+
+    def test_monitor_decision_cirs_block_risk_ceiling(self):
+        """hard_block fired by risk > beta_high should label the reason as risk, not resonance."""
+        state = MagicMock()
+        state.E = 0.3
+        state.I = 0.9
+        state.S = 0.25
+        state.V = 0.0
+        state.coherence = 0.49
+        state.void_active = False
+        state.coherence_history = []
+
+        oi_state = MagicMock()
+        oi_state.oi = 0.30
+        oi_state.flips = 2
+        oi_state.resonant = False
+
+        decision = monitor_make_decision(
+            state=state, risk_score=0.85,
+            response_tier='hard_block', oscillation_state=oi_state
+        )
+        assert decision['sub_action'] == 'cirs_block'
+        assert 'risk ceiling' in decision['reason'].lower()
+        assert 'resonance' not in decision['reason'].lower()
+        assert decision['nearest_edge'] == 'risk'
+
+    def test_monitor_decision_cirs_block_coherence_floor(self):
+        """hard_block fired by coherence < tau_low should label the reason as coherence."""
+        state = MagicMock()
+        state.E = 0.5
+        state.I = 0.5
+        state.S = 0.5
+        state.V = 0.0
+        state.coherence = 0.25
+        state.void_active = False
+        state.coherence_history = []
+
+        oi_state = MagicMock()
+        oi_state.oi = 0.10
+        oi_state.flips = 1
+        oi_state.resonant = False
+
+        decision = monitor_make_decision(
+            state=state, risk_score=0.4,
+            response_tier='hard_block', oscillation_state=oi_state
+        )
+        assert decision['sub_action'] == 'cirs_block'
+        assert 'coherence floor' in decision['reason'].lower()
+        assert 'resonance' not in decision['reason'].lower()
+        assert decision['nearest_edge'] == 'coherence'
 
     def test_monitor_decision_risk_pause(self):
         state = MagicMock()
