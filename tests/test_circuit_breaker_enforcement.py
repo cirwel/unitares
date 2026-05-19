@@ -41,7 +41,7 @@ class TestCircuitBreakerEnforcement:
         """Paused agent is blocked."""
         mock_meta = MagicMock()
         mock_meta.status = "paused"
-        mock_meta.paused_at = "2026-02-05T10:00:00"
+        mock_meta.paused_at = datetime.now().isoformat()  # fresh — pause TTL would expire stale ones
         mock_mcp_server.agent_metadata["paused-agent"] = mock_meta
 
         with patch('src.mcp_handlers.shared.get_mcp_server', return_value=mock_mcp_server):
@@ -67,7 +67,7 @@ class TestCircuitBreakerEnforcement:
         """Paused agent error includes recovery guidance."""
         mock_meta = MagicMock()
         mock_meta.status = "paused"
-        mock_meta.paused_at = "2026-02-05T10:00:00"
+        mock_meta.paused_at = datetime.now().isoformat()  # fresh — pause TTL would expire stale ones
         mock_mcp_server.agent_metadata["paused-agent"] = mock_meta
 
         with patch('src.mcp_handlers.shared.get_mcp_server', return_value=mock_mcp_server):
@@ -141,7 +141,7 @@ class TestCircuitBreakerStates:
         for status, expected in statuses_and_expected:
             mock_meta = MagicMock()
             mock_meta.status = status
-            mock_meta.paused_at = "2026-02-05T10:00:00" if status == "paused" else None
+            mock_meta.paused_at = datetime.now().isoformat() if status == "paused" else None  # fresh — pause TTL would expire stale ones
             mock_mcp_server.agent_metadata["test-agent"] = mock_meta
 
             with patch('src.mcp_handlers.shared.get_mcp_server', return_value=mock_mcp_server):

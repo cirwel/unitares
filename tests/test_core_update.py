@@ -309,7 +309,9 @@ class TestProcessAgentUpdate:
     async def test_paused_agent_rejected(self, mock_server):
         """Paused agent cannot process updates."""
         agent_uuid = "test-uuid-paused"
-        meta = _make_metadata(status="paused", paused_at="2026-01-20T12:00:00")
+        # Fresh paused_at — pause TTL auto-expires stale ones (>72h default)
+        from datetime import datetime as _dt
+        meta = _make_metadata(status="paused", paused_at=_dt.now().isoformat())
         mock_server.agent_metadata = {agent_uuid: meta}
 
         with patch("src.mcp_handlers.core.mcp_server", mock_server), \

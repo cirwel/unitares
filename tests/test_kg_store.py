@@ -472,7 +472,9 @@ class TestStoreKnowledgeGraph:
     async def test_store_paused_agent_blocked(self, patch_common, registered_agent, mock_mcp_server):
         """Paused agents cannot store knowledge (circuit breaker)."""
         mock_mcp_server.agent_metadata[registered_agent].status = "paused"
-        mock_mcp_server.agent_metadata[registered_agent].paused_at = "2026-01-01T00:00:00"
+        # Fresh paused_at — pause TTL auto-expires stale ones (>72h default)
+        from datetime import datetime as _dt
+        mock_mcp_server.agent_metadata[registered_agent].paused_at = _dt.now().isoformat()
 
         from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
 

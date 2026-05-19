@@ -697,7 +697,40 @@ class GovernanceConfig:
     # cycle's verdict will catch genuine high-risk states). Evidence in
     # knowledge graph discovery 2026-05-15T14:27:26.894282+00:00.
     GAP_RECOVERY_CYCLES = 2
-    
+
+    # Pause TTL: an agent paused for longer than this is considered stale
+    # and the next gate-traversal is allowed through, letting the
+    # categorizer re-evaluate (its own gap-suppression handles the
+    # first-after-gap state; a real problem re-pauses immediately on the
+    # next cycle via the normal circuit-breaker path).
+    #
+    # Motivation: GAP_RECOVERY_CYCLES above only protects the *categorizer
+    # path* — the case where a long gap would falsely paint a pause on a
+    # first-after-gap check-in. It does not help once an agent is
+    # *already* paused, because the pause-status check at every gate
+    # (src/mcp_handlers/support/agent_auth.py, src/mcp_handlers/updates/
+    # phases.py, etc.) rejects the call before the categorizer runs. The
+    # 2026-05-09 → 2026-05-18 Watcher/Sentinel/Lumen silence (recovered
+    # 2026-05-18 via operator self_recovery) was this class: pauses set
+    # during the earlier 2026-05-08 sleep-wake incident persisted across
+    # nine days because there was no aging mechanism.
+    #
+    # Default 72h (3 days): long enough to cover a long-weekend operator-
+    # AFK window without the dashboard going noisy; shorter than the
+    # observed 9-day silence so the operator's first sign would be one
+    # auto-expire event in the audit log instead of weeks of fleet
+    # blindness. All pause sources are categorizer-driven (only
+    # agent_loop_detection.py:513 sets status=paused in the codebase, and
+    # only on `decision_action == 'pause'` from monitor_decision.py's
+    # four pause paths); loop-detection uses a separate cooldown
+    # mechanism (loop_detected_at + loop_cooldown_until) and is not
+    # affected by this TTL.
+    #
+    # Override via env `UNITARES_PAUSE_AUTO_EXPIRE_SECONDS` (seconds).
+    PAUSE_AUTO_EXPIRE_SECONDS = int(
+        os.getenv("UNITARES_PAUSE_AUTO_EXPIRE_SECONDS", str(72 * 3600))
+    )
+
     # History window for metrics
     HISTORY_WINDOW = 1000  # Keep last 1000 updates for statistics
     

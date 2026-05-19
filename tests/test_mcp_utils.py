@@ -262,7 +262,9 @@ class TestCheckAgentCanOperate:
     @patch("src.mcp_handlers.support.agent_auth.compute_agent_signature", return_value={"uuid": None})
     @patch("src.mcp_handlers.shared.get_mcp_server")
     def test_paused_blocked(self, mock_srv, mock_sig):
-        mock_srv.return_value = _mock_server({"p": _meta(status="paused", paused_at="2026-01-01")})
+        from datetime import datetime as _dt
+        # Fresh paused_at — pause TTL auto-expires stale ones (>72h default)
+        mock_srv.return_value = _mock_server({"p": _meta(status="paused", paused_at=_dt.now().isoformat())})
         r = check_agent_can_operate("p")
         assert r is not None
         d = _parse_tc(r)

@@ -168,24 +168,33 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
                 }
             )]
 
-    # Circuit breaker: paused / archived agents cannot update
+    # Circuit breaker: paused / archived agents cannot update.
+    # Pause TTL: stale pauses auto-expire via the shared helper, letting
+    # the categorizer re-evaluate downstream. Implementation in
+    # src/mcp_handlers/support/pause_ttl.py — same module serves
+    # check_agent_can_operate to keep all gates in sync.
     if ctx.agent_uuid in mcp_server.agent_metadata:
         meta = mcp_server.agent_metadata[ctx.agent_uuid]
         if meta.status == "paused":
-            return [error_response(
-                "Agent is paused and cannot process updates",
-                error_code="AGENT_PAUSED",
-                details={
-                    "agent_id": ctx.agent_uuid[:12],
-                    "paused_at": meta.paused_at,
-                    "status": "paused",
-                },
-                recovery={
-                    "action": "Use self_recovery(action='quick') for safe states, or self_recovery(action='review', reflection='...') for full recovery",
-                    "note": "Circuit breaker triggered due to governance threshold violation",
-                    "auto_recovery": "Dialectic recovery may already be in progress",
-                }
-            )]
+            from ..support.pause_ttl import maybe_auto_expire_pause_async
+            expired = await maybe_auto_expire_pause_async(ctx.agent_uuid, meta)
+            if not expired:
+                return [error_response(
+                    "Agent is paused and cannot process updates",
+                    error_code="AGENT_PAUSED",
+                    details={
+                        "agent_id": ctx.agent_uuid[:12],
+                        "paused_at": meta.paused_at,
+                        "status": "paused",
+                    },
+                    recovery={
+                        "action": "Use self_recovery(action='quick') for safe states, or self_recovery(action='review', reflection='...') for full recovery",
+                        "note": "Circuit breaker triggered due to governance threshold violation",
+                        "auto_recovery": "Dialectic recovery may already be in progress",
+                    }
+                )]
+            # Expired — fall through to normal processing; categorizer
+            # will re-pause if state is genuinely degraded.
         # NOTE: Do NOT block archived here. Phase 2 (handle_onboarding_and_resume)
         # auto-resumes archived agents on engagement. Blocking here prevented
         # onboard() reactivation from taking effect (Phase 1 ran before metadata

@@ -110,6 +110,31 @@ class AuditLogger:
         )
         self._write_entry(entry)
     
+    def log_pause_auto_expired(self, agent_id: str,
+                                original_paused_at: Optional[str],
+                                elapsed_seconds: float):
+        """Log a stale-pause auto-expiration.
+
+        Emitted when a paused agent's status is auto-cleared at a gate
+        because the pause is older than `PAUSE_AUTO_EXPIRE_SECONDS`.
+        The categorizer is allowed to re-evaluate on the same call;
+        if the agent is genuinely degraded, the normal circuit-breaker
+        path re-pauses on the next cycle. See
+        `src/mcp_handlers/support/pause_ttl.py` and
+        `docs/proposals/wave-1-window-evaluation-2026-05-18.md`.
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="pause_auto_expired",
+            confidence=0.0,
+            details={
+                "original_paused_at": original_paused_at,
+                "elapsed_seconds": round(elapsed_seconds, 1),
+            }
+        )
+        self._write_entry(entry)
+
     def log_attest_gap_suppressed(self, agent_id: str, elapsed_seconds: float,
                                    risk_score: float, original_reason: str,
                                    cycles_remaining: int,
