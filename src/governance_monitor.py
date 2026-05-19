@@ -1129,6 +1129,13 @@ class UNITARESMonitor:
                     'overconf': continuity_metrics.overconfidence_signal,
                     'underconf': continuity_metrics.underconfidence_signal,
                 },
+                'behavioral': {
+                    'verdict': behavioral_assessment.verdict,
+                    'health': behavioral_assessment.health,
+                    'risk': behavioral_assessment.risk,
+                    'components': behavioral_assessment.components,
+                    'baselined': self._behavioral_state.is_baselined,
+                },
             }
         )
 

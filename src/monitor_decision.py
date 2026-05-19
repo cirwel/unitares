@@ -76,18 +76,48 @@ def make_decision(
     )
 
     # --- Priority 1: CIRS hard_block override ---
+    # classify_response() can fire hard_block from three independent conditions:
+    # coherence < tau_low, risk > beta_high, or resonant + bad state. Attribute
+    # the reason to the actual trigger instead of blanket-labeling as resonance.
     if response_tier == 'hard_block':
-        oi = oscillation_state.oi if oscillation_state else 0.0
-        flips = oscillation_state.flips if oscillation_state else 0
+        from src.cirs import CIRS_DEFAULTS
+        resonant = bool(oscillation_state and oscillation_state.resonant)
+        if resonant:
+            oi = oscillation_state.oi
+            flips = oscillation_state.flips
+            reason = (
+                f'CIRS resonance detected (OI={oi:.2f}, flips={flips}) — decision oscillating'
+            )
+            guidance = 'Governance is flip-flopping. Reduce complexity or wait for state to settle.'
+            nearest_edge = 'oscillation'
+        elif risk_score > CIRS_DEFAULTS['beta_high']:
+            reason = f'CIRS risk ceiling breached (risk={risk_score:.2f} > {CIRS_DEFAULTS["beta_high"]})'
+            guidance = 'Risk score exceeded the hard-block ceiling. Pause to investigate the input driving the spike.'
+            nearest_edge = 'risk'
+        elif state.coherence < CIRS_DEFAULTS['tau_low']:
+            reason = f'CIRS coherence floor breached (coherence={state.coherence:.2f} < {CIRS_DEFAULTS["tau_low"]})'
+            guidance = 'Coherence fell below the hard-block floor. Pause to let state stabilize.'
+            nearest_edge = 'coherence'
+        else:
+            # hard_block reached us but none of the documented conditions hold —
+            # surface that fact rather than mislabeling as resonance.
+            oi = oscillation_state.oi if oscillation_state else 0.0
+            flips = oscillation_state.flips if oscillation_state else 0
+            reason = (
+                f'CIRS hard_block (cause unclassified; OI={oi:.2f}, flips={flips}, '
+                f'risk={risk_score:.2f}, coherence={state.coherence:.2f})'
+            )
+            guidance = 'CIRS forced a hard block but the trigger condition is ambiguous; inspect monitor inputs.'
+            nearest_edge = 'oscillation'
         return {
             'action': 'pause',
             'sub_action': 'cirs_block',
-            'reason': f'CIRS resonance detected (OI={oi:.2f}, flips={flips}) — decision oscillating',
-            'guidance': 'Governance is flip-flopping. Reduce complexity or wait for state to settle.',
+            'reason': reason,
+            'guidance': guidance,
             'critical': False,
             'basin': basin,
             'margin': 'critical',
-            'nearest_edge': 'oscillation',
+            'nearest_edge': nearest_edge,
         }
 
     # --- Priority 2: void_active → pause (runtime adaptive threshold) ---
