@@ -19,6 +19,22 @@ from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+# Module-local strong-ref set for in-flight fire-and-forget PG audit-write
+# tasks. Without this, `loop.create_task(coro)` returns a Task that CPython
+# GC can collect mid-await — `_write_to_postgres` awaits asyncpg, so a
+# collection between yields drops the write. Mirrors the canonical pattern
+# at `src/coordination_failure_emit.py:_inflight_dedicated_writes` and
+# `src/mcp_handlers/support/pause_ttl.py:_inflight_persistence_tasks`.
+_inflight_pg_audit_tasks: "set" = set()
+
+
+def _spawn_pg_audit_task(loop, coro) -> None:
+    """Spawn coro on `loop` and pin a strong ref until it completes."""
+    task = loop.create_task(coro, name="pg_audit_write")
+    _inflight_pg_audit_tasks.add(task)
+    task.add_done_callback(_inflight_pg_audit_tasks.discard)
+
+
 def _parse_ts_naive(ts: str) -> datetime:
     """Parse an ISO timestamp and strip tzinfo for naive-naive comparison.
 
@@ -613,18 +629,21 @@ class AuditLogger:
             logger.warning(f"Could not write audit log: {e}", exc_info=True)
 
         # Fire-and-forget Postgres write; see docstring for the loss/latency
-        # tradeoff.
+        # tradeoff. The task is pinned in `_inflight_pg_audit_tasks` until
+        # done so CPython GC can't collect it mid-await — bare create_task
+        # is a documented P001 hazard (Watcher #69f2ccbc, 2026-05-18).
         try:
             import asyncio
             try:
                 loop = asyncio.get_running_loop()
                 # In event loop thread — schedule directly
-                loop.create_task(self._write_to_postgres(entry_dict))
+                _spawn_pg_audit_task(loop, self._write_to_postgres(entry_dict))
             except RuntimeError:
                 # In executor thread — schedule back to main loop
                 loop = self.__class__._event_loop
                 if loop is not None and loop.is_running():
-                    loop.call_soon_threadsafe(loop.create_task, self._write_to_postgres(entry_dict))
+                    coro = self._write_to_postgres(entry_dict)
+                    loop.call_soon_threadsafe(_spawn_pg_audit_task, loop, coro)
         except Exception:
             pass  # No event loop at all (tests, CLI)
 

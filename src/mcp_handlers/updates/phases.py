@@ -126,6 +126,29 @@ def _derive_outcome(evidence: dict) -> tuple:
     return ("task_failed" if is_bad else "task_completed", is_bad)
 
 
+# Module-local strong-ref set for in-flight fire-and-forget persist tasks
+# (thread-identity, inferred-purpose). Without this, `asyncio.create_task(coro)`
+# returns a Task that CPython GC can collect mid-await — these persisters
+# await asyncpg, so a collection between yields silently drops the write.
+# Mirrors the canonical pattern at
+# `src/coordination_failure_emit.py:_inflight_dedicated_writes` and
+# `src/mcp_handlers/support/pause_ttl.py:_inflight_persistence_tasks`.
+# P001 fix per Watcher findings #0a0616c2 and #acfc7012 (2026-05-18).
+_inflight_persist_tasks: "set" = set()
+
+
+def _spawn_persist_task(coro, *, name: str) -> None:
+    """Spawn coro on the running loop and pin a strong ref until done.
+
+    Callers should be inside an async handler (running loop required);
+    `RuntimeError` from `get_running_loop` is left to the caller's
+    existing try/except to swallow.
+    """
+    task = asyncio.get_running_loop().create_task(coro, name=name)
+    _inflight_persist_tasks.add(task)
+    task.add_done_callback(_inflight_persist_tasks.discard)
+
+
 # ─── Phase 1: Identity Resolution & Guards ─────────────────────────────
 
 async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
@@ -908,8 +931,9 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
                     "node_index": ctx.meta.node_index,
                     "active_session_key": ctx.meta.active_session_key,
                 }
-                asyncio.create_task(
-                    _persist_thread_identity_async(ctx.agent_uuid, _thread_metadata_snapshot)
+                _spawn_persist_task(
+                    _persist_thread_identity_async(ctx.agent_uuid, _thread_metadata_snapshot),
+                    name="persist_thread_identity",
                 )
             except RuntimeError:
                 # No running loop — extremely unusual for this code path
@@ -1007,8 +1031,9 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
             if inferred:
                 meta.purpose = inferred
                 try:
-                    asyncio.create_task(
-                        _persist_inferred_purpose_async(ctx.agent_id, inferred)
+                    _spawn_persist_task(
+                        _persist_inferred_purpose_async(ctx.agent_id, inferred),
+                        name="persist_inferred_purpose",
                     )
                 except RuntimeError:
                     pass
