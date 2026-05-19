@@ -256,7 +256,10 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
     if tool_name in skip_tools:
         return None
 
-    from src.mcp_handlers.context import update_context_agent_id
+    from src.mcp_handlers.context import (
+        set_session_resolution_source,
+        update_context_agent_id,
+    )
     from src.mcp_handlers.identity.handlers import derive_session_key, resolve_session_identity
 
     # Respect an already explicit UUID.
@@ -290,6 +293,12 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
                 if cached and (_time.monotonic() - cached.bound_at) < _TRANSPORT_CACHE_TTL:
                     update_context_agent_id(cached.agent_uuid)
                     arguments["agent_id"] = cached.agent_uuid
+                    # Mark resolution source so _compute_identity_assurance
+                    # doesn't read None and downgrade to "weak / unknown".
+                    # Cache-hit means the caller supplied no auth this call
+                    # but matches a recently-proven binding by transport
+                    # fingerprint. See _MEDIUM_IDENTITY_SOURCES rationale.
+                    set_session_resolution_source("sticky_transport_cache")
                     return cached.agent_uuid
         except Exception as e:
             logger.debug("[STICKY-REST] cache check failed: %s", e)

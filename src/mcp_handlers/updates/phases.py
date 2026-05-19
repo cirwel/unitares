@@ -46,6 +46,12 @@ _MEDIUM_IDENTITY_SOURCES = {
     "pinned_onboard_session",
     "context_mcp_session_id",
     "context_session_key",
+    # Sticky transport cache hit: caller supplied no auth signal this call,
+    # but the IP:UA fingerprint matched a recently-resolved binding (TTL'd).
+    # Honest tier: the chain-of-trust is fingerprint-stability since the
+    # original strongly-proven resolution. Not weak ("no signal at all"),
+    # not strong ("this call carried explicit proof").
+    "sticky_transport_cache",
 }
 
 

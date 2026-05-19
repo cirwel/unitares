@@ -638,6 +638,42 @@ class TestStickyRESTPath:
         mock_resolve.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_rest_cache_hit_marks_session_resolution_source(self):
+        """Cache-hit short-circuit must mark session_resolution_source.
+
+        Regression for the REST process_agent_update identity-assurance
+        mismatch surfaced during R6 H1 dogfood 2026-05-19: the cache-hit
+        branch bound the right agent_uuid but never called
+        ``set_session_resolution_source``. Downstream
+        ``_compute_identity_assurance`` then read None and reported
+        ``tier: weak / session_source: unknown`` even though the row
+        landed under the correctly bound UUID. Response body and durable
+        state disagreed about assurance tier — the kind of identity-
+        honesty regression the 2026-04-17 rollout was meant to close.
+        """
+        from src.http_api import _resolve_http_bound_agent
+        from src.mcp_handlers.context import get_session_resolution_source
+
+        update_transport_binding("sticky:7.7.7.7:ua-hit", "uuid-cached", "sk", "rest")
+        signals = FakeSignals(ip_ua_fingerprint="7.7.7.7:ua-hit")
+
+        result = await _resolve_http_bound_agent("call_model", {}, signals)
+
+        assert result == "uuid-cached"
+        # The mark is the load-bearing assertion — without it,
+        # _compute_identity_assurance reads None → weak / unknown.
+        source = get_session_resolution_source()
+        assert source == "sticky_transport_cache"
+
+        # And the assurance computation must map it to medium, not weak —
+        # cache hit implies fingerprint-stability since the original
+        # (strongly-proven) resolution, not a no-signal-at-all call.
+        from src.mcp_handlers.updates.phases import _compute_identity_assurance
+        assurance = _compute_identity_assurance(source, None)
+        assert assurance["tier"] == "medium"
+        assert assurance["session_source"] == "sticky_transport_cache"
+
+    @pytest.mark.asyncio
     async def test_rest_cache_populated_on_miss(self):
         """First REST call for a fingerprint populates the cache so next call hits it."""
         from src.http_api import _resolve_http_bound_agent
