@@ -46,13 +46,18 @@ _MEDIUM_IDENTITY_SOURCES = {
     "pinned_onboard_session",
     "context_mcp_session_id",
     "context_session_key",
-    # Sticky transport cache hit: caller supplied no auth signal this call,
-    # but the IP:UA fingerprint matched a recently-resolved binding (TTL'd).
-    # Honest tier: the chain-of-trust is fingerprint-stability since the
-    # original strongly-proven resolution. Not weak ("no signal at all"),
-    # not strong ("this call carried explicit proof").
-    "sticky_transport_cache",
 }
+
+# NOTE: "sticky_transport_cache" is intentionally NOT in either set above.
+# A sticky-cache hit means the caller supplied no per-call proof. The 04-17
+# identity-honesty rollout treats per-call proof absence as weak, even when
+# the server's own cache trusts the binding. Marking the source (in
+# http_api.py:_resolve_http_bound_agent) gives diagnostic clarity
+# (session_source="sticky_transport_cache" instead of "unknown") without
+# upgrading the tier away from honest weak. A durable per-binding tier would
+# require TransportBinding to capture the original session_resolution_source
+# at mint time (currently it only captures load-provenance: redis/postgres/
+# rest). See r6-h1 dogfood 2026-05-19 finding.
 
 
 def _compute_identity_assurance(

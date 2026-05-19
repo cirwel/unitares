@@ -660,17 +660,23 @@ class TestStickyRESTPath:
         result = await _resolve_http_bound_agent("call_model", {}, signals)
 
         assert result == "uuid-cached"
-        # The mark is the load-bearing assertion — without it,
-        # _compute_identity_assurance reads None → weak / unknown.
+        # The mark is the load-bearing assertion. Pre-fix, the cache-hit
+        # branch returned without ever calling set_session_resolution_source,
+        # leaving the contextvar at None — _compute_identity_assurance then
+        # reported session_source="unknown".
         source = get_session_resolution_source()
         assert source == "sticky_transport_cache"
 
-        # And the assurance computation must map it to medium, not weak —
-        # cache hit implies fingerprint-stability since the original
-        # (strongly-proven) resolution, not a no-signal-at-all call.
+        # Tier intentionally stays weak: a cache hit means the caller
+        # supplied no per-call proof. The 04-17 identity-honesty stance
+        # is that per-call proof absence is weak even when the server's
+        # own cache trusts the binding. The mark gives diagnostic
+        # clarity (source identified) without claiming a stronger tier
+        # than the caller proved. See the _MEDIUM_IDENTITY_SOURCES note
+        # in phases.py for rationale.
         from src.mcp_handlers.updates.phases import _compute_identity_assurance
         assurance = _compute_identity_assurance(source, None)
-        assert assurance["tier"] == "medium"
+        assert assurance["tier"] == "weak"
         assert assurance["session_source"] == "sticky_transport_cache"
 
     @pytest.mark.asyncio

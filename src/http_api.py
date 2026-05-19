@@ -293,11 +293,14 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
                 if cached and (_time.monotonic() - cached.bound_at) < _TRANSPORT_CACHE_TTL:
                     update_context_agent_id(cached.agent_uuid)
                     arguments["agent_id"] = cached.agent_uuid
-                    # Mark resolution source so _compute_identity_assurance
-                    # doesn't read None and downgrade to "weak / unknown".
-                    # Cache-hit means the caller supplied no auth this call
-                    # but matches a recently-proven binding by transport
-                    # fingerprint. See _MEDIUM_IDENTITY_SOURCES rationale.
+                    # Mark resolution source for diagnostic clarity.
+                    # The tier stays weak (intentionally — see
+                    # phases.py _MEDIUM_IDENTITY_SOURCES note: a cache hit
+                    # carries no per-call proof). The mark replaces
+                    # "unknown" with "sticky_transport_cache" so callers
+                    # can see where their identity came from. R6 H1
+                    # dogfood 2026-05-19 surfaced the prior "unknown"
+                    # behavior as identity-honesty noise.
                     set_session_resolution_source("sticky_transport_cache")
                     return cached.agent_uuid
         except Exception as e:
