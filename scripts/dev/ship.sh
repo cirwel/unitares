@@ -41,6 +41,16 @@ RUNTIME_PATTERNS=(
     '^src/mcp_server'
     '^src/core\.py$'
     '^src/background_tasks\.py$'
+    # Governance decision pipeline — drives every auto_attest verdict.
+    # Fell into "other" for PR #467 (CIRS reason-string + behavioral
+    # components instrumentation) and shipped without a PR until manually
+    # opened. Same rollback-artifact rationale as elixir/ below.
+    '^src/governance_monitor\.py$'
+    '^src/governance_state\.py$'
+    '^src/monitor_[^/]+\.py$'
+    '^src/cirs\.py$'
+    '^src/behavioral_[^/]+\.py$'
+    '^governance_core/'
     # BEAM substrate (Sentinel, lease plane, future apps under elixir/) is
     # runtime: every change wants a CI-gated PR, not direct push. Without
     # this, a fix to elixir/sentinel/ falls through to "other" and ships
