@@ -48,36 +48,60 @@ _MEDIUM_IDENTITY_SOURCES = {
     "context_session_key",
 }
 
-# NOTE: "sticky_transport_cache" is intentionally NOT in either set above.
-# A sticky-cache hit means the caller supplied no per-call proof. The 04-17
-# identity-honesty rollout treats per-call proof absence as weak, even when
-# the server's own cache trusts the binding. Marking the source (in
-# http_api.py:_resolve_http_bound_agent) gives diagnostic clarity
-# (session_source="sticky_transport_cache" instead of "unknown") without
-# upgrading the tier away from honest weak. A durable per-binding tier would
-# require TransportBinding to capture the original session_resolution_source
-# at mint time (currently it only captures load-provenance: redis/postgres/
-# rest). See r6-h1 dogfood 2026-05-19 finding.
+# S3: `sticky_cache:<original>` envelopes are emitted by the cache-hit
+# fast-paths in http_api.py and middleware/identity_step.py. The decay rule
+# (strong→medium, medium→weak, weak→weak) honors the original mint while
+# debiting one tier for per-call proof absence — the principled middle
+# ground between #466's "always weak" and trusting the cache fully. Pre-S3
+# bindings carry original="unknown" and continue to map to weak.
+_STICKY_CACHE_PREFIX = "sticky_cache:"
+
+# Single-step downward decay. Anything not in this map (including "weak"
+# and unknowns) stays at its computed tier.
+_DECAY_BY_ONE = {"strong": "medium", "medium": "weak"}
+_TIER_SCORES = {"strong": 1.0, "medium": 0.7, "weak": 0.35}
+
+
+def _tier_for_source(source_key: str) -> tuple[str, str]:
+    """Map a raw source key to (tier, reason). Pure — no decay applied."""
+    if source_key in _STRONG_IDENTITY_SOURCES:
+        return "strong", "cryptographic or explicit stable session source"
+    if source_key in _MEDIUM_IDENTITY_SOURCES:
+        return "medium", "session continuity source with weaker explicit proof"
+    return "weak", "heuristic or unknown session source"
 
 
 def _compute_identity_assurance(
     source: Optional[str],
     trajectory_confidence: Optional[float],
 ) -> dict:
-    """Compute identity assurance tier for write-path governance updates."""
+    """Compute identity assurance tier for write-path governance updates.
+
+    Recognizes the S3 `sticky_cache:<original>` envelope: the original
+    proof source's tier is computed, then decayed one step (strong→medium,
+    medium→weak, weak→weak) to honor the original mint while debiting
+    for per-call proof absence.
+    """
     source_key = (source or "unknown").strip().lower()
-    if source_key in _STRONG_IDENTITY_SOURCES:
-        tier = "strong"
-        score = 1.0
-        reason = "cryptographic or explicit stable session source"
-    elif source_key in _MEDIUM_IDENTITY_SOURCES:
-        tier = "medium"
-        score = 0.7
-        reason = "session continuity source with weaker explicit proof"
+
+    if source_key.startswith(_STICKY_CACHE_PREFIX):
+        original_key = source_key[len(_STICKY_CACHE_PREFIX):] or "unknown"
+        original_tier, _ = _tier_for_source(original_key)
+        tier = _DECAY_BY_ONE.get(original_tier, original_tier)
+        if original_tier == tier:
+            reason = (
+                f"cache hit; original proof '{original_key}' was {original_tier} "
+                "(no further decay)"
+            )
+        else:
+            reason = (
+                f"cache hit; original proof '{original_key}' was {original_tier}, "
+                f"decayed one tier to {tier} for per-call proof absence"
+            )
+        score = _TIER_SCORES[tier]
     else:
-        tier = "weak"
-        score = 0.35
-        reason = "heuristic or unknown session source"
+        tier, reason = _tier_for_source(source_key)
+        score = _TIER_SCORES[tier]
 
     # Trajectory acts as continuity evidence, not primary auth.
     if trajectory_confidence is not None:

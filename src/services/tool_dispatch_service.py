@@ -79,14 +79,27 @@ async def run_tool_dispatch_pipeline(
 
         if ctx._transport_key:
             try:
-                from src.mcp_handlers.context import get_context_agent_id
+                from src.mcp_handlers.context import (
+                    get_context_agent_id,
+                    get_session_resolution_source,
+                )
                 current_agent = get_context_agent_id()
                 if current_agent and current_agent != ctx.bound_agent_id:
+                    # S3: read whichever proof source the handler established
+                    # for the rebound identity (the handler will have called
+                    # set_session_resolution_source as part of its mint/bind).
+                    # Strip any prior `sticky_cache:` envelope so the new
+                    # binding records the underlying proof, not the cache-hit
+                    # marker that brought us into this request.
+                    _rebind_original = get_session_resolution_source() or "unknown"
+                    if _rebind_original.startswith("sticky_cache:"):
+                        _rebind_original = _rebind_original[len("sticky_cache:"):]
                     update_transport_binding(
                         ctx._transport_key,
                         current_agent,
                         ctx.session_key or "",
                         f"post_handler:{name}",
+                        original_session_source=_rebind_original,
                     )
             except Exception:
                 pass

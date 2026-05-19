@@ -1353,7 +1353,27 @@ async def _perform_session_bind(
         _signals = _get_signals()
         _tkey = _transport_cache_key(_signals)
         if _tkey:
-            update_transport_binding(_tkey, agent_uuid, session_key, source)
+            # S3: derive original_session_source from the strongest proof
+            # signal present on the current request. _transport_cache_key
+            # only returns a key for the ip_ua_fingerprint paths (with
+            # optional mcp_session_id), so the realistic originals here are
+            # "context_mcp_session_id" (medium) or "ip_ua_fingerprint" (weak).
+            # Falls back to the caller's source label otherwise so audit
+            # trails stay non-empty.
+            _original = (
+                "context_mcp_session_id"
+                if getattr(_signals, "mcp_session_id", None)
+                else "ip_ua_fingerprint"
+                if getattr(_signals, "ip_ua_fingerprint", None)
+                else source
+            )
+            update_transport_binding(
+                _tkey,
+                agent_uuid,
+                session_key,
+                source,
+                original_session_source=_original,
+            )
             bound_info["transport"] = True
     except Exception:
         bound_info["transport"] = False
