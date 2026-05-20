@@ -52,13 +52,55 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 import json
 import math
 import sys
 from datetime import datetime, UTC
 
 from config.governance_config import GovernanceConfig
+
+# S10: the bucket name used when a write arrives without a class_tag, or when
+# the classifier cannot resolve a class for an agent_id during a rebucket pass.
+# Surfaced as a first-class row in compute_metrics_by_class so calibration
+# starvation in the unclassified band reads as a deficit signal, not a silent
+# fold into "global."
+UNKNOWN_CLASS_BUCKET = "unknown"
+
+
+def _merge_state(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
+    """Fold src counters into dst in place. Used by rebucket_from_agent_states
+    to recompose class_states from per-agent slices.
+
+    Sums extensive quantities (samples, successes, confidence_sum, log_e_value);
+    forwards the most-recent last_* fields by timestamp; merges signal_sources
+    and signal_source_outcomes additively. Last-value semantics for last_e_value
+    and last_alt_probability are best-effort under aggregation — the e-process
+    martingale property holds per-state, not across folded states.
+    """
+    dst["eligible_samples"] = int(dst.get("eligible_samples", 0)) + int(src.get("eligible_samples", 0))
+    dst["successes"] = int(dst.get("successes", 0)) + int(src.get("successes", 0))
+    dst["confidence_sum"] = float(dst.get("confidence_sum", 0.0)) + float(src.get("confidence_sum", 0.0))
+    dst["log_e_value"] = float(dst.get("log_e_value", 0.0)) + float(src.get("log_e_value", 0.0))
+
+    src_ts = src.get("last_updated")
+    dst_ts = dst.get("last_updated")
+    if src_ts and (dst_ts is None or src_ts > dst_ts):
+        dst["last_updated"] = src_ts
+        dst["last_e_value"] = float(src.get("last_e_value", dst.get("last_e_value", 1.0)))
+        dst["last_alt_probability"] = float(
+            src.get("last_alt_probability", dst.get("last_alt_probability", 0.5))
+        )
+
+    dst_sources = dst.setdefault("signal_sources", {})
+    for k, v in (src.get("signal_sources") or {}).items():
+        dst_sources[k] = int(dst_sources.get(k, 0)) + int(v)
+
+    dst_outcomes = dst.setdefault("signal_source_outcomes", {})
+    for channel, counts in (src.get("signal_source_outcomes") or {}).items():
+        merged = dst_outcomes.setdefault(channel, {"samples": 0, "successes": 0})
+        merged["samples"] = int(merged.get("samples", 0)) + int(counts.get("samples", 0))
+        merged["successes"] = int(merged.get("successes", 0)) + int(counts.get("successes", 0))
 
 
 def _empty_state() -> Dict[str, Any]:
@@ -97,11 +139,30 @@ class SequentialCalibrationTracker:
     def reset(self) -> None:
         self.global_state = _empty_state()
         self.agent_states = defaultdict(_empty_state)
+        # S10: denormalized per-class rollup. Writes update class_states alongside
+        # global_state and agent_states; reads via compute_metrics_by_class are O(1)
+        # per class. Authoritative counters remain in agent_states — class_states is
+        # a read cache that must be rebuilt via rebucket_from_agent_states when
+        # class membership shifts (S8a promotion sweeps, manual re-tagging).
+        self.class_states = defaultdict(_empty_state)
+        # S10 bootstrap flag: True once class_states is known to represent the
+        # full agent_states corpus (either because it was populated by live
+        # writes only — a fresh epoch — or because rebucket_from_agent_states
+        # has been run at least once). False indicates pre-S10 file load where
+        # class_states is sparse relative to agent_states/global_state. Surfaced
+        # in compute_metrics_by_class so dashboards/MCP consumers can label the
+        # window honestly instead of showing a misleading-by-class breakdown.
+        self.class_states_bootstrapped = True
 
     def _serialize(self) -> Dict[str, Any]:
         return {
             "global": dict(self.global_state),
             "agents": {agent_id: dict(state) for agent_id, state in self.agent_states.items()},
+            # S10: additive field. Tracker state files predating S10 will load
+            # cleanly (load_state defaults to empty class_states); the first
+            # rebucket pass repopulates from agent_states.
+            "classes": {class_tag: dict(state) for class_tag, state in self.class_states.items()},
+            "class_states_bootstrapped": self.class_states_bootstrapped,
             "prior_success": self.prior_success,
             "prior_failure": self.prior_failure,
             "epoch": GovernanceConfig.CURRENT_EPOCH,
@@ -165,6 +226,27 @@ class SequentialCalibrationTracker:
                 restored = _empty_state()
                 restored.update(state or {})
                 self.agent_states[agent_id] = restored
+
+            # S10: load class_states if present; absent for pre-S10 state files,
+            # in which case the next rebucket pass will repopulate from agent_states.
+            self.class_states = defaultdict(_empty_state)
+            classes_data = data.get("classes")
+            for class_tag, state in (classes_data or {}).items():
+                restored = _empty_state()
+                restored.update(state or {})
+                self.class_states[class_tag] = restored
+
+            # S10 bootstrap flag. Honest gap labeling for the window between
+            # pre-S10 file load and the first rebucket run. If the file lacks
+            # the flag AND has no `classes` key AND has non-empty `agents`,
+            # this is a pre-S10 file with history that class_states does not
+            # represent — bootstrap is required.
+            if "class_states_bootstrapped" in data:
+                self.class_states_bootstrapped = bool(data["class_states_bootstrapped"])
+            elif classes_data is None and data.get("agents"):
+                self.class_states_bootstrapped = False
+            else:
+                self.class_states_bootstrapped = True
             self._loaded_mtime = self._file_mtime()
         except Exception as e:
             print(f"Warning: Failed to load sequential calibration state: {e}, resetting", file=sys.stderr)
@@ -231,6 +313,7 @@ class SequentialCalibrationTracker:
         confidence: float,
         outcome_correct: bool,
         agent_id: Optional[str] = None,
+        class_tag: Optional[str] = None,
         signal_source: str,
         decision_action: Optional[str] = None,
         outcome_type: Optional[str] = None,
@@ -243,6 +326,12 @@ class SequentialCalibrationTracker:
         prediction_id, if provided, is included in the return payload for
         forensic audit. The tracker state itself remains aggregate and is
         not indexed by prediction_id.
+
+        class_tag, when provided, drives the parallel class_states rollup
+        (S10). Callers should pass the agent's resolved class (per
+        src/grounding/class_indicator.py::classify_agent). Omitted writes
+        bucket into UNKNOWN_CLASS_BUCKET so the by-class view surfaces
+        calibration starvation in the unclassified band as a deficit signal.
         """
         if not signal_source:
             raise ValueError("signal_source is required")
@@ -267,17 +356,31 @@ class SequentialCalibrationTracker:
                 timestamp=ts,
             )
 
+        # S10: write-through to the class bucket. UNKNOWN_CLASS_BUCKET when the
+        # caller did not pass a class_tag (rather than skipping entirely) keeps
+        # the class breakdown lossless against the global rollup.
+        bucket = class_tag or UNKNOWN_CLASS_BUCKET
+        class_update = self._update_state(
+            self.class_states[bucket],
+            confidence=confidence,
+            outcome_correct=outcome_correct,
+            signal_source=signal_source,
+            timestamp=ts,
+        )
+
         if persist:
             self.save_state()
 
         return {
             "agent_id": agent_id,
+            "class_tag": bucket,
             "prediction_id": prediction_id,
             "decision_action": decision_action,
             "outcome_type": outcome_type,
             "signal_source": signal_source,
             "global": global_update,
             "agent": agent_update,
+            "class": class_update,
         }
 
     def compute_per_channel_health(self, min_samples_for_pin: int = 100) -> Dict[str, Dict[str, Any]]:
@@ -308,57 +411,185 @@ class SequentialCalibrationTracker:
             }
         return out
 
-    def compute_metrics(self, agent_id: Optional[str] = None) -> Dict[str, Any]:
-        """Return bounded, operator-friendly metrics for the tracked e-process."""
-        self._reload_if_stale()
-        if agent_id:
-            state = self.agent_states.get(agent_id)
-            if not state:
-                return {
-                    "status": "no_data",
-                    "eligible_samples": 0,
-                    "scope": "agent",
-                    "agent_id": agent_id,
-                    "signal_sources": {},
-                    "log_evidence": 0.0,
-                    "capped_alarm": 0.0,
-                }
-            scope = "agent"
-        else:
-            state = self.global_state
-            scope = "global"
+    def _state_to_metrics(
+        self,
+        state: Optional[Dict[str, Any]],
+        *,
+        scope: str,
+        agent_id: Optional[str] = None,
+        class_tag: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Render one state dict (global / agent_states[id] / class_states[tag])
+        into the operator-facing metrics payload.
+
+        ANYTIME-VALIDITY SCOPE (S10 council finding):
+        - scope="global" / scope="agent" expose the full e-process envelope
+          including `log_evidence`, `capped_alarm`, `last_alt_probability` —
+          each is a single coherent filtration with valid martingale guarantees.
+        - scope="class" deliberately omits those fields. A class bucket is
+          either (a) a parallel e-process under live writes — valid in
+          isolation but not multipliable against global/agent (same warning
+          the module docstring at the top of this file gives) — or (b) a
+          rebucketed sum of agent log_e_values with different q-trajectories,
+          which has no martingale interpretation. Rather than expose a field
+          that is sometimes anytime-valid and sometimes not, the class
+          envelope is restricted to descriptive statistics that survive
+          aggregation: eligible_samples, mean_confidence, empirical_accuracy,
+          calibration_gap, signal_sources, last_updated.
+        """
+        is_class_scope = scope == "class"
+
+        empty_envelope: Dict[str, Any] = {
+            "status": "no_data",
+            "eligible_samples": 0,
+            "scope": scope,
+            "signal_sources": {},
+        }
+        if not is_class_scope:
+            empty_envelope["log_evidence"] = 0.0
+            empty_envelope["capped_alarm"] = 0.0
+        if agent_id is not None:
+            empty_envelope["agent_id"] = agent_id
+        if class_tag is not None:
+            empty_envelope["class_tag"] = class_tag
+
+        if not state:
+            return empty_envelope
 
         total = int(state["eligible_samples"])
-        positive_log = max(0.0, float(state["log_e_value"]))
 
         if total == 0:
-            return {
-                "status": "no_data",
-                "eligible_samples": 0,
-                "scope": scope,
-                "agent_id": agent_id,
-                "signal_sources": dict(state.get("signal_sources", {})),
-                "log_evidence": 0.0,
-                "capped_alarm": 0.0,
-            }
+            empty_envelope["signal_sources"] = dict(state.get("signal_sources", {}))
+            return empty_envelope
 
         mean_confidence = float(state["confidence_sum"]) / total
         empirical_accuracy = float(state["successes"]) / total
         calibration_gap = empirical_accuracy - mean_confidence
 
-        return {
+        payload: Dict[str, Any] = {
             "status": "tracking",
             "scope": scope,
-            "agent_id": agent_id,
             "eligible_samples": total,
             "mean_confidence": round(mean_confidence, 4),
             "empirical_accuracy": round(empirical_accuracy, 4),
             "calibration_gap": round(calibration_gap, 4),
-            "log_evidence": round(positive_log, 4),
-            "capped_alarm": round(1.0 - math.exp(-positive_log), 4),
-            "last_alt_probability": round(float(state["last_alt_probability"]), 4),
             "signal_sources": dict(state.get("signal_sources", {})),
             "last_updated": state.get("last_updated"),
+        }
+        if not is_class_scope:
+            positive_log = max(0.0, float(state["log_e_value"]))
+            payload["log_evidence"] = round(positive_log, 4)
+            payload["capped_alarm"] = round(1.0 - math.exp(-positive_log), 4)
+            payload["last_alt_probability"] = round(float(state["last_alt_probability"]), 4)
+        if agent_id is not None:
+            payload["agent_id"] = agent_id
+        if class_tag is not None:
+            payload["class_tag"] = class_tag
+        return payload
+
+    def compute_metrics(self, agent_id: Optional[str] = None) -> Dict[str, Any]:
+        """Return bounded, operator-friendly metrics for the tracked e-process."""
+        self._reload_if_stale()
+        if agent_id:
+            return self._state_to_metrics(
+                self.agent_states.get(agent_id),
+                scope="agent",
+                agent_id=agent_id,
+            )
+        return self._state_to_metrics(self.global_state, scope="global")
+
+    def compute_metrics_by_class(self) -> Dict[str, Any]:
+        """S10: per-class rollup keyed by class_tag (substrate / session_like /
+        engaged_ephemeral / ephemeral / UNKNOWN_CLASS_BUCKET).
+
+        Returns an envelope:
+            {
+                "bootstrapped": bool,
+                "by_class": {class_tag: descriptive_metrics, ...},
+            }
+
+        `bootstrapped=False` signals that class_states was loaded from a pre-S10
+        state file and has not been reconciled against agent_states yet —
+        consumers (dashboard, MCP responses) should label the by-class breakdown
+        as a sparse bootstrap view rather than a fleet-representative summary.
+        First successful rebucket_from_agent_states call flips this to True.
+
+        Each by_class value carries only descriptive statistics
+        (eligible_samples, mean_confidence, empirical_accuracy, calibration_gap,
+        signal_sources, last_updated). The e-process fields (log_evidence,
+        capped_alarm, last_alt_probability) are deliberately omitted at class
+        scope — see _state_to_metrics docstring for the anytime-validity
+        rationale.
+        """
+        self._reload_if_stale()
+        return {
+            "bootstrapped": bool(getattr(self, "class_states_bootstrapped", True)),
+            "by_class": {
+                class_tag: self._state_to_metrics(state, scope="class", class_tag=class_tag)
+                for class_tag, state in self.class_states.items()
+            },
+        }
+
+    def rebucket_from_agent_states(
+        self,
+        classifier: Callable[[str], Optional[str]],
+        *,
+        persist: bool = True,
+    ) -> Dict[str, Any]:
+        """S10: rebuild class_states from agent_states by re-asking the classifier
+        for each tracked agent_id.
+
+        classifier(agent_id) returns the current class_tag (or None to bucket the
+        agent's counters into UNKNOWN_CLASS_BUCKET). The walk is full-replacement —
+        old class_states are discarded so a promotion (ephemeral → session_like)
+        moves the counters cleanly rather than leaving the donor bucket inflated.
+
+        IMPORTANT: the merged class_states is a descriptive-stats rollup, not an
+        e-process. `_merge_state` sums per-agent log_e_values across different
+        q-trajectories, which has no martingale interpretation. By design,
+        `_state_to_metrics(scope="class", ...)` omits log_evidence/capped_alarm
+        from the output so this sum never appears in the operator-facing payload.
+
+        Classifier exceptions are caught per-agent (a periodic sweep must not
+        be fragile against transient DB lookup failures), routed to
+        UNKNOWN_CLASS_BUCKET, and logged to stderr with the exception type +
+        agent_id prefix so the operator surface can distinguish "agent not
+        classified" from "classifier raised."
+
+        Returns a telemetry dict (tracked_agents, unresolved_agents, buckets,
+        classifier_errors) and flips class_states_bootstrapped to True.
+        """
+        new_class_states: Dict[str, Dict[str, Any]] = defaultdict(_empty_state)
+        movement: Dict[str, int] = defaultdict(int)
+        unresolved = 0
+        classifier_errors = 0
+
+        for agent_id, agent_state in self.agent_states.items():
+            try:
+                resolved = classifier(agent_id)
+            except Exception as exc:
+                resolved = None
+                classifier_errors += 1
+                print(
+                    f"[S10 rebucket] classifier raised on agent_id={agent_id!r}: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+            bucket = resolved or UNKNOWN_CLASS_BUCKET
+            if resolved is None:
+                unresolved += 1
+            _merge_state(new_class_states[bucket], agent_state)
+            movement[bucket] += 1
+
+        self.class_states = new_class_states
+        self.class_states_bootstrapped = True
+        if persist:
+            self.save_state()
+        return {
+            "tracked_agents": sum(movement.values()),
+            "unresolved_agents": unresolved,
+            "classifier_errors": classifier_errors,
+            "buckets": {k: v for k, v in movement.items()},
         }
 
 
