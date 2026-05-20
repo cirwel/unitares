@@ -421,6 +421,43 @@ class TestGetGovernanceMetrics:
             assert "meaning" in data["mode"]
 
     @pytest.mark.asyncio
+    async def test_get_metrics_standard_mode_omits_basin_mode_when_state_missing(self, mock_mcp_server):
+        """When interpret_state raises, standard verbosity omits basin/mode rather
+        than emitting bare {"value": null}. Symmetric to lite path guard at
+        runtime_queries.py:346.
+        """
+        state = SimpleNamespace(
+            interpret_state=MagicMock(side_effect=RuntimeError("interpret failed")),
+            unitaires_state=None,
+        )
+        m = MagicMock()
+        m.state = state
+        m.get_metrics.return_value = {
+            "E": 0.5, "I": 0.5, "S": 0.5, "V": 0.0,
+            "coherence": None, "risk_score": None,
+            "initialized": True, "status": "ok",
+            "verdict": "proceed",
+        }
+        mock_mcp_server.agent_metadata = {"agent-1": MagicMock(purpose=None)}
+        mock_mcp_server.get_or_create_monitor.return_value = m
+
+        with patch("src.mcp_handlers.core.mcp_server", mock_mcp_server), \
+             patch("src.mcp_handlers.core.require_agent_id", return_value=("agent-1", None)), \
+             patch("src.governance_monitor.UNITARESMonitor") as MockMonitorClass:
+
+            MockMonitorClass.get_eisv_labels.return_value = {
+                "E": "Energy", "I": "Information", "S": "Entropy", "V": "Void"
+            }
+
+            from src.mcp_handlers.core import handle_get_governance_metrics
+            result = await handle_get_governance_metrics({"verbosity": "standard"})
+
+            data = json.loads(result[0].text)
+            assert "basin" not in data
+            assert "mode" not in data
+            assert data["verdict"]["value"] == "proceed"
+
+    @pytest.mark.asyncio
     async def test_get_metrics_uninitialized_agent(self, mock_mcp_server):
         """Uninitialized agent should show pending status in lite mode."""
         state = SimpleNamespace(

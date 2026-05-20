@@ -246,12 +246,17 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         standardized_metrics["reflection"] = reflection
 
     if verbosity == "standard":
-        state = standardized_metrics.get("state", {})
         from src.governance_glossary import (
             explain_basin,
             explain_mode,
             explain_verdict,
         )
+        # Gate basin/mode on state presence — symmetric to lite path (lines
+        # 346-348). When interpret_state raises, standardized_metrics["state"]
+        # is absent; emitting explain_*(None) leaks {"value": null} without
+        # the meaning key, which is worse than just omitting the field.
+        state_present = "state" in standardized_metrics
+        state = standardized_metrics.get("state", {})
         standard_metrics = {
             "agent_id": display_name or public_agent_id,
             "display_name": display_name,
@@ -267,11 +272,12 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             "verdict": explain_verdict(metrics.get("verdict", "uninitialized")),
             "risk_score": metrics.get("risk_score"),
             "primary_eisv_source": standardized_metrics.get("primary_eisv_source"),
-            "basin": explain_basin(state.get("basin")),
-            "mode": explain_mode(state.get("mode")),
             "summary": standardized_metrics.get("summary"),
             "guidance": state.get("guidance"),
         })
+        if state_present:
+            standard_metrics["basin"] = explain_basin(state.get("basin"))
+            standard_metrics["mode"] = explain_mode(state.get("mode"))
         if public_agent_id != agent_id:
             standard_metrics["agent_uuid"] = agent_id
         if reflection:
