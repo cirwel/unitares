@@ -169,7 +169,6 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
 @mcp_tool("compare_agents", timeout=15.0, register=False)
 async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Compare governance patterns across multiple agents"""
-    from src.governance_monitor import UNITARESMonitor
     # Was force=True with a "non-blocking" comment that was wrong — the
     # implementation does 3221 sequential per-agent cache.set awaits
     # (~16s per call). Drop force; in-memory cache is fresh enough for
@@ -192,6 +191,7 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
     
     # Get metrics for all agents
     agents_data = []
+    loop = asyncio.get_running_loop()
     for agent_id in agent_ids:
         # Resolve label to UUID if needed (consistent with observe_agent)
         try:
@@ -203,15 +203,16 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
         except Exception:
             pass  # Use agent_id as-is
 
-        monitor = mcp_server.monitors.get(agent_id)
-        if monitor is None:
-            # Load monitor state (non-blocking)
-            loop = asyncio.get_running_loop()
-            persisted_state = await loop.run_in_executor(None, mcp_server.load_monitor_state, agent_id)
-            if persisted_state:
-                monitor = UNITARESMonitor(agent_id, load_state=False)
-                monitor.state = persisted_state
-        
+        # Skip agents with no measured activity — transient seed-default monitors
+        # would dilute the comparison. Mirrors the prior "no persisted state ⇒
+        # skip" behavior, but gated on metadata (in-memory, no I/O).
+        meta = mcp_server.agent_metadata.get(agent_id)
+        if not meta or int(getattr(meta, "total_updates", 0) or 0) == 0:
+            continue
+
+        monitor = await loop.run_in_executor(None, mcp_server.get_or_create_monitor, agent_id)
+        await ensure_hydrated(monitor, agent_id)
+
         if monitor:
             metrics = monitor.get_metrics()
             
@@ -567,7 +568,6 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
 @mcp_tool("detect_anomalies", timeout=15.0, register=False)
 async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Detect anomalies across agents"""
-    from src.governance_monitor import UNITARESMonitor
     import asyncio
 
     # Wave 0 follow-up: was force=True, which forced a full PostgreSQL
@@ -601,16 +601,16 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
     # Process agents in batches to prevent blocking
     async def process_agent(agent_id: str):
         """Process a single agent's anomalies"""
-        monitor = mcp_server.monitors.get(agent_id)
-        if monitor is None:
-            # Load state in executor to avoid blocking
-            persisted_state = await loop.run_in_executor(
-                None, mcp_server.load_monitor_state, agent_id
-            )
-            if persisted_state:
-                monitor = UNITARESMonitor(agent_id, load_state=False)
-                monitor.state = persisted_state
-        
+        # Skip agents with no measured activity — pattern analysis on seed
+        # defaults yields no anomalies anyway, and skipping avoids the per-call
+        # disk read.
+        meta = mcp_server.agent_metadata.get(agent_id)
+        if not meta or int(getattr(meta, "total_updates", 0) or 0) == 0:
+            return
+
+        monitor = await loop.run_in_executor(None, mcp_server.get_or_create_monitor, agent_id)
+        await ensure_hydrated(monitor, agent_id)
+
         if monitor:
             # Analyze patterns in executor (may do file I/O)
             from src.pattern_analysis import analyze_agent_patterns
@@ -725,110 +725,362 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
 
 @mcp_tool("aggregate_metrics", timeout=15.0, register=False)
 async def handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Get fleet-level health overview"""
-    from src.governance_monitor import UNITARESMonitor
-    import numpy as np
+    """Get fleet-level health overview.
 
-    # Wave 0 follow-up: was force=True, comment claimed "non-blocking" but
-    # the implementation blocks ~16s per call (3221 sequential awaits on
-    # metadata_cache.set in the loader). Same anti-pattern as the prior
-    # list_agents incident (lifecycle/query.py:41). Drop force; in-memory
-    # cache is kept current by process_agent_update / onboard / background
-    # paths and is fresh enough for fleet-aggregate use.
-    await mcp_server.load_metadata_async()
-    
+    Postgres-canonical. Reads core.mv_latest_agent_states for per-agent state
+    rollups, core.agents for active membership + currently-paused, audit.events
+    for current-epoch pause counts, and audit.r1_score_audit for verdict
+    distribution. No in-memory monitor iteration — the prior implementation
+    summed monitor.state across in-process monitors, which is load-once-per-
+    process and drifts from PG truth on cross-process writes, producing
+    persistent "0 pauses" reports while audit.events has hundreds.
+    """
+    from datetime import datetime, timezone
+    from src.db import get_db
+
     agent_ids = arguments.get("agent_ids")
     include_health_breakdown = arguments.get("include_health_breakdown", True)
-    
-    # Get agent list
-    if not agent_ids:
-        agent_ids = [aid for aid, meta in mcp_server.agent_metadata.items() if meta.status == "active"]
-    
-    # Aggregate metrics
-    total_agents = len(agent_ids)
-    agents_with_data = 0
-    total_updates = 0
-    risk_scores = []  # Governance/operational risk scores
-    coherence_scores = []
-    health_statuses = {"healthy": 0, "moderate": 0, "critical": 0, "unknown": 0}
-    decision_counts = {"proceed": 0, "pause": 0}  # Two-tier system (backward compat: approve/reflect/reject mapped)
-    verdict_counts = {"safe": 0, "caution": 0, "high-risk": 0}  # Behavioral verdict distribution
-    
-    for agent_id in agent_ids:
-        monitor = mcp_server.monitors.get(agent_id)
-        if monitor is None:
-            # Load monitor state (non-blocking)
-            loop = asyncio.get_running_loop()
-            persisted_state = await loop.run_in_executor(None, mcp_server.load_monitor_state, agent_id)
-            if persisted_state:
-                monitor = UNITARESMonitor(agent_id, load_state=False)
-                monitor.state = persisted_state
-        
-        if monitor:
-            agents_with_data += 1
-            metrics = monitor.get_metrics()
-            
-            # Aggregate risk_score and coherence
-            risk_score = metrics.get("risk_score") or metrics.get("current_risk")
-            if risk_score is not None:
-                risk_scores.append(float(risk_score))
-            elif monitor.state.risk_history:
-                # Fallback to risk_history if risk_score not available
-                history_values = [float(r) for r in monitor.state.risk_history[-10:]]  # Last 10 updates
-                risk_scores.extend(history_values)
-            coherence_scores.append(float(monitor.state.coherence))
-            
-            # Aggregate health status
-            status = metrics.get("status", "unknown")
-            health_statuses[status] = health_statuses.get(status, 0) + 1
-            
-            # Aggregate decisions
-            decision_stats = metrics.get("decision_statistics", {})
-            # Map old decisions to new system
-            proceed_count = decision_stats.get("proceed", 0) + decision_stats.get("approve", 0) + decision_stats.get("reflect", 0) + decision_stats.get("revise", 0)
-            pause_count = decision_stats.get("pause", 0) + decision_stats.get("reject", 0)
-            decision_counts["proceed"] += proceed_count
-            decision_counts["pause"] += pause_count
-            # Backward compatibility (keep old keys for compatibility)
-            decision_counts["approve"] = decision_stats.get("approve", 0)
-            decision_counts["reflect"] = decision_stats.get("reflect", 0) + decision_stats.get("revise", 0)
-            decision_counts["reject"] = decision_stats.get("reject", 0)
-            
-            # Aggregate verdict distribution from metrics
-            verdict = metrics.get("verdict")
-            if verdict and verdict in verdict_counts:
-                verdict_counts[verdict] += 1
 
-            # Count total updates — prefer meta.total_updates (Postgres-backed)
-            meta = mcp_server.agent_metadata.get(agent_id)
-            total_updates += meta.total_updates if meta else monitor.state.update_count
-    
-    # Compute aggregate statistics
-    aggregate_data = {
-        "total_agents": total_agents,
-        "agents_with_data": agents_with_data,
-        "total_updates": total_updates,
-        "mean_risk_score": float(np.mean(risk_scores)) if risk_scores else 0.0,  # Governance/operational risk (mean)
-        "mean_risk": float(np.mean(risk_scores)) if risk_scores else 0.0,  # DEPRECATED: Use mean_risk_score instead
-        "mean_coherence": float(np.mean(coherence_scores)) if coherence_scores else 0.0,
-        "decision_distribution": {
-            **decision_counts,
-            "total": sum(decision_counts.values())
-        },
-        "verdict_distribution": {
-            **verdict_counts,
-            "total": sum(verdict_counts.values())
-        }
+    db = get_db()
+    async with db.acquire() as conn:
+        # Current epoch: max(epoch) in core.epochs is the authoritative
+        # boundary for "this epoch" rollups; outcome_events.epoch and
+        # agent_state.epoch are written against the same value via
+        # GovernanceConfig.CURRENT_EPOCH.
+        epoch_row = await conn.fetchrow(
+            "SELECT epoch, started_at FROM core.epochs ORDER BY epoch DESC LIMIT 1"
+        )
+        current_epoch = epoch_row["epoch"] if epoch_row else 1
+        epoch_started_at = epoch_row["started_at"] if epoch_row else None
+
+        # Build agent scope. agent_ids=None → all active agents. agent_ids=list
+        # → that explicit set (no active-status filter; matches prior behavior
+        # of trusting the caller).
+        if agent_ids:
+            scope_clause = "WHERE a.id = ANY($1::text[])"
+            scope_args: tuple = (list(agent_ids),)
+        else:
+            scope_clause = "WHERE a.status = 'active'"
+            scope_args = ()
+
+        # State rollups via matview. The matview excludes synthetic bootstrap
+        # rows at definition time (migration 023), so no extra filter needed.
+        # LEFT JOIN preserves agents that never wrote a measured state row.
+        state_sql = f"""
+            WITH scope AS (
+                SELECT a.id AS agent_id, a.status
+                FROM core.agents a
+                {scope_clause}
+            )
+            SELECT
+              count(*)::int AS total_agents,
+              count(ls.identity_id)::int AS agents_with_data,
+              avg(ls.risk_score)::real AS mean_risk_score,
+              avg(ls.coherence)::real AS mean_coherence,
+              count(*) FILTER (
+                  WHERE ls.regime IN ('nominal','STABLE','CONVERGENCE')
+              )::int AS healthy,
+              count(*) FILTER (
+                  WHERE ls.regime IN ('warning','EXPLORATION','recovery')
+              )::int AS moderate,
+              count(*) FILTER (
+                  WHERE ls.regime IN ('critical','DIVERGENCE')
+              )::int AS critical,
+              count(*) FILTER (WHERE ls.identity_id IS NULL)::int AS unknown_health,
+              count(*) FILTER (WHERE scope.status = 'paused')::int AS paused_now,
+              EXTRACT(EPOCH FROM (now() - min(ls.recorded_at)))::bigint
+                  AS staleness_oldest_seconds,
+              EXTRACT(EPOCH FROM (now() - max(ls.recorded_at)))::bigint
+                  AS staleness_newest_seconds
+            FROM scope
+            LEFT JOIN core.mv_latest_agent_states ls ON ls.agent_id = scope.agent_id
+        """
+        state_row = await conn.fetchrow(state_sql, *scope_args)
+
+        # total_updates: persisted as core.identities.metadata->>'total_updates'
+        # (atomically incremented by db.increment_update_count on every
+        # process_agent_update). chain_obs_count is an R2-specific lineage
+        # counter — only ~27 across all active agents — so don't confuse it.
+        updates_sql = f"""
+            SELECT COALESCE(
+                SUM(COALESCE((i.metadata->>'total_updates')::int, 0)), 0
+            )::bigint AS total_updates
+            FROM core.agents a
+            JOIN core.identities i ON i.agent_id = a.id
+            {scope_clause}
+        """
+        total_updates = await conn.fetchval(updates_sql, *scope_args)
+
+        # Pauses this epoch: governance pauses persist to audit.events as
+        # event_type='lifecycle_paused' (fired from agent_loop_detection.py
+        # when a circuit-breaker pause decision lands). circuit_breaker_trip
+        # fires 1:1 alongside; counting both would double-count.
+        if epoch_started_at is not None:
+            pause_sql = """
+                SELECT count(*)::int FROM audit.events
+                WHERE ts >= $1 AND event_type = 'lifecycle_paused'
+            """
+            pauses_this_epoch = await conn.fetchval(pause_sql, epoch_started_at)
+
+            # Proceed proxy: trajectory_validated outcomes in audit.outcome_events
+            # for this epoch. Not a perfect 1:1 with "governance said proceed"
+            # — there is no lifecycle_proceeded event today — but it's the
+            # measured "agent kept moving" signal scoped to the same window.
+            proceed_sql = """
+                SELECT count(*)::int FROM audit.outcome_events
+                WHERE epoch = $1 AND outcome_type = 'trajectory_validated'
+            """
+            proceed_this_epoch = await conn.fetchval(proceed_sql, current_epoch)
+
+            # Verdict distribution from r1 score audit, current-epoch window.
+            verdict_sql = """
+                SELECT verdict, count(*)::int AS n
+                FROM audit.r1_score_audit
+                WHERE recorded_at >= $1 AND verdict IS NOT NULL
+                GROUP BY verdict
+            """
+            verdict_rows = await conn.fetch(verdict_sql, epoch_started_at)
+        else:
+            pauses_this_epoch = 0
+            proceed_this_epoch = 0
+            verdict_rows = []
+
+    # Map r1 verdicts (plausible/inconclusive/unsupported) into the
+    # legacy verdict_distribution surface (safe/caution/high-risk) so
+    # external readers don't break. R1 vocabulary is the persisted truth;
+    # the legacy keys are presentation.
+    R1_TO_LEGACY = {
+        "plausible": "safe",
+        "inconclusive": "caution",
+        "unsupported": "high-risk",
     }
-    
+    verdict_distribution = {"safe": 0, "caution": 0, "high-risk": 0}
+    for row in verdict_rows:
+        legacy_key = R1_TO_LEGACY.get(row["verdict"], row["verdict"])
+        verdict_distribution[legacy_key] = (
+            verdict_distribution.get(legacy_key, 0) + int(row["n"])
+        )
+    verdict_distribution["total"] = sum(
+        v for k, v in verdict_distribution.items() if k != "total"
+    )
+
+    decision_distribution = {
+        "proceed": int(proceed_this_epoch or 0),
+        "pause": int(pauses_this_epoch or 0),
+        "total": int((proceed_this_epoch or 0) + (pauses_this_epoch or 0)),
+    }
+
+    aggregate_data = {
+        "total_agents": int(state_row["total_agents"]),
+        "agents_with_data": int(state_row["agents_with_data"]),
+        "total_updates": int(total_updates or 0),
+        "mean_risk_score": float(state_row["mean_risk_score"] or 0.0),
+        "mean_risk": float(state_row["mean_risk_score"] or 0.0),  # DEPRECATED alias
+        "mean_coherence": float(state_row["mean_coherence"] or 0.0),
+        "paused_now": int(state_row["paused_now"] or 0),
+        "pauses_this_epoch": int(pauses_this_epoch or 0),
+        "epoch": int(current_epoch),
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "staleness": {
+            "oldest_state_seconds": int(state_row["staleness_oldest_seconds"] or 0),
+            "newest_state_seconds": int(state_row["staleness_newest_seconds"] or 0),
+        },
+        "decision_distribution": decision_distribution,
+        "verdict_distribution": verdict_distribution,
+    }
+
     if include_health_breakdown:
-        aggregate_data["health_breakdown"] = health_statuses
-    
-    # Add EISV labels for API documentation
+        aggregate_data["health_breakdown"] = {
+            "healthy": int(state_row["healthy"]),
+            "moderate": int(state_row["moderate"]),
+            "critical": int(state_row["critical"]),
+            "unknown": int(state_row["unknown_health"]),
+        }
+
     return success_response({
         "aggregate": aggregate_data,
-        # eisv_labels omitted by default — use get_governance_metrics(lite=false) for labels
     })
+
+
+def _parse_window_arg(value: Any, default_hours: float = 24.0) -> "datetime":
+    """Parse `since`/`until` window args into an aware datetime.
+
+    Accepts:
+      - shorthand: ``"14d"``, ``"168h"``, ``"30m"``
+      - ISO 8601 string (``"2026-05-08T00:00:00Z"`` or ``"2026-05-08T00:00:00+00:00"``)
+      - ``None`` → now − default_hours
+
+    Returned datetime is timezone-aware UTC.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    if value is None:
+        return now - timedelta(hours=default_hours)
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    s = str(value).strip()
+    if not s:
+        return now - timedelta(hours=default_hours)
+
+    # Shorthand: <int><unit> where unit ∈ d/h/m/s.
+    if len(s) >= 2 and s[-1] in {"d", "h", "m", "s"} and s[:-1].lstrip("-").isdigit():
+        n = int(s[:-1])
+        if n < 0:
+            # `since="-14d"` would silently query a future window (now − (−14d) = now + 14d)
+            # and return zero rows. Reject explicitly so the operator sees the typo.
+            raise ValueError(f"negative shorthand duration not allowed: {s!r}")
+        unit = s[-1]
+        delta = {
+            "d": timedelta(days=n),
+            "h": timedelta(hours=n),
+            "m": timedelta(minutes=n),
+            "s": timedelta(seconds=n),
+        }[unit]
+        return now - delta
+
+    # ISO 8601. Accept trailing 'Z' as UTC.
+    iso = s[:-1] + "+00:00" if s.endswith("Z") else s
+    dt = datetime.fromisoformat(iso)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+@mcp_tool("audit_events_query", timeout=15.0, register=False)
+async def handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """Query the Postgres ``audit.events`` table by event_type + time window.
+
+    Issue #422 — S1-c grace-period evaluations could not distinguish "zero emits
+    in window" from "no query surface." This action wraps
+    ``query_audit_events_async`` so grace-window verdicts and similar
+    audit-driven evaluations can be computed without operator SQL access.
+
+    Args (all optional except ``event_type``):
+      event_type: str — exact audit event type to filter on
+      event_types: list[str] — alternative to event_type, for IN-list filters
+      since: str | None — window start; ``"14d"``/``"24h"`` shorthand or ISO; default 24h
+      until: str | None — window end; ISO; default now
+      agent_id: str | None — restrict to one agent
+      limit: int — max event rows returned (default 1000, capped at 5000)
+      include_events: bool — include event payloads in response (default False;
+        counts + per-agent breakdown only)
+      include_test_fixtures: bool — include agents whose id (case-insensitive)
+        starts with ``test_`` (covers ``test_agent``, ``test_stress``,
+        ``test_recovery_agent``, ``Test_Agent_S9``, etc. — verified against the
+        live audit.events table 2026-05-20). Default True for transparency; set
+        False to mirror the recommended-subtasks filter in #422.
+
+    Returns counts grouped by agent and event_type plus first/last timestamps.
+    Always reports test-fixture totals separately so the caller decides whether
+    to discount them.
+    """
+    from src.audit_db import query_audit_events_async
+
+    event_type = arguments.get("event_type")
+    event_types_arg = arguments.get("event_types")
+    if not event_type and not event_types_arg:
+        return error_response(
+            "event_type or event_types is required",
+            error_code="missing_argument",
+        )
+
+    # Default 7d (168h). The primary use case is multi-week grace-window
+    # evaluations (issue #422 names a 14-day window). A 24h default would
+    # silently undercount when callers omit `since`.
+    since_arg = arguments.get("since")
+    window_defaulted = since_arg is None
+    try:
+        start_dt = _parse_window_arg(since_arg, default_hours=168.0)
+        end_dt = (
+            _parse_window_arg(arguments.get("until"), default_hours=0.0)
+            if arguments.get("until") is not None
+            else None
+        )
+    except (ValueError, KeyError) as e:
+        return error_response(
+            f"invalid window arg: {e}",
+            error_code="invalid_argument",
+        )
+
+    try:
+        limit = int(arguments.get("limit", 1000))
+    except (TypeError, ValueError):
+        limit = 1000
+    limit = max(1, min(limit, 5000))
+
+    agent_id = arguments.get("agent_id")
+    include_events = bool(arguments.get("include_events", False))
+    include_test_fixtures = bool(arguments.get("include_test_fixtures", True))
+
+    # `event_types` wins when both are provided. Echo the effective filter
+    # in the response so callers can see what was actually queried.
+    effective_event_type = event_type if event_type and not event_types_arg else None
+    effective_event_types = list(event_types_arg) if event_types_arg else None
+
+    events = await query_audit_events_async(
+        agent_id=agent_id,
+        event_type=effective_event_type,
+        event_types=effective_event_types,
+        start_time=start_dt.isoformat(),
+        end_time=end_dt.isoformat() if end_dt else None,
+        limit=limit,
+        order="asc",
+    )
+
+    def _is_test_fixture(aid: Any) -> bool:
+        # Case-insensitive `test_` prefix. Verified against the live audit.events
+        # table 2026-05-20: covers `test_agent`, `test_stress`, `test_recovery_agent`,
+        # `test_agent_v2`, `test_agent_concurrent`, and the title-case `Test_Agent_*`
+        # variants the issue comment names.
+        return isinstance(aid, str) and aid.lower().startswith("test_")
+
+    test_fixture_count = sum(1 for e in events if _is_test_fixture(e.get("agent_id")))
+    visible_events = events if include_test_fixtures else [
+        e for e in events if not _is_test_fixture(e.get("agent_id"))
+    ]
+
+    by_agent: Dict[str, int] = {}
+    by_event_type: Dict[str, int] = {}
+    first_ts: str | None = None
+    last_ts: str | None = None
+    for e in visible_events:
+        aid = e.get("agent_id") or "<unknown>"
+        by_agent[aid] = by_agent.get(aid, 0) + 1
+        et = e.get("event_type") or "<unknown>"
+        by_event_type[et] = by_event_type.get(et, 0) + 1
+        ts = e.get("timestamp")
+        if ts:
+            if first_ts is None or ts < first_ts:
+                first_ts = ts
+            if last_ts is None or ts > last_ts:
+                last_ts = ts
+
+    payload: Dict[str, Any] = {
+        # Echo the EFFECTIVE filter that was applied to the DB query, not the
+        # raw inputs. When both event_type and event_types are provided,
+        # event_types wins; the response makes that visible.
+        "event_type": effective_event_type,
+        "event_types": effective_event_types,
+        "window": {
+            "since": start_dt.isoformat(),
+            "until": end_dt.isoformat() if end_dt else None,
+            "defaulted": window_defaulted,
+        },
+        "total_emits": len(visible_events),
+        "test_fixture_emits": test_fixture_count,
+        "raw_row_count": len(events),
+        "by_agent_id": by_agent,
+        "by_event_type": by_event_type,
+        "first_ts": first_ts,
+        "last_ts": last_ts,
+        "limit_reached": len(events) >= limit,
+        "include_test_fixtures": include_test_fixtures,
+    }
+    if include_events:
+        payload["events"] = visible_events
+
+    return success_response(payload)
+
 
 # REMOVED: handle_get_status - redundant with status alias → get_governance_metrics
 # Use status() or get_governance_metrics() instead

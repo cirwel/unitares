@@ -24,11 +24,24 @@ _TRANSPORT_CACHE_MAX = 10_000
 
 @dataclass
 class TransportBinding:
-    """Cached identity binding for a transport fingerprint."""
+    """Cached identity binding for a transport fingerprint.
+
+    `source` is load-provenance — where this in-memory binding came from
+    (e.g. "redis", "postgres", "agent_uuid_passthrough", "warmup",
+    "post_handler:<tool>"). It is NOT the original proof tier.
+
+    `original_session_source` is the proof source at mint time — the value
+    that fed `_compute_identity_assurance` when this binding was first
+    created. On cache hits, downstream code reads this field via the
+    `sticky_cache:<original>` marker so tier-decay (strong→medium,
+    medium→weak, weak→weak) can be applied honestly. Default "unknown"
+    flows from pre-S3 Redis entries and decays as weak.
+    """
     agent_uuid: str
     session_key: str
     bound_at: float  # monotonic timestamp
-    source: str  # e.g. "redis", "postgres", "created"
+    source: str
+    original_session_source: str = "unknown"
 
 
 _transport_identity_cache: Dict[str, TransportBinding] = {}
@@ -96,21 +109,41 @@ def _transport_cache_key(signals) -> Optional[str]:
     return f"sticky:{signals.ip_ua_fingerprint}"
 
 
-def update_transport_binding(key: str, agent_uuid: str, session_key: str, source: str) -> None:
-    """Set or update a sticky transport binding (in-memory + Redis)."""
+def update_transport_binding(
+    key: str,
+    agent_uuid: str,
+    session_key: str,
+    source: str,
+    *,
+    original_session_source: str = "unknown",
+) -> None:
+    """Set or update a sticky transport binding (in-memory + Redis).
+
+    `original_session_source` should be the proof source at mint time
+    (the value the tier mapper would consume — e.g. "x_session_id",
+    "agent_uuid_direct"). Callers updating an existing binding without a
+    fresh proof should leave it at the default; S3 cache-hit decay treats
+    "unknown" as weak.
+    """
     _transport_identity_cache[key] = TransportBinding(
         agent_uuid=agent_uuid,
         session_key=session_key,
         bound_at=_time.monotonic(),
         source=source,
+        original_session_source=original_session_source,
     )
     _evict_stale_entries()
     # Persist to Redis so bindings survive server restarts
-    _persist_binding_to_redis(key, agent_uuid, session_key, source)
+    _persist_binding_to_redis(key, agent_uuid, session_key, source, original_session_source)
 
 
 def populate_transport_binding_from_recovery(
-    key: str, agent_uuid: str, session_key: str, source: str
+    key: str,
+    agent_uuid: str,
+    session_key: str,
+    source: str,
+    *,
+    original_session_source: str = "unknown",
 ) -> None:
     """Populate the in-memory cache without triggering a Redis write-back.
 
@@ -122,24 +155,39 @@ def populate_transport_binding_from_recovery(
         session_key=session_key,
         bound_at=_time.monotonic(),
         source=source,
+        original_session_source=original_session_source,
     )
     _evict_stale_entries()
 
 
-def _persist_binding_to_redis(key: str, agent_uuid: str, session_key: str, source: str) -> None:
+def _persist_binding_to_redis(
+    key: str,
+    agent_uuid: str,
+    session_key: str,
+    source: str,
+    original_session_source: str,
+) -> None:
     """Best-effort fire-and-forget write of transport binding to Redis."""
     try:
         asyncio.get_running_loop()  # raises RuntimeError if no loop
         from src.background_tasks import create_tracked_task
         create_tracked_task(
-            _persist_binding_to_redis_async(key, agent_uuid, session_key, source),
+            _persist_binding_to_redis_async(
+                key, agent_uuid, session_key, source, original_session_source
+            ),
             name="redis_persist_binding",
         )
     except RuntimeError:
         pass  # No event loop — skip Redis persist
 
 
-async def _persist_binding_to_redis_async(key: str, agent_uuid: str, session_key: str, source: str) -> None:
+async def _persist_binding_to_redis_async(
+    key: str,
+    agent_uuid: str,
+    session_key: str,
+    source: str,
+    original_session_source: str,
+) -> None:
     """Write transport binding to Redis."""
     try:
         from src.cache.redis_client import get_redis
@@ -152,6 +200,7 @@ async def _persist_binding_to_redis_async(key: str, agent_uuid: str, session_key
             "agent_uuid": agent_uuid,
             "session_key": session_key,
             "source": source,
+            "original_session_source": original_session_source,
         }))
     except Exception as e:
         logger.debug(f"[STICKY] Redis persist failed: {e}")
@@ -221,6 +270,8 @@ async def _load_binding_from_redis_inner(key: str) -> Optional[TransportBinding]
         session_key=parsed["session_key"],
         bound_at=_time.monotonic(),  # Treat as fresh since Redis TTL handles expiry
         source=parsed.get("source", "redis_recovery"),
+        # Pre-S3 Redis entries lack this field; default decays as weak.
+        original_session_source=parsed.get("original_session_source", "unknown"),
     )
     # Warm the in-memory cache
     _transport_identity_cache[key] = binding
@@ -300,12 +351,21 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                 cached.agent_uuid,
                 "STICKY",
             )
-            # Reuse cached binding — set context and return early
-            from ..context import set_session_context
+            # Reuse cached binding — set context and return early.
+            # S3: mark session_resolution_source with the cache-hit envelope
+            # `sticky_cache:<original>` so the tier mapper can apply
+            # decay-by-one (strong→medium, medium→weak, weak→weak) against
+            # the original proof, instead of treating every cache hit as
+            # uniformly weak. See `_compute_identity_assurance`.
+            from ..context import set_session_context, set_session_resolution_source
+            set_session_resolution_source(
+                f"sticky_cache:{cached.original_session_source}"
+            )
             client_hint = arguments.get("client_hint") if arguments else None
             identity_result = {
                 "agent_uuid": cached.agent_uuid,
                 "source": "sticky_cache",
+                "original_session_source": cached.original_session_source,
                 "core_agent_row_status": core_status,
             }
             context_token = set_session_context(
@@ -470,7 +530,13 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
         )
         # Populate sticky cache so subsequent tool calls reuse this UUID
         if transport_key:
-            update_transport_binding(transport_key, _direct_uuid, session_key, "agent_uuid_passthrough")
+            update_transport_binding(
+                transport_key,
+                _direct_uuid,
+                session_key,
+                "agent_uuid_passthrough",
+                original_session_source="agent_uuid_passthrough",
+            )
         logger.info(f"[DISPATCH] PATH 0 passthrough: agent_uuid={_direct_uuid[:8]}... (skipped resolution)")
         return name, arguments, ctx
 
@@ -648,6 +714,15 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     # --- Populate sticky cache after successful resolution ---
     if transport_key and bound_agent_id:
         source = identity_result.get("source", "unknown") if identity_result else "unknown"
-        update_transport_binding(transport_key, bound_agent_id, session_key, source)
+        # identity_result.source IS the proof source the tier mapper consumes,
+        # so original_session_source mirrors it at mint time. On future cache
+        # hits the decay function reads this value and applies tier-decay.
+        update_transport_binding(
+            transport_key,
+            bound_agent_id,
+            session_key,
+            source,
+            original_session_source=source,
+        )
 
     return name, arguments, ctx

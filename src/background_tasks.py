@@ -11,6 +11,7 @@ import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from src.logging_utils import get_logger
 from src.connection_tracker import CONNECTIONS_ACTIVE
@@ -195,6 +196,15 @@ async def class_promotion_sweeper_task(interval_minutes: float = 30.0):
 
     Startup delay 60s to let metadata cache warm. Errors are logged at
     WARNING (not debug) so a 30-min silent gap is visible to operators.
+
+    S10.2: at the tail of each cycle, also call
+    ``SequentialCalibrationTracker.rebucket_from_agent_states`` so the
+    by-class calibration rollup tracks any promotions just executed.
+    Rebucket is decoupled from promotion success — even cycles with zero
+    promotions still rebucket so that out-of-band tag edits (manual
+    re-tagging, label changes) eventually converge in the by-class view.
+    Errors in the rebucket pass are isolated from the promotion pass so a
+    rebucket failure cannot starve future promotions.
     """
     await asyncio.sleep(60.0)
     while True:
@@ -214,6 +224,38 @@ async def class_promotion_sweeper_task(interval_minutes: float = 30.0):
             break
         except Exception as e:
             logger.warning(f"[CLASS_PROMOTION] Sweep failed (will retry): {e}")
+
+        # S10.2: rebucket calibration class_states from current metadata.
+        # Isolated try-block so a rebucket failure does not abort the sweeper
+        # loop or starve future promotion cycles. Telemetry is logged at INFO
+        # when meaningful (non-zero tracked or any errors) and at DEBUG on
+        # the idle path so the cycle stays quiet under steady state.
+        try:
+            from src.agent_metadata_model import agent_metadata
+            from src.grounding.class_indicator import classify_agent
+            from src.sequential_calibration import get_sequential_calibration_tracker
+
+            def _s10_classifier(aid: str) -> Optional[str]:
+                meta = agent_metadata.get(aid)
+                return classify_agent(meta) if meta is not None else None
+
+            rebucket = get_sequential_calibration_tracker().rebucket_from_agent_states(
+                classifier=_s10_classifier,
+            )
+            if rebucket["tracked_agents"] > 0 or rebucket["classifier_errors"] > 0:
+                logger.info(
+                    f"[S10_REBUCKET] tracked={rebucket['tracked_agents']} "
+                    f"unresolved={rebucket['unresolved_agents']} "
+                    f"errors={rebucket['classifier_errors']} "
+                    f"buckets={rebucket['buckets']}"
+                )
+            else:
+                logger.debug("[S10_REBUCKET] no tracked agents this cycle")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"[S10_REBUCKET] Sweep failed (will retry): {e}")
+
         try:
             await asyncio.sleep(interval_minutes * 60)
         except asyncio.CancelledError:
@@ -1292,7 +1334,19 @@ async def identity_cache_warmup():
                 ip_ua_fp = binding.get("ip_ua_fingerprint")
                 if agent_uuid and ip_ua_fp:
                     cache_key = f"sticky:{ip_ua_fp}"
-                    update_transport_binding(cache_key, agent_uuid, session_key, source="warmup")
+                    # S3: warmup scans `session:*` Redis keys (session-cache
+                    # entries), not the per-binding transport_binding:* keys
+                    # that carry original_session_source. The original proof
+                    # tier isn't recoverable from this path, so the warmed
+                    # binding defaults to "unknown" — cache hits against it
+                    # decay as weak until a fresh proof rebinds.
+                    update_transport_binding(
+                        cache_key,
+                        agent_uuid,
+                        session_key,
+                        source="warmup",
+                        original_session_source="unknown",
+                    )
                     warmed += 1
             except Exception:
                 continue  # Skip malformed entries

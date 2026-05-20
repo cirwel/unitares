@@ -25,19 +25,21 @@ class StateMixin:
         regime: str,
         coherence: float,
         state_json: Optional[Dict[str, Any]] = None,
+        risk_score: Optional[float] = None,
     ) -> int:
         from config.governance_config import GovernanceConfig
         async with self.acquire() as conn:
             state_id = await conn.fetchval(
                 """
                 INSERT INTO core.agent_state
-                    (identity_id, entropy, integrity, stability_index, volatility, regime, coherence, state_json, epoch)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    (identity_id, entropy, integrity, stability_index, volatility, regime, coherence, state_json, epoch, risk_score)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 RETURNING state_id
                 """,
                 identity_id, entropy, integrity, stability_index, void,  # void maps to volatility column
                 regime, coherence, json.dumps(state_json or {}),
                 GovernanceConfig.CURRENT_EPOCH,
+                risk_score,
             )
             # Matview refresh moved to periodic_matview_refresh() in background_tasks.py
             return state_id

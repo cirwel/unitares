@@ -256,7 +256,10 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
     if tool_name in skip_tools:
         return None
 
-    from src.mcp_handlers.context import update_context_agent_id
+    from src.mcp_handlers.context import (
+        set_session_resolution_source,
+        update_context_agent_id,
+    )
     from src.mcp_handlers.identity.handlers import derive_session_key, resolve_session_identity
 
     # Respect an already explicit UUID.
@@ -290,6 +293,14 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
                 if cached and (_time.monotonic() - cached.bound_at) < _TRANSPORT_CACHE_TTL:
                     update_context_agent_id(cached.agent_uuid)
                     arguments["agent_id"] = cached.agent_uuid
+                    # S3: emit the cache-hit envelope `sticky_cache:<original>`
+                    # so `_compute_identity_assurance` can apply decay-by-one
+                    # against the original proof tier. Pre-S3 Redis entries
+                    # (and bindings created before this field was threaded)
+                    # carry original="unknown" and continue to map to weak.
+                    set_session_resolution_source(
+                        f"sticky_cache:{cached.original_session_source}"
+                    )
                     return cached.agent_uuid
         except Exception as e:
             logger.debug("[STICKY-REST] cache check failed: %s", e)
@@ -329,8 +340,17 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
                     from src.mcp_handlers.middleware.identity_step import (
                         update_transport_binding,
                     )
+                    # `resolved.source` is the proof source from
+                    # resolve_session_identity — exactly what the tier mapper
+                    # consumes. Mirror it as the binding's original_session_source
+                    # so future cache hits decay against it.
+                    _original = resolved.get("source") or "rest_resolution"
                     update_transport_binding(
-                        transport_key, agent_uuid, session_key, source="rest"
+                        transport_key,
+                        agent_uuid,
+                        session_key,
+                        source="rest",
+                        original_session_source=_original,
                     )
                 except Exception as e:
                     logger.debug("[STICKY-REST] cache update failed: %s", e)

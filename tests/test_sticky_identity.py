@@ -638,6 +638,42 @@ class TestStickyRESTPath:
         mock_resolve.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_rest_cache_hit_marks_session_resolution_source(self):
+        """Cache-hit short-circuit must emit the S3 sticky_cache envelope.
+
+        Regression history:
+        - #466 fixed the original bug (cache-hit branch never called
+          set_session_resolution_source), emitting the mark
+          ``sticky_transport_cache`` and mapping all cache hits to weak.
+        - S3 supersedes that mark with ``sticky_cache:<original>`` so the
+          tier mapper can apply decay-by-one against the original proof
+          tier captured at mint time. A binding minted via no recorded
+          proof source (original=unknown, the case here since the test
+          does not pass `original_session_source` to update_transport_binding)
+          decays as weak — preserving the 04-17 honest-weak behavior for
+          unproven mints while letting strong-minted bindings inherit
+          medium on cache hit (see decay tests below).
+        """
+        from src.http_api import _resolve_http_bound_agent
+        from src.mcp_handlers.context import get_session_resolution_source
+
+        update_transport_binding("sticky:7.7.7.7:ua-hit", "uuid-cached", "sk", "rest")
+        signals = FakeSignals(ip_ua_fingerprint="7.7.7.7:ua-hit")
+
+        result = await _resolve_http_bound_agent("call_model", {}, signals)
+
+        assert result == "uuid-cached"
+        source = get_session_resolution_source()
+        assert source == "sticky_cache:unknown"
+
+        # Original=unknown → tier=weak → decay leaves it weak. The 04-17
+        # honest-weak posture is preserved for the no-recorded-proof case.
+        from src.mcp_handlers.updates.phases import _compute_identity_assurance
+        assurance = _compute_identity_assurance(source, None)
+        assert assurance["tier"] == "weak"
+        assert assurance["session_source"] == "sticky_cache:unknown"
+
+    @pytest.mark.asyncio
     async def test_rest_cache_populated_on_miss(self):
         """First REST call for a fingerprint populates the cache so next call hits it."""
         from src.http_api import _resolve_http_bound_agent
@@ -917,3 +953,174 @@ class TestMCPCrossProcessSiphoning:
         )
         assert out_ctx.bound_agent_id == "11111111-1111-1111-1111-111111111111"
         assert out_ctx.identity_result.get("source") != "sticky_cache"
+
+
+# ============================================================================
+# S3: TransportBinding.original_session_source + tier-decay on cache hit
+# ============================================================================
+
+class TestStickyCacheTierDecay:
+    """Decay-by-one when a sticky cache hit serves a request.
+
+    Rule: tier(original_session_source) is computed first, then decayed
+    one step (strong → medium, medium → weak, weak → weak). Honors the
+    original mint while debiting one tier for per-call proof absence.
+    Pre-S3 bindings carry original="unknown" and decay as weak.
+    """
+
+    def setup_method(self):
+        _clear_cache()
+
+    def test_decay_strong_to_medium(self):
+        from src.mcp_handlers.updates.phases import _compute_identity_assurance
+
+        a = _compute_identity_assurance("sticky_cache:x_session_id", None)
+        assert a["tier"] == "medium"
+        assert a["score"] == 0.7
+        assert a["session_source"] == "sticky_cache:x_session_id"
+        assert "decayed one tier" in a["reason"]
+
+    def test_decay_medium_to_weak(self):
+        from src.mcp_handlers.updates.phases import _compute_identity_assurance
+
+        a = _compute_identity_assurance("sticky_cache:x_client_id", None)
+        assert a["tier"] == "weak"
+        assert a["score"] == 0.35
+        assert "decayed one tier" in a["reason"]
+
+    def test_decay_weak_stays_weak(self):
+        from src.mcp_handlers.updates.phases import _compute_identity_assurance
+
+        a = _compute_identity_assurance("sticky_cache:ip_ua_fingerprint", None)
+        assert a["tier"] == "weak"
+        assert a["score"] == 0.35
+        assert "no further decay" in a["reason"]
+
+    def test_decay_unknown_stays_weak(self):
+        """Pre-S3 Redis entries and ungraced callers default to unknown."""
+        from src.mcp_handlers.updates.phases import _compute_identity_assurance
+
+        a = _compute_identity_assurance("sticky_cache:unknown", None)
+        assert a["tier"] == "weak"
+        assert "no further decay" in a["reason"]
+
+    def test_identity_payload_decay_mirrors_phases(self):
+        """identity() response uses identity_payloads._identity_assurance_from_source.
+
+        S3 added the same decay envelope handling there so the identity()
+        response and the update-path tier stay in lockstep — diverging
+        would re-introduce the body/state disagreement the #466 council
+        pivot fixed in the first place.
+        """
+        from src.services.identity_payloads import _identity_assurance_from_source
+
+        strong = _identity_assurance_from_source("sticky_cache:x_session_id")
+        medium = _identity_assurance_from_source("sticky_cache:x_client_id")
+        weak = _identity_assurance_from_source("sticky_cache:ip_ua_fingerprint")
+        unknown = _identity_assurance_from_source("sticky_cache:unknown")
+        assert strong["tier"] == "medium"
+        assert medium["tier"] == "weak"
+        assert weak["tier"] == "weak"
+        assert unknown["tier"] == "weak"
+
+    def test_binding_carries_original_session_source(self):
+        """update_transport_binding records the original proof source."""
+        update_transport_binding(
+            "sticky:s3-a",
+            "uuid-a",
+            "sk-a",
+            "rest",
+            original_session_source="x_session_id",
+        )
+        binding = _transport_identity_cache["sticky:s3-a"]
+        assert binding.original_session_source == "x_session_id"
+        # Load-provenance field unchanged; the two fields are distinct.
+        assert binding.source == "rest"
+
+    def test_binding_default_original_is_unknown(self):
+        """Callers that don't pass original_session_source default to 'unknown'.
+
+        Backward compat: anything still calling the old positional form
+        ends up safely at weak on cache hit.
+        """
+        update_transport_binding("sticky:s3-b", "uuid-b", "sk-b", "rest")
+        assert _transport_identity_cache["sticky:s3-b"].original_session_source == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_rest_cache_hit_emits_decayable_envelope(self):
+        """End-to-end: a strong-minted binding cache hit yields tier=medium."""
+        from src.http_api import _resolve_http_bound_agent
+        from src.mcp_handlers.context import get_session_resolution_source
+        from src.mcp_handlers.updates.phases import _compute_identity_assurance
+
+        update_transport_binding(
+            "sticky:s3-e2e:ua",
+            "uuid-strong-minted",
+            "sk-strong",
+            "rest",
+            original_session_source="x_session_id",
+        )
+        signals = FakeSignals(ip_ua_fingerprint="s3-e2e:ua")
+
+        result = await _resolve_http_bound_agent("call_model", {}, signals)
+        assert result == "uuid-strong-minted"
+
+        source = get_session_resolution_source()
+        assert source == "sticky_cache:x_session_id"
+
+        # Strong-minted binding decays to medium on cache hit. This is the
+        # behavior #466's body called out as the S3 goal.
+        assurance = _compute_identity_assurance(source, None)
+        assert assurance["tier"] == "medium"
+
+
+class TestS3RedisRoundTrip:
+    """original_session_source survives Redis serialize/deserialize."""
+
+    def setup_method(self):
+        _clear_cache()
+
+    @pytest.mark.asyncio
+    async def test_redis_recovery_carries_original_source(self):
+        import json
+        from src.mcp_handlers.middleware import identity_step as step
+
+        fast_redis = MagicMock()
+        fast_redis.get = AsyncMock(return_value=json.dumps({
+            "agent_uuid": "uuid-rt",
+            "session_key": "sk-rt",
+            "source": "redis_recovery",
+            "original_session_source": "x_session_id",
+        }))
+
+        with patch("src.cache.redis_client.get_redis", new_callable=AsyncMock, return_value=fast_redis):
+            binding = await step._load_binding_from_redis("sticky:rt")
+
+        assert binding is not None
+        assert binding.original_session_source == "x_session_id"
+
+    @pytest.mark.asyncio
+    async def test_redis_recovery_pre_s3_entry_defaults_to_unknown(self):
+        """Old Redis entries lack the field; loader must default to 'unknown'.
+
+        Migration shape: pre-S3 transport_binding:* keys in Redis don't
+        carry original_session_source. The loader treats the absence as
+        unknown → cache hits decay as weak. No Redis migration step
+        needed — the old data ages out under the 2-hour TTL.
+        """
+        import json
+        from src.mcp_handlers.middleware import identity_step as step
+
+        old_redis = MagicMock()
+        old_redis.get = AsyncMock(return_value=json.dumps({
+            "agent_uuid": "uuid-old",
+            "session_key": "sk-old",
+            "source": "redis_recovery",
+            # No original_session_source field — pre-S3 shape.
+        }))
+
+        with patch("src.cache.redis_client.get_redis", new_callable=AsyncMock, return_value=old_redis):
+            binding = await step._load_binding_from_redis("sticky:old")
+
+        assert binding is not None
+        assert binding.original_session_source == "unknown"

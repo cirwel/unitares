@@ -354,6 +354,7 @@ class TestExplicitOutcomeEventCalibration:
             confidence=0.85,
             outcome_correct=True,
             agent_id='agent-test',
+            class_tag='default',  # S10.2: classify_agent(None)="default" when agent_metadata cache miss
             signal_source='tests',
             decision_action='proceed',
             outcome_type='test_passed',
@@ -409,6 +410,7 @@ class TestExplicitOutcomeEventCalibration:
             confidence=0.7,
             outcome_correct=True,
             agent_id='agent-mon',
+            class_tag='default',
             signal_source='tasks',
             decision_action=None,
             outcome_type='task_completed',
@@ -544,6 +546,7 @@ class TestExplicitOutcomeEventCalibration:
             confidence=0.9,
             outcome_correct=False,
             agent_id='agent-tf',
+            class_tag='default',
             signal_source='tests',
             decision_action='proceed',
             outcome_type='test_failed',
@@ -999,9 +1002,12 @@ class TestPredictionBindingConcurrencyCanary:
 # ============================================================================
 
 class TestVerificationSourceRoundTrip:
-    """Confirm verification_source lands in detail JSONB for both default and
-    explicit values. Uses the same mock-DB pattern as the rest of this module
-    (no live DB required); inspects record_outcome_event call_args directly."""
+    """Confirm verification_source is passed to the mixin as a top-level column
+    argument (not buried in detail JSONB) for both default and explicit values.
+    Updated for migration 039: the field was promoted from detail JSONB to a
+    top-level audit.outcome_events column. Uses the same mock-DB pattern as the
+    rest of this module (no live DB required); inspects record_outcome_event
+    call_args directly."""
 
     def _make_mock_db(self, outcome_id="oe-vs-1"):
         mock_db = MagicMock()
@@ -1013,13 +1019,14 @@ class TestVerificationSourceRoundTrip:
         return mock_db
 
     @pytest.mark.asyncio
-    async def test_default_recorded_in_detail(self):
-        """Omitting verification_source stores 'agent_reported_tool_result' in detail.
+    async def test_default_recorded_as_column_arg(self):
+        """Omitting verification_source defaults to 'agent_reported_tool_result' on the column arg.
 
         In production, params_step.py runs Pydantic validation before the handler,
         so the schema default is already present in `arguments` when the handler
-        runs. This test mirrors that by including the default explicitly — the
-        handler no longer has a fallback string (schema is the single source of truth).
+        runs. This test mirrors that by including the default explicitly.
+        Post-migration 039: the value is passed as a top-level column argument
+        (kwargs['verification_source']), not embedded in detail JSONB.
         """
         mock_db = self._make_mock_db("oe-vs-default")
 
@@ -1043,11 +1050,11 @@ class TestVerificationSourceRoundTrip:
         assert parsed.get('outcome_id') == 'oe-vs-default'
 
         _, kwargs = mock_db.record_outcome_event.call_args
-        assert kwargs['detail']['verification_source'] == 'agent_reported_tool_result'
+        assert kwargs.get('verification_source') == 'agent_reported_tool_result'
 
     @pytest.mark.asyncio
-    async def test_server_observation_recorded_when_set(self):
-        """Explicit verification_source='server_observation' is stored in detail."""
+    async def test_server_observation_passed_as_column_arg(self):
+        """Explicit verification_source='server_observation' is passed as column arg."""
         mock_db = self._make_mock_db("oe-vs-server")
 
         with patch('src.db.get_db', return_value=mock_db), \
@@ -1068,4 +1075,4 @@ class TestVerificationSourceRoundTrip:
         assert parsed.get('outcome_id') == 'oe-vs-server'
 
         _, kwargs = mock_db.record_outcome_event.call_args
-        assert kwargs['detail']['verification_source'] == 'server_observation'
+        assert kwargs.get('verification_source') == 'server_observation'
