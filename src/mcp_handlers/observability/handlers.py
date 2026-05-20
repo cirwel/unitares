@@ -169,7 +169,6 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
 @mcp_tool("compare_agents", timeout=15.0, register=False)
 async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Compare governance patterns across multiple agents"""
-    from src.governance_monitor import UNITARESMonitor
     # Was force=True with a "non-blocking" comment that was wrong — the
     # implementation does 3221 sequential per-agent cache.set awaits
     # (~16s per call). Drop force; in-memory cache is fresh enough for
@@ -192,6 +191,7 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
     
     # Get metrics for all agents
     agents_data = []
+    loop = asyncio.get_running_loop()
     for agent_id in agent_ids:
         # Resolve label to UUID if needed (consistent with observe_agent)
         try:
@@ -203,15 +203,16 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
         except Exception:
             pass  # Use agent_id as-is
 
-        monitor = mcp_server.monitors.get(agent_id)
-        if monitor is None:
-            # Load monitor state (non-blocking)
-            loop = asyncio.get_running_loop()
-            persisted_state = await loop.run_in_executor(None, mcp_server.load_monitor_state, agent_id)
-            if persisted_state:
-                monitor = UNITARESMonitor(agent_id, load_state=False)
-                monitor.state = persisted_state
-        
+        # Skip agents with no measured activity — transient seed-default monitors
+        # would dilute the comparison. Mirrors the prior "no persisted state ⇒
+        # skip" behavior, but gated on metadata (in-memory, no I/O).
+        meta = mcp_server.agent_metadata.get(agent_id)
+        if not meta or int(getattr(meta, "total_updates", 0) or 0) == 0:
+            continue
+
+        monitor = await loop.run_in_executor(None, mcp_server.get_or_create_monitor, agent_id)
+        await ensure_hydrated(monitor, agent_id)
+
         if monitor:
             metrics = monitor.get_metrics()
             
@@ -567,7 +568,6 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
 @mcp_tool("detect_anomalies", timeout=15.0, register=False)
 async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Detect anomalies across agents"""
-    from src.governance_monitor import UNITARESMonitor
     import asyncio
 
     # Wave 0 follow-up: was force=True, which forced a full PostgreSQL
@@ -601,16 +601,16 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
     # Process agents in batches to prevent blocking
     async def process_agent(agent_id: str):
         """Process a single agent's anomalies"""
-        monitor = mcp_server.monitors.get(agent_id)
-        if monitor is None:
-            # Load state in executor to avoid blocking
-            persisted_state = await loop.run_in_executor(
-                None, mcp_server.load_monitor_state, agent_id
-            )
-            if persisted_state:
-                monitor = UNITARESMonitor(agent_id, load_state=False)
-                monitor.state = persisted_state
-        
+        # Skip agents with no measured activity — pattern analysis on seed
+        # defaults yields no anomalies anyway, and skipping avoids the per-call
+        # disk read.
+        meta = mcp_server.agent_metadata.get(agent_id)
+        if not meta or int(getattr(meta, "total_updates", 0) or 0) == 0:
+            return
+
+        monitor = await loop.run_in_executor(None, mcp_server.get_or_create_monitor, agent_id)
+        await ensure_hydrated(monitor, agent_id)
+
         if monitor:
             # Analyze patterns in executor (may do file I/O)
             from src.pattern_analysis import analyze_agent_patterns
