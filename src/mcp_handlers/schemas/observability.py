@@ -54,13 +54,19 @@ class AggregateMetricsParams(AgentIdentityMixin):
 
 class ObserveParams(AgentIdentityMixin):
     """Parameters for observe"""
-    action: Literal["agent", "compare", "similar", "anomalies", "aggregate"] = Field(..., description="Operation to perform")
+    action: Literal["agent", "compare", "similar", "anomalies", "aggregate", "telemetry", "audit_events"] = Field(..., description="Operation to perform")
     target_agent_id: Optional[str] = Field(None, description="Agent to observe — UUID or label (for action=agent). Use list_agents to find.")
     agent_ids: Optional[List[Any]] = Field(None, description="Agent identifiers to compare (for action=compare, min 2)")
     include_history: bool = Field(True, description="Include recent history (for action=agent). Default true.")
     analyze_patterns: bool = Field(True, description="Perform pattern analysis (for action=agent). Default true.")
     compare_metrics: Optional[List[Any]] = Field(None, description="Metrics to compare (for action=compare). Default: risk_score, coherence, E, I, S, V")
-    limit: Optional[int] = Field(None, description="Max results to return (for action=similar, anomalies)")
+    limit: Optional[int] = Field(None, description="Max results to return (for action=similar, anomalies, audit_events)")
+    event_type: Optional[str] = Field(None, description="Audit event type to filter on (for action=audit_events)")
+    event_types: Optional[List[str]] = Field(None, description="IN-list of audit event types (for action=audit_events, alternative to event_type)")
+    since: Optional[str] = Field(None, description="Window start: '14d'/'24h'/'30m' shorthand or ISO 8601 (for action=audit_events). Default 24h.")
+    until: Optional[str] = Field(None, description="Window end: ISO 8601 (for action=audit_events). Default now.")
+    include_events: bool = Field(False, description="Include event payloads in response (for action=audit_events). Default false — counts only.")
+    include_test_fixtures: bool = Field(True, description="Include agents matching Test_Agent_* fixture pattern (for action=audit_events). Default true.")
 
 class OutcomeCorrelationParams(AgentIdentityMixin):
     """Run outcome correlation study: does EISV instability predict bad outcomes?"""

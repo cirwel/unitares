@@ -62,6 +62,7 @@ from .observability.handlers import (
     handle_compare_me_to_similar,
     handle_detect_anomalies,
     handle_aggregate_metrics,
+    handle_audit_events,
 )
 from .dialectic.handlers import (
     handle_get_dialectic_session,
@@ -208,9 +209,10 @@ handle_observe = action_router(
         "anomalies": handle_detect_anomalies,
         "aggregate": handle_aggregate_metrics,
         "telemetry": handle_get_telemetry_metrics,
+        "audit_events": handle_audit_events,
     },
     timeout=15.0,
-    description="Unified observability operations: agent, compare, similar, anomalies, aggregate, telemetry",
+    description="Unified observability operations: agent, compare, similar, anomalies, aggregate, telemetry, audit_events",
     examples=[
         "observe(action='agent', agent_id='claude-opus-20251215')",
         "observe(action='compare', agent_ids=['agent1', 'agent2'])",
@@ -218,6 +220,7 @@ handle_observe = action_router(
         "observe(action='anomalies')",
         "observe(action='aggregate')",
         "observe(action='telemetry')",
+        "observe(action='audit_events', event_type='continuity_token_deprecated_accept', since='14d')",
     ],
 )
 
