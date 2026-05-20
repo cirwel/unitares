@@ -1193,6 +1193,23 @@ async function loadSystemHealth() {
     }
 }
 
+// S10.3: format the by_class breakdown as a chip strip for the card detail
+// line. The envelope shape comes from sequential_calibration.compute_metrics_by_class:
+//   { bootstrapped: bool, by_class: { class_tag: { eligible_samples, calibration_gap, ... } } }
+// Returns a string like "substrate: 12 · ephemeral: 8" with the top
+// buckets by sample count, or null when the envelope has no useful content.
+function formatByClassChips(byClassEnvelope) {
+    if (!byClassEnvelope || !byClassEnvelope.by_class) return null;
+    var buckets = byClassEnvelope.by_class;
+    var entries = Object.keys(buckets)
+        .map(function (k) { return { name: k, samples: buckets[k].eligible_samples || 0 }; })
+        .filter(function (e) { return e.samples > 0; })
+        .sort(function (a, b) { return b.samples - a.samples; })
+        .slice(0, 3);
+    if (entries.length === 0) return null;
+    return entries.map(function (e) { return e.name + ': ' + e.samples; }).join(' · ');
+}
+
 async function loadCalibration() {
     try {
         const result = await callTool('check_calibration', {});
@@ -1202,6 +1219,8 @@ async function loadCalibration() {
         if (result && result.success) {
             const samples = result.total_samples ?? 0;
             const th = result.trajectory_health ?? result.accuracy ?? 0;
+            const byClass = result.by_class;
+            const byClassBootstrapping = byClass && byClass.bootstrapped === false;
             if (samples === 0) {
                 valueEl.textContent = '—';
                 valueEl.style.color = '';
@@ -1222,21 +1241,29 @@ async function loadCalibration() {
                     : 'var(--color-danger, #ef4444)';
                 var trajectoryPct = (th * 100).toFixed(0);
 
-                // Per-channel chips render when the broadened truth channel
-                // has populated state. Falls back to the legacy detail line
-                // when per_channel_calibration is absent.
+                // S10.3: per-class breakdown leads the detail line when
+                // available; per-channel chips (S22) follow. The bootstrap
+                // window (pre-S10 state file pre-first-rebucket) renders
+                // explicitly as "bootstrapping\u2026" so operators see the
+                // gap honestly rather than reading partial buckets as
+                // fleet-representative.
+                var classChips = byClassBootstrapping
+                    ? 'bootstrapping\u2026'
+                    : formatByClassChips(byClass);
                 var perChannel = result.per_channel_calibration;
+                var channelChips = null;
                 if (perChannel && Object.keys(perChannel).length > 0) {
-                    var chips = Object.keys(perChannel).map(function (name) {
+                    channelChips = Object.keys(perChannel).map(function (name) {
                         var c = perChannel[name];
                         var icon = c.calibrated ? '\u2713' : '\u2715';
                         return name + ': ' + icon;
                     }).join(' \u00b7 ');
-                    detailEl.textContent = samples + ' samples \u00b7 ' + chips
-                        + ' \u00b7 ' + trajectoryPct + '% trajectory';
-                } else {
-                    detailEl.textContent = samples + ' samples \u00b7 ' + trajectoryPct + '% trajectory';
                 }
+                var detailParts = [samples + ' samples'];
+                if (classChips) detailParts.push(classChips);
+                if (channelChips) detailParts.push(channelChips);
+                detailParts.push(trajectoryPct + '% trajectory');
+                detailEl.textContent = detailParts.join(' \u00b7 ');
             }
         } else {
             valueEl.textContent = '-';
@@ -2225,6 +2252,43 @@ if (calibrationCard) {
                 '<div><strong>Trajectory health:</strong> ' + (th * 100).toFixed(1) + '%</div>' +
                 '<div><strong>Samples:</strong> ' + samples + '</div>' +
                 (dist.mean != null ? '<div><strong>Confidence mean:</strong> ' + (dist.mean * 100).toFixed(1) + '%</div>' : '');
+
+            // S10.3: per-class breakdown panel. Renders bootstrap banner when
+            // the tracker has agent history that hasn't been rebucketed yet
+            // (first 30min after a pre-S10 state file load). Class envelopes
+            // carry only descriptive statistics — log_evidence / capped_alarm
+            // are intentionally absent (see plan.md §3.4 anytime-validity scope).
+            var byClassData = r?.by_class;
+            if (byClassData) {
+                calHtml += '<div style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.06);padding-top:8px"><strong>By class:</strong>';
+                if (byClassData.bootstrapped === false) {
+                    calHtml += ' <span style="opacity:0.6;font-style:italic">(bootstrapping — class data sparse until next 30-min sweeper tick)</span>';
+                }
+                var buckets = byClassData.by_class || {};
+                var bucketNames = Object.keys(buckets).filter(function (n) {
+                    return (buckets[n].eligible_samples || 0) > 0;
+                });
+                if (bucketNames.length === 0) {
+                    calHtml += '<div style="opacity:0.5;padding:4px 0;font-size:12px">No per-class samples yet</div>';
+                } else {
+                    bucketNames.sort(function (a, b) {
+                        return (buckets[b].eligible_samples || 0) - (buckets[a].eligible_samples || 0);
+                    });
+                    calHtml += '<ul style="margin:4px 0;padding-left:18px">';
+                    bucketNames.forEach(function (name) {
+                        var b = buckets[name];
+                        var accPct = (b.empirical_accuracy != null) ? (b.empirical_accuracy * 100).toFixed(1) + '%' : '—';
+                        var gap = (b.calibration_gap != null) ? b.calibration_gap.toFixed(3) : '—';
+                        calHtml += '<li>' + escapeHtml(name) + ': '
+                            + b.eligible_samples + ' samples · '
+                            + accPct + ' accuracy · '
+                            + 'gap ' + gap + '</li>';
+                    });
+                    calHtml += '</ul>';
+                }
+                calHtml += '</div>';
+            }
+
             if (issues.length > 0) {
                 calHtml += '<div style="margin-top:8px"><strong>Issues:</strong><ul style="margin:4px 0;padding-left:18px">';
                 issues.forEach(function (iss) { calHtml += '<li>' + escapeHtml(iss) + '</li>'; });
