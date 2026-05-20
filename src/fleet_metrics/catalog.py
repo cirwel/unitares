@@ -135,19 +135,24 @@ register(Metric(
     unit="cloners",
 ))
 
-# ODE compute time — the load-bearing unknown from
+# Numpy ODE step wall-clock — the load-bearing unknown from
 # beam-footprint-roadmap-v0.md v0.3 RESOLUTION ("what's in the 7s ODE
 # remainder?"). Sampled every 5 minutes from perf_monitor (in-process,
 # 1000-sample ring buffer). p50 + p99 only — finer percentiles do not
 # answer a question the operator will read.
+#
+# Naming note: this measures `monitor.process_update` dispatched via the
+# default executor — wall-clock includes executor queue-wait AND numpy
+# work. Renamed from `ode.compute_ms` to make this honest; see
+# ode-profile-decomposition-2026-05-20.md falsifier matrix.
 register(Metric(
-    name="ode.compute_ms.p50",
-    description="Median wall-clock of monitor.process_update (numpy ODE step) over the trailing in-process window. Snapshot every 5min.",
+    name="ode.numpy_step_ms.p50",
+    description="Median wall-clock of monitor.process_update (numpy ODE step) over the trailing in-process window. Snapshot every 5min. Includes executor queue-wait time as well as numpy compute.",
     unit="ms",
 ))
 register(Metric(
-    name="ode.compute_ms.p99",
-    description="p99 wall-clock of monitor.process_update over the trailing in-process window. Tracks the substrate-tax tail at the ODE compute boundary.",
+    name="ode.numpy_step_ms.p99",
+    description="p99 wall-clock of monitor.process_update over the trailing in-process window. Tracks the substrate-tax tail at the ODE numpy-step boundary; under saturated default executor, queue-wait can dominate numpy.",
     unit="ms",
 ))
 

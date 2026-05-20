@@ -54,7 +54,7 @@ async def test_persist_iteration_writes_present_keys_only(monkeypatch):
     import src.background_tasks as bg
 
     fake_snapshot = {
-        "ode.compute_ms": {
+        "ode.numpy_step_ms": {
             "count": 12,
             "avg_ms": 100.0,
             "p50_ms": 80.0,
@@ -82,7 +82,7 @@ async def test_persist_iteration_writes_present_keys_only(monkeypatch):
             continue
         await fake_record(metric_name, float(value))
 
-    assert ("ode.compute_ms.p50", 80.0) in written
-    assert ("ode.compute_ms.p99", 200.0) in written
+    assert ("ode.numpy_step_ms.p50", 80.0) in written
+    assert ("ode.numpy_step_ms.p99", 200.0) in written
     # lease_plane absent from fake snapshot → not in written
     assert all("lease_plane" not in name for name, _ in written)

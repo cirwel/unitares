@@ -30,31 +30,44 @@ numpy compute, and PG persistence.
 Five sub-timers inside `process_update_authenticated_async`
 (`src/agent_loop_detection.py:353-560`):
 
-| Key | Surface measured | Expected character |
-|---|---|---|
-| `ode.auth_ms` | `verify_agent_ownership` in executor (sync PG/Redis-touching) | I/O-bound; sub-50ms typical |
-| `ode.loop_detect_ms` | `detect_loop_pattern` in executor | CPU-bound, in-process state inspection |
-| `ode.monitor_setup_ms` | `get_or_create_monitor` + `hydrate_from_db_if_fresh` | First-call I/O; cache-hit otherwise |
-| **`ode.compute_ms`** | `monitor.process_update` in executor — **the actual numpy ODE step** | CPU-bound numpy work; this is the "7s remainder" candidate |
-| `ode.persist_ms` | `increment_update_count` (PG atomic write) | I/O-bound; touches asyncpg via ExecutorPool |
+| Key | Surface measured | Persisted? | Expected character |
+|---|---|---|---|
+| `ode.auth_ms` | `verify_agent_ownership` in executor | volatile only | I/O-bound; sub-50ms typical |
+| `ode.loop_detect_ms` | `detect_loop_pattern` in executor | volatile only | CPU-bound, in-process state inspection |
+| `ode.monitor_setup_ms` | `get_or_create_monitor` + `hydrate_from_db_if_fresh` | volatile only | First-call I/O; cache-hit otherwise |
+| **`ode.numpy_step_ms`** | `monitor.process_update` in executor — numpy step (wall-clock includes executor queue-wait) | **yes (p50/p99)** | CPU-bound numpy work + executor queue-wait |
+| `ode.persist_ms` | `increment_update_count` (PG atomic write via ExecutorPool); covers `get_db()` acquisition cost | volatile only | I/O-bound |
+| `ode.persist_failed_ms` | sibling key when `increment_update_count` raises | volatile only | Failure rate signal; distinguishes "errored" from "never fired" |
 
 Sub-timers feed the existing in-process `perf_monitor` ring buffer
 (`src/perf_monitor.py`) — 1000 samples per key, p50/p95/p99/max exposed
 via the snapshot endpoint.
 
+**Honest gap:** only `ode.numpy_step_ms` reaches `metrics.series`. The
+other four sub-timers are volatile-only — visible via the snapshot
+endpoint for ad-hoc inspection, but they don't accumulate longitudinally.
+That means the "residual that doesn't sum is event-loop scheduling
+overhead" computation requires manual snapshot collection across a
+window, not a SQL query. A follow-up that promotes the other four to
+catalog entries can land when the first 7d of `numpy_step_ms` data has
+identified which decomposition slice is load-bearing.
+
 ## Persistence
 
 The catalog at `src/fleet_metrics/catalog.py` is intentionally a
 high-bar surface ("answers a question the operator will actually ask
-monthly"). Four new entries earned their rent:
+monthly"). Four entries earned their rent:
 
-- `ode.compute_ms.p50` / `.p99` — answers "is the numpy ODE step's
-  latency shrinking, stable, or growing?" The v0.3 RESOLUTION question.
+- `ode.numpy_step_ms.p50` / `.p99` — answers "is the numpy ODE step's
+  wall-clock shrinking, stable, or growing?" The v0.3 RESOLUTION
+  question. Renamed from the initial `ode.compute_ms` to make the
+  executor-queue-wait inclusion explicit (council architect-lane finding).
 - `lease_plane.client.v1.lease.acquire.p50` / `.p99` — answers "is the
   lease-boundary substrate-tax materializing?" The v0.3.2 amendment
-  question.
+  question. (Shared infra; persisted by this branch even though the
+  recorder lives in `lease-plane-phase-a-latency`.)
 
-`perf_monitor_persist_task` (`src/background_tasks.py:706+`, started at
+`perf_monitor_persist_task` (`src/background_tasks.py:715+`, started at
 server bootstrap alongside `coherence_monitoring_task`) samples
 `perf_monitor.snapshot()` every 5 minutes and writes these four series
 to `metrics.series` via `fleet_metrics.storage.record()`. The 5-minute
@@ -75,9 +88,10 @@ key somewhere in `src/`.
 - Does not split the ODE numpy compute itself into sub-steps. The Wave 3
   re-attempt may want that (governance_core changes); this branch stops
   at the boundary between `agent_loop_detection.py` and the numpy
-  module. Honest current-state: we will measure whether `ode.compute_ms`
-  is the load-bearing slice. If yes, a follow-up branch decomposes
-  governance_core's ODE solver.
+  module. Honest current-state: we will measure whether
+  `ode.numpy_step_ms` is the load-bearing slice. If yes, a follow-up
+  branch decomposes governance_core's ODE solver (and adds executor
+  queue-depth sampling to disambiguate numpy from queue-wait).
 - Does not redraft Wave 3 RFC. Per
   `feedback_redraft-cycle-bias-trap.md`, this is measure-first.
 - Does not change ODE behavior. Pure observation.
@@ -90,17 +104,25 @@ meaning if the bulk of `process_update_authenticated_async` is
 substrate question becomes about NumPy/SciPy not Python event loops.
 
 The four candidate readings, all directly checkable from the new
-series in 7+ days of steady traffic:
+series in 7+ days of steady traffic (caveats below):
 
 | Reading | Signature | Substrate-question consequence |
 |---|---|---|
-| ODE is numpy-bound | `ode.compute_ms.p99 > 6000` and other phases sub-100ms | Substrate-tax NOT at the asyncio boundary; consider numpy compile / vectorization, not BEAM port |
+| ODE is numpy-or-executor-bound | `ode.numpy_step_ms.p99 > 6000` and other phases sub-100ms | Either numpy is slow OR default executor pool is saturated under load — same wall-clock surface; disambiguate by sampling executor queue depth alongside |
 | ODE is asyncpg-bound | `ode.persist_ms.p99 > 5000` and rest fine | ExecutorPool isn't isolating; the bug class is still alive on this surface |
-| ODE is event-loop-bound | All sub-timers sum to << ode_call_ms | Substrate-tax IS the asyncio/anyio scheduling residual; supports v0.3 destination commitment |
+| ODE is event-loop-bound | All sub-timers sum to << `phases.ode_call_ms` (legacy outer-call timer in `phases.py:1062`) | Substrate-tax IS the asyncio/anyio scheduling residual; supports v0.3 destination commitment |
 | ODE is monitor-setup-bound | `ode.monitor_setup_ms.p99 > 1000` | Cache pathology, not substrate |
 
+**Readings are not mutually exclusive.** Numpy-bound and executor-bound
+can both be true simultaneously; the first row of the table captures
+their shared signature without resolving between them. Resolving
+requires executor queue-depth instrumentation that this branch does
+*not* add — that's a follow-up if/when the first row's signature fires.
+
 This makes the v0.3 RESOLUTION question structurally falsifiable for
-the first time.
+the first time. The legacy `phases.ode_call_ms` (whole-call timer in
+`phases.py:1062`) is preserved; together with `ode.numpy_step_ms` and
+the volatile sub-timers, the residual computation is well-defined.
 
 ## Cross-references
 
@@ -113,5 +135,5 @@ the first time.
 - `lease-plane-phase-a-latency-2026-05-20.md` — sibling lease-boundary
   measurement gate; shares the persistence infra introduced here
 - `CLAUDE.md §"Substrate Tax: anyio-asyncio Coupling"` — the
-  amplification phenomenon `ode.compute_ms` vs sum-of-other-phases is
+  amplification phenomenon `ode.numpy_step_ms` vs sum-of-other-phases is
   meant to detect or rule out

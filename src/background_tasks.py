@@ -707,8 +707,8 @@ async def session_cleanup_task(interval_hours: float = 6.0):
 # perf_monitor.snapshot() may carry many more keys; the catalog gate keeps
 # metrics.series from filling with surface-area noise.
 _PERF_PERSIST_TARGETS: tuple[tuple[str, str, str], ...] = (
-    ("ode.compute_ms",                              "p50_ms", "ode.compute_ms.p50"),
-    ("ode.compute_ms",                              "p99_ms", "ode.compute_ms.p99"),
+    ("ode.numpy_step_ms",                           "p50_ms", "ode.numpy_step_ms.p50"),
+    ("ode.numpy_step_ms",                           "p99_ms", "ode.numpy_step_ms.p99"),
     ("lease_plane.client.v1.lease.acquire",         "p50_ms", "lease_plane.client.v1.lease.acquire.p50"),
     ("lease_plane.client.v1.lease.acquire",         "p99_ms", "lease_plane.client.v1.lease.acquire.p99"),
 )

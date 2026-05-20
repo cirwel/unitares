@@ -487,17 +487,21 @@ async def process_update_authenticated_async(
 
     task_type = agent_state.get("task_type", "mixed")
 
-    # The actual ODE compute — numpy work, no I/O. v0.3 RESOLUTION's
-    # "load-bearing unknown" was "what's in the 7s ODE remainder?"; this
-    # timer answers that. Combined with ode.auth_ms / ode.loop_detect_ms /
-    # ode.monitor_setup_ms / ode.persist_ms, the residual that doesn't sum
-    # is event-loop scheduling overhead — the substrate-tax candidate.
-    _t_compute = time.perf_counter()
+    # Numpy ODE step — `monitor.process_update` dispatched via the default
+    # executor pool. v0.3 RESOLUTION's "load-bearing unknown" was "what's
+    # in the 7s ODE remainder?"; this timer answers that. Named
+    # `ode.numpy_step_ms` (not `compute_ms`) because the wall-clock here
+    # includes executor queue-wait time as well as the numpy work — under
+    # concurrent load on a saturated default pool, queue-wait can dominate
+    # numpy compute. Disambiguating "numpy slow" from "executor saturated"
+    # requires looking at executor queue depth alongside, which is out of
+    # scope for this branch; called out in the eval doc's falsifier matrix.
+    _t_numpy = time.perf_counter()
     result = await loop.run_in_executor(
         None,
         partial(monitor.process_update, agent_state, confidence=confidence, task_type=task_type)
     )
-    _perf_record_ms("ode.compute_ms", (time.perf_counter() - _t_compute) * 1000.0)
+    _perf_record_ms("ode.numpy_step_ms", (time.perf_counter() - _t_numpy) * 1000.0)
 
     if auto_save:
         decision_action = result.get('decision', {}).get('action', 'unknown')
@@ -509,10 +513,10 @@ async def process_update_authenticated_async(
             meta.add_recent_update(now, decision_action)
 
         # Atomically increment total_updates in PostgreSQL
+        _t_persist = time.perf_counter()
         try:
             from src import agent_storage
             db = agent_storage.get_db()
-            _t_persist = time.perf_counter()
             new_count = await db.increment_update_count(agent_id, extra_metadata={
                 "recent_update_timestamps": meta.recent_update_timestamps if meta else [now],
                 "recent_decisions": meta.recent_decisions if meta else [decision_action],
@@ -521,6 +525,11 @@ async def process_update_authenticated_async(
             if meta is not None:
                 meta.total_updates = new_count
         except Exception as e:
+            # Record the failed-persist sample under a distinct key so the
+            # success-path series (`ode.persist_ms`) reflects only successful
+            # writes, while operators can still tell "failure" from "never
+            # fired" in perf_monitor snapshots.
+            _perf_record_ms("ode.persist_failed_ms", (time.perf_counter() - _t_persist) * 1000.0)
             logger.warning(f"Failed to increment update count for {agent_id[:8]}...: {e}")
             if meta is not None:
                 meta.total_updates += 1
