@@ -1723,3 +1723,53 @@ class TestHandleAuditEvents:
         data = parse_result(result)
         assert data["success"] is True
         assert data["total_emits"] == 1
+
+    @pytest.mark.asyncio
+    async def test_caller_agent_id_not_injected_as_filter(self):
+        """Regression: auto-injected `agent_id` (caller UUID) must NOT scope the
+        query. The handler should ignore it and use `target_agent_id` only.
+
+        Bug history (2026-05-20): The Pydantic AgentIdentityMixin auto-fills
+        `agent_id` with the calling agent's UUID. The first cut of this handler
+        read `arguments.get("agent_id")` and passed it to the audit query,
+        silently scoping all results to the caller — every fleet-wide query
+        returned zero rows in production despite live data being present.
+        """
+        captured: Dict[str, Any] = {}
+
+        async def fake_query(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+            from src.mcp_handlers.observability.handlers import handle_audit_events
+            await handle_audit_events({
+                "event_type": "cross_device_call",
+                "since": "1d",
+                # Identity middleware-style injection: caller UUID lands here.
+                "agent_id": "43f5a089-e1e0-4048-be49-8229bd292dea",
+            })
+
+        # `agent_id` must NOT be forwarded to the audit query.
+        assert captured["agent_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_target_agent_id_scopes_query(self):
+        """`target_agent_id` is the intentional per-agent scope (not `agent_id`)."""
+        captured: Dict[str, Any] = {}
+
+        async def fake_query(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+            from src.mcp_handlers.observability.handlers import handle_audit_events
+            await handle_audit_events({
+                "event_type": "cross_device_call",
+                "since": "1d",
+                "target_agent_id": "Hermes_Gpt_5_4_20260519",
+                # Identity-mixin auto-injected caller UUID; must be ignored.
+                "agent_id": "43f5a089-e1e0-4048-be49-8229bd292dea",
+            })
+
+        assert captured["agent_id"] == "Hermes_Gpt_5_4_20260519"

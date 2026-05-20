@@ -960,7 +960,10 @@ async def handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextContent
       event_types: list[str] — alternative to event_type, for IN-list filters
       since: str | None — window start; ``"14d"``/``"24h"`` shorthand or ISO; default 24h
       until: str | None — window end; ISO; default now
-      agent_id: str | None — restrict to one agent
+      target_agent_id: str | None — restrict to one agent. Do NOT use `agent_id`
+        — that is auto-injected by the identity middleware with the caller's UUID
+        and would silently scope the query to the caller (zero rows for an
+        observer asking about fleet activity).
       limit: int — max event rows returned (default 1000, capped at 5000)
       include_events: bool — include event payloads in response (default False;
         counts + per-agent breakdown only)
@@ -1008,7 +1011,10 @@ async def handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextContent
         limit = 1000
     limit = max(1, min(limit, 5000))
 
-    agent_id = arguments.get("agent_id")
+    # NOTE: `agent_id` is auto-injected by the identity middleware (caller's UUID
+    # via AgentIdentityMixin). Use `target_agent_id` for the "audit-events-about-X"
+    # filter so we don't silently scope to the caller. Matches observe(action='agent').
+    agent_id = arguments.get("target_agent_id")
     include_events = bool(arguments.get("include_events", False))
     include_test_fixtures = bool(arguments.get("include_test_fixtures", True))
 
