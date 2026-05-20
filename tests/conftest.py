@@ -299,18 +299,72 @@ def _isolate_db_backend(monkeypatch):
     storage_module._db_ready_cache.clear()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_tool_usage_tracker(tmp_path_factory):
+    """
+    Redirect the tool_usage_tracker singleton to a session-scoped tmp file.
+
+    governance_monitor.process_update() calls get_tool_usage_tracker().get_usage_stats()
+    every cycle as part of dual-log complexity grounding. The default singleton
+    points at <repo>/data/tool_usage.jsonl, which on developer machines accumulates
+    to hundreds of MB / millions of entries — get_usage_stats() reads and json.loads()
+    every line on each call.
+
+    Measured cost (2026-05-06 dev box, 176MB / 1.09M-line tool_usage.jsonl):
+      - Default tracker: 2779 ms / process_update
+      - Tmp tracker:        0.3 ms / process_update  (~9000x speedup)
+
+    Tests that legitimately exercise the tracker construct ToolUsageTracker
+    directly with their own log_file (test_tool_usage_tracker.py), or patch
+    get_tool_usage_tracker via unittest.mock.patch — both override this default.
+
+    Session scope is safe because the tracker has no cross-test state we read;
+    the file is only ever appended to and we never assert on its contents here.
+    """
+    import src.tool_usage_tracker as tut
+    tmp_log = tmp_path_factory.mktemp("tool_usage") / "tool_usage.jsonl"
+    original = tut._tool_usage_tracker
+    tut._tool_usage_tracker = tut.ToolUsageTracker(log_file=tmp_log)
+    try:
+        yield tut._tool_usage_tracker
+    finally:
+        tut._tool_usage_tracker = original
+
+
 @pytest.fixture(autouse=True)
 def _neutralize_metadata_loading(monkeypatch):
     """
     Prevent ensure_metadata_loaded() from trying to connect to PostgreSQL.
 
-    Sets _metadata_loaded = True in agent_state so the fast-path returns
-    immediately. Tests that need to exercise metadata loading should
-    explicitly set _metadata_loaded = False and mock load_metadata_async.
+    The canonical state lives on ``src.agent_metadata_model`` (the
+    ``_model`` reference inside ``agent_metadata_persistence``). Patching
+    ``agent_state._metadata_loaded`` alone is a no-op because that name is
+    only an import-time copy of the bool — assigning to it does not
+    propagate back to ``agent_metadata_model``. Pre-2026-05-06 the fixture
+    only patched ``agent_state``, so every code path that hit
+    ``require_registered_agent`` (e.g. all dialectic submit handlers) blocked
+    for the full 5.0s ``_metadata_loaded_event.wait(timeout=5.0)`` ceiling
+    inside ``ensure_metadata_loaded()``. Three suite tests sat at exactly
+    5.01s for that reason.
+
+    Patch the canonical module *and* pre-set the threading event so any
+    handler that reaches ``ensure_metadata_loaded`` returns on the fast
+    path. Tests that need to exercise the loader explicitly clear these
+    in-place (see ``_isolate_identity_state`` teardown).
     """
     try:
-        import src.agent_state as agent_state
-        monkeypatch.setattr(agent_state, '_metadata_loaded', True)
+        import src.agent_metadata_model as amm
+        monkeypatch.setattr(amm, '_metadata_loaded', True, raising=False)
+        monkeypatch.setattr(amm, '_metadata_loading', False, raising=False)
+        amm._metadata_loaded_event.set()
+
+        # Keep the legacy patch on agent_state for any code that introspects
+        # via that re-exported name (defensive — not currently the hot path).
+        try:
+            import src.agent_state as agent_state
+            monkeypatch.setattr(agent_state, '_metadata_loaded', True, raising=False)
+        except Exception:
+            pass
     except Exception as exc:
         import warnings
         warnings.warn(f"test cleanup failed: {exc}", stacklevel=2)

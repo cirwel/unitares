@@ -608,12 +608,23 @@ class TestCallLocalLLM:
 
     @pytest.mark.asyncio
     async def test_timeout_returns_none(self):
+        """When the LLM call times out, call_local_llm returns None.
+
+        The implementation wraps the executor call in
+        ``asyncio.wait_for(..., timeout=timeout + 5)`` and catches
+        ``asyncio.TimeoutError``. Pre-2026-05-06 this test used
+        ``time.sleep(5)`` inside the mock to make ``wait_for`` actually fire
+        — but with the +5 buffer that meant the test ran for the full 5
+        seconds on every invocation. We exercise the same except-clause by
+        raising ``asyncio.TimeoutError`` directly from the mocked OpenAI
+        call, which propagates out of ``run_in_executor`` and ``wait_for``
+        unchanged. Same exception class, same handler branch — without the
+        artificial 5s wait.
+        """
+        import asyncio as _asyncio
+
         mock_client = MagicMock()
-
-        def slow_call(**kwargs):
-            time.sleep(5)
-
-        mock_client.chat.completions.create.side_effect = slow_call
+        mock_client.chat.completions.create.side_effect = _asyncio.TimeoutError("simulated timeout")
 
         with patch("src.mcp_handlers.support.llm_delegation.OPENAI_AVAILABLE", True), \
              patch("src.mcp_handlers.support.llm_delegation._get_ollama_client", return_value=mock_client):
