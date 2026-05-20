@@ -725,109 +725,180 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
 
 @mcp_tool("aggregate_metrics", timeout=15.0, register=False)
 async def handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Get fleet-level health overview"""
-    from src.governance_monitor import UNITARESMonitor
-    import numpy as np
+    """Get fleet-level health overview.
 
-    # Wave 0 follow-up: was force=True, comment claimed "non-blocking" but
-    # the implementation blocks ~16s per call (3221 sequential awaits on
-    # metadata_cache.set in the loader). Same anti-pattern as the prior
-    # list_agents incident (lifecycle/query.py:41). Drop force; in-memory
-    # cache is kept current by process_agent_update / onboard / background
-    # paths and is fresh enough for fleet-aggregate use.
-    await mcp_server.load_metadata_async()
-    
+    Postgres-canonical. Reads core.mv_latest_agent_states for per-agent state
+    rollups, core.agents for active membership + currently-paused, audit.events
+    for current-epoch pause counts, and audit.r1_score_audit for verdict
+    distribution. No in-memory monitor iteration — the prior implementation
+    summed monitor.state across in-process monitors, which is load-once-per-
+    process and drifts from PG truth on cross-process writes, producing
+    persistent "0 pauses" reports while audit.events has hundreds.
+    """
+    from datetime import datetime, timezone
+    from src.db import get_db
+
     agent_ids = arguments.get("agent_ids")
     include_health_breakdown = arguments.get("include_health_breakdown", True)
-    
-    # Get agent list
-    if not agent_ids:
-        agent_ids = [aid for aid, meta in mcp_server.agent_metadata.items() if meta.status == "active"]
-    
-    # Aggregate metrics
-    total_agents = len(agent_ids)
-    agents_with_data = 0
-    total_updates = 0
-    risk_scores = []  # Governance/operational risk scores
-    coherence_scores = []
-    health_statuses = {"healthy": 0, "moderate": 0, "critical": 0, "unknown": 0}
-    decision_counts = {"proceed": 0, "pause": 0}  # Two-tier system (backward compat: approve/reflect/reject mapped)
-    verdict_counts = {"safe": 0, "caution": 0, "high-risk": 0}  # Behavioral verdict distribution
-    
-    for agent_id in agent_ids:
-        monitor = mcp_server.monitors.get(agent_id)
-        if monitor is None:
-            # Load monitor state (non-blocking)
-            loop = asyncio.get_running_loop()
-            persisted_state = await loop.run_in_executor(None, mcp_server.load_monitor_state, agent_id)
-            if persisted_state:
-                monitor = UNITARESMonitor(agent_id, load_state=False)
-                monitor.state = persisted_state
-        
-        if monitor:
-            agents_with_data += 1
-            metrics = monitor.get_metrics()
-            
-            # Aggregate risk_score and coherence
-            risk_score = metrics.get("risk_score") or metrics.get("current_risk")
-            if risk_score is not None:
-                risk_scores.append(float(risk_score))
-            elif monitor.state.risk_history:
-                # Fallback to risk_history if risk_score not available
-                history_values = [float(r) for r in monitor.state.risk_history[-10:]]  # Last 10 updates
-                risk_scores.extend(history_values)
-            coherence_scores.append(float(monitor.state.coherence))
-            
-            # Aggregate health status
-            status = metrics.get("status", "unknown")
-            health_statuses[status] = health_statuses.get(status, 0) + 1
-            
-            # Aggregate decisions
-            decision_stats = metrics.get("decision_statistics", {})
-            # Map old decisions to new system
-            proceed_count = decision_stats.get("proceed", 0) + decision_stats.get("approve", 0) + decision_stats.get("reflect", 0) + decision_stats.get("revise", 0)
-            pause_count = decision_stats.get("pause", 0) + decision_stats.get("reject", 0)
-            decision_counts["proceed"] += proceed_count
-            decision_counts["pause"] += pause_count
-            # Backward compatibility (keep old keys for compatibility)
-            decision_counts["approve"] = decision_stats.get("approve", 0)
-            decision_counts["reflect"] = decision_stats.get("reflect", 0) + decision_stats.get("revise", 0)
-            decision_counts["reject"] = decision_stats.get("reject", 0)
-            
-            # Aggregate verdict distribution from metrics
-            verdict = metrics.get("verdict")
-            if verdict and verdict in verdict_counts:
-                verdict_counts[verdict] += 1
 
-            # Count total updates — prefer meta.total_updates (Postgres-backed)
-            meta = mcp_server.agent_metadata.get(agent_id)
-            total_updates += meta.total_updates if meta else monitor.state.update_count
-    
-    # Compute aggregate statistics
-    aggregate_data = {
-        "total_agents": total_agents,
-        "agents_with_data": agents_with_data,
-        "total_updates": total_updates,
-        "mean_risk_score": float(np.mean(risk_scores)) if risk_scores else 0.0,  # Governance/operational risk (mean)
-        "mean_risk": float(np.mean(risk_scores)) if risk_scores else 0.0,  # DEPRECATED: Use mean_risk_score instead
-        "mean_coherence": float(np.mean(coherence_scores)) if coherence_scores else 0.0,
-        "decision_distribution": {
-            **decision_counts,
-            "total": sum(decision_counts.values())
-        },
-        "verdict_distribution": {
-            **verdict_counts,
-            "total": sum(verdict_counts.values())
-        }
+    db = get_db()
+    async with db.acquire() as conn:
+        # Current epoch: max(epoch) in core.epochs is the authoritative
+        # boundary for "this epoch" rollups; outcome_events.epoch and
+        # agent_state.epoch are written against the same value via
+        # GovernanceConfig.CURRENT_EPOCH.
+        epoch_row = await conn.fetchrow(
+            "SELECT epoch, started_at FROM core.epochs ORDER BY epoch DESC LIMIT 1"
+        )
+        current_epoch = epoch_row["epoch"] if epoch_row else 1
+        epoch_started_at = epoch_row["started_at"] if epoch_row else None
+
+        # Build agent scope. agent_ids=None → all active agents. agent_ids=list
+        # → that explicit set (no active-status filter; matches prior behavior
+        # of trusting the caller).
+        if agent_ids:
+            scope_clause = "WHERE a.id = ANY($1::text[])"
+            scope_args: tuple = (list(agent_ids),)
+        else:
+            scope_clause = "WHERE a.status = 'active'"
+            scope_args = ()
+
+        # State rollups via matview. The matview excludes synthetic bootstrap
+        # rows at definition time (migration 023), so no extra filter needed.
+        # LEFT JOIN preserves agents that never wrote a measured state row.
+        state_sql = f"""
+            WITH scope AS (
+                SELECT a.id AS agent_id, a.status
+                FROM core.agents a
+                {scope_clause}
+            )
+            SELECT
+              count(*)::int AS total_agents,
+              count(ls.identity_id)::int AS agents_with_data,
+              avg(ls.risk_score)::real AS mean_risk_score,
+              avg(ls.coherence)::real AS mean_coherence,
+              count(*) FILTER (
+                  WHERE ls.regime IN ('nominal','STABLE','CONVERGENCE')
+              )::int AS healthy,
+              count(*) FILTER (
+                  WHERE ls.regime IN ('warning','EXPLORATION','recovery')
+              )::int AS moderate,
+              count(*) FILTER (
+                  WHERE ls.regime IN ('critical','DIVERGENCE')
+              )::int AS critical,
+              count(*) FILTER (WHERE ls.identity_id IS NULL)::int AS unknown_health,
+              count(*) FILTER (WHERE scope.status = 'paused')::int AS paused_now,
+              EXTRACT(EPOCH FROM (now() - min(ls.recorded_at)))::bigint
+                  AS staleness_oldest_seconds,
+              EXTRACT(EPOCH FROM (now() - max(ls.recorded_at)))::bigint
+                  AS staleness_newest_seconds
+            FROM scope
+            LEFT JOIN core.mv_latest_agent_states ls ON ls.agent_id = scope.agent_id
+        """
+        state_row = await conn.fetchrow(state_sql, *scope_args)
+
+        # total_updates: persisted as core.identities.metadata->>'total_updates'
+        # (atomically incremented by db.increment_update_count on every
+        # process_agent_update). chain_obs_count is an R2-specific lineage
+        # counter — only ~27 across all active agents — so don't confuse it.
+        updates_sql = f"""
+            SELECT COALESCE(
+                SUM(COALESCE((i.metadata->>'total_updates')::int, 0)), 0
+            )::bigint AS total_updates
+            FROM core.agents a
+            JOIN core.identities i ON i.agent_id = a.id
+            {scope_clause}
+        """
+        total_updates = await conn.fetchval(updates_sql, *scope_args)
+
+        # Pauses this epoch: governance pauses persist to audit.events as
+        # event_type='lifecycle_paused' (fired from agent_loop_detection.py
+        # when a circuit-breaker pause decision lands). circuit_breaker_trip
+        # fires 1:1 alongside; counting both would double-count.
+        if epoch_started_at is not None:
+            pause_sql = """
+                SELECT count(*)::int FROM audit.events
+                WHERE ts >= $1 AND event_type = 'lifecycle_paused'
+            """
+            pauses_this_epoch = await conn.fetchval(pause_sql, epoch_started_at)
+
+            # Proceed proxy: trajectory_validated outcomes in audit.outcome_events
+            # for this epoch. Not a perfect 1:1 with "governance said proceed"
+            # — there is no lifecycle_proceeded event today — but it's the
+            # measured "agent kept moving" signal scoped to the same window.
+            proceed_sql = """
+                SELECT count(*)::int FROM audit.outcome_events
+                WHERE epoch = $1 AND outcome_type = 'trajectory_validated'
+            """
+            proceed_this_epoch = await conn.fetchval(proceed_sql, current_epoch)
+
+            # Verdict distribution from r1 score audit, current-epoch window.
+            verdict_sql = """
+                SELECT verdict, count(*)::int AS n
+                FROM audit.r1_score_audit
+                WHERE recorded_at >= $1 AND verdict IS NOT NULL
+                GROUP BY verdict
+            """
+            verdict_rows = await conn.fetch(verdict_sql, epoch_started_at)
+        else:
+            pauses_this_epoch = 0
+            proceed_this_epoch = 0
+            verdict_rows = []
+
+    # Map r1 verdicts (plausible/inconclusive/unsupported) into the
+    # legacy verdict_distribution surface (safe/caution/high-risk) so
+    # external readers don't break. R1 vocabulary is the persisted truth;
+    # the legacy keys are presentation.
+    R1_TO_LEGACY = {
+        "plausible": "safe",
+        "inconclusive": "caution",
+        "unsupported": "high-risk",
     }
-    
+    verdict_distribution = {"safe": 0, "caution": 0, "high-risk": 0}
+    for row in verdict_rows:
+        legacy_key = R1_TO_LEGACY.get(row["verdict"], row["verdict"])
+        verdict_distribution[legacy_key] = (
+            verdict_distribution.get(legacy_key, 0) + int(row["n"])
+        )
+    verdict_distribution["total"] = sum(
+        v for k, v in verdict_distribution.items() if k != "total"
+    )
+
+    decision_distribution = {
+        "proceed": int(proceed_this_epoch or 0),
+        "pause": int(pauses_this_epoch or 0),
+        "total": int((proceed_this_epoch or 0) + (pauses_this_epoch or 0)),
+    }
+
+    aggregate_data = {
+        "total_agents": int(state_row["total_agents"]),
+        "agents_with_data": int(state_row["agents_with_data"]),
+        "total_updates": int(total_updates or 0),
+        "mean_risk_score": float(state_row["mean_risk_score"] or 0.0),
+        "mean_risk": float(state_row["mean_risk_score"] or 0.0),  # DEPRECATED alias
+        "mean_coherence": float(state_row["mean_coherence"] or 0.0),
+        "paused_now": int(state_row["paused_now"] or 0),
+        "pauses_this_epoch": int(pauses_this_epoch or 0),
+        "epoch": int(current_epoch),
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "staleness": {
+            "oldest_state_seconds": int(state_row["staleness_oldest_seconds"] or 0),
+            "newest_state_seconds": int(state_row["staleness_newest_seconds"] or 0),
+        },
+        "decision_distribution": decision_distribution,
+        "verdict_distribution": verdict_distribution,
+    }
+
     if include_health_breakdown:
-        aggregate_data["health_breakdown"] = health_statuses
-    
-    # Add EISV labels for API documentation
+        aggregate_data["health_breakdown"] = {
+            "healthy": int(state_row["healthy"]),
+            "moderate": int(state_row["moderate"]),
+            "critical": int(state_row["critical"]),
+            "unknown": int(state_row["unknown_health"]),
+        }
+
     return success_response({
         "aggregate": aggregate_data,
-        # eisv_labels omitted by default — use get_governance_metrics(lite=false) for labels
     })
 
 # REMOVED: handle_get_status - redundant with status alias → get_governance_metrics
