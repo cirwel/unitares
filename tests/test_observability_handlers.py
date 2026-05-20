@@ -1484,3 +1484,242 @@ class TestHandleObserveRouter:
         data = parse_result(result)
         assert data["success"] is True
         assert "summary" in data
+
+
+# ---------------------------------------------------------------------------
+# Audit events (issue #422)
+# ---------------------------------------------------------------------------
+
+class TestHandleAuditEvents:
+    """Tests for observe(action='audit_events') — issue #422."""
+
+    @staticmethod
+    def _fake_event(ts: str, agent_id: str, event_type: str = "continuity_token_deprecated_accept", **payload):
+        return {
+            "timestamp": ts,
+            "agent_id": agent_id,
+            "event_type": event_type,
+            "confidence": 1.0,
+            "details": payload or {},
+            "event_id": f"evt-{ts}-{agent_id}",
+        }
+
+    @pytest.mark.asyncio
+    async def test_missing_event_type_returns_error(self):
+        from src.mcp_handlers.observability.handlers import handle_audit_events
+        result = await handle_audit_events({})
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "event_type" in data.get("error", "").lower()
+
+    @pytest.mark.asyncio
+    async def test_shorthand_window_resolves_correctly(self):
+        """'14d' → start_time exactly 14 days ago (UTC)."""
+        captured: Dict[str, Any] = {}
+
+        async def fake_query(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+            from src.mcp_handlers.observability.handlers import handle_audit_events
+            result = await handle_audit_events({
+                "event_type": "continuity_token_deprecated_accept",
+                "since": "14d",
+            })
+
+        from datetime import datetime, timezone, timedelta
+        start = datetime.fromisoformat(captured["start_time"])
+        expected = datetime.now(timezone.utc) - timedelta(days=14)
+        # Allow small drift between the call and now()
+        assert abs((start - expected).total_seconds()) < 5
+        assert captured["event_type"] == "continuity_token_deprecated_accept"
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["total_emits"] == 0
+        assert data["raw_row_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_negative_shorthand_rejected(self):
+        """`since='-14d'` would silently query a future window — reject."""
+        from src.mcp_handlers.observability.handlers import handle_audit_events
+        result = await handle_audit_events({"event_type": "x", "since": "-14d"})
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "negative" in data.get("error", "").lower()
+
+    @pytest.mark.asyncio
+    async def test_default_window_is_seven_days(self):
+        """Default since= → 7d window (matches primary grace-window use case)."""
+        captured: Dict[str, Any] = {}
+
+        async def fake_query(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+            from src.mcp_handlers.observability.handlers import handle_audit_events
+            result = await handle_audit_events({"event_type": "x"})
+
+        from datetime import datetime, timezone, timedelta
+        start = datetime.fromisoformat(captured["start_time"])
+        expected = datetime.now(timezone.utc) - timedelta(days=7)
+        assert abs((start - expected).total_seconds()) < 5
+        data = parse_result(result)
+        assert data["window"]["defaulted"] is True
+
+    @pytest.mark.asyncio
+    async def test_event_types_wins_when_both_provided(self):
+        """When both event_type and event_types are passed, event_types wins.
+
+        The response payload echoes the *effective* filter, not the raw inputs,
+        so callers see what was actually queried.
+        """
+        captured: Dict[str, Any] = {}
+
+        async def fake_query(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+            from src.mcp_handlers.observability.handlers import handle_audit_events
+            result = await handle_audit_events({
+                "event_type": "foo",
+                "event_types": ["bar", "baz"],
+                "since": "7d",
+            })
+
+        assert captured["event_type"] is None
+        assert captured["event_types"] == ["bar", "baz"]
+        data = parse_result(result)
+        assert data["event_type"] is None
+        assert data["event_types"] == ["bar", "baz"]
+
+    @pytest.mark.asyncio
+    async def test_grouping_by_agent(self):
+        events = [
+            self._fake_event("2026-05-19T10:00:00+00:00", "real-agent-uuid-1"),
+            self._fake_event("2026-05-19T11:00:00+00:00", "real-agent-uuid-1"),
+            self._fake_event("2026-05-19T12:00:00+00:00", "Test_Agent_S9"),
+        ]
+
+        async def fake_query(**kwargs):
+            return events
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+            from src.mcp_handlers.observability.handlers import handle_audit_events
+            result = await handle_audit_events({
+                "event_type": "continuity_token_deprecated_accept",
+                "since": "7d",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["raw_row_count"] == 3
+        assert data["total_emits"] == 3  # include_test_fixtures default True
+        assert data["test_fixture_emits"] == 1
+        assert data["by_agent_id"] == {"real-agent-uuid-1": 2, "Test_Agent_S9": 1}
+        assert data["first_ts"] == "2026-05-19T10:00:00+00:00"
+        assert data["last_ts"] == "2026-05-19T12:00:00+00:00"
+
+    @pytest.mark.asyncio
+    async def test_exclude_test_fixtures(self):
+        # Mixed-case `test_` prefix variants verified against live audit.events
+        # 2026-05-20 — handler should catch all of them.
+        events = [
+            self._fake_event("2026-05-19T10:00:00+00:00", "real-agent-uuid-1"),
+            self._fake_event("2026-05-19T11:00:00+00:00", "Test_Agent_S9"),       # title case
+            self._fake_event("2026-05-19T12:00:00+00:00", "test_agent"),         # lowercase
+            self._fake_event("2026-05-19T13:00:00+00:00", "test_stress"),        # lowercase variant
+        ]
+
+        async def fake_query(**kwargs):
+            return events
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+            from src.mcp_handlers.observability.handlers import handle_audit_events
+            result = await handle_audit_events({
+                "event_type": "continuity_token_deprecated_accept",
+                "since": "7d",
+                "include_test_fixtures": False,
+            })
+
+        data = parse_result(result)
+        assert data["raw_row_count"] == 4
+        assert data["total_emits"] == 1
+        assert data["test_fixture_emits"] == 3
+        for tid in ("Test_Agent_S9", "test_agent", "test_stress"):
+            assert tid not in data["by_agent_id"]
+
+    @pytest.mark.asyncio
+    async def test_include_events_payload(self):
+        events = [self._fake_event("2026-05-19T10:00:00+00:00", "agent-1", caller_channel="rest")]
+
+        async def fake_query(**kwargs):
+            return events
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+            from src.mcp_handlers.observability.handlers import handle_audit_events
+            result = await handle_audit_events({
+                "event_type": "continuity_token_deprecated_accept",
+                "since": "7d",
+                "include_events": True,
+            })
+
+        data = parse_result(result)
+        assert "events" in data
+        assert len(data["events"]) == 1
+        assert data["events"][0]["details"]["caller_channel"] == "rest"
+
+    @pytest.mark.asyncio
+    async def test_iso_window_parsing(self):
+        """ISO 8601 since/until pass through unchanged."""
+        captured: Dict[str, Any] = {}
+
+        async def fake_query(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+            from src.mcp_handlers.observability.handlers import handle_audit_events
+            await handle_audit_events({
+                "event_type": "x",
+                "since": "2026-04-24T00:00:00Z",
+                "until": "2026-05-08T00:00:00Z",
+            })
+
+        from datetime import datetime
+        assert datetime.fromisoformat(captured["start_time"]).isoformat().startswith("2026-04-24")
+        assert datetime.fromisoformat(captured["end_time"]).isoformat().startswith("2026-05-08")
+
+    @pytest.mark.asyncio
+    async def test_limit_clamped(self):
+        captured: Dict[str, Any] = {}
+
+        async def fake_query(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+            from src.mcp_handlers.observability.handlers import handle_audit_events
+            await handle_audit_events({"event_type": "x", "limit": 99999})
+
+        assert captured["limit"] == 5000
+
+    @pytest.mark.asyncio
+    async def test_routed_through_observe(self):
+        """action='audit_events' routes through the unified observe tool."""
+        async def fake_query(**kwargs):
+            return [self._fake_event("2026-05-19T10:00:00+00:00", "agent-1")]
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+            from src.mcp_handlers.consolidated import handle_observe
+            result = await handle_observe({
+                "action": "audit_events",
+                "event_type": "continuity_token_deprecated_accept",
+                "since": "14d",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["total_emits"] == 1

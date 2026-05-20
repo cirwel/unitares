@@ -901,5 +901,186 @@ async def handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextCo
         "aggregate": aggregate_data,
     })
 
+
+def _parse_window_arg(value: Any, default_hours: float = 24.0) -> "datetime":
+    """Parse `since`/`until` window args into an aware datetime.
+
+    Accepts:
+      - shorthand: ``"14d"``, ``"168h"``, ``"30m"``
+      - ISO 8601 string (``"2026-05-08T00:00:00Z"`` or ``"2026-05-08T00:00:00+00:00"``)
+      - ``None`` → now − default_hours
+
+    Returned datetime is timezone-aware UTC.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    if value is None:
+        return now - timedelta(hours=default_hours)
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    s = str(value).strip()
+    if not s:
+        return now - timedelta(hours=default_hours)
+
+    # Shorthand: <int><unit> where unit ∈ d/h/m/s.
+    if len(s) >= 2 and s[-1] in {"d", "h", "m", "s"} and s[:-1].lstrip("-").isdigit():
+        n = int(s[:-1])
+        if n < 0:
+            # `since="-14d"` would silently query a future window (now − (−14d) = now + 14d)
+            # and return zero rows. Reject explicitly so the operator sees the typo.
+            raise ValueError(f"negative shorthand duration not allowed: {s!r}")
+        unit = s[-1]
+        delta = {
+            "d": timedelta(days=n),
+            "h": timedelta(hours=n),
+            "m": timedelta(minutes=n),
+            "s": timedelta(seconds=n),
+        }[unit]
+        return now - delta
+
+    # ISO 8601. Accept trailing 'Z' as UTC.
+    iso = s[:-1] + "+00:00" if s.endswith("Z") else s
+    dt = datetime.fromisoformat(iso)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+@mcp_tool("audit_events_query", timeout=15.0, register=False)
+async def handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """Query the Postgres ``audit.events`` table by event_type + time window.
+
+    Issue #422 — S1-c grace-period evaluations could not distinguish "zero emits
+    in window" from "no query surface." This action wraps
+    ``query_audit_events_async`` so grace-window verdicts and similar
+    audit-driven evaluations can be computed without operator SQL access.
+
+    Args (all optional except ``event_type``):
+      event_type: str — exact audit event type to filter on
+      event_types: list[str] — alternative to event_type, for IN-list filters
+      since: str | None — window start; ``"14d"``/``"24h"`` shorthand or ISO; default 24h
+      until: str | None — window end; ISO; default now
+      agent_id: str | None — restrict to one agent
+      limit: int — max event rows returned (default 1000, capped at 5000)
+      include_events: bool — include event payloads in response (default False;
+        counts + per-agent breakdown only)
+      include_test_fixtures: bool — include agents whose id (case-insensitive)
+        starts with ``test_`` (covers ``test_agent``, ``test_stress``,
+        ``test_recovery_agent``, ``Test_Agent_S9``, etc. — verified against the
+        live audit.events table 2026-05-20). Default True for transparency; set
+        False to mirror the recommended-subtasks filter in #422.
+
+    Returns counts grouped by agent and event_type plus first/last timestamps.
+    Always reports test-fixture totals separately so the caller decides whether
+    to discount them.
+    """
+    from src.audit_db import query_audit_events_async
+
+    event_type = arguments.get("event_type")
+    event_types_arg = arguments.get("event_types")
+    if not event_type and not event_types_arg:
+        return error_response(
+            "event_type or event_types is required",
+            error_code="missing_argument",
+        )
+
+    # Default 7d (168h). The primary use case is multi-week grace-window
+    # evaluations (issue #422 names a 14-day window). A 24h default would
+    # silently undercount when callers omit `since`.
+    since_arg = arguments.get("since")
+    window_defaulted = since_arg is None
+    try:
+        start_dt = _parse_window_arg(since_arg, default_hours=168.0)
+        end_dt = (
+            _parse_window_arg(arguments.get("until"), default_hours=0.0)
+            if arguments.get("until") is not None
+            else None
+        )
+    except (ValueError, KeyError) as e:
+        return error_response(
+            f"invalid window arg: {e}",
+            error_code="invalid_argument",
+        )
+
+    try:
+        limit = int(arguments.get("limit", 1000))
+    except (TypeError, ValueError):
+        limit = 1000
+    limit = max(1, min(limit, 5000))
+
+    agent_id = arguments.get("agent_id")
+    include_events = bool(arguments.get("include_events", False))
+    include_test_fixtures = bool(arguments.get("include_test_fixtures", True))
+
+    # `event_types` wins when both are provided. Echo the effective filter
+    # in the response so callers can see what was actually queried.
+    effective_event_type = event_type if event_type and not event_types_arg else None
+    effective_event_types = list(event_types_arg) if event_types_arg else None
+
+    events = await query_audit_events_async(
+        agent_id=agent_id,
+        event_type=effective_event_type,
+        event_types=effective_event_types,
+        start_time=start_dt.isoformat(),
+        end_time=end_dt.isoformat() if end_dt else None,
+        limit=limit,
+        order="asc",
+    )
+
+    def _is_test_fixture(aid: Any) -> bool:
+        # Case-insensitive `test_` prefix. Verified against the live audit.events
+        # table 2026-05-20: covers `test_agent`, `test_stress`, `test_recovery_agent`,
+        # `test_agent_v2`, `test_agent_concurrent`, and the title-case `Test_Agent_*`
+        # variants the issue comment names.
+        return isinstance(aid, str) and aid.lower().startswith("test_")
+
+    test_fixture_count = sum(1 for e in events if _is_test_fixture(e.get("agent_id")))
+    visible_events = events if include_test_fixtures else [
+        e for e in events if not _is_test_fixture(e.get("agent_id"))
+    ]
+
+    by_agent: Dict[str, int] = {}
+    by_event_type: Dict[str, int] = {}
+    first_ts: str | None = None
+    last_ts: str | None = None
+    for e in visible_events:
+        aid = e.get("agent_id") or "<unknown>"
+        by_agent[aid] = by_agent.get(aid, 0) + 1
+        et = e.get("event_type") or "<unknown>"
+        by_event_type[et] = by_event_type.get(et, 0) + 1
+        ts = e.get("timestamp")
+        if ts:
+            if first_ts is None or ts < first_ts:
+                first_ts = ts
+            if last_ts is None or ts > last_ts:
+                last_ts = ts
+
+    payload: Dict[str, Any] = {
+        # Echo the EFFECTIVE filter that was applied to the DB query, not the
+        # raw inputs. When both event_type and event_types are provided,
+        # event_types wins; the response makes that visible.
+        "event_type": effective_event_type,
+        "event_types": effective_event_types,
+        "window": {
+            "since": start_dt.isoformat(),
+            "until": end_dt.isoformat() if end_dt else None,
+            "defaulted": window_defaulted,
+        },
+        "total_emits": len(visible_events),
+        "test_fixture_emits": test_fixture_count,
+        "raw_row_count": len(events),
+        "by_agent_id": by_agent,
+        "by_event_type": by_event_type,
+        "first_ts": first_ts,
+        "last_ts": last_ts,
+        "limit_reached": len(events) >= limit,
+        "include_test_fixtures": include_test_fixtures,
+    }
+    if include_events:
+        payload["events"] = visible_events
+
+    return success_response(payload)
+
+
 # REMOVED: handle_get_status - redundant with status alias → get_governance_metrics
 # Use status() or get_governance_metrics() instead
