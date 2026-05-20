@@ -589,6 +589,7 @@ async def record_agent_state(
         regime=db_regime,
         coherence=coherence,
         state_json=state_json,
+        risk_score=risk_score,
     )
 
     return state_id

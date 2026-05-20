@@ -1116,18 +1116,138 @@ class TestHandleDetectAnomalies:
 # handle_aggregate_metrics
 # ---------------------------------------------------------------------------
 
+class _FakeAggregateConn:
+    """Routes the four queries handle_aggregate_metrics issues to canned rows.
+
+    The handler issues:
+      1. epoch lookup (fetchrow)
+      2. state rollup (fetchrow)        — fields: total_agents, agents_with_data, ...
+      3. total_updates (fetchval)
+      4. pauses_this_epoch (fetchval)   — lifecycle_paused count
+      5. proceed_this_epoch (fetchval)  — trajectory_validated count
+      6. verdict distribution (fetch)
+    """
+
+    def __init__(
+        self,
+        *,
+        epoch: int = 3,
+        epoch_started_at=None,
+        state_row=None,
+        total_updates: int = 0,
+        pauses_this_epoch: int = 0,
+        proceed_this_epoch: int = 0,
+        verdict_rows=None,
+    ):
+        from datetime import datetime, timezone
+        self._epoch = epoch
+        self._epoch_started_at = epoch_started_at or datetime(
+            2026, 4, 27, tzinfo=timezone.utc
+        )
+        self._state_row = state_row or {
+            "total_agents": 0,
+            "agents_with_data": 0,
+            "mean_risk_score": 0.0,
+            "mean_coherence": 0.0,
+            "healthy": 0,
+            "moderate": 0,
+            "critical": 0,
+            "unknown_health": 0,
+            "paused_now": 0,
+            "staleness_oldest_seconds": 0,
+            "staleness_newest_seconds": 0,
+        }
+        self._total_updates = total_updates
+        self._pauses_this_epoch = pauses_this_epoch
+        self._proceed_this_epoch = proceed_this_epoch
+        self._verdict_rows = verdict_rows or []
+        # captured args so tests can assert scoping
+        self.fetchrow_calls = []
+        self.fetchval_calls = []
+        self.fetch_calls = []
+
+    async def fetchrow(self, sql, *args):
+        self.fetchrow_calls.append((sql, args))
+        if "core.epochs" in sql:
+            return {
+                "epoch": self._epoch,
+                "started_at": self._epoch_started_at,
+            }
+        # state rollup
+        return self._state_row
+
+    async def fetchval(self, sql, *args):
+        self.fetchval_calls.append((sql, args))
+        if "metadata->>'total_updates'" in sql or "total_updates" in sql:
+            return self._total_updates
+        if "lifecycle_paused" in sql:
+            return self._pauses_this_epoch
+        if "trajectory_validated" in sql:
+            return self._proceed_this_epoch
+        return 0
+
+    async def fetch(self, sql, *args):
+        self.fetch_calls.append((sql, args))
+        return self._verdict_rows
+
+
+class _FakeAcquire:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeDB:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def acquire(self):
+        return _FakeAcquire(self._conn)
+
+
+def _patch_db(conn):
+    """Patch get_db at its source so the in-function import resolves to fake."""
+    fake_db = _FakeDB(conn)
+    return patch("src.db.get_db", return_value=fake_db)
+
+
 class TestHandleAggregateMetrics:
-    """Tests for handle_aggregate_metrics."""
+    """Tests for handle_aggregate_metrics — Postgres-canonical path.
+
+    The handler queries core.mv_latest_agent_states, core.agents,
+    core.identities.metadata, audit.events (lifecycle_paused),
+    audit.outcome_events (trajectory_validated), and audit.r1_score_audit.
+    These tests mock the DB connection — the prior in-memory monitor
+    iteration was replaced because it produced "0 pauses" reports while
+    audit.events had hundreds.
+    """
 
     @pytest.mark.asyncio
     async def test_happy_path(self):
-        """Aggregate metrics across active agents."""
-        id1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
-        id2 = "aaaaaaaa-bbbb-cccc-dddd-222222222222"
-        server = _build_mock_server(agent_ids=[id1, id2])
-
-        with patch(_PATCH_SERVER, server), \
-             patch(_PATCH_CTX, return_value=None):
+        conn = _FakeAggregateConn(
+            state_row={
+                "total_agents": 2,
+                "agents_with_data": 2,
+                "mean_risk_score": 0.25,
+                "mean_coherence": 0.5,
+                "healthy": 1,
+                "moderate": 1,
+                "critical": 0,
+                "unknown_health": 0,
+                "paused_now": 0,
+                "staleness_oldest_seconds": 100,
+                "staleness_newest_seconds": 10,
+            },
+            total_updates=137000,
+            pauses_this_epoch=81,
+            proceed_this_epoch=13000,
+        )
+        with _patch_db(conn):
             from src.mcp_handlers.observability.handlers import handle_aggregate_metrics
             result = await handle_aggregate_metrics({})
 
@@ -1136,190 +1256,128 @@ class TestHandleAggregateMetrics:
         agg = data["aggregate"]
         assert agg["total_agents"] == 2
         assert agg["agents_with_data"] == 2
-        assert "mean_risk_score" in agg
-        assert "mean_coherence" in agg
-        assert "decision_distribution" in agg
+        assert agg["mean_risk_score"] == pytest.approx(0.25)
+        assert agg["mean_coherence"] == pytest.approx(0.5)
+        assert agg["total_updates"] == 137000
+        assert agg["pauses_this_epoch"] == 81
+        assert agg["paused_now"] == 0
+        assert agg["epoch"] == 3
+        assert "as_of" in agg
+        assert "staleness" in agg
+        assert agg["decision_distribution"]["pause"] == 81
+        assert agg["decision_distribution"]["proceed"] == 13000
 
     @pytest.mark.asyncio
     async def test_no_active_agents(self):
-        """No agents -> zero aggregates."""
-        server = _build_mock_server()
-
-        with patch(_PATCH_SERVER, server), \
-             patch(_PATCH_CTX, return_value=None):
+        conn = _FakeAggregateConn()  # all zeros by default
+        with _patch_db(conn):
             from src.mcp_handlers.observability.handlers import handle_aggregate_metrics
             result = await handle_aggregate_metrics({})
-
         data = parse_result(result)
-        assert data["success"] is True
         agg = data["aggregate"]
         assert agg["total_agents"] == 0
         assert agg["agents_with_data"] == 0
         assert agg["mean_risk_score"] == 0.0
         assert agg["mean_coherence"] == 0.0
+        assert agg["pauses_this_epoch"] == 0
 
     @pytest.mark.asyncio
-    async def test_specific_agent_ids(self):
-        """Aggregate only specified agents."""
-        id1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
-        id2 = "aaaaaaaa-bbbb-cccc-dddd-222222222222"
-        server = _build_mock_server(agent_ids=[id1, id2])
-
-        with patch(_PATCH_SERVER, server), \
-             patch(_PATCH_CTX, return_value=None):
+    async def test_specific_agent_ids_scopes_query(self):
+        """When agent_ids passed, the SQL uses WHERE a.id = ANY($1::text[])."""
+        conn = _FakeAggregateConn(
+            state_row={**_FakeAggregateConn().__dict__["_state_row"], "total_agents": 1, "agents_with_data": 1},
+        )
+        ids = ["aaaaaaaa-bbbb-cccc-dddd-111111111111"]
+        with _patch_db(conn):
             from src.mcp_handlers.observability.handlers import handle_aggregate_metrics
-            result = await handle_aggregate_metrics({"agent_ids": [id1]})
+            await handle_aggregate_metrics({"agent_ids": ids})
 
-        data = parse_result(result)
-        assert data["success"] is True
-        agg = data["aggregate"]
-        assert agg["total_agents"] == 1
-
-    @pytest.mark.asyncio
-    async def test_health_breakdown_included(self):
-        """include_health_breakdown=True (default) -> health_breakdown key present."""
-        id1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
-        server = _build_mock_server(agent_ids=[id1])
-
-        with patch(_PATCH_SERVER, server), \
-             patch(_PATCH_CTX, return_value=None):
-            from src.mcp_handlers.observability.handlers import handle_aggregate_metrics
-            result = await handle_aggregate_metrics({})
-
-        data = parse_result(result)
-        assert data["success"] is True
-        assert "health_breakdown" in data["aggregate"]
+        # First fetchrow after epoch lookup is the state rollup with the scope
+        state_call = [c for c in conn.fetchrow_calls if "scope" in c[0]][0]
+        assert "ANY($1::text[])" in state_call[0]
+        assert state_call[1] == (ids,)
 
     @pytest.mark.asyncio
     async def test_health_breakdown_excluded(self):
-        """include_health_breakdown=False -> no health_breakdown key."""
-        id1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
-        server = _build_mock_server(agent_ids=[id1])
-
-        with patch(_PATCH_SERVER, server), \
-             patch(_PATCH_CTX, return_value=None):
+        conn = _FakeAggregateConn()
+        with _patch_db(conn):
             from src.mcp_handlers.observability.handlers import handle_aggregate_metrics
-            result = await handle_aggregate_metrics({
-                "include_health_breakdown": False,
-            })
-
+            result = await handle_aggregate_metrics({"include_health_breakdown": False})
         data = parse_result(result)
-        assert data["success"] is True
         assert "health_breakdown" not in data["aggregate"]
 
     @pytest.mark.asyncio
-    async def test_decision_distribution_totals(self):
-        """Decision distribution total matches sum of counts."""
-        id1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
-        server = _build_mock_server(agent_ids=[id1])
-
-        with patch(_PATCH_SERVER, server), \
-             patch(_PATCH_CTX, return_value=None):
+    async def test_pauses_persist_even_when_agents_freshly_loaded(self):
+        """Regression: this is the load-bearing fix. The prior in-memory path
+        reported pauses=0 when no agent in this process had been written-through
+        since startup, despite audit.events showing real pauses. The new path
+        always reads audit.events directly, so pauses surface regardless of
+        process state."""
+        conn = _FakeAggregateConn(
+            state_row={
+                "total_agents": 100,
+                "agents_with_data": 0,  # nothing in matview for this scope
+                "mean_risk_score": 0.0,
+                "mean_coherence": 0.0,
+                "healthy": 0, "moderate": 0, "critical": 0, "unknown_health": 100,
+                "paused_now": 5,
+                "staleness_oldest_seconds": 0,
+                "staleness_newest_seconds": 0,
+            },
+            pauses_this_epoch=83,  # the real audit.events count from the bug report
+        )
+        with _patch_db(conn):
             from src.mcp_handlers.observability.handlers import handle_aggregate_metrics
             result = await handle_aggregate_metrics({})
-
         data = parse_result(result)
-        dist = data["aggregate"]["decision_distribution"]
-        # Total should be sum of proceed + pause (and backward compat keys)
-        assert "total" in dist
+        agg = data["aggregate"]
+        assert agg["pauses_this_epoch"] == 83
+        assert agg["paused_now"] == 5
+        assert agg["decision_distribution"]["pause"] == 83
 
     @pytest.mark.asyncio
-    async def test_monitor_loaded_from_persisted_state(self):
-        """When monitor not in memory, load from persisted state."""
-        id1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
-        metadata = {id1: _make_metadata(id1)}
-        server = _build_mock_server(metadata_dict=metadata)
-        server.load_monitor_state = MagicMock(return_value=_make_state())
-
-        with patch(_PATCH_SERVER, server), \
-             patch(_PATCH_CTX, return_value=None), \
-             patch("src.governance_monitor.UNITARESMonitor") as MockMonitor:
-            mock_instance = _make_monitor(id1)
-            MockMonitor.return_value = mock_instance
-            from src.mcp_handlers.observability.handlers import handle_aggregate_metrics
-            result = await handle_aggregate_metrics({"agent_ids": [id1]})
-
-        data = parse_result(result)
-        assert data["success"] is True
-        assert data["aggregate"]["agents_with_data"] == 1
-
-    @pytest.mark.asyncio
-    async def test_risk_history_fallback(self):
-        """When risk_score and current_risk are None, fall back to risk_history."""
-        id1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
-        monitor = _make_monitor(id1, metrics={
-            "risk_score": None,
-            "current_risk": None,
-        })
-        monitor.state = _make_state(risk_history=[0.3, 0.4, 0.5])
-
-        server = _build_mock_server(
-            monitors_dict={id1: monitor},
-            metadata_dict={id1: _make_metadata(id1)},
+    async def test_verdict_mapping_r1_to_legacy(self):
+        """r1_score_audit verdicts (plausible/inconclusive/unsupported) map to
+        legacy verdict_distribution keys (safe/caution/high-risk)."""
+        conn = _FakeAggregateConn(
+            verdict_rows=[
+                {"verdict": "plausible", "n": 10},
+                {"verdict": "inconclusive", "n": 4},
+                {"verdict": "unsupported", "n": 1},
+            ],
         )
-
-        with patch(_PATCH_SERVER, server), \
-             patch(_PATCH_CTX, return_value=None):
-            from src.mcp_handlers.observability.handlers import handle_aggregate_metrics
-            result = await handle_aggregate_metrics({"agent_ids": [id1]})
-
-        data = parse_result(result)
-        assert data["success"] is True
-        # mean_risk_score should be computed from risk_history
-        assert data["aggregate"]["mean_risk_score"] > 0
-
-    @pytest.mark.asyncio
-    async def test_total_updates_aggregated(self):
-        """total_updates across agents are summed (from meta.total_updates)."""
-        id1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
-        id2 = "aaaaaaaa-bbbb-cccc-dddd-222222222222"
-
-        m1 = _make_monitor(id1)
-        m1.state = _make_state(update_count=10)
-        m2 = _make_monitor(id2)
-        m2.state = _make_state(update_count=20)
-
-        server = _build_mock_server(
-            monitors_dict={id1: m1, id2: m2},
-            metadata_dict={id1: _make_metadata(id1, total_updates=10), id2: _make_metadata(id2, total_updates=20)},
-        )
-
-        with patch(_PATCH_SERVER, server), \
-             patch(_PATCH_CTX, return_value=None):
+        with _patch_db(conn):
             from src.mcp_handlers.observability.handlers import handle_aggregate_metrics
             result = await handle_aggregate_metrics({})
-
-        data = parse_result(result)
-        assert data["aggregate"]["total_updates"] == 30
+        v = parse_result(result)["aggregate"]["verdict_distribution"]
+        assert v["safe"] == 10
+        assert v["caution"] == 4
+        assert v["high-risk"] == 1
+        assert v["total"] == 15
 
     @pytest.mark.asyncio
-    async def test_does_not_force_full_metadata_reload(self):
-        """Regression: handle_aggregate_metrics MUST NOT call load_metadata_async
-        with force=True. The force-reload triggers 3221 sequential per-agent
-        cache.set awaits (~16s blocking), causing decorator timeouts and
-        bystander timeouts on concurrent handlers via shared event loop. See
-        Wave 0 follow-up to PR #348 — substrate-tax framing in CLAUDE.md.
-        Pin the regression so the slow path can't reappear silently."""
-        id1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
-        server = _build_mock_server(agent_ids=[id1])
-
-        with patch(_PATCH_SERVER, server), \
-             patch(_PATCH_CTX, return_value=None):
+    async def test_response_includes_freshness_metadata(self):
+        """as_of, epoch, and staleness must be present so callers know the
+        freshness window. The prior handler reported in-memory state as fleet
+        truth with no freshness signal — that's the ontology bug being fixed."""
+        conn = _FakeAggregateConn(
+            state_row={
+                "total_agents": 1, "agents_with_data": 1,
+                "mean_risk_score": 0.3, "mean_coherence": 0.5,
+                "healthy": 1, "moderate": 0, "critical": 0, "unknown_health": 0,
+                "paused_now": 0,
+                "staleness_oldest_seconds": 42,
+                "staleness_newest_seconds": 5,
+            },
+        )
+        with _patch_db(conn):
             from src.mcp_handlers.observability.handlers import handle_aggregate_metrics
-            await handle_aggregate_metrics({})
-
-        # The handler MUST call load_metadata_async (cache hint), but with NO
-        # force=True. Inspect every call's kwargs and any positional bool.
-        for call in server.load_metadata_async.await_args_list:
-            assert call.kwargs.get("force", False) is False, (
-                f"handle_aggregate_metrics called load_metadata_async with "
-                f"force=True (kwargs={call.kwargs}); this is the slow path"
-            )
-            for arg in call.args:
-                assert arg is not True, (
-                    f"handle_aggregate_metrics called load_metadata_async "
-                    f"with positional True (args={call.args}); equivalent to force=True"
-                )
+            result = await handle_aggregate_metrics({})
+        agg = parse_result(result)["aggregate"]
+        assert agg["epoch"] == 3
+        assert "as_of" in agg and agg["as_of"]
+        assert agg["staleness"]["oldest_state_seconds"] == 42
+        assert agg["staleness"]["newest_state_seconds"] == 5
 
 
 # ---------------------------------------------------------------------------
@@ -1378,9 +1436,11 @@ class TestHandleObserveRouter:
         """action='aggregate' routes to handle_aggregate_metrics."""
         id1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
         server = _build_mock_server(agent_ids=[id1])
+        conn = _FakeAggregateConn()
 
         with patch(_PATCH_SERVER, server), \
-             patch(_PATCH_CTX, return_value=None):
+             patch(_PATCH_CTX, return_value=None), \
+             _patch_db(conn):
             from src.mcp_handlers.consolidated import handle_observe
             result = await handle_observe({"action": "aggregate"})
 
