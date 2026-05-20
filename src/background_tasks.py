@@ -1292,7 +1292,19 @@ async def identity_cache_warmup():
                 ip_ua_fp = binding.get("ip_ua_fingerprint")
                 if agent_uuid and ip_ua_fp:
                     cache_key = f"sticky:{ip_ua_fp}"
-                    update_transport_binding(cache_key, agent_uuid, session_key, source="warmup")
+                    # S3: warmup scans `session:*` Redis keys (session-cache
+                    # entries), not the per-binding transport_binding:* keys
+                    # that carry original_session_source. The original proof
+                    # tier isn't recoverable from this path, so the warmed
+                    # binding defaults to "unknown" — cache hits against it
+                    # decay as weak until a fresh proof rebinds.
+                    update_transport_binding(
+                        cache_key,
+                        agent_uuid,
+                        session_key,
+                        source="warmup",
+                        original_session_source="unknown",
+                    )
                     warmed += 1
             except Exception:
                 continue  # Skip malformed entries

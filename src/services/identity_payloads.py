@@ -450,29 +450,63 @@ def build_identity_response_context(
     return context
 
 
-def _identity_assurance_from_source(source_key: str) -> Dict[str, Any]:
+_STICKY_CACHE_PREFIX = "sticky_cache:"
+_DECAY_BY_ONE = {"strong": "medium", "medium": "weak"}
+_TIER_PAYLOADS = {
+    "strong": (1.0, "cryptographic, explicit stable session, or direct UUID proof path"),
+    "medium": (0.7, "session continuity source with weaker explicit proof"),
+    "weak": (0.35, "heuristic, fallback, or unknown session source"),
+}
+
+
+def _tier_for_source(source_key: str) -> str:
     if source_key in _STRONG_IDENTITY_SOURCES:
-        return {
-            "tier": "strong",
-            "score": 1.0,
-            "session_source": source_key,
-            "trajectory_confidence": None,
-            "reason": "cryptographic, explicit stable session, or direct UUID proof path",
-        }
+        return "strong"
     if source_key in _MEDIUM_IDENTITY_SOURCES:
+        return "medium"
+    return "weak"
+
+
+def _identity_assurance_from_source(source_key: str) -> Dict[str, Any]:
+    """Compute assurance tier from a session-resolution source.
+
+    Recognizes the S3 `sticky_cache:<original>` envelope: the original
+    proof source is mapped to its tier, then decayed one step
+    (strong→medium, medium→weak, weak→weak). Mirrors the same logic in
+    `mcp_handlers/updates/phases.py:_compute_identity_assurance` so the
+    identity() response and update-path tier stay consistent.
+    """
+    if source_key.startswith(_STICKY_CACHE_PREFIX):
+        original_key = source_key[len(_STICKY_CACHE_PREFIX):] or "unknown"
+        original_tier = _tier_for_source(original_key)
+        tier = _DECAY_BY_ONE.get(original_tier, original_tier)
+        score, _ = _TIER_PAYLOADS[tier]
+        if original_tier == tier:
+            reason = (
+                f"cache hit; original proof '{original_key}' was {original_tier} "
+                "(no further decay)"
+            )
+        else:
+            reason = (
+                f"cache hit; original proof '{original_key}' was {original_tier}, "
+                f"decayed one tier to {tier} for per-call proof absence"
+            )
         return {
-            "tier": "medium",
-            "score": 0.7,
+            "tier": tier,
+            "score": score,
             "session_source": source_key,
             "trajectory_confidence": None,
-            "reason": "session continuity source with weaker explicit proof",
+            "reason": reason,
         }
+
+    tier = _tier_for_source(source_key)
+    score, reason = _TIER_PAYLOADS[tier]
     return {
-        "tier": "weak",
-        "score": 0.35,
+        "tier": tier,
+        "score": score,
         "session_source": source_key,
         "trajectory_confidence": None,
-        "reason": "heuristic, fallback, or unknown session source",
+        "reason": reason,
     }
 
 
