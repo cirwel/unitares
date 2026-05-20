@@ -46,6 +46,12 @@ class PerfMonitor:
         with self._lock:
             self._samples[op].append(float(duration_ms))
 
+    def reset(self) -> None:
+        """Drop all recorded samples. Test-fixture helper; production code
+        should rely on the per-op ring buffer's natural decay."""
+        with self._lock:
+            self._samples.clear()
+
     def snapshot(self) -> Dict[str, Dict[str, Any]]:
         """
         Return compact stats per operation.
