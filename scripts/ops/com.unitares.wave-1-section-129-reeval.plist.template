@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    One-shot Wave 1 §129 re-evaluation. Fires at 09:00 local time on
+    June 2 (= 09:00 MDT = 15:00 UTC during Denver summer). Anchored to
+    the 2026-05-19 decorator-fix merge (PR #463); T+14 = 2026-06-02.
+
+    The wrapper at scripts/dev/run_section_129_reeval_one_shot.sh
+    self-unloads after firing so this is effectively one-shot for
+    2026-06-02. The plist file stays on disk as an audit trail; rearm
+    by editing the calendar interval and `launchctl bootstrap` again.
+
+    Before installing, substitute placeholders:
+      __UNITARES_ROOT__  → absolute path to your unitares checkout
+      __HOME__           → your $HOME (expanded absolute path)
+
+    Example:
+      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
+          -e "s|__HOME__|$HOME|g" \
+          scripts/ops/com.unitares.wave-1-section-129-reeval.plist.template \
+          > ~/Library/LaunchAgents/com.unitares.wave-1-section-129-reeval.plist
+      launchctl bootstrap gui/$(id -u) \
+          ~/Library/LaunchAgents/com.unitares.wave-1-section-129-reeval.plist
+
+    Cross-references:
+      - docs/proposals/wave-1-window-evaluation-T0-2026-05-19.md
+      - docs/proposals/wave-1-window-evaluation-2026-05-18.md
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unitares.wave-1-section-129-reeval</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__UNITARES_ROOT__/scripts/dev/run_section_129_reeval_one_shot.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__UNITARES_ROOT__</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Month</key>
+        <integer>6</integer>
+        <key>Day</key>
+        <integer>2</integer>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__UNITARES_ROOT__/data/logs/section_129_reeval_launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__UNITARES_ROOT__/data/logs/section_129_reeval_launchd.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>GOVERNANCE_DATABASE_URL</key>
+        <string>postgresql://postgres:postgres@localhost:5432/governance</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
