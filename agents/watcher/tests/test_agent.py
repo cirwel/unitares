@@ -25,6 +25,7 @@ import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -937,6 +938,189 @@ def test_update_finding_status_omits_reason_when_not_provided(watcher_module):
     row = watcher_module._iter_findings_raw()[0]
     assert "resolution_reason" not in row
     assert "resolved_by" not in row
+
+
+# --- Watcher findings lease gate -------------------------------------------
+
+
+class _FakeLeaseClient:
+    def __init__(self, result):
+        self.result = result
+        self.acquire_requests = []
+        self.release_requests = []
+
+    def acquire(self, request):
+        self.acquire_requests.append(request)
+        return self.result
+
+    def release(self, request):
+        from src.lease_plane import SimpleOk
+
+        self.release_requests.append(request)
+        return SimpleOk(ok=True)
+
+
+def _held_by_other_result():
+    from src.lease_plane import AcquireHeldByOther
+
+    return AcquireHeldByOther(
+        ok=False,
+        error="held_by_other",
+        surface_id="file:///tmp/watcher-state",
+        blocking_lease_id=uuid4(),
+        held_by_uuid=uuid4(),
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        retry_after_hint_ms=250,
+    )
+
+
+def _acquire_ok_result():
+    from src.lease_plane import AcquireOk, LeaseRecord
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    return AcquireOk(
+        ok=True,
+        idempotent=False,
+        drift_warning=[],
+        lease=LeaseRecord(
+            lease_id=uuid4(),
+            surface_id="file:///tmp/watcher-state",
+            surface_kind="file",
+            holder_agent_uuid=uuid4(),
+            holder_class="process_instance",
+            holder_kind="remote_heartbeat",
+            holder_pid=None,
+            heartbeat_required=True,
+            intent="unit-test mutation",
+            acquired_at=now,
+            expires_at=now + timedelta(seconds=120),
+            last_heartbeat_at=now,
+            released_at=None,
+            release_reason=None,
+            audit_session=None,
+            original_ttl_s=120,
+            earned_status="provisional",
+        ),
+    )
+
+
+def test_watcher_findings_lease_advisory_runs_when_held_by_other(
+    watcher_module, monkeypatch, capsys
+):
+    from src.lease_plane import advisory as advisory_module
+
+    result = _held_by_other_result()
+    client = _FakeLeaseClient(result)
+    monkeypatch.setattr(advisory_module, "make_advisory_client", lambda: client)
+    monkeypatch.delenv(watcher_module.WATCHER_FINDINGS_LEASE_MODE_ENV, raising=False)
+
+    calls = []
+    rc = watcher_module._run_with_watcher_findings_lease(
+        "unit-test mutation",
+        lambda: calls.append("ran") or 0,
+        holder_agent_id=str(uuid4()),
+    )
+
+    assert rc == 0
+    assert calls == ["ran"]
+    assert len(client.acquire_requests) == 1
+    assert client.release_requests == []
+    captured = capsys.readouterr()
+    assert "held_by_other" in captured.err
+    assert str(result.held_by_uuid) in captured.err
+    assert str(result.blocking_lease_id) in captured.err
+
+
+def test_watcher_findings_lease_enforcement_blocks_when_held_by_other(
+    watcher_module, monkeypatch, capsys
+):
+    from src.lease_plane import advisory as advisory_module
+
+    result = _held_by_other_result()
+    client = _FakeLeaseClient(result)
+    monkeypatch.setattr(advisory_module, "make_advisory_client", lambda: client)
+    monkeypatch.setenv(watcher_module.WATCHER_FINDINGS_LEASE_MODE_ENV, "enforce")
+
+    calls = []
+    rc = watcher_module._run_with_watcher_findings_lease(
+        "unit-test mutation",
+        lambda: calls.append("ran") or 0,
+        holder_agent_id=str(uuid4()),
+    )
+
+    assert rc == watcher_module.WATCHER_FINDINGS_LEASE_BLOCK_RC
+    assert calls == []
+    assert len(client.acquire_requests) == 1
+    assert client.release_requests == []
+    captured = capsys.readouterr()
+    assert "mutation blocked" in captured.err
+    assert str(result.held_by_uuid) in captured.err
+
+
+def test_watcher_findings_lease_enforcement_runs_and_releases_when_acquired(
+    watcher_module, monkeypatch
+):
+    from src.lease_plane import advisory as advisory_module
+
+    result = _acquire_ok_result()
+    client = _FakeLeaseClient(result)
+    monkeypatch.setattr(advisory_module, "make_advisory_client", lambda: client)
+    monkeypatch.setenv(watcher_module.WATCHER_FINDINGS_LEASE_MODE_ENV, "enforce")
+
+    calls = []
+    rc = watcher_module._run_with_watcher_findings_lease(
+        "unit-test mutation",
+        lambda: calls.append("ran") or 0,
+        holder_agent_id=str(uuid4()),
+    )
+
+    assert rc == 0
+    assert calls == ["ran"]
+    assert len(client.acquire_requests) == 1
+    assert len(client.release_requests) == 1
+    assert client.release_requests[0].lease_id == result.lease.lease_id
+
+
+def test_main_resolve_routes_through_findings_lease_wrapper(
+    watcher_module, monkeypatch
+):
+    resolver = str(uuid4())
+    _seed_findings(watcher_module, [_make_raw_entry("aaaaaaaaaaaaaaaa")])
+    monkeypatch.setattr(watcher_module, "_make_identity_client", lambda: object())
+    monkeypatch.setattr(watcher_module, "resolve_identity", lambda _client: None)
+
+    seen = {}
+
+    def fake_lease_wrapper(intent, mutation, *, holder_agent_id=None):
+        seen["intent"] = intent
+        seen["holder_agent_id"] = holder_agent_id
+        return mutation()
+
+    monkeypatch.setattr(
+        watcher_module,
+        "_run_with_watcher_findings_lease",
+        fake_lease_wrapper,
+    )
+
+    rc = watcher_module.main(
+        ["--resolve", "aaaaaaaa", "--agent-id", resolver, "--reason", "fixed"]
+    )
+
+    assert rc == 0
+    assert seen == {"intent": "resolve aaaaaaaa", "holder_agent_id": resolver}
+
+
+def test_main_print_unresolved_is_read_only_and_unleased(watcher_module, monkeypatch):
+    _seed_findings(watcher_module, [_make_raw_entry("aaaaaaaaaaaaaaaa")])
+    monkeypatch.setattr(watcher_module, "_make_identity_client", lambda: object())
+    monkeypatch.setattr(watcher_module, "resolve_identity", lambda _client: None)
+    monkeypatch.setattr(
+        watcher_module,
+        "_run_with_watcher_findings_lease",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("unexpected lease")),
+    )
+
+    assert watcher_module.main(["--print-unresolved"]) == 0
 
 
 # --- sweep_stale_findings ---------------------------------------------------
