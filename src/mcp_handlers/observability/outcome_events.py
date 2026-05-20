@@ -331,6 +331,21 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
             logger.debug(f"Calibration from outcome_event skipped: {e_cal}")
 
         if eprocess_eligible:
+            # S10.2: resolve class_tag from the in-memory agent_metadata cache so
+            # the tracker's by-class rollup gets the agent's current class at
+            # write time. classify_agent(None) returns "default" — a benign
+            # bucket — when the cache lookup misses (uncached agent or transient
+            # eviction). On any unexpected error, fall through to None so the
+            # tracker writes into UNKNOWN_CLASS_BUCKET; the calibration write
+            # itself must not fail because class resolution failed.
+            class_tag: Optional[str] = None
+            try:
+                from src.agent_metadata_model import agent_metadata
+                from src.grounding.class_indicator import classify_agent
+                class_tag = classify_agent(agent_metadata.get(agent_id))
+            except Exception as e_cls:
+                logger.debug(f"S10 class lookup failed (defaulting to unknown bucket): {e_cls}")
+
             try:
                 from src.sequential_calibration import sequential_calibration_tracker
 
@@ -338,6 +353,7 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
                     confidence=_confidence,
                     outcome_correct=not is_bad,
                     agent_id=agent_id,
+                    class_tag=class_tag,
                     signal_source=hard_exogenous_signal,
                     decision_action=decision_action,
                     outcome_type=outcome_type,

@@ -354,6 +354,7 @@ class TestExplicitOutcomeEventCalibration:
             confidence=0.85,
             outcome_correct=True,
             agent_id='agent-test',
+            class_tag='default',  # S10.2: classify_agent(None)="default" when agent_metadata cache miss
             signal_source='tests',
             decision_action='proceed',
             outcome_type='test_passed',
@@ -409,6 +410,7 @@ class TestExplicitOutcomeEventCalibration:
             confidence=0.7,
             outcome_correct=True,
             agent_id='agent-mon',
+            class_tag='default',
             signal_source='tasks',
             decision_action=None,
             outcome_type='task_completed',
@@ -544,6 +546,7 @@ class TestExplicitOutcomeEventCalibration:
             confidence=0.9,
             outcome_correct=False,
             agent_id='agent-tf',
+            class_tag='default',
             signal_source='tests',
             decision_action='proceed',
             outcome_type='test_failed',
