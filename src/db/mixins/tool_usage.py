@@ -56,8 +56,16 @@ class ToolUsageMixin:
         eisv_coherence: Optional[float] = None,
         eisv_regime: Optional[str] = None,
         detail: Optional[Dict[str, Any]] = None,
+        verification_source: Optional[str] = None,
     ) -> Optional[str]:
-        """Insert one outcome event. Returns outcome_id UUID string or None on failure."""
+        """Insert one outcome event. Returns outcome_id UUID string or None on failure.
+
+        ``verification_source`` is the v1 enum (agent_reported_tool_result |
+        server_observation | external_signal), promoted to a top-level column
+        in migration 038. Callers must pass a value matching the enum or NULL;
+        the CHECK constraint rejects other strings. Optional for backwards
+        compatibility with pre-Phase-1 callers; future migration will require it.
+        """
         from config.governance_config import GovernanceConfig
         async with self.acquire() as conn:
             try:
@@ -66,14 +74,15 @@ class ToolUsageMixin:
                     INSERT INTO audit.outcome_events
                         (ts, agent_id, session_id, outcome_type, outcome_score, is_bad,
                          eisv_e, eisv_i, eisv_s, eisv_v, eisv_phi, eisv_verdict, eisv_coherence, eisv_regime,
-                         detail, epoch)
-                    VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                         detail, epoch, verification_source)
+                    VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                     RETURNING outcome_id
                     """,
                     agent_id, session_id, outcome_type, outcome_score, is_bad,
                     eisv_e, eisv_i, eisv_s, eisv_v, eisv_phi, eisv_verdict, eisv_coherence, eisv_regime,
                     json.dumps(detail or {}),
                     GovernanceConfig.CURRENT_EPOCH,
+                    verification_source,
                 )
                 return str(outcome_id)
             except Exception:

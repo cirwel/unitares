@@ -273,10 +273,12 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     detail["eprocess_eligible"] = eprocess_eligible
     detail["prediction_id"] = prediction_id
     detail["prediction_source"] = prediction_source
-    # Pydantic validation (params_step.py) fills defaults before the handler
-    # runs, so the schema default ("agent_reported_tool_result") is already
-    # present in `arguments`. No fallback string needed here.
-    detail["verification_source"] = arguments.get("verification_source")
+    # Pydantic validation (params_step.py) fills defaults before the MCP
+    # entry point runs, so the schema default ("agent_reported_tool_result")
+    # is already present in `arguments` for that path. In-process callers
+    # (Phase-5 evidence loop, dialectic resolution) pass their own value
+    # explicitly. Default here is the v1 schema default for safety.
+    verification_source = arguments.get("verification_source") or "agent_reported_tool_result"
 
     # Insert
     outcome_id = await db.record_outcome_event(
@@ -294,6 +296,7 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
         eisv_coherence=eisv_coherence,
         eisv_regime=eisv_regime,
         detail=detail,
+        verification_source=verification_source,
     )
 
     if not outcome_id:
