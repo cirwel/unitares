@@ -410,22 +410,28 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
     state = %{state | running?: true}
     lease = acquire_runtime_lease(state)
 
-    try do
-      case await_runtime_tick(state) do
-        {:ok, next_state} ->
-          schedule_next_tick(next_state)
-          {:noreply, next_state}
+    if lease_enforcement_blocked?(lease) do
+      Logger.warning("ForcedReleasePoller: tick skipped by lease enforcement")
+      schedule_next_tick(state)
+      {:noreply, %{state | running?: false}}
+    else
+      try do
+        case await_runtime_tick(state) do
+          {:ok, next_state} ->
+            schedule_next_tick(next_state)
+            {:noreply, next_state}
 
-        :timeout ->
-          Logger.warning(
-            "ForcedReleasePoller: runtime tick exceeded #{state.tick_timeout_ms}ms — cursor unchanged"
-          )
+          :timeout ->
+            Logger.warning(
+              "ForcedReleasePoller: runtime tick exceeded #{state.tick_timeout_ms}ms — cursor unchanged"
+            )
 
-          schedule_next_tick(state)
-          {:noreply, %{state | running?: false}}
+            schedule_next_tick(state)
+            {:noreply, %{state | running?: false}}
+        end
+      after
+        release_runtime_lease(lease, state)
       end
-    after
-      release_runtime_lease(lease, state)
     end
   end
 
@@ -481,6 +487,9 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
 
   defp acquire_runtime_lease(%{lease_opts: lease_opts}),
     do: LeaseAdvisory.acquire_cycle(lease_opts)
+
+  defp lease_enforcement_blocked?(%{outcome: :enforcement_blocked}), do: true
+  defp lease_enforcement_blocked?(_lease), do: false
 
   defp release_runtime_lease(_lease, %{lease_advisory?: false}), do: :ok
 

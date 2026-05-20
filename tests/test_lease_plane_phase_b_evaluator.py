@@ -77,7 +77,7 @@ def test_unknown_surface_kind_raises(evaluator):
 
 def test_dialectic_fails_when_window_too_short(evaluator, monkeypatch):
     """Recently-started advisory traffic for a non-write surface_kind:
-    criterion 1 fails (calendar gate), 5 is N/A, 4+6 NOT_YET_EVALUABLE."""
+    criterion 1 fails (calendar gate), 5+6 are N/A, 4 is NOT_YET_EVALUABLE."""
     earliest = datetime.now(timezone.utc) - timedelta(days=2)
     cursor = FakeCursor(
         [
@@ -89,11 +89,16 @@ def test_dialectic_fails_when_window_too_short(evaluator, monkeypatch):
             {"n": 0},
             # criterion 3
             {"distinct_surfaces": 2, "total_conflicts": 2},
-            # criterion 4: no audit_session column
-            None,
-            # criterion 5 is N/A for dialectic — no SQL runs
-            # criterion 6: no observation table
-            {"has_table": False},
+            # criterion 4: KG table present, but no conflict audit_session
+            {"has_table": True},
+            {
+                "conflicts_with_audit_session": 0,
+                "linked_conflicts": 0,
+                "linked_discoveries": 0,
+                "example_discovery_id": None,
+                "example_surface_id": None,
+            },
+            # criteria 5 and 6 are N/A for dialectic — no SQL runs
         ]
     )
     _patched_conn(monkeypatch, evaluator, cursor)
@@ -106,7 +111,7 @@ def test_dialectic_fails_when_window_too_short(evaluator, monkeypatch):
     assert statuses[3] == "FAIL"  # only 2 distinct surfaces
     assert statuses[4] == "NOT_YET_EVALUABLE"
     assert statuses[5] == "NOT_APPLICABLE"  # non-write
-    assert statuses[6] == "NOT_YET_EVALUABLE"
+    assert statuses[6] == "NOT_APPLICABLE"  # non-write
     assert report.promotable is False
 
 
@@ -120,11 +125,16 @@ def test_dialectic_eligible_when_all_pass(evaluator, monkeypatch):
             {"has_table": True},
             {"n": 0},
             {"distinct_surfaces": 5, "total_conflicts": 12},
-            # criterion 4: pretend audit_session column exists
-            {"column_name": "audit_session"},
-            # criterion 5 is N/A for dialectic
-            # criterion 6: pretend observation table exists
+            # criterion 4: conflict links to a KG collision discovery
             {"has_table": True},
+            {
+                "conflicts_with_audit_session": 12,
+                "linked_conflicts": 1,
+                "linked_discoveries": 1,
+                "example_discovery_id": "kg-1",
+                "example_surface_id": "dialectic:/abc",
+            },
+            # criteria 5 and 6 are N/A for dialectic
         ]
     )
     _patched_conn(monkeypatch, evaluator, cursor)
@@ -134,13 +144,84 @@ def test_dialectic_eligible_when_all_pass(evaluator, monkeypatch):
     assert statuses[1] == "PASS"
     assert statuses[3] == "PASS"
     assert statuses[5] == "NOT_APPLICABLE"
-    # 4 and 6 still mark NOT_YET_EVALUABLE because the join SQL is reserved
-    # for when the instrumentation actually finalizes — this is intentional.
+    assert statuses[4] == "PASS"
+    assert statuses[6] == "NOT_APPLICABLE"
+    assert report.promotable is True
+
+
+def test_controlled_drill_evidence_can_satisfy_conflict_criteria(evaluator, monkeypatch):
+    """Drill evidence is explicit opt-in and does not require waiting for a real incident."""
+    earliest = datetime.now(timezone.utc) - timedelta(days=20)
+    cursor = FakeCursor(
+        [
+            {"earliest": earliest, "latest": datetime.now(timezone.utc), "n": 500},
+            {"has_table": True},
+            {"n": 0},
+            {
+                "distinct_surfaces": 3,
+                "total_conflicts": 3,
+                "organic_distinct_surfaces": 0,
+                "organic_total_conflicts": 0,
+                "drill_distinct_surfaces": 3,
+                "drill_total_conflicts": 3,
+            },
+            {
+                "drill_conflicts": 3,
+                "drill_distinct_surfaces": 3,
+                "example_surface_id": "resident:/phase_b_drill/run-1/1",
+                "example_audit_session": "phase-b-drill:resident:run-1",
+            },
+            # criteria 5 and 6 are N/A for resident
+        ]
+    )
+    _patched_conn(monkeypatch, evaluator, cursor)
+
+    report = evaluator.evaluate("resident", window_days=14, accept_drill_evidence=True)
+
+    statuses = {c.number: c.status for c in report.criteria}
+    assert statuses[3] == "PASS"
+    assert statuses[4] == "PASS"
+    c4 = next(c for c in report.criteria if c.number == 4)
+    assert c4.measured["accepted_instead_of_real_incident"] is True
+    assert report.accept_drill_evidence is True
+    assert statuses[6] == "NOT_APPLICABLE"
+    assert report.promotable is True
+
+
+def test_drill_evidence_is_not_accepted_without_flag(evaluator, monkeypatch):
+    earliest = datetime.now(timezone.utc) - timedelta(days=20)
+    cursor = FakeCursor(
+        [
+            {"earliest": earliest, "latest": datetime.now(timezone.utc), "n": 500},
+            {"has_table": True},
+            {"n": 0},
+            {
+                "distinct_surfaces": 3,
+                "total_conflicts": 3,
+                "organic_distinct_surfaces": 0,
+                "organic_total_conflicts": 0,
+                "drill_distinct_surfaces": 3,
+                "drill_total_conflicts": 3,
+            },
+            {"has_table": True},
+            {
+                "conflicts_with_audit_session": 0,
+                "linked_conflicts": 0,
+                "linked_discoveries": 0,
+                "example_discovery_id": None,
+                "example_surface_id": None,
+            },
+            # criteria 5 and 6 are N/A for resident
+        ]
+    )
+    _patched_conn(monkeypatch, evaluator, cursor)
+
+    report = evaluator.evaluate("resident", window_days=14)
+
+    statuses = {c.number: c.status for c in report.criteria}
+    assert statuses[3] == "FAIL"
     assert statuses[4] == "NOT_YET_EVALUABLE"
-    assert statuses[6] == "NOT_YET_EVALUABLE"
-    # Until 4 and 6 stop being NOT_YET_EVALUABLE, even a "fully-passing"
-    # window cannot be marked promotable. This is the honest posture.
-    assert report.promotable is False
+    assert statuses[6] == "NOT_APPLICABLE"
 
 
 def test_file_coverage_ratio_low(evaluator, monkeypatch):
@@ -152,7 +233,14 @@ def test_file_coverage_ratio_low(evaluator, monkeypatch):
             {"has_table": True},
             {"n": 0},
             {"distinct_surfaces": 7, "total_conflicts": 9},
-            None,  # criterion 4 — no audit_session
+            {"has_table": True},
+            {
+                "conflicts_with_audit_session": 9,
+                "linked_conflicts": 1,
+                "linked_discoveries": 1,
+                "example_discovery_id": "kg-1",
+                "example_surface_id": "file:///tmp/a",
+            },
             # criterion 5: low coverage
             {"writes": 100, "acquires": 60, "coverage_ratio": 0.6},
             {"has_table": False},  # criterion 6 — no observation table
@@ -179,7 +267,14 @@ def test_file_coverage_ratio_no_writes_yet(evaluator, monkeypatch):
             {"has_table": True},
             {"n": 0},
             {"distinct_surfaces": 7, "total_conflicts": 9},
-            None,
+            {"has_table": True},
+            {
+                "conflicts_with_audit_session": 9,
+                "linked_conflicts": 1,
+                "linked_discoveries": 1,
+                "example_discovery_id": "kg-1",
+                "example_surface_id": "file:///tmp/a",
+            },
             {"writes": 0, "acquires": 60, "coverage_ratio": None},
             {"has_table": False},
         ]
@@ -200,7 +295,14 @@ def test_no_advisory_traffic_at_all(evaluator, monkeypatch):
             {"has_table": True},
             {"n": 0},
             {"distinct_surfaces": 0, "total_conflicts": 0},
-            None,
+            {"has_table": True},
+            {
+                "conflicts_with_audit_session": 0,
+                "linked_conflicts": 0,
+                "linked_discoveries": 0,
+                "example_discovery_id": None,
+                "example_surface_id": None,
+            },
             # capture is a write surface_kind, so criterion 5 runs
             {"writes": 0, "acquires": 0, "coverage_ratio": None},
             {"has_table": False},
@@ -222,7 +324,14 @@ def test_uptime_fails_with_down_events(evaluator, monkeypatch):
             {"has_table": True},
             {"n": 4},  # 4 down events in window
             {"distinct_surfaces": 5, "total_conflicts": 7},
-            None,
+            {"has_table": True},
+            {
+                "conflicts_with_audit_session": 7,
+                "linked_conflicts": 1,
+                "linked_discoveries": 1,
+                "example_discovery_id": "kg-1",
+                "example_surface_id": "dialectic:/abc",
+            },
             {"has_table": False},
         ]
     )
@@ -243,7 +352,14 @@ def test_text_format_mentions_eligibility_date(evaluator, monkeypatch):
             {"has_table": True},
             {"n": 0},
             {"distinct_surfaces": 2, "total_conflicts": 2},
-            None,
+            {"has_table": True},
+            {
+                "conflicts_with_audit_session": 0,
+                "linked_conflicts": 0,
+                "linked_discoveries": 0,
+                "example_discovery_id": None,
+                "example_surface_id": None,
+            },
             {"has_table": False},
         ]
     )

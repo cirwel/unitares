@@ -36,6 +36,7 @@ from src.lease_plane import LeasePlaneClient, ReleaseRequest  # noqa: E402
 from src.lease_plane.advisory import (  # noqa: E402
     AcquireRequest,
     acquire_advisory,
+    is_surface_enforced,
     make_advisory_client,
 )
 
@@ -57,9 +58,15 @@ def _cmd_acquire(args: argparse.Namespace) -> int:
     )
 
     outcome, lease_id = acquire_advisory(client, request)
+    blocked = lease_id is None and is_surface_enforced(args.surface_id)
 
     json.dump(
-        {"outcome": outcome, "lease_id": str(lease_id) if lease_id else None},
+        {
+            "outcome": outcome,
+            "lease_id": str(lease_id) if lease_id else None,
+            "enforced": is_surface_enforced(args.surface_id),
+            "blocked": blocked,
+        },
         sys.stdout,
     )
     sys.stdout.write("\n")

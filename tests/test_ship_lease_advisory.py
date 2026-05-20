@@ -70,6 +70,8 @@ def test_acquire_emits_lease_id_on_acquired_new(capsys, monkeypatch):
     payload = json.loads(capsys.readouterr().out)
     assert payload["outcome"] == "acquired_new"
     assert UUID(payload["lease_id"])  # well-formed
+    assert payload["enforced"] is False
+    assert payload["blocked"] is False
 
 
 def test_acquire_emits_null_lease_on_held_by_other(capsys, monkeypatch):
@@ -102,6 +104,42 @@ def test_acquire_emits_null_lease_on_held_by_other(capsys, monkeypatch):
     payload = json.loads(capsys.readouterr().out)
     assert payload["outcome"] == "held_by_other"
     assert payload["lease_id"] is None
+    assert payload["blocked"] is False
+
+
+def test_acquire_marks_blocked_when_surface_kind_enforced(capsys, monkeypatch):
+    other = uuid4()
+    client = _scripted_client(
+        [
+            {
+                "ok": False,
+                "error": "held_by_other",
+                "surface_id": "resident:/ship_sh_contended",
+                "blocking_lease_id": str(uuid4()),
+                "held_by_uuid": str(other),
+                "expires_at": (datetime.now(UTC) + timedelta(seconds=60)).isoformat(),
+                "retry_after_hint_ms": 5000,
+            }
+        ]
+    )
+
+    monkeypatch.setattr(shla, "make_advisory_client", lambda: client)
+    monkeypatch.setenv("LEASE_PLANE_ENFORCED_SURFACE_KINDS", "resident")
+
+    rc = shla.main(
+        [
+            "acquire",
+            "--surface-id=resident:/ship_sh_contended",
+            "--surface-kind=ship_sh",
+        ]
+    )
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["outcome"] == "held_by_other"
+    assert payload["lease_id"] is None
+    assert payload["enforced"] is True
+    assert payload["blocked"] is True
 
 
 def test_acquire_emits_service_unavailable_on_disabled(capsys, monkeypatch):

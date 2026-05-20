@@ -14,7 +14,13 @@ from src.lease_plane import (
     LeasePlaneDisabledClient,
     SimpleOk,
 )
-from src.lease_plane.advisory import lease_advisory_scope, make_advisory_client
+from src.lease_plane.advisory import (
+    LeaseEnforcementBlocked,
+    enforced_surface_kinds,
+    is_surface_enforced,
+    lease_advisory_scope,
+    make_advisory_client,
+)
 
 
 def _ok_lease_payload(holder_uuid: UUID) -> dict[str, Any]:
@@ -133,6 +139,69 @@ def test_held_by_other_runs_block_no_release():
     assert block_ran is True
     # No release call because we never held the lease.
     assert len(calls) == 1
+
+
+def test_held_by_other_blocks_when_surface_kind_enforced(monkeypatch):
+    other_holder = uuid4()
+    transport, calls = _scripted_transport(
+        [
+            {
+                "ok": False,
+                "error": "held_by_other",
+                "surface_id": "dialectic:/test_advisory_contended",
+                "blocking_lease_id": str(uuid4()),
+                "held_by_uuid": str(other_holder),
+                "expires_at": (datetime.now(UTC) + timedelta(seconds=30)).isoformat(),
+                "retry_after_hint_ms": 5000,
+            }
+        ]
+    )
+    client = LeasePlaneClient(transport=transport)
+    monkeypatch.setenv("LEASE_PLANE_ENFORCED_SURFACE_KINDS", "dialectic")
+
+    block_ran = False
+    try:
+        with lease_advisory_scope(
+            surface_id="dialectic:/test_advisory_contended",
+            holder_agent_uuid=uuid4(),
+            ttl_s=60,
+            client=client,
+        ):
+            block_ran = True
+    except LeaseEnforcementBlocked as exc:
+        assert exc.surface_id == "dialectic:/test_advisory_contended"
+        assert exc.outcome == "held_by_other"
+    else:
+        raise AssertionError("LeaseEnforcementBlocked must be raised")
+
+    assert block_ran is False
+    assert len(calls) == 1
+
+
+def test_service_unavailable_blocks_when_surface_kind_enforced(monkeypatch):
+    transport, calls = _scripted_transport([{"ok": False, "error": "service_unavailable"}])
+    client = LeasePlaneClient(transport=transport)
+    monkeypatch.setenv("LEASE_PLANE_ENFORCED_SURFACE_KINDS", "dialectic")
+
+    try:
+        with lease_advisory_scope(
+            surface_id="dialectic:/test_advisory_down",
+            holder_agent_uuid=uuid4(),
+            ttl_s=60,
+            client=client,
+        ):
+            raise AssertionError("block must not run")
+    except LeaseEnforcementBlocked as exc:
+        assert exc.outcome == "service_unavailable"
+
+    assert len(calls) == 1
+
+
+def test_enforced_surface_kinds_parses_csv(monkeypatch):
+    monkeypatch.setenv("LEASE_PLANE_ENFORCED_SURFACE_KINDS", " resident, file ,,")
+    assert enforced_surface_kinds() == frozenset({"resident", "file"})
+    assert is_surface_enforced("resident:/sentinel_cycle") is True
+    assert is_surface_enforced("dialectic:/abc") is False
 
 
 def test_service_unavailable_runs_block_no_release():

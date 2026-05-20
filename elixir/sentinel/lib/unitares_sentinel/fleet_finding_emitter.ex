@@ -186,24 +186,30 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
     state = %{state | running?: true}
     lease = acquire_runtime_lease(state)
 
-    try do
-      case await_runtime_tick(state) do
-        {:ok, result} ->
-          schedule_next_tick(state)
+    if lease_enforcement_blocked?(lease) do
+      Logger.warning("FleetFindingEmitter: tick skipped by lease enforcement")
+      schedule_next_tick(state)
+      {:noreply, %{state | running?: false}}
+    else
+      try do
+        case await_runtime_tick(state) do
+          {:ok, result} ->
+            schedule_next_tick(state)
 
-          {:noreply,
-           %{state | running?: false, last_result: result, cycle_count: state.cycle_count + 1}}
+            {:noreply,
+             %{state | running?: false, last_result: result, cycle_count: state.cycle_count + 1}}
 
-        :timeout ->
-          Logger.warning(
-            "FleetFindingEmitter: runtime tick exceeded #{state.tick_timeout_ms}ms - skipping"
-          )
+          :timeout ->
+            Logger.warning(
+              "FleetFindingEmitter: runtime tick exceeded #{state.tick_timeout_ms}ms - skipping"
+            )
 
-          schedule_next_tick(state)
-          {:noreply, %{state | running?: false}}
+            schedule_next_tick(state)
+            {:noreply, %{state | running?: false}}
+        end
+      after
+        release_runtime_lease(lease, state)
       end
-    after
-      release_runtime_lease(lease, state)
     end
   end
 
@@ -259,6 +265,9 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
 
   defp acquire_runtime_lease(%{lease_opts: lease_opts}),
     do: LeaseAdvisory.acquire_cycle(lease_opts)
+
+  defp lease_enforcement_blocked?(%{outcome: :enforcement_blocked}), do: true
+  defp lease_enforcement_blocked?(_lease), do: false
 
   defp release_runtime_lease(_lease, %{lease_advisory?: false}), do: :ok
 

@@ -66,6 +66,7 @@ async def test_run_cycle_invokes_lease_advisory_with_expected_surface(
 
     monkeypatch.setattr(advisory_module, "lease_advisory_scope", fake_scope)
     monkeypatch.delenv("LEASE_PLANE_BEARER_TOKEN", raising=False)
+    agent.client_session_id = "sentinel-session-1"
 
     with pytest.raises(_CycleStopMarker):
         await agent.run_cycle()
@@ -76,6 +77,7 @@ async def test_run_cycle_invokes_lease_advisory_with_expected_surface(
     assert "surface_kind" not in captured
     assert captured["ttl_s"] == 300
     assert captured.get("intent") == "sentinel analysis cycle"
+    assert captured.get("audit_session") == "sentinel-session-1"
 
 
 @pytest.mark.asyncio

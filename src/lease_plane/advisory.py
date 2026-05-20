@@ -17,6 +17,9 @@ Environment:
         disabled client and every acquire surfaces as service_unavailable
         in the log; the caller proceeds normally.
     LEASE_PLANE_BASE_URL — defaults to http://127.0.0.1:8788.
+    LEASE_PLANE_ENFORCED_SURFACE_KINDS — comma-separated surface kinds
+        promoted to Phase B enforcement. When a wrapped surface kind is
+        listed, the block runs only after the lease is acquired.
 """
 
 from __future__ import annotations
@@ -43,7 +46,10 @@ from . import (
 
 __all__ = [
     "AdvisoryOutcome",
+    "LeaseEnforcementBlocked",
     "acquire_advisory",
+    "enforced_surface_kinds",
+    "is_surface_enforced",
     "lease_advisory_scope",
     "make_advisory_client",
     "new_holder_uuid",
@@ -62,6 +68,17 @@ AdvisoryOutcome = Literal[
     "schema_invalid",
     "client_error",
 ]
+
+
+class LeaseEnforcementBlocked(RuntimeError):
+    """Raised when a Phase B promoted surface cannot acquire its lease."""
+
+    def __init__(self, *, surface_id: str, outcome: AdvisoryOutcome) -> None:
+        super().__init__(
+            f"lease enforcement blocked surface_id={surface_id!r} outcome={outcome}"
+        )
+        self.surface_id = surface_id
+        self.outcome = outcome
 
 
 def make_advisory_client() -> LeasePlaneClient:
@@ -94,6 +111,26 @@ def new_holder_uuid() -> uuid.UUID:
     residents that want substrate-earned continuity will graduate later.
     """
     return uuid.uuid4()
+
+
+def enforced_surface_kinds(raw: str | None = None) -> frozenset[str]:
+    """Return the configured Phase B enforced surface kinds.
+
+    The env value is comma-separated (`resident,file`). Empty items are
+    ignored. Use `*` only for explicit all-surface local testing.
+    """
+    value = raw if raw is not None else os.environ.get("LEASE_PLANE_ENFORCED_SURFACE_KINDS", "")
+    return frozenset(item.strip() for item in value.split(",") if item.strip())
+
+
+def _surface_kind(surface_id: str) -> str:
+    return surface_id.split(":", 1)[0]
+
+
+def is_surface_enforced(surface_id: str) -> bool:
+    """Return whether `surface_id` is promoted to Phase B enforcement."""
+    configured = enforced_surface_kinds()
+    return "*" in configured or _surface_kind(surface_id) in configured
 
 
 @contextlib.contextmanager
@@ -134,6 +171,13 @@ def lease_advisory_scope(
     )
 
     outcome, lease_id = acquire_advisory(advisory_client, request)
+    if lease_id is None and is_surface_enforced(surface_id):
+        logger.warning(
+            "lease_enforcement: blocked surface=%s outcome=%s",
+            surface_id,
+            outcome,
+        )
+        raise LeaseEnforcementBlocked(surface_id=surface_id, outcome=outcome)
 
     try:
         yield outcome, lease_id

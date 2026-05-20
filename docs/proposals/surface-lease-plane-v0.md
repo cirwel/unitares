@@ -453,13 +453,17 @@ Mirror the precedent set by `path1-sync-fingerprint-check.md` and the IDENTITY_S
    SELECT (acquires.n::float / NULLIF(writes.n, 0)) AS coverage_ratio FROM writes, acquires;
    ```
    Promotion requires `coverage_ratio >= 0.95`. The payload-standardization is itself a small spec task that must precede Phase B promotion of any write-heavy surface_kind. For non-write surface_kinds (`dialectic:/`, `resident:/`), criterion 5 is N/A — those don't have a write-side audit signal.
-6. **Adversarial-bypass cross-check**: telemetry includes a write-side after-the-fact check (file-mtime delta vs. lease-acquired window) showing no detectable un-acquired writes during the window. Council finding 3.3.
+6. **Adversarial-bypass cross-check**: telemetry includes a write-side after-the-fact check (file-mtime delta vs. lease-acquired window) showing no detectable un-acquired writes during the window. Council finding 3.3. For non-write surface_kinds (`dialectic:/`, `resident:/`), criterion 6 is N/A for the same reason as criterion 5: there is no write-side mtime/bypass signal to reconcile.
 
 If criteria (1)-(6) are met for a surface_kind, that surface_kind is eligible for Phase B promotion. Each promotion is a single config flag flip; no code change. Demotion back to advisory is the same flag, reversible at any time.
 
 ### 6.2 Phase B — Selective enforcement (week 4+)
 
 Per-surface-kind enforcement flags. Each surface kind promoted independently.
+Integrated callers read `LEASE_PLANE_ENFORCED_SURFACE_KINDS` as a comma-separated
+runtime config (for example, `resident,file`); when their surface kind is listed,
+they fail closed if lease acquisition returns `held_by_other` or the lease plane is
+unavailable. Omitting the surface kind keeps Phase A advisory behavior.
 
 - `dialectic:/...` likely first (lowest external blast radius, dialectic infra already has manual fallbacks).
 - `resident:/...` second (already has launchd-level protection, lease layer adds restart-window safety).
