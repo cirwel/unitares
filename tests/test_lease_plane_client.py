@@ -380,7 +380,7 @@ def test_rpc_latency_recorded_on_ok_acquire():
     """ok acquire records both an aggregate and an `.ok` shard."""
     from src.perf_monitor import perf_monitor as _pm
 
-    _pm._samples.clear()  # type: ignore[attr-defined]
+    _pm.reset()
 
     holder = uuid4()
 
@@ -407,7 +407,7 @@ def test_rpc_latency_recorded_on_transport_exception():
     """transport exception is timed and tagged `transport_exception`."""
     from src.perf_monitor import perf_monitor as _pm
 
-    _pm._samples.clear()  # type: ignore[attr-defined]
+    _pm.reset()
 
     def transport(_request: LeaseHTTPRequest):
         raise TimeoutError("down")
@@ -431,7 +431,7 @@ def test_rpc_latency_recorded_on_held_by_other_outcome():
     """typed-absence outcomes are recorded under their error shard."""
     from src.perf_monitor import perf_monitor as _pm
 
-    _pm._samples.clear()  # type: ignore[attr-defined]
+    _pm.reset()
 
     def transport(_request: LeaseHTTPRequest):
         return {

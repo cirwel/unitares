@@ -55,6 +55,22 @@ Derived rates over 14 days:
 - BEAM↔Postgres forward attempts: **100% of 116,833 events** completed
   on the first forward attempt — no retry pile-up.
 
+## Regime boundary inside the window
+
+The 14-day window straddles two enforcement regimes — this is named here
+because the v0.3.2 gate predates the boundary:
+
+- 2026-05-06 → 2026-05-18 (13d): Phase A advisory mode (PR #305, merged
+  2026-05-03)
+- 2026-05-19 → 2026-05-20 (1d at window close): Phase B resident
+  enforcement (PR #476, merged 2026-05-19)
+
+The headline percentiles aggregate across both regimes. The conflict
+and TTL-reap counts are dominated by the 13-day advisory tail; Phase B
+enforcement has not produced enough events to characterize on its own.
+The next 14d window will be Phase-B-only and is the cleaner attribution
+surface — flag for the follow-up doc.
+
 ## Honest reading
 
 The numbers are **compatible with no substrate-tax signature at the

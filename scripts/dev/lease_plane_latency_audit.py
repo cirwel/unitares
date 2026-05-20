@@ -43,19 +43,39 @@ def connect():
 
 
 HOLD_TIME_SQL = """
-WITH pairs AS (
+-- One row per lease_id, computed as MIN(acquire.ts) -> MIN(release.ts).
+-- The naive (a.lease_id = r.lease_id) join produced an N*M Cartesian
+-- fanout whenever a lease had a duplicate release event (reaper +
+-- corrective release race) or a duplicate acquire (idempotent retry).
+-- That inflated percentile counts and admitted phantom durations.
+-- Aggregating both sides first removes the cardinality risk; for
+-- substrate-tax measurement we want the *first* release after the
+-- *first* acquire, which is what MIN/MIN expresses.
+WITH first_acquire AS (
+  SELECT lease_id, MIN(ts) AS acquired_ts,
+         MIN(surface_kind) AS surface_kind,
+         MIN(surface_id)   AS surface_id
+  FROM lease_plane.lease_plane_events
+  WHERE event_type = 'acquire'
+    AND ts > now() - make_interval(days := %s)
+  GROUP BY lease_id
+),
+first_release AS (
+  SELECT lease_id, MIN(ts) AS released_ts
+  FROM lease_plane.lease_plane_events
+  WHERE event_type = 'release'
+  GROUP BY lease_id
+),
+pairs AS (
   SELECT
     a.lease_id,
     a.surface_kind,
     a.surface_id,
-    a.ts AS acquired_ts,
-    r.ts AS released_ts,
-    EXTRACT(EPOCH FROM (r.ts - a.ts)) * 1000 AS hold_ms
-  FROM lease_plane.lease_plane_events a
-  JOIN lease_plane.lease_plane_events r
-    ON r.lease_id = a.lease_id AND r.event_type = 'release'
-  WHERE a.event_type = 'acquire'
-    AND a.ts > now() - make_interval(days := %s)
+    a.acquired_ts,
+    r.released_ts,
+    EXTRACT(EPOCH FROM (r.released_ts - a.acquired_ts)) * 1000 AS hold_ms
+  FROM first_acquire a
+  JOIN first_release r USING (lease_id)
 )
 SELECT
   surface_kind,
