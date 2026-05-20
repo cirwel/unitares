@@ -247,6 +247,11 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
 
     if verbosity == "standard":
         state = standardized_metrics.get("state", {})
+        from src.governance_glossary import (
+            explain_basin,
+            explain_mode,
+            explain_verdict,
+        )
         standard_metrics = {
             "agent_id": display_name or public_agent_id,
             "display_name": display_name,
@@ -259,11 +264,11 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             "S": metrics.get("S"),
             "V": metrics.get("V"),
             "coherence": metrics.get("coherence"),
-            "verdict": metrics.get("verdict", "uninitialized"),
+            "verdict": explain_verdict(metrics.get("verdict", "uninitialized")),
             "risk_score": metrics.get("risk_score"),
             "primary_eisv_source": standardized_metrics.get("primary_eisv_source"),
-            "basin": state.get("basin"),
-            "mode": state.get("mode"),
+            "basin": explain_basin(state.get("basin")),
+            "mode": explain_mode(state.get("mode")),
             "summary": standardized_metrics.get("summary"),
             "guidance": state.get("guidance"),
         })
