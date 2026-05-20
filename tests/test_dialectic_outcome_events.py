@@ -81,6 +81,12 @@ class TestExecuteResolutionEmitsOutcomeEvent:
         assert args["is_bad"] is False
         assert args["outcome_score"] == 1.0
         assert args["decision_action"] == "proceed"
+        # Phase 1 (migration 038): dialectic resolution is computed
+        # server-side from session protocol state, not the agent's claim.
+        # Architect council 2026-05-19 flagged it as peer-mediated, which
+        # the v1 enum has no value for; server_observation is the honest
+        # placement pending v2 taxonomy redesign.
+        assert args["verification_source"] == "server_observation"
         detail = args["detail"]
         assert detail["dialectic_session_id"] == "dialectic-sess-abc123"
         assert detail["session_type"] == "recovery"

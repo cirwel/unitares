@@ -1302,6 +1302,9 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                         'trigger': cirs_data.get('trigger'),
                         'response_tier': cirs_data.get('response_tier'),
                     },
+                    # CIRS resonance is computed server-side from telemetry,
+                    # not claimed by the agent.
+                    verification_source='server_observation',
                 )
                 logger.info(f"CIRS resonance event persisted for {agent_id}")
     except Exception as e:
@@ -1490,6 +1493,9 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                             'confidence': ctx.arguments.get('confidence'),
                             'summary': _summary,
                         },
+                        # Inferred from keyword regex over agent's own
+                        # response_text — closest match in v1 enum.
+                        verification_source='agent_reported_tool_result',
                     )
                     if ctx.outcome_event_id:
                         logger.debug(f"Auto-emitted outcome event {ctx.outcome_event_id} for {agent_id}")
@@ -1539,6 +1545,9 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                                 'summary': _summary,
                                 'is_negative': True,
                             },
+                            # Same regex-on-response-text inference as
+                            # task_completed above; not server-observed.
+                            verification_source='agent_reported_tool_result',
                         )
                         if _bad_oid:
                             logger.debug(f"Auto-emitted negative outcome event {_bad_oid} for {agent_id}")
@@ -1584,6 +1593,8 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                         'current_norm': tv['current_norm'],
                         'norm_delta': tv['norm_delta'],
                     },
+                    # Quality computed server-side from ctx.result trajectory data.
+                    verification_source='server_observation',
                 )
     except Exception as e:
         logger.debug(f"Trajectory validation record skipped: {e}")

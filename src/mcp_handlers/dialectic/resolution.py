@@ -175,6 +175,15 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
             "is_bad": False,
             "outcome_score": 1.0,
             "decision_action": "proceed",
+            # Dialectic resolution is computed server-side from session
+            # protocol state (conditions applied, synthesis convergence),
+            # not the agent's claim of resolution. Architect council
+            # 2026-05-19 flagged dialectic as peer-mediated and not a clean
+            # fit for the v1 enum; classifying as server_observation pending
+            # the v2 taxonomy redesign (see project_outcome-verification-
+            # taxonomy-redesign in memory) which would introduce a
+            # peer_attested value.
+            "verification_source": "server_observation",
             "detail": {
                 "dialectic_session_id": session.session_id,
                 "session_type": getattr(session, "session_type", None),
