@@ -134,3 +134,33 @@ register(Metric(
     description="GitHub unique-cloner count summed across non-archived CIRWEL repos. GitHub traffic API rolling 14-day window; not daily delta.",
     unit="cloners",
 ))
+
+# ODE compute time — the load-bearing unknown from
+# beam-footprint-roadmap-v0.md v0.3 RESOLUTION ("what's in the 7s ODE
+# remainder?"). Sampled every 5 minutes from perf_monitor (in-process,
+# 1000-sample ring buffer). p50 + p99 only — finer percentiles do not
+# answer a question the operator will read.
+register(Metric(
+    name="ode.compute_ms.p50",
+    description="Median wall-clock of monitor.process_update (numpy ODE step) over the trailing in-process window. Snapshot every 5min.",
+    unit="ms",
+))
+register(Metric(
+    name="ode.compute_ms.p99",
+    description="p99 wall-clock of monitor.process_update over the trailing in-process window. Tracks the substrate-tax tail at the ODE compute boundary.",
+    unit="ms",
+))
+
+# Lease-plane client RPC latency — the v0.3.2 amendment's
+# "lease-plane Phase A latency instrumentation" gate. Sampled every
+# 5min from perf_monitor.
+register(Metric(
+    name="lease_plane.client.v1.lease.acquire.p50",
+    description="Median wall-clock for lease.acquire RPC (Python client to BEAM lease plane). Snapshot every 5min.",
+    unit="ms",
+))
+register(Metric(
+    name="lease_plane.client.v1.lease.acquire.p99",
+    description="p99 wall-clock for lease.acquire RPC. Tracks substrate-tax tail at the lease boundary (BEAM↔Python).",
+    unit="ms",
+))

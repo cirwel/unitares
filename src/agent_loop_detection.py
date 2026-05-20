@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import time
 import asyncio
 from typing import Any, Dict, Optional
 from collections import Counter, deque
@@ -21,6 +22,7 @@ from src.agent_metadata_model import agent_metadata
 from src.agent_monitor_state import monitors, save_monitor_state, save_monitor_state_async
 from src.agent_identity_auth import verify_agent_ownership
 from src.agent_metadata_persistence import load_metadata_async
+from src.perf_monitor import record_ms as _perf_record_ms
 
 logger = get_logger(__name__)
 
@@ -371,9 +373,11 @@ async def process_update_authenticated_async(
     from src.agent_lifecycle import get_or_create_monitor
 
     loop = asyncio.get_running_loop()
+    _t0 = time.perf_counter()
     is_valid, error_msg = await loop.run_in_executor(
         None, verify_agent_ownership, agent_id, api_key, session_bound
     )
+    _perf_record_ms("ode.auth_ms", (time.perf_counter() - _t0) * 1000.0)
     if not is_valid:
         raise PermissionError(f"Authentication failed: {error_msg}")
 
@@ -392,7 +396,9 @@ async def process_update_authenticated_async(
         )
 
     # Check for loop pattern BEFORE processing
+    _t_loop = time.perf_counter()
     is_loop, loop_reason = await loop.run_in_executor(None, detect_loop_pattern, agent_id)
+    _perf_record_ms("ode.loop_detect_ms", (time.perf_counter() - _t_loop) * 1000.0)
     if is_loop:
         meta = agent_metadata[agent_id]
 
@@ -469,6 +475,7 @@ async def process_update_authenticated_async(
         )
 
     # Get or create monitor
+    _t_setup = time.perf_counter()
     monitor = await loop.run_in_executor(None, get_or_create_monitor, agent_id)
     # Heal the DB ↔ file persistence split: if the on-disk state file is
     # missing but core.agent_state has history, hydrate update_count +
@@ -476,13 +483,21 @@ async def process_update_authenticated_async(
     # rather than from a fresh zero.
     from src.agent_monitor_state import hydrate_from_db_if_fresh
     await hydrate_from_db_if_fresh(monitor, agent_id)
+    _perf_record_ms("ode.monitor_setup_ms", (time.perf_counter() - _t_setup) * 1000.0)
 
     task_type = agent_state.get("task_type", "mixed")
 
+    # The actual ODE compute — numpy work, no I/O. v0.3 RESOLUTION's
+    # "load-bearing unknown" was "what's in the 7s ODE remainder?"; this
+    # timer answers that. Combined with ode.auth_ms / ode.loop_detect_ms /
+    # ode.monitor_setup_ms / ode.persist_ms, the residual that doesn't sum
+    # is event-loop scheduling overhead — the substrate-tax candidate.
+    _t_compute = time.perf_counter()
     result = await loop.run_in_executor(
         None,
         partial(monitor.process_update, agent_state, confidence=confidence, task_type=task_type)
     )
+    _perf_record_ms("ode.compute_ms", (time.perf_counter() - _t_compute) * 1000.0)
 
     if auto_save:
         decision_action = result.get('decision', {}).get('action', 'unknown')
@@ -497,10 +512,12 @@ async def process_update_authenticated_async(
         try:
             from src import agent_storage
             db = agent_storage.get_db()
+            _t_persist = time.perf_counter()
             new_count = await db.increment_update_count(agent_id, extra_metadata={
                 "recent_update_timestamps": meta.recent_update_timestamps if meta else [now],
                 "recent_decisions": meta.recent_decisions if meta else [decision_action],
             })
+            _perf_record_ms("ode.persist_ms", (time.perf_counter() - _t_persist) * 1000.0)
             if meta is not None:
                 meta.total_updates = new_count
         except Exception as e:
