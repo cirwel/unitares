@@ -113,9 +113,17 @@ def check_representative_load(cur, start: datetime, end: datetime) -> ConditionR
     )
     rows = cur.fetchall()
     by_day = {r[0].date().isoformat(): int(r[1]) for r in rows}
-    days_in_window = (end - start).days
+    days_in_window = (end - start).days  # full window length (target = 14)
+    # The query was filtered to `recorded_at < effective_end` where
+    # effective_end is `min(end, now)`. During the live (incomplete) window
+    # `effective_end < end`, so dividing `total` by `days_in_window` (which
+    # is always the full 14) gives a denominator inflated by ~7× for the
+    # first half of the window, producing false FAIL. Use observed days
+    # with data instead — honest current-rate while informational, and
+    # equal to days_in_window once the window is complete.
     total = sum(by_day.values())
-    avg = (total / days_in_window) if days_in_window > 0 else 0.0
+    days_observed = len(by_day)
+    avg = (total / days_observed) if days_observed > 0 else 0.0
     met = avg >= LOAD_FLOOR_WRITES_PER_DAY
     return ConditionResult(
         "representative_load",
@@ -124,6 +132,7 @@ def check_representative_load(cur, start: datetime, end: datetime) -> ConditionR
             "writes_per_day_avg": round(avg, 1),
             "floor_writes_per_day": LOAD_FLOOR_WRITES_PER_DAY,
             "days_in_window": days_in_window,
+            "days_observed": days_observed,
             "by_day": by_day,
         },
     )
@@ -153,7 +162,13 @@ def check_zero_incidents(cur, start: datetime, end: datetime) -> ConditionResult
             "some rows lack incident_id; distinct count is suppressed and not a "
             "trustworthy measurement until Condition 1 is fully met."
         )
-    met = distinct_incidents == 0
+    # Postgres `count(DISTINCT ...)` ignores NULLs, so a window where every
+    # row has `incident_id IS NULL` would report `distinct_incidents=0` —
+    # the exact NULL-artifact failure mode the 2026-05-18 doc named. Require
+    # that every row carries the field (or no rows exist) before honoring
+    # the zero. Without this, C3.met can be True while the measurement is
+    # not a measurement.
+    met = distinct_incidents == 0 and (raw_rows == 0 or rows_with_id == raw_rows)
     return ConditionResult("zero_incidents", met=met, detail=detail)
 
 
