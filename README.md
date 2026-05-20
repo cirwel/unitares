@@ -13,7 +13,7 @@ Status: live. First public commit 2025-12-04. For architecture details, see [doc
 
 Multi-agent fleets fly blind. The agent-identity layer tells you *who* is calling. The evaluation layer tells you *whether a model is good enough to deploy*. Neither tells you **what the fleet is actually doing right now, whether it's still coherent, or whether it's drifting from its anchor**. That layer is what Unitares is.
 
-Unitares is a runtime telemetry and coordination layer for heterogeneous AI-agent fleets. Agents check in, the system tracks a four-channel state vector (energy, integrity, structure, valence), and each check-in returns a verdict (`proceed` / `guide` / `pause` / `reject`) — so agents regulate themselves *before* external circuit breakers fire. Humans read the same state on a dashboard; peer agents read it over the API.
+Unitares is a runtime telemetry and coordination layer for heterogeneous AI-agent fleets. Agents check in, the system tracks a four-channel state vector — **energy** (productive capacity), **integrity** (information coherence), **entropy** (disorder), **valence** (signed E/I imbalance) — and each check-in returns a verdict (`proceed` / `guide` / `pause` / `reject`), so agents regulate themselves *before* external circuit breakers fire. Humans read the same state on a dashboard; peer agents read it over the API.
 
 Slow down when disorder spikes, ask for review when integrity drops, hand off when running on fumes. Circuit breakers and kill switches are still there — they're just the last line of defense, not the first.
 
@@ -260,13 +260,13 @@ dV/dt = κ(E - I) - δ·V             Valence accumulates E-I mismatch, decays t
 
 ```mermaid
 graph LR
-    A[AI Agent] -->|check-in| M[MCP Server :8767]
+    A[AI Agent] -->|check-in| M["MCP Server :8767"]
     M -->|observations| BS[Behavioral EISV]
-    BS -->|verdict + guidance| M
+    BS -->|"verdict + guidance"| M
     M -->|parallel diagnostic| UC[unitares-core ODE]
     UC -.->|analysis only| M
-    M -->|verdict + guidance| A
-    M <-->|state, audit, calibration| PG[(PostgreSQL + AGE)]
+    M -->|"verdict + guidance"| A
+    M <-->|"state, audit, calibration"| PG[("PostgreSQL + AGE")]
     M <-->|knowledge graph| PG
     M -.->|session cache| R[(Redis)]
     M -->|web UI| D[Dashboard]
@@ -330,6 +330,6 @@ Kenny Wang ([ORCID 0009-0006-7544-2374](https://orcid.org/0009-0006-7544-2374)),
 
 ---
 
-**Apache License 2.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Covers server, dashboard, tooling, and the ODE dynamics engine in `governance_core/`. Attribution requested per the NOTICE file (Apache §4(d)) for redistributions and derivative works.
+**Apache License 2.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Covers server, dashboard, tooling, and the ODE dynamics engine in `governance_core/`. Attribution requested per the NOTICE file for redistributions and derivative works.
 
 Built by [@cirwel](https://github.com/cirwel)
