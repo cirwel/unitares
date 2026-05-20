@@ -2219,12 +2219,13 @@ async def handle_answer_question(arguments: Dict[str, Any]) -> Sequence[TextCont
     except Exception as e:
         return [error_response(f"Failed to answer question: {str(e)}")]
 
-@mcp_tool("leave_note", timeout=10.0)
+@mcp_tool("leave_note", timeout=10.0, deprecated=True, superseded_by="knowledge")
 async def handle_leave_note(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Leave a quick note in the knowledge graph - minimal friction contribution.
+    """[DEPRECATED — use knowledge(action='note') instead] Leave a quick note in the knowledge graph.
 
     Just agent_id + summary + optional tags. Auto-sets type='note', severity='low'.
-    For when you want to jot something down without the full store_knowledge_graph ceremony.
+    Functionally identical to ``knowledge(action='note', summary=...)``; deprecation
+    is per dogfood-UX issue #429 (tool aliasing — pick one). Calls still work.
     """
     # Apply parameter aliases (e.g., "text" → "summary", "note" → "summary")
     arguments = apply_param_aliases("leave_note", arguments)

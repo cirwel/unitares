@@ -338,9 +338,13 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "category": "knowledge"
         },
         "leave_note": {
+            "deprecated": True,
+            "deprecated_since": "2026-05-20",
+            "superseded_by": "knowledge",
             "depends_on": [],  # No deps - identity auto-binds
-            "related_to": ["store_knowledge_graph"],
-            "category": "knowledge"
+            "related_to": ["knowledge", "store_knowledge_graph"],
+            "category": "knowledge",
+            "migration": "Use knowledge(action='note', summary='...', tags=[...]) — same handler, same params"
         },
         "update_discovery_status_graph": {
             "depends_on": ["get_discovery_details"],

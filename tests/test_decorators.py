@@ -114,6 +114,15 @@ class TestMcpToolDecorator:
         assert is_tool_deprecated("test_normal_tool") is False
         assert is_tool_hidden("test_normal_tool") is False
 
+    def test_leave_note_marked_deprecated(self):
+        """leave_note is the issue-#429 canonical deprecation: superseded by knowledge(action='note')."""
+        # Import handler to trigger decorator registration in the live registry.
+        import src.mcp_handlers.knowledge.handlers  # noqa: F401
+
+        assert is_tool_deprecated("leave_note") is True
+        meta = get_tool_metadata("leave_note")
+        assert meta["superseded_by"] == "knowledge"
+
 
 class TestListRegisteredTools:
 
