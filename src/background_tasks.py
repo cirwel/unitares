@@ -700,6 +700,72 @@ async def session_cleanup_task(interval_hours: float = 6.0):
 
 
 # ---------------------------------------------------------------------------
+# perf_monitor snapshot persistence
+# ---------------------------------------------------------------------------
+
+# Names registered in fleet_metrics.catalog.py — only these get persisted.
+# perf_monitor.snapshot() may carry many more keys; the catalog gate keeps
+# metrics.series from filling with surface-area noise.
+_PERF_PERSIST_TARGETS: tuple[tuple[str, str, str], ...] = (
+    ("ode.numpy_step_ms",                           "p50_ms", "ode.numpy_step_ms.p50"),
+    ("ode.numpy_step_ms",                           "p99_ms", "ode.numpy_step_ms.p99"),
+    ("lease_plane.client.v1.lease.acquire",         "p50_ms", "lease_plane.client.v1.lease.acquire.p50"),
+    ("lease_plane.client.v1.lease.acquire",         "p99_ms", "lease_plane.client.v1.lease.acquire.p99"),
+)
+
+
+async def perf_monitor_persist_task(interval_minutes: float = 5.0):
+    """Snapshot perf_monitor every N minutes; persist load-bearing percentiles
+    to ``metrics.series``.
+
+    The in-process perf_monitor singleton holds a 1000-sample ring per op key
+    (``src/perf_monitor.py``). That's volatile — process restart wipes it,
+    and snapshots are only visible via the snapshot HTTP endpoint. This task
+    samples the snapshot every 5min and writes the catalog-gated subset to
+    ``metrics.series`` so the substrate-question measurement gates
+    (``beam-footprint-roadmap-v0.md`` v0.3 RESOLUTION + v0.3.2 amendment) can
+    accumulate longitudinal data without each restart resetting the window.
+
+    Startup delay 90s to let monitor traffic accumulate at least one sample.
+    Errors are logged at WARNING so a silent gap is visible.
+    """
+    await asyncio.sleep(90.0)
+    logger.info(
+        f"[PERF_PERSIST] Started perf_monitor → metrics.series persistence "
+        f"(every {interval_minutes}m, {len(_PERF_PERSIST_TARGETS)} series)"
+    )
+    from src.perf_monitor import snapshot as _perf_snapshot
+    from src.fleet_metrics.storage import record as _record_metric
+
+    while True:
+        try:
+            await asyncio.sleep(interval_minutes * 60.0)
+            snap = _perf_snapshot()
+            written = 0
+            for op_key, pct_field, metric_name in _PERF_PERSIST_TARGETS:
+                op_stats = snap.get(op_key)
+                if not op_stats:
+                    continue
+                value = op_stats.get(pct_field)
+                if value is None:
+                    continue
+                try:
+                    await _record_metric(metric_name, float(value))
+                    written += 1
+                except Exception as e:
+                    logger.warning(
+                        f"[PERF_PERSIST] record {metric_name} failed: {e}"
+                    )
+            if written:
+                logger.debug(f"[PERF_PERSIST] wrote {written} series points")
+        except asyncio.CancelledError:
+            logger.info("[PERF_PERSIST] Task cancelled")
+            break
+        except Exception as e:
+            logger.warning(f"[PERF_PERSIST] Error: {e}", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # Coherence monitoring
 # ---------------------------------------------------------------------------
 
@@ -1526,6 +1592,9 @@ def start_all_background_tasks(connection_tracker, set_ready):
 
     _supervised_create_task(coherence_monitoring_task(interval_minutes=10.0), name="coherence_monitor")
     logger.info("[COHERENCE_MONITOR] Started proactive coherence monitoring (every 10m)")
+
+    _supervised_create_task(perf_monitor_persist_task(interval_minutes=5.0), name="perf_monitor_persist")
+    logger.info("[PERF_PERSIST] Started perf_monitor snapshot persistence (every 5m)")
 
     _supervised_create_task(periodic_telemetry_rotation(), name="telemetry_rotation")
     _supervised_create_task(periodic_audit_log_rotation(), name="audit_log_rotation")

@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import time
 import asyncio
 from typing import Any, Dict, Optional
 from collections import Counter, deque
@@ -21,6 +22,7 @@ from src.agent_metadata_model import agent_metadata
 from src.agent_monitor_state import monitors, save_monitor_state, save_monitor_state_async
 from src.agent_identity_auth import verify_agent_ownership
 from src.agent_metadata_persistence import load_metadata_async
+from src.perf_monitor import record_ms as _perf_record_ms
 
 logger = get_logger(__name__)
 
@@ -371,9 +373,11 @@ async def process_update_authenticated_async(
     from src.agent_lifecycle import get_or_create_monitor
 
     loop = asyncio.get_running_loop()
+    _t0 = time.perf_counter()
     is_valid, error_msg = await loop.run_in_executor(
         None, verify_agent_ownership, agent_id, api_key, session_bound
     )
+    _perf_record_ms("ode.auth_ms", (time.perf_counter() - _t0) * 1000.0)
     if not is_valid:
         raise PermissionError(f"Authentication failed: {error_msg}")
 
@@ -392,7 +396,9 @@ async def process_update_authenticated_async(
         )
 
     # Check for loop pattern BEFORE processing
+    _t_loop = time.perf_counter()
     is_loop, loop_reason = await loop.run_in_executor(None, detect_loop_pattern, agent_id)
+    _perf_record_ms("ode.loop_detect_ms", (time.perf_counter() - _t_loop) * 1000.0)
     if is_loop:
         meta = agent_metadata[agent_id]
 
@@ -469,6 +475,7 @@ async def process_update_authenticated_async(
         )
 
     # Get or create monitor
+    _t_setup = time.perf_counter()
     monitor = await loop.run_in_executor(None, get_or_create_monitor, agent_id)
     # Heal the DB ↔ file persistence split: if the on-disk state file is
     # missing but core.agent_state has history, hydrate update_count +
@@ -476,13 +483,25 @@ async def process_update_authenticated_async(
     # rather than from a fresh zero.
     from src.agent_monitor_state import hydrate_from_db_if_fresh
     await hydrate_from_db_if_fresh(monitor, agent_id)
+    _perf_record_ms("ode.monitor_setup_ms", (time.perf_counter() - _t_setup) * 1000.0)
 
     task_type = agent_state.get("task_type", "mixed")
 
+    # Numpy ODE step — `monitor.process_update` dispatched via the default
+    # executor pool. v0.3 RESOLUTION's "load-bearing unknown" was "what's
+    # in the 7s ODE remainder?"; this timer answers that. Named
+    # `ode.numpy_step_ms` (not `compute_ms`) because the wall-clock here
+    # includes executor queue-wait time as well as the numpy work — under
+    # concurrent load on a saturated default pool, queue-wait can dominate
+    # numpy compute. Disambiguating "numpy slow" from "executor saturated"
+    # requires looking at executor queue depth alongside, which is out of
+    # scope for this branch; called out in the eval doc's falsifier matrix.
+    _t_numpy = time.perf_counter()
     result = await loop.run_in_executor(
         None,
         partial(monitor.process_update, agent_state, confidence=confidence, task_type=task_type)
     )
+    _perf_record_ms("ode.numpy_step_ms", (time.perf_counter() - _t_numpy) * 1000.0)
 
     if auto_save:
         decision_action = result.get('decision', {}).get('action', 'unknown')
@@ -494,6 +513,7 @@ async def process_update_authenticated_async(
             meta.add_recent_update(now, decision_action)
 
         # Atomically increment total_updates in PostgreSQL
+        _t_persist = time.perf_counter()
         try:
             from src import agent_storage
             db = agent_storage.get_db()
@@ -501,9 +521,15 @@ async def process_update_authenticated_async(
                 "recent_update_timestamps": meta.recent_update_timestamps if meta else [now],
                 "recent_decisions": meta.recent_decisions if meta else [decision_action],
             })
+            _perf_record_ms("ode.persist_ms", (time.perf_counter() - _t_persist) * 1000.0)
             if meta is not None:
                 meta.total_updates = new_count
         except Exception as e:
+            # Record the failed-persist sample under a distinct key so the
+            # success-path series (`ode.persist_ms`) reflects only successful
+            # writes, while operators can still tell "failure" from "never
+            # fired" in perf_monitor snapshots.
+            _perf_record_ms("ode.persist_failed_ms", (time.perf_counter() - _t_persist) * 1000.0)
             logger.warning(f"Failed to increment update count for {agent_id[:8]}...: {e}")
             if meta is not None:
                 meta.total_updates += 1
