@@ -768,6 +768,108 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
             )
 
 
+async def _track_thread_identity(ctx: "UpdateContext") -> bool:
+    """Resolve `ctx.meta.thread_id` + `node_index` for a (possibly) new session.
+
+    Closes #424 (\"two independent thread_id mint paths\"). The previous
+    implementation called ``uuid.uuid4()`` mid-update whenever the in-memory
+    metadata cache had no thread_id — producing a UUID-format id that
+    conflicted with onboard's ``t-<sha16>`` format and resetting node_index
+    to 1 even when the durable PG record knew otherwise. The 2026-05-08
+    trace showed the path was reachable on a 30s session-resolve-miss
+    cadence in normal operation, not a rare race.
+
+    Resolution order (no random mints):
+
+    1. In-memory ``ctx.meta`` already has ``thread_id``. Use it; only bump
+       ``node_index`` and stamp ``active_session_key``.
+
+    2. ``ctx.meta`` lacks ``thread_id`` → read ``core.identities.metadata``
+       for the durable copy. The onboard-time persist may have committed
+       there even when the in-memory cache hadn't been rehydrated yet
+       (fresh process-instance, IP+UA fingerprint resolve, etc.).
+
+    3. PG also empty → derive deterministically from ``ctx.session_key``
+       via ``generate_thread_id`` — the exact function onboard uses, so
+       the format stays consistent. This is the final \"no random UUID\"
+       guarantee.
+
+    Returns True when the session-key actually changed and downstream
+    re-stamp/persist effects should fire; False on a no-op (already
+    tracking the same session).
+
+    **Known durable-state gap (not addressed here).** Live-verifier 2026-05-20:
+    ~35% of ``core.identities.metadata.thread_id`` rows already carry
+    UUID-format values from the broken mint path that pre-dated this fix
+    (886 of 2521 rows). Step 1 will read those back unchanged. Healing
+    them retroactively would silently change identity for 886 agents — a
+    bigger blast radius than this PR — so it is intentionally deferred to
+    a separate cleanup pass.
+    """
+    if not (ctx.meta and ctx.session_key):
+        return False
+    if getattr(ctx.meta, "active_session_key", None) == ctx.session_key:
+        return False
+
+    # Step 1: hydrate from durable PG metadata when the in-memory cache is
+    # empty. ExecutorPool means we can `await` asyncpg directly here without
+    # the locked-update concern (per CLAUDE.md post-PR-#218 note).
+    if not getattr(ctx.meta, "thread_id", None) and ctx.agent_uuid:
+        try:
+            from src.db import get_db
+            identity_record = await get_db().get_identity(ctx.agent_uuid)
+            if identity_record and identity_record.metadata:
+                persisted_thread_id = identity_record.metadata.get("thread_id")
+                persisted_node_index = identity_record.metadata.get("node_index")
+                persisted_session_key = identity_record.metadata.get(
+                    "active_session_key"
+                )
+                if persisted_thread_id:
+                    ctx.meta.thread_id = persisted_thread_id
+                if persisted_node_index is not None and not getattr(
+                    ctx.meta, "node_index", None
+                ):
+                    ctx.meta.node_index = persisted_node_index
+                if persisted_session_key is not None and getattr(
+                    ctx.meta, "active_session_key", None
+                ) is None:
+                    ctx.meta.active_session_key = persisted_session_key
+        except Exception as e:
+            logger.debug(
+                "thread_id PG hydration skipped for %s...: %s",
+                (ctx.agent_uuid or "?")[:8], e,
+            )
+
+    # Re-check after hydration: caller may have just adopted the session
+    # already (rare — only if PG had the exact same active_session_key).
+    if getattr(ctx.meta, "active_session_key", None) == ctx.session_key:
+        return False
+
+    # Step 2: deterministic fallback if still no thread_id. Matches onboard
+    # format; never invents a random UUID.
+    if not getattr(ctx.meta, "thread_id", None):
+        from src.thread_identity import generate_thread_id
+        ctx.meta.thread_id = generate_thread_id(ctx.session_key)
+        logger.info(
+            "[PROCESS_UPDATE] thread_id fallback-derived from session_key "
+            "(no in-memory cache or PG record): %s... agent=%s...",
+            ctx.meta.thread_id[:8],
+            (ctx.agent_uuid or "?")[:8],
+        )
+
+    # node_index bookkeeping. Re-entry into the same session leaves
+    # position alone (first branch); a session transition with a tracked
+    # prior session bumps (second branch). The PG hydration above already
+    # imported persisted_node_index when present, so process-restart no
+    # longer silently loses position continuity.
+    if getattr(ctx.meta, "active_session_key", None) is None:
+        ctx.meta.node_index = getattr(ctx.meta, "node_index", None) or 1
+    else:
+        ctx.meta.node_index = (getattr(ctx.meta, "node_index", None) or 1) + 1
+    ctx.meta.active_session_key = ctx.session_key
+    return True
+
+
 async def _persist_thread_identity_async(agent_uuid: str, metadata: dict) -> None:
     """Fire-and-forget thread-identity metadata persist. Eventual consistency
     is fine: in-memory ctx.meta is the source of truth within this process,
@@ -945,47 +1047,41 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
     except Exception as e:
         logger.debug(f"Baseline preload skipped: {e}")
 
-    # Track Thread Identity across sessions
-    if ctx.meta and ctx.session_key:
-        if getattr(ctx.meta, "active_session_key", None) != ctx.session_key:
-            import uuid
-            if not getattr(ctx.meta, "thread_id", None):
-                ctx.meta.thread_id = str(uuid.uuid4())
-            if getattr(ctx.meta, "active_session_key", None) is None:
-                ctx.meta.node_index = getattr(ctx.meta, "node_index", None) or 1
-            else:
-                ctx.meta.node_index = (getattr(ctx.meta, "node_index", None) or 1) + 1
-            ctx.meta.active_session_key = ctx.session_key
+    # Track Thread Identity across sessions. See `_track_thread_identity` for
+    # the #424 fix: no random-UUID mint mid-update; hydrate from PG, then fall
+    # back to deterministic derivation from session_key (matches onboard).
+    session_changed = await _track_thread_identity(ctx)
 
-            # Re-stamp R6 fork fields into the durable S22 envelope using the
-            # post-mutation node_index. The early stamp at prepare_unlocked_inputs
-            # ran before this block bumped node_index, so without the re-stamp
-            # a fresh-session transition would persist episode_fork_kind="none"
-            # while enrich_thread_identity (order=230) returns "sibling_locus"
-            # in the response. See _restamp_fork_after_thread_identity_update.
-            _restamp_fork_after_thread_identity_update(ctx)
+    if session_changed:
+        # Re-stamp R6 fork fields into the durable S22 envelope using the
+        # post-mutation node_index. The early stamp at prepare_unlocked_inputs
+        # ran before this block bumped node_index, so without the re-stamp
+        # a fresh-session transition would persist episode_fork_kind="none"
+        # while enrich_thread_identity (order=230) returns "sibling_locus"
+        # in the response. See _restamp_fork_after_thread_identity_update.
+        _restamp_fork_after_thread_identity_update(ctx)
 
-            # Fire-and-forget: PG metadata persist doesn't need to hold the
-            # agent lock. In-memory ctx.meta has already been mutated above
-            # and is the process-local source of truth; PG copy is for
-            # cross-process visibility. Same pattern as PR #360.
-            try:
-                _thread_metadata_snapshot = {
-                    "thread_id": ctx.meta.thread_id,
-                    "node_index": ctx.meta.node_index,
-                    "active_session_key": ctx.meta.active_session_key,
-                }
-                _spawn_persist_task(
-                    _persist_thread_identity_async(ctx.agent_uuid, _thread_metadata_snapshot),
-                    name="persist_thread_identity",
-                )
-            except RuntimeError:
-                # No running loop — extremely unusual for this code path
-                # since we're inside an async handler. Swallow per the
-                # PR #360 precedent.
-                pass
-            except Exception as e:
-                logger.debug(f"Could not schedule thread identity persist: {e}")
+        # Fire-and-forget: PG metadata persist doesn't need to hold the
+        # agent lock. In-memory ctx.meta has already been mutated above
+        # and is the process-local source of truth; PG copy is for
+        # cross-process visibility. Same pattern as PR #360.
+        try:
+            _thread_metadata_snapshot = {
+                "thread_id": ctx.meta.thread_id,
+                "node_index": ctx.meta.node_index,
+                "active_session_key": ctx.meta.active_session_key,
+            }
+            _spawn_persist_task(
+                _persist_thread_identity_async(ctx.agent_uuid, _thread_metadata_snapshot),
+                name="persist_thread_identity",
+            )
+        except RuntimeError:
+            # No running loop — extremely unusual for this code path
+            # since we're inside an async handler. Swallow per the
+            # PR #360 precedent.
+            pass
+        except Exception as e:
+            logger.debug(f"Could not schedule thread identity persist: {e}")
 
     # Per-agent anomaly detection: add entropy if current signals deviate from baseline
     try:
