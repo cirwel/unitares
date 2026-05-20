@@ -160,6 +160,18 @@ async def handle_check_calibration(arguments: Dict[str, Any]) -> Sequence[TextCo
             ),
         }
 
+    # S10.2: per-class fleet calibration breakdown. The envelope carries
+    # `bootstrapped` (False during the pre-rebucket bootstrap window after a
+    # pre-S10 state-file load) and `by_class` (descriptive stats only — see
+    # SequentialCalibrationTracker._state_to_metrics for the anytime-validity
+    # rationale: log_evidence/capped_alarm are intentionally omitted at class
+    # scope and only appear on the tactical_evidence (global) envelope above).
+    try:
+        from src.sequential_calibration import get_sequential_calibration_tracker
+        response["by_class"] = get_sequential_calibration_tracker().compute_metrics_by_class()
+    except Exception as e_bc:
+        logger.debug(f"S10 by_class breakdown skipped: {e_bc}")
+
     # Forward per-channel breakdown + hygiene from CalibrationChecker.check_calibration.
     # The handler composes its own response dict, so additions to the underlying
     # metrics dict do not propagate automatically — they have to be forwarded here.
