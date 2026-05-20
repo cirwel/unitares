@@ -174,4 +174,56 @@ defmodule UnitaresSentinel.FleetFindingEmitterTest do
 
     GenServer.stop(pid)
   end
+
+  test "GenServer skips runtime tick when lease enforcement blocks" do
+    parent = self()
+
+    lease_http_post = fn url, body, _headers, _timeout_ms ->
+      if String.ends_with?(url, "/v1/lease/acquire") do
+        send(parent, {:lease_acquire, body})
+
+        {:ok, 409,
+         Jason.encode!(%{
+           ok: false,
+           error: "held_by_other",
+           held_by_uuid: "cccccccc-cccc-cccc-cccc-cccccccccccc"
+         })}
+      else
+        send(parent, {:unexpected_release, body})
+        {:ok, 200, ~s({"ok":true})}
+      end
+    end
+
+    analysis_fun = fn _snapshot, _analysis_opts ->
+      send(parent, :analysis_ran)
+      [fleet_finding()]
+    end
+
+    {:ok, pid} =
+      FleetFindingEmitter.start_link(
+        name: :"test_fleet_finding_emitter_enforced_#{System.unique_integer([:positive])}",
+        initial_delay_ms: 60_000,
+        interval_ms: 60_000,
+        jitter_ms: 0,
+        lease_advisory: true,
+        lease_opts: [
+          base_url: "http://lease.test",
+          bearer_token: "test-token",
+          enforced_surface_kinds: MapSet.new(["resident"]),
+          http_post: lease_http_post
+        ],
+        snapshot: %{agents: %{}, events: []},
+        analysis_fun: analysis_fun,
+        self_agent_id: "sentinel-test",
+        findings_opts: []
+      )
+
+    send(pid, :tick)
+
+    assert_receive {:lease_acquire, _body}, 1_000
+    refute_receive :analysis_ran, 100
+    refute_receive {:unexpected_release, _body}, 100
+
+    GenServer.stop(pid)
+  end
 end

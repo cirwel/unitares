@@ -554,6 +554,7 @@ class SentinelAgent(GovernanceAgent):
             holder_agent_uuid=new_holder_uuid(),
             ttl_s=300,
             intent="sentinel analysis cycle",
+            audit_session=getattr(self, "client_session_id", None),
         ):
             return await self._run_cycle_inner()
 

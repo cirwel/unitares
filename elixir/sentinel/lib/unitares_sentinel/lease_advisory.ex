@@ -19,6 +19,7 @@ defmodule UnitaresSentinel.LeaseAdvisory do
   @type outcome ::
           :acquired_new
           | :acquired_idempotent
+          | :enforcement_blocked
           | :held_by_other
           | :service_unavailable
           | :permission_denied
@@ -39,14 +40,16 @@ defmodule UnitaresSentinel.LeaseAdvisory do
   """
   @spec acquire_cycle(keyword()) :: scope()
   def acquire_cycle(opts \\ []) do
-    body = %{
-      "surface_id" => Keyword.get(opts, :surface_id, @cycle_surface_id),
-      "holder_agent_uuid" => Keyword.get(opts, :holder_agent_uuid, new_holder_uuid()),
-      "holder_class" => "process_instance",
-      "holder_kind" => Keyword.get(opts, :holder_kind, @cycle_holder_kind),
-      "ttl_s" => Keyword.get(opts, :ttl_s, @cycle_ttl_s),
-      "intent" => Keyword.get(opts, :intent, @cycle_intent)
-    }
+    body =
+      %{
+        "surface_id" => Keyword.get(opts, :surface_id, @cycle_surface_id),
+        "holder_agent_uuid" => Keyword.get(opts, :holder_agent_uuid, new_holder_uuid()),
+        "holder_class" => "process_instance",
+        "holder_kind" => Keyword.get(opts, :holder_kind, @cycle_holder_kind),
+        "ttl_s" => Keyword.get(opts, :ttl_s, @cycle_ttl_s),
+        "intent" => Keyword.get(opts, :intent, @cycle_intent)
+      }
+      |> maybe_put("audit_session", audit_session(opts))
 
     acquire_advisory(body, opts)
   end
@@ -54,26 +57,31 @@ defmodule UnitaresSentinel.LeaseAdvisory do
   @doc false
   @spec acquire_advisory(map(), keyword()) :: scope()
   def acquire_advisory(body, opts \\ []) when is_map(body) do
-    with {:ok, token} <- bearer_token(opts),
-         {:ok, status, response_body} <- post_json("/v1/lease/acquire", body, token, opts) do
-      classify_acquire(status, response_body, Map.get(body, "surface_id"))
-    else
-      {:disabled, reason} ->
-        Logger.debug("lease_advisory: disabled #{inspect(reason)}")
-        scope(:service_unavailable)
+    surface_id = Map.get(body, "surface_id")
 
-      {:error, reason} ->
-        Logger.debug("lease_advisory: acquire failed #{inspect(reason)}")
-        scope(:service_unavailable)
-    end
+    scope =
+      with {:ok, token} <- bearer_token(opts),
+           {:ok, status, response_body} <- post_json("/v1/lease/acquire", body, token, opts) do
+        classify_acquire(status, response_body, surface_id)
+      else
+        {:disabled, reason} ->
+          Logger.debug("lease_advisory: disabled #{inspect(reason)}")
+          scope(:service_unavailable)
+
+        {:error, reason} ->
+          Logger.debug("lease_advisory: acquire failed #{inspect(reason)}")
+          scope(:service_unavailable)
+      end
+
+    enforce_scope(scope, surface_id, opts)
   rescue
     e ->
       Logger.debug("lease_advisory: acquire raised #{inspect(e)}")
-      scope(:client_error)
+      body |> Map.get("surface_id") |> then(&enforce_scope(scope(:client_error), &1, opts))
   catch
     :exit, reason ->
       Logger.debug("lease_advisory: acquire exited #{inspect(reason)}")
-      scope(:client_error)
+      body |> Map.get("surface_id") |> then(&enforce_scope(scope(:client_error), &1, opts))
   end
 
   @doc """
@@ -254,4 +262,82 @@ defmodule UnitaresSentinel.LeaseAdvisory do
   defp lease_plane_timeout_ms do
     Application.get_env(:unitares_sentinel, :lease_plane_timeout_ms, @default_timeout_ms)
   end
+
+  defp audit_session(opts) do
+    non_empty_string(Keyword.get(opts, :audit_session)) ||
+      configured_audit_session() ||
+      session_anchor_client_session_id(opts)
+  end
+
+  defp configured_audit_session do
+    non_empty_string(Application.get_env(:unitares_sentinel, :lease_audit_session)) ||
+      non_empty_string(System.get_env("UNITARES_SENTINEL_AUDIT_SESSION"))
+  end
+
+  defp enforce_scope(%{lease_id: nil, outcome: outcome} = scope, surface_id, opts) do
+    if surface_enforced?(surface_id, opts) do
+      Logger.warning("lease_enforcement: blocked surface=#{surface_id} outcome=#{outcome}")
+      %{scope | outcome: :enforcement_blocked}
+    else
+      scope
+    end
+  end
+
+  defp enforce_scope(scope, _surface_id, _opts), do: scope
+
+  defp surface_enforced?(surface_id, opts) when is_binary(surface_id) do
+    kinds = Keyword.get_lazy(opts, :enforced_surface_kinds, &configured_enforced_surface_kinds/0)
+    "*" in kinds or surface_kind(surface_id) in kinds
+  end
+
+  defp surface_enforced?(_surface_id, _opts), do: false
+
+  defp configured_enforced_surface_kinds do
+    configured =
+      Application.get_env(:unitares_sentinel, :lease_enforced_surface_kinds) ||
+        System.get_env("LEASE_PLANE_ENFORCED_SURFACE_KINDS") ||
+        ""
+
+    configured
+    |> split_surface_kinds()
+    |> MapSet.new()
+  end
+
+  defp split_surface_kinds(value) when is_binary(value) do
+    value
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp split_surface_kinds(values) when is_list(values), do: values
+  defp split_surface_kinds(_value), do: []
+
+  defp surface_kind(surface_id), do: surface_id |> String.split(":", parts: 2) |> hd()
+
+  defp session_anchor_client_session_id(opts) do
+    case Keyword.fetch(opts, :anchor) do
+      {:ok, %{} = anchor} ->
+        non_empty_string(Map.get(anchor, "client_session_id"))
+
+      :error ->
+        case UnitaresSentinel.SessionAnchor.load() do
+          {:ok, anchor} -> non_empty_string(Map.get(anchor, "client_session_id"))
+          {:error, _reason} -> nil
+        end
+    end
+  end
+
+  defp non_empty_string(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp non_empty_string(_value), do: nil
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, _key, ""), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

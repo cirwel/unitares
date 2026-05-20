@@ -102,10 +102,10 @@ fi
 KIND=$(classify)
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
-# Phase A advisory lease (RFC v0.5 §6.1). Telemetry-only: a held_by_other
-# or service_unavailable outcome MUST NOT block the ship. We log the
-# outcome and proceed regardless, and release on EXIT so the lease is
-# returned even if a downstream step (commit, push, PR create) fails.
+# Phase A advisory / Phase B enforcement lease. In advisory mode a
+# held_by_other or service_unavailable outcome is telemetry-only. When
+# LEASE_PLANE_ENFORCED_SURFACE_KINDS includes this surface kind, a missing
+# lease blocks the ship.
 LEASE_RESULT=$(python3 "$PROJECT_ROOT/scripts/dev/_ship_lease_advisory.py" acquire \
     --surface-id="resident:/ship_sh_$BRANCH" \
     --surface-kind="ship_sh" \
@@ -113,7 +113,12 @@ LEASE_RESULT=$(python3 "$PROJECT_ROOT/scripts/dev/_ship_lease_advisory.py" acqui
     --ttl-s=300 2>/dev/null || echo '{"outcome":"client_error","lease_id":null}')
 LEASE_OUTCOME=$(printf '%s' "$LEASE_RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("outcome",""))')
 LEASE_ID=$(printf '%s' "$LEASE_RESULT" | python3 -c 'import json,sys; v=json.load(sys.stdin).get("lease_id"); print(v if v else "")')
+LEASE_BLOCKED=$(printf '%s' "$LEASE_RESULT" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("blocked") else "0")')
 echo "[ship] lease: $LEASE_OUTCOME"
+if [[ "$LEASE_BLOCKED" == "1" ]]; then
+    echo "[ship] blocked by Phase B lease enforcement" >&2
+    exit 1
+fi
 if [[ -n "$LEASE_ID" ]]; then
     trap 'python3 "$PROJECT_ROOT/scripts/dev/_ship_lease_advisory.py" release --lease-id="$LEASE_ID" >/dev/null 2>&1 || true' EXIT
 fi

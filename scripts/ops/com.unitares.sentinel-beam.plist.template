@@ -5,6 +5,8 @@
   Render, but do NOT load while Python Sentinel is still running:
     sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
         -e "s|__HOME__|$HOME|g" \
+        -e "s|__SENTINEL_AUDIT_SESSION__|agent-...|g" \
+        -e "s|__LEASE_PLANE_ENFORCED_SURFACE_KINDS__||g" \
         scripts/ops/com.unitares.sentinel-beam.plist.template \
         > ~/Library/LaunchAgents/com.unitares.sentinel-beam.plist
 
@@ -70,6 +72,10 @@
         <string>__HOME__/.unitares/anchors/sentinel.json</string>
         <key>UNITARES_SENTINEL_LEGACY_SESSION_FILE</key>
         <string>__UNITARES_ROOT__/.sentinel_session</string>
+        <key>UNITARES_SENTINEL_AUDIT_SESSION</key>
+        <string>__SENTINEL_AUDIT_SESSION__</string>
+        <key>LEASE_PLANE_ENFORCED_SURFACE_KINDS</key>
+        <string>__LEASE_PLANE_ENFORCED_SURFACE_KINDS__</string>
         <key>GOV_WS_URL</key>
         <string>ws://localhost:8767/ws/eisv</string>
         <key>UNITARES_FINDINGS_URL</key>
