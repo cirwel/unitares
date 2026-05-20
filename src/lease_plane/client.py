@@ -72,6 +72,23 @@ class LeaseHTTPRequest:
 LeaseTransport = Callable[[LeaseHTTPRequest], Mapping[str, Any]]
 
 
+def _record_lease_rpc_latency(path: str, start_perf: float, outcome: str) -> None:
+    """Record lease RPC latency to the in-process perf_monitor.
+
+    Best-effort: a profile run with perf_monitor missing or import-broken must
+    never break a lease call. Key shape: ``lease_plane.client.<path>.<outcome>``
+    plus a coarser ``lease_plane.client.<path>`` aggregate.
+    """
+    try:
+        from src.perf_monitor import record_ms
+    except Exception:
+        return
+    elapsed_ms = (time.perf_counter() - start_perf) * 1000.0
+    op = path.lstrip("/").replace("/", ".")
+    record_ms(f"lease_plane.client.{op}", elapsed_ms)
+    record_ms(f"lease_plane.client.{op}.{outcome}", elapsed_ms)
+
+
 def _urllib_transport(request: LeaseHTTPRequest) -> Mapping[str, Any]:
     body = None
     if request.json_body is not None:
@@ -333,13 +350,18 @@ class LeasePlaneClient:
             json_body=json_body,
             timeout_s=self.config.timeout_s,
         )
+        _start = time.perf_counter()
         try:
             payload = self._transport(request)
         except Exception:
+            _record_lease_rpc_latency(path, _start, "transport_exception")
             return {"ok": False, "error": "service_unavailable"}
         if not isinstance(payload, Mapping):
+            _record_lease_rpc_latency(path, _start, "schema_invalid")
             return {"ok": False, "error": "schema_invalid", "detail": "response was not an object"}
+        outcome = "ok" if payload.get("ok", True) else str(payload.get("error", "error"))
         _check_protocol_version(payload, path)
+        _record_lease_rpc_latency(path, _start, outcome)
         return payload
 
 

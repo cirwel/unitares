@@ -372,3 +372,86 @@ def test_simple_unknown_error_preserves_raw_string_in_reason():
     assert result.error == "service_unavailable"
     assert result.reason is not None
     assert "wormhole_collapsed" in result.reason
+
+
+# --- Phase A latency instrumentation (substrate-tax measurement gate) ---
+
+def test_rpc_latency_recorded_on_ok_acquire():
+    """ok acquire records both an aggregate and an `.ok` shard."""
+    from src.perf_monitor import perf_monitor as _pm
+
+    _pm._samples.clear()  # type: ignore[attr-defined]
+
+    holder = uuid4()
+
+    def transport(_request: LeaseHTTPRequest):
+        return {"ok": True, "lease": _lease_payload(holder_agent_uuid=holder)}
+
+    LeasePlaneClient(transport=transport).acquire(
+        AcquireRequest(
+            surface_id="file:///tmp/a",
+            holder_agent_uuid=holder,
+            holder_class="process_instance",
+            holder_kind="remote_heartbeat",
+            ttl_s=90,
+        )
+    )
+
+    snap = _pm.snapshot()
+    assert "lease_plane.client.v1.lease.acquire" in snap
+    assert "lease_plane.client.v1.lease.acquire.ok" in snap
+    assert snap["lease_plane.client.v1.lease.acquire"]["count"] == 1
+
+
+def test_rpc_latency_recorded_on_transport_exception():
+    """transport exception is timed and tagged `transport_exception`."""
+    from src.perf_monitor import perf_monitor as _pm
+
+    _pm._samples.clear()  # type: ignore[attr-defined]
+
+    def transport(_request: LeaseHTTPRequest):
+        raise TimeoutError("down")
+
+    LeasePlaneClient(transport=transport).acquire(
+        AcquireRequest(
+            surface_id="file:///tmp/a",
+            holder_agent_uuid=uuid4(),
+            holder_class="process_instance",
+            holder_kind="remote_heartbeat",
+            ttl_s=90,
+        )
+    )
+
+    snap = _pm.snapshot()
+    assert "lease_plane.client.v1.lease.acquire" in snap
+    assert "lease_plane.client.v1.lease.acquire.transport_exception" in snap
+
+
+def test_rpc_latency_recorded_on_held_by_other_outcome():
+    """typed-absence outcomes are recorded under their error shard."""
+    from src.perf_monitor import perf_monitor as _pm
+
+    _pm._samples.clear()  # type: ignore[attr-defined]
+
+    def transport(_request: LeaseHTTPRequest):
+        return {
+            "ok": False,
+            "error": "held_by_other",
+            "surface_id": "file:///tmp/a",
+            "blocking_lease_id": str(uuid4()),
+            "held_by_uuid": str(uuid4()),
+            "expires_at": datetime.now(UTC).isoformat(),
+        }
+
+    LeasePlaneClient(transport=transport).acquire(
+        AcquireRequest(
+            surface_id="file:///tmp/a",
+            holder_agent_uuid=uuid4(),
+            holder_class="process_instance",
+            holder_kind="remote_heartbeat",
+            ttl_s=90,
+        )
+    )
+
+    snap = _pm.snapshot()
+    assert "lease_plane.client.v1.lease.acquire.held_by_other" in snap
