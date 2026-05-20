@@ -511,6 +511,21 @@ class VigilAgent(GovernanceAgent):
                     pass
                 log(f"GROUNDSKEEPER: {note_text}")
 
+        # --- Watcher commit-scan: auto-resolve findings referenced in recent commits ---
+        try:
+            scan_proc = subprocess.run(
+                [sys.executable, str(project_root / "agents" / "watcher" / "agent.py"), "--scan-commits"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if scan_proc.returncode != 0:
+                log(f"GROUNDSKEEPER: watcher --scan-commits exited {scan_proc.returncode}: {scan_proc.stderr[:200]}")
+            else:
+                log(f"GROUNDSKEEPER: watcher --scan-commits: {scan_proc.stdout.strip()[:100]}")
+        except Exception as e:
+            log(f"GROUNDSKEEPER: watcher --scan-commits failed ({type(e).__name__}: {e})")
+
         return summary
 
     async def _run_aged_candidate_archive(
