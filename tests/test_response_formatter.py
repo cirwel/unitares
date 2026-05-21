@@ -46,8 +46,8 @@ def _sample_response():
             "S": 0.1,
             "V": -0.02,
             "coherence": 0.92,
-            "risk_score": 0.08,
-            "latest_risk_score": 0.08,
+            "risk_score": 0.08,           # smoothed (gating)
+            "latest_risk_score": 0.42,    # raw last observation (spike)
             "phi": 1.23,
             "verdict": "approve",
             "lambda1": 0.9,
@@ -147,16 +147,23 @@ class TestFormatMinimal:
         result = _format_minimal(data, using_default_mode=False, saved_trust_tier=None)
         assert "trust_tier" not in result
 
-    def test_risk_score_from_latest(self):
+    def test_risk_score_is_canonical_gating_value(self):
+        """metrics.risk_score in the response must be the smoothed gating
+        value (the one make_decision reasoned over), not the raw spike."""
         data = _sample_response()
+        # Sample has risk_score=0.08 (smoothed), latest_risk_score=0.42 (spike).
         result = _format_minimal(data, using_default_mode=False, saved_trust_tier=None)
         assert result["risk_score"] == 0.08
+        assert result["risk_score_latest"] == 0.42
 
-    def test_risk_score_fallback(self):
+    def test_risk_score_latest_missing(self):
+        """If latest_risk_score is absent, risk_score still surfaces the
+        canonical gating value; latest is None."""
         data = _sample_response()
         data["metrics"].pop("latest_risk_score")
         result = _format_minimal(data, using_default_mode=False, saved_trust_tier=None)
-        assert result["risk_score"] == 0.08  # falls back to risk_score
+        assert result["risk_score"] == 0.08
+        assert result["risk_score_latest"] is None
 
     def test_empty_decision(self):
         data = _sample_response()
@@ -230,11 +237,24 @@ class TestFormatCompact:
         result = _format_compact(data, using_default_mode=False, saved_trust_tier=None)
         assert "_tip" not in result
 
-    def test_risk_score_fallback(self):
+    def test_risk_score_is_canonical_gating_value(self):
+        """Compact response's metrics.risk_score must be the smoothed gating
+        value (matches decision.reason). Raw last observation lives in
+        risk_score_latest."""
+        data = _sample_response()
+        # Sample has risk_score=0.08 (smoothed), latest_risk_score=0.42 (spike).
+        result = _format_compact(data, using_default_mode=False, saved_trust_tier=None)
+        assert result["metrics"]["risk_score"] == 0.08
+        assert result["metrics"]["risk_score_latest"] == 0.42
+
+    def test_risk_score_latest_missing(self):
+        """If latest_risk_score is absent, risk_score still surfaces canonical
+        gating value; risk_score_latest is None."""
         data = _sample_response()
         data["metrics"]["latest_risk_score"] = None
         result = _format_compact(data, using_default_mode=False, saved_trust_tier=None)
         assert result["metrics"]["risk_score"] == 0.08
+        assert result["metrics"]["risk_score_latest"] is None
 
     def test_empty_metrics(self):
         data = _sample_response()
