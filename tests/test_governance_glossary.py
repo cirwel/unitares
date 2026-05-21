@@ -125,6 +125,51 @@ class TestExplainTrajectory:
         assert "dialectic" in result["meaning"].lower()
 
 
+class TestExplainTrustTier:
+
+    def test_int_tier_returns_full_glossary_entry(self):
+        from src.governance_glossary import explain_trust_tier
+        result = explain_trust_tier(1)
+        assert result["tier"] == 1
+        assert result["name"] == "emerging"
+        assert "forming" in result["meaning"].lower() or "consistency" in result["meaning"].lower()
+        assert "50" in result["criteria"]  # observation threshold
+
+    def test_existing_dict_preserved_and_annotated(self):
+        """compute_trust_tier emits {tier, name, reason, ...}.
+        explain_trust_tier must preserve all existing keys and ADD meaning + criteria."""
+        from src.governance_glossary import explain_trust_tier
+        existing = {
+            "tier": 2,
+            "name": "established",
+            "reason": "60 observations, confidence 0.6, lineage 0.8",
+            "observation_count": 60,
+        }
+        result = explain_trust_tier(existing)
+        assert result["tier"] == 2
+        assert result["name"] == "established"
+        assert result["reason"] == existing["reason"]
+        assert result["observation_count"] == 60  # extra fields survive
+        assert "meaning" in result
+        assert "criteria" in result
+
+    def test_unknown_tier_marked(self):
+        from src.governance_glossary import explain_trust_tier
+        result = explain_trust_tier(99)
+        assert result["tier"] == 99
+        assert "unknown" in result["meaning"].lower()
+
+    def test_none_returns_value_none(self):
+        from src.governance_glossary import explain_trust_tier
+        assert explain_trust_tier(None) == {"value": None}
+
+    def test_verified_tier_mentions_long_running(self):
+        from src.governance_glossary import explain_trust_tier
+        result = explain_trust_tier(3)
+        assert result["name"] == "verified"
+        assert "200" in result["criteria"]  # higher observation threshold
+
+
 class TestAnnotateDriftComponents:
 
     def test_annotates_known_components(self):
