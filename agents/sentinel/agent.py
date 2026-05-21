@@ -623,7 +623,7 @@ class SentinelAgent(GovernanceAgent):
         # wrote to the KG via leave_note — that path is removed because the
         # entries had no archival value (10-min fleet snapshots) and the
         # Vigil-Sentinel coordination contract that read them is broken at the
-        # type-name level (see docs/proposals/sentinel-events-vs-kg.md).
+ # type-name level .
         return CycleResult(
             summary=f"Sentinel analysis: {summary}",
             complexity=complexity,

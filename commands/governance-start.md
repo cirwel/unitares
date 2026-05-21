@@ -2,7 +2,7 @@
 description: "Create or declare lineage for a UNITARES session in Codex"
 ---
 
-Under the identity ontology v2 (`docs/ontology/identity.md`), a fresh process-instance mints fresh governance-identity. Lineage is declared via `parent_agent_id`, not resumed via token. This command starts a session in that posture.
+Under the identity ontology v2 (``), a fresh process-instance mints fresh governance-identity. Lineage is declared via `parent_agent_id`, not resumed via token. This command starts a session in that posture.
 
 Start by checking the local workspace cache inventory.
 

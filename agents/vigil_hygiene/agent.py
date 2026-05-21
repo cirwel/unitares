@@ -10,7 +10,6 @@ Usage:
 
 Defaults to dry-run. --live enables actual deletions.
 
-Spec: docs/proposals/branch-hygiene-automation.md
 """
 from __future__ import annotations
 

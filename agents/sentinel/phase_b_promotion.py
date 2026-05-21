@@ -7,7 +7,7 @@ conflict batch fires for a surface_kind, re-run
 and emit a transition finding only when one or more §6.1 criteria change
 status vs. the last recorded verdict (or when overall ``promotable`` flips).
 
-Spec: docs/proposals/surface-lease-plane-v0.md §6.1 / §6.2 ordering.
+Spec: §6.1 / §6.2 ordering.
 
 Design notes:
   * Event-triggered, not cron — piggybacks on Sentinel's existing

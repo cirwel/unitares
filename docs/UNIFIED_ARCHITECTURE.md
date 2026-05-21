@@ -41,7 +41,7 @@ An agent calls `process_agent_update` with:
 - `complexity` — optional reflective self-report [0, 1]
 - `confidence` — optional reflective self-report [0, 1]
 
-Identity is **not** auto-resumed across process boundaries. Per the v2 identity ontology, a fresh process-instance mints a fresh agent UUID; cross-process continuity is *declared* (via `parent_agent_id`) and verified, not silently inherited. The full model — performative vs descriptive vs inventive stances, layered continuity taxonomy, the substrate-earned identity pattern — is in [`ontology/identity.md`](ontology/identity.md).
+Identity is **not** auto-resumed across process boundaries. A fresh process-instance mints a fresh agent UUID; cross-process continuity is *declared* (via `parent_agent_id`) and verified, not silently inherited. The shared agent contract is in [`AGENTS.md`](../AGENTS.md).
 
 At runtime, the reflective fields above (`complexity`, `confidence`) are not trusted in isolation. The dual-log layer compares them against server-derived operational signals, tool usage, continuity metrics, and other exogenous evidence when available.
 
@@ -170,7 +170,7 @@ UNITARES has run continuously in production since November 2025 on a **single-op
 
 - All services bind to `127.0.0.1` by default — public exposure is an operator decision (env-var gated)
 - The lease plane fails closed if `LEASE_PLANE_BEARER_TOKEN` is unset
-- Agent identity is bearer-token-based with intentional retention of the symmetric stack (asymmetric DPoP considered, shelved 2026-04-19 — see [`ontology/s1-continuity-token-retirement.md`](ontology/s1-continuity-token-retirement.md))
+- Agent identity is bearer-token-based with intentional retention of the symmetric stack (asymmetric DPoP considered and shelved 2026-04-19)
 - The dashboard reads PostgreSQL directly with the same auth model as MCP
 
 Multi-tenant or public-facing deployment will benefit from a harder auth posture than the current defaults. Vulnerability reports: [`SECURITY.md`](../SECURITY.md).
@@ -193,10 +193,6 @@ For Lumen's internal architecture (sensors, neural bands, DrawingEISV, LED pipel
 
 ## What's in flight
 
-The system is in active development. Larger conceptual shifts and shipping RFCs live in:
-
-- **[`ontology/`](ontology/)** — the versioned identity ontology and the research/system RFCs that evolve it (R1 honest lineage, R2 honest memory, R6 harness-substrate plurality). Start at [`ontology/README.md`](ontology/README.md).
-- **[`proposals/`](proposals/)** — RFCs that don't (yet) belong in `ontology/`. The Plexus / lease-plane / BEAM-coordination work is here: [`plexus-scope.md`](proposals/plexus-scope.md), [`surface-lease-plane-v0.md`](proposals/surface-lease-plane-v0.md), [`beam-footprint-roadmap-v0.md`](proposals/beam-footprint-roadmap-v0.md), and the `wave-*` series.
-- **The paper** — [`unitares-paper-v6`](https://github.com/cirwel/unitares-paper-v6) (DOI [10.5281/zenodo.19647159](https://doi.org/10.5281/zenodo.19647159)). v7 is in scoping; see [`ontology/paper-positioning.md`](ontology/paper-positioning.md).
+The system is in active development. The paper — [`unitares-paper-v6`](https://github.com/cirwel/unitares-paper-v6) (DOI [10.5281/zenodo.19647159](https://doi.org/10.5281/zenodo.19647159)) — is the canonical conceptual reference; v7 is in scoping.
 
 If runtime code and this doc disagree, runtime wins. Disputes resolve against [`dev/CANONICAL_SOURCES.md`](dev/CANONICAL_SOURCES.md).

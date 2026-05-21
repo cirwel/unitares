@@ -49,7 +49,7 @@ async def test_run_cycle_does_not_write_findings_to_kg():
     Regression for the redundant double-write pattern. Sentinel previously
     populated `notes` for high-severity findings, which the SDK routed to
     leave_note(). Those KG entries were ephemeral fleet snapshots with no
-    archival value (see docs/proposals/sentinel-events-vs-kg.md). Findings
+ archival value . Findings
     already reach the dashboard via post_finding(); the KG write was pure
     redundancy and noise.
     """

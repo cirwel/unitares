@@ -106,13 +106,6 @@ Strong ownership proof is better than implicit continuity. If the runtime falls 
 
 When you are paused, stuck, or need intervention:
 
-First run the Machine R.A.I.N. loop (`docs/operations/machine-rain-protocol.md`) when the trigger involves contradiction, stale data, failed validation, weak identity assurance, or surface conflict:
-
-1. Register the concrete signal.
-2. Allow the evidence to remain visible.
-3. Investigate the canonical source.
-4. Next: choose the smallest stabilizing action.
-
 | Situation | Tool | Notes |
 |-----------|------|-------|
 | Stuck or paused, want automatic recovery | `self_recovery()` | Attempts to restore healthy state |

@@ -23,19 +23,6 @@ The circuit breaker is a **protective pause**, not a failure. It exists to preve
 
 ---
 
-## Machine R.A.I.N. Pre-Flight
-
-Before quick recovery, dialectic review, or operator escalation, run the short Machine R.A.I.N. loop from [machine-rain-protocol.md](../operations/machine-rain-protocol.md):
-
-1. **Register** the concrete signal.
-2. **Allow** the evidence to remain visible.
-3. **Investigate** the canonical source.
-4. **Next**: choose the smallest stabilizing action.
-
-This is the pre-recovery discipline for contradictions, stale data, failed validation, identity ambiguity, and surface ownership conflict. It does not replace `self_recovery()` or dialectic review; it makes those paths better grounded.
-
----
-
 ## Dialectic Protocol Overview
 
 Dialectic recovery is a structured review process:

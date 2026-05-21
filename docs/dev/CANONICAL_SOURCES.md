@@ -64,8 +64,6 @@ These are live but intentionally specialized. They should not be treated as gene
 | `docs/guides/CIRS_PROTOCOL.md` | specialized protocol reference | CIRS-specific coordination flows |
 | `docs/dev/CIRCUIT_BREAKER_DIALECTIC.md` | specialized recovery reference | Circuit-breaker and dialectic recovery flow |
 | `docs/dev/TOOL_REGISTRATION.md` | specialized developer reference | MCP/tool registration work |
-| `docs/operations/contract-drift-playbook.md` | specialized engineering playbook | Tool-contract and drift-prevention work |
-| `docs/dev/validation-roadmap.md` | specialized engineering roadmap | Empirical validation ladder for groundedness, prediction, and intervention |
 
 ## Supporting Non-Canonical Artifacts
 

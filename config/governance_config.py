@@ -933,7 +933,7 @@ DELTA_NORM_MAX_BY_CLASS: Dict[str, ScaleConstant] = {
         name="DELTA_NORM_MAX[engaged_ephemeral]", value=0.2018, measured_on="2026-04-30",
         corpus_size=0, percentile=None, provenance="alias",
         notes="Alias to default. engaged_ephemeral cohort added by S8a Phase 2 "
-              "(docs/ontology/s8a-phase2-prep.md): ephemeral agents with "
+ ": ephemeral agents with "
               "total_updates >= 3 promote to engaged_ephemeral; the corpus does "
               "not exist until promotion runs. "
               "REVIEW BY: 2026-05-30 — if corpus_size is still 0 after a month, "

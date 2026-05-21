@@ -146,7 +146,7 @@ If the agent appears in that response, ingestion and persistence are working. Th
 
 The repo has active Elixir/OTP work under `elixir/lease_plane/`, but that is the BEAM coordination kernel/lease plane, not a Phoenix dashboard rewrite.
 
-`docs/proposals/surface-lease-plane-v0.md` explicitly lists these as deferred follow-up scope:
+`` explicitly lists these as deferred follow-up scope:
 
 - Phoenix LiveView migration of the existing dashboard.
 - Phoenix PubSub migration of the existing broadcaster, Discord bridge, and dashboard WebSocket plumbing.
