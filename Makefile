@@ -75,6 +75,11 @@ uninstall-hooks: ## Remove git pre-commit hooks
 	@rm -f .git/hooks/pre-commit
 	@echo "Pre-commit hook removed"
 
+# ── Demo ─────────────────────────────────────────────────
+
+demo: ## Run a 60-second governance trajectory against a live server on :8767
+	@python3 scripts/demo/quick_demo.py
+
 # ── Cleanup ──────────────────────────────────────────────
 
 clean: ## Remove generated artifacts (htmlcov, coverage, pycache)

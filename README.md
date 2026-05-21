@@ -19,15 +19,17 @@ Slow down when disorder spikes, ask for review when integrity drops, hand off wh
 
 Running continuously in production since November 2025. Long-run trajectories are stored in PostgreSQL + AGE; the state model is derived from what agents actually do (EMA-smoothed observations, not model predictions). Test counts and coverage gates are in the [Production snapshot](#production-snapshot).
 
-**Try it** (one command, no Postgres/AGE on the host required):
+**Try it** — bring the stack up, then feel the loop:
 
 ```bash
 git clone https://github.com/cirwel/unitares.git && cd unitares
-docker compose up
-# then point any MCP client at http://localhost:8767/mcp/
+docker compose up                  # Postgres+AGE+pgvector+Redis+server, bound to 127.0.0.1
+make demo                          # in another shell: 60-second scripted trajectory
 ```
 
-That brings up Postgres 17 + Apache AGE + pgvector + Redis + the governance server, all bound to `127.0.0.1`. Bare-metal setup (Homebrew Postgres, native install) is in [Installation](#installation). The Pi/Lumen embodiment side is **optional** — governance runs standalone.
+`make demo` onboards a synthetic agent, drives seven check-ins (clean work → calibration drift → confusion), and prints the verdict + EISV state at each step — so you can see the loop reading drift before reading the architecture doc. Source: [`scripts/demo/quick_demo.py`](scripts/demo/quick_demo.py). Then point any MCP client at `http://localhost:8767/mcp/`.
+
+Bare-metal setup (Homebrew Postgres, native install) is in [Installation](#installation). The Pi/Lumen embodiment side is **optional** — governance runs standalone.
 
 **Service ports** (bound to `127.0.0.1` by default; override host-side via `.env`):
 
