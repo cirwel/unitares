@@ -353,6 +353,28 @@ this gap and harden the entire detector pipeline, not just P016. Two
 sweeps in three weeks is enough evidence that the rule's own escape hatch
 (move to experimental) is on the table if the storage fix doesn't ship.
 
+False-positive sweep 2026-05-20: third sweep, two findings (fingerprints
+`651b3427` at `sync_client.py:342`, `2b12fa39` at `sync_client.py:458`).
+Different shape from the 2026-05-04 batch — both flagged lines DO contain
+the quoted `"success"` literal, so the required-token filter could not have
+caught them. Instead they are the **already-unwrapped-result check** shape:
+the operator wired the inner-layer assertion (`result.get("isError")` at
+sync_client.py:352, or the `_raise_for_tool_failure` helper itself), but the
+model sees a single `.get("success")` and flags. Closed by adding two
+structural verifiers parallel to `_P016_GETATTR_SUCCESS`:
+
+- `_is_p016_followed_by_inner_layer_check` walks forward ~20 lines for
+  `isError`, `_raise_for_tool_failure(`, `_parse_mcp_result(`, or
+  `<Result>.model_validate(` as the inner-leg cue.
+- `_is_p016_inside_inner_assertion_helper` walks backward up to 6 lines for
+  a `def _raise_for_*(` enclosing header — by convention these helpers
+  operate on already-unwrapped inner results.
+
+The `src_line` storage fix from the 2026-05-04 note remains separately
+useful for line-drift FPs and is tracked outside this rule. Move-to-
+experimental stays off the table as long as the structural-verifier path
+keeps closing new shapes.
+
 **Why this is in the active library and not experimental:** the shape is
 reasonably lexical — the model can spot a conditional on one success flag
 that ignores a nested success flag in the same response object. If Qwen3
