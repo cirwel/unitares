@@ -29,7 +29,7 @@ make demo                          # in another shell: 60-second scripted trajec
 
 `make demo` onboards a synthetic agent, drives seven check-ins (clean work → calibration drift → confusion), and prints the verdict + EISV state at each step — so you can see the loop reading drift before reading the architecture doc. Source: [`scripts/demo/quick_demo.py`](scripts/demo/quick_demo.py). Then point any MCP client at `http://localhost:8767/mcp/`.
 
-Bare-metal setup (Homebrew Postgres, native install) is in [Installation](#installation). The Pi/Lumen embodiment side is **optional** — governance runs standalone.
+Bare-metal setup (Homebrew Postgres, native install) is in [Installation](#installation).
 
 **Service ports** (bound to `127.0.0.1` by default; override host-side via `.env`):
 
@@ -96,7 +96,7 @@ As of May 6, 2026 (single-operator deployment — self-traffic, not external ado
 
 | Metric | Value |
 |--------|-------|
-| Agents onboarded | 3,660 total process-instances — overwhelmingly ephemeral CLI sessions from one operator's workstation plus a handful of long-running resident agents (launchd crons, Pi-side Lumen) |
+| Agents onboarded | 3,660 total process-instances — overwhelmingly ephemeral CLI sessions from one operator's workstation plus a handful of long-running resident agents (launchd crons) |
 | Distinct event-emitting identities (last 21 days) | 1,144 total; mostly ephemeral local CLI sessions, not external adoption |
 | Unique agents active (last 7 days) | 135 distinct event emitters |
 | Governance events processed | 351,000+ (≈94K in the last 7 days) |
@@ -307,10 +307,10 @@ Three files at the repo root orient different AI CLIs. Human readers can skip th
 
 ## Related Projects
 
-- [**Lumen / anima-mcp**](https://github.com/cirwel/anima-mcp) — Embodied agent on Raspberry Pi
+- [**anima-mcp**](https://github.com/cirwel/anima-mcp) — reference UNITARES deployment cited as longitudinal validation data in the papers
 - [**unitares-governance-plugin**](https://github.com/cirwel/unitares-governance-plugin) — Installable client adapters for Codex and Claude
 - [**unitares-discord-bridge**](https://github.com/cirwel/unitares-discord-bridge) — Discord presence and governance events
-- [**eisv-lumen**](https://github.com/cirwel/eisv-lumen) — Governance benchmark (21K trajectories on HuggingFace)
+- [**eisv-lumen**](https://github.com/cirwel/eisv-lumen) — Governance benchmark dataset (21K agent-state trajectories on HuggingFace)
 - [**unitares-paper-v6**](https://github.com/cirwel/unitares-paper-v6) — Companion paper *Information-Theoretic Governance of Heterogeneous Agent Fleets* (Wang, 2026); concept DOI [10.5281/zenodo.19647159](https://doi.org/10.5281/zenodo.19647159)
 
 This `unitares` repo is the governance server/runtime. Plugin-side `.codex-plugin/`, `hooks/`, `skills/`, and `commands/` content belongs to the companion adapter repo, not as canonical copies here.
