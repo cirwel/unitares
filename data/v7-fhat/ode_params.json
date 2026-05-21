@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "source": "unitares-paper-v6/unitares-v6.tex Appendix A (tab:params)",
+  "source_commit_note": "Read from master of CIRWEL/unitares-paper-v6 as of 2026-04-23; frozen by v7 F-hat Session 1a",
+  "form": "linear g_I(I) = gamma_I * I (spec v4 §2.3 discretization)",
+  "notes": [
+    "Spec §2.3 drops the gamma_E ||delta-eta||^2 drift term from the v6 E equation; prior has 9 params.",
+    "gamma_I_linear (0.169) is the linear-mode value. Paper App A also lists gamma_I (logistic) = 0.25; the spec uses the linear form, so 0.169 is the binding value.",
+    "These values differ from config/governance_config.py (alpha=0.5, beta_I=0.05, gamma_I=0.3). Paper is source of truth per memory feedback_eisv-bounds-drift.md. Runtime config divergence should be reconciled separately."
+  ],
+  "parameters": {
+    "alpha": 0.42,
+    "beta_E": 0.10,
+    "k": 0.10,
+    "beta_I": 0.30,
+    "gamma_I_linear": 0.169,
+    "mu": 0.80,
+    "lambda_2": 0.05,
+    "kappa": 0.30,
+    "delta": 0.40
+  },
+  "canonical_json": "{\"alpha\":0.42,\"beta_E\":0.1,\"beta_I\":0.3,\"delta\":0.4,\"gamma_I_linear\":0.169,\"k\":0.1,\"kappa\":0.3,\"lambda_2\":0.05,\"mu\":0.8}",
+  "sha256": "dee1182cd109c4a3d2999f21168a3093b9be8660765cd0d34f8c4337fce9751e",
+  "hash_protocol": {
+    "input": "parameters dict, serialized via json.dumps(sort_keys=True, separators=(',', ':')) on UTF-8 bytes",
+    "algorithm": "sha256",
+    "verification": "Session 2 MUST recompute on the live ode_params.json at dispatch time; mismatch aborts horse race per spec §2.5"
+  },
+  "prior_at_t0": {
+    "mu_0": [0.7, 0.8, 0.2, 0.0],
+    "sigma_0_diag": [0.01, 0.01, 0.01, 0.04],
+    "sigma_0_format": "variance (sigma^2), not std",
+    "spec_section": "§2.3"
+  },
+  "transition_noise_bounds": {
+    "sigma_trans_min": 0.005,
+    "sigma_trans_max": 0.05,
+    "spec_section": "§2.3"
+  },
+  "emission_obs_noise_bounds": {
+    "sigma_obs_min": 0.01,
+    "sigma_obs_max": 0.3,
+    "spec_section": "§2.4"
+  }
+}

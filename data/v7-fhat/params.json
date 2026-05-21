@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "ode_params_source": "data/v7-fhat/ode_params.json",
+  "ode_params_file_sha256": "f835422aa622d8da85e63989006f68573189bce90f40358ec8bb2d0bee576031",
+  "ode_params_sha256": "dee1182cd109c4a3d2999f21168a3093b9be8660765cd0d34f8c4337fce9751e",
+  "fit_metadata": {
+    "window_start": "2026-02-20",
+    "window_end": "2026-03-20",
+    "train_agents": 42,
+    "val_agents": 10,
+    "eval_agents": 10,
+    "corpus_rows_train": 4147,
+    "corpus_rows_val": 952,
+    "corpus_rows_eval": 783,
+    "train_rows_by_class": {
+      "resident_persistent": 2100,
+      "session_or_unlabeled": 2047
+    },
+    "wall_time_seconds": 24.28,
+    "code_commit_sha": "1c3bd621199987b145dd3f63f67f02123ab210b5",
+    "completed_at": "2026-04-24T03:53:08Z",
+    "max_iters": 50,
+    "em_iters_run": 21,
+    "em_converged": true,
+    "l2_lambda": 0.01,
+    "seed": 42
+  },
+  "sigma_obs": {
+    "resident_persistent": [
+      0.06412159004411182,
+      0.11487457673572918,
+      0.04437602095387217,
+      0.053984014043642455
+    ],
+    "session_or_unlabeled": [
+      0.019617071116769025,
+      0.0357496402798199,
+      0.031704513989689175,
+      0.01905558058051134
+    ]
+  },
+  "sigma_trans_fleet": [
+    0.05,
+    0.05,
+    0.05,
+    0.05
+  ],
+  "c5_coef": {
+    "resident_persistent": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "session_or_unlabeled": [
+      4.099790238502907,
+      0.05607515074513818,
+      0.020469733368703218,
+      0.05275060252378728,
+      0.011247707798509551
+    ]
+  },
+  "c5_coef_ordering": [
+    "beta0",
+    "beta_E",
+    "beta_I",
+    "beta_S",
+    "beta_V_abs"
+  ],
+  "c5_sign_convention": "sigma(beta0 - beta_E*E - beta_I*I + beta_S*S + beta_V_abs*|V|)",
+  "loglik_history": [
+    18408.620739167087,
+    26075.99200878622,
+    28036.754458278956,
+    29085.75880139391,
+    29645.8976430643,
+    29935.42437641643,
+    30098.47410121554,
+    30197.492508523093,
+    30253.580089864805,
+    30296.337160514664,
+    30315.69276989084,
+    30327.49726927749,
+    30334.755206699265,
+    30328.840974920866,
+    30342.537796002915,
+    30339.46389641887,
+    30345.692356589756,
+    30339.837262263653,
+    30347.00023148388,
+    30340.727040150075,
+    30342.66602607217
+  ],
+  "iter_count": 21,
+  "converged": true,
+  "sc1": {
+    "pass": true,
+    "bounds_violations": [],
+    "sign_violations": []
+  },
+  "sc2": {
+    "pass": false,
+    "r": 0.9948738879861849,
+    "n": 952,
+    "n_validation_agents": 10,
+    "c5_turn_count": 0
+  }
+}
