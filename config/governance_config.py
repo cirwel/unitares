@@ -627,7 +627,7 @@ class GovernanceConfig:
             return {
                 'action': 'proceed',
                 'sub_action': 'approve',
-                'reason': f'Low complexity ({risk_score:.1%}) - healthy operating range',
+                'reason': f'Low risk ({risk_score:.1%}) - healthy operating range',
                 'guidance': f'{margin_to_pause:.0%} margin to PAUSE threshold ({effective_revise_threshold:.0%})',
                 'margin': margin_info['margin'],
                 'nearest_edge': margin_info['nearest_edge']
@@ -647,7 +647,7 @@ class GovernanceConfig:
             return {
                 'action': 'proceed',
                 'sub_action': 'guide',
-                'reason': f'Moderate complexity ({risk_score:.1%}) - PAUSE threshold: {effective_revise_threshold:.0%}',
+                'reason': f'Moderate risk ({risk_score:.1%}) - PAUSE threshold: {effective_revise_threshold:.0%}',
                 'guidance': guidance,
                 'margin': margin_info['margin'],
                 'nearest_edge': margin_info['nearest_edge']
@@ -657,7 +657,7 @@ class GovernanceConfig:
         return {
             'action': 'pause',
             'sub_action': 'reject',
-            'reason': f'Complexity threshold reached ({risk_score:.1%} ≥ {effective_revise_threshold:.0%})',
+            'reason': f'Risk threshold reached ({risk_score:.1%} ≥ {effective_revise_threshold:.0%})',
             'guidance': f'Pause suggested: simplify approach, break into smaller steps, or take a break. Coherence: {coherence:.2f} (critical: {effective_coherence_threshold:.2f})',
             'margin': margin_info['margin'],
             'nearest_edge': margin_info['nearest_edge']
