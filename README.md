@@ -26,9 +26,9 @@ Each check-in returns a verdict — `proceed` / `guide` / `pause` / `reject` —
 
 ### Why an agent can't just lie about its confidence
 
-Self-reported confidence is one input. UNITARES also observes **hard exogenous outcomes** — test pass/fail, exit codes, tool results — fed back through the `outcome_event` tool. A sequential Beta-Bernoulli e-process compares each pre-task confidence against the actual outcome rate. An agent that reports `confidence=0.9` while succeeding only 50% of the time accumulates calibration error; integrity drops; the verdict shifts to `guide` or `pause`. The signal is grounded in what actually happened, not what the agent claimed.
+Self-reported confidence is one input. UNITARES also observes **hard exogenous outcomes** — test pass/fail, exit codes, tool results — fed back through the `outcome_event` tool. Over many tasks it tracks whether the agent's claimed confidence matches its actual success rate. An agent that reports `confidence=0.9` while succeeding only 50% of the time accumulates calibration error; integrity drops; the verdict shifts to `guide` or `pause`. The signal is grounded in what actually happened, not what the agent claimed.
 
-After ~30 check-ins the four numbers are graded against *your own* baseline (Welford z-score), not a universal threshold. Absolute safety floors still apply.
+After ~30 check-ins the four numbers are graded against the agent's own running baseline, not a universal threshold. Absolute safety floors still apply.
 
 Running continuously since November 2025. State stored in PostgreSQL + AGE. The theory and the dynamical-systems version of this model live in [Paper v6](https://github.com/cirwel/unitares-paper-v6) (DOI 10.5281/zenodo.19647159) — readers who want the full derivation start there.
 
