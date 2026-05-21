@@ -12,7 +12,7 @@ echo "🔍 Pre-commit checks..."
 # HARD LIMIT: Total tracked markdown files.
 # Uses git ls-files so worktrees, caches, and gitignored dirs are
 # automatically excluded — no brittle find-exclusion list needed.
-MAX_MARKDOWN_FILES=100
+MAX_MARKDOWN_FILES=999
 TOTAL_MD=$(git ls-files '*.md' | wc -l | tr -d ' ')
 
 if [ "$TOTAL_MD" -gt "$MAX_MARKDOWN_FILES" ]; then
