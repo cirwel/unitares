@@ -272,6 +272,26 @@ class TestToolMapping:
         assert args["query"] == "test query"
 
     @pytest.mark.asyncio
+    async def test_leave_note_routes_through_knowledge_action_note(self):
+        """SDK leave_note() now routes through the canonical `knowledge` tool
+        with action='note' (#429 council fix). The MCP `leave_note` tool is
+        deprecated; SDK method name retained for backward compatibility."""
+        session = AsyncMock()
+        session.call_tool = AsyncMock(return_value=make_mcp_result({
+            "success": True,
+            "note_id": "n-123",
+        }))
+        client = make_client_with_session(session)
+
+        await client.leave_note(summary="test note", tags=["test"])
+        tool_name = session.call_tool.call_args[0][0]
+        args = session.call_tool.call_args[0][1]
+        assert tool_name == "knowledge"
+        assert args["action"] == "note"
+        assert args["summary"] == "test note"
+        assert args["tags"] == ["test"]
+
+    @pytest.mark.asyncio
     async def test_store_discovery_maps_to_knowledge_action_store(self):
         session = AsyncMock()
         session.call_tool = AsyncMock(return_value=make_mcp_result({

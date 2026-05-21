@@ -114,6 +114,36 @@ class TestMcpToolDecorator:
         assert is_tool_deprecated("test_normal_tool") is False
         assert is_tool_hidden("test_normal_tool") is False
 
+    def test_leave_note_marked_deprecated(self):
+        """leave_note is the issue-#429 canonical deprecation: superseded by knowledge(action='note')."""
+        # Import handler to trigger decorator registration in the live registry.
+        import src.mcp_handlers.knowledge.handlers  # noqa: F401
+
+        assert is_tool_deprecated("leave_note") is True
+        meta = get_tool_metadata("leave_note")
+        assert meta["superseded_by"] == "knowledge"
+
+    def test_describe_tool_surfaces_deprecation(self):
+        """describe_tool must inject deprecation block for deprecated tools (#429 council fix).
+
+        Pre-fix, the deprecation lived only in tool_relationships (consumed by
+        list_tools) and on the decorator. describe_tool built responses from
+        get_tool_definitions only — agents calling describe_tool('leave_note')
+        got no migration hint.
+        """
+        from src.mcp_handlers.introspection.tool_introspection import (
+            _describe_tool_deprecation_block,
+        )
+        block = _describe_tool_deprecation_block("leave_note")
+        assert block is not None
+        assert block["deprecated"] is True
+        assert block["superseded_by"] == "knowledge"
+        assert "knowledge" in block["migration"]
+        assert "action='note'" in block["migration"]
+
+        # Non-deprecated tool returns None
+        assert _describe_tool_deprecation_block("process_agent_update") is None
+
 
 class TestListRegisteredTools:
 

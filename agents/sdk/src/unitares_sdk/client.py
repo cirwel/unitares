@@ -364,12 +364,15 @@ class GovernanceClient:
         tags: list[str] | None = None,
         **kwargs: Any,
     ) -> NoteResult:
-        """Leave a knowledge graph note. Maps to server tool: leave_note."""
-        args: dict[str, Any] = {"summary": summary}
+        """Leave a knowledge graph note. Routes through `knowledge(action='note')` —
+        the `leave_note` MCP tool is deprecated (issue #429) but the SDK method
+        name is retained for backward compatibility.
+        """
+        args: dict[str, Any] = {"action": "note", "summary": summary}
         if tags is not None:
             args["tags"] = tags
         args.update(kwargs)
-        raw = await self.call_tool("leave_note", args)
+        raw = await self.call_tool("knowledge", args)
         return NoteResult.model_validate(raw)
 
     async def search_knowledge(self, query: str, **kwargs: Any) -> SearchResult:

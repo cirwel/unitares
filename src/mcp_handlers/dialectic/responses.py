@@ -33,9 +33,9 @@ def get_session_timeout_recovery(timeout_reason: str) -> Dict[str, Any]:
         "what_you_can_do": [
             "1. Check your state with get_governance_metrics",
             "2. Use self_recovery(action='quick') if you believe you can proceed safely",
-            "3. Leave a note about what happened with leave_note",
+            "3. Leave a note about what happened with knowledge(action='note', summary='...')",
         ],
-        "related_tools": ["get_governance_metrics", "self_recovery", "leave_note"],
+        "related_tools": ["get_governance_metrics", "self_recovery", "knowledge"],
         "note": "Session is no longer active. Inspect the transcript and current state before retrying.",
     }
 
@@ -50,9 +50,9 @@ def get_reviewer_stuck_recovery(reviewer_agent_id: str | None) -> Dict[str, Any]
         "what_you_can_do": [
             "1. Check your state with get_governance_metrics",
             "2. Use self_recovery(action='quick') if you believe you can proceed safely",
-            "3. Leave a note about what happened with leave_note",
+            "3. Leave a note about what happened with knowledge(action='note', summary='...')",
         ],
-        "related_tools": ["get_governance_metrics", "self_recovery", "leave_note"],
+        "related_tools": ["get_governance_metrics", "self_recovery", "knowledge"],
         "note": "The session is no longer active. Start a new review only if the issue still stands.",
     }
 

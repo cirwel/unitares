@@ -19,6 +19,54 @@ from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = get_logger(__name__)
 
 
+# Deprecation registry surfaced by both list_tools (via tool_relationships)
+# and describe_tool (via _describe_tool_deprecation_block). Keeping the
+# migration string in one place avoids drift between the two surfaces.
+# Mirrored into tool_relationships in handle_list_tools below.
+_DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
+    "leave_note": {
+        "deprecated_since": "2026-05-20",
+        "superseded_by": "knowledge",
+        "migration": (
+            "MCP tool surface: call `knowledge` with action='note', "
+            "summary='...', tags=[...]. unitares_sdk callers can keep using "
+            "client.leave_note() — that method now routes through `knowledge` "
+            "internally (same audit shape, same DB row)."
+        ),
+    },
+    "request_dialectic_review": {
+        "deprecated_since": "2026-01-29",
+        "superseded_by": "self_recovery_review",
+        "migration": "Use self_recovery_review(reflection='...') instead",
+    },
+    "direct_resume_if_safe": {
+        "deprecated_since": "2026-01-29",
+        "superseded_by": "quick_resume",
+        "migration": (
+            "Use quick_resume() if coherence > 0.60 and risk < 0.40, "
+            "otherwise use self_recovery_review(reflection='...')"
+        ),
+    },
+}
+
+
+def _describe_tool_deprecation_block(tool_name: str) -> Optional[Dict[str, Any]]:
+    """Return a deprecation block for the named tool, or None if not deprecated.
+
+    Surfaces server-side deprecation metadata in describe_tool responses so
+    agents don't have to call list_tools to learn the migration story.
+    """
+    entry = _DEPRECATION_REGISTRY.get(tool_name)
+    if entry is None:
+        return None
+    return {
+        "deprecated": True,
+        "deprecated_since": entry["deprecated_since"],
+        "superseded_by": entry["superseded_by"],
+        "migration": entry["migration"],
+    }
+
+
 def _resolve_json_schema_type(field_info: Dict[str, Any]) -> str:
     """Render a Pydantic/JSON Schema field's type for lite-mode param lists.
 
@@ -338,9 +386,18 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "category": "knowledge"
         },
         "leave_note": {
+            "deprecated": True,
+            "deprecated_since": "2026-05-20",
+            "superseded_by": "knowledge",
             "depends_on": [],  # No deps - identity auto-binds
-            "related_to": ["store_knowledge_graph"],
-            "category": "knowledge"
+            "related_to": ["knowledge", "store_knowledge_graph"],
+            "category": "knowledge",
+            "migration": (
+                "MCP tool surface: call `knowledge` with action='note', "
+                "summary='...', tags=[...]. unitares_sdk callers can keep using "
+                "client.leave_note() — that method now routes through `knowledge` "
+                "internally (same audit shape, same DB row)."
+            ),
         },
         "update_discovery_status_graph": {
             "depends_on": ["get_discovery_details"],
@@ -1161,6 +1218,10 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     "note": "Lite mode - use describe_tool(tool_name=..., lite=false) for full schema"
                 }
 
+                deprecation = _describe_tool_deprecation_block(tool_name)
+                if deprecation is not None:
+                    response_data["deprecation"] = deprecation
+
                 if tool_aliases:
                     # Format: {"content": "summary"} → "content → summary"
                     response_data["parameter_aliases"] = {
@@ -1209,6 +1270,10 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     "note": "Lite mode - use describe_tool(tool_name=..., lite=false) for full schema"
                 }
 
+                deprecation = _describe_tool_deprecation_block(tool_name)
+                if deprecation is not None:
+                    response_data["deprecation"] = deprecation
+
                 if tool_aliases:
                     response_data["parameter_aliases"] = {
                         alias: f"→ {canonical}" for alias, canonical in tool_aliases.items()
@@ -1219,12 +1284,16 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
 
                 return success_response(response_data)
 
-        return success_response({
+        full_response: Dict[str, Any] = {
             "tool": {
                 "name": tool.name,
                 "description": description,
                 "inputSchema": tool.inputSchema if include_schema else None,
             }
-        })
+        }
+        deprecation = _describe_tool_deprecation_block(tool_name)
+        if deprecation is not None:
+            full_response["deprecation"] = deprecation
+        return success_response(full_response)
     except Exception as e:
         return [error_response(f"Error describing tool: {str(e)}")]

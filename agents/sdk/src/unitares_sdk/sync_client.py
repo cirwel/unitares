@@ -207,11 +207,15 @@ class SyncGovernanceClient:
     def leave_note(
         self, summary: str, tags: list[str] | None = None, **kwargs: Any
     ) -> NoteResult:
-        args: dict[str, Any] = {"summary": summary}
+        """Routes through `knowledge(action='note')` — the `leave_note` MCP tool
+        is deprecated (issue #429) but the SDK method name is retained for
+        backward compatibility.
+        """
+        args: dict[str, Any] = {"action": "note", "summary": summary}
         if tags is not None:
             args["tags"] = tags
         args.update(kwargs)
-        raw = self.call_tool("leave_note", args)
+        raw = self.call_tool("knowledge", args)
         return NoteResult.model_validate(raw)
 
     def search_knowledge(self, query: str, **kwargs: Any) -> SearchResult:
