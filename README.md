@@ -32,6 +32,14 @@ After ~30 check-ins the four numbers are graded against the agent's own running 
 
 Running continuously since November 2025. State stored in PostgreSQL + AGE. The theory and the dynamical-systems version of this model live in [Paper v6](https://github.com/cirwel/unitares-paper-v6) (DOI 10.5281/zenodo.19647159) — readers who want the full derivation start there.
 
+### Who should integrate this
+
+If you're running **multiple long-lived autonomous agents** — tool-using, multi-step, doing real work over hours or days — and you've had the experience of an agent quietly drifting without anyone noticing until something visible broke, UNITARES is for you. The check-in loop surfaces drift while it's still numerical (integrity slipping, calibration error climbing) instead of at the point a human user complains. It does not replace evals or guardrails; it runs in parallel as a state layer the agent itself can read.
+
+**Integration cost:** one MCP / REST call per agent unit-of-work, plus an `outcome_event` callback for any task with a hard exogenous outcome (tests, exit codes, tool results). Dashboard, knowledge graph, dialectic, and continuity are downstream of that.
+
+**Not yet a good fit for** short-lived chatbot interactions where per-turn governance overhead exceeds the value, or teams without the ability to instrument their agent loop. External adoption is the open question; the [Production snapshot](#production-snapshot) is honest about it.
+
 ### Try it
 
 ```bash
