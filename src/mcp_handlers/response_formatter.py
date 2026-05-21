@@ -137,7 +137,7 @@ def _format_standard(response_data: dict, task_type: str) -> dict:
     S = float(metrics.get("S", 0.1))
     V = float(metrics.get("V", 0.0))
     coherence = float(metrics.get("coherence", 0.5))
-    risk_score = metrics.get("latest_risk_score") or metrics.get("risk_score")
+    risk_score = metrics.get("risk_score")
 
     temp_state = GovernanceState()
     temp_state.unitaires_state = State(E=E, I=I, S=S, V=V)
@@ -337,7 +337,8 @@ def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_t
         "S": metrics.get("S"),
         "V": metrics.get("V"),
         "coherence": metrics.get("coherence"),
-        "risk_score": metrics.get("latest_risk_score") or metrics.get("risk_score"),
+        "risk_score": metrics.get("risk_score"),
+        "risk_score_latest": metrics.get("latest_risk_score"),
     }
 
     margin = decision.get("margin")
@@ -366,9 +367,12 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
     metrics = response_data.get("metrics", {}) if isinstance(response_data.get("metrics"), dict) else {}
     decision = response_data.get("decision", {}) if isinstance(response_data.get("decision"), dict) else {}
 
-    canonical_risk = metrics.get("latest_risk_score")
-    if canonical_risk is None:
-        canonical_risk = metrics.get("risk_score")
+    # `metrics.risk_score` is the smoothed gating value (mean of last 10
+    # observations) — the same number `make_decision` reasoned over.
+    # `latest_risk_score` is the raw most-recent observation; surface it
+    # alongside so readers can see both the gating signal and the spike.
+    canonical_risk = metrics.get("risk_score")
+    latest_risk = metrics.get("latest_risk_score")
 
     # #428: wrap verdict with meaning + next_action at the response surface.
     # The bare metrics["verdict"] is preserved for internal readers; this is
@@ -381,6 +385,7 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         "V": metrics.get("V"),
         "coherence": metrics.get("coherence"),
         "risk_score": canonical_risk,
+        "risk_score_latest": latest_risk,
         "phi": metrics.get("phi"),
         "verdict": explain_verdict(metrics.get("verdict")),
         "lambda1": metrics.get("lambda1"),

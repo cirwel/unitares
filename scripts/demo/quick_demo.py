@@ -79,9 +79,13 @@ def banner(title: str) -> None:
 
 
 def fmt_metrics(m: dict) -> str:
+    # risk_score: smoothed mean-of-10, the value make_decision gated on
+    # risk_score_latest: raw last observation (spike), shown alongside
+    latest = m.get("risk_score_latest")
+    latest_str = f" latest={latest:.2f}" if latest is not None else ""
     return (
         f"E={m['E']:+.2f} I={m['I']:+.2f} S={m['S']:+.2f} V={m['V']:+.2f}  "
-        f"coh={m['coherence']:.2f} risk={m['risk_score']:.2f}"
+        f"coh={m['coherence']:.2f} risk={m['risk_score']:.2f}{latest_str}"
     )
 
 
@@ -122,17 +126,25 @@ def main() -> int:
         print(f"     reason: {d['reason']}")
 
     banner("3. what just happened")
-    print("  Risk trajectory across the seven steps:")
-    print("    step 1–3 (clean work):              risk ≈ 0.27")
-    print("    step 4   (calibration drift):       risk ≈ 0.29")
-    print("    step 5–6 (confidence collapse):     risk → 0.95")
-    print("    step 7   (overconfident on garble): risk > 1.00")
+    print("  Two risk signals to watch in each step above:")
     print()
-    print("  Verdicts stayed `proceed` because this is a brand-new agent —")
-    print("  self-relative scoring needs ~30 check-ins to build a Welford baseline.")
-    print("  On a warm agent the same drift would flip to `guide` then `pause`.")
-    print("  The drift is *legible in the metrics from check-in #1*; the verdict is")
-    print("  what the system would gate on once it has enough self-history to trust.")
+    print("  • risk         = smoothed mean of the last 10 observations.")
+    print("                   This is the value `make_decision` gates on, and")
+    print("                   the percentage you see in `decision.reason`.")
+    print("  • latest       = raw last observation. A single bad check-in can")
+    print("                   spike this without moving the gating signal.")
+    print()
+    print("  On this 7-step cold-agent trajectory, latest climbs sharply (raw")
+    print("  signal sees the drift) while risk stays low (smoothing damps a")
+    print("  short history). Verdicts therefore stay `proceed`.")
+    print()
+    print("  This is the system being conservative on a fresh agent —")
+    print("  self-relative scoring needs ~30 check-ins to build a Welford")
+    print("  baseline. On a warm agent the same drift would shift the smoothed")
+    print("  risk faster and flip to `guide` or `pause`. The honest read of")
+    print("  this demo: latest tells you what just happened, risk tells you")
+    print("  what the gate believes — and the gap between them is the cold-")
+    print("  start cost.")
 
     banner("done")
     print("  • Every number above came from check-in responses — no DB queries.")
