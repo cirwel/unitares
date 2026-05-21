@@ -3,7 +3,7 @@ Regression tests for S21-a (session resolution bypass — stop the bleed).
 
 Incident 2026-04-27: explicit `client_session_id` was silently overwritten in
 Redis by every PATH 3 ghost-mint, producing a 95.1%/30d fleet-wide ghost-fork
-rate. See docs/ontology/s21-session-resolution-bypass-incident.md.
+rate. .
 
 Three regression assertions:
   T1  PATH 3 mint must not overwrite an existing in-memory session binding

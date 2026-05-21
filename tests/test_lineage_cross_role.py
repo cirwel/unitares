@@ -10,8 +10,8 @@ helper's JSONB shape against postgres directly — this is the same
 "mock and a misnamed jsonb operator silently agree" risk that
 `test_class_promotion.py` documents, so we mirror that pattern.
 
-See: docs/handoffs/2026-05-04-r2-implementation-plan.md PR 3
-     docs/ontology/r2-honest-memory-integration.md §"Cross-role pre-check"
+See: PR 3
+ §"Cross-role pre-check"
 """
 
 from __future__ import annotations

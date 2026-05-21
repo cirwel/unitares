@@ -14,7 +14,7 @@ separate ``behavior_cohort`` field, at which point this tag retires.
 Until then the resolution order in ``classify_agent`` checks
 ``engaged_ephemeral`` before ``ephemeral`` so the more specific cohort wins.
 
-Threshold rationale (see ``docs/ontology/s8a-phase2-prep.md``):
+Threshold rationale (see ````):
   - Day-7 distribution within the ephemeral cohort is roughly flat across
     1–25 update buckets (12% / 12% / 8% / 12%); the only honest break is
     "0 vs engaged."

@@ -1,7 +1,7 @@
 """S1-a — continuity_token retirement, narrowed.
 
 Tests the TTL shrink, ownership_proof_version schema extension, and
-deprecation-warning emission per docs/ontology/s1-continuity-token-retirement.md
+deprecation-warning emission
 §4.1, §4.3, §4.5.
 
 Reference: S1 plan doc §7 risks require regression coverage for:
@@ -554,9 +554,9 @@ async def test_bind_session_handler_rejects_expired_continuity_token_s9():
     extract_token_agent_uuid (which intentionally ignores expiry per PR #42's
     Part-C ownership-proof contract), the existing resolver-layer test would
     still pass while bind_session silently restored the pre-S1-a 30d-equivalent
-    acceptance window. See docs/ontology/plan.md S9 row, "should not silently
+ acceptance window. S9 row, "should not silently
     propagate without a regression test asserting the new TTL", and
-    docs/ontology/s1-continuity-token-retirement.md §7.3 (operator decision:
+ §7.3 (operator decision:
     let-propagate).
 
     Strict differential: identical handler call on the same token, only
@@ -800,7 +800,7 @@ def test_handle_identity_adapter_wiring_present():
     src = inspect.getsource(handlers.handle_identity_adapter)
     assert "_emit_continuity_token_deprecation" in src, (
         "handle_identity_adapter must wire S1-a deprecation surface — "
-        "see docs/ontology/s1-continuity-token-retirement.md §4.3"
+ ""
     )
     assert "response_dict=response_data" in src
 

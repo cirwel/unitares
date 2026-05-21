@@ -9,8 +9,7 @@ Tests the `scripts/dev/lease_plane_deprecate.py` CLI which implements the
   Phase 2 (`deprecation-sweep`)      — force-release surviving leases, idempotent predicate
   Phase 3 (`deprecation-finalize`)   — extend grammar CHECK, atomic with sweep
 
-Spec: docs/proposals/surface-lease-plane-v0.md §7.11
-      docs/proposals/surface-lease-plane-phase-a-plan.md PR 3a
+ PR 3a
 
 Stage A (PR 2 of 2): sweep force-releases go through POST /v1/lease/force-release
 via LeasePlaneClient, not direct SQL. Tests inject a mock HTTP transport to verify

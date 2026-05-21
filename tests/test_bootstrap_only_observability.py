@@ -10,7 +10,6 @@ DAO:
 REST:
   - GET /v1/bootstrap/silent
 
-Spec: docs/proposals/onboard-bootstrap-checkin.md §6.
 """
 
 from __future__ import annotations

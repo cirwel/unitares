@@ -5,8 +5,8 @@ Covers migration 036 (column existence) plus the new backend helpers:
 ``increment_chain_obs_count``, ``stamp_lineage_eval``,
 ``are_lineages_provisional``.
 
-See: docs/handoffs/2026-05-04-r2-implementation-plan.md PR 1
-     docs/ontology/r2-honest-memory-integration.md §Storage
+See: PR 1
+ §Storage
 """
 
 from __future__ import annotations

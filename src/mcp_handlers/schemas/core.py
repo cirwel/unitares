@@ -228,7 +228,7 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
         description=(
             "Self-reported tool outcomes from the agent's most recent actions. "
             "Server emits one outcome_event per item (gated by "
-            "UNITARES_PHASE5_EVIDENCE_WRITE). See docs/proposals/refined-phase-5-evidence-contract.md."
+ "UNITARES_PHASE5_EVIDENCE_WRITE). ."
         ),
     )
     # S22 provenance — agent-knowable subset only. Harness/server-knowable

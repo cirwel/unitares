@@ -51,7 +51,7 @@ class SessionSignals:
     # against UNITARES_OPERATOR_TOKENS env-var allowlist by
     # ``is_operator_caller`` in ``src/mcp_handlers/identity/operator.py``.
     # Distinct from transport fingerprints — see KG 2026-04-20T00:57:45 and
-    # docs/proposals/list-agents-uuid-redaction.code-review.md for why
+ # for why
     # client_session_id cannot serve this role.
     unitares_operator_token: Optional[str] = None
 

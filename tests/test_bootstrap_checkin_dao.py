@@ -4,7 +4,6 @@ These exercise the end-to-end path the onboard handler calls. Handler-level
 HTTP/MCP tests live separately and depend on more wiring; the contract this
 file pins is the DB-touching surface that the handler trusts.
 
-Spec: docs/proposals/onboard-bootstrap-checkin.md §3.4, §3.5, §8.
 """
 
 from __future__ import annotations

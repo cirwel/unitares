@@ -2185,7 +2185,7 @@ class TestHandleOnboardV2:
 
         The force_new branch goes through resolve_session_identity, which — before
         this fix — owned its own upsert path and silently dropped parent_agent_id
-        and spawn_reason. Under the identity ontology v2 (docs/ontology/identity.md)
+ and spawn_reason. Under the identity ontology v2
         lineage declaration at onboard is the **descriptive** floor: a fresh
         process-instance that declares a predecessor must have that link persisted,
         or the ontology's only earned cross-process signal (declared lineage) is

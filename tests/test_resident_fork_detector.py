@@ -3,7 +3,7 @@
 Originally landed via docs/superpowers/plans/2026-04-19-anchor-resilience-series.md
 (Phase 1). Inverted 2026-04-23 per ontology plan.md §S5 — event now fires only
 when the new agent *lacks* declared lineage to the existing persistent holder.
-See docs/ontology/identity.md §"Pattern — Substrate-Earned Identity".
+"Pattern — Substrate-Earned Identity".
 """
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch

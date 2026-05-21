@@ -4,8 +4,8 @@ PR 2 — surface_id canonicalization helper (RFC v0.8 §7.12).
 Tests the per-scheme normalization rule, error semantics, and
 filesystem case-detection probe.
 
-Spec: docs/proposals/surface-lease-plane-v0.md §7.12.0–§7.12.3
-      docs/proposals/surface-lease-plane-phase-a-plan.md PR 2
+Spec: §7.12.0–§7.12.3
+ PR 2
 """
 
 from __future__ import annotations

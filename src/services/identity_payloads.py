@@ -78,7 +78,7 @@ def build_identity_response_data(
         response_data["identity_resolution_outcome"] = identity_resolution_outcome
     # R2 PR 3: surface persisted lineage flag at top level so callers
     # don't need a follow-up read to detect provisional edges. See
-    # docs/ontology/r2-honest-memory-integration.md.
+ # .
     response_data["provisional_lineage"] = bool(provisional_lineage)
     # R2 PR 3 council fix: surface response-facing lineage_state when
     # the caller has derived it (slow paths). Fast paths default to
@@ -311,7 +311,7 @@ def build_onboard_response_data(
         result["identity_resolution_outcome"] = identity_resolution_outcome
     # S1-a (2026-04-24): surface ownership_proof_version at top level so log
     # consumers and dashboards don't have to dig into the token payload or
-    # rely on verbose=True. See docs/ontology/s1-continuity-token-retirement.md §4.5.
+ # rely on verbose=True.
     if continuity_support.get("ownership_proof_version") is not None:
         result["ownership_proof_version"] = continuity_support["ownership_proof_version"]
     # R2 PR 3 (2026-05-04): surface honest-memory lineage state at top
@@ -319,7 +319,7 @@ def build_onboard_response_data(
     # "no_lineage_declared", None}; `provisional_lineage` mirrors the
     # storage column so downstream gates (trust-tier, KG provenance,
     # R3 baselines) can be derived from the response without a follow-up
-    # query. See docs/ontology/r2-honest-memory-integration.md.
+ # query. .
     if lineage_state is not None:
         result["lineage_state"] = lineage_state
     result["provisional_lineage"] = bool(provisional_lineage)

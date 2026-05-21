@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Mechanical evaluator for Phase B promotion eligibility per
-``docs/proposals/surface-lease-plane-v0.md`` §6.1.
+```` §6.1.
 
 Runs the six promotion-gate criteria against live telemetry and prints a
 deterministic per-criterion verdict plus overall recommendation. Use this

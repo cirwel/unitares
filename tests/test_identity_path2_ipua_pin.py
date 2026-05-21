@@ -59,7 +59,7 @@ class TestPath2IpuaPinCheck:
         flip resume=False so a fresh identity is minted.
 
         Retires the PATH 2 IP:UA fingerprint pin as an implicit resume path.
-        Identity ontology v2 (§85, `docs/ontology/identity.md`) names
+ Identity ontology v2 (§85, ``) names
         fingerprint-based cross-process-instance identity as performative —
         fresh process-instance = fresh identity unless a cryptographic resume
         signal is presented. Invariant #2 ("force_new is explicit opt-in

@@ -37,7 +37,7 @@ Known limitations
 - The prediction_id seam is operational at the outcome_event tool level:
   register_tactical_prediction (governance_monitor) mints; outcome_event consumes
   via consume_prediction. The remaining gap was the report path — closed by the
-  Refined Phase-5 Evidence Contract (docs/proposals/refined-phase-5-evidence-contract.md),
+ Refined Phase-5 Evidence Contract,
   which adds recent_tool_results to process_agent_update and emits outcome_event
   server-side per item with verification_source="agent_reported_tool_result".
 - Global and per-agent trackers update from the same samples. Each is

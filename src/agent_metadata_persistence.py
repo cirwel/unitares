@@ -89,7 +89,7 @@ async def _load_metadata_from_postgres_async() -> dict:
     Cold-start path: shaped to avoid per-agent awaits. With ~3000 agents
     the prior per-agent provisional-lineage fetch + per-agent
     `metadata_cache.set` produced a ~17s first-call tax on observe (see
-    `docs/proposals/beam-footprint-roadmap-v0.md` v0.2 RESOLUTION). Now:
+ `` v0.2 RESOLUTION). Now:
     bulk PG reads up front (list_agents, get_identities_batch,
     get_provisional_lineage_set), per-agent computation is sync
     (compute_trust_tier with prefetched_provisional), and redis

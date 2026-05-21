@@ -3,7 +3,7 @@
 
 This is a read-only diagnostic. It counts lineage state in ``core.identities``
 and lineage lifecycle events in ``audit.events``, then evaluates the Phase 2
-gate from ``docs/ontology/r2-honest-memory-integration.md``. It does not write
+gate from ````. It does not write
 audit rows, KG rows, or lineage state.
 """
 

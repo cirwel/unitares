@@ -1,6 +1,6 @@
 """Synthetic trajectory pair generators for R1 score_trajectory_continuity tests.
 
-Per docs/ontology/r1-verify-lineage-claim.md §"Test fixture (synthetic)". Each
+"Test fixture (synthetic)". Each
 generator produces deterministic per-dimension EISV series for a parent and
 successor pair given a seed. The score primitive's threshold cuts are
 *regression-tested* against these fixtures (not calibrated against them — see

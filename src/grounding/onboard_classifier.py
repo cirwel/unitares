@@ -1,6 +1,6 @@
 """S8a default-stamp: classify fresh identities at creation time.
 
-Rule (2-branch, per docs/ontology/s8a-tag-discipline-audit.md):
+Rule (2-branch, ):
   - ``name`` matches ``KNOWN_RESIDENT_LABELS`` → resident default tags.
   - otherwise → ``["ephemeral"]``.
 
@@ -12,7 +12,7 @@ Phase-1 (PR #121, 2026-04-23) wired this from ``onboard()``. Phase-2
 (2026-04-30) wires the same stamp into the two ``process_agent_update``
 auto-create sites in ``src/mcp_handlers/updates/phases.py`` so identities
 born outside the explicit onboard handler aren't left untagged. See
-``docs/ontology/s8a-phase2-prep.md`` for the day-7 audit that surfaced
+```` for the day-7 audit that surfaced
 the gap (72 of 200 in-window identities untagged, including a 441-update
 ``claude_desktop-claude`` row).
 

@@ -15,8 +15,7 @@ the migration aborts with an explicit error message if surface_leases
 contains any rows when 026 runs. This avoids silent destructive
 DROP COLUMN against populated data.
 
-Spec: docs/proposals/surface-lease-plane-v0.md §7.2.2, §7.2.3
-      docs/proposals/surface-lease-plane-phase-a-plan.md PR 1 row 1-3
+ PR 1 row 1-3
 """
 
 from __future__ import annotations

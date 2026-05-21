@@ -1,4 +1,4 @@
-"""Wave 0 coordination-event emitter (RFC docs/proposals/beam-footprint-roadmap-v0.md).
+"""Wave 0 coordination-event emitter (RFC ).
 
 Single-surface replay log for coordination-class failures across all services
 (sentinel, governance_mcp, lease_plane, vigil, chronicler, watcher). Wave 1's

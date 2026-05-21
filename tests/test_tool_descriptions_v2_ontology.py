@@ -1,6 +1,6 @@
 """Pin v2-ontology language in tool_descriptions.json for identity-domain tools.
 
-Per docs/ontology/s15-server-side-skills.md §6 (2026-04-25): tool descriptions
+(2026-04-25): tool descriptions
 are MCP-canonical and travel to every client (including ones with no skill
 surface like claude.ai). Embedding v2-ontology invariants directly in the
 descriptions for `onboard` and `identity` is the cheapest way to prevent

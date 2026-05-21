@@ -4,7 +4,7 @@ The primitive itself is covered by test_trajectory_continuity.py. This file
 covers the fire-and-forget helper in mcp_handlers.identity.handlers that the
 onboard flow schedules alongside the SPAWNED edge + seed_genesis tasks.
 
-Per docs/ontology/r1-verify-lineage-claim.md §"Caller policy" + §v3.3-D:
+"Caller policy" + §v3.3-D:
 - Onboard policy is `marks` — `inconclusive` verdict stamps
   `provisional_lineage=true`; `plausible` and `unsupported` are no-ops at
   this gate (orphan-archival handles `unsupported`).

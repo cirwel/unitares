@@ -111,8 +111,7 @@ class OnboardParams(AgentIdentityMixin):
             "immediately after identity creation. Bootstrap rows seed "
             "trajectory genesis only and are excluded by default from "
             "calibration, outcome correlation, trust-tier observation "
-            "counts, and real-check-in counts. See docs/proposals/"
-            "onboard-bootstrap-checkin.md."
+            "counts, and real-check-in counts."
         ),
     )
 

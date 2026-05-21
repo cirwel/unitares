@@ -1,7 +1,7 @@
 """R2 PR 2: lineage lifecycle FSM.
 
 Drives the provisional → {confirmed, demoted, archived} state machine
-described in `docs/ontology/r2-honest-memory-integration.md`
+described in ``
 §"Promotion / demotion / archival protocol".
 
 The FSM:
@@ -203,7 +203,7 @@ async def pre_check_cross_role(
     misclassified spawn can't anchor a parent's lineage to a
     different role's identity surface (an ephemeral process must
     not declare a substrate-anchored Lumen as parent, etc.). See:
-    docs/ontology/r2-honest-memory-integration.md §"Cross-role
+ §"Cross-role
     pre-check".
 
     Caller is the onboard handler: a rejection here clears

@@ -14,7 +14,7 @@ Two operations live behind one CLI:
    promotion sweep. Same logic as the in-server background task, but
    from a CLI so operators can run it on demand or against the archived
    backlog (~3180 rows for **decision (d)** in
-   ``docs/ontology/s8a-phase2-prep.md``).
+ ````).
 
 The two operations are typically run in sequence:
 

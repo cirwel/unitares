@@ -6,7 +6,7 @@ kernel (via ``LOCAL_PEERPID`` getsockopt) at connection-accept time; this
 peer PID is then propagated into the ASGI scope and from there into
 ``SessionSignals.peer_pid`` for the substrate-claim verification path.
 
-See ``docs/proposals/s19-attestation-mechanism.md`` v2 §M3-v2 for the design.
+See ```` v2 §M3-v2 for the design.
 
 Why this is additive (not a replacement for HTTP):
 - HTTP at port 8767 keeps serving non-substrate-anchored clients.

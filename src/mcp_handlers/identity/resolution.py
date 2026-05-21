@@ -437,7 +437,7 @@ async def resolve_session_identity(
                             f"Token-based resume is not accepted over HTTP. "
                             f"Connect via the UNITARES_UDS_SOCKET path so the "
                             f"kernel can attest peer credentials. See "
-                            f"docs/proposals/s19-attestation-mechanism.md."
+ f"."
                         ),
                     }
         except Exception as exc:
@@ -900,7 +900,7 @@ async def resolve_session_identity(
                             f"Token-based resume is not accepted over HTTP. "
                             f"Connect via the UNITARES_UDS_SOCKET path so the "
                             f"kernel can attest peer credentials. See "
-                            f"docs/proposals/s19-attestation-mechanism.md."
+ f"."
                         ),
                     }
         except Exception as exc:

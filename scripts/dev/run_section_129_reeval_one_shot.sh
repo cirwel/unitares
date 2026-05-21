@@ -26,7 +26,7 @@ mkdir -p "$LOG_DIR"
     printf '\n=== exit code: %d ===\n' "$RC"
     case "$RC" in
         0) printf 'verdict: SUBSTANTIVE PASS (all three conditions met)\n' ;;
-        1) printf 'verdict: FAIL — at least one condition not met. Substrate-question evidence; see docs/proposals/beam-footprint-roadmap-v0.md AMENDMENT 2026-05-04.\n' ;;
+ 1) printf 'verdict: FAIL — at least one condition not met. Substrate-question evidence; AMENDMENT 2026-05-04.\n' ;;
         2) printf 'verdict: PENDING (window incomplete — this should not happen on T+14)\n' ;;
         *) printf 'verdict: ERROR (unexpected exit code)\n' ;;
     esac

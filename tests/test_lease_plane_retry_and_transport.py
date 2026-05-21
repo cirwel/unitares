@@ -6,8 +6,7 @@ Closes RFC v0.8 §7.3.3 (caller-library retry contract: jittered exponential,
 floor 100ms, ceiling 5s, full jitter) and §7.3.5 (HTTP 409 on `held_by_other`
 with the typed-absence body in the response).
 
-Spec: docs/proposals/surface-lease-plane-v0.md §7.3.3, §7.3.5
-      docs/proposals/surface-lease-plane-phase-a-plan.md PR 4
+ PR 4
 """
 
 from __future__ import annotations

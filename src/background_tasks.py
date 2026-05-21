@@ -188,7 +188,7 @@ async def class_promotion_sweeper_task(interval_minutes: float = 30.0):
     """Promote ephemeral identities with ``total_updates >= 3`` to ``engaged_ephemeral``.
 
     See ``src/grounding/class_promotion.py`` for the rule and
-    ``docs/ontology/s8a-phase2-prep.md`` for the audit that produced the
+ ```` for the audit that produced the
     threshold. Cadence is 30min — same as Vigil's launchd cycle. The sweep
     is monotone, idempotent, and concurrency-safe (CTE with FOR UPDATE
     SKIP LOCKED + re-check on update), so cadence affects only freshness
@@ -312,7 +312,7 @@ async def lineage_eval_sweeper_task(interval_minutes: float = 30.0):
     boundary are logged at WARNING (not debug) so a 30-minute silent
     gap is visible to operators.
 
-    See: docs/ontology/r2-honest-memory-integration.md §"Evaluation
+ See: §"Evaluation
     triggers" and §"Observability"
     """
     await asyncio.sleep(60.0)
@@ -496,7 +496,6 @@ async def deep_health_probe_task(interval_seconds: float | None = None):
     single slow component (huge Redis keyspace, KG stall, etc.) cannot lock
     the probe task forever.
 
-    See docs/handoffs/2026-04-10-option-f-spec.md.
     """
     import os
     from src.services.health_snapshot import (

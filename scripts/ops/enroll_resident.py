@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Enroll a substrate-anchored resident in core.substrate_claims (S19).
 
-Operator pre-seed enrollment per docs/proposals/s19-attestation-mechanism.md
+Operator pre-seed enrollment
 v2 §Enrollment workflow. Run BEFORE the resident first connects: this closes
 the launchctl-bootstrap adversary (proposal Q3 (b)) by removing the
 trust-on-first-use race.
@@ -189,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__.split("\n", 1)[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="See docs/proposals/s19-attestation-mechanism.md for the full design.",
+ epilog=" for the full design.",
     )
     parser.add_argument(
         "--agent-id", required=True, type=_validate_uuid,

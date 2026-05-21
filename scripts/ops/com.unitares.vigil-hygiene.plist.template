@@ -21,7 +21,6 @@
   Manual test (dry-run, anytime):
     python3 __UNITARES_ROOT__/agents/vigil_hygiene/agent.py --repo __UNITARES_ROOT__
 
-  Spec: docs/proposals/branch-hygiene-automation.md
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

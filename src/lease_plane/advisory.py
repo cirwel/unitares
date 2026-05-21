@@ -107,7 +107,7 @@ def new_holder_uuid() -> uuid.UUID:
     """Fresh UUID for a Phase A holder.
 
     Phase A treats every Python invocation as a fresh process_instance —
-    `force_new` semantics from `docs/ontology/identity.md`. Long-lived
+ `force_new` semantics from ``. Long-lived
     residents that want substrate-earned continuity will graduate later.
     """
     return uuid.uuid4()

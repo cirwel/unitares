@@ -1,6 +1,6 @@
 """Substrate-earned tier routing — S6 Option B.
 
-See docs/ontology/plan.md §S6 (options appendix) — routing shortcuts
+S6 (options appendix) — routing shortcuts
 tier=3 for R4-verified substrate-earned agents, falls through to
 `compute_trust_tier` for session-like agents.
 """

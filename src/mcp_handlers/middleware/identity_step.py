@@ -618,7 +618,7 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                             "If continuing prior work, pass parent_agent_id to "
                             "declare lineage; otherwise pass force_new=true."
                         ),
-                        "ontology_ref": "docs/ontology/identity.md",
+ "ontology_ref": "",
                         "rollout_flag": "STRICT_IDENTITY_REQUIRED",
                     })
                 logger.info(

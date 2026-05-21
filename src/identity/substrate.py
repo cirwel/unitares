@@ -2,7 +2,7 @@
 
 Implements `verify_substrate_earned(agent_uuid) -> dict`, the mechanical
 predicate that answers: "Does this agent meet the three conditions laid
-out in `docs/ontology/identity.md` Appendix: Pattern — Substrate-Earned
+out in `` Appendix: Pattern — Substrate-Earned
 Identity?"
 
 The three conditions (from the appendix) are:

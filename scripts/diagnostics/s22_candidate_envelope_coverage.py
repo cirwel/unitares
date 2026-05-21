@@ -9,7 +9,7 @@ Reads from:
   - knowledge.discoveries.provenance.s22_context
 
 Output groups fields by promotion status per Hermes's 2026-05-08 audit
-(``docs/ontology/harness-substrate-plurality.md``):
+(````):
   - promoted-core: must be present
   - fork-discriminator: R6 v2 fork fields (newly persisted 2026-05-08)
   - optional: present when meaningful, not required

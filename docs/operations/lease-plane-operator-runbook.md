@@ -1,8 +1,8 @@
 # Surface Lease Plane Operator Runbook
 
-Status: **LIVE — Phase A shipped 2026-05-03 (PR #305).** Service `com.unitares.lease-plane` runs on `127.0.0.1:8788` via launchd. Bearer-auth fail-closed (HTTPAuth → 503 if `LEASE_PLANE_BEARER_TOKEN` is unset). See `docs/proposals/surface-lease-plane-v0.md` (v0.11+) for the contract spec; this runbook covers operations.
+Status: **LIVE — Phase A shipped 2026-05-03 (PR #305).** Service `com.unitares.lease-plane` runs on `127.0.0.1:8788` via launchd. Bearer-auth fail-closed (HTTPAuth → 503 if `LEASE_PLANE_BEARER_TOKEN` is unset).
 
-The audience is Kenny (operator-as-reviewer, not author). This runbook teaches what the BEAM node does, not Elixir-the-language. PRs will read clearly enough without prior fluency once these terms are familiar.
+This runbook teaches what the BEAM node does, not Elixir-the-language. PRs will read clearly enough without prior fluency once these terms are familiar.
 
 ## What the lease plane is
 
@@ -402,7 +402,4 @@ TBD. Will include incident-class playbooks for:
 
 ## Related
 
-- RFC: `docs/proposals/surface-lease-plane-v0.md` (v0.1, pre-council)
-- Pattern precedent: `docs/proposals/path1-sync-fingerprint-check.md` (advisory→strict rollout)
 - Existing operator runbook: `docs/operations/OPERATOR_RUNBOOK.md` (Python governance MCP)
-- Memory anchors: `feedback_running-process-vs-master-commit.md`, `multi-agent-git-reset-incident.md`, `feedback_check-in-during-long-sessions.md`

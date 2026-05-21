@@ -462,7 +462,7 @@ async def seed_genesis_from_parent(
 ) -> Dict[str, Any]:
     """Seed an agent's genesis from its declared parent's `trajectory_current`.
 
-    Ontology v2 primitive — see docs/ontology/plan.md R3-appendix Q2.
+ Ontology v2 primitive — R3-appendix Q2.
     Under v2 most process-instances die before accumulating the 50/200
     observations `compute_trust_tier` expects. When a fresh agent declares
     a `parent_agent_id` at onboard, seeding genesis from the parent's

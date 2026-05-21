@@ -1,6 +1,6 @@
 """Tests for the `skills` MCP introspection handler.
 
-Per docs/ontology/s15-server-side-skills.md §4.1 + Appendix.
++ Appendix.
 
 The handler reads `unitares/skills/*/SKILL.md`, parses YAML frontmatter,
 and returns a structured response keyed by skill name + version. It does

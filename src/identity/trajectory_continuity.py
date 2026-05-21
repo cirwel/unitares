@@ -1,7 +1,7 @@
 """R1 score_trajectory_continuity — single-channel per-dimension DTW similarity
 plausibility score for declared lineage claims.
 
-Per docs/ontology/r1-verify-lineage-claim.md v3.1 + v3.3.
+ v3.1 + v3.3.
 
 A fresh process-instance declaring `parent_agent_id=<uuid>` is making a *claim*,
 not a fact. This primitive scores how well the successor's observed EISV

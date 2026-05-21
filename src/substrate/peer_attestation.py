@@ -8,7 +8,7 @@ verification path needs:
 - ``read_executable_path(pid)``     — absolute binary path of a process
 - ``read_process_start_time(pid)``  — Unix epoch seconds for PID-reuse detection
 
-See ``docs/proposals/s19-attestation-mechanism.md`` v2 §Verification at
+See ```` v2 §Verification at
 connection-accept for how these compose into the M3-v2 attestation flow.
 
 This module is dependency-light by design (stdlib only): it has to be
@@ -48,7 +48,7 @@ def _require_supported_platform() -> None:
     if sys.platform == "linux":
         raise NotImplementedError(
             "S19 Linux backend not yet implemented — see "
-            "docs/proposals/s19-attestation-mechanism.md §Open questions deferred"
+ " §Open questions deferred"
         )
     raise NotImplementedError(
         f"S19 attestation not supported on {sys.platform!r}"

@@ -3,7 +3,7 @@ Tests for src/db/executor_pool.py — wraps asyncpg.Pool so all DB operations
 run on a dedicated background thread with its own asyncio event loop, isolating
 asyncpg from the MCP SDK's anyio task group context.
 
-Background: docs/handoffs/2026-04-27-anyio-followup-scope.md (P2 design + council).
+Background: (P2 design + council).
 """
 
 from __future__ import annotations

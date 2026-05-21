@@ -2,7 +2,7 @@
 """§129 Wave 1 condition 1 re-evaluation script.
 
 Runs the three falsifier conditions from
-`docs/proposals/wave-1-window-evaluation-2026-05-18.md`:
+``:
 
   1. `incident_id` is populated in the decorator emit payload
      (`src/mcp_handlers/decorators.py`). Shipped 2026-05-19 (#463); verified

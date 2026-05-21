@@ -98,7 +98,7 @@ def _emit_continuity_token_deprecation(
     Intra-session token use (request auth on process_agent_update, mid-session
     identity() rebind) is the Part-C anti-hijack proof and stays load-bearing.
     Each caller is responsible for deciding which case it's in via
-    ``used_token_for_resume``. See docs/ontology/s1-continuity-token-retirement.md.
+ ``used_token_for_resume``. .
     """
     if not used_token_for_resume:
         return
@@ -709,7 +709,7 @@ async def _try_resume_by_agent_uuid_direct(
                                 "hint": (
                                     "Substrate-anchored UUIDs require "
                                     "kernel-attested peer match over UDS. "
-                                    "See docs/proposals/s19-attestation-mechanism.md."
+ "."
                                 ),
                             },
                         )
@@ -1717,7 +1717,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                             "work, OR force_new=true to confirm a fresh "
                             "process-instance with no lineage."
                         ),
-                        "ontology_ref": "docs/ontology/identity.md",
+ "ontology_ref": "",
                         "rollout_flag": "STRICT_IDENTITY_REQUIRED",
                     })
                 logger.info(
@@ -2053,7 +2053,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # partition (ephemeral / resident / ...) is populated from onboard rather
     # than left to out-of-band SDK writes that only fire for resident
     # subclasses. Rule lives in src/grounding/onboard_classifier.py; see
-    # docs/ontology/s8a-tag-discipline-audit.md.
+ # .
     if is_new:
         try:
             await _stamp_default_tags_on_onboard(agent_uuid, name)
@@ -2344,7 +2344,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # of this handler (L1180) from arguments and never reassigned — signal is
     # honest. Non-string token inputs (adversarial list/dict/bytes) would
     # otherwise inflate grace-period telemetry without holding a real token.
-    # See docs/ontology/s1-continuity-token-retirement.md §4.3 / §6.
+ # / §6.
     _caller_token = arguments.get("continuity_token")
     if not isinstance(_caller_token, str) or not _caller_token:
         _caller_token = None
@@ -2373,7 +2373,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # later to answer "is the 30-min sliding pin TTL bleeding into
     # continuity-token-only resumes?" Pin shadow fields are populated when
     # the IP/UA pin path didn't win but a fingerprint signal was present.
-    # See docs/ontology/s1-continuity-token-retirement.md and the audit-log
+ # and the audit-log
     # schema in src/audit_log.py:log_identity_resolution_observed.
     try:
         import time as _ires_time
@@ -2573,7 +2573,7 @@ async def _stamp_default_tags_on_onboard(agent_uuid: str, name: Optional[str]) -
 async def _seed_genesis_from_parent_bg(child_id: str, parent_id: str):
     """Seed child's trajectory_genesis from parent's trajectory_current.
 
-    Ontology v2 Q2 reseed — see docs/ontology/plan.md R3-appendix and
+ Ontology v2 Q2 reseed — R3-appendix and
     `src/trajectory_identity.seed_genesis_from_parent`. Primitive is
     permissive (no-op if parent lacks trajectory_current, refuses to
     clobber a tier>=2 genesis), so fire-and-forget here is safe.
@@ -2770,7 +2770,7 @@ async def _r2_pre_check_and_declare(
 async def _score_lineage_continuity_bg(child_id: str, parent_id: str) -> None:
     """R1 onboard-time lineage scoring with the `marks` policy.
 
-    Per docs/ontology/r1-verify-lineage-claim.md §"Caller policy" and §v3.3-D:
+ "Caller policy" and §v3.3-D:
     onboard scores the declared lineage and stamps `provisional_lineage=true`
     on the successor's identity row when the verdict is `inconclusive`.
     `plausible` and `unsupported` are no-ops at this gate — orphan-archival

@@ -137,7 +137,7 @@ class AuditLogger:
         if the agent is genuinely degraded, the normal circuit-breaker
         path re-pauses on the next cycle. See
         `src/mcp_handlers/support/pause_ttl.py` and
-        `docs/proposals/wave-1-window-evaluation-2026-05-18.md`.
+ ``.
         """
         entry = AuditEntry(
             timestamp=datetime.now().isoformat(),
@@ -496,7 +496,7 @@ class AuditLogger:
         happens (even with proof signal), to build the dataset of
         multi-agent-on-same-machine concurrency. Hijack alerts remain the
         active-attack signal; this event is the observation channel.
-        See docs/ontology/plan.md S13.
+ S13.
         """
         entry = AuditEntry(
             timestamp=datetime.now().isoformat(),
@@ -609,7 +609,6 @@ class AuditLogger:
 
         Fires when a caller invokes onboard() with a continuity_token and
         without force_new=true. The retired cross-process-instance resume path.
-        See docs/ontology/s1-continuity-token-retirement.md §4.3, §6.
         """
         lifetime_seconds = max(0, int(accepted_at) - int(issued_at))
         entry = AuditEntry(

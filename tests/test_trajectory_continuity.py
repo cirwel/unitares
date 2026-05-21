@@ -1,6 +1,6 @@
 """Tests for R1 score_trajectory_continuity.
 
-Per docs/ontology/r1-verify-lineage-claim.md §"Test fixture (synthetic)" — six
+"Test fixture (synthetic)" — six
 deterministic synthetic cases regression-test the threshold cuts. Calibration
 of the cuts against real production data is a separate path (shadow-mode
 calibration; the primitive ships with status=seeded per v3.3-C until the

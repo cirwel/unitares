@@ -292,7 +292,6 @@ async def handle_health_check(arguments: Dict[str, Any]) -> Sequence[TextContent
     is refreshed every 30s by the deep_health_probe_task background task
     running on the main event loop.
 
-    See docs/handoffs/2026-04-10-option-f-spec.md.
 
     Args:
         lite: If True (default), strip per-check detail and return a compact

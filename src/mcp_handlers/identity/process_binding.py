@@ -5,7 +5,7 @@ same-UUID siphoning across live execution contexts. V1 is audit-only:
 collision emits `identity_concurrent_binding` via the broadcaster — no
 automatic force-new.
 
-See docs/ontology/identity.md and issue #123 for the design.
+ and issue #123 for the design.
 """
 from __future__ import annotations
 

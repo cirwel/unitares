@@ -1,6 +1,6 @@
 """Lineage-seeded genesis — S6/R3-Q2 primitive.
 
-See docs/ontology/plan.md R3 appendix Q2 + S6 options appendix.
+ R3 appendix Q2 + S6 options appendix.
 Under ontology v2, session-like agents rarely accumulate the 50/200
 observations `compute_trust_tier` expects. Seeding genesis from the
 declared parent's `trajectory_current` gives the child a meaningful

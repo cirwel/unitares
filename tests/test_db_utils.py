@@ -109,7 +109,7 @@ async def ensure_test_database_schema() -> None:
         await _execute_sql_file(conn, "db/postgres/migrations/023_matview_measured_only.sql")
         await _execute_sql_file(conn, "db/postgres/migrations/020_progress_flat_telemetry.sql")
         await _execute_sql_file(conn, "db/postgres/migrations/021_seed_epoch_3.sql")
-        # Surface lease plane (RFC docs/proposals/surface-lease-plane-v0.md):
+ # Surface lease plane (RFC ):
         # 024 + 025 build the lease_plane schema + immutability triggers; 026 adds
         # storage-layer grammar CHECK + generated surface_kind column (PR 1, this branch).
         await _execute_sql_file(conn, "db/postgres/migrations/024_lease_plane.sql")
@@ -129,7 +129,6 @@ async def ensure_test_database_schema() -> None:
         # (RFC v0.11). Adds 2 NULLABLE columns + 4 CHECK constraints + freshness index.
         await _execute_sql_file(conn, "db/postgres/migrations/034_lease_plane_substrate_state.sql")
         # Migration 035: Wave 0 coordination_events instrumentation table.
-        # See docs/proposals/beam-footprint-roadmap-v0.md.
         await _execute_sql_file(conn, "db/postgres/migrations/035_coordination_events.sql")
         # Migration 036: R2 lineage lifecycle columns + sweeper-friendly partial index.
         # Adds lineage_declared_at, lineage_demoted_at, lineage_archived_at,

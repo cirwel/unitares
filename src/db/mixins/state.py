@@ -254,7 +254,7 @@ class StateMixin:
         from a synthetic row, because every downstream consumer of
         monitor.state (self-recovery, dialectic, trajectory ODE) treats
         seeded values as measured. See
-        docs/proposals/onboard-bootstrap-checkin.filter-audit.md sites #5/#6.
+ sites #5/#6.
         """
         from config.governance_config import GovernanceConfig
         async with self.acquire() as conn:
@@ -346,7 +346,7 @@ class StateMixin:
         name 'void' ↔ SQL 'volatility'. R1 uses the user-facing 'V' label
         (matches paper terminology and identity.md ontology lexicon).
 
-        See: docs/ontology/r1-verify-lineage-claim.md §v3.1 'New helper',
+ See: §v3.1 'New helper',
              §v3.3-A 'audit-only persistence' (consumes this output),
              §v3.3-F 'epoch column reference'.
         """

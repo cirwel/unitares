@@ -5,7 +5,7 @@ Verifies the column, partial index, unique-partial index, and matview
 projection are in place. Subsequent phases add handler tests, filter-site
 tests, and the bootstrapped-but-silent observable surface.
 
-Spec: docs/proposals/onboard-bootstrap-checkin.md §3.2, §3.4, §9 step 1.
+Spec: §3.2, §3.4, §9 step 1.
 """
 
 from __future__ import annotations

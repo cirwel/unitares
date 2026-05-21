@@ -1,6 +1,5 @@
 """Bootstrap check-in helper for onboard.initial_state.
 
-Spec: docs/proposals/onboard-bootstrap-checkin.md
 
 The handler's job at the call site is small: build the BootstrapStateParams,
 fill server defaults, decide substrate-earned exemption, then run the write

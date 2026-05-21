@@ -12,8 +12,7 @@ fields (surface_id, blocking_lease_id, retry_after_hint_ms) so callers can:
 The model in src/lease_plane/models.py was not updated when v0.7 shipped.
 This test pins the v0.7 contract; the implementation lands in this PR.
 
-Spec: docs/proposals/surface-lease-plane-v0.md §7.3.2
-      docs/proposals/surface-lease-plane-phase-a-plan.md PR 1 row 6
+ PR 1 row 6
 """
 
 from __future__ import annotations

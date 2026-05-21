@@ -1,7 +1,7 @@
 """Tests for `src/identity/substrate.py` — R4 operational check.
 
 Exercises the synthetic test cases called out in the ontology appendix
-(`docs/ontology/identity.md` — "Appendix: Pattern — Substrate-Earned
+(`` — "Appendix: Pattern — Substrate-Earned
 Identity"):
 
   - Lumen-like: embodied + sustained + declared → earned=true

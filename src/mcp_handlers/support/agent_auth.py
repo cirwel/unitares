@@ -493,7 +493,7 @@ def require_registered_agent(arguments: Dict[str, Any]) -> Tuple[str, Optional[T
                     ],
                     "naming_suggestions": naming_guidance,
                     "onboarding_sequence": ["onboard", "identity", "process_agent_update", "list_tools"],
-                    "tip": "onboard() registers the current process-instance with governance — see docs/ontology/identity.md for the full v2 ontology"
+ "tip": "onboard registers the current process-instance with governance — for the full v2 ontology"
                 }
             )
 

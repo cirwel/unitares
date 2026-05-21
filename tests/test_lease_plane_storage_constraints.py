@@ -6,7 +6,6 @@ table — both are storage-layer behaviors set up by migration 026:
   - `surface_id_grammar` CHECK constraint rejects unknown schemes.
   - `surface_kind` generated column derives from the surface_id prefix.
 
-Spec: docs/proposals/surface-lease-plane-v0.md §7.2.2, §7.2.3
       db/postgres/migrations/026_lease_plane_grammar.sql
 """
 

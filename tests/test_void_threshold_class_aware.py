@@ -19,7 +19,7 @@ NOT trip check_void_state, while a non-resident at the same V_ss DOES trip.
 (`project_steward-paused.md`). 0.30 (the resident override) clears it;
 0.15 (default INITIAL) does not.
 
-Spec: docs/proposals/surface-lease-plane-v0.md §7.13.6 PR 3
+Spec: §7.13.6 PR 3
       memory: project_steward-paused.md
 """
 

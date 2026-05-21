@@ -127,7 +127,7 @@ def test_enrich_thread_identity_adds_r6_thin_shape_for_root():
     assert thread_context["honest_message"] == "You are the first observation under this thread. No fork."
 
 
-# Spec test plan items 10 + 11 from `docs/ontology/r6-episode-fork-response-shape.md`
+# Spec test plan items 10 + 11 from ``
 # §"Test plan" — every R6 v2 case must (10) populate the thin thread_context
 # shape (`thread_id`, `position`, `is_fork`, `episode_fork_kind`,
 # `identity_lineage_fork`, `honest_message`) and (11) preserve the legacy

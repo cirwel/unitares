@@ -21,7 +21,7 @@ def is_strict_identity_required() -> bool:
     else, including unset, is False.
 
     When True, all auto-mint paths MUST refuse-or-skip rather than create
-    an ephemeral identity. See docs/ontology/identity.md and #425 for the
+ an ephemeral identity. and #425 for the
     contract; CLAUDE.md "STRICT_IDENTITY_REQUIRED" section for the rollout
     sequence.
     """

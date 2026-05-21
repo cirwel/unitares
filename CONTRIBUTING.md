@@ -29,7 +29,7 @@ New behavior needs a test. New tests should live in `tests/` alongside the exist
 - **One topic per PR.** If a change touches the identity ontology *and* the lease plane, those are two PRs unless you can convince the maintainer otherwise.
 - **No `git add -A`** — stage by name. The `data/` tree contains runtime state that's easy to accidentally commit.
 - **Update tests in the same PR.** Bug fixes that don't include a regression test won't merge.
-- **Identity-touching changes** require reading [`docs/ontology/identity.md`](docs/ontology/identity.md) and [`AGENTS.md`](AGENTS.md) first. The identity layer is the most constraint-laden part of the system.
+- **Identity-touching changes** require reading [`AGENTS.md`](AGENTS.md) first. The identity layer is the most constraint-laden part of the system.
 
 ## Code style
 
@@ -43,8 +43,8 @@ By submitting a contribution you agree it's licensed under the [Apache License 2
 
 ## What I won't merge
 
-- Substrate-migration proposals without falsifying evidence — the current Python + Postgres stack is the deliberate choice; see commit history and `docs/proposals/` for prior considerations
-- Backwards-compatibility shims for already-removed identity primitives (the `resolve_by_name_claim` / STRICT env / etc. removals were intentional; see `docs/ontology/s1-continuity-token-retirement.md`)
+- Substrate-migration proposals without falsifying evidence — the current Python + Postgres stack is the deliberate choice; see commit history for prior considerations
+- Backwards-compatibility shims for already-removed identity primitives (the `resolve_by_name_claim` / STRICT env / etc. removals were intentional)
 - Feature flags that exist only to soften a sharp behavioral edge — if the new behavior is right, ship it; if it isn't, don't ship it
 - Cosmetic-only refactors without a behavior or readability win
 

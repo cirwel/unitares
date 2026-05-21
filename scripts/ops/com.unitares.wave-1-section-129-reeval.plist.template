@@ -21,9 +21,6 @@
       launchctl bootstrap gui/$(id -u) \
           ~/Library/LaunchAgents/com.unitares.wave-1-section-129-reeval.plist
 
-    Cross-references:
-      - docs/proposals/wave-1-window-evaluation-T0-2026-05-19.md
-      - docs/proposals/wave-1-window-evaluation-2026-05-18.md
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

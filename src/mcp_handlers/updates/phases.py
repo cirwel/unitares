@@ -899,7 +899,7 @@ async def _persist_thread_identity_async(agent_uuid: str, metadata: dict) -> Non
     awaits in our own loop, moved out of the critical section so the agent
     lock isn't held across a PG UPDATE roundtrip. Classification: NOT an
     anyio/asyncio coupling pattern — just lock-holding-too-long. See
-    `docs/proposals/beam-footprint-roadmap-v0.md` v0.2 RESOLUTION.
+ `` v0.2 RESOLUTION.
     """
     try:
         from src.db import get_db
@@ -960,7 +960,7 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
                     "Agent is not registered. Call onboard() first to "
                     "mint identity, then retry the update."
                 ),
-                "ontology_ref": "docs/ontology/identity.md",
+ "ontology_ref": "",
                 "rollout_flag": "STRICT_IDENTITY_REQUIRED",
             })
 
@@ -993,7 +993,7 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
             # process_agent_update-first agents land in the same class partition
             # as onboard-first agents. Without this, the day-7 audit found 72 of
             # 200 in-window identities untagged (claude_desktop-claude with 441
-            # updates among them). See docs/ontology/s8a-phase2-prep.md.
+ # updates among them). .
             if created_agent:
                 try:
                     from src.grounding.onboard_classifier import stamp_default_class_tags
@@ -1148,7 +1148,7 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
         logger.debug(f"Anomaly detection skipped for {ctx.agent_id}: {e}")
 
     # Execute ODE update — timed for Wave 3 RFC §0 disconfirmer (A′.1).
-    # See docs/proposals/beam-wave-3-handler-dispatch.md §B1.2 — A′.1 measures
+ # B1.2 — A′.1 measures
     # whether >60% of process_agent_update p99 floor lives in this call.
     # The surrounding [checkin_phases] log line in update_workflow_service.py
     # already captures locked_update_total + total_ms; this wrap captures the
@@ -1537,7 +1537,6 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
             # S8a Phase-2: stamp default class tag on the recovery-create path.
             # Same rationale as the is_new_agent branch above; this branch
             # fires when record_agent_state hits a missing-row ValueError.
-            # See docs/ontology/s8a-phase2-prep.md.
             try:
                 from src.grounding.onboard_classifier import stamp_default_class_tags
                 recovery_meta = mcp_server.agent_metadata.get(agent_id)

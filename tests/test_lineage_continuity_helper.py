@@ -1,7 +1,7 @@
 """Tests for reconstruct_eisv_series — the StateMixin method that R1's
 score_trajectory_continuity primitive (PR 2) consumes.
 
-Per docs/ontology/r1-verify-lineage-claim.md §v3.1 ("New helper") and §v3.3-I
+v3.1 ("New helper") and §v3.3-I
 (table name + column corrections). The helper is a normal async mixin method
 using the existing self.acquire() pool pattern; the anyio safety wrapper lives
 at the handler layer, not here (consistent with sibling methods like

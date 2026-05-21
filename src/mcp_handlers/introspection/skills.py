@@ -1,6 +1,6 @@
 """Server-side `skills` MCP introspection handler.
 
-Per docs/ontology/s15-server-side-skills.md (S15-a). Reads canonical skill
+ (S15-a). Reads canonical skill
 content from `unitares/skills/*/SKILL.md`, parses YAML frontmatter, and
 returns a structured response keyed by skill name + content hash.
 

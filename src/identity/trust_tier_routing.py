@@ -1,6 +1,6 @@
 """Trust-tier routing — S6 Option B.
 
-Under ontology v2 (docs/ontology/identity.md) agents split into two
+Under ontology v2 agents split into two
 populations with incompatible calibration assumptions:
 
   - Substrate-earned agents (Lumen, Watcher, Sentinel, Vigil, Steward)
@@ -23,7 +23,7 @@ observation-count thresholds that session-like agents can never reach,
 and isolates future empirical recalibration (blocked on S8a tag
 discipline) to `compute_trust_tier` alone.
 
-See docs/ontology/plan.md §S6 (options doc + resolution) for the
+S6 (options doc + resolution) for the
 design-space analysis and the operator decision behind Option B.
 """
 

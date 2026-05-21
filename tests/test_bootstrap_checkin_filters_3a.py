@@ -6,8 +6,8 @@ get_latest_eisv_by_agent_id) exclude bootstrap rows by default. Plus
 the matview-as-measured-only invariant from migration 019, plus the
 calibration and trust-tier invariant locks.
 
-Spec: docs/proposals/onboard-bootstrap-checkin.md §4.1, §8 items 4–8.
-Audit: docs/proposals/onboard-bootstrap-checkin.filter-audit.md (sites 1–4 + I1, I3).
+Spec: §4.1, §8 items 4–8.
+Audit: (sites 1–4 + I1, I3).
 """
 
 from __future__ import annotations

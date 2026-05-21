@@ -973,7 +973,7 @@ async def main():
         # UDS listener serves the same ASGI app, but every request scope
         # gains `unitares_peer_pid` populated from kernel-attested
         # LOCAL_PEERPID — used downstream by the substrate-claim verification
-        # path. See docs/proposals/s19-attestation-mechanism.md v2.
+ # path. v2.
         _uds_socket_path = os.getenv("UNITARES_UDS_SOCKET")
         _uds_task: Optional[asyncio.Task[None]] = None
         if _uds_socket_path:

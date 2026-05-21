@@ -9,8 +9,7 @@ Tests the forced-release alarm wiring in `agents/sentinel/forced_release_alarm.p
     (RFC §7.11.5 batch suppression).
   - Cursor state so successive polls don't re-emit alarms for already-seen events.
 
-Spec: docs/proposals/surface-lease-plane-v0.md §7.10, §7.11.5
-      docs/proposals/surface-lease-plane-phase-a-plan.md PR 3b
+ PR 3b
 """
 
 from __future__ import annotations

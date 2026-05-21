@@ -6,7 +6,7 @@ POST /v1/lease/force-release. Skips at module level if the router
 is not reachable on 127.0.0.1:8788 (fast TCP probe), so CI/remote
 environments without the BEAM server still pass.
 
-RFC §9 gate (line 971, docs/proposals/surface-lease-plane-v0.md):
+RFC §9 gate (line 971, ):
   test_force_release_rejects_governance_token
 
 Test name MUST match exactly for audit_rfc_section_9_gates.py to

@@ -1,7 +1,7 @@
 """Tests for R1 v3.3-D consumer patch: provisional_lineage gate in
 resolve_trust_tier.
 
-Per docs/ontology/r1-verify-lineage-claim.md §v3.3-D consumer table:
+v3.3-D consumer table:
   Trust-tier (S6): Read provisional_lineage; if true, do not contribute to
   tier upgrades.
 

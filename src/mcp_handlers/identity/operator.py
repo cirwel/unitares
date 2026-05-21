@@ -5,7 +5,7 @@ cross-agent UUIDs (initially: list_agents).
 Background — KG 2026-04-20T00:57:45 found that ``list_agents`` returns
 every agent's UUID to any caller, enabling a two-call identity hijack
 when combined with the PATH 1 ``agent-{uuid12}`` prefix-bind. The
-proposed fix at ``docs/proposals/list-agents-uuid-redaction.md``
+proposed fix at ````
 redacts UUIDs except for "operator-class" callers — trusted
 infrastructure (Discord bridge, dashboard, ollama bridge) that
 genuinely needs full visibility.

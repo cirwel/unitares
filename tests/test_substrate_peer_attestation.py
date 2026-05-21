@@ -22,7 +22,7 @@ from src.substrate import peer_attestation as pa
 
 _skip_non_darwin = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="exercises macOS launchctl path; Linux backend stubbed (NotImplementedError) — see docs/proposals/s19-attestation-mechanism.md",
+ reason="exercises macOS launchctl path; Linux backend stubbed (NotImplementedError) — ",
 )
 
 

@@ -5,7 +5,7 @@
   Phase A advisory service for shared-surface coordination across the fleet
   (Watcher, Vigil, Sentinel, Chronicler, Steward, ship.sh, dispatch). Bind
   defaults to 127.0.0.1:8788; bearer-auth is fail-closed (HTTPAuth → 503
-  if LEASE_PLANE_BEARER_TOKEN is unset). See docs/proposals/surface-lease-plane-v0.md.
+ if LEASE_PLANE_BEARER_TOKEN is unset). .
 
   Install (render __VARS__ then load):
     sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \

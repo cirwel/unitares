@@ -13,7 +13,6 @@ Implements the 8 §9 test gates listed in §7.13.6 PR 1 touch-list:
   (g) class-aware void-threshold test (parks alongside PR 3 land), marked xfail-strict
   (h) reader-side: rows with status='degraded' tolerate NULL last_healthy_observed_at
 
-Spec: docs/proposals/surface-lease-plane-v0.md §7.13
       db/postgres/migrations/034_lease_plane_substrate_state.sql
 """
 

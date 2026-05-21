@@ -2,7 +2,7 @@
 ExecutorPool — wraps asyncpg.Pool so DB operations run on a dedicated
 background thread with its own asyncio event loop.
 
-Why: docs/handoffs/2026-04-27-anyio-followup-scope.md. The MCP SDK's anyio
+Why: . The MCP SDK's anyio
 task group conflicts with asyncpg/Redis cancellation semantics. Running
 asyncpg coroutines on a separate event loop (in a separate thread) means
 the anyio context never sees an asyncpg await — only a future from the

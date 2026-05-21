@@ -11,8 +11,8 @@ for that promotion.
 
 Migration 029 restores the earned_status check and pins the contract via test.
 
-Spec: docs/proposals/surface-lease-plane-v0.md §7.8 (substrate-earned identity)
-      docs/proposals/surface-lease-plane-phase-a-plan.md PR 5
+Spec: §7.8 (substrate-earned identity)
+ PR 5
 """
 
 from __future__ import annotations

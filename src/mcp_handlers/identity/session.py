@@ -27,7 +27,7 @@ _PIN_TTL = 1800  # 30 minutes — refresh on use
 # "anyio-asyncio Conflict" and _load_binding_from_redis for the canonical pattern.
 _PIN_REDIS_TIMEOUT = 0.5
 # S1-a (2026-04-24): shrunk from 30 days to 1 hour as part of continuity_token
-# retirement-via-narrowing. See docs/ontology/s1-continuity-token-retirement.md §4.1.
+# retirement-via-narrowing.
 # TTL-only is not process-instance binding; this is honestly "performative, narrowed".
 # A′ (PID/nonce binding) is the follow-on for actual earned process-scope.
 _CONTINUITY_TTL = 3600  # 1 hour
@@ -143,7 +143,7 @@ def build_token_deprecation_block(
         "message": (
             "cross-process-instance resume via continuity_token is deprecated; "
             "declare lineage via parent_agent_id on force_new=true. "
-            "See docs/ontology/s1-continuity-token-retirement.md."
+ "."
         ),
         "sunset": _S1_DEPRECATION_SUNSET,
     }
@@ -237,9 +237,8 @@ def extract_token_iat(token: str) -> Optional[int]:
     """Extract the `iat` (issued-at) claim from a continuity token.
 
     Signature-verified like `extract_token_agent_uuid`; does NOT check expiry.
-    Returned for grace-period telemetry under S1-a (docs/ontology/
-    s1-continuity-token-retirement.md §6) — callers need `iat` to compute
-    token lifetime at accept-time.
+    Returned for grace-period telemetry under S1-a — callers need `iat`
+    to compute token lifetime at accept-time.
     """
     payload = _decode_token_payload(token)
     if payload is None:

@@ -368,7 +368,7 @@ class Resolution:
         signature for a payload that another agent will accept." It is NOT a
         public-key signature; do not treat this as non-repudiation. For
         non-repudiation we'd need DPoP / asymmetric keys (decided shelved
-        2026-04-19; see docs/ontology/identity.md and project memory
+ 2026-04-19; and project memory
         identity-audit-2026-04-19).
         """
         if not api_key:

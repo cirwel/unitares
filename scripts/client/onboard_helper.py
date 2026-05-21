@@ -223,7 +223,7 @@ def run_onboard(
 
     ``with_bootstrap`` (default True) attaches an initial_state payload so
     the server writes a bootstrap check-in row at t=0 per
-    docs/proposals/onboard-bootstrap-checkin.md §3.5. Idempotent on resume
+ §3.5. Idempotent on resume
     (server returns the existing bootstrap row's state_id).
     """
     url = f"{server_url.rstrip('/')}/v1/tools/call"

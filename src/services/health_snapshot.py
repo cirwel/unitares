@@ -2,7 +2,7 @@
 Cached health snapshot — shared between the deep_health_probe_task (writer)
 and the health_check MCP handler / /health/deep REST endpoint (readers).
 
-See docs/handoffs/2026-04-10-option-f-spec.md for the design.
+ for the design.
 
 Rationale: the MCP SDK's anyio task group deadlocks asyncpg awaits inside
 MCP tool handlers. Background tasks running on the main event loop can

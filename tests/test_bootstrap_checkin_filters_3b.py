@@ -7,8 +7,8 @@ Sites:
        dialectic refuse-with-explanation for bootstrap-only agents because
        monitor.state.update_count stays 0.
 
-Spec: docs/proposals/onboard-bootstrap-checkin.md §4 inclusions/exclusions.
-Audit: docs/proposals/onboard-bootstrap-checkin.filter-audit.md sites #5, #6.
+Spec: §4 inclusions/exclusions.
+Audit: sites #5, #6.
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 """Audit RFC §9 named test gates against the live test suite.
 
 Mechanically reconciles every `Test name:` / `Test names:` reference in §9 of
-`docs/proposals/surface-lease-plane-v0.md` against the actual Python and
+`` against the actual Python and
 Elixir test suites. For each gate, classifies as:
 
   exact   — a test with the named symbol exists
@@ -10,7 +10,7 @@ Elixir test suites. For each gate, classifies as:
   missing — no plausible match found
 
 Architect-recommended starting move for §9 reconciliation
-(`docs/proposals/surface-lease-plane-phase-a-plan.md` line 348). The
+(`` line 348). The
 mechanical baseline lets follow-up PRs target specific missing/variant
 rows rather than relitigating the count each time.
 
@@ -32,7 +32,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-RFC_PATH = REPO_ROOT / "docs/proposals/surface-lease-plane-v0.md"
+RFC_PATH = REPO_ROOT / ""
 PYTHON_TEST_DIRS = [REPO_ROOT / "tests"]
 ELIXIR_TEST_DIRS = [REPO_ROOT / "elixir/lease_plane/test"]
 

@@ -715,7 +715,7 @@ async def http_health_deep(request):
     """Deep health — reads the cached snapshot produced by deep_health_probe_task.
 
     Does NOT touch the DB at request time (see
-    docs/handoffs/2026-04-10-option-f-spec.md). If the probe has not populated
+ ). If the probe has not populated
     the cache yet, returns 503 and instructs the caller to retry.
     """
     from src.services.health_snapshot import (

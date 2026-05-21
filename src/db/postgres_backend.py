@@ -290,8 +290,7 @@ class PostgresBackend(
 
         Wraps the asyncpg pool in ExecutorPool so all DB operations route
         through a dedicated background thread+loop, isolating asyncpg from
-        the MCP SDK's anyio task group. See docs/handoffs/2026-04-27-anyio-
-        followup-scope.md and src/db/executor_pool.py.
+        the MCP SDK's anyio task group. See src/db/executor_pool.py.
         """
         logger.info("Creating PostgreSQL connection pool...")
         try:

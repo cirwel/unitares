@@ -4,7 +4,6 @@ Covers the digest contract, default-fill behavior, and state_json composition.
 DB-touching paths (write_bootstrap, is_substrate_earned) are exercised in
 test_bootstrap_checkin_handler.py.
 
-Spec: docs/proposals/onboard-bootstrap-checkin.md §3.1, §3.3
 """
 
 from __future__ import annotations

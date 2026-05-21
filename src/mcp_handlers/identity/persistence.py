@@ -95,7 +95,7 @@ async def _cache_session(
             function refuses to overwrite an existing in-memory or Redis
             binding for the same session_key whose agent_uuid differs from
             the one being written (S21-a, 2026-04-27 — see
-            docs/ontology/s21-session-resolution-bypass-incident.md).
+ ).
             PATH 2 / PATH 2.8 / set_agent_label callers leave it False —
             they are corrective writes from authoritative sources and may
             overwrite a stale Redis ghost.
@@ -628,7 +628,7 @@ async def set_agent_label(agent_uuid: str, label: str, session_key: Optional[str
         # persistent-tagged collision occurs *without* that lineage
         # declaration — i.e., a silent/unlineaged fork. Lineage-declared
         # restarts log at INFO and rename silently. The rename still happens
-        # (can't block onboard). See docs/ontology/identity.md §"Pattern —
+ # (can't block onboard). "Pattern —
         # Substrate-Earned Identity".
         existing = await _find_agent_by_label(label)
         if existing and existing != agent_uuid:
@@ -661,7 +661,7 @@ async def set_agent_label(agent_uuid: str, label: str, session_key: Optional[str
                     "(expected %s). Renaming to %r. Under v2 ontology a resident "
                     "restart declares parent_agent_id=<existing_uuid>; missing "
                     "lineage suggests rotation wipe, anchor corruption, or "
-                    "misconfigured bootstrap. See docs/ontology/identity.md "
+ "misconfigured bootstrap. "
                     "§'Pattern — Substrate-Earned Identity'.",
                     existing[:8], agent_uuid[:8], label, declared_parent,
                     existing[:8], new_label,

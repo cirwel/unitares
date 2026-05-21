@@ -13,8 +13,8 @@ Two layers:
    per-eval exceptions, and counts transitions correctly. These use
    the autouse mocked DB backend and patch the FSM entry point.
 
-See: docs/handoffs/2026-05-04-r2-implementation-plan.md PR 4
-     docs/ontology/r2-honest-memory-integration.md §"Evaluation triggers"
+See: PR 4
+ §"Evaluation triggers"
 """
 
 from __future__ import annotations

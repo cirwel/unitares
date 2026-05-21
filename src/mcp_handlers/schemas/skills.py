@@ -1,6 +1,6 @@
 """Pydantic schema for the `skills` MCP introspection tool.
 
-Per docs/ontology/s15-server-side-skills.md §4.1.
+
 
 The tool is read-only and identity-blind (§4.5): identity-derived parameters
 on the request payload are accepted (so adapters can pass through MCP

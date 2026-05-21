@@ -1,6 +1,6 @@
 """
 Tests for src/services/health_snapshot.py and the cached-snapshot health_check
-handler (Option F — see docs/handoffs/2026-04-10-option-f-spec.md).
+handler (Option F — ).
 """
 
 import asyncio

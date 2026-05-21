@@ -12,8 +12,8 @@ every transition and side-effect cleanly. One DB-touching test
 `read_lineage_state` helper's single-query shape against a live
 postgres backend.
 
-See: docs/handoffs/2026-05-04-r2-implementation-plan.md PR 2
-     docs/ontology/r2-honest-memory-integration.md
+See: PR 2
+
        §"Promotion / demotion / archival protocol"
 """
 

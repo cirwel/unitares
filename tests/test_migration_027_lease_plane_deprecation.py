@@ -9,8 +9,7 @@ Migration 027 (per RFC v0.8 §7.11.1) adds two tables:
      §7.11 deprecation procedure. FK to surface_kind_catalog so deprecation
      can only target a registered kind.
 
-Spec: docs/proposals/surface-lease-plane-v0.md §7.11.1
-      docs/proposals/surface-lease-plane-phase-a-plan.md PR 1 row 4-5
+ PR 1 row 4-5
 """
 
 from __future__ import annotations
