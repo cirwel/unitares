@@ -212,3 +212,6 @@ data/v7-fhat/corpus/
 # Lease-plane runtime state — written by the resident process every cycle,
 # accidentally committed via `git add -A` in PR #349 ship.
 data/lease_plane/
+
+# superpowers plugin planning artifacts
+docs/superpowers/
