@@ -6,10 +6,10 @@ This is the documentation tree for the [UNITARES governance MCP server](../READM
 
 | You are… | Read in this order |
 |---|---|
-| **A reviewer / first-time visitor** | [repo README](../README.md) → [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md) |
+| **A reviewer / first-time visitor** | [repo README](../README.md) → [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/paper-positioning.md`](ontology/paper-positioning.md) |
 | **Integrating an MCP client** | [`integration/MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) → [`guides/START_HERE.md`](guides/START_HERE.md) → [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) |
 | **Installing / deploying** | [`install/PLAYBOOK.md`](install/PLAYBOOK.md) → [`install/cross-machine-surface.md`](install/cross-machine-surface.md) → [`operations/OPERATOR_RUNBOOK.md`](operations/OPERATOR_RUNBOOK.md) |
-| **Working on the identity layer** | [`../AGENTS.md`](../AGENTS.md) (the shared agent contract) → `src/mcp_handlers/identity/` |
+| **Working on the identity layer** | [`../AGENTS.md`](../AGENTS.md) → [`ontology/README.md`](ontology/README.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/plan.md`](ontology/plan.md) |
 
 ## Layout
 
@@ -34,6 +34,12 @@ User- and integrator-facing how-tos. Thin by design — most architecture lives 
 
 - [`MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) — Streamable HTTP MCP endpoints and how to point Claude Code / other clients at them
 
+### `ontology/` — identity ontology
+
+The system's versioned identity ontology, the resolution ledger, and the working RFCs that evolve them. Has its own reader's guide because the folder is dense.
+
+→ Start at **[`ontology/README.md`](ontology/README.md)**.
+
 ### `operations/` — operator-internal runbooks
 
 How to run this in production. Most readers can skip these.
@@ -49,6 +55,11 @@ For people working on UNITARES itself, not using it.
 
 - [`CANONICAL_SOURCES.md`](dev/CANONICAL_SOURCES.md) — arch-dispute resolution
 - [`TOOL_REGISTRATION.md`](dev/TOOL_REGISTRATION.md) — how tools are wired into the MCP server
+- [`CIRCUIT_BREAKER_DIALECTIC.md`](dev/CIRCUIT_BREAKER_DIALECTIC.md) — recovery semantics (specialized)
+
+### `proposals/` — RFCs
+
+Active and resolved RFCs that don't (yet) belong in `ontology/`. The Plexus / lease-plane / BEAM-coordination thread lives here. Each doc carries its own resolution status in the body.
 
 ### `assets/`
 

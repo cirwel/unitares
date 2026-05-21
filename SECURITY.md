@@ -13,7 +13,7 @@ If GitHub PVR is unavailable to you (e.g., you don't have an account), open a pu
 UNITARES is a runtime governance MCP server for AI-agent fleets. In-scope vulnerabilities include:
 
 - Authentication / identity bypasses in the MCP handlers, the gateway (port 8768), the lease plane (port 8788), or the dashboard
-- Bearer-token handling, session-cache leakage, or cross-agent identity confusion
+- Bearer-token handling, session-cache leakage, or cross-agent identity confusion (see [`docs/ontology/identity.md`](docs/ontology/identity.md) for the identity model)
 - Injection / RCE through MCP tool inputs, audit-log entries, or knowledge-graph writes
 - SQL injection, AGE injection, or other database-layer issues
 - Sensitive data exposure in audit logs, telemetry, or the dashboard
