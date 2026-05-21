@@ -119,6 +119,36 @@ TRAJECTORIES: Dict[str, Dict[str, str]] = {
 
 
 # -----------------------------------------------------------------------------
+# TRUST_TIERS — trajectory-identity tiers from compute_trust_tier
+# -----------------------------------------------------------------------------
+# Source: src/trajectory_identity.py:25-30 (_TRUST_TIER_NAMES) and the
+# compute_trust_tier docstring (lines 737-741).
+
+TRUST_TIERS: Dict[int, Dict[str, str]] = {
+    0: {
+        "name": "unknown",
+        "meaning": "No trajectory data yet — identity has nothing to compare against.",
+        "criteria": "Pre-genesis or trajectory metadata missing.",
+    },
+    1: {
+        "name": "emerging",
+        "meaning": "Identity is forming. Genesis is recorded but behavioral consistency is not yet established.",
+        "criteria": "< 50 observations OR identity_confidence < 0.5.",
+    },
+    2: {
+        "name": "established",
+        "meaning": "Identity has consistent behavior across enough observations to be trustworthy.",
+        "criteria": ">= 50 observations, identity_confidence >= 0.5, lineage_similarity > 0.7.",
+    },
+    3: {
+        "name": "verified",
+        "meaning": "Identity is robustly grounded — long-running and consistent.",
+        "criteria": ">= 200 observations, identity_confidence >= 0.7, lineage_similarity > 0.8.",
+    },
+}
+
+
+# -----------------------------------------------------------------------------
 # DRIFT_COMPONENTS — concrete ethical-drift dimensions
 # -----------------------------------------------------------------------------
 # Source: src/monitor_result.py reads dv.calibration_deviation etc.
@@ -179,6 +209,41 @@ def explain_mode(mode: Optional[str]) -> Dict[str, Any]:
 def explain_trajectory(trajectory: Optional[str]) -> Dict[str, Any]:
     """Wrap a trajectory value with meaning."""
     return _wrap(trajectory, TRAJECTORIES)
+
+
+def explain_trust_tier(tier: Optional[Any]) -> Dict[str, Any]:
+    """Wrap a trust-tier integer with name + meaning + criteria.
+
+    Accepts int 0-3, the existing {tier, name, reason} dict shape produced by
+    `compute_trust_tier`, or None. Returns a merged dict that preserves all
+    existing keys and adds `meaning` + `criteria` from the glossary.
+
+    Callers can drop this in place of the previous hardcoded
+    {tier, name, reason} block without breaking consumers.
+    """
+    if tier is None:
+        return {"value": None}
+    # Already a dict — preserve all fields, add glossary annotation
+    if isinstance(tier, dict):
+        tier_value = tier.get("tier")
+        info = TRUST_TIERS.get(tier_value)
+        if info is None:
+            return {**tier, "meaning": "unknown (not in glossary)"}
+        return {**tier, "meaning": info["meaning"], "criteria": info["criteria"]}
+    # Raw int
+    try:
+        tier_int = int(tier)
+    except (TypeError, ValueError):
+        return {"value": tier, "meaning": "unknown (not in glossary)"}
+    info = TRUST_TIERS.get(tier_int)
+    if info is None:
+        return {"tier": tier_int, "meaning": "unknown (not in glossary)"}
+    return {
+        "tier": tier_int,
+        "name": info["name"],
+        "meaning": info["meaning"],
+        "criteria": info["criteria"],
+    }
 
 
 def annotate_drift_components(drift: Dict[str, float]) -> Dict[str, Dict[str, Any]]:

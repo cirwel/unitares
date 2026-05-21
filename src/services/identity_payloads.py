@@ -376,12 +376,15 @@ def build_onboard_response_data(
         result["previous_status"] = "archived"
 
     if trajectory_result:
+        from src.governance_glossary import explain_trust_tier
         result["trajectory"] = dict(trajectory_result)
-        result["trajectory"]["trust_tier"] = {
+        # #428: glossary-sourced trust_tier with meaning + criteria.
+        # Preserves prior {tier, name, reason} shape and adds the explanation.
+        result["trajectory"]["trust_tier"] = explain_trust_tier({
             "tier": 1,
             "name": "emerging",
             "reason": "Genesis stored at onboard. Identity will mature with behavioral consistency.",
-        }
+        })
 
     return result
 
