@@ -1347,6 +1347,36 @@ _P016_GETATTR_SUCCESS = re.compile(
     r"""\bgetattr\s*\([^,]+,\s*['"]success['"]"""
 )
 
+# Regex: an inner-layer assertion cue appearing AFTER the flagged outer
+# `.get("success")` check. The two-layer envelope-parsing shape is:
+#
+#     if not data.get("success", False):   # ← outer (flagged)
+#         raise ...
+#     result = data.get("result")
+#     if isinstance(result, dict) and result.get("isError"):   # ← inner cue
+#         raise ...
+#     # or: _raise_for_tool_failure(name, result)
+#     # or: <Typed>Result.model_validate(result)  (raises on inner failure)
+#     # or: _parse_mcp_result(result)
+#
+# When any of these cues appear in the lines following a flagged success check,
+# the operator has already wired the inner-layer assertion; P016 is satisfied.
+_P016_INNER_LAYER_FOLLOWUP = re.compile(
+    r"""\.get\(\s*['"]isError['"]\s*\)"""
+    r"""|\b_raise_for_tool_failure\s*\("""
+    r"""|\b_parse_mcp_result\s*\("""
+    r"""|\b\w*Result\.model_validate\s*\("""
+)
+
+# Regex: helper-function definitions whose body operates on already-unwrapped
+# inner results (the caller did the outer-envelope check before invoking them).
+# `_raise_for_tool_failure(tool_name, raw)` is the canonical SDK shape — single
+# `raw.get("success") is False` check + raise. By convention these helpers do
+# not double-check an envelope they were never handed.
+_P016_INNER_ASSERTION_HELPER_DEF = re.compile(
+    r"""^\s*(?:async\s+)?def\s+_raise_for_\w+\s*\("""
+)
+
 # Regex: P005 resource-leak false positive when the acquire/cursor/connect/lock
 # call sits inside an `async with` (or plain `with`) header — the context
 # manager guarantees release on `__aexit__`, so by construction it is not a
@@ -1581,6 +1611,60 @@ def _has_preceding_persist_call(
     return False
 
 
+def _is_p016_followed_by_inner_layer_check(
+    flagged_line: int,
+    snippet_lines_by_num: dict[int, str],
+    lookahead: int = 20,
+) -> bool:
+    """Detect the canonical two-layer envelope-parsing shape where the
+    flagged outer `.get("success")` is followed within `lookahead` lines
+    by an inner-layer assertion — `result.get("isError")`, a typed
+    `XxxResult.model_validate(...)`, `_raise_for_tool_failure(...)`, or
+    `_parse_mcp_result(...)`. The operator has already wired the inner
+    leg; P016 is satisfied. Caught when qwen3 reflagged the SDK's
+    `_rest_call` (sync_client.py:342, client.py equivalent) on 2026-05-20.
+    """
+    for line_no in range(flagged_line + 1, flagged_line + lookahead + 1):
+        line = snippet_lines_by_num.get(line_no, "")
+        if not line.strip():
+            continue
+        # A new `def`/`class` at the same-or-lower indent ends the function.
+        if _P003_OTHER_DEF.match(line):
+            return False
+        if _P016_INNER_LAYER_FOLLOWUP.search(line):
+            return True
+    return False
+
+
+def _is_p016_inside_inner_assertion_helper(
+    flagged_line: int,
+    snippet_lines_by_num: dict[int, str],
+    lookback: int = 6,
+) -> bool:
+    """Detect that the flagged success check sits inside a helper named
+    `_raise_for_*`. By project convention these helpers operate on
+    already-unwrapped inner results — the caller did the outer-envelope
+    check before invoking them. Shape:
+
+        def _raise_for_tool_failure(tool_name: str, raw: dict) -> None:
+            if raw.get("success") is False:          # ← flagged
+                raise GovernanceConnectionError(...)
+
+    Caught when qwen3 reflagged sync_client.py:458 (and client.py's
+    equivalent at :545) on 2026-05-20.
+    """
+    for line_no in range(flagged_line - 1, flagged_line - lookback - 1, -1):
+        line = snippet_lines_by_num.get(line_no, "")
+        if not line.strip():
+            continue
+        if _P016_INNER_ASSERTION_HELPER_DEF.match(line):
+            return True
+        # A different def header above means we walked past our enclosing fn.
+        if _P003_OTHER_DEF.match(line):
+            return False
+    return False
+
+
 def _verify_finding_against_source(
     finding: Finding, raw_evidence: str, snippet_lines_by_num: dict[int, str]
 ) -> bool:
@@ -1727,6 +1811,36 @@ def _verify_finding_against_source(
         log(
             f"drop P016 {finding.file}:{finding.line} — getattr-style typed "
             f"attribute access (no nested envelope): {src_line.strip()[:80]}",
+            "warning",
+        )
+        return False
+    # P016 specifically: the flagged outer success check is followed within
+    # ~20 lines by an inner-layer assertion (`isError`, `_raise_for_tool_failure`,
+    # `_parse_mcp_result`, or `<Result>.model_validate`). This is the canonical
+    # SDK envelope-parsing shape: outer envelope failure raises on transport
+    # error, then inner-layer assertion raises on tool failure. Caught when
+    # qwen3 reflagged sync_client.py:342 on 2026-05-20.
+    if finding.pattern == "P016" and _is_p016_followed_by_inner_layer_check(
+        finding.line, snippet_lines_by_num
+    ):
+        log(
+            f"drop P016 {finding.file}:{finding.line} — outer success check "
+            f"followed by inner-layer assertion (isError / _raise_for_tool_failure "
+            f"/ model_validate): {src_line.strip()[:80]}",
+            "warning",
+        )
+        return False
+    # P016 specifically: the flagged success check sits inside a `_raise_for_*`
+    # helper that operates on an already-unwrapped inner result. By project
+    # convention the caller validated the outer envelope before invoking it.
+    # Caught when qwen3 reflagged sync_client.py:458 (and client.py:545) on
+    # 2026-05-20.
+    if finding.pattern == "P016" and _is_p016_inside_inner_assertion_helper(
+        finding.line, snippet_lines_by_num
+    ):
+        log(
+            f"drop P016 {finding.file}:{finding.line} — inside _raise_for_* "
+            f"inner-layer assertion helper: {src_line.strip()[:80]}",
             "warning",
         )
         return False

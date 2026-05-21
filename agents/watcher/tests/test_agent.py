@@ -2370,6 +2370,159 @@ def test_p016_kept_for_dict_envelope_parse(watcher_module):
         ), f"P016 should fire on dict-envelope parse: {src_line!r}"
 
 
+def test_p016_dropped_when_followed_by_inner_layer_check(watcher_module):
+    """The canonical SDK two-layer shape: outer `data.get("success")` raises
+    on transport failure, then inner `result.get("isError")` raises on tool
+    failure. Caught when qwen3 reflagged
+    agents/sdk/src/unitares_sdk/sync_client.py:342 on 2026-05-20 (fingerprint
+    651b3427) — the operator had already wired both legs."""
+    f = watcher_module.Finding(
+        pattern="P016",
+        file="/repo/agents/sdk/src/unitares_sdk/sync_client.py",
+        line=342,
+        hint="t",
+        severity="high",
+        detected_at="2026-05-20T00:00:00Z",
+        model_used="t",
+    )
+    snippet = {
+        342: 'if not data.get("success", False):',
+        343: '    error = data.get("error", "Unknown error")',
+        344: '    raise GovernanceConnectionError(f"Tool {tool_name} failed: {error}")',
+        345: "",
+        346: 'result = data.get("result")',
+        347: "if result is None:",
+        348: '    raise GovernanceConnectionError(f"No result from {tool_name}")',
+        349: "",
+        350: "# Check MCP-level isError flag (outer envelope success doesn't",
+        351: "# guarantee the tool itself succeeded).",
+        352: 'if isinstance(result, dict) and result.get("isError"):',
+    }
+    assert not watcher_module._verify_finding_against_source(f, "", snippet), (
+        "P016 should be dropped when outer success check is followed by an "
+        "inner result.get('isError') assertion"
+    )
+
+
+def test_p016_dropped_when_followed_by_raise_for_tool_failure_call(watcher_module):
+    """A caller that does `result = self._rest_call(...)` then
+    `self._raise_for_tool_failure(tool_name, result)` has wired the inner-layer
+    assertion via a helper. The outer `.get("success")` in `_rest_call` (or a
+    parallel one in `call_tool`) should not be flagged."""
+    f = watcher_module.Finding(
+        pattern="P016",
+        file="/repo/agents/sdk/src/unitares_sdk/sync_client.py",
+        line=100,
+        hint="t",
+        severity="high",
+        detected_at="2026-05-20T00:00:00Z",
+        model_used="t",
+    )
+    snippet = {
+        100: 'if not data.get("success", False):',
+        101: "    raise GovernanceConnectionError('transport failed')",
+        102: "result = data.get('result')",
+        103: "self._raise_for_tool_failure(tool_name, result)",
+    }
+    assert not watcher_module._verify_finding_against_source(f, "", snippet)
+
+
+def test_p016_dropped_when_followed_by_model_validate(watcher_module):
+    """Typed-result validation through pydantic's `model_validate(...)` raises
+    on schema mismatch / explicit failure markers, so it serves as the inner
+    leg of the two-layer check."""
+    f = watcher_module.Finding(
+        pattern="P016",
+        file="/repo/agents/sdk/src/unitares_sdk/sync_client.py",
+        line=200,
+        hint="t",
+        severity="high",
+        detected_at="2026-05-20T00:00:00Z",
+        model_used="t",
+    )
+    snippet = {
+        200: 'if not data.get("success", False):',
+        201: "    raise GovernanceConnectionError('transport failed')",
+        202: "return OnboardResult.model_validate(data)",
+    }
+    assert not watcher_module._verify_finding_against_source(f, "", snippet)
+
+
+def test_p016_dropped_inside_raise_for_tool_failure_helper(watcher_module):
+    """The `_raise_for_*` helper-fn shape operates on an already-unwrapped
+    inner result; the caller has done the outer-envelope check before
+    invoking it. Caught when qwen3 reflagged sync_client.py:458 on
+    2026-05-20 (fingerprint 2b12fa39)."""
+    f = watcher_module.Finding(
+        pattern="P016",
+        file="/repo/agents/sdk/src/unitares_sdk/sync_client.py",
+        line=458,
+        hint="t",
+        severity="high",
+        detected_at="2026-05-20T00:00:00Z",
+        model_used="t",
+    )
+    snippet = {
+        456: "    @staticmethod",
+        457: "    def _raise_for_tool_failure(tool_name: str, raw: dict) -> None:",
+        458: '        if raw.get("success") is False:',
+        459: '            error = raw.get("error", "Unknown error")',
+        460: '            raise GovernanceConnectionError(f"Tool {tool_name} failed: {error}")',
+    }
+    assert not watcher_module._verify_finding_against_source(f, "", snippet), (
+        "P016 should be dropped inside _raise_for_* helper — the helper "
+        "operates on an already-unwrapped inner result"
+    )
+
+
+def test_p016_kept_when_no_inner_layer_followup(watcher_module):
+    """Negative case: a bare `data.get("success")` check in a function that
+    writes state without an inner-leg assertion is the original bug shape.
+    This is the parse_onboard pattern (scripts/unitares, commit 718ccd3)."""
+    f = watcher_module.Finding(
+        pattern="P016",
+        file="/repo/scripts/unitares",
+        line=100,
+        hint="t",
+        severity="high",
+        detected_at="2026-05-20T00:00:00Z",
+        model_used="t",
+    )
+    snippet = {
+        100: 'if data.get("success"):',
+        101: "    write_session_file(data.get('result', {}))",
+        102: "    log.info('session written')",
+        103: "    return True",
+    }
+    assert watcher_module._verify_finding_against_source(f, "", snippet), (
+        "P016 should fire when outer check is not followed by an inner-layer "
+        "assertion — this is the real bug shape"
+    )
+
+
+def test_p016_kept_when_helper_def_has_different_name(watcher_module):
+    """Negative case: a helper whose name is NOT `_raise_for_*` doesn't
+    get the inner-assertion-helper benefit of the doubt. Without the inner
+    leg, the bare success check is still the bug shape."""
+    f = watcher_module.Finding(
+        pattern="P016",
+        file="/repo/src/something.py",
+        line=458,
+        hint="t",
+        severity="high",
+        detected_at="2026-05-20T00:00:00Z",
+        model_used="t",
+    )
+    snippet = {
+        456: "    @staticmethod",
+        457: "    def process_response(tool_name: str, raw: dict) -> None:",
+        458: '        if raw.get("success") is False:',
+        459: '            log.warning("failed silently")',
+        460: "            return None",
+    }
+    assert watcher_module._verify_finding_against_source(f, "", snippet)
+
+
 # ---------------------------------------------------------------------------
 # violation_class loading
 # ---------------------------------------------------------------------------
