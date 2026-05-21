@@ -798,13 +798,19 @@ async def _track_thread_identity(ctx: "UpdateContext") -> bool:
     re-stamp/persist effects should fire; False on a no-op (already
     tracking the same session).
 
-    **Known durable-state gap (not addressed here).** Live-verifier 2026-05-20:
-    ~35% of ``core.identities.metadata.thread_id`` rows already carry
-    UUID-format values from the broken mint path that pre-dated this fix
-    (886 of 2521 rows). Step 1 will read those back unchanged. Healing
-    them retroactively would silently change identity for 886 agents — a
-    bigger blast radius than this PR — so it is intentionally deferred to
-    a separate cleanup pass.
+    **Heal-on-read for pre-#483 UUID-format thread_ids (#484, 2026-05-20).**
+    886 of 2521 populated ``core.identities.metadata.thread_id`` rows still
+    carry UUID-format values from the broken mint path that pre-dated #483.
+    Step 1 detects them by the ``t-`` prefix check and treats them as malformed
+    — the value is skipped, and step 2 derives a fresh deterministic
+    ``t-<sha16>`` from ``session_key``. One update per affected agent migrates
+    the row via the regular persist path. The single downstream consumer that
+    keys on thread_id format is ``src/db/mixins/thread.py:71``; lookups on
+    the old UUID value will miss until that agent next updates, which is the
+    expected migration behavior. Spread cost, no concentrated burst.
+
+    ``node_index`` and ``active_session_key`` are still imported from the
+    persisted row — only ``thread_id`` is the corrupt field.
     """
     if not (ctx.meta and ctx.session_key):
         return False
@@ -824,6 +830,18 @@ async def _track_thread_identity(ctx: "UpdateContext") -> bool:
                 persisted_session_key = identity_record.metadata.get(
                     "active_session_key"
                 )
+                # #484 heal-on-read: pre-#483 mint path emitted UUID-format
+                # thread_ids. Treat them as malformed so step 2 re-derives
+                # the canonical t-<sha16> shape via generate_thread_id.
+                if persisted_thread_id and not persisted_thread_id.startswith("t-"):
+                    logger.info(
+                        "[PROCESS_UPDATE] heal-on-read: skipping legacy "
+                        "UUID-format thread_id %s... for agent=%s...; "
+                        "step 2 will re-derive canonical form",
+                        persisted_thread_id[:8],
+                        (ctx.agent_uuid or "?")[:8],
+                    )
+                    persisted_thread_id = None
                 if persisted_thread_id:
                     ctx.meta.thread_id = persisted_thread_id
                 if persisted_node_index is not None and not getattr(

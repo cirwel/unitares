@@ -167,6 +167,63 @@ class TestNoRandomUuidMintRegression:
         assert meta.node_index == 5
 
     @pytest.mark.asyncio
+    async def test_pg_uuid_format_thread_id_heals_to_canonical(self):
+        """#484 heal-on-read: pre-#483 PG rows carry UUID-format thread_ids.
+        Step 1 must skip them so step 2 re-derives t-<sha16> from session_key.
+        node_index continuity is preserved (it's not the corrupt field).
+        """
+        from src.mcp_handlers.updates.phases import _track_thread_identity
+        from src.thread_identity import generate_thread_id
+
+        meta = _FakeMeta()
+        ctx = _make_ctx(meta=meta, session_key="mcp:heal-session-xyz")
+        fake_db = MagicMock()
+        # UUID-format thread_id from broken pre-#483 mint path
+        fake_db.get_identity = AsyncMock(
+            return_value=_identity_record({
+                "thread_id": "a3f2e1d0-1234-5678-9abc-def012345678",
+                "node_index": 7,
+                "active_session_key": "mcp:prior-session",
+            })
+        )
+
+        with patch("src.db.get_db", return_value=fake_db):
+            changed = await _track_thread_identity(ctx)
+
+        assert changed is True
+        # thread_id healed to canonical t-<sha16> derived from session_key
+        assert meta.thread_id.startswith("t-")
+        assert len(meta.thread_id) == 18
+        assert meta.thread_id == generate_thread_id("mcp:heal-session-xyz")
+        # node_index continuity preserved (7 → 8, NOT reset to 1)
+        assert meta.node_index == 8
+        assert meta.active_session_key == "mcp:heal-session-xyz"
+
+    @pytest.mark.asyncio
+    async def test_pg_canonical_thread_id_not_touched_by_heal_logic(self):
+        """Regression guard for #484: canonical t-<sha> values must pass
+        through step 1 unchanged. Heal-on-read must not break the happy path.
+        """
+        from src.mcp_handlers.updates.phases import _track_thread_identity
+
+        meta = _FakeMeta()
+        ctx = _make_ctx(meta=meta, session_key="mcp:happy-session")
+        fake_db = MagicMock()
+        fake_db.get_identity = AsyncMock(
+            return_value=_identity_record({
+                "thread_id": "t-canonicalvalue1",
+                "node_index": 3,
+                "active_session_key": "mcp:prior",
+            })
+        )
+
+        with patch("src.db.get_db", return_value=fake_db):
+            await _track_thread_identity(ctx)
+
+        # Canonical value preserved — NOT regenerated from session_key
+        assert meta.thread_id == "t-canonicalvalue1"
+
+    @pytest.mark.asyncio
     async def test_pg_lookup_failure_falls_back_safely(self):
         """A DB error during hydration must not crash the update — fall back
         to deterministic derivation, log, and proceed."""
