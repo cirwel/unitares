@@ -11,15 +11,28 @@
 
 Status: live. First public commit 2025-12-04. For architecture details, see [docs/UNIFIED_ARCHITECTURE.md](docs/UNIFIED_ARCHITECTURE.md).
 
-Multi-agent fleets fly blind. The agent-identity layer tells you *who* is calling. The evaluation layer tells you *whether a model is good enough to deploy*. Neither tells you **what the fleet is actually doing right now, whether it's still coherent, or whether it's drifting from its anchor**. That layer is what Unitares is.
+Multi-agent fleets fly blind. The agent-identity layer tells you *who* is calling. The evaluation layer tells you *whether a model is good enough to deploy*. Neither tells you **what the fleet is actually doing right now, whether it's still coherent, or whether it's drifting from its baseline**. That layer is what UNITARES is.
 
-Unitares is a runtime telemetry and coordination layer for heterogeneous AI-agent fleets. Agents check in, the system tracks a four-channel state vector — **energy** (productive capacity), **integrity** (information coherence), **entropy** (disorder), **valence** (signed E/I imbalance) — and each check-in returns a verdict (`proceed` / `guide` / `pause` / `reject`), so agents regulate themselves *before* external circuit breakers fire. Humans read the same state on a dashboard; peer agents read it over the API.
+### How it works in one read
 
-Slow down when disorder spikes, ask for review when integrity drops, hand off when running on fumes. Circuit breakers and kill switches are still there — they're just the last line of defense, not the first.
+An agent calls `process_agent_update()` after a unit of work. It sends a self-reported `confidence`, a self-reported `complexity`, the `response_text`, and any `recent_tool_results` (test outcomes, exit codes, lint output, file modifications — things the system doesn't have to trust the agent about). UNITARES tracks four numbers per agent — **EISV** for short:
 
-Running continuously in production since November 2025. Long-run trajectories are stored in PostgreSQL + AGE; the state model is derived from what agents actually do (EMA-smoothed observations, not model predictions). Test counts and coverage gates are in the [Production snapshot](#production-snapshot).
+- **E (Energy)** — is the work advancing? Tool calls succeeding and decisions resolving raise E; thrashing, retries, no-progress lower it.
+- **I (Integrity)** — do claims match outcomes? Confidence calibrated to observed success rate raises I; high confidence with low actual success lowers it.
+- **S (Entropy)** — is behavior diverging from the agent's own baseline? Stable trajectory and consistent claims keep S low; drift and divergence push it up.
+- **V (Valence)** — derived: a signed E−I imbalance. Positive = energetic-but-incoherent; negative = coherent-but-depleted.
 
-**Try it** — bring the stack up, then feel the loop:
+Each check-in returns a verdict — `proceed` / `guide` / `pause` / `reject` — so the agent can self-regulate before external circuit breakers fire. Humans read the same state on a dashboard; peer agents read it over the API.
+
+### Why an agent can't just lie about its confidence
+
+Self-reported confidence is one input. UNITARES also observes **hard exogenous outcomes** — test pass/fail, exit codes, tool results — fed back through the `outcome_event` tool. A sequential Beta-Bernoulli e-process compares each pre-task confidence against the actual outcome rate. An agent that reports `confidence=0.9` while succeeding only 50% of the time accumulates calibration error; integrity drops; the verdict shifts to `guide` or `pause`. The signal is grounded in what actually happened, not what the agent claimed.
+
+After ~30 check-ins the four numbers are graded against *your own* baseline (Welford z-score), not a universal threshold. Absolute safety floors still apply.
+
+Running continuously since November 2025. State stored in PostgreSQL + AGE. The theory and the dynamical-systems version of this model live in [Paper v6](https://github.com/cirwel/unitares-paper-v6) (DOI 10.5281/zenodo.19647159) — readers who want the full derivation start there.
+
+### Try it
 
 ```bash
 git clone https://github.com/cirwel/unitares.git && cd unitares
@@ -27,7 +40,7 @@ docker compose up                  # Postgres+AGE+pgvector+Redis+server, bound t
 make demo                          # in another shell: 60-second scripted trajectory
 ```
 
-`make demo` onboards a synthetic agent, drives seven check-ins (clean work → calibration drift → confusion), and prints the verdict + EISV state at each step — so you can see the loop reading drift before reading the architecture doc. Source: [`scripts/demo/quick_demo.py`](scripts/demo/quick_demo.py). Then point any MCP client at `http://localhost:8767/mcp/`.
+`make demo` onboards a synthetic agent, drives seven check-ins (clean work → calibration drift → confusion), and prints the verdict + state at each step. Source: [`scripts/demo/quick_demo.py`](scripts/demo/quick_demo.py). Then point any MCP client at `http://localhost:8767/mcp/`.
 
 Bare-metal setup (Homebrew Postgres, native install) is in [Installation](#installation).
 
@@ -77,13 +90,11 @@ The agent reads its own metrics and adjusts *before* external controls have to f
 
 ## What makes the signal trustworthy
 
-**Self-relative scoring.** After ~30 check-ins, the four numbers are graded against *your* baseline, not a universal threshold. You're flagged when *you* drift.
+**No ethics oracle.** The four numbers come from things UNITARES already measures — calibration error, complexity divergence, behavioral drift. No hand-labeled "is this ethical?" classifier.
 
-**Drift from observables, not an ethics oracle.** The drift signal comes from calibration accuracy, complexity divergence, coherence, and stability — things the system already measures. No hand-labeled "is this ethical?" classifier.
+**Trajectory as identity.** Long-run EISV patterns answer continuity questions ("still the same agent across restarts?") and surface drift no single check-in could see.
 
-**Trajectory as identity.** Long-run EISV patterns answer continuity questions ("still the same agent?") and surface drift no single check-in could see.
-
-**Peer review when needed.** When an agent's confidence and the system's assessment disagree, Unitares can run a short adversarial review with peer agents — or with an LLM when no peers are around — before anything halts.
+**Peer review when needed.** When an agent's confidence and the system's assessment disagree, UNITARES runs a short adversarial review with peer agents — or with an LLM when no peers are around — before anything halts. See [dialectic-dataset](https://github.com/cirwel/dialectic-dataset).
 
 ---
 
@@ -229,32 +240,9 @@ Agent identity: save `agent_uuid` from `onboard()` as an anchor; declare fresh-p
 
 ---
 
-## How state works
+## State ranges and pipeline
 
-Agents emit text and tool results; they rarely expose a stable notion of internal condition. Unitares exposes four continuous variables any client can report and any observer can read:
-
-| Variable | Range | What it tracks |
-|----------|-------|----------------|
-| **E** (Energy) | [0, 1] | Productive capacity |
-| **I** (Integrity) | [0, 1] | Information coherence |
-| **S** (Entropy) | [0, 1] | Disorder and uncertainty |
-| **V** (Valence) | [-1, 1] | Signed energy/integrity imbalance: energetic-but-incoherent (positive) vs coherent-but-depleted (negative) |
-
-**Behavioral EISV (primary, verdict-driving)** — Implemented in `src/behavioral_state.py` and `src/behavioral_assessment.py`: EMA-smoothed observations per dimension, no ODE and no universal attractor. After **~30** updates, per-agent **Welford** baselines enable self-relative scoring (z-score vs *your* operating point). Earlier check-ins use bootstrap behavior; absolute safety floors still apply.
-
-**ODE in `governance_core` (secondary, diagnostic/fallback)** — The same four variables also evolve in a coupled ODE with contraction-style stability analysis. That integration runs **in parallel for analysis**; governance verdicts normally follow behavioral EISV once behavioral confidence is established, while ODE remains the fallback when behavioral confidence is still insufficient. See [Architecture](docs/UNIFIED_ARCHITECTURE.md) for the full pipeline (drift → entropy, calibration, circuit breaker, dialectic).
-
-<details>
-<summary><strong>Dynamics (for the curious)</strong> — the coupled ODE behind the fallback path</summary>
-
-```
-dE/dt = α(I - E) - β·E·S           Energy tracks integrity, dragged by entropy
-dI/dt = -k·S + β_I·C(V) - γ_I·I   Integrity boosted by coherence, reduced by entropy
-dS/dt = -μ·S + λ₁·‖Δη‖² - λ₂·C   Entropy decays, rises with drift, damped by coherence
-dV/dt = κ(E - I) - δ·V             Valence accumulates E-I mismatch, decays toward zero
-```
-
-</details>
+E, I, S each live in `[0, 1]`; V in `[-1, 1]`. Verdict thresholds and the absolute safety floors are in [`src/behavioral_assessment.py`](src/behavioral_assessment.py). Implementation: EMA-smoothed observations primary (`src/behavioral_state.py`); a coupled ODE in `governance_core/` runs in parallel as a diagnostic fallback. The full pipeline (drift → entropy, calibration, circuit breaker, dialectic) and the ODE derivation are in [Architecture](docs/UNIFIED_ARCHITECTURE.md) and [Paper v6](https://github.com/cirwel/unitares-paper-v6).
 
 ---
 
