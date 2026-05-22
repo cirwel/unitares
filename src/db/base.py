@@ -48,12 +48,13 @@ class AgentStateRecord:
     """Agent state snapshot (EISV metrics).
 
     Column → EISV mapping:
-        DB column       Python field    EISV dimension
-        ─────────────   ────────────    ──────────────
-        (state_json.E)  energy          E  (Energy)
-        integrity       integrity       I  (Information Integrity)
-        entropy         entropy         S  (Entropy)
-        volatility      void            V  (Void)
+        DB column        Python field    EISV dimension
+        ─────────────    ────────────    ──────────────
+        (state_json.E)   energy          E  (Energy)
+        integrity        integrity       I  (Information Integrity)
+        entropy          entropy         S  (Entropy)
+        volatility       void            V  (Void)
+        stability_index  stability_index DEAD — was 1.0 − S, retired in 20684dd1
     """
     state_id: int
     identity_id: int
