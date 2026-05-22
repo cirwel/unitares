@@ -409,6 +409,64 @@ class TestMiddlewarePath0Gate:
         assert payload.get("source") == "middleware"
 
     @pytest.mark.asyncio
+    async def test_middleware_strict_defers_uds_peer_to_handler(self, monkeypatch):
+        """UDS peer_pid paths are substrate-checked by the identity handler.
+
+        Middleware must not pre-emit a hijack event for tokenless UUID-only
+        resident anchors, because the handler has the substrate-attestation
+        proof path that can legitimately accept them.
+        """
+        monkeypatch.setenv("UNITARES_IDENTITY_STRICT", "strict")
+
+        from src.mcp_handlers.middleware import identity_step as mw
+
+        broadcaster_stub = MagicMock()
+        broadcaster_stub.broadcast_event = AsyncMock()
+
+        signals = MagicMock(
+            transport="uds",
+            user_agent="resident-test",
+            ip_ua_fingerprint=None,
+            x_session_id=None,
+            x_agent_id=None,
+            mcp_session_id=None,
+            oauth_client_id=None,
+            x_client_id=None,
+            client_hint=None,
+            peer_pid=12345,
+        )
+        direct_uuid = "eeeeeeee-1111-2222-3333-444444444444"
+        with patch(
+            "src.mcp_handlers.context.get_session_signals",
+            return_value=signals,
+        ), patch(
+            "src.mcp_handlers.identity.handlers.derive_session_key",
+            new_callable=AsyncMock,
+            return_value="uds-session",
+        ), patch(
+            "src.mcp_handlers.context.set_session_context",
+            return_value=MagicMock(),
+        ), patch(
+            "src.mcp_handlers.identity.handlers._broadcaster",
+            return_value=broadcaster_stub,
+        ):
+            ctx = MagicMock()
+            ctx.strict_reject = False
+            ctx.identity_result = None
+            await mw.resolve_identity(
+                "identity",
+                {
+                    "agent_uuid": direct_uuid,
+                    "resume": True,
+                },
+                ctx,
+            )
+
+        assert ctx.strict_reject is False
+        assert ctx.bound_agent_id == direct_uuid
+        broadcaster_stub.broadcast_event.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_middleware_log_mode_emits_hijack_event(self, monkeypatch, caplog):
         """Log mode also emits — operators need to see attempts even when allowed."""
         import logging
