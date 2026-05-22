@@ -1,16 +1,21 @@
 # BEAM Coordination Kernel Plan
 
-**Created:** April 30, 2026  
-**Last Updated:** May 2, 2026  
-**Status:** Placement decided; Phase 1 in-memory spike implemented
+**Created:** April 30, 2026
+**Last Updated:** May 21, 2026
+**Status:** Placement decided; lease-plane service is live; BEAM Sentinel Wave 1 is in progress; Wave 3 handler-dispatch RFC is the next large design gate
 
 ## Related artifacts (independent convergence, 2026-04-30)
 
 This ontology-track plan converged with a parallel proposals-track RFC on the same primitive without coordination between sessions. Both should be read by anyone executing the spike:
 
-- **`docs/proposals/surface-lease-plane-v0.md` (v0.4)** — proposals-track contract spec. Council-pass-1 + ack-pass complete; status: implementation-gate ready. Defines the Postgres schema (matches `db/postgres/migrations/024_lease_plane.sql` verbatim), the `/v1/lease/*` HTTP API, typed-absence return shapes (matches `src/lease_plane/models.py`), the Phase A advisory → Phase B selective-enforcement rollout, and the §7 open questions.
+- **`docs/proposals/surface-lease-plane-v0.md`** — canonical lease-plane contract spec. It defines the `lease_plane.*` Postgres schema migrations, `/v1/lease/*` HTTP API, typed-absence return shapes, advisory → selective-enforcement rollout, surface-kind grammar, substrate-state extension, and Phase B gates.
+- **`docs/proposals/surface-lease-plane-phase-a-plan.md`** — shipped Phase A implementation ledger. Use this to reconstruct which RFC rows landed in which PR sequence.
+- **`docs/operations/lease-plane-operator-runbook.md`** — live operator surface for the running launchd service on `127.0.0.1:8788`.
+- **`docs/proposals/beam-footprint-roadmap-v0.md`** — roadmap-level migration decision. Current binding destination is stateful coordination to BEAM, stateless computation in Python.
+- **`docs/proposals/beam-wave-1-sentinel.md`** — Sentinel-on-BEAM Wave 1 RFC. Surface 1 cycle state, Surface 2 findings emission, and Surface 3 lease advisory are the active Sentinel scope.
+- **`docs/proposals/beam-wave-3-handler-dispatch.md`** — handler dispatch, identity middleware, and dialectic resolution RFC. This is a single-writer identity/onboarding-adjacent surface; check open PRs before editing.
 
-This plan is the **integration-into-UNITARES framing** (R7 row in `docs/ontology/plan.md`); the RFC is the **contract spec**. Neither subsumes the other. Implementation skeleton (`db/postgres/migrations/024_lease_plane.sql`, `src/lease_plane/`, `tests/test_lease_plane_client.py`) was captured into the repo by commit `b5364d3` after both docs landed; the migration is already applied to the live `governance` database. The Elixir/OTP implementation now lives in this repo under `elixir/lease_plane/`.
+This plan is the **integration-into-UNITARES framing** (R7 row in `docs/ontology/plan.md`); the RFCs are the **contract specs**. Neither subsumes the other. The original implementation skeleton (`db/postgres/migrations/024_lease_plane.sql`, `src/lease_plane/`, `tests/test_lease_plane_client.py`) was captured into the repo by commit `b5364d3` after both docs landed. The current Elixir/OTP apps live under `elixir/lease_plane/` and `elixir/sentinel/`.
 
 ---
 
@@ -210,7 +215,7 @@ V1 can hardcode rules. Do not add ML classification.
 
 Expose a small JSON API first. MCP wrapper can come later.
 
-### `POST /leases/acquire`
+### `POST /v1/lease/acquire`
 
 Request:
 
@@ -235,54 +240,41 @@ Responses:
 - `409 conflicted` with current holder, expiry, and intent
 - `422 invalid_evidence_ref`
 
-### `POST /leases/:lease_id/renew`
+The shipped API returns the discriminated JSON shapes from `surface-lease-plane-v0.md` instead of relying on HTTP status alone. For example: `ok: true` with `idempotent: true | false`, or `ok: false` with `error: "held_by_other" | "schema_invalid" | "service_unavailable" | ...`.
+
+### `POST /v1/lease/renew`
 
 Renews TTL if caller proves same holder/episode or valid handoff successor.
 
-### `POST /leases/:lease_id/release`
+### `POST /v1/lease/release`
 
 Releases with `release_reason`.
 
-### `GET /surfaces/:surface_type/:surface_id`
+### `GET /v1/lease/status`
 
-Returns active lease or typed absence.
+Returns active lease or typed absence for `surface_id`.
 
-### `POST /handoffs/offer`
+### `POST /v1/lease/heartbeat`
+
+Records remote-holder proof of life.
+
+### `POST /v1/lease/handoff/offer`
 
 Offers typed transfer.
 
-### `POST /handoffs/:handoff_id/accept`
+### `POST /v1/lease/handoff/accept`
 
 Accepts transfer and updates lease holder.
 
-## Postgres schema sketch
+## Postgres durable contract
 
-```sql
-CREATE TABLE coordination.surface_leases (
-    lease_id UUID PRIMARY KEY,
-    surface_type TEXT NOT NULL,
-    surface_id TEXT NOT NULL,
-    holder_uuid UUID,
-    holder_label TEXT,
-    episode_id TEXT,
-    harness TEXT,
-    intent TEXT NOT NULL,
-    evidence_ref TEXT NOT NULL,
-    acquired_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    expires_at TIMESTAMPTZ NOT NULL,
-    last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    status TEXT NOT NULL,
-    handoff_to UUID,
-    release_reason TEXT,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+The shipped schema is `lease_plane.*`, not the early ontology-draft `coordination.*` sketch. Implement from the migrations and RFC, not from historical prose:
 
-CREATE UNIQUE INDEX surface_leases_one_active_surface
-ON coordination.surface_leases (surface_type, surface_id)
-WHERE status = 'active';
-```
+- `db/postgres/migrations/024_lease_plane.sql` — first durable contract: `lease_plane.surface_leases`, `lease_plane.lease_plane_events`, active unique index, immutable holder/TTL checks, and event outbox shape.
+- Later `lease_plane` migrations — surface-kind grammar, deprecation catalog, earned-status guard, substrate-state columns and CHECK constraints.
+- `docs/proposals/surface-lease-plane-v0.md` — semantic contract for the schema and typed absence.
 
-V1 can use application-level expiry checks plus a periodic reaper. Do not rely on partial index magic alone; expired rows must transition out of `active`.
+V1 uses application-level expiry checks plus a periodic reaper. Do not rely on partial index uniqueness alone; expired rows must transition out of the active set.
 
 ## Telemetry to UNITARES
 
@@ -310,6 +302,13 @@ Forwarder behavior:
 
 ## Implementation sequence
 
+Current status as of 2026-05-21:
+
+- `elixir/lease_plane/` is the live lease-plane OTP app.
+- `elixir/sentinel/` is the Wave 1 Sentinel OTP app.
+- Phase A lease-plane rollout is complete; Phase B remains selectively gated by surface kind.
+- The Wave 3 handler-dispatch RFC is design-gated by measurement artifacts and single-writer identity/onboarding coordination.
+
 ### Phase 0 — repo and toolchain
 
 1. Confirm Elixir/Mix availability.
@@ -334,11 +333,10 @@ Exit criterion: two concurrent requests for the same `surface_id` deterministica
 
 ### Phase 2 — Postgres durability
 
-1. Add Ecto.
-2. Add migration for `coordination.surface_leases`.
-3. Persist lifecycle transitions.
-4. Add expiry reaper.
-5. Add tests around process crash/restart restoring active leases from DB.
+1. Use Postgrex against the existing `lease_plane.*` schema.
+2. Persist lifecycle transitions.
+3. Add expiry reaper.
+4. Add tests around process crash/restart restoring active leases from DB.
 
 Exit criterion: killing the BEAM process does not lose active lease knowledge; expired leases become expired, not corpse-locks.
 
@@ -396,11 +394,18 @@ When any trigger fires, the extraction itself is small: `git mv elixir/lease_pla
 
 ## Immediate next action
 
-Run the Phase 1 proof in the existing in-repo OTP app:
+For lease-plane changes, run the focused OTP suite first:
 
 ```bash
 cd elixir/lease_plane
-mix test test/surface_registry_test.exs
+mix test
+```
+
+For Sentinel Wave 1 changes, run the focused Sentinel suite:
+
+```bash
+cd elixir/sentinel
+mix test
 ```
 
 Keep UNITARES integration through the HTTP/API contract and the existing `lease_plane` schema. Do not create `unitares-coordination-kernel` unless a future split has a concrete release-cadence or external-consumer reason.
