@@ -103,6 +103,7 @@ def build_state_json(filled: Dict[str, Any]) -> Dict[str, Any]:
         "confidence": filled["confidence"],
         "task_type": filled["task_type"],
         "ethical_drift": filled["ethical_drift"],
+        "epistemic_class": "synthetic",
     }
 
 

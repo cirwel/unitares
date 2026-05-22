@@ -65,6 +65,30 @@ class TestPydanticSchemas:
         with pytest.raises(ValidationError):
             ProcessAgentUpdateParams(response_text="T", response_mode="invalid_mode")
 
+    def test_process_update_epistemic_class_validation(self):
+        """process_agent_update accepts the forward-only warrant labels."""
+        from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
+
+        valid = ProcessAgentUpdateParams(
+            response_text="hook-derived summary",
+            epistemic_class="substrate_interpretation",
+        )
+        assert valid.epistemic_class == "substrate_interpretation"
+
+        default = ProcessAgentUpdateParams(response_text="agent-authored")
+        assert default.epistemic_class == "agent_report"
+
+        with pytest.raises(ValidationError):
+            ProcessAgentUpdateParams(
+                response_text="old draft vocabulary",
+                epistemic_class="vitals",
+            )
+        with pytest.raises(ValidationError):
+            ProcessAgentUpdateParams(
+                response_text="caller cannot self-label measured rows synthetic",
+                epistemic_class="synthetic",
+            )
+
     def test_schema_registry_complete(self):
         """Ensure all 79 tools mapped in PYDANTIC_SCHEMAS exist and are valid subclasses of BaseModel."""
         schemas = get_pydantic_schemas()

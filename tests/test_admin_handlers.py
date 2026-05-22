@@ -1155,8 +1155,6 @@ class TestCheckCalibration:
         mock_seq_tracker.compute_metrics.return_value = {
             "status": "no_data",
             "eligible_samples": 0,
-            "log_evidence": 0.0,
-            "capped_alarm": 0.0,
             "signal_sources": {},
         }
 
@@ -1170,6 +1168,8 @@ class TestCheckCalibration:
             assert data["pending_updates"] == 2
             assert "complexity_calibration" in data
             assert data["tactical_evidence"]["status"] == "no_data"
+            assert "log_evidence" not in data["tactical_evidence"]
+            assert "capped_alarm" not in data["tactical_evidence"]
 
     @pytest.mark.asyncio
     async def test_check_calibration_empty_bins(self, patch_context_agent_id):
@@ -1180,8 +1180,6 @@ class TestCheckCalibration:
         mock_seq_tracker.compute_metrics.return_value = {
             "status": "no_data",
             "eligible_samples": 0,
-            "log_evidence": 0.0,
-            "capped_alarm": 0.0,
             "signal_sources": {},
         }
 
@@ -1194,6 +1192,8 @@ class TestCheckCalibration:
             assert data["total_samples"] == 0
             assert data["trajectory_health"] == 0.0
             assert data["confidence_distribution"]["mean"] == 0.0
+            assert "log_evidence" not in data["tactical_evidence"]
+            assert "capped_alarm" not in data["tactical_evidence"]
 
     @pytest.mark.asyncio
     async def test_check_calibration_accuracy_uses_real_outcome_evidence(self, patch_context_agent_id):
@@ -1258,8 +1258,6 @@ class TestCheckCalibration:
         mock_seq_tracker.compute_metrics.return_value = {
             "status": "no_data",
             "eligible_samples": 0,
-            "log_evidence": 0.0,
-            "capped_alarm": 0.0,
             "signal_sources": {},
         }
 
@@ -1272,6 +1270,8 @@ class TestCheckCalibration:
             assert data["accuracy"] is None
             assert data["trajectory_health"] == 0.97
             assert data["truth_channel"] == "trajectory_proxy"
+            assert "log_evidence" not in data["tactical_evidence"]
+            assert "capped_alarm" not in data["tactical_evidence"]
 
 
 # ============================================================================

@@ -165,4 +165,7 @@ async def test_backfill_skips_unmatched_missing_confidence(
     assert result["rebuilt_samples"] == 0
     assert result["paired_missing_confidence"] == 0
     assert result["skipped_no_match"] == 1
+    assert result["tracker_state"]["status"] == "no_data"
+    assert "log_evidence" not in result["tracker_state"]
+    assert "capped_alarm" not in result["tracker_state"]
     assert metrics["status"] == "no_data"

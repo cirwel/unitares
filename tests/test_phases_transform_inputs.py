@@ -34,3 +34,35 @@ def test_transform_inputs_missing_key_defaults_to_empty_string():
     ctx = UpdateContext(arguments={"complexity": 0.5})
     transform_inputs(ctx)
     assert ctx.response_text == ""
+
+
+def test_transform_inputs_defaults_epistemic_class_to_agent_report():
+    ctx = UpdateContext(arguments={"response_text": "done", "complexity": 0.5})
+    transform_inputs(ctx)
+    assert ctx.epistemic_class == "agent_report"
+
+
+def test_transform_inputs_preserves_valid_epistemic_class():
+    ctx = UpdateContext(
+        arguments={
+            "response_text": "edited foo.py; 3 command(s)",
+            "complexity": 0.65,
+            "epistemic_class": "substrate_interpretation",
+        }
+    )
+    transform_inputs(ctx)
+    assert ctx.epistemic_class == "substrate_interpretation"
+
+
+def test_transform_inputs_invalid_epistemic_class_degrades_to_agent_report():
+    """Non-schema internal callers should not be able to trip the DB CHECK."""
+    for bad_class in ("vitals", "synthetic"):
+        ctx = UpdateContext(
+            arguments={
+                "response_text": "done",
+                "complexity": 0.5,
+                "epistemic_class": bad_class,
+            }
+        )
+        transform_inputs(ctx)
+        assert ctx.epistemic_class == "agent_report"

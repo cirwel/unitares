@@ -32,6 +32,13 @@ from ..support.tool_hints import (
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = get_logger(__name__)
 
+_ALLOWED_EPISTEMIC_CLASSES = {
+    "agent_report",
+    "substrate_observation",
+    "substrate_interpretation",
+    "prediction",
+}
+
 _STRONG_IDENTITY_SOURCES = {
     "continuity_token",
     "explicit_client_session_id",
@@ -520,6 +527,18 @@ def transform_inputs(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
         except Exception as e:
             logger.debug(f"Calibration correction skipped: {e}")
 
+    # Epistemic class: forward-only storage label for the state row. Pydantic
+    # validates the public schema; this fallback keeps non-schema internal
+    # callers on the honest default.
+    raw_epistemic_class = ctx.arguments.get("epistemic_class") or "agent_report"
+    if raw_epistemic_class not in _ALLOWED_EPISTEMIC_CLASSES:
+        logger.warning(
+            "Unknown epistemic_class %r on process_agent_update; defaulting to agent_report",
+            raw_epistemic_class,
+        )
+        raw_epistemic_class = "agent_report"
+    ctx.epistemic_class = raw_epistemic_class
+
     # Low-assurance identity should not drive high-confidence updates.
     if ctx.identity_assurance.get("tier") == "weak" and ctx.confidence is not None:
         original_confidence = ctx.confidence
@@ -594,7 +613,8 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
         "parameters": np.array(ctx.arguments.get("parameters", [])),
         "ethical_drift": np.array(ctx.ethical_drift),
         "response_text": ctx.response_text,
-        "complexity": ctx.complexity
+        "complexity": ctx.complexity,
+        "epistemic_class": ctx.epistemic_class,
     }
     try:
         from src.provenance_context import (
@@ -1500,6 +1520,7 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
             action=(ctx.result.get('decision') or {}).get('sub_action')
                 or (ctx.result.get('decision') or {}).get('action'),
             provenance_context=ctx.agent_state.get("provenance_context"),
+            epistemic_class=ctx.epistemic_class,
         )
         logger.debug(f"PostgreSQL: Recorded state for {agent_id}")
     except ValueError:
@@ -1580,6 +1601,7 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                 action=(ctx.result.get('decision') or {}).get('sub_action')
                     or (ctx.result.get('decision') or {}).get('action'),
                 provenance_context=ctx.agent_state.get("provenance_context"),
+                epistemic_class=ctx.epistemic_class,
             )
             logger.debug(f"PostgreSQL: Created agent and recorded state for {agent_id}")
         except Exception as create_error:

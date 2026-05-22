@@ -26,20 +26,26 @@ class StateMixin:
         coherence: float,
         state_json: Optional[Dict[str, Any]] = None,
         risk_score: Optional[float] = None,
+        epistemic_class: Optional[str] = None,
     ) -> int:
         from config.governance_config import GovernanceConfig
+        payload = dict(state_json or {})
+        if epistemic_class is not None:
+            payload.setdefault("epistemic_class", epistemic_class)
         async with self.acquire() as conn:
             state_id = await conn.fetchval(
                 """
                 INSERT INTO core.agent_state
-                    (identity_id, entropy, integrity, stability_index, volatility, regime, coherence, state_json, epoch, risk_score)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    (identity_id, entropy, integrity, stability_index, volatility, regime,
+                     coherence, state_json, epoch, risk_score, epistemic_class)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 RETURNING state_id
                 """,
                 identity_id, entropy, integrity, stability_index, void,  # void maps to volatility column
-                regime, coherence, json.dumps(state_json or {}),
+                regime, coherence, json.dumps(payload),
                 GovernanceConfig.CURRENT_EPOCH,
                 risk_score,
+                epistemic_class,
             )
             # Matview refresh moved to periodic_matview_refresh() in background_tasks.py
             return state_id
@@ -64,18 +70,20 @@ class StateMixin:
         """
         import asyncpg
         from config.governance_config import GovernanceConfig
+        payload = dict(state_json)
+        payload.setdefault("epistemic_class", "synthetic")
         async with self.acquire() as conn:
             try:
                 state_id = await conn.fetchval(
                     """
                     INSERT INTO core.agent_state
                         (identity_id, entropy, integrity, stability_index, volatility,
-                         regime, coherence, state_json, epoch, synthetic)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true)
+                         regime, coherence, state_json, epoch, synthetic, epistemic_class)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, 'synthetic')
                     RETURNING state_id
                     """,
                     identity_id, entropy, integrity, stability_index, void,
-                    regime, coherence, json.dumps(state_json),
+                    regime, coherence, json.dumps(payload),
                     GovernanceConfig.CURRENT_EPOCH,
                 )
                 return state_id, True
@@ -219,7 +227,7 @@ class StateMixin:
                 """
                 SELECT s.state_id, s.identity_id, i.agent_id, s.recorded_at,
                        s.entropy, s.integrity, s.stability_index, s.volatility,
-                       s.regime, s.coherence, s.state_json
+                       s.regime, s.coherence, s.state_json, s.epistemic_class
                 FROM core.agent_state s
                 JOIN core.identities i ON i.identity_id = s.identity_id
                 WHERE s.identity_id = $1 AND s.epoch = $2
@@ -261,7 +269,7 @@ class StateMixin:
             base_sql = """
                 SELECT s.state_id, s.identity_id, i.agent_id, s.recorded_at,
                        s.entropy, s.integrity, s.stability_index, s.volatility,
-                       s.regime, s.coherence, s.state_json
+                       s.regime, s.coherence, s.state_json, s.epistemic_class
                 FROM core.agent_state s
                 JOIN core.identities i ON i.identity_id = s.identity_id
                 WHERE s.identity_id = $1 AND s.epoch = $2
@@ -291,12 +299,14 @@ class StateMixin:
                     """
                     SELECT state_id, identity_id, agent_id, recorded_at,
                            entropy, integrity, stability_index, volatility,
-                           regime, coherence, state_json
+                           regime, coherence, state_json, epistemic_class
                     FROM core.mv_latest_agent_states
                     """,
                 )
             except Exception:
-                # Matview may not exist yet — fall back to base table.
+                # Matview may not exist yet, or may still be on the pre-040
+                # projection that lacks epistemic_class. Fall back to the base
+                # table rather than requiring a DROP/CREATE matview migration.
                 # Filter `synthetic = false` here because the base table
                 # contains both measured and synthetic rows.
                 from config.governance_config import GovernanceConfig
@@ -306,7 +316,7 @@ class StateMixin:
                     SELECT DISTINCT ON (s.identity_id)
                            s.state_id, s.identity_id, i.agent_id, s.recorded_at,
                            s.entropy, s.integrity, s.stability_index, s.volatility,
-                           s.regime, s.coherence, s.state_json
+                           s.regime, s.coherence, s.state_json, s.epistemic_class
                     FROM core.agent_state s
                     JOIN core.identities i ON i.identity_id = s.identity_id
                     WHERE s.epoch = $1
@@ -414,6 +424,12 @@ class StateMixin:
 
     def _row_to_agent_state(self, row) -> AgentStateRecord:
         sj = json.loads(row["state_json"]) if isinstance(row["state_json"], str) else (row["state_json"] or {})
+        try:
+            epistemic_class = row["epistemic_class"]
+        except (KeyError, IndexError):
+            epistemic_class = None
+        if epistemic_class is not None:
+            sj.setdefault("epistemic_class", epistemic_class)
         return AgentStateRecord(
             state_id=row["state_id"],
             identity_id=row["identity_id"],
@@ -426,5 +442,6 @@ class StateMixin:
             void=row["volatility"],  # Map database column 'volatility' to 'void' field
             regime=row["regime"],
             coherence=row["coherence"],
+            epistemic_class=epistemic_class,
             state_json=sj,
         )

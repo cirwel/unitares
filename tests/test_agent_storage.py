@@ -768,8 +768,10 @@ class TestRecordAgentState:
         assert call_kwargs["void"] == -0.01
         assert call_kwargs["regime"] == "EXPLORATION"
         assert call_kwargs["coherence"] == 0.5
+        assert call_kwargs["epistemic_class"] == "agent_report"
         assert call_kwargs["state_json"]["health_status"] == "healthy"
         assert call_kwargs["state_json"]["E"] == 0.7
+        assert call_kwargs["state_json"]["epistemic_class"] == "agent_report"
 
     @pytest.mark.asyncio
     async def test_raises_when_agent_not_found(self):
@@ -836,6 +838,23 @@ class TestRecordAgentState:
         assert state_json["risk_score"] == 0.3
         assert state_json["phi"] == 0.42
         assert state_json["verdict"] == "safe"
+
+    @pytest.mark.asyncio
+    async def test_epistemic_class_persisted_to_column_and_state_json(self):
+        identity = _make_identity()
+        db = _mock_db(get_identity=identity, record_agent_state=1)
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import record_agent_state
+            await record_agent_state(
+                "agent-1",
+                E=0.5, I=0.5, S=0.5, V=0.0,
+                regime="nominal", coherence=1.0,
+                epistemic_class="substrate_interpretation",
+            )
+
+        call_kwargs = db.record_agent_state.call_args.kwargs
+        assert call_kwargs["epistemic_class"] == "substrate_interpretation"
+        assert call_kwargs["state_json"]["epistemic_class"] == "substrate_interpretation"
 
     @pytest.mark.asyncio
     async def test_provenance_context_in_state_json(self):

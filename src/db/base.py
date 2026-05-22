@@ -66,6 +66,7 @@ class AgentStateRecord:
     void: float = 0.1
     regime: str = "nominal"
     coherence: float = 1.0
+    epistemic_class: Optional[str] = None
     state_json: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -304,6 +305,8 @@ class DatabaseBackend(ABC):
         regime: str,
         coherence: float,
         state_json: Optional[Dict[str, Any]] = None,
+        risk_score: Optional[float] = None,
+        epistemic_class: Optional[str] = None,
     ) -> int:
         """Record a new state snapshot. Returns state_id."""
         pass
@@ -427,4 +430,3 @@ class DatabaseBackend(ABC):
     ) -> List[Dict[str, Any]]:
         """Query tool usage records."""
         pass
-
