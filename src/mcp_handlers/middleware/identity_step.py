@@ -327,6 +327,11 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     client_session_id = arguments.get("client_session_id")
     force_new = arguments.get("force_new", False)
     continuity_token = arguments.get("continuity_token")
+    try:
+        from ..tool_stability import resolve_tool_alias
+        canonical_name, _alias_info = resolve_tool_alias(name)
+    except Exception:
+        canonical_name = name
 
     # --- Sticky transport binding: early return if cached ---
     transport_key = _transport_cache_key(signals)
@@ -442,8 +447,12 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
         _partc_owned = _partc_token_aid == _direct_uuid
 
         if not _partc_owned:
-            from config.governance_config import identity_strict_mode
-            _partc_mode = identity_strict_mode()
+            _peer_pid = getattr(signals, "peer_pid", None) if signals else None
+            _transport = getattr(signals, "transport", None) if signals else None
+            _defer_to_substrate_handler = (
+                _transport == "uds" and isinstance(_peer_pid, int)
+            )
+            _partc_mode = None
 
             async def _emit_middleware_hijack(mode: str) -> None:
                 """Mirror the handlers.py event emission so middleware-path
@@ -474,7 +483,18 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                 except Exception as e:
                     logger.warning(f"[IDENTITY_HIJACK] middleware broadcast_event failed: {e}")
 
-            if _partc_mode == "strict":
+            if _defer_to_substrate_handler:
+                logger.debug(
+                    "[SUBSTRATE_GATE] Middleware PATH 0 saw UDS peer_pid=%d "
+                    "for %s...; deferring ownership decision to identity handler",
+                    _peer_pid,
+                    _direct_uuid[:8],
+                )
+            else:
+                from config.governance_config import identity_strict_mode
+                _partc_mode = identity_strict_mode()
+
+            if not _defer_to_substrate_handler and _partc_mode == "strict":
                 ctx.strict_reject = True
                 ctx.identity_result = {
                     "error": (
@@ -491,7 +511,7 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                 )
                 await _emit_middleware_hijack("strict")
                 return name, arguments, ctx
-            elif _partc_mode == "log":
+            elif not _defer_to_substrate_handler and _partc_mode == "log":
                 logger.warning(
                     "[IDENTITY_STRICT] Would reject middleware PATH 0 passthrough: "
                     "agent_uuid=%s... token_aid=%s",
@@ -585,7 +605,7 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
             # identity, onboard, bind_session} now lives as decorator
             # arguments on those handlers.
             from src.mcp_handlers.decorators import get_tool_identity_requirement
-            if get_tool_identity_requirement(name) == "pre_onboard":
+            if get_tool_identity_requirement(canonical_name) == "pre_onboard":
                 logger.info(
                     "[DISPATCH] session_resolve_miss for %s under %s... "
                     "— leaving request unbound (no middleware auto-mint, "
