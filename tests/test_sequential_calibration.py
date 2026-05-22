@@ -3,6 +3,20 @@
 from src.sequential_calibration import SequentialCalibrationTracker
 
 
+def test_no_data_omits_e_process_fields(tmp_path):
+    tracker = SequentialCalibrationTracker(state_file=tmp_path / "seq_state.json")
+
+    global_metrics = tracker.compute_metrics()
+    agent_metrics = tracker.compute_metrics(agent_id="missing-agent")
+
+    for metrics in (global_metrics, agent_metrics):
+        assert metrics["status"] == "no_data"
+        assert metrics["eligible_samples"] == 0
+        assert "log_evidence" not in metrics
+        assert "capped_alarm" not in metrics
+        assert "last_alt_probability" not in metrics
+
+
 def test_overconfident_failures_accumulate_positive_evidence(tmp_path):
     tracker = SequentialCalibrationTracker(state_file=tmp_path / "seq_state.json")
 

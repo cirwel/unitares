@@ -536,6 +536,7 @@ async def record_agent_state(
     verdict: Optional[str] = None,
     action: Optional[str] = None,
     provenance_context: Optional[Mapping[str, Any]] = None,
+    epistemic_class: Optional[str] = "agent_report",
 ) -> int:
     """
     Record agent EISV state to PostgreSQL.
@@ -579,6 +580,8 @@ async def record_agent_state(
         state_json["action"] = action
     if provenance_context:
         state_json["provenance_context"] = dict(provenance_context)
+    if epistemic_class is not None:
+        state_json["epistemic_class"] = epistemic_class
 
     state_id = await db.record_agent_state(
         identity_id=identity.identity_id,
@@ -590,6 +593,7 @@ async def record_agent_state(
         coherence=coherence,
         state_json=state_json,
         risk_score=risk_score,
+        epistemic_class=epistemic_class,
     )
 
     return state_id

@@ -31,6 +31,7 @@ class UpdateContext:
     response_text: str = ""
     complexity: float = 0.5
     confidence: Optional[float] = None
+    epistemic_class: str = "agent_report"
     ethical_drift: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     task_type: str = "mixed"
     calibration_correction_info: Optional[str] = None

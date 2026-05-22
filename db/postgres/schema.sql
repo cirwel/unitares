@@ -162,6 +162,17 @@ CREATE TABLE IF NOT EXISTS core.agent_state (
     -- Full state snapshot (for complex queries)
     state_json          JSONB NOT NULL DEFAULT '{}'::jsonb,
 
+    -- Forward-only warrant label. Historical rows may be NULL because
+    -- pre-040 process_agent_update inputs were not recoverably persisted.
+    epistemic_class     TEXT
+                        CHECK (epistemic_class IS NULL OR epistemic_class IN (
+                            'agent_report',
+                            'substrate_observation',
+                            'substrate_interpretation',
+                            'prediction',
+                            'synthetic'
+                        )),
+
     -- Epoch (added by migration 007; backported here so base DDL is honest
     -- under R1 v3.3-F. Bumped when EISV coupling constants, coherence formulas,
     -- or calibration logic change in a way that invalidates existing rows.)
@@ -174,6 +185,9 @@ CREATE TABLE IF NOT EXISTS core.agent_state (
 CREATE INDEX IF NOT EXISTS idx_agent_state_identity_time ON core.agent_state(identity_id, recorded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_state_regime ON core.agent_state(regime) WHERE regime != 'nominal';
 CREATE INDEX IF NOT EXISTS idx_agent_state_epoch ON core.agent_state(epoch);
+CREATE INDEX IF NOT EXISTS idx_agent_state_epistemic_class
+    ON core.agent_state(epistemic_class, recorded_at DESC)
+    WHERE epistemic_class IS NOT NULL;
 
 -- -----------------------------------------------------------------------------
 -- Schema Migrations (track applied migrations)
@@ -491,7 +505,7 @@ CREATE MATERIALIZED VIEW core.mv_latest_agent_states AS
 SELECT DISTINCT ON (s.identity_id)
        s.state_id, s.identity_id, i.agent_id, s.recorded_at,
        s.entropy, s.integrity, s.stability_index, s.volatility,
-       s.regime, s.coherence, s.state_json
+       s.regime, s.coherence, s.epistemic_class, s.state_json
 FROM core.agent_state s
 JOIN core.identities i ON i.identity_id = s.identity_id
 ORDER BY s.identity_id, s.recorded_at DESC;

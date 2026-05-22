@@ -15,6 +15,20 @@ TaskType = Literal[
 
 ToolResultKind = Literal["command", "test", "lint", "build", "file_op", "tool_call"]
 
+StateEpistemicClass = Literal[
+    "agent_report",
+    "substrate_observation",
+    "substrate_interpretation",
+    "prediction",
+    "synthetic",
+]
+ProcessUpdateEpistemicClass = Literal[
+    "agent_report",
+    "substrate_observation",
+    "substrate_interpretation",
+    "prediction",
+]
+
 
 def _infer_tool_result_kind(tool: Any, summary: Any = "") -> str:
     text = f"{tool or ''} {summary or ''}".strip().lower()
@@ -194,6 +208,16 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
         ge=0.0, 
         le=1.0,
         description="Confidence level for this update (0-1, optional)."
+    )
+    epistemic_class: ProcessUpdateEpistemicClass = Field(
+        default="agent_report",
+        description=(
+            "Forward-only storage label for this state row. Defaults to "
+            "agent_report. Use substrate_observation for raw measured facts, "
+            "substrate_interpretation for hook/tool-derived heuristics, "
+            "and prediction for explicit forward claims. Server-authored "
+            "bootstrap rows are labeled synthetic internally."
+        ),
     )
     response_mode: Literal["minimal", "compact", "standard", "full", "mirror", "auto"] = Field(
         default="auto",

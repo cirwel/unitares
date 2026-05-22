@@ -177,10 +177,12 @@ async def backfill(apply: bool = False, verbose: bool = False) -> dict:
     if apply:
         metrics = tracker.compute_metrics()
         result["tracker_state"] = {
+            "status": metrics.get("status", "no_data"),
             "eligible_samples": metrics.get("eligible_samples", 0),
-            "log_evidence": metrics.get("log_evidence", 0),
-            "capped_alarm": metrics.get("capped_alarm", 0),
         }
+        for field in ("log_evidence", "capped_alarm"):
+            if field in metrics:
+                result["tracker_state"][field] = metrics[field]
 
     return result
 
@@ -207,9 +209,12 @@ def main():
     if "tracker_state" in result:
         ts = result["tracker_state"]
         print(f"\n  Tracker state after backfill:")
+        print(f"    status:           {ts['status']}")
         print(f"    eligible_samples: {ts['eligible_samples']}")
-        print(f"    log_evidence:     {ts['log_evidence']:.4f}")
-        print(f"    capped_alarm:     {ts['capped_alarm']:.4f}")
+        if "log_evidence" in ts:
+            print(f"    log_evidence:     {ts['log_evidence']:.4f}")
+        if "capped_alarm" in ts:
+            print(f"    capped_alarm:     {ts['capped_alarm']:.4f}")
 
     return 0
 

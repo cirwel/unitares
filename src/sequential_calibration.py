@@ -27,10 +27,13 @@ Null and construction
   making the bet F_{n-1}-measurable. Under H0, E[e_n | F_{n-1}] = 1, so the
   running product is a nonnegative martingale with mean 1 and the cumulative
   log is a valid e-process for anytime-valid testing.
-- The exposed alarm metric is capped_alarm = 1 - exp(-max(0, log_e_value)),
-  which lives in [0, 1). log_evidence is similarly clamped at 0 from below
-  so favorable trajectories do not produce negative alarms. Raw e-values
-  remain internal to the tracker and are not exposed as governance state.
+- When at least one eligible sample exists, the exposed alarm metric is
+  capped_alarm = 1 - exp(-max(0, log_e_value)), which lives in [0, 1).
+  log_evidence is similarly clamped at 0 from below so favorable trajectories
+  do not produce negative alarms. No-data envelopes deliberately omit those
+  e-process fields so consumers cannot read calibration starvation as a
+  healthy zero alarm. Raw e-values remain internal to the tracker and are not
+  exposed as governance state.
 
 Known limitations
 -----------------
@@ -424,8 +427,11 @@ class SequentialCalibrationTracker:
 
         ANYTIME-VALIDITY SCOPE (S10 council finding):
         - scope="global" / scope="agent" expose the full e-process envelope
-          including `log_evidence`, `capped_alarm`, `last_alt_probability` —
-          each is a single coherent filtration with valid martingale guarantees.
+          once at least one eligible sample exists, including `log_evidence`,
+          `capped_alarm`, `last_alt_probability` — each is a single coherent
+          filtration with valid martingale guarantees. No-data envelopes omit
+          these fields so a missing signal cannot be mistaken for a healthy
+          zero alarm.
         - scope="class" deliberately omits those fields. A class bucket is
           either (a) a parallel e-process under live writes — valid in
           isolation but not multipliable against global/agent (same warning
@@ -445,9 +451,6 @@ class SequentialCalibrationTracker:
             "scope": scope,
             "signal_sources": {},
         }
-        if not is_class_scope:
-            empty_envelope["log_evidence"] = 0.0
-            empty_envelope["capped_alarm"] = 0.0
         if agent_id is not None:
             empty_envelope["agent_id"] = agent_id
         if class_tag is not None:

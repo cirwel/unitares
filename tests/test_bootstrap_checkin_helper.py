@@ -95,6 +95,7 @@ def test_state_json_marks_source_and_carries_digest():
     assert sj["source"] == "bootstrap"
     assert sj["bootstrap_digest"] == filled["bootstrap_digest"]
     assert sj["complexity"] == 0.7
+    assert sj["epistemic_class"] == "synthetic"
 
 
 def test_pydantic_rejects_extra_fields():
