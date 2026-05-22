@@ -7,6 +7,20 @@ contract drifting from actual behavior because nothing tests the description.
 import pytest
 
 
+def test_get_server_info_schema_tool_is_dispatch_registered():
+    """A tool advertised by MCP schemas must also resolve at dispatch time."""
+    from src.mcp_handlers import TOOL_HANDLERS
+    from src.tool_schemas import get_tool_definitions
+
+    schema_names = {tool.name for tool in get_tool_definitions(verbosity="full")}
+
+    assert "get_server_info" in schema_names
+    assert "get_server_info" in TOOL_HANDLERS, (
+        "get_server_info is advertised in tool schemas and health_check docs; "
+        "it must be dispatch-registered, not an unknown tool at call time"
+    )
+
+
 @pytest.mark.asyncio
 async def test_process_agent_update_describe_mentions_prediction_id():
     from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
@@ -66,10 +80,11 @@ async def test_health_check_describe_mentions_agent_signature():
     from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
     result = await handle_describe_tool({"tool_name": "health_check", "lite": False})
     description = _json.loads(result[0].text)["tool"]["description"]
-    assert "agent_signature" in description, (
-        "describe_tool(health_check) description text must document "
-        "agent_signature — response_base.py adds it to every non-lite response"
-    )
+    for field in ("agent_signature", "server_time", "_cache"):
+        assert field in description, (
+            "describe_tool(health_check) description text must document "
+            f"{field} from the shared response wrapper"
+        )
 
 
 def test_get_server_info_is_registered():

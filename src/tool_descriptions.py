@@ -35,6 +35,15 @@ _IDENTITY_DESCRIPTION_OVERRIDES = {
 }
 
 _DESCRIPTION_APPENDICES = {
+    "health_check": (
+        "\n\nRESPONSE WRAPPER FIELDS:\n"
+        "- server_time: ISO timestamp added by the shared MCP success wrapper\n"
+        "- agent_signature: caller identity signature object, e.g. "
+        "{\"uuid\": string|null}; may be {\"uuid\": null} before a caller is bound\n"
+        "- _cache: cached health snapshot metadata "
+        "(age_seconds, produced_at, stale, probe_interval_seconds, "
+        "staleness_threshold_seconds)"
+    ),
     "process_agent_update": (
         "\n\nS22 PROVENANCE FIELDS (optional, descriptive, not identity proof):\n"
         "- harness_type / harness: normalized harness family such as "
