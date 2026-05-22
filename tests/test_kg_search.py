@@ -1757,6 +1757,52 @@ class TestIssue165FtsOperator:
         assert "Invalid operator" in data["error"]
 
 
+class TestKgSearchComplexityCeiling:
+    """Broad auto queries stay inside the MCP tool budget."""
+
+    @pytest.mark.asyncio
+    async def test_auto_hybrid_skips_long_query_unless_forced(self, patch_common, monkeypatch):
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        monkeypatch.setenv("UNITARES_ENABLE_HYBRID", "1")
+        disc = make_discovery(id="sem-1", summary="Semantic match")
+        mock_graph.semantic_search = AsyncMock(return_value=[(disc, 0.82)])
+        mock_graph.full_text_search = AsyncMock(return_value=[disc])
+
+        result = await handle_search_knowledge_graph({
+            "query": "one two three four five six",
+        })
+        data = parse_result(result)
+
+        assert data["success"] is True
+        assert data["search_mode_used"] == "semantic"
+        assert "hybrid_skipped_reason" in data
+        mock_graph.semantic_search.assert_awaited_once()
+        mock_graph.full_text_search.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_long_fts_query_skips_automatic_or_fallback(self, patch_common):
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        del mock_graph.semantic_search
+        mock_graph.full_text_search = AsyncMock(return_value=[])
+
+        result = await handle_search_knowledge_graph({
+            "query": "one two three four five six",
+        })
+        data = parse_result(result)
+
+        assert data["success"] is True
+        assert data["search_mode_used"] == "fts"
+        assert data["fts_operator_used"] == "AND"
+        assert data["fts_fallback_used"] is False
+        assert "fts_fallback_skipped_reason" in data
+        assert mock_graph.full_text_search.await_count == 1
+        assert mock_graph.full_text_search.await_args.kwargs["operator"] == "AND"
+
+
 class TestIssue165ListScope:
     """list response declares its scope and accepts epoch_scope/including_cold."""
 
@@ -1864,6 +1910,5 @@ class TestIssue165Provenance:
         mock_graph.add_discovery.assert_awaited()
         node = mock_graph.add_discovery.await_args.args[0]
         assert node.provenance["source"] == "self_recovery_quick_resume"
-
 
 

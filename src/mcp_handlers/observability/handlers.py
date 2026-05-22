@@ -3,6 +3,7 @@ Observability tool handlers.
 """
 
 import asyncio
+import math
 from typing import Dict, Any, Sequence
 from mcp.types import TextContent
 import sys
@@ -14,6 +15,33 @@ from src.agent_monitor_state import ensure_hydrated
 logger = get_logger(__name__)
 
 # Import from mcp_server_std module (using shared utility)
+
+
+def _coerce_float_metric(value: Any, default: float) -> float:
+    """Return a finite float, falling back when sparse state returns None."""
+    try:
+        coerced = float(value)
+    except (TypeError, ValueError):
+        return default
+    return coerced if math.isfinite(coerced) else default
+
+
+def _resolve_agent_from_memory(target: str) -> str | None:
+    if target in mcp_server.agent_metadata:
+        return target
+    for uuid_key, meta in mcp_server.agent_metadata.items():
+        if target in (
+            getattr(meta, "label", None),
+            getattr(meta, "display_name", None),
+            getattr(meta, "structured_id", None),
+            getattr(meta, "public_agent_id", None),
+        ):
+            return uuid_key
+    return None
+
+
+def _get_observable_monitor(agent_id: str):
+    return mcp_server.monitors.get(agent_id)
 
 
 def _agent_display_name(agent_id: str) -> str | None:
@@ -31,7 +59,6 @@ def _agent_display_name(agent_id: str) -> str | None:
 @mcp_tool("observe_agent", timeout=15.0, register=False)
 async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Observe another agent's governance state with pattern analysis"""
-    from src.governance_monitor import UNITARESMonitor
     # Resolve the TARGET agent to observe.
     # Accept "target_agent_id" (preferred) or "agent_id" (legacy, only if it
     # doesn't match the caller's session-bound UUID — avoids self-observe).
@@ -64,44 +91,11 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
                 "example": "observe(action='agent', target_agent_id='<agent-label>')"
             }
         )]
-    # Resolve label to UUID if needed
-    agent_id = target
-    if not (len(target) == 36 and target.count('-') == 4):
-        # Looks like a label, resolve to UUID
-        resolved = None
-        try:
-            from src.mcp_handlers.identity.handlers import _find_agent_by_label
-            resolved = await _find_agent_by_label(target)
-        except Exception as e:
-            logger.debug(f"Label DB lookup failed for '{target}': {e}")
-
-        if not resolved:
-            # Fallback: search in-memory metadata by label.
-            # Was force=True; dropped because the in-memory dict is kept current
-            # by the regular write paths (process_agent_update / onboard /
-            # background load), and a full PG reload here would block all
-            # other handlers ~16s per call. If the agent isn't in memory,
-            # the DB lookup above already missed it.
-            await mcp_server.load_metadata_async()
-            for uuid, meta in mcp_server.agent_metadata.items():
-                if getattr(meta, 'label', None) == target:
-                    resolved = uuid
-                    break
-
-        if resolved:
-            agent_id = resolved
-        else:
-            return [error_response(
-                f"Agent '{target}' not found. Use list_agents to see available agents.",
-                recovery={"related_tools": ["list_agents"]}
-            )]
-    # Verify agent exists. Was force=True full reload; dropped — the
-    # in-memory dict is kept current by the write paths, so reloading all
-    # 3221 agents to look up one is overkill. If the agent is genuinely
-    # missing from in-memory, force-reloading will not surface it (the
-    # DB row was already there or wasn't).
-    await mcp_server.load_metadata_async()
-    if agent_id not in mcp_server.agent_metadata:
+    # Resolve label/UUID from the in-memory metadata snapshot only. Avoid
+    # async DB lookups here: MCP/anyio request handlers can deadlock when they
+    # await asyncpg/Redis work. Background loaders keep this snapshot fresh.
+    agent_id = _resolve_agent_from_memory(target)
+    if not agent_id:
         return [error_response(
             f"Agent '{target}' not found in active metadata. They may need to check in first.",
             recovery={"related_tools": ["list_agents"]}
@@ -110,9 +104,17 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
     include_history = arguments.get("include_history", True)
     analyze_patterns_flag = arguments.get("analyze_patterns", True)
     
-    # Load monitor state from disk if not in memory (consistent with get_governance_metrics)
-    monitor = mcp_server.get_or_create_monitor(agent_id)
-    await ensure_hydrated(monitor, agent_id)
+    # Read a monitor snapshot without request-time DB hydration. If no
+    # in-memory/sync-loaded snapshot exists yet, return a clear cache miss.
+    monitor = _get_observable_monitor(agent_id)
+    if monitor is None:
+        return [error_response(
+            f"Observation snapshot for agent '{target}' is not available yet.",
+            recovery={
+                "related_tools": ["get_governance_metrics", "list_agents"],
+                "hint": "Have the agent check in, or retry after background metadata/state loading catches up.",
+            },
+        )]
 
     # Perform pattern analysis
     if analyze_patterns_flag:
@@ -334,11 +336,11 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
     my_metrics = monitor.get_metrics()
     my_meta = mcp_server.agent_metadata.get(agent_id)
     
-    my_E = float(my_metrics.get('E', 0.7))
-    my_I = float(my_metrics.get('I', 0.8))
-    my_S = float(my_metrics.get('S', 0.2))
-    my_coherence = float(my_metrics.get('coherence', 0.5))
-    my_phi = my_metrics.get('phi', 0.0)
+    my_E = _coerce_float_metric(my_metrics.get('E'), 0.7)
+    my_I = _coerce_float_metric(my_metrics.get('I'), 0.8)
+    my_S = _coerce_float_metric(my_metrics.get('S'), 0.2)
+    my_coherence = _coerce_float_metric(my_metrics.get('coherence'), 0.5)
+    my_phi = _coerce_float_metric(my_metrics.get('phi'), 0.0)
     my_verdict = my_metrics.get('verdict', 'caution')
     my_regime = my_metrics.get('regime', 'nominal')
     my_total_updates = my_meta.total_updates if my_meta else 0
@@ -356,10 +358,12 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
             await ensure_hydrated(other_monitor, other_id)
             other_metrics = other_monitor.get_metrics()
 
-            other_E = float(other_metrics.get('E', 0.7))
-            other_I = float(other_metrics.get('I', 0.8))
-            other_S = float(other_metrics.get('S', 0.2))
-            other_coherence = float(other_metrics.get('coherence', 0.5))
+            other_E = _coerce_float_metric(other_metrics.get('E'), 0.7)
+            other_I = _coerce_float_metric(other_metrics.get('I'), 0.8)
+            other_S = _coerce_float_metric(other_metrics.get('S'), 0.2)
+            other_coherence = _coerce_float_metric(other_metrics.get('coherence'), 0.5)
+            other_phi = _coerce_float_metric(other_metrics.get('phi'), 0.0)
+            other_risk = _coerce_float_metric(other_metrics.get('risk_score'), 0.4)
             
             # Calculate similarity (Euclidean distance in EISV space)
             E_diff = abs(my_E - other_E)
@@ -381,9 +385,9 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
                         "I": other_I,
                         "S": other_S,
                         "coherence": other_coherence,
-                        "phi": other_metrics.get('phi', 0.0),
+                        "phi": other_phi,
                         "verdict": other_metrics.get('verdict', 'caution'),
-                        "risk_score": other_metrics.get('risk_score', 0.4)
+                        "risk_score": other_risk
                     },
                     "differences": {
                         "E": other_E - my_E,
@@ -429,7 +433,7 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
             "coherence": my_coherence,
             "phi": my_phi,
             "verdict": my_verdict,
-            "risk_score": my_metrics.get('risk_score', 0.4)
+            "risk_score": _coerce_float_metric(my_metrics.get('risk_score'), 0.4)
         },
         "similar_agents": top_similar,
         "message": f"Found {len(top_similar)} similar agent(s). Here's how you compare:",
