@@ -141,7 +141,7 @@ Same as v1, with explicit acknowledgement these are deferred *not* because they'
 
 | Channel | What it would measure | Prerequisite |
 |---|---|---|
-| **KG cite-and-extend** | Successor's KG writes within window cite or build on ≥ N of parent's entries | Selected as R5 v0.1's first shadow channel in `docs/ontology/r5-memory-deepening-reality.md`; runtime R2 gating still deferred until telemetry matures. |
+| **KG cite-and-extend** | Successor's KG writes within window cite or build on ≥ N of parent's entries | Selected as R5 v0.1's first shadow channel in private planning notes removed from public master; runtime R2 gating still deferred until telemetry matures. |
 | **Calibration-envelope match** | Successor's per-agent calibration curve falls within parent's confidence envelope | Per-agent calibration storage (R1 deferred C3). |
 | **Decision-distribution overlap** | Successor's decision distribution overlaps parent's | Persistent per-agent decision log (R1 deferred C4). |
 | **Forced re-derivation** (R5's domain) | Successor independently reproduces N of parent's KG conclusions from raw inputs | R5 — out of scope for R2; this is the integration-vs-replay discriminator. |
@@ -232,7 +232,7 @@ The forward-only trust-tier policy means clawback is bounded: only the *chain's*
 
 R2 uses the following columns on `core.identities` (canonical lineage table). R1 shipped the provisional/promotion subset; R2 Phase 1 shipped the lifecycle subset in migration 036:
 
-**Reconciliation (2026-05-05):** R1 PR #306 (migration 031) already shipped `provisional_lineage`, `provisional_score_id`, `provisional_recorded_at`, and `confirmed_at` on `core.identities`. R2 reuses these. `lineage_promoted_at` in the table below is satisfied by R1's existing `confirmed_at` — R2 does not introduce a duplicate column. R2's Phase 1 implementation (#357, migration 036) added the genuinely new columns: `lineage_declared_at`, `lineage_demoted_at`, `lineage_archived_at`, `lineage_last_eval_at`, `chain_obs_count`. See `docs/handoffs/2026-05-04-r2-implementation-plan.md`.
+**Reconciliation (2026-05-05):** R1 PR #306 (migration 031) already shipped `provisional_lineage`, `provisional_score_id`, `provisional_recorded_at`, and `confirmed_at` on `core.identities`. R2 reuses these. `lineage_promoted_at` in the table below is satisfied by R1's existing `confirmed_at` — R2 does not introduce a duplicate column. R2's Phase 1 implementation (#357, migration 036) added the genuinely new columns: `lineage_declared_at`, `lineage_demoted_at`, `lineage_archived_at`, `lineage_last_eval_at`, `chain_obs_count`. The implementation handoff was part of the private planning archive removed from public master after #357 landed.
 
 | Column | Type | Default | Purpose | Status |
 |---|---|---|---|---|

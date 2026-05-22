@@ -38,6 +38,11 @@ _PATH_PATTERNS = [
     re.compile(r'\]\(((?:src|config|scripts|docs|db|dashboard)/[^\)#\s]+)\)'),
 ]
 
+# Individual files where dead refs are expected. Keep these narrow: most
+# ontology docs are current contract docs, but plan.md is an intentionally
+# preserved internal ledger after public master removed some private drafts.
+_DEAD_REF_SKIP_FILES = {"docs/ontology/plan.md"}
+
 # Directories where dead refs are expected: historical planning records, not
 # current documentation. Specs/handoffs/plans describe intent at a moment in
 # time; implementation often lands under different names, so refs drift by
@@ -82,6 +87,8 @@ def check_dead_refs(md_files: list[Path]) -> list[str]:
     seen = set()
     for fpath in md_files:
         rel = fpath.relative_to(REPO_ROOT)
+        if rel.as_posix() in _DEAD_REF_SKIP_FILES:
+            continue
         if any(d in rel.parts for d in _DEAD_REF_SKIP_DIRS):
             continue
         # Review artifacts (code-review, dialectic-review, adversary-review)
@@ -178,6 +185,7 @@ _TOOL_ALLOWLIST = {
     "postgres", "redis", "age", "docker",  # infra
     "smoke", "pytest",  # test
     "export",  # consolidated tool (registered as action, not standalone)
+    "get_db",  # internal DB helper, not an MCP tool
     "create_task",  # asyncio.create_task(), not an MCP tool
     "str", "float", "int", "bool", "dict", "list", "set", "tuple",  # Python casts
     "acquire", "release",  # asyncio.Lock / Semaphore methods

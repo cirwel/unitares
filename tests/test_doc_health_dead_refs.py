@@ -196,6 +196,27 @@ def test_mixed_valid_and_dead_refs(stub_repo, doc_health):
     assert _FAKE_PATH in warnings[0]
 
 
+def test_dead_ref_check_skips_private_ontology_plan_ledger(tmp_path, monkeypatch, doc_health):
+    """The ontology plan ledger preserves private/internal refs removed from public master."""
+    plan = tmp_path / "docs" / "ontology" / "plan.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("Historical handoff: `docs/handoffs/removed-private-note.md`\n")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+
+    assert doc_health.check_dead_refs([plan]) == []
+
+
+def test_get_db_call_is_internal_helper_not_ghost_tool(tmp_path, monkeypatch, doc_health):
+    """AGENTS.md mentions get_db() as an internal helper, not an MCP tool claim."""
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text("New handlers can use `get_db()` for DB access.\n")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+
+    assert doc_health.check_ghost_tools([agents], {"onboard"}) == []
+
+
 def test_dedup_stripped_paths(stub_repo, doc_health):
     """Multiple refs to the same file with different line numbers dedupe to one warning."""
     content = (
