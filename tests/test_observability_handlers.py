@@ -208,6 +208,7 @@ class TestHandleObserveAgent:
         assert data["success"] is True
         assert data["agent_id"] == uuid
         assert "observation" in data
+        server.load_metadata_async.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_happy_path_without_pattern_analysis(self):
@@ -292,27 +293,27 @@ class TestHandleObserveAgent:
 
     @pytest.mark.asyncio
     async def test_label_resolution(self):
-        """When target is a label (not UUID format), resolve via _find_agent_by_label."""
+        """When target is a label, resolve from in-memory metadata."""
         uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        server = _build_mock_server(agent_ids=[uuid])
+        meta = _make_metadata(uuid, label="Lumen")
+        server = _build_mock_server(
+            monitors_dict={uuid: _make_monitor(uuid)},
+            metadata_dict={uuid: meta},
+        )
 
         with patch(_PATCH_SERVER, server), \
-             patch(_PATCH_CTX, return_value="caller-uuid"), \
-             patch(
-                 "src.mcp_handlers.identity.handlers._find_agent_by_label",
-                 new_callable=AsyncMock,
-                 return_value=uuid,
-             ):
+             patch(_PATCH_CTX, return_value="caller-uuid"):
             from src.mcp_handlers.observability.handlers import handle_observe_agent
             result = await handle_observe_agent({"target_agent_id": "Lumen"})
 
         data = parse_result(result)
         assert data["success"] is True
         assert data["agent_id"] == uuid
+        server.load_metadata_async.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_label_resolution_metadata_fallback(self):
-        """When _find_agent_by_label returns None, fall back to metadata label search."""
+        """Observe does not call async label lookup; metadata label search is enough."""
         uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         meta = _make_metadata(uuid, label="Lumen")
         server = _build_mock_server(
@@ -326,13 +327,15 @@ class TestHandleObserveAgent:
                  "src.mcp_handlers.identity.handlers._find_agent_by_label",
                  new_callable=AsyncMock,
                  return_value=None,
-             ):
+             ) as mock_find:
             from src.mcp_handlers.observability.handlers import handle_observe_agent
             result = await handle_observe_agent({"target_agent_id": "Lumen"})
 
         data = parse_result(result)
         assert data["success"] is True
         assert data["agent_id"] == uuid
+        mock_find.assert_not_awaited()
+        server.load_metadata_async.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_label_not_found(self):
@@ -722,6 +725,63 @@ class TestHandleCompareMeToSimilar:
 
         data = parse_result(result)
         assert data["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_none_metrics_use_defaults_instead_of_crashing(self):
+        """Sparse hydrated state can return explicit None values for metrics."""
+        my_uuid = "aaaaaaaa-bbbb-cccc-dddd-000000000000"
+        other_uuid = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
+        none_metrics = {
+            "E": None,
+            "I": None,
+            "S": None,
+            "coherence": None,
+            "phi": None,
+            "risk_score": None,
+        }
+        monitors = {
+            my_uuid: _make_monitor(my_uuid, metrics=none_metrics),
+            other_uuid: _make_monitor(other_uuid, metrics=none_metrics),
+        }
+        metadata = {
+            my_uuid: _make_metadata(my_uuid, status="active", total_updates=1),
+            other_uuid: _make_metadata(other_uuid, status="active", total_updates=1),
+        }
+        server = _build_mock_server(monitors_dict=monitors, metadata_dict=metadata)
+
+        with self._patches(server, my_uuid):
+            from src.mcp_handlers.observability.handlers import handle_compare_me_to_similar
+            result = await handle_compare_me_to_similar({"agent_id": my_uuid})
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["my_metrics"]["E"] == 0.7
+        assert data["my_metrics"]["I"] == 0.8
+        assert data["my_metrics"]["S"] == 0.2
+        assert data["my_metrics"]["coherence"] == 0.5
+        assert data["my_metrics"]["phi"] == 0.0
+        assert data["my_metrics"]["risk_score"] == 0.4
+        assert data["similar_agents"][0]["metrics"]["risk_score"] == 0.4
+
+    @pytest.mark.asyncio
+    async def test_consolidated_similar_uses_session_bound_identity(self):
+        """observe(action='similar') works without explicit agent_id when context is bound."""
+        my_uuid = "aaaaaaaa-bbbb-cccc-dddd-000000000000"
+        others = {
+            "aaaaaaaa-bbbb-cccc-dddd-111111111111": {
+                "E": 0.76, "I": 0.84, "S": 0.16, "coherence": 0.64,
+                "total_updates": 8,
+            },
+        }
+        server = self._setup_server_with_similar(my_uuid, others)
+
+        with self._patches(server, my_uuid):
+            from src.mcp_handlers.consolidated import handle_observe
+            result = await handle_observe({"action": "similar"})
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["agent_id"] == my_uuid
 
 
 # ---------------------------------------------------------------------------

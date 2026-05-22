@@ -4,7 +4,9 @@ Lifecycle query handlers — read-only agent listing and metadata retrieval.
 Extracted from handlers.py for maintainability.
 """
 
-from typing import Dict, Any, Sequence
+import hashlib
+import uuid
+from typing import Dict, Any, Optional, Sequence
 from mcp.types import TextContent
 from datetime import datetime, timedelta, timezone
 
@@ -28,6 +30,102 @@ from src.agent_monitor_state import ensure_hydrated
 from .helpers import _is_test_agent
 
 logger = get_logger(__name__)
+
+
+def _is_uuid_like_agent_id(value: Any) -> bool:
+    """Return True for identifiers that could be used as UUID credentials."""
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        uuid.UUID(value)
+        return True
+    except (TypeError, ValueError, AttributeError):
+        pass
+
+    if value.startswith("agent-"):
+        suffix = value[6:]
+        return (
+            len(suffix) >= 12
+            and all(ch in "0123456789abcdefABCDEF" for ch in suffix[:12])
+        )
+    return False
+
+
+def _public_agent_identifier(agent_id: str, meta: Any) -> str:
+    for attr in ("public_agent_id", "structured_id", "label", "display_name"):
+        value = getattr(meta, attr, None)
+        if value:
+            return str(value)
+    digest = hashlib.sha256(str(agent_id).encode("utf-8")).hexdigest()[:12]
+    return f"agent-redacted-{digest}"
+
+
+def _can_disclose_agent_uuid(
+    agent_id: Optional[str],
+    *,
+    caller_uuid: Optional[str],
+    operator_caller: bool,
+) -> bool:
+    if not agent_id:
+        return True
+    if operator_caller or agent_id == caller_uuid:
+        return True
+    return not _is_uuid_like_agent_id(agent_id)
+
+
+def _visible_agent_identifier(
+    agent_id: str,
+    meta: Any,
+    *,
+    caller_uuid: Optional[str],
+    operator_caller: bool,
+) -> tuple[str, bool]:
+    if _can_disclose_agent_uuid(
+        agent_id,
+        caller_uuid=caller_uuid,
+        operator_caller=operator_caller,
+    ):
+        return agent_id, False
+    return _public_agent_identifier(agent_id, meta), True
+
+
+def _visible_related_agent_identifier(
+    agent_id: Optional[str],
+    *,
+    caller_uuid: Optional[str],
+    operator_caller: bool,
+) -> tuple[Optional[str], bool]:
+    if not agent_id:
+        return None, False
+    if _can_disclose_agent_uuid(
+        agent_id,
+        caller_uuid=caller_uuid,
+        operator_caller=operator_caller,
+    ):
+        return agent_id, False
+
+    related_meta = mcp_server.agent_metadata.get(agent_id)
+    if related_meta:
+        return _public_agent_identifier(agent_id, related_meta), True
+
+    digest = hashlib.sha256(str(agent_id).encode("utf-8")).hexdigest()[:12]
+    return f"agent-redacted-{digest}", True
+
+
+def _context_agent_id() -> Optional[str]:
+    try:
+        from ..context import get_context_agent_id
+        return get_context_agent_id()
+    except Exception:
+        return None
+
+
+def _is_operator_request() -> bool:
+    try:
+        from src.mcp_handlers.identity.operator import is_operator_caller
+        return is_operator_caller()
+    except Exception:
+        return False
 
 
 @mcp_tool("list_agents", timeout=15.0, rate_limit_exempt=True, register=False)
@@ -57,6 +155,8 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                 lite_mode = False
             elif arguments.get("summary_only") is True or arguments.get("grouped") is False:
                 lite_mode = False
+        caller_uuid = _context_agent_id()
+        operator_caller = _is_operator_request()
         if lite_mode:
             # Ultra-compact response - only real agents
             limit = arguments.get("limit", 20)
@@ -122,8 +222,19 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                 label = getattr(meta, 'label', None)
                 public_id = getattr(meta, 'public_agent_id', None) or getattr(meta, 'structured_id', None)
                 from src.resident_progress.registry import is_event_driven_label
-                agents.append({
-                    "id": agent_id,
+                visible_id, uuid_redacted = _visible_agent_identifier(
+                    agent_id,
+                    meta,
+                    caller_uuid=caller_uuid,
+                    operator_caller=operator_caller,
+                )
+                parent_id, parent_redacted = _visible_related_agent_identifier(
+                    getattr(meta, 'parent_agent_id', None),
+                    caller_uuid=caller_uuid,
+                    operator_caller=operator_caller,
+                )
+                agent_entry = {
+                    "id": visible_id,
                     # display_name (user-chosen) takes precedence; agent_id is fallback
                     "label": label or public_id,
                     "status": meta.status,
@@ -132,26 +243,30 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                     "last": meta.last_update[:10] if meta.last_update else None,
                     "last_update": meta.last_update,
                     "trust_tier": getattr(meta, 'trust_tier', None),
-                    "parent_agent_id": getattr(meta, 'parent_agent_id', None),
+                    "parent_agent_id": parent_id,
                     "spawn_reason": getattr(meta, 'spawn_reason', None),
                     "event_driven": is_event_driven_label(label),
-                })
+                }
+                if uuid_redacted:
+                    agent_entry["uuid_redacted"] = True
+                if parent_redacted:
+                    agent_entry["parent_agent_id_redacted"] = True
+                agents.append(agent_entry)
             # Sort: labeled first, then by most recent activity
             agents.sort(key=lambda x: (0 if x.get("label") else 1, -(x.get("updates") or 0), x.get("last_update", "") or ""), reverse=False)
 
             # Always include the requesting agent even if filtered out
-            caller_uuid = None
-            try:
-                from ..context import get_context_agent_id
-                caller_uuid = get_context_agent_id()
-            except Exception:
-                pass
             caller_in_list = caller_uuid and any(a["id"] == caller_uuid for a in agents)
             if caller_uuid and not caller_in_list:
                 caller_meta = mcp_server.agent_metadata.get(caller_uuid)
                 if caller_meta:
                     caller_label = getattr(caller_meta, 'label', None)
                     caller_public = getattr(caller_meta, 'public_agent_id', None) or getattr(caller_meta, 'structured_id', None)
+                    parent_id, parent_redacted = _visible_related_agent_identifier(
+                        getattr(caller_meta, 'parent_agent_id', None),
+                        caller_uuid=caller_uuid,
+                        operator_caller=operator_caller,
+                    )
                     agents.append({
                         "id": caller_uuid,
                         "label": caller_label or caller_public,
@@ -161,10 +276,12 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                         "last": caller_meta.last_update[:10] if caller_meta.last_update else None,
                         "last_update": caller_meta.last_update,
                         "trust_tier": getattr(caller_meta, 'trust_tier', None),
-                        "parent_agent_id": getattr(caller_meta, 'parent_agent_id', None),
+                        "parent_agent_id": parent_id,
                         "spawn_reason": getattr(caller_meta, 'spawn_reason', None),
                         "you": True,
                     })
+                    if parent_redacted:
+                        agents[-1]["parent_agent_id_redacted"] = True
 
             for a in agents:
                 # Mark the requesting agent
@@ -278,8 +395,19 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                     inferred_status = "archived"  # Old activity = archived
 
             from src.resident_progress.registry import is_event_driven_label
+            visible_agent_id, uuid_redacted = _visible_agent_identifier(
+                agent_id,
+                meta,
+                caller_uuid=caller_uuid,
+                operator_caller=operator_caller,
+            )
+            parent_id, parent_redacted = _visible_related_agent_identifier(
+                getattr(meta, 'parent_agent_id', None),
+                caller_uuid=caller_uuid,
+                operator_caller=operator_caller,
+            )
             agent_info = {
-                "agent_id": agent_id,
+                "agent_id": visible_agent_id,
                 "label": getattr(meta, 'label', None),
                 "purpose": getattr(meta, 'purpose', None),
                 "lifecycle_status": inferred_status,
@@ -288,10 +416,14 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                 "total_updates": meta.total_updates,
                 "tags": meta.tags.copy() if meta.tags else [],
                 "notes": meta.notes if meta.notes else "",
-                "parent_agent_id": getattr(meta, 'parent_agent_id', None),
+                "parent_agent_id": parent_id,
                 "spawn_reason": getattr(meta, 'spawn_reason', None),
                 "event_driven": is_event_driven_label(getattr(meta, 'label', None)),
             }
+            if uuid_redacted:
+                agent_info["agent_id_redacted"] = True
+            if parent_redacted:
+                agent_info["parent_agent_id_redacted"] = True
 
             # Lazy load metrics only if requested (optimization)
             if include_metrics:
@@ -419,6 +551,7 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
             # Trust tier from cached trajectory data (DB fallback done in batch below)
             cached_tier = getattr(meta, 'trust_tier', None)
             agent_info["trust_tier"] = cached_tier
+            agent_info["_agent_uuid"] = agent_id
 
             agents_list.append(agent_info)
 
@@ -430,10 +563,10 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                 from src.identity.trust_tier_routing import resolve_trust_tier
                 from src.db import get_db as _get_db
                 db = _get_db()
-                ids_to_fetch = [a["agent_id"] for a in agents_needing_tiers]
+                ids_to_fetch = [a["_agent_uuid"] for a in agents_needing_tiers]
                 identities = await db.get_identities_batch(ids_to_fetch)
                 for agent_info in agents_needing_tiers:
-                    aid = agent_info["agent_id"]
+                    aid = agent_info["_agent_uuid"]
                     identity = identities.get(aid)
                     if identity and identity.metadata:
                         meta_obj = mcp_server.agent_metadata.get(aid)
@@ -470,6 +603,8 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
             agents_list = agents_list[offset:offset + limit]
         elif offset > 0:
             agents_list = agents_list[offset:]
+        for agent_info in agents_list:
+            agent_info.pop("_agent_uuid", None)
 
         # Group by status if requested (for returned agents only)
         if grouped and not summary_only:
