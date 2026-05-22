@@ -2070,6 +2070,43 @@ def _parse_resident_timestamp(value: object) -> Optional[datetime]:
     return parsed
 
 
+def _safe_resident_total_updates(meta: object) -> int:
+    try:
+        return int(getattr(meta, "total_updates", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _resident_meta_preference_key(meta: object) -> tuple[int, int, float, int]:
+    """Sort key for duplicate resident labels.
+
+    Governance restarts can leave active 0-update resident forks beside the
+    canonical row. Prefer an active row, then one that has real updates, then
+    the freshest timestamp, then total update count as a final tiebreaker.
+    """
+    status = getattr(meta, "status", None)
+    total_updates = _safe_resident_total_updates(meta)
+    last_dt = _parse_resident_timestamp(getattr(meta, "last_update", None))
+    return (
+        1 if status == "active" else 0,
+        1 if total_updates > 0 else 0,
+        last_dt.timestamp() if last_dt else 0.0,
+        total_updates,
+    )
+
+
+def _latest_eisv_for_label(label: str) -> Optional[dict]:
+    """Find the most recent eisv_update event for a resident label."""
+    for event in reversed(broadcaster_instance.event_history):
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") != "eisv_update":
+            continue
+        if event.get("agent_name") == label:
+            return event
+    return None
+
+
 def _coherence_history_for_agent(agent_id: str, window_minutes: int = 60) -> list[dict]:
     """Collect coherence (plus risk, verdict) data points for a sparkline.
 
@@ -2186,19 +2223,7 @@ async def http_residents(request):
                 label_to_meta[label] = (agent_id, meta)
                 continue
             existing_meta = existing[1]
-            # Prefer active over archived/paused.
-            existing_status = getattr(existing_meta, "status", None)
-            new_status = getattr(meta, "status", None)
-            existing_active = existing_status == "active"
-            new_active = new_status == "active"
-            if new_active and not existing_active:
-                label_to_meta[label] = (agent_id, meta)
-                continue
-            if existing_active and not new_active:
-                continue
-            # Both same activity tier — prefer the one with more updates.
-            if (getattr(meta, "total_updates", 0) or 0) > \
-               (getattr(existing_meta, "total_updates", 0) or 0):
+            if _resident_meta_preference_key(meta) > _resident_meta_preference_key(existing_meta):
                 label_to_meta[label] = (agent_id, meta)
 
         residents: list[dict] = []
@@ -2209,6 +2234,29 @@ async def http_residents(request):
             meta = entry[1] if entry else None
 
             latest = _latest_eisv_for_agent(agent_id) if agent_id else None
+
+            # If metadata points at a stale duplicate UUID but the broadcaster
+            # has a newer EISV event for the same resident label, follow the
+            # live event. This catches resident identity skew without waiting
+            # for metadata hydration to converge.
+            latest_by_label = _latest_eisv_for_label(label)
+            if latest_by_label:
+                label_dt = _parse_resident_timestamp(latest_by_label.get("timestamp"))
+                current_event_dt = _parse_resident_timestamp(latest.get("timestamp")) if latest else None
+                metadata_dt_for_selection = _parse_resident_timestamp(
+                    getattr(meta, "last_update", None) if meta else None
+                )
+                if (
+                    label_dt
+                    and (current_event_dt is None or label_dt > current_event_dt)
+                    and (metadata_dt_for_selection is None or label_dt >= metadata_dt_for_selection)
+                ):
+                    latest = latest_by_label
+                    event_agent_id = latest_by_label.get("agent_id")
+                    if event_agent_id and event_agent_id != agent_id:
+                        agent_id = event_agent_id
+                        meta = getattr(mcp_server_obj, "agent_metadata", {}).get(event_agent_id)
+
             history = _coherence_history_for_agent(agent_id) if agent_id else []
             recent_writes = await _recent_writes_for_agent(agent_id) if agent_id else []
 
@@ -2257,13 +2305,12 @@ async def http_residents(request):
 
             # Status: paused > silent > healthy > unknown.
             status = "unknown"
-            if meta:
-                if getattr(meta, "status", None) in ("paused", "archived"):
-                    status = getattr(meta, "status")
-                elif silence_seconds is not None and silence_seconds > silence_threshold:
-                    status = "silent"
-                elif latest is not None or silence_seconds is not None:
-                    status = "healthy"
+            if meta and getattr(meta, "status", None) in ("paused", "archived"):
+                status = getattr(meta, "status")
+            elif silence_seconds is not None and silence_seconds > silence_threshold:
+                status = "silent"
+            elif latest is not None or silence_seconds is not None:
+                status = "healthy"
 
             flat = _extract_eisv_fields(latest) if latest else None
             from src.resident_progress.registry import is_event_driven_label

@@ -18,7 +18,9 @@ from src.mcp_handlers.support.wrapper_generator import (
     _json_type_to_python,
     create_typed_wrapper,
     _create_simple_wrapper,
+    enable_extra_argument_passthrough,
 )
+from mcp.server.fastmcp.tools.base import Tool
 
 
 # ============================================================================
@@ -364,3 +366,62 @@ class TestSessionWrapperContextDetection:
         wrapper = create_typed_wrapper("plain", schema, get_handler, inject_session=False)
         assert "ctx" not in inspect.signature(wrapper).parameters
         assert "ctx" not in wrapper.__annotations__
+
+
+class TestExtraArgumentPassthrough:
+
+    def test_fastmcp_validation_preserves_process_agent_update_s22_envelope(self):
+        """FastMCP must not drop internal S22 fields before dispatch middleware."""
+        call_log = []
+
+        def get_handler(name):
+            async def handler(**kwargs):
+                call_log.append(kwargs)
+                return {"ok": True}
+            return handler
+
+        def session_extractor(ctx):
+            return "session-id"
+
+        # Mirrors the public process_agent_update shape: only the agent-knowable
+        # provenance fields are named schema properties. Harness/server-known
+        # fields arrive as extra top-level MCP arguments from internal callers.
+        schema = {
+            "properties": {
+                "response_text": {"type": "string"},
+                "comparison_key": {"type": "string"},
+                "task_label": {"type": "string"},
+                "task_outcome": {"type": "string"},
+                "memory_context": {"type": "string"},
+            },
+            "required": [],
+        }
+        wrapper = create_typed_wrapper(
+            "process_agent_update",
+            schema,
+            get_handler,
+            inject_session=True,
+            session_extractor=session_extractor,
+        )
+        tool = Tool.from_function(wrapper, structured_output=False)
+        enable_extra_argument_passthrough(tool)
+
+        sent = {
+            "response_text": "round-trip check",
+            "harness_type": "r6_dogfood",
+            "model": "test-model",
+            "tool_surface": "hermes-wrapper",
+            "memory_context": "memory+kg+transcript",
+            "comparison_key": "hermes-wrapper-rt-test",
+            "task_label": "Hermes MCP wrapper round-trip",
+            "task_outcome": "test_passed",
+            "verification_source": "agent_reported_tool_result",
+            "governance_mode": "governed",
+            "locus": "in_process_mcp_wrapper",
+        }
+
+        asyncio.run(tool.run(sent))
+
+        assert call_log
+        for key, value in sent.items():
+            assert call_log[0][key] == value
