@@ -15,7 +15,7 @@ import inspect
 import logging
 from typing import Annotated, Any, Callable, Optional, Union
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,46 @@ def create_typed_wrapper(
     wrapper.__qualname__ = tool_name
     
     return wrapper
+
+def enable_extra_argument_passthrough(tool: Any) -> bool:
+    """Preserve unknown top-level MCP arguments through FastMCP validation.
+
+    FastMCP builds an internal Pydantic argument model from a wrapper's
+    signature and, by default, Pydantic ignores keys that are not named in that
+    signature. UNITARES' dispatch middleware already preserves extra fields
+    after its own Pydantic validation, but internal S22/R6 callers need those
+    fields to survive FastMCP's earlier validation boundary first.
+
+    This helper intentionally leaves the public/listed tool schema unchanged;
+    it only swaps the registered FastMCP tool's internal argument model for a
+    subclass with ``extra='allow'`` whose ``model_dump_one_level`` includes the
+    retained extras.
+    """
+    fn_metadata = getattr(tool, "fn_metadata", None)
+    arg_model = getattr(fn_metadata, "arg_model", None)
+    if fn_metadata is None or arg_model is None:
+        return False
+    if getattr(arg_model, "__unitaires_extra_passthrough_enabled__", False):
+        return False
+
+    base_config = dict(getattr(arg_model, "model_config", {}) or {})
+
+    class ExtraPassthroughArgModel(arg_model):  # type: ignore[misc, valid-type]
+        __unitaires_extra_passthrough_enabled__ = True
+        model_config = ConfigDict(**{**base_config, "extra": "allow"})
+
+        def model_dump_one_level(self) -> dict[str, Any]:
+            values = super().model_dump_one_level()
+            extras = getattr(self, "__pydantic_extra__", None) or {}
+            values.update(extras)
+            return values
+
+    ExtraPassthroughArgModel.__name__ = f"{arg_model.__name__}ExtraPassthrough"
+    ExtraPassthroughArgModel.__qualname__ = ExtraPassthroughArgModel.__name__
+    ExtraPassthroughArgModel.model_rebuild(force=True)
+    fn_metadata.arg_model = ExtraPassthroughArgModel
+    return True
+
 
 def _resolve_param_type(param_def: dict) -> Any:
     """Resolve a JSON Schema parameter definition to a Python type.

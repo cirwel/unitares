@@ -15,6 +15,7 @@ residents that aren't running.
 """
 import os
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -207,6 +208,96 @@ async def test_residents_use_broadcaster_event_when_it_is_newer(monkeypatch):
     assert lumen["last_checkin_at"] == "2026-04-28T10:06:04+00:00"
     assert lumen["last_checkin_source"] == "broadcaster_eisv"
     assert lumen["metadata_last_update"] == "2026-04-28T10:01:56+00:00"
+
+
+@pytest.mark.asyncio
+async def test_residents_duplicate_label_prefers_fresh_real_metadata(monkeypatch):
+    """A stale 0-update resident fork must not shadow the active resident."""
+    from src import http_api
+
+    request = SimpleNamespace(
+        headers={},
+        query_params={},
+        url=SimpleNamespace(path="/v1/residents"),
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+    server = SimpleNamespace(agent_metadata={
+        "sentinel-stale": _resident_meta(
+            label="Sentinel",
+            last_update="2026-05-01T01:58:39+00:00",
+            total_updates=0,
+        ),
+        "sentinel-active": _resident_meta(
+            label="Sentinel",
+            last_update="2026-05-18T21:32:04+00:00",
+            total_updates=1,
+        ),
+    })
+
+    http_api.broadcaster_instance.event_history.clear()
+    http_api.broadcaster_instance.event_history.append({
+        "type": "eisv_update",
+        "agent_id": "sentinel-active",
+        "agent_name": "Sentinel",
+        "timestamp": "2026-05-18T21:32:04+00:00",
+        "eisv": {"E": 0.7, "I": 0.6, "S": 0.2, "V": 0.1},
+        "metrics": {"coherence": 0.5, "risk_score": 0.2, "verdict": "safe"},
+    })
+
+    with patch("src.mcp_handlers.shared.lazy_mcp_server", server), \
+            patch("src.http_api._recent_writes_for_agent", AsyncMock(return_value=[])):
+        resp = await http_api.http_residents(request)
+
+    data = json.loads(resp.body.decode())
+    sentinel = data["residents"][0]
+    assert sentinel["agent_id"] == "sentinel-active"
+    assert sentinel["last_checkin_at"] == "2026-05-18T21:32:04+00:00"
+
+
+@pytest.mark.asyncio
+async def test_residents_rebinds_stale_metadata_to_newer_label_event(monkeypatch):
+    """A live EISV event can recover a resident whose metadata label points at a stale UUID."""
+    from src import http_api
+
+    request = SimpleNamespace(
+        headers={},
+        query_params={},
+        url=SimpleNamespace(path="/v1/residents"),
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+    server = SimpleNamespace(agent_metadata={
+        "sentinel-stale": _resident_meta(
+            label="Sentinel",
+            last_update="2026-05-01T01:58:39+00:00",
+            total_updates=0,
+        ),
+    })
+
+    http_api.broadcaster_instance.event_history.clear()
+    http_api.broadcaster_instance.event_history.append({
+        "type": "eisv_update",
+        "agent_id": "sentinel-real",
+        "agent_name": "Sentinel",
+        "timestamp": "2026-05-18T21:32:04+00:00",
+        "eisv": {"E": 0.74, "I": 0.68, "S": 0.24, "V": 0.08},
+        "metrics": {"coherence": 0.496, "risk_score": 0.6535, "verdict": "high-risk"},
+    })
+    monkeypatch.setattr(
+        http_api.time,
+        "time",
+        lambda: datetime(2026, 5, 18, 21, 33, 0, tzinfo=timezone.utc).timestamp(),
+    )
+
+    with patch("src.mcp_handlers.shared.lazy_mcp_server", server), \
+            patch("src.http_api._recent_writes_for_agent", AsyncMock(return_value=[])):
+        resp = await http_api.http_residents(request)
+
+    data = json.loads(resp.body.decode())
+    sentinel = data["residents"][0]
+    assert sentinel["agent_id"] == "sentinel-real"
+    assert sentinel["status"] == "healthy"
+    assert sentinel["last_checkin_source"] == "broadcaster_eisv"
+    assert sentinel["latest_eisv_at"] == "2026-05-18T21:32:04+00:00"
 
 
 @pytest.mark.asyncio

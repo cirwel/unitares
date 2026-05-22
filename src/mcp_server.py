@@ -347,6 +347,14 @@ TOOLS_NEEDING_SESSION_INJECTION = {
     "compare_me_to_similar",
 }
 
+# FastMCP validates tool arguments before dispatch_tool sees them. For these
+# internal/provenance-heavy tools, UNITARES dispatch middleware is the source of
+# truth and must receive caller-supplied extra fields unchanged.
+EXTRA_ARGUMENT_PASSTHROUGH_TOOLS = {
+    "process_agent_update",
+}
+
+
 def auto_register_all_tools():
     """
     Auto-register tools from tool_schemas.py with typed signatures.
@@ -371,7 +379,10 @@ def auto_register_all_tools():
     The SSE server will automatically pick it up.
     """
     from src.tool_schemas import get_tool_definitions
-    from src.mcp_handlers.support.wrapper_generator import create_typed_wrapper
+    from src.mcp_handlers.support.wrapper_generator import (
+        create_typed_wrapper,
+        enable_extra_argument_passthrough,
+    )
     from src.mcp_handlers.decorators import get_tool_registry
     from src.tool_modes import TOOL_MODE, get_tools_for_mode
 
@@ -415,6 +426,26 @@ def auto_register_all_tools():
 
             # Register with FastMCP - it will infer schema from signature
             mcp.tool(description=description, structured_output=False)(wrapper)
+            if tool_name in EXTRA_ARGUMENT_PASSTHROUGH_TOOLS:
+                tool_manager = getattr(mcp, "_tool_manager", None)
+                registered_tool = (
+                    tool_manager.get_tool(tool_name)
+                    if tool_manager and hasattr(tool_manager, "get_tool")
+                    else None
+                )
+                if registered_tool is None:
+                    logger.warning(
+                        "Failed to enable extra argument passthrough for %s: "
+                        "registered FastMCP tool not found",
+                        tool_name,
+                    )
+                else:
+                    enabled = enable_extra_argument_passthrough(registered_tool)
+                    if enabled:
+                        logger.info(
+                            "Enabled extra argument passthrough for %s",
+                            tool_name,
+                        )
             registered_count += 1
 
         except Exception as e:
