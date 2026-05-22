@@ -1,7 +1,9 @@
 defmodule UnitaresSentinel do
   @moduledoc """
   Wave 1 — Sentinel-on-BEAM. Per `docs/proposals/beam-wave-1-sentinel.md`
-  v0.1.1 (council-folded).
+  v0.1.3. The v0.1.2 amendment is binding for Surface 1 cycle-state
+  path resolution and cutover semantics; v0.1.1 Surface 1 prose is
+  historical only.
 
   Top-level invariant inherited from the lease plane: **BEAM owns live
   coordination, Python owns governance truth, Postgres owns durable truth.**
@@ -10,9 +12,12 @@ defmodule UnitaresSentinel do
   feeds and emits findings + EISV check-ins via REST to the Python
   governance MCP.
 
-  ## State surfaces (5 total per v0.1.1)
+  ## State surfaces (5 total)
 
-    1. `STATE_FILE` cycle state at `~/.unitares/anchors/.sentinel_state`
+    1. `STATE_FILE` cycle state at the config-supplied path
+       (`UNITARES_SENTINEL_STATE_FILE`; production defaults to
+       `<repo_root>/.sentinel_state`, with `<repo_root>/.sentinel_state.beam`
+       as the BEAM shadow file)
     2. Findings emit channel via `post_finding(...)` → `POST /api/findings`
     3. Lease-advisory scope `resident:/sentinel_cycle`
     4. Python-runtime-specific anyio mitigations (BEAM-side: not inherited)
