@@ -9,7 +9,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
 
-Status: live. First public commit 2025-12-04. For architecture details, see [docs/UNIFIED_ARCHITECTURE.md](docs/UNIFIED_ARCHITECTURE.md).
+Status: live. First public commit 2025-12-04. Cold evaluators can start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md); architecture details are in [docs/UNIFIED_ARCHITECTURE.md](docs/UNIFIED_ARCHITECTURE.md).
 
 Multi-agent fleets fly blind. The agent-identity layer tells you *who* is calling. The evaluation layer tells you *whether a model is good enough to deploy*. Neither tells you **what the fleet is actually doing right now, whether it's still coherent, or whether it's drifting from its baseline**. That layer is what UNITARES is.
 
@@ -108,7 +108,7 @@ The agent reads its own metrics and adjusts *before* external controls have to f
 
 ## Production snapshot
 
-As of May 6, 2026 (single-operator deployment — self-traffic, not external adoption). Headline: **351K+ governance events processed · ≈94K in the last 7 days**.
+Frozen public snapshot from May 6, 2026 (single-operator deployment — self-traffic, not external adoption). Headline: **351K+ governance events processed · ≈94K in the last 7 days**.
 
 <details>
 <summary><strong>Full metrics table</strong></summary>
