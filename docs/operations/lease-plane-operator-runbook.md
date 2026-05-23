@@ -41,7 +41,7 @@ tail -f ~/Library/Logs/unitares-lease-plane.log
 
 # Health probe (sources LEASE_PLANE_BEARER_TOKEN from ~/.config/cirwel/secrets.env)
 curl -s -H "Authorization: Bearer $LEASE_PLANE_BEARER_TOKEN" \
-     "http://127.0.0.1:8788/v1/lease/status?surface_id=file:///tmp/probe"
+     "http://127.0.0.1:8788/v1/health"
 ```
 
 ## Stop
@@ -55,14 +55,14 @@ launchctl unload ~/Library/LaunchAgents/com.unitares.lease-plane.plist
 
 ## Health check
 
-Sentinel monitors the lease plane via `GET /v1/lease/status?surface_id=__healthcheck__` (RFC §7.7).
+Sentinel monitors the lease plane via `GET /v1/health` (RFC §7.7).
 
 **What the probe is**
 
-`__healthcheck__` is a sentinel surface_id reserved for liveness — the lease plane never holds a real lease against it. A successful probe returns `{"ok": true, "lease": null}` with HTTP 200, proving:
+A successful `/v1/health` probe returns `{"ok": true, "status": "ok", "protocol_version": "v1.0"}` with HTTP 200, proving:
 1. Bandit/Plug router is up
 2. `HTTPAuth` plug accepts the configured `LEASE_PLANE_BEARER_TOKEN`
-3. The Postgres `governance` connection is alive (status query touches `lease_plane.surface_leases`)
+3. The Postgres `governance` connection is alive
 
 **Sentinel alarm rules**
 
@@ -267,7 +267,7 @@ launchctl kickstart -k system/com.unitares.lease-plane
 
 # 5. Confirm the lease plane is back up
 curl -fsS -H "Authorization: Bearer $LEASE_PLANE_BEARER_TOKEN" \
-  http://127.0.0.1:8788/v1/lease/status?surface_id=__healthcheck__
+  http://127.0.0.1:8788/v1/health
 ```
 
 **Rotation cadence**
