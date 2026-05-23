@@ -1,7 +1,7 @@
 ---
-status: v0.11+ (Phase A SHIPPED 2026-05-03 via PR #305; post-Phase-A amendments: §7.5 v0.9 Pi remote_heartbeat TTL, §7.2.8/9 v0.10 payload-shape + scheme grammar, §7.13 v0.11 substrate-state separation; §7.13.3 v0.11.3 reviewer-judgment-at-review-time accepted; Phase B promotion eligibility window opens 2026-05-16 for `dialectic:/` per §6.2 ordering — earliest date any surface_kind satisfies §6.1.1's 14-day advisory-window minimum given Phase A close on 2026-05-02; mechanical evaluator at `scripts/lease_plane/evaluate_phase_b_promotion.py`)
+status: v0.11+ (Phase A SHIPPED 2026-05-03 via PR #305; post-Phase-A amendments: §7.5 v0.9 Pi remote_heartbeat TTL, §7.2.8/9 v0.10 payload-shape + scheme grammar, §7.13 v0.11 substrate-state separation; §7.13.3 v0.11.3 reviewer-judgment-at-review-time accepted; Phase B promotion eligibility window opened 2026-05-16; `resident` enforcement shipped 2026-05-20 UTC via PR #476 after the mechanical evaluator accepted controlled drill evidence; evaluator at `scripts/lease_plane/evaluate_phase_b_promotion.py`)
 authored: 2026-04-30
-amended: 2026-04-30 (v0.1–v0.8 same session); 2026-05-02 (v0.9 §7.5); 2026-05-02 (v0.10 §7.2.8/9); 2026-05-03 (v0.11 §7.13 substrate-state separation); 2026-05-04 (status: Phase B eligibility window + evaluator pointer)
+amended: 2026-04-30 (v0.1–v0.8 same session); 2026-05-02 (v0.9 §7.5); 2026-05-02 (v0.10 §7.2.8/9); 2026-05-03 (v0.11 §7.13 substrate-state separation); 2026-05-04 (status: Phase B eligibility window + evaluator pointer); 2026-05-20 (status: resident Phase B enforcement shipped via PR #476)
 council_pass_1: 2026-04-30
 ack_pass_1: 2026-04-30
 author_session: agent-68437d77-65c (claude_code-claude_68437d77)
@@ -465,8 +465,13 @@ runtime config (for example, `resident,file`); when their surface kind is listed
 they fail closed if lease acquisition returns `held_by_other` or the lease plane is
 unavailable. Omitting the surface kind keeps Phase A advisory behavior.
 
-- `dialectic:/...` likely first (lowest external blast radius, dialectic infra already has manual fallbacks).
-- `resident:/...` second (already has launchd-level protection, lease layer adds restart-window safety).
+**Current promotion state (2026-05-20 UTC):** `resident` is the first promoted
+surface_kind. PR #476 (`feat(lease-plane): enforce resident phase b leases`)
+merged after `evaluate_phase_b_promotion.py` returned PROMOTABLE with
+controlled drill evidence and zero active drill leases.
+
+- `resident:/...` first (PR #476; already has launchd-level protection, lease layer adds restart-window safety).
+- `dialectic:/...` next candidate (lowest external blast radius, dialectic infra already has manual fallbacks).
 - `file:/...` last (highest blast radius, every code-edit caller path must be integrated).
 
 Reverting a surface kind from enforcement back to advisory must be a single config flag, not a code change.

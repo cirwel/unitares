@@ -63,7 +63,7 @@ because the v0.3.2 gate predates the boundary:
 - 2026-05-06 → 2026-05-18 (13d): Phase A advisory mode (PR #305, merged
   2026-05-03)
 - 2026-05-19 → 2026-05-20 (1d at window close): Phase B resident
-  enforcement (PR #476, merged 2026-05-19)
+  enforcement drill began; PR #476 merged 2026-05-20 UTC
 
 The headline percentiles aggregate across both regimes. The conflict
 and TTL-reap counts are dominated by the 13-day advisory tail; Phase B
@@ -115,21 +115,20 @@ latency to the in-process `perf_monitor` under keys:
 - ... and corresponding outcome shards (`schema_invalid`,
   `transport_exception`, `permission_denied`, `service_unavailable`)
 
-`perf_monitor.snapshot()` exposes p50/p95/p99/max per key. For
-longitudinal capture, the next step is to persist these snapshots to
-`metrics.series` periodically — that work is tracked in the ODE-profile
-branch (`ode-profile-decompose`), which faces the same persistence gap
-and is the cleaner place to land the shared infrastructure.
+`perf_monitor.snapshot()` exposes p50/p95/p99/max per key. Longitudinal
+capture landed in PR #481: `perf_monitor_persist_task` samples the snapshot
+every 5 minutes and writes catalog-gated series to `metrics.series`,
+including `lease_plane.client.v1.lease.acquire.p50` and `.p99`.
 
 ## Falsifier — what this window cannot resolve
 
 The substrate-tax-at-lease-boundary question is **deferred** until:
 
-1. Client-side RPC instrumentation is persisted to `metrics.series`
-   (this branch adds the recorder; persistence pending).
-2. A subsequent 14-day window runs with the recorder live, under load
-   comparable to the §129 representative-load floor (≥ 500 agent_state
-   writes/day).
+1. A subsequent 14-day window runs with the recorder and persistence live,
+   under load comparable to the §129 representative-load floor (≥ 500
+   agent_state writes/day).
+2. The persisted client-side RPC series has enough samples to characterize
+   p50/p99 rather than only hold-time proxy data.
 3. RPC latency p95 for `lease.acquire.ok` is examined against the
    baseline that asyncpg-coupled handlers showed pre-`PR #218`
    ExecutorPool wrap. A 60× amplification signature at the lease
