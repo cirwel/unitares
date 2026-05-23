@@ -34,6 +34,7 @@ import math
 import statistics
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 try:
@@ -43,26 +44,18 @@ except ImportError:
     print("ERROR: psycopg2 not installed. Run: pip install psycopg2-binary", file=sys.stderr)
     sys.exit(1)
 
+# Ensure repo root is importable so we can use the canonical class fold from
+# src/. The module is pure-stdlib (no governance-server runtime dependency).
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-KNOWN_RESIDENT_LABELS = {"Lumen", "Vigil", "Sentinel", "Watcher", "Steward", "Chronicler"}
+from src.grounding.class_indicator import (  # noqa: E402
+    KNOWN_RESIDENT_LABELS,
+    classify_by_label_and_tags as classify_from_db_row,
+)
+
 HEALTHY_REGIMES = ("nominal", "STABLE", "CONVERGENCE", "EXPLORATION")
-
-
-def classify_from_db_row(label: Optional[str], tags: Optional[list]) -> str:
-    """Mirror src/grounding/class_indicator.classify_agent for DB-row inputs.
-
-    Kept inline so this script has no governance-server runtime dependency.
-    """
-    if label and label in KNOWN_RESIDENT_LABELS:
-        return label
-    tags_set = set(tags or [])
-    if "embodied" in tags_set:
-        return "embodied"
-    if "ephemeral" in tags_set:
-        return "ephemeral"
-    if "persistent" in tags_set and "autonomous" in tags_set:
-        return "resident_persistent"
-    return "default"
 
 
 @dataclass
