@@ -1,7 +1,7 @@
 # BEAM Footprint Roadmap
 
 **Created:** May 3, 2026
-**Last Updated:** May 5, 2026 (v0.3 — operator-decision migration commit; supersedes v0.2)
+**Last Updated:** May 9, 2026 (v0.3.2 — Wave 3 substrate re-litigation; includes 2026-05-07 Wave 3 surface inventory addendum; v0.3 destination unchanged)
 **Status:** v0.3 — destination is **A′ (committed, operator-decision-driven, 2026-05-05)**. Stateful coordination ports to BEAM in waves; stateless computation (numpy ODE, embeddings, LLM SDK calls) stays Python and is called from BEAM via Ports / HTTP. v0.2 had reopened the destination after PR #350's verdict; v0.3 closes it again on operator call after four Python-fixable PRs (#350 / #354 / #360 / #361) closed every measured floor without moving the user-visible ~11s p50 per-turn overhead. **Read the V0.3 RESOLUTION block first.** v0 / v0.1 / v0.2 bodies preserved as historical record.
 **Council pass v0.1 (2026-05-04):** dialectic-knowledge-architect (2B/4C/3D/4N), feature-dev:code-reviewer (2B/3C/2D/2N), live-verifier (7 VERIFIED, 6 DRIFT, 0 REFUTED, 1 SOURCE_ONLY) — all findings folded inline. Architect C3 + reviewer C3 both flagged "v0.1 destination committed pre-experiment"; the v0.1 conditionality block was the fold for that finding, and v0.2 was the realization of it.
 **Council pass v0.3:** none on the migration call itself — that's an operator decision after a multi-session debate, and adversarial review of the call after operator commitment is the relitigation pattern v0.3 is trying to end. Council passes ARE expected on technical scope (Wave 1 supervisor topology, BEAM↔Python boundary contracts, identity-state migration) once those land as RFCs.
@@ -181,6 +181,20 @@ Added to V0.3 §Stop signs:
 
 ---
 
+## V0.3.1a INVENTORY ADDENDUM 2026-05-07 — `dialectic/session.py` Wave 3 surfaces
+
+Bookkeeping addition. **No change to V0.3 destination, sequencing, scope, or stop signs.** Adds one file to the Wave 3 surface inventory and documents an operator-protective non-action.
+
+**Surface.** `src/mcp_handlers/dialectic/session.py` carries six raw asyncpg awaits in MCP-handler context: three in `load_session_as_dict` (lines 273, 282 — `await conn.fetchrow` / `await conn.fetch` inside `compatible_acquire(db._pool)`) reached from the `@mcp_tool("get_dialectic_session")` handler at `dialectic/handlers.py:656`; one in `list_all_sessions` (line 433 — `await conn.fetch(query, *params)`) reached from `@mcp_tool("list_dialectic_sessions")` at `handlers.py:830`; plus two delegated `await pg_get_session(...)` calls at lines 230 and 247 inside the load path. **Same anyio-coupling shape as CLAUDE.md substrate-tax patterns #1 and #2 — not a new shape.** V0.3's "fourth shape" count is unchanged.
+
+**Watcher trail.** Four `P004` findings (`1727cfea`, `8802bf3c`, `7fb72d52`, `7a207d7e`) raised against `.worktrees/dialectic-retire-quorum-escalated/src/mcp_handlers/dialectic/session.py:{240,249,400,433}` while PR #406 was in flight. PR #406 merged 2026-05-07; the underlying code is now on master at the line numbers above. Worktree-bound findings dismissed as `stale` 2026-05-07.
+
+**Why no executor-wrap fix landed alongside the dismissal.** CLAUDE.md is explicit that "the accumulation of these patterns is not progress." Wrapping six new sites in `run_in_executor` one wave-cycle before Wave 1 ships is the workaround-stacking pattern V0.3 explicitly committed past. These surfaces enter the Wave 3 inventory; Wave 3's per-agent GenServer model dissolves them by replacing the shared event-loop dispatch, not by wrapping it. The non-action is the discipline holding.
+
+**Wave 3 inventory implication.** When the Wave 3 RFC drafts the `@mcp_tool` handler port list, `dialectic/handlers.py::list_dialectic_sessions` and `dialectic/handlers.py::get_dialectic_session` are on it, and `session.py::load_session_as_dict` / `session.py::list_all_sessions` are the underlying functions to port (or replace with BEAM-side equivalents querying the same `core.dialectic_sessions` / `core.dialectic_messages` tables through Postgrex). This is consistent with V0.3.1 §C2's dialectic-stateful/stateless split — these are stateful-coordinating reads that go to BEAM under A′.
+
+---
+
 ## V0.3.2 AMENDMENT 2026-05-09 — Wave 3 substrate re-litigation (scope question, not destination revert)
 
 **Summary.** Wave 3 RFC has gone through four iterations (v0.1 → v0.1.1 → v0.1.2 → v0.2 → v0.3). Each iteration's council pass surfaced a fresh substrate-tax bias signature in the redraft itself — five across four iterations as of 2026-05-09. The v0.3 council architect lane invoked v0.3's own §15 escalation rule: *"if v0.3 surfaces a sixth bias signature, that's evidence the substrate question itself needs re-litigation rather than redraft mechanics."* It did. This amendment opens that re-litigation at the parent-roadmap altitude — **not as a destination revert** (A′ stands; operator decision 2026-05-05 unchanged) but as a scope question on Wave 3 specifically.
@@ -249,7 +263,6 @@ Each is referenceable for the architectural decisions tried at that iteration. N
 - The Wave 0 channel design (`audit.coordination_events`) or its CHECK constraint scope.
 
 What it changes: Wave 3 sequencing is on hold pending operator decision among (α)/(β)/(γ)/(δ). Until that decision lands, no v0.4 redraft, no implementation work on Wave-3-specific prereqs. The non-Wave-3-specific prereqs (lease-plane Phase A latency instrumentation, ODE profile, boundary-event helpers) can ship independently because they're useful regardless of Wave 3's eventual shape.
-
 ---
 
 ## V0.2 RESOLUTION 2026-05-05 — verdict landed; destination reopens *(SUPERSEDED by V0.3 RESOLUTION above; preserved as historical record)*
