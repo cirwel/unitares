@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """vigil-hygiene — weekly branch hygiene sweep.
 
-Runs once per week via launchd. Prunes [gone] local branches, removes
-their worktrees (when clean), and deletes origin branches whose commits
-are all squash-merged. Reports HOLD branches for human review.
+Runs once per week via launchd. Prunes [gone] local branches only after
+checking that their commits are merged or patch-equivalent, removes their
+worktrees (when clean), and deletes origin branches whose commits are all
+squash-merged. Reports HOLD branches with unique commits for human salvage
+review.
 
 Usage:
     python3 agents/vigil_hygiene/agent.py [--repo PATH] [--live]
 
 Defaults to dry-run. --live enables actual deletions.
+See docs/operations/branch-hygiene-runbook.md for the salvage contract.
 
 """
 from __future__ import annotations
@@ -30,7 +33,7 @@ project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from agents.vigil_hygiene.cherry import CherryVerdict, parse_cherry
+from agents.vigil_hygiene.cherry import CherryResult, CherryVerdict, parse_cherry
 from agents.vigil_hygiene.clean_check import check_worktree_clean
 
 KEEPALIVE_BRANCH_NAMES = frozenset({"master", "main", "feat/branch-hygiene-automation"})
@@ -87,7 +90,7 @@ def list_gone_branches(repo: Path) -> list[str]:
     result = run_git("branch", "-vv", repo=repo)
     gone = []
     for line in result.stdout.splitlines():
-        m = re.match(r"^[*+ ]\s*(\S+)\s+\S+\s+\[.*: gone\]", line)
+        m = re.match(r"^[*+ ]\s*(\S+)\s+\S+(?:\s+\([^)]*\))?\s+\[.*: gone\]", line)
         if m:
             gone.append(m.group(1))
     return gone
@@ -141,6 +144,32 @@ def cherry(repo: Path, branch: str, base: str = "master") -> str:
         return ""
 
 
+def cherry_local(repo: Path, branch: str, base: str = "master") -> Optional[str]:
+    try:
+        result = run_git("cherry", base, branch, repo=repo)
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        log(f"SKIP gone-branch '{branch}': git cherry failed ({e.stderr.strip()})")
+        return None
+
+
+def classify_local_gone_cherry(output: str, base: str = "master") -> CherryResult:
+    result = parse_cherry(output)
+    if (
+        result.verdict == CherryVerdict.SKIP
+        and result.plus_count == 0
+        and result.minus_count == 0
+        and result.reason.startswith("empty output")
+    ):
+        return CherryResult(
+            CherryVerdict.DELETE,
+            0,
+            0,
+            f"no commits ahead of {base}",
+        )
+    return result
+
+
 def is_keepalive(
     branch: str,
     open_pr_branches: set[str],
@@ -188,6 +217,22 @@ def sweep(repo: Path, dry_run: bool = True) -> SweepReport:
 
     # 2. Local [gone] cleanup
     for branch in list_gone_branches(repo):
+        cherry_out = cherry_local(repo, branch)
+        if cherry_out is None:
+            continue
+        cherry_result = classify_local_gone_cherry(cherry_out)
+        if cherry_result.verdict == CherryVerdict.HOLD:
+            report.holds.append(branch)
+            report.holds_count += 1
+            log(
+                f"HOLD gone-branch '{branch}': {cherry_result.reason}; "
+                "inspect/salvage before deleting"
+            )
+            continue
+        if cherry_result.verdict == CherryVerdict.SKIP:
+            log(f"SKIP gone-branch '{branch}': {cherry_result.reason}")
+            continue
+
         wt = branch_to_wt.get(branch)
         if wt is not None:
             status = _safe_status(wt)
@@ -211,11 +256,11 @@ def sweep(repo: Path, dry_run: bool = True) -> SweepReport:
                     continue
 
         if dry_run:
-            log(f"DRY-RUN would branch -D '{branch}'")
+            log(f"DRY-RUN would branch -D '{branch}': {cherry_result.reason}")
         else:
             try:
                 run_git("branch", "-D", branch, repo=repo)
-                log(f"deleted local branch: {branch}")
+                log(f"deleted local branch: {branch}: {cherry_result.reason}")
                 report.branches_pruned += 1
             except subprocess.CalledProcessError as e:
                 log(f"ERROR branch -D {branch}: {e.stderr}")
