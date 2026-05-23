@@ -40,6 +40,15 @@ UNITARES_METADATA_WRITE_JSON_SNAPSHOT = os.getenv("UNITARES_METADATA_WRITE_JSON_
 
 _metadata_backend_resolved: str | None = None
 
+# Prevent fire-and-forget tasks from being GC'd (P001). See
+# src/agent_loop_detection.py:40 for the canonical pattern.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _track_background_task(task: asyncio.Task) -> None:
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
 
 def _resolve_metadata_backend() -> str:
     """
@@ -328,7 +337,9 @@ async def load_metadata_async(force: bool = False) -> None:
         # start observe calls don't block on it. Snapshot the dict so
         # later mutations don't race the hydration loop.
         try:
-            asyncio.create_task(_hydrate_metadata_cache_async(dict(result)))
+            _track_background_task(
+                asyncio.create_task(_hydrate_metadata_cache_async(dict(result)))
+            )
         except RuntimeError:
             pass
     except Exception as e:
