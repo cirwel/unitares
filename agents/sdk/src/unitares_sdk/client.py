@@ -481,14 +481,12 @@ class GovernanceClient:
     # --- Internal helpers ---
 
     def _inject_session(self, tool_name: str, arguments: dict) -> dict:
-        """Auto-append session/continuity IDs. Skip for identity tools."""
+        """Auto-append in-process session ID. Skip for identity tools."""
         if tool_name in _IDENTITY_TOOLS:
             return arguments
         args = dict(arguments)
         if self.client_session_id and "client_session_id" not in args:
             args["client_session_id"] = self.client_session_id
-        if self.continuity_token and "continuity_token" not in args:
-            args["continuity_token"] = self.continuity_token
         return args
 
     def _capture_identity(self, raw: dict) -> None:

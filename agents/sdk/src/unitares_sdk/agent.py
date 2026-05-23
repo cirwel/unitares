@@ -283,8 +283,8 @@ class GovernanceAgent:
         # Fast path: we know who we are — just tell the server
         if self.agent_uuid:
             # Identity Honesty Part C: server's PATH 0 now requires
-            # continuity_token alongside agent_uuid. Copy the saved token to
-            # the client so call_tool auto-injects it on this first request.
+            # continuity_token alongside agent_uuid. Pass it explicitly here;
+            # generic client auto-injection is intentionally token-free.
             if self.continuity_token and not client.continuity_token:
                 client.continuity_token = self.continuity_token
             try:
@@ -293,9 +293,15 @@ class GovernanceAgent:
                 # resident_name to build surface_id = "resident:/<name>").
                 # Without this, residents that resume via UUID never set
                 # resident_name and substrate emission skips.
-                await client.identity(
-                    name=self.name, agent_uuid=self.agent_uuid, resume=True
-                )
+                identity_kwargs: dict[str, Any] = {
+                    "name": self.name,
+                    "agent_uuid": self.agent_uuid,
+                    "resume": True,
+                }
+                token = self.continuity_token or getattr(client, "continuity_token", None)
+                if token:
+                    identity_kwargs["continuity_token"] = token
+                await client.identity(**identity_kwargs)
                 self._sync_from_client(client)
                 self._save_session()
                 logger.info("%s: resumed via UUID %s", self.name, self.agent_uuid[:12])

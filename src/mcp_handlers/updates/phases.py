@@ -225,10 +225,13 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
                 "process_agent_update requires strong identity assurance for this call",
                 details={
                     "identity_assurance": ctx.identity_assurance,
-                    "hint": "Use bind_session(..., strict=true) or continuity_token for strong identity continuity.",
+                    "hint": (
+                        "Use explicit client_session_id for the active process, "
+                        "or proof-owned identity(agent_uuid=..., continuity_token=..., resume=true)."
+                    ),
                 },
                 recovery={
-                    "action": "Re-bind with strict identity or pass continuity_token, then retry.",
+                    "action": "Re-bind with strong identity proof, then retry.",
                     "related_tools": ["bind_session", "identity", "onboard"],
                 }
             )]

@@ -25,7 +25,7 @@ Inputs:
 - `response_text`: concise summary of what was actually accomplished
 - `complexity`: estimate `0.0-1.0`
 - `confidence`: honest estimate `0.0-1.0`
-- include `continuity_token` only when it is current in-process ownership proof, otherwise rely on the active session binding or `client_session_id` when the client needs explicit continuity data
+- use the active session binding or `client_session_id`; do not auto-inject `continuity_token` into `process_agent_update`
 - use `response_mode="mirror"` by default for Codex
 
 Guidelines:

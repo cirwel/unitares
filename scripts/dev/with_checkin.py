@@ -44,7 +44,6 @@ class CheckinContext:
     session: str | None = None
     agent_id: str | None = None
     client_session_id: str | None = None
-    continuity_token: str | None = None
     task_type: str | None = None
     complexity: float | None = None
     confidence: float | None = None
@@ -233,7 +232,6 @@ def build_checkin_payload(result: CommandResult, context: CheckinContext) -> dic
 
     put_if_present(payload, "agent_id", context.agent_id)
     put_if_present(payload, "client_session_id", context.client_session_id)
-    put_if_present(payload, "continuity_token", context.continuity_token)
     put_if_present(payload, "harness_type", context.harness_type)
     put_if_present(payload, "harness_id", context.harness_id)
     put_if_present(payload, "model_provider", context.model_provider)
@@ -354,6 +352,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--continuity-token",
         default=env_default("UNITARES_CONTINUITY_TOKEN"),
+        help=(
+            "Deprecated compatibility flag; ignored for process_agent_update. "
+            "Use continuity_token only with explicit identity(agent_uuid, "
+            "continuity_token, resume=true) PATH 0 rebinds."
+        ),
     )
     parser.add_argument("--workflow", choices=WORKFLOWS, default="auto")
     parser.add_argument("--task-type")
@@ -415,7 +418,6 @@ def build_context(args: argparse.Namespace, command: list[str]) -> CheckinContex
         session=args.session,
         agent_id=args.agent_id,
         client_session_id=args.client_session_id,
-        continuity_token=args.continuity_token,
         task_type=args.task_type,
         complexity=args.complexity,
         confidence=args.confidence,
