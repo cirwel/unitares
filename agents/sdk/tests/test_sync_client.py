@@ -130,8 +130,10 @@ class TestSyncSessionInjection:
     def test_injects_session_id(self):
         client = SyncGovernanceClient(transport="rest")
         client.client_session_id = "sid-123"
+        client.continuity_token = "tok-456"
         result = client._inject_session("process_agent_update", {"response_text": "hi"})
         assert result["client_session_id"] == "sid-123"
+        assert "continuity_token" not in result
 
     def test_skips_for_identity_tools(self):
         client = SyncGovernanceClient(transport="rest")

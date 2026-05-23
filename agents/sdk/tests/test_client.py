@@ -56,7 +56,7 @@ class TestSessionInjection:
 
         result = client._inject_session("process_agent_update", {"response_text": "hi"})
         assert result["client_session_id"] == "sid-123"
-        assert result["continuity_token"] == "tok-456"
+        assert "continuity_token" not in result
         assert result["response_text"] == "hi"
 
     def test_skips_injection_for_onboard(self):

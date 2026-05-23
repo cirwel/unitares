@@ -446,6 +446,30 @@ def test_curl_post_tool_does_not_inject_continuity_when_force_new(tmp_path):
     assert include_session_file.read_text() == "0"
 
 
+def test_curl_post_tool_does_not_auto_inject_continuity_token(tmp_path):
+    """S2/S3: ordinary calls use client_session_id, not token auto-injection."""
+    session_file = tmp_path / "session.json"
+    session_file.write_text(json.dumps({
+        "uuid": "parent-uuid",
+        "client_session_id": "cached-session",
+        "continuity_token": "cached-token",
+    }))
+    env = os.environ.copy()
+    env["UNITARES_SESSION_FILE"] = str(session_file)
+    env["UNITARES_AGENT"] = "cli-unit"
+
+    script = (
+        "_curl_fetch() { printf '%s' \"$3\"; }; "
+        "_curl_post_tool process_agent_update '{\"response_text\": \"hi\"}'"
+    )
+    result = _source_cli_and_run(script, env)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    args = payload["arguments"]
+    assert args["client_session_id"] == "cached-session"
+    assert "continuity_token" not in args
+
+
 def test_cmd_onboard_declares_cached_uuid_as_parent(tmp_path):
     """The CLI onboard command should use cached uuid as lineage, not resume."""
     session_file = tmp_path / "session.json"

@@ -135,15 +135,15 @@ _curl_get() {
 
 _curl_post_tool() {
     local tool="$1" args="${2:-{\}}"
-    # Inject known continuity material for ordinary in-process calls, but
-    # never onto force_new startup onboards.
+    # Inject known in-session transport continuity for ordinary calls, but
+    # never onto force_new startup onboards. continuity_token is deliberately
+    # not auto-injected; it is only for explicit PATH 0 ownership rebinds.
     local payload include_session
-    payload=$(TOOL="$tool" RAW_ARGS="$args" CSID="${SESSION_ID:-}" CTOKEN="${CONT_TOKEN:-}" python3 -c '
+    payload=$(TOOL="$tool" RAW_ARGS="$args" CSID="${SESSION_ID:-}" python3 -c '
 import json, os, sys
 tool = os.environ["TOOL"]
 raw_args = os.environ.get("RAW_ARGS") or "{}"
 sid = os.environ.get("CSID") or ""
-token = os.environ.get("CTOKEN") or ""
 try:
     args = json.loads(raw_args) if raw_args else {}
 except json.JSONDecodeError as exc:
@@ -155,8 +155,6 @@ if not isinstance(args, dict):
 inject = not bool(args.get("force_new"))
 if inject and sid:
     args.setdefault("client_session_id", sid)
-if inject and token:
-    args.setdefault("continuity_token", token)
 print(json.dumps({"name": tool, "arguments": args}))
 ') || return $?
     include_session=$(RAW_ARGS="$args" python3 -c '

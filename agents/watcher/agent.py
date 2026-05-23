@@ -192,7 +192,7 @@ def _save_session(client_session_id: str, continuity_token: str, agent_uuid: str
 
 
 def resolve_identity(client) -> None:
-    """Resolve Watcher identity via UUID-direct → token → fresh onboard.
+    """Resolve Watcher identity via proof-owned UUID-direct → fresh onboard.
 
     Name-resume (previous Step 2) was removed 2026-04-17 when the server-side
     name-claim path was deleted. Without it, every `identity(name="Watcher")`
@@ -213,41 +213,35 @@ def resolve_identity(client) -> None:
     global _watcher_identity
     saved = _load_session()
 
-    # Step 0: UUID-direct (PATH 0) — strongest resume signal.
-    # Works whenever we have a stored UUID, even if the token is stale.
-    # Identity Honesty Part C: server requires continuity_token alongside
-    # agent_uuid for PATH 0 resume — load the saved token into the client so
-    # SyncGovernanceClient.call_tool auto-injects it.
+    # Step 0: UUID-direct (PATH 0) — strongest resume signal when proof-owned.
+    # Identity Honesty Part C + S1-c: server requires continuity_token alongside
+    # agent_uuid for PATH 0 resume, and token-only resume is retired. Pass the
+    # token explicitly; generic client auto-injection is intentionally token-free.
     if saved.get("agent_uuid"):
-        if saved.get("continuity_token") and not getattr(client, "continuity_token", None):
-            client.continuity_token = saved["continuity_token"]
-        try:
-            client.identity(agent_uuid=saved["agent_uuid"], resume=True)
-            _sync_identity(client)
-            return
-        except GovernanceTimeoutError as e:
-            # Transient server slowness — don't fork a new agent. Skip this
-            # cycle; the stored UUID remains the ground truth.
-            log(f"uuid-direct resume timed out ({e}) — skipping, will retry next cycle", "warning")
-            _watcher_identity = None
-            return
-        except Exception as e:
-            log(f"uuid-direct resume failed: {e}", "warning")
+        token = saved.get("continuity_token") or getattr(client, "continuity_token", None)
+        if token:
+            if not getattr(client, "continuity_token", None):
+                client.continuity_token = token
+            try:
+                client.identity(
+                    agent_uuid=saved["agent_uuid"],
+                    continuity_token=token,
+                    resume=True,
+                )
+                _sync_identity(client)
+                return
+            except GovernanceTimeoutError as e:
+                # Transient server slowness — don't fork a new agent. Skip this
+                # cycle; the stored UUID remains the ground truth.
+                log(f"uuid-direct resume timed out ({e}) — skipping, will retry next cycle", "warning")
+                _watcher_identity = None
+                return
+            except Exception as e:
+                log(f"uuid-direct resume failed: {e}", "warning")
+        else:
+            log("uuid-direct resume skipped: missing continuity_token ownership proof", "warning")
 
-    # Step 1: Token resume (PATH 2.8) — fallback when UUID is missing.
-    if saved.get("continuity_token"):
-        try:
-            client.identity(continuity_token=saved["continuity_token"], resume=True)
-            _sync_identity(client)
-            return
-        except GovernanceTimeoutError as e:
-            log(f"token resume timed out ({e}) — skipping, will retry next cycle", "warning")
-            _watcher_identity = None
-            return
-        except Exception as e:
-            log(f"token resume failed: {e}", "warning")
-
-    # Step 2: Fresh onboard — only when nothing else works.
+    # Step 1: Fresh onboard — only when no proof-owned UUID rebind works.
     # Silent-fork guard (added 2026-04-19 anchor-resilience series): Watcher
     # is a resident; missing anchor + no UNITARES_FIRST_RUN means the
     # operator did not authorize a fresh identity. Refuse loudly rather

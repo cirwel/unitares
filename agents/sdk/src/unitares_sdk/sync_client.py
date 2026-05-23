@@ -427,8 +427,6 @@ class SyncGovernanceClient:
         args = dict(arguments)
         if self.client_session_id and "client_session_id" not in args:
             args["client_session_id"] = self.client_session_id
-        if self.continuity_token and "continuity_token" not in args:
-            args["continuity_token"] = self.continuity_token
         return args
 
     def _capture_identity(self, raw: dict) -> None:

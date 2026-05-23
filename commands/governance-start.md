@@ -10,7 +10,7 @@ Use the shared helper in this repo:
 
 - `scripts/client/session_cache.py list`
 
-If the newest entry contains `parent_agent_id`, treat it as a lineage candidate, not ownership proof. Ignore any legacy `continuity_token` field for startup; tokens are only for same-live-owner proof paths and in-process calls.
+If the newest entry contains `parent_agent_id`, treat it as a lineage candidate, not ownership proof. Ignore any legacy `continuity_token` field for startup; tokens are only for explicit same-live-owner PATH 0 proof rebinds.
 
 Call `onboard()` against UNITARES using the strongest honest mode:
 
@@ -21,7 +21,7 @@ Call `onboard()` against UNITARES using the strongest honest mode:
 
 Do not use bare `identity(agent_uuid=<uuid>, resume=true)`. UUID alone is an unsigned claim and is hijack-shaped under strict identity mode.
 
-Do not use `onboard(continuity_token=...)` as cross-process resume except when deliberately testing the S1-a deprecation path.
+Do not use `onboard(continuity_token=...)` as cross-process resume; after S1-c it returns `status=continuity_token_resume_rejected`.
 
 After a successful `identity()` or `onboard()` response:
 

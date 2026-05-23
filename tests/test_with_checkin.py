@@ -41,6 +41,7 @@ def test_build_checkin_payload_records_successful_s22_evidence():
     )
     context = with_checkin.CheckinContext(
         workflow="test",
+        client_session_id="sid-123",
         comparison_key="pair-key",
         task_label="Run unit tests",
         invocation_id="inv-1",
@@ -53,6 +54,8 @@ def test_build_checkin_payload_records_successful_s22_evidence():
 
     ProcessAgentUpdateParams.model_validate(payload)
     assert payload["response_mode"] == "minimal"
+    assert payload["client_session_id"] == "sid-123"
+    assert "continuity_token" not in payload
     assert payload["task_type"] == "testing"
     assert payload["confidence"] == 0.82
     assert payload["harness_type"] == "codex-cli"

@@ -106,6 +106,7 @@ class TestIdentityResolution:
         client.identity.assert_called_once()
         args = client.identity.call_args
         assert args.kwargs.get("agent_uuid") == "uuid-test"
+        assert args.kwargs.get("continuity_token") == _make_token("uuid-test")
         assert args.kwargs.get("resume") is True
         client.onboard.assert_not_called()
 

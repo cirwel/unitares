@@ -2656,7 +2656,7 @@ SESSION_FILE_NAME = ".watcher_session"
 
 
 class TestWatcherIdentity:
-    """Watcher identity resolution: uuid-direct → token → fresh onboard.
+    """Watcher identity resolution: proof-owned uuid-direct → fresh onboard.
 
     Name-resume was removed 2026-04-17 alongside the server-side name-claim
     deletion. Without name-claim, identity(name="Watcher") forked a fresh
@@ -2695,7 +2695,7 @@ class TestWatcherIdentity:
         assert session_file.exists()
 
     def test_uuid_direct_resume_when_agent_uuid_saved(self, watcher_module, tmp_path, monkeypatch):
-        """Session file with agent_uuid → PATH 0 UUID-direct. Token/name untouched."""
+        """Session file with agent_uuid + token → proof-owned PATH 0 UUID-direct."""
         session_file = tmp_path / SESSION_FILE_NAME
         session_file.write_text(json.dumps({
             "client_session_id": "old-sess",
@@ -2719,14 +2719,23 @@ class TestWatcherIdentity:
                 calls.append(("onboard", name))
 
         watcher_module.resolve_identity(FakeClient())
-        assert calls == [("identity", {"agent_uuid": "uuid-watcher-001", "resume": True})]
-        # No onboard, no token fallback — PATH 0 succeeded on first try.
+        assert calls == [
+            (
+                "identity",
+                {
+                    "agent_uuid": "uuid-watcher-001",
+                    "continuity_token": "old-tok",
+                    "resume": True,
+                },
+            )
+        ]
+        # No onboard, no token-only fallback — PATH 0 succeeded on first try.
 
-    def test_token_resume_when_uuid_missing(self, watcher_module, tmp_path, monkeypatch):
-        """Session file with continuity_token but no agent_uuid → token resume.
+    def test_token_only_resume_retired_when_uuid_missing(self, watcher_module, tmp_path, monkeypatch):
+        """Session file with continuity_token but no agent_uuid does not resume.
 
-        Covers the transition window where an older session file was written
-        before Step 0 existed.
+        S1-c retired token-only identity resume; without a UUID ownership
+        target, Watcher cannot prove PATH 0 ownership.
         """
         session_file = tmp_path / SESSION_FILE_NAME
         session_file.write_text(json.dumps({
@@ -2735,7 +2744,6 @@ class TestWatcherIdentity:
         }))
         monkeypatch.setattr(watcher_module, "SESSION_FILE", session_file)
 
-        identity_called = {}
         onboard_called = {}
 
         class FakeClient:
@@ -2744,19 +2752,16 @@ class TestWatcherIdentity:
             agent_uuid = "uuid-watcher-001"
 
             def identity(self, **kwargs):
-                identity_called.update(kwargs)
-                return type("R", (), {"success": True})()
+                raise AssertionError("token-only identity resume must not be attempted")
 
             def onboard(self, name, **kwargs):
                 onboard_called["name"] = name
 
         watcher_module.resolve_identity(FakeClient())
-        assert identity_called.get("continuity_token") == "old-tok"
-        assert identity_called.get("resume") is True
         assert not onboard_called
 
-    def test_token_fallback_when_uuid_direct_fails(self, watcher_module, tmp_path, monkeypatch):
-        """UUID-direct raises (e.g. agent archived) → fall back to token resume."""
+    def test_no_token_only_fallback_when_uuid_direct_fails(self, watcher_module, tmp_path, monkeypatch):
+        """UUID-direct raises; token-only fallback is retired by S1-c."""
         session_file = tmp_path / SESSION_FILE_NAME
         session_file.write_text(json.dumps({
             "continuity_token": "stale-tok",
@@ -2773,17 +2778,22 @@ class TestWatcherIdentity:
 
             def identity(self, **kwargs):
                 calls.append(("identity", kwargs))
-                if kwargs.get("agent_uuid"):
-                    raise RuntimeError("uuid not found")
-                return type("R", (), {"success": True})()
+                raise RuntimeError("uuid not found")
 
             def onboard(self, name, **kwargs):
                 calls.append(("onboard", name))
 
         watcher_module.resolve_identity(FakeClient())
-        assert calls[0] == ("identity", {"agent_uuid": "uuid-old", "resume": True})
-        assert calls[1] == ("identity", {"continuity_token": "stale-tok", "resume": True})
-        assert len(calls) == 2  # no onboard needed
+        assert calls == [
+            (
+                "identity",
+                {
+                    "agent_uuid": "uuid-old",
+                    "continuity_token": "stale-tok",
+                    "resume": True,
+                },
+            )
+        ]
 
     def test_fresh_onboard_when_both_uuid_direct_and_token_fail(self, watcher_module, tmp_path, monkeypatch):
         """Both UUID-direct AND token fail → fresh onboard (Step 2).
@@ -2816,8 +2826,8 @@ class TestWatcherIdentity:
 
         watcher_module.resolve_identity(FakeClient())
         assert calls[0][0] == "identity" and calls[0][1].get("agent_uuid") == "uuid-archived"
-        assert calls[1][0] == "identity" and calls[1][1].get("continuity_token") == "stale-tok"
-        assert calls[2] == ("onboard", "Watcher")
+        assert calls[0][1].get("continuity_token") == "stale-tok"
+        assert calls[1] == ("onboard", "Watcher")
 
     def test_governance_down_leaves_identity_none(self, watcher_module, tmp_path, monkeypatch):
         """If governance is unreachable, identity is None — scanning still works.
