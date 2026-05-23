@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate or assess R6 H1/H3 dogfood payloads.
+"""Generate or assess R6 H1/H3/H7/H8 dogfood payloads.
 
 By default this script is offline and only prints payload templates. Pass
 ``--assess`` to read existing S22 write-context rows for the comparison key.
@@ -22,6 +22,7 @@ sys.path.insert(
 
 from src.db import close_db
 from src.identity.r6_dogfood import (
+    SUPPORTED_R6_EXPERIMENTS,
     assess_r6_dogfood_entries,
     build_r6_dogfood_payloads,
     default_r6_comparison_key,
@@ -33,7 +34,7 @@ async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--experiment",
-        choices=["h1", "h3"],
+        choices=SUPPORTED_R6_EXPERIMENTS,
         required=True,
         help="R6 experiment to prepare or assess.",
     )
@@ -58,6 +59,24 @@ async def main() -> int:
     parser.add_argument(
         "--parent-agent-id",
         help="Optional predecessor UUID to include in the H3 force_new onboard step.",
+    )
+    parser.add_argument(
+        "--baseline-tool-surface",
+        help=(
+            "Comma-separated H7 baseline tool surface. Defaults to "
+            "mcp:unitares,hermes."
+        ),
+    )
+    parser.add_argument(
+        "--variant-tool-surface",
+        help=(
+            "Comma-separated H7 variant tool surface. Defaults to "
+            "mcp:unitares,hermes,mcp:knowledge-graph."
+        ),
+    )
+    parser.add_argument(
+        "--variant-transport",
+        help="H8 non-interactive transport label. Defaults to hermes-gateway.",
     )
     parser.add_argument(
         "--assess",
@@ -91,6 +110,9 @@ async def main() -> int:
             variant_model=args.variant_model,
             memory_context=args.memory_context,
             parent_agent_id=args.parent_agent_id,
+            baseline_tool_surface=args.baseline_tool_surface,
+            variant_tool_surface=args.variant_tool_surface,
+            variant_transport=args.variant_transport,
         )
 
     if args.assess:
@@ -125,6 +147,14 @@ def _print_text(payload: dict) -> None:
         print(
             "memory contexts: "
             f"{', '.join(assessment['distinct_memory_contexts']) or 'none'}"
+        )
+        print(
+            "transports: "
+            f"{', '.join(assessment['distinct_transports']) or 'none'}"
+        )
+        print(
+            "tool surfaces: "
+            f"{', '.join(assessment['distinct_tool_surfaces']) or 'none'}"
         )
         for recommendation in assessment.get("recommendations", []):
             print(f"recommendation: {recommendation}")
