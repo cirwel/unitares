@@ -14,6 +14,7 @@ Reference: S1 plan doc §7 risks require regression coverage for:
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import time
 from unittest.mock import patch
@@ -545,128 +546,104 @@ def test_bind_session_resolve_path_uses_1h_ttl():
 
 
 @pytest.mark.asyncio
-async def test_bind_session_handler_rejects_expired_continuity_token_s9():
-    """S9 regression: handle_bind_session itself must reject expired tokens.
+async def test_bind_session_handler_rejects_token_only_resume_s1c():
+    """S1-c: bind_session no longer accepts continuity_token as a bind input.
 
-    The sibling test above asserts that resolve_continuity_token honors the
-    1h TTL. That is necessary but not sufficient — it does not pin the bind
-    path's call site. If a future refactor swaps resolve_continuity_token for
-    extract_token_agent_uuid (which intentionally ignores expiry per PR #42's
-    Part-C ownership-proof contract), the existing resolver-layer test would
-    still pass while bind_session silently restored the pre-S1-a 30d-equivalent
- acceptance window. S9 row, "should not silently
-    propagate without a regression test asserting the new TTL", and
- §7.3 (operator decision:
-    let-propagate).
-
-    Strict differential: identical handler call on the same token, only
-    time.time() differs — fresh time binds, time-shifted past TTL+skew rejects.
+    Explicit client_session_id binding remains valid. Token-only binding was
+    the retired cross-process-instance resume surface.
     """
-    import uuid as _uuid
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock
     from src.mcp_handlers.identity.handlers import handle_bind_session
-    from src.mcp_handlers.identity.session import (
-        create_continuity_token,
-        _CLOCK_SKEW_TOLERANCE,
-    )
+    from src.mcp_handlers.identity.session import create_continuity_token
     from tests.helpers import parse_result
-
-    target_uuid = str(_uuid.uuid4())
-    target_agent_id = "Test_Agent_S9"
-    resolved_identity = {
-        "agent_uuid": target_uuid,
-        "agent_id": target_agent_id,
-        "label": "TestAgent",
-        "created": False,
-    }
-    mock_db = AsyncMock()
-    mock_db.get_identity.return_value = SimpleNamespace(identity_id="ident-1")
-    mock_db.create_session = AsyncMock()
-
-    def handler_patches():
-        return [
-            patch(
-                "src.mcp_handlers.identity.handlers.resolve_session_identity",
-                new=AsyncMock(return_value=resolved_identity),
-            ),
-            patch(
-                "src.mcp_handlers.identity.handlers.derive_session_key",
-                new=AsyncMock(return_value="mcp:test-session"),
-            ),
-            patch(
-                "src.mcp_handlers.identity.handlers._cache_session",
-                new=AsyncMock(),
-            ),
-            patch(
-                "src.mcp_handlers.identity.handlers.get_db",
-                return_value=mock_db,
-            ),
-            patch(
-                "src.mcp_handlers.context.get_session_signals",
-                return_value=SimpleNamespace(user_agent="test"),
-            ),
-        ]
 
     with patch.dict(
         "os.environ",
         {"UNITARES_CONTINUITY_TOKEN_SECRET": "test-secret-s9"},
         clear=False,
     ):
-        token = create_continuity_token(target_uuid, "agent-s9-bind-test")
+        token = create_continuity_token(
+            "11111111-2222-3333-4444-555555555555",
+            "agent-s9-bind-test",
+        )
         assert token is not None
 
-        # Baseline: fresh-time call binds successfully via the token resolve path.
-        from contextlib import ExitStack
-        with ExitStack() as stack:
-            for cm in handler_patches():
-                stack.enter_context(cm)
-            fresh_result = await handle_bind_session({
-                "continuity_token": token,
-                "resume": True,
-            })
-        fresh_data = parse_result(fresh_result)
-        assert fresh_data["success"] is True, (
-            f"baseline broken: fresh continuity_token did not bind through "
-            f"handle_bind_session — fixture or handler shape changed. "
-            f"Got: {fresh_data!r}"
-        )
-        assert fresh_data["agent_uuid"] == target_uuid
+        result = await handle_bind_session({
+            "continuity_token": token,
+            "resume": True,
+        })
 
-        # Differential: same token, time-traveled past _CONTINUITY_TTL + skew.
-        # handle_bind_session must reject. If this fails, the bind path no
-        # longer goes through resolve_continuity_token — file it under S9.
-        past_ttl = int(time.time()) + 3600 + _CLOCK_SKEW_TOLERANCE + 1
-        with ExitStack() as stack:
-            stack.enter_context(patch(
-                "src.mcp_handlers.identity.session.time.time",
-                return_value=past_ttl,
-            ))
-            for cm in handler_patches():
-                stack.enter_context(cm)
-            stale_result = await handle_bind_session({
-                "continuity_token": token,
-                "resume": True,
-            })
-        stale_data = parse_result(stale_result)
+    data = parse_result(result)
+    assert data["success"] is False
+    assert data["status"] == "continuity_token_resume_rejected"
+    assert data["tool"] == "bind_session"
+    assert data["recovery"]["reason"] == "continuity_token_resume_retired"
 
-        assert stale_data["success"] is False, (
-            "S9 invariant violated: handle_bind_session accepted a continuity "
-            "token aged past _CONTINUITY_TTL + _CLOCK_SKEW_TOLERANCE. The bind "
-            "path likely no longer routes through resolve_continuity_token — "
-            "check whether it was swapped for extract_token_agent_uuid or a "
-            "new expiry-ignoring resolver. See plan.md S9 row."
+
+@pytest.mark.asyncio
+async def test_onboard_rejects_token_resume_s1c():
+    """S1-c: onboard(token) must fail closed; lineage declaration replaces it."""
+    from unittest.mock import AsyncMock
+    from src.mcp_handlers.identity.handlers import handle_onboard_v2
+    from src.mcp_handlers.identity.session import create_continuity_token
+    from tests.helpers import parse_result
+
+    with patch.dict(
+        "os.environ",
+        {"UNITARES_CONTINUITY_TOKEN_SECRET": "test-secret-s1c"},
+        clear=False,
+    ):
+        token = create_continuity_token(
+            "22222222-3333-4444-5555-666666666666",
+            "agent-s1c-onboard",
         )
-        # The expected rejection mode: resolve_continuity_token returned None,
-        # client_session_id stayed None, handler errored at the early gate.
-        assert (
-            "client_session_id or continuity_token is required"
-            in stale_data.get("error", "")
-        ), (
-            "Expected the early 'client_session_id or continuity_token is "
-            "required' error (resolve returned None), got: "
-            f"{stale_data.get('error')!r}"
-        )
+        assert token is not None
+        with patch(
+            "src.mcp_handlers.identity.handlers.derive_session_key",
+            new=AsyncMock(return_value="s1c-onboard-session"),
+        ):
+            result = await handle_onboard_v2({
+                "continuity_token": token,
+                "client_hint": "test",
+            })
+
+    data = parse_result(result)
+    assert data["success"] is False
+    assert data["status"] == "continuity_token_resume_rejected"
+    assert data["tool"] == "onboard"
+
+
+@pytest.mark.asyncio
+async def test_identity_token_only_resume_rejected_but_path0_preserved_s1c():
+    """Token-only identity resume is retired; PATH 0 ownership proof remains."""
+    from unittest.mock import AsyncMock
+    from src.mcp_handlers.identity.handlers import handle_identity_adapter
+    from src.mcp_handlers.identity.session import create_continuity_token
+    from tests.helpers import parse_result
+
+    token_uuid = "33333333-4444-5555-6666-777777777777"
+    with patch.dict(
+        "os.environ",
+        {"UNITARES_CONTINUITY_TOKEN_SECRET": "test-secret-s1c"},
+        clear=False,
+    ):
+        token = create_continuity_token(token_uuid, "agent-s1c-identity")
+        assert token is not None
+        with patch(
+            "src.mcp_handlers.identity.handlers.derive_session_key",
+            new=AsyncMock(return_value="s1c-identity-session"),
+        ):
+            result = await handle_identity_adapter({
+                "continuity_token": token,
+            })
+
+    data = parse_result(result)
+    assert data["success"] is False
+    assert data["status"] == "continuity_token_resume_rejected"
+    assert data["tool"] == "identity"
+
+    src = inspect.getsource(handle_identity_adapter)
+    assert "_try_resume_by_agent_uuid_direct" in src
+    assert "_continuity_token_resume_rejected" in src
 
 
 # -----------------------------------------------------------------------------
@@ -791,29 +768,24 @@ def test_emit_helper_swallows_audit_failure(tmp_path, monkeypatch, caplog):
     assert "deprecations" in response
 
 
-def test_handle_identity_adapter_wiring_present():
-    """Static contract: handle_identity_adapter source contains the helper invocation
-    on its response_data. Cheap regression against silent removal in future refactors."""
+def test_handle_identity_adapter_s1c_rejection_wiring_present():
+    """Static contract: token-only identity resume hits the S1-c rejection gate."""
     import inspect
     from src.mcp_handlers.identity import handlers
 
     src = inspect.getsource(handlers.handle_identity_adapter)
-    assert "_emit_continuity_token_deprecation" in src, (
-        "handle_identity_adapter must wire S1-a deprecation surface — "
- ""
-    )
-    assert "response_dict=response_data" in src
+    assert "_continuity_token_resume_rejected" in src
+    assert 'tool="identity"' in src
 
 
-def test_handle_bind_session_wiring_present():
-    """Static contract: handle_bind_session source wires the helper on the response
-    payload — only when continuity_token was used to derive the session id."""
+def test_handle_bind_session_s1c_rejection_wiring_present():
+    """Static contract: bind_session rejects token-only binding."""
     import inspect
     from src.mcp_handlers.identity import handlers
 
     src = inspect.getsource(handlers.handle_bind_session)
-    assert "_emit_continuity_token_deprecation" in src
-    assert "response_dict=bind_response" in src
+    assert "_continuity_token_resume_rejected" in src
+    assert 'tool="bind_session"' in src
 
 
 # -----------------------------------------------------------------------------

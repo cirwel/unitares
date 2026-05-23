@@ -107,7 +107,7 @@ def build_identity_response_data(
             "to_set_display_name": "identity(name='YourName')",
         }
         if continuity_token:
-            response_data["quick_reference"]["for_strong_resume"] = continuity_token
+            response_data["quick_reference"]["for_path0_ownership_proof"] = continuity_token
 
         if session_continuity:
             response_data["session_continuity"] = dict(session_continuity)
@@ -119,8 +119,9 @@ def build_identity_response_data(
             if continuity_token:
                 response_data["session_continuity"]["continuity_token"] = continuity_token
                 response_data["session_continuity"]["instruction"] = (
-                    "Prefer continuity_token for robust resume. "
-                    "Use client_session_id when token support is unavailable."
+                    "Use client_session_id for continuity within this process. "
+                    "continuity_token is only for proof-owned PATH 0 rebinds "
+                    "with agent_uuid."
                 )
         response_data["session_continuity"]["resolution_source"] = continuity_source
         response_data["session_continuity"]["token_support"] = continuity_support
@@ -245,12 +246,6 @@ def build_onboard_response_data(
             "args_full": {"client_session_id": stable_session_id, "name": "YourName"},
         },
     ]
-    if continuity_token:
-        for call in next_calls:
-            args_full = call.get("args_full")
-            if isinstance(args_full, dict):
-                args_full["continuity_token"] = continuity_token
-
     client_tips = {
         "chatgpt": "ChatGPT loses session state. ALWAYS include client_session_id in every call.",
         "cursor": "Cursor maintains sessions well. client_session_id optional but recommended.",
@@ -350,8 +345,9 @@ def build_onboard_response_data(
         if "session_continuity" in result:
             result["session_continuity"]["continuity_token"] = continuity_token
             result["session_continuity"]["instruction"] = (
-                "Prefer continuity_token for robust resume across session-key changes. "
-                "Use client_session_id when token support is unavailable."
+                "Use client_session_id for continuity within this process. "
+                "continuity_token is only for proof-owned PATH 0 rebinds "
+                "with agent_uuid."
             )
 
     if verbose:

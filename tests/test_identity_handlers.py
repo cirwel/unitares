@@ -912,18 +912,12 @@ class TestHandleBindSession:
         assert "resume=true" in data["error"]
 
     @pytest.mark.asyncio
-    async def test_bind_session_rejects_expired_continuity_token_before_resolution(self):
-        """bind_session must honor the shared continuity-token TTL gate."""
+    async def test_bind_session_rejects_token_only_continuity_before_resolution(self):
+        """S1-c: bind_session rejects token-only binding before resolution."""
         from src.mcp_handlers.identity import session as session_mod
         from src.mcp_handlers.identity.handlers import handle_bind_session
 
         issued_at = 1_700_000_000
-        expired_at = (
-            issued_at
-            + session_mod._CONTINUITY_TTL
-            + session_mod._CLOCK_SKEW_TOLERANCE
-            + 1
-        )
         token_agent_uuid = str(uuid.uuid4())
         resolve_identity = AsyncMock(return_value={
             "agent_uuid": token_agent_uuid,
@@ -942,8 +936,7 @@ class TestHandleBindSession:
 
             assert token is not None
 
-            with patch("src.mcp_handlers.identity.session.time.time", return_value=expired_at), \
-                 patch("src.mcp_handlers.identity.handlers.resolve_session_identity", new=resolve_identity), \
+            with patch("src.mcp_handlers.identity.handlers.resolve_session_identity", new=resolve_identity), \
                  patch("src.mcp_handlers.identity.handlers.derive_session_key", new=derive_session), \
                  patch("src.mcp_handlers.context.get_session_signals", return_value=SimpleNamespace(user_agent="test")):
                 result = await handle_bind_session({
@@ -954,7 +947,9 @@ class TestHandleBindSession:
         data = parse_result(result)
 
         assert data["success"] is False
-        assert "client_session_id or continuity_token is required" in data["error"]
+        assert data["status"] == "continuity_token_resume_rejected"
+        assert data["tool"] == "bind_session"
+        assert data["recovery"]["reason"] == "continuity_token_resume_retired"
         resolve_identity.assert_not_awaited()
         derive_session.assert_not_awaited()
 
@@ -2644,21 +2639,14 @@ class TestHandleOnboardV2:
         mock_db.update_agent_fields.assert_called_with(test_uuid, status="active")
 
     @pytest.mark.asyncio
-    async def test_archived_token_without_explicit_resume_returns_clean_error(
+    async def test_archived_token_without_explicit_resume_returns_s1c_reject(
         self, patch_onboard_deps, mock_db, mock_redis
     ):
-        """Regression (2026-04-19): onboard with a continuity_token for an
-        archived agent — no explicit `resume` arg — must return a clean
-        resume_failed error instead of UnboundLocalError on session_key.
+        """S1-c short-circuits the old archived-token resume path.
 
-        The pre-fix chain was: OnboardParams default resume=False → handler's
-        `coerce_bool(default=True)` was overridden by the Pydantic-materialized
-        False → the archived-token path fell into the non-resume branch of
-        resolve_session_identity (which also returns resume_failed), but the
-        handler only checked resume_failed on the resume=True branch. The
-        non-resume branch dropped through to code that referenced an
-        uninitialized session_key, raising UnboundLocalError and returning
-        an error_response with a misleading agent_signature echo.
+        This still covers the old UnboundLocalError regression shape: a token
+        without explicit resume must return a clean typed error before PATH 2.8
+        can try to inspect archived-agent state.
         """
         from src.mcp_handlers.identity import handlers as identity_handlers
 
@@ -2677,8 +2665,10 @@ class TestHandleOnboardV2:
                 ),
             }
 
-        with patch.object(identity_handlers, "resolve_session_identity", side_effect=_fake_resolve), \
-             patch.object(identity_handlers, "extract_token_agent_uuid", return_value=archived_uuid):
+        resolve_spy = AsyncMock(side_effect=_fake_resolve)
+        extract_spy = MagicMock(return_value=archived_uuid)
+        with patch.object(identity_handlers, "resolve_session_identity", resolve_spy), \
+             patch.object(identity_handlers, "extract_token_agent_uuid", extract_spy):
             # Deliberately omit `resume` — exercises the Pydantic-default path.
             result = await identity_handlers.handle_onboard_v2({
                 "client_session_id": "archived-token-no-resume",
@@ -2686,12 +2676,13 @@ class TestHandleOnboardV2:
             })
 
         data = parse_result(result)
-        assert data.get("success") is False, "must NOT succeed on archived-token resume"
-        err = (data.get("error") or "").lower()
-        assert "resume" in err or "not active" in err
+        assert data.get("success") is False
+        assert data["status"] == "continuity_token_resume_rejected"
+        assert data["tool"] == "onboard"
         recovery = data.get("recovery") or {}
-        assert recovery.get("reason") == "resume_failed"
-        assert recovery.get("token_agent_uuid") == archived_uuid
+        assert recovery.get("reason") == "continuity_token_resume_retired"
+        resolve_spy.assert_not_awaited()
+        extract_spy.assert_not_called()
         # Crucially: we did not raise. Before the fix this path produced
         # UnboundLocalError on session_key.
 

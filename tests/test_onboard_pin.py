@@ -690,7 +690,7 @@ class TestToolSchemaClientSessionId:
 
     @pytest.mark.parametrize("tool_name", CRITICAL_TOOLS)
     def test_critical_tool_has_continuity_token(self, tool_schemas, tool_name):
-        """Critical tools should expose continuity_token for robust resume."""
+        """Critical tools expose continuity_token for PATH 0 ownership proof."""
         assert tool_name in tool_schemas, f"Tool '{tool_name}' not found in TOOL_SCHEMAS"
         tool = tool_schemas[tool_name]
         input_schema = tool.inputSchema or {}

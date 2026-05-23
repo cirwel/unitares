@@ -131,6 +131,50 @@ def _emit_continuity_token_deprecation(
         )
 
 
+def _continuity_token_resume_rejected(
+    *,
+    tool: str,
+    token_str: Optional[str],
+) -> TextContent:
+    """S1-c post-grace gate for the retired token-as-resume path.
+
+    ``continuity_token`` remains a PATH 0 ownership proof when paired with an
+    explicit ``agent_uuid``. It is no longer accepted as a cross-process
+    resume or bind credential. Callers should mint a fresh process identity and
+    declare lineage through ``parent_agent_id``.
+    """
+    details: Dict[str, Any] = {
+        "status": "continuity_token_resume_rejected",
+        "tool": tool,
+        "ontology_ref": "docs/ontology/s1-continuity-token-retirement.md#s1-c-post-grace-cross-process-instance-reject",
+    }
+    if token_str:
+        issued_at = extract_token_iat(str(token_str))
+        if issued_at is not None:
+            details["token_issued_at"] = issued_at
+    return error_response(
+        (
+            "Cross-process-instance resume via continuity_token is no longer "
+            "accepted. Mint a fresh process identity and declare lineage with "
+            "parent_agent_id."
+        ),
+        details=details,
+        recovery={
+            "reason": "continuity_token_resume_retired",
+            "action": (
+                "Call onboard(force_new=true, parent_agent_id=<prior UUID>, "
+                "spawn_reason='new_session') instead of resuming by token."
+            ),
+            "preserved_path": (
+                "Same-live-process PATH 0 remains available as "
+                "identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)."
+            ),
+        },
+        error_code="CONTINUITY_TOKEN_RESUME_RETIRED",
+        error_category="auth_error",
+    )
+
+
 async def _emit_identity_hijack_event(
     direct_uuid: str,
     mode: str,
@@ -1069,11 +1113,20 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
     # label updated after the session resolves; it never drives lookup.
     name = arguments.get("name")
 
+    _id_caller_token = arguments.get("continuity_token")
+    if not isinstance(_id_caller_token, str) or not _id_caller_token:
+        _id_caller_token = None
+    if _id_caller_token and not force_new:
+        return _continuity_token_resume_rejected(
+            tool="identity",
+            token_str=_id_caller_token,
+        )
+
     # Extract agent UUID from continuity token for direct lookup fallback.
     # If session bindings expired, this allows rebinding without forking.
     _token_agent_uuid = None
-    if arguments.get("continuity_token"):
-        _token_agent_uuid = extract_token_agent_uuid(str(arguments["continuity_token"]))
+    if _id_caller_token:
+        _token_agent_uuid = extract_token_agent_uuid(_id_caller_token)
 
     # STEP 1: Check for existing identity under BASE key first (unless force_new).
     session_key = base_session_key
@@ -1282,9 +1335,6 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
     # Adversarial-input guard: a non-string continuity_token (list/dict/bytes)
     # would otherwise inflate grace-period telemetry without the caller
     # actually holding a verifiable token.
-    _id_caller_token = arguments.get("continuity_token")
-    if not isinstance(_id_caller_token, str) or not _id_caller_token:
-        _id_caller_token = None
     _emit_continuity_token_deprecation(
         response_dict=response_data,
         used_token_for_resume=(_id_caller_token is not None) and not force_new,
@@ -1413,30 +1463,18 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
 
     client_session_id = arguments.get("client_session_id")
     expected_agent_id = arguments.get("agent_id")
-    # S1-a (2026-04-29): track whether we derived client_session_id from a
-    # continuity_token so the deprecation surface fires for the actual
-    # cross-process-instance resume case. We can't infer this from
-    # `arguments.get("client_session_id")` after the fact because HTTP
-    # middleware (`http_api.py:471-474`) injects client_session_id into
-    # arguments BEFORE dispatch — `arguments.get("client_session_id")` is
-    # truthy on every HTTP call, so a post-facto check would suppress the
-    # warning for the primary fleet caller class.
-    _resolved_from_token = False
+    # S1-c (2026-05-23): token-only bind was the retired cross-process
+    # resume surface. Explicit client_session_id binding remains valid.
     _bs_caller_token = arguments.get("continuity_token")
     if not isinstance(_bs_caller_token, str) or not _bs_caller_token:
         _bs_caller_token = None
     if not client_session_id and _bs_caller_token:
-        from ..context import get_session_signals
-        token_signals = get_session_signals()
-        client_session_id = normalize_client_session_id(resolve_continuity_token(
-            _bs_caller_token,
-            model_type=arguments.get("model_type"),
-            user_agent=token_signals.user_agent if token_signals else None,
-        ))
-        if client_session_id:
-            _resolved_from_token = True
+        return _continuity_token_resume_rejected(
+            tool="bind_session",
+            token_str=_bs_caller_token,
+        )
     if not client_session_id:
-        return error_response("client_session_id or continuity_token is required")
+        return error_response("client_session_id is required")
     if strict and not expected_agent_id:
         return error_response(
             "strict bind_session requires agent_id",
@@ -1511,24 +1549,6 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
         "mcp_session_key": mcp_session_key[:20] + "..." if mcp_session_key else None,
         "message": f"MCP session bound to agent '{target_label or target_agent_id}'",
     }
-
-    # S1-a (2026-04-29): warn iff the caller's continuity_token actually
-    # produced this binding — the transport-rebind for an already-bound
-    # session (caller passed client_session_id directly) is Role-2 and does
-    # NOT warn. Discriminator is *session pre-existence at the handler
-    # boundary*, tracked via `_resolved_from_token` set above; reading
-    # arguments.get("client_session_id") after dispatch is unsafe because
-    # HTTP middleware injects that field before the handler runs.
-    if _resolved_from_token:
-        _emit_continuity_token_deprecation(
-            response_dict=bind_response,
-            used_token_for_resume=True,
-            token_str=_bs_caller_token,
-            agent_uuid=target_uuid,
-            response_agent_id=target_agent_id,
-            client_hint=arguments.get("client_hint"),
-            model_type=arguments.get("model_type"),
-        )
 
     return success_response(bind_response)
 
@@ -1631,8 +1651,16 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # Extract agent UUID from continuity token for direct lookup fallback (PATH 2.8).
     # Token is a cryptographic proof of identity — stronger than name claim.
     _token_agent_uuid = None
-    if arguments.get("continuity_token"):
-        _token_agent_uuid = extract_token_agent_uuid(str(arguments["continuity_token"]))
+    _caller_token_for_resume = arguments.get("continuity_token")
+    if not isinstance(_caller_token_for_resume, str) or not _caller_token_for_resume:
+        _caller_token_for_resume = None
+    if _caller_token_for_resume and not force_new:
+        return _continuity_token_resume_rejected(
+            tool="onboard",
+            token_str=_caller_token_for_resume,
+        )
+    if _caller_token_for_resume:
+        _token_agent_uuid = extract_token_agent_uuid(_caller_token_for_resume)
 
     middleware_identity = _middleware_identity_for_session(arguments, base_session_key)
 

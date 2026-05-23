@@ -125,9 +125,16 @@ class TestIdentityCapture:
     def test_captures_from_quick_reference(self):
         client = GovernanceClient()
         client._capture_identity({
-            "quick_reference": {"for_strong_resume": "tok-qr"},
+            "quick_reference": {"for_path0_ownership_proof": "tok-qr"},
         })
         assert client.continuity_token == "tok-qr"
+
+    def test_captures_legacy_strong_resume_quick_reference(self):
+        client = GovernanceClient()
+        client._capture_identity({
+            "quick_reference": {"for_strong_resume": "tok-legacy"},
+        })
+        assert client.continuity_token == "tok-legacy"
 
     def test_raises_on_uuid_drift(self):
         client = GovernanceClient()

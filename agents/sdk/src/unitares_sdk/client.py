@@ -530,6 +530,7 @@ class GovernanceClient:
             raw.get("continuity_token")
             or raw.get("session_continuity", {}).get("continuity_token")
             or raw.get("identity_summary", {}).get("continuity_token", {}).get("value")
+            or raw.get("quick_reference", {}).get("for_path0_ownership_proof")
             or raw.get("quick_reference", {}).get("for_strong_resume")
         )
 
