@@ -282,6 +282,21 @@ R6 v2/v2.1 ─ does NOT block on ───── any deferred envelope fields
 - **Multi-generation chain semantics.** R2 v2 already specified per-link-only handling. R6 inherits the same posture: `episode_fork_kind` is per-event, not chain-aggregate.
 - **Substrate-earned restart discrimination.** Intentionally collapsed to `sibling_locus`. Revisit when class_tag signal is cheap at the enrichment site.
 
+## 2026-05-23 promotion-scope refresh
+
+Read-only diagnostics re-ran after S1-c and the S2/S3 cleanup. H1/H3 remain complete on the explicit historical keys:
+
+- `scripts/diagnostics/r6_dogfood.py --experiment h1 --comparison-key r6-h1-2026-05-08 --assess --json` returns `decision=complete`, `reason=same_identity_distinct_models_observed`.
+- `scripts/diagnostics/r6_dogfood.py --experiment h3 --comparison-key r6-h3-2026-05-08 --assess --json` returns `decision=complete`, `reason=fresh_identity_shared_memory_context_observed`.
+
+This is enough to keep the already-promoted S22 core write context and R6 fork discriminators. It is not enough to promote the broader candidate envelope:
+
+- Historical H1/H3 rows still show `episode_fork_kind` / `identity_lineage_fork` as 0/2 because they predate durable fork-discriminator persistence. Treat that as no-backfill evidence, not a regression.
+- Post-fix coverage from `scripts/diagnostics/s22_candidate_envelope_coverage.py --since 2026-05-08T00:00:00Z --json` shows `agent_state` candidate fields absent except for sparse `locus`, and KG candidate fields absent except for a sparse `episode_id` footprint.
+- `locus` stays candidate-only despite appearing on H1/H3 rows; its aggregate footprint is too sparse and its semantics are still experiment-local rather than a durable public contract.
+
+Decision: do not promote `affordance_state`, formal `locus`, `harness_id`, `episode_id`, `invocation_id`, `process_instance_id`, embedded `identity_assurance`, `agent_uuid`, `client_session_id`, or `label_at_write` yet. The next evidence should come from targeted H7/H8/gateway/Discord/cron/Dispatch dogfood, not from widening public schemas around sparse fields.
+
 ## Appendix: review provenance
 
 - v1 council pass 2026-05-02 (parallel three-agent: `dialectic-knowledge-architect` + `feature-dev:code-reviewer` + `live-verifier`). All three returned "withhold pending v2." 5+ forcing items: enum partitioning failures, language-slip back to performative continuity, dead `continuation` value, build_fork_context call-site mismatch (silent), force_new path doesn't write thread_position, R6 v1's conflation of force_new and resume paths, has_child_uuid not derivable. Live-verifier specifically ground-truthed: 33-tool MCP catalogue, runtime spawn_reason vocabulary (5 distinct values), DB schema (thread_position NULL for all force_new agents), call-site signature mismatch verified by source comparison.

@@ -18,6 +18,7 @@ Output groups fields by promotion status per Hermes's 2026-05-08 audit
 Usage:
     python3 scripts/diagnostics/s22_candidate_envelope_coverage.py
     python3 scripts/diagnostics/s22_candidate_envelope_coverage.py --comparison-key r6-h1-2026-05-08
+    python3 scripts/diagnostics/s22_candidate_envelope_coverage.py --since 2026-05-08T00:00:00Z
     python3 scripts/diagnostics/s22_candidate_envelope_coverage.py --json
 """
 
@@ -29,6 +30,7 @@ import json
 import os
 import sys
 from collections.abc import Iterable, Mapping
+from datetime import datetime
 from typing import Any, Optional
 
 
@@ -113,12 +115,14 @@ def _coverage_block(
 async def _fetch_agent_state_contexts(
     pool: Any,
     comparison_key: Optional[str],
+    since: Optional[str],
 ) -> list[dict[str, Any]]:
-    where = "WHERE state_json->'provenance_context' IS NOT NULL"
-    params: list[Any] = []
-    if comparison_key:
-        where += " AND state_json->'provenance_context'->>'comparison_key' = $1"
-        params.append(comparison_key)
+    where, params = _build_context_where(
+        json_expr="state_json->'provenance_context'",
+        timestamp_column="recorded_at",
+        comparison_key=comparison_key,
+        since=since,
+    )
     sql = f"SELECT state_json->'provenance_context' AS pc FROM core.agent_state {where}"
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, *params)
@@ -138,12 +142,14 @@ async def _fetch_agent_state_contexts(
 async def _fetch_kg_contexts(
     pool: Any,
     comparison_key: Optional[str],
+    since: Optional[str],
 ) -> list[dict[str, Any]]:
-    where = "WHERE provenance->'s22_context' IS NOT NULL"
-    params: list[Any] = []
-    if comparison_key:
-        where += " AND provenance->'s22_context'->>'comparison_key' = $1"
-        params.append(comparison_key)
+    where, params = _build_context_where(
+        json_expr="provenance->'s22_context'",
+        timestamp_column="created_at",
+        comparison_key=comparison_key,
+        since=since,
+    )
     sql = f"SELECT provenance->'s22_context' AS pc FROM knowledge.discoveries {where}"
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, *params)
@@ -162,6 +168,7 @@ async def _fetch_kg_contexts(
 
 def _print_text(payload: dict[str, Any]) -> None:
     print(f"comparison_key: {payload.get('comparison_key') or '<all>'}")
+    print(f"since: {payload.get('since') or '<all>'}")
     for source_label, source_key in (
         ("agent_state", "agent_state"),
         ("knowledge graph", "knowledge_graph"),
@@ -182,11 +189,51 @@ def _print_text(payload: dict[str, Any]) -> None:
                 print(f"    {row['field']:<30} {row['ratio']}")
 
 
+def _build_context_where(
+    *,
+    json_expr: str,
+    timestamp_column: str,
+    comparison_key: Optional[str],
+    since: Optional[str],
+) -> tuple[str, list[Any]]:
+    clauses = [f"{json_expr} IS NOT NULL"]
+    params: list[Any] = []
+    if comparison_key:
+        params.append(comparison_key)
+        clauses.append(f"{json_expr}->>'comparison_key' = ${len(params)}")
+    if since:
+        params.append(since)
+        clauses.append(f"{timestamp_column} >= ${len(params)}::timestamptz")
+    return "WHERE " + " AND ".join(clauses), params
+
+
+def _parse_since(value: str) -> datetime:
+    text = value.strip()
+    if not text:
+        raise argparse.ArgumentTypeError("--since must not be empty")
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "--since must be an ISO timestamp, e.g. 2026-05-08T00:00:00Z"
+        ) from exc
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--comparison-key",
         help="Restrict the diagnostic to one comparison_key.",
+    )
+    parser.add_argument(
+        "--since",
+        type=_parse_since,
+        help=(
+            "Restrict rows to writes at or after this timestamptz. "
+            "Uses core.agent_state.recorded_at and knowledge.discoveries.created_at."
+        ),
     )
     parser.add_argument(
         "--json",
@@ -198,13 +245,18 @@ async def main() -> int:
     db = get_db()
     pool = getattr(db, "pool", None) or db
     try:
-        agent_state = await _fetch_agent_state_contexts(pool, args.comparison_key)
-        kg = await _fetch_kg_contexts(pool, args.comparison_key)
+        agent_state = await _fetch_agent_state_contexts(
+            pool,
+            args.comparison_key,
+            args.since,
+        )
+        kg = await _fetch_kg_contexts(pool, args.comparison_key, args.since)
     finally:
         await close_db()
 
     payload: dict[str, Any] = {
         "comparison_key": args.comparison_key,
+        "since": args.since.isoformat() if args.since else None,
         "agent_state": {
             "total": len(agent_state),
             "promoted_core": _coverage_block(agent_state, PROMOTED_CORE),
