@@ -346,10 +346,12 @@ This is not merely DX. Evidence shape is part of how a harness describes action.
 
 Operator helper:
 
-- `scripts/diagnostics/r6_dogfood.py --experiment h1|h3` emits read-only payload templates for the remaining controlled Hermes dogfood passes.
+- `scripts/diagnostics/r6_dogfood.py --experiment h1|h3|h7|h8` emits read-only payload templates for controlled Hermes dogfood passes.
 - `--assess --comparison-key <key>` reads existing S22 write-context rows and reports whether the selected experiment has enough structured evidence.
 - H1 acceptance checks for one Hermes identity with two distinct model labels on the same comparison key.
 - H3 acceptance checks for distinct UNITARES identities sharing one Hermes memory-context label on the same comparison key.
+- H7 acceptance checks for one Hermes identity with distinct non-empty tool-surface lists on the same comparison key.
+- H8 acceptance checks for one Hermes identity with both interactive and non-interactive transport labels on the same comparison key.
 
 ## Proposed plan rows
 
