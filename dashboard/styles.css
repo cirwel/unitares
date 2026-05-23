@@ -684,7 +684,7 @@ body::after {
    ============================================ */
 .stats-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
     gap: 14px;
     margin-bottom: 24px;
     max-width: 1400px;
@@ -842,7 +842,7 @@ main {
 
 .main-content {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
     gap: 25px;
     margin-bottom: 25px;
     max-width: 1400px;
@@ -2633,7 +2633,7 @@ main {
 
 .eisv-chart-row {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
     gap: 20px;
 }
 
@@ -2828,7 +2828,7 @@ main {
    ============================================ */
 .pulse-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
     gap: 1.5rem;
     padding: 0.5rem 0;
 }
@@ -3884,29 +3884,8 @@ main {
 /* ============================================
    Responsive
    ============================================ */
-/* 960px: collapse all 2+ column grids to single column (except
- * .stats-grid which steps 3→2 first — 3 cards in a row gets cramped).
- * Bumped .main-content / .eisv-chart-row / .pulse-grid up from 900px so
- * tablets in landscape (820–960px) and narrow desktop windows don't sit
- * in a squashed 2-column state — content gets too tight between 760 and
- * 900px, which is exactly the tablet-landscape band. */
-@media (max-width: 960px) {
-    .stats-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-
-    .main-content {
-        grid-template-columns: 1fr;
-    }
-
-    .eisv-chart-row {
-        grid-template-columns: 1fr;
-    }
-
-    .pulse-grid {
-        grid-template-columns: 1fr;
-    }
-}
+/* Top-level multi-column grids (.stats-grid, .main-content, .eisv-chart-row,
+ * .pulse-grid) reflow via grid auto-fit + minmax() — no breakpoint cascade. */
 
 @media (max-width: 768px) {
     .section-nav {
@@ -3917,10 +3896,6 @@ main {
     .section-nav-item {
         padding: 5px 10px;
         font-size: 0.72rem;
-    }
-
-    .eisv-chart-row {
-        grid-template-columns: 1fr;
     }
 
     .toolbar {
@@ -4010,10 +3985,6 @@ main {
 
     .panel {
         max-height: min(70vh, 600px);
-    }
-
-    .stats-grid {
-        grid-template-columns: 1fr;
     }
 
     .stat-card .value {
@@ -5507,15 +5478,13 @@ main {
  * ----------------------------------------------------------------------- */
 
 .vigil-counts {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 110px), 1fr));
     gap: 12px;
     margin-bottom: 14px;
 }
 
 .vigil-stat {
-    flex: 1 1 110px;
-    min-width: 110px;
     padding: 10px 12px;
     background: rgba(255, 255, 255, 0.02);
     border: 1px solid rgba(255, 255, 255, 0.06);
