@@ -1,11 +1,26 @@
 # Wave 3 RFC: handler dispatch + identity middleware + dialectic resolution → BEAM
 
-**Status:** v0.3, 2026-05-09. Full redraft superseding v0.2 (which superseded v0.1.x). Each prior version is preserved on its branch as a historical record. v0.3 closes the architectural irony the v0.2 council surfaced: cache coherence and feature-flag state move off PostgreSQL into BEAM-native ETS, so the RFC stops piling new PG-coordination load onto the substrate it exists to relieve.
-**Parent:** `docs/proposals/beam-footprint-roadmap-v0.md` v0.3.1.
+**Status:** v0.3.2 + 2026-05-20 status fold. Full redraft superseding v0.2 (which superseded v0.1.x). Each prior version is preserved on its branch as a historical record. v0.3 closes the architectural irony the v0.2 council surfaced: cache coherence and feature-flag state move off PostgreSQL into BEAM-native ETS, so the RFC stops piling new PG-coordination load onto the substrate it exists to relieve.
+**Parent:** `docs/proposals/beam-footprint-roadmap-v0.md` v0.3.3.
 **Sibling, completed:** `docs/proposals/beam-wave-1-sentinel.md` (Surface 1+2 shipped; Surface 3 in flight).
-**Sibling, completed:** `docs/proposals/surface-lease-plane-v0.md` Phase A + Wave 2 hardening (#412/#414/#417/#418/#419).
+**Sibling, completed:** `docs/proposals/surface-lease-plane-v0.md` Phase A + Wave 2 hardening + resident Phase B + lease RPC recorder/persistence (#412/#414/#417/#418/#419/#476/#480/#481).
 **Wave 0 channel:** `audit.coordination_events` exists with `event_type ~ '^(coordination_failure)(\.[a-z_]+)+$'` CHECK constraint; zero rows as of 2026-05-09. The constraint scopes the table to failure events only — informational latency lives in the parallel channel introduced in §6.
 **Single-writer surface:** Identity / onboarding (per `CLAUDE.md` "Before Starting Work on a Single-Writer Surface") spans this entire RFC plus its prereq PRs. Branch from this RFC's head before any parallel work.
+
+## Post-v0.3.2 status fold (2026-05-20)
+
+Two non-Wave-3-specific prerequisites moved after this RFC was drafted:
+
+- **Resident Phase B is already open.** PR #476 merged 2026-05-20 UTC after the
+  lease-plane evaluator returned PROMOTABLE with controlled drill evidence.
+  §4 option (α) is revised from "open resident Phase B" to "reuse existing
+  resident enforcement where it actually applies"; it is not evidence for
+  unrelated agent-state surfaces.
+- **Lease RPC instrumentation uses the existing client module.** PR #480 added
+  per-call recorder hooks in `src/lease_plane/client.py`; PR #481 persists
+  acquire p50/p99 snapshots to `metrics.series`. §6/§14 PR #6 should build on
+  that recorder if it still needs the `audit.coordination_measurements`
+  channel.
 
 ## What changed in v0.3.2 (vs v0.3.1)
 
@@ -145,10 +160,13 @@ Identity middleware decomposes into eight state surfaces.
 
 The cutover window has a dual-write phase where both BEAM and Python actively write to the same agent's state. After full cutover, BEAM is the sole writer for the migrated surfaces; this section's coordination is bounded to the cutover window.
 
-- **(α)** Open a `resident:/` Phase B window via amendment to `surface-lease-plane-v0.md`. Forces every Python resident (Sentinel, Vigil, Chronicler, in-process Steward) to learn fail-closed-on-deny semantics in the same window as cutover — couples two large changes.
+- **(α)** Reuse existing `resident` Phase B enforcement where the cutover touches resident-owned surfaces. PR #476 already opened resident enforcement, so this no longer couples Wave 3 to opening Phase B. It also does not generalize resident drill evidence to unrelated agent-state surfaces.
 - **(β) — recommended.** Per-agent PG advisory lock at the writer entry point (`pg_try_advisory_lock(hashtext(agent_uuid))`). BEAM acquires on enter, releases on exit; Python writers attempt with 50ms timeout and fail-fast (returning the same 503-equivalent surfaced as `governance_temporarily_unavailable`). Keeps lease plane unchanged. **Cost accounting:** the per-write advisory-lock round-trip is counted against disconfirmer (B)'s budget (§0). Bounded per write, not per observe.
 
-If (α) is chosen, B5.2 from v0.1.2 stands: operator evaluates `resident:/` against `surface-lease-plane-v0.md` §6.1 criteria and flips a flag rather than shipping a PR. If (β) is chosen, §4 is a binding implementation spec. Council confirms before implementation gate.
+If (α) is chosen, implementation must verify `LEASE_PLANE_ENFORCED_SURFACE_KINDS`
+includes `resident` in every process participating in the relevant cutover path
+and must name any non-resident surface_kind separately. If (β) is chosen, §4 is
+a binding implementation spec. Council confirms before implementation gate.
 
 ---
 
@@ -281,7 +299,12 @@ Wave 3 wires `coordination_failure.beam_python_boundary.*` emissions at:
 
 ### 6.3 Measurement call-sites (new channel, `audit.coordination_measurements`)
 
-- A new `src/lease_plane_client.py` (created by prereq PR #6 — does not currently exist) will emit `measurement.lease_plane.request` on every request to `127.0.0.1:8788`, payload `{endpoint, method, status_code, elapsed_ms}`. PR #6 primary deliverable; data accrues ≥14 days before disconfirmer (B) thresholds can be set.
+- Existing `src/lease_plane/client.py` emits per-call lease RPC latency into
+  `perf_monitor` (PR #480), and PR #481 persists acquire p50/p99 snapshots to
+  `metrics.series`. If prereq PR #6 still needs
+  `measurement.lease_plane.request` rows in `audit.coordination_measurements`,
+  it should bridge from this recorder rather than create a parallel one-off
+  client module.
 - Wave 3 BEAM handler-dispatch emits `measurement.beam_python_boundary.request` on every successful boundary call, payload `{endpoint, method, elapsed_ms, payload_bytes}`.
 - Python MCP transport during cutover emits `measurement.governance_mcp.503_emission` on every 503 it returns, payload `{request_path, error_reason}` — input to §3.2's halt aggregator.
 
@@ -732,7 +755,9 @@ Inheriting parent roadmap stop signs #1–#4, plus Wave-3-specific:
 - Does not port the LLM SDK call paths. Anthropic/OpenAI/Ollama call paths inside handlers stay Python, called from BEAM via Ports/HTTP.
 - Does not port Watcher. Single-shot LLM pattern matcher; no coordination shape.
 - Does not modify the `lease_plane` schema. Wave 3's new state lives in BEAM ETS (live) + new PG schemas/tables (durable): `coordination` schema (§9), `core.identities_shadow` + `core.agents_shadow` (§8), `audit.coordination_measurements` (§6), `core.feature_flags` (§10).
-- Does not extend `surface-lease-plane-v0.md` Phase B to `resident:/` unless §4 option (α) is chosen.
+- Does not open `surface-lease-plane-v0.md` Phase B for `resident:/`; PR #476
+  already did that. Does not extend Phase B to any new agent-state or cutover
+  surface_kind until §4 option (α) names it explicitly.
 - Does not version columns in `core.agent_behavioral_baselines` or `core.feature_flags`. v0.2's version-counter approach is retired in favor of single-writer ETS canonical + PG durable.
 
 ---
@@ -748,7 +773,7 @@ All ten prereq PRs land BEFORE any commit in `elixir/handler_dispatch/` or any n
 | 3 | `coordination_events_helpers.py` + Elixir helper + CI lint | `governance_core/coordination_events_helpers.py` (`make_boundary_payload`, `make_measurement_payload`), Elixir helper module, `scripts/dev/check-boundary-event-helpers.sh` (CI lint) | — |
 | 4 | IPUA pin integration test | `tests/integration/test_identity_path2_ipua_pin_pipeline.py` | — |
 | 5 | Golden-capture fixture + capture script + masking + parity test | `tests/fixtures/wave3_response_golden/` (50+), `scripts/dev/wave3-capture-goldens.sh`, `tests/integration/test_wave_3_response_parity.py` | — |
-| 6 | Lease-plane Phase A latency instrumentation + measurement table + retention | `db/postgres/migrations/0NN_audit_coordination_measurements.sql`, `src/lease_plane_client.py` (emit `measurement.lease_plane.request`), `scripts/ops/wave-0-channel-report.sh` (read both tables), `scripts/ops/wave-0-partition-roll.sh` + plist (90-day retention). Runs ≥14 days before disconfirmer (B) thresholds set | #3 (`make_measurement_payload`) |
+| 6 | Lease-plane Phase A latency instrumentation + measurement table + retention | `db/postgres/migrations/0NN_audit_coordination_measurements.sql`, `src/lease_plane/client.py` (existing recorder; bridge/emission to `measurement.lease_plane.request`), `scripts/ops/wave-0-channel-report.sh` (read both tables), `scripts/ops/wave-0-partition-roll.sh` + plist (90-day retention). Runs ≥14 days before disconfirmer (B) thresholds set | #3 (`make_measurement_payload`) |
 | 7 | Saga DDL + state machine | `db/postgres/migrations/0NN_coordination_session_resolution_sagas.sql` (CREATE SCHEMA + CREATE TABLE + partial unique index), Python interface stubs for tests | — |
 | 8a | BaselineWriter stub + Readiness GenServer + cold-ETS contract test | `elixir/handler_dispatch/lib/baseline_writer.ex` (skeleton: GenServer scaffolding, `:writer_warm` signal, no PG read yet), `elixir/handler_dispatch/lib/readiness.ex` (the readiness gate from §10.2), `elixir/handler_dispatch/test/cold_ets_contract_test.exs` (the `:cold` return contract; matches §10.2 belt-and-suspenders spec). No production wiring; allows the §10.2 invariants to ship and be tested before measurement data accrues. | #2 (FeatureFlagWriter pattern) |
 | 8b | BaselineWriter wiring + boundary endpoint + slow-reconciliation cron | Wires `BaselineWriter` to PG (bulk SELECT on init, write path per §10.1), boundary endpoint `POST /v1/baseline/get` for Python reads during transition, slow-reconciliation cron, ExUnit tests for ETS-PG single-writer invariant + reconciliation divergence detection. **Gated on PR #6 14-day window**: `scripts/dev/check-wave3-prereq-data-window.sh` (CI lint, added in this PR) verifies ≥14 days of `measurement.lease_plane.request` rows in `audit.coordination_measurements` before this PR can merge. Enforces criterion §11.5 mechanically rather than as a Go-decision document obligation. | #6 (14-day data), #8a |

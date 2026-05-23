@@ -1,7 +1,7 @@
 # BEAM Footprint Roadmap
 
 **Created:** May 3, 2026
-**Last Updated:** May 9, 2026 (v0.3.2 — Wave 3 substrate re-litigation; includes 2026-05-07 Wave 3 surface inventory addendum; v0.3 destination unchanged)
+**Last Updated:** May 20, 2026 (v0.3.3 status fold — resident Phase B + lease/ODE measurement persistence; v0.3 destination unchanged)
 **Status:** v0.3 — destination is **A′ (committed, operator-decision-driven, 2026-05-05)**. Stateful coordination ports to BEAM in waves; stateless computation (numpy ODE, embeddings, LLM SDK calls) stays Python and is called from BEAM via Ports / HTTP. v0.2 had reopened the destination after PR #350's verdict; v0.3 closes it again on operator call after four Python-fixable PRs (#350 / #354 / #360 / #361) closed every measured floor without moving the user-visible ~11s p50 per-turn overhead. **Read the V0.3 RESOLUTION block first.** v0 / v0.1 / v0.2 bodies preserved as historical record.
 **Council pass v0.1 (2026-05-04):** dialectic-knowledge-architect (2B/4C/3D/4N), feature-dev:code-reviewer (2B/3C/2D/2N), live-verifier (7 VERIFIED, 6 DRIFT, 0 REFUTED, 1 SOURCE_ONLY) — all findings folded inline. Architect C3 + reviewer C3 both flagged "v0.1 destination committed pre-experiment"; the v0.1 conditionality block was the fold for that finding, and v0.2 was the realization of it.
 **Council pass v0.3:** none on the migration call itself — that's an operator decision after a multi-session debate, and adversarial review of the call after operator commitment is the relitigation pattern v0.3 is trying to end. Council passes ARE expected on technical scope (Wave 1 supervisor topology, BEAM↔Python boundary contracts, identity-state migration) once those land as RFCs.
@@ -143,9 +143,9 @@ V0.3 lists dialectic resolution in the "stateful-coordinating, ports to BEAM" co
 
 ### C3 (reviewer) — Lease plane Phase A is advisory-only; Wave 3 needs Phase B
 
-V0.3 says "Lease plane already proves the boundary." Reviewer correction: Phase A contract is advisory mode — failed acquire MUST NOT block the caller's normal operation. Pattern generalizes for Sentinel (Wave 1) cleanly but NOT for Wave 3 handler dispatch, which requires Python MCP to stop accepting writes for an agent while its BEAM GenServer is mid-update. That's Phase B enforcement. Phase B eligibility for `dialectic:/` opens 2026-05-16 per lease plane RFC; **no Phase B window is named for `resident:/` surfaces.**
+V0.3 says "Lease plane already proves the boundary." Reviewer correction: Phase A contract is advisory mode — failed acquire MUST NOT block the caller's normal operation. Pattern generalizes for Sentinel (Wave 1) cleanly but NOT for Wave 3 handler dispatch, which requires Python MCP to stop accepting writes for an agent while its BEAM GenServer is mid-update. That's Phase B enforcement. Phase B eligibility for `dialectic:/` opens 2026-05-16 per lease plane RFC; at v0.3.1 time, **no Phase B window had yet been named for `resident:/` surfaces.**
 
-**Fold:** Wave 3 RFC MUST address opening a `resident:/` Phase B window OR specify a different enforcement-grade boundary mechanism. Wave 1 stays unaffected (Sentinel is fine on Phase A advisory).
+**Fold:** Wave 3 RFC MUST address opening a `resident:/` Phase B window OR specify a different enforcement-grade boundary mechanism. Superseded status note: resident Phase B opened later via PR #476 (merged 2026-05-20 UTC); Wave 3 still must specify its own enforcement-grade boundary for handler-dispatch cutover rather than treating resident evidence as proof for unrelated agent-state surfaces. Wave 1 stays unaffected (Sentinel is fine on Phase A advisory).
 
 ### C4 (reviewer) — Test strategy under migration
 
@@ -263,6 +263,29 @@ Each is referenceable for the architectural decisions tried at that iteration. N
 - The Wave 0 channel design (`audit.coordination_events`) or its CHECK constraint scope.
 
 What it changes: Wave 3 sequencing is on hold pending operator decision among (α)/(β)/(γ)/(δ). Until that decision lands, no v0.4 redraft, no implementation work on Wave-3-specific prereqs. The non-Wave-3-specific prereqs (lease-plane Phase A latency instrumentation, ODE profile, boundary-event helpers) can ship independently because they're useful regardless of Wave 3's eventual shape.
+
+---
+
+## V0.3.3 STATUS FOLD 2026-05-20 — resident Phase B + measurement persistence
+
+This is a bookkeeping fold over shipped work after v0.3.2. It does not change
+A' or resolve the Wave 3 re-litigation question.
+
+- **Resident Phase B is already open.** PR #476
+  (`feat(lease-plane): enforce resident phase b leases`) merged 2026-05-20 UTC
+  after the mechanical evaluator returned PROMOTABLE with controlled drill
+  evidence. Wave 3 no longer needs to open the `resident:/` Phase B window as
+  future work, but it still needs an enforcement-grade boundary decision for
+  handler-dispatch cutover.
+- **Lease-boundary RPC latency is now recorder + persistence.**
+  PR #480 added the Python client recorder in `src/lease_plane/client.py`;
+  PR #481 added `perf_monitor_persist_task`, catalog entries, and
+  `metrics.series` persistence for `lease_plane.client.v1.lease.acquire.p50`
+  and `.p99`.
+- **ODE profile persistence also landed.** PR #481 persists
+  `ode.numpy_step_ms.p50` / `.p99`; the remaining question is the 7+ day
+  reading, not whether the longitudinal storage path exists.
+
 ---
 
 ## V0.2 RESOLUTION 2026-05-05 — verdict landed; destination reopens *(SUPERSEDED by V0.3 RESOLUTION above; preserved as historical record)*

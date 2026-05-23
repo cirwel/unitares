@@ -525,7 +525,11 @@ v0.3 §Sequencing names Sentinel-on-BEAM as the smallest first ship under A′ (
 - Wave 3 work (handler dispatch, identity middleware, dialectic resolution). Lock-invariant inventory belongs in Wave 3 RFC, not here.
 - ODE profile work (`process_update_authenticated_async` profiling). Runs in parallel; lands in v0.3.1.1 amendment; gates Wave 1 *exit criteria authorship* (per v0.3.1 C1) but not implementation.
 - Vigil and Chronicler ports. Each gets its own RFC if/when sequenced.
-- Phase B `resident:/` enforcement window (v0.3.1 C3). Sentinel uses Phase A advisory; opening Phase B for resident surfaces is a Wave 3 prerequisite, not a Wave 1 prerequisite.
+- Resident Phase B promotion ownership (v0.3.1 C3). Wave 1 originally used
+  Phase A advisory; resident Phase B later opened via PR #476 (merged
+  2026-05-20 UTC). Sentinel-on-BEAM consumes that enforcement posture, but
+  Wave 1 does not define Phase-B promotion criteria or Wave 3 cutover
+  enforcement.
 - Migration of the `unitares_sdk` Python SDK to an Elixir SDK. Cross-runtime, BEAM Sentinel calls governance MCP via the same HTTP/REST contract Python Sentinel uses today.
 
 ## State migration (per v0.3.1 B1, B3, B4)
