@@ -424,7 +424,7 @@ Mirror the precedent set by `path1-sync-fingerprint-check.md` and the IDENTITY_S
 **Promotion gate to Phase B per surface_kind requires ALL of:**
 
 1. ≥14 days of advisory-mode telemetry for that surface_kind.
-2. 0 service-availability incidents on the lease plane itself during the window (Sentinel `/v1/lease/status?surface_id=__healthcheck__` uptime ≥ 99.5%).
+2. 0 service-availability incidents on the lease plane itself during the window (Sentinel `/v1/health` uptime ≥ 99.5%).
 3. **Type A signal**: at least one observable conflict event:
    ```sql
    SELECT count(DISTINCT surface_id) FROM lease_plane.lease_plane_events
@@ -733,7 +733,7 @@ The **§6.1 promotion-gate denominator is the outbox**, never PromEx.
 
 Already covered in §4.5: callers receive `{ok: false, error: "service_unavailable"}` and proceed advisory-style. v0 enforcement does not block on lease-plane availability. Phase B selective-enforcement does — a `file:/` surface that's been promoted to enforce *will* block writes if the lease plane is unreachable. That's an operational hazard worth naming.
 
-**Mitigation:** the lease plane itself is supervised by launchd (or homebrew services); restart on crash; alarm on prolonged downtime. A specific Sentinel check should monitor `/v1/lease/status?surface_id=__healthcheck__` and alert if unreachable for >5min. Document in operational runbook before any surface kind reaches enforcement.
+**Mitigation:** the lease plane itself is supervised by launchd (or homebrew services); restart on crash; alarm on prolonged downtime. A specific Sentinel check should monitor `/v1/health` and alert if unreachable for >5min. Document in operational runbook before any surface kind reaches enforcement.
 
 ### 7.8 Lease plane's own identity in UNITARES (council finding 4.1)
 
@@ -1274,7 +1274,7 @@ Required before any `.ex` file is written:
 - [x] §7 open questions all answered (RFC tentative -> RFC committed) — §7.1/7.4/7.6/7.8 resolved v0.2; §7.7 resolved v0.2 with operator-action carve-out; §7.9/7.10 resolved v0.6; §7.2/7.3 resolved v0.7; §7.11/7.12 resolved v0.8; **§7.5 Pi path resolved v0.9 (measured 2026-05-03; Mac path remains provisional pending Mac-resident measurement)** (v0.8 §7.12.4 leaves v1 forward-compat option (a) vs (b) Open, by design)
 - [x] Shelf-Python sketch checked in alongside the Elixir spec — same schema, same API, same return shapes (v0.4)
 - [x] Operational runbook draft: `docs/operations/lease-plane-operator-runbook.md`. **v0.6 commitment:** runbook MUST cover (a) §7.9 rename-orphan manual-release procedure ✓, and (b) §7.10 `LEASE_FORCE_RELEASE_TOKEN` provisioning + rotation steps ✓. **v0.7 addition:** (c) §7.11 scheme-deprecation 30-day drain procedure ✓ (extensive coverage including SIGKILL recovery + idempotent-rerun guidance). Concrete bash commands and SQL audit queries shipped; "Common operations" section retains TBD entries for post-Phase-A operational lore.
-- [x] Sentinel monitoring spec for `/v1/lease/status?surface_id=__healthcheck__` — committed in `docs/operations/lease-plane-operator-runbook.md` "Health check" section. Probe cadence 30s, 5-min sliding-window alarm thresholds, four typed alarm rules (`lease_plane.unreachable`, `lease_plane.auth_drift`, `lease_plane.db_degraded`, `lease_plane.slow`), explicit non-coverage list (reaper liveness + audit-outbox + per-kind acquire rate are separate signals).
+- [x] Sentinel monitoring spec for `/v1/health` — committed in `docs/operations/lease-plane-operator-runbook.md` "Health check" section. Probe cadence 30s, 5-min sliding-window alarm thresholds, four typed alarm rules (`lease_plane.unreachable`, `lease_plane.auth_drift`, `lease_plane.db_degraded`, `lease_plane.slow`), explicit non-coverage list (reaper liveness + audit-outbox + per-kind acquire rate are separate signals).
 - [x] Decision: which exact surface_kind goes first into advisory — **`dialectic:/`**. Rationale: (a) lowest blast-radius surface (dialectic sessions are short-lived, single-writer by nature, and the existing dialectic flow can fall through to advisory-skip on lease unavailability without losing work); (b) the dialectic-knowledge-architect / feature-dev:code-reviewer / live-verifier council pattern naturally exercises lease handoff and held_by_other paths during normal use, surfacing real conflict telemetry quickly; (c) operator (the operator) interacts with dialectic surfaces directly and can recognize anomalies without instrumentation overhead. Contrast: `file://` would be higher-risk (every code edit hits it; one bug locks the workspace) and `capture://` is broader but lower-frequency. Promotion to enforcement gated on §6.1 conflict-log evidence (still open as a separate operator decision — see remaining unchecked rows).
 - [ ] Decision on §6.1 promotion-gate criteria — what specifically counts as "the conflict log says 'we would have prevented a real bug here'". **Deferred until conflict-log data exists.** Phase A ships with `dialectic:/` in advisory; promotion-to-enforcement is the next gate, and locking a threshold on zero advisory-mode evidence would be arbitrary. Reopen when the conflict log has accumulated entries against `dialectic:/` traffic.
 

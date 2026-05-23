@@ -4,8 +4,8 @@
 
   Phase A advisory service for shared-surface coordination across the fleet
   (Watcher, Vigil, Sentinel, Chronicler, Steward, ship.sh, dispatch). Bind
-  defaults to 127.0.0.1:8788; bearer-auth is fail-closed (HTTPAuth → 503
- if LEASE_PLANE_BEARER_TOKEN is unset). .
+	  defaults to 127.0.0.1:8788; bearer-auth is fail-closed (HTTPAuth → 503
+	 if LEASE_PLANE_BEARER_TOKEN is unset).
 
   Install (render __VARS__ then load):
     sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
@@ -18,7 +18,7 @@
     launchctl list | grep com.unitares.lease-plane
     tail -f ~/Library/Logs/unitares-lease-plane.log
     curl -s -H "Authorization: Bearer $LEASE_PLANE_BEARER_TOKEN" \
-         "http://127.0.0.1:8788/v1/lease/status?surface_id=file:///tmp/probe"
+         "http://127.0.0.1:8788/v1/health"
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
