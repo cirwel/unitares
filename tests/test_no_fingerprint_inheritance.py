@@ -232,16 +232,15 @@ def test_explicit_parent_agent_id_records_lineage_without_state_transplant():
 
 
 @pytest.mark.asyncio
-async def test_continuity_token_roundtrip_preserves_uuid():
+async def test_continuity_token_only_roundtrip_is_rejected_s1c():
     """
-    Regression guard for the explicit-continuity path (the blessed
-    alternative to fingerprint-based resumption that this spec removes).
+    S1-c regression guard for the old explicit-continuity path.
 
     Round-trip: onboard() -> capture uuid + continuity_token ->
-    call identity() again with that token -> the SAME UUID must come back.
-    No new identity may be forged.
+    call identity() again with only that token. Token-only resume is no longer
+    accepted; callers must use force_new + parent_agent_id or same-live-process
+    PATH 0 with agent_uuid + continuity_token.
     """
-    import json
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -337,45 +336,14 @@ async def test_continuity_token_roundtrip_preserves_uuid():
             f"is configured (got keys: {sorted(first_data.keys())})"
         )
 
-        # --- Second call: resume via the captured token ----------------------
-        # For the second call the resolver should find the existing agent.
-        # The token encodes agent_uuid + client_session_id; handle_identity_adapter
-        # resolves the token back to its stable session id, then resolve_session_identity
-        # is called with that. We make PATH 1 (Redis) return the existing agent
-        # cached under that session_key so no new UUID is minted.
-        display_agent_id = first_data.get("agent_id") or first_uuid
-
-        async def cache_get_second(session_id):
-            # Any session key routed through on the second call resolves to the
-            # existing agent. This models the Redis cache that the first
-            # onboard populated (we don't exercise real cache writes here).
-            return {
-                "agent_id": first_uuid,
-                "display_agent_id": display_agent_id,
-                "label": "RoundtripAgent",
-            }
-
-        mock_redis.get.side_effect = cache_get_second
-        # Identity lookups on the second call resolve the existing row.
-        mock_db.get_identity.side_effect = None
-        mock_db.get_identity.return_value = SimpleNamespace(
-            identity_id="i-new",
-            metadata={"agent_id": display_agent_id},
-        )
-
         second_result = await handle_identity_adapter({
             "continuity_token": captured_token,
             "resume": True,
         })
         second_data = parse_result(second_result)
 
-    # --- The contract: same agent, no new identity --------------------------
-    assert second_data.get("success") is True, second_data
-    assert second_data.get("uuid") == first_uuid, (
-        "continuity_token round-trip must resolve to the original UUID; "
-        f"first={first_uuid!r} second={second_data.get('uuid')!r}"
-    )
-    # is_new should be False/absent — this is a resume, not a creation.
-    assert second_data.get("is_new") in (False, None), (
-        f"second call must not create a new identity (is_new={second_data.get('is_new')!r})"
-    )
+    # --- The contract: token-only resume is rejected, not silently minted ----
+    assert second_data.get("success") is False, second_data
+    assert second_data.get("status") == "continuity_token_resume_rejected"
+    assert second_data.get("tool") == "identity"
+    assert second_data.get("recovery", {}).get("reason") == "continuity_token_resume_retired"

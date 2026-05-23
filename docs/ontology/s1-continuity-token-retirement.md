@@ -217,6 +217,16 @@ Grace period = one release cycle after Option-A ships.
 - **Weeks 2-4:** monitor the deprecation-warning log. Count cross-process-instance token acceptances per channel/caller. If any unexpected caller appears, extend grace.
 - **End of cycle:** server rejects cross-process-instance token acceptance (HTTP 401 on HTTP, error on MCP). Intra-process-instance PATH 0 still accepts.
 
+> **Status update 2026-05-23 — S1-c shipped.** Live telemetry was re-run after
+> the Hermes wrapper migration: 3 production-shaped grace-window emits, 1
+> Hermes post-window emit before the fix, and 0 emits after the forced Hermes
+> run. The server now rejects the retired token-as-resume surfaces:
+> `onboard(continuity_token=...)`, token-only `identity(continuity_token=...)`,
+> and token-only `bind_session(continuity_token=...)`. Same-live-process PATH 0
+> ownership proof remains accepted as
+> `identity(agent_uuid=..., continuity_token=..., resume=true)`, and explicit
+> `client_session_id` binding remains accepted.
+
 **Grace-period telemetry** lives in a new `audit_log` event type: `continuity_token_deprecated_accept` with fields `{caller_channel, caller_model_type, issued_at, accepted_at, lifetime_seconds, agent_uuid}`. That event populates a dashboard panel showing cross-instance resume attempts.
 
 **Grace-period security posture.** During weeks 2-4 the server still accepts stale tokens. An attacker holding a 30d-TTL token issued pre-S1-a has the full grace window to use it; the "teeth" are warnings, not rejection. This is the deliberate tradeoff of a deprecation window, but operators should be explicit about it: grace period is a migration courtesy, not a security hardening window. If the concrete threat model requires earlier cutoff, grace can shorten to one week or go zero.
@@ -271,7 +281,7 @@ Suggested commit-shaped PRs, in order:
 
 1. **S1-a: TTL shrink + deprecation warning + forward-compat version field (`unitares`).** `_CONTINUITY_TTL = 3600`, add `continuity_token_deprecated_accept` audit event, add `identity_status.deprecations` response block, add `ownership_proof_version: 1` to payload. No rename. One PR to master; auto-merge via `ship.sh` runtime path.
 2. **S1-b: onboard-helper + CLI migration (`unitares-governance-plugin`, `unitares/scripts/unitares`).** Swap startup path from cached token to `force_new + parent_agent_id`. In-process token-pass preserved. Two PRs (one per repo).
-3. **S1-c (post-grace): cross-process-instance reject.** After one release cycle with clean telemetry, server rejects stale tokens.
+3. **S1-c (post-grace): cross-process-instance reject.** **Shipped 2026-05-23** after clean post-Hermes telemetry. Token-only resume/bind surfaces now return `status=continuity_token_resume_rejected`; PATH 0 ownership proof and explicit `client_session_id` binding are preserved.
 4. **S1-d (optional, deferred): field rename** `continuity_token` → `ownership_proof`. Only after S1-c settles.
 5. **A′ (optional, pre-B): PID/nonce binding.** Schema bump to `ownership_proof_version: 2`. Ships if operator wants the real "intra-process-instance proof" claim.
 

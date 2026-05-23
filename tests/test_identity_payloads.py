@@ -27,7 +27,7 @@ def test_build_identity_response_data_verbose_includes_continuity_context():
     assert payload["identity_resolution_outcome"] == "resumed"
     assert payload["continuity_token"] == "token-abc"
     assert payload["session_continuity"]["continuity_token"] == "token-abc"
-    assert payload["quick_reference"]["for_strong_resume"] == "token-abc"
+    assert payload["quick_reference"]["for_path0_ownership_proof"] == "token-abc"
     assert payload["identity_assurance"]["tier"] == "strong"
     assert payload["identity_context"]["identity_is"] == "uuid"
     assert payload["identity_context"]["label_is"] == "social_or_cosmetic"
