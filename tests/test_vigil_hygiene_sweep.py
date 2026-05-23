@@ -11,6 +11,7 @@ import pytest
 
 from agents.vigil_hygiene import agent as agent_mod
 from agents.vigil_hygiene.agent import is_keepalive, sweep
+from agents.vigil_hygiene.cherry import CherryVerdict
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
@@ -95,6 +96,68 @@ class TestSweepDryRun:
 
         assert report.errors == []
         assert report.duration_s > 0
+
+
+class TestSweepGoneBranchSalvageGuard:
+    def test_empty_local_cherry_is_delete_candidate(self):
+        result = agent_mod.classify_local_gone_cherry("")
+        assert result.verdict == CherryVerdict.DELETE
+        assert "no commits ahead" in result.reason
+
+    def test_live_holds_gone_branch_with_unique_commits(self, fake_repo: Path, monkeypatch):
+        _git(fake_repo, "switch", "-c", "codex/unique-local")
+        (fake_repo / "unique.txt").write_text("unique work\n")
+        _git(fake_repo, "add", "unique.txt")
+        _git(fake_repo, "commit", "-m", "unique local work")
+        _git(fake_repo, "push", "-u", "origin", "codex/unique-local")
+        _git(fake_repo, "switch", "master")
+        _git(fake_repo, "push", "origin", "--delete", "codex/unique-local")
+        monkeypatch.setattr(agent_mod, "list_open_pr_branches", lambda repo: set())
+
+        report = sweep(fake_repo, dry_run=False)
+
+        branches = _git(fake_repo, "branch", "--list", "codex/unique-local").stdout
+        assert "codex/unique-local" in branches
+        assert "codex/unique-local" in report.holds
+        assert report.branches_pruned == 0
+
+    def test_live_holds_gone_worktree_branch_with_unique_commits(self, fake_repo: Path, monkeypatch):
+        wt_dir = fake_repo / ".worktrees" / "wt-unique"
+        _git(fake_repo, "worktree", "add", "-b", "codex/wt-unique", str(wt_dir))
+        (wt_dir / "wt-unique.txt").write_text("unique worktree work\n")
+        _git(wt_dir, "add", "wt-unique.txt")
+        _git(wt_dir, "commit", "-m", "unique worktree work")
+        _git(wt_dir, "push", "-u", "origin", "codex/wt-unique")
+        _git(fake_repo, "push", "origin", "--delete", "codex/wt-unique")
+        monkeypatch.setattr(agent_mod, "list_open_pr_branches", lambda repo: set())
+
+        report = sweep(fake_repo, dry_run=False)
+
+        branches = _git(fake_repo, "branch", "--list", "codex/wt-unique").stdout
+        assert "codex/wt-unique" in branches
+        assert wt_dir.exists()
+        assert "codex/wt-unique" in report.holds
+        assert report.worktrees_removed == 0
+
+    def test_live_deletes_gone_branch_when_patch_equivalent(self, fake_repo: Path, monkeypatch):
+        _git(fake_repo, "switch", "-c", "codex/squash-merged")
+        (fake_repo / "squash.txt").write_text("squash-equivalent work\n")
+        _git(fake_repo, "add", "squash.txt")
+        _git(fake_repo, "commit", "-m", "squash-equivalent work")
+        feature_sha = _git(fake_repo, "rev-parse", "HEAD").stdout.strip()
+        _git(fake_repo, "push", "-u", "origin", "codex/squash-merged")
+        _git(fake_repo, "switch", "master")
+        _git(fake_repo, "cherry-pick", feature_sha)
+        _git(fake_repo, "push", "origin", "master")
+        _git(fake_repo, "push", "origin", "--delete", "codex/squash-merged")
+        monkeypatch.setattr(agent_mod, "list_open_pr_branches", lambda repo: set())
+
+        report = sweep(fake_repo, dry_run=False)
+
+        branches = _git(fake_repo, "branch", "--list", "codex/squash-merged").stdout
+        assert "codex/squash-merged" not in branches
+        assert report.holds == []
+        assert report.branches_pruned == 1
 
 
 class TestSweepHelpers:
