@@ -123,6 +123,49 @@ class TestMcpToolDecorator:
         meta = get_tool_metadata("leave_note")
         assert meta["superseded_by"] == "knowledge"
 
+    def test_deprecated_tool_call_emits_log_line(self, caplog):
+        """Every call to a deprecated tool must emit a structured log line
+        (`deprecated_tool_called: tool=... superseded_by=...`) so the
+        operator can grep `mcp_server.log` to measure usage before removing
+        the tool per #429's "remove after N weeks" process. Without this,
+        the removal decision is blind."""
+        import asyncio
+        import logging
+
+        @mcp_tool("test_legacy_tool", deprecated=True, superseded_by="test_new_tool")
+        async def handle_test_legacy_tool(arguments):
+            return []
+
+        with caplog.at_level(logging.WARNING, logger="src.mcp_handlers.decorators"):
+            asyncio.run(handle_test_legacy_tool({}))
+
+        deprecation_lines = [
+            r.message for r in caplog.records
+            if "deprecated_tool_called" in r.message
+        ]
+        assert len(deprecation_lines) == 1
+        assert "tool=test_legacy_tool" in deprecation_lines[0]
+        assert "superseded_by=test_new_tool" in deprecation_lines[0]
+
+    def test_non_deprecated_tool_emits_no_deprecation_log(self, caplog):
+        """Non-deprecated tools must NOT emit the deprecation log line —
+        otherwise the grep signal is meaningless."""
+        import asyncio
+        import logging
+
+        @mcp_tool("test_modern_tool")
+        async def handle_test_modern_tool(arguments):
+            return []
+
+        with caplog.at_level(logging.WARNING, logger="src.mcp_handlers.decorators"):
+            asyncio.run(handle_test_modern_tool({}))
+
+        deprecation_lines = [
+            r.message for r in caplog.records
+            if "deprecated_tool_called" in r.message
+        ]
+        assert deprecation_lines == []
+
     def test_describe_tool_surfaces_deprecation(self):
         """describe_tool must inject deprecation block for deprecated tools (#429 council fix).
 
