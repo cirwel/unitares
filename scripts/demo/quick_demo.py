@@ -2,12 +2,16 @@
 """60-second demo: onboard a synthetic agent and drive it through a trajectory.
 
 Prereq: a governance MCP server reachable at http://127.0.0.1:8767.
-Either ``docker compose up`` or ``python src/mcp_server.py --port 8767``.
+Either ``docker compose up -d --wait`` or
+``python src/mcp_server.py --port 8767``.
 
 Run::
 
     make demo
     # or: python3 scripts/demo/quick_demo.py
+
+If the server is on another host-side port, set UNITARES_DEMO_PORT=18767 or
+UNITARES_DEMO_URL=http://127.0.0.1:18767/v1/tools/call.
 
 What you'll see:
 - The agent onboards (fresh UUID + thread).
@@ -21,11 +25,33 @@ in the check-in response shape that any client would receive.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
-REST = "http://127.0.0.1:8767/v1/tools/call"
+
+def _rest_url() -> str:
+    """Return the REST tools endpoint used by the demo."""
+    explicit = os.environ.get("UNITARES_DEMO_URL")
+    if explicit:
+        return explicit
+    port = (
+        os.environ.get("UNITARES_DEMO_PORT")
+        or os.environ.get("GOVERNANCE_HOST_PORT")
+        or "8767"
+    )
+    return f"http://127.0.0.1:{port}/v1/tools/call"
+
+
+REST = _rest_url()
+
+
+def _health_url() -> str:
+    """Return the liveness endpoint matching REST's scheme/host/port."""
+    parsed = urllib.parse.urlsplit(REST)
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "/health/live", "", ""))
 
 # (response_text, complexity_self_report, confidence_self_report)
 # The story: 3 clean check-ins, then a calibration miss (claims easy but the
@@ -61,15 +87,18 @@ def call(tool: str, args: dict) -> dict:
 
 
 def preflight() -> None:
+    health = _health_url()
     try:
-        urllib.request.urlopen("http://127.0.0.1:8767/health/live", timeout=3)
+        urllib.request.urlopen(health, timeout=3)
     except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
         sys.exit(
-            "Governance server not reachable at 127.0.0.1:8767.\n"
+            f"Governance server not reachable at {health}.\n"
             "Start it first:\n"
-            "    docker compose up        # bundled stack\n"
+            "    docker compose up -d --wait        # bundled stack\n"
             "    # or:\n"
             "    python src/mcp_server.py --port 8767   # bare-metal\n"
+            "If you changed the host port, run e.g.:\n"
+            "    UNITARES_DEMO_PORT=18767 make demo\n"
             f"\nError: {e}"
         )
 

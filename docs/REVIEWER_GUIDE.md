@@ -32,12 +32,18 @@ UNITARES is runtime state telemetry for long-lived AI-agent fleets: agents check
 ```bash
 git clone https://github.com/CIRWEL/unitares.git
 cd unitares
-docker compose up
-# In another shell:
+docker compose up -d --wait
 make demo
 ```
 
 `make demo` runs a short synthetic trajectory: clean work, calibration drift, and confusion. The useful thing to inspect is not just whether the command exits; it is whether the returned state and verdicts change in the expected direction as the synthetic agent drifts.
+
+If port `8767` is already in use because a local UNITARES service is running, skip Compose and run `make demo` directly. For a separate Docker stack on alternate host ports:
+
+```bash
+POSTGRES_HOST_PORT=15432 REDIS_HOST_PORT=16379 GOVERNANCE_HOST_PORT=18767 docker compose up -d --wait
+UNITARES_DEMO_PORT=18767 make demo
+```
 
 ## Ten-minute path
 

@@ -44,11 +44,18 @@ If you're running **multiple long-lived autonomous agents** — tool-using, mult
 
 ```bash
 git clone https://github.com/cirwel/unitares.git && cd unitares
-docker compose up                  # Postgres+AGE+pgvector+Redis+server, bound to 127.0.0.1
-make demo                          # in another shell: 60-second scripted trajectory
+docker compose up -d --wait         # Postgres+AGE+pgvector+Redis+server, bound to 127.0.0.1
+make demo                           # 60-second scripted trajectory
 ```
 
 `make demo` onboards a synthetic agent, drives seven check-ins (clean work → calibration drift → confusion), and prints the verdict + state at each step. Source: [`scripts/demo/quick_demo.py`](scripts/demo/quick_demo.py). Then point any MCP client at `http://localhost:8767/mcp/`.
+
+If you already run UNITARES locally and port `8767` is live, skip `docker compose up` and run `make demo` directly. If Docker reports that `5432`, `6379`, or `8767` is already allocated, pick alternate host ports:
+
+```bash
+POSTGRES_HOST_PORT=15432 REDIS_HOST_PORT=16379 GOVERNANCE_HOST_PORT=18767 docker compose up -d --wait
+UNITARES_DEMO_PORT=18767 make demo
+```
 
 Bare-metal setup (Homebrew Postgres, native install) is in [Installation](#installation).
 
