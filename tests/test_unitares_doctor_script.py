@@ -261,6 +261,47 @@ def test_main_returns_failure_when_check_fails(doctor, monkeypatch, capsys):
     assert rc == 1
 
 
+# ---------- resident_agents ----------
+
+
+def test_resident_agents_accepts_python_sentinel(doctor):
+    loaded = {
+        "com.unitares.vigil",
+        "com.unitares.sentinel",
+        "com.unitares.chronicler",
+    }
+
+    result = doctor.check_resident_agents(loaded)
+
+    assert result.status == doctor.Status.PASS
+    assert "sentinel=com.unitares.sentinel" in result.message
+
+
+def test_resident_agents_accepts_beam_sentinel(doctor):
+    loaded = {
+        "com.unitares.vigil",
+        "com.unitares.sentinel-beam",
+        "com.unitares.chronicler",
+    }
+
+    result = doctor.check_resident_agents(loaded)
+
+    assert result.status == doctor.Status.PASS
+    assert "sentinel=com.unitares.sentinel-beam" in result.message
+
+
+def test_resident_agents_reports_missing_slot_with_alternatives(doctor):
+    loaded = {
+        "com.unitares.vigil",
+        "com.unitares.chronicler",
+    }
+
+    result = doctor.check_resident_agents(loaded)
+
+    assert result.status == doctor.Status.WARN
+    assert "sentinel (com.unitares.sentinel or com.unitares.sentinel-beam)" in result.message
+
+
 # ---------- elixir_deprecated_scheme_lint (RFC §7.11.8 — Phase B prep) ----------
 
 

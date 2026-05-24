@@ -38,10 +38,10 @@ from typing import Callable
 
 DEFAULT_DB_URL = "postgresql://postgres:postgres@localhost:5432/governance"
 REQUIRED_PG_EXTENSIONS = ("age", "pgcrypto", "pg_trgm", "uuid-ossp", "vector")
-RESIDENT_PLISTS = (
-    "com.unitares.vigil",
-    "com.unitares.sentinel",
-    "com.unitares.chronicler",
+RESIDENT_LAUNCHD_SLOTS = (
+    ("vigil", ("com.unitares.vigil",)),
+    ("sentinel", ("com.unitares.sentinel", "com.unitares.sentinel-beam")),
+    ("chronicler", ("com.unitares.chronicler",)),
 )
 ANCHOR_DIR = Path.home() / ".unitares"
 SECRETS_FILE = Path.home() / ".config" / "cirwel" / "secrets.env"
@@ -618,10 +618,17 @@ def check_launchagent(loaded: set[str]) -> CheckResult:
 
 def check_resident_agents(loaded: set[str]) -> CheckResult:
     name, mode = "resident_agents", "operator"
-    missing = [p for p in RESIDENT_PLISTS if p not in loaded]
+    missing: list[str] = []
+    resolved: list[str] = []
+    for slot_name, labels in RESIDENT_LAUNCHD_SLOTS:
+        present = [label for label in labels if label in loaded]
+        if present:
+            resolved.append(f"{slot_name}={'+'.join(present)}")
+        else:
+            missing.append(f"{slot_name} ({' or '.join(labels)})")
     if not missing:
         return CheckResult(name, mode, Status.PASS,
-                           f"vigil + sentinel + chronicler loaded")
+                           f"resident agents loaded: {', '.join(resolved)}")
     return CheckResult(name, mode, Status.WARN,
                        f"resident agents not loaded: {', '.join(missing)}")
 

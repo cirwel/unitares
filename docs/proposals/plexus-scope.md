@@ -1,8 +1,8 @@
 # Plexus Scope
 
-**Created:** May 2, 2026  
-**Last Updated:** May 2, 2026  
-**Status:** Draft — Plexus Zero bootstrap boundary
+- **Created:** May 2, 2026
+- **Last Updated:** May 23, 2026
+- **Status:** Active boundary name over live Surface Lease Plane; Plexus Zero retained as manual fallback
 
 ---
 
@@ -19,6 +19,10 @@ Plexus exists to answer one operational question before an agent mutates a share
 > May I touch this surface right now, who else claims it, when does that claim expire, and how do we release, revoke, or hand it off?
 
 Plexus does **not** decide what the work means, what should be prioritized, whether a design is correct, or what belongs in durable memory. Those questions remain with UNITARES governance, Dialectic, KG, council review, PR review, and the operator.
+
+## Current state
+
+As of May 23, 2026, Plexus is not waiting on a separate bootstrap service. The active service is Surface Lease Plane in `elixir/lease_plane/`, loaded locally as `com.unitares.lease-plane`, with authenticated `/v1/health` returning `ok: true` in the operator check. Resident Phase B enforcement also ships through the lease-plane track, so the Plexus name should continue to describe that boundary rather than fork a new implementation.
 
 ## Why this document exists
 
@@ -70,9 +74,9 @@ Plexus v1 does not own:
 
 If a proposed feature is not necessary to prevent or resolve a shared-surface collision, it probably does not belong in Plexus v1.
 
-## Plexus Zero: bootstrap protocol before the service exists
+## Plexus Zero: manual fallback protocol
 
-Until the service can safely self-host coordination, use a manual paper protocol in the operator-visible coordination locus. For the current workstream, that means the active Discord thread or an explicitly named operator-visible board, not this file.
+When the service is unavailable, a caller is not integrated yet, or the operator explicitly needs a human-visible claim during recovery, use a manual paper protocol in the operator-visible coordination locus. For the current workstream, that means the active Discord thread or an explicitly named operator-visible board, not this file.
 
 A manual claim uses this shape:
 
@@ -110,11 +114,11 @@ expires_at=<expiry if known>
 next_action=<retry | ask operator | choose another surface>
 ```
 
-Plexus Zero is intentionally awkward. The friction teaches the real service what must become automatic.
+Plexus Zero remains intentionally awkward. The friction teaches the real service what must become automatic.
 
-## Bootstrap surface IDs
+## Fallback surface IDs
 
-Use a tiny seed set while the protocol is manual:
+Use a tiny seed set when the manual fallback is active:
 
 Manual Plexus Zero may use human-readable `repo://unitares/...` aliases in Discord. Those aliases are **not** service/API `surface_id` values. Any implementation or automated client must translate to the canonical Surface Lease Plane `file://` surface ID for an exact path.
 
@@ -143,20 +147,20 @@ Before mutating a Plexus/lease-plane surface, an agent should answer:
 7. How will I release or hand off if interrupted?
 8. Am I trying to put KG, identity, dialectic, chat, or project management into Plexus? If yes, stop.
 
-## Promotion path from Plexus Zero to real Plexus
+## Expansion path beyond the first slice
 
-Do not promote the service based on elegance. Promote it based on observed coordination pain.
+Do not expand the service based on elegance. Expand it based on observed coordination pain.
 
 Minimum evidence before expanding beyond the first slice:
 
-1. At least five manual Plexus Zero claims on real shared surfaces.
+1. At least five real claims on shared surfaces, through the service or the fallback protocol.
 2. At least one observed blocked/conflict case or a credible near-miss reconstructed from evidence.
 3. A reviewer confirms this document still prevents scope creep.
-4. The first service test passes: two holders acquire the same exact surface; one succeeds, one receives the RFC-defined `held_by_other` response.
+4. The core collision test stays passing: two holders acquire the same exact surface; one succeeds, one receives the RFC-defined `held_by_other` response.
 5. Routine lease lifecycle events do not flood KG; only durable lessons are promoted.
 6. The implementation remains inside the existing Surface Lease Plane track unless a separate extraction trigger from `beam-coordination-kernel.md` fires.
 
-These are product-discovery gates for Plexus Zero. They do not replace the Surface Lease Plane RFC's Phase A/B rollout gates, migration gates, or implementation test gates.
+These are product-discovery gates for expanding Plexus beyond the first slice. They do not replace the Surface Lease Plane RFC's Phase A/B rollout gates, migration gates, or implementation test gates.
 
 ## Relationship to durable memory
 
