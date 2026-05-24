@@ -108,6 +108,18 @@ def mcp_tool(
 
         @wraps(func)
         async def wrapper(arguments: Dict[str, Any]):
+            # #429: log every call to a deprecated tool so the operator can
+            # tell when usage drops to ~0 and removal is safe. structured
+            # prefix `deprecated_tool_called:` makes the log line greppable.
+            # Once-per-call (not once-per-process) — duplicate volume is the
+            # signal, not noise. No DB write here to keep the hot path off
+            # asyncpg per CLAUDE.md's anyio coupling notes.
+            if deprecated:
+                _superseded = superseded_by or "(no replacement registered)"
+                logger.warning(
+                    f"deprecated_tool_called: tool={tool_name} "
+                    f"superseded_by={_superseded}"
+                )
             start_time = time.time()
             try:
                 result = await asyncio.wait_for(func(arguments), timeout=timeout)
