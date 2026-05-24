@@ -126,6 +126,10 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
             pE, pI, pS, pV = monitor.get_primary_eisv()
         except (AttributeError, TypeError, ValueError):
             pE, pI, pS, pV = float(monitor.state.E), float(monitor.state.I), float(monitor.state.S), float(monitor.state.V)
+        # #428: vocabulary at point-of-use — wrap the verdict with
+        # meaning + next_action inline so cold-onboarded agents observing
+        # themselves don't have to look up what "pause"/"guide" mean.
+        from src.governance_glossary import explain_verdict
         observation = {
             "current_state": {
                 "E": pE,
@@ -135,7 +139,7 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
                 "coherence": float(monitor.state.coherence),
                 "risk_score": float(metrics.get("risk_score") or metrics.get("current_risk") or 0.0),  # Governance/operational risk
                 "phi": metrics.get("phi"),  # Primary physics signal
-                "verdict": metrics.get("verdict"),  # Primary governance signal
+                "verdict": explain_verdict(metrics.get("verdict")),  # Primary governance signal
                 "lambda1": float(monitor.state.lambda1),
                 "update_count": monitor.state.update_count
             }

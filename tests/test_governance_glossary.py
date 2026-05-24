@@ -42,6 +42,18 @@ class TestGlossaryIntegrity:
                 f"agent can act on it without consulting external docs."
             )
 
+    def test_behavioral_verdicts_covered(self):
+        # behavioral_assessment.py and monitor_decision.py emit a parallel
+        # vocabulary {safe, caution, high-risk} through the same `verdict`
+        # field. Agents should not see these without an inline gloss.
+        for verdict in ("safe", "caution", "high-risk"):
+            assert verdict in VERDICTS, (
+                f"Behavioral verdict {verdict!r} must be in the glossary — "
+                f"it flows through metrics['verdict'] alongside the decision "
+                f"verdicts and would otherwise fall to the unknown branch."
+            )
+            assert "next_action" in VERDICTS[verdict]
+
     def test_all_basins_have_meaning(self):
         for basin, info in BASINS.items():
             assert "meaning" in info and info["meaning"]
@@ -169,6 +181,32 @@ class TestExplainTrustTier:
         assert result["name"] == "verified"
         assert "200" in result["criteria"]  # higher observation threshold
 
+    def test_name_string_resolves_via_reverse_lookup(self):
+        # The response formatter previously stored trust_tier as the bare
+        # name string. The helper must accept that shape so existing
+        # callers compose naturally.
+        from src.governance_glossary import explain_trust_tier
+        result = explain_trust_tier("established")
+        assert result["tier"] == 2
+        assert result["name"] == "established"
+        assert "meaning" in result
+        assert "criteria" in result
+
+    def test_unknown_name_string_marked(self):
+        from src.governance_glossary import explain_trust_tier
+        result = explain_trust_tier("not_a_tier_name")
+        assert result["value"] == "not_a_tier_name"
+        assert "unknown" in result["meaning"].lower()
+
+    def test_dict_with_only_name_resolves(self):
+        # Some upstream paths build {"name": "established"} without "tier".
+        # Helper should resolve tier via reverse lookup.
+        from src.governance_glossary import explain_trust_tier
+        result = explain_trust_tier({"name": "verified"})
+        assert result["name"] == "verified"
+        assert result["tier"] == 3
+        assert "meaning" in result
+
 
 class TestAnnotateDriftComponents:
 
@@ -288,4 +326,49 @@ class TestGlossaryAppliedToResponseFormatter:
             "core.py unbound branch must wrap the bare 'unbound' verdict "
             "via explain_verdict() so an unbound agent gets the next-action "
             "hint without consulting docs."
+        )
+
+    def test_mirror_format_wraps_trust_tier(self):
+        # #428: trust_tier was a bare name string ("established"); mirror
+        # now emits it through explain_trust_tier so meaning + criteria
+        # appear inline.
+        source = self._read("src/mcp_handlers/response_formatter.py")
+        idx = source.find("def _format_mirror")
+        end = source.find("\ndef ", idx + 1)
+        window = source[idx:end if end != -1 else len(source)]
+        assert "explain_trust_tier" in window, (
+            "response_formatter._format_mirror must wrap trust_tier via "
+            "explain_trust_tier() so the agent sees the tier scale inline."
+        )
+
+    def test_compact_format_wraps_trust_tier(self):
+        source = self._read("src/mcp_handlers/response_formatter.py")
+        idx = source.find("def _format_compact")
+        end = source.find("\ndef ", idx + 1)
+        window = source[idx:end if end != -1 else len(source)]
+        assert "explain_trust_tier" in window, (
+            "response_formatter._format_compact must wrap trust_tier via "
+            "explain_trust_tier()."
+        )
+
+
+class TestGlossaryAppliedToObservabilityHandlers:
+    """Regression guard: observe_agent's current_state must wrap verdict via
+    the glossary helper. observe_agent is the primary tool an agent uses to
+    inspect itself or peers; a bare verdict here forces a docs lookup.
+    """
+
+    @staticmethod
+    def _read(rel_path: str) -> str:
+        from pathlib import Path
+        return (Path(__file__).parent.parent / rel_path).read_text()
+
+    def test_observe_agent_wraps_verdict(self):
+        source = self._read("src/mcp_handlers/observability/handlers.py")
+        idx = source.find('"verdict": ')
+        assert idx != -1
+        window = source[max(0, idx - 300):idx + 300]
+        assert "explain_verdict" in window, (
+            "observe_agent's current_state must wrap verdict via "
+            "explain_verdict() — it's the primary self-observation surface."
         )

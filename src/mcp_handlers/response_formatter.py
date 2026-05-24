@@ -62,10 +62,16 @@ def format_response(
     if meta and hasattr(meta, 'preferences') and meta.preferences:
         agent_verbosity_pref = meta.preferences.get("verbosity")
 
-    # Preserve trust_tier across filtering
+    # Preserve trust_tier across filtering. Save the full upstream dict (not
+    # just the name) so terse modes can re-emit it through explain_trust_tier
+    # at the agent-facing surface. #428: vocabulary at point-of-use.
     saved_trust_tier = None
     try:
-        saved_trust_tier = response_data.get("trajectory_identity", {}).get("trust_tier", {}).get("name")
+        tier_obj = response_data.get("trajectory_identity", {}).get("trust_tier")
+        if isinstance(tier_obj, dict):
+            saved_trust_tier = tier_obj
+        elif tier_obj is not None:
+            saved_trust_tier = {"name": str(tier_obj)}
     except Exception:
         pass
 
@@ -169,7 +175,7 @@ def _format_standard(response_data: dict, task_type: str) -> dict:
     _copy_passthrough_fields(response_data, result, ("prediction_id", "warnings"))
     return result
 
-def _format_mirror(response_data: dict, saved_trust_tier: Optional[str], meta: Any = None) -> dict:
+def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None) -> dict:
     """Build mirror response: a lens on the full data, not a filter that hides it."""
     decision = response_data.get("decision", {}) if isinstance(response_data.get("decision"), dict) else {}
     metrics = response_data.get("metrics", {}) if isinstance(response_data.get("metrics"), dict) else {}
@@ -309,7 +315,9 @@ def _format_mirror(response_data: dict, saved_trust_tier: Optional[str], meta: A
             result["nearest_edge"] = decision.get("nearest_edge")
 
     if saved_trust_tier:
-        result["trust_tier"] = saved_trust_tier
+        # #428: wrap with glossary so agent sees tier scale + meaning inline.
+        from src.governance_glossary import explain_trust_tier
+        result["trust_tier"] = explain_trust_tier(saved_trust_tier)
     if "thread_context" in response_data:
         result["thread_context"] = response_data["thread_context"]
     if "identity_assurance" in response_data:
@@ -324,7 +332,7 @@ def _format_mirror(response_data: dict, saved_trust_tier: Optional[str], meta: A
     return result
 
 
-def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_tier: Optional[str]) -> dict:
+def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_tier: Any) -> dict:
     """Build minimal response: action + EISV + margin."""
     decision = response_data.get("decision", {}) if isinstance(response_data.get("decision"), dict) else {}
     metrics = response_data.get("metrics", {}) if isinstance(response_data.get("metrics"), dict) else {}
@@ -350,7 +358,11 @@ def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_t
     if using_default_mode:
         result["_tip"] = "Set verbosity: update_agent_metadata(preferences={'verbosity':'minimal'})"
     if saved_trust_tier:
-        result["trust_tier"] = saved_trust_tier
+        # Minimal mode is intentionally terse — emit the name string only.
+        # Agents wanting tier-scale + meaning should use mirror/compact.
+        result["trust_tier"] = (
+            saved_trust_tier.get("name") if isinstance(saved_trust_tier, dict) else saved_trust_tier
+        )
     if "thread_context" in response_data:
         result["thread_context"] = response_data["thread_context"]
     if "identity_assurance" in response_data:
@@ -362,7 +374,7 @@ def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_t
 
     return result
 
-def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_tier: Optional[str]) -> dict:
+def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_tier: Any) -> dict:
     """Build compact response: brief metrics + decision summary."""
     metrics = response_data.get("metrics", {}) if isinstance(response_data.get("metrics"), dict) else {}
     decision = response_data.get("decision", {}) if isinstance(response_data.get("decision"), dict) else {}
@@ -420,7 +432,9 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
     }
 
     if saved_trust_tier:
-        result["trust_tier"] = saved_trust_tier
+        # #428: glossary at point-of-use — tier scale + meaning inline.
+        from src.governance_glossary import explain_trust_tier
+        result["trust_tier"] = explain_trust_tier(saved_trust_tier)
     if using_default_mode:
         result["_tip"] = "Verbosity options: response_mode='minimal'|'compact'|'full', or set permanently via update_agent_metadata(preferences={'verbosity':'minimal'})"
     if "thread_context" in response_data:

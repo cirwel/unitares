@@ -233,6 +233,27 @@ class TestHandleObserveAgent:
         assert "coherence" in state
 
     @pytest.mark.asyncio
+    async def test_verdict_wrapped_with_meaning(self):
+        """#428: observe_agent's current_state.verdict carries meaning + next_action inline."""
+        uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        server = _build_mock_server(agent_ids=[uuid])
+
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value="other-caller-uuid"):
+            from src.mcp_handlers.observability.handlers import handle_observe_agent
+            result = await handle_observe_agent({
+                "target_agent_id": uuid,
+                "analyze_patterns": False,  # raw-state branch is the one we wrap
+            })
+
+        data = parse_result(result)
+        verdict = data["observation"]["current_state"]["verdict"]
+        assert isinstance(verdict, dict), "verdict must be glossary-wrapped, not bare"
+        assert verdict["value"] == "caution"
+        assert "meaning" in verdict
+        assert "next_action" in verdict
+
+    @pytest.mark.asyncio
     async def test_missing_target_agent_id(self):
         """No target_agent_id and no fallback -> error."""
         server = _build_mock_server()

@@ -65,6 +65,21 @@ VERDICTS: Dict[str, Dict[str, str]] = {
         "meaning": "Synonym of proceed; legacy label still used in some payloads.",
         "next_action": "Continue working normally.",
     },
+    # Behavioral-assessment verdicts (src/behavioral_assessment.py, monitor_decision.py).
+    # Different vocabulary than the decision verdicts above but flows through the
+    # same `metrics["verdict"]` field, so agents see both schemes.
+    "safe": {
+        "meaning": "Behavioral assessment: low risk.",
+        "next_action": "Continue working normally.",
+    },
+    "caution": {
+        "meaning": "Behavioral assessment: elevated risk — proceed deliberately.",
+        "next_action": "Continue but watch coherence and risk_score; consider a check-in.",
+    },
+    "high-risk": {
+        "meaning": "Behavioral assessment: significant risk.",
+        "next_action": "Pause, reflect, or request dialectic review.",
+    },
 }
 
 
@@ -211,12 +226,18 @@ def explain_trajectory(trajectory: Optional[str]) -> Dict[str, Any]:
     return _wrap(trajectory, TRAJECTORIES)
 
 
-def explain_trust_tier(tier: Optional[Any]) -> Dict[str, Any]:
-    """Wrap a trust-tier integer with name + meaning + criteria.
+_TIER_BY_NAME: Dict[str, int] = {info["name"]: tier_int for tier_int, info in TRUST_TIERS.items()}
 
-    Accepts int 0-3, the existing {tier, name, reason} dict shape produced by
-    `compute_trust_tier`, or None. Returns a merged dict that preserves all
-    existing keys and adds `meaning` + `criteria` from the glossary.
+
+def explain_trust_tier(tier: Optional[Any]) -> Dict[str, Any]:
+    """Wrap a trust-tier value with name + meaning + criteria.
+
+    Accepts:
+      - None → {"value": None}
+      - int 0-3 → full {tier, name, meaning, criteria} dict
+      - name string ("emerging", "established", ...) → same as int via reverse lookup
+      - {tier, name, reason} dict from compute_trust_tier → preserves all fields, adds meaning + criteria
+      - any other value → {"value": <as-is>, "meaning": "unknown (not in glossary)"}
 
     Callers can drop this in place of the previous hardcoded
     {tier, name, reason} block without breaking consumers.
@@ -226,10 +247,27 @@ def explain_trust_tier(tier: Optional[Any]) -> Dict[str, Any]:
     # Already a dict — preserve all fields, add glossary annotation
     if isinstance(tier, dict):
         tier_value = tier.get("tier")
-        info = TRUST_TIERS.get(tier_value)
+        if tier_value is None and "name" in tier:
+            tier_value = _TIER_BY_NAME.get(tier["name"])
+        info = TRUST_TIERS.get(tier_value) if tier_value is not None else None
         if info is None:
             return {**tier, "meaning": "unknown (not in glossary)"}
-        return {**tier, "meaning": info["meaning"], "criteria": info["criteria"]}
+        merged = {**tier, "meaning": info["meaning"], "criteria": info["criteria"]}
+        merged.setdefault("tier", tier_value)
+        merged.setdefault("name", info["name"])
+        return merged
+    # Name string — reverse-lookup to int
+    if isinstance(tier, str):
+        tier_int = _TIER_BY_NAME.get(tier)
+        if tier_int is None:
+            return {"value": tier, "meaning": "unknown (not in glossary)"}
+        info = TRUST_TIERS[tier_int]
+        return {
+            "tier": tier_int,
+            "name": info["name"],
+            "meaning": info["meaning"],
+            "criteria": info["criteria"],
+        }
     # Raw int
     try:
         tier_int = int(tier)
