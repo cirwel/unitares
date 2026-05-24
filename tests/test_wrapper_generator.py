@@ -272,6 +272,49 @@ class TestCreateTypedWrapper:
         sig = inspect.signature(wrapper)
         assert len(sig.parameters) == 6
 
+    def test_nullable_ref_param_resolves_to_object(self):
+        """Nested Pydantic models arrive as $ref | null, not string.
+
+        Regression guard for onboard.initial_state: if this degrades to str,
+        MCP clients cannot send the bootstrap object that the server validator
+        expects, so managed sessions mint UUIDs without a synthetic t=0 anchor.
+        """
+        call_log = []
+
+        def get_handler(name):
+            async def handler(**kwargs):
+                call_log.append(kwargs)
+                return kwargs
+            return handler
+
+        schema = {
+            "$defs": {
+                "BootstrapStateParams": {
+                    "type": "object",
+                    "properties": {"task_type": {"type": "string"}},
+                }
+            },
+            "properties": {
+                "initial_state": {
+                    "anyOf": [
+                        {"$ref": "#/$defs/BootstrapStateParams"},
+                        {"type": "null"},
+                    ]
+                }
+            },
+            "required": [],
+        }
+
+        wrapper = create_typed_wrapper("onboard", schema, get_handler)
+        sig = inspect.signature(wrapper)
+
+        assert sig.parameters["initial_state"].annotation == Optional[dict]
+
+        tool = Tool.from_function(wrapper, structured_output=False)
+        asyncio.run(tool.run({"initial_state": {"task_type": "introspection"}}))
+
+        assert call_log == [{"initial_state": {"task_type": "introspection"}}]
+
 
 # ============================================================================
 # FastMCP Context parameter detection

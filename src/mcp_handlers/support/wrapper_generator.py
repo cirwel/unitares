@@ -118,8 +118,15 @@ def _resolve_param_type(param_def: dict) -> Any:
             vtype = variant.get("type")
             if vtype == "null":
                 has_null = True
+            elif "$ref" in variant:
+                # Pydantic emits nested BaseModel fields as $ref entries. FastMCP
+                # only needs the Python wrapper to accept a JSON object here; the
+                # handler's Pydantic schema performs the nested validation later.
+                types.append(dict)
             elif vtype:
                 types.append(_json_type_to_python(vtype))
+            elif variant.get("properties") is not None:
+                types.append(dict)
             elif "anyOf" in variant:
                 # Nested anyOf (Pydantic wraps constrained unions this way)
                 inner = _resolve_param_type(variant)
@@ -156,6 +163,11 @@ def _resolve_param_type(param_def: dict) -> Any:
         if has_null:
             return Optional[base]  # type: ignore
         return base
+
+    if "$ref" in param_def:
+        return dict
+    if param_def.get("properties") is not None:
+        return dict
 
     return _json_type_to_python(param_def.get("type", "string"))
 

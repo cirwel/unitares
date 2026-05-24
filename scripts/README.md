@@ -1,6 +1,6 @@
 # Scripts Directory
 
-**Last Updated:** 2026-05-06
+**Last Updated:** 2026-05-24
 
 > **Note:** Most functionality is available via MCP tools. Scripts are for CLI-only interfaces, operations, and maintenance.
 >
@@ -96,7 +96,12 @@ Analysis and reporting scripts, including outcome / calibration reporting, tool 
 Client-side utilities including the Ollama MCP bridge and session/freshness helpers.
 
 ### `diagnostics/`
-Diagnostic scripts for debugging server and agent issues.
+Diagnostic scripts for debugging server and agent issues. Notable operator
+checks:
+
+| Script | Description |
+|--------|-------------|
+| `agent_fragmentation.py` | Read-only report for identities with zero or sparse real check-ins, grouped by model/session/thread so fresh-UUID fragmentation is visible. |
 
 ### `migration/`
 Database maintenance scripts (embeddings backfill, ghost agent cleanup, knowledge graph maintenance).
