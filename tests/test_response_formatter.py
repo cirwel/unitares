@@ -223,9 +223,30 @@ class TestFormatCompact:
         assert "0.92" in result["summary"]
 
     def test_trust_tier_included(self):
+        # #428: compact mode wraps trust_tier with meaning + criteria inline.
         data = _sample_response()
         result = _format_compact(data, using_default_mode=False, saved_trust_tier="established")
-        assert result["trust_tier"] == "established"
+        tt = result["trust_tier"]
+        assert isinstance(tt, dict)
+        assert tt["name"] == "established"
+        assert tt["tier"] == 2
+        assert "meaning" in tt
+        assert "criteria" in tt
+
+    def test_trust_tier_from_dict(self):
+        # #428: also accepts the upstream {tier, name, reason} dict shape.
+        data = _sample_response()
+        result = _format_compact(
+            data,
+            using_default_mode=False,
+            saved_trust_tier={"tier": 2, "name": "established", "reason": "test"},
+        )
+        tt = result["trust_tier"]
+        assert tt["tier"] == 2
+        assert tt["name"] == "established"
+        assert tt["reason"] == "test"
+        assert "meaning" in tt
+        assert "criteria" in tt
 
     def test_tip_when_default_mode(self):
         data = _sample_response()
@@ -430,6 +451,31 @@ class TestFormatResponse:
             result = format_response(data, {})  # No per-call mode
             assert result["_mode"] == "compact"
 
+    def test_trust_tier_propagates_through_format_response_compact(self):
+        # #428: end-to-end — trajectory_identity.trust_tier dict at the top
+        # carries through to the compact-mode trust_tier dict.
+        data = _sample_response()
+        data["trajectory_identity"]["trust_tier"] = {"tier": 2, "name": "established"}
+        result = format_response(data, {"response_mode": "compact"})
+        tt = result["trust_tier"]
+        assert isinstance(tt, dict)
+        assert tt["name"] == "established"
+        assert "meaning" in tt
+        assert "criteria" in tt
+
+    def test_trust_tier_propagates_through_format_response_mirror(self):
+        # Same end-to-end check for mirror mode.
+        data = _sample_response()
+        data["trajectory_identity"]["trust_tier"] = {"tier": 3, "name": "verified"}
+        # Force mirror via no sensor_data + healthy.
+        data["health_status"] = "healthy"
+        result = format_response(data, {"response_mode": "auto"})
+        assert result["_mode"] == "mirror"
+        tt = result["trust_tier"]
+        assert tt["name"] == "verified"
+        assert tt["tier"] == 3
+        assert "meaning" in tt
+
     def test_per_call_overrides_env_var(self):
         data = _sample_response()
         with patch.dict(os.environ, {"UNITARES_PROCESS_UPDATE_RESPONSE_MODE": "compact"}):
@@ -593,6 +639,36 @@ class TestFormatMirror:
         result = _format_mirror(data, saved_trust_tier=None)
         assert result["question"] == "What changed in your understanding?"
 
+    def test_trust_tier_wrapped_with_meaning(self):
+        # #428: mirror mode wraps trust_tier with meaning + criteria inline.
+        data = _sample_response()
+        result = _format_mirror(data, saved_trust_tier="established")
+        tt = result["trust_tier"]
+        assert isinstance(tt, dict)
+        assert tt["name"] == "established"
+        assert tt["tier"] == 2
+        assert "meaning" in tt
+        assert "criteria" in tt
+
+    def test_trust_tier_from_dict_preserves_upstream_fields(self):
+        # When upstream passes the full {tier, name, reason} dict, mirror
+        # preserves all fields and layers meaning + criteria on top.
+        data = _sample_response()
+        result = _format_mirror(
+            data,
+            saved_trust_tier={"tier": 1, "name": "emerging", "reason": "test reason"},
+        )
+        tt = result["trust_tier"]
+        assert tt["name"] == "emerging"
+        assert tt["tier"] == 1
+        assert tt["reason"] == "test reason"
+        assert "meaning" in tt
+
+    def test_no_trust_tier_when_none(self):
+        data = _sample_response()
+        result = _format_mirror(data, saved_trust_tier=None)
+        assert "trust_tier" not in result
+
     def test_legacy_reflection_prompt_supported(self):
         data = _sample_response()
         data["_mirror_reflection"] = "What changed in your understanding?"
@@ -600,9 +676,12 @@ class TestFormatMirror:
         assert result["question"] == "What changed in your understanding?"
 
     def test_trust_tier_included(self):
+        # #428: mirror now wraps with glossary; the bare name resolves
+        # through reverse-lookup so existing string callers compose.
         data = _sample_response()
         result = _format_mirror(data, saved_trust_tier="established")
-        assert result["trust_tier"] == "established"
+        assert isinstance(result["trust_tier"], dict)
+        assert result["trust_tier"]["name"] == "established"
 
     def test_thread_context_preserved(self):
         data = _sample_response()
