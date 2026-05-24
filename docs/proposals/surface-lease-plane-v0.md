@@ -37,7 +37,7 @@ related:
   - **docs/ontology/beam-coordination-kernel.md** (parallel ontology-track spec converged independently on the same primitive 2026-04-30; framed as UNITARES R7 row in `docs/ontology/plan.md`. This proposals-track RFC is the contract spec; the ontology-track plan is the integration-into-UNITARES framing. Neither subsumes the other; both should be read by anyone executing the spike. See v0.4 changelog for the convergence story.)
   - **db/postgres/migrations/024_lease_plane.sql** (live in `governance` DB as of 2026-04-30 ~13:05 local; implements §4.4 schema verbatim — the schema is no longer a proposal, it's deployed)
   - **src/lease_plane/** (Python contract anchor implementing §4.5 typed-absence shapes; `LeasePlaneDisabledClient` is the advisory-mode escape valve. Closes RFC §9 checklist item "Shelf-Python sketch checked in alongside the Elixir spec.")
-  - **docs/proposals/plexus-scope.md** (`Plexus` is the product/system boundary name for this RFC's coordination layer. Defines v1 ownership, non-goals, stop signs, and the manual `Plexus Zero` bootstrap protocol used until this RFC's service ships. Does not redefine schema, API, or `surface_id` semantics — those remain here.)
+  - **docs/proposals/plexus-scope.md** (`Plexus` is the product/system boundary name for this RFC's coordination layer. Defines v1 ownership, non-goals, stop signs, and the manual `Plexus Zero` fallback protocol for service outages or callers that have not integrated the service yet. Does not redefine schema, API, or `surface_id` semantics — those remain here.)
 unblocks: |
   - Recurring "auto-recovered stuck agent" KG entries (12+ in the last 5 days)
   - Multi-agent surface collisions on shared file paths, TD networks, dialectic sessions
@@ -57,7 +57,7 @@ out_of_scope_explicit: |
 
 # Proposal: Surface Lease Plane v0 (Elixir/OTP coordination kernel)
 
-> **Status: DRAFT-v0, pre-council.** This document captures the first concrete coordination-substrate wedge converged on by three independent reviewers (claude_code, codex, gpt-5.5) on 2026-04-30. It is intentionally a **decision document with open questions**, not an implementation spec. Sections 7-8 list the questions that must be answered (council-reviewed) before any `.ex` file is written.
+> **Status: v0.11+, implemented.** Phase A shipped 2026-05-03 and `resident` enforcement shipped 2026-05-20 UTC via PR #476. This document remains the canonical Surface Lease Plane contract and historical decision record; later status amendments live in the frontmatter above.
 
 ## 1. Problem
 
