@@ -1,6 +1,6 @@
 # Scripts Directory
 
-**Last Updated:** 2026-05-24
+**Last Updated:** 2026-05-25
 
 > **Note:** Most functionality is available via MCP tools. Scripts are for CLI-only interfaces, operations, and maintenance.
 >
@@ -90,7 +90,13 @@ they contain machine-specific paths and may contain secrets. Keep local copies i
 AGE (Apache Graph Extension) utilities — bootstrap SQL, export scripts, sample Cypher queries.
 
 ### `analysis/`
-Analysis and reporting scripts, including outcome / calibration reporting, tool counting, EISV PCA analysis, and offline dataset export for validation studies.
+Analysis and reporting scripts, including outcome / calibration reporting, tool
+counting, EISV PCA analysis, and offline dataset export for validation studies.
+Notable validation reports:
+
+| Script | Description |
+|--------|-------------|
+| `eisv_skeptic_report.py` | Falsifiable report comparing EISV/prior-state predictive lift against simple outcome baselines. |
 
 ### `client/`
 Client-side utilities including the Ollama MCP bridge and session/freshness helpers.
