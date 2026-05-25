@@ -1168,16 +1168,35 @@ class KnowledgeGraphAGE:
                 return
 
             graph_count = await self._count_age_discoveries()
-            if graph_count > 0:
+            if graph_count == pg_count:
+                return
+
+            if graph_count == 0:
+                logger.warning(
+                    f"AGE graph '{self.graph_name}' is empty while PostgreSQL has {pg_count} discoveries; rehydrating"
+                )
+                restored = await self._rehydrate_from_postgres()
+                logger.warning(
+                    f"Rehydrated AGE graph '{self.graph_name}' from PostgreSQL: "
+                    f"{restored['discoveries']} discoveries, {restored['related_edges']} related edges"
+                )
+                return
+
+            if graph_count < pg_count:
+                logger.warning(
+                    f"AGE graph '{self.graph_name}' has {graph_count}/{pg_count} "
+                    "PostgreSQL discoveries; rehydrating missing rows"
+                )
+                restored = await self._rehydrate_missing_from_postgres()
+                logger.warning(
+                    f"Rehydrated missing AGE rows for graph '{self.graph_name}': "
+                    f"{restored['discoveries']} discoveries, {restored['related_edges']} related edges"
+                )
                 return
 
             logger.warning(
-                f"AGE graph '{self.graph_name}' is empty while PostgreSQL has {pg_count} discoveries; rehydrating"
-            )
-            restored = await self._rehydrate_from_postgres()
-            logger.warning(
-                f"Rehydrated AGE graph '{self.graph_name}' from PostgreSQL: "
-                f"{restored['discoveries']} discoveries, {restored['related_edges']} related edges"
+                f"AGE graph '{self.graph_name}' has {graph_count} discoveries but "
+                f"PostgreSQL has {pg_count}; AGE-only rows require operator review"
             )
         except Exception as e:
             logger.error(f"AGE graph rehydration check failed: {e}")
@@ -1196,6 +1215,80 @@ class KnowledgeGraphAGE:
         if result and isinstance(result[0], (int, float)):
             return int(result[0])
         return 0
+
+    async def _list_age_discovery_ids(self) -> Set[str]:
+        """Return discovery IDs currently present in AGE."""
+        db = await self._get_db()
+        result = await db.graph_query("MATCH (d:Discovery) RETURN d.id", {})
+        return {str(item) for item in result if item is not None}
+
+    async def _fetch_missing_postgres_discovery_rows(self, limit: Optional[int] = None) -> List[Any]:
+        """Fetch durable discovery rows that have no AGE Discovery vertex."""
+        db = await self._get_db()
+        age_ids = list(await self._list_age_discovery_ids())
+        limit_clause = ""
+        if limit is not None:
+            limit_clause = f"LIMIT {max(0, int(limit))}"
+
+        async with db.acquire() as conn:
+            if age_ids:
+                rows = await conn.fetch(
+                    f"""
+                    SELECT *
+                    FROM knowledge.discoveries
+                    WHERE NOT (id = ANY($1::text[]))
+                    ORDER BY created_at ASC, id ASC
+                    {limit_clause}
+                    """,
+                    age_ids,
+                )
+            else:
+                rows = await conn.fetch(
+                    f"""
+                    SELECT *
+                    FROM knowledge.discoveries
+                    ORDER BY created_at ASC, id ASC
+                    {limit_clause}
+                    """
+                )
+        return list(rows)
+
+    async def _rehydrate_missing_from_postgres(self, limit: Optional[int] = None) -> Dict[str, int]:
+        """Restore durable PostgreSQL discoveries that are missing from AGE."""
+        db = await self._get_db()
+        discovery_rows = await self._fetch_missing_postgres_discovery_rows(limit=limit)
+        if not discovery_rows:
+            return {"discoveries": 0, "related_edges": 0}
+
+        discovery_ids = [row["id"] for row in discovery_rows]
+        async with db.acquire() as conn:
+            related_rows = await conn.fetch(
+                """
+                SELECT src_id, dst_id, weight, metadata
+                FROM knowledge.discovery_edges
+                WHERE edge_type = 'related'
+                  AND (src_id = ANY($1::text[]) OR dst_id = ANY($1::text[]))
+                ORDER BY created_at ASC, src_id ASC, dst_id ASC
+                """,
+                discovery_ids,
+            )
+
+        async with db.transaction() as conn:
+            for row in discovery_rows:
+                await self._import_discovery_row(conn, row)
+            for row in related_rows:
+                cypher, params = create_related_to_edge(
+                    from_discovery_id=row["src_id"],
+                    to_discovery_id=row["dst_id"],
+                    strength=row["weight"],
+                    reason=(row["metadata"] or {}).get("reason") if isinstance(row["metadata"], dict) else None,
+                )
+                await db.graph_query(cypher, params, conn=conn)
+
+        return {
+            "discoveries": len(discovery_rows),
+            "related_edges": len(related_rows),
+        }
 
     async def _rehydrate_from_postgres(self) -> Dict[str, int]:
         """Restore AGE vertices and edges from durable PostgreSQL knowledge tables."""

@@ -175,9 +175,8 @@ async def _emit_public_kg_node(
     the side-effect path without parsing logs).
     """
     try:
-        from src.db import get_db
+        from src.knowledge_graph import get_knowledge_graph
         from src.knowledge_graph import DiscoveryNode
-        backend = get_db()
 
         public = _build_public_payload(score)
         node = DiscoveryNode(
@@ -199,7 +198,8 @@ async def _emit_public_kg_node(
             severity="low",
             status="open",
         )
-        await backend.kg_add_discovery(node)
+        graph = await get_knowledge_graph()
+        await graph.add_discovery(node)
         return True
     except Exception as exc:
         import logging
