@@ -59,13 +59,20 @@ def mocked_db(monkeypatch):
     # Per-test overrides set get_identity to return a record with metadata.tags
     # containing a recognized class tag.
     backend.get_identity = AsyncMock(return_value=None)
+    graph = AsyncMock()
+    graph.add_discovery = AsyncMock(return_value=None)
+    backend.public_kg_graph = graph
 
     def _get_db():
         return backend
 
+    async def _get_knowledge_graph():
+        return graph
+
     # The score primitive imports get_db inside the function (per CLAUDE.md
     # anyio pattern lazy imports); patch the source module.
     monkeypatch.setattr("src.db.get_db", _get_db)
+    monkeypatch.setattr("src.knowledge_graph.get_knowledge_graph", _get_knowledge_graph)
     return backend
 
 
@@ -526,12 +533,11 @@ async def test_score_dataclass_internal_caller_surface_unchanged(mocked_db):
 @pytest.mark.asyncio
 async def test_score_emits_public_kg_node_after_audit(mocked_db):
     """Per v3.3-A: score_trajectory_continuity publishes a redacted node to
-    the public KG via `kg_add_discovery`, joined to the audit row by
+    the configured public KG backend, joined to the audit row by
     score_id."""
     import json
     from src.identity.trajectory_continuity import score_trajectory_continuity
 
-    mocked_db.kg_add_discovery = AsyncMock(return_value=None)
     parent, successor = synthetic_trajectory_pair(seed=60, kind="genuine")
     mocked_db.reconstruct_eisv_series = AsyncMock(
         side_effect=_stub_reconstruct(parent, successor)
@@ -542,9 +548,9 @@ async def test_score_emits_public_kg_node_after_audit(mocked_db):
         successor_id="successor-uuid",
     )
 
-    mocked_db.kg_add_discovery.assert_awaited_once()
+    mocked_db.public_kg_graph.add_discovery.assert_awaited_once()
     # Inspect the DiscoveryNode that was passed
-    (node,), _kw = mocked_db.kg_add_discovery.call_args
+    (node,), _kw = mocked_db.public_kg_graph.add_discovery.call_args
     assert node.type == "trajectory_continuity_score"
     assert node.agent_id == "successor-uuid"
     assert node.id.startswith("r1_score:")
@@ -563,11 +569,10 @@ async def test_score_emits_public_kg_node_after_audit(mocked_db):
 async def test_score_kg_node_id_is_deterministic_per_pair(mocked_db):
     """Per v3.2-D dedupe-by-pair: the node id MUST be deterministic from
     (parent_id, successor_id). Re-scoring the same pair produces the same
-    id, so ON CONFLICT (id) DO UPDATE in `kg_add_discovery` overwrites
+    id, so ON CONFLICT (id) DO UPDATE in the active KG backend overwrites
     rather than appends."""
     from src.identity.trajectory_continuity import score_trajectory_continuity
 
-    mocked_db.kg_add_discovery = AsyncMock(return_value=None)
     parent, successor = synthetic_trajectory_pair(seed=61, kind="genuine")
     mocked_db.reconstruct_eisv_series = AsyncMock(
         side_effect=_stub_reconstruct(parent, successor)
@@ -580,14 +585,14 @@ async def test_score_kg_node_id_is_deterministic_per_pair(mocked_db):
         claimed_parent_id="parent-uuid", successor_id="successor-uuid",
     )
 
-    assert mocked_db.kg_add_discovery.await_count == 2
-    first_id = mocked_db.kg_add_discovery.call_args_list[0][0][0].id
-    second_id = mocked_db.kg_add_discovery.call_args_list[1][0][0].id
+    assert mocked_db.public_kg_graph.add_discovery.await_count == 2
+    first_id = mocked_db.public_kg_graph.add_discovery.call_args_list[0][0][0].id
+    second_id = mocked_db.public_kg_graph.add_discovery.call_args_list[1][0][0].id
     assert first_id == second_id
     # Each score has a fresh score_id (audit retains all); the node id is
     # the dedupe key, NOT the score_id.
-    first_payload = mocked_db.kg_add_discovery.call_args_list[0][0][0].details
-    second_payload = mocked_db.kg_add_discovery.call_args_list[1][0][0].details
+    first_payload = mocked_db.public_kg_graph.add_discovery.call_args_list[0][0][0].details
+    second_payload = mocked_db.public_kg_graph.add_discovery.call_args_list[1][0][0].details
     assert first_payload != second_payload  # score_id differs across calls
 
 
@@ -597,7 +602,6 @@ async def test_score_kg_node_id_differs_across_pairs(mocked_db):
     so dedupe-by-pair is per-pair, not global."""
     from src.identity.trajectory_continuity import score_trajectory_continuity
 
-    mocked_db.kg_add_discovery = AsyncMock(return_value=None)
     parent, successor = synthetic_trajectory_pair(seed=62, kind="genuine")
     mocked_db.reconstruct_eisv_series = AsyncMock(
         side_effect=_stub_reconstruct(parent, successor)
@@ -614,7 +618,7 @@ async def test_score_kg_node_id_differs_across_pairs(mocked_db):
     )
 
     ids = [
-        mocked_db.kg_add_discovery.call_args_list[i][0][0].id
+        mocked_db.public_kg_graph.add_discovery.call_args_list[i][0][0].id
         for i in range(3)
     ]
     assert len(set(ids)) == 3, "expected 3 distinct node ids for 3 distinct pairs"
@@ -627,7 +631,7 @@ async def test_score_kg_emission_failure_is_non_fatal(mocked_db):
     audit row is durably written."""
     from src.identity.trajectory_continuity import score_trajectory_continuity
 
-    mocked_db.kg_add_discovery = AsyncMock(side_effect=RuntimeError("kg pool down"))
+    mocked_db.public_kg_graph.add_discovery = AsyncMock(side_effect=RuntimeError("kg pool down"))
     parent, successor = synthetic_trajectory_pair(seed=63, kind="genuine")
     mocked_db.reconstruct_eisv_series = AsyncMock(
         side_effect=_stub_reconstruct(parent, successor)
@@ -651,7 +655,6 @@ async def test_score_kg_emission_skipped_when_audit_fails(mocked_db):
     from src.identity.trajectory_continuity import score_trajectory_continuity
 
     mocked_db.record_r1_score_audit = AsyncMock(return_value=False)
-    mocked_db.kg_add_discovery = AsyncMock(return_value=None)
     parent, successor = synthetic_trajectory_pair(seed=64, kind="genuine")
     mocked_db.reconstruct_eisv_series = AsyncMock(
         side_effect=_stub_reconstruct(parent, successor)
@@ -662,4 +665,4 @@ async def test_score_kg_emission_skipped_when_audit_fails(mocked_db):
             claimed_parent_id="parent-uuid", successor_id="successor-uuid",
         )
 
-    mocked_db.kg_add_discovery.assert_not_awaited()
+    mocked_db.public_kg_graph.add_discovery.assert_not_awaited()
