@@ -114,7 +114,7 @@ def format_response(
 
     # STANDARD MODE: Human-readable interpretation
     elif response_mode in ("standard", "interpreted"):
-        response_data = _format_standard(response_data, task_type)
+        response_data = _format_standard(response_data, task_type, saved_trust_tier)
 
     # MINIMAL MODE: Bare essentials
     elif response_mode == "minimal":
@@ -130,7 +130,7 @@ def format_response(
 
     return response_data
 
-def _format_standard(response_data: dict, task_type: str) -> dict:
+def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any = None) -> dict:
     """Build standard (interpreted) response."""
     from governance_state import GovernanceState
     from governance_core import State, Theta, DEFAULT_THETA
@@ -152,6 +152,11 @@ def _format_standard(response_data: dict, task_type: str) -> dict:
     temp_state.decision_history = response_data.get("history", {}).get("decision_history", [])
 
     interpreted = temp_state.interpret_state(risk_score=risk_score, task_type=task_type)
+    from src.governance_glossary import (
+        explain_basin,
+        explain_mode,
+        explain_trajectory,
+    )
 
     result = {
         "success": True,
@@ -165,6 +170,20 @@ def _format_standard(response_data: dict, task_type: str) -> dict:
         "_mode": "standard",
         "_raw_available": "Use response_mode='full' to see complete metrics",
     }
+    state_glossary = {}
+    if interpreted.get("mode") is not None:
+        state_glossary["mode"] = explain_mode(interpreted.get("mode"))
+    if interpreted.get("basin") is not None:
+        state_glossary["basin"] = explain_basin(interpreted.get("basin"))
+    if interpreted.get("trajectory") is not None:
+        state_glossary["trajectory"] = explain_trajectory(interpreted.get("trajectory"))
+    if state_glossary:
+        result["state_glossary"] = state_glossary
+    if saved_trust_tier:
+        from src.governance_glossary import explain_trust_tier
+        result["trust_tier"] = explain_trust_tier(saved_trust_tier)
+    if "input_glossary" in response_data:
+        result["input_glossary"] = response_data["input_glossary"]
     if "thread_context" in response_data:
         result["thread_context"] = response_data["thread_context"]
     if "identity_assurance" in response_data:

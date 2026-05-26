@@ -67,6 +67,20 @@ async def enrich_state_interpretation(ctx: UpdateContext) -> None:
             task_type=task_type
         )
         ctx.response_data['state'] = interpreted_state
+        from src.governance_glossary import (
+            explain_basin,
+            explain_mode,
+            explain_trajectory,
+        )
+        state_glossary = {}
+        if interpreted_state.get("mode") is not None:
+            state_glossary["mode"] = explain_mode(interpreted_state.get("mode"))
+        if interpreted_state.get("basin") is not None:
+            state_glossary["basin"] = explain_basin(interpreted_state.get("basin"))
+        if interpreted_state.get("trajectory") is not None:
+            state_glossary["trajectory"] = explain_trajectory(interpreted_state.get("trajectory"))
+        if state_glossary:
+            ctx.response_data['state_glossary'] = state_glossary
 
         health = interpreted_state.get('health', 'unknown')
         mode = interpreted_state.get('mode', 'unknown')
@@ -310,6 +324,19 @@ def enrich_health_status_toplevel(ctx: UpdateContext) -> None:
                     pass
     except Exception as e:
         logger.debug(f"Could not enrich health status: {e}")
+
+
+@enrichment(order=85, lite_safe=True)
+def enrich_input_glossary(ctx: UpdateContext) -> None:
+    """Attach point-of-use glossary for positional input vectors."""
+    try:
+        from src.governance_glossary import explain_ethical_drift_vector
+
+        ctx.response_data["input_glossary"] = {
+            "ethical_drift": explain_ethical_drift_vector(ctx.ethical_drift),
+        }
+    except Exception as e:
+        logger.debug(f"Could not enrich input glossary: {e}")
 
 # ─── CIRS Response Fields ──────────────────────────────────────────────
 
@@ -714,6 +741,10 @@ async def enrich_trajectory_identity(ctx: UpdateContext) -> None:
                 "observation_count": trajectory_result.get("observation_count"),
                 "identity_confidence": trajectory_result.get("identity_confidence"),
             }
+            from src.governance_glossary import annotate_trajectory_signature_terms
+            signature_glossary = annotate_trajectory_signature_terms(trajectory_signature)
+            if signature_glossary:
+                ctx.response_data["trajectory_identity"]["signature_glossary"] = signature_glossary
 
             if "lineage_similarity" in trajectory_result:
                 ctx.response_data["trajectory_identity"]["lineage"] = {
@@ -747,15 +778,17 @@ async def enrich_trajectory_identity(ctx: UpdateContext) -> None:
                         )
 
                 if trust_tier:
-                    ctx.response_data["trajectory_identity"]["trust_tier"] = trust_tier
+                    from src.governance_glossary import explain_trust_tier
+                    explained_trust_tier = explain_trust_tier(trust_tier)
+                    ctx.response_data["trajectory_identity"]["trust_tier"] = explained_trust_tier
 
                     mcp_server = ctx.mcp_server
                     meta = ctx.meta or mcp_server.agent_metadata.get(ctx.agent_id)
                     if meta:
-                        meta.trust_tier = trust_tier.get("name", "unknown")
-                        meta.trust_tier_num = trust_tier.get("tier", 0)
+                        meta.trust_tier = explained_trust_tier.get("name", "unknown")
+                        meta.trust_tier_num = explained_trust_tier.get("tier", 0)
 
-                    tier_num = trust_tier.get("tier", 0)
+                    tier_num = explained_trust_tier.get("tier", 0)
                     is_anomaly = trajectory_result.get("is_anomaly", False)
 
                     risk_adj = 0.0
@@ -766,7 +799,7 @@ async def enrich_trajectory_identity(ctx: UpdateContext) -> None:
                         risk_reason = "Behavioral deviation detected (lineage < 0.6)"
                     elif tier_num <= 1:
                         risk_adj = 0.05
-                        risk_reason = f"Trust tier {tier_num} ({trust_tier['name']}): identity not yet established"
+                        risk_reason = f"Trust tier {tier_num} ({explained_trust_tier['name']}): identity not yet established"
                     elif tier_num == 3:
                         risk_adj = -0.05
                         risk_reason = f"Trust tier 3 (verified): earned trust reduces friction"

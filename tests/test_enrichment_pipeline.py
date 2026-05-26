@@ -18,7 +18,7 @@ from src.mcp_handlers.updates.pipeline import (
 
 class TestEnrichmentRegistration:
     def test_all_enrichments_registered(self):
-        assert get_enrichment_count() == 29
+        assert get_enrichment_count() == 30
 
     def test_enrichment_order_is_unique(self):
         orders = [e.order for e in _ENRICHMENTS]
@@ -30,6 +30,8 @@ class TestEnrichmentRegistration:
         # state_interpretation before actionable_feedback before llm_coaching
         assert idx["enrich_state_interpretation"] < idx["enrich_actionable_feedback"]
         assert idx["enrich_actionable_feedback"] < idx["enrich_llm_coaching"]
+        assert idx["enrich_health_status_toplevel"] < idx["enrich_input_glossary"]
+        assert idx["enrich_input_glossary"] < idx["enrich_cirs_response_fields"]
         # mirror_signals runs late
         assert idx["enrich_mirror_signals"] > idx["enrich_websocket_broadcast"]
 
@@ -219,6 +221,7 @@ class TestLiteModeSkipping:
         assert names_to_lite_safe.get("enrich_learning_context") is True
         assert names_to_lite_safe.get("enrich_knowledge_surfacing") is True
         assert names_to_lite_safe.get("enrich_mirror_signals") is True
+        assert names_to_lite_safe.get("enrich_input_glossary") is True
         # Side-effect enrichments must NOT be lite_safe — confirms intent.
         assert names_to_lite_safe.get("enrich_websocket_broadcast") is False
         assert names_to_lite_safe.get("enrich_basin_tracking") is False
