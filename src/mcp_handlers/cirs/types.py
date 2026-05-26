@@ -92,10 +92,16 @@ class StateAnnounce:
         }
         if self.trajectory_signature:
             result["trajectory_signature"] = self.trajectory_signature
+            from src.governance_glossary import annotate_trajectory_signature_terms
+            signature_glossary = annotate_trajectory_signature_terms(self.trajectory_signature)
+            if signature_glossary:
+                result["trajectory_signature_glossary"] = signature_glossary
         if self.purpose:
             result["purpose"] = self.purpose
         if self.trust_tier:
             result["trust_tier"] = self.trust_tier
+            from src.governance_glossary import explain_trust_tier
+            result["trust_tier_meta"] = explain_trust_tier(self.trust_tier)
         return result
 
 

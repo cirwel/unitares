@@ -87,18 +87,42 @@ VERDICTS: Dict[str, Dict[str, str]] = {
 # BASINS — region of EISV state space
 # -----------------------------------------------------------------------------
 
-BASINS: Dict[str, Dict[str, str]] = {
+BASINS: Dict[str, Dict[str, Any]] = {
     "high": {
         "meaning": "Healthy. E and I are high; S and V are low. Normal operating range.",
+        "thresholds": {
+            "type": "all",
+            "E_min": 0.6,
+            "I_min": 0.7,
+            "S_max": 0.25,
+            "V_abs_max": 0.15,
+            "coherence_min": 0.45,
+            "risk_max": 0.45,
+        },
     },
     "low": {
         "meaning": "Degraded. May need recovery or intervention.",
+        "thresholds": {
+            "type": "any",
+            "I_below": 0.5,
+            "coherence_below": 0.40,
+            "V_abs_above": 0.30,
+            "risk_at_or_above": 0.70,
+        },
     },
     "boundary": {
         "meaning": "Transitioning between basins. Verdicts may carry margin: tight.",
+        "thresholds": {
+            "type": "complement",
+            "rule": "Neither high nor low; transitional remainder of state space.",
+        },
     },
     "critical": {
         "meaning": "Circuit breaker imminent. Pause and reassess.",
+        "thresholds": {
+            "type": "operator_alert",
+            "rule": "Used by higher-level diagnostics when risk/coherence guards are near breaker thresholds.",
+        },
     },
 }
 
@@ -130,6 +154,24 @@ TRAJECTORIES: Dict[str, Dict[str, str]] = {
     "stable":     {"meaning": "Steady; no significant V drift."},
     "declining":  {"meaning": "Value trajectory negative (V < -0.1). Simplify or seek input."},
     "stuck":      {"meaning": "Multiple pauses in recent decisions. Try a different approach or request dialectic."},
+}
+
+
+# -----------------------------------------------------------------------------
+# EISV_SOURCES — which state estimate is primary in read APIs
+# -----------------------------------------------------------------------------
+
+EISV_SOURCES: Dict[str, Dict[str, Any]] = {
+    "behavioral": {
+        "meaning": "Primary EISV comes from observed behavioral state.",
+        "thresholds": {"behavioral_confidence_min": 0.3},
+        "next_action": "Read behavioral_eisv first; use ode_eisv only as diagnostics.",
+    },
+    "ode_fallback": {
+        "meaning": "Behavioral confidence is too low, so primary EISV falls back to ODE dynamics.",
+        "thresholds": {"behavioral_confidence_below": 0.3},
+        "next_action": "Treat flat EISV as a fallback estimate until behavioral observations accumulate.",
+    },
 }
 
 
@@ -192,6 +234,58 @@ DRIFT_COMPONENTS: Dict[str, Dict[str, str]] = {
 }
 
 
+# Public process_agent_update accepts a positional ethical_drift vector. Keep
+# this separate from concrete drift-vector telemetry above: these are the three
+# caller-facing input slots from src/mcp_handlers/schemas/core.py.
+ETHICAL_DRIFT_VECTOR_COMPONENTS: Dict[str, Dict[str, str]] = {
+    "primary_drift": {
+        "meaning": "Caller-reported primary ethical-drift pressure for this update.",
+        "range": "[0, 1]",
+        "ideal": "0",
+    },
+    "coherence_loss": {
+        "meaning": "Caller-reported contribution from lost coherence or destabilized reasoning.",
+        "range": "[0, 1]",
+        "ideal": "0",
+    },
+    "complexity_contribution": {
+        "meaning": "Caller-reported contribution from task complexity or overload.",
+        "range": "[0, 1]",
+        "ideal": "0",
+    },
+}
+
+
+# -----------------------------------------------------------------------------
+# TRAJECTORY_SIGNATURE_TERMS — opaque labels that appear inside trajectory data
+# -----------------------------------------------------------------------------
+
+TRAJECTORY_SIGNATURE_TERMS: Dict[str, Dict[str, Any]] = {
+    "settling": {
+        "meaning": "Projected state is moving toward an attractor or stable set point.",
+        "next_action": "Usually safe to continue; watch for rising risk or entropy.",
+    },
+    "ode_fallback": EISV_SOURCES["ode_fallback"],
+    "behavioral": EISV_SOURCES["behavioral"],
+    "divergence": {
+        "meaning": "Open exploration regime; higher entropy can be normal.",
+        "next_action": "Keep scope visible and consolidate before switching to execution.",
+    },
+    "transition": {
+        "meaning": "Between exploration and convergence; state may shift quickly.",
+        "next_action": "Avoid raising complexity until coherence stabilizes.",
+    },
+    "convergence": {
+        "meaning": "Focused regime; integrity and low entropy matter more than novelty.",
+        "next_action": "Prefer verification and completion over new branches of work.",
+    },
+    "stable": {
+        "meaning": "State is near equilibrium or recently steady.",
+        "next_action": "Continue, while watching for hidden stasis if no progress is being made.",
+    },
+}
+
+
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
@@ -224,6 +318,32 @@ def explain_mode(mode: Optional[str]) -> Dict[str, Any]:
 def explain_trajectory(trajectory: Optional[str]) -> Dict[str, Any]:
     """Wrap a trajectory value with meaning."""
     return _wrap(trajectory, TRAJECTORIES)
+
+
+def explain_eisv_source(source: Optional[str]) -> Dict[str, Any]:
+    """Wrap a primary EISV source label with meaning + activation threshold."""
+    return _wrap(source, EISV_SOURCES)
+
+
+def explain_trajectory_signature_term(term: Optional[str]) -> Dict[str, Any]:
+    """Wrap a string found in trajectory-signature payloads.
+
+    The terms can come from several local vocabularies: state modes,
+    trajectories, basins, primary EISV source labels, and CIRS regimes.
+    """
+    if term is None:
+        return {"value": None}
+    key = str(term)
+    for table in (
+        MODES,
+        TRAJECTORIES,
+        BASINS,
+        EISV_SOURCES,
+        TRAJECTORY_SIGNATURE_TERMS,
+    ):
+        if key in table:
+            return {"value": term, **table[key]}
+    return {"value": term, "meaning": "unknown (not in glossary)"}
 
 
 _TIER_BY_NAME: Dict[str, int] = {info["name"]: tier_int for tier_int, info in TRUST_TIERS.items()}
@@ -297,3 +417,69 @@ def annotate_drift_components(drift: Dict[str, float]) -> Dict[str, Dict[str, An
         else:
             out[key] = {"value": value, **info}
     return out
+
+
+def explain_ethical_drift_vector(drift: Optional[Any]) -> Dict[str, Any]:
+    """Name the three positional ethical_drift input components.
+
+    Public schemas accept ethical_drift as
+    [primary_drift, coherence_loss, complexity_contribution]. Returning both
+    the original vector and named components preserves the wire shape while
+    making the input self-describing at the response surface.
+    """
+    if drift is None:
+        return {"value": None}
+    try:
+        values = list(drift)
+    except TypeError:
+        return {"value": drift, "meaning": "unknown (expected three-component vector)"}
+
+    component_names = list(ETHICAL_DRIFT_VECTOR_COMPONENTS.keys())
+    components: Dict[str, Dict[str, Any]] = {}
+    for idx, name in enumerate(component_names):
+        value = values[idx] if idx < len(values) else None
+        components[name] = {
+            "value": value,
+            **ETHICAL_DRIFT_VECTOR_COMPONENTS[name],
+        }
+    extras = values[len(component_names):]
+    result: Dict[str, Any] = {
+        "value": values,
+        "order": component_names,
+        "components": components,
+    }
+    if extras:
+        result["extra_components"] = [
+            {"index": len(component_names) + i, "value": v}
+            for i, v in enumerate(extras)
+        ]
+    return result
+
+
+def annotate_trajectory_signature_terms(signature: Optional[Any]) -> Dict[str, Dict[str, Any]]:
+    """Return glossary entries for known string values inside a signature.
+
+    The original trajectory_signature can be large and structurally owned by
+    upstream agents. This helper leaves it untouched and returns path-keyed
+    annotations only for known terms.
+    """
+    if not isinstance(signature, dict):
+        return {}
+
+    annotations: Dict[str, Dict[str, Any]] = {}
+
+    def walk(value: Any, path: str) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                child_path = f"{path}.{key}" if path else str(key)
+                walk(child, child_path)
+        elif isinstance(value, list):
+            for idx, child in enumerate(value):
+                walk(child, f"{path}[{idx}]")
+        elif isinstance(value, str):
+            explained = explain_trajectory_signature_term(value)
+            if "meaning" in explained and not str(explained["meaning"]).startswith("unknown"):
+                annotations[path] = explained
+
+    walk(signature, "")
+    return annotations

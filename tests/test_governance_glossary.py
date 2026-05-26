@@ -12,10 +12,16 @@ from src.governance_glossary import (
     MODES,
     TRAJECTORIES,
     DRIFT_COMPONENTS,
+    EISV_SOURCES,
+    ETHICAL_DRIFT_VECTOR_COMPONENTS,
+    TRAJECTORY_SIGNATURE_TERMS,
     explain_verdict,
     explain_basin,
+    explain_eisv_source,
     explain_mode,
     explain_trajectory,
+    explain_ethical_drift_vector,
+    annotate_trajectory_signature_terms,
     annotate_drift_components,
 )
 
@@ -57,6 +63,7 @@ class TestGlossaryIntegrity:
     def test_all_basins_have_meaning(self):
         for basin, info in BASINS.items():
             assert "meaning" in info and info["meaning"]
+            assert "thresholds" in info and info["thresholds"]
 
     def test_all_modes_have_meaning(self):
         for mode, info in MODES.items():
@@ -78,6 +85,21 @@ class TestGlossaryIntegrity:
 
     def test_all_trajectories_have_meaning(self):
         for trajectory, info in TRAJECTORIES.items():
+            assert "meaning" in info and info["meaning"]
+
+    def test_all_eisv_sources_have_thresholds(self):
+        for source, info in EISV_SOURCES.items():
+            assert "meaning" in info and info["meaning"]
+            assert "thresholds" in info and info["thresholds"]
+
+    def test_positional_ethical_drift_components_have_range_and_ideal(self):
+        for component, info in ETHICAL_DRIFT_VECTOR_COMPONENTS.items():
+            assert "meaning" in info and info["meaning"]
+            assert "range" in info
+            assert "ideal" in info
+
+    def test_trajectory_signature_terms_have_meaning(self):
+        for term, info in TRAJECTORY_SIGNATURE_TERMS.items():
             assert "meaning" in info and info["meaning"]
 
     def test_drift_components_have_range_and_ideal(self):
@@ -135,6 +157,16 @@ class TestExplainTrajectory:
     def test_stuck_recommends_dialectic(self):
         result = explain_trajectory("stuck")
         assert "dialectic" in result["meaning"].lower()
+
+
+class TestExplainEisvSource:
+
+    def test_ode_fallback_includes_threshold_and_action(self):
+        result = explain_eisv_source("ode_fallback")
+        assert result["value"] == "ode_fallback"
+        assert "Behavioral confidence" in result["meaning"]
+        assert result["thresholds"]["behavioral_confidence_below"] == 0.3
+        assert "next_action" in result
 
 
 class TestExplainTrustTier:
@@ -244,6 +276,37 @@ class TestAnnotateDriftComponents:
         assert result["norm_squared"] == {"value": 0.176}
 
 
+class TestExplainEthicalDriftVector:
+
+    def test_names_three_positional_components(self):
+        result = explain_ethical_drift_vector([0.1, 0.2, 0.3])
+        assert result["value"] == [0.1, 0.2, 0.3]
+        assert result["order"] == [
+            "primary_drift",
+            "coherence_loss",
+            "complexity_contribution",
+        ]
+        assert result["components"]["primary_drift"]["value"] == 0.1
+        assert "meaning" in result["components"]["coherence_loss"]
+        assert "range" in result["components"]["complexity_contribution"]
+        assert "ideal" in result["components"]["complexity_contribution"]
+
+
+class TestAnnotateTrajectorySignatureTerms:
+
+    def test_returns_path_keyed_known_terms_without_mutating_signature(self):
+        signature = {
+            "state": {"mode": "building_alone"},
+            "source": "ode_fallback",
+            "projection": {"phase": "settling"},
+        }
+        result = annotate_trajectory_signature_terms(signature)
+        assert result["state.mode"]["value"] == "building_alone"
+        assert result["source"]["value"] == "ode_fallback"
+        assert result["projection.phase"]["value"] == "settling"
+        assert signature["source"] == "ode_fallback"
+
+
 class TestGlossaryAppliedToMonitorResult:
     """Source-level guards that monitor_result.py uses the glossary helpers
     to wrap ethical_drift and behavioral.assessment.verdict. Regression
@@ -351,6 +414,23 @@ class TestGlossaryAppliedToResponseFormatter:
             "explain_trust_tier()."
         )
 
+    def test_standard_format_wraps_state_glossary(self):
+        source = self._read("src/mcp_handlers/response_formatter.py")
+        idx = source.find("def _format_standard")
+        end = source.find("\ndef ", idx + 1)
+        window = source[idx:end if end != -1 else len(source)]
+        assert "state_glossary" in window
+        assert "explain_basin" in window
+        assert "explain_mode" in window
+        assert "explain_trajectory" in window
+
+    def test_simulate_update_wraps_input_ethical_drift(self):
+        source = self._read("src/mcp_handlers/core.py")
+        idx = source.find("def handle_simulate_update")
+        end = source.find("\n@mcp_tool(\"process_agent_update\"", idx + 1)
+        window = source[idx:end if end != -1 else len(source)]
+        assert "explain_ethical_drift_vector" in window
+
 
 class TestGlossaryAppliedToObservabilityHandlers:
     """Regression guard: observe_agent's current_state must wrap verdict via
@@ -372,3 +452,45 @@ class TestGlossaryAppliedToObservabilityHandlers:
             "observe_agent's current_state must wrap verdict via "
             "explain_verdict() — it's the primary self-observation surface."
         )
+
+
+class TestGlossaryAppliedToRuntimeQueries:
+    """Read APIs should keep raw values and add peer glossary metadata."""
+
+    @staticmethod
+    def _read(rel_path: str) -> str:
+        from pathlib import Path
+        return (Path(__file__).parent.parent / rel_path).read_text()
+
+    def test_primary_eisv_source_has_meta(self):
+        source = self._read("src/services/runtime_queries.py")
+        assert "primary_eisv_source_meta" in source
+        assert "explain_eisv_source" in source
+
+
+class TestGlossaryAppliedToUpdateEnrichments:
+    """process_agent_update full payload should annotate raw state/signature fields."""
+
+    @staticmethod
+    def _read(rel_path: str) -> str:
+        from pathlib import Path
+        return (Path(__file__).parent.parent / rel_path).read_text()
+
+    def test_state_interpretation_adds_state_glossary(self):
+        source = self._read("src/mcp_handlers/updates/enrichments.py")
+        idx = source.find("def enrich_state_interpretation")
+        end = source.find("\n@enrichment", idx + 1)
+        window = source[idx:end if end != -1 else len(source)]
+        assert "state_glossary" in window
+        assert "explain_basin" in window
+        assert "explain_mode" in window
+        assert "explain_trajectory" in window
+
+    def test_trajectory_identity_adds_signature_glossary_and_wrapped_trust_tier(self):
+        source = self._read("src/mcp_handlers/updates/enrichments.py")
+        idx = source.find("def enrich_trajectory_identity")
+        end = source.find("\n@enrichment", idx + 1)
+        window = source[idx:end if end != -1 else len(source)]
+        assert "annotate_trajectory_signature_terms" in window
+        assert "signature_glossary" in window
+        assert "explain_trust_tier" in window

@@ -291,6 +291,11 @@ async def handle_simulate_update(arguments: ToolArgumentsDict) -> Sequence[TextC
     if dialectic_warnings:
         response["dialectic_condition_warnings"] = dialectic_warnings
 
+    from src.governance_glossary import explain_ethical_drift_vector
+    response["input_glossary"] = {
+        "ethical_drift": explain_ethical_drift_vector(ethical_drift),
+    }
+
     return success_response(response)
 
 @mcp_tool("process_agent_update", timeout=60.0)

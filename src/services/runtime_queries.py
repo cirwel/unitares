@@ -73,6 +73,8 @@ def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, An
         behavioral_confidence = 0.0
 
     primary_source = "behavioral" if behavioral_confidence >= 0.3 else "ode_fallback"
+    from src.governance_glossary import explain_eisv_source
+    primary_source_meta = explain_eisv_source(primary_source)
     ode_diagnostics = {
         "phi": metrics.get("phi"),
         "verdict": metrics.get("verdict"),
@@ -86,6 +88,7 @@ def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, An
         "eisv": primary_eisv,
         "primary_eisv": primary_eisv,
         "primary_eisv_source": primary_source,
+        "primary_eisv_source_meta": primary_source_meta,
         "behavioral_eisv": behavioral_eisv,
         "ode_eisv": ode_eisv,
         "ode_diagnostics": ode_diagnostics,
@@ -105,6 +108,7 @@ def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, An
             ),
             "ode_diagnostics_role": "Thermostat dynamics diagnostics (phi, regime, lambda1)",
             "verdict_source": primary_source,
+            "verdict_source_meta": primary_source_meta,
             "hierarchy": [
                 "1. behavioral_eisv (primary when confidence >= 0.3)",
                 "2. ode_eisv (fallback when behavioral data insufficient)",
@@ -248,6 +252,7 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
     if verbosity == "standard":
         from src.governance_glossary import (
             explain_basin,
+            explain_eisv_source,
             explain_mode,
             explain_verdict,
         )
@@ -272,6 +277,9 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             "verdict": explain_verdict(metrics.get("verdict", "uninitialized")),
             "risk_score": metrics.get("risk_score"),
             "primary_eisv_source": standardized_metrics.get("primary_eisv_source"),
+            "primary_eisv_source_meta": explain_eisv_source(
+                standardized_metrics.get("primary_eisv_source")
+            ),
             "summary": standardized_metrics.get("summary"),
             "guidance": state.get("guidance"),
         })
@@ -351,8 +359,12 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         # at point-of-use.
         from src.governance_glossary import (
             explain_basin,
+            explain_eisv_source,
             explain_mode,
             explain_verdict,
+        )
+        lite_metrics["primary_eisv_source_meta"] = explain_eisv_source(
+            standardized_metrics.get("primary_eisv_source")
         )
         if "state" in standardized_metrics:
             lite_metrics["mode"] = explain_mode(standardized_metrics["state"].get("mode"))
