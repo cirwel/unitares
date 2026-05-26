@@ -1280,13 +1280,18 @@ _PERSIST_VERB_PATTERN = re.compile(
 _PATTERN_REQUIRED_TOKENS: dict[str, tuple[str, ...]] = {
     "P001": ("create_task(",),
     "P003": ("UNITARESMonitor(",),
-    # P004 needs a literal asyncpg/Redis call marker on the flagged line.
-    # Without this, qwen3-coder-next associates the pattern with a nearby
-    # `async def http_dashboard(...)` or unrelated arithmetic. Caught when
-    # it flagged http_api.py:736 and :907 on 2026-04-14.
-    "P004": ("asyncpg", "pool.acquire", "conn.fetch", "conn.execute",
-             "db.fetch", "db.execute", "await redis", "redis.get(",
-             "redis.set(", "load_metadata_async(", "archive_agent("),
+    # P004 needs a literal Redis call marker on the flagged line.
+    # Narrowed to Redis-only on 2026-05-23: asyncpg ops in MCP handlers are
+    # safe post-PR #218 (2026-04-27), which wraps the asyncpg pool in
+    # ExecutorPool so direct `await conn.fetchval(...)` no longer collides
+    # with the MCP SDK's anyio task group. Redis is NOT wrapped — those
+    # awaits still need `asyncio.wait_for` guards per CLAUDE.md
+    # "Substrate Tax" section, so the rule still fires on raw Redis ops.
+    # The literal-token guard (vs. just "any await") protects against
+    # qwen3-coder-next associating the pattern with nearby unrelated lines;
+    # caught when it flagged http_api.py:736 and :907 on 2026-04-14.
+    "P004": ("await redis", "redis.get(", "redis.set(", "redis.delete(",
+             "redis.hget(", "redis.hset(", "redis.expire(", "redis.exists("),
     # P005 needs a literal acquire/cursor call on the flagged line.
     # Without this, the model sometimes associates a P005 "resource leak"
     # finding with the method DEFINITION (async def __aexit__, etc.)
@@ -1306,7 +1311,7 @@ _PATTERN_REQUIRED_TOKENS: dict[str, tuple[str, ...]] = {
 }
 
 # File-path substrings that MUST be present in finding.file for the pattern
-# to apply. P004 (asyncpg-in-MCP-handler) is only relevant to code under
+# to apply. P004 (Redis-in-MCP-handler) is only relevant to code under
 # src/mcp_handlers/ — the pattern library explicitly excludes Starlette REST
 # routes in src/http_api.py, which run outside the MCP anyio task group.
 _PATTERN_FILE_PATH_CONSTRAINTS: dict[str, tuple[str, ...]] = {
@@ -1532,7 +1537,7 @@ def _is_wait_for_guarded_onboard_pin_helper(
 
     `lookup_onboard_pin()` and `set_onboard_pin()` bound their inner Redis
     work with `asyncio.wait_for(..., timeout=_PIN_REDIS_TIMEOUT)`. P004's
-    actionable condition is unbounded async Redis/asyncpg in an MCP handler;
+    actionable condition is unbounded async Redis in an MCP handler;
     this shape has the timeout mitigation and regression tests already.
     """
     helper_name = None

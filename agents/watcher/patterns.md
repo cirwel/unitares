@@ -83,48 +83,73 @@ that the cache uses to populate itself). See
 
 **Hint template:** `transient monitor — use get_or_create_monitor`
 
-### P004 — DB-touching code inside MCP tool handler (severity: high, project-specific, violation_class: REC)
+### P004 — Unguarded Redis call inside MCP tool handler (severity: high, project-specific, violation_class: REC)
 
-Any `await` on asyncpg or Redis inside an `@mcp_tool`-decorated handler
+Any `await` on a raw Redis async client inside an `@mcp_tool`-decorated handler
 (functions in `src/mcp_handlers/`). The anyio task group in the MCP SDK's
-StreamableHTTP transport deadlocks with asyncpg/Redis async calls. Symptom:
+StreamableHTTP transport deadlocks with unbounded Redis async calls. Symptom:
 `/v1/tools/call` hangs indefinitely for that tool.
+
+**Scope narrowed 2026-05-23: Redis only.** asyncpg ops in MCP handlers are
+*safe* post-PR #218 (2026-04-27), which wraps the asyncpg pool in
+`src/db/executor_pool.py`. Direct `await conn.fetchval(...)`,
+`await db.acquire()`, and `await mcp_server.load_metadata_async()` no longer
+collide with the anyio task group — the asyncpg work happens on a dedicated
+background thread. Historic dismiss rate on asyncpg-firing P004s was 89.5%
+(17 dismissed / 19 fired) post-#218; the two `confirmed`s were correct
+*before* #218 and are stale. Per CLAUDE.md "Substrate Tax" section:
+*"New handlers can use `async with db.acquire() as conn: await
+conn.fetchval(...)` directly — no wrapper needed for asyncpg DB work."*
+
+Redis is **NOT** ExecutorPool-wrapped. Existing Redis `asyncio.wait_for`
+timeouts in `identity_step.py`, `persistence.py`, `session.py` remain
+load-bearing; do not remove them, and do not add new unguarded `await redis.*`
+in MCP handlers.
 
 **SAFE — DO NOT FLAG:**
 ```python
 # Starlette REST route handlers in src/http_api.py (http_health, http_metrics,
 # http_incidents, etc.) run in normal asyncio context, NOT inside the MCP
-# SDK's anyio task group. asyncpg calls in REST endpoints do not deadlock.
+# SDK's anyio task group. asyncpg and Redis are both safe in REST endpoints.
 async def http_incidents(request):
     events = await query_audit_events_async(...)  # safe — REST handler
 
 # MCP helper whose public entrypoint bounds the async Redis work.
 async def lookup_onboard_pin(fp):
     return await asyncio.wait_for(_lookup_onboard_pin_inner(fp), timeout=0.5)
+
+# asyncpg in MCP handlers — safe via ExecutorPool (post-PR #218):
+@mcp_tool("my_tool")
+async def handle_my_tool(arguments):
+    async with db.acquire() as conn:
+        row = await conn.fetchval("SELECT ...")  # safe — ExecutorPool-wrapped
 ```
 
-Only flag `await` on asyncpg/Redis in files under `src/mcp_handlers/` or in
-functions decorated with `@mcp_tool` / `@mcp.tool()`. Do NOT flag plain
-Starlette route handlers in `src/http_api.py`.
+**FLAG:**
+```python
+@mcp_tool("my_tool")
+async def handle_my_tool(arguments):
+    val = await redis.get(key)  # P004 — unguarded Redis in MCP handler
+```
 
-The structural verifier now enforces both constraints post-hoc: P004 findings
+Only flag `await` on raw Redis calls in files under `src/mcp_handlers/` or in
+functions decorated with `@mcp_tool` / `@mcp.tool()`. Do NOT flag plain
+Starlette route handlers in `src/http_api.py`, and do NOT flag asyncpg ops
+(those go through ExecutorPool).
+
+The structural verifier enforces both constraints post-hoc: P004 findings
 outside `src/mcp_handlers/` are dropped, and the flagged line must contain a
-literal asyncpg/Redis call marker (`asyncpg`, `pool.acquire`, `conn.fetch`,
-`await redis`, etc.). See `_PATTERN_FILE_PATH_CONSTRAINTS` and
-`_PATTERN_REQUIRED_TOKENS["P004"]` in `agent.py`.
+literal Redis call marker (`await redis`, `redis.get(`, `redis.set(`, etc.).
+See `_PATTERN_FILE_PATH_CONSTRAINTS` and `_PATTERN_REQUIRED_TOKENS["P004"]`
+in `agent.py`.
 
 **Seen in:** `health_check` MCP tool (fixed via Option F), KG lifecycle, eisv_sync.
 False-positive sweep 2026-04-14 (flagged `async def http_dashboard` and
 unrelated arithmetic in `src/http_api.py`) motivated the verifier constraints.
+Scope-narrowing sweep 2026-05-23 dismissed 9 stale asyncpg findings and
+removed asyncpg tokens from `_PATTERN_REQUIRED_TOKENS["P004"]`.
 
-**Hint template:** `asyncpg/Redis in MCP handler — will deadlock, wrap in executor`
-
-> NOTE for resolvers: the hint historically said only "asyncpg", which led
-> agents to dismiss real `await raw_redis.get(...)` deadlock sites. Both
-> drivers share the same anyio task-group conflict — see CLAUDE.md
-> "Known Issue: anyio-asyncio Conflict" and the existing
-> `_load_binding_from_redis` `wait_for` mitigation. Do not dismiss a
-> P004 just because the call is Redis rather than asyncpg.
+**Hint template:** `unguarded Redis in MCP handler — wrap with asyncio.wait_for(..., timeout=N)`
 
 ### P005 — Acquire without paired release (severity: high, violation_class: REC)
 

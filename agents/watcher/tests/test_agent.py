@@ -2098,9 +2098,9 @@ def _verify_finding(watcher_module, pattern, line, src_line, file="/repo/src/mcp
 
 
 def test_p004_dropped_outside_mcp_handlers_directory(watcher_module):
-    """P004 is the asyncpg-in-MCP-handler deadlock pattern. It MUST NOT fire
-    on files outside src/mcp_handlers/ (e.g. Starlette REST handlers in
-    src/http_api.py), which is exactly what happened on 2026-04-14."""
+    """P004 is the unguarded-Redis-in-MCP-handler deadlock pattern. It MUST
+    NOT fire on files outside src/mcp_handlers/ (e.g. Starlette REST handlers
+    in src/http_api.py), which is exactly what happened on 2026-04-14."""
     assert not _verify_finding(
         watcher_module,
         pattern="P004",
@@ -2110,10 +2110,10 @@ def test_p004_dropped_outside_mcp_handlers_directory(watcher_module):
     )
 
 
-def test_p004_dropped_when_flagged_line_has_no_asyncpg_marker(watcher_module):
-    """Even inside src/mcp_handlers/, P004 requires a literal asyncpg/Redis
-    call on the flagged line. `bucket = max(1, min(bucket, 30))` cannot be
-    an asyncpg deadlock source and must be dropped."""
+def test_p004_dropped_when_flagged_line_has_no_redis_marker(watcher_module):
+    """Even inside src/mcp_handlers/, P004 requires a literal Redis call on
+    the flagged line. `bucket = max(1, min(bucket, 30))` cannot be a Redis
+    deadlock source and must be dropped."""
     assert not _verify_finding(
         watcher_module,
         pattern="P004",
@@ -2122,14 +2122,44 @@ def test_p004_dropped_when_flagged_line_has_no_asyncpg_marker(watcher_module):
     )
 
 
-def test_p004_kept_for_real_asyncpg_call_inside_mcp_handler(watcher_module):
-    """Positive case: a real `await conn.fetch(...)` inside src/mcp_handlers/
-    MUST survive verification — that's the whole point of P004."""
-    assert _verify_finding(
+def test_p004_dropped_for_asyncpg_in_mcp_handler(watcher_module):
+    """Scope narrowed 2026-05-23: asyncpg in MCP handlers is SAFE post-PR #218
+    (ExecutorPool wraps the pool, so direct `await conn.fetchval(...)` no
+    longer collides with the anyio task group). The rule must NOT flag
+    asyncpg call sites anymore — historic dismiss rate on these was 89.5%
+    after #218 deployed. Per CLAUDE.md "Substrate Tax" section: 'New handlers
+    can use `async with db.acquire() as conn: await conn.fetchval(...)`
+    directly — no wrapper needed for asyncpg DB work.'"""
+    assert not _verify_finding(
         watcher_module,
         pattern="P004",
         line=42,
         src_line="rows = await conn.fetchrow(query)",
+        file="/repo/src/mcp_handlers/identity/handlers.py",
+    )
+
+
+def test_p004_kept_for_unguarded_redis_in_mcp_handler(watcher_module):
+    """Positive case: a raw `await redis.get(...)` inside src/mcp_handlers/
+    MUST survive verification. Redis is NOT ExecutorPool-wrapped — those
+    awaits still need `asyncio.wait_for` guards. This is the remaining
+    actionable surface for P004 post-scope-narrowing."""
+    assert _verify_finding(
+        watcher_module,
+        pattern="P004",
+        line=42,
+        src_line="val = await redis.get(cache_key)",
+        file="/repo/src/mcp_handlers/identity/handlers.py",
+    )
+
+
+def test_p004_kept_for_redis_set_in_mcp_handler(watcher_module):
+    """Multiple Redis call shapes are flagged — get/set/delete/hget/hset/etc."""
+    assert _verify_finding(
+        watcher_module,
+        pattern="P004",
+        line=42,
+        src_line="await redis.set(key, value, ex=60)",
         file="/repo/src/mcp_handlers/identity/handlers.py",
     )
 
