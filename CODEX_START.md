@@ -102,6 +102,32 @@ python3 agents/watcher/agent.py --resolve <fingerprint> --agent-id <your-uuid>
 python3 agents/watcher/agent.py --dismiss <fingerprint> --agent-id <your-uuid>
 ```
 
+## BEAM File Leases
+
+For multi-agent edits, claim codebase surfaces through the Elixir lease plane before mutating shared files. The helper maps paths to canonical `file://` surfaces.
+
+For longer editing sessions, keep a foreground hold running in another terminal:
+
+```bash
+python3 scripts/dev/file_lease.py hold --changed
+```
+
+`hold --changed` refreshes the changed-file set on every heartbeat. If a new changed file is already held by another agent, it releases its own leases and exits blocked.
+
+For single commands that mutate or validate the current worktree, wrap them:
+
+```bash
+python3 scripts/dev/file_lease.py guard --changed -- ./scripts/dev/test-cache.sh
+```
+
+Useful inspection commands:
+
+```bash
+python3 scripts/dev/file_lease.py changed
+python3 scripts/dev/file_lease.py status path/to/file.py
+python3 scripts/dev/file_lease.py acquire path/to/file.py --enforce
+```
+
 ## Scope
 
 This file documents the stable manual Codex path. Older planning docs mention `explicit`, `dogfood-light`, and `dogfood-heavy` modes; treat those as planning terms unless a concrete runtime surface is documented alongside them.
