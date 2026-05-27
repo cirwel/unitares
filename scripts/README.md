@@ -1,6 +1,6 @@
 # Scripts Directory
 
-**Last Updated:** 2026-05-25
+**Last Updated:** 2026-05-27
 
 > **Note:** Most functionality is available via MCP tools. Scripts are for CLI-only interfaces, operations, and maintenance.
 >
@@ -15,10 +15,31 @@
 | `bump_epoch.py` | Bump governance epoch |
 | `check_ci_python_version_sync.py` | Verify CI Python version matches project |
 | `doc_audit.sh` | Check all three Unitares repos for stale docs |
+| `file_lease.py` | Claim BEAM lease-plane `file://` surfaces before code edits; `guard --changed` wraps commands, `hold --changed` refreshes and heartbeats during agent work |
 | `test-cache.sh` | Tree-hash pytest cache (skips if tests already passed against this exact working tree) |
 | `update_docs_tool_count.py` | Update tool counts in documentation |
 | `version_manager.py` | Version management utilities |
 | `with_checkin.py` | Run a command and emit a best-effort `process_agent_update` check-in with command outcome evidence |
+
+### BEAM File Lease Helper
+
+`scripts/dev/file_lease.py` is the local bridge from code-editing sessions to the Elixir lease plane. It claims canonical `file://` surfaces for paths in this worktree.
+
+Common patterns:
+
+```bash
+# Hold current and future changed paths while an agent edits.
+python3 scripts/dev/file_lease.py hold --changed
+
+# Guard a command with the current changed paths.
+python3 scripts/dev/file_lease.py guard --changed -- ./scripts/dev/test-cache.sh
+
+# Check or explicitly claim one file.
+python3 scripts/dev/file_lease.py status src/foo.py
+python3 scripts/dev/file_lease.py acquire src/foo.py --enforce
+```
+
+`hold --changed` refreshes on every heartbeat and releases on interrupt. `guard --changed` snapshots the current changed paths, blocks on contention, runs the command, then releases.
 
 ---
 
