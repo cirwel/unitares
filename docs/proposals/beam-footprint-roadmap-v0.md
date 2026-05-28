@@ -1,10 +1,54 @@
 # BEAM Footprint Roadmap
 
 **Created:** May 3, 2026
-**Last Updated:** May 20, 2026 (v0.3.3 status fold — resident Phase B + lease/ODE measurement persistence; v0.3 destination unchanged)
-**Status:** v0.3 — destination is **A′ (committed, operator-decision-driven, 2026-05-05)**. Stateful coordination ports to BEAM in waves; stateless computation (numpy ODE, embeddings, LLM SDK calls) stays Python and is called from BEAM via Ports / HTTP. v0.2 had reopened the destination after PR #350's verdict; v0.3 closes it again on operator call after four Python-fixable PRs (#350 / #354 / #360 / #361) closed every measured floor without moving the user-visible ~11s p50 per-turn overhead. **Read the V0.3 RESOLUTION block first.** v0 / v0.1 / v0.2 bodies preserved as historical record.
+**Last Updated:** May 28, 2026 (v0.3.1 amendment — ODE profile landed; the "7s locked-phase floor" framing falsified; post-lock enrichment was the actual user-visible floor and is now Python-fixed in PR #533)
+**Status:** v0.3 — destination is **A′ (committed, operator-decision-driven, 2026-05-05)**. Stateful coordination ports to BEAM in waves; stateless computation (numpy ODE, embeddings, LLM SDK calls) stays Python and is called from BEAM via Ports / HTTP. v0.2 had reopened the destination after PR #350's verdict; v0.3 closes it again on operator call after four Python-fixable PRs (#350 / #354 / #360 / #361) closed every measured floor without moving the user-visible ~11s p50 per-turn overhead. **Read the V0.3 RESOLUTION block first**, then the V0.3.1 amendment for what changed on 2026-05-28. v0 / v0.1 / v0.2 bodies preserved as historical record.
 **Council pass v0.1 (2026-05-04):** dialectic-knowledge-architect (2B/4C/3D/4N), feature-dev:code-reviewer (2B/3C/2D/2N), live-verifier (7 VERIFIED, 6 DRIFT, 0 REFUTED, 1 SOURCE_ONLY) — all findings folded inline. Architect C3 + reviewer C3 both flagged "v0.1 destination committed pre-experiment"; the v0.1 conditionality block was the fold for that finding, and v0.2 was the realization of it.
 **Council pass v0.3:** none on the migration call itself — that's an operator decision after a multi-session debate, and adversarial review of the call after operator commitment is the relitigation pattern v0.3 is trying to end. Council passes ARE expected on technical scope (Wave 1 supervisor topology, BEAM↔Python boundary contracts, identity-state migration) once those land as RFCs.
+
+---
+
+## V0.3.1 AMENDMENT 2026-05-28 — ODE profile + post-lock enrichment Python-fix
+
+**Read this after V0.3 RESOLUTION.**
+
+The v0.3 RESOLUTION's load-bearing unknown was the ODE profile — the 7s remainder of what was framed as the "locked-phase floor." Both halves of that framing turned out to be wrong:
+
+- **The "7s" wasn't in the locked phase.** A side-by-side profile on 2026-05-28 (`/tmp/mcp_profile_analysis.txt`) measured the locked phase at ~100ms under 4-way concurrency, ~21ms serial — 2% of user-visible wall-clock, not 100%. The structured-log boundaries at `src/services/update_workflow_service.py:110-153` and `src/mcp_handlers/updates/pipeline.py:58-86` were already in place; the breakdown was always derivable, just not derived.
+
+- **The actual floor was post-lock enrichment**, specifically `enrich_learning_context` calling `audit_logger.query_audit_log` (`src/audit_log.py:54-84,729-778`), which scanned `.jsonl` files synchronously on the event loop. That blocking sync I/O was hogging the single shared ExecutorPool thread (introduced by PR #218); the other PG/KG-backed enrichers queued behind it.
+
+- **PR #533 collapsed it Python-side.** Side-by-side benchmark, same 4-way concurrent load, same DB:
+
+| Phase | Master `087404e7` | Branch `e83d2920` (PR #533) | Ratio |
+|---|---|---|---|
+| user-visible p50 | 5321 ms | **51 ms** | **104×** |
+| enrichment phase | 5070 ms | 22.7 ms | 224× |
+| checkin total | 5281 ms | 47 ms | 112× |
+| `enrich_learning_context` (directly fixed) | 3330 ms | 6.3 ms | 528× |
+| `enrich_knowledge_surfacing` (cascading) | 1784 ms | 5.3 ms | 337× |
+| `enrich_mirror_signals` (cascading) | 112 ms | 1.9 ms | 59× |
+
+The fix is a `loop.run_in_executor` wrap on the sync `query_audit_log` call plus an `asyncio.gather` refactor on the 5 independent reads in `build_temporal_context`. CLAUDE.md "Substrate Tax" pattern #2 (sync-client + executor) — already documented as the workaround for this exact bug class.
+
+**Bias accountability.** Memory `feedback_substrate-migration-status-quo-bias.md` flags that I reliably resist substrate migrations across sessions. This profile + fix lands in that pole. I'm flagging it explicitly: a Python-side fix collapsing 104× of the user-visible floor with one `run_in_executor` is exactly the shape v0.3 said it would no longer be moved by. The operator has two honest reads available:
+
+1. **The destination is still A′ on the architectural-ceiling argument.** The single-ExecutorPool-thread serialization is still real and is structural to anyio + asyncio + asyncpg on a shared event loop. Under N>>4 sustained concurrency this benchmark's 51ms p50 will degrade. The v0.3 framing was wrong about *which mechanism* dissolves under BEAM but right that *some* mechanism does. The fix doesn't change the destination; it changes the timeline pressure.
+
+2. **The destination is open to relitigation.** Every measured floor in the project's history has resolved as a Python-side fix. The CLAUDE.md "Substrate Tax" workarounds are workarounds-not-architecture, but they keep working. v0.3 already committed past this read once with eyes open; doing so a second time with the same data shape weakens the empirical posture. Stop sign #2 of v0.3 was conditional on "ODE profile lands and 6+ of the 7s is numpy/embedding compute" — the literal premise (locked-phase floor = 7s) didn't hold, so the conditional doesn't directly apply, but the spirit (Python-fixable floors keep collapsing) does.
+
+This amendment does not pick between (1) and (2). The v0.3 RESOLUTION explicitly named operator-decision as the criterion; same posture applies here. Wave 1 (Sentinel-on-BEAM, `com.unitares.sentinel-beam` PID 1782) is running and not affected by this finding. Wave 2 and Wave 3 sequencing are operator territory after this amendment is read.
+
+**What the amendment does NOT close:**
+- The single-ExecutorPool-thread serialization. PR #533 unhogged the executor thread for this specific bug; it did not eliminate the fact that all asyncpg goes through one thread. The deeper fix (multiple ExecutorPool instances, or `lite_safe`-skip-under-contention path in `pipeline.py:58-86`) is unaddressed.
+- Redis async clients are still not ExecutorPool-wrapped per CLAUDE.md; that's orthogonal to PR #533 but the same bug class.
+- The §129 14-day window (T+0 = 2026-05-19, closes 2026-06-02) is on its original auto-trigger via launchd one-shot `com.unitares.wave-1-section-129-reeval`. Condition 1 (incident_id wired) is still pending; this amendment does not satisfy it.
+
+**Artifacts:**
+- PR #533 — the fix + benchmark
+- Profile run: `/tmp/mcp_profile_analysis.txt`, `/tmp/mcp_phase_logs_tail100.txt`
+- Benchmark: `/tmp/loadgen_8770.py`, `/tmp/loadgen_baseline_out.txt`, `/tmp/loadgen_worktree_out.txt`, `/tmp/parse_phases.py`
+- Memory: `project_locked-phase-floor-is-the-ode.md` (the misattribution this amendment supersedes — needs a 2026-05-28 amendment of its own)
 
 ---
 
