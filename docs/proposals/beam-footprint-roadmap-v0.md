@@ -1,7 +1,7 @@
 # BEAM Footprint Roadmap
 
 **Created:** May 3, 2026
-**Last Updated:** May 28, 2026 (v0.3.1 amendment — ODE profile landed; the "7s locked-phase floor" framing falsified; post-lock enrichment was the actual user-visible floor and is now Python-fixed in PR #533)
+**Last Updated:** May 28, 2026 (v0.3.1b amendment — ODE profile landed; the "7s locked-phase floor" framing falsified; post-lock enrichment was the actual user-visible floor, Python-fixed in PR #533, and re-benchmarked at 8/16 concurrent workers)
 **Status:** v0.3 — destination is **A′ (committed, operator-decision-driven, 2026-05-05)**. Stateful coordination ports to BEAM in waves; stateless computation (numpy ODE, embeddings, LLM SDK calls) stays Python and is called from BEAM via Ports / HTTP. v0.2 had reopened the destination after PR #350's verdict; v0.3 closes it again on operator call after four Python-fixable PRs (#350 / #354 / #360 / #361) closed every measured floor without moving the user-visible ~11s p50 per-turn overhead. **Read the V0.3 RESOLUTION block first**, then the V0.3.1 amendment for what changed on 2026-05-28. v0 / v0.1 / v0.2 bodies preserved as historical record.
 **Council pass v0.1 (2026-05-04):** dialectic-knowledge-architect (2B/4C/3D/4N), feature-dev:code-reviewer (2B/3C/2D/2N), live-verifier (7 VERIFIED, 6 DRIFT, 0 REFUTED, 1 SOURCE_ONLY) — all findings folded inline. Architect C3 + reviewer C3 both flagged "v0.1 destination committed pre-experiment"; the v0.1 conditionality block was the fold for that finding, and v0.2 was the realization of it.
 **Council pass v0.3:** none on the migration call itself — that's an operator decision after a multi-session debate, and adversarial review of the call after operator commitment is the relitigation pattern v0.3 is trying to end. Council passes ARE expected on technical scope (Wave 1 supervisor topology, BEAM↔Python boundary contracts, identity-state migration) once those land as RFCs.
@@ -31,6 +31,20 @@ The v0.3 RESOLUTION's load-bearing unknown was the ODE profile — the 7s remain
 
 The fix is a `loop.run_in_executor` wrap on the sync `query_audit_log` call plus an `asyncio.gather` refactor on the 5 independent reads in `build_temporal_context`. CLAUDE.md "Substrate Tax" pattern #2 (sync-client + executor) — already documented as the workaround for this exact bug class.
 
+### V0.3.1b sustained-concurrency follow-up — 2026-05-28
+
+PR #533 merged before the recommended 8-16 worker benchmark ran. A follow-up run on current master (`13517b42`, governance MCP on `127.0.0.1:8767`) used the repo-captured load generator in `scripts/dev/process_update_loadgen.py`. Each worker minted a fresh identity and ran 16 `process_agent_update` calls with `response_mode=minimal`; this tests multi-agent concurrency, not same-agent mailbox serialization.
+
+| Run | Calls | Wall-clock | p50 | p95 | p99 | max | Errors |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| PR #533 4 workers | 32 | 0.5s | 51ms | n/a | 125ms | 125ms | 0 |
+| Master 8 workers | 128 | 4.5s | 281ms | 338ms | 360ms | 378ms | 0 |
+| Master 16 workers | 256 | 8.9s | 554ms | 622ms | 641ms | 647ms | 0 |
+
+**Interpretation.** The single-ExecutorPool-thread ceiling is still visible: p50 grows roughly with worker count. But the ceiling under this synthetic fresh-agent load is sub-second at 16 concurrent agents, not multi-second. That materially weakens "Wave 3 as urgent latency rescue" and strengthens "Wave 3 only if the coordination/ownership argument survives its own gates."
+
+This is not the Wave 3 RFC §0(A.2) production-telemetry measurement by itself. The run uses fresh synthetic identities, short audit histories, no resident traffic mix, and one local server window. It is still enough to require a production telemetry read before citing old 5-11s `process_agent_update` p99 as current evidence for handler-dispatch migration pressure.
+
 **Bias accountability.** Memory `feedback_substrate-migration-status-quo-bias.md` flags that I reliably resist substrate migrations across sessions. This profile + fix lands in that pole. I'm flagging it explicitly: a Python-side fix collapsing 104× of the user-visible floor with one `run_in_executor` is exactly the shape v0.3 said it would no longer be moved by. The operator has two honest reads available:
 
 1. **The destination is still A′ on the architectural-ceiling argument.** The single-ExecutorPool-thread serialization is still real and is structural to anyio + asyncio + asyncpg on a shared event loop. Under N>>4 sustained concurrency this benchmark's 51ms p50 will degrade. The v0.3 framing was wrong about *which mechanism* dissolves under BEAM but right that *some* mechanism does. The fix doesn't change the destination; it changes the timeline pressure.
@@ -48,6 +62,8 @@ This amendment does not pick between (1) and (2). The v0.3 RESOLUTION explicitly
 - PR #533 — the fix + benchmark
 - Profile run: `/tmp/mcp_profile_analysis.txt`, `/tmp/mcp_phase_logs_tail100.txt`
 - Benchmark: `/tmp/loadgen_8770.py`, `/tmp/loadgen_baseline_out.txt`, `/tmp/loadgen_worktree_out.txt`, `/tmp/parse_phases.py`
+- Reproducible benchmark tooling: `scripts/dev/process_update_loadgen.py`, `scripts/dev/parse_update_phase_logs.py`
+- Sustained local benchmark outputs: `/tmp/process_update_loadgen_8x16.json`, `/tmp/process_update_loadgen_16x16.json`
 - Memory: `project_locked-phase-floor-is-the-ode.md` (the misattribution this amendment supersedes — needs a 2026-05-28 amendment of its own)
 
 ---
