@@ -32,9 +32,13 @@ async def test_reconstruct_eisv_series_maps_rows_to_per_dim_lists():
     """Behavior: rows in window get bucketed into {E, I, S, V} → list[float]
     in recorded_at-ascending order.
 
-    Mocks self.acquire() context manager returning a connection whose fetch()
-    returns three synthetic rows. Verifies dimension-key mapping
-    (entropy→E, integrity→I, stability_index→S, volatility→V) and order.
+    Verifies dimension-key mapping per db/base.py:50-57:
+      state_json.E → E, integrity → I, entropy → S, volatility → V.
+    The stability_index column was retired in commit 20684dd1 (2026-03-26)
+    and is no longer read. The earlier version of this test had E and S
+    swapped — entropy was mapped to E and the dead stability_index column
+    was mapped to S — which silently produced wrong R1 components for ~2
+    months until the reader was corrected.
     """
     from src.db.mixins.state import StateMixin
 
@@ -46,11 +50,15 @@ async def test_reconstruct_eisv_series_maps_rows_to_per_dim_lists():
         async def __aenter__(self):
             conn = AsyncMock()
             # Three rows ordered ascending by recorded_at; columns match the
-            # SQL projection in the helper.
+            # SQL projection in the helper. Distinct values per channel let
+            # any mismapping surface in the assertions below.
             conn.fetch = AsyncMock(return_value=[
-                _row(entropy=0.5, integrity=0.6, stability_index=0.4, volatility=0.1),
-                _row(entropy=0.6, integrity=0.7, stability_index=0.4, volatility=0.2),
-                _row(entropy=0.7, integrity=0.8, stability_index=0.5, volatility=0.3),
+                _row(entropy=0.5, integrity=0.6, volatility=0.1,
+                     state_json={"E": 0.9}),
+                _row(entropy=0.6, integrity=0.7, volatility=0.2,
+                     state_json={"E": 0.85}),
+                _row(entropy=0.7, integrity=0.8, volatility=0.3,
+                     state_json={"E": 0.8}),
             ])
             return conn
 
@@ -65,9 +73,9 @@ async def test_reconstruct_eisv_series_maps_rows_to_per_dim_lists():
     )
 
     assert set(result.keys()) == {"E", "I", "S", "V"}
-    assert result["E"] == [0.5, 0.6, 0.7]
+    assert result["E"] == [0.9, 0.85, 0.8]
     assert result["I"] == [0.6, 0.7, 0.8]
-    assert result["S"] == [0.4, 0.4, 0.5]
+    assert result["S"] == [0.5, 0.6, 0.7]
     assert result["V"] == [0.1, 0.2, 0.3]
 
 
