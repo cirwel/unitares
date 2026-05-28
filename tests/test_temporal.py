@@ -44,6 +44,9 @@ def test_kg_query_accepts_created_after():
 
 # ─── Duration formatter tests ─────────────────────────────────────
 
+import asyncio
+import time
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime, timezone, timedelta
@@ -371,3 +374,63 @@ async def test_temporal_enrichment_silence():
         await enrich_temporal_context(ctx)
 
         assert "temporal_context" not in ctx.response_data
+
+
+@pytest.mark.asyncio
+async def test_temporal_phase_2_reads_run_concurrently():
+    """The 4 per-identity reads (sessions/last_session/latest_state/history)
+    must run concurrently via asyncio.gather, not sequentially.
+
+    Under N-way concurrent enrichment, sequential awaits serialize through
+    the shared executor thread and turn a ~5ms enricher into a ~500ms one
+    (post-lock enrichment profile, 2026-05-28). This regression test
+    inserts a 50ms sleep on each mocked read; if they run sequentially the
+    total is ~200ms, if concurrently it's ~50ms. Allows ~120ms of headroom
+    for asyncio scheduling and slow CI.
+    """
+    now = datetime.now(timezone.utc)
+
+    db = AsyncMock()
+    db.get_identity.return_value = MagicMock(identity_id=1)
+
+    async def _slow(*args, **kwargs):
+        await asyncio.sleep(0.05)
+        return []
+
+    db.get_active_sessions_for_identity.side_effect = _slow
+    db.get_last_inactive_session.side_effect = _slow
+    db.get_latest_agent_state.side_effect = _slow
+    db.get_agent_state_history.side_effect = _slow
+    db.kg_query.return_value = []
+
+    start = time.perf_counter()
+    await build_temporal_context("test-uuid", db, now=now)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 0.170, (
+        f"phase 2 reads serialized; elapsed {elapsed:.3f}s suggests "
+        f"sequential awaits instead of asyncio.gather"
+    )
+
+
+@pytest.mark.asyncio
+async def test_temporal_phase_2_tolerates_single_failure(mock_db):
+    """If one of the gathered reads raises, others still produce signals
+    (matches the pre-gather per-call try/except semantics).
+    """
+    now = datetime.now(timezone.utc)
+    mock_db.get_identity.return_value = MagicMock(identity_id=1)
+
+    mock_db.get_active_sessions_for_identity.return_value = [
+        MagicMock(created_at=now - timedelta(hours=3))
+    ]
+    mock_db.get_last_inactive_session.side_effect = RuntimeError("db go boom")
+    mock_db.get_latest_agent_state.return_value = MagicMock(
+        recorded_at=now - timedelta(minutes=2)
+    )
+    mock_db.get_agent_state_history.return_value = []
+    mock_db.kg_query.return_value = []
+
+    result = await build_temporal_context("test-uuid", mock_db, now=now)
+    assert result is not None
+    assert "Session: 3h" in result  # other reads still produced signal
