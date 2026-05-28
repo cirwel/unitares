@@ -1,12 +1,15 @@
 from datetime import datetime, timedelta, timezone
 
 from scripts.analysis.eisv_skeptic_report import (
+    ModelScore,
     OutcomeRow,
     auc_score,
     brier_score,
     build_model_scores,
+    build_report,
     quantile_cuts,
     risk_bucket_rates,
+    score_deltas_vs_baseline,
     smoothed_rate,
 )
 
@@ -86,3 +89,42 @@ def test_build_model_scores_includes_prior_risk_when_covered():
     names = {score.name for score in scores}
     assert "global_bad_rate" in names
     assert "prior_risk_binned" in names
+
+
+def test_score_deltas_vs_baseline_reports_auc_and_brier_lift():
+    deltas = score_deltas_vs_baseline([
+        ModelScore("previous_outcome_bad", 70, 30, 30, auc=0.70, brier=0.120),
+        ModelScore("prior_risk_binned", 70, 30, 30, auc=0.73, brier=0.110),
+        ModelScore("prior_phi_binned", 70, 30, 30, auc=0.74, brier=0.130),
+        ModelScore("prior_verdict", 70, 30, 30, auc=None, brier=0.115),
+    ])
+
+    assert [delta.name for delta in deltas] == ["prior_risk_binned", "prior_phi_binned"]
+    assert deltas[0].auc_delta == 0.03
+    assert deltas[0].brier_improvement == 0.01
+    assert deltas[0].beats_baseline is True
+    assert deltas[1].auc_delta == 0.04
+    assert deltas[1].brier_improvement == -0.01
+    assert deltas[1].beats_baseline is False
+
+
+def test_build_report_includes_ablation_delta_section():
+    rows = []
+    for idx in range(120):
+        bad = idx >= 96
+        risk = 0.9 if bad else 0.1
+        rows.append(_row(idx, bad=bad, risk=risk, agent=f"agent-{idx % 6}"))
+
+    report = build_report(
+        rows,
+        scope="task",
+        window_days=90,
+        lead_minutes=30,
+        train_fraction=0.7,
+        generated_at=rows[0].ts + timedelta(days=1),
+    )
+
+    assert "## Ablation vs Previous-Outcome Baseline" in report
+    assert "| `prior_risk_binned` |" in report
+    assert "AUC delta" in report
+    assert "Brier improvement" in report

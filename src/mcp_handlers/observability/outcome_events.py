@@ -273,6 +273,7 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     detail["eprocess_eligible"] = eprocess_eligible
     detail["prediction_id"] = prediction_id
     detail["prediction_source"] = prediction_source
+    detail["prediction_binding"] = prediction_binding
     # Pydantic validation (params_step.py) fills defaults before the MCP
     # entry point runs, so the schema default ("agent_reported_tool_result")
     # is already present in `arguments` for that path. In-process callers

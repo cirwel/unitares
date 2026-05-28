@@ -47,6 +47,14 @@ TASK_OUTCOMES = (
 
 SMOOTHING_ALPHA = 1.0
 
+EISV_PRIOR_STATE_MODELS = (
+    "previous_bad_plus_prior_risk",
+    "prior_risk_binned",
+    "prior_phi_binned",
+    "prior_s_binned",
+    "prior_verdict",
+)
+
 
 @dataclass(frozen=True)
 class OutcomeRow:
@@ -87,6 +95,54 @@ class ModelScore:
     auc: float | None
     brier: float | None
     note: str = ""
+
+
+@dataclass(frozen=True)
+class ScoreDelta:
+    """A paired scoreboard delta against a named boring baseline."""
+
+    name: str
+    baseline_name: str
+    auc_delta: float
+    brier_improvement: float
+    beats_baseline: bool
+
+
+def score_deltas_vs_baseline(
+    scores: Sequence[ModelScore],
+    *,
+    baseline_name: str = "previous_outcome_bad",
+    candidate_names: Sequence[str] = EISV_PRIOR_STATE_MODELS,
+) -> list[ScoreDelta]:
+    """Return AUC/Brier deltas for EISV/prior-state candidates vs baseline.
+
+    Positive AUC delta means better ranking than the baseline. Positive Brier
+    improvement means lower probability error than the baseline. Candidates with
+    missing AUC or Brier are skipped so single-class/sparse slices do not pretend
+    to have measurable lift.
+    """
+    baseline = next((score for score in scores if score.name == baseline_name), None)
+    if baseline is None or baseline.auc is None or baseline.brier is None:
+        return []
+
+    deltas: list[ScoreDelta] = []
+    for score in scores:
+        if score.name not in candidate_names:
+            continue
+        if score.auc is None or score.brier is None:
+            continue
+        auc_delta = round(score.auc - baseline.auc, 12)
+        brier_improvement = round(baseline.brier - score.brier, 12)
+        deltas.append(
+            ScoreDelta(
+                name=score.name,
+                baseline_name=baseline_name,
+                auc_delta=auc_delta,
+                brier_improvement=brier_improvement,
+                beats_baseline=auc_delta > 0.0 and brier_improvement > 0.0,
+            )
+        )
+    return deltas
 
 
 def _to_float(value: Any) -> float | None:
@@ -767,6 +823,25 @@ def build_report(
             f"| {_fmt_float(score.auc, 3)} | {_fmt_float(score.brier, 4)} | {score.note} |"
         )
     a("")
+
+    a("## Ablation vs Previous-Outcome Baseline")
+    a("")
+    a("Positive AUC delta means better ranking; positive Brier improvement means lower probability error.")
+    a("")
+    a("| EISV/prior-state model | AUC delta | Brier improvement | Beats both? |")
+    a("|---|---:|---:|---|")
+    deltas = score_deltas_vs_baseline(scores)
+    if deltas:
+        for delta in deltas:
+            a(
+                f"| `{delta.name}` | {_fmt_float(delta.auc_delta, 3)} "
+                f"| {_fmt_float(delta.brier_improvement, 4)} "
+                f"| {'yes' if delta.beats_baseline else 'no'} |"
+            )
+    else:
+        a("| (insufficient paired baseline/candidate metrics) | - | - | no |")
+    a("")
+
     a("## Conclusion")
     a("")
     a(conclusion)

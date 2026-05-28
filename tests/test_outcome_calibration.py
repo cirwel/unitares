@@ -808,6 +808,8 @@ class TestPredictionBindingEcho:
 
         parsed = parse_result(result)
         assert parsed.get('prediction_binding') == 'registry'
+        _, db_kwargs = mock_db.record_outcome_event.call_args
+        assert db_kwargs['detail']['prediction_binding'] == 'registry'
         # Record is consumed
         assert open_predictions[pid].get('consumed') is True
 
@@ -840,6 +842,8 @@ class TestPredictionBindingEcho:
 
         parsed = parse_result(result)
         assert parsed.get('prediction_binding') == 'missing_prediction'
+        _, db_kwargs = mock_db.record_outcome_event.call_args
+        assert db_kwargs['detail']['prediction_binding'] == 'missing_prediction'
 
     @pytest.mark.asyncio
     async def test_binding_ttl_expired_when_record_present_but_old(self):
@@ -875,6 +879,8 @@ class TestPredictionBindingEcho:
 
         parsed = parse_result(result)
         assert parsed.get('prediction_binding') == 'ttl_expired_fallback'
+        _, db_kwargs = mock_db.record_outcome_event.call_args
+        assert db_kwargs['detail']['prediction_binding'] == 'ttl_expired_fallback'
         # Record must NOT have been consumed
         assert open_predictions[pid].get('consumed') is not True
 
@@ -905,6 +911,8 @@ class TestPredictionBindingEcho:
 
         parsed = parse_result(result)
         assert parsed.get('prediction_binding') == 'argument_fallback'
+        _, db_kwargs = mock_db.record_outcome_event.call_args
+        assert db_kwargs['detail']['prediction_binding'] == 'argument_fallback'
 
     @pytest.mark.asyncio
     async def test_binding_no_binding_when_all_fallbacks_fail(self):
@@ -927,6 +935,8 @@ class TestPredictionBindingEcho:
 
         parsed = parse_result(result)
         assert parsed.get('prediction_binding') == 'no_binding'
+        _, db_kwargs = mock_db.record_outcome_event.call_args
+        assert db_kwargs['detail']['prediction_binding'] == 'no_binding'
 
 
 # ============================================================================
