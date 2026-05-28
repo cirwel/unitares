@@ -1116,6 +1116,104 @@ class TestKnowledgeWriteBroadcast:
         assert data["success"] is True
 
 
+class TestKnowledgeReadBroadcast:
+    """Read-side audit coverage. Without these emits the central usage
+    question for the KG ("is anyone pulling from this?") is unanswerable
+    from audit.events — only writes show up. Pin the four read paths."""
+
+    @pytest.mark.asyncio
+    async def test_get_emits_knowledge_read(self, patch_common, registered_agent):
+        mock_mcp_server, mock_graph = patch_common
+        mock_graph.get_agent_discoveries.return_value = [
+            make_discovery(id="d1", agent_id=registered_agent),
+            make_discovery(id="d2", agent_id=registered_agent),
+        ]
+        from src.mcp_handlers.knowledge.handlers import handle_get_knowledge_graph
+
+        with patch(
+            "src.mcp_handlers.knowledge.handlers.broadcaster_instance.broadcast_event",
+            new_callable=AsyncMock,
+        ) as bc:
+            await handle_get_knowledge_graph({"agent_id": registered_agent})
+
+        read_calls = [c for c in bc.await_args_list if c.args and c.args[0] == "knowledge_read"]
+        assert read_calls, "expected knowledge_read to be emitted on get"
+        payload = read_calls[0].kwargs["payload"]
+        assert payload["action"] == "get"
+        assert payload["target_agent_id"] == registered_agent
+        assert payload["result_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_list_emits_knowledge_read(self, patch_common):
+        mock_mcp_server, mock_graph = patch_common
+        mock_graph.get_stats.return_value = {
+            "total_discoveries": 7,
+            "total_agents": 3,
+            "scope": {"epoch_scope": "current", "including_cold": False},
+        }
+        from src.mcp_handlers.knowledge.handlers import handle_list_knowledge_graph
+
+        with patch(
+            "src.mcp_handlers.knowledge.handlers.broadcaster_instance.broadcast_event",
+            new_callable=AsyncMock,
+        ) as bc:
+            await handle_list_knowledge_graph({})
+
+        read_calls = [c for c in bc.await_args_list if c.args and c.args[0] == "knowledge_read"]
+        assert read_calls, "expected knowledge_read to be emitted on list"
+        payload = read_calls[0].kwargs["payload"]
+        assert payload["action"] == "list"
+
+    @pytest.mark.asyncio
+    async def test_details_emits_knowledge_read_with_writer_agent(
+        self, patch_common, registered_agent,
+    ):
+        mock_mcp_server, mock_graph = patch_common
+        writer_uuid = "11111111-1111-4111-8111-111111111111"
+        mock_graph.get_discovery.return_value = make_discovery(
+            id="disc-xyz", agent_id=writer_uuid, summary="something",
+        )
+        from src.mcp_handlers.knowledge.handlers import handle_get_discovery_details
+
+        with patch(
+            "src.mcp_handlers.knowledge.handlers.broadcaster_instance.broadcast_event",
+            new_callable=AsyncMock,
+        ) as bc, patch(
+            "src.mcp_handlers.context.get_context_agent_id",
+            return_value=registered_agent,
+        ):
+            await handle_get_discovery_details({"discovery_id": "disc-xyz"})
+
+        read_calls = [c for c in bc.await_args_list if c.args and c.args[0] == "knowledge_read"]
+        assert read_calls, "expected knowledge_read to be emitted on details"
+        call = read_calls[0]
+        payload = call.kwargs["payload"]
+        assert payload["action"] == "details"
+        assert payload["discovery_id"] == "disc-xyz"
+        assert payload["writer_agent_id"] == writer_uuid
+
+    @pytest.mark.asyncio
+    async def test_broadcast_failure_does_not_break_read(
+        self, patch_common, registered_agent,
+    ):
+        """A dead broadcaster on the read path must not fail the read."""
+        mock_mcp_server, mock_graph = patch_common
+        mock_graph.get_agent_discoveries.return_value = [
+            make_discovery(id="d1", agent_id=registered_agent),
+        ]
+        from src.mcp_handlers.knowledge.handlers import handle_get_knowledge_graph
+
+        with patch(
+            "src.mcp_handlers.knowledge.handlers.broadcaster_instance.broadcast_event",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("broadcaster dead"),
+        ):
+            result = await handle_get_knowledge_graph({"agent_id": registered_agent})
+
+        data = parse_result(result)
+        assert data["success"] is True
+
+
 class TestLeaveNoteTagPassthrough:
     """leave_note must not auto-inject `ephemeral` into caller-supplied tags.
 

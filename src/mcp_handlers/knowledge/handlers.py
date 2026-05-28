@@ -124,6 +124,44 @@ async def _broadcast_knowledge_write(discovery, agent_id: str) -> None:
         logger.debug("knowledge_write broadcast skipped: %s", exc)
 
 
+async def _broadcast_knowledge_read(
+    action: str,
+    reader_agent_id: Optional[str],
+    payload: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Emit a ``knowledge_read`` event so read traffic is observable.
+
+    Writes have been audited since the broadcaster shipped; reads were not,
+    which made the central usage question for the KG ("is anyone actually
+    pulling from this?") unanswerable from audit.events. This helper closes
+    that gap. ``action`` is one of ``search``/``get``/``list``/``details``;
+    when knowable (``details``, search-result enumeration), the payload
+    carries the writer agent_id so cross-agent reads can be distinguished
+    from self-reads in SQL.
+    """
+    try:
+        body: Dict[str, Any] = {"action": action}
+        if payload:
+            body.update(payload)
+        await broadcaster_instance.broadcast_event(
+            "knowledge_read",
+            agent_id=reader_agent_id,
+            payload=body,
+        )
+    except Exception as exc:
+        logger.debug("knowledge_read broadcast skipped: %s", exc)
+
+
+def _resolve_reader_agent_id(arguments: Dict[str, Any]) -> Optional[str]:
+    """Best-effort reader-identity extraction for read-side audit events."""
+    from ..context import get_context_agent_id
+    return (
+        arguments.get("_agent_uuid")
+        or get_context_agent_id()
+        or arguments.get("agent_id")
+    )
+
+
 def _compute_staleness_warning(discovery, current_server_version: str) -> Optional[str]:
     """Flag open entries that are likely stale (>60 days old or 2+ minor versions behind)."""
     warning_parts = []
@@ -1587,6 +1625,19 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
 
             asyncio.create_task(_touch_referenced([d.id for d in results]))
 
+        writer_sample = list({d.agent_id for d in results if d.agent_id})[:10]
+        await _broadcast_knowledge_read(
+            "search",
+            _resolve_reader_agent_id(arguments),
+            payload={
+                "result_count": len(results),
+                "query_present": bool(query_text),
+                "query_term_count": query_term_count,
+                "search_mode": locals().get("search_mode") or search_mode_param,
+                "writer_agent_ids": writer_sample,
+                "filter_agent_id": arguments.get("agent_id"),
+            },
+        )
         return success_response(response_data, arguments=arguments)
 
     except Exception as e:
@@ -1652,8 +1703,17 @@ async def handle_get_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Text
         if limit and len(discoveries) == limit:
             response_data["_more_available"] = f"Results limited to {limit}. Use limit=N to get more."
 
+        await _broadcast_knowledge_read(
+            "get",
+            _resolve_reader_agent_id(arguments),
+            payload={
+                "target_agent_id": agent_id,
+                "result_count": len(discoveries),
+                "include_details": bool(include_details),
+            },
+        )
         return success_response(response_data, arguments=arguments)
-        
+
     except Exception as e:
         return [error_response(f"Failed to retrieve knowledge: {str(e)}")]
 
@@ -1695,6 +1755,14 @@ async def handle_list_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Tex
         scope_summary = (
             f"epoch_scope={stats.get('scope', {}).get('epoch_scope', '?')}, "
             f"including_cold={stats.get('scope', {}).get('including_cold', '?')}"
+        )
+        await _broadcast_knowledge_read(
+            "list",
+            _resolve_reader_agent_id(arguments),
+            payload={
+                "epoch_scope": stats.get("scope", {}).get("epoch_scope") if isinstance(stats, dict) else None,
+                "including_cold": including_cold,
+            },
         )
         return success_response({
             "stats": stats,
@@ -1955,6 +2023,15 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
 
         asyncio.create_task(_touch(discovery_id))
 
+        await _broadcast_knowledge_read(
+            "details",
+            _resolve_reader_agent_id(arguments),
+            payload={
+                "discovery_id": discovery_id,
+                "writer_agent_id": getattr(discovery, "agent_id", None),
+                "include_response_chain": bool(arguments.get("include_response_chain", False)),
+            },
+        )
         return success_response(response, arguments=arguments)
 
     except Exception as e:
