@@ -96,7 +96,7 @@ class EISVBroadcaster:
             lifecycle_paused, lifecycle_resumed, lifecycle_archived,
             lifecycle_created, lifecycle_loop_detected, lifecycle_stuck_detected,
             identity_drift, identity_assurance_change,
-            knowledge_write, knowledge_confidence_clamped,
+            knowledge_write, knowledge_read, knowledge_confidence_clamped,
             circuit_breaker_trip, circuit_breaker_reset
         """
         event = {
