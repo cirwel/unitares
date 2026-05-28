@@ -16,6 +16,8 @@
 | `check_ci_python_version_sync.py` | Verify CI Python version matches project |
 | `doc_audit.sh` | Check all three Unitares repos for stale docs |
 | `file_lease.py` | Claim BEAM lease-plane `file://` surfaces before code edits; `guard --changed` wraps commands, `hold --changed` refreshes and heartbeats during agent work |
+| `parse_update_phase_logs.py` | Parse `[checkin_phases]` and `[enrichment_phases]` timing lines from MCP logs |
+| `process_update_loadgen.py` | Drive concurrent `process_agent_update` load against the local governance MCP server |
 | `test-cache.sh` | Tree-hash pytest cache (skips if tests already passed against this exact working tree) |
 | `update_docs_tool_count.py` | Update tool counts in documentation |
 | `version_manager.py` | Version management utilities |
