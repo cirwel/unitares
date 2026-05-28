@@ -6,6 +6,7 @@ Every function is fail-safe: wraps its logic in try/except so a single
 enrichment failure never crashes the update.
 """
 
+import asyncio
 import json
 import os
 from datetime import datetime, timezone
@@ -974,7 +975,16 @@ async def enrich_learning_context(ctx: UpdateContext) -> None:
         try:
             from src.audit_log import AuditLogger
             audit_logger = AuditLogger()
-            recent_events = audit_logger.query_audit_log(agent_id=ctx.agent_id, limit=10)
+            # query_audit_log does a reverse-scan over .jsonl files (sync
+            # blocking I/O on the event loop). Push to the default executor
+            # so other handlers can progress while the scan runs — the scan
+            # itself is the ~700ms floor on agents with deep audit history
+            # (post-lock enrichment profile, 2026-05-28).
+            loop = asyncio.get_event_loop()
+            recent_events = await loop.run_in_executor(
+                None,
+                lambda: audit_logger.query_audit_log(agent_id=ctx.agent_id, limit=10),
+            )
             if recent_events:
                 recent_decisions = []
                 for event in recent_events[:5]:
