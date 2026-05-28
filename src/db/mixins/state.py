@@ -367,7 +367,7 @@ class StateMixin:
         async with self.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT s.entropy, s.integrity, s.stability_index, s.volatility,
+                SELECT s.entropy, s.integrity, s.volatility, s.state_json,
                        s.recorded_at
                 FROM core.agent_state s
                 JOIN core.identities i ON i.identity_id = s.identity_id
@@ -380,11 +380,17 @@ class StateMixin:
                 agent_id, epoch, window,
             )
 
+        # Column → EISV mapping per db/base.py:50-57: state_json.E → E,
+        # integrity → I, entropy → S, volatility → V. The stability_index
+        # column was retired in commit 20684dd1 (2026-03-26) and is no
+        # longer read; the writer hardcodes 0.0.
         series: Dict[str, List[float]] = {"E": [], "I": [], "S": [], "V": []}
         for row in rows:
-            series["E"].append(float(row["entropy"]))
+            sj_raw = row["state_json"]
+            sj = json.loads(sj_raw) if isinstance(sj_raw, str) else (sj_raw or {})
+            series["E"].append(float(sj.get("E", 0.5)))
             series["I"].append(float(row["integrity"]))
-            series["S"].append(float(row["stability_index"]))
+            series["S"].append(float(row["entropy"]))
             series["V"].append(float(row["volatility"]))
         return series
 
