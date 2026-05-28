@@ -83,6 +83,7 @@ class OutcomeRow:
     snapshot_v: float | None
     snapshot_phi: float | None
     snapshot_coherence: float | None
+    row_key: str | None = None
     previous_bad: bool | None = None
 
 
@@ -95,6 +96,10 @@ class ModelScore:
     auc: float | None
     brier: float | None
     note: str = ""
+    scored_row_keys: tuple[Any, ...] = ()
+    y_true: tuple[int, ...] = ()
+    y_prob: tuple[float, ...] = ()
+    y_auc_score: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -105,7 +110,69 @@ class ScoreDelta:
     baseline_name: str
     auc_delta: float
     brier_improvement: float
+    paired_n: int
     beats_baseline: bool
+
+
+def _score_row_key(row: OutcomeRow) -> Any:
+    return row.row_key if row.row_key is not None else id(row)
+
+
+def _paired_model_metrics(
+    baseline: ModelScore,
+    candidate: ModelScore,
+) -> tuple[float | None, float | None, float | None, float | None, int]:
+    """Return candidate and baseline metrics over the candidate-covered rows."""
+    baseline_n = len(baseline.scored_row_keys)
+    candidate_n = len(candidate.scored_row_keys)
+    if not (
+        baseline_n
+        and len(baseline.y_true) == baseline_n
+        and len(baseline.y_prob) == baseline_n
+        and len(baseline.y_auc_score) == baseline_n
+        and candidate_n
+        and len(candidate.y_true) == candidate_n
+        and len(candidate.y_prob) == candidate_n
+        and len(candidate.y_auc_score) == candidate_n
+    ):
+        return (
+            candidate.auc,
+            candidate.brier,
+            baseline.auc,
+            baseline.brier,
+            min(baseline.n_test_scored, candidate.n_test_scored),
+        )
+
+    baseline_by_key = {
+        key: idx for idx, key in enumerate(baseline.scored_row_keys)
+    }
+    paired_true: list[int] = []
+    paired_candidate_prob: list[float] = []
+    paired_candidate_auc_score: list[float] = []
+    paired_baseline_prob: list[float] = []
+    paired_baseline_auc_score: list[float] = []
+    for candidate_idx, key in enumerate(candidate.scored_row_keys):
+        baseline_idx = baseline_by_key.get(key)
+        if baseline_idx is None:
+            continue
+        if baseline.y_true[baseline_idx] != candidate.y_true[candidate_idx]:
+            continue
+        paired_true.append(candidate.y_true[candidate_idx])
+        paired_candidate_prob.append(candidate.y_prob[candidate_idx])
+        paired_candidate_auc_score.append(candidate.y_auc_score[candidate_idx])
+        paired_baseline_prob.append(baseline.y_prob[baseline_idx])
+        paired_baseline_auc_score.append(baseline.y_auc_score[baseline_idx])
+
+    if not paired_true:
+        return None, None, None, None, 0
+
+    return (
+        auc_score(paired_true, paired_candidate_auc_score),
+        brier_score(paired_true, paired_candidate_prob),
+        auc_score(paired_true, paired_baseline_auc_score),
+        brier_score(paired_true, paired_baseline_prob),
+        len(paired_true),
+    )
 
 
 def score_deltas_vs_baseline(
@@ -122,23 +189,32 @@ def score_deltas_vs_baseline(
     to have measurable lift.
     """
     baseline = next((score for score in scores if score.name == baseline_name), None)
-    if baseline is None or baseline.auc is None or baseline.brier is None:
+    if baseline is None:
         return []
 
     deltas: list[ScoreDelta] = []
     for score in scores:
         if score.name not in candidate_names:
             continue
-        if score.auc is None or score.brier is None:
+        candidate_auc, candidate_brier, baseline_auc, baseline_brier, paired_n = (
+            _paired_model_metrics(baseline, score)
+        )
+        if (
+            candidate_auc is None
+            or candidate_brier is None
+            or baseline_auc is None
+            or baseline_brier is None
+        ):
             continue
-        auc_delta = round(score.auc - baseline.auc, 12)
-        brier_improvement = round(baseline.brier - score.brier, 12)
+        auc_delta = round(candidate_auc - baseline_auc, 12)
+        brier_improvement = round(baseline_brier - candidate_brier, 12)
         deltas.append(
             ScoreDelta(
                 name=score.name,
                 baseline_name=baseline_name,
                 auc_delta=auc_delta,
                 brier_improvement=brier_improvement,
+                paired_n=paired_n,
                 beats_baseline=auc_delta > 0.0 and brier_improvement > 0.0,
             )
         )
@@ -282,11 +358,13 @@ def _score_predictions(
     y_true: list[int] = []
     y_prob: list[float] = []
     y_auc_score: list[float] = []
+    scored_row_keys: list[Any] = []
     for row in test_rows:
         prediction = predict_fn(row)
         if prediction is None:
             continue
         probability = _clamp_probability(float(prediction))
+        scored_row_keys.append(_score_row_key(row))
         y_true.append(int(row.is_bad))
         y_prob.append(probability)
         if raw_score_fn is None:
@@ -302,6 +380,10 @@ def _score_predictions(
         auc=auc_score(y_true, y_auc_score),
         brier=brier_score(y_true, y_prob),
         note=note,
+        scored_row_keys=tuple(scored_row_keys),
+        y_true=tuple(y_true),
+        y_prob=tuple(y_prob),
+        y_auc_score=tuple(y_auc_score),
     )
 
 
@@ -614,41 +696,34 @@ def summarize_conclusion(rows: Sequence[OutcomeRow], scores: Sequence[ModelScore
     if bad < 10:
         return "INCONCLUSIVE: fewer than 10 bad outcomes; predictive lift is too fragile."
 
-    baseline = next((s for s in scores if s.name == "previous_outcome_bad"), None)
-    combined = next((s for s in scores if s.name == "previous_bad_plus_prior_risk"), None)
-    risk = next((s for s in scores if s.name == "prior_risk_binned"), None)
-    phi = next((s for s in scores if s.name == "prior_phi_binned"), None)
-    entropy = next((s for s in scores if s.name == "prior_s_binned"), None)
-    verdict = next((s for s in scores if s.name == "prior_verdict"), None)
-
-    candidates = [
-        s
-        for s in (combined, risk, phi, entropy, verdict)
-        if s and s.auc is not None and s.brier is not None
-    ]
-    if not candidates:
+    deltas = score_deltas_vs_baseline(scores)
+    if not deltas:
         return "INCONCLUSIVE: EISV/prior-state coverage is too low for model comparison."
 
-    best = max(candidates, key=lambda s: (s.auc or 0.0, -(s.brier or 1.0)))
-    if baseline and baseline.auc is not None and baseline.brier is not None:
-        auc_lift = (best.auc or 0.0) - baseline.auc
-        brier_lift = baseline.brier - (best.brier or baseline.brier)
-        if auc_lift >= 0.03 and brier_lift >= 0.001:
-            return (
-                "KEEP TESTING: EISV/prior-state features show modest lift over the "
-                f"previous-outcome baseline (best={best.name}, AUC lift={auc_lift:.3f}, "
-                f"Brier improvement={brier_lift:.4f})."
-            )
-        if auc_lift <= 0.0 or brier_lift <= 0.0:
-            return (
-                "SKEPTICAL: EISV/prior-state features do not beat the boring "
-                "previous-outcome baseline across both ranking and calibration "
-                f"in this split (best={best.name}, AUC lift={auc_lift:.3f}, "
-                f"Brier improvement={brier_lift:.4f})."
-            )
-    if best.auc is not None and best.auc < 0.55:
+    best_delta = max(
+        deltas,
+        key=lambda d: (d.beats_baseline, d.auc_delta, d.brier_improvement),
+    )
+    best = next((s for s in scores if s.name == best_delta.name), None)
+    if best_delta.auc_delta >= 0.03 and best_delta.brier_improvement >= 0.001:
+        return (
+            "KEEP TESTING: EISV/prior-state features show modest lift over the "
+            f"previous-outcome baseline (best={best_delta.name}, "
+            f"paired N={best_delta.paired_n}, AUC lift={best_delta.auc_delta:.3f}, "
+            f"Brier improvement={best_delta.brier_improvement:.4f})."
+        )
+    if best_delta.auc_delta <= 0.0 or best_delta.brier_improvement <= 0.0:
+        return (
+            "SKEPTICAL: EISV/prior-state features do not beat the boring "
+            "previous-outcome baseline across both ranking and calibration "
+            f"in this split (best={best_delta.name}, paired N={best_delta.paired_n}, "
+            f"AUC lift={best_delta.auc_delta:.3f}, "
+            f"Brier improvement={best_delta.brier_improvement:.4f})."
+        )
+    if best is not None and best.auc is not None and best.auc < 0.55:
         return f"SKEPTICAL: best EISV/prior-state AUC is weak ({best.name} AUC={best.auc:.3f})."
-    return f"WEAK SIGNAL: {best.name} has some predictive signal, but compare across more windows."
+    best_name = best.name if best is not None else best_delta.name
+    return f"WEAK SIGNAL: {best_name} has some predictive signal, but compare across more windows."
 
 
 def build_report(
@@ -826,20 +901,25 @@ def build_report(
 
     a("## Ablation vs Previous-Outcome Baseline")
     a("")
+    a(
+        "Deltas compare each candidate against the previous-outcome baseline over "
+        "the candidate-scored rows."
+    )
     a("Positive AUC delta means better ranking; positive Brier improvement means lower probability error.")
     a("")
-    a("| EISV/prior-state model | AUC delta | Brier improvement | Beats both? |")
-    a("|---|---:|---:|---|")
+    a("| EISV/prior-state model | Paired N | AUC delta | Brier improvement | Beats both? |")
+    a("|---|---:|---:|---:|---|")
     deltas = score_deltas_vs_baseline(scores)
     if deltas:
         for delta in deltas:
             a(
-                f"| `{delta.name}` | {_fmt_float(delta.auc_delta, 3)} "
+                f"| `{delta.name}` | {delta.paired_n} "
+                f"| {_fmt_float(delta.auc_delta, 3)} "
                 f"| {_fmt_float(delta.brier_improvement, 4)} "
                 f"| {'yes' if delta.beats_baseline else 'no'} |"
             )
     else:
-        a("| (insufficient paired baseline/candidate metrics) | - | - | no |")
+        a("| (insufficient paired baseline/candidate metrics) | 0 | - | - | no |")
     a("")
 
     a("## Conclusion")
@@ -868,6 +948,7 @@ def _row_from_record(record: Any) -> OutcomeRow:
     detail = _parse_detail(record.get("detail"))
     return OutcomeRow(
         ts=record["ts"],
+        row_key=str(record["outcome_id"]) if record.get("outcome_id") is not None else None,
         agent_id=record["agent_id"],
         outcome_type=record["outcome_type"],
         is_bad=bool(record["is_bad"]),
@@ -914,6 +995,7 @@ async def fetch_rows(
             """
             SELECT
                 o.ts,
+                o.outcome_id,
                 o.agent_id,
                 o.outcome_type,
                 o.outcome_score,

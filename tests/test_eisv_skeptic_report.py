@@ -11,6 +11,7 @@ from scripts.analysis.eisv_skeptic_report import (
     risk_bucket_rates,
     score_deltas_vs_baseline,
     smoothed_rate,
+    summarize_conclusion,
 )
 
 
@@ -106,6 +107,55 @@ def test_score_deltas_vs_baseline_reports_auc_and_brier_lift():
     assert deltas[1].auc_delta == 0.04
     assert deltas[1].brier_improvement == -0.01
     assert deltas[1].beats_baseline is False
+
+
+def test_score_deltas_use_candidate_covered_rows_for_baseline():
+    deltas = score_deltas_vs_baseline([
+        ModelScore(
+            "previous_outcome_bad",
+            70,
+            30,
+            30,
+            auc=0.0,
+            brier=0.80,
+            scored_row_keys=("a", "b", "c", "d"),
+            y_true=(0, 0, 1, 1),
+            y_prob=(0.9, 0.1, 0.1, 0.9),
+            y_auc_score=(0.9, 0.1, 0.1, 0.9),
+        ),
+        ModelScore(
+            "prior_risk_binned",
+            70,
+            30,
+            2,
+            auc=0.9,
+            brier=0.10,
+            scored_row_keys=("b", "d"),
+            y_true=(0, 1),
+            y_prob=(0.4, 0.6),
+            y_auc_score=(0.4, 0.6),
+        ),
+    ])
+
+    assert len(deltas) == 1
+    assert deltas[0].auc_delta == 0.0
+    assert deltas[0].brier_improvement == -0.15
+    assert deltas[0].paired_n == 2
+    assert deltas[0].beats_baseline is False
+
+
+def test_summarize_conclusion_prefers_candidates_that_beat_both_metrics():
+    rows = [_row(idx, bad=idx % 5 == 0, risk=0.5) for idx in range(120)]
+    scores = [
+        ModelScore("previous_outcome_bad", 84, 36, 36, auc=0.50, brier=0.020),
+        ModelScore("prior_phi_binned", 84, 36, 36, auc=0.95, brier=0.030),
+        ModelScore("prior_risk_binned", 84, 36, 36, auc=0.80, brier=0.0195),
+    ]
+
+    conclusion = summarize_conclusion(rows, scores)
+
+    assert "prior_risk_binned" in conclusion
+    assert "do not beat" not in conclusion
 
 
 def test_build_report_includes_ablation_delta_section():
