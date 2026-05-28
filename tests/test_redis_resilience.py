@@ -6,7 +6,6 @@ Tests circuit breaker, retry logic, metrics, and fallback behavior.
 
 import pytest
 import asyncio
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.cache.redis_client import (
@@ -64,47 +63,52 @@ class TestCircuitBreaker:
 
     def test_half_open_after_timeout(self):
         """Circuit transitions to half-open after timeout."""
-        cb = CircuitBreaker(threshold=3, timeout=0.1)  # 100ms timeout
+        with patch("src.cache.redis_client.time.time") as mock_time:
+            mock_time.return_value = 1000.0
+            cb = CircuitBreaker(threshold=3, timeout=0.1)  # 100ms timeout
 
-        # Open the circuit
-        for _ in range(3):
-            cb.record_failure()
-        assert cb.state == CircuitBreaker.OPEN
+            # Open the circuit
+            for _ in range(3):
+                cb.record_failure()
+            assert cb.state == CircuitBreaker.OPEN
 
-        # Wait for timeout
-        time.sleep(0.15)
+            mock_time.return_value = 1000.15
 
-        # Should transition to half-open
-        assert cb.state == CircuitBreaker.HALF_OPEN
-        assert cb.is_available() is True
+            # Should transition to half-open
+            assert cb.state == CircuitBreaker.HALF_OPEN
+            assert cb.is_available() is True
 
     def test_half_open_closes_on_success(self):
         """Circuit closes from half-open on success."""
-        cb = CircuitBreaker(threshold=3, timeout=0.1)
+        with patch("src.cache.redis_client.time.time") as mock_time:
+            mock_time.return_value = 1000.0
+            cb = CircuitBreaker(threshold=3, timeout=0.1)
 
-        # Open -> half-open
-        for _ in range(3):
-            cb.record_failure()
-        time.sleep(0.15)
-        assert cb.state == CircuitBreaker.HALF_OPEN
+            # Open -> half-open
+            for _ in range(3):
+                cb.record_failure()
+            mock_time.return_value = 1000.15
+            assert cb.state == CircuitBreaker.HALF_OPEN
 
-        # Success closes it
-        cb.record_success()
-        assert cb.state == CircuitBreaker.CLOSED
+            # Success closes it
+            cb.record_success()
+            assert cb.state == CircuitBreaker.CLOSED
 
     def test_half_open_reopens_on_failure(self):
         """Circuit reopens from half-open on failure."""
-        cb = CircuitBreaker(threshold=3, timeout=0.1)
+        with patch("src.cache.redis_client.time.time") as mock_time:
+            mock_time.return_value = 1000.0
+            cb = CircuitBreaker(threshold=3, timeout=0.1)
 
-        # Open -> half-open
-        for _ in range(3):
+            # Open -> half-open
+            for _ in range(3):
+                cb.record_failure()
+            mock_time.return_value = 1000.15
+            assert cb.state == CircuitBreaker.HALF_OPEN
+
+            # Failure reopens it
             cb.record_failure()
-        time.sleep(0.15)
-        assert cb.state == CircuitBreaker.HALF_OPEN
-
-        # Failure reopens it
-        cb.record_failure()
-        assert cb.state == CircuitBreaker.OPEN
+            assert cb.state == CircuitBreaker.OPEN
 
     def test_reset(self):
         """Reset returns circuit to initial state."""

@@ -165,6 +165,12 @@ class TestDeriveOutcome:
         assert outcome_type == "task_failed"
         assert is_bad is True
 
+    def test_tool_call_exit1_is_tool_rejected(self):
+        ev = {"kind": "tool_call", "exit_code": 1, "is_bad": None}
+        outcome_type, is_bad = _derive_outcome(ev)
+        assert outcome_type == "tool_rejected"
+        assert is_bad is True
+
     def test_is_bad_true_overrides_exit_code(self):
         # is_bad=True takes priority even if exit_code=0
         ev = {"kind": "command", "exit_code": 0, "is_bad": True}
@@ -184,8 +190,8 @@ class TestDeriveOutcome:
         assert outcome_type == "task_completed"
         assert is_bad is False
 
-    def test_all_non_test_kinds_map_to_task(self):
-        for kind in ("command", "lint", "build", "file_op", "tool_call"):
+    def test_non_test_non_tool_call_kinds_map_to_task(self):
+        for kind in ("command", "lint", "build", "file_op"):
             ev = {"kind": kind, "exit_code": 0, "is_bad": None}
             outcome_type, is_bad = _derive_outcome(ev)
             assert outcome_type == "task_completed", (
@@ -311,7 +317,7 @@ async def test_per_item_isolation_one_bad_does_not_abort_siblings(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_kind_to_outcome_type_mapping(monkeypatch):
-    """Spec §1: test→test_passed/test_failed; all others→task_completed/task_failed."""
+    """Spec §1: tests stay strict and failed tool calls become tool_rejected."""
     monkeypatch.setenv("UNITARES_PHASE5_EVIDENCE_WRITE", "1")
 
     outcome_event_mock = AsyncMock(return_value=[MagicMock(text='{"outcome_id":"eid"}')])
@@ -337,10 +343,10 @@ async def test_kind_to_outcome_type_mapping(monkeypatch):
 
     outcome_types = sorted(args["outcome_type"] for args in phase5_calls)
     # test(exit=0)→test_passed, lint(exit=0)→task_completed, command(exit=1)→task_failed,
-    # build(exit=0)→task_completed, file_op(exit=0)→task_completed, tool_call(exit=1)→task_failed
+    # build(exit=0)→task_completed, file_op(exit=0)→task_completed, tool_call(exit=1)→tool_rejected
     expected = sorted([
         "test_passed", "task_completed", "task_failed",
-        "task_completed", "task_completed", "task_failed",
+        "task_completed", "task_completed", "tool_rejected",
     ])
     assert outcome_types == expected, (
         f"Mapping mismatch.\nExpected: {expected}\nGot:      {outcome_types}"

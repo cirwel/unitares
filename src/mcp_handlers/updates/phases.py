@@ -163,8 +163,11 @@ def _derive_outcome(evidence: dict) -> tuple:
     if is_bad is None:
         exit_code = evidence.get("exit_code")
         is_bad = (exit_code is not None and exit_code != 0)
-    if evidence.get("kind") == "test":
+    kind = evidence.get("kind")
+    if kind == "test":
         return ("test_failed" if is_bad else "test_passed", is_bad)
+    if kind == "tool_call" and is_bad:
+        return ("tool_rejected", is_bad)
     return ("task_failed" if is_bad else "task_completed", is_bad)
 
 
