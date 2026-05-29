@@ -59,6 +59,12 @@ PROTOCOL_VERSION = "wave3a.v1"
 PROBE_TOKEN_ENV = "WAVE_3A_PROBE_TOKEN"
 PROBE_PREFIX = "/v1/probe"
 
+# Strong references for in-flight measurement writes. asyncio.create_task
+# returns a weakly-held task; without storing the reference, GC can collect
+# the task before the write completes and silently drop the row. Watcher
+# P001. The pattern is set + discard-on-done.
+_PENDING_WRITES: "set[asyncio.Task[None]]" = set()
+
 # Wave 3a §4.3 measurement channel: every probe call records one row in
 # audit.coordination_measurements with measurement_type='measurement.wave_3a.request'.
 # §4.1 (HTTP transport p99 vs Python-in-process p99) and §4.2 (503 / fallback
@@ -401,7 +407,7 @@ def _record_and_return(
         meta.update(meta_extra)
 
     try:
-        asyncio.create_task(
+        task = asyncio.create_task(
             _write_measurement(
                 endpoint=endpoint,
                 elapsed_ms=elapsed_ms,
@@ -410,6 +416,8 @@ def _record_and_return(
                 meta=meta,
             )
         )
+        _PENDING_WRITES.add(task)
+        task.add_done_callback(_PENDING_WRITES.discard)
     except Exception as exc:  # noqa: BLE001 — observability infra
         logger.debug(
             "[wave3a-probe] create_task for measurement write failed: %r", exc
