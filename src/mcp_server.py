@@ -842,6 +842,13 @@ async def main():
             mcp_server_name=mcp.name,
         )
 
+        # === Wave 3a probe endpoint (PR #1 scaffolding, see docs/proposals/
+        # beam-wave-3a-read-only-handlers.md §2.3). Internal-only surface
+        # consumed by the BEAM listener once PR #4 lands. Fail-closed:
+        # missing WAVE_3A_PROBE_TOKEN -> 503 on every /v1/probe/* call.
+        from src.mcp_handlers.wave3a_probe import register_wave3a_probe_routes
+        register_wave3a_probe_routes(app)
+
         # === Streamable HTTP endpoint (/mcp) ===
         if HAS_STREAMABLE_HTTP:
             # Create a pure ASGI app for /mcp that wraps the session manager
