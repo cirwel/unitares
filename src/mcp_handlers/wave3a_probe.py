@@ -38,6 +38,8 @@ The route prefix carries its own bearer-auth — the public MCP bearer
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import re
 import secrets
@@ -56,6 +58,13 @@ logger = get_logger(__name__)
 PROTOCOL_VERSION = "wave3a.v1"
 PROBE_TOKEN_ENV = "WAVE_3A_PROBE_TOKEN"
 PROBE_PREFIX = "/v1/probe"
+
+# Wave 3a §4.3 measurement channel: every probe call records one row in
+# audit.coordination_measurements with measurement_type='measurement.wave_3a.request'.
+# §4.1 (HTTP transport p99 vs Python-in-process p99) and §4.2 (503 / fallback
+# rate sliding window) both read from this surface; without it, neither stop
+# sign can be evaluated.
+MEASUREMENT_TYPE_WAVE_3A_REQUEST = "measurement.wave_3a.request"
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +314,111 @@ def mask_timestamps(payload: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Measurement channel — §4.3
+# ---------------------------------------------------------------------------
+
+
+async def _write_measurement(
+    *,
+    endpoint: str,
+    elapsed_ms: int,
+    status: str,
+    payload_bytes: int,
+    meta: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Insert one row into audit.coordination_measurements (Wave 3a §4.3).
+
+    Uses ``get_db().acquire()`` (ExecutorPool-wrapped per CLAUDE.md "Substrate
+    Tax") so the asyncpg await never lands on the anyio task group. Failures
+    are logged at debug and swallowed — the measurement channel is observability
+    infrastructure for stop signs §4.1/§4.2, and a write failure here MUST
+    NOT propagate into the probe response (or contribute to the latency the
+    response itself is being measured for).
+    """
+    try:
+        # Lazy import so test patches at module scope work and so import-time
+        # of this module doesn't pull in the DB backend.
+        from src.db import get_db
+
+        db = get_db()
+        meta_json = json.dumps(meta) if meta is not None else None
+        async with db.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO audit.coordination_measurements
+                    (measurement_type, endpoint, elapsed_ms, status,
+                     payload_bytes, meta)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                """,
+                MEASUREMENT_TYPE_WAVE_3A_REQUEST,
+                endpoint,
+                elapsed_ms,
+                status,
+                payload_bytes,
+                meta_json,
+            )
+    except Exception as exc:  # noqa: BLE001 — observability infra; swallow
+        logger.debug(
+            "[wave3a-probe] measurement-channel write failed: %r (endpoint=%s "
+            "status=%s elapsed_ms=%s)",
+            exc,
+            endpoint,
+            status,
+            elapsed_ms,
+        )
+
+
+def _record_and_return(
+    request: Request,
+    response: JSONResponse,
+    *,
+    endpoint: str,
+    start_monotonic: float,
+    meta_extra: Optional[Dict[str, Any]] = None,
+) -> JSONResponse:
+    """Fire-and-forget measurement write, then return the response.
+
+    Per §4.3 the measurement IS the latency we're measuring — writing it
+    inline would contribute to its own value. ``asyncio.create_task`` lets
+    the write happen on the next event-loop tick after the response has
+    already been sent.
+
+    Wrapped in try/except: even task creation failures (running loop closed,
+    etc.) must not break the response. The task itself swallows DB errors.
+    """
+    elapsed_ms = int((time.monotonic() - start_monotonic) * 1000)
+    payload_bytes = len(response.body) if response.body is not None else 0
+    status = str(response.status_code)
+
+    meta: Dict[str, Any] = {
+        "probe_token_set": _get_configured_token() is not None,
+        "auth_header_present": bool(
+            request.headers.get("authorization")
+            or request.headers.get("Authorization")
+        ),
+    }
+    if meta_extra:
+        meta.update(meta_extra)
+
+    try:
+        asyncio.create_task(
+            _write_measurement(
+                endpoint=endpoint,
+                elapsed_ms=elapsed_ms,
+                status=status,
+                payload_bytes=payload_bytes,
+                meta=meta,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — observability infra
+        logger.debug(
+            "[wave3a-probe] create_task for measurement write failed: %r", exc
+        )
+
+    return response
+
+
+# ---------------------------------------------------------------------------
 # Endpoint implementations
 # ---------------------------------------------------------------------------
 
@@ -314,20 +428,33 @@ async def _health(request: Request) -> JSONResponse:
 
     Mirrors the lease plane's ``/health`` shape so the BEAM Finch client can
     verify connectivity before bothering with bearer headers.
+
+    Per §4.3 this endpoint IS part of the contract surface and DOES record a
+    measurement row — fallback-rate denominators (§4.2) need to count every
+    probe call including liveness pings, otherwise the stop-sign denominator
+    is wrong on the cheapest endpoint.
     """
-    return JSONResponse(
+    start = time.monotonic()
+    response = JSONResponse(
         {
             "ok": True,
             "protocol_version": PROTOCOL_VERSION,
         },
         status_code=200,
     )
+    return _record_and_return(
+        request, response, endpoint=f"{PROBE_PREFIX}/health", start_monotonic=start
+    )
 
 
 async def _health_snapshot(request: Request) -> JSONResponse:
+    start = time.monotonic()
+    endpoint = f"{PROBE_PREFIX}/health_snapshot"
     auth_err = _auth_or_response(request)
     if auth_err is not None:
-        return auth_err
+        return _record_and_return(
+            request, auth_err, endpoint=endpoint, start_monotonic=start
+        )
 
     # Import lazily so test patches at module scope work.
     from src.services.health_snapshot import (
@@ -339,12 +466,15 @@ async def _health_snapshot(request: Request) -> JSONResponse:
 
     snapshot, age_seconds, produced_at = get_snapshot()
     if snapshot is None:
-        return JSONResponse(
+        response = JSONResponse(
             _envelope_err(
                 "snapshot_unavailable",
                 "deep_health_probe has not run yet",
             ),
             status_code=503,
+        )
+        return _record_and_return(
+            request, response, endpoint=endpoint, start_monotonic=start
         )
 
     # Full snapshot (no lite filter) per §2.3 — the BEAM-side handler decides
@@ -357,13 +487,20 @@ async def _health_snapshot(request: Request) -> JSONResponse:
         "probe_interval_seconds": PROBE_INTERVAL_SECONDS,
         "staleness_threshold_seconds": STALENESS_THRESHOLD_SECONDS,
     }
-    return JSONResponse(_envelope_ok(response_data), status_code=200)
+    response = JSONResponse(_envelope_ok(response_data), status_code=200)
+    return _record_and_return(
+        request, response, endpoint=endpoint, start_monotonic=start
+    )
 
 
 async def _server_info(request: Request) -> JSONResponse:
+    start = time.monotonic()
+    endpoint = f"{PROBE_PREFIX}/server_info"
     auth_err = _auth_or_response(request)
     if auth_err is not None:
-        return auth_err
+        return _record_and_return(
+            request, auth_err, endpoint=endpoint, start_monotonic=start
+        )
 
     # Reproduce the get_server_info data shape WITHOUT going through the MCP
     # handler (avoids TextContent wrapping). The fields here mirror the
@@ -452,13 +589,20 @@ async def _server_info(request: Request) -> JSONResponse:
     # Python probe process and may inject its own values before returning
     # to its caller.
     meta = {"probe_process": True}
-    return JSONResponse(_envelope_ok(payload, meta=meta), status_code=200)
+    response = JSONResponse(_envelope_ok(payload, meta=meta), status_code=200)
+    return _record_and_return(
+        request, response, endpoint=endpoint, start_monotonic=start
+    )
 
 
 async def _tool_registry(request: Request) -> JSONResponse:
+    start = time.monotonic()
+    endpoint = f"{PROBE_PREFIX}/tool_registry"
     auth_err = _auth_or_response(request)
     if auth_err is not None:
-        return auth_err
+        return _record_and_return(
+            request, auth_err, endpoint=endpoint, start_monotonic=start
+        )
 
     from src.mcp_handlers import TOOL_HANDLERS
     from src.mcp_handlers.tool_stability import list_all_aliases
@@ -502,7 +646,10 @@ async def _tool_registry(request: Request) -> JSONResponse:
         "deprecated_tools": deprecated_tools,
     }
     masked = mask_timestamps(payload)
-    return JSONResponse(_envelope_ok(masked), status_code=200)
+    response = JSONResponse(_envelope_ok(masked), status_code=200)
+    return _record_and_return(
+        request, response, endpoint=endpoint, start_monotonic=start
+    )
 
 
 # ---------------------------------------------------------------------------

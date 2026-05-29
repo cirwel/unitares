@@ -96,6 +96,50 @@ COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_BEAM_TO_PYTHON_REQUEST_FAILED = (
     "coordination_failure.beam_python_boundary.beam_to_python_request_failed"
 )
 
+# Wave 3a stop-sign event types (RFC docs/proposals/beam-wave-3a-read-only-handlers.md
+# §4.2). PR #2 of v0.2 sequencing lands the constants ahead of PR #3's Python
+# transport per-tool routing table — the routing-table fallback path is the
+# first emitter of `coordination_failure.wave_3a.fallback`, the BEAM-side
+# timeout enforcement is the first emitter of
+# `coordination_failure.wave_3a.timeout`, and the BEAM response-shape validator
+# is the first emitter of `coordination_failure.wave_3a.envelope_invalid`.
+# Landing the constants here lets PR #3/PR #4 emit without re-extending the
+# allowlist.
+#
+# Payload shape (per Stability discipline §"event_type extends only by adding
+# new dotted namespaces"; payload contract pinned at landing):
+#
+#   coordination_failure.wave_3a.fallback:
+#     payload = {
+#       "tool_name": str,         # tool whose dispatch fell back to Python
+#       "trigger": str,           # "timeout" | "non_200" | "decode_error" |
+#                                 # "connect_error"
+#       "elapsed_ms": int | None, # wall-clock spent before falling back
+#     }
+#
+#   coordination_failure.wave_3a.timeout:
+#     payload = {
+#       "tool_name": str,
+#       "elapsed_ms": int,        # exceeded the 500ms hard budget
+#       "budget_ms": int,         # 500 in Wave 3a per §3.2
+#     }
+#
+#   coordination_failure.wave_3a.envelope_invalid:
+#     payload = {
+#       "tool_name": str,
+#       "detail": str,            # which §2.2 envelope key was missing/wrong
+#       "envelope_keys": list[str],
+#     }
+#
+# Migration 035's CHECK regex `^(coordination_failure)(\.[a-z_]+)+$` already
+# accepts arbitrarily deep subtypes under `coordination_failure`, so no
+# constraint modification is needed.
+COORDINATION_FAILURE_WAVE_3A_FALLBACK = "coordination_failure.wave_3a.fallback"
+COORDINATION_FAILURE_WAVE_3A_TIMEOUT = "coordination_failure.wave_3a.timeout"
+COORDINATION_FAILURE_WAVE_3A_ENVELOPE_INVALID = (
+    "coordination_failure.wave_3a.envelope_invalid"
+)
+
 WAVE_0_EVENT_TYPES: frozenset[str] = frozenset({
     COORDINATION_FAILURE_ASYNCPG_CONNECT_ERROR,
     COORDINATION_FAILURE_ANYIO_CANCELLATION,
@@ -104,6 +148,10 @@ WAVE_0_EVENT_TYPES: frozenset[str] = frozenset({
     # Wave 2 extension — see the docstring above the constants.
     COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_PYTHON_TO_BEAM_REQUEST_FAILED,
     COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_BEAM_TO_PYTHON_REQUEST_FAILED,
+    # Wave 3a extension — see RFC §4.2 stop signs.
+    COORDINATION_FAILURE_WAVE_3A_FALLBACK,
+    COORDINATION_FAILURE_WAVE_3A_TIMEOUT,
+    COORDINATION_FAILURE_WAVE_3A_ENVELOPE_INVALID,
 })
 
 # Cached emitter context — git_commit and host don't change at runtime.
@@ -163,6 +211,11 @@ def _validate_event_type(event_type: str) -> None:
     `coordination_failure.mcp_handler_timeout.identity_step` both pass. Per the
     council architect C5 finding (post-v0.1 review): subtype discrimination
     belongs in the event_type contract, not in a payload subtype enum.
+
+    Segment character class: ``[a-z0-9_]+``. Wave 3a (migration 041) relaxed
+    the original ``[a-z_]+`` class to allow digits so ``wave_3a`` is a legal
+    segment. The Python validator mirrors that broadened class — keeping
+    client-side and DB-side acceptance sets identical.
     """
     if not isinstance(event_type, str):
         raise ValueError(f"event_type must be a string, got {type(event_type).__name__}")
@@ -179,10 +232,12 @@ def _validate_event_type(event_type: str) -> None:
             f"({{'coordination_failure'}}). Add via migration when extending."
         )
     for segment in parts[1:]:
-        if not segment or not all(c.islower() or c == "_" for c in segment):
+        if not segment or not all(
+            c.islower() or c.isdigit() or c == "_" for c in segment
+        ):
             raise ValueError(
                 f"event_type {event_type!r}: every segment must be "
-                f"lowercase + underscores (failed segment: {segment!r})"
+                f"lowercase + digits + underscores (failed segment: {segment!r})"
             )
 
 
