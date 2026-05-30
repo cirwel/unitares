@@ -113,6 +113,11 @@ def test_event_type_constants_match_documented_set():
         # Wave 2 extension — directional cross-runtime request failures.
         "coordination_failure.beam_python_boundary.python_to_beam_request_failed",
         "coordination_failure.beam_python_boundary.beam_to_python_request_failed",
+        # Wave 3a extension (RFC docs/proposals/beam-wave-3a-read-only-handlers.md §4.2).
+        # Migration 035's CHECK regex already accepts these — no DB follow-up.
+        "coordination_failure.wave_3a.fallback",
+        "coordination_failure.wave_3a.timeout",
+        "coordination_failure.wave_3a.envelope_invalid",
     }
     assert WAVE_0_EVENT_TYPES == expected
 
