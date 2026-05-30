@@ -9,15 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
-from pathlib import Path
 
 from src.logging_utils import get_logger
 from src.knowledge_graph import DiscoveryNode, ResponseTo
 from src.mcp_handlers.knowledge.limits import EMBED_DETAILS_WINDOW
-from src.db import get_db
+import src.db as db_module
 from src.db.age_queries import (
     create_discovery_node,
     create_agent_node,
@@ -26,9 +24,6 @@ from src.db.age_queries import (
     create_related_to_edge,
     create_tagged_edge,
     create_supersedes_edge,
-    query_agent_discoveries,
-    query_response_chain,
-    create_indexes,
 )
 
 logger = get_logger(__name__)
@@ -316,7 +311,7 @@ class KnowledgeGraphAGE:
     async def _get_db(self):
         """Get database backend (lazy initialization)."""
         if self._db is None:
-            self._db = get_db()
+            self._db = db_module.get_db()
             await self._db.init()
 
             # Best-effort: align our graph_name with backend config
@@ -1416,10 +1411,10 @@ class KnowledgeGraphAGE:
         # so we fetch all matches and rank by tag overlap in Python.
         db = await self._get_db()
 
-        cypher = f"""
+        cypher = """
             MATCH (d:Discovery)-[:TAGGED]->(t:Tag)
-            WHERE t.name IN ${{tags}}
-              AND d.id <> ${{exclude_id}}
+            WHERE t.name IN ${tags}
+              AND d.id <> ${exclude_id}
             WITH DISTINCT d
             RETURN d
         """
