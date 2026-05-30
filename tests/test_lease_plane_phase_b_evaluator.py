@@ -371,6 +371,57 @@ def test_text_format_mentions_eligibility_date(evaluator, monkeypatch):
     assert "VERDICT: NOT PROMOTABLE" in text
 
 
+def test_organic_predicate_excludes_synthetic_and_empty(evaluator):
+    """§6.1.3/§6.1.4 organic predicate must exclude drill, synthetic harness/
+    probe sessions, and empty audit_session — and escape its LIKE wildcards as
+    ``%%`` so psycopg2 doesn't misread them as parameter placeholders.
+
+    Regression: the 2026-05-30 forensic found surface_kind='file' passing
+    §6.1.3 on 6 synthetic surfaces (race harness / live probe / empty-session
+    bring-up) because the filter only excluded the ``phase-b-drill:`` prefix.
+    """
+    sql = evaluator._organic_audit_session_sql()
+    # non-empty session required (empty is structurally unlinkable in §6.1.4)
+    assert "coalesce(payload->>'audit_session', '') <> ''" in sql
+    # drill + every synthetic prefix excluded
+    assert evaluator.DRILL_AUDIT_SESSION_PREFIX in sql
+    for prefix in evaluator.SYNTHETIC_SESSION_PREFIXES:
+        assert prefix in sql
+    assert evaluator.SYNTHETIC_SESSION_PREFIXES, "expected at least one synthetic prefix"
+    # every % must be part of %% — the fragment carries literal LIKE wildcards
+    # only, never a %s placeholder (those live in the outer query).
+    assert "%s" not in sql
+    assert sql.count("%") % 2 == 0
+    assert sql.replace("%%", "").count("%") == 0
+
+
+def test_criterion_3_query_is_percent_safe(evaluator):
+    """The criterion-3 query must mogrify cleanly: #placeholders == #params and
+    literal wildcards escaped. psycopg2 uses pyformat, so Python %-substitution
+    is a faithful proxy — a bare ``%`` in an inlined LIKE pattern would raise
+    here exactly as it raised IndexError in psycopg2 before the %% fix."""
+    cursor = FakeCursor(
+        [
+            {
+                "distinct_surfaces": 6,
+                "total_conflicts": 24,
+                "organic_distinct_surfaces": 0,
+                "organic_total_conflicts": 0,
+                "drill_distinct_surfaces": 0,
+                "drill_total_conflicts": 0,
+            }
+        ]
+    )
+    result = evaluator._criterion_3_type_a_signal(
+        cursor, "file", 14, accept_drill_evidence=False
+    )
+    assert result.status == "FAIL"  # 0 organic → correctly not promotable
+    sql, params = cursor.executed[0]
+    # Will raise ValueError/TypeError if a literal % is unescaped or the
+    # placeholder/param counts disagree — the precise regression we fixed.
+    sql % tuple("x" for _ in params)
+
+
 def test_main_exit_codes(evaluator, monkeypatch):
     """Exit code contract: 1 not-promotable, 3 unknown surface_kind."""
     # unknown surface_kind path — must not touch DB
