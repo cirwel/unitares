@@ -467,6 +467,79 @@ async def test_save_monitor_state_async_writes_normally_under_budget(tmp_path, m
     assert "update_count" in data or "E" in data
 
 
+# ─── Behavioral EISV survives restart (save was dropping it) ─────────────
+
+def _advance_behavioral(monitor, n=4):
+    """Advance the monitor's behavioral EMA so update_count > fallback threshold."""
+    for _ in range(n):
+        monitor._behavioral_state.update(0.6, 0.7, 0.25)
+    return monitor._behavioral_state.update_count
+
+
+def test_attach_behavioral_state_includes_ema():
+    from types import SimpleNamespace
+    from src.agent_monitor_state import _attach_behavioral_state
+    from src.behavioral_state import BehavioralEISV
+
+    beh = BehavioralEISV()
+    for _ in range(3):
+        beh.update(0.6, 0.7, 0.25)
+    monitor = SimpleNamespace(_behavioral_state=beh)
+    state_data = {}
+    _attach_behavioral_state(monitor, state_data)
+
+    assert "behavioral_eisv" in state_data
+    assert state_data["behavioral_eisv"]["updates"] == 3
+
+
+def test_attach_behavioral_state_failopen_when_absent():
+    from types import SimpleNamespace
+    from src.agent_monitor_state import _attach_behavioral_state
+
+    # No _behavioral_state attribute → no key, no raise
+    state_data = {}
+    _attach_behavioral_state(SimpleNamespace(), state_data)
+    assert "behavioral_eisv" not in state_data
+
+    # _behavioral_state present but serialization raises → fail-open, no key
+    class _Boom:
+        def to_dict_with_history(self):
+            raise RuntimeError("boom")
+
+    state_data = {}
+    _attach_behavioral_state(SimpleNamespace(_behavioral_state=_Boom()), state_data)
+    assert "behavioral_eisv" not in state_data
+
+
+@pytest.mark.asyncio
+async def test_save_persists_behavioral_eisv_and_round_trips(tmp_path, monkeypatch):
+    """Regression: the live save path dropped behavioral_eisv, so behavioral
+    confidence reset to ODE-fallback on every restart. Save must now persist it,
+    and the saved block must restore faithfully via from_dict (the load side)."""
+    from src import agent_monitor_state
+    from src.behavioral_state import BehavioralEISV
+
+    monkeypatch.setattr(
+        agent_monitor_state, "get_state_file",
+        lambda agent_id: tmp_path / f"{agent_id}_state.json",
+    )
+
+    monitor = _make_fresh_monitor("beh-persist")
+    count = _advance_behavioral(monitor, n=4)
+    assert count == 4  # precondition: would clear fallback (>=3)
+
+    await save_monitor_state_async("beh-persist", monitor)
+
+    data = json.loads((tmp_path / "beh-persist_state.json").read_text())
+    assert "behavioral_eisv" in data, "save path still dropping behavioral state"
+    assert data["behavioral_eisv"]["updates"] == 4
+
+    # Load side (from_dict) restores the persisted block faithfully.
+    restored = BehavioralEISV.from_dict(data["behavioral_eisv"])
+    assert restored.update_count == 4
+    assert restored.confidence >= 0.3  # no longer stuck in fallback after restart
+
+
 # ─── Fix #4: meta-None guards in process_update_authenticated_async ───────
 
 @pytest.mark.asyncio
