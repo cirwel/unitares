@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd manifest for the Wave 3a BEAM handler app (Elixir/OTP, port 8770).
+
+  Per RFC `docs/proposals/beam-wave-3a-read-only-handlers.md` v0.2 §5 PR #4:
+  this template ships in-tree but is NOT loaded by default. The operator
+  promotes it (rendering __VARS__ and `launchctl load`-ing) when ready for
+  the first handler cutover (PR #5 wires `health_check`).
+
+  IMPORTANT: the rendered plist intentionally does NOT include `RunAtLoad`.
+  Until the operator manually loads it, the Bandit listener at
+  127.0.0.1:8770 is not running, the Python routing table routes nothing
+  through the BEAM proxy, and the 500ms timeout-then-fallback path
+  (src/wave3a_beam_proxy.py) is the rollback contract. "Rollback by
+  default" is the posture before any handler is wired.
+
+  Install (render __VARS__ then load):
+    sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
+        -e "s|__HOME__|$HOME|g" \
+        scripts/ops/com.unitares.wave3a-handlers.plist.template \
+        > ~/Library/LaunchAgents/com.unitares.wave3a-handlers.plist
+    launchctl load ~/Library/LaunchAgents/com.unitares.wave3a-handlers.plist
+
+  Verify (with $WAVE_3A_BEAM_TOKEN sourced from ~/.config/cirwel/secrets.env):
+    launchctl list | grep com.unitares.wave3a-handlers
+    tail -f ~/Library/Logs/unitares-wave3a-handlers.log
+    curl -s "http://127.0.0.1:8770/health"
+    curl -s -H "Authorization: Bearer $WAVE_3A_BEAM_TOKEN" \
+         "http://127.0.0.1:8770/v1/handlers/health_check" -X POST -d '{}'
+
+  Unload (rollback):
+    launchctl unload ~/Library/LaunchAgents/com.unitares.wave3a-handlers.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unitares.wave3a-handlers</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__UNITARES_ROOT__/elixir/wave3a_handlers/scripts/start.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__UNITARES_ROOT__/elixir/wave3a_handlers</string>
+
+    <!--
+      RunAtLoad is intentionally absent per RFC §5 PR #4. The plist exists
+      as configuration; the operator promotes it to running when ready. Do
+      NOT add this key without an explicit operator decision to cut over.
+    -->
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/unitares-wave3a-handlers.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/unitares-wave3a-handlers.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
+        <key>MIX_ENV</key>
+        <string>prod</string>
+    </dict>
+</dict>
+</plist>
