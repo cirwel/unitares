@@ -32,10 +32,93 @@ is empty and the proxy code path is never exercised in production.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Per-handler env-flag cutover hooks (RFC §5 PR #5+)
+# ---------------------------------------------------------------------------
+#
+# Each Wave 3a handler PR adds a single row to ``_ENV_FLAG_ROUTES``: the
+# env var the operator flips, the tool name, and the BEAM URL to route to
+# when the flag is true. ``apply_env_flag_routes()`` reads the table at MCP
+# startup (called from ``src/mcp_server.py`` after the routing table is
+# constructed) and adds routes for every enabled flag.
+#
+# Operator workflow (RFC §3.1 cutover shape):
+#
+#   1. Land the handler PR. Behavior is unchanged — flag default is OFF.
+#   2. Confirm the BEAM listener is healthy (PR #4 launchd plist loaded).
+#   3. Run the pre-cutover script (verifies ``requires_identity`` posture).
+#   4. Set the env flag in ``~/.config/cirwel/secrets.env``.
+#   5. Restart the MCP. ``apply_env_flag_routes`` runs once at boot and
+#      adds the route to the table. Subsequent calls flow through BEAM.
+#   6. Rollback: clear the env flag and restart, OR call
+#      ``scripts/ops/wave-3a-rollback.sh --tool <name>`` (no restart needed).
+
+_ENV_FLAG_ROUTES: Dict[str, Dict[str, str]] = {
+    # RFC §5 PR #5 — first cutover.
+    "WAVE_3A_HEALTH_CHECK_ON_BEAM": {
+        "tool_name": "health_check",
+        "beam_url": "http://127.0.0.1:8770/v1/handlers/health_check",
+    },
+    # PR #6/#7/#8 add their rows here. Each row independent so the operator
+    # can cut over handlers one at a time and roll them back independently.
+}
+
+
+def _flag_is_truthy(value: Optional[str]) -> bool:
+    """Match the env-flag semantics used elsewhere in the codebase.
+
+    ``true``, ``True``, ``1``, ``yes`` are truthy. Everything else
+    (including empty string, ``false``, ``0``, ``no``, missing) is falsy.
+    """
+    if not value:
+        return False
+    return value.strip().lower() in {"true", "1", "yes", "y", "on"}
+
+
+def apply_env_flag_routes() -> List[str]:
+    """Read ``_ENV_FLAG_ROUTES`` and apply rows whose env flag is truthy.
+
+    Returns the list of tool names that were added to the routing table.
+    Called once at MCP startup from ``src/mcp_server.py`` after the
+    routing-table admin surface is wired. Idempotent — a tool already
+    present in the table is overwritten with the same URL; the operator
+    can re-run the startup hook (e.g., via a launchd one-shot) safely.
+
+    Hard invariant per RFC §3.1: a process restart with the env flag UNSET
+    yields an empty routing table. No persistence across restarts.
+    """
+    added: List[str] = []
+    for env_var, row in _ENV_FLAG_ROUTES.items():
+        if _flag_is_truthy(os.environ.get(env_var)):
+            tool_name = row["tool_name"]
+            beam_url = row["beam_url"]
+            try:
+                set_route(tool_name, beam_url)
+                added.append(tool_name)
+                logger.info(
+                    "[wave3a-routing] env-flag cutover: %s=true → routed %s "
+                    "to %s",
+                    env_var,
+                    tool_name,
+                    beam_url,
+                )
+            except ValueError as exc:
+                # Bad config in the env-flag table itself — should never
+                # happen in master, but log it explicitly rather than
+                # silently dropping the cutover.
+                logger.error(
+                    "[wave3a-routing] env-flag cutover FAILED for %s: %s",
+                    env_var,
+                    exc,
+                )
+    return added
 
 
 # Module-level state. The table is a single dict; rows added at runtime
@@ -137,6 +220,7 @@ def is_routed(tool_name: str) -> bool:
 
 
 __all__ = [
+    "apply_env_flag_routes",
     "clear_routes",
     "get_route",
     "is_routed",

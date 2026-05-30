@@ -80,7 +80,14 @@ data/agents_archived/
 data/archives/
 data/backups/
 data/analysis/
-tests/fixtures/
+tests/fixtures/*
+# Wave 3a §2.6 golden parity fixtures are committed (load-bearing contract).
+# Use the directory-contents pattern: ignore the parent's contents broadly,
+# then re-include this subtree. Git's negation does NOT work if the parent
+# itself matches an ignore rule, so we ignore `tests/fixtures/*` (not
+# `tests/fixtures/`) and selectively unignore.
+!tests/fixtures/wave3a_response_golden/
+!tests/fixtures/wave3a_response_golden/**
 tests/data/
 data/exports/
 data/mcp_server_sse*.log
