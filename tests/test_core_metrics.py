@@ -731,8 +731,8 @@ class TestGetSystemHistory:
             assert data["agent_id"] == "agent-1"
 
     @pytest.mark.asyncio
-    async def test_no_history_returns_error(self, mock_server):
-        """Agent with no history returns informative error."""
+    async def test_no_history_returns_empty_success(self, mock_server):
+        """Agent with no history returns an empty export instead of an error."""
         empty_monitor = _make_monitor(E_history=[], timestamp_history=[])
         mock_server.get_or_create_monitor.return_value = empty_monitor
 
@@ -744,7 +744,10 @@ class TestGetSystemHistory:
             result = await handle_get_system_history({})
 
             data = _parse(result)
-            assert "error" in data or "No history" in json.dumps(data)
+            assert data["success"] is True
+            assert data["empty"] is True
+            assert data["history"] == []
+            assert data["agent_id"] == "agent-1"
 
     @pytest.mark.asyncio
     async def test_requires_agent_registration(self, mock_server):
@@ -1523,4 +1526,3 @@ class TestVerbosityTiers:
 # ============================================================================
 # EXTENDED COVERAGE: process_agent_update deeper paths
 # ============================================================================
-

@@ -67,6 +67,7 @@ from .observability.handlers import (
 from .dialectic.handlers import (
     handle_get_dialectic_session,
     handle_list_dialectic_sessions,
+    handle_quick_dialectic,
     handle_request_dialectic_review,
     handle_submit_thesis,
     handle_submit_antithesis,
@@ -235,6 +236,7 @@ handle_dialectic = action_router(
     actions={
         "get": handle_get_dialectic_session,
         "list": handle_list_dialectic_sessions,
+        "quick": handle_quick_dialectic,
         "request": handle_request_dialectic_review,
         "thesis": handle_submit_thesis,
         "antithesis": handle_submit_antithesis,
@@ -247,6 +249,7 @@ handle_dialectic = action_router(
     examples=[
         "dialectic(action='list')",
         "dialectic(action='get', session_id='abc123')",
+        "dialectic(action='quick', issue_description='Should I proceed?', position='Proceed after tests pass')",
         "dialectic(action='request', issue_description='Agent stuck in loop')",
         "dialectic(action='thesis', session_id='abc123', root_cause='...', proposed_conditions=[...])",
         "dialectic(action='vote', session_id='abc123', vote='resume', reasoning='...')",

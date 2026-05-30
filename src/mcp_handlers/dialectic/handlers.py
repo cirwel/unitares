@@ -238,6 +238,105 @@ def _agent_display(agent_id: Optional[str]) -> str:
     return _agent_label(agent_id) or agent_id
 
 
+def _as_string_list(value: Any) -> List[str]:
+    """Normalize string/list-ish caller input into a clean list of strings."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+@mcp_tool("quick_dialectic", timeout=10.0, register=False)
+async def handle_quick_dialectic(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """Lightweight decision triage without opening a full dialectic session.
+
+    Use this when an agent wants structured second-thoughts for a small
+    decision. It does not mutate dialectic session state. If risk markers are
+    present, it tells the caller to escalate to dialectic(action='request').
+    """
+    issue = str(arguments.get("issue_description") or arguments.get("reason") or "").strip()
+    if not issue:
+        return [error_response(
+            "issue_description is required for quick dialectic triage",
+            error_code="MISSING_PARAMETER",
+            error_category="validation_error",
+            recovery={
+                "action": "Pass issue_description='the decision or concern to triage'",
+                "related_tools": ["dialectic"],
+            },
+            arguments=arguments,
+        )]
+
+    position = str(
+        arguments.get("position")
+        or arguments.get("decision")
+        or arguments.get("root_cause")
+        or arguments.get("reasoning")
+        or ""
+    ).strip()
+    concerns = _as_string_list(arguments.get("concerns"))
+    proposed_conditions = _as_string_list(_read_proposed_conditions(arguments))
+    observed_metrics = arguments.get("observed_metrics") or {}
+    if not isinstance(observed_metrics, dict):
+        observed_metrics = {}
+
+    risk_flags: List[str] = []
+    issue_lower = issue.lower()
+    high_risk_terms = ("paused", "reject", "unsafe", "security", "data loss", "delete", "drop", "credential")
+    if any(term in issue_lower for term in high_risk_terms):
+        risk_flags.append("issue_contains_high_risk_terms")
+
+    if len(concerns) >= 3:
+        risk_flags.append("three_or_more_concerns")
+
+    try:
+        risk_score = float(observed_metrics.get("risk_score"))
+        if risk_score >= 0.7:
+            risk_flags.append("risk_score_at_or_above_0.70")
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        coherence = float(observed_metrics.get("coherence"))
+        if coherence <= 0.4:
+            risk_flags.append("coherence_at_or_below_0.40")
+    except (TypeError, ValueError):
+        pass
+
+    if not position:
+        risk_flags.append("no_position_supplied")
+
+    if risk_flags:
+        recommendation = "escalate_full_dialectic"
+        next_steps = [
+            "Call dialectic(action='request', issue_description=...) to open a full review session.",
+            "Prepare root_cause and proposed_conditions before submitting thesis.",
+        ]
+    else:
+        recommendation = "record_decision"
+        next_steps = [
+            "Proceed with the stated position if it still matches current evidence.",
+            "Leave a knowledge note if this decision should be discoverable later.",
+        ]
+
+    return success_response({
+        "mode": "quick_dialectic",
+        "lightweight": True,
+        "full_session_created": False,
+        "issue_description": issue,
+        "position": position or None,
+        "concerns": concerns,
+        "proposed_conditions": proposed_conditions,
+        "risk_flags": risk_flags,
+        "recommendation": recommendation,
+        "next_steps": next_steps,
+        "escalation_tool": "dialectic(action='request')" if risk_flags else None,
+    }, arguments=arguments)
+
+
 def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, Any]:
     """Annotate a session payload with concrete next-action metadata."""
     paused_agent_id = session_data.get("paused_agent_id")

@@ -291,12 +291,22 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         elif "rate limit" in error_msg.lower():
             error_code = "RATE_LIMIT_EXCEEDED"
             recovery_hint = "Wait a moment and retry, or use a different model"
+        elif (
+            ("localhost" in base_url or "127.0.0.1" in base_url)
+            and any(marker in error_msg.lower() for marker in ("connection refused", "connection error", "failed to establish", "connect"))
+        ):
+            error_code = "MODEL_PROVIDER_UNAVAILABLE"
+            recovery_hint = (
+                "Ollama is not reachable. Start Ollama, or explicitly opt into fallback "
+                "routing with privacy='auto' or privacy='cloud' and provider='hf'."
+            )
         elif "not found" in error_msg.lower() or "invalid" in error_msg.lower():
             error_code = "MODEL_NOT_AVAILABLE"
             if "localhost" in base_url or "127.0.0.1" in base_url:
                 recovery_hint = (
                     f"Model '{model}' is not pulled on this host. "
-                    "Run `ollama list` to see available models, or `ollama pull {model}` to fetch it."
+                    f"Run `ollama list` to see available models, `ollama pull {model}` to fetch it, "
+                    "or call with privacy='auto' to allow configured cloud fallback."
                 )
             else:
                 recovery_hint = (
@@ -322,10 +332,10 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "workflow": [
                     "1. Check provider configuration",
                     "2. Verify model is available (`ollama list` for local)",
-                    "3. Try a different model",
-                    "4. Check server logs for details"
+                    "3. For local failures, start Ollama or pull the requested model",
+                    "4. To allow fallback, retry with privacy='auto' or privacy='cloud' and provider='hf'",
+                    "5. Check server logs for details"
                 ]
             }
         )]
-
 

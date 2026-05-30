@@ -118,7 +118,7 @@ class LlmAssistedDialecticParams(AgentIdentityMixin):
 
 class DialecticParams(AgentIdentityMixin):
     """Parameters for dialectic"""
-    action: Literal["get", "list", "request", "thesis", "antithesis", "synthesis", "reassign"] = Field(..., description="Operation: get, list, request, thesis, antithesis, synthesis, reassign")
+    action: Literal["get", "list", "quick", "request", "thesis", "antithesis", "synthesis", "reassign"] = Field(..., description="Operation: get, list, quick, request, thesis, antithesis, synthesis, reassign")
     session_id: Optional[str] = Field(None, description="Dialectic session ID")
     agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get or list)")
     status: Optional[str] = Field(None, description="Filter by phase (for action=list)")
@@ -127,6 +127,8 @@ class DialecticParams(AgentIdentityMixin):
     check_timeout: Optional[bool] = Field(None, description="Check reviewer/session timeouts for action=get")
     # Write action fields
     issue_description: Optional[str] = Field(None, description="Issue description (for action=request)")
+    position: Optional[str] = Field(None, description="Current position or proposed decision (for action=quick)")
+    decision: Optional[Literal["proceed", "defer", "escalate", "block", "unknown"]] = Field(None, description="Decision label (for action=quick)")
     root_cause: Optional[str] = Field(None, description="Root cause analysis (for action=thesis/synthesis)")
     proposed_conditions: Optional[List[str]] = Field(None, description="Conditions for resumption (for action=thesis/synthesis)")
     reasoning: Optional[str] = Field(None, description="Explanation/reasoning")

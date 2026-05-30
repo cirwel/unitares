@@ -1151,6 +1151,11 @@ class TestCheckCalibration:
             }
         )
         mock_checker.get_pending_updates.return_value = 2
+        mock_checker.compute_correction_factors.return_value = {"0.8-0.9": 0.75}
+        mock_checker.characterize_failure_modes.return_value = {
+            "verdict_quality_warning": "High confidence bin is overconfident",
+            "tactical": {"status": "analyzed"},
+        }
         mock_seq_tracker = MagicMock()
         mock_seq_tracker.compute_metrics.return_value = {
             "status": "no_data",
@@ -1170,6 +1175,12 @@ class TestCheckCalibration:
             assert data["tactical_evidence"]["status"] == "no_data"
             assert "log_evidence" not in data["tactical_evidence"]
             assert "capped_alarm" not in data["tactical_evidence"]
+            guidance = data["calibration_guidance"]
+            assert guidance["mode"] == "advisory_only"
+            assert guidance["confidence_policy"] == "require_evidence_for_high_confidence_actions"
+            assert guidance["correction_factors"] == {"0.8-0.9": 0.75}
+            assert guidance["verdict_quality_warning"] == "High confidence bin is overconfident"
+            assert "silently alter" in guidance["note"]
 
     @pytest.mark.asyncio
     async def test_check_calibration_empty_bins(self, patch_context_agent_id):
@@ -1794,6 +1805,8 @@ class TestListTools:
             assert data["success"] is True
             assert "tools" in data
             assert data["shown"] > 0
+            assert data["getting_started_path"][0]["tool"] == "onboard"
+            assert data["essential_toolkit"]["preferred_consolidated_tools"]["dialectic"].startswith("Use action='quick'")
 
     @pytest.mark.asyncio
     async def test_list_tools_full_mode(self, mock_mcp_server, patch_context_agent_id):
@@ -1837,6 +1850,8 @@ class TestListTools:
             assert "categories" in data
             assert "workflows" in data
             assert "tool_map" in data
+            assert data["getting_started"]["path"][0]["tool"] == "onboard"
+            assert "knowledge" in data["getting_started"]["essential_toolkit"]["preferred_consolidated_tools"]
             assert data["total_tools"] >= 0
 
     @pytest.mark.asyncio

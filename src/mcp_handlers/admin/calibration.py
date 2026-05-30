@@ -17,6 +17,55 @@ from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = get_logger(__name__)
 
+
+def _build_calibration_guidance(
+    *,
+    calibration_status: str,
+    truth_channel: str,
+    total_samples: int,
+    issues: List[str],
+    correction_factors: Dict[str, float],
+    failure_modes: Dict[str, Any],
+    tactical_staleness_days: Optional[float],
+) -> Dict[str, Any]:
+    """Operator guidance derived from calibration, without changing decisions."""
+    actions: List[str] = []
+    confidence_policy = "use_reported_confidence"
+
+    if total_samples == 0:
+        confidence_policy = "no_auto_correction"
+        actions.append("Collect hard outcome evidence via recent_tool_results or outcome_event before interpreting calibration.")
+    elif calibration_status == "signal_stale":
+        confidence_policy = "do_not_use_stale_bins_for_correction"
+        actions.append("Refresh tactical evidence before applying calibration corrections.")
+    elif calibration_status == "miscalibrated":
+        confidence_policy = "require_evidence_for_high_confidence_actions"
+        actions.append("Treat high-confidence actions in miscalibrated bins as requiring external evidence.")
+        if correction_factors:
+            actions.append("Use correction_factors as advisory scaling when presenting calibrated confidence.")
+    else:
+        actions.append("Calibration is currently acceptable; continue recording objective outcomes.")
+
+    warning = None
+    if isinstance(failure_modes, dict):
+        warning = failure_modes.get("verdict_quality_warning")
+        if warning:
+            actions.append("Review failure_modes before trusting confidence-heavy verdicts.")
+
+    return {
+        "mode": "advisory_only",
+        "confidence_policy": confidence_policy,
+        "truth_channel": truth_channel,
+        "tactical_staleness_days": tactical_staleness_days,
+        "correction_factors": correction_factors,
+        "failure_modes": failure_modes,
+        "verdict_quality_warning": warning,
+        "actions": actions,
+        "issues": issues,
+        "note": "Guidance does not silently alter verdicts or reported confidence.",
+    }
+
+
 @mcp_tool("check_calibration", timeout=10.0, rate_limit_exempt=True, register=False)
 async def handle_check_calibration(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
@@ -179,6 +228,39 @@ async def handle_check_calibration(arguments: Dict[str, Any]) -> Sequence[TextCo
         response['per_channel_calibration'] = metrics['per_channel_calibration']
     if 'per_channel_health' in metrics:
         response['per_channel_health'] = metrics['per_channel_health']
+
+    correction_factors: Dict[str, float] = {}
+    try:
+        compute_corrections = getattr(calibration_checker, "compute_correction_factors", None)
+        if callable(compute_corrections):
+            maybe_corrections = compute_corrections()
+            if isinstance(maybe_corrections, dict):
+                correction_factors = {
+                    str(bin_key): float(factor)
+                    for bin_key, factor in maybe_corrections.items()
+                }
+    except Exception as e_corr:
+        logger.debug(f"Calibration correction factors skipped: {e_corr}")
+
+    failure_modes: Dict[str, Any] = {}
+    try:
+        characterize = getattr(calibration_checker, "characterize_failure_modes", None)
+        if callable(characterize):
+            maybe_failure_modes = characterize()
+            if isinstance(maybe_failure_modes, dict):
+                failure_modes = maybe_failure_modes
+    except Exception as e_modes:
+        logger.debug(f"Calibration failure-mode characterization skipped: {e_modes}")
+
+    response["calibration_guidance"] = _build_calibration_guidance(
+        calibration_status=calibration_status,
+        truth_channel=truth_channel,
+        total_samples=total_samples,
+        issues=response["issues"],
+        correction_factors=correction_factors,
+        failure_modes=failure_modes,
+        tactical_staleness_days=tactical_staleness_days,
+    )
 
     # Add complexity calibration metrics if available
     if 'complexity_calibration' in metrics:

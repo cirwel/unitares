@@ -97,6 +97,56 @@ def _resolve_json_schema_type(field_info: Dict[str, Any]) -> str:
             return "|".join(non_null)
     return "any"
 
+
+def _getting_started_path() -> List[Dict[str, Any]]:
+    """Canonical low-friction path for first-time governance callers."""
+    return [
+        {
+            "step": 1,
+            "tool": "onboard",
+            "call": "onboard(force_new=true)",
+            "why": "Mint a fresh process identity. If continuing prior work, include parent_agent_id and spawn_reason='new_session'.",
+        },
+        {
+            "step": 2,
+            "tool": "process_agent_update",
+            "call": "process_agent_update(response_text='what changed', complexity=0.5, confidence=0.7)",
+            "why": "Record meaningful work and receive a governance verdict.",
+        },
+        {
+            "step": 3,
+            "tool": "get_governance_metrics",
+            "call": "get_governance_metrics()",
+            "why": "Inspect current EISV state without mutating history.",
+        },
+        {
+            "step": 4,
+            "tool": "knowledge",
+            "call": "knowledge(action='search', query='topic') or knowledge(action='note', content='short note')",
+            "why": "Reuse shared memory before writing; leave lightweight notes when useful.",
+        },
+        {
+            "step": 5,
+            "tool": "list_tools",
+            "call": "list_tools(essential_only=true)",
+            "why": "Stay in the small core tool set until the workflow needs more surface area.",
+        },
+    ]
+
+
+def _essential_toolkit() -> Dict[str, Any]:
+    """Short orientation block for agents trying not to drown in the tool list."""
+    return {
+        "default_path": [item["tool"] for item in _getting_started_path()],
+        "small_surface": "Use list_tools(essential_only=true) or list_tools(lite=true) before exploring the full registry.",
+        "preferred_consolidated_tools": {
+            "knowledge": "Use action='search'|'note'|'store' instead of older KG-specific tools.",
+            "dialectic": "Use action='quick' for simple decision triage; use request/thesis/antithesis/synthesis for paused-state recovery.",
+            "calibration": "Use action='check' first; add ground truth with action='update' only when you have trusted external evidence.",
+            "export": "Use action='history' for in-memory export; action='file' writes a server-side file.",
+        },
+    }
+
 @mcp_tool("list_tools", timeout=10.0, rate_limit_exempt=True, requires_identity="pre_onboard")
 async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """List all available governance tools with descriptions and categories
@@ -786,7 +836,9 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             },
             "more": "list_tools(lite=false) for all tools with full category details",
             "tip": "describe_tool(tool_name=...) for parameter details and examples",
-            "quick_start": "Start fresh with onboard(force_new=true); use parent_agent_id for lineage, not bare UUID resume"
+            "quick_start": "Start fresh with onboard(force_new=true); use parent_agent_id for lineage, not bare UUID resume",
+            "getting_started_path": _getting_started_path(),
+            "essential_toolkit": _essential_toolkit(),
         }
         
         # Add first-time hint for new agents
@@ -958,6 +1010,8 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "dialectic": "💭 View archived dialectic sessions"
         },
         "getting_started": {
+            "path": _getting_started_path(),
+            "essential_toolkit": _essential_toolkit(),
             "for_new_agents": [
                 {
                     "category": "identity",
@@ -1124,6 +1178,25 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                         "by_tag": "knowledge(action=\"search\", tags=[\"bug\"], limit=10)",
                         "by_type": "knowledge(action=\"search\", discovery_type=\"insight\", limit=5)",
                         "full_text": "knowledge(action=\"search\", query=\"authentication\", limit=10)"
+                    },
+                    "knowledge": {
+                        "quick_note": "knowledge(action=\"note\", content=\"Short shared note\", tags=[\"topic\"])",
+                        "store_discovery": "knowledge(action=\"store\", summary=\"Found issue\", discovery_type=\"bug_found\", severity=\"medium\")",
+                        "search": "knowledge(action=\"search\", query=\"authentication\", limit=10)"
+                    },
+                    "dialectic": {
+                        "quick_decision": "dialectic(action=\"quick\", issue_description=\"...\", position=\"...\", concerns=[...])",
+                        "request_recovery": "dialectic(action=\"request\", issue_description=\"Agent is paused because ...\")",
+                        "submit_thesis": "dialectic(action=\"thesis\", session_id=\"...\", root_cause=\"...\", proposed_conditions=[...])"
+                    },
+                    "calibration": {
+                        "check": "calibration(action=\"check\")",
+                        "update_truth": "calibration(action=\"update\", confidence=0.8, actual_correct=true)",
+                        "rebuild_preview": "calibration(action=\"rebuild\", dry_run=true)"
+                    },
+                    "export": {
+                        "history": "export(action=\"history\", format=\"json\")",
+                        "file": "export(action=\"file\", format=\"json\", filename=\"agent_history\")"
                     },
                     "get_governance_metrics": {
                         "check_state": "get_governance_metrics()  # uses bound identity",

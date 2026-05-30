@@ -1,6 +1,8 @@
 """Steps 3-6: Parameter handling (unwrap kwargs, resolve alias, inject identity, validate)."""
 
 import json
+import re
+from difflib import get_close_matches
 from typing import Any, Dict
 
 from src.logging_utils import get_logger
@@ -216,7 +218,64 @@ def _format_pydantic_error(error, tool_name: str):
 
     # Map common Pydantic error types to our error taxonomy
     if err_type == "missing":
+        missing_fields = [
+            ".".join(str(part) for part in err.get("loc", []))
+            for err in errors
+            if err.get("type") == "missing"
+        ]
+        if len(missing_fields) > 1:
+            return error_response(
+                f"Missing required parameters for '{tool_name}': {', '.join(missing_fields)}",
+                error_code="MISSING_PARAMETER",
+                error_category="validation_error",
+                details={
+                    "error_type": "missing_parameter",
+                    "tool_name": tool_name,
+                    "missing_parameters": missing_fields,
+                },
+                recovery={
+                    "action": f"Add all missing parameters: {', '.join(missing_fields)}",
+                    "related_tools": ["describe_tool"],
+                    "workflow": [
+                        f"1. Use describe_tool(tool_name='{tool_name}') for the full schema",
+                        "2. Add the missing parameters listed above",
+                        "3. Retry the tool call",
+                    ],
+                },
+            )
         return missing_parameter_error(loc, tool_name=tool_name)[0]
+
+    if err_type == "literal_error":
+        valid_values = _literal_expected_values(first)
+        provided = first.get("input")
+        suggestion = _suggest_enum_value(loc, provided, valid_values)
+        message = f"Invalid value for '{loc}': {provided!r}. Valid values: {', '.join(valid_values)}"
+        recovery_action = f"Use one of: {', '.join(valid_values)}"
+        if suggestion:
+            message += f". Did you mean '{suggestion}'?"
+            recovery_action = f"Use {loc}='{suggestion}' or another valid value"
+        return error_response(
+            message,
+            error_code="PARAMETER_ERROR",
+            error_category="validation_error",
+            details={
+                "error_type": "invalid_enum_value",
+                "tool_name": tool_name,
+                "parameter": loc,
+                "provided_value": provided,
+                "valid_values": valid_values,
+                "suggested_value": suggestion,
+            },
+            recovery={
+                "action": recovery_action,
+                "related_tools": ["describe_tool"],
+                "workflow": [
+                    f"1. Use describe_tool(tool_name='{tool_name}') for allowed values",
+                    f"2. Set {loc} to a valid value",
+                    "3. Retry the tool call",
+                ],
+            },
+        )
 
     if err_type in ("int_parsing", "float_parsing", "bool_parsing"):
         expected = err_type.replace("_parsing", "")
@@ -248,3 +307,43 @@ def _format_pydantic_error(error, tool_name: str):
             ]
         }
     )
+
+
+def _literal_expected_values(error: Dict[str, Any]) -> list[str]:
+    """Extract Literal choices from Pydantic's human-readable ctx."""
+    expected = (error.get("ctx") or {}).get("expected", "")
+    values = re.findall(r"'([^']+)'", expected)
+    return values or [expected] if expected else []
+
+
+def _suggest_enum_value(parameter: str, provided: Any, valid_values: list[str]) -> str | None:
+    """Suggest a likely enum value for common caller vocabulary."""
+    if provided is None or not valid_values:
+        return None
+
+    raw = str(provided).strip()
+    lowered = raw.lower()
+    aliases = {
+        "severity": {
+            "info": "low",
+            "informational": "low",
+            "warn": "medium",
+            "warning": "medium",
+            "error": "high",
+            "fatal": "critical",
+            "urgent": "critical",
+        },
+        "discovery_type": {
+            "bug": "bug_found",
+            "issue": "bug_found",
+            "finding": "insight",
+            "idea": "insight",
+            "obs": "observation",
+        },
+    }
+    alias = aliases.get(parameter, {}).get(lowered)
+    if alias in valid_values:
+        return alias
+
+    matches = get_close_matches(lowered, valid_values, n=1, cutoff=0.58)
+    return matches[0] if matches else None
