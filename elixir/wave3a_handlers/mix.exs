@@ -54,7 +54,12 @@ defmodule Wave3aHandlers.MixProject do
       # Outbound client to the Python probe surface. Finch is Mint-based and
       # the same library Sentinel already uses for /api/findings POSTs.
       {:finch, "~> 0.18"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      # Test-only mocking. PR #5 stubs `Wave3aHandlers.ProbeClient` to
+      # exercise success/error paths without a live Python probe surface.
+      # Same library as standard Elixir mocking convention; no Erlang
+      # build dependencies beyond OTP.
+      {:meck, "~> 0.9", only: :test}
     ]
   end
 end

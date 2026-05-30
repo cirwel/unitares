@@ -902,6 +902,22 @@ async def main():
         from src.mcp_handlers.wave3a_admin import register_wave3a_admin_routes
         register_wave3a_admin_routes(app)
 
+        # === Wave 3a per-handler env-flag cutover (PR #5+). Reads
+        # ``_ENV_FLAG_ROUTES`` in ``src/wave3a_routing.py`` and adds a
+        # routing-table row for every flag that is truthy. Default-OFF
+        # posture: every flag is unset by default; behavior is unchanged
+        # until the operator sets a flag in
+        # ``~/.config/cirwel/secrets.env`` and restarts. PR #5 (the first
+        # cutover) flips ``WAVE_3A_HEALTH_CHECK_ON_BEAM``.
+        from src.wave3a_routing import apply_env_flag_routes
+        _wave3a_added = apply_env_flag_routes()
+        if _wave3a_added:
+            logger.info(
+                "[wave3a-routing] startup-hook added %d route(s): %s",
+                len(_wave3a_added),
+                _wave3a_added,
+            )
+
         # === Streamable HTTP endpoint (/mcp) ===
         if HAS_STREAMABLE_HTTP:
             # Create a pure ASGI app for /mcp that wraps the session manager

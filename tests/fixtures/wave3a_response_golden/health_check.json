@@ -1,0 +1,34 @@
+{
+  "_cache": {
+    "age_seconds": "<MASKED_COUNTER>",
+    "probe_interval_seconds": 30.0,
+    "produced_at": "<MASKED_COUNTER>",
+    "stale": false,
+    "staleness_threshold_seconds": 90.0
+  },
+  "_note": "Use lite=false for full diagnostic detail",
+  "checks": {
+    "postgres": {
+      "mode": "executor_pool",
+      "status": "healthy"
+    },
+    "redis": {
+      "redis_present": true,
+      "status": "healthy",
+      "warning": "ttl < 60s"
+    }
+  },
+  "identity_continuity_mode": "session_based",
+  "ok": true,
+  "operator_summary": "all systems nominal",
+  "protocol_version": "wave3a.v1",
+  "redis_present": true,
+  "status": "healthy",
+  "status_breakdown": {
+    "degraded": 0,
+    "failed": 0,
+    "healthy": 7
+  },
+  "timestamp": "<MASKED_TIMESTAMP>",
+  "version": "0.42.0"
+}
