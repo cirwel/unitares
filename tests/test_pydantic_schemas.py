@@ -171,6 +171,38 @@ class TestPydanticSchemas:
         missing = dispatcher_actions - schema_actions
         assert not missing, f"Schema missing dispatcher actions: {missing}"
 
+    def test_dialectic_schema_accepts_quick_action(self):
+        """Lightweight dialectic action must be accepted by public schema."""
+        from src.mcp_handlers.schemas.dialectic import DialecticParams
+
+        model = DialecticParams(
+            action="quick",
+            issue_description="Should I proceed?",
+            position="Proceed after tests pass",
+            decision="proceed",
+            concerns=["low blast radius"],
+        )
+
+        assert model.action == "quick"
+        assert model.position == "Proceed after tests pass"
+
+    def test_store_knowledge_schema_matches_handler_discovery_types(self):
+        """Public schema must not reject discovery types the handler accepts."""
+        import typing
+        from src.mcp_handlers.schemas.knowledge import StoreKnowledgeGraphParams
+
+        schema_types = set(typing.get_args(StoreKnowledgeGraphParams.model_fields["discovery_type"].annotation.__args__[0]))
+        handler_types = {
+            "architectural_decision", "learning", "pattern", "bug_fix",
+            "refactoring", "documentation", "experiment", "question", "note", "rule",
+            "insight", "bug_found", "bug", "improvement", "exploration", "observation",
+        }
+
+        missing = handler_types - schema_types
+        assert not missing, f"Store schema missing handler discovery types: {missing}"
+        assert StoreKnowledgeGraphParams(summary="found auth issue", discovery_type="bug_found").discovery_type == "bug_found"
+        assert StoreKnowledgeGraphParams(summary="shorthand", discovery_type="bug").discovery_type == "bug"
+
 
 class TestVerificationSource:
     def test_default_is_agent_reported_tool_result(self):

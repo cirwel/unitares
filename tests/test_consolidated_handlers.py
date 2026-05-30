@@ -656,6 +656,41 @@ class TestDialecticHandler:
             assert data["session"]["id"] == "abc123"
             mock_get.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_quick_action_triages_without_session(self):
+        from src.mcp_handlers.consolidated import handle_dialectic
+
+        result = await handle_dialectic({
+            "action": "quick",
+            "issue_description": "Should I merge this small refactor?",
+            "position": "Proceed after focused tests pass",
+            "concerns": ["limited blast radius"],
+            "proposed_conditions": ["focused tests pass"],
+        })
+
+        data = _parse_response(result)
+        assert data["success"] is True
+        assert data["mode"] == "quick_dialectic"
+        assert data["full_session_created"] is False
+        assert data["recommendation"] == "record_decision"
+
+    @pytest.mark.asyncio
+    async def test_quick_action_escalates_high_risk(self):
+        from src.mcp_handlers.consolidated import handle_dialectic
+
+        result = await handle_dialectic({
+            "action": "quick",
+            "issue_description": "Paused agent wants to delete credential state",
+            "position": "Proceed",
+            "observed_metrics": {"risk_score": 0.8},
+        })
+
+        data = _parse_response(result)
+        assert data["success"] is True
+        assert data["recommendation"] == "escalate_full_dialectic"
+        assert data["escalation_tool"] == "dialectic(action='request')"
+        assert "issue_contains_high_risk_terms" in data["risk_flags"]
+
 
 # ===========================================================================
 # 4. Parameter mapping on real consolidated handlers

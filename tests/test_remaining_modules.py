@@ -1480,6 +1480,46 @@ class TestValidateParams:
             assert isinstance(result, list)  # Error response
 
     @pytest.mark.asyncio
+    async def test_enum_validation_error_suggests_common_alias(self):
+        """Literal enum failures include valid values and an actionable suggestion."""
+        from pydantic import BaseModel
+        from typing import Literal
+
+        class SeverityModel(BaseModel):
+            severity: Literal["low", "medium", "high", "critical"]
+
+        ctx = DispatchContext()
+        with patch("src.tool_schemas.get_pydantic_schemas", return_value={"severity_tool": SeverityModel}):
+            result = await validate_params("severity_tool", {"severity": "info"}, ctx)
+
+        assert isinstance(result, list)
+        data = json.loads(result[0].text)
+        assert data["success"] is False
+        assert data["parameter"] == "severity"
+        assert data["suggested_value"] == "low"
+        assert data["valid_values"] == ["low", "medium", "high", "critical"]
+        assert "Did you mean 'low'" in data["error"]
+
+    @pytest.mark.asyncio
+    async def test_multiple_missing_params_returned_together(self):
+        """Agents get all missing required fields in one validation response."""
+        from pydantic import BaseModel
+
+        class ThesisModel(BaseModel):
+            root_cause: str
+            proposed_conditions: list[str]
+
+        ctx = DispatchContext()
+        with patch("src.tool_schemas.get_pydantic_schemas", return_value={"thesis_tool": ThesisModel}):
+            result = await validate_params("thesis_tool", {}, ctx)
+
+        assert isinstance(result, list)
+        data = json.loads(result[0].text)
+        assert data["success"] is False
+        assert data["missing_parameters"] == ["root_cause", "proposed_conditions"]
+        assert "root_cause, proposed_conditions" in data["error"]
+
+    @pytest.mark.asyncio
     async def test_passthrough_with_no_schema(self):
         """Without schema, params pass through with aliases applied."""
         ctx = DispatchContext()

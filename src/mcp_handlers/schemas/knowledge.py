@@ -2,14 +2,19 @@ from typing import Optional, Union, Literal, Dict, Any, List, Sequence
 from pydantic import Field, model_validator
 from .mixins import AgentIdentityMixin
 
+DiscoveryType = Literal[
+    "architectural_decision", "learning", "pattern", "bug_fix",
+    "refactoring", "documentation", "experiment", "question", "note", "rule",
+    "insight", "bug_found", "bug", "improvement", "exploration", "observation"
+]
+
+Severity = Literal["low", "medium", "high", "critical"]
+
 class StoreKnowledgeGraphParams(AgentIdentityMixin):
     """
     Store knowledge discovery/discoveries in graph
     """
-    discovery_type: Optional[Literal[
-        "architectural_decision", "learning", "pattern", "bug_fix", 
-        "refactoring", "documentation", "experiment", "question", "note", "rule"
-    ]] = Field(
+    discovery_type: Optional[DiscoveryType] = Field(
         default=None,
         description="Type of discovery"
     )
@@ -29,7 +34,7 @@ class StoreKnowledgeGraphParams(AgentIdentityMixin):
         default_factory=list,
         description="IDs of related discoveries"
     )
-    severity: Optional[Literal["low", "medium", "high", "critical"]] = Field(
+    severity: Optional[Severity] = Field(
         default="medium",
         description="Importance/impact"
     )

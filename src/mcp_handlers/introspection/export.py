@@ -42,14 +42,14 @@ async def handle_get_system_history(arguments: Dict[str, Any]) -> Sequence[TextC
 
     # Check if monitor has any history
     if not monitor.state.E_history and not monitor.state.timestamp_history:
-        return [error_response(
-            "No history available for this agent",
-            details={"agent_id": agent_id[:12] if agent_id else "unknown"},
-            recovery={
-                "action": "Agent needs to call process_agent_update() first to generate history",
-                "related_tools": ["process_agent_update", "get_governance_metrics"]
-            }
-        )]
+        return success_response({
+            "format": format_type,
+            "history": [],
+            "agent_id": agent_id,
+            "empty": True,
+            "message": "No history available yet for this agent",
+            "next_step": "Call process_agent_update() to generate history",
+        })
     
     history_data = monitor.export_history(format=format_type)
     

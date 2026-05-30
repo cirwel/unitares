@@ -47,6 +47,67 @@ logger = get_logger(__name__)
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from src.broadcaster import broadcaster_instance
 
+VALID_DISCOVERY_TYPES = {
+    "architectural_decision", "learning", "pattern", "bug_fix",
+    "refactoring", "documentation", "experiment", "question", "note", "rule",
+    "insight", "bug_found", "improvement", "exploration", "observation",
+}
+VALID_SEVERITIES = {"low", "medium", "high", "critical"}
+SEVERITY_ALIASES = {
+    "info": "low",
+    "informational": "low",
+    "warn": "medium",
+    "warning": "medium",
+    "error": "high",
+    "fatal": "critical",
+    "urgent": "critical",
+}
+
+
+def _normalize_discovery_type(discovery_type: Any) -> Any:
+    if isinstance(discovery_type, str):
+        normalized = discovery_type.strip().lower()
+        if normalized == "bug":
+            return "bug_found"
+        return normalized
+    return discovery_type
+
+
+def _invalid_enum_response(field: str, value: Any, valid_values: set[str], *, tip: str | None = None):
+    normalized = str(value).strip().lower()
+    suggestion = None
+    if field == "severity":
+        suggestion = SEVERITY_ALIASES.get(normalized)
+    elif field == "discovery_type" and normalized == "bug":
+        suggestion = "bug_found"
+
+    valid = sorted(valid_values)
+    message = f"Invalid {field} '{normalized}'. Valid: {valid}."
+    if suggestion in valid_values:
+        message += f" Did you mean '{suggestion}'?"
+    elif tip:
+        message += f" {tip}"
+
+    return error_response(
+        message,
+        error_code="PARAMETER_ERROR",
+        error_category="validation_error",
+        details={
+            "error_type": "invalid_enum_value",
+            "parameter": field,
+            "provided_value": normalized,
+            "valid_values": valid,
+            "suggested_value": suggestion if suggestion in valid_values else None,
+        },
+        recovery={
+            "action": (
+                f"Use {field}='{suggestion}'"
+                if suggestion in valid_values
+                else f"Use one of: {', '.join(valid)}"
+            )
+        },
+    )
+
 
 async def _clamp_confidence_to_coherence(discovery, agent_id: str) -> bool:
     """Cross-check discovery confidence against agent's EISV coherence.
@@ -490,18 +551,15 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
     # Single discovery mode (original behavior)
     # LITE-FIRST: discovery_type defaults to "note" (simplest form)
     discovery_type = arguments.get("discovery_type", "note")
-    if isinstance(discovery_type, str):
-        discovery_type = discovery_type.strip().lower()
-        # UX alias: many callers naturally use "bug"
-        if discovery_type == "bug":
-            discovery_type = "bug_found"
+    discovery_type = _normalize_discovery_type(discovery_type)
     
     # Validate discovery_type enum
-    VALID_DISCOVERY_TYPES = {"architectural_decision", "learning", "pattern", "bug_fix", "refactoring", "documentation", "experiment", "question", "note", "rule", "insight", "bug_found", "improvement", "exploration", "observation"}
     if discovery_type not in VALID_DISCOVERY_TYPES:
-        return error_response(
-            f"Invalid discovery_type '{discovery_type}'. Valid types: {sorted(VALID_DISCOVERY_TYPES)}. "
-            "Tip: use 'bug_found' (or shorthand 'bug')."
+        return _invalid_enum_response(
+            "discovery_type",
+            discovery_type,
+            VALID_DISCOVERY_TYPES,
+            tip="Tip: use 'bug_found' (or shorthand 'bug').",
         )
 
     summary, error = require_argument(arguments, "summary",
@@ -583,10 +641,9 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
         # Validate severity if provided
         severity = arguments.get("severity")
         if severity is not None:
-            VALID_SEVERITIES = {"low", "medium", "high", "critical"}
             severity = str(severity).lower()
             if severity not in VALID_SEVERITIES:
-                return error_response(f"Invalid severity '{severity}'. Valid: {sorted(VALID_SEVERITIES)}")
+                return _invalid_enum_response("severity", severity, VALID_SEVERITIES)
 
         # Auto-populate system_version at write time (Task 1: KG version coupling)
         system_version = getattr(mcp_server, "SERVER_VERSION", "unknown")
@@ -1886,21 +1943,15 @@ async def handle_update_discovery_status_graph(arguments: Dict[str, Any]) -> Seq
             updates["details"] = str(raw_details)
 
         if severity is not None:
-            VALID_SEVERITIES = {"low", "medium", "high", "critical"}
             severity = str(severity).lower()
             if severity not in VALID_SEVERITIES:
-                return [error_response(f"Invalid severity '{severity}'. Valid: {sorted(VALID_SEVERITIES)}")]
+                return [_invalid_enum_response("severity", severity, VALID_SEVERITIES)]
             updates["severity"] = severity
 
         if discovery_type is not None:
-            VALID_DISCOVERY_TYPES = {"architectural_decision", "learning", "pattern", "bug_fix", "refactoring", "documentation", "experiment", "question", "note", "rule", "insight", "bug_found", "improvement", "exploration", "observation"}
-            discovery_type = str(discovery_type).strip().lower()
-            if discovery_type == "bug":
-                discovery_type = "bug_found"
+            discovery_type = _normalize_discovery_type(discovery_type)
             if discovery_type not in VALID_DISCOVERY_TYPES:
-                return [error_response(
-                    f"Invalid discovery_type '{discovery_type}'. Valid types: {sorted(VALID_DISCOVERY_TYPES)}."
-                )]
+                return [_invalid_enum_response("discovery_type", discovery_type, VALID_DISCOVERY_TYPES)]
             updates["type"] = discovery_type
 
         if tags is not None:
@@ -2070,17 +2121,12 @@ async def _handle_store_knowledge_graph_batch(arguments: Dict[str, Any], agent_i
                     errors.append(f"Discovery {idx}: must be a dict")
                     continue
                 
-                discovery_type = disc_data.get("discovery_type")
-                if isinstance(discovery_type, str):
-                    discovery_type = discovery_type.strip().lower()
-                    if discovery_type == "bug":
-                        discovery_type = "bug_found"
+                discovery_type = _normalize_discovery_type(disc_data.get("discovery_type"))
                 if not discovery_type:
                     errors.append(f"Discovery {idx}: discovery_type is required")
                     continue
                 
-                VALID_TYPES = {"architectural_decision", "learning", "pattern", "bug_fix", "refactoring", "documentation", "experiment", "question", "note", "rule", "insight", "bug_found", "improvement", "exploration", "observation"}
-                if discovery_type not in VALID_TYPES:
+                if discovery_type not in VALID_DISCOVERY_TYPES:
                     errors.append(f"Discovery {idx}: invalid discovery_type '{discovery_type}'")
                     continue
                 
@@ -2136,7 +2182,6 @@ async def _handle_store_knowledge_graph_batch(arguments: Dict[str, Any], agent_i
                 # Validate severity
                 severity = disc_data.get("severity")
                 if severity is not None:
-                    VALID_SEVERITIES = {"low", "medium", "high", "critical"}
                     if severity not in VALID_SEVERITIES:
                         severity = "medium"  # Use default if invalid
                 
