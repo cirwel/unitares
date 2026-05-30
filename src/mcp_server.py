@@ -98,6 +98,13 @@ except ImportError as e:
 
 # Import dispatch_tool from handlers (reuse all existing tool logic)
 from src.mcp_handlers import dispatch_tool, TOOL_HANDLERS
+# Wave 3a per-tool routing table imports — hoisted to module load time so
+# (a) the per-call ~200-500ns import cost vanishes from the dispatch hot
+# path, and (b) ``patch("src.wave3a_routing.get_route")`` style mocks
+# affect the wrapper (function-local imports bypass module-level patches —
+# see memory ``feedback_patch-local-imports``). FIND-A3 council fold.
+from src.wave3a_routing import get_route as _wave3a_get_route
+from src.wave3a_beam_proxy import proxy_to_beam as _wave3a_proxy_to_beam
 
 # Tool schemas are now in src/tool_schemas.py (shared module)
 
@@ -265,6 +272,44 @@ def get_tool_wrapper(tool_name: str):
             start_time = time.time()
             logger.info(f"[TOOL_WRAPPER] {tool_name}: called with keys={list(kwargs.keys())}")
             try:
+                # Wave 3a per-tool routing table (RFC docs/proposals/
+                # beam-wave-3a-read-only-handlers.md v0.2 §3.1). If the
+                # tool has been cut over to BEAM, attempt the BEAM proxy
+                # with §3.2's 500ms hard timeout. On any BEAM failure mode
+                # we fall back to the existing Python dispatch — silent
+                # skip is the worst possible outcome per §3.2.
+                #
+                # Hot-path discipline: the lookup is O(1) and cheap. For
+                # the ~100 tools NOT in the routing table the lookup returns
+                # None and the existing dispatch fires unchanged. Imports
+                # are at module top-level (FIND-A3 council fold) so the
+                # per-call cost is zero and ``patch()``-style mocks work.
+                beam_url = _wave3a_get_route(tool_name)
+                if beam_url is not None:
+                    proxy_result = await _wave3a_proxy_to_beam(
+                        tool_name=tool_name,
+                        beam_url=beam_url,
+                        kwargs=kwargs,
+                    )
+                    if proxy_result.ok:
+                        # BEAM succeeded — return its response unchanged.
+                        # Python implementation MUST NOT be touched.
+                        duration = time.time() - start_time
+                        TOOL_CALLS_TOTAL.labels(
+                            tool_name=tool_name, status="success"
+                        ).inc()
+                        TOOL_CALL_DURATION.labels(tool_name=tool_name).observe(
+                            duration
+                        )
+                        return proxy_result.response
+                    # BEAM failed — fall through to Python dispatch.
+                    # The proxy already emitted the §4.2 fallback event.
+                    logger.info(
+                        "[TOOL_WRAPPER] %s: BEAM fallback (reason=%s)",
+                        tool_name,
+                        proxy_result.fallback_reason,
+                    )
+
                 # Dispatch to existing handler (which has @mcp_tool timeout protection)
                 result = await dispatch_tool(tool_name, kwargs)
 
@@ -848,6 +893,14 @@ async def main():
         # missing WAVE_3A_PROBE_TOKEN -> 503 on every /v1/probe/* call.
         from src.mcp_handlers.wave3a_probe import register_wave3a_probe_routes
         register_wave3a_probe_routes(app)
+
+        # === Wave 3a admin surface (PR #3 of v0.2 sequencing, see
+        # docs/proposals/beam-wave-3a-read-only-handlers.md §3.1). Backs
+        # scripts/ops/wave-3a-rollback.sh. Operator-token gated
+        # (UNITARES_OPERATOR_TOKENS); missing/wrong → 401. The routing
+        # table starts empty at every process boot (§3.1 invariant).
+        from src.mcp_handlers.wave3a_admin import register_wave3a_admin_routes
+        register_wave3a_admin_routes(app)
 
         # === Streamable HTTP endpoint (/mcp) ===
         if HAS_STREAMABLE_HTTP:
