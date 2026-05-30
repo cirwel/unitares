@@ -4,7 +4,7 @@
 # Sources WAVE_3A_BEAM_TOKEN + WAVE_3A_PROBE_TOKEN from
 # ~/.config/cirwel/secrets.env (mode 600 — not keychain), then execs
 # `mix run --no-halt`. Bind defaults to 127.0.0.1:8770; override via
-# the :wave3a_handlers runtime config or env (see application.ex).
+# the :wave3a_handlers runtime config or env (see config/config.exs).
 #
 # Used by: scripts/ops/com.unitares.wave3a-handlers.plist (NOT loaded by
 # default — operator must `launchctl load` when ready for cutover).

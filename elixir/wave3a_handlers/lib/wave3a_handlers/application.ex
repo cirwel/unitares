@@ -71,9 +71,7 @@ defmodule Wave3aHandlers.Application do
       port = Application.get_env(:wave3a_handlers, :http_port, 8770)
       ip = Application.get_env(:wave3a_handlers, :http_ip, {127, 0, 0, 1})
 
-      Logger.info(
-        "[wave3a_handlers] starting Bandit listener at #{inspect(ip)}:#{port}"
-      )
+      Logger.info("[wave3a_handlers] starting Bandit listener at #{inspect(ip)}:#{port}")
 
       [
         Supervisor.child_spec(
