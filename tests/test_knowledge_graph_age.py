@@ -148,7 +148,7 @@ class TestGetDb:
     async def test_lazy_init_calls_get_db_once(self):
         """_get_db should call get_db() and init() on first call only."""
         mock_db = make_mock_db()
-        with patch("src.storage.knowledge_graph_age.get_db", return_value=mock_db) as mock_get:
+        with patch("src.db.get_db", return_value=mock_db) as mock_get:
             kg = KnowledgeGraphAGE()
             # Prevent index creation from triggering recursive _get_db
             kg._indexes_created = True
@@ -162,7 +162,7 @@ class TestGetDb:
     async def test_subsequent_calls_return_cached_db(self):
         """_get_db should return cached instance on subsequent calls."""
         mock_db = make_mock_db()
-        with patch("src.storage.knowledge_graph_age.get_db", return_value=mock_db) as mock_get:
+        with patch("src.db.get_db", return_value=mock_db) as mock_get:
             kg = KnowledgeGraphAGE()
             kg._indexes_created = True
 
@@ -176,7 +176,7 @@ class TestGetDb:
         """_get_db should align graph_name from the backend if available."""
         mock_db = make_mock_db()
         mock_db._age_graph = "custom_graph"
-        with patch("src.storage.knowledge_graph_age.get_db", return_value=mock_db):
+        with patch("src.db.get_db", return_value=mock_db):
             kg = KnowledgeGraphAGE()
             kg._indexes_created = True
 
@@ -194,7 +194,7 @@ class TestGetDb:
         mock_pg._age_graph = "dual_graph"
         mock_db._postgres = mock_pg
 
-        with patch("src.storage.knowledge_graph_age.get_db", return_value=mock_db):
+        with patch("src.db.get_db", return_value=mock_db):
             kg = KnowledgeGraphAGE()
             kg._indexes_created = True
 
@@ -205,7 +205,7 @@ class TestGetDb:
     async def test_creates_indexes_on_first_use(self):
         """_get_db should trigger index creation on first call."""
         mock_db = make_mock_db(graph_available=False)
-        with patch("src.storage.knowledge_graph_age.get_db", return_value=mock_db):
+        with patch("src.db.get_db", return_value=mock_db):
             kg = KnowledgeGraphAGE()
             # _indexes_created is False by default
 

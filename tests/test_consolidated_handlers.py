@@ -691,6 +691,22 @@ class TestDialecticHandler:
         assert data["escalation_tool"] == "dialectic(action='request')"
         assert "issue_contains_high_risk_terms" in data["risk_flags"]
 
+    @pytest.mark.asyncio
+    async def test_quick_action_escalates_high_risk_in_position_or_concerns(self):
+        from src.mcp_handlers.consolidated import handle_dialectic
+
+        result = await handle_dialectic({
+            "action": "quick",
+            "issue_description": "Should I proceed?",
+            "position": "Delete credential state after the run",
+            "concerns": ["Possible data loss if the cache is wrong"],
+        })
+
+        data = _parse_response(result)
+        assert data["success"] is True
+        assert data["recommendation"] == "escalate_full_dialectic"
+        assert "decision_context_contains_high_risk_terms" in data["risk_flags"]
+
 
 # ===========================================================================
 # 4. Parameter mapping on real consolidated handlers

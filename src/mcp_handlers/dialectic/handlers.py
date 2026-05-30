@@ -284,10 +284,13 @@ async def handle_quick_dialectic(arguments: Dict[str, Any]) -> Sequence[TextCont
         observed_metrics = {}
 
     risk_flags: List[str] = []
-    issue_lower = issue.lower()
     high_risk_terms = ("paused", "reject", "unsafe", "security", "data loss", "delete", "drop", "credential")
+    issue_lower = issue.lower()
+    decision_context_lower = "\n".join([position, *concerns, *proposed_conditions]).lower()
     if any(term in issue_lower for term in high_risk_terms):
         risk_flags.append("issue_contains_high_risk_terms")
+    if any(term in decision_context_lower for term in high_risk_terms):
+        risk_flags.append("decision_context_contains_high_risk_terms")
 
     if len(concerns) >= 3:
         risk_flags.append("three_or_more_concerns")
