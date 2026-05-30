@@ -82,6 +82,7 @@ defmodule Wave3aHandlers.EnvelopeShapeTest do
       # Top-level keys present, no nesting under 'data'.
       assert body["ok"] == true
       assert body["protocol_version"] == "wave3a.v1"
+
       refute Map.has_key?(body, "data"),
              "§2.2: envelope MUST be top-level keys, never nested under 'data'"
     end
