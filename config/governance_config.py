@@ -930,15 +930,11 @@ DELTA_NORM_MAX_BY_CLASS: Dict[str, ScaleConstant] = {
               "one check-in per day means a corpus takes weeks to build. "
               "Re-run scripts/calibrate_class_conditional.py once corpus exists."),
     "engaged_ephemeral": ScaleConstant(
-        name="DELTA_NORM_MAX[engaged_ephemeral]", value=0.2018, measured_on="2026-04-30",
-        corpus_size=0, percentile=None, provenance="alias",
-        notes="Alias to default. engaged_ephemeral cohort added by S8a Phase 2 "
- ": ephemeral agents with "
-              "total_updates >= 3 promote to engaged_ephemeral; the corpus does "
-              "not exist until promotion runs. "
-              "REVIEW BY: 2026-05-30 — if corpus_size is still 0 after a month, "
-              "either the sweeper isn't running or the threshold is wrong. "
-              "If corpus crosses N>=30, re-run scripts/calibrate_class_conditional.py."),
+        name="DELTA_NORM_MAX[engaged_ephemeral]", value=0.4246, measured_on="2026-05-30",
+        corpus_size=1289, percentile=95, provenance="measured",
+        notes="S8a 30-day REVIEW BY recalibration. engaged_ephemeral active "
+              "identity count grew from 163 to 261; healthy production slice "
+              "is now large enough to replace the default alias."),
 }
 
 # Healthy operating points per class — median (E, I, S) on healthy-regime
@@ -952,7 +948,7 @@ HEALTHY_OPERATING_POINT_BY_CLASS: Dict[str, Tuple[float, float, float]] = {
     "Watcher":  (0.7482, 0.7686, 0.2477),   # N=283
     "Steward":  (0.7264, 0.7934, 0.2364),   # alias=default (N=0; see DELTA_NORM_MAX[Steward])
     "Chronicler": (0.7264, 0.7934, 0.2364), # alias=default (N=0; see DELTA_NORM_MAX[Chronicler])
-    "engaged_ephemeral": (0.7264, 0.7934, 0.2364), # alias=default (S8a Phase 2; see DELTA_NORM_MAX[engaged_ephemeral])
+    "engaged_ephemeral": (0.7556, 0.6853, 0.3068), # measured 2026-05-30; N=1289
 }
 
 # Default healthy operating point (fleet fallback for unclassified agents).

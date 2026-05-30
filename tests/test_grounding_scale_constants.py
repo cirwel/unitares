@@ -145,6 +145,24 @@ def test_healthy_operating_point_class_conditional():
     assert unknown_hop == HEALTHY_OPERATING_POINT_DEFAULT
 
 
+def test_engaged_ephemeral_review_cookie_recalibrated():
+    """S8a 30-day review replaced the default alias with measured values."""
+    from config.governance_config import (
+        DELTA_NORM_MAX_BY_CLASS,
+        HEALTHY_OPERATING_POINT_BY_CLASS,
+    )
+
+    sc = DELTA_NORM_MAX_BY_CLASS["engaged_ephemeral"]
+    assert sc.provenance == "measured"
+    assert sc.measured_on == "2026-05-30"
+    assert sc.corpus_size == 1289
+    assert sc.percentile == 95
+    assert sc.value == pytest.approx(0.4246)
+    assert HEALTHY_OPERATING_POINT_BY_CLASS["engaged_ephemeral"] == pytest.approx(
+        (0.7556, 0.6853, 0.3068)
+    )
+
+
 def test_delta_norm_max_default_covers_full_state_space_diagonal():
     """Fleet-wide default must allow full diagonal so unclassified agents can hit C=0."""
     assert DELTA_NORM_MAX.value >= math.sqrt(3) - 0.01
