@@ -597,6 +597,36 @@ async def test_score_kg_node_id_is_deterministic_per_pair(mocked_db):
 
 
 @pytest.mark.asyncio
+async def test_score_skips_kg_emit_when_n_dims_used_is_zero(mocked_db):
+    """When the score had no EISV channels to compute on (n_dims_used=0,
+    typical for fresh-agent onboards with no core.agent_state history),
+    the verdict is forced inconclusive by _classify_verdict's short-circuit.
+    The audit row still writes (forensic anchor), but the public KG node
+    is skipped to avoid noise. 2026-05-30: 24 of 26 KG R1 discoveries were
+    n_dims=0 from this exact path."""
+    from src.identity.trajectory_continuity import score_trajectory_continuity
+
+    # Empty series → reconstruct returns no usable data for any channel
+    # → n_dims_used=0 → verdict forced to inconclusive.
+    empty_series = {"E": [], "I": [], "S": [], "V": []}
+    mocked_db.reconstruct_eisv_series = AsyncMock(
+        side_effect=_stub_reconstruct(empty_series, empty_series)
+    )
+
+    score = await score_trajectory_continuity(
+        claimed_parent_id="parent-uuid",
+        successor_id="successor-uuid",
+    )
+
+    assert score.n_dims_used == 0
+    assert score.verdict == "inconclusive"
+    # Audit row written (canonical forensic record).
+    mocked_db.record_r1_score_audit.assert_awaited_once()
+    # KG node skipped to avoid "I couldn't score this" noise.
+    mocked_db.public_kg_graph.add_discovery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_score_kg_node_id_differs_across_pairs(mocked_db):
     """Different (parent, successor) pairs must produce different node ids
     so dedupe-by-pair is per-pair, not global."""

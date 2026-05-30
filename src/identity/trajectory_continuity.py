@@ -172,8 +172,19 @@ async def _emit_public_kg_node(
     consumers needing forensic access read.
 
     Returns True on successful write, False otherwise (so tests can assert
-    the side-effect path without parsing logs).
+    the side-effect path without parsing logs). False covers both the
+    "no data to score" skip below and the fail-soft exception path.
     """
+    # When n_dims_used == 0 the verdict is forced to "inconclusive" by
+    # _classify_verdict's short-circuit (no channels had enough data to
+    # score). Emitting "I couldn't score this" to the public KG is noise:
+    # the audit row remains as the forensic anchor (canonical record per
+    # the v3.3-A docstring contract above), and downstream R2/sweep
+    # consumers operate on the audit table, not the KG node. Measured
+    # 2026-05-30: 24 of 26 new R1 KG discoveries were n_dims=0 from
+    # fresh-agent onboards that had no core.agent_state history yet.
+    if score.n_dims_used == 0:
+        return False
     try:
         from src.knowledge_graph import get_knowledge_graph
         from src.knowledge_graph import DiscoveryNode
