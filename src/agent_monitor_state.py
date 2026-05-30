@@ -91,6 +91,26 @@ def _snapshot_governor_state(monitor: UNITARESMonitor) -> None:
         monitor.state._governor_state_dict = None
 
 
+def _attach_behavioral_state(monitor: UNITARESMonitor, state_data: dict) -> None:
+    """Merge the behavioral EISV EMA into the persisted snapshot.
+
+    The load path (``GovernanceMonitor.load_persisted_state``) already restores a
+    ``behavioral_eisv`` block via ``BehavioralEISV.from_dict``, but the live save
+    path historically serialized only the ODE state — so behavioral confidence reset
+    to ODE-fallback on every process restart (0/702 state files carried it). This
+    makes save symmetric with load. ``to_dict_with_history``/``from_dict`` round-trip
+    update_count, EMA values, histories, and the Welford baseline faithfully.
+    Telemetry serialization must never break a state save, so it is fail-open.
+    """
+    beh = getattr(monitor, "_behavioral_state", None)
+    if beh is None:
+        return
+    try:
+        state_data["behavioral_eisv"] = beh.to_dict_with_history()
+    except Exception:  # noqa: BLE001 — never let a snapshot serialization break the save
+        logger.debug("Behavioral state serialization skipped during save", exc_info=True)
+
+
 async def save_monitor_state_async(agent_id: str, monitor: UNITARESMonitor) -> None:
     """
     Async version of save_monitor_state - uses file-based storage.
@@ -99,6 +119,7 @@ async def save_monitor_state_async(agent_id: str, monitor: UNITARESMonitor) -> N
     """
     _snapshot_governor_state(monitor)
     state_data = monitor.state.to_dict_with_history()
+    _attach_behavioral_state(monitor, state_data)
 
     state_file = get_state_file(agent_id)
     state_file.parent.mkdir(parents=True, exist_ok=True)
@@ -168,6 +189,7 @@ def save_monitor_state(agent_id: str, monitor: UNITARESMonitor) -> None:
     """Save monitor state to file with locking to prevent race conditions."""
     _snapshot_governor_state(monitor)
     state_data = monitor.state.to_dict_with_history()
+    _attach_behavioral_state(monitor, state_data)
 
     state_file = get_state_file(agent_id)
     state_file.parent.mkdir(parents=True, exist_ok=True)

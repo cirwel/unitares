@@ -2,6 +2,16 @@
 
 Provides a narrow direct-call path for core tools whose handlers already accept
 plain argument dicts. Everything else falls back to the MCP dispatch pipeline.
+
+Wave 3a routing integration (cutover-discovered gap): the REST entry point
+``execute_http_tool`` checks the per-tool routing table BEFORE the direct
+handler short-circuit. Without this, REST callers (curl, loadgen, simple
+HTTP clients) would bypass BEAM dispatch even when the operator has flipped
+``WAVE_3A_*_ON_BEAM=true`` and the routing table is populated, because the
+five core tools in ``_DIRECT_HTTP_TOOL_HANDLERS`` short-circuit MCP dispatch.
+
+See ``docs/proposals/beam-wave-3a-read-only-handlers.md`` v0.2 §5 (Wave 3a
+cutover sequence) + architect FIND-A4 (dispatch-path question).
 """
 
 from __future__ import annotations
@@ -19,8 +29,45 @@ from src.mcp_handlers.utils import require_agent_id
 from src.services.http_dispatch_fallback import execute_http_dispatch_fallback
 from src.services.runtime_queries import get_governance_metrics_data, get_health_check_data
 from src.services.tool_usage_recorder import classify_tool_result, record_tool_usage
+from src.wave3a_beam_proxy import proxy_to_beam
+from src.wave3a_routing import get_route as wave3a_get_route
 
 ToolHandler = Callable[[Dict[str, Any]], Awaitable[Any]]
+
+
+# Envelope keys that are transport metadata — stripped before handing the
+# payload to ``_build_http_tool_response`` so REST callers see the same
+# handler-shape they got pre-cutover. Per ``elixir/wave3a_handlers/lib/
+# wave3a_handlers/http_router.ex`` §2.2 the envelope is flat (top-level
+# keys, never nested under ``data``); ``ok`` + ``protocol_version`` are the
+# only universal transport fields.
+_WAVE3A_ENVELOPE_TRANSPORT_KEYS = frozenset({"ok", "protocol_version"})
+
+
+def _unwrap_wave3a_envelope_for_http(envelope: Any) -> Any:
+    """Strip Wave 3a envelope transport keys for REST wire output.
+
+    The BEAM envelope is ``{"ok": true, "protocol_version": "wave3a.v1",
+    ...handler_fields...}`` — handler payload is at the top level alongside
+    the transport keys. REST callers expect the handler payload only (same
+    shape the Python direct handler returns), so we strip ``ok`` and
+    ``protocol_version`` and return the rest as the tool result.
+
+    Defensive: if the envelope is unrecognised (not a dict, ``ok`` not
+    True, missing keys) we return it untouched. ``proxy_to_beam`` only
+    returns ``ok=True`` results with a validated envelope per
+    ``_validate_success_envelope``, so this branch shouldn't fire in
+    production — but if it ever does, returning the raw envelope is more
+    diagnostic than raising.
+    """
+    if not isinstance(envelope, dict):
+        return envelope
+    if envelope.get("ok") is not True:
+        return envelope
+    return {
+        k: v for k, v in envelope.items()
+        if k not in _WAVE3A_ENVELOPE_TRANSPORT_KEYS
+    }
 
 
 def _normalize_direct_http_result(result: Any) -> Any:
@@ -64,11 +111,44 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
     the full MCP dispatch path. All other tools use an HTTP-specific fallback
     that skips identity-resolution middleware because HTTP already set context.
 
+    Wave 3a routing — HTTP path must also honor the per-tool routing table.
+    Cutover-discovered gap: REST callers bypass MCP dispatch via
+    ``_DIRECT_HTTP_TOOL_HANDLERS``, so without this check the routing only
+    fires for MCP-protocol clients. The check is symmetric with
+    ``src/mcp_server.py::get_tool_wrapper``: routing-table-hit → BEAM proxy
+    → on success, return the unwrapped envelope payload; on any BEAM failure
+    mode, fall through to the existing direct-handler / fallback path.
+    Routing-table-miss → unchanged (single dict lookup is hot-path cheap).
+
     Records tool_usage telemetry (JSONL + audit.tool_usage) at every exit point.
     """
     agent_id = arguments.get("agent_id") if isinstance(arguments, dict) else None
     t0 = time.monotonic()
     try:
+        # Wave 3a routing — HTTP path symmetric with MCP-protocol wrapper.
+        # On BEAM success we return the unwrapped envelope payload. On any
+        # BEAM failure (timeout, connect_error, envelope_invalid, etc.) the
+        # proxy itself emits the §4.2 fallback event and we fall through to
+        # the existing Python path — same fallback semantics as the MCP
+        # wrapper at ``src/mcp_server.py::get_tool_wrapper``.
+        beam_url = wave3a_get_route(tool_name)
+        if beam_url is not None:
+            proxy_result = await proxy_to_beam(
+                tool_name=tool_name,
+                beam_url=beam_url,
+                kwargs=arguments,
+            )
+            if proxy_result.ok:
+                latency_ms = int((time.monotonic() - t0) * 1000)
+                record_tool_usage(tool_name=tool_name, agent_id=agent_id,
+                                  success=True, latency_ms=latency_ms)
+                # The proxy already wrote the success-row measurement
+                # (FIND-A5 fold in ``wave3a_beam_proxy.py``); do not
+                # duplicate the write here.
+                return _unwrap_wave3a_envelope_for_http(proxy_result.response)
+            # Proxy failed — fall through to Python path. The proxy already
+            # emitted the §4.2 fallback event; nothing to do here.
+
         handler = get_direct_http_tool_handler(tool_name)
         if handler is not None:
             result = await handler(arguments)
