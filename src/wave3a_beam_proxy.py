@@ -42,6 +42,7 @@ the outbound request; PR #4 verifies it on the BEAM side.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -55,6 +56,13 @@ from src.coordination_events import (
     COORDINATION_FAILURE_WAVE_3A_FALLBACK,
     COORDINATION_FAILURE_WAVE_3A_TIMEOUT,
 )
+
+# §4.3 measurement channel: the §4.2 rate-of-failure stop sign needs both
+# numerator (failure events emitted above) and denominator (per-routed-call
+# success rows). ``wave3a_probe.py`` writes measurement rows for HTTP probe
+# calls; tool-dispatch calls through ``proxy_to_beam`` go through a
+# different surface and need their own success-row write site.
+MEASUREMENT_TYPE_WAVE_3A_REQUEST = "measurement.wave_3a.request"
 
 logger = logging.getLogger(__name__)
 
@@ -140,26 +148,32 @@ async def _emit_event(event_type: str, payload: Dict[str, Any]) -> None:
     failure here MUST NOT propagate into the dispatch path. We log at
     debug and move on (mirrors ``src/mcp_handlers/wave3a_probe.py``'s
     measurement-write discipline).
+
+    Routes through ``db._pool`` — which post-PR #218 is an ``ExecutorPool``
+    wrapper, NOT a raw ``asyncpg.Pool`` — passed straight to ``emit_event``.
+    ``emit_event`` only calls ``pool.acquire()``, which both the wrapper
+    and a raw asyncpg pool expose, so the call works against either. An
+    earlier ``isinstance(pool, asyncpg.Pool)`` guard here silently dropped
+    every emit in production (FIND-R1, council fold). The probe module
+    (``wave3a_probe.py::_write_measurement``) demonstrates the same
+    pattern using ``db.acquire()`` directly.
     """
     try:
-        import asyncpg
-
         from src.coordination_events import emit_event
         from src.db import get_db
 
         db = get_db()
-        if not hasattr(db, "_pool") or getattr(db, "_pool", None) is None:
+        pool = getattr(db, "_pool", None)
+        if pool is None:
+            # Lazy-init the pool if the backend hasn't been touched yet
+            # (e.g., a tool dispatch fired before any other handler did).
             try:
                 await db.init()
             except Exception:  # noqa: BLE001
                 return
-        pool = getattr(db, "_pool", None)
-        if not isinstance(pool, asyncpg.Pool):
-            logger.debug(
-                "[wave3a-proxy] event emit skipped: pool is not asyncpg.Pool "
-                "(got %s)",
-                type(pool).__name__,
-            )
+            pool = getattr(db, "_pool", None)
+        if pool is None:
+            logger.debug("[wave3a-proxy] event emit skipped: no pool available")
             return
         await emit_event(
             pool,
@@ -194,6 +208,75 @@ def _spawn_emit(event_type: str, payload: Dict[str, Any]) -> None:
 
 _PENDING_EMITS: "set[asyncio.Task[None]]" = set()
 
+# Strong references for in-flight measurement writes. Same set+discard
+# pattern as ``wave3a_probe.py::_PENDING_WRITES`` — Watcher P001 fix.
+_PENDING_WRITES: "set[asyncio.Task[None]]" = set()
+
+
+async def _write_success_measurement(
+    *,
+    endpoint: str,
+    elapsed_ms: int,
+    payload_bytes: int,
+    beam_url: str,
+) -> None:
+    """Insert one ``measurement.wave_3a.request`` row marking a routed-call
+    success. Failures swallowed — measurement is observability infra for
+    the §4.2 denominator and a write failure here MUST NOT propagate into
+    the dispatch path. Mirrors ``wave3a_probe.py::_write_measurement``.
+    """
+    try:
+        from src.db import get_db
+
+        db = get_db()
+        meta_json = json.dumps(
+            {"source": "proxy_to_beam", "beam_url": beam_url}
+        )
+        async with db.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO audit.coordination_measurements
+                    (measurement_type, endpoint, elapsed_ms, status,
+                     payload_bytes, meta)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                """,
+                MEASUREMENT_TYPE_WAVE_3A_REQUEST,
+                endpoint,
+                elapsed_ms,
+                "200",
+                payload_bytes,
+                meta_json,
+            )
+    except Exception as exc:  # noqa: BLE001 — observability infra; swallow
+        logger.debug(
+            "[wave3a-proxy] measurement write failed: %r (endpoint=%s "
+            "elapsed_ms=%s)",
+            exc,
+            endpoint,
+            elapsed_ms,
+        )
+
+
+def _spawn_success_measurement(
+    *, endpoint: str, elapsed_ms: int, payload_bytes: int, beam_url: str,
+) -> None:
+    """Fire-and-forget the success-measurement write, keeping a strong ref."""
+    try:
+        task = asyncio.create_task(
+            _write_success_measurement(
+                endpoint=endpoint,
+                elapsed_ms=elapsed_ms,
+                payload_bytes=payload_bytes,
+                beam_url=beam_url,
+            )
+        )
+        _PENDING_WRITES.add(task)
+        task.add_done_callback(_PENDING_WRITES.discard)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "[wave3a-proxy] create_task for measurement write failed: %r", exc
+        )
+
 
 # ---------------------------------------------------------------------------
 # Outbound HTTP — §3.2 timeout + fallback
@@ -214,10 +297,11 @@ async def _call_beam(
     if token:
         headers["authorization"] = f"Bearer {token}"
     body = {"tool_name": tool_name, "arguments": kwargs}
-    # Create a per-call client. The BEAM-routed tool count is small in
-    # Wave 3a (≤4 handlers per §1.1) and the per-call overhead is dwarfed
-    # by the 500ms timeout budget. A shared client would risk anyio/asyncio
-    # loop-binding issues that the per-call client trivially sidesteps.
+    # Per-call client: Wave 3a calls are HTTP-over-localhost (no TLS), so
+    # connection setup cost is negligible against the 500ms budget. A shared
+    # client is also viable — httpx does not have asyncpg's loop-binding
+    # constraint. Per-call is chosen for simplicity at Wave 3a scale (≤4
+    # handlers). Revisit for Wave 3b if p99 pressure appears.
     async with httpx.AsyncClient(timeout=BEAM_TIMEOUT_SECONDS) as client:
         response = await client.post(beam_url, json=body, headers=headers)
         response.raise_for_status()
@@ -376,6 +460,22 @@ async def proxy_to_beam(
 
     logger.debug(
         "[wave3a-proxy] %s: BEAM ok at %dms", tool_name, elapsed_ms
+    )
+    # FIND-A5 fold: write one ``measurement.wave_3a.request`` row marking
+    # this routed-call success so §4.2's rate-of-failure denominator has a
+    # non-failure baseline to divide against. Without this, the denominator
+    # counts only emitted failure events and the stop sign is structurally
+    # mis-scaled. Fire-and-forget so the write does not contribute to the
+    # latency it itself records.
+    try:
+        payload_bytes = len(json.dumps(body)) if body is not None else 0
+    except Exception:  # noqa: BLE001
+        payload_bytes = 0
+    _spawn_success_measurement(
+        endpoint=tool_name,
+        elapsed_ms=elapsed_ms,
+        payload_bytes=payload_bytes,
+        beam_url=beam_url,
     )
     return ProxyResult(ok=True, response=body, elapsed_ms=elapsed_ms)
 

@@ -98,6 +98,13 @@ except ImportError as e:
 
 # Import dispatch_tool from handlers (reuse all existing tool logic)
 from src.mcp_handlers import dispatch_tool, TOOL_HANDLERS
+# Wave 3a per-tool routing table imports — hoisted to module load time so
+# (a) the per-call ~200-500ns import cost vanishes from the dispatch hot
+# path, and (b) ``patch("src.wave3a_routing.get_route")`` style mocks
+# affect the wrapper (function-local imports bypass module-level patches —
+# see memory ``feedback_patch-local-imports``). FIND-A3 council fold.
+from src.wave3a_routing import get_route as _wave3a_get_route
+from src.wave3a_beam_proxy import proxy_to_beam as _wave3a_proxy_to_beam
 
 # Tool schemas are now in src/tool_schemas.py (shared module)
 
@@ -272,14 +279,13 @@ def get_tool_wrapper(tool_name: str):
                 # we fall back to the existing Python dispatch — silent
                 # skip is the worst possible outcome per §3.2.
                 #
-                # Hot-path discipline: the import + lookup are both O(1)
-                # and cheap. For the ~100 tools NOT in the routing table
-                # the lookup returns None and the existing dispatch fires
-                # unchanged.
-                from src.wave3a_routing import get_route as _wave3a_get_route
+                # Hot-path discipline: the lookup is O(1) and cheap. For
+                # the ~100 tools NOT in the routing table the lookup returns
+                # None and the existing dispatch fires unchanged. Imports
+                # are at module top-level (FIND-A3 council fold) so the
+                # per-call cost is zero and ``patch()``-style mocks work.
                 beam_url = _wave3a_get_route(tool_name)
                 if beam_url is not None:
-                    from src.wave3a_beam_proxy import proxy_to_beam as _wave3a_proxy_to_beam
                     proxy_result = await _wave3a_proxy_to_beam(
                         tool_name=tool_name,
                         beam_url=beam_url,

@@ -217,21 +217,71 @@ def clean_routing_table():
 
 
 @pytest.mark.asyncio
-async def test_routing_table_miss_passthrough(captured_events):
-    """Tool not in table → no BEAM call, no fallback event, Python fires."""
-    from src.wave3a_beam_proxy import proxy_to_beam  # noqa: F401  (import sanity)
-    from src import wave3a_routing
+async def test_routing_table_miss_passthrough(
+    captured_events, monkeypatch: pytest.MonkeyPatch
+):
+    """Tool not in table → wrapper invokes Python dispatch, NOT the BEAM proxy.
 
-    assert wave3a_routing.get_route("nonexistent_tool") is None
+    Exercises ``get_tool_wrapper`` directly so the assertion observes the
+    wrapper's actual behaviour. Earlier draft of this test only consulted
+    ``wave3a_routing.get_route`` — that test would have passed even if the
+    routing-table integration in ``mcp_server.get_tool_wrapper`` were
+    deleted. FIND-R4 council fold: tests must observe the wrapper, not the
+    routing-table state.
+    """
+    from src import wave3a_beam_proxy, wave3a_routing
+    from src import mcp_server
+
+    assert wave3a_routing.get_route("_wave3a_test_miss_tool") is None
     assert wave3a_routing.route_count() == 0
 
-    # The dispatch wrapper consults get_route first; with a miss it falls
-    # through to dispatch_tool. Since this test is transport-only, simulate
-    # the wrapper's branch directly: get_route → None means "skip proxy".
-    route = wave3a_routing.get_route("some_other_tool")
-    assert route is None
-    # No proxy invoked → no events captured.
+    # Spy on dispatch_tool and on the BEAM proxy so we can confirm exactly
+    # which path fired. ``patch("src.mcp_server.dispatch_tool")`` works
+    # because the wrapper closes over the module-level binding (FIND-A3
+    # hoisted ``_wave3a_get_route`` / ``_wave3a_proxy_to_beam`` similarly).
+    dispatch_calls: List[Tuple[str, Dict[str, Any]]] = []
+    proxy_calls: List[str] = []
+
+    class _FakeText:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    async def fake_dispatch(name, arguments):
+        dispatch_calls.append((name, dict(arguments or {})))
+        # Mimic dispatch_tool's TextContent-list return; the wrapper
+        # extracts ``.text`` from the first element and json-decodes.
+        return [_FakeText(json.dumps({"ok": True, "fake": True}))]
+
+    async def fake_proxy(**kwargs):  # pragma: no cover — must not fire
+        proxy_calls.append(kwargs.get("tool_name", ""))
+        raise AssertionError(
+            "proxy_to_beam invoked on routing-table-miss path"
+        )
+
+    monkeypatch.setattr(mcp_server, "dispatch_tool", fake_dispatch)
+    monkeypatch.setattr(
+        mcp_server, "_wave3a_proxy_to_beam", fake_proxy
+    )
+
+    # Wrappers are cached; clear the cache so a fresh wrapper picks up the
+    # patched dispatch binding via closure-on-module.
+    mcp_server._tool_wrappers_cache.clear()
+    wrapper = mcp_server.get_tool_wrapper("_wave3a_test_miss_tool")
+    result = await wrapper(arg="value")
+
+    # Python dispatch fired exactly once; BEAM proxy did NOT fire; no
+    # fallback events were emitted.
+    assert dispatch_calls == [("_wave3a_test_miss_tool", {"arg": "value"})]
+    assert proxy_calls == []
     assert captured_events == []
+    # Wrapper's post-processing decodes the TextContent payload.
+    assert result == {"ok": True, "fake": True}
+
+    # Cleanup: pop the cached wrapper so the patched dispatch binding does
+    # not leak into other tests in this module.
+    mcp_server._tool_wrappers_cache.pop("_wave3a_test_miss_tool", None)
+    # Silence unused-import lint while keeping the import-sanity probe.
+    _ = wave3a_beam_proxy
 
 
 # ---------------------------------------------------------------------------
