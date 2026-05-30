@@ -54,6 +54,43 @@ COLLISION_SYMPTOM_RE = (
 )
 DRILL_AUDIT_SESSION_PREFIX = "phase-b-drill:"
 
+# Session-label prefixes that mark *synthetic* conflict traffic — the HTTP race
+# harness and the live-probe smoke runner manufacture conflict_held_by_other
+# events against throwaway `.tmp` surfaces to exercise the plane. They must NOT
+# count as organic Type-A evidence (§6.1.3): they inflate the distinct-surface
+# count with conflicts that §6.1.4 can never corroborate (no real incident is
+# ever recorded, and their `codex-*` audit_session labels don't even share a
+# namespace with KG `provenance.writer_session_id_at_write`, which is `agent-*`).
+# 2026-05-30 forensic on surface_kind='file': all 6 "organic" surfaces were
+# harness/probe/bring-up artifacts; §6.1.4 was the only criterion preventing a
+# spurious promotion on test traffic. Tightening §6.1.3 removes that fragility.
+SYNTHETIC_SESSION_PREFIXES = ("codex-http-race", "codex-live-probe")
+
+
+def _organic_audit_session_sql() -> str:
+    """SQL predicate on ``payload->>'audit_session'`` selecting *organic*
+    conflict evidence for §6.1.3 / §6.1.4: a non-empty session that is neither a
+    controlled drill nor synthetic harness/probe traffic.
+
+    A conflict with an empty audit_session is excluded because it is
+    structurally unlinkable in §6.1.4 (no session to join to a KG incident), so
+    it cannot contribute corroborable Type-A evidence. All interpolated values
+    are trusted module constants (no quotes/wildcards), never user input — safe
+    to inline rather than parameterize. The LIKE wildcard is written ``%%``
+    because this fragment is embedded in a query that psycopg2 then runs through
+    %-style parameter substitution; a bare ``%`` would be misread as a
+    placeholder (IndexError: tuple index out of range).
+    """
+    clauses = [
+        "coalesce(payload->>'audit_session', '') <> ''",
+        f"payload->>'audit_session' NOT LIKE '{DRILL_AUDIT_SESSION_PREFIX}%%'",
+    ]
+    clauses.extend(
+        f"payload->>'audit_session' NOT LIKE '{prefix}%%'"
+        for prefix in SYNTHETIC_SESSION_PREFIXES
+    )
+    return " AND ".join(clauses)
+
 
 @dataclass
 class CriterionResult:
@@ -212,15 +249,16 @@ def _criterion_3_type_a_signal(
     cur, surface_kind: str, window_days: int, *, accept_drill_evidence: bool
 ) -> CriterionResult:
     """≥3 distinct surface_id with conflict_held_by_other in the window."""
+    organic_sql = _organic_audit_session_sql()
     cur.execute(
-        """
+        f"""
         SELECT count(DISTINCT surface_id) AS distinct_surfaces,
                count(*) AS total_conflicts,
                count(DISTINCT surface_id) FILTER (
-                 WHERE coalesce(payload->>'audit_session', '') NOT LIKE %s
+                 WHERE {organic_sql}
                ) AS organic_distinct_surfaces,
                count(*) FILTER (
-                 WHERE coalesce(payload->>'audit_session', '') NOT LIKE %s
+                 WHERE {organic_sql}
                ) AS organic_total_conflicts,
                count(DISTINCT surface_id) FILTER (
                  WHERE payload->>'audit_session' LIKE %s
@@ -235,8 +273,6 @@ def _criterion_3_type_a_signal(
           AND ts > now() - %s::interval
         """,
         (
-            f"{DRILL_AUDIT_SESSION_PREFIX}%",
-            f"{DRILL_AUDIT_SESSION_PREFIX}%",
             f"{DRILL_AUDIT_SESSION_PREFIX}%",
             f"{DRILL_AUDIT_SESSION_PREFIX}%",
             surface_kind,
@@ -341,8 +377,9 @@ def _criterion_4_incident_linkage(
             detail="knowledge.discoveries table not present; KG linkage cannot be evaluated",
         )
 
+    organic_sql = _organic_audit_session_sql()
     cur.execute(
-        """
+        f"""
         WITH conflicts AS (
           SELECT
             event_id,
@@ -354,7 +391,7 @@ def _criterion_4_incident_linkage(
             AND advisory_mode = true
             AND surface_kind = %s
             AND ts > now() - %s::interval
-            AND coalesce(payload->>'audit_session', '') NOT LIKE %s
+            AND {organic_sql}
         ), linked AS (
           SELECT DISTINCT
             c.event_id,
@@ -384,7 +421,6 @@ def _criterion_4_incident_linkage(
         (
             surface_kind,
             f"{window_days} days",
-            f"{DRILL_AUDIT_SESSION_PREFIX}%",
             COLLISION_SYMPTOM_RE,
         ),
     )
