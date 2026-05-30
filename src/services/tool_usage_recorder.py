@@ -8,11 +8,61 @@ asyncpg (anyio-asyncio deadlock rule).
 
 from __future__ import annotations
 
-from typing import Optional
+import json
+from typing import Any, Optional, Tuple
 
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def _payload_from_result(result: Any) -> Optional[dict]:
+    """Best-effort extraction of the JSON payload dict from a dispatched tool result.
+
+    Handlers return either a single-element list of MCP TextContent (whose .text is
+    a JSON string) or already-decoded data. Returns the decoded dict, or None when
+    the result is not a recognizable JSON object (treated as success — no signal).
+    """
+    if isinstance(result, dict):
+        return result
+    # All known error-bearing responses put the payload in element 0; inspect it
+    # regardless of list length so a multi-element response can't hide a failure.
+    if isinstance(result, (list, tuple)) and result and hasattr(result[0], "text"):
+        try:
+            decoded = json.loads(result[0].text)
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            return None
+        return decoded if isinstance(decoded, dict) else None
+    return None
+
+
+# error_category values that are caused by governance (EISV) rather than by the
+# caller or the substrate. AGENT_PAUSED / AGENT_ARCHIVED gate-refusals carry
+# error_category="state_error"; counting them as tool failures would re-import the
+# circularity this label exists to avoid (a paused agent's later calls fail ONLY
+# because EISV paused it). Treat as no-signal to keep tool_usage.success EISV-blind.
+_EISV_CAUSED_ERROR_CATEGORIES = frozenset({"state_error"})
+
+
+def classify_tool_result(result: Any) -> Tuple[bool, Optional[str]]:
+    """Distinguish a genuine, EISV-blind tool failure from a successful call (possibly
+    carrying a governance verdict) by inspecting the result payload.
+
+    Only ``error_response()`` sets ``success: False`` (validation/auth/state/system
+    errors). ``success_response()`` always sets ``success: True`` and spreads any
+    governance ``verdict`` (pause/reject) into the payload — those are SUCCESSFUL
+    tool calls and must NOT be flagged as failures. ``state_error`` refusals are
+    excluded too: they are governance-caused (see ``_EISV_CAUSED_ERROR_CATEGORIES``),
+    so counting them would make the label circular. Returns ``(success, error_type)``.
+    """
+    payload = _payload_from_result(result)
+    if isinstance(payload, dict) and payload.get("success") is False:
+        category = payload.get("error_category")
+        if category in _EISV_CAUSED_ERROR_CATEGORIES:
+            return True, None  # governance-caused refusal — not an EISV-blind failure
+        error_type = category or payload.get("error_code") or "tool_error"
+        return False, str(error_type)
+    return True, None
 
 
 def record_tool_usage(
