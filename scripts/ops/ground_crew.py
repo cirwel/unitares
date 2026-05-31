@@ -53,6 +53,15 @@ class CronFailure:
     error: str
 
 
+@dataclass(frozen=True)
+class EvidenceItem:
+    """One labeled evidence line used by Ground Crew audits."""
+
+    id: str
+    source: str
+    text: str
+
+
 def run_command(args: list[str], cwd: Path | None = None, timeout: int = 20) -> CommandResult:
     """Run a read-only command and capture output without raising on failure."""
     try:
@@ -213,7 +222,82 @@ def _has_direct_evidence_match(normalized_claim: str, normalized_evidence: str) 
     return re.search(pattern, normalized_evidence) is not None
 
 
-def audit_claims(claims: Sequence[str], evidence: Sequence[str]) -> dict[str, list[dict[str, str]]]:
+def _coerce_evidence_items(evidence: Sequence[str | EvidenceItem]) -> list[EvidenceItem]:
+    """Convert inline evidence strings into labeled evidence items."""
+    items: list[EvidenceItem] = []
+    for index, item in enumerate(evidence, start=1):
+        if isinstance(item, EvidenceItem):
+            items.append(item)
+        elif isinstance(item, str):
+            items.append(EvidenceItem(id=f"inline:{index}", source="inline", text=item))
+        else:
+            raise TypeError("audit evidence must be strings or EvidenceItem objects")
+    return items
+
+
+def _required_packet_string(value: object, field_name: str) -> str:
+    """Return a required packet string or raise a clear validation error."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"evidence packet {field_name} must be a non-empty string")
+    return value
+
+
+def _optional_packet_string(value: object, default: str, field_name: str) -> str:
+    """Return an optional packet string, defaulting only when absent or blank."""
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise ValueError(f"evidence packet {field_name} must be a string when present")
+    return value.strip() or default
+
+
+def load_evidence_packet(packet_path: Path) -> tuple[list[str], list[EvidenceItem]]:
+    """Load a minimal JSON evidence packet from disk.
+
+    Expected shape:
+    {"claims": ["..."], "evidence": [{"id": "...", "source": "...", "text": "..."}]}
+    """
+    data = json.loads(packet_path.read_text())
+    if not isinstance(data, dict):
+        raise ValueError("evidence packet must be a JSON object")
+
+    claims_data = data.get("claims", [])
+    evidence_data = data.get("evidence", [])
+    if not isinstance(claims_data, list):
+        raise ValueError("evidence packet 'claims' must be a list")
+    if not isinstance(evidence_data, list):
+        raise ValueError("evidence packet 'evidence' must be a list")
+
+    claims: list[str] = []
+    for item in claims_data:
+        if isinstance(item, str):
+            claims.append(item)
+        elif isinstance(item, dict):
+            claims.append(_required_packet_string(item.get("text"), "claim text"))
+        else:
+            raise ValueError("each claim must be a string or object with text")
+
+    evidence_items: list[EvidenceItem] = []
+    for index, item in enumerate(evidence_data, start=1):
+        if isinstance(item, str):
+            evidence_items.append(EvidenceItem(id=f"packet:{index}", source="packet", text=item))
+        elif isinstance(item, dict):
+            evidence_items.append(
+                EvidenceItem(
+                    id=_optional_packet_string(item.get("id"), f"packet:{index}", "evidence id"),
+                    source=_optional_packet_string(item.get("source"), "packet", "evidence source"),
+                    text=_required_packet_string(item.get("text"), "evidence text"),
+                )
+            )
+        else:
+            raise ValueError("each evidence item must be a string or object with text")
+    return claims, evidence_items
+
+
+def audit_claims(
+    claims: Sequence[str],
+    evidence: Sequence[str | EvidenceItem],
+) -> dict[str, list[dict[str, str]]]:
     """Classify claims by direct textual support in the evidence lines.
 
     This intentionally uses conservative direct matching rather than semantic
@@ -222,7 +306,8 @@ def audit_claims(claims: Sequence[str], evidence: Sequence[str]) -> dict[str, li
     """
     supported: list[dict[str, str]] = []
     unsupported: list[dict[str, str]] = []
-    normalized_evidence = [(_normalize_text(item), item) for item in evidence]
+    evidence_items = _coerce_evidence_items(evidence)
+    normalized_evidence = [(_normalize_text(item.text), item) for item in evidence_items]
     for claim in claims:
         normalized_claim = _normalize_text(claim)
         match = next(
@@ -236,11 +321,18 @@ def audit_claims(claims: Sequence[str], evidence: Sequence[str]) -> dict[str, li
         if match is None:
             unsupported.append({"claim": claim, "evidence": ""})
         else:
-            supported.append({"claim": claim, "evidence": match})
+            supported.append(
+                {
+                    "claim": claim,
+                    "evidence": match.text,
+                    "evidence_id": match.id,
+                    "source": match.source,
+                }
+            )
     return {"supported": supported, "unsupported": unsupported}
 
 
-def render_evidence_audit(claims: Sequence[str], evidence: Sequence[str]) -> str:
+def render_evidence_audit(claims: Sequence[str], evidence: Sequence[str | EvidenceItem]) -> str:
     """Render a provenance-pressure audit of claims against evidence lines."""
     result = audit_claims(claims, evidence)
     supported = result["supported"]
@@ -249,7 +341,10 @@ def render_evidence_audit(claims: Sequence[str], evidence: Sequence[str]) -> str
     lines = ["Supported claims:"]
     if supported:
         for item in supported:
-            lines.append(f"- {item['claim']} (evidence: {item['evidence']})")
+            citation = item["evidence"]
+            if item.get("evidence_id"):
+                citation = f"{item['evidence_id']} from {item.get('source', 'unknown')}: {item['evidence']}"
+            lines.append(f"- {item['claim']} (evidence: {citation})")
     else:
         lines.append("- None with direct evidence.")
 
@@ -478,6 +573,7 @@ def _build_parser() -> argparse.ArgumentParser:
     audit = subparsers.add_parser("audit", help="Audit claims against explicit evidence lines")
     audit.add_argument("--claim", action="append", default=[], help="Claim to audit; repeatable")
     audit.add_argument("--evidence", action="append", default=[], help="Evidence line; repeatable")
+    audit.add_argument("--packet", type=Path, action="append", default=[], help="JSON evidence packet to audit; repeatable")
     audit.add_argument("--json", action="store_true", help="Emit audit result as JSON")
 
     handoff = subparsers.add_parser("handoff", help="Render a compact task handoff pack")
@@ -522,11 +618,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "audit":
-        audit = audit_claims(args.claim, args.evidence)
+        claims = list(args.claim)
+        evidence: list[str | EvidenceItem] = list(args.evidence)
+        for packet_path in args.packet:
+            packet_claims, packet_evidence = load_evidence_packet(packet_path)
+            claims.extend(packet_claims)
+            evidence.extend(packet_evidence)
+        audit = audit_claims(claims, evidence)
         if args.json:
             print(json.dumps({"audit": audit}, indent=2))
         else:
-            print(render_evidence_audit(args.claim, args.evidence), end="")
+            print(render_evidence_audit(claims, evidence), end="")
         return 0
 
     if args.command == "handoff":
