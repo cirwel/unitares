@@ -5,12 +5,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts.ops import ground_crew
 from scripts.ops.ground_crew import (
     CommandResult,
+    EvidenceItem,
     RepoState,
     audit_claims,
     collect_repo_state,
+    load_evidence_packet,
     main,
     parse_cron_failures,
     render_evidence_audit,
@@ -181,6 +185,12 @@ def test_audit_claims_does_not_support_blank_or_substring_claims() -> None:
     assert [item["claim"] for item in result["unsupported"]] == ["", "safe"]
 
 
+def test_audit_claims_rejects_unexpected_programmatic_evidence_objects() -> None:
+    """Only strings and EvidenceItem objects should become citeable audit evidence."""
+    with pytest.raises(TypeError):
+        audit_claims(("tests passed",), ({"text": "tests passed"},))  # type: ignore[list-item]
+
+
 def test_render_handoff_pack_includes_repo_state_and_stop_conditions() -> None:
     """Handoff packs should be compact, sectioned, and evidence-bearing."""
     class RepoLike:
@@ -242,3 +252,96 @@ def test_handoff_json_includes_task_context(monkeypatch, capsys) -> None:
     assert payload["task"] == "publish Ground Crew"
     assert payload["repo"]["branch"] == "master"
     assert payload["cron_failures"] == []
+
+
+def test_render_evidence_audit_cites_evidence_id_and_source() -> None:
+    """Labeled evidence should remain citeable in human audit output."""
+    output = render_evidence_audit(
+        claims=("Ground Crew pulse returned [SILENT]",),
+        evidence=(
+            EvidenceItem(
+                id="cmd:pulse",
+                source="terminal",
+                text="Command output: Ground Crew pulse returned [SILENT]",
+            ),
+        ),
+    )
+
+    assert "Ground Crew pulse returned [SILENT]" in output
+    assert "cmd:pulse" in output
+    assert "terminal" in output
+
+
+def test_load_evidence_packet_parses_claims_and_labeled_evidence(tmp_path) -> None:
+    """Packet files should preserve claim text plus evidence IDs and sources."""
+    packet_path = tmp_path / "packet.json"
+    packet_path.write_text(
+        json.dumps(
+            {
+                "claims": ["Ground Crew pulse returned [SILENT]"],
+                "evidence": [
+                    {
+                        "id": "cmd:pulse",
+                        "source": "terminal",
+                        "text": "Command output: Ground Crew pulse returned [SILENT]",
+                    }
+                ],
+            }
+        )
+    )
+
+    claims, evidence = load_evidence_packet(packet_path)
+
+    assert claims == ["Ground Crew pulse returned [SILENT]"]
+    assert evidence == [
+        EvidenceItem(
+            id="cmd:pulse",
+            source="terminal",
+            text="Command output: Ground Crew pulse returned [SILENT]",
+        )
+    ]
+
+
+def test_load_evidence_packet_rejects_malformed_evidence_fields(tmp_path) -> None:
+    """Packet evidence fields should not be coerced into citeable text."""
+    malformed_packets = [
+        {"claims": ["tests passed"], "evidence": [{"id": "bad", "source": "terminal"}]},
+        {
+            "claims": ["tests passed"],
+            "evidence": [{"id": "bad", "source": "terminal", "text": {"result": "tests passed"}}],
+        },
+        {"claims": ["tests passed"], "evidence": [{"id": 123, "source": "terminal", "text": "tests passed"}]},
+        {"claims": ["tests passed"], "evidence": [{"id": "bad", "source": 123, "text": "tests passed"}]},
+    ]
+
+    for index, packet in enumerate(malformed_packets):
+        packet_path = tmp_path / f"packet-{index}.json"
+        packet_path.write_text(json.dumps(packet))
+        with pytest.raises(ValueError):
+            load_evidence_packet(packet_path)
+
+
+def test_audit_json_uses_packet_evidence_ids(tmp_path, capsys) -> None:
+    """CLI audit JSON should preserve stable evidence IDs from packet input."""
+    packet_path = tmp_path / "packet.json"
+    packet_path.write_text(
+        json.dumps(
+            {
+                "claims": ["Ground Crew pulse returned [SILENT]"],
+                "evidence": [
+                    {
+                        "id": "cmd:pulse",
+                        "source": "terminal",
+                        "text": "Command output: Ground Crew pulse returned [SILENT]",
+                    }
+                ],
+            }
+        )
+    )
+
+    assert main(["audit", "--packet", str(packet_path), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["audit"]["supported"][0]["claim"] == "Ground Crew pulse returned [SILENT]"
+    assert payload["audit"]["supported"][0]["evidence_id"] == "cmd:pulse"
+    assert payload["audit"]["supported"][0]["source"] == "terminal"
