@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -178,6 +179,196 @@ def _upstream_note(upstream_counts: str) -> str:
     return f"ahead {ahead} and behind {behind} commit(s) versus origin/master"
 
 
+def _repo_cleanliness_note(clean: bool | None, status_short: str) -> str:
+    """Render tri-state repo cleanliness without turning unknown into dirty."""
+    if clean is True:
+        return "clean"
+    if clean is False:
+        if status_short:
+            return f"dirty ({len(status_short.splitlines())} status line(s))"
+        return "dirty"
+    return "status unknown"
+
+
+def _changed_path_lines(status_short: str) -> list[str]:
+    """Extract changed path display lines from `git status --short` output."""
+    paths: list[str] = []
+    for line in status_short.splitlines():
+        stripped = line.strip()
+        if stripped:
+            paths.append(stripped)
+    return paths
+
+
+def _normalize_text(text: str) -> str:
+    """Normalize text for conservative direct-evidence matching."""
+    return " ".join(text.casefold().split())
+
+
+def _has_direct_evidence_match(normalized_claim: str, normalized_evidence: str) -> bool:
+    """Return true when a non-blank claim appears as an exact word-bounded phrase."""
+    if not normalized_claim:
+        return False
+    pattern = rf"(?<!\w){re.escape(normalized_claim)}(?!\w)"
+    return re.search(pattern, normalized_evidence) is not None
+
+
+def audit_claims(claims: Sequence[str], evidence: Sequence[str]) -> dict[str, list[dict[str, str]]]:
+    """Classify claims by direct textual support in the evidence lines.
+
+    This intentionally uses conservative direct matching rather than semantic
+    inference. Ground Crew should pressure provenance; it should not hallucinate
+    support from vibe-similar evidence.
+    """
+    supported: list[dict[str, str]] = []
+    unsupported: list[dict[str, str]] = []
+    normalized_evidence = [(_normalize_text(item), item) for item in evidence]
+    for claim in claims:
+        normalized_claim = _normalize_text(claim)
+        match = next(
+            (
+                original
+                for normalized, original in normalized_evidence
+                if _has_direct_evidence_match(normalized_claim, normalized)
+            ),
+            None,
+        )
+        if match is None:
+            unsupported.append({"claim": claim, "evidence": ""})
+        else:
+            supported.append({"claim": claim, "evidence": match})
+    return {"supported": supported, "unsupported": unsupported}
+
+
+def render_evidence_audit(claims: Sequence[str], evidence: Sequence[str]) -> str:
+    """Render a provenance-pressure audit of claims against evidence lines."""
+    result = audit_claims(claims, evidence)
+    supported = result["supported"]
+    unsupported = result["unsupported"]
+
+    lines = ["Supported claims:"]
+    if supported:
+        for item in supported:
+            lines.append(f"- {item['claim']} (evidence: {item['evidence']})")
+    else:
+        lines.append("- None with direct evidence.")
+
+    lines.extend(["", "Unsupported claims:"])
+    if unsupported:
+        for item in unsupported:
+            lines.append(f"- {item['claim']}")
+    else:
+        lines.append("- None.")
+
+    lines.extend(["", "Evidence gaps:"])
+    if unsupported:
+        for item in unsupported:
+            lines.append(f"- Collect direct evidence for: {item['claim']}")
+    elif not claims:
+        lines.append("- No claims supplied to audit.")
+    else:
+        lines.append("- No direct-evidence gaps detected by this deterministic check.")
+
+    risk = "low: all supplied claims matched supplied evidence text deterministically."
+    if unsupported:
+        risk = "medium: unsupported claims remain and need source-of-truth probes."
+    if claims and not evidence:
+        risk = "high: claims were supplied with no evidence packet."
+
+    lines.extend([
+        "",
+        "Risk:",
+        f"- {risk}",
+        "",
+        "Repair recommendation:",
+    ])
+    if unsupported:
+        lines.append("- Run or cite the narrowest source-of-truth probe for each unsupported claim, then rerun audit.")
+    else:
+        lines.append("- Keep evidence attached to the handoff; do not promote this audit into authority.")
+    return "\n".join(lines) + "\n"
+
+
+def render_handoff_pack(
+    task: str,
+    repo_state: object,
+    cron_text: str,
+    surfaces: Sequence[str] = (),
+    tests: Sequence[str] = (),
+) -> str:
+    """Render a compact handoff pack from current read-only evidence."""
+    path = getattr(repo_state, "path", "unknown")
+    branch = getattr(repo_state, "branch", "unknown")
+    clean = getattr(repo_state, "clean", None)
+    status_short = getattr(repo_state, "status_short", "")
+    head = getattr(repo_state, "head", "unknown")
+    upstream_counts = getattr(repo_state, "upstream_counts", "unknown")
+    errors = tuple(getattr(repo_state, "errors", ()))
+    failures = parse_cron_failures(cron_text)
+    changed_paths = _changed_path_lines(status_short)
+
+    lines = [
+        "Task:",
+        f"- {task}",
+        "",
+        "Current state:",
+        f"- Repo: {path}",
+        f"- Branch: {branch}; working tree {_repo_cleanliness_note(clean, status_short)}; {_upstream_note(upstream_counts)}.",
+        f"- HEAD: {head}",
+        "",
+        "Verified facts:",
+    ]
+    if failures:
+        for failure in failures:
+            lines.append(f"- Cron failure observed: {failure.name}: {failure.error}")
+    else:
+        lines.append("- No Hermes cron failures detected in supplied cron evidence.")
+    if errors:
+        for error in errors:
+            lines.append(f"- Collection warning: {error}")
+    else:
+        lines.append("- Repository evidence collected without reported command errors.")
+
+    lines.extend(["", "Unverified assumptions:"])
+    lines.append("- Runtime health beyond supplied command output was not independently proven by this handoff.")
+    lines.append("- Lease/collision status is unknown unless a separate lease probe is attached.")
+
+    lines.extend(["", "Changed files / surfaces:"])
+    if changed_paths:
+        for changed in changed_paths:
+            lines.append(f"- {changed}")
+    else:
+        lines.append("- No changed files in supplied git status evidence.")
+    if surfaces:
+        for surface in surfaces:
+            lines.append(f"- Surface: {surface}")
+
+    lines.extend([
+        "",
+        "Lease or collision status:",
+        "- No lease probe was run; do not assume collision freedom from this pack alone.",
+        "",
+        "Relevant tests:",
+    ])
+    if tests:
+        for test in tests:
+            lines.append(f"- {test}")
+    else:
+        lines.append("- No tests supplied.")
+
+    lines.extend([
+        "",
+        "Open questions:",
+        "- Are any claims in the next response unsupported by direct evidence?",
+        "- Are there any private/public boundary concerns before publishing?",
+        "",
+        "Stop conditions:",
+        "- Stop if repo divergence, failing tests, cron failure, or lease conflict appears.",
+        "- Stop before mutating credentials, resident agents, KG, or services without explicit operator intent.",
+    ])
+    return "\n".join(lines) + "\n"
+
+
 def render_pulse(cron_text: str) -> str:
     """Render a quiet-first pulse from currently collected Hermes cron evidence."""
     failures = parse_cron_failures(cron_text)
@@ -283,6 +474,18 @@ def _build_parser() -> argparse.ArgumentParser:
     pulse = subparsers.add_parser("pulse", help="Render quiet-first operational pulse")
     pulse.add_argument("--quiet", action="store_true", help="Accepted for command-shape parity")
     pulse.add_argument("--json", action="store_true", help="Emit parsed failures as JSON")
+
+    audit = subparsers.add_parser("audit", help="Audit claims against explicit evidence lines")
+    audit.add_argument("--claim", action="append", default=[], help="Claim to audit; repeatable")
+    audit.add_argument("--evidence", action="append", default=[], help="Evidence line; repeatable")
+    audit.add_argument("--json", action="store_true", help="Emit audit result as JSON")
+
+    handoff = subparsers.add_parser("handoff", help="Render a compact task handoff pack")
+    handoff.add_argument("--task", required=True, help="Task to hand off")
+    handoff.add_argument("--repo", type=Path, default=Path.cwd(), help="Repository path to inspect")
+    handoff.add_argument("--surface", action="append", default=[], help="Surface URI/path to include; repeatable")
+    handoff.add_argument("--test", action="append", default=[], help="Relevant test evidence; repeatable")
+    handoff.add_argument("--json", action="store_true", help="Emit handoff evidence as JSON")
     return parser
 
 
@@ -316,6 +519,46 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps({"cron_failures": [asdict(failure) for failure in failures]}, indent=2))
         else:
             print(render_pulse(hermes["cron_list"]), end="")
+        return 0
+
+    if args.command == "audit":
+        audit = audit_claims(args.claim, args.evidence)
+        if args.json:
+            print(json.dumps({"audit": audit}, indent=2))
+        else:
+            print(render_evidence_audit(args.claim, args.evidence), end="")
+        return 0
+
+    if args.command == "handoff":
+        repo_state = collect_repo_state(args.repo)
+        hermes = collect_hermes_text()
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "task": args.task,
+                        "repo": asdict(repo_state),
+                        "cron_failures": [
+                            asdict(failure) for failure in parse_cron_failures(hermes["cron_list"])
+                        ],
+                        "surfaces": args.surface,
+                        "tests": args.test,
+                    },
+                    default=str,
+                    indent=2,
+                )
+            )
+        else:
+            print(
+                render_handoff_pack(
+                    task=args.task,
+                    repo_state=repo_state,
+                    cron_text=hermes["cron_list"],
+                    surfaces=args.surface,
+                    tests=args.test,
+                ),
+                end="",
+            )
         return 0
 
     parser.error(f"unknown command: {args.command}")
