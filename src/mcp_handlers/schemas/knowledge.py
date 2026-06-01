@@ -283,6 +283,13 @@ class LeaveNoteParams(AgentIdentityMixin):
         default_factory=list,
         description="Tags"
     )
+    # S22 provenance - agent-knowable subset only. Keep parity with
+    # StoreKnowledgeGraphParams and KnowledgeParams so knowledge(action="note")
+    # can preserve dogfood diagnostic provenance instead of silently dropping it.
+    comparison_key: Optional[str] = Field(None, description="S22 H5 provenance: stable key for comparing the same bounded task across harnesses")
+    task_label: Optional[str] = Field(None, description="S22 H5 provenance: human-readable bounded task label")
+    task_outcome: Optional[str] = Field(None, description="S22 H5 provenance: outcome label for the bounded task")
+    memory_context: Optional[str] = Field(None, description="S22 provenance: memory/KG/transcript surfaces visible to the writer")
 
 
 class CleanupKnowledgeGraphParams(AgentIdentityMixin):
@@ -317,7 +324,7 @@ class KnowledgeParams(AgentIdentityMixin):
     limit: Optional[int] = Field(None, description="Max results")
     include_details: Optional[bool] = Field(None, description="Include full details inline (for action=search/get)")
     dry_run: Union[bool, str, None] = Field(None, description="Dry run mode (for action=cleanup)")
-    # S22 provenance — agent-knowable subset only. See StoreKnowledgeGraphParams
+    # S22 provenance - agent-knowable subset only. See StoreKnowledgeGraphParams
     # above for the dropped-field rationale.
     comparison_key: Optional[str] = Field(None, description="S22 H5 provenance: stable key for comparing the same bounded task across harnesses")
     task_label: Optional[str] = Field(None, description="S22 H5 provenance: human-readable bounded task label")

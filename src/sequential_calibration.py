@@ -54,11 +54,15 @@ Known limitations
 from __future__ import annotations
 
 from collections import defaultdict
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional
+import fcntl
 import json
 import math
+import os
 import sys
+import tempfile
 from datetime import datetime, UTC
 
 from config.governance_config import GovernanceConfig
@@ -139,6 +143,18 @@ class SequentialCalibrationTracker:
         self.prior_failure = float(prior_failure)
         self.load_state()
 
+    @contextmanager
+    def _state_file_lock(self, *, exclusive: bool):
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.state_file.with_name(f"{self.state_file.name}.lock")
+        with open(lock_path, "a+") as lock_file:
+            lock_mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+            fcntl.flock(lock_file.fileno(), lock_mode)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
     def reset(self) -> None:
         self.global_state = _empty_state()
         self.agent_states = defaultdict(_empty_state)
@@ -171,12 +187,32 @@ class SequentialCalibrationTracker:
             "epoch": GovernanceConfig.CURRENT_EPOCH,
         }
 
+    def _save_state_unlocked(self) -> None:
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(self.state_file.parent),
+            prefix=f".{self.state_file.name}.",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(self._serialize(), f, indent=2)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self.state_file)
+            self._loaded_mtime = self._file_mtime()
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
     def save_state(self) -> None:
         try:
-            self.state_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.state_file, "w") as f:
-                json.dump(self._serialize(), f, indent=2)
-            self._loaded_mtime = self._file_mtime()
+            with self._state_file_lock(exclusive=True):
+                self._save_state_unlocked()
         except Exception as e:
             print(f"Warning: Failed to save sequential calibration state: {e}", file=sys.stderr)
 
@@ -192,7 +228,12 @@ class SequentialCalibrationTracker:
         if current_mtime > getattr(self, "_loaded_mtime", 0.0):
             self.load_state()
 
-    def load_state(self) -> None:
+    def _reload_if_stale_unlocked(self) -> None:
+        current_mtime = self._file_mtime()
+        if current_mtime > getattr(self, "_loaded_mtime", 0.0):
+            self._load_state_unlocked()
+
+    def _load_state_unlocked(self) -> None:
         try:
             if not self.state_file.exists():
                 self.reset()
@@ -256,6 +297,15 @@ class SequentialCalibrationTracker:
             self.reset()
             self._loaded_mtime = 0.0
 
+    def load_state(self) -> None:
+        try:
+            with self._state_file_lock(exclusive=True):
+                self._load_state_unlocked()
+        except Exception as e:
+            print(f"Warning: Failed to load sequential calibration state: {e}, resetting", file=sys.stderr)
+            self.reset()
+            self._loaded_mtime = 0.0
+
     @staticmethod
     def _clamp_probability(value: float) -> float:
         return min(1.0 - 1e-6, max(1e-6, float(value)))
@@ -310,7 +360,7 @@ class SequentialCalibrationTracker:
             "log_e_value": state["log_e_value"],
         }
 
-    def record_exogenous_tactical_outcome(
+    def _record_exogenous_tactical_outcome_in_memory(
         self,
         *,
         confidence: float,
@@ -322,20 +372,7 @@ class SequentialCalibrationTracker:
         outcome_type: Optional[str] = None,
         timestamp: Optional[str] = None,
         prediction_id: Optional[str] = None,
-        persist: bool = True,
     ) -> Dict[str, Any]:
-        """Record one eligible hard exogenous tactical outcome.
-
-        prediction_id, if provided, is included in the return payload for
-        forensic audit. The tracker state itself remains aggregate and is
-        not indexed by prediction_id.
-
-        class_tag, when provided, drives the parallel class_states rollup
-        (S10). Callers should pass the agent's resolved class (per
-        src/grounding/class_indicator.py::classify_agent). Omitted writes
-        bucket into UNKNOWN_CLASS_BUCKET so the by-class view surfaces
-        calibration starvation in the unclassified band as a deficit signal.
-        """
         if not signal_source:
             raise ValueError("signal_source is required")
 
@@ -371,9 +408,6 @@ class SequentialCalibrationTracker:
             timestamp=ts,
         )
 
-        if persist:
-            self.save_state()
-
         return {
             "agent_id": agent_id,
             "class_tag": bucket,
@@ -385,6 +419,90 @@ class SequentialCalibrationTracker:
             "agent": agent_update,
             "class": class_update,
         }
+
+    def record_exogenous_tactical_outcome(
+        self,
+        *,
+        confidence: float,
+        outcome_correct: bool,
+        agent_id: Optional[str] = None,
+        class_tag: Optional[str] = None,
+        signal_source: str,
+        decision_action: Optional[str] = None,
+        outcome_type: Optional[str] = None,
+        timestamp: Optional[str] = None,
+        prediction_id: Optional[str] = None,
+        persist: bool = True,
+    ) -> Dict[str, Any]:
+        """Record one eligible hard exogenous tactical outcome.
+
+        prediction_id, if provided, is included in the return payload for
+        forensic audit. The tracker state itself remains aggregate and is
+        not indexed by prediction_id.
+
+        class_tag, when provided, drives the parallel class_states rollup
+        (S10). Callers should pass the agent's resolved class (per
+        src/grounding/class_indicator.py::classify_agent). Omitted writes
+        bucket into UNKNOWN_CLASS_BUCKET so the by-class view surfaces
+        calibration starvation in the unclassified band as a deficit signal.
+        """
+        if persist:
+            with self._state_file_lock(exclusive=True):
+                self._reload_if_stale_unlocked()
+                result = self._record_exogenous_tactical_outcome_in_memory(
+                    confidence=confidence,
+                    outcome_correct=outcome_correct,
+                    agent_id=agent_id,
+                    class_tag=class_tag,
+                    signal_source=signal_source,
+                    decision_action=decision_action,
+                    outcome_type=outcome_type,
+                    timestamp=timestamp,
+                    prediction_id=prediction_id,
+                )
+                self._save_state_unlocked()
+                return result
+
+        return self._record_exogenous_tactical_outcome_in_memory(
+            confidence=confidence,
+            outcome_correct=outcome_correct,
+            agent_id=agent_id,
+            class_tag=class_tag,
+            signal_source=signal_source,
+            decision_action=decision_action,
+            outcome_type=outcome_type,
+            timestamp=timestamp,
+            prediction_id=prediction_id,
+        )
+
+    def _drop_agent_state_in_memory(self, agent_id: str) -> bool:
+        if not agent_id or agent_id not in self.agent_states:
+            return False
+
+        del self.agent_states[agent_id]
+        # class_states is a derived read cache over agent_states. Once an agent
+        # slice is pruned, the old class rollup may still contain that slice, so
+        # clear it and force the existing rebucket sweeper to rebuild honestly.
+        self.class_states = defaultdict(_empty_state)
+        self.class_states_bootstrapped = False
+        return True
+
+    def drop_agent_state(self, agent_id: str, *, persist: bool = True) -> bool:
+        """Drop per-agent calibration state when lifecycle archival succeeds.
+
+        Global evidence remains intact. Per-agent slices are bounded by the
+        lifecycle archive path; class rollups are cleared because they are
+        derived from agent_states and must be rebuilt after a prune.
+        """
+        if persist:
+            with self._state_file_lock(exclusive=True):
+                self._load_state_unlocked()
+                changed = self._drop_agent_state_in_memory(agent_id)
+                if changed:
+                    self._save_state_unlocked()
+                return changed
+
+        return self._drop_agent_state_in_memory(agent_id)
 
     def compute_per_channel_health(self, min_samples_for_pin: int = 100) -> Dict[str, Dict[str, Any]]:
         """

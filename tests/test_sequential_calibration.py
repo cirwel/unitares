@@ -98,6 +98,96 @@ def test_agent_metrics_are_isolated(tmp_path):
     assert b_metrics["signal_sources"] == {"lint": 1}
 
 
+def test_persisted_record_reloads_before_write_to_avoid_stale_overwrite(tmp_path):
+    state_file = tmp_path / "seq_state.json"
+    first = SequentialCalibrationTracker(state_file=state_file)
+    stale_second = SequentialCalibrationTracker(state_file=state_file)
+
+    first.record_exogenous_tactical_outcome(
+        confidence=0.9,
+        outcome_correct=False,
+        agent_id="agent-a",
+        signal_source="tests",
+        decision_action="proceed",
+        outcome_type="test_failed",
+    )
+    stale_second.record_exogenous_tactical_outcome(
+        confidence=0.8,
+        outcome_correct=True,
+        agent_id="agent-b",
+        signal_source="lint",
+        decision_action="proceed",
+        outcome_type="task_completed",
+    )
+
+    reloaded = SequentialCalibrationTracker(state_file=state_file)
+
+    assert reloaded.compute_metrics()["eligible_samples"] == 2
+    assert reloaded.compute_metrics(agent_id="agent-a")["eligible_samples"] == 1
+    assert reloaded.compute_metrics(agent_id="agent-b")["eligible_samples"] == 1
+
+
+def test_persisted_record_preserves_local_unpersisted_samples_when_not_stale(tmp_path):
+    state_file = tmp_path / "seq_state.json"
+    tracker = SequentialCalibrationTracker(state_file=state_file)
+    tracker.record_exogenous_tactical_outcome(
+        confidence=0.9,
+        outcome_correct=False,
+        agent_id="agent-a",
+        signal_source="tests",
+        decision_action="proceed",
+        outcome_type="test_failed",
+        persist=False,
+    )
+
+    tracker.record_exogenous_tactical_outcome(
+        confidence=0.8,
+        outcome_correct=True,
+        agent_id="agent-b",
+        signal_source="lint",
+        decision_action="proceed",
+        outcome_type="task_completed",
+    )
+    reloaded = SequentialCalibrationTracker(state_file=state_file)
+
+    assert reloaded.compute_metrics()["eligible_samples"] == 2
+    assert reloaded.compute_metrics(agent_id="agent-a")["eligible_samples"] == 1
+    assert reloaded.compute_metrics(agent_id="agent-b")["eligible_samples"] == 1
+
+
+def test_drop_agent_state_prunes_agent_and_invalidates_class_rollup(tmp_path):
+    state_file = tmp_path / "seq_state.json"
+    tracker = SequentialCalibrationTracker(state_file=state_file)
+    tracker.record_exogenous_tactical_outcome(
+        confidence=0.9,
+        outcome_correct=False,
+        agent_id="agent-a",
+        class_tag="ephemeral",
+        signal_source="tests",
+        decision_action="proceed",
+        outcome_type="test_failed",
+    )
+    tracker.record_exogenous_tactical_outcome(
+        confidence=0.8,
+        outcome_correct=True,
+        agent_id="agent-b",
+        class_tag="session_like",
+        signal_source="lint",
+        decision_action="proceed",
+        outcome_type="task_completed",
+    )
+
+    assert tracker.drop_agent_state("agent-a") is True
+    reloaded = SequentialCalibrationTracker(state_file=state_file)
+
+    assert reloaded.compute_metrics()["eligible_samples"] == 2
+    assert reloaded.compute_metrics(agent_id="agent-a")["status"] == "no_data"
+    assert reloaded.compute_metrics(agent_id="agent-b")["eligible_samples"] == 1
+    by_class = reloaded.compute_metrics_by_class()
+    assert by_class["bootstrapped"] is False
+    assert by_class["by_class"] == {}
+
+
 def test_prediction_id_is_echoed_in_return_payload(tmp_path):
     """record_exogenous_tactical_outcome should pass prediction_id through for audit."""
     tracker = SequentialCalibrationTracker(state_file=tmp_path / "seq_state.json")

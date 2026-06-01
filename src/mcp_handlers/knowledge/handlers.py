@@ -2476,6 +2476,30 @@ async def handle_leave_note(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
         # Create note with minimal ceremony
         from src.knowledge_graph import tag_provenance_source as _tag_src
+        provenance = _tag_src(None, "explicit_leave_note")
+        try:
+            from src.provenance_context import (
+                attach_s22_context,
+                build_s22_write_context,
+                classify_fork_for_s22_context,
+            )
+
+            meta = mcp_server.agent_metadata.get(agent_id)
+            episode_fork_kind, identity_lineage_fork = classify_fork_for_s22_context(
+                meta, agent_id
+            )
+            s22_context = build_s22_write_context(
+                arguments,
+                meta=meta,
+                context_source="knowledge.note",
+                default_governance_mode="explicit",
+                episode_fork_kind=episode_fork_kind,
+                identity_lineage_fork=identity_lineage_fork,
+            )
+            provenance = attach_s22_context(provenance, s22_context)
+        except Exception as exc:
+            logger.debug("Could not capture note S22 provenance: %s", exc)
+
         note = DiscoveryNode(
             id=_utc_now_iso(),
             agent_id=agent_id,
@@ -2486,7 +2510,7 @@ async def handle_leave_note(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             severity=note_severity,
             status="open",
             response_to=response_to,
-            provenance=_tag_src(None, "explicit_leave_note"),
+            provenance=provenance,
         )
         
         # Auto-link if tags provided (fast with indexes)

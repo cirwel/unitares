@@ -1115,6 +1115,38 @@ class TestKnowledgeWriteBroadcast:
         data = parse_result(result)
         assert data["success"] is True
 
+    @pytest.mark.asyncio
+    async def test_knowledge_note_preserves_s22_context(
+        self, patch_common, registered_agent,
+    ):
+        """Unified knowledge(note) must not drop S22 provenance fields."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.consolidated import handle_knowledge
+
+        result = await handle_knowledge({
+            "action": "note",
+            "agent_id": registered_agent,
+            "content": "S22 note provenance test",
+            "comparison_key": "s22-note-2026-05-31",
+            "task_label": "Exercise knowledge note provenance",
+            "task_outcome": "note-recorded",
+            "memory_context": "repo+kg",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        discovery = mock_graph.add_discovery.await_args.args[0]
+        provenance = discovery.provenance
+        assert provenance["source"] == "explicit_leave_note"
+        context = provenance["s22_context"]
+        assert context["schema"] == "s22.write_context.v1"
+        assert context["context_source"] == "knowledge.note"
+        assert context["comparison_key"] == "s22-note-2026-05-31"
+        assert context["task_label"] == "Exercise knowledge note provenance"
+        assert context["task_outcome"] == "note-recorded"
+        assert context["memory_context"] == "repo+kg"
+        assert context["governance_mode"] == "explicit"
+
 
 class TestKnowledgeReadBroadcast:
     """Read-side audit coverage. Without these emits the central usage

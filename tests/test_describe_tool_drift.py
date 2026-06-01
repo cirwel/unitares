@@ -55,6 +55,69 @@ async def test_process_agent_update_describe_mentions_recent_tool_results():
 
 
 @pytest.mark.asyncio
+async def test_process_agent_update_lite_mentions_current_parameters():
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
+    result = await handle_describe_tool({"tool_name": "process_agent_update", "lite": True})
+    data = json.loads(result[0].text)
+    params = "\n".join(data["parameters"])
+
+    for field in (
+        "client_session_id",
+        "response_text",
+        "complexity",
+        "confidence",
+        "task_type",
+        "response_mode",
+        "require_strong_identity",
+        "recent_tool_results",
+    ):
+        assert field in params
+
+    assert "parameters:" not in params
+    assert "ethical_drift" not in params
+
+
+@pytest.mark.asyncio
+async def test_outcome_event_lite_mentions_calibration_parameters():
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
+    result = await handle_describe_tool({"tool_name": "outcome_event", "lite": True})
+    data = json.loads(result[0].text)
+    params = "\n".join(data["parameters"])
+
+    for field in (
+        "outcome_type",
+        "confidence",
+        "prediction_id",
+        "decision_action",
+        "session_id",
+        "verification_source",
+    ):
+        assert field in params
+
+
+@pytest.mark.asyncio
+async def test_outcome_event_describe_mentions_current_types_and_provenance():
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
+    result = await handle_describe_tool({"tool_name": "outcome_event", "lite": False})
+    description = json.loads(result[0].text)["tool"]["description"]
+
+    for text in (
+        "trajectory_validated",
+        "dialectic_resolved",
+        "prediction_id",
+        "decision_action",
+        "verification_source",
+    ):
+        assert text in description
+
+
+@pytest.mark.asyncio
 async def test_process_agent_update_describe_mentions_s22_h5_fields():
     from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
     result = await handle_describe_tool({"tool_name": "process_agent_update", "lite": False})

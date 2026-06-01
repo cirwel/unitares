@@ -98,6 +98,46 @@ def _resolve_json_schema_type(field_info: Dict[str, Any]) -> str:
     return "any"
 
 
+_LITE_PARAMETER_PRIORITIES: Dict[str, List[str]] = {
+    "process_agent_update": [
+        "client_session_id",
+        "response_text",
+        "complexity",
+        "confidence",
+        "task_type",
+        "response_mode",
+        "require_strong_identity",
+        "recent_tool_results",
+    ],
+    "outcome_event": [
+        "confidence",
+        "prediction_id",
+        "decision_action",
+        "session_id",
+        "verification_source",
+        "detail",
+    ],
+}
+
+_LITE_IDENTITY_FIELDS = {"continuity_token", "client_session_id", "agent_id"}
+
+
+def _format_lite_parameter(
+    field_name: str,
+    field_info: Dict[str, Any],
+    *,
+    required: bool = False,
+) -> str:
+    if required:
+        return f"{field_name} (required)"
+
+    field_type = _resolve_json_schema_type(field_info)
+    default = field_info.get("default")
+    if default is not None:
+        return f"{field_name}: {field_type} (default: {default})"
+    return f"{field_name}: {field_type}"
+
+
 def _getting_started_path() -> List[Dict[str, Any]]:
     """Canonical low-friction path for first-time governance callers."""
     return [
@@ -1234,24 +1274,48 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     required_fields = schema.get("required", [])
 
                     params_simple = []
+                    shown_fields = set()
+
+                    def add_lite_field(
+                        field_name: str,
+                        *,
+                        required: bool = False,
+                        force: bool = False,
+                    ) -> bool:
+                        if field_name in shown_fields:
+                            return False
+                        if field_name in _LITE_IDENTITY_FIELDS and not force:
+                            return False
+                        field_info = properties.get(field_name, {})
+                        params_simple.append(
+                            _format_lite_parameter(
+                                field_name,
+                                field_info,
+                                required=required,
+                            )
+                        )
+                        shown_fields.add(field_name)
+                        return True
+
                     for field_name in required_fields:
-                        if field_name == "client_session_id":
-                            continue
-                        params_simple.append(f"{field_name} (required)")
+                        add_lite_field(field_name, required=True)
 
                     shown = 0
-                    for field_name, field_info in properties.items():
-                        if field_name in required_fields or field_name == "client_session_id":
+                    for field_name in _LITE_PARAMETER_PRIORITIES.get(tool_name, []):
+                        if add_lite_field(field_name, force=True):
+                            shown += 1
+
+                    for field_name in properties:
+                        if field_name in required_fields:
                             continue
-                        if shown >= 5:
+                        if field_name in shown_fields:
+                            continue
+                        if shown >= 5 and tool_name not in _LITE_PARAMETER_PRIORITIES:
                             break
-                        shown += 1
-                        field_type = _resolve_json_schema_type(field_info)
-                        default = field_info.get("default")
-                        if default is not None:
-                            params_simple.append(f"{field_name}: {field_type} (default: {default})")
-                        else:
-                            params_simple.append(f"{field_name}: {field_type}")
+                        if shown >= 8:
+                            break
+                        if add_lite_field(field_name):
+                            shown += 1
 
                     lite_schema = {"params_simple": params_simple, "required": required_fields}
             except Exception:

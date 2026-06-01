@@ -171,6 +171,23 @@ class TestPydanticSchemas:
         missing = dispatcher_actions - schema_actions
         assert not missing, f"Schema missing dispatcher actions: {missing}"
 
+    def test_leave_note_accepts_s22_h5_agent_knowable_fields(self):
+        """Quick notes must preserve the same S22 diagnostic fields as store."""
+        from src.mcp_handlers.schemas.knowledge import LeaveNoteParams
+
+        params = LeaveNoteParams(
+            summary="dogfood diagnostic note",
+            comparison_key="s22-note-2026-05-31",
+            task_label="Exercise knowledge note provenance",
+            task_outcome="note-recorded",
+            memory_context="repo+kg",
+        )
+
+        assert params.comparison_key == "s22-note-2026-05-31"
+        assert params.task_label == "Exercise knowledge note provenance"
+        assert params.task_outcome == "note-recorded"
+        assert params.memory_context == "repo+kg"
+
     def test_dialectic_schema_accepts_quick_action(self):
         """Lightweight dialectic action must be accepted by public schema."""
         from src.mcp_handlers.schemas.dialectic import DialecticParams
@@ -245,6 +262,26 @@ class TestToolResultEvidence:
         from src.mcp_handlers.schemas.core import ToolResultEvidence
         ev = ToolResultEvidence(tool="curl", summary="health check passed", exit_code=0)
         assert ev.kind == "command"
+
+    def test_rejects_name_success_shape_with_recovery_hint(self):
+        from pydantic import ValidationError
+        from src.mcp_handlers.schemas.core import ToolResultEvidence
+
+        with pytest.raises(ValidationError) as exc_info:
+            ToolResultEvidence(name="pytest", summary="passed", success=True)
+
+        message = str(exc_info.value)
+        assert "does not accept {name, success}" in message
+        assert "Use {tool, summary, is_bad}" in message
+        assert "kind' field is optional" in message
+
+    def test_accepts_tool_summary_is_bad_shape_without_kind(self):
+        from src.mcp_handlers.schemas.core import ToolResultEvidence
+
+        ev = ToolResultEvidence(tool="pytest", summary="tests passed", is_bad=False)
+
+        assert ev.kind == "test"
+        assert ev.is_bad is False
 
     def test_rejects_extra_fields(self):
         from pydantic import ValidationError
