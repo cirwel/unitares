@@ -150,6 +150,8 @@ class ToolResultEvidence(BaseModel):
     `verification_source="agent_reported_tool_result"`. A future server-verified
     primitive will provide `server_observation` outcomes for the subset of
     work the server can independently verify. See spec §1.
+
+    Example: {"tool": "pytest", "summary": "tests passed", "is_bad": false}
     """
     model_config = ConfigDict(extra="forbid")
 
@@ -160,12 +162,33 @@ class ToolResultEvidence(BaseModel):
             "tool/summary and falls back to command or tool_call."
         ),
     )
-    tool: str = Field(..., max_length=64)
+    tool: str = Field(..., max_length=64, description="Tool name, NOT 'name'.")
     summary: str = Field(..., max_length=512)
     exit_code: Optional[int] = None
-    is_bad: Optional[bool] = None
+    is_bad: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether the tool outcome was bad (true=failure). Note: this is "
+            "the inverse of 'success'."
+        ),
+    )
     prediction_id: Optional[str] = None
     observed_at: Optional[datetime] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_success_alias_shape(cls, data):
+        if not isinstance(data, dict):
+            return data
+        if "name" in data and "success" in data:
+            raise ValueError(
+                "ToolResultEvidence does not accept {name, success}. "
+                "Use {tool, summary, is_bad}. "
+                "Example: {\"tool\": \"pytest\", \"summary\": \"tests passed\", "
+                "\"is_bad\": false}. "
+                "The 'kind' field is optional and inferred from tool when omitted."
+            )
+        return data
 
     @model_validator(mode="before")
     @classmethod

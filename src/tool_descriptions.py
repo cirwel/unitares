@@ -45,6 +45,11 @@ _DESCRIPTION_APPENDICES = {
         "staleness_threshold_seconds)"
     ),
     "process_agent_update": (
+        "\n\nCURRENT HIGH-VALUE PARAMETERS:\n"
+        "- response_mode: minimal | compact | standard | full | mirror | auto\n"
+        "- require_strong_identity: reject updates unless identity assurance is strong\n"
+        "- recent_tool_results: list of ToolResultEvidence items, shaped as "
+        "{tool, summary, is_bad}; kind is inferred when omitted\n"
         "\n\nS22 PROVENANCE FIELDS (optional, descriptive, not identity proof):\n"
         "- harness_type / harness: normalized harness family such as "
         "\"codex-cli\", \"claude-code\", or \"hermes\"\n"
@@ -64,6 +69,21 @@ _DESCRIPTION_APPENDICES = {
         "  \"task_label\": \"Run S22 H5 coverage diagnostic\",\n"
         "  \"task_outcome\": \"diagnostic-complete\"\n"
         "}"
+    ),
+    "outcome_event": (
+        "\n\nCURRENT OUTCOME TYPES:\n"
+        "- trajectory_validated: server-observed trajectory validation event\n"
+        "- dialectic_resolved: dialectic review reached a resolution\n"
+        "\n"
+        "CURRENT CALIBRATION / PROVENANCE FIELDS:\n"
+        "- confidence: agent confidence at outcome time; inferred from last "
+        "check-in if omitted\n"
+        "- prediction_id: tactical prediction id returned by process_agent_update; "
+        "binds this outcome to that prediction\n"
+        "- decision_action: decision taken, e.g. proceed or pause\n"
+        "- session_id: optional session id; falls back to client_session_id/context\n"
+        "- verification_source: agent_reported_tool_result | server_observation | "
+        "external_signal"
     ),
 }
 

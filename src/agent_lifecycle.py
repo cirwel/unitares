@@ -211,6 +211,16 @@ async def auto_archive_orphan_agents(
             )
             if not ok:
                 continue
+            try:
+                from src.sequential_calibration import get_sequential_calibration_tracker
+                get_sequential_calibration_tracker().drop_agent_state(agent_id)
+            except Exception as exc:
+                logger.warning(
+                    "Archived orphan agent %s, but failed to prune sequential "
+                    "calibration state: %s",
+                    agent_id[:12],
+                    exc,
+                )
             logger.info(f"Auto-archived orphan agent: {agent_id[:12]}... ({reason})")
 
         results.append({

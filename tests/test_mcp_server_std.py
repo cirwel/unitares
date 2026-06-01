@@ -1380,6 +1380,32 @@ class TestAutoArchiveOrphanAgents:
         finally:
             agent_metadata.pop(test_id, None)
 
+    @pytest.mark.asyncio
+    async def test_successful_archive_prunes_sequential_calibration_agent_state(self):
+        """Archive lifecycle is the retention boundary for per-agent calibration slices."""
+        from src.agent_state import auto_archive_orphan_agents, agent_metadata, AgentMetadata
+        old_time = (datetime.now() - timedelta(hours=5)).isoformat()
+        test_id = "calibration-prune-test-agent"
+        agent_metadata[test_id] = AgentMetadata(
+            agent_id=test_id, status="active", created_at=old_time, last_update=old_time,
+            total_updates=1,
+        )
+        tracker = MagicMock()
+        try:
+            with patch(
+                "src.mcp_handlers.lifecycle.helpers.agent_storage.archive_agent",
+                new_callable=AsyncMock,
+            ), patch(
+                "src.sequential_calibration.get_sequential_calibration_tracker",
+                return_value=tracker,
+            ):
+                results = await auto_archive_orphan_agents(low_update_hours=3.0)
+
+            assert [r["id"] for r in results] == [test_id]
+            tracker.drop_agent_state.assert_called_once_with(test_id)
+        finally:
+            agent_metadata.pop(test_id, None)
+
 
 # ============================================================================
 # Test: MCP list_tools handler
