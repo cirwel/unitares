@@ -464,6 +464,68 @@ async def stuck_agent_recovery_task():
 
 
 # ---------------------------------------------------------------------------
+# Dialectic stuck-session sweep
+# ---------------------------------------------------------------------------
+
+async def _run_dialectic_auto_resolve_cycle() -> dict[str, int]:
+    """One sweep of stuck dialectic sessions, returning a flattened summary.
+
+    Extracted from ``dialectic_auto_resolve_sweeper_task`` so the cycle is
+    unit-testable (mirrors the ``lineage_eval_sweeper`` extraction). Note the
+    auto-resolve return key ``resolved_count`` actually counts sessions marked
+    FAILED — the mapping here pins that naming so callers read ``failed``.
+    """
+    from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+    result = await auto_resolve_stuck_sessions()
+    return {
+        "failed": int(result.get("resolved_count", 0) or 0),
+        "reassigned": int(result.get("reassigned_count", 0) or 0),
+        "facilitation": int(result.get("facilitation_count", 0) or 0),
+    }
+
+
+async def dialectic_auto_resolve_sweeper_task(interval_minutes: float = 10.0):
+    """Periodically sweep stuck dialectic sessions.
+
+    ``auto_resolve_stuck_sessions()`` was previously only invoked lazily — from
+    ``is_agent_in_active_session()``, which only runs when an agent queries
+    active sessions or requests a review. A dialectic session that went stale
+    with no further dialectic traffic was therefore never swept: session
+    ``e8417ad0`` sat in ``antithesis`` for 3 days. This task gives the sweep a
+    real timer, so stuck sessions are reaped within ~interval of crossing the
+    inactivity threshold (``auto_resolve.STUCK_SESSION_THRESHOLD`` = 2h),
+    regardless of whether any agent happens to hit the lazy path.
+
+    Mirrors ``class_promotion_sweeper_task`` / ``stuck_agent_recovery_task``:
+    runs outside the request path, 90s startup delay to let the metadata cache
+    and pools warm, errors WARNING-logged so a silent gap is operator-visible.
+    The sweep itself is failure-isolated (``auto_resolve_stuck_sessions``
+    returns an error dict rather than raising).
+    """
+    await asyncio.sleep(90.0)
+    interval_seconds = interval_minutes * 60
+    logger.info(
+        f"[DIALECTIC_SWEEP] Started stuck-session sweep (every {interval_minutes}m)"
+    )
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            summary = await _run_dialectic_auto_resolve_cycle()
+            if summary["failed"] or summary["reassigned"] or summary["facilitation"]:
+                logger.info(
+                    f"[DIALECTIC_SWEEP] {summary['reassigned']} reassigned, "
+                    f"{summary['facilitation']} awaiting facilitation, "
+                    f"{summary['failed']} failed"
+                )
+        except asyncio.CancelledError:
+            logger.info("[DIALECTIC_SWEEP] Task cancelled")
+            break
+        except Exception as e:
+            logger.warning(f"[DIALECTIC_SWEEP] Error in sweep: {e}", exc_info=True)
+            await asyncio.sleep(60.0)
+
+
+# ---------------------------------------------------------------------------
 # Server warmup
 # ---------------------------------------------------------------------------
 
@@ -1579,6 +1641,10 @@ def start_all_background_tasks(connection_tracker, set_ready):
     # onboarding bugs behind archival. Use the archive_orphan_agents MCP tool
     # manually (defaults to dry_run) if a sweep is actually wanted.
     _supervised_create_task(stuck_agent_recovery_task(), name="stuck_agent_recovery")
+    _supervised_create_task(
+        dialectic_auto_resolve_sweeper_task(), name="dialectic_auto_resolve_sweeper"
+    )
+    logger.info("[DIALECTIC_SWEEP] Started stuck dialectic-session sweep (every 10m)")
     _supervised_create_task(server_warmup_task(set_ready), name="server_warmup")
     _supervised_create_task(deep_health_probe_task(), name="deep_health_probe")
     logger.info("[HEALTH_PROBE] Deep health probe started (cached snapshots for health_check handler)")
