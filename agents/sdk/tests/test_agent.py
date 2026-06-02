@@ -490,6 +490,55 @@ class TestCycleTimeout:
                 await agent.run_once()
 
     @pytest.mark.asyncio
+    async def test_connect_params_thread_to_client(self):
+        """connect_timeout/connect_retries reach the per-cycle GovernanceClient."""
+
+        class QuickAgent(GovernanceAgent):
+            async def run_cycle(self, client):
+                return None
+
+        agent = QuickAgent(
+            name="Tuned",
+            mcp_url="http://127.0.0.1:9999/mcp/",
+            connect_timeout=5.0,
+            connect_retries=2,
+        )
+        assert agent.connect_timeout == 5.0
+        assert agent.connect_retries == 2
+
+        with patch("unitares_sdk.agent.GovernanceClient") as mock_cm:
+            mock_client = AsyncMock()
+            mock_cm.return_value.__aenter__.return_value = mock_client
+            mock_cm.return_value.__aexit__.return_value = None
+            with patch.object(QuickAgent, "_ensure_identity", AsyncMock()):
+                await agent.run_once()
+            kwargs = mock_cm.call_args.kwargs
+            assert kwargs["connect_timeout"] == 5.0
+            assert kwargs["connect_retries"] == 2
+
+    @pytest.mark.asyncio
+    async def test_connect_params_default_none_passed_through(self):
+        """Defaults are None so the client resolves its own env/defaults."""
+
+        class QuickAgent(GovernanceAgent):
+            async def run_cycle(self, client):
+                return None
+
+        agent = QuickAgent(name="Default", mcp_url="http://127.0.0.1:9999/mcp/")
+        assert agent.connect_timeout is None
+        assert agent.connect_retries is None
+
+        with patch("unitares_sdk.agent.GovernanceClient") as mock_cm:
+            mock_client = AsyncMock()
+            mock_cm.return_value.__aenter__.return_value = mock_client
+            mock_cm.return_value.__aexit__.return_value = None
+            with patch.object(QuickAgent, "_ensure_identity", AsyncMock()):
+                await agent.run_once()
+            kwargs = mock_cm.call_args.kwargs
+            assert kwargs["connect_timeout"] is None
+            assert kwargs["connect_retries"] is None
+
+    @pytest.mark.asyncio
     async def test_run_forever_respects_cycle_timeout(self):
         """run_forever also bounds each iteration by cycle_timeout_seconds."""
 
