@@ -36,6 +36,19 @@ from unitares_sdk.models import (
 
 logger = logging.getLogger(__name__)
 
+# Connect-handshake failures worth retrying: timeout (incl. the bounded
+# initialize()) and connection-level transients. Auth/protocol errors are NOT
+# here — they are deterministic and must surface immediately, not burn retries.
+# asyncio.wait_for raises asyncio.TimeoutError (== builtin TimeoutError on 3.11+).
+_CONNECT_RETRYABLE = (
+    asyncio.TimeoutError,
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.RemoteProtocolError,
+    ConnectionError,
+)
+
 # Tools that must NOT get automatic session injection
 _IDENTITY_TOOLS = frozenset({"onboard", "identity"})
 
@@ -57,6 +70,8 @@ class GovernanceClient:
         timeout: float = 30.0,
         retry_delay: float = 3.0,
         uds_path: str | None = None,
+        connect_timeout: float | None = None,
+        connect_retries: int | None = None,
     ):
         # S19 substrate-anchored residents (Vigil, Sentinel, Chronicler)
         # connect over Unix-domain socket so the kernel attests their PID
@@ -72,6 +87,23 @@ class GovernanceClient:
         self.timeout = timeout
         self.retry_delay = retry_delay
         self.uds_path = uds_path
+
+        # Connect-handshake resilience. The MCP `initialize()` handshake was
+        # historically unbounded — under the anyio-asyncio connect tax it can
+        # hang on the stream `receive()`, which is NOT covered by httpx's
+        # `timeout` (that bounds HTTP reads, not the MCP session's internal
+        # anyio stream). An unbounded hang silently consumes the caller's whole
+        # cycle budget (Vigil cron 2026-06-02: every check skipped that cycle).
+        # We bound `initialize()` with `connect_timeout` and retry the cold
+        # connect `connect_retries` times — sized so worst case
+        # (connect_timeout * (retries+1) + retry_delay * retries) fits the
+        # tightest resident cycle budget (Sentinel = 45s). Env-overridable.
+        if connect_timeout is None:
+            connect_timeout = float(os.environ.get("UNITARES_CONNECT_TIMEOUT", "10"))
+        if connect_retries is None:
+            connect_retries = int(os.environ.get("UNITARES_CONNECT_RETRIES", "1"))
+        self.connect_timeout = connect_timeout
+        self.connect_retries = connect_retries
 
         # Session state — updated after identity/onboard responses
         self.client_session_id: str | None = None
@@ -95,15 +127,58 @@ class GovernanceClient:
     # --- Connection lifecycle ---
 
     async def connect(self) -> None:
-        """Open MCP transport. Call disconnect() when done.
+        """Open MCP transport with a bounded, retried handshake.
 
-        If any step fails (e.g. httpx.ConnectError during initialize), unwinds
-        whatever was already entered before re-raising. Python does NOT call
-        __aexit__ when __aenter__ raises, so without this cleanup the MCP
-        streamable_http_client's anyio task group is leaked and later unwound
-        on a different task at GC — producing the "Attempted to exit cancel
-        scope in a different task than it was entered in" crash that killed
-        the sentinel repeatedly (KG 2026-04-19T00:51:46).
+        On each attempt, if any step fails (e.g. httpx.ConnectError, or a
+        ``TimeoutError`` from the bounded ``initialize()``), ``disconnect()``
+        unwinds whatever was already entered before retry/re-raise. Python does
+        NOT call __aexit__ when __aenter__ raises, so without this cleanup the
+        MCP streamable_http_client's anyio task group is leaked and later
+        unwound on a different task at GC — producing the "Attempted to exit
+        cancel scope in a different task than it was entered in" crash that
+        killed the sentinel repeatedly (KG 2026-04-19T00:51:46).
+
+        Transient failures (timeout/connection-level) are retried up to
+        ``connect_retries`` times; non-transient ones (auth, protocol) surface
+        immediately without burning the retry budget. See __init__ for why the
+        handshake is bounded (an unbounded ``initialize()`` hang is invisible
+        to httpx's timeout and silently consumes the caller's cycle budget).
+        """
+        attempts = self.connect_retries + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                await self._open_session()
+                return
+            except _CONNECT_RETRYABLE as e:
+                await self.disconnect()  # unwind partial state before retrying
+                if attempt < attempts:
+                    logger.warning(
+                        "connect() attempt %d/%d failed (%s: %s); retrying in %.1fs",
+                        attempt, attempts, type(e).__name__, e, self.retry_delay,
+                    )
+                    await asyncio.sleep(self.retry_delay)
+                    continue
+                logger.warning(
+                    "connect() failed after %d attempt(s) (%s: %s); giving up",
+                    attempts, type(e).__name__, e,
+                )
+                raise
+            except Exception as e:
+                # Non-transient (auth, protocol): unwind and surface at once.
+                logger.warning(
+                    "connect() failed (%s: %s); unwinding partial state",
+                    type(e).__name__, e,
+                )
+                await self.disconnect()
+                raise
+
+    async def _open_session(self) -> None:
+        """Open transport + session and run the bounded MCP initialize handshake.
+
+        Factored out of connect() so the retry loop can re-enter cleanly and so
+        the bounded-initialize behavior is unit-testable. Raises on any failure;
+        connect() owns unwind/retry. Never swallows — a partially-opened stack
+        is left for connect()'s disconnect() to unwind.
         """
         # S19: when uds_path is set, route the underlying HTTP requests over
         # a Unix-domain socket via httpx.AsyncHTTPTransport(uds=...). The MCP
@@ -121,20 +196,19 @@ class GovernanceClient:
             )
         else:
             self._http_client = httpx.AsyncClient(http2=False, timeout=self.timeout)
-        try:
-            cm = streamable_http_client(self.mcp_url, http_client=self._http_client)
-            read, write, _ = await cm.__aenter__()
-            self._cm_stack.append(cm)
 
-            session_cm = ClientSession(read, write)
-            self._session = await session_cm.__aenter__()
-            self._cm_stack.append(session_cm)
+        cm = streamable_http_client(self.mcp_url, http_client=self._http_client)
+        read, write, _ = await cm.__aenter__()
+        self._cm_stack.append(cm)
 
-            await self._session.initialize()
-        except Exception as e:
-            logger.warning("connect() failed (%s: %s); unwinding partial state", type(e).__name__, e)
-            await self.disconnect()
-            raise
+        session_cm = ClientSession(read, write)
+        self._session = await session_cm.__aenter__()
+        self._cm_stack.append(session_cm)
+
+        # Bound the handshake: an anyio-stream hang inside initialize() is not
+        # covered by httpx's timeout, so without this it blocks until the
+        # caller's outer cycle timeout cancels the whole cycle.
+        await asyncio.wait_for(self._session.initialize(), self.connect_timeout)
 
     async def disconnect(self) -> None:
         """Close MCP transport."""
