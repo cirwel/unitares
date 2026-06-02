@@ -697,7 +697,7 @@ body::after {
     background-image: linear-gradient(135deg, var(--stat-tint, transparent), transparent 60%);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    padding: 20px 22px;
+    padding: 20px;
     transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
     box-shadow: var(--shadow-sm);
     position: relative;
@@ -1123,8 +1123,8 @@ main {
     border: 1px solid var(--border-color);
     border-left: 4px solid var(--accent-cyan);
     border-radius: var(--radius-md);
-    padding: 18px;
-    margin-bottom: 15px;
+    padding: 20px;
+    margin-bottom: 16px;
     transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
     position: relative;
     overflow: hidden;
@@ -1771,8 +1771,8 @@ main {
     border: 1px solid var(--border-color);
     border-left: 4px solid var(--border-highlight);
     border-radius: var(--radius-md);
-    padding: 18px;
-    margin-bottom: 15px;
+    padding: 20px;
+    margin-bottom: 16px;
     transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
     contain: layout style;
     position: relative;
