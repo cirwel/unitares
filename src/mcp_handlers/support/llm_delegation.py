@@ -22,6 +22,7 @@ Usage:
 
 from typing import Optional, List, Dict, Any
 import os
+import json
 
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -58,6 +59,20 @@ def _get_default_model() -> str:
 
     # gemma4 for governance coaching — needs real reasoning
     return "gemma4:latest"
+
+
+def _reviewer_timeout(default: float = 120.0) -> float:
+    """Timeout budget for a structured dialectic reviewer call. A paused agent
+    awaiting recovery is not latency-critical, and a real structured antithesis
+    on a local model can take >60s (gemma4 measured 43-70s+ on a Mac, variable),
+    so the budget is generous. Tunable via UNITARES_DIALECTIC_REVIEWER_TIMEOUT."""
+    raw = os.getenv("UNITARES_DIALECTIC_REVIEWER_TIMEOUT")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return default
 
 
 def _wants_reasoning_effort_none(model: str) -> bool:
@@ -144,6 +159,84 @@ async def call_local_llm(
     except Exception as e:
         logger.warning(f"Local LLM call failed: {type(e).__name__}: {e}")
         return None
+
+
+def _ollama_native_url() -> str:
+    """Native Ollama /api/chat endpoint (supports JSON-schema-constrained output
+    via the `format` field). Distinct from the OpenAI-compat /v1 base used by
+    call_local_llm; the native endpoint is what was validated for structured
+    dialectic output."""
+    base = os.getenv("UNITARES_OLLAMA_BASE", "http://localhost:11434").rstrip("/")
+    return base + "/api/chat"
+
+
+async def call_local_llm_structured(
+    messages: List[Dict[str, str]],
+    schema: Dict[str, Any],
+    model: Optional[str] = None,
+    max_tokens: int = 2048,
+    temperature: float = 0.7,
+    timeout: float = 60.0,
+) -> Optional[Dict[str, Any]]:
+    """Call local LLM constrained to a JSON schema (Ollama native `format=`).
+
+    Returns the parsed dict, or None on unavailability / timeout / malformed JSON.
+    Graceful-failure by design — callers fall back to free-text generation.
+
+    Design notes (learned from the 2026-06-02 reviewer experiment):
+      - Thinking is NOT disabled. Constrained decoding + think-off degenerates
+        (qwen returned a schema-valid object with every field empty). Let the
+        model reason; the JSON is filled from that reasoning.
+      - Schema field ORDER matters for autoregressive models: put reasoning
+        fields before verdict/derived fields so the model reasons before it
+        commits. Callers own the ordering.
+      - JSON `format=` is the transport, not a reasoning constraint; a general
+        (non-coding) model is the right default (see _get_default_model).
+    """
+    import asyncio
+    import urllib.request
+
+    model = model or _get_default_model()
+    body = {
+        "model": model,
+        "messages": messages,
+        "format": schema,
+        "stream": False,
+        "options": {"temperature": temperature, "num_predict": max_tokens},
+    }
+    payload = json.dumps(body).encode()
+    url = _ollama_native_url()
+
+    def _call_sync():
+        req = urllib.request.Request(
+            url, data=payload, headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            resp = json.load(r)
+        return resp.get("message", {}).get("content")
+
+    try:
+        loop = asyncio.get_running_loop()
+        content = await asyncio.wait_for(
+            loop.run_in_executor(None, _call_sync),
+            timeout=timeout + 5,
+        )
+        if not content:
+            logger.warning(f"Structured LLM returned empty content (model={model})")
+            return None
+        parsed = json.loads(content)
+        logger.info(f"Structured LLM call successful: model={model}")
+        return parsed if isinstance(parsed, dict) else None
+    except asyncio.TimeoutError:
+        logger.warning(f"Structured LLM timed out after {timeout}s (model={model})")
+        return None
+    except json.JSONDecodeError as e:
+        logger.warning(f"Structured LLM returned non-JSON (model={model}): {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Structured LLM call failed: {type(e).__name__}: {e}")
+        return None
+
 
 async def synthesize_results(
     discoveries: List[Dict[str, Any]],
@@ -315,10 +408,22 @@ async def generate_antithesis(
 
     Returns:
         Dict with antithesis components, or None if unavailable:
-            - observed_metrics: What the "reviewer" observes
-            - concerns: Potential issues with the thesis
-            - counter_reasoning: Alternative perspective
-            - suggested_conditions: Modified conditions
+            - concerns: list[str] of specific concerns with the thesis
+            - counter_reasoning: alternative perspective (prose)
+            - grounding_cited: which independent signal the critique rests on
+            - position: agree | dispute | refine
+            - suggested_conditions: list[str] of modified/added conditions
+            - raw_response: model output (JSON string, or prose on fallback)
+            - _structured: True if JSON-schema path succeeded
+            - _degraded: True if it fell back to free-text (fields best-effort)
+
+    Strategy (2026-06-02 reviewer rework): a heterogeneous (non-Claude) model
+    with a JSON-schema contract + an adversarial, grounding-citing prompt
+    produces a substantive antithesis — replacing the brittle CONCERNS:/
+    COUNTER-REASONING: text-scrape that silently degraded to empty fields. JSON
+    is the transport; the schema orders reasoning fields BEFORE the verdict so
+    the model reasons before it commits. Falls back to free-text capture (never
+    silent-empty) if the structured call is unavailable or returns nothing.
     """
     root_cause = thesis.get("root_cause", "Unknown")
     proposed_conditions = thesis.get("proposed_conditions", [])
@@ -329,67 +434,98 @@ async def generate_antithesis(
     state_context = ""
     if agent_state:
         state_context = f"""
-Current metrics:
-  - Risk: {agent_state.get('risk_score', '?')}
-  - Coherence: {agent_state.get('coherence', '?')}
-  - Energy: {agent_state.get('E', '?')}
-  - Entropy: {agent_state.get('S', '?')}
+Independent governance signals you can ground critique in:
+  - risk_score: {agent_state.get('risk_score', '?')}
+  - coherence: {agent_state.get('coherence', '?')}
+  - E (energy): {agent_state.get('E', '?')}
+  - I (information integrity): {agent_state.get('I', '?')}
+  - S (entropy): {agent_state.get('S', '?')}
+  - V (valence): {agent_state.get('V', '?')}
 """
 
-    prompt = f"""You are reviewing a dialectic thesis from an AI agent that was paused by the governance system.
-
-THESIS:
-Root cause (agent's view): {root_cause}
-Proposed conditions:
-{conditions_text}
-Reasoning: {reasoning[:300] if reasoning else '(none)'}
-{state_context}
-As a reviewer, provide an ANTITHESIS - a thoughtful counterargument:
-1. What concerns do you have about this analysis?
-2. What might the agent be missing or underestimating?
-3. What modifications to the conditions would you suggest?
-
-Be constructive but critical. Format your response as:
-CONCERNS: [1-2 specific concerns]
-COUNTER-REASONING: [brief alternative perspective]
-SUGGESTED_CONDITIONS: [modified or additional conditions]"""
-
-    result = await call_local_llm(
-        prompt=prompt,
-        max_tokens=max_tokens,
-        temperature=0.7,
-        timeout=30.0
+    system = (
+        "You are an INDEPENDENT adversarial reviewer in a UNITARES governance "
+        "dialectic. The paused agent wrote the thesis; your job is the ANTITHESIS "
+        "— find what it underestimates or gets wrong. Do not be agreeable. Ground "
+        "every concern in an independent governance signal (EISV state E/I/S/V, "
+        "coherence, calibration, trajectory, audit history), NOT in re-reading the "
+        "thesis's own prose. If after genuine scrutiny the thesis holds, set "
+        "position=agree; otherwise dispute or refine."
+    )
+    user = (
+        f"THESIS\n"
+        f"Root cause (agent's view): {root_cause}\n"
+        f"Proposed conditions:\n{conditions_text}\n"
+        f"Reasoning: {reasoning[:400] if reasoning else '(none)'}\n"
+        f"{state_context}"
     )
 
-    if not result:
-        return None
-
-    # Parse the response into structured components
-    antithesis = {
-        "raw_response": result,
-        "source": "llm_synthetic_reviewer",
-        "_note": "Generated by local LLM when no peer reviewer available"
+    # Reasoning fields FIRST so an autoregressive model reasons before it
+    # commits to a verdict (position) or derived conditions.
+    schema = {
+        "type": "object",
+        "properties": {
+            "concerns": {
+                "type": "array", "items": {"type": "string"}, "minItems": 2,
+                "description": "Specific concerns the thesis underestimates",
+            },
+            "counter_reasoning": {"type": "string"},
+            "grounding_cited": {
+                "type": "string",
+                "description": "Which independent signal (EISV/calibration/"
+                               "trajectory/audit) the critique rests on",
+            },
+            "position": {"type": "string", "enum": ["agree", "dispute", "refine"]},
+            "suggested_conditions": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["concerns", "counter_reasoning", "grounding_cited",
+                     "position", "suggested_conditions"],
     }
 
-    # Try to extract structured parts (best effort)
-    lines = result.split("\n")
-    current_section = None
-    for line in lines:
-        line_lower = line.lower().strip()
-        if line_lower.startswith("concerns:"):
-            current_section = "concerns"
-            antithesis["concerns"] = line.split(":", 1)[1].strip() if ":" in line else ""
-        elif line_lower.startswith("counter-reasoning:") or line_lower.startswith("counter_reasoning:"):
-            current_section = "counter_reasoning"
-            antithesis["counter_reasoning"] = line.split(":", 1)[1].strip() if ":" in line else ""
-        elif line_lower.startswith("suggested_conditions:") or line_lower.startswith("suggested conditions:"):
-            current_section = "suggested_conditions"
-            antithesis["suggested_conditions"] = line.split(":", 1)[1].strip() if ":" in line else ""
-        elif current_section and line.strip():
-            # Append to current section
-            antithesis[current_section] = antithesis.get(current_section, "") + " " + line.strip()
+    parsed = await call_local_llm_structured(
+        messages=[{"role": "system", "content": system},
+                  {"role": "user", "content": user}],
+        schema=schema,
+        max_tokens=max_tokens,
+        temperature=0.7,
+        timeout=_reviewer_timeout(),
+    )
 
-    return antithesis
+    if parsed and parsed.get("concerns"):
+        return {
+            "concerns": parsed.get("concerns", []),
+            "counter_reasoning": parsed.get("counter_reasoning", ""),
+            "grounding_cited": parsed.get("grounding_cited", ""),
+            "position": parsed.get("position", "refine"),
+            "suggested_conditions": parsed.get("suggested_conditions", []),
+            "raw_response": json.dumps(parsed),
+            "source": "llm_synthetic_reviewer",
+            "_structured": True,
+            "_degraded": False,
+            "_note": "Heterogeneous structured-JSON adversarial reviewer",
+        }
+
+    # Fallback: structured path unavailable or returned empty. Capture free-text
+    # so the antithesis is never silently empty (the prior bug).
+    prose = await call_local_llm(
+        prompt=system + "\n\n" + user + "\n\nWrite a critical antithesis with "
+        "concrete concerns and the independent signal each rests on.",
+        max_tokens=max_tokens, temperature=0.7, timeout=45.0,
+    )
+    if not prose:
+        return None
+    return {
+        "concerns": [],
+        "counter_reasoning": prose.strip()[:1500],
+        "grounding_cited": "",
+        "position": "refine",
+        "suggested_conditions": [],
+        "raw_response": prose,
+        "source": "llm_synthetic_reviewer",
+        "_structured": False,
+        "_degraded": True,
+        "_note": "Structured path unavailable; free-text antithesis captured",
+    }
 
 async def generate_synthesis(
     thesis: Dict[str, Any],
@@ -420,76 +556,107 @@ async def generate_synthesis(
     thesis_conditions = thesis.get("proposed_conditions", [])
     thesis_reasoning = thesis.get("reasoning", "")[:200]
 
-    antithesis_concerns = antithesis.get("concerns", "")
-    antithesis_counter = antithesis.get("counter_reasoning", "")
-    antithesis_suggested = antithesis.get("suggested_conditions", "")
+    def _as_text(v) -> str:
+        if isinstance(v, list):
+            return "; ".join(str(x) for x in v)
+        return str(v) if v else ""
+
+    antithesis_concerns = _as_text(antithesis.get("concerns"))
+    antithesis_counter = _as_text(antithesis.get("counter_reasoning"))
+    antithesis_suggested = _as_text(antithesis.get("suggested_conditions"))
 
     thesis_cond_text = ", ".join(thesis_conditions[:3]) if thesis_conditions else "(none)"
 
-    prompt = f"""You are synthesizing a dialectic discussion between an AI agent and its reviewer.
-
-THESIS (agent's position):
-- Root cause: {thesis_cause}
-- Proposed conditions: {thesis_cond_text}
-- Reasoning: {thesis_reasoning}
-
-ANTITHESIS (reviewer's concerns):
-- Concerns: {antithesis_concerns[:200] if antithesis_concerns else '(none)'}
-- Counter-reasoning: {antithesis_counter[:200] if antithesis_counter else '(none)'}
-- Suggested modifications: {antithesis_suggested[:200] if antithesis_suggested else '(none)'}
-
-This is synthesis round {synthesis_round}/5.
-
-Create a SYNTHESIS that merges both perspectives:
-1. What is the agreed understanding of what happened?
-2. What conditions should be set for recovery?
-3. What is your recommendation: RESUME (agent can continue), COOLDOWN (wait period), or ESCALATE (needs human)?
-
-Format:
-AGREED_CAUSE: [one sentence]
-MERGED_CONDITIONS: [2-3 specific conditions]
-RECOMMENDATION: [RESUME/COOLDOWN/ESCALATE]
-REASONING: [brief justification]"""
-
-    result = await call_local_llm(
-        prompt=prompt,
-        max_tokens=max_tokens,
-        temperature=0.6,  # Slightly lower for more consistent synthesis
-        timeout=30.0
+    system = (
+        "You are synthesizing a UNITARES governance dialectic between a paused "
+        "agent (thesis) and an independent reviewer (antithesis). Produce a "
+        "synthesis that genuinely integrates the reviewer's concerns — do not "
+        "rubber-stamp the thesis. The recommendation must follow from the "
+        "merged conditions, not from a desire to resume."
+    )
+    user = (
+        f"THESIS (agent)\n"
+        f"- Root cause: {thesis_cause}\n"
+        f"- Proposed conditions: {thesis_cond_text}\n"
+        f"- Reasoning: {thesis_reasoning}\n\n"
+        f"ANTITHESIS (reviewer)\n"
+        f"- Concerns: {antithesis_concerns[:400] if antithesis_concerns else '(none)'}\n"
+        f"- Counter-reasoning: {antithesis_counter[:400] if antithesis_counter else '(none)'}\n"
+        f"- Suggested conditions: {antithesis_suggested[:400] if antithesis_suggested else '(none)'}\n\n"
+        f"This is synthesis round {synthesis_round}."
     )
 
-    if not result:
-        return None
-
-    synthesis = {
-        "raw_response": result,
-        "synthesis_round": synthesis_round,
-        "source": "llm_synthesis",
-        "_note": "Generated by local LLM dialectic synthesis"
+    # Reasoning fields first; recommendation (the verdict) derived last.
+    schema = {
+        "type": "object",
+        "properties": {
+            "agreed_root_cause": {"type": "string"},
+            "reasoning": {
+                "type": "string",
+                "description": "How the synthesis integrates both sides",
+            },
+            "merged_conditions": {
+                "type": "array", "items": {"type": "string"},
+                "description": "Recovery conditions that honor the reviewer's concerns",
+            },
+            "recommendation": {
+                "type": "string", "enum": ["RESUME", "COOLDOWN", "ESCALATE"],
+            },
+        },
+        "required": ["agreed_root_cause", "reasoning", "merged_conditions",
+                     "recommendation"],
     }
 
-    # Parse structured response
-    lines = result.split("\n")
-    for line in lines:
-        line_lower = line.lower().strip()
-        if line_lower.startswith("agreed_cause:") or line_lower.startswith("agreed cause:"):
-            synthesis["agreed_root_cause"] = line.split(":", 1)[1].strip() if ":" in line else ""
-        elif line_lower.startswith("merged_conditions:") or line_lower.startswith("merged conditions:"):
-            synthesis["merged_conditions"] = line.split(":", 1)[1].strip() if ":" in line else ""
-        elif line_lower.startswith("recommendation:"):
-            rec = line.split(":", 1)[1].strip().upper() if ":" in line else ""
-            if "RESUME" in rec:
-                synthesis["recommendation"] = "RESUME"
-            elif "COOLDOWN" in rec:
-                synthesis["recommendation"] = "COOLDOWN"
-            elif "ESCALATE" in rec:
-                synthesis["recommendation"] = "ESCALATE"
-            else:
-                synthesis["recommendation"] = rec
-        elif line_lower.startswith("reasoning:"):
-            synthesis["reasoning"] = line.split(":", 1)[1].strip() if ":" in line else ""
+    parsed = await call_local_llm_structured(
+        messages=[{"role": "system", "content": system},
+                  {"role": "user", "content": user}],
+        schema=schema,
+        max_tokens=max_tokens,
+        temperature=0.6,
+        timeout=_reviewer_timeout(),
+    )
 
-    return synthesis
+    if parsed and parsed.get("recommendation"):
+        rec = str(parsed.get("recommendation", "")).upper()
+        rec = "RESUME" if "RESUME" in rec else "COOLDOWN" if "COOLDOWN" in rec \
+            else "ESCALATE" if "ESCALATE" in rec else rec
+        return {
+            "agreed_root_cause": parsed.get("agreed_root_cause", ""),
+            "reasoning": parsed.get("reasoning", ""),
+            "merged_conditions": parsed.get("merged_conditions", []),
+            "recommendation": rec,
+            "raw_response": json.dumps(parsed),
+            "synthesis_round": synthesis_round,
+            "source": "llm_synthesis",
+            "_structured": True,
+            "_degraded": False,
+            "_note": "Structured-JSON dialectic synthesis",
+        }
+
+    # Fallback: free-text synthesis, recommendation parsed leniently, ESCALATE
+    # as the honest default when the model won't commit.
+    prose = await call_local_llm(
+        prompt=system + "\n\n" + user + "\n\nGive the agreed cause, merged "
+        "conditions, a recommendation (RESUME/COOLDOWN/ESCALATE), and reasoning.",
+        max_tokens=max_tokens, temperature=0.6, timeout=45.0,
+    )
+    if not prose:
+        return None
+    upper = prose.upper()
+    rec = "RESUME" if "RESUME" in upper else "COOLDOWN" if "COOLDOWN" in upper \
+        else "ESCALATE"
+    return {
+        "agreed_root_cause": "",
+        "reasoning": prose.strip()[:1500],
+        "merged_conditions": [],
+        "recommendation": rec,
+        "raw_response": prose,
+        "synthesis_round": synthesis_round,
+        "source": "llm_synthesis",
+        "_structured": False,
+        "_degraded": True,
+        "_note": "Structured path unavailable; free-text synthesis captured",
+    }
 
 async def run_full_dialectic(
     thesis: Dict[str, Any],

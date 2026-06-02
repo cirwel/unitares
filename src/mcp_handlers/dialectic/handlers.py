@@ -1765,8 +1765,12 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         await pg_update_phase(session_id, session.phase.value)
 
         # 2. Submit antithesis through protocol
+        # concerns is now a list[str] from the structured reviewer; tolerate the
+        # legacy single-string shape for safety.
         anti_reasoning = antithesis_data.get("counter_reasoning", antithesis_data.get("raw_response", "")[:500])
-        anti_concerns = [antithesis_data.get("concerns", "")] if antithesis_data.get("concerns") else []
+        anti_concerns = antithesis_data.get("concerns") or []
+        if isinstance(anti_concerns, str):
+            anti_concerns = [anti_concerns] if anti_concerns else []
         anti_msg = DMsg(
             phase="antithesis",
             agent_id="llm-synthetic-reviewer",
@@ -1785,7 +1789,10 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         await pg_update_phase(session_id, session.phase.value)
 
         # 3. Submit synthesis with agrees=True through protocol
-        synth_conditions = [synthesis.get("merged_conditions", "")] if synthesis.get("merged_conditions") else []
+        # merged_conditions is now a list[str]; tolerate the legacy string shape.
+        synth_conditions = synthesis.get("merged_conditions") or []
+        if isinstance(synth_conditions, str):
+            synth_conditions = [synth_conditions] if synth_conditions else []
         synth_msg = DMsg(
             phase="synthesis",
             agent_id="llm-synthetic-reviewer",

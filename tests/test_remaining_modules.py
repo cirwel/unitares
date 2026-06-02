@@ -754,74 +754,99 @@ class TestGenerateRecoveryCoaching:
             assert "EISV" in prompt
 
 
+_MOD = "src.mcp_handlers.support.llm_delegation"
+
+
 class TestGenerateAntithesis:
     @pytest.mark.asyncio
     async def test_successful_antithesis(self):
-        llm_response = (
-            "CONCERNS: The agent may be underestimating risk\n"
-            "COUNTER-REASONING: An alternative explanation\n"
-            "SUGGESTED_CONDITIONS: Add monitoring for 48h"
-        )
+        """Structured reviewer path yields list concerns + structured flag."""
+        structured = {
+            "concerns": ["underestimates risk", "ignores trajectory"],
+            "counter_reasoning": "An alternative explanation",
+            "grounding_cited": "coherence trend",
+            "position": "dispute",
+            "suggested_conditions": ["Add monitoring for 48h"],
+        }
         thesis = {
             "root_cause": "High complexity",
             "proposed_conditions": ["Reduce complexity to 0.3"],
-            "reasoning": "I believe..."
+            "reasoning": "I believe...",
         }
-        with patch("src.mcp_handlers.support.llm_delegation.call_local_llm", new_callable=AsyncMock, return_value=llm_response):
+        with patch(f"{_MOD}.call_local_llm_structured", new_callable=AsyncMock, return_value=structured):
             result = await generate_antithesis(thesis)
             assert result is not None
             assert result["source"] == "llm_synthetic_reviewer"
-            assert "concerns" in result
-            assert "counter_reasoning" in result
-            assert "suggested_conditions" in result
+            assert result["_structured"] is True
+            assert isinstance(result["concerns"], list) and len(result["concerns"]) == 2
+            assert result["counter_reasoning"]
+            assert result["suggested_conditions"] == ["Add monitoring for 48h"]
 
     @pytest.mark.asyncio
     async def test_llm_unavailable(self):
-        with patch("src.mcp_handlers.support.llm_delegation.call_local_llm", new_callable=AsyncMock, return_value=None):
+        """Both structured and free-text unavailable -> None."""
+        with patch(f"{_MOD}.call_local_llm_structured", new_callable=AsyncMock, return_value=None), \
+             patch(f"{_MOD}.call_local_llm", new_callable=AsyncMock, return_value=None):
             result = await generate_antithesis({"root_cause": "x"})
             assert result is None
 
     @pytest.mark.asyncio
     async def test_with_agent_state(self):
-        with patch("src.mcp_handlers.support.llm_delegation.call_local_llm", new_callable=AsyncMock, return_value="CONCERNS: none") as mock_call:
+        """agent_state EISV signals are passed into the reviewer prompt."""
+        with patch(f"{_MOD}.call_local_llm_structured", new_callable=AsyncMock,
+                   return_value={"concerns": ["c1", "c2"], "counter_reasoning": "x",
+                                 "grounding_cited": "g", "position": "refine",
+                                 "suggested_conditions": []}) as mock_call:
             await generate_antithesis(
                 {"root_cause": "x", "proposed_conditions": [], "reasoning": "r"},
-                agent_state={"risk_score": 0.8, "coherence": 0.3}
+                agent_state={"risk_score": 0.8, "coherence": 0.3},
             )
-            prompt = mock_call.call_args[1]["prompt"]
-            assert "Risk" in prompt
+            user_msg = mock_call.call_args[1]["messages"][1]["content"]
+            assert "risk_score" in user_msg
 
 
 class TestGenerateSynthesis:
     @pytest.mark.asyncio
     async def test_successful_synthesis(self):
-        llm_response = (
-            "AGREED_CAUSE: Both sides agree on high complexity\n"
-            "MERGED_CONDITIONS: Reduce complexity, monitor 24h\n"
-            "RECOMMENDATION: RESUME\n"
-            "REASONING: Agent demonstrated understanding"
-        )
+        structured = {
+            "agreed_root_cause": "Both sides agree on high complexity",
+            "reasoning": "Agent demonstrated understanding",
+            "merged_conditions": ["Reduce complexity", "monitor 24h"],
+            "recommendation": "RESUME",
+        }
         thesis = {"root_cause": "x", "proposed_conditions": ["c1"], "reasoning": "r"}
-        antithesis = {"concerns": "c", "counter_reasoning": "cr", "suggested_conditions": "sc"}
-        with patch("src.mcp_handlers.support.llm_delegation.call_local_llm", new_callable=AsyncMock, return_value=llm_response):
+        antithesis = {"concerns": ["c"], "counter_reasoning": "cr", "suggested_conditions": ["sc"]}
+        with patch(f"{_MOD}.call_local_llm_structured", new_callable=AsyncMock, return_value=structured):
             result = await generate_synthesis(thesis, antithesis, synthesis_round=1)
             assert result is not None
             assert result["recommendation"] == "RESUME"
             assert result["synthesis_round"] == 1
+            assert isinstance(result["merged_conditions"], list)
 
     @pytest.mark.asyncio
     async def test_cooldown_recommendation(self):
-        llm_response = "RECOMMENDATION: COOLDOWN\nREASONING: needs time"
-        with patch("src.mcp_handlers.support.llm_delegation.call_local_llm", new_callable=AsyncMock, return_value=llm_response):
+        structured = {"agreed_root_cause": "x", "reasoning": "needs time",
+                      "merged_conditions": [], "recommendation": "COOLDOWN"}
+        with patch(f"{_MOD}.call_local_llm_structured", new_callable=AsyncMock, return_value=structured):
             result = await generate_synthesis({}, {})
             assert result["recommendation"] == "COOLDOWN"
 
     @pytest.mark.asyncio
     async def test_escalate_recommendation(self):
-        llm_response = "RECOMMENDATION: ESCALATE\nREASONING: needs human"
-        with patch("src.mcp_handlers.support.llm_delegation.call_local_llm", new_callable=AsyncMock, return_value=llm_response):
+        structured = {"agreed_root_cause": "x", "reasoning": "needs human",
+                      "merged_conditions": [], "recommendation": "ESCALATE"}
+        with patch(f"{_MOD}.call_local_llm_structured", new_callable=AsyncMock, return_value=structured):
             result = await generate_synthesis({}, {})
             assert result["recommendation"] == "ESCALATE"
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_free_text_defaults_escalate(self):
+        """Structured unavailable -> free-text fallback, ESCALATE default."""
+        with patch(f"{_MOD}.call_local_llm_structured", new_callable=AsyncMock, return_value=None), \
+             patch(f"{_MOD}.call_local_llm", new_callable=AsyncMock, return_value="ambivalent"):
+            result = await generate_synthesis({}, {"concerns": ["a", "b"]})
+            assert result["recommendation"] == "ESCALATE"
+            assert result["_degraded"] is True
 
 
 class TestRunFullDialectic:
