@@ -617,7 +617,9 @@ class TestConnectFailureCleanup:
     @pytest.mark.asyncio
     async def test_initialize_failure_unwinds_cm_stack_and_http_client(self):
         """session.initialize() failure must leave client in a clean state."""
-        client = GovernanceClient()
+        # connect_retries=0: this guards single-attempt unwind correctness;
+        # the retry path is covered in test_client_connect_resilience.py.
+        client = GovernanceClient(connect_retries=0)
 
         entered_cm = AsyncMock()
         entered_cm.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock(), MagicMock()))
@@ -651,7 +653,9 @@ class TestConnectFailureCleanup:
     @pytest.mark.asyncio
     async def test_transport_failure_unwinds_http_client(self):
         """streamable_http_client.__aenter__ failure still closes the httpx client."""
-        client = GovernanceClient()
+        # connect_retries=0: single-attempt unwind contract; retry tested
+        # separately in test_client_connect_resilience.py.
+        client = GovernanceClient(connect_retries=0)
 
         failing_cm = AsyncMock()
         failing_cm.__aenter__ = AsyncMock(side_effect=ConnectionError("transport refused"))
