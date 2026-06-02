@@ -91,6 +91,28 @@ async def test_retries_exhausted_raises_and_unwinds_each_attempt(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cancellation_unwinds_and_is_not_retried(monkeypatch):
+    """An outer-cycle CancelledError mid-connect must unwind exactly once and
+    propagate — NOT be swallowed or retried. Guards the anyio task-group leak
+    the cancel-scope crash (KG 2026-04-19) was about."""
+    c = GovernanceClient(connect_retries=3, retry_delay=0)
+    disconnects = {"n": 0}
+
+    async def fake_disconnect():
+        disconnects["n"] += 1
+
+    async def cancelled():
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(c, "_open_session", cancelled)
+    monkeypatch.setattr(c, "disconnect", fake_disconnect)
+
+    with pytest.raises(asyncio.CancelledError):
+        await c.connect()
+    assert disconnects["n"] == 1  # unwound once; not retried despite retries=3
+
+
+@pytest.mark.asyncio
 async def test_non_transient_error_not_retried(monkeypatch):
     """Auth/protocol errors are deterministic — surface at once, no retry."""
     c = GovernanceClient(connect_retries=5, retry_delay=0)

@@ -163,8 +163,14 @@ class GovernanceClient:
                     attempts, type(e).__name__, e,
                 )
                 raise
-            except Exception as e:
-                # Non-transient (auth, protocol): unwind and surface at once.
+            except BaseException as e:
+                # Non-transient (auth, protocol) AND cancellation: unwind and
+                # surface at once. Catching BaseException is deliberate — a
+                # CancelledError from the caller's outer cycle timeout would
+                # otherwise skip disconnect() entirely (it is not in
+                # _CONNECT_RETRYABLE), leaking the partially-entered anyio task
+                # group. disconnect() shields its own unwind, so cleanup
+                # completes before the CancelledError propagates.
                 logger.warning(
                     "connect() failed (%s: %s); unwinding partial state",
                     type(e).__name__, e,
@@ -211,17 +217,30 @@ class GovernanceClient:
         await asyncio.wait_for(self._session.initialize(), self.connect_timeout)
 
     async def disconnect(self) -> None:
-        """Close MCP transport."""
+        """Close MCP transport.
+
+        Cleanup is shielded from cancellation: when the caller's outer cycle
+        timeout cancels connect() mid-handshake, the unwind of the anyio task
+        group inside streamable_http_client MUST still complete in THIS task —
+        otherwise its post_writer leaks and later crashes at GC with "exit
+        cancel scope in a different task" (the sentinel crash, KG
+        2026-04-19T00:51:46). A bare ``except Exception`` does not catch the
+        CancelledError that would otherwise interrupt an unshielded __aexit__
+        await partway through, so each unwind step runs inside a shielded
+        scope and the CancelledError is left to propagate afterwards.
+        """
         for cm in reversed(self._cm_stack):
             try:
-                await cm.__aexit__(None, None, None)
+                with anyio.CancelScope(shield=True):
+                    await cm.__aexit__(None, None, None)
             except Exception:
                 pass
         self._cm_stack.clear()
         self._session = None
         if self._http_client:
             try:
-                await self._http_client.aclose()
+                with anyio.CancelScope(shield=True):
+                    await self._http_client.aclose()
             except Exception:
                 pass
             self._http_client = None
