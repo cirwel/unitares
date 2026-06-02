@@ -638,7 +638,7 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
         paused_agent_state = {}
 
     # Reviewer selection
-    auto_self_review = False
+    auto_awaiting_reviewer = False
     if reviewer_mode == "self":
         reviewer_agent_id = agent_uuid
     elif reviewer_mode == "auto":
@@ -654,13 +654,20 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
         except Exception as e:
             logger.warning(f"Auto reviewer selection failed: {e}")
             reviewer_agent_id = None
-        # Fall back to self-review if no eligible reviewer found
+        # No eligible independent reviewer found. Leave the reviewer slot OPEN
+        # (reviewer_agent_id=None) so a summoned agent or operator-assigned
+        # first-responder can claim it via submit_antithesis. Previously this
+        # self-assigned the paused agent as its own reviewer, which occupied the
+        # slot and blocked every later reviewer's first-responder path (the
+        # first-responder guard requires reviewer_agent_id is None) — and
+        # self-review is not a genuine antithesis. reviewer_mode="self" remains
+        # the explicit opt-in for deliberate solo self-review.
         if reviewer_agent_id is None:
             logger.info(
-                "[DIALECTIC] No eligible reviewer found; falling back to self-review"
+                "[DIALECTIC] No eligible reviewer found; leaving reviewer slot "
+                "open for first-responder/summon, flagging awaiting_facilitation"
             )
-            reviewer_agent_id = agent_uuid
-            auto_self_review = True
+            auto_awaiting_reviewer = True
     else:
         # Manual mode or unknown - no reviewer assigned
         # First responder can claim via submit_antithesis
@@ -710,9 +717,19 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
     # Cache in-memory for quick access
     ACTIVE_SESSIONS[session.session_id] = session
 
+    if auto_awaiting_reviewer:
+        # No independent reviewer yet; the antithesis is owed by a summoned or
+        # operator-assigned reviewer, not by the paused agent itself.
+        session.awaiting_facilitation = True
+
     # Build response based on reviewer assignment
-    if auto_self_review:
-        note = "No eligible reviewer available — configured for self-review. Use submit_thesis, then submit_antithesis for your counter-perspective."
+    if auto_awaiting_reviewer:
+        note = (
+            "No independent reviewer is currently available. The reviewer slot is "
+            "left open: submit your thesis now, and an independent reviewer "
+            "(summoned or operator-assigned) can claim it via submit_antithesis. "
+            "To proceed solo, recreate the session with reviewer_mode='self'."
+        )
     elif session.reviewer_agent_id and session.reviewer_agent_id != agent_uuid:
         note = f"Reviewer assigned: {session.reviewer_agent_id[:12]}... Use submit_thesis to add your thesis."
     elif session.reviewer_agent_id:
