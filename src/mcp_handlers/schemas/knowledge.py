@@ -310,7 +310,7 @@ class CleanupKnowledgeGraphParams(AgentIdentityMixin):
 
 class KnowledgeParams(AgentIdentityMixin):
     """Parameters for knowledge"""
-    action: Literal["store", "search", "get", "list", "update", "details", "note", "cleanup", "stats", "supersede", "audit"] = Field(..., description="Operation to perform")
+    action: Literal["store", "search", "get", "list", "update", "details", "note", "cleanup", "synthesize", "stats", "supersede", "audit"] = Field(..., description="Operation to perform")
     query: Optional[str] = Field(None, description="Search query (for action=search)")
     content: Optional[str] = Field(None, description="Extended content/details (for action=store or action=note)")
     details: Optional[str] = Field(None, description="Extended details for discovery (for action=store). Alias: content")
@@ -323,7 +323,11 @@ class KnowledgeParams(AgentIdentityMixin):
     agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get, search)")
     limit: Optional[int] = Field(None, description="Max results")
     include_details: Optional[bool] = Field(None, description="Include full details inline (for action=search/get)")
-    dry_run: Union[bool, str, None] = Field(None, description="Dry run mode (for action=cleanup)")
+    dry_run: Union[bool, str, None] = Field(None, description="Dry run mode (for action=cleanup, synthesize)")
+    # Synthesis (action=synthesize): roll discoveries up into topic summaries.
+    topic: Optional[str] = Field(None, description="Synthesize just this one tag/topic (for action=synthesize). Omit to sweep the densest topics.")
+    min_members: Optional[int] = Field(None, description="Minimum discoveries a topic needs before it is rolled up (for action=synthesize, default 3)")
+    use_llm: Union[bool, str, None] = Field(None, description="Use the local LLM for the rollup narrative (for action=synthesize, default true; falls back to deterministic when unreachable)")
     # S22 provenance - agent-knowable subset only. See StoreKnowledgeGraphParams
     # above for the dropped-field rationale.
     comparison_key: Optional[str] = Field(None, description="S22 H5 provenance: stable key for comparing the same bounded task across harnesses")
@@ -335,4 +339,6 @@ class KnowledgeParams(AgentIdentityMixin):
     def coerce_booleans(self):
         if isinstance(self.dry_run, str):
             self.dry_run = self.dry_run.lower() in ('true', '1', 'yes')
+        if isinstance(self.use_llm, str):
+            self.use_llm = self.use_llm.lower() in ('true', '1', 'yes')
         return self

@@ -27,6 +27,7 @@ from .knowledge.handlers import (
     handle_get_discovery_details,
     handle_leave_note,
     handle_cleanup_knowledge_graph,
+    handle_synthesize_knowledge_graph,
     handle_get_lifecycle_stats,
     handle_supersede_discovery,
     handle_audit_knowledge_graph,
@@ -94,12 +95,13 @@ handle_knowledge = action_router(
         "details": handle_get_discovery_details,
         "note": handle_leave_note,
         "cleanup": handle_cleanup_knowledge_graph,
+        "synthesize": handle_synthesize_knowledge_graph,
         "stats": handle_get_lifecycle_stats,
         "supersede": handle_supersede_discovery,
         "audit": handle_audit_knowledge_graph,
     },
-    timeout=60.0,
-    description="Unified knowledge graph operations: store, search, get, list, update, details, note, cleanup, stats, supersede, audit",
+    timeout=120.0,
+    description="Unified knowledge graph operations: store, search, get, list, update, details, note, cleanup, synthesize, stats, supersede, audit",
     param_maps={
         "search": {"query": "search_query"},
         "store": {"content": "details"},  # Allow 'content' as alias for 'details'
@@ -110,6 +112,8 @@ handle_knowledge = action_router(
         "knowledge(action='store', summary='Found bug in auth', discovery_type='bug_found')",
         "knowledge(action='search', query='authentication issues')",
         "knowledge(action='note', content='Remember to check cache')",
+        "knowledge(action='synthesize')  # roll up the densest topics into summaries",
+        "knowledge(action='synthesize', topic='identity', dry_run=true)",
     ],
 )
 

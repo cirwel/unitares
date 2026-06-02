@@ -232,6 +232,48 @@ class KnowledgeGraphMixin:
 
             return [self._row_to_discovery_dict(row) for row in rows]
 
+    async def kg_topic_candidates(
+        self,
+        min_members: int = 3,
+        limit: int = 20,
+        exclude_types: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Topics (normalized tags) dense enough to be worth rolling up.
+
+        Powers the on-demand synthesis pass (Issue #1): returns each tag that
+        appears on at least ``min_members`` non-archived discoveries, most active
+        first. ``exclude_types`` drops rows whose ``type`` is in the list — the
+        synthesis pass passes its own rollup type so rollups never become members
+        of a future rollup (no feedback loop). Read-only aggregate; no writes.
+        """
+        excluded = exclude_types or []
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT tag AS topic,
+                       COUNT(*) AS member_count,
+                       COUNT(*) FILTER (WHERE status = 'open') AS open_count
+                FROM knowledge.discoveries d, unnest(d.tags) AS tag
+                WHERE d.status <> 'archived'
+                  AND ($3::text[] IS NULL OR d.type <> ALL($3::text[]))
+                GROUP BY tag
+                HAVING COUNT(*) >= $1
+                ORDER BY member_count DESC, tag ASC
+                LIMIT $2
+                """,
+                min_members,
+                limit,
+                excluded or None,
+            )
+            return [
+                {
+                    "topic": r["topic"],
+                    "member_count": r["member_count"],
+                    "open_count": r["open_count"],
+                }
+                for r in rows
+            ]
+
     async def kg_get_discovery(self, discovery_id: str) -> Optional[Dict[str, Any]]:
         """Get a single discovery by ID, including backlinks."""
         async with self.acquire() as conn:
