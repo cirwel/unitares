@@ -239,15 +239,24 @@ class TestHandleRequestDialecticReview:
         pg_create.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_happy_path_auto_mode_no_reviewer_falls_back_to_self(
+    async def test_auto_mode_no_reviewer_leaves_slot_open(
         self, mock_server, mock_require_registered, mock_verify_ownership,
         mock_pg_create, mock_is_in_session, mock_context_agent, mock_select_reviewer,
     ):
-        """Auto mode falls back to self-review when no eligible reviewer found."""
+        """Auto mode with no eligible reviewer leaves the slot OPEN (not self-review).
+
+        Regression guard: previously this self-assigned the paused agent as its own
+        reviewer, which occupied the slot and blocked any later summoned/first-
+        responder reviewer (the first-responder guard requires reviewer_agent_id
+        is None). The slot must stay claimable and the session flag
+        awaiting_facilitation.
+        """
         from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
+        from src.mcp_handlers.dialectic.session import ACTIVE_SESSIONS
 
         with mock_require_registered("agent-paused"), mock_verify_ownership, \
-             mock_pg_create, mock_is_in_session, mock_context_agent, mock_select_reviewer:
+             mock_pg_create as pg_create, mock_is_in_session, mock_context_agent, \
+             mock_select_reviewer:
             result = await handle_request_dialectic_review({
                 "agent_id": "agent-paused",
                 "_agent_uuid": "agent-paused",
@@ -257,10 +266,42 @@ class TestHandleRequestDialecticReview:
 
         data = parse_result(result)
         assert data["success"] is True
-        # Falls back to self-review instead of leaving session orphaned
+        # Slot left open so a summoned/first-responder reviewer can claim it.
+        assert data["reviewer_agent_id"] is None
+        assert data["awaiting_reviewer"] is True
+        assert "self-review" not in data["note"].lower()
+        assert "submit_antithesis" in data["note"]
+        # Persisted with a NULL reviewer (not the paused agent).
+        assert pg_create.await_args.kwargs["reviewer_agent_id"] is None
+        # Session flagged as awaiting an independent reviewer.
+        session = ACTIVE_SESSIONS[data["session_id"]]
+        assert session.awaiting_facilitation is True
+
+    @pytest.mark.asyncio
+    async def test_explicit_self_review_still_self_assigns(
+        self, mock_server, mock_require_registered, mock_verify_ownership,
+        mock_pg_create, mock_is_in_session, mock_context_agent, mock_select_reviewer,
+    ):
+        """reviewer_mode='self' remains the deliberate solo escape hatch.
+
+        Even with no eligible auto reviewer, an explicit self request must still
+        bind the paused agent as reviewer (the auto path no longer does this
+        silently, but the explicit opt-in is preserved)."""
+        from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
+
+        with mock_require_registered("agent-paused"), mock_verify_ownership, \
+             mock_pg_create, mock_is_in_session, mock_context_agent, mock_select_reviewer:
+            result = await handle_request_dialectic_review({
+                "agent_id": "agent-paused",
+                "_agent_uuid": "agent-paused",
+                "reason": "Solo recovery",
+                "reviewer_mode": "self",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
         assert data["reviewer_agent_id"] == "agent-paused"
         assert data["awaiting_reviewer"] is False
-        assert "self-review" in data["note"]
 
     @pytest.mark.asyncio
     async def test_agent_not_registered(self, mock_server, mock_context_agent):
