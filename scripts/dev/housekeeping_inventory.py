@@ -93,6 +93,33 @@ class Inventory:
     watcher: ProbeResult
 
 
+@dataclass
+class AttentionSummary:
+    dirty_worktrees: int = 0
+    detached_worktrees: int = 0
+    worktree_status_errors: int = 0
+    gone_upstream_branches: int = 0
+    merged_branch_candidates: int = 0
+    old_stashes: int = 0
+    open_github_prs: int = 0
+    watcher_unresolved_lines: int = 0
+    probe_errors: int = 0
+
+    @property
+    def total(self) -> int:
+        return (
+            self.dirty_worktrees
+            + self.detached_worktrees
+            + self.worktree_status_errors
+            + self.gone_upstream_branches
+            + self.merged_branch_candidates
+            + self.old_stashes
+            + self.open_github_prs
+            + self.watcher_unresolved_lines
+            + self.probe_errors
+        )
+
+
 def run_cmd(
     args: list[str],
     cwd: Path | str,
@@ -475,6 +502,7 @@ def print_text_report(inventory: Inventory, *, limit: int) -> None:
     print("UNITARES housekeeping inventory")
     print(f"repo: {root}")
     print(f"generated_at: {inventory.generated_at}")
+    print(f"attention_total: {attention_summary(inventory).total}")
     print()
 
     print(
@@ -544,7 +572,36 @@ def print_text_report(inventory: Inventory, *, limit: int) -> None:
 
 
 def to_jsonable(inventory: Inventory) -> dict[str, Any]:
-    return asdict(inventory)
+    payload = asdict(inventory)
+    payload["attention"] = asdict(attention_summary(inventory))
+    payload["attention"]["total"] = attention_summary(inventory).total
+    return payload
+
+
+def attention_summary(inventory: Inventory) -> AttentionSummary:
+    dirty = [wt for wt in inventory.worktrees if wt.dirty_paths]
+    detached = [wt for wt in inventory.worktrees if wt.detached]
+    status_errors = [wt for wt in inventory.worktrees if wt.status_error]
+    watcher_lines = [
+        line for line in inventory.watcher.stdout.splitlines() if line.strip()
+    ] if inventory.watcher.status == "ok" else []
+    probe_errors = sum(
+        1
+        for probe in (inventory.github_prs, inventory.watcher)
+        if probe.status in {"error", "timeout"}
+    )
+    open_prs = len(inventory.github_prs.items) if inventory.github_prs.status == "ok" else 0
+    return AttentionSummary(
+        dirty_worktrees=len(dirty),
+        detached_worktrees=len(detached),
+        worktree_status_errors=len(status_errors),
+        gone_upstream_branches=len(inventory.gone_upstream_branches),
+        merged_branch_candidates=len(inventory.merged_branch_candidates),
+        old_stashes=len(inventory.old_stashes),
+        open_github_prs=open_prs,
+        watcher_unresolved_lines=len(watcher_lines),
+        probe_errors=probe_errors,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -562,6 +619,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"age threshold for old stashes (default: {DEFAULT_STASH_DAYS})",
     )
     parser.add_argument("--json", action="store_true", help="emit JSON")
+    parser.add_argument(
+        "--fail-on-attention",
+        action="store_true",
+        help="exit 1 when any attention item is present; default is report-only",
+    )
     parser.add_argument("--limit", type=int, default=20, help="max rows per text section")
     parser.add_argument("--no-github", action="store_true", help="skip gh PR probe")
     parser.add_argument("--github-repo", default="", help="GitHub owner/repo override")
@@ -589,6 +651,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(to_jsonable(inventory), indent=2, sort_keys=True))
     else:
         print_text_report(inventory, limit=args.limit)
+    if args.fail_on_attention and attention_summary(inventory).total:
+        return 1
     return 0
 
 

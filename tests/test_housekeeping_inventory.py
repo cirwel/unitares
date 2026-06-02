@@ -176,6 +176,70 @@ def test_text_report_includes_core_counts(inventory_module, capsys):
 
     out = capsys.readouterr().out
     assert "worktrees: 2 total, 1 dirty, 1 detached" in out
+    assert "attention_total: 4" in out
     assert "README.md" in out
     assert "stashes: 1 total, 1 old" in out
     assert "watcher unresolved output: 1 non-empty line(s)" in out
+
+
+def test_attention_summary_counts_only_actionable_probe_states(inventory_module):
+    inventory = inventory_module.Inventory(
+        repo_root="/repo",
+        generated_at="2026-06-02T12:00:00+00:00",
+        worktrees=[
+            inventory_module.WorktreeInfo(
+                path="/repo",
+                branch="master",
+                dirty_paths=["README.md"],
+            ),
+            inventory_module.WorktreeInfo(path="/detached", detached=True),
+        ],
+        gone_upstream_branches=[
+            inventory_module.BranchInfo("codex/gone", "origin/codex/gone", "[gone]", "abc", "", "")
+        ],
+        merged_branch_candidates=[],
+        unmerged_branches=[],
+        stashes=[],
+        old_stashes=[],
+        github_prs=inventory_module.ProbeResult(
+            status="ok",
+            items=[{"number": 1, "title": "open"}],
+        ),
+        watcher=inventory_module.ProbeResult(status="skipped", message="disabled"),
+    )
+
+    summary = inventory_module.attention_summary(inventory)
+
+    assert summary.dirty_worktrees == 1
+    assert summary.detached_worktrees == 1
+    assert summary.gone_upstream_branches == 1
+    assert summary.open_github_prs == 1
+    assert summary.probe_errors == 0
+    assert summary.total == 4
+
+
+def test_main_fail_on_attention_is_opt_in(inventory_module, monkeypatch, capsys):
+    inventory = inventory_module.Inventory(
+        repo_root="/repo",
+        generated_at="2026-06-02T12:00:00+00:00",
+        worktrees=[
+            inventory_module.WorktreeInfo(
+                path="/repo",
+                branch="master",
+                dirty_paths=["README.md"],
+            )
+        ],
+        gone_upstream_branches=[],
+        merged_branch_candidates=[],
+        unmerged_branches=[],
+        stashes=[],
+        old_stashes=[],
+        github_prs=inventory_module.ProbeResult(status="skipped"),
+        watcher=inventory_module.ProbeResult(status="skipped"),
+    )
+
+    monkeypatch.setattr(inventory_module, "build_inventory", lambda args: inventory)
+
+    assert inventory_module.main(["--no-github", "--no-watcher"]) == 0
+    assert inventory_module.main(["--no-github", "--no-watcher", "--fail-on-attention"]) == 1
+    capsys.readouterr()
