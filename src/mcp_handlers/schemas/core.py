@@ -278,15 +278,22 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
  "UNITARES_PHASE5_EVIDENCE_WRITE). ."
         ),
     )
-    # S22 provenance — agent-knowable subset only. Harness/server-knowable
-    # fields (harness, harness_id, harness_type, transport, model,
-    # model_provider, tool_surface, governance_mode, verification_source,
-    # episode_id, invocation_id, process_instance_id, locus, affordance_state)
-    # are filled server-side by build_s22_write_context from request signals;
-    # exposing them to agents invited confabulation (KG 2026-05-09T13:03 by
-    # 43a2cbf9). r6_dogfood-style internal callers continue to pass any of
-    # those fields via the extra-field preservation path in
-    # src/mcp_handlers/middleware/params_step.py — the data flow is unchanged.
+    provenance_context: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Optional S22 write-local provenance envelope. Use this visible "
+            "object for situating metadata such as harness_type, model_provider, "
+            "model, transport, tool_surface, governance_mode, verification_source, "
+            "locus, and session-resolution fields. Do not put these fields in "
+            "recent_tool_results. Descriptive only, not identity proof."
+        ),
+    )
+    # S22 provenance — compact top-level subset retained for older callers and
+    # H5 comparison keys. Richer situating metadata should use
+    # provenance_context above so LLM-facing clients have one typed slot instead
+    # of stuffing hidden/prose fields into recent_tool_results. r6_dogfood-style
+    # internal callers can still pass known S22 fields via extra-field
+    # preservation in src/mcp_handlers/middleware/params_step.py.
     comparison_key: Optional[str] = Field(None, description="S22 H5 provenance: stable key for comparing the same bounded task across harnesses")
     task_label: Optional[str] = Field(None, description="S22 H5 provenance: human-readable bounded task label")
     task_outcome: Optional[str] = Field(None, description="S22 H5 provenance: outcome label for the bounded task")

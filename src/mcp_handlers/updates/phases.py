@@ -566,6 +566,9 @@ def transform_inputs(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
     # The actual per-item outcome_event iteration (which is async) runs in
     # execute_post_update_effects after the ODE update, using ctx.recent_tool_results.
     ctx.recent_tool_results = ctx.arguments.get("recent_tool_results") or []
+    for warning in ctx.arguments.get("_mangled_s22_recovery_warnings") or []:
+        if warning not in ctx.warnings:
+            ctx.warnings.append(warning)
 
     return None  # Continue
 

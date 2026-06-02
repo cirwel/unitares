@@ -33,11 +33,161 @@ _STRING_FIELDS: dict[str, tuple[str, ...]] = {
     "spawn_reason": ("spawn_reason",),
 }
 
+_ALIAS_TO_STRING_FIELD = {
+    alias: target_key
+    for target_key, aliases in _STRING_FIELDS.items()
+    for alias in aliases
+}
+
 _MAPPING_FIELDS = {
     "locus",
     "affordance_state",
     "identity_assurance",
 }
+
+_S22_PROVENANCE_KEYS = (
+    set(_MAPPING_FIELDS)
+    | {"tool_surface", "identity_lineage_fork", "provenance_context"}
+    | {alias for aliases in _STRING_FIELDS.values() for alias in aliases}
+)
+_MANGLED_PROVENANCE_WARNING = (
+    "recovered_mangled_provenance: lifted S22 provenance fields out of "
+    "recent_tool_results"
+)
+
+
+def recover_mangled_s22_provenance(arguments: dict[str, Any]) -> list[str]:
+    """Lift S22 metadata that an LLM placed inside recent_tool_results.
+
+    The public tool-result evidence list is for outcome evidence, not write-local
+    provenance. Hermes/native MCP one-shots can still misplace prose-described S22
+    fields into that list when the public schema lacks an obvious slot. Recover the
+    known provenance keys before Pydantic validation/outcome emission so a mangled
+    payload can still persist provenance without creating bogus tool evidence.
+
+    Explicit top-level provenance values always win over recovered values.
+    """
+    if not isinstance(arguments, dict):
+        return []
+    recent_tool_results = arguments.get("recent_tool_results")
+    if not isinstance(recent_tool_results, list):
+        return []
+
+    recovered_any = False
+    cleaned_results: list[Any] = []
+    for item in recent_tool_results:
+        if not isinstance(item, Mapping):
+            cleaned_results.append(item)
+            continue
+
+        recovered = _extract_s22_provenance_from_mapping(item)
+        if not recovered:
+            cleaned_results.append(item)
+            continue
+
+        recovered_any = True
+        _merge_recovered_s22_provenance(arguments, recovered)
+
+        evidence_part = {
+            key: value
+            for key, value in item.items()
+            if key not in _S22_PROVENANCE_KEYS
+        }
+        # Preserve real tool evidence while stripping misplaced S22 keys. If the
+        # remaining dict does not satisfy the required evidence shape, drop it so
+        # validation does not turn provenance mangling into a hard failure or a
+        # bogus outcome_event.
+        if evidence_part.get("tool") and evidence_part.get("summary"):
+            cleaned_results.append(evidence_part)
+
+    if not recovered_any:
+        return []
+
+    arguments["recent_tool_results"] = cleaned_results
+    arguments["_recovered_mangled_provenance"] = True
+    return [_MANGLED_PROVENANCE_WARNING]
+
+
+def _extract_s22_provenance_from_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    recovered: dict[str, Any] = {}
+    nested = value.get("provenance_context")
+    if isinstance(nested, Mapping):
+        for nested_key, nested_value in nested.items():
+            if nested_key in _S22_PROVENANCE_KEYS and nested_key != "provenance_context":
+                recovered[nested_key] = nested_value
+    for key, item_value in value.items():
+        if key in _S22_PROVENANCE_KEYS and key != "provenance_context":
+            recovered[key] = item_value
+    return recovered
+
+
+def _merge_recovered_s22_provenance(
+    arguments: dict[str, Any],
+    recovered: Mapping[str, Any],
+) -> None:
+    public_context = _public_provenance_context(arguments)
+    existing_recovered = arguments.get("_recovered_s22_context")
+    if isinstance(existing_recovered, Mapping):
+        recovered_context = dict(existing_recovered)
+    else:
+        recovered_context = {}
+
+    for key, value in recovered.items():
+        if key == "provenance_context":
+            if isinstance(value, Mapping):
+                _merge_recovered_s22_provenance(arguments, value)
+            continue
+        if _can_accept_recovered_provenance_key(key, arguments, public_context):
+            recovered_context.setdefault(key, value)
+
+    if recovered_context:
+        arguments["_recovered_s22_context"] = recovered_context
+
+
+def _can_accept_recovered_provenance_key(
+    key: str,
+    arguments: Mapping[str, Any],
+    public_context: Mapping[str, Any],
+) -> bool:
+    """Return whether recovered mangled metadata may fill this provenance key."""
+    target_key = _ALIAS_TO_STRING_FIELD.get(key)
+    if target_key is not None:
+        aliases = _STRING_FIELDS[target_key]
+        return (
+            _first_text(arguments, aliases) is None
+            and _first_text(public_context, aliases) is None
+        )
+
+    if key == "tool_surface":
+        return (
+            not _normalize_text_list(arguments.get("tool_surface"))
+            and not _normalize_text_list(public_context.get("tool_surface"))
+        )
+
+    if key in _MAPPING_FIELDS:
+        return (
+            not isinstance(arguments.get(key), Mapping)
+            and not isinstance(public_context.get(key), Mapping)
+        )
+
+    return False
+
+
+def _public_provenance_context(
+    arguments: Mapping[str, Any],
+) -> dict[str, Any]:
+    public_context = arguments.get("provenance_context")
+    if isinstance(public_context, Mapping):
+        return dict(public_context)
+    return {}
+
+
+def _first_text_by_precedence(
+    arguments: Mapping[str, Any],
+    public_context: Mapping[str, Any],
+    keys: Sequence[str],
+) -> Optional[str]:
+    return _first_text(arguments, keys) or _first_text(public_context, keys)
 
 
 def build_s22_write_context(
@@ -56,23 +206,30 @@ def build_s22_write_context(
     provided they override any client-supplied values in ``arguments`` —
     fork-kind is a server-authoritative determination, not a client claim.
     """
+    public_context = _public_provenance_context(arguments)
     context: dict[str, Any] = {}
 
     for target_key, aliases in _STRING_FIELDS.items():
-        value = _first_text(arguments, aliases)
+        value = _first_text_by_precedence(arguments, public_context, aliases)
         if value is not None:
             context[target_key] = value
 
     tool_surface = _normalize_text_list(arguments.get("tool_surface"))
+    if not tool_surface:
+        tool_surface = _normalize_text_list(public_context.get("tool_surface"))
     if tool_surface:
         context["tool_surface"] = tool_surface
 
     for key in _MAPPING_FIELDS:
         value = arguments.get(key)
+        if not isinstance(value, Mapping):
+            value = public_context.get(key)
         if isinstance(value, Mapping):
             context[key] = dict(value)
 
     arg_lineage_fork = arguments.get("identity_lineage_fork")
+    if arg_lineage_fork is None:
+        arg_lineage_fork = public_context.get("identity_lineage_fork")
     if arg_lineage_fork is not None:
         context["identity_lineage_fork"] = _coerce_bool(arg_lineage_fork)
 
@@ -84,8 +241,14 @@ def build_s22_write_context(
     _merge_meta_defaults(context, meta)
     _merge_request_context_defaults(context)
 
-    if default_governance_mode and context and "governance_mode" not in context:
+    recovered_context = arguments.get("_recovered_s22_context")
+    if (
+        default_governance_mode
+        and (context or isinstance(recovered_context, Mapping))
+        and "governance_mode" not in context
+    ):
         context["governance_mode"] = default_governance_mode
+    _merge_recovered_context_defaults(context, recovered_context)
 
     # Do not persist an envelope containing only bookkeeping. The helper is
     # optional by design and should not create noisy empty context records.
@@ -190,6 +353,39 @@ def _coerce_bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _merge_recovered_context_defaults(
+    context: dict[str, Any],
+    recovered: Any,
+) -> None:
+    """Fill still-empty S22 slots from repaired mangled provenance metadata."""
+    if not isinstance(recovered, Mapping):
+        return
+
+    for target_key, aliases in _STRING_FIELDS.items():
+        if target_key in context:
+            continue
+        value = _first_text(recovered, aliases)
+        if value is not None:
+            context[target_key] = value
+
+    if "tool_surface" not in context:
+        tool_surface = _normalize_text_list(recovered.get("tool_surface"))
+        if tool_surface:
+            context["tool_surface"] = tool_surface
+
+    for key in _MAPPING_FIELDS:
+        if key in context:
+            continue
+        value = recovered.get(key)
+        if isinstance(value, Mapping):
+            context[key] = dict(value)
+
+    if "identity_lineage_fork" not in context:
+        value = recovered.get("identity_lineage_fork")
+        if value is not None:
+            context["identity_lineage_fork"] = _coerce_bool(value)
 
 
 def _merge_meta_defaults(context: dict[str, Any], meta: Optional[Any]) -> None:

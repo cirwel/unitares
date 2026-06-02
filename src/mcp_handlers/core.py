@@ -299,7 +299,7 @@ async def handle_simulate_update(arguments: ToolArgumentsDict) -> Sequence[TextC
     return success_response(response)
 
 @mcp_tool("process_agent_update", timeout=60.0)
-async def handle_process_agent_update(arguments: ToolArgumentsDict) -> Sequence[TextContent]:
+async def handle_process_agent_update(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Share your work and get feedback. Auto-binds identity on first call.
 
     Args:
@@ -318,7 +318,23 @@ async def handle_process_agent_update(arguments: ToolArgumentsDict) -> Sequence[
     import src.mcp_handlers.updates.enrichments  # noqa: F401 — triggers registration
 
     # MAGNET PATTERN: Accept fuzzy inputs (text, message, work -> response_text)
-    arguments = apply_param_aliases("process_agent_update", arguments)
+    arguments = dict(apply_param_aliases("process_agent_update", arguments))
+
+    # Repair LLM-facing MCP payloads that placed S22 provenance metadata inside
+    # recent_tool_results. The middleware path performs the same recovery before
+    # validation; this direct handler call covers REST/direct HTTP callers.
+    try:
+        from src.provenance_context import recover_mangled_s22_provenance
+
+        recovery_warnings = recover_mangled_s22_provenance(arguments)
+        if recovery_warnings:
+            existing = arguments.get("_mangled_s22_recovery_warnings") or []
+            arguments["_mangled_s22_recovery_warnings"] = [
+                *existing,
+                *recovery_warnings,
+            ]
+    except Exception as exc:
+        logger.debug("S22 provenance unmangling skipped at handler entry: %s", exc)
 
     # LITE MODE SHORTHAND
     if arguments.get("lite") in (True, "true", "1", 1):

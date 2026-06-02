@@ -43,6 +43,8 @@ def load_plugins() -> None:
     register(GovernanceHealth())
     from .resident_tag_hygiene import ResidentTagHygiene
     register(ResidentTagHygiene())
+    from .plugin_hook_liveness import PluginHookLiveness
+    register(PluginHookLiveness())
 
     raw = os.getenv("VIGIL_CHECK_PLUGINS", "") or ""
     for mod_path in raw.split(":"):

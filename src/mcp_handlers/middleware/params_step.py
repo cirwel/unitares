@@ -181,6 +181,20 @@ async def validate_params(name: str, arguments: Dict[str, Any], ctx) -> Any:
     except Exception:
         schema_model = None
 
+    if name == "process_agent_update":
+        try:
+            from src.provenance_context import recover_mangled_s22_provenance
+
+            recovery_warnings = recover_mangled_s22_provenance(arguments)
+            if recovery_warnings:
+                existing = arguments.get("_mangled_s22_recovery_warnings") or []
+                arguments["_mangled_s22_recovery_warnings"] = [
+                    *existing,
+                    *recovery_warnings,
+                ]
+        except Exception as exc:
+            logger.debug("S22 provenance unmangling skipped before validation: %s", exc)
+
     if schema_model:
         try:
             from pydantic import ValidationError

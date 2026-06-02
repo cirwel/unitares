@@ -5,7 +5,10 @@ from src.mcp_handlers.context import (
     reset_session_signals,
     set_session_signals,
 )
-from src.provenance_context import build_s22_write_context
+from src.provenance_context import (
+    build_s22_write_context,
+    recover_mangled_s22_provenance,
+)
 
 
 def test_build_s22_write_context_prefers_explicit_values():
@@ -80,6 +83,237 @@ def test_build_s22_write_context_empty_without_signals_or_explicit_fields():
     )
 
     assert context == {}
+
+
+def test_build_s22_write_context_reads_public_provenance_context_object():
+    """LLM-facing callers need one visible slot for S22 situating metadata."""
+    context = build_s22_write_context(
+        {
+            "comparison_key": "top-level-wins",
+            "provenance_context": {
+                "harness_type": "hermes",
+                "model_provider": "openai-codex",
+                "model": "gpt-5.5",
+                "transport": "hermes-one-shot",
+                "tool_surface": ["mcp:unitares", "terminal", "mcp:unitares"],
+                "comparison_key": "nested-loses",
+                "locus": {"profile": "default"},
+            },
+        },
+        context_source="process_agent_update",
+        default_governance_mode="explicit",
+    )
+
+    assert context["harness_type"] == "hermes"
+    assert context["model_provider"] == "openai-codex"
+    assert context["model"] == "gpt-5.5"
+    assert context["transport"] == "hermes-one-shot"
+    assert context["tool_surface"] == ["mcp:unitares", "terminal"]
+    assert context["comparison_key"] == "top-level-wins"
+    assert context["locus"] == {"profile": "default"}
+
+
+def test_build_s22_write_context_top_level_alias_family_beats_public_context():
+    context = build_s22_write_context(
+        {
+            "harness": "top-harness",
+            "model_type": "top-model",
+            "task": "top-task",
+            "outcome": "top-outcome",
+            "tool_surface": "top-tool",
+            "provenance_context": {
+                "harness_type": "nested-harness",
+                "model": "nested-model",
+                "task_label": "nested-task",
+                "task_outcome": "nested-outcome",
+                "tool_surface": ["nested-tool"],
+            },
+        },
+        context_source="process_agent_update",
+    )
+
+    assert context["harness_type"] == "top-harness"
+    assert context["model"] == "top-model"
+    assert context["task_label"] == "top-task"
+    assert context["task_outcome"] == "top-outcome"
+    assert context["tool_surface"] == ["top-tool"]
+
+
+def test_recover_mangled_s22_provenance_lifts_recent_tool_result_metadata():
+    arguments = {
+        "response_text": "recording H7/H8 evidence",
+        "recent_tool_results": [
+            {
+                "harness_type": "hermes",
+                "model_provider": "openai-codex",
+                "model": "gpt-5.5",
+                "transport": "hermes-one-shot",
+                "tool_surface": ["mcp:unitares", "terminal"],
+                "comparison_key": "r6-h7-2026-06-01",
+                "task_label": "H7 tool-surface perturbation",
+                "task_outcome": "tool-surface-contrast-entry",
+            },
+            {
+                "tool": "terminal",
+                "summary": "diagnostic command passed",
+                "kind": "command",
+                "transport": "should-not-stay-on-evidence",
+            },
+        ],
+    }
+
+    warnings = recover_mangled_s22_provenance(arguments)
+    context = build_s22_write_context(
+        arguments,
+        context_source="process_agent_update",
+    )
+
+    assert warnings == [
+        "recovered_mangled_provenance: lifted S22 provenance fields out of recent_tool_results"
+    ]
+    assert context["harness_type"] == "hermes"
+    assert context["model_provider"] == "openai-codex"
+    assert context["model"] == "gpt-5.5"
+    assert context["transport"] == "hermes-one-shot"
+    assert context["tool_surface"] == ["mcp:unitares", "terminal"]
+    assert context["comparison_key"] == "r6-h7-2026-06-01"
+    assert context["task_label"] == "H7 tool-surface perturbation"
+    assert context["task_outcome"] == "tool-surface-contrast-entry"
+    assert arguments["_recovered_s22_context"]["harness_type"] == "hermes"
+    assert "harness_type" not in arguments
+    assert arguments["recent_tool_results"] == [
+        {"tool": "terminal", "summary": "diagnostic command passed", "kind": "command"}
+    ]
+
+
+def test_recover_mangled_s22_provenance_preserves_explicit_public_context():
+    arguments = {
+        "provenance_context": {
+            "transport": "explicit-rest",
+            "harness": "explicit-hermes",
+        },
+        "recent_tool_results": [
+            {
+                "transport": "mangled-one-shot",
+                "harness_type": "mangled-hermes",
+                "comparison_key": "r6-h8-2026-06-01",
+            }
+        ],
+    }
+
+    recover_mangled_s22_provenance(arguments)
+    context = build_s22_write_context(
+        arguments,
+        context_source="process_agent_update",
+    )
+
+    assert context["transport"] == "explicit-rest"
+    assert context["harness_type"] == "explicit-hermes"
+    assert context["comparison_key"] == "r6-h8-2026-06-01"
+
+
+def test_recover_mangled_s22_provenance_preserves_top_level_alias_family():
+    arguments = {
+        "harness": "explicit-harness",
+        "model_type": "explicit-model",
+        "task": "explicit-task",
+        "outcome": "explicit-outcome",
+        "recent_tool_results": [
+            {
+                "harness_type": "mangled-harness",
+                "model": "mangled-model",
+                "task_label": "mangled-task",
+                "task_outcome": "mangled-outcome",
+                "comparison_key": "r6-h8-2026-06-01",
+            }
+        ],
+    }
+
+    recover_mangled_s22_provenance(arguments)
+    context = build_s22_write_context(
+        arguments,
+        context_source="process_agent_update",
+    )
+
+    assert context["harness_type"] == "explicit-harness"
+    assert context["model"] == "explicit-model"
+    assert context["task_label"] == "explicit-task"
+    assert context["task_outcome"] == "explicit-outcome"
+    assert context["comparison_key"] == "r6-h8-2026-06-01"
+
+
+def test_recover_mangled_s22_provenance_does_not_promote_operational_fields():
+    arguments = {
+        "recent_tool_results": [
+            {
+                "provenance_context": {
+                    "harness_type": "hermes",
+                    "comparison_key": "r6-h8-2026-06-01",
+                    "confidence": 1.0,
+                    "agent_id": "evil-label",
+                    "require_strong_identity": False,
+                }
+            }
+        ],
+    }
+
+    recover_mangled_s22_provenance(arguments)
+    context = build_s22_write_context(
+        arguments,
+        context_source="process_agent_update",
+    )
+
+    assert context["harness_type"] == "hermes"
+    assert context["comparison_key"] == "r6-h8-2026-06-01"
+    assert "confidence" not in arguments
+    assert "agent_id" not in arguments
+    assert "require_strong_identity" not in arguments
+    assert "confidence" not in arguments["_recovered_s22_context"]
+    assert "agent_id" not in arguments["_recovered_s22_context"]
+    assert "require_strong_identity" not in arguments["_recovered_s22_context"]
+
+
+def test_recover_mangled_s22_provenance_does_not_override_server_meta():
+    from types import SimpleNamespace
+
+    arguments = {
+        "recent_tool_results": [
+            {
+                "provenance_context": {
+                    "parent_agent_id": "mangled-parent",
+                    "spawn_reason": "mangled-spawn",
+                    "thread_id": "mangled-thread",
+                    "comparison_key": "r6-h8-2026-06-01",
+                }
+            }
+        ],
+    }
+    meta = SimpleNamespace(
+        parent_agent_id="server-parent",
+        spawn_reason="server-spawn",
+        thread_id="server-thread",
+    )
+
+    recover_mangled_s22_provenance(arguments)
+    context = build_s22_write_context(
+        arguments,
+        meta=meta,
+        context_source="process_agent_update",
+    )
+
+    assert context["parent_agent_id"] == "server-parent"
+    assert context["spawn_reason"] == "server-spawn"
+    assert context["thread_id"] == "server-thread"
+    assert context["comparison_key"] == "r6-h8-2026-06-01"
+
+
+def test_process_agent_update_schema_exposes_public_provenance_context_slot():
+    from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
+
+    schema = ProcessAgentUpdateParams.model_json_schema()
+
+    assert "provenance_context" in schema["properties"]
+    assert schema["properties"]["provenance_context"]["type"] == "object"
 
 
 def test_build_s22_write_context_persists_server_classified_fork_fields():
