@@ -51,6 +51,10 @@ VALID_DISCOVERY_TYPES = {
     "architectural_decision", "learning", "pattern", "bug_fix",
     "refactoring", "documentation", "experiment", "question", "note", "rule",
     "insight", "bug_found", "improvement", "exploration", "observation",
+    # System-generated rollup rows (Issue #1 synthesis). Listed so search can
+    # filter discovery_type='topic_rollup'; written by the synthesis pass, not
+    # by agents directly.
+    "topic_rollup",
 }
 VALID_SEVERITIES = {"low", "medium", "high", "critical"}
 SEVERITY_ALIASES = {
@@ -2583,6 +2587,78 @@ async def handle_cleanup_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[
 
     except Exception as e:
         return [error_response(f"Failed to run lifecycle cleanup: {str(e)}")]
+
+@mcp_tool("synthesize_knowledge_graph", timeout=120.0, register=False)
+async def handle_synthesize_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """Compound discrete discoveries into rolled-up topic summaries (Issue #1).
+
+    Closes the loop the knowledge-graph skill admits is open ("does not close
+    loops automatically"): a periodic/on-demand pass that maintains a
+    cross-referenced, compounded narrative per topic *before* query time, the
+    way GraphRAG maintains hierarchical community summaries.
+
+    Deliberately NOT a per-write hook — running an LLM pass on every store/note
+    across a multi-agent fleet is the auto-checkin anti-pattern. This runs like
+    lint/cleanup: on demand, or wired to a periodic trigger. Rollups are stored
+    as ordinary discovery rows (type='topic_rollup', deterministic id
+    'rollup::<topic>'), so they upsert in place and need no schema change.
+
+    Args:
+        topic:       Synthesize just this one tag. Omit to sweep the densest topics.
+        limit:       Max topics processed this run (default 20). Bounds cost.
+        min_members: Minimum discoveries a topic needs to be rolled up (default 3).
+        use_llm:     Use the local LLM for the narrative (default true). When the
+                     LLM is unreachable, falls back to a deterministic rollup.
+        dry_run:     Preview the rollups without persisting them.
+
+    Returns a per-topic report (member counts, cross-references, summary source).
+    """
+    from .synthesis import synthesize_topics, MIN_TOPIC_MEMBERS, DEFAULT_TOPIC_LIMIT
+
+    topic = arguments.get("topic")
+
+    dry_run = arguments.get("dry_run", False)
+    if isinstance(dry_run, str):
+        dry_run = dry_run.lower() in ("true", "1", "yes")
+    elif dry_run is None:
+        dry_run = False
+
+    use_llm = arguments.get("use_llm", True)
+    if isinstance(use_llm, str):
+        use_llm = use_llm.lower() in ("true", "1", "yes")
+    elif use_llm is None:
+        use_llm = True
+
+    def _as_int(value, default):
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return default
+
+    limit = _as_int(arguments.get("limit"), DEFAULT_TOPIC_LIMIT)
+    min_members = _as_int(arguments.get("min_members"), MIN_TOPIC_MEMBERS)
+
+    try:
+        graph = await get_knowledge_graph()
+        result = await synthesize_topics(
+            graph,
+            topic=topic,
+            limit=limit,
+            min_members=min_members,
+            use_llm=use_llm,
+            dry_run=dry_run,
+        )
+        prefix = "[DRY RUN] " if dry_run else ""
+        scope = f"topic '{topic}'" if topic else f"top {limit} topics"
+        return success_response({
+            "message": (
+                f"{prefix}Synthesis complete over {scope}: "
+                f"{result['rollups_written']} rollup(s) written"
+            ),
+            **result,
+        }, arguments=arguments)
+    except Exception as e:
+        return [error_response(f"Failed to synthesize knowledge graph: {str(e)}")]
 
 @mcp_tool("get_lifecycle_stats", timeout=30.0, rate_limit_exempt=True, register=False)
 async def handle_get_lifecycle_stats(arguments: Dict[str, Any]) -> Sequence[TextContent]:

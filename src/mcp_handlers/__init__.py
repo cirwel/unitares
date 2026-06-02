@@ -76,6 +76,7 @@ from .knowledge.handlers import (
     handle_get_discovery_details,
     handle_leave_note,
     handle_cleanup_knowledge_graph,
+    handle_synthesize_knowledge_graph,
     handle_get_lifecycle_stats,
 )
 # Dialectic - full protocol restored (Feb 2026)

@@ -108,3 +108,35 @@ The graph accumulates knowledge well but does not close loops automatically. Thi
 - **Periodically check for stale entries** in your domain using `knowledge(action="cleanup")`.
 
 Unresolved entries create noise. Closed loops create trust in the graph.
+
+## Synthesis: rolling up topics
+
+`knowledge(action="synthesize")` compounds the discrete discoveries under a topic
+(a tag) into a single rolled-up **summary row**, so a cross-referenced, compounded
+narrative exists *before* query time instead of only being assembled on read via
+`search(..., synthesize=true)`. It is the GraphRAG "community summary" pattern: a
+hierarchical summary layer maintained over the base discovery nodes.
+
+- `knowledge(action="synthesize")` — sweep the densest topics and (re)build their
+  rollups. `topic="..."` rolls up a single tag; `dry_run=true` previews without
+  writing; `min_members` (default 3) sets the threshold; `use_llm=false` forces the
+  deterministic narrative.
+- Rollups are stored as ordinary discoveries (`type="topic_rollup"`, deterministic
+  id `rollup::<topic>`, tagged `rollup`), so they upsert in place across runs and
+  are found by normal search — e.g. `knowledge(action="search", tags=["rollup"])`.
+
+Run it **on demand or on a periodic cadence (like cleanup/lint), not on every
+write** — a per-write LLM pass across a multi-agent fleet is exactly the
+high-frequency-noise anti-pattern this graph avoids.
+
+## Deferred: bi-temporal fact validity (documented idea, not built)
+
+A first-class notion of *when a fact became true/false* (valid-from / valid-to
+plus observation time, per the Graphiti/Zep bi-temporal model) was considered and
+**deliberately deferred**. It is a substrate-level change — migration, AGE query
+rewrites, and every read path having to reason about time — for a payoff
+(point-in-time reconstruction, automatic invalidation) that is speculative for
+current usage. The existing `superseded` status + `created_at` is an ~80%
+substitute. The signal to build it is a concrete failure: an agent acting on a
+stale fact in a way that actually bites. Until then this stays a documented idea,
+not a roadmap item.
