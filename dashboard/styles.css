@@ -725,23 +725,14 @@ body::after {
     left: 0;
     width: 100%;
     height: 3px;
-    background: var(--stat-accent, var(--accent-cyan));
-    box-shadow: 0 0 12px var(--stat-accent, var(--accent-cyan));
+    background: var(--border-highlight);
+    box-shadow: none;
 }
 
-.stat-card[data-accent="cyan"]  { --stat-accent: var(--accent-cyan);   --stat-tint: rgba(0, 240, 255, 0.04); }
-.stat-card[data-accent="green"] { --stat-accent: var(--accent-green);  --stat-tint: rgba(0, 230, 118, 0.04); }
-.stat-card[data-accent="purple"]{ --stat-accent: var(--accent-purple); --stat-tint: rgba(157, 78, 221, 0.04); }
-.stat-card[data-accent="orange"]{ --stat-accent: var(--accent-orange); --stat-tint: rgba(255, 61, 0, 0.05); }
-.stat-card[data-accent="info"]  { --stat-accent: var(--color-info);    --stat-tint: rgba(59, 130, 246, 0.04); }
-
-.stat-card[data-accent="coherence"] {
-    --stat-accent: var(--accent-cyan);
-}
-.stat-card[data-accent="coherence"]::after {
-    background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
-    box-shadow: 0 0 8px rgba(0, 240, 255, 0.3);
-}
+/* data-accent is legacy decorative identity — neutralized. Color on a stat
+   card now comes only from status (.stat-warning / .stat-critical), so a
+   card's hue always means "needs attention", never just "which card". */
+.stat-card[data-accent] { --stat-tint: transparent; }
 
 /* Warning state for stat cards */
 .stat-card.stat-warning {
@@ -786,8 +777,8 @@ body::after {
 
 .stat-card:hover {
     transform: translateY(-3px);
-    box-shadow: var(--shadow-md), 0 0 20px color-mix(in srgb, var(--stat-accent, var(--accent-cyan)) 15%, transparent);
-    border-color: color-mix(in srgb, var(--stat-accent, var(--accent-cyan)) 40%, transparent);
+    box-shadow: var(--shadow-md);
+    border-color: var(--border-highlight);
 }
 
 .stat-card h2 {
@@ -807,11 +798,10 @@ body::after {
 }
 
 .stat-card .value {
-    color: var(--stat-accent, var(--text-primary));
+    color: var(--text-primary);
     font-size: 2em;
     font-weight: 700;
     font-family: var(--font-mono);
-    text-shadow: 0 0 20px color-mix(in srgb, var(--stat-accent, transparent) 30%, transparent);
 }
 
 .stat-card .change {
@@ -936,7 +926,7 @@ main {
 }
 
 .panel h2 {
-    color: var(--panel-dot-color, var(--text-primary));
+    color: var(--text-primary);
     font-size: 1.4rem;
     font-weight: 700;
     margin: 0;
@@ -949,33 +939,22 @@ main {
 .panel h2::before {
     content: '';
     display: block;
-    width: 12px;
-    height: 12px;
-    background-color: var(--panel-dot-color, var(--accent-cyan));
+    width: 8px;
+    height: 8px;
+    background-color: var(--accent-cyan);
     border-radius: 50%;
-    box-shadow: 0 0 10px var(--panel-dot-color, var(--accent-cyan));
 }
 
-.panel-purple {
-    --panel-dot-color: var(--accent-purple);
-    background-image: radial-gradient(ellipse at top left, rgba(157, 78, 221, 0.06), transparent 50%);
-}
-.panel-yellow {
-    --panel-dot-color: var(--accent-yellow);
-    background-image: radial-gradient(ellipse at top left, rgba(255, 234, 0, 0.04), transparent 50%);
-}
-.panel-green {
-    --panel-dot-color: var(--accent-green);
-    background-image: radial-gradient(ellipse at top left, rgba(0, 230, 118, 0.05), transparent 50%);
-}
-.panel-orange {
-    --panel-dot-color: var(--accent-orange);
-    background-image: radial-gradient(ellipse at top left, rgba(255, 61, 0, 0.05), transparent 50%);
-}
-
-/* Agents panel (default cyan) gets its own tint */
+/* Panel color modifiers neutralized: panels no longer carry decorative
+   per-panel hues or background tints. The heading dot is one consistent
+   brand cyan across every panel; color is reserved for status. Kept as
+   no-ops so existing markup classes still resolve. */
+.panel-purple,
+.panel-yellow,
+.panel-green,
+.panel-orange,
 .agents-panel {
-    background-image: radial-gradient(ellipse at top left, rgba(0, 240, 255, 0.05), transparent 50%);
+    background-image: none;
 }
 
 /* ============================================
@@ -1788,9 +1767,9 @@ main {
    Discoveries
    ============================================ */
 .discovery-item {
-    background: linear-gradient(90deg, rgba(157, 78, 221, 0.03) 0%, var(--item-bg) 30%);
+    background: var(--item-bg);
     border: 1px solid var(--border-color);
-    border-left: 4px solid var(--accent-purple);
+    border-left: 4px solid var(--border-highlight);
     border-radius: var(--radius-md);
     padding: 18px;
     margin-bottom: 15px;
@@ -1808,17 +1787,16 @@ main {
     left: 0;
     width: 100%;
     height: 100%;
-    background: linear-gradient(90deg, rgba(157, 78, 221, 0.05) 0%, transparent 100%);
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.04) 0%, transparent 100%);
     opacity: 0;
     transition: opacity 0.3s;
     pointer-events: none;
 }
 
 .discovery-item:hover {
-    border-color: rgba(157, 78, 221, 0.4);
-    border-left-color: var(--accent-purple);
-    background: rgba(157, 78, 221, 0.03);
-    box-shadow: -4px 0 15px rgba(157, 78, 221, 0.15), var(--shadow-sm);
+    border-color: var(--border-highlight);
+    background: rgba(255, 255, 255, 0.03);
+    box-shadow: var(--shadow-sm);
     transform: translateX(6px);
 }
 
@@ -1838,42 +1816,9 @@ main {
     border: 1px solid transparent;
 }
 
-.discovery-type.insight {
-    color: var(--accent-green);
-    background: rgba(0, 230, 118, 0.12);
-    border-color: rgba(0, 230, 118, 0.3);
-}
-
-.discovery-type.improvement {
-    color: var(--accent-cyan);
-    background: rgba(0, 240, 255, 0.1);
-    border-color: rgba(0, 240, 255, 0.3);
-}
-
-.discovery-type.pattern {
-    color: var(--accent-purple);
-    background: rgba(157, 78, 221, 0.12);
-    border-color: rgba(157, 78, 221, 0.3);
-}
-
-.discovery-type.bug_found {
-    color: var(--accent-orange);
-    background: rgba(255, 61, 0, 0.12);
-    border-color: rgba(255, 61, 0, 0.3);
-}
-
-.discovery-type.question,
-.discovery-type.answer {
-    color: var(--color-info);
-    background: rgba(59, 130, 246, 0.1);
-    border-color: rgba(59, 130, 246, 0.3);
-}
-
-.discovery-type.analysis {
-    color: var(--accent-yellow-text);
-    background: rgba(255, 208, 0, 0.1);
-    border-color: rgba(255, 208, 0, 0.25);
-}
+/* Discovery-type variants neutralized — the type is already named in the
+   chip text, so it doesn't need a per-type hue. All types share the base
+   neutral chip; color stays reserved for status. */
 
 .discovery-item h4 {
     margin: 8px 0;
@@ -1914,7 +1859,7 @@ main {
     padding: 10px 12px;
     background: rgba(0, 0, 0, 0.2);
     border-radius: 6px;
-    border-left: 2px solid var(--accent-cyan);
+    border-left: 2px solid var(--border-highlight);
     font-size: 0.88em;
     color: var(--text-secondary);
     line-height: 1.6;
@@ -5036,9 +4981,9 @@ main {
 }
 .resident-pill:hover { background: rgba(255, 255, 255, 0.07); border-color: var(--border-highlight); }
 .resident-pill:active { transform: scale(0.97); }
-.resident-pill.status-silent { border-color: rgba(255, 234, 0, 0.4); }
+.resident-pill.status-silent { border-color: rgba(245, 158, 11, 0.4); }
 .resident-pill.status-paused,
-.resident-pill.status-archived { border-color: rgba(255, 61, 0, 0.45); }
+.resident-pill.status-archived { border-color: rgba(239, 68, 68, 0.45); }
 
 .resident-pill-dot {
     width: 7px;
@@ -5048,17 +4993,17 @@ main {
     flex-shrink: 0;
 }
 .resident-pill-dot.status-healthy {
-    background: var(--accent-green);
-    box-shadow: 0 0 0 0 rgba(0, 230, 118, 0.5);
+    background: var(--color-success);
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5);
     animation: residentPillPulse 2.4s ease-in-out infinite;
 }
-.resident-pill-dot.status-silent { background: var(--accent-yellow); }
+.resident-pill-dot.status-silent { background: var(--color-warning); }
 .resident-pill-dot.status-paused,
-.resident-pill-dot.status-archived { background: var(--accent-orange); }
+.resident-pill-dot.status-archived { background: var(--color-error); }
 
 @keyframes residentPillPulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(0, 230, 118, 0.5); }
-    50% { box-shadow: 0 0 0 4px rgba(0, 230, 118, 0); }
+    0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5); }
+    50% { box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
 }
 
 .resident-pill-name {
@@ -5072,7 +5017,7 @@ main {
     opacity: 0.8;
 }
 .resident-pill-silence.over-threshold {
-    color: var(--accent-yellow-text);
+    color: var(--color-warning);
     opacity: 1;
     font-weight: 600;
 }
@@ -5080,13 +5025,13 @@ main {
 /* Event-driven agents (e.g. Watcher) — don't check in on a schedule, so a
    silence reading is meaningless. Show a neutral label instead. */
 .resident-pill.status-event-driven {
-    border-color: rgba(157, 78, 221, 0.3);
+    border-color: var(--border-highlight);
 }
 .resident-pill-dot.status-event-driven {
-    background: var(--accent-purple);
+    background: var(--text-muted);
 }
 .resident-pill-eventdriven {
-    color: var(--accent-purple);
+    color: var(--text-secondary);
     font-size: 0.85em;
     letter-spacing: 0.04em;
     opacity: 0.85;
@@ -5106,10 +5051,10 @@ main {
     cursor: help;
 }
 .resident-pill-alerts.sev-high {
-    background: var(--accent-yellow);
+    background: var(--color-warning);
 }
 .resident-pill-alerts.sev-critical {
-    background: var(--accent-orange);
+    background: var(--color-error);
     color: #ffffff;
 }
 
