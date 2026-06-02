@@ -46,6 +46,9 @@ _DESCRIPTION_APPENDICES = {
     ),
     "process_agent_update": (
         "\n\nS22 PROVENANCE FIELDS (optional, descriptive, not identity proof):\n"
+        "- provenance_context: preferred object slot for S22 situating metadata; "
+        "put harness/model/transport/tool_surface/locus metadata here, not in "
+        "recent_tool_results\n"
         "- harness_type / harness: normalized harness family such as "
         "\"codex-cli\", \"claude-code\", or \"hermes\"\n"
         "- model_provider, model, transport, memory_context, tool_surface: "
