@@ -97,10 +97,20 @@ class GovernanceAgent:
         cycle_timeout_seconds: float | None = None,
         log_file: Path | None = None,
         max_log_lines: int = 10_000,
+        connect_timeout: float | None = None,
+        connect_retries: int | None = None,
     ):
         self.name = name
         self.mcp_url = mcp_url
         self.timeout = timeout
+        # Connect-handshake resilience, threaded to the per-cycle
+        # GovernanceClient. None lets the client resolve its own defaults
+        # (UNITARES_CONNECT_TIMEOUT / UNITARES_CONNECT_RETRIES env, else
+        # 10s / 1). Residents whose cycle budget differs from the default
+        # (e.g. a tighter cycle_timeout_seconds) can size these explicitly so
+        # worst-case connect time still fits the cycle.
+        self.connect_timeout = connect_timeout
+        self.connect_retries = connect_retries
         # Hard cap on a single cycle in both run_once() and run_forever()
         # (connect + run_cycle + checkin + heartbeat-check). Used by
         # residents whose cycles can stall on an MCP session that never
@@ -207,7 +217,12 @@ class GovernanceAgent:
         completion (success, failure, or timeout).
         """
         async def _cycle() -> None:
-            async with GovernanceClient(mcp_url=self.mcp_url, timeout=self.timeout) as client:
+            async with GovernanceClient(
+                mcp_url=self.mcp_url,
+                timeout=self.timeout,
+                connect_timeout=self.connect_timeout,
+                connect_retries=self.connect_retries,
+            ) as client:
                 await self._ensure_identity(client)
                 result = await self.run_cycle(client)
                 await self._handle_cycle_result(client, result)
@@ -233,7 +248,10 @@ class GovernanceAgent:
 
         async def _iteration() -> None:
             async with GovernanceClient(
-                mcp_url=self.mcp_url, timeout=self.timeout
+                mcp_url=self.mcp_url,
+                timeout=self.timeout,
+                connect_timeout=self.connect_timeout,
+                connect_retries=self.connect_retries,
             ) as client:
                 await self._ensure_identity(client)
                 result = await self.run_cycle(client)
