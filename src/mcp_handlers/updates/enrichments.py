@@ -1451,8 +1451,21 @@ def _generate_mirror_question(ctx: UpdateContext, signals: list) -> str | None:
         text_lower = (ctx.response_text or "").lower()
         verdict = ctx.metrics_dict.get("verdict", "proceed")
 
-        if "stuck" in text_lower or "blocked" in text_lower:
-            return "You said you're stuck. What's the smallest concrete step that would unblock you right now?"
+        # Only nudge on a genuine first-person "I'm stuck" — not on any text that
+        # merely contains the substring "stuck"/"blocked" (e.g. reporting a lease
+        # that "blocked my edits" or a fix that "unblocks" something). The bare
+        # substring match fabricated "you said you're stuck" on check-ins that
+        # described a *resolved* or external block. (2026-06-03 dogfood.)
+        first_person_stuck = any(
+            p in text_lower
+            for p in (
+                "i'm stuck", "im stuck", "i am stuck", "i feel stuck",
+                "feeling stuck", "i'm blocked", "im blocked", "i am blocked",
+                "still stuck",
+            )
+        )
+        if first_person_stuck:
+            return "You flagged being stuck. What's the smallest concrete step that would unblock you right now?"
 
         if verdict in ("guide", "pause", "reject"):
             return f"Your state just triggered a {verdict} verdict. What changed immediately before that?"
@@ -1468,12 +1481,12 @@ def _generate_mirror_question(ctx: UpdateContext, signals: list) -> str | None:
                 return "You're close to a risk edge. What assumption would you verify before continuing?"
             return "You're close to a governance edge. What's one simplification that would make the next step safer?"
 
-        disagreement = _get_complexity_disagreement(response_data, ctx.meta)
-        if disagreement:
-            return (
-                "You and the system disagree on difficulty. "
-                "Is that coming from scope, uncertainty, or hidden dependencies?"
-            )
+        # Complexity divergence is surfaced as a neutral, recorded signal line
+        # in the mirror (response_formatter._format_mirror), NOT as an
+        # in-the-moment question demanding the agent justify itself on an
+        # otherwise-healthy check-in. The derived complexity is a surface-feature
+        # proxy; the self-report is the richer signal, so a divergence is data
+        # for the calibration curve, not an interrogation. (2026-06-03.)
 
         if isinstance(conf_rel, dict):
             external = conf_rel.get("external_provided")

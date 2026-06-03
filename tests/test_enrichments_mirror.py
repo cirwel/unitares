@@ -144,7 +144,11 @@ class TestGenerateMirrorQuestion:
         question = _generate_mirror_question(ctx, signals=[])
         assert question is None
 
-    def test_complexity_disagreement_returns_question(self):
+    def test_complexity_disagreement_no_longer_returns_question(self):
+        # Complexity divergence is now surfaced as a neutral, recorded mirror
+        # *signal* line (response_formatter._format_mirror), not as an
+        # in-the-moment question demanding the agent justify itself on an
+        # otherwise-healthy check-in. (2026-06-03)
         ctx = _make_ctx(
             response_data={
                 "continuity": {
@@ -155,8 +159,19 @@ class TestGenerateMirrorQuestion:
             }
         )
         question = _generate_mirror_question(ctx, signals=[])
-        assert question is not None
-        assert "disagree on difficulty" in question.lower()
+        assert question is None
+
+    def test_third_person_blocked_does_not_trigger_stuck_question(self):
+        # Regression: a check-in that merely contains "blocked"/"stuck" while
+        # describing a *resolved* or external event must not fabricate a
+        # "you're stuck" nudge. Only genuine first-person stuckness should.
+        for text in (
+            "Cleared stale leases that blocked my edits; all green now.",
+            "The fix unblocks future sessions.",
+            "Investigated where the pipeline gets stuck for other agents.",
+        ):
+            ctx = _make_ctx(response_text=text)
+            assert _generate_mirror_question(ctx, signals=[]) is None, text
 
     def test_autopilot_signal_returns_question(self):
         ctx = _make_ctx()

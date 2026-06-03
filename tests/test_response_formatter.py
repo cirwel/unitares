@@ -605,7 +605,24 @@ class TestFormatMirror:
         assert "fleet" in signal.lower(), \
             "Calibration trajectory-health signal must be labeled fleet-wide"
 
-    def test_complexity_divergence_question(self):
+    def test_fleet_calibration_suppressed_when_healthy(self):
+        # At steady-high fleet health the line is a constant dashboard stat with
+        # no per-turn signal — it must NOT appear in a per-agent mirror.
+        data = _sample_response()
+        data["learning_context"] = {
+            "calibration": {
+                "insight": "Well calibrated",
+                "total_decisions": 41705,
+                "trajectory_health": 0.99,
+                "high_confidence_trajectory_health": 0.99,
+                "low_confidence_trajectory_health": 0.99,
+            }
+        }
+        result = _format_mirror(data, saved_trust_tier=None)
+        assert not any("fleet calibration" in s.lower() for s in result["mirror"]), \
+            "Healthy fleet calibration must be suppressed (no non-sequitur dashboard stat)"
+
+    def test_complexity_divergence_signal_is_neutral_not_interrogation(self):
         data = _sample_response()
         data["calibration_feedback"] = {
             "complexity": {
@@ -615,8 +632,12 @@ class TestFormatMirror:
             }
         }
         result = _format_mirror(data, saved_trust_tier=None)
-        assert any("complexity=0.80" in s for s in result["mirror"])
-        assert any("what's driving" in s.lower() for s in result["mirror"])
+        # Recorded observation, not a demand to justify "difficulty".
+        assert any("you reported 0.80" in s and "surface estimate" in s for s in result["mirror"])
+        assert not any(
+            "what's driving" in s.lower() or "sense of difficulty" in s.lower()
+            for s in result["mirror"]
+        )
 
     def test_mirror_signals_from_enrichment(self):
         data = _sample_response()
@@ -738,7 +759,7 @@ class TestFormatMirror:
             "complexity_divergence": 0.48,
         }
         result = _format_mirror(data, saved_trust_tier=None)
-        assert any("complexity=0.70" in s for s in result["mirror"])
+        assert any("you reported 0.70" in s for s in result["mirror"])
         assert any("0.22" in s for s in result["mirror"])
 
     def test_continuity_takes_precedence_over_calibration_feedback(self):
@@ -753,7 +774,7 @@ class TestFormatMirror:
         }
         result = _format_mirror(data, saved_trust_tier=None)
         # Should use continuity (0.7/0.22), not calibration_feedback (0.8/0.28)
-        assert any("complexity=0.70" in s for s in result["mirror"])
+        assert any("you reported 0.70" in s for s in result["mirror"])
 
     def test_restorative_action_surfaced(self):
         data = _sample_response()
@@ -780,7 +801,7 @@ class TestFormatMirror:
             "complexity": {"reported": 0.8, "derived": 0.28, "discrepancy": 0.52}
         }
         result = _format_mirror(data, saved_trust_tier=None)
-        assert any("complexity=0.80" in s for s in result["mirror"])
+        assert any("you reported 0.80" in s for s in result["mirror"])
 
     def test_complexity_divergence_suppressed_early(self):
         """With meta.total_updates <= 3, complexity divergence is suppressed."""
@@ -811,7 +832,7 @@ class TestFormatMirror:
         meta = MagicMock()
         meta.total_updates = 10
         result = _format_mirror(data, saved_trust_tier=None, meta=meta)
-        assert any("complexity=0.70" in s for s in result["mirror"])
+        assert any("you reported 0.70" in s for s in result["mirror"])
 
 
 class TestFormatResponseMirror:
