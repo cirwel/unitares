@@ -621,7 +621,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         claims = list(args.claim)
         evidence: list[str | EvidenceItem] = list(args.evidence)
         for packet_path in args.packet:
-            packet_claims, packet_evidence = load_evidence_packet(packet_path)
+            try:
+                packet_claims, packet_evidence = load_evidence_packet(packet_path)
+            except (OSError, ValueError) as exc:
+                parser.error(f"--packet {packet_path}: {exc}")
             claims.extend(packet_claims)
             evidence.extend(packet_evidence)
         audit = audit_claims(claims, evidence)

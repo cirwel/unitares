@@ -345,3 +345,18 @@ def test_audit_json_uses_packet_evidence_ids(tmp_path, capsys) -> None:
     assert payload["audit"]["supported"][0]["claim"] == "Ground Crew pulse returned [SILENT]"
     assert payload["audit"]["supported"][0]["evidence_id"] == "cmd:pulse"
     assert payload["audit"]["supported"][0]["source"] == "terminal"
+
+
+def test_audit_packet_errors_use_argparse_reporting(tmp_path, capsys) -> None:
+    """Malformed packet input should fail like a CLI usage error, not a traceback."""
+    missing_packet = tmp_path / "missing-packet.json"
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["audit", "--packet", str(missing_packet)])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "error:" in captured.err
+    assert "--packet" in captured.err
+    assert "missing-packet.json" in captured.err
+    assert "Traceback" not in captured.err
