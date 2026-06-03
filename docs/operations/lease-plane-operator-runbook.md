@@ -23,10 +23,16 @@ It does not own EISV, calibration, KG, or identity issuance. Those stay in Pytho
 
 ## Start
 
-Render the plist template and load it (one-time install):
+The service runs from a **dedicated deploy worktree pinned to `origin/master`** — `$HOME/projects/unitares-deploy` — **never the dev checkout**. Running `mix run` against a developer tree drifts: stale feature branches, uncommitted edits to the very files being served. See "Updating the running code" below.
+
+One-time install:
 
 ```bash
-sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
+# 1. Create the dedicated deploy worktree (clean, on master)
+git -C "$HOME/projects/unitares" worktree add "$HOME/projects/unitares-deploy" master
+
+# 2. Render the plist pointing at the DEPLOY worktree (not the dev checkout)
+sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
     -e "s|__HOME__|$HOME|g" \
     scripts/ops/com.unitares.lease-plane.plist.template \
     > ~/Library/LaunchAgents/com.unitares.lease-plane.plist
@@ -43,6 +49,18 @@ tail -f ~/Library/Logs/unitares-lease-plane.log
 curl -s -H "Authorization: Bearer $LEASE_PLANE_BEARER_TOKEN" \
      "http://127.0.0.1:8788/v1/health"
 ```
+
+## Updating the running code (deploy)
+
+Deploys are full-restart in v0 (BEAM hot-code-reload is the floor we're building toward — see "Hot code reload" below). To deploy merged `master` changes:
+
+```bash
+scripts/ops/deploy-lease-plane.sh
+```
+
+It fast-forwards `$HOME/projects/unitares-deploy` to `origin/master`, recompiles, restarts the LaunchAgent (`launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane`), and verifies `/v1/health`. Idempotent; creates the deploy worktree if missing. Because the service runs from this dedicated worktree, "is the merged fix actually live?" has a clean answer: `git -C "$HOME/projects/unitares-deploy" rev-parse HEAD`.
+
+> Incident 2026-06-02: a merged fix (#568) was **not** live because the service ran from the dev checkout, which sat on a feature branch with uncommitted edits to the same file. The dedicated worktree exists to make running-code == `origin/master` by construction. This is the running-process-vs-master-commit drift class (`feedback_running-process-vs-master-commit.md`).
 
 ## Stop
 
@@ -68,7 +86,7 @@ A successful `/v1/health` probe returns `{"ok": true, "status": "ok", "protocol_
 
 | Condition | Alarm | Action |
 |-----------|-------|--------|
-| 0 successful probes in last 5 min | `lease_plane.unreachable` | Check `launchctl list com.unitares.lease-plane`; restart via `launchctl kickstart -k system/com.unitares.lease-plane` |
+| 0 successful probes in last 5 min | `lease_plane.unreachable` | Check `launchctl list com.unitares.lease-plane`; restart via `launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane` |
 | HTTP 401 on probe | `lease_plane.auth_drift` | Sentinel's bearer token diverged from the lease plane's; re-source `~/.config/cirwel/secrets.env` and `launchctl kickstart` Sentinel |
 | HTTP 503 sustained | `lease_plane.db_degraded` | Postgres flapping; check `pg_isready -h localhost -p 5432` |
 | Probe latency > 1s sustained | `lease_plane.slow` | Postgres lock contention or backlog; inspect `pg_stat_activity` for stuck transactions on `lease_plane.surface_leases` |
@@ -244,8 +262,10 @@ Force-release is a separate authority from regular lease access. It uses its own
 
 ```
 ~/.config/cirwel/secrets.env    # mode 600, local-Mac-only
-LEASE_FORCE_RELEASE_TOKEN=<32-byte-random-hex>
+export LEASE_FORCE_RELEASE_TOKEN=<32-byte-random-hex>
 ```
+
+The `export` is **required**, not cosmetic: `start.sh` does `source secrets.env` then `exec mix run`, and a sourced-but-not-exported variable is a shell local the exec'd BEAM process never sees — so without `export`, force-release silently stays 503 even though the line is present. Every key in `secrets.env` already uses `export` for this reason.
 
 This follows the existing `~/.config/cirwel/secrets.env` convention (noun-first, `_TOKEN` suffix; cf. `ZENODO_TOKEN`, `CLOUDFLARE_API_TOKEN`). Mode 600. v0 is **local-Mac-only by design** — there is no off-host force-release path. If the operator is travelling, they SSH to the Mac or wait for the lease's TTL.
 
@@ -255,15 +275,17 @@ This follows the existing `~/.config/cirwel/secrets.env` convention (noun-first,
 # 1. Generate a fresh 32-byte hex token (no Anthropic-style 'sk-' prefix; this is internal)
 TOKEN=$(openssl rand -hex 32)
 
-# 2. Add to secrets.env (preserve existing keys; do NOT overwrite the file)
-printf 'LEASE_FORCE_RELEASE_TOKEN=%s\n' "$TOKEN" >> ~/.config/cirwel/secrets.env
+# 2. Add to secrets.env (preserve existing keys; do NOT overwrite the file).
+#    NOTE the `export` — start.sh sources this file then execs mix; a
+#    non-exported var never reaches the BEAM process (force-release stays 503).
+printf 'export LEASE_FORCE_RELEASE_TOKEN=%s\n' "$TOKEN" >> ~/.config/cirwel/secrets.env
 
 # 3. Verify mode is still 600
 chmod 600 ~/.config/cirwel/secrets.env
 ls -la ~/.config/cirwel/secrets.env
 
 # 4. Reload the lease-plane LaunchAgent so it picks up the new env
-launchctl kickstart -k system/com.unitares.lease-plane
+launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane
 
 # 5. Confirm the lease plane is back up
 curl -fsS -H "Authorization: Bearer $LEASE_PLANE_BEARER_TOKEN" \
@@ -277,11 +299,11 @@ Same as other operator-scoped tokens at `~/.config/cirwel/secrets.env`. No speci
 ```bash
 # 1. Rotate
 NEW_TOKEN=$(openssl rand -hex 32)
-sed -i.bak "s/^LEASE_FORCE_RELEASE_TOKEN=.*$/LEASE_FORCE_RELEASE_TOKEN=$NEW_TOKEN/" ~/.config/cirwel/secrets.env
+sed -i.bak "s/^export LEASE_FORCE_RELEASE_TOKEN=.*$/export LEASE_FORCE_RELEASE_TOKEN=$NEW_TOKEN/" ~/.config/cirwel/secrets.env
 rm ~/.config/cirwel/secrets.env.bak
 
 # 2. Reload
-launchctl kickstart -k system/com.unitares.lease-plane
+launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane
 
 # 3. Update any local Python clients that had the old token cached
 # (LeasePlaneClientConfig.force_release_token — see src/lease_plane/client.py)
