@@ -157,8 +157,10 @@ class TestRunOnboard:
         assert "parent_agent_id" not in sent_args
 
         written = json.loads(cache_path.read_text())
+        assert written["schema_version"] == 2
         assert written["uuid"] == "uuid-ok"
         assert written["client_session_id"] == "agent-ok"
+        assert "updated_at" in written
         # S20.3: continuity_token must NOT be persisted to the cache file.
         # The field stays in the in-process return value (transient) so a
         # caller can use it within the same process, but is never written
@@ -410,6 +412,78 @@ class TestSlotIsolation:
         legacy_path = tmp_path / ".unitares" / "session.json"
         assert legacy_path.exists()
         assert json.loads(legacy_path.read_text()) == legacy
+
+    def test_new_slot_uses_newest_existing_slotted_cache_for_lineage(self, tmp_path: Path) -> None:
+        """A fresh process usually has a fresh slot. It should still see
+        workspace lineage from the newest existing session cache, not only
+        from legacy session.json."""
+        older = {
+            "uuid": "older-parent",
+            "updated_at": "2026-05-01T00:00:00+00:00",
+        }
+        newer = {
+            "uuid": "newer-parent",
+            "updated_at": "2026-05-02T00:00:00+00:00",
+        }
+        result, poster, cache_path = self._call(
+            tmp_path,
+            [_success_response(uuid="child-uuid", session_id="agent-child")],
+            slot="fresh-process",
+            initial_files={
+                "session-older.json": older,
+                "session-newer.json": newer,
+            },
+        )
+
+        assert result["status"] == "ok"
+        sent_args = poster.calls[0][1]["arguments"]
+        assert sent_args["parent_agent_id"] == "newer-parent"
+        assert sent_args["spawn_reason"] == "new_session"
+        assert cache_path.name == "session-fresh-process.json"
+
+    def test_exact_slot_cache_wins_over_newer_other_slot(self, tmp_path: Path) -> None:
+        exact = {
+            "uuid": "exact-parent",
+            "updated_at": "2026-05-01T00:00:00+00:00",
+        }
+        newer_other = {
+            "uuid": "other-parent",
+            "updated_at": "2026-05-02T00:00:00+00:00",
+        }
+        _, poster, _ = self._call(
+            tmp_path,
+            [_success_response(uuid="child-uuid", session_id="agent-child")],
+            slot="same-process",
+            initial_files={
+                "session-same-process.json": exact,
+                "session-other-process.json": newer_other,
+            },
+        )
+
+        sent_args = poster.calls[0][1]["arguments"]
+        assert sent_args["parent_agent_id"] == "exact-parent"
+
+    def test_newest_cache_without_uuid_does_not_hide_older_lineage(self, tmp_path: Path) -> None:
+        uuid_less = {
+            "client_session_id": "agent-no-uuid",
+            "updated_at": "2026-05-03T00:00:00+00:00",
+        }
+        older_with_uuid = {
+            "uuid": "usable-parent",
+            "updated_at": "2026-05-02T00:00:00+00:00",
+        }
+        _, poster, _ = self._call(
+            tmp_path,
+            [_success_response(uuid="child-uuid", session_id="agent-child")],
+            slot="fresh-process",
+            initial_files={
+                "session-no-uuid.json": uuid_less,
+                "session-usable.json": older_with_uuid,
+            },
+        )
+
+        sent_args = poster.calls[0][1]["arguments"]
+        assert sent_args["parent_agent_id"] == "usable-parent"
 
     def test_unsanitized_slot_filename_chars_are_replaced(self, tmp_path: Path) -> None:
         # Slot keys come from external input (Claude Code session_id) — must

@@ -28,6 +28,7 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -74,27 +75,81 @@ def _post_json(url: str, payload: dict, timeout: float, token: str | None) -> di
         return {}
 
 
-def _read_cache(workspace: Path, slot: str | None = None) -> dict:
-    """Read the cache for this slot, falling back to the legacy unslotted file.
+def _read_cache_file(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) and data else {}
 
-    Fallback exists so existing single-process flows (no slot supplied) keep
-    working unchanged, and so a slotted hook can still pick up continuity
-    state written by an earlier unslotted run.
-    """
-    primary = workspace / CACHE_DIR / _slot_filename(slot)
-    candidates = [primary]
-    if slot:
-        candidates.append(workspace / CACHE_DIR / CACHE_FILE)
-    for path in candidates:
-        if not path.exists():
-            continue
+
+def _parse_cache_timestamp(payload: dict, path: Path) -> float:
+    raw = payload.get("updated_at")
+    if isinstance(raw, str) and raw:
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.timestamp()
         except Exception:
+            pass
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _cache_lineage_uuid(payload: dict) -> str:
+    for key in ("uuid", "agent_uuid"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _session_cache_paths(cache_dir: Path) -> list[Path]:
+    if not cache_dir.is_dir():
+        return []
+    paths: list[Path] = []
+    for path in cache_dir.iterdir():
+        if not path.is_file():
             continue
-        if isinstance(data, dict) and data:
-            return data
-    return {}
+        if path.name == CACHE_FILE:
+            paths.append(path)
+        elif path.name.startswith("session-") and path.name.endswith(".json"):
+            paths.append(path)
+    return paths
+
+
+def _read_cache(workspace: Path, slot: str | None = None) -> dict:
+    """Read the best local lineage candidate for this process.
+
+    The exact slot wins first. If a fresh process has a new slot, fall back to
+    the newest valid session cache in the workspace, including legacy
+    ``session.json``. This mirrors ``session_cache.py list`` and avoids the
+    common Codex/adapter failure mode where prior lineage exists only in a
+    different slotted file.
+    """
+    cache_dir = workspace / CACHE_DIR
+    primary = cache_dir / _slot_filename(slot)
+    primary_payload = _read_cache_file(primary)
+    if _cache_lineage_uuid(primary_payload):
+        return primary_payload
+
+    candidates: list[tuple[float, dict]] = []
+    for path in _session_cache_paths(cache_dir):
+        if path == primary:
+            continue
+        payload = _read_cache_file(path)
+        if _cache_lineage_uuid(payload):
+            candidates.append((_parse_cache_timestamp(payload, path), payload))
+
+    if not candidates:
+        return primary_payload
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
 
 
 def _write_cache(workspace: Path, payload: dict, slot: str | None = None) -> None:
@@ -267,6 +322,7 @@ def run_onboard(
     # caller can use them transiently within the same process if needed.
     # S20.3 — mirrors the plugin helper's v2 cache schema (session_cache.py).
     new_cache = {
+        "schema_version": 2,
         "server_url": server_url,
         "agent_name": agent_name,
         "slot": slot or "",
@@ -275,6 +331,7 @@ def run_onboard(
         "client_session_id": parsed.get("client_session_id", ""),
         "session_resolution_source": parsed.get("session_resolution_source", ""),
         "display_name": parsed.get("display_name", ""),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if parent_agent_id:
         new_cache["parent_agent_id"] = parent_agent_id
