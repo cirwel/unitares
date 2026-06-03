@@ -120,6 +120,33 @@ class AttentionSummary:
         )
 
 
+ATTENTION_KEYS = (
+    "dirty_worktrees",
+    "detached_worktrees",
+    "worktree_status_errors",
+    "gone_upstream_branches",
+    "merged_branch_candidates",
+    "old_stashes",
+    "open_github_prs",
+    "watcher_unresolved_lines",
+    "probe_errors",
+)
+
+ATTENTION_GROUPS = {
+    "all": ATTENTION_KEYS,
+    "worktrees": (
+        "dirty_worktrees",
+        "detached_worktrees",
+        "worktree_status_errors",
+    ),
+    "branches": ("gone_upstream_branches", "merged_branch_candidates"),
+    "stashes": ("old_stashes",),
+    "github": ("open_github_prs",),
+    "watcher": ("watcher_unresolved_lines",),
+    "probes": ("probe_errors",),
+}
+
+
 def run_cmd(
     args: list[str],
     cwd: Path | str,
@@ -604,6 +631,36 @@ def attention_summary(inventory: Inventory) -> AttentionSummary:
     )
 
 
+def parse_attention_keys(raw: str | None) -> tuple[str, ...]:
+    if not raw:
+        return ()
+
+    selected: list[str] = []
+    unknown: list[str] = []
+    for part in raw.split(","):
+        key = part.strip().replace("-", "_")
+        if not key:
+            continue
+        if key in ATTENTION_GROUPS:
+            selected.extend(ATTENTION_GROUPS[key])
+        elif key in ATTENTION_KEYS:
+            selected.append(key)
+        else:
+            unknown.append(part.strip())
+
+    if unknown:
+        choices = ", ".join(sorted((*ATTENTION_GROUPS.keys(), *ATTENTION_KEYS)))
+        raise ValueError(
+            f"unknown attention key(s): {', '.join(unknown)}; choices: {choices}"
+        )
+
+    return tuple(dict.fromkeys(selected))
+
+
+def selected_attention_total(summary: AttentionSummary, keys: tuple[str, ...]) -> int:
+    return sum(getattr(summary, key) for key in keys)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cwd", default=".", help="repo directory to inspect")
@@ -621,8 +678,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="emit JSON")
     parser.add_argument(
         "--fail-on-attention",
-        action="store_true",
-        help="exit 1 when any attention item is present; default is report-only",
+        nargs="?",
+        const="all",
+        default="",
+        metavar="KEYS",
+        help=(
+            "exit 1 when selected attention items are present; optional KEYS is "
+            "comma-separated and may include all, worktrees, branches, stashes, "
+            "github, watcher, probes, or exact attention keys"
+        ),
     )
     parser.add_argument("--limit", type=int, default=20, help="max rows per text section")
     parser.add_argument("--no-github", action="store_true", help="skip gh PR probe")
@@ -646,12 +710,17 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    try:
+        fail_keys = parse_attention_keys(args.fail_on_attention)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     inventory = build_inventory(args)
     if args.json:
         print(json.dumps(to_jsonable(inventory), indent=2, sort_keys=True))
     else:
         print_text_report(inventory, limit=args.limit)
-    if args.fail_on_attention and attention_summary(inventory).total:
+    if fail_keys and selected_attention_total(attention_summary(inventory), fail_keys):
         return 1
     return 0
 

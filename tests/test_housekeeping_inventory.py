@@ -218,6 +218,24 @@ def test_attention_summary_counts_only_actionable_probe_states(inventory_module)
     assert summary.total == 4
 
 
+def test_parse_attention_keys_accepts_groups_fields_and_dash_aliases(inventory_module):
+    assert inventory_module.parse_attention_keys("") == ()
+    assert inventory_module.parse_attention_keys("worktrees") == (
+        "dirty_worktrees",
+        "detached_worktrees",
+        "worktree_status_errors",
+    )
+    assert inventory_module.parse_attention_keys(
+        "old-stashes,watcher_unresolved_lines"
+    ) == (
+        "old_stashes",
+        "watcher_unresolved_lines",
+    )
+
+    with pytest.raises(ValueError, match="unknown attention key"):
+        inventory_module.parse_attention_keys("nope")
+
+
 def test_main_fail_on_attention_is_opt_in(inventory_module, monkeypatch, capsys):
     inventory = inventory_module.Inventory(
         repo_root="/repo",
@@ -242,4 +260,16 @@ def test_main_fail_on_attention_is_opt_in(inventory_module, monkeypatch, capsys)
 
     assert inventory_module.main(["--no-github", "--no-watcher"]) == 0
     assert inventory_module.main(["--no-github", "--no-watcher", "--fail-on-attention"]) == 1
+    assert (
+        inventory_module.main(
+            ["--no-github", "--no-watcher", "--fail-on-attention", "old-stashes"]
+        )
+        == 0
+    )
+    assert (
+        inventory_module.main(
+            ["--no-github", "--no-watcher", "--fail-on-attention", "worktrees"]
+        )
+        == 1
+    )
     capsys.readouterr()

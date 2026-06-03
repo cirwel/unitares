@@ -94,7 +94,9 @@ python3 scripts/dev/housekeeping_inventory.py
 
 It reports dirty or detached worktrees, gone-upstream branches, old stashes,
 open GitHub PRs, and unresolved Watcher output. For automation, add
-`--fail-on-attention` to exit nonzero when any reported attention item exists.
+`--fail-on-attention` to exit nonzero when any reported attention item exists,
+or narrow it with comma-separated categories such as
+`--fail-on-attention worktrees,watcher`.
 
 ## Commands
 
