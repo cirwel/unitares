@@ -995,6 +995,15 @@ def _prune_log_archives(archive_dir: Path, stem: str, keep_months: int = 6):
 
 _supervised_tasks: list = []
 
+# Set True at the top of stop_all_background_tasks() before the cancel loop.
+# Graceful shutdown cancels every supervised task at once (a sub-5ms fanout
+# burst); those are benign lifecycle, NOT substrate-coupling incidents, so the
+# cancellation emitter suppresses them when this is set. Runtime-anomalous
+# cancellations (server up — e.g. cancel_and_respawn_task) still emit, which is
+# the genuine §129 substrate-tax signal. One-way latch: never reset (once the
+# graceful-shutdown sequence starts, the process is going down).
+_background_tasks_shutting_down: bool = False
+
 
 def _on_background_task_done(task: asyncio.Task) -> None:
     """Callback for background task completion — logs crashes, emits a
@@ -1028,6 +1037,17 @@ def _emit_background_task_cancellation(task_name: str) -> None:
     is defense-in-depth so an ImportError at the wire-up site cannot break
     the supervisor's bookkeeping (the `_supervised_tasks.remove(...)` that
     follows in `_on_background_task_done`)."""
+    if _background_tasks_shutting_down:
+        # Graceful-shutdown teardown cancels all supervised tasks at once; these
+        # are expected lifecycle, not coordination failures. Emitting them
+        # pollutes the §129 substrate-tax incident count with restart noise (a
+        # nesting+noise audit on 2026-06-03 found 69 such rows = 8 restart
+        # bursts). Suppress; runtime-anomalous cancellations (flag still False)
+        # still emit and remain the real signal.
+        logger.debug(
+            "[coord-events] suppressing graceful-shutdown cancellation for task %r", task_name
+        )
+        return
     try:
         from uuid import uuid4
 
@@ -1588,6 +1608,12 @@ def list_restartable_tasks() -> list[str]:
 
 async def stop_all_background_tasks() -> None:
     """Cancel and await all supervised background tasks before teardown."""
+    # Latch the shutdown flag BEFORE the cancel loop so the done-callbacks (which
+    # fire during the gather await below) see it and suppress their cancellation
+    # emits — otherwise every graceful restart writes ~N benign coordination-
+    # failure rows that poison the §129 substrate-tax measurement.
+    global _background_tasks_shutting_down
+    _background_tasks_shutting_down = True
     tasks = [task for task in list(_supervised_tasks) if not task.done()]
     if not tasks:
         return
