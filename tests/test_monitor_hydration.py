@@ -607,3 +607,67 @@ async def test_process_update_authenticated_async_tolerates_missing_meta(monkeyp
     # Handler returned, save was reached (previously skipped via exception)
     assert result is not None
     assert save_called.is_set(), "save_monitor_state_async was not reached"
+
+
+# ─── Behavioral baseline restore during hydrate (2026-06-03 fleet starvation) ──
+# Regression: hydrate healed only the ODE state, leaving _behavioral_state fresh
+# (update_count=0) on every JSON-snapshot-loss restart. Combined with frequent
+# restarts, no agent ever reached the 25-update baseline → fleet-wide
+# is_baselined=false → atypical agents (e.g. Lumen) false-paused on universal
+# thresholds. record_agent_state now persists behavioral_eisv into state_json and
+# hydrate restores it.
+
+@pytest.mark.asyncio
+async def test_hydrate_restores_behavioral_baseline_from_state_json():
+    from src.behavioral_state import BehavioralEISV
+
+    # Build a mature, baselined behavioral state and serialize it as the latest
+    # DB row would carry it.
+    mature = BehavioralEISV()
+    for _ in range(30):
+        mature.update(0.31, 0.81, 0.24)  # Lumen-like low-energy operating point
+    assert mature.is_baselined is True
+    beh_blob = mature.to_dict_with_history()
+
+    monitor = _make_fresh_monitor("hydrate-behavioral")
+    assert monitor._behavioral_state.update_count == 0  # precondition: starved
+
+    fake_identity = MagicMock(identity_id=7)
+    fake_rows_desc = [
+        _FakeStateRow(E=0.31, I=0.81, S=0.24, V=-0.45, coherence=0.29,
+                      regime="CONVERGENCE", state_json={"behavioral_eisv": beh_blob}),
+        _FakeStateRow(E=0.32, I=0.80, S=0.23, V=-0.44, coherence=0.30,
+                      regime="CONVERGENCE"),
+    ]
+    fake_db = MagicMock()
+    fake_db.get_identity = AsyncMock(return_value=fake_identity)
+    fake_db.get_agent_state_history = AsyncMock(return_value=fake_rows_desc)
+
+    with patch("src.db.get_db", return_value=fake_db):
+        applied = await hydrate_from_db_if_fresh(monitor, "hydrate-behavioral")
+
+    assert applied is True
+    # The behavioral baseline survived the restart instead of resetting to 0.
+    assert monitor._behavioral_state.update_count == 30
+    assert monitor._behavioral_state.is_baselined is True
+
+
+@pytest.mark.asyncio
+async def test_hydrate_without_behavioral_blob_leaves_fresh_state():
+    """Backward-compat: rows predating the behavioral_eisv persistence carry no
+    blob — hydrate must not crash and leaves the behavioral state fresh."""
+    monitor = _make_fresh_monitor("hydrate-no-behavioral")
+
+    fake_identity = MagicMock(identity_id=8)
+    fake_rows_desc = [
+        _FakeStateRow(E=0.7, I=0.8, S=0.1, V=0.0, coherence=0.5, regime="EXPLORATION"),
+    ]
+    fake_db = MagicMock()
+    fake_db.get_identity = AsyncMock(return_value=fake_identity)
+    fake_db.get_agent_state_history = AsyncMock(return_value=fake_rows_desc)
+
+    with patch("src.db.get_db", return_value=fake_db):
+        applied = await hydrate_from_db_if_fresh(monitor, "hydrate-no-behavioral")
+
+    assert applied is True
+    assert monitor._behavioral_state.update_count == 0  # unchanged, no crash

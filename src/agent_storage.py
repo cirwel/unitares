@@ -537,6 +537,7 @@ async def record_agent_state(
     action: Optional[str] = None,
     provenance_context: Optional[Mapping[str, Any]] = None,
     epistemic_class: Optional[str] = "agent_report",
+    behavioral_eisv: Optional[Mapping[str, Any]] = None,
 ) -> int:
     """
     Record agent EISV state to PostgreSQL.
@@ -582,6 +583,12 @@ async def record_agent_state(
         state_json["provenance_context"] = dict(provenance_context)
     if epistemic_class is not None:
         state_json["epistemic_class"] = epistemic_class
+    # Persist the behavioral baseline alongside the ODE state so a JSON-snapshot
+    # loss + DB-hydrate restart restores baseline maturity instead of resetting
+    # it to update_count=0. Symmetric with the JSON path (PR #545); closes the
+    # hydrate gap that left the fleet permanently is_baselined=false (2026-06-03).
+    if behavioral_eisv:
+        state_json["behavioral_eisv"] = dict(behavioral_eisv)
 
     state_id = await db.record_agent_state(
         identity_id=identity.identity_id,

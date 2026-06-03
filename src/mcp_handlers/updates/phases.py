@@ -1512,6 +1512,17 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
     except Exception as e:
         logger.debug(f"Drift dialectic trigger skipped: {e}")
 
+    # Snapshot the behavioral baseline so the DB row carries it (survives a
+    # JSON-snapshot loss + DB-hydrate restart). Fail-open: a serialization
+    # error must never break the state record. (Fleet starvation fix 2026-06-03.)
+    try:
+        behavioral_snapshot = (
+            monitor._behavioral_state.to_dict_for_persistence()
+            if monitor is not None else None
+        )
+    except Exception:
+        behavioral_snapshot = None
+
     # PostgreSQL: Record EISV state
     try:
         await agent_storage.record_agent_state(
@@ -1530,6 +1541,7 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                 or (ctx.result.get('decision') or {}).get('action'),
             provenance_context=ctx.agent_state.get("provenance_context"),
             epistemic_class=ctx.epistemic_class,
+            behavioral_eisv=behavioral_snapshot,
         )
         logger.debug(f"PostgreSQL: Recorded state for {agent_id}")
     except ValueError:
@@ -1611,6 +1623,7 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                     or (ctx.result.get('decision') or {}).get('action'),
                 provenance_context=ctx.agent_state.get("provenance_context"),
                 epistemic_class=ctx.epistemic_class,
+                behavioral_eisv=behavioral_snapshot,
             )
             logger.debug(f"PostgreSQL: Created agent and recorded state for {agent_id}")
         except Exception as create_error:

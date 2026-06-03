@@ -241,3 +241,28 @@ class TestSerialization:
         assert "updates" in d
         # Basic dict should NOT have history
         assert "E_history" not in d
+
+
+def test_to_dict_for_persistence_round_trips_baseline_without_histories():
+    """Lean DB-persistence snapshot: restores baseline maturity (Welford stats +
+    update_count) but omits the bulky history arrays. (Fleet starvation fix.)"""
+    from src.behavioral_state import BehavioralEISV
+
+    src = BehavioralEISV()
+    for _ in range(30):
+        src.update(0.31, 0.81, 0.24)
+    assert src.is_baselined is True
+
+    blob = src.to_dict_for_persistence()
+    # History arrays omitted (the whole point — avoid per-row DB bloat)
+    assert "E_history" not in blob
+    assert "obs_history" not in blob
+    # But baseline_stats + counts present
+    assert "baseline_stats" in blob
+    assert blob["updates"] == 30
+
+    restored = BehavioralEISV.from_dict(blob)
+    assert restored.update_count == 30
+    assert restored.is_baselined is True
+    # Welford baseline survived → z-scoring works post-restore
+    assert restored._baseline_E.count == src._baseline_E.count

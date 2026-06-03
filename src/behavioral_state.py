@@ -255,6 +255,27 @@ class BehavioralEISV:
             d["baseline_confidence"] = round(self.baseline_confidence, 2)
         return d
 
+    def to_dict_for_persistence(self) -> Dict:
+        """Lean snapshot for the append-only DB path (core.agent_state.state_json).
+
+        Carries everything needed to restore baseline maturity across a restart —
+        EMA scalars, alphas, update_count, and the Welford baseline_stats — but
+        OMITS the up-to-100-entry E/I/S/V/obs history arrays. The full
+        ``to_dict_with_history`` (~5KB) is fine for the JSON file (one overwritten
+        file per agent) but would bloat the DB, which appends a row per check-in.
+        Histories rebuild within a few updates after restore; baseline_stats and
+        update_count are what gate ``is_baselined`` and drive z-scoring.
+        """
+        d = self.to_dict()
+        d["alphas"] = dict(self.alphas)
+        d["baseline_stats"] = {
+            "E": self._baseline_E.to_dict(),
+            "I": self._baseline_I.to_dict(),
+            "S": self._baseline_S.to_dict(),
+            "V": self._baseline_V.to_dict(),
+        }
+        return d
+
     def to_dict_with_history(self) -> Dict:
         """Export state with history for persistence."""
         d = self.to_dict()
