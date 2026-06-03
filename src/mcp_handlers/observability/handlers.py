@@ -168,6 +168,14 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
     # truth regardless of which process owns the agent. Counts are order-
     # independent, so no chronological reversal is needed. Fail-open: on any DB
     # error keep the monitor-derived distributions rather than breaking observe.
+    #
+    # IMPORTANT: circuit-breaker / CIRS pauses are NOT recorded as
+    # state_json.action='pause' — the breaker enforces the pause out-of-band of
+    # the check-in pipeline and emits an audit.events 'lifecycle_paused' row
+    # instead (the same source aggregate uses for pauses_this_epoch). Counting
+    # only state_json.action therefore still reports pause=0 for an agent the
+    # fleet actually paused. Fold the authoritative lifecycle pause count in so
+    # observe agrees with `agent get`.
     try:
         from src.agent_storage import get_agent_state_history, extract_actions_verdicts
         from src.pattern_analysis import (
@@ -175,11 +183,31 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
             build_verdict_distribution,
         )
         rows = await get_agent_state_history(agent_id, limit=200, exclude_synthetic=True)
-        if rows:
-            actions, verdicts = extract_actions_verdicts(rows)
+        actions, verdicts = extract_actions_verdicts(rows) if rows else ([], [])
+
+        lifecycle_pauses = 0
+        try:
+            from src.audit_db import query_audit_events_async
+            pause_events = await query_audit_events_async(
+                agent_id=agent_id, event_type="lifecycle_paused", limit=1000,
+            )
+            lifecycle_pauses = len(pause_events)
+        except Exception:
+            logger.debug(
+                "observe: lifecycle_paused count skipped for %s", agent_id, exc_info=True
+            )
+
+        if rows or lifecycle_pauses:
             summary = observation.setdefault("summary", {})
-            if actions:
-                summary["decision_distribution"] = build_decision_distribution(actions)
+            if actions or lifecycle_pauses:
+                dist = build_decision_distribution(actions)
+                # max(), not sum(): an agent that DOES record action='pause'
+                # alongside its lifecycle_paused event must not be double-counted,
+                # while breaker pauses that never reach the action stream still
+                # surface. (Today no path writes action='pause', so this reduces
+                # to lifecycle_pauses, but max() keeps it correct either way.)
+                dist["pause"] = max(dist["pause"], lifecycle_pauses)
+                summary["decision_distribution"] = dist
             if verdicts:
                 summary["verdict_distribution"] = build_verdict_distribution(verdicts)
             summary["distribution_source"] = "postgres"

@@ -241,7 +241,9 @@ class TestHandleObserveAgent:
         with patch(_PATCH_SERVER, server), \
              patch(_PATCH_CTX, return_value="other-caller-uuid"), \
              patch("src.agent_storage.get_agent_state_history",
-                   new=AsyncMock(return_value=pg_rows)):
+                   new=AsyncMock(return_value=pg_rows)), \
+             patch("src.audit_db.query_audit_events_async",
+                   new=AsyncMock(return_value=[])):
             from src.mcp_handlers.observability.handlers import handle_observe_agent
             result = await handle_observe_agent({"target_agent_id": uuid})
 
@@ -250,6 +252,44 @@ class TestHandleObserveAgent:
         assert summary["decision_distribution"]["pause"] == 2
         assert summary["decision_distribution"]["proceed"] == 8
         assert summary["verdict_distribution"]["high-risk"] == 2
+        assert summary["distribution_source"] == "postgres"
+
+    @pytest.mark.asyncio
+    async def test_decision_distribution_includes_circuit_breaker_pauses(self):
+        """Regression: circuit-breaker / CIRS pauses are recorded as
+        audit.events 'lifecycle_paused', NOT state_json.action='pause'. The
+        state_json recount alone reports pause=0 for an agent the fleet paused
+        (the live symptom that survived the first cut of the fix). The override
+        must fold the lifecycle pause count in.
+        """
+        import types
+        uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        server = _build_mock_server(agent_ids=[uuid])
+        server.analyze_agent_patterns = MagicMock(return_value={
+            "current_state": {"E": 0.78, "I": 0.67, "S": 0.26, "V": 0.12},
+            "patterns": {"trend": "stable"},
+            "anomalies": [],
+            "summary": {"decision_distribution": {"proceed": 27, "pause": 0}},
+        })
+        # state_json has ONLY proceeds — the breaker pause never wrote action=pause
+        pg_rows = [types.SimpleNamespace(state_json={"action": "proceed", "verdict": "safe"})
+                   for _ in range(27)]
+        # ...but audit.events has 2 lifecycle_paused rows for this agent.
+        pause_events = [{"event_type": "lifecycle_paused"}, {"event_type": "lifecycle_paused"}]
+
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value="other-caller-uuid"), \
+             patch("src.agent_storage.get_agent_state_history",
+                   new=AsyncMock(return_value=pg_rows)), \
+             patch("src.audit_db.query_audit_events_async",
+                   new=AsyncMock(return_value=pause_events)):
+            from src.mcp_handlers.observability.handlers import handle_observe_agent
+            result = await handle_observe_agent({"target_agent_id": uuid})
+
+        data = parse_result(result)
+        summary = data["observation"]["summary"]
+        assert summary["decision_distribution"]["proceed"] == 27
+        assert summary["decision_distribution"]["pause"] == 2  # from lifecycle_paused
         assert summary["distribution_source"] == "postgres"
 
     @pytest.mark.asyncio
