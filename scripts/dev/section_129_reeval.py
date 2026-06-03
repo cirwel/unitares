@@ -71,8 +71,8 @@ def check_incident_id_wired(cur, start: datetime, end: datetime) -> ConditionRes
     cur.execute(
         """
         SELECT
-            count(*) FILTER (WHERE payload ? 'incident_id') AS with_id,
-            count(*)                                        AS total,
+            count(*) FILTER (WHERE payload->'payload' ? 'incident_id') AS with_id,
+            count(*)                                                   AS total,
             min(ts), max(ts)
         FROM audit.events
         WHERE event_type = 'coordination_failure.mcp_handler_timeout.tool_decorator'
@@ -139,12 +139,23 @@ def check_representative_load(cur, start: datetime, end: datetime) -> ConditionR
 
 
 def check_zero_incidents(cur, start: datetime, end: datetime) -> ConditionResult:
+    # NESTING (2026-06-03 fix): emit_coordination_failure_sync stores the
+    # caller payload under AuditEntry.details["payload"], which becomes the
+    # audit.events.payload column, so incident_id lives at
+    # payload->'payload'->>'incident_id' — NOT top-level. The original flat
+    # `payload->>'incident_id'` was blind to it (read 0/70 while the field was
+    # present on every row). NOTE the sibling table differs: the dual-write to
+    # audit.coordination_events stores the caller payload FLAT, so a query there
+    # uses payload->>'incident_id'. Do not copy this nested path to that table.
+    # Graceful-shutdown background_task cancellations no longer emit (they were
+    # benign restart noise inflating the count); see background_tasks.py
+    # _background_tasks_shutting_down.
     cur.execute(
         """
         SELECT
-            count(*)                                  AS raw_rows,
-            count(DISTINCT payload->>'incident_id')   AS distinct_incidents,
-            count(*) FILTER (WHERE payload ? 'incident_id') AS rows_with_id
+            count(*)                                            AS raw_rows,
+            count(DISTINCT payload->'payload'->>'incident_id')  AS distinct_incidents,
+            count(*) FILTER (WHERE payload->'payload' ? 'incident_id') AS rows_with_id
         FROM audit.events
         WHERE event_type LIKE 'coordination_failure.%%'
           AND ts >= %s AND ts < %s
