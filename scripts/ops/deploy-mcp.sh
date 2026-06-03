@@ -1,26 +1,33 @@
 #!/usr/bin/env bash
-# Deploy the governance MCP from a DEDICATED clean worktree pinned to
-# origin/master — never from a developer working tree.
+# Deploy the governance MCP from the master-pinned deploy worktree
+# (~/projects/unitares-deploy), the Python-side analogue of
+# deploy-lease-plane.sh (#569). Both services share that one worktree.
 #
-# Why: the running MCP starts via `python src/mcp_server.py` against a checkout
-# on disk. If that checkout is the dev tree (as it is by default), it drifts —
-# the live fleet brain runs whatever branch/WIP happens to be checked out, so a
-# merged fix is NOT actually live until the dev tree happens to be on master and
-# restarted. This is the running-process-vs-master-commit drift class
-# (feedback_running-process-vs-master-commit.md). deploy-lease-plane.sh (#569)
-# closed it for the Elixir lease plane; this is the same move for the Python
-# governance MCP. Both services share the one deploy worktree (same repo, master).
+# DESIGN — why this is split into a one-time setup vs. a recurring deploy:
 #
-# What it does, idempotently:
-#   1. fast-forward the deploy worktree to origin/master (never destructive)
-#   2. repoint the governance-mcp LaunchAgent at the deploy worktree, preserving
-#      EVERY env var / secret from the currently-installed plist (paths only are
-#      rewritten — secrets are never templated into the repo)
-#   3. restart the LaunchAgent and verify /health/ready
-#   4. AUTO-ROLLBACK to the previous plist + restart if the new one is not
-#      healthy within the budget (model load can take ~30-60s)
+# The live MCP is a LaunchAgent. `launchctl kickstart` restarts the *process*
+# but does NOT re-read the plist file — only a RELOAD (`launchctl unload` +
+# `load`) picks up plist changes, and that reload needs a login/GUI context
+# (it fails from a sandboxed/automated shell). So changing WHERE the MCP runs
+# from is a one-time, operator-interactive step. After that the plist is
+# STATIC (always points at the deploy worktree) and recurring deploys are just
+# ff + kickstart — exactly like the lease plane, whose plist never changes.
 #
-# Requires the LaunchAgent to have been installed once already.
+# This script does ONLY the recurring deploy and REFUSES if the plist does not
+# already point at the deploy worktree, so it can never (a) silently no-op a
+# plist change kickstart won't apply, or (b) report a false success — the
+# failure mode of the first cut of this script, where kickstart restarted the
+# OLD code and the /health/ready check passed against it. It verifies the
+# RUNNING process is actually executing the deploy-worktree code, because the
+# old process answers /health/ready too.
+#
+# ONE-TIME SETUP (run interactively from a normal login shell, NOT automated):
+#   PLIST=~/Library/LaunchAgents/com.unitares.governance-mcp.plist
+#   cp "$PLIST" "$PLIST.bak"
+#   sed -i '' 's|/Users/cirwel/projects/unitares|/Users/cirwel/projects/unitares-deploy|g' "$PLIST"
+#   launchctl unload "$PLIST" && launchctl load "$PLIST"   # RELOAD (kickstart won't)
+#   curl -s http://127.0.0.1:8767/health/ready             # expect {"status":"ready"}
+#   # rollback: cp "$PLIST.bak" "$PLIST"; launchctl unload "$PLIST"; launchctl load "$PLIST"
 set -euo pipefail
 
 REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
@@ -32,60 +39,59 @@ PORT="${UNITARES_MCP_PORT:-8767}"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
-echo "[deploy-mcp] fetching origin/master"
-git -C "$REPO" fetch origin master --quiet
-
-if ! git -C "$REPO" worktree list --porcelain | grep -qx "worktree $DEPLOY"; then
-  echo "[deploy-mcp] creating dedicated deploy worktree at $DEPLOY (on master)"
-  git -C "$REPO" worktree add "$DEPLOY" master
-fi
-
-echo "[deploy-mcp] fast-forwarding $DEPLOY to origin/master (ff-only; refuses if it would lose work)"
-git -C "$DEPLOY" merge --ff-only origin/master
-
-# The MCP writes logs relative to its WorkingDirectory; ensure the dir exists in
-# the deploy worktree (data/ is gitignored).
-mkdir -p "$DEPLOY/data/logs"
-
 if [[ ! -f "$PLIST" ]]; then
-  echo "[deploy-mcp] $PLIST is not installed — install the LaunchAgent once (see CLAUDE.md setup) before deploying" >&2
+  echo "[deploy-mcp] $PLIST not installed — install the LaunchAgent first (see CLAUDE.md setup)" >&2
   exit 1
 fi
 
-# Repoint the plist at the deploy worktree, preserving all env/secrets from the
-# currently-installed plist. Idempotent: skip if it already points at $DEPLOY.
-# Only the dev-checkout path prefix is rewritten (PYTHONPATH, the script path,
-# the log paths, WorkingDirectory); secrets/env values are byte-identical.
-if grep -q "$DEPLOY/src/mcp_server.py" "$PLIST"; then
-  echo "[deploy-mcp] plist already points at the deploy worktree — no repoint needed"
-else
-  echo "[deploy-mcp] repointing plist $REPO -> $DEPLOY (backup at ${PLIST}.bak)"
-  cp "$PLIST" "${PLIST}.bak"
-  sed "s|${REPO}|${DEPLOY}|g" "${PLIST}.bak" > "$PLIST"
+# Precondition: the plist must already point at the deploy worktree. We do NOT
+# change the plist here (that needs an operator-interactive reload). Refuse
+# loudly with the one-time setup recipe rather than silently no-op.
+if ! grep -q "$DEPLOY/src/mcp_server.py" "$PLIST"; then
+  cat >&2 <<EOF
+[deploy-mcp] REFUSING: the LaunchAgent plist does not point at the deploy
+worktree, so kickstart would restart the OLD code and this script would lie
+about success. Do the one-time setup interactively (login shell) first:
+
+  cp "$PLIST" "$PLIST.bak"
+  sed -i '' 's|$REPO|$DEPLOY|g' "$PLIST"
+  launchctl unload "$PLIST" && launchctl load "$PLIST"   # RELOAD — kickstart won't
+  curl -s http://127.0.0.1:$PORT/health/ready            # expect {"status":"ready"}
+
+Then re-run this script for ongoing deploys.
+EOF
+  exit 1
 fi
 
-echo "[deploy-mcp] restarting $LABEL (gui domain — LaunchAgent, not a system daemon)"
+echo "[deploy-mcp] fetching origin/master"
+git -C "$REPO" fetch origin master --quiet
+
+PREV="$(git -C "$DEPLOY" rev-parse HEAD)"
+echo "[deploy-mcp] fast-forwarding $DEPLOY to origin/master (ff-only; was ${PREV:0:8})"
+git -C "$DEPLOY" merge --ff-only origin/master
+mkdir -p "$DEPLOY/data/logs"
+
+echo "[deploy-mcp] restarting $LABEL (plist is static + already points at the worktree, so kickstart suffices)"
 launchctl kickstart -k "gui/$UID_NUM/$LABEL"
 
-echo "[deploy-mcp] verifying /health/ready (bge-m3 model load can take ~30-60s)"
+echo "[deploy-mcp] verifying the RUNNING process is the deploy-worktree code (bge-m3 load can take ~30-90s)"
 ok=""
-for _ in $(seq 1 30); do
+for _ in $(seq 1 40); do
   sleep 3
-  if curl -fsS -m 4 "http://127.0.0.1:${PORT}/health/ready" 2>/dev/null | grep -q '"status":"ready"'; then
+  pid="$(launchctl print "gui/$UID_NUM/$LABEL" 2>/dev/null | awk -F'= ' '/^[[:space:]]*pid =/{print $2; exit}')"
+  if curl -fsS -m4 "http://127.0.0.1:${PORT}/health/ready" 2>/dev/null | grep -q '"status":"ready"' \
+     && [[ -n "$pid" ]] && ps -o command= -p "$pid" 2>/dev/null | grep -q "$DEPLOY/src/mcp_server.py"; then
     ok=yes
     break
   fi
 done
 
 if [[ "$ok" == yes ]]; then
-  echo "[deploy-mcp] OK — governance MCP healthy, serving from $DEPLOY @ $(git -C "$DEPLOY" rev-parse --short HEAD)"
+  echo "[deploy-mcp] OK — governance MCP healthy on deploy-worktree code @ $(git -C "$DEPLOY" rev-parse --short HEAD)"
 else
-  echo "[deploy-mcp] FAILED — MCP did not return /health/ready in budget." >&2
-  if [[ -f "${PLIST}.bak" ]] && ! grep -q "$DEPLOY/src/mcp_server.py" "${PLIST}.bak"; then
-    echo "[deploy-mcp] rolling back to previous plist (dev checkout) and restarting" >&2
-    cp "${PLIST}.bak" "$PLIST"
-    launchctl kickstart -k "gui/$UID_NUM/$LABEL"
-    echo "[deploy-mcp] rolled back. Investigate ${DEPLOY}/data/logs/mcp_server_error.log" >&2
-  fi
+  echo "[deploy-mcp] FAILED — new code did not come up healthy. Rolling the worktree back to ${PREV:0:8} and restarting." >&2
+  git -C "$DEPLOY" reset --hard "$PREV"
+  launchctl kickstart -k "gui/$UID_NUM/$LABEL"
+  echo "[deploy-mcp] rolled back. Investigate ${DEPLOY}/data/logs/mcp_server_error.log" >&2
   exit 1
 fi
