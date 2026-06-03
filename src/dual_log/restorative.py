@@ -146,9 +146,12 @@ class RestorativeBalanceMonitor:
             )
         
         if cumulative_divergence > self.divergence_threshold:
+            # Descriptive, not interrogative — matches the neutralized mirror
+            # complexity-calibration line. The divergence is calibration data,
+            # not a demand to justify difficulty. (2026-06-03.)
             reasons.append(
-                f"complexity divergence pattern ({cumulative_divergence:.2f} cumulative) "
-                f"-- is your sense of difficulty calibrated?"
+                f"complexity divergence ({cumulative_divergence:.2f} cumulative, "
+                f"logged for calibration)"
             )
         
         if reasons:

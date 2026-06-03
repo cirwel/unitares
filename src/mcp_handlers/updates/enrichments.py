@@ -1254,7 +1254,7 @@ async def enrich_mirror_signals(ctx: UpdateContext) -> None:
     Produces:
       - _mirror_signals: list of short insight strings
       - _mirror_kg_results: relevant KG discoveries by text search
-      - _mirror_question: targeted question when state warrants it
+      - _mirror_reflection: targeted descriptive reflection when state warrants it
       - _has_sensor_data: bool for auto-mode routing
     """
     try:
@@ -1274,13 +1274,13 @@ async def enrich_mirror_signals(ctx: UpdateContext) -> None:
         # 1. Gaming / autopilot detection (low variance in recent reports)
         signals.extend(_detect_gaming(ctx))
 
-        # 2. Targeted question — only when there is something worth reflecting on
-        question = _generate_mirror_question(ctx, signals)
-        if question:
-            ctx.response_data["_mirror_question"] = question
+        # 2. Targeted reflection — descriptive, only when state warrants it
+        reflection = _generate_mirror_reflection(ctx, signals)
+        if reflection:
+            ctx.response_data["_mirror_reflection"] = reflection
 
-        # 3. KG search is useful when there is a concrete signal/question, not on steady-state check-ins
-        if _should_search_kg_by_checkin_text(ctx, signals, question):
+        # 3. KG search is useful when there is a concrete signal/reflection, not on steady-state check-ins
+        if _should_search_kg_by_checkin_text(ctx, signals, reflection):
             kg_results = await _search_kg_by_checkin_text(ctx)
             if kg_results:
                 ctx.response_data["_mirror_kg_results"] = kg_results
@@ -1440,8 +1440,14 @@ def _get_complexity_disagreement(response_data: dict, meta: Any = None) -> dict 
     return None
 
 
-def _generate_mirror_question(ctx: UpdateContext, signals: list) -> str | None:
-    """Generate a targeted mirror-mode question only when the current state merits a nudge."""
+def _generate_mirror_reflection(ctx: UpdateContext, signals: list) -> str | None:
+    """Surface a single descriptive reflection when the current state merits one.
+
+    Reflect, don't advise: a mirror shows the agent its own state and lets the
+    agent draw the conclusion. Each branch returns the observation only — never a
+    directive ("what would you simplify / verify / change?"). Prescription, when
+    warranted, is the verdict channel's job, not the mirror's. A mirror that tells
+    the agent what to do is a verdict wearing a mirror's clothes. (2026-06-03.)"""
     try:
         response_data = ctx.response_data if isinstance(ctx.response_data, dict) else {}
         decision = response_data.get("decision", {})
@@ -1451,7 +1457,7 @@ def _generate_mirror_question(ctx: UpdateContext, signals: list) -> str | None:
         text_lower = (ctx.response_text or "").lower()
         verdict = ctx.metrics_dict.get("verdict", "proceed")
 
-        # Only nudge on a genuine first-person "I'm stuck" — not on any text that
+        # Only reflect on a genuine first-person "I'm stuck" — not on any text that
         # merely contains the substring "stuck"/"blocked" (e.g. reporting a lease
         # that "blocked my edits" or a fix that "unblocks" something). The bare
         # substring match fabricated "you said you're stuck" on check-ins that
@@ -1465,21 +1471,21 @@ def _generate_mirror_question(ctx: UpdateContext, signals: list) -> str | None:
             )
         )
         if first_person_stuck:
-            return "You flagged being stuck. What's the smallest concrete step that would unblock you right now?"
+            return "You flagged being stuck in this check-in."
 
         if verdict in ("guide", "pause", "reject"):
-            return f"Your state just triggered a {verdict} verdict. What changed immediately before that?"
+            return f"This check-in triggered a {verdict} verdict."
 
         if isinstance(restorative, dict) and restorative.get("needs_restoration"):
-            return "The system thinks you're pushing too hard. What can you simplify, defer, or slow down before the next step?"
+            return "Your recent pace is above the cooldown threshold."
 
         if _has_tight_margin(response_data) or (isinstance(state, dict) and state.get("borderline")):
             nearest_edge = decision.get("nearest_edge")
             if nearest_edge == "coherence":
-                return "You're close to a coherence edge. What's the smallest next step that would simplify the plan?"
+                return "You're close to a coherence edge."
             if nearest_edge in ("risk", "risk_threshold"):
-                return "You're close to a risk edge. What assumption would you verify before continuing?"
-            return "You're close to a governance edge. What's one simplification that would make the next step safer?"
+                return "You're close to a risk edge."
+            return "You're close to a governance edge."
 
         # Complexity divergence is surfaced as a neutral, recorded signal line
         # in the mirror (response_formatter._format_mirror), NOT as an
@@ -1493,16 +1499,16 @@ def _generate_mirror_question(ctx: UpdateContext, signals: list) -> str | None:
             derived_cap = conf_rel.get("derived_cap")
             try:
                 if external is not None and derived_cap is not None and float(external) - float(derived_cap) > 0.1:
-                    return "Your reported confidence is above what the system can justify so far. What evidence are you leaning on?"
+                    return "Your reported confidence is above what the system can justify so far."
             except (TypeError, ValueError):
                 pass
 
         for signal in signals:
             signal_lower = str(signal).lower()
             if "autopilot" in signal_lower:
-                return "Your recent check-ins look repetitive. What actually changed since the last one?"
+                return "Your recent check-ins look repetitive (low variance)."
             if "confidence" in signal_lower and "variance" in signal_lower:
-                return "Your confidence reports have been very flat. What evidence shifted this time?"
+                return "Your confidence reports have been very flat."
 
         return None
     except Exception:
