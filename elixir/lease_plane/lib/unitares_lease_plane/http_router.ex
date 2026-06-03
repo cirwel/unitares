@@ -62,7 +62,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   post "/v1/lease/acquire" do
     case extract_acquire_params(conn.body_params) do
       {:ok, params} ->
-        case UnitaresLeasePlane.acquire_local_beam(params) do
+        case acquire_for_surface(params) do
           {:ok, lease, kind} ->
             json(conn, 200, %{
               ok: true,
@@ -438,6 +438,32 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   end
 
   defp extract_acquire_params(_), do: {:error, "body must be a JSON object"}
+
+  # Route the acquire to the correct lease lifecycle based on the surface scheme.
+  #
+  # `file://` surfaces are file-edit leases from the plugin's per-edit hook —
+  # one-shot / session-scoped and MUST self-heal if the editing session dies
+  # without releasing. They take the `remote_heartbeat` path: a pure DB row with
+  # NO auto-renewing LeaseHolder, reaped by the Reaper at `expires_at` (the
+  # editor's post-edit heartbeat extends it while the session is alive). Before
+  # this, every file edit spawned an immortally-auto-renewing local_beam holder
+  # that locked the file for the BEAM process's lifetime — memory files, with
+  # their stable cross-session path, stayed locked for hours/days.
+  #
+  # Every other surface (resident:/ presence, migration:/, etc.) keeps the
+  # local_beam auto-renew path. Residents are intentionally long-lived and rely
+  # on server-side auto-renew for continuity, so the routing is scoped to the
+  # file scheme precisely so it CANNOT regress resident coordination.
+  defp acquire_for_surface(%{surface_id: surface_id} = params)
+       when is_binary(surface_id) do
+    if String.starts_with?(surface_id, "file://") do
+      UnitaresLeasePlane.acquire_remote_heartbeat(params)
+    else
+      UnitaresLeasePlane.acquire_local_beam(params)
+    end
+  end
+
+  defp acquire_for_surface(params), do: UnitaresLeasePlane.acquire_local_beam(params)
 
   defp extract_release_params(%{"lease_id" => lease_id} = body)
        when is_binary(lease_id) and byte_size(lease_id) > 0 do

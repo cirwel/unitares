@@ -270,6 +270,47 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert payload["detail"] =~ "invalid_scheme"
     end
 
+    # --- file-lease self-heal routing (acquire_for_surface) ---
+    # file:// edit-leases must NOT spawn an auto-renewing local_beam holder
+    # (that made them immortal and locked memory files for hours). They route
+    # to the remote_heartbeat path — a pure DB row reaped at TTL — so a dead
+    # editing session self-heals. resident:/ and other coordination surfaces
+    # MUST stay local_beam (long-lived auto-renew presence), even when the
+    # caller sends holder_kind="remote_heartbeat" (as the resident advisory
+    # path does), so the routing is scoped strictly to the file scheme.
+
+    @tag :tmp_dir
+    test "file:// surface routes to remote_heartbeat (self-healing, no holder)", ctx do
+      path = Path.join(ctx.tmp_dir, "edit-target.txt")
+      File.write!(path, "x")
+      resp =
+        post_json(
+          "/v1/lease/acquire",
+          acquire_body("file://" <> path, holder_kind: "remote_heartbeat")
+        )
+
+      assert resp.status == 200
+      lease = parsed(resp)["lease"]
+      on_exit(fn -> cleanup_surface(lease["surface_id"]) end)
+      assert lease["surface_kind"] == "file"
+      assert lease["holder_kind"] == "remote_heartbeat"
+    end
+
+    test "resident:/ surface stays local_beam even when remote_heartbeat requested", _ctx do
+      surface = "resident:/lease-routing-test-#{random_uuid()}"
+      resp =
+        post_json(
+          "/v1/lease/acquire",
+          acquire_body(surface, holder_kind: "remote_heartbeat")
+        )
+
+      assert resp.status == 200
+      lease = parsed(resp)["lease"]
+      on_exit(fn -> cleanup_surface(lease["surface_id"]) end)
+      # Routing is scoped to file://; residents keep auto-renew presence.
+      assert lease["holder_kind"] == "local_beam"
+    end
+
     test "PR 7 — capture:/ unsorted members → server stores canonical (sorted)" do
       # Per PR 7 council BLOCK 2 (reviewer): construct surface_canonical via
       # the Canonicalize helper itself, not by hand. This eliminates the
