@@ -244,12 +244,18 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
                     "low_confidence_trajectory_health",
                     cal.get("low_confidence_accuracy", "?"),
                 )
-                mirror_signals.append(
-                    f"Fleet calibration: {trajectory_health:.0%} trajectory health over "
-                    f"{cal['total_decisions']} fleet-wide decisions "
-                    f"(high-conf health: {high_conf_health}, "
-                    f"low-conf health: {low_conf_health})"
-                )
+                # Only surface the fleet number when it is actually informative —
+                # i.e. when fleet trajectory health is degrading. At steady-high
+                # (~0.99 on every check-in) it is a constant dashboard stat with
+                # zero per-turn signal that reads as a non-sequitur in a per-agent
+                # mirror. The INVERTED case above still fires regardless.
+                if isinstance(trajectory_health, (int, float)) and trajectory_health < 0.95:
+                    mirror_signals.append(
+                        f"Fleet calibration degrading: {trajectory_health:.0%} trajectory health over "
+                        f"{cal['total_decisions']} fleet-wide decisions "
+                        f"(high-conf health: {high_conf_health}, "
+                        f"low-conf health: {low_conf_health})"
+                    )
 
     # 3. Complexity divergence — suppress on first few check-ins (no baseline)
     update_count = getattr(meta, 'total_updates', 999) if meta else 999
@@ -261,9 +267,13 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
             reported = continuity.get("self_reported_complexity", 0)
             derived = continuity.get("derived_complexity", 0)
             divergence = continuity.get("complexity_divergence", 0)
+            # Neutral, recorded observation — not an interrogation. The derived
+            # value is a surface-feature proxy; the self-report is the richer
+            # signal, so a divergence is calibration data, not a demand to
+            # justify "difficulty" on an otherwise-healthy check-in.
             mirror_signals.append(
-                f"You reported complexity={reported:.2f} but system derives {derived:.2f} "
-                f"(divergence={divergence:.2f}) — what's driving your sense of difficulty?"
+                f"Complexity calibration: you reported {reported:.2f}, surface estimate "
+                f"{derived:.2f} (Δ{divergence:.2f}) — logged for the calibration curve."
             )
         else:
             # Fallback to calibration_feedback if continuity not present
@@ -274,8 +284,8 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
                     reported = complexity_info.get("reported", 0)
                     derived = complexity_info.get("derived", 0)
                     mirror_signals.append(
-                        f"You reported complexity={reported:.2f} but system estimates {derived:.2f} "
-                        f"— what's driving your sense of difficulty?"
+                        f"Complexity calibration: you reported {reported:.2f}, surface estimate "
+                        f"{derived:.2f} — logged for the calibration curve."
                     )
 
     # 4. Restorative action — surface if system is cooling down
