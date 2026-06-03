@@ -1861,14 +1861,18 @@ async def handle_update_discovery_status_graph(arguments: Dict[str, Any]) -> Seq
     raw_details = arguments.get("details")
     if raw_details is None:
         raw_details = arguments.get("content")
+    resolution_notes = arguments.get("resolution_notes")
+    resolution_note_text = None
+    if resolution_notes is not None:
+        resolution_note_text = str(resolution_notes).strip() or None
     summary = arguments.get("summary")
     severity = arguments.get("severity")
     discovery_type = arguments.get("discovery_type")
     tags = arguments.get("tags")
 
-    if not any(value is not None for value in (status, raw_details, summary, severity, discovery_type, tags)):
+    if not any(value is not None for value in (status, raw_details, resolution_note_text, summary, severity, discovery_type, tags)):
         return [error_response(
-            "At least one updatable field is required. Provide status, details/content, summary, severity, discovery_type, or tags."
+            "At least one updatable field is required. Provide status, details/content, resolution_notes, summary, severity, discovery_type, or tags."
         )]
     
     try:
@@ -1908,6 +1912,8 @@ async def handle_update_discovery_status_graph(arguments: Dict[str, Any]) -> Seq
                 }.items()
                 if field_value is not None
             ]
+            if resolution_note_text is not None and status not in allowed_non_owner_statuses:
+                requested_non_status_edits.append("resolution_notes")
             if discovery.agent_id != agent_id and requested_non_status_edits:
                 allowed_list = sorted(allowed_non_owner_statuses)
                 return [error_response(
@@ -1945,6 +1951,17 @@ async def handle_update_discovery_status_graph(arguments: Dict[str, Any]) -> Seq
 
         if raw_details is not None:
             updates["details"] = str(raw_details)
+
+        if resolution_note_text is not None:
+            base_details = (
+                str(raw_details)
+                if raw_details is not None
+                else (discovery.details or "")
+            ).rstrip()
+            note_block = f"Resolution notes ({_utc_now_iso()}):\n{resolution_note_text}"
+            updates["details"] = (
+                f"{base_details}\n\n{note_block}" if base_details else note_block
+            )
 
         if severity is not None:
             severity = str(severity).lower()
@@ -2672,6 +2689,35 @@ async def handle_get_lifecycle_stats(arguments: Dict[str, Any]) -> Sequence[Text
     try:
         from src.knowledge_graph_lifecycle import get_kg_lifecycle_stats
         stats = await get_kg_lifecycle_stats()
+        try:
+            graph = await get_knowledge_graph()
+            get_stats = getattr(graph, "get_stats", None)
+            if callable(get_stats):
+                try:
+                    raw_stats = await get_stats(epoch_scope="current", including_cold=True)
+                except TypeError:
+                    raw_stats = await get_stats()
+                if isinstance(raw_stats, dict):
+                    stats["raw_current_counts"] = {
+                        "total_discoveries": raw_stats.get("total_discoveries"),
+                        "by_status": raw_stats.get("by_status", {}),
+                        "scope": raw_stats.get("scope", {}),
+                    }
+                    lifecycle_total = stats.get("total_discoveries")
+                    raw_total = raw_stats.get("total_discoveries")
+                    if (
+                        isinstance(lifecycle_total, int)
+                        and isinstance(raw_total, int)
+                        and lifecycle_total != raw_total
+                    ):
+                        stats["count_scope_warning"] = (
+                            "Lifecycle bucket totals differ from raw current counts. "
+                            "Use raw_current_counts.by_status to confirm immediate "
+                            "status updates; lifecycle buckets may span backend or "
+                            "historical query scope."
+                        )
+        except Exception as exc:
+            stats["raw_current_counts_error"] = str(exc)
 
         return success_response({
             "message": "Lifecycle statistics",

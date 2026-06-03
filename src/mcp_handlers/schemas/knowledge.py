@@ -320,6 +320,7 @@ class KnowledgeParams(AgentIdentityMixin):
     severity: Optional[str] = Field(None, description="Severity: low, medium, high, critical (for action=store)")
     discovery_id: Optional[str] = Field(None, description="Discovery ID (for action=details, update)")
     status: Optional[str] = Field(None, description="Status filter/update value (open, resolved, archived, superseded)")
+    resolution_notes: Optional[str] = Field(None, description="Rationale to append when closing or updating a discovery")
     agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get, search)")
     limit: Optional[int] = Field(None, description="Max results")
     include_details: Optional[bool] = Field(None, description="Include full details inline (for action=search/get)")

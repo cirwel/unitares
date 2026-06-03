@@ -106,7 +106,7 @@ handle_knowledge = action_router(
         "search": {"query": "search_query"},
         "store": {"content": "details"},  # Allow 'content' as alias for 'details'
         "update": {"content": "details"},  # Allow 'content' as alias for 'details'
-        "note": {"content": "note"},
+        "note": {"content": "summary"},
     },
     examples=[
         "knowledge(action='store', summary='Found bug in auth', discovery_type='bug_found')",

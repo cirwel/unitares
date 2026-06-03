@@ -725,13 +725,13 @@ class TestKnowledgeParamMaps:
             assert args_passed["search_query"] == "auth bugs"
 
     @pytest.mark.asyncio
-    async def test_note_maps_content_to_note(self):
+    async def test_note_maps_content_to_summary(self):
         from src.mcp_handlers.consolidated import handle_knowledge
         mock_note = AsyncMock(return_value=_ok_response({"noted": True}))
         with _patch_router_action(handle_knowledge, "note", mock_note):
             await handle_knowledge({"action": "note", "content": "remember this"})
             args_passed = mock_note.call_args[0][0]
-            assert args_passed["note"] == "remember this"
+            assert args_passed["summary"] == "remember this"
 
     @pytest.mark.asyncio
     async def test_update_maps_content_to_details(self):

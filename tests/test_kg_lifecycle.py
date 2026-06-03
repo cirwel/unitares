@@ -693,7 +693,13 @@ class TestGetLifecycleStats:
         stats_data = {
             "by_status": {"open": 10, "resolved": 5, "archived": 2},
             "by_policy": {"permanent": 3, "standard": 12, "ephemeral": 2},
+            "total_discoveries": 17,
         }
+        mock_graph.get_stats = AsyncMock(return_value={
+            "total_discoveries": 12,
+            "by_status": {"open": 7, "resolved": 5},
+            "scope": {"kind": "raw_status_aggregate", "epoch_scope": "current"},
+        })
         import src.knowledge_graph_lifecycle as lifecycle_mod
         with patch.object(lifecycle_mod, "get_kg_lifecycle_stats",
                           AsyncMock(return_value=stats_data)):
@@ -704,6 +710,8 @@ class TestGetLifecycleStats:
         assert data["success"] is True
         assert "stats" in data
         assert data["stats"]["by_status"]["open"] == 10
+        assert data["stats"]["raw_current_counts"]["by_status"]["open"] == 7
+        assert "count_scope_warning" in data["stats"]
 
     @pytest.mark.asyncio
     async def test_lifecycle_stats_exception_handling(self, patch_common):
@@ -1092,3 +1100,45 @@ class TestUpdateDiscoveryExtended:
         assert data["success"] is True
         updates = mock_graph.update_discovery.call_args[0][1]
         assert updates["details"] == "aliased details"
+
+    @pytest.mark.asyncio
+    async def test_update_appends_resolution_notes(self, patch_common, registered_agent):
+        """resolution_notes should allow one-call close-with-rationale."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_update_discovery_status_graph
+
+        discovery = make_discovery(id="disc-1", severity="low", details="existing details")
+        mock_graph.get_discovery = AsyncMock(side_effect=[discovery, discovery])
+
+        result = await handle_update_discovery_status_graph({
+            "agent_id": registered_agent,
+            "discovery_id": "disc-1",
+            "status": "resolved",
+            "resolution_notes": "Fixed by current KG UX pass.",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        updates = mock_graph.update_discovery.call_args[0][1]
+        assert updates["status"] == "resolved"
+        assert updates["resolved_at"]
+        assert "existing details" in updates["details"]
+        assert "Resolution notes (" in updates["details"]
+        assert "Fixed by current KG UX pass." in updates["details"]
+
+    @pytest.mark.asyncio
+    async def test_update_rejects_blank_resolution_notes_as_only_update(self, patch_common, registered_agent):
+        """Blank resolution_notes should not create an empty update."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_update_discovery_status_graph
+
+        result = await handle_update_discovery_status_graph({
+            "agent_id": registered_agent,
+            "discovery_id": "disc-1",
+            "resolution_notes": "   ",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "At least one updatable field is required" in data["error"]
+        mock_graph.get_discovery.assert_not_called()

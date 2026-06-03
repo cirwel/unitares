@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # test-cache.sh — tree-hash pytest cache
 #
-# Hashes all tracked Python files in src/, tests/, agents/.
-# If tests already passed against this exact tree state, prints
+# Hashes tracked repo inputs plus untracked files under pytest-relevant paths.
+# If tests already passed against this exact input state, prints
 # the cached summary and exits 0 without re-running pytest.
 #
 # Usage:
 #   ./scripts/dev/test-cache.sh              # default: pytest tests/ agents/ -q --tb=short -x
-#   ./scripts/dev/test-cache.sh --staged     # hash staged Python commit candidate
+#   ./scripts/dev/test-cache.sh --staged     # hash staged commit candidate
 #   ./scripts/dev/test-cache.sh --fresh      # ignore cache, force run
 #   ./scripts/dev/test-cache.sh -- -k "test_foo"  # extra pytest args after --
 
@@ -19,7 +19,7 @@ _cache_mtime() {
 }
 
 CACHE_DIR=".test-cache"
-CACHE_VERSION="v2"
+CACHE_VERSION="v3"
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
@@ -36,20 +36,84 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-_hash_worktree_python() {
+TRACKED_HASH_PATHS=(".")
+UNTRACKED_HASH_PATHS=(
+    "src"
+    "tests"
+    "agents"
+    "governance_core"
+    "db"
+    "scripts"
+    "config"
+    "commands"
+    "docs"
+    "dashboard"
+    "elixir"
+    "skills"
+    "pyproject.toml"
+    "requirements*.txt"
+    "VERSION"
+    "AGENTS.md"
+    "CLAUDE.md"
+    "CODEX_START.md"
+    "README.md"
+    "CONTRIBUTING.md"
+    "SECURITY.md"
+    "Makefile"
+    "Dockerfile"
+    "docker-compose.yml"
+)
+
+_hash_worktree_inputs() {
     python3 - <<'PY'
 import hashlib
 import subprocess
 
-patterns = ["src/*.py", "tests/*.py", "agents/*.py", "governance_core/*.py", "pyproject.toml"]
-proc = subprocess.run(
-    ["git", "ls-files", "-z", "--", *patterns],
+tracked_proc = subprocess.run(
+    ["git", "ls-files", "-z", "--", "."],
     check=True,
     stdout=subprocess.PIPE,
 )
-paths = sorted(p.decode("utf-8") for p in proc.stdout.split(b"\0") if p)
+untracked_patterns = [
+    "src",
+    "tests",
+    "agents",
+    "governance_core",
+    "db",
+    "scripts",
+    "config",
+    "commands",
+    "docs",
+    "dashboard",
+    "elixir",
+    "skills",
+    "pyproject.toml",
+    "requirements*.txt",
+    "VERSION",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CODEX_START.md",
+    "README.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "Makefile",
+    "Dockerfile",
+    "docker-compose.yml",
+]
+untracked_proc = subprocess.run(
+    ["git", "ls-files", "-z", "--others", "--exclude-standard", "--", *untracked_patterns],
+    check=True,
+    stdout=subprocess.PIPE,
+)
+paths = sorted(
+    {
+        p.decode("utf-8", "surrogateescape")
+        for p in tracked_proc.stdout.split(b"\0") + untracked_proc.stdout.split(b"\0")
+        if p
+    }
+)
 h = hashlib.sha256()
-h.update(b"worktree-python-v1\0")
+h.update(b"worktree-inputs-v2\0")
 for path in paths:
     h.update(path.encode("utf-8", "surrogateescape"))
     h.update(b"\0")
@@ -63,22 +127,64 @@ print(h.hexdigest())
 PY
 }
 
-_hash_staged_python() {
+_hash_staged_inputs() {
     python3 - <<'PY'
 import hashlib
 import subprocess
 
-patterns = ["src/*.py", "tests/*.py", "agents/*.py", "governance_core/*.py", "pyproject.toml"]
 proc = subprocess.run(
-    ["git", "ls-files", "-s", "-z", "--", *patterns],
+    ["git", "ls-files", "-s", "-z", "--", "."],
     check=True,
     stdout=subprocess.PIPE,
 )
 records = sorted(r for r in proc.stdout.split(b"\0") if r)
 h = hashlib.sha256()
-h.update(b"staged-python-v1\0")
+h.update(b"staged-inputs-v2\0")
 for record in records:
     h.update(record)
+    h.update(b"\0")
+print(h.hexdigest())
+PY
+}
+
+_hash_runtime() {
+    "$PYTHON" - <<'PY'
+import hashlib
+import importlib.metadata
+import os
+import platform
+import sys
+
+packages = [
+    "pytest",
+    "pytest-cov",
+    "pytest-asyncio",
+    "hypothesis",
+]
+env_names = [
+    "PYTEST_ADDOPTS",
+    "STRICT_IDENTITY_REQUIRED",
+    "UNITARES_KNOWLEDGE_BACKEND",
+    "UNITARES_DB_URL",
+    "DATABASE_URL",
+    "REDIS_URL",
+]
+
+h = hashlib.sha256()
+h.update(b"runtime-v1\0")
+h.update(sys.executable.encode("utf-8", "surrogateescape"))
+h.update(b"\0")
+h.update(platform.python_version().encode("utf-8"))
+h.update(b"\0")
+for package in packages:
+    try:
+        version = importlib.metadata.version(package)
+    except importlib.metadata.PackageNotFoundError:
+        version = "<missing>"
+    h.update(f"{package}={version}".encode("utf-8"))
+    h.update(b"\0")
+for name in env_names:
+    h.update(f"{name}={os.environ.get(name, '')}".encode("utf-8", "surrogateescape"))
     h.update(b"\0")
 print(h.hexdigest())
 PY
@@ -97,31 +203,34 @@ print(h.hexdigest())
 PY
 }
 
-_print_staged_dirty_python() {
-    git diff --name-only -- 'src/*.py' 'tests/*.py' 'agents/*.py' 'governance_core/*.py' 'pyproject.toml'
-    git ls-files --others --exclude-standard -- 'src/*.py' 'tests/*.py' 'agents/*.py' 'governance_core/*.py' 'pyproject.toml'
+_print_staged_dirty_inputs() {
+    git diff --name-only -- "${TRACKED_HASH_PATHS[@]}"
+    git ls-files --others --exclude-standard -- "${UNTRACKED_HASH_PATHS[@]}"
 }
+
+PYTHON="${UNITARES_PYTHON:-python3}"
+RUNTIME_HASH=$(_hash_runtime)
 
 # --- compute tree hash ---
 HASH_MODE="worktree"
 if [[ "$STAGED" == true ]]; then
     HASH_MODE="staged"
-    DIRTY_PYTHON=$(_print_staged_dirty_python)
-    if [[ -n "$DIRTY_PYTHON" ]]; then
-        echo "[test-cache] --staged refused: unstaged or untracked Python files would affect pytest:" >&2
-        echo "$DIRTY_PYTHON" >&2
+    DIRTY_INPUTS=$(_print_staged_dirty_inputs)
+    if [[ -n "$DIRTY_INPUTS" ]]; then
+        echo "[test-cache] --staged refused: unstaged or untracked files would affect pytest:" >&2
+        echo "$DIRTY_INPUTS" >&2
         echo "[test-cache] stash them, stage them, or use a clean worktree before validating the staged tree." >&2
         exit 4
     fi
-    TREE_HASH=$(_hash_staged_python)
+    TREE_HASH=$(_hash_staged_inputs)
 else
-    TREE_HASH=$(_hash_worktree_python)
+    TREE_HASH=$(_hash_worktree_inputs)
 fi
 
 PYTEST_ARGS_HASH=$(_hash_pytest_args ${PYTEST_EXTRA[@]+"${PYTEST_EXTRA[@]}"})
-CACHE_KEY=$(printf '%s\0%s\0%s\0%s\0' "$CACHE_VERSION" "$HASH_MODE" "$TREE_HASH" "$PYTEST_ARGS_HASH" | shasum -a 256 | cut -d' ' -f1)
+CACHE_KEY=$(printf '%s\0%s\0%s\0%s\0%s\0' "$CACHE_VERSION" "$HASH_MODE" "$TREE_HASH" "$PYTEST_ARGS_HASH" "$RUNTIME_HASH" | shasum -a 256 | cut -d' ' -f1)
 CACHE_FILE="$CACHE_DIR/$CACHE_KEY"
-CACHE_LABEL="$HASH_MODE tree $TREE_HASH"
+CACHE_LABEL="$HASH_MODE inputs $TREE_HASH runtime $RUNTIME_HASH"
 if [[ ${#PYTEST_EXTRA[@]} -gt 0 ]]; then
     CACHE_LABEL="$CACHE_LABEL args $PYTEST_ARGS_HASH"
 fi
@@ -144,7 +253,7 @@ fi
 # leave ghost/zombie children. macOS has no native flock(1); use atomic
 # mkdir as the lock primitive and record the holder PID so stale locks
 # from killed holders can be reclaimed.
-LOCK_DIR="/tmp/unitares-test-cache.lock"
+LOCK_DIR="${UNITARES_TEST_CACHE_LOCK_DIR:-/tmp/unitares-test-cache.lock}"
 LOCK_HOLDER="$LOCK_DIR/holder.pid"
 LOCK_WAIT_MAX=600   # seconds
 LOCK_WAITED=0
@@ -183,8 +292,6 @@ fi
 mkdir -p "$CACHE_DIR"
 echo "[test-cache] MISS — $CACHE_LABEL, running pytest..."
 
-# Prefer env override; otherwise `python3` on PATH (Linux CI + typical macOS).
-PYTHON="${UNITARES_PYTHON:-python3}"
 PYTEST_CMD=("$PYTHON" -m pytest tests/ agents/ -q --tb=short -x \
 	--cov=src --cov=agents/sdk/src/unitares_sdk --cov=agents \
 	--cov-report=term-missing --cov-fail-under=25 \
