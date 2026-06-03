@@ -325,17 +325,8 @@ async def hydrate_from_db_if_fresh(monitor: UNITARESMonitor, agent_id: str) -> b
         # populates it, which observe surfaces as zero counts.
         # verdict_history rebuilt from state_json.verdict — that key has been
         # persisted since long before this change, so legacy rows DO replay.
-        actions: list[str] = []
-        verdicts: list[str] = []
-        for r in chrono:
-            sj = getattr(r, "state_json", None) or {}
-            if isinstance(sj, dict):
-                action = sj.get("action")
-                if isinstance(action, str) and action:
-                    actions.append(action)
-                verdict = sj.get("verdict")
-                if isinstance(verdict, str) and verdict:
-                    verdicts.append(verdict)
+        from src.agent_storage import extract_actions_verdicts
+        actions, verdicts = extract_actions_verdicts(chrono)
         monitor.state.decision_history = actions
         monitor.state.verdict_history = verdicts
 

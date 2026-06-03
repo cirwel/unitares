@@ -606,11 +606,43 @@ async def record_agent_state(
     return state_id
 
 
+def extract_actions_verdicts(rows) -> "tuple[list[str], list[str]]":
+    """Pull the governance action + verdict vocabularies out of state_json rows.
+
+    `action` ('proceed'|'pause'|'approve'|'reflect'|'revise'|'reject') and
+    `verdict` ('safe'|'caution'|'high-risk') are persisted into state_json by
+    record_agent_state. This is the single extractor shared by
+    hydrate_from_db_if_fresh (cold-monitor rebuild) and handle_observe_agent's
+    Postgres-truth override, so both reconstruct identical histories. Input
+    order is preserved; callers that need chronological order pass rows in that
+    order (counts are order-independent). Rows lacking an action/verdict key are
+    skipped — pre-`action`-write rows replay partially rather than padding.
+    """
+    actions: list[str] = []
+    verdicts: list[str] = []
+    for r in rows:
+        sj = getattr(r, "state_json", None) or {}
+        if isinstance(sj, dict):
+            action = sj.get("action")
+            if isinstance(action, str) and action:
+                actions.append(action)
+            verdict = sj.get("verdict")
+            if isinstance(verdict, str) and verdict:
+                verdicts.append(verdict)
+    return actions, verdicts
+
+
 async def get_agent_state_history(
     agent_id: str,
     limit: int = 100,
+    exclude_synthetic: bool = False,
 ) -> List[AgentStateRecord]:
-    """Get agent state history."""
+    """Get agent state history (most-recent-first).
+
+    `exclude_synthetic=True` drops synthetic bootstrap rows — pass it when the
+    history feeds measured-trajectory consumers (decision/verdict reconstruction)
+    so a bootstrap row never inflates the counts.
+    """
     await _ensure_db_ready()
     db = get_db()
 
@@ -618,6 +650,13 @@ async def get_agent_state_history(
     if not identity:
         return []
 
+    # Pass exclude_synthetic only when set, so the default call shape stays
+    # `(identity_id, limit=...)` — matches the abstract backend signature and
+    # avoids forcing every backend to accept the (newer) measured-only kwarg.
+    if exclude_synthetic:
+        return await db.get_agent_state_history(
+            identity.identity_id, limit=limit, exclude_synthetic=True
+        )
     return await db.get_agent_state_history(identity.identity_id, limit=limit)
 
 

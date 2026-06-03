@@ -152,6 +152,44 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
         observation["summary"] = observation.get("summary", {})
         observation["summary"]["total_updates"] = meta.total_updates
 
+    # Decision/verdict distributions from Postgres truth.
+    #
+    # The summary built above derives decision_distribution / verdict_distribution
+    # from monitor.state.decision_history / verdict_history — in-memory lists that
+    # are only rebuilt from the DB when the monitor is COLD (update_count==0, see
+    # hydrate_from_db_if_fresh). For an agent whose live process_update calls land
+    # in ANOTHER process, this observer warms its monitor once and then never
+    # refreshes those lists, so pauses written cross-process are invisible — the
+    # summary reports decision_distribution.pause=0 for an agent that is actually
+    # paused. (EISV/coherence stay correct because a background loader syncs them;
+    # the decision/verdict vocabularies are not part of that sync.)
+    #
+    # Recount from the persisted state_json rows so the distributions reflect PG
+    # truth regardless of which process owns the agent. Counts are order-
+    # independent, so no chronological reversal is needed. Fail-open: on any DB
+    # error keep the monitor-derived distributions rather than breaking observe.
+    try:
+        from src.agent_storage import get_agent_state_history, extract_actions_verdicts
+        from src.pattern_analysis import (
+            build_decision_distribution,
+            build_verdict_distribution,
+        )
+        rows = await get_agent_state_history(agent_id, limit=200, exclude_synthetic=True)
+        if rows:
+            actions, verdicts = extract_actions_verdicts(rows)
+            summary = observation.setdefault("summary", {})
+            if actions:
+                summary["decision_distribution"] = build_decision_distribution(actions)
+            if verdicts:
+                summary["verdict_distribution"] = build_verdict_distribution(verdicts)
+            summary["distribution_source"] = "postgres"
+    except Exception:
+        logger.debug(
+            "observe: PG decision/verdict override skipped for %s",
+            agent_id,
+            exc_info=True,
+        )
+
     # Agent profile — differentiated metrics outside the ODE
     profile_data = None
     try:
@@ -795,7 +833,6 @@ async def handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextCo
                   WHERE ls.regime IN ('critical','DIVERGENCE')
               )::int AS critical,
               count(*) FILTER (WHERE ls.identity_id IS NULL)::int AS unknown_health,
-              count(*) FILTER (WHERE scope.status = 'paused')::int AS paused_now,
               EXTRACT(EPOCH FROM (now() - min(ls.recorded_at)))::bigint
                   AS staleness_oldest_seconds,
               EXTRACT(EPOCH FROM (now() - max(ls.recorded_at)))::bigint
@@ -804,6 +841,24 @@ async def handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextCo
             LEFT JOIN core.mv_latest_agent_states ls ON ls.agent_id = scope.agent_id
         """
         state_row = await conn.fetchrow(state_sql, *scope_args)
+
+        # paused_now: agents currently in status='paused'. MUST be computed
+        # independently of the scope CTE above. When agent_ids is None that CTE
+        # is WHERE a.status='active', so an active-only row set can never contain
+        # a paused row — the prior `FILTER (WHERE scope.status='paused')` was
+        # structurally always 0 and reported "0 paused" for months while the
+        # fleet genuinely had paused agents. Scope to agent_ids when the caller
+        # passed an explicit set; otherwise count the whole fleet.
+        if agent_ids:
+            paused_now = await conn.fetchval(
+                "SELECT count(*)::int FROM core.agents "
+                "WHERE status = 'paused' AND id = ANY($1::text[])",
+                list(agent_ids),
+            )
+        else:
+            paused_now = await conn.fetchval(
+                "SELECT count(*)::int FROM core.agents WHERE status = 'paused'"
+            )
 
         # total_updates: persisted as core.identities.metadata->>'total_updates'
         # (atomically incremented by db.increment_update_count on every
@@ -885,7 +940,7 @@ async def handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextCo
         "mean_risk_score": float(state_row["mean_risk_score"] or 0.0),
         "mean_risk": float(state_row["mean_risk_score"] or 0.0),  # DEPRECATED alias
         "mean_coherence": float(state_row["mean_coherence"] or 0.0),
-        "paused_now": int(state_row["paused_now"] or 0),
+        "paused_now": int(paused_now or 0),
         "pauses_this_epoch": int(pauses_this_epoch or 0),
         "epoch": int(current_epoch),
         "as_of": datetime.now(timezone.utc).isoformat(),

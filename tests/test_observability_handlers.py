@@ -211,6 +211,73 @@ class TestHandleObserveAgent:
         server.load_metadata_async.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_decision_distribution_overridden_from_postgres(self):
+        """Regression: a paused agent whose live updates land in another process
+        must not report decision_distribution.pause=0.
+
+        The in-memory monitor's decision_history only refreshes when the monitor
+        is cold (update_count==0), so a cross-process observer freezes at the
+        last counts it warmed with. handle_observe_agent recounts from the
+        persisted state_json rows and overrides the stale summary.
+        """
+        import types
+        uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        server = _build_mock_server(agent_ids=[uuid])
+        # Simulate the STALE monitor-derived summary: all proceed, zero pauses.
+        server.analyze_agent_patterns = MagicMock(return_value={
+            "current_state": {"E": 0.78, "I": 0.67, "S": 0.26, "V": 0.12},
+            "patterns": {"trend": "stable"},
+            "anomalies": [],
+            "summary": {
+                "decision_distribution": {"proceed": 28, "pause": 0},
+                "verdict_distribution": {"safe": 28, "caution": 0, "high-risk": 0, "total": 28},
+            },
+        })
+        # Postgres truth: 8 proceeds then 2 pauses (matches the agent record).
+        pg_rows = [types.SimpleNamespace(state_json={"action": a, "verdict": v}) for a, v in (
+            [("pause", "high-risk"), ("pause", "high-risk")] + [("proceed", "safe")] * 8
+        )]
+
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value="other-caller-uuid"), \
+             patch("src.agent_storage.get_agent_state_history",
+                   new=AsyncMock(return_value=pg_rows)):
+            from src.mcp_handlers.observability.handlers import handle_observe_agent
+            result = await handle_observe_agent({"target_agent_id": uuid})
+
+        data = parse_result(result)
+        summary = data["observation"]["summary"]
+        assert summary["decision_distribution"]["pause"] == 2
+        assert summary["decision_distribution"]["proceed"] == 8
+        assert summary["verdict_distribution"]["high-risk"] == 2
+        assert summary["distribution_source"] == "postgres"
+
+    @pytest.mark.asyncio
+    async def test_observe_survives_postgres_read_failure(self):
+        """Fail-open: if the PG recount raises, observe still returns the
+        monitor-derived summary rather than erroring."""
+        uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        server = _build_mock_server(agent_ids=[uuid])
+        server.analyze_agent_patterns = MagicMock(return_value={
+            "current_state": {"E": 0.78, "I": 0.67, "S": 0.26, "V": 0.12},
+            "patterns": {"trend": "stable"},
+            "anomalies": [],
+            "summary": {"decision_distribution": {"proceed": 5, "pause": 0}},
+        })
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value="other-caller-uuid"), \
+             patch("src.agent_storage.get_agent_state_history",
+                   new=AsyncMock(side_effect=RuntimeError("db down"))):
+            from src.mcp_handlers.observability.handlers import handle_observe_agent
+            result = await handle_observe_agent({"target_agent_id": uuid})
+
+        data = parse_result(result)
+        assert data["success"] is True
+        summary = data["observation"]["summary"]
+        assert summary["decision_distribution"]["pause"] == 0
+        assert "distribution_source" not in summary
+
+    @pytest.mark.asyncio
     async def test_happy_path_without_pattern_analysis(self):
         """Observe an agent with analyze_patterns=False -- returns raw state."""
         uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -1198,15 +1265,17 @@ class TestHandleDetectAnomalies:
 # ---------------------------------------------------------------------------
 
 class _FakeAggregateConn:
-    """Routes the four queries handle_aggregate_metrics issues to canned rows.
+    """Routes the queries handle_aggregate_metrics issues to canned rows.
 
     The handler issues:
       1. epoch lookup (fetchrow)
       2. state rollup (fetchrow)        — fields: total_agents, agents_with_data, ...
-      3. total_updates (fetchval)
-      4. pauses_this_epoch (fetchval)   — lifecycle_paused count
-      5. proceed_this_epoch (fetchval)  — trajectory_validated count
-      6. verdict distribution (fetch)
+      3. paused_now (fetchval)          — count of core.agents WHERE status='paused',
+                                          computed OUTSIDE the active-only scope CTE
+      4. total_updates (fetchval)
+      5. pauses_this_epoch (fetchval)   — lifecycle_paused count
+      6. proceed_this_epoch (fetchval)  — trajectory_validated count
+      7. verdict distribution (fetch)
     """
 
     def __init__(
@@ -1216,6 +1285,7 @@ class _FakeAggregateConn:
         epoch_started_at=None,
         state_row=None,
         total_updates: int = 0,
+        paused_now: int = 0,
         pauses_this_epoch: int = 0,
         proceed_this_epoch: int = 0,
         verdict_rows=None,
@@ -1239,6 +1309,7 @@ class _FakeAggregateConn:
             "staleness_newest_seconds": 0,
         }
         self._total_updates = total_updates
+        self._paused_now = paused_now
         self._pauses_this_epoch = pauses_this_epoch
         self._proceed_this_epoch = proceed_this_epoch
         self._verdict_rows = verdict_rows or []
@@ -1261,6 +1332,8 @@ class _FakeAggregateConn:
         self.fetchval_calls.append((sql, args))
         if "metadata->>'total_updates'" in sql or "total_updates" in sql:
             return self._total_updates
+        if "core.agents" in sql and "status = 'paused'" in sql:
+            return self._paused_now
         if "lifecycle_paused" in sql:
             return self._pauses_this_epoch
         if "trajectory_validated" in sql:
@@ -1349,6 +1422,44 @@ class TestHandleAggregateMetrics:
         assert agg["decision_distribution"]["proceed"] == 13000
 
     @pytest.mark.asyncio
+    async def test_paused_now_counted_outside_active_scope(self):
+        """Regression: paused_now must come from a dedicated count of
+        status='paused' agents, NOT from a FILTER over the active-only scope
+        CTE. The old code filtered `scope.status='paused'` where scope was
+        `WHERE a.status='active'`, so it was structurally always 0 even while
+        the fleet had paused agents.
+        """
+        conn = _FakeAggregateConn(
+            state_row={
+                "total_agents": 5,
+                "agents_with_data": 5,
+                "mean_risk_score": 0.3,
+                "mean_coherence": 0.5,
+                "healthy": 3,
+                "moderate": 2,
+                "critical": 0,
+                "unknown_health": 0,
+                # The active-scoped rollup cannot see paused agents — emulate
+                # the real matview/scope behavior: zero here.
+                "paused_now": 0,
+                "staleness_oldest_seconds": 100,
+                "staleness_newest_seconds": 10,
+            },
+            paused_now=4,  # dedicated count of status='paused' agents
+        )
+        with _patch_db(conn):
+            from src.mcp_handlers.observability.handlers import handle_aggregate_metrics
+            result = await handle_aggregate_metrics({})
+        data = parse_result(result)
+        agg = data["aggregate"]
+        assert agg["paused_now"] == 4
+        # The dedicated paused count query was actually issued.
+        assert any(
+            "core.agents" in sql and "status = 'paused'" in sql
+            for sql, _ in conn.fetchval_calls
+        )
+
+    @pytest.mark.asyncio
     async def test_no_active_agents(self):
         conn = _FakeAggregateConn()  # all zeros by default
         with _patch_db(conn):
@@ -1401,10 +1512,10 @@ class TestHandleAggregateMetrics:
                 "mean_risk_score": 0.0,
                 "mean_coherence": 0.0,
                 "healthy": 0, "moderate": 0, "critical": 0, "unknown_health": 100,
-                "paused_now": 5,
                 "staleness_oldest_seconds": 0,
                 "staleness_newest_seconds": 0,
             },
+            paused_now=5,  # dedicated status='paused' count, independent of scope
             pauses_this_epoch=83,  # the real audit.events count from the bug report
         )
         with _patch_db(conn):
