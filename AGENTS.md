@@ -16,6 +16,7 @@ Codex has no hook system analogous to Claude's. **Nothing is automatic.** You de
 - `/checkin` — governance update after meaningful work
 - `/diagnose` — identity, state, and operator diagnostics
 - `/dialectic` — structured review
+- `/closeout` — final workspace hygiene check; reports dirty files and repo-rooted processes, and can stash/stop them when cleanup is requested
 
 Raw tool flow when slash commands are unavailable: `onboard(force_new=true, parent_agent_id=<prior uuid if continuing>, spawn_reason="new_session")` → save `uuid` + `client_session_id` → `process_agent_update(response_text, complexity, client_session_id=...)` → `get_governance_metrics()` for read-only checks → `health_check()` only if system health is suspect.
 

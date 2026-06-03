@@ -10,6 +10,10 @@ Use the shared helper in this repo:
 
 - `scripts/client/session_cache.py list`
 
+Then capture the current repo-rooted process baseline for closeout:
+
+- `python3 scripts/dev/workspace_closeout.py --write-baseline`
+
 If the newest entry contains `parent_agent_id`, treat it as a lineage candidate, not ownership proof. Ignore any legacy `continuity_token` field for startup; tokens are only for explicit same-live-owner PATH 0 proof rebinds.
 
 Call `onboard()` against UNITARES using the strongest honest mode:
