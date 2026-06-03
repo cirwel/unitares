@@ -288,15 +288,17 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
                         f"{derived:.2f} — logged for the calibration curve."
                     )
 
-    # 4. Restorative action — surface if system is cooling down
+    # 4. Pace — reflect cooldown-threshold state descriptively. NOT "Restorative
+    # action:" — that named an action (the verdict's voice). The mirror reflects
+    # the pace facts; the decision to cool down, if any, is the verdict's job.
     restorative = response_data.get("restorative", {})
     if isinstance(restorative, dict) and restorative.get("needs_restoration"):
         restorative_reason = restorative.get("reason")
         restorative_reasons = restorative.get("reasons", [])
         if isinstance(restorative_reason, str) and restorative_reason:
-            mirror_signals.append(f"Restorative action: {restorative_reason}")
+            mirror_signals.append(f"Pace: {restorative_reason}")
         elif restorative_reasons:
-            mirror_signals.append(f"Restorative action: {'; '.join(str(r) for r in restorative_reasons[:2])}")
+            mirror_signals.append(f"Pace: {'; '.join(str(r) for r in restorative_reasons[:2])}")
 
     # 5. Surface relevant KG discoveries — from mirror enrichment AND from existing enrichments
     relevant_prior = []
@@ -317,11 +319,12 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
             entry["relevance"] = relevance
         relevant_prior.append(entry)
 
-    # 6. Surface the single most relevant question when state warrants it
-    question = response_data.get("_mirror_question")
-    if question is None:
-        # Backward compatibility for older enrichments/tests
-        question = response_data.get("_mirror_reflection", None)
+    # 6. Surface the single most relevant reflection when state warrants it — a
+    # descriptive lens, not a directive question (reflect, don't advise).
+    reflection = response_data.get("_mirror_reflection")
+    if reflection is None:
+        # Back-compat: older enrichments may still set _mirror_question.
+        reflection = response_data.get("_mirror_question", None)
 
     result = {
         "success": True,
@@ -333,8 +336,8 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     if relevant_prior:
         result["relevant_prior_work"] = relevant_prior
 
-    if question:
-        result["question"] = question
+    if reflection:
+        result["reflection"] = reflection
 
     # Include margin/edge warnings
     margin = decision.get("margin")

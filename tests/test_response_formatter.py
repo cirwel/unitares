@@ -654,11 +654,14 @@ class TestFormatMirror:
         assert "relevant_prior_work" in result
         assert result["relevant_prior_work"][0]["by"] == "AlvaNoto"
 
-    def test_question_prompt(self):
+    def test_legacy_mirror_question_surfaces_as_reflection(self):
+        # Back-compat: an older enrichment that still sets _mirror_question is
+        # surfaced under the descriptive `reflection` key (no `question` key).
         data = _sample_response()
-        data["_mirror_question"] = "What changed in your understanding?"
+        data["_mirror_question"] = "Something an old enrichment set"
         result = _format_mirror(data, saved_trust_tier=None)
-        assert result["question"] == "What changed in your understanding?"
+        assert result["reflection"] == "Something an old enrichment set"
+        assert "question" not in result
 
     def test_trust_tier_wrapped_with_meaning(self):
         # #428: mirror mode wraps trust_tier with meaning + criteria inline.
@@ -690,11 +693,12 @@ class TestFormatMirror:
         result = _format_mirror(data, saved_trust_tier=None)
         assert "trust_tier" not in result
 
-    def test_legacy_reflection_prompt_supported(self):
+    def test_reflection_surfaced_under_reflection_key(self):
         data = _sample_response()
-        data["_mirror_reflection"] = "What changed in your understanding?"
+        data["_mirror_reflection"] = "You're close to a coherence edge."
         result = _format_mirror(data, saved_trust_tier=None)
-        assert result["question"] == "What changed in your understanding?"
+        assert result["reflection"] == "You're close to a coherence edge."
+        assert "question" not in result
 
     def test_trust_tier_included(self):
         # #428: mirror now wraps with glossary; the bare name resolves
@@ -723,6 +727,7 @@ class TestFormatMirror:
         data.pop("_mirror_reflection", None)
         result = _format_mirror(data, saved_trust_tier=None)
         assert "steady state" in result["mirror"][0].lower()
+        assert "reflection" not in result
         assert "question" not in result
 
     def test_margin_included_when_tight(self):
@@ -776,14 +781,19 @@ class TestFormatMirror:
         # Should use continuity (0.7/0.22), not calibration_feedback (0.8/0.28)
         assert any("you reported 0.70" in s for s in result["mirror"])
 
-    def test_restorative_action_surfaced(self):
+    def test_pace_surfaced_descriptively(self):
         data = _sample_response()
         data["restorative"] = {
             "needs_restoration": True,
-            "reason": "complexity divergence pattern (0.48 cumulative)",
+            "reason": "complexity divergence (0.48 cumulative, logged for calibration)",
         }
         result = _format_mirror(data, saved_trust_tier=None)
-        assert any("restorative" in s.lower() for s in result["mirror"])
+        # Reflected as a descriptive "Pace:" line — NOT "Restorative action:"
+        # (which named an action = the verdict's voice, not the mirror's).
+        pace_lines = [s for s in result["mirror"] if s.startswith("Pace:")]
+        assert pace_lines, result["mirror"]
+        assert "0.48 cumulative" in pace_lines[0]
+        assert not any("restorative action" in s.lower() for s in result["mirror"])
 
     def test_existing_discoveries_merged_into_prior_work(self):
         data = _sample_response()

@@ -1,7 +1,7 @@
 """
 Tests for mirror signal enrichments in src/mcp_handlers/updates/enrichments.py.
 
-Tests _detect_gaming, _generate_mirror_question,
+Tests _detect_gaming, _generate_mirror_reflection,
 and mirror KG-search gating helpers.
 """
 
@@ -17,7 +17,7 @@ sys.path.insert(0, str(project_root))
 
 from src.mcp_handlers.updates.enrichments import (
     _detect_gaming,
-    _generate_mirror_question,
+    _generate_mirror_reflection,
     _should_search_kg_by_checkin_text,
 )
 
@@ -118,22 +118,24 @@ class TestDetectGaming:
 
 
 # ============================================================================
-# _generate_mirror_question
+# _generate_mirror_reflection
 # ============================================================================
 
-class TestGenerateMirrorQuestion:
+class TestGenerateMirrorReflection:
 
-    def test_stuck_keyword_in_text_returns_unblock_question(self):
+    def test_stuck_keyword_in_text_reflects_stuck(self):
         ctx = _make_ctx(task_type="mixed", response_text="I'm stuck on this problem")
-        question = _generate_mirror_question(ctx, signals=[])
-        assert question is not None
-        assert "unblock" in question.lower()
+        reflection = _generate_mirror_reflection(ctx, signals=[])
+        assert reflection is not None
+        # Descriptive reflection of their own words — NOT a directive ("what would unblock you?").
+        assert "stuck" in reflection.lower()
+        assert "?" not in reflection
 
     def test_tight_margin_returns_edge_question(self):
         ctx = _make_ctx(
             response_data={"decision": {"margin": 0.05, "nearest_edge": "coherence"}}
         )
-        question = _generate_mirror_question(ctx, signals=[])
+        question = _generate_mirror_reflection(ctx, signals=[])
         assert question is not None
         assert "coherence edge" in question.lower()
 
@@ -141,7 +143,7 @@ class TestGenerateMirrorQuestion:
         ctx = _make_ctx(
             response_data={"decision": {"margin": "settling", "nearest_edge": None}}
         )
-        question = _generate_mirror_question(ctx, signals=[])
+        question = _generate_mirror_reflection(ctx, signals=[])
         assert question is None
 
     def test_complexity_disagreement_no_longer_returns_question(self):
@@ -158,7 +160,7 @@ class TestGenerateMirrorQuestion:
                 }
             }
         )
-        question = _generate_mirror_question(ctx, signals=[])
+        question = _generate_mirror_reflection(ctx, signals=[])
         assert question is None
 
     def test_third_person_blocked_does_not_trigger_stuck_question(self):
@@ -171,17 +173,18 @@ class TestGenerateMirrorQuestion:
             "Investigated where the pipeline gets stuck for other agents.",
         ):
             ctx = _make_ctx(response_text=text)
-            assert _generate_mirror_question(ctx, signals=[]) is None, text
+            assert _generate_mirror_reflection(ctx, signals=[]) is None, text
 
-    def test_autopilot_signal_returns_question(self):
+    def test_autopilot_signal_reflects_repetition(self):
         ctx = _make_ctx()
-        question = _generate_mirror_question(ctx, signals=["Real work varies -- are you on autopilot?"])
-        assert question is not None
-        assert "actually changed" in question.lower()
+        reflection = _generate_mirror_reflection(ctx, signals=["Real work varies -- are you on autopilot?"])
+        assert reflection is not None
+        assert "repetitive" in reflection.lower()
+        assert "?" not in reflection
 
     def test_steady_state_returns_none(self):
         ctx = _make_ctx(task_type="feature", response_text="Finished tracing the mirror output path.")
-        question = _generate_mirror_question(ctx, signals=[])
+        question = _generate_mirror_reflection(ctx, signals=[])
         assert question is None
 
 
