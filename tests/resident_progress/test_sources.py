@@ -9,6 +9,7 @@ from src.resident_progress.sources import (
     KnowledgeDiscoverySource,
     EISVSyncSource,
     MetricsSeriesSource,
+    CheckinSource,
     CHRONICLER_SERIES_NAMES,
 )
 
@@ -106,4 +107,66 @@ async def test_metrics_series_source_returns_uniform_count(test_db):
 async def test_kg_source_empty_uuid_list_no_query(test_db):
     src = KnowledgeDiscoverySource(test_db)
     out = await src.fetch([], timedelta(hours=1))
+    assert out == {}
+
+
+# --- CheckinSource: substrate-agnostic productivity via core.agent_state ---
+
+
+async def _seed_identity_with_state(conn, handle, *, synthetic):
+    """Insert (or reset) the agents->identities->agent_state chain for a handle
+    + one agent_state row. Idempotent across re-runs via delete-first.
+    (identities.agent_id is a FK to core.agents.id, so the agent must exist.)"""
+    await conn.execute(
+        "DELETE FROM core.agent_state WHERE identity_id IN "
+        "(SELECT identity_id FROM core.identities WHERE agent_id=$1)", handle
+    )
+    await conn.execute("DELETE FROM core.identities WHERE agent_id=$1", handle)
+    await conn.execute("DELETE FROM core.agents WHERE id=$1", handle)
+    await conn.execute(
+        "INSERT INTO core.agents (id, api_key) VALUES ($1, 'test')", handle
+    )
+    iid = await conn.fetchval(
+        "INSERT INTO core.identities (agent_id, api_key_hash) VALUES ($1, 'test') "
+        "RETURNING identity_id", handle
+    )
+    await conn.execute(
+        "INSERT INTO core.agent_state (identity_id, synthetic) VALUES ($1, $2)",
+        iid, synthetic,
+    )
+
+
+@pytest.mark.asyncio
+async def test_checkin_source_returns_zero_for_unknown_handle(test_db):
+    src = CheckinSource(test_db)
+    out = await src.fetch(["no-such-handle-000"], timedelta(minutes=30))
+    assert out == {"no-such-handle-000": 0}
+
+
+@pytest.mark.asyncio
+async def test_checkin_source_counts_real_checkins_via_agent_id_join(test_db):
+    # Exercises the agent_id(handle) -> identity_id(PK) join. A naive
+    # `WHERE identity_id = handle` would return 0 here (the 2026-06-03 bug).
+    handle = "test-checkin-handle-real"
+    async with test_db.acquire() as conn:
+        await _seed_identity_with_state(conn, handle, synthetic=False)
+    src = CheckinSource(test_db)
+    out = await src.fetch([handle], timedelta(minutes=30))
+    assert out[handle] == 1
+
+
+@pytest.mark.asyncio
+async def test_checkin_source_excludes_synthetic_bootstrap_rows(test_db):
+    handle = "test-checkin-handle-synthetic"
+    async with test_db.acquire() as conn:
+        await _seed_identity_with_state(conn, handle, synthetic=True)
+    src = CheckinSource(test_db)
+    out = await src.fetch([handle], timedelta(minutes=30))
+    assert out[handle] == 0  # genesis/bootstrap seeding is not "work done"
+
+
+@pytest.mark.asyncio
+async def test_checkin_source_empty_uuid_list_no_query(test_db):
+    src = CheckinSource(test_db)
+    out = await src.fetch([], timedelta(minutes=30))
     assert out == {}

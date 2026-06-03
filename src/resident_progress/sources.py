@@ -144,3 +144,49 @@ class MetricsSeriesSource:
             )
         n = int(row["n"]) if row else 0
         return {u: n for u in resident_uuids}
+
+
+class CheckinSource:
+    """Counts genuine governance check-ins (``core.agent_state`` rows) per
+    resident in the window — a *substrate-agnostic* productivity signal.
+
+    Unlike the role-specific sources (kg_writes, eisv_sync_rows, …), this reads
+    the universal channel EVERY resident uses to report a cycle of work:
+    ``process_agent_update`` → ``core.agent_state``. That makes it correct
+    regardless of runtime — the BEAM Sentinel checks in over REST exactly like
+    the Python residents did. Used for residents whose "work" IS the check-in
+    (Sentinel, after its BEAM migration); the old ``record_progress_pulse``
+    pulse was a Python-sentinel-only channel the BEAM runtime never wrote.
+
+    Mapping gotcha (load-bearing — cost a misdiagnosis 2026-06-03):
+    ``core.agent_state`` has NO ``agent_id`` column; it keys on ``identity_id``
+    (the ``core.identities`` PK). The resolved ``resident_uuids`` are agent_id
+    HANDLES (the anchor's ``agent_uuid``), so we join through ``identities`` and
+    match ``i.agent_id``, NOT ``s.identity_id``. The join also folds re-onboards
+    / UUID rotation under one handle. Synthetic (bootstrap) rows are excluded so
+    the count reflects real cycles, not genesis seeding.
+    """
+    name = "agent_checkins"
+
+    def __init__(self, db) -> None:
+        self._db = db
+
+    async def fetch(self, resident_uuids: list[str], window: timedelta) -> dict[str, int]:
+        if not resident_uuids:
+            return {}
+        async with self._db.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT i.agent_id::text AS uuid, count(*) AS n
+                FROM core.agent_state s
+                JOIN core.identities i ON i.identity_id = s.identity_id
+                WHERE i.agent_id = ANY($1::text[])
+                  AND s.recorded_at > now() - $2::interval
+                  AND s.synthetic IS NOT TRUE
+                GROUP BY i.agent_id
+                """,
+                resident_uuids,
+                window,
+            )
+        counts = {r["uuid"]: int(r["n"]) for r in rows}
+        return {u: counts.get(u, 0) for u in resident_uuids}

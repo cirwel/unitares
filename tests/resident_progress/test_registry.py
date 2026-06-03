@@ -14,11 +14,12 @@ from src.resident_progress.registry import (
 )
 
 
-def test_registry_has_four_residents():
-    # Sentinel was retired when it moved to the BEAM runtime (it no longer
-    # posts record_progress_pulse). See registry.py for the rationale.
+def test_registry_has_five_residents():
+    # Sentinel is back on a substrate-agnostic source (agent_checkins) after
+    # its BEAM migration — it checks in via process_agent_update like the rest.
+    # (PR #566 retired it as a stopgap; this re-keys it correctly.)
     assert set(RESIDENT_PROGRESS_REGISTRY) == {
-        "vigil", "watcher", "steward", "chronicler"
+        "vigil", "watcher", "steward", "chronicler", "sentinel"
     }
 
 
@@ -27,7 +28,7 @@ def test_registry_entries_have_required_fields():
         assert isinstance(cfg, ResidentConfig)
         assert cfg.source in {
             "kg_writes", "watcher_findings", "eisv_sync_rows",
-            "metrics_series", "sentinel_pulse",
+            "metrics_series", "sentinel_pulse", "agent_checkins",
         }
         assert cfg.window.total_seconds() > 0
         assert cfg.threshold >= 1
@@ -47,6 +48,7 @@ def test_registry_cadences_match_resident_natural_periods():
         label: cfg.expected_cadence_s
         for label, cfg in RESIDENT_PROGRESS_REGISTRY.items()
     }
+    assert cadences["sentinel"] == 300      # BEAM fleet-cycle (~5min)
     assert cadences["steward"] == 300       # 5-min EISV sync
     assert cadences["vigil"] == 1800        # 30-min launchd cron
     assert cadences["watcher"] is None      # event-driven
@@ -103,7 +105,7 @@ def test_is_event_driven_label_only_true_for_watcher():
     # (residents.js, agents.js) — they consume this flag to suppress
     # "Inactive" badges and pick the right pill style.
     assert is_event_driven_label("watcher") is True
-    for label in ("vigil", "steward", "chronicler"):
+    for label in ("vigil", "steward", "chronicler", "sentinel"):
         assert is_event_driven_label(label) is False, label
 
 

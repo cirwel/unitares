@@ -632,6 +632,7 @@ async def progress_flat_probe_task(interval_seconds: float | None = None):
     from src.resident_progress.sentinel_source import SentinelPulseSource
     from src.resident_progress.snapshot_writer import SnapshotWriter
     from src.resident_progress.sources import (
+        CheckinSource,
         EISVSyncSource,
         KnowledgeDiscoverySource,
         MetricsSeriesSource,
@@ -688,6 +689,7 @@ async def progress_flat_probe_task(interval_seconds: float | None = None):
         "eisv_sync_rows":   EISVSyncSource(db),
         "metrics_series":   MetricsSeriesSource(db),
         "sentinel_pulse":   SentinelPulseSource(db),
+        "agent_checkins":   CheckinSource(db),
     }
     probe = ProgressFlatProbe(
         sources_by_name=sources,
