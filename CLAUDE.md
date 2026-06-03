@@ -76,8 +76,8 @@ This section is operator-protective, not session-protective. The deeper fix is o
 
 ## Before Committing
 
-- **Run `./scripts/dev/test-cache.sh` before the first commit in a local change sequence** (tree-hash cache — skips if tests already passed against this exact Python tree; use `--fresh` to force a re-run)
-- Use `./scripts/dev/test-cache.sh --staged` when validating a staged subset; it hashes the staged Python commit candidate and refuses to run if unstaged/untracked Python files would affect pytest
+- **Run `./scripts/dev/test-cache.sh` before the first commit in a local change sequence** (tree-hash cache — skips if tests already passed against this exact test input tree; use `--fresh` to force a re-run)
+- Use `./scripts/dev/test-cache.sh --staged` when validating a staged subset; it hashes the staged commit candidate and refuses to run if unstaged/untracked files would affect pytest
 - After a branch is pushed and GitHub CI is running the full gate, do not restart local full `test-cache` runs for every fixup; run focused local tests for the touched behavior, push, and let CI be the final full gate
 - **If you edit `AGENTS.md` or `CLAUDE.md`**, also run `./scripts/dev/check-shared-contract.sh` to confirm the shared block stayed in sync
 - Fix any test failures your changes introduce — do not commit broken tests
