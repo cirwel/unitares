@@ -772,6 +772,26 @@ class TestRecordAgentState:
         assert call_kwargs["state_json"]["health_status"] == "healthy"
         assert call_kwargs["state_json"]["E"] == 0.7
         assert call_kwargs["state_json"]["epistemic_class"] == "agent_report"
+        # No behavioral_eisv passed → key absent (backward compatible)
+        assert "behavioral_eisv" not in call_kwargs["state_json"]
+
+    @pytest.mark.asyncio
+    async def test_persists_behavioral_eisv_into_state_json(self):
+        """behavioral_eisv, when supplied, lands in state_json so a DB-hydrate
+        restart can restore baseline maturity (2026-06-03 fleet starvation fix)."""
+        identity = _make_identity(identity_id=42)
+        db = _mock_db(get_identity=identity, record_agent_state=1)
+        beh = {"updates": 30, "warmup": {"is_baselined": True}, "E": 0.31}
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import record_agent_state
+            await record_agent_state(
+                "agent-1",
+                E=0.31, I=0.81, S=0.24, V=-0.45,
+                regime="CONVERGENCE", coherence=0.29,
+                behavioral_eisv=beh,
+            )
+        call_kwargs = db.record_agent_state.call_args.kwargs
+        assert call_kwargs["state_json"]["behavioral_eisv"] == beh
 
     @pytest.mark.asyncio
     async def test_raises_when_agent_not_found(self):

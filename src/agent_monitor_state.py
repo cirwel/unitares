@@ -345,6 +345,21 @@ async def hydrate_from_db_if_fresh(monitor: UNITARESMonitor, agent_id: str) -> b
         # it as "how much history have we seen" which is exactly len(chrono).
         monitor.state.update_count = len(chrono)
 
+        # Restore the behavioral baseline from the latest row's state_json.
+        # hydrate previously healed only the ODE state, leaving _behavioral_state
+        # fresh (update_count=0) on every JSON-snapshot-loss restart — which kept
+        # the entire fleet permanently is_baselined=false (2026-06-03 starvation).
+        # record_agent_state now persists behavioral_eisv into state_json, so the
+        # DB path is symmetric with the JSON path (PR #545). Fail-open.
+        try:
+            latest_sj = getattr(latest, "state_json", None) or {}
+            beh_blob = latest_sj.get("behavioral_eisv") if isinstance(latest_sj, dict) else None
+            if isinstance(beh_blob, dict) and beh_blob:
+                from src.behavioral_state import BehavioralEISV
+                monitor._behavioral_state = BehavioralEISV.from_dict(beh_blob)
+        except Exception:
+            logger.debug("Behavioral baseline restore during hydrate skipped", exc_info=True)
+
         logger.info(
             "Hydrated monitor from core.agent_state: "
             "%s records, coherence=%.3f, regime=%s",
