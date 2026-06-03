@@ -45,13 +45,13 @@ RESIDENT_PROGRESS_REGISTRY: dict[str, ResidentConfig] = {
     "watcher":    ResidentConfig("watcher_findings", "rows_any",     timedelta(hours=6),     1, expected_cadence_s=None),
     "steward":    ResidentConfig("eisv_sync_rows",   "rows_written", timedelta(minutes=30),  1, expected_cadence_s=300),
     "chronicler": ResidentConfig("metrics_series",   "rows_written", timedelta(hours=26),    1, expected_cadence_s=86400),
-    # Sentinel migrated to the Elixir/BEAM runtime (com.unitares.sentinel-beam),
-    # which does not post record_progress_pulse — so the sentinel_pulse source
-    # read a permanent 0 and the probe false-flagged sentinel as "flat-candidate"
-    # against a 60s expected cadence. Retired from the progress probe: BEAM
-    # sentinel liveness shows via the resident strip + its launchd KeepAlive, and
-    # its findings still feed Vigil. To re-cover it here, re-add an entry and have
-    # the BEAM sentinel emit record_progress_pulse (the source is still wired).
+    # Sentinel runs on the Elixir/BEAM runtime (com.unitares.sentinel-beam). It
+    # does NOT post record_progress_pulse (Python-only) but it DOES check in via
+    # process_agent_update like every other resident — so it's measured on the
+    # substrate-agnostic `agent_checkins` source (core.agent_state), not the
+    # Python pulse. PR #566 retired it as a stopgap; this is the real re-key.
+    # Cadence is the BEAM fleet-cycle (~5min), not the old Python 60s loop.
+    "sentinel":   ResidentConfig("agent_checkins",   "checkin_count", timedelta(minutes=30),  1, expected_cadence_s=300),
 }
 
 
