@@ -698,6 +698,25 @@ class GovernanceConfig:
     # knowledge graph discovery 2026-05-15T14:27:26.894282+00:00.
     GAP_RECOVERY_CYCLES = 2
 
+    # Warmup structural grace: on the first WARMUP_STRUCTURAL_GRACE_CYCLES
+    # process-LOCAL updates after a process (re)start, the ODE state
+    # (coherence/V) is a cold-start transient — the integrators reset and
+    # state.coherence/V can briefly cross the void/coherence/basin floors even
+    # for a healthy agent. In that window we suppress STRUCTURAL pauses
+    # (void_pause / coherence_pause / basin_pause / cirs coherence-floor) ONLY
+    # when the behavioral baseline is established AND says 'safe' — i.e. the
+    # trustworthy self-relative signal contradicts the cold structural metric.
+    # Risk-ceiling, CIRS resonance, and a non-safe behavioral verdict are NEVER
+    # suppressed (a genuinely-degraded agent has high behavioral risk / a
+    # non-safe verdict). Per-process counter — NOT persisted, NOT restored on
+    # hydrate. Composes with the #575 baseline-restore: that restores the
+    # baseline this guard trusts. (2026-06-03 Lumen restart false-pause; the
+    # behavioral fix alone left a residual void_pause on the cold restart state.)
+    WARMUP_STRUCTURAL_GRACE_CYCLES = 3
+    WARMUP_STRUCTURAL_GRACE_ENABLED = (
+        os.environ.get('GOVERNANCE_WARMUP_STRUCTURAL_GRACE', 'true').lower() == 'true'
+    )
+
     # Pause TTL: an agent paused for longer than this is considered stale
     # and the next gate-traversal is allowed through, letting the
     # categorizer re-evaluate (its own gap-suppression handles the

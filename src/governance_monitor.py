@@ -163,6 +163,13 @@ class UNITARESMonitor:
         # via audit_logger.log_attest_gap_suppressed. Decrements each cycle.
         self._gap_recovery_cycles_remaining: int = 0
 
+        # Per-process update counter for the warmup STRUCTURAL grace. Counts
+        # process_update calls in THIS process only — NOT persisted, NOT restored
+        # by load/hydrate, so every (re)start begins at 0. Distinct from
+        # state.update_count (lifetime, restored) and from behavioral update_count.
+        # While this is small, the ODE state is a cold-start transient.
+        self._process_local_updates: int = 0
+
         # Tactical prediction registry: open (confidence, id) pairs awaiting an
         # outcome. Minted at check-in time, consumed when an outcome references
         # the id. Enables exact filtration for the sequential calibration lane
@@ -841,6 +848,10 @@ class UNITARESMonitor:
             'metrics': {...},
         }
         """
+        # Per-process cycle count for the warmup STRUCTURAL grace (see
+        # _maybe_warmup_structural_suppress). Reset to 0 on every process start.
+        self._process_local_updates += 1
+
         # Compute elapsed time for gap-aware decay scaling
         now = datetime.now()
         # Guard against NTP step-back / clock skew: dt must never be negative.
@@ -1160,7 +1171,15 @@ class UNITARESMonitor:
         decision = self._maybe_gap_suppress(
             decision, elapsed_seconds, risk_score, confidence
         )
-        
+
+        # Warmup structural grace: on the first few process-LOCAL cycles after a
+        # restart, the cold ODE state can trip the void/coherence/basin floors
+        # even for a healthy agent. Suppress those STRUCTURAL pauses only when the
+        # restored behavioral baseline is established and says 'safe'. Applied
+        # after gap-suppress and after the recording paths above (which saw the
+        # original decision). See _maybe_warmup_structural_suppress.
+        decision = self._maybe_warmup_structural_suppress(decision)
+
         # Determine overall status using health thresholds (aligned with health_checker)
         # Use same thresholds as health_checker for consistency: risk_healthy_max=0.35, risk_moderate_max=0.60
         from src.health_thresholds import HealthThresholds
@@ -1258,6 +1277,82 @@ class UNITARESMonitor:
                 cycles_remaining=self._gap_recovery_cycles_remaining - 1,
             )
         self._gap_recovery_cycles_remaining -= 1
+        return decision
+
+    # Structural pauses that are cold-ODE transients on restart and may be
+    # suppressed during warmup. NOT included: 'risk_pause' (high-risk verdict)
+    # and any oscillation-edged block — those reflect real signal.
+    _WARMUP_SUPPRESSIBLE_SUBACTIONS = frozenset(
+        {'void_pause', 'coherence_pause', 'basin_pause', 'cirs_block'}
+    )
+
+    def _maybe_warmup_structural_suppress(self, decision: Dict) -> Dict:
+        """Suppress a STRUCTURAL pause during the post-restart warmup window.
+
+        Rationale: on the first WARMUP_STRUCTURAL_GRACE_CYCLES process-LOCAL
+        cycles, the ODE integrators are cold and state.coherence/V can briefly
+        cross the void/coherence/basin floors even for a healthy agent (verified
+        2026-06-03: a restored-but-healthy Lumen still tripped void_pause on the
+        first post-restart check-in, with behavioral risk 0.00). We trust the
+        restored behavioral baseline over the cold structural metric — but ONLY
+        when that baseline is established AND says 'safe'. A genuinely-degraded
+        agent has high behavioral risk or a non-safe verdict and is never
+        suppressed; CIRS resonance (oscillation) and the high-risk verdict path
+        are never suppressed. Fail-safe: any uncertainty leaves the pause intact.
+
+        Composes with the DB behavioral-restore (#575), which is what makes the
+        baseline available to trust here. Counter is per-process (not persisted).
+
+        Operator-transparency note (same semantics as _maybe_gap_suppress): this
+        runs AFTER the recording paths (calibration, log_auto_attest,
+        decision_history.append), so those record the ORIGINAL structural pause —
+        the `observe` decision_distribution will show e.g. a `void_pause` for a
+        cycle the agent actually proceeded through. That's intentional (audit sees
+        the true pre-suppress decision); the dedicated warmup_structural_suppressed
+        audit event is the reconciling record.
+        """
+        if not config.WARMUP_STRUCTURAL_GRACE_ENABLED:
+            return decision
+        if self._process_local_updates > config.WARMUP_STRUCTURAL_GRACE_CYCLES:
+            return decision
+        if decision.get('action') != 'pause':
+            return decision
+        if decision.get('sub_action') not in self._WARMUP_SUPPRESSIBLE_SUBACTIONS:
+            return decision
+        # CIRS resonance is accumulated real signal, never a cold-start artifact.
+        if decision.get('nearest_edge') == 'oscillation':
+            return decision
+        # Only trust the behavioral signal when its baseline is established AND
+        # it independently judges the agent safe. Fresh/unbaselined behavioral
+        # (the universal-threshold regime) is exactly what NOT to trust here.
+        bs = self._behavioral_state
+        if not bs.is_baselined:
+            return decision
+        if self._last_behavioral_verdict != 'safe':
+            return decision
+
+        original_reason = decision.get('reason', 'pause')
+        original_sub = decision.get('sub_action')
+        decision['original_action'] = 'pause'
+        decision['warmup_structural_suppressed'] = True
+        decision['action'] = 'proceed'
+        decision['reason'] = (
+            f"warmup-structural-suppressed (was: {original_reason}); "
+            f"behavioral baselined+safe overrides cold structural metric; "
+            f"process_cycle={self._process_local_updates}/"
+            f"{config.WARMUP_STRUCTURAL_GRACE_CYCLES}"
+        )
+        try:
+            audit_logger.log_warmup_structural_suppressed(
+                agent_id=self.agent_id,
+                sub_action=original_sub,
+                original_reason=original_reason,
+                process_cycle=self._process_local_updates,
+                coherence=self.state.coherence,
+                void=self.state.V,
+            )
+        except Exception:
+            logger.debug("warmup_structural_suppressed audit log skipped", exc_info=True)
         return decision
 
     def _compute_phi_and_risk(self, grounded_agent_state, agent_state, task_type):

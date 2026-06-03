@@ -177,6 +177,33 @@ class AuditLogger:
         )
         self._write_entry(entry)
 
+    def log_warmup_structural_suppressed(self, agent_id: str, sub_action: str,
+                                         original_reason: str, process_cycle: int,
+                                         coherence: float = None, void: float = None):
+        """Log a STRUCTURAL pause suppressed by the warmup grace window.
+
+        Emitted when a void/coherence/basin (cold-ODE-transient) pause fires in
+        the first few process-LOCAL cycles after a restart, but the restored
+        behavioral baseline is established and judges the agent 'safe'. The pause
+        is downgraded to 'proceed' on the assumption the structural metric is a
+        cold-start artifact, not real degradation. Every suppression is recorded
+        so an operator can audit that no genuine safety signal was masked.
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="warmup_structural_suppressed",
+            confidence=0.0,
+            details={
+                "sub_action": sub_action,
+                "original_reason": original_reason,
+                "process_cycle": process_cycle,
+                "coherence": round(coherence, 4) if coherence is not None else None,
+                "void": round(void, 4) if void is not None else None,
+            }
+        )
+        self._write_entry(entry)
+
     def log_auto_attest(self, agent_id: str, confidence: float, ci_passed: bool,
                        risk_score: float, decision: str, details: Dict = None):
         """Log an auto-attestation event"""
