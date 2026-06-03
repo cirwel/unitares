@@ -11,6 +11,20 @@ from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+def _is_missing_outcome_partition(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "no partition of relation" in msg and "outcome_events" in msg
+
+
+def _is_missing_verification_source_column(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    class_name = exc.__class__.__name__.lower()
+    return (
+        "verification_source" in msg
+        and ("does not exist" in msg or "undefinedcolumn" in class_name)
+    )
+
+
 class ToolUsageMixin:
     """Tool usage recording, outcome events, and EISV queries."""
 
@@ -68,25 +82,82 @@ class ToolUsageMixin:
         """
         from config.governance_config import GovernanceConfig
         async with self.acquire() as conn:
-            try:
-                outcome_id = await conn.fetchval(
+            def _detail_json(*, legacy_verification_source: bool = False) -> str:
+                payload = dict(detail or {})
+                if legacy_verification_source and verification_source is not None:
+                    payload.setdefault("verification_source", verification_source)
+                return json.dumps(payload)
+
+            async def _insert(*, include_verification_source: bool = True):
+                if include_verification_source:
+                    return await conn.fetchval(
+                        """
+                        INSERT INTO audit.outcome_events
+                            (ts, agent_id, session_id, outcome_type, outcome_score, is_bad,
+                             eisv_e, eisv_i, eisv_s, eisv_v, eisv_phi, eisv_verdict, eisv_coherence, eisv_regime,
+                             detail, epoch, verification_source)
+                        VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                        RETURNING outcome_id
+                        """,
+                        agent_id, session_id, outcome_type, outcome_score, is_bad,
+                        eisv_e, eisv_i, eisv_s, eisv_v, eisv_phi, eisv_verdict, eisv_coherence, eisv_regime,
+                        _detail_json(),
+                        GovernanceConfig.CURRENT_EPOCH,
+                        verification_source,
+                    )
+
+                return await conn.fetchval(
                     """
                     INSERT INTO audit.outcome_events
                         (ts, agent_id, session_id, outcome_type, outcome_score, is_bad,
                          eisv_e, eisv_i, eisv_s, eisv_v, eisv_phi, eisv_verdict, eisv_coherence, eisv_regime,
-                         detail, epoch, verification_source)
-                    VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                         detail, epoch)
+                    VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                     RETURNING outcome_id
                     """,
                     agent_id, session_id, outcome_type, outcome_score, is_bad,
                     eisv_e, eisv_i, eisv_s, eisv_v, eisv_phi, eisv_verdict, eisv_coherence, eisv_regime,
-                    json.dumps(detail or {}),
+                    _detail_json(legacy_verification_source=True),
                     GovernanceConfig.CURRENT_EPOCH,
-                    verification_source,
                 )
-                return str(outcome_id)
-            except Exception:
-                return None
+
+            try:
+                outcome_id = await _insert()
+                return str(outcome_id) if outcome_id else None
+            except Exception as exc:
+                last_exc = exc
+
+            if _is_missing_outcome_partition(last_exc):
+                logger.warning(
+                    "record_outcome_event encountered missing outcome_events partition; "
+                    "running audit.partition_maintenance() before one retry"
+                )
+                try:
+                    await conn.fetchval("SELECT audit.partition_maintenance()")
+                    outcome_id = await _insert()
+                    return str(outcome_id) if outcome_id else None
+                except Exception as retry_exc:
+                    last_exc = retry_exc
+
+            if _is_missing_verification_source_column(last_exc):
+                logger.warning(
+                    "record_outcome_event found audit.outcome_events without "
+                    "verification_source column; retrying legacy insert without "
+                    "optional provenance column"
+                )
+                try:
+                    outcome_id = await _insert(include_verification_source=False)
+                    return str(outcome_id) if outcome_id else None
+                except Exception as retry_exc:
+                    last_exc = retry_exc
+
+            logger.error(
+                "record_outcome_event failed for agent=%s outcome_type=%s: %s",
+                agent_id,
+                outcome_type,
+                last_exc,
+            )
+            return None
 
     async def get_recent_outcomes(
         self,
