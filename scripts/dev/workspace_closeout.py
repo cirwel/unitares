@@ -64,6 +64,16 @@ class CloseoutResult:
     errors: list[str]
 
 
+@dataclass
+class StartCheckResult:
+    workspace: str
+    checked_existing_baseline: bool
+    closeout: CloseoutResult
+    baseline_written: bool
+    new_baseline_path: str | None
+    new_baseline_process_count: int
+
+
 def _run(args: list[str], cwd: Path) -> tuple[int, str, str]:
     try:
         completed = subprocess.run(
@@ -426,8 +436,60 @@ def closeout(
     )
 
 
+def start_check(root: Path, *, use_baseline: bool = True) -> StartCheckResult:
+    """Validate session-start hygiene and refresh the process baseline.
+
+    Dirty git state always blocks baseline refresh. Repo-rooted process residue
+    blocks refresh only when a previous baseline exists; without a baseline, the
+    current process set is treated as the initial expected resident/control-plane
+    set.
+    """
+    baseline_file = baseline_path(root)
+    checked_existing_baseline = use_baseline and baseline_file.exists()
+
+    if checked_existing_baseline:
+        result = closeout(root, use_baseline=True)
+    else:
+        state = git_state(root)
+        result = CloseoutResult(
+            workspace=str(root),
+            git=state,
+            baseline_path=str(baseline_file) if baseline_file.exists() else None,
+            baseline_used=False,
+            stashed=False,
+            stash_message=None,
+            repo_processes=[],
+            stopped_processes=[],
+            booted_out_labels=[],
+            errors=[],
+        )
+
+    baseline_written = False
+    new_baseline_path: str | None = None
+    process_count = 0
+    if not result_has_issues(result):
+        processes = repo_rooted_processes(root, baseline_keys=None)
+        path = write_process_baseline(root, processes)
+        baseline_written = True
+        new_baseline_path = str(path)
+        process_count = len(processes)
+
+    return StartCheckResult(
+        workspace=str(root),
+        checked_existing_baseline=checked_existing_baseline,
+        closeout=result,
+        baseline_written=baseline_written,
+        new_baseline_path=new_baseline_path,
+        new_baseline_process_count=process_count,
+    )
+
+
 def result_has_issues(result: CloseoutResult) -> bool:
     return result.git.dirty or bool(result.repo_processes) or bool(result.errors)
+
+
+def start_check_has_issues(result: StartCheckResult) -> bool:
+    return result_has_issues(result.closeout) or not result.baseline_written
 
 
 def render_text(result: CloseoutResult) -> str:
@@ -479,6 +541,34 @@ def render_text(result: CloseoutResult) -> str:
     return "\n".join(lines)
 
 
+def render_start_check_text(result: StartCheckResult) -> str:
+    lines = [f"Workspace start check: {result.workspace}"]
+    if result.checked_existing_baseline:
+        lines.append("previous baseline: checked")
+    else:
+        lines.append(
+            "previous baseline: not present; "
+            "treating current services as initial baseline"
+        )
+
+    if result_has_issues(result.closeout):
+        lines.append("status: blocked")
+        lines.append(render_text(result.closeout))
+    else:
+        lines.append("status: clean")
+
+    if result.baseline_written:
+        lines.append(
+            "baseline: wrote "
+            f"{result.new_baseline_process_count} process(es) to "
+            f"{result.new_baseline_path}"
+        )
+    else:
+        lines.append("baseline: not written")
+
+    return "\n".join(lines)
+
+
 def to_jsonable(result: CloseoutResult) -> dict[str, Any]:
     return {
         "workspace": result.workspace,
@@ -492,6 +582,18 @@ def to_jsonable(result: CloseoutResult) -> dict[str, Any]:
         "booted_out_labels": result.booted_out_labels,
         "errors": result.errors,
         "clean": not result_has_issues(result),
+    }
+
+
+def start_check_to_jsonable(result: StartCheckResult) -> dict[str, Any]:
+    return {
+        "workspace": result.workspace,
+        "checked_existing_baseline": result.checked_existing_baseline,
+        "closeout": to_jsonable(result.closeout),
+        "baseline_written": result.baseline_written,
+        "new_baseline_path": result.new_baseline_path,
+        "new_baseline_process_count": result.new_baseline_process_count,
+        "clean": not start_check_has_issues(result),
     }
 
 
@@ -519,6 +621,14 @@ def main(argv: list[str] | None = None) -> int:
         help="record current repo-rooted processes as expected baseline and exit",
     )
     parser.add_argument(
+        "--start-check",
+        action="store_true",
+        help=(
+            "fail on dirty git or prior-session process residue, then refresh "
+            "the process baseline when clean"
+        ),
+    )
+    parser.add_argument(
         "--no-baseline",
         action="store_true",
         help="ignore .unitares/workspace-closeout-baseline.json",
@@ -527,6 +637,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     root = repo_root(Path(args.cwd).resolve())
+    if args.start_check:
+        try:
+            result = start_check(root, use_baseline=not args.no_baseline)
+        except RuntimeError as exc:
+            print(f"workspace-closeout: {exc}", file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(start_check_to_jsonable(result), indent=2, sort_keys=True))
+        else:
+            print(render_start_check_text(result))
+        return 1 if start_check_has_issues(result) else 0
+
     if args.write_baseline:
         try:
             processes = repo_rooted_processes(root, baseline_keys=None)

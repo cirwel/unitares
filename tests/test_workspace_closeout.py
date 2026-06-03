@@ -163,3 +163,80 @@ def test_closeout_stashes_dirty_repo_when_requested(closeout_module, git_repo, m
         check=True,
     )
     assert "workspace-closeout auto-stash" in stash_list.stdout
+
+
+def test_start_check_without_existing_baseline_writes_initial_baseline(
+    closeout_module, git_repo, monkeypatch
+):
+    process = closeout_module.ProcessInfo(
+        pid=10,
+        ppid=1,
+        cwd=str(git_repo),
+        command="python server.py",
+        launch_label="com.example.server",
+    )
+    monkeypatch.setattr(
+        closeout_module,
+        "repo_rooted_processes",
+        lambda *args, **kwargs: [process],
+    )
+
+    result = closeout_module.start_check(git_repo)
+
+    assert result.checked_existing_baseline is False
+    assert result.baseline_written is True
+    assert result.new_baseline_process_count == 1
+    keys = closeout_module.read_process_baseline(git_repo)
+    assert closeout_module.process_key(process) in keys
+
+
+def test_start_check_dirty_repo_blocks_baseline_refresh(
+    closeout_module, git_repo, monkeypatch
+):
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("dirty start should not write process baseline")
+
+    monkeypatch.setattr(closeout_module, "repo_rooted_processes", fail_if_called)
+    (git_repo / "seed.py").write_text("dirty\n")
+
+    result = closeout_module.start_check(git_repo)
+
+    assert result.baseline_written is False
+    assert result.closeout.git.dirty is True
+    assert not closeout_module.baseline_path(git_repo).exists()
+
+
+def test_start_check_existing_baseline_blocks_leftover_process(
+    closeout_module, git_repo, monkeypatch
+):
+    existing = closeout_module.ProcessInfo(
+        pid=10,
+        ppid=1,
+        cwd=str(git_repo),
+        command="python server.py",
+        launch_label="com.example.server",
+    )
+    leftover = closeout_module.ProcessInfo(
+        pid=11,
+        ppid=1,
+        cwd=str(git_repo),
+        command="python forgotten.py",
+    )
+    closeout_module.write_process_baseline(git_repo, [existing])
+
+    def fake_repo_rooted_processes(_root, *, baseline_keys=None):
+        if baseline_keys:
+            return [leftover]
+        return [existing, leftover]
+
+    monkeypatch.setattr(
+        closeout_module,
+        "repo_rooted_processes",
+        fake_repo_rooted_processes,
+    )
+
+    result = closeout_module.start_check(git_repo)
+
+    assert result.checked_existing_baseline is True
+    assert result.baseline_written is False
+    assert result.closeout.repo_processes == [leftover]

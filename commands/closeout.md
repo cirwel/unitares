@@ -10,9 +10,10 @@ First run a non-mutating check:
 - `python3 scripts/dev/workspace_closeout.py`
 
 This uses `.unitares/workspace-closeout-baseline.json` when present. The
-baseline is written by `/governance-start`; it lets the closeout check ignore
-resident/control-plane processes that already existed before the agent began
-work and focus on newly started repo-rooted processes.
+baseline is written by `/governance-start` through `workspace_closeout.py
+--start-check`; it lets the closeout check ignore resident/control-plane
+processes that already existed before the agent began work and focus on newly
+started repo-rooted processes.
 
 Report:
 

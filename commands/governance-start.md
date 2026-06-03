@@ -10,9 +10,13 @@ Use the shared helper in this repo:
 
 - `scripts/client/session_cache.py list`
 
-Then capture the current repo-rooted process baseline for closeout:
+Then run the workspace start guard:
 
-- `python3 scripts/dev/workspace_closeout.py --write-baseline`
+- `python3 scripts/dev/workspace_closeout.py --start-check`
+
+This fails on dirty git state or non-baseline repo-rooted processes from a
+prior session, and writes a fresh process baseline only when the workspace is
+clean.
 
 If the newest entry contains `parent_agent_id`, treat it as a lineage candidate, not ownership proof. Ignore any legacy `continuity_token` field for startup; tokens are only for explicit same-live-owner PATH 0 proof rebinds.
 
