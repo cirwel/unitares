@@ -1,7 +1,7 @@
 ---
-status: v0.1 — counter-note / companion to surface-lease-plane-v0.md (NOT a replacement)
+status: v0.2 — counter-note / companion to surface-lease-plane-v0.md (NOT a replacement). Consolidates the duplicate #584 (worktree-isolation-as-default-2026-06-03.md, written in parallel) into this doc; the duplication is itself analyzed in §8.
 authored: 2026-06-03
-author_session: dispatch thread-1511767523715055857 (claude_code, opus-4-8)
+author_session: dispatch thread-1511767523715055857 (claude_code, opus-4-8); consolidation by a second parallel session (claude_code, opus-4-8) folding #584
 relates_to:
   - docs/proposals/surface-lease-plane-v0.md (the canonical Surface Lease Plane / Plexus contract; SHIPPED)
   - docs/proposals/plexus-scope.md (boundary doc; names repo file paths as the initial forcing function)
@@ -49,6 +49,23 @@ a path. So even accepting the lease framing, the correct git surface is the
 **worktree/branch**, not individual files — and once the surface is "the whole
 working tree," the natural implementation of "one holder per working tree" is simply
 *give each agent its own working tree.* The lease collapses into isolation.
+
+## 2a. The RFC concedes this in its own text (folded from #584)
+
+Two clauses in `surface-lease-plane-v0.md` make the case for us:
+
+- **§7.12.3 (worktree handling, lines 937 & 1442):** "A lease on `…/src/x.py` and a
+  lease on `…/.worktrees/foo/src/x.py` are distinct leases by design — different
+  physical files even though they're 'the same logical source.' This is correct and
+  intended." Distinct leases means **no contention** between worktree-isolated sessions
+  on the same logical file — so the file lease coordinates *nothing* for them. It only
+  does work on a shared checkout. The RFC's file-surface value is conditional on the
+  exact practice (shared-checkout editing) that worktree-default removes.
+- **Internal tension:** the thundering-herd analysis (line 653) reasons about "ship.sh
+  fans out N parallel session worktrees, all attempting `lease_acquire('file:///<path>')`"
+  with one winner and N−1 `held_by_other`. That convoy can only occur if those N
+  worktrees resolve to the *same* `file://` path — which contradicts the distinct-lease
+  rule above. Under worktree-default the contention the RFC defends against cannot arise.
 
 ## 3. Advisory-on-a-shared-filesystem cannot bind the unaware actor
 
@@ -103,3 +120,37 @@ this note argues it should be worktree isolation, with leases scoped to §4.
   shared-runtime-state residue that stays under leases? (Probably the latter.)
 - Cost: bge-m3 load and per-worktree venv/state overhead vs. the concurrency tax the
   lease plane is paying. Needs a measurement, not a guess.
+
+## 8. Live evidence: this note collided with itself
+
+This note existed twice. Two agents on the same account, in parallel dispatch sessions,
+independently wrote the same counter-note — this doc (#582) and
+`worktree-isolation-as-default-2026-06-03.md` (#584) — both green, both merged within
+~25 minutes. This consolidation folds the second in. The collision is the most useful
+data point here, because it **refines the thesis**:
+
+- **Isolation prevented the mechanical collision.** Different filenames → no git
+  conflict → both merged clean. The forkable-surface argument (§1–§3) held perfectly:
+  no `write()` contention, no lock, no lost work.
+- **Isolation did NOT prevent the semantic collision.** Two agents did the *same work*
+  because nothing coordinated them at the *task* level. Worktree isolation dissolves
+  collisions on the bytes; it does nothing about two agents deciding to write the same
+  bytes.
+
+So the residue that genuinely needs coordination (§4) is larger than "un-forkable
+runtime surfaces" — it includes **task-level work claims**. The control for that is
+already written down: CLAUDE.md's "Before Starting Work on a Single-Writer Surface" rule
+(run `gh pr list --search` before touching a hot proposal doc). It did not fire here
+because neither session ran it. That is the honest correction to a naive "just isolate"
+reading: **isolate the bytes, but still coordinate the intent** — via the open-PR check,
+an advisory task-lease, or dispatch-level dedup. The lease plane's advisory model is one
+valid implementation of that intent layer; this note's whole argument is that it was
+pointed at the *byte* layer (files) instead of the *intent* layer (tasks).
+
+**Bias disclosure (folded from #584):** the standing bias of both authoring sessions
+(memory `feedback_substrate-migration-status-quo-bias`) is to resist substrate
+migrations, which this note's "less leasing, more git-native isolation" conclusion leans
+toward. §5 (steelman) and §7 (cost, unresolved) are where it tries to earn the position
+rather than assume it. The cost question is genuinely open and needs measurement, not
+advocacy — and the fact that two biased sessions converged here is itself weak evidence
+the bias is doing some of the work.
