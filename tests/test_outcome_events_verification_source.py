@@ -15,6 +15,7 @@ source / claimant / strength axes; v2 redesign is tracked separately in
 project_outcome-verification-taxonomy-redesign. These tests pin the v1
 classifications so the v2 work can be a deliberate motion, not silent drift.
 """
+import json
 import sys
 from pathlib import Path
 from contextlib import ExitStack
@@ -27,6 +28,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from tests.helpers import make_agent_meta, make_mock_server, make_monitor
+from src.db.mixins.tool_usage import ToolUsageMixin
 from src.mcp_handlers.updates.context import UpdateContext
 
 
@@ -217,3 +219,81 @@ def test_mixin_record_outcome_event_accepts_verification_source():
     assert "verification_source" in insert_block, (
         "verification_source must appear in the INSERT column list, not just the docstring"
     )
+
+
+class _FakeAcquire:
+    def __init__(self, conn):
+        self.conn = conn
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeOutcomeConn:
+    def __init__(self, effects):
+        self.effects = list(effects)
+        self.calls = []
+
+    async def fetchval(self, sql, *args):
+        self.calls.append((sql, args))
+        effect = self.effects.pop(0)
+        if isinstance(effect, Exception):
+            raise effect
+        return effect
+
+
+class _OutcomeMixinHarness(ToolUsageMixin):
+    def __init__(self, conn):
+        self.conn = conn
+
+    def acquire(self):
+        return _FakeAcquire(self.conn)
+
+
+@pytest.mark.asyncio
+async def test_mixin_retries_legacy_insert_when_verification_source_column_missing():
+    conn = _FakeOutcomeConn([
+        Exception('column "verification_source" of relation "outcome_events" does not exist'),
+        "legacy-outcome-id",
+    ])
+    db = _OutcomeMixinHarness(conn)
+
+    result = await db.record_outcome_event(
+        agent_id="agent-1",
+        outcome_type="task_completed",
+        is_bad=False,
+        verification_source="agent_reported_tool_result",
+    )
+
+    assert result == "legacy-outcome-id"
+    assert len(conn.calls) == 2
+    assert "verification_source" in conn.calls[0][0]
+    assert "verification_source" not in conn.calls[1][0]
+    legacy_detail = json.loads(conn.calls[1][1][13])
+    assert legacy_detail["verification_source"] == "agent_reported_tool_result"
+
+
+@pytest.mark.asyncio
+async def test_mixin_runs_partition_maintenance_once_for_missing_outcome_partition():
+    conn = _FakeOutcomeConn([
+        Exception('no partition of relation "outcome_events" found for row'),
+        '{"outcome_events_current": "Created partition outcome_events_2026_06"}',
+        "partition-retry-outcome-id",
+    ])
+    db = _OutcomeMixinHarness(conn)
+
+    result = await db.record_outcome_event(
+        agent_id="agent-1",
+        outcome_type="task_completed",
+        is_bad=False,
+        verification_source="agent_reported_tool_result",
+    )
+
+    assert result == "partition-retry-outcome-id"
+    assert len(conn.calls) == 3
+    assert "verification_source" in conn.calls[0][0]
+    assert "SELECT audit.partition_maintenance()" == conn.calls[1][0]
+    assert "verification_source" in conn.calls[2][0]
