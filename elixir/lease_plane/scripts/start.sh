@@ -31,4 +31,28 @@ fi
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 cd "$LEASE_PLANE_DIR"
-exec mix run --no-halt
+
+# --- Distributed node for BEAM hot-code-reload ---
+# When LEASE_PLANE_NODE_COOKIE is set (in secrets.env) we start the node
+# *named* + *cookied* so an operator can attach a remote shell or drive an
+# in-place module swap (scripts/ops/hot-reload.sh) WITHOUT a restart — the
+# substrate answer to the running-process-vs-master-commit drift class.
+#
+# Security: the Erlang distribution port is authenticated ONLY by the cookie
+# (node access == arbitrary code execution), so we (a) refuse to name the
+# node without a cookie — falling back to the pre-hot-reload UNNAMED launch,
+# preserving exact current behavior — and (b) pin epmd + the distribution
+# listener to 127.0.0.1, matching the lease plane's localhost trust boundary.
+NODE_SNAME="${LEASE_PLANE_NODE_SNAME:-unitares-lease-plane}"
+
+if [[ -n "${LEASE_PLANE_NODE_COOKIE:-}" ]]; then
+    export ERL_EPMD_ADDRESS="127.0.0.1"
+    exec elixir \
+        --sname "$NODE_SNAME" \
+        --cookie "$LEASE_PLANE_NODE_COOKIE" \
+        --erl "-kernel inet_dist_use_interface {127,0,0,1}" \
+        -S mix run --no-halt
+else
+    echo "[lease-plane] LEASE_PLANE_NODE_COOKIE unset — starting UNNAMED (hot-reload disabled; set the cookie in secrets.env and restart to enable)" >&2
+    exec mix run --no-halt
+fi

@@ -52,10 +52,16 @@ curl -s -H "Authorization: Bearer $LEASE_PLANE_BEARER_TOKEN" \
 
 ## Updating the running code (deploy)
 
-Deploys are full-restart in v0 (BEAM hot-code-reload is the floor we're building toward — see "Hot code reload" below). To deploy merged `master` changes:
+Two paths now exist: full-restart (always correct) and hot-code-reload (no restart, no dropped leases — for stateless modules; see "Hot code reload" below). To deploy merged `master` changes with a restart:
 
 ```bash
 scripts/ops/deploy-lease-plane.sh
+```
+
+To deploy a stateless-module change (router, plugs, pure logic) *without* a restart, `git pull` in the deploy worktree then:
+
+```bash
+scripts/ops/hot-reload.sh --changed     # or name modules explicitly
 ```
 
 It fast-forwards `$HOME/projects/unitares-deploy` to `origin/master`, recompiles, restarts the LaunchAgent (`launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane`), and verifies `/v1/health`. Idempotent; creates the deploy worktree if missing. Because the service runs from this dedicated worktree, "is the merged fix actually live?" has a clean answer: `git -C "$HOME/projects/unitares-deploy" rev-parse HEAD`.
@@ -103,11 +109,15 @@ The healthcheck probe is a binary "is the front door open" signal. Functional he
 
 ## Live introspection (the BEAM superpower)
 
-This is the part most worth learning. From your laptop:
+This is the part most worth learning. Requires the node started named +
+cookied (set `LEASE_PLANE_NODE_COOKIE` in `secrets.env` — see `start.sh`).
+The node is `unitares-lease-plane@<short-hostname>` and distribution is pinned
+to loopback, so attach from the same host:
 
 ```bash
-# Connect to the running BEAM node interactively
-iex --sname operator --remsh unitares-lease-plane@localhost
+# Connect to the running BEAM node interactively (same cookie as the node)
+iex --sname operator --cookie "$LEASE_PLANE_NODE_COOKIE" \
+    --remsh "unitares-lease-plane@$(hostname -s)"
 ```
 
 Once attached, useful commands:
@@ -410,7 +420,38 @@ When a new version of a module is deployed, the BEAM node can swap it in place w
 - Old: `ps -o etime` + `git log --since=` to figure out if the resident has the fix you think it has
 - New: deploy = module swap = the running node *has the fix*. The "is this code running?" question becomes "what version is loaded?", which `:application.loaded_applications/0` answers directly.
 
-v0 does not *automate* hot-reload deploys. Initial deploys are full-restart. But the capability is the floor, not a feature add.
+### How it works now
+
+Enable once (a single restart pays for itself): set a strong random
+`LEASE_PLANE_NODE_COOKIE` in `~/.config/cirwel/secrets.env`, then restart the
+plane (`launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane`). From
+then on the node runs named + cookied, distribution pinned to loopback.
+
+Reload after pulling new code into the deploy worktree:
+
+```bash
+cd "$HOME/projects/unitares-deploy" && git pull --ff-only
+elixir/lease_plane/scripts/ops/hot-reload.sh --changed
+# or name modules: scripts/ops/hot-reload.sh UnitaresLeasePlane.HTTPRouter
+```
+
+The helper recompiles in the worktree and `:code.purge` + `:code.load_file`s
+each module into the running node via a short-lived `:rpc` peer — no restart,
+no dropped leases. Verify with `/v1/health` or `:application.loaded_applications/0`.
+
+### Scope — what reloads cleanly, and the frontier
+
+- **Stateless modules reload cleanly**: `HTTPRouter`, plugs, `Canonicalize`,
+  pure logic. Requests run in transient processes that pick up new code on the
+  next call. Proven end-to-end 2026-06-03 (isolated node, `/v1/health` swapped
+  with no restart).
+- **Long-lived stateful GenServers are the relup / `code_change` frontier**:
+  `LeaseHolder` (per-lease, auto-renew state), `HandoffServer`, the periodic
+  workers. `:code.purge` *kills* any process still executing the old module,
+  and a changed state shape needs `code_change/3`. Reload these in place only
+  when the state shape is unchanged; otherwise full-restart that change. Full
+  `appup`/`relup` release upgrades remain deliberately out of scope until a
+  stateful change actually demands them.
 
 ## When things go wrong
 
