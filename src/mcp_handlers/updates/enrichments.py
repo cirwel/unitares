@@ -1552,6 +1552,15 @@ def _should_search_kg_by_checkin_text(ctx: UpdateContext, signals: list, questio
 
 # ─── Identity Notifications ──────────────────────────────────────────
 
+# P004: bound every Redis await in this MCP-handler path. The anyio<->asyncpg/
+# Redis seam can stall an await indefinitely (see CLAUDE.md "Known Issue"); an
+# unguarded await here would hang the whole update-enrichment pipeline. This is a
+# best-effort surfacing of pending notifications, so on timeout we degrade to
+# "no notifications this turn" rather than block. Mirrors the
+# _REDIS_RECOVERY_TIMEOUT idiom in mcp_handlers/middleware/identity_step.py.
+_REDIS_NOTIF_TIMEOUT = 0.5
+
+
 @enrichment(order=250)
 async def enrich_identity_notifications(ctx: UpdateContext) -> None:
     """Surface pending identity notifications (e.g., session accessed from elsewhere)."""
@@ -1563,7 +1572,9 @@ async def enrich_identity_notifications(ctx: UpdateContext) -> None:
             return
 
         key = f"identity_notifications:{ctx.agent_uuid}"
-        notifications = await redis.lrange(key, 0, -1)
+        notifications = await asyncio.wait_for(
+            redis.lrange(key, 0, -1), timeout=_REDIS_NOTIF_TIMEOUT
+        )
         if not notifications:
             return
 
@@ -1577,8 +1588,13 @@ async def enrich_identity_notifications(ctx: UpdateContext) -> None:
         if parsed:
             ctx.response_data["_identity_notifications"] = parsed
             # Clear after delivery
-            await redis.delete(key)
+            await asyncio.wait_for(redis.delete(key), timeout=_REDIS_NOTIF_TIMEOUT)
 
+    except asyncio.TimeoutError:
+        logger.debug(
+            "identity notifications check timed out after %.3fs (degrading to none)",
+            _REDIS_NOTIF_TIMEOUT,
+        )
     except Exception as e:
         logger.debug(f"Could not check identity notifications: {e}")
 
