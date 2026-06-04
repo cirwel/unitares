@@ -165,6 +165,75 @@ def test_closeout_stashes_dirty_repo_when_requested(closeout_module, git_repo, m
     assert "workspace-closeout auto-stash" in stash_list.stdout
 
 
+def _add_worktree(repo: Path, path: Path, branch: str) -> Path:
+    subprocess.run(
+        ["git", "worktree", "add", str(path), "-b", branch],
+        cwd=str(repo), check=True, capture_output=True,
+    )
+    return path
+
+
+def test_classify_main_checkout_is_shared(closeout_module, git_repo):
+    iso = closeout_module.classify_workspace(git_repo)
+    assert iso.kind == "main_checkout"
+    assert iso.shared is True
+
+
+def test_classify_linked_worktree_is_agent_owned(closeout_module, git_repo, tmp_path):
+    wt = _add_worktree(git_repo, tmp_path / "agent_wt", "feat/x")
+    iso = closeout_module.classify_workspace(wt)
+    assert iso.kind == "agent_worktree"
+    assert iso.shared is False
+
+
+def test_classify_deploy_worktree_by_name(closeout_module, git_repo, tmp_path):
+    wt = _add_worktree(git_repo, tmp_path / "unitares-deploy", "deploybr")
+    iso = closeout_module.classify_workspace(wt)
+    assert iso.kind == "deploy_worktree"
+    assert iso.shared is True
+
+
+def test_classify_non_repo_is_unknown_not_shared(closeout_module, tmp_path):
+    plain = tmp_path / "not_a_repo"
+    plain.mkdir()
+    iso = closeout_module.classify_workspace(plain)
+    assert iso.kind == "unknown"
+    assert iso.shared is False
+
+
+def test_start_check_shared_checkout_is_advisory_by_default(
+    closeout_module, git_repo, monkeypatch
+):
+    monkeypatch.setattr(closeout_module, "repo_rooted_processes", lambda *a, **k: [])
+    result = closeout_module.start_check(git_repo)  # advisory (default)
+    assert result.isolation.shared is True
+    assert result.isolation_enforced is False
+    # Advisory: shared checkout does NOT block a clean start.
+    assert closeout_module.isolation_is_issue(result) is False
+    assert closeout_module.start_check_has_issues(result) is False
+
+
+def test_start_check_require_worktree_blocks_shared_checkout(
+    closeout_module, git_repo, monkeypatch
+):
+    monkeypatch.setattr(closeout_module, "repo_rooted_processes", lambda *a, **k: [])
+    result = closeout_module.start_check(git_repo, require_worktree=True)
+    assert result.isolation_enforced is True
+    assert closeout_module.isolation_is_issue(result) is True
+    assert closeout_module.start_check_has_issues(result) is True
+
+
+def test_start_check_agent_worktree_clean_under_strict(
+    closeout_module, git_repo, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(closeout_module, "repo_rooted_processes", lambda *a, **k: [])
+    wt = _add_worktree(git_repo, tmp_path / "agent_wt2", "feat/y")
+    result = closeout_module.start_check(wt, require_worktree=True)
+    assert result.isolation.kind == "agent_worktree"
+    assert closeout_module.isolation_is_issue(result) is False
+    assert closeout_module.start_check_has_issues(result) is False
+
+
 def test_start_check_without_existing_baseline_writes_initial_baseline(
     closeout_module, git_repo, monkeypatch
 ):

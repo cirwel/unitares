@@ -65,6 +65,15 @@ class CloseoutResult:
 
 
 @dataclass
+class WorkspaceIsolation:
+    kind: str  # main_checkout | deploy_worktree | agent_worktree | unknown
+    shared: bool
+    git_dir: str
+    common_dir: str
+    detail: str
+
+
+@dataclass
 class StartCheckResult:
     workspace: str
     checked_existing_baseline: bool
@@ -72,6 +81,11 @@ class StartCheckResult:
     baseline_written: bool
     new_baseline_path: str | None
     new_baseline_process_count: int
+    # Advisory by default: a shared-checkout warning is surfaced but does NOT
+    # fail the check unless require_worktree (strict mode) was requested. Default
+    # None keeps existing constructors/tests working.
+    isolation: WorkspaceIsolation | None = None
+    isolation_enforced: bool = False
 
 
 def _run(args: list[str], cwd: Path) -> tuple[int, str, str]:
@@ -93,6 +107,59 @@ def repo_root(cwd: Path) -> Path:
     if rc == 0 and stdout.strip():
         return Path(stdout.strip()).resolve()
     return cwd.resolve()
+
+
+# Names whose presence in the workspace path marks a live/shared checkout that is
+# linked-but-not-agent-owned (the deploy worktree). Override via env (comma-sep).
+# The main dev checkout is detected structurally (git_dir == git_common_dir) and
+# needs no name match.
+_DEFAULT_LIVE_CHECKOUT_NAMES = ("unitares-deploy",)
+
+
+def _live_checkout_names() -> tuple[str, ...]:
+    raw = os.getenv("UNITARES_LIVE_CHECKOUT_NAMES", "")
+    names = tuple(n.strip() for n in raw.split(",") if n.strip())
+    return names or _DEFAULT_LIVE_CHECKOUT_NAMES
+
+
+def classify_workspace(root: Path) -> "WorkspaceIsolation":
+    """Classify a workspace as the main checkout, the deploy worktree, or an
+    agent-owned linked worktree.
+
+    The main working tree has git_dir == git_common_dir; a linked worktree's
+    git_dir is `<common>/worktrees/<name>`. Agents should mutate code only in an
+    agent-owned linked worktree — never the shared main checkout or the deploy
+    worktree (see docs/proposals/worktree-isolation-vs-lease-default.md).
+    """
+    rc_a, git_dir_out, _ = _run(["git", "rev-parse", "--absolute-git-dir"], root)
+    rc_b, common_out, _ = _run(["git", "rev-parse", "--git-common-dir"], root)
+    if rc_a != 0 or rc_b != 0:
+        return WorkspaceIsolation(
+            kind="unknown", shared=False, git_dir="", common_dir="",
+            detail="not a git work tree; isolation check skipped",
+        )
+    git_dir = Path(git_dir_out.strip()).resolve()
+    common_raw = Path(common_out.strip())
+    common_dir = (common_raw if common_raw.is_absolute() else (root / common_raw)).resolve()
+
+    if git_dir == common_dir:
+        return WorkspaceIsolation(
+            kind="main_checkout", shared=True,
+            git_dir=str(git_dir), common_dir=str(common_dir),
+            detail="this is the main/shared checkout, not an agent-owned worktree",
+        )
+    for name in _live_checkout_names():
+        if name and name in str(root):
+            return WorkspaceIsolation(
+                kind="deploy_worktree", shared=True,
+                git_dir=str(git_dir), common_dir=str(common_dir),
+                detail=f"path matches a live checkout name ({name!r})",
+            )
+    return WorkspaceIsolation(
+        kind="agent_worktree", shared=False,
+        git_dir=str(git_dir), common_dir=str(common_dir),
+        detail="agent-owned linked worktree",
+    )
 
 
 def parse_git_porcelain(output: str) -> GitState:
@@ -436,14 +503,22 @@ def closeout(
     )
 
 
-def start_check(root: Path, *, use_baseline: bool = True) -> StartCheckResult:
+def start_check(
+    root: Path, *, use_baseline: bool = True, require_worktree: bool = False
+) -> StartCheckResult:
     """Validate session-start hygiene and refresh the process baseline.
 
     Dirty git state always blocks baseline refresh. Repo-rooted process residue
     blocks refresh only when a previous baseline exists; without a baseline, the
     current process set is treated as the initial expected resident/control-plane
     set.
+
+    Also classifies workspace isolation (main checkout vs agent-owned worktree).
+    Advisory by default — editing the shared/main checkout is surfaced as a
+    warning. With ``require_worktree=True`` (strict mode) a shared checkout
+    becomes a hard failure, matching the lease-plane advisory->strict pattern.
     """
+    isolation = classify_workspace(root)
     baseline_file = baseline_path(root)
     checked_existing_baseline = use_baseline and baseline_file.exists()
 
@@ -481,6 +556,8 @@ def start_check(root: Path, *, use_baseline: bool = True) -> StartCheckResult:
         baseline_written=baseline_written,
         new_baseline_path=new_baseline_path,
         new_baseline_process_count=process_count,
+        isolation=isolation,
+        isolation_enforced=bool(require_worktree and isolation.shared),
     )
 
 
@@ -488,8 +565,17 @@ def result_has_issues(result: CloseoutResult) -> bool:
     return result.git.dirty or bool(result.repo_processes) or bool(result.errors)
 
 
+def isolation_is_issue(result: StartCheckResult) -> bool:
+    """A shared-checkout warning is an *issue* only in strict mode."""
+    return bool(result.isolation and result.isolation.shared and result.isolation_enforced)
+
+
 def start_check_has_issues(result: StartCheckResult) -> bool:
-    return result_has_issues(result.closeout) or not result.baseline_written
+    return (
+        result_has_issues(result.closeout)
+        or not result.baseline_written
+        or isolation_is_issue(result)
+    )
 
 
 def render_text(result: CloseoutResult) -> str:
@@ -551,6 +637,18 @@ def render_start_check_text(result: StartCheckResult) -> str:
             "treating current services as initial baseline"
         )
 
+    if result.isolation is not None:
+        iso = result.isolation
+        if not iso.shared:
+            lines.append(f"workspace isolation: ok ({iso.kind})")
+        else:
+            marker = "BLOCKED" if isolation_is_issue(result) else "warning"
+            lines.append(
+                f"workspace isolation: {marker} — {iso.detail}. "
+                "Prefer an agent-owned worktree "
+                "(git worktree add ../unitares-wt/<task> -b <branch> origin/master)."
+            )
+
     if result_has_issues(result.closeout):
         lines.append("status: blocked")
         lines.append(render_text(result.closeout))
@@ -593,6 +691,8 @@ def start_check_to_jsonable(result: StartCheckResult) -> dict[str, Any]:
         "baseline_written": result.baseline_written,
         "new_baseline_path": result.new_baseline_path,
         "new_baseline_process_count": result.new_baseline_process_count,
+        "isolation": asdict(result.isolation) if result.isolation else None,
+        "isolation_enforced": result.isolation_enforced,
         "clean": not start_check_has_issues(result),
     }
 
@@ -633,13 +733,26 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="ignore .unitares/workspace-closeout-baseline.json",
     )
+    parser.add_argument(
+        "--require-worktree",
+        action="store_true",
+        help=(
+            "strict mode: fail --start-check when run in the shared/main checkout "
+            "or deploy worktree instead of an agent-owned linked worktree "
+            "(advisory warning only without this flag)"
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     args = parser.parse_args(argv)
 
     root = repo_root(Path(args.cwd).resolve())
     if args.start_check:
         try:
-            result = start_check(root, use_baseline=not args.no_baseline)
+            result = start_check(
+                root,
+                use_baseline=not args.no_baseline,
+                require_worktree=args.require_worktree,
+            )
         except RuntimeError as exc:
             print(f"workspace-closeout: {exc}", file=sys.stderr)
             return 2

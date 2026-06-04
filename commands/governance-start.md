@@ -18,6 +18,13 @@ This fails on dirty git state or non-baseline repo-rooted processes from a
 prior session, and writes a fresh process baseline only when the workspace is
 clean.
 
+It also classifies workspace isolation: editing the shared/main checkout (or the
+deploy worktree) instead of an agent-owned linked worktree is surfaced as an
+**advisory warning** by default. Add `--require-worktree` to make that a hard
+failure (strict mode) once the fleet reliably works in worktrees — the
+advisory→strict rollout mirrors the Surface Lease Plane. Rationale:
+`docs/proposals/worktree-isolation-vs-lease-default.md`.
+
 If the newest entry contains `parent_agent_id`, treat it as a lineage candidate, not ownership proof. Ignore any legacy `continuity_token` field for startup; tokens are only for explicit same-live-owner PATH 0 proof rebinds.
 
 Call `onboard()` against UNITARES using the strongest honest mode:
