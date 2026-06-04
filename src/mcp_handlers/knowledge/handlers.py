@@ -802,7 +802,15 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
         # Find similar discoveries (fast with tag index) - DEFAULT: true for better linking
         similar_discoveries = []
         if arguments.get("auto_link_related", True):  # Default to true - new graph uses indexes (fast)
-            similar = await graph.find_similar(discovery, limit=5)
+            # Drop system-generated rollup rows from auto-linking. A topic_rollup
+            # is a summary OF discoveries, not a peer discovery; linking a fresh
+            # write to one would pollute related_to edges and let rollups accrete
+            # inbound peer edges, then feed back into other rollups' member sets
+            # (#44 synthesis follow-up). The storage find_similar layer has no
+            # rollup awareness, so filter here. Fetch a wider pool first so the
+            # exclusion does not shrink the suggestion set below the cap.
+            from .synthesis import is_rollup
+            similar = [s for s in await graph.find_similar(discovery, limit=8) if not is_rollup(s)][:5]
             discovery.related_to = [s.id for s in similar]
             similar_discoveries = [s.to_dict(include_details=False) for s in similar]
         

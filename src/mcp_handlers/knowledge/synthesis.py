@@ -31,6 +31,7 @@ migration. Re-running refreshes ``summary``/``details`` via the existing
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from src.knowledge_graph import DiscoveryNode, normalize_tags
@@ -168,6 +169,17 @@ def _make_rollup_node(
     """Assemble the rollup discovery row for a topic."""
     member_ids = [m["id"] for m in members[:MAX_MEMBERS_PER_ROLLUP] if m.get("id")]
     open_count = sum(1 for m in members if (m.get("status") or "open") == "open")
+
+    # Staleness watermark. A rollup's id is deterministic (rollup::<topic>), so
+    # re-runs upsert in place and there is otherwise NO record of how current the
+    # row is. `newest_member_id` is the lexicographically-max member id across
+    # ALL considered members (discovery ids are UTC-ISO timestamps, so max == the
+    # newest discovery rolled up); a reader or a periodic pass can compare it
+    # against the topic's current newest discovery to know whether the rollup is
+    # behind. `synthesized_at` is wall-clock recency for the same purpose.
+    member_id_pool = [m.get("id") for m in members if m.get("id")]
+    newest_member_id = max(member_id_pool) if member_id_pool else None
+    synthesized_at = datetime.now(timezone.utc).isoformat()
     headline = narrative.strip().split("\n", 1)[0][:200]
     summary = f"[rollup] {topic}: {len(members)} discoveries ({open_count} open) — {headline}"
 
@@ -198,6 +210,8 @@ def _make_rollup_node(
                 "open_count": open_count,
                 "summary_source": source,
                 "related_topics": related_topics,
+                "synthesized_at": synthesized_at,
+                "newest_member_id": newest_member_id,
             },
             "source": "kg_synthesis",
         },

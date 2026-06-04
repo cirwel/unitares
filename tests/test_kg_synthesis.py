@@ -94,6 +94,37 @@ def test_make_rollup_node_shape():
     assert node.provenance["source"] == "kg_synthesis"
 
 
+def test_make_rollup_node_carries_staleness_watermark():
+    # Member ids are UTC-ISO timestamps; the watermark must be the newest one
+    # across ALL members (not just the capped/shown slice), so a reader can tell
+    # whether the rollup is behind the topic's current newest discovery.
+    members = [
+        _disc("2026-01-01T00:00:00", "old", ["t"]).to_dict(include_details=False),
+        _disc("2026-06-04T12:00:00", "newest", ["t"]).to_dict(include_details=False),
+        _disc("2026-03-15T00:00:00", "mid", ["t"]).to_dict(include_details=False),
+    ]
+    node = syn._make_rollup_node("t", members, "n", "deterministic", [], writer_id="sys")
+    synth = node.provenance["synthesis"]
+    assert synth["newest_member_id"] == "2026-06-04T12:00:00"
+    # synthesized_at is a parseable UTC-aware ISO timestamp.
+    from datetime import datetime
+    parsed = datetime.fromisoformat(synth["synthesized_at"])
+    assert parsed.tzinfo is not None
+
+
+def test_make_rollup_node_watermark_spans_beyond_member_cap():
+    # The newest member can sit past MAX_MEMBERS_PER_ROLLUP in the input list;
+    # the watermark must still find it even though related_to is capped.
+    members = [
+        _disc(f"2026-01-{i + 1:02d}T00:00:00", f"s{i}", ["t"]).to_dict(include_details=False)
+        for i in range(syn.MAX_MEMBERS_PER_ROLLUP + 3)
+    ]
+    node = syn._make_rollup_node("t", members, "n", "deterministic", [], writer_id="sys")
+    newest = max(m["id"] for m in members)
+    assert node.provenance["synthesis"]["newest_member_id"] == newest
+    assert len(node.related_to) == syn.MAX_MEMBERS_PER_ROLLUP  # edges still capped
+
+
 def test_make_rollup_node_caps_related_to_at_max_members():
     many = [_disc(f"d{i}", f"s{i}", ["t"]).to_dict(include_details=False) for i in range(syn.MAX_MEMBERS_PER_ROLLUP + 5)]
     node = syn._make_rollup_node("t", many, "n", "deterministic", [], writer_id="sys")
