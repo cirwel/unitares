@@ -87,6 +87,47 @@ defmodule AgentOrchestratorTest do
     end
   end
 
+  describe "await/snapshot after exit (retained result, #581 race)" do
+    test "await after a fast agent has already exited returns the retained result" do
+      {:ok, id, pid} = AgentOrchestrator.run(%{cmd: "echo", args: ["fast"]})
+
+      # Drive the race deterministically: wait until the runner is fully gone
+      # before awaiting, so whereis/0 is nil (or the call exits :noproc). Before
+      # the ResultStore this returned {:error, :not_found} and lost the result.
+      assert eventually(fn -> id not in AgentOrchestrator.list() end)
+      refute Process.alive?(pid)
+
+      assert {:ok, result} = AgentOrchestrator.await(id)
+      assert result.exit_status == 0
+      assert result.output == ["fast"]
+      assert result.running == false
+    end
+
+    test "snapshot after exit returns the retained result instead of :not_found" do
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "echo", args: ["snap"]})
+
+      assert eventually(fn -> id not in AgentOrchestrator.list() end)
+
+      assert {:ok, %{exit_status: 0, output: ["snap"], running: false}} =
+               AgentOrchestrator.snapshot(id)
+    end
+
+    test "a non-zero fast exit is still retained for a late await" do
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "sh", args: ["-c", "echo boom 1>&2; exit 3"]})
+
+      assert eventually(fn -> id not in AgentOrchestrator.list() end)
+
+      assert {:ok, result} = AgentOrchestrator.await(id)
+      assert result.exit_status == 3
+      assert "boom" in result.output
+    end
+
+    test "await/snapshot for an agent id that never ran returns :not_found" do
+      assert {:error, :not_found} = AgentOrchestrator.await("ag-never-existed")
+      assert {:error, :not_found} = AgentOrchestrator.snapshot("ag-never-existed")
+    end
+  end
+
   describe "fleet + registry" do
     test "list/count track live agents and stop tears one down" do
       {:ok, id, pid} = AgentOrchestrator.run(%{cmd: "sleep", args: ["30"]})
