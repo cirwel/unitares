@@ -141,6 +141,17 @@ defmodule AgentOrchestratorTest do
       assert eventually(fn -> id not in AgentOrchestrator.list() end)
     end
 
+    test "stop/2 does not crash when the agent died between lookup and the call" do
+      {:ok, id, pid} = AgentOrchestrator.run(%{cmd: "sleep", args: ["30"], lease: false})
+      # Brutal kill: terminate/2 does NOT run and the Registry :DOWN is still in
+      # flight, so stop/2's whereis/0 may still return this now-dead pid and reach
+      # GenServer.stop on a dead process. It must NOT exit/crash the caller —
+      # :ok (stop of an already-gone agent) or :not_found (whereis lost the race),
+      # never an uncaught :noproc exit. (Regression for the on_exit cleanup flake.)
+      Process.exit(pid, :kill)
+      assert AgentOrchestrator.stop(id) in [:ok, {:error, :not_found}]
+    end
+
     test "run_fleet spawns each spec" do
       results =
         AgentOrchestrator.run_fleet([
