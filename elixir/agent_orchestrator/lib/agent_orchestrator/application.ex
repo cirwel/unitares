@@ -12,8 +12,13 @@ defmodule AgentOrchestrator.Application do
 
       AgentOrchestrator.Supervisor            (one_for_one)
       ├── Registry  (AgentOrchestrator.Registry)   agent_id -> runner pid
+      ├── ResultStore  (GenServer + ETS)            retained final results
       └── AgentSupervisor  (DynamicSupervisor)
           └── AgentRunner  (GenServer + Port)       restart: :temporary
+
+  `ResultStore` starts before `AgentSupervisor` so its ETS table exists before
+  any runner can finalize and write its result — closing the await-vs-fast-exit
+  race (#581) where a finished agent's result was lost to `:not_found`.
 
   Lease-binding to the plane is the architectural-coherence payoff: an agent
   acquires a `remote_heartbeat` lease on its `agent:<id>` surface when it spawns
@@ -27,6 +32,7 @@ defmodule AgentOrchestrator.Application do
   def start(_type, _args) do
     children = [
       {Registry, keys: :unique, name: AgentOrchestrator.Registry},
+      AgentOrchestrator.ResultStore,
       AgentOrchestrator.AgentSupervisor
     ]
 

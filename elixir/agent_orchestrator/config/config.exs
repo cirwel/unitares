@@ -11,4 +11,11 @@ config :agent_orchestrator,
   # Default TTL for an ephemeral agent's remote_heartbeat lease. The lease is a
   # pure DB TTL row reaped by the lease plane's reaper, so a crashed orchestrator
   # self-heals within one TTL rather than leaking the surface forever.
-  default_lease_ttl_s: 300
+  default_lease_ttl_s: 300,
+  # AgentOrchestrator.ResultStore retention (closes the await-vs-fast-exit race,
+  # #581). A finished runner retains its final result for this long so a late
+  # await/snapshot survives process death; the sweep evicts expired rows and the
+  # max caps the table under a churn burst within one TTL window.
+  result_retention_ms: 300_000,
+  result_sweep_interval_ms: 60_000,
+  result_store_max: 10_000

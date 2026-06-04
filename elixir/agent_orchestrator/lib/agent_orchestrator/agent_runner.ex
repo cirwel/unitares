@@ -63,6 +63,7 @@ defmodule AgentOrchestrator.AgentRunner do
   require Logger
 
   alias AgentOrchestrator.LeasePlaneClient
+  alias AgentOrchestrator.ResultStore
 
   @default_max_lines 1000
   @line_max_bytes 65_536
@@ -99,22 +100,46 @@ defmodule AgentOrchestrator.AgentRunner do
   @doc "Block until the agent exits (or `timeout` ms). Returns `{:ok, result}` or `{:error, :timeout}`."
   @spec await(String.t(), timeout()) :: {:ok, map()} | {:error, :timeout | :not_found}
   def await(agent_id, timeout \\ 30_000) do
-    call(agent_id, :await, timeout)
+    case call(agent_id, :await, timeout) do
+      # whereis/0 already saw the runner gone — fall back to the retained result.
+      {:error, :not_found} -> retained_or_not_found(agent_id)
+      reply -> reply
+    end
   catch
     :exit, {:timeout, _} ->
       {:error, :timeout}
 
     # The agent can exit between whereis/0 and the call landing in its mailbox
     # (it stops itself on exit). GenServer.call then exits :noproc/:normal —
-    # catch it instead of crashing the caller. The final result is lost on this
-    # narrow race; snapshot/1 during the run or await earlier to avoid it.
+    # catch it instead of crashing the caller. The runner writes its final
+    # result to ResultStore before it dies (see finalize/2), so a fast agent's
+    # result survives this race rather than being lost to :not_found (#581).
     :exit, _ ->
-      {:error, :not_found}
+      retained_or_not_found(agent_id)
   end
 
   @doc "Current captured output and status without blocking."
   @spec snapshot(String.t()) :: {:ok, map()} | {:error, :not_found}
-  def snapshot(agent_id), do: call(agent_id, :snapshot)
+  def snapshot(agent_id) do
+    case call(agent_id, :snapshot) do
+      {:error, :not_found} -> retained_or_not_found(agent_id)
+      reply -> reply
+    end
+  catch
+    # Same dead-mid-call race as await/2: a live whereis/0 followed by the
+    # process exiting before the snapshot lands. Fall back to the retained
+    # terminal result instead of crashing the caller with the GenServer exit.
+    :exit, _ ->
+      retained_or_not_found(agent_id)
+  end
+
+  # On a dead runner, the terminal result may have been retained by finalize/2.
+  defp retained_or_not_found(agent_id) do
+    case ResultStore.fetch(agent_id) do
+      {:ok, result} -> {:ok, result}
+      :error -> {:error, :not_found}
+    end
+  end
 
   @doc "Stop the agent: close the Port (terminating the child) and release its lease."
   @spec stop(String.t(), term()) :: :ok | {:error, :not_found}
@@ -237,20 +262,22 @@ defmodule AgentOrchestrator.AgentRunner do
   def handle_info(_msg, state), do: {:noreply, state}
 
   # Terminal finalize: flush any partial line, release the lease, record the
-  # exit status, reply to waiters, and stop. `status` is an integer for a clean
-  # exit or `{:port_closed, reason}` for an abnormal close.
+  # exit status, reply to waiters, retain the result, and stop. `status` is an
+  # integer for a clean exit or `{:port_closed, reason}` for an abnormal close.
   #
-  # NOTE: a late await/snapshot (one issued after the process has already exited)
-  # returns {:error, :not_found} — the result is not retained past process death.
-  # Callers that need a fast agent's final result should await before it exits or
-  # snapshot during the run. (Retaining results post-exit — e.g. an ETS result
-  # store — is a deferred follow-up; it is not required for presence.)
+  # The ResultStore write happens-before the {:stop, ...} return (the GenServer
+  # only terminates after this callback returns), so a late await/snapshot that
+  # observes the runner as dead is guaranteed to find the retained result rather
+  # than racing to {:error, :not_found} (#581). Retention is TTL-bounded — see
+  # ResultStore — so a fan-out caller that collects results after exit still
+  # works, without retaining forever.
   defp finalize(state, status) do
     state = if state.partial != "", do: push_line(%{state | partial: ""}, state.partial), else: state
     Logger.info("agent #{state.agent_id} exited status=#{inspect(status)}")
     release_status = maybe_release_lease(state, @release_reason)
     state = %{state | exit_status: status, port: nil, release_status: release_status}
     state = reply_waiters(state)
+    ResultStore.put(state.agent_id, result(state))
 
     if status == 0 do
       {:stop, :normal, state}

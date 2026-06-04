@@ -111,8 +111,17 @@ defer the architecture call." Fixed:
    `{:EXIT}` cleared it first, the status was dropped, waiters hung forever, and
    the lease was never released. Both messages now route through a shared
    `finalize/2` that is order-independent.
-4. **`await/2` caller crash.** A race between `whereis/0` and the call landing
-   could exit the caller `:noproc`; now caught → `{:error, :not_found}`.
+4. **`await/2` caller crash, and the result lost behind it.** A race between
+   `whereis/0` and the call landing could exit the caller `:noproc`; that exit is
+   caught. But a fast agent (`echo`, a sub-second worker) could be *gone* before
+   the await even looked, and the documented "await earlier / snapshot during the
+   run" workaround does not help a fan-out caller collecting results after exit —
+   the final result was simply lost to `{:error, :not_found}`. Now `finalize/2`
+   writes the terminal result to `AgentOrchestrator.ResultStore` (a TTL-bounded
+   ETS table owned by the app, not by any runner) *before* the runner stops, so a
+   late `await`/`snapshot` that observes the runner as dead falls back to the
+   retained result. The write happens-before process death, so the race is closed,
+   not merely narrowed.
 5. **Unbounded partial-line buffer.** A child emitting a line longer than
    `@line_max_bytes` with no newline grew `partial` without limit; now flushed at
    the cap.
