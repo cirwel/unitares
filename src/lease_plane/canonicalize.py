@@ -30,10 +30,11 @@ import os.path
 import tempfile
 
 # v0.8 canonical scheme list (RFC §7.2.1). Single source of truth in code.
-CANONICAL_SCHEMES: tuple[str, ...] = ("file", "dialectic", "resident", "capture", "td")
+# `agent` (ephemeral-agent presence surfaces) added by migration 042.
+CANONICAL_SCHEMES: tuple[str, ...] = ("file", "dialectic", "resident", "capture", "td", "agent")
 
-# Compiled scheme-grammar regex matches what migration 026 enforces at the DB layer.
-_SCHEME_GRAMMAR = "^(file://|dialectic:/|resident:/|capture:/|td:/)"
+# Compiled scheme-grammar regex matches what migrations 026 + 042 enforce at the DB layer.
+_SCHEME_GRAMMAR = "^(file://|dialectic:/|resident:/|capture:/|td:/|agent:/)"
 
 _PATH_MAX = 4096
 
@@ -104,6 +105,8 @@ def canonicalize(surface_id: str) -> str:
         # Reserved scheme; pass-through with no normalization beyond what the
         # caller supplied. Field_validator ensures the prefix matched the grammar.
         return f"td:/{surface_id[len('td:/') :]}"
+    if surface_id.startswith("agent:/"):
+        return _canonicalize_agent(surface_id[len("agent:/") :])
     raise CanonicalizeError(
         "invalid_scheme",
         f"surface_id does not match canonical scheme list ({CANONICAL_SCHEMES}): {surface_id!r}",
@@ -160,6 +163,20 @@ def _canonicalize_resident(path: str) -> str:
             f"resident:/ surface_id contains reserved character (?, #, &, whitespace): {path!r}",
         )
     return f"resident:/{path.rstrip('/')}"
+
+
+def _canonicalize_agent(path: str) -> str:
+    """agent:/ — opaque ephemeral-agent id; case-sensitive; strip trailing /.
+
+    A PRESENCE surface (unique per agent), routed to remote_heartbeat by the
+    plane — not a mutex. Same reserved-char rules as resident:/. (Migration 042.)
+    """
+    if any(ch in path for ch in (" ", "\t", "\n", "?", "#", "&")):
+        raise CanonicalizeError(
+            "invalid_scheme",
+            f"agent:/ surface_id contains reserved character (?, #, &, whitespace): {path!r}",
+        )
+    return f"agent:/{path.rstrip('/')}"
 
 
 def _canonicalize_capture(path: str) -> str:

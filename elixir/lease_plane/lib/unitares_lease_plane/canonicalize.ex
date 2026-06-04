@@ -72,7 +72,7 @@ defmodule UnitaresLeasePlane.Canonicalize do
   require Logger
 
   # v0.8 canonical scheme list (RFC §7.2.1). Single source of truth in Elixir.
-  @canonical_schemes ~w(file dialectic resident capture td)
+  @canonical_schemes ~w(file dialectic resident capture td agent)
 
   @path_max 4096
 
@@ -137,6 +137,7 @@ defmodule UnitaresLeasePlane.Canonicalize do
   defp dispatch("resident:/" <> rest), do: canonicalize_resident(rest)
   defp dispatch("capture:/" <> rest), do: canonicalize_capture(rest)
   defp dispatch("td:/" <> rest), do: canonicalize_td(rest)
+  defp dispatch("agent:/" <> rest), do: canonicalize_agent(rest)
   defp dispatch(_), do: {:error, :invalid_scheme}
 
   @doc """
@@ -370,5 +371,17 @@ defmodule UnitaresLeasePlane.Canonicalize do
   # td:/ — reserved scheme; pass-through with no normalization (matches Python).
   defp canonicalize_td(path) do
     {:ok, "td:/" <> path}
+  end
+
+  # agent:/ — opaque ephemeral-agent id (url-safe base64-ish); case-sensitive,
+  # strip trailing /. Same reserved-char set as resident:/. This is a PRESENCE
+  # surface (unique per agent, routed to remote_heartbeat in the router), not a
+  # mutex — see migration 042 and http_router.acquire_for_surface.
+  defp canonicalize_agent(path) do
+    if String.match?(path, ~r/[ \t\n#&]/) do
+      {:error, :invalid_scheme}
+    else
+      {:ok, "agent:/" <> String.trim_trailing(path, "/")}
+    end
   end
 end

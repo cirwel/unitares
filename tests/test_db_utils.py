@@ -128,6 +128,9 @@ async def ensure_test_database_schema() -> None:
         # Migration 034: substrate_state columns for §7.13 resident heartbeat surface
         # (RFC v0.11). Adds 2 NULLABLE columns + 4 CHECK constraints + freshness index.
         await _execute_sql_file(conn, "db/postgres/migrations/034_lease_plane_substrate_state.sql")
+        # Migration 042: agent:/ ephemeral-agent presence scheme (extends the
+        # 026 grammar CHECK). Must run after 026; placed with the lease_plane group.
+        await _execute_sql_file(conn, "db/postgres/migrations/042_lease_plane_agent_scheme.sql")
         # Migration 035: Wave 0 coordination_events instrumentation table.
         await _execute_sql_file(conn, "db/postgres/migrations/035_coordination_events.sql")
         # Migration 036: R2 lineage lifecycle columns + sweeper-friendly partial index.

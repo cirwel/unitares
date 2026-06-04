@@ -86,6 +86,24 @@ def test_capture_canonicalizes_member_ordering():
     )
 
 
+def test_agent_scheme_canonicalizes_as_presence_surface():
+    """agent:/ — ephemeral-agent presence surface (migration 042). Opaque,
+    case-sensitive, strip trailing /, same reserved chars as resident:/."""
+    from src.lease_plane import canonicalize as canon
+    from src.lease_plane.canonicalize import CANONICAL_SCHEMES, CanonicalizeError
+
+    assert "agent" in CANONICAL_SCHEMES
+
+    assert canon.canonicalize("agent:/ag-7SDzA2Tm") == "agent:/ag-7SDzA2Tm"
+    assert canon.canonicalize("agent:/ag-abc/") == "agent:/ag-abc"  # trailing / stripped
+    # url-safe base64 ids (the orchestrator's generate_agent_id output) are valid
+    assert canon.canonicalize("agent:/FQSzK8iT_-x") == "agent:/FQSzK8iT_-x"
+
+    for bad in ("agent:/with space", "agent:/h#frag", "agent:/a&b", "agent:/q?x=1"):
+        with pytest.raises(CanonicalizeError):
+            canon.canonicalize(bad)
+
+
 def test_canonicalize_error_semantics():
     """Helper raises CanonicalizeError with named reasons for bounded failure modes."""
     from src.lease_plane.canonicalize import CanonicalizeError, canonicalize
