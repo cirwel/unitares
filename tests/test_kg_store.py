@@ -269,6 +269,45 @@ class TestStoreKnowledgeGraph:
         assert len(data["related_discoveries"]) == 1
 
     @pytest.mark.asyncio
+    async def test_store_auto_link_excludes_rollup_rows(self, patch_common, registered_agent):
+        """Auto-linking drops system-generated topic_rollup rows (#44 follow-up).
+
+        A rollup is a summary OF discoveries, not a peer; linking a fresh write to
+        one would pollute related_to edges and let rollups accrete inbound peer
+        edges. find_similar has no rollup awareness, so the store handler filters.
+        """
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        real = make_discovery(id="2026-06-04T00:00:00", summary="Real peer")
+        rollup = make_discovery(id="rollup::auth", type="topic_rollup", summary="[rollup] auth")
+        mock_graph.find_similar = AsyncMock(return_value=[real, rollup])
+
+        captured = {}
+        orig_add = mock_graph.add_discovery
+
+        async def _capture(node):
+            captured["related_to"] = list(node.related_to or [])
+            return await orig_add(node) if orig_add else None
+
+        mock_graph.add_discovery = AsyncMock(side_effect=_capture)
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "summary": "Something related",
+            "auto_link_related": True,
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        # The rollup is excluded from both the stored edges and the surfaced set.
+        assert "rollup::auth" not in captured.get("related_to", [])
+        assert "2026-06-04T00:00:00" in captured.get("related_to", [])
+        related_ids = {d.get("id") for d in data.get("related_discoveries", [])}
+        assert "rollup::auth" not in related_ids
+        assert "2026-06-04T00:00:00" in related_ids
+
+    @pytest.mark.asyncio
     async def test_store_graph_exception(self, patch_common, registered_agent):
         """Exception from graph backend returns error response."""
         mock_mcp_server, mock_graph = patch_common
