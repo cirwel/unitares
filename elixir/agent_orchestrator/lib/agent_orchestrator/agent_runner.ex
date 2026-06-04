@@ -31,15 +31,29 @@ defmodule AgentOrchestrator.AgentRunner do
         env: [{String.t(), String.t()}],   # extra env for the child (default [])
         cd: String.t() | nil,              # working dir
         max_output_lines: pos_integer(),   # buffer cap (default 1000)
-        lease: nil | lease_cfg,            # nil = no lease; map = lease-bound
+        lease: nil | false | lease_cfg,    # default (absent/nil) = best-effort agent:/ presence;
+                                           # false = no presence; map = override
         lease_client: module()             # injectable, default LeasePlaneClient
       }
 
       lease_cfg :: %{
-        required: boolean(),               # default true — refuse to start if acquire fails
+        required: boolean(),               # default FALSE — presence is best-effort, not gating
+        surface_id: String.t(),            # default "agent:/<id>" (presence surface)
         holder_agent_uuid: String.t(),     # the agent's governance UUID (generated if absent)
         ttl_s: pos_integer()               # default from config :default_lease_ttl_s
       }
+
+  ## Presence
+
+  By default an agent registers an `agent:/<id>` PRESENCE row on the lease plane
+  (migration 042 routes it to the self-healing remote_heartbeat path). It is
+  best-effort: a plane failure does NOT block the spawn. The result's `:presence`
+  field is the distinguishable signal:
+
+    * `:registered`   — a plane presence row exists for this agent.
+    * `:unregistered` — best-effort acquire failed; the agent is running but has
+      NO plane row (so plane-absence ≠ not-running).
+    * `:disabled`     — presence was turned off (`lease: false`).
   """
 
   use GenServer
@@ -60,6 +74,7 @@ defmodule AgentOrchestrator.AgentRunner do
     :lease_id,
     :lease_client,
     :lease_cfg,
+    :presence,
     :exit_status,
     :release_status,
     output: [],
@@ -147,8 +162,8 @@ defmodule AgentOrchestrator.AgentRunner do
       {:error, :lease_denied, reason} ->
         {:stop, {:lease_denied, reason}}
 
-      {:ok, lease_id} ->
-        state = %{state | lease_id: lease_id}
+      {:ok, lease_id, presence} ->
+        state = %{state | lease_id: lease_id, presence: presence}
 
         case open_port(spec) do
           {:ok, port, os_pid} ->
@@ -224,6 +239,12 @@ defmodule AgentOrchestrator.AgentRunner do
   # Terminal finalize: flush any partial line, release the lease, record the
   # exit status, reply to waiters, and stop. `status` is an integer for a clean
   # exit or `{:port_closed, reason}` for an abnormal close.
+  #
+  # NOTE: a late await/snapshot (one issued after the process has already exited)
+  # returns {:error, :not_found} — the result is not retained past process death.
+  # Callers that need a fast agent's final result should await before it exits or
+  # snapshot during the run. (Retaining results post-exit — e.g. an ETS result
+  # store — is a deferred follow-up; it is not required for presence.)
   defp finalize(state, status) do
     state = if state.partial != "", do: push_line(%{state | partial: ""}, state.partial), else: state
     Logger.info("agent #{state.agent_id} exited status=#{inspect(status)}")
@@ -273,36 +294,55 @@ defmodule AgentOrchestrator.AgentRunner do
     end
   end
 
-  defp normalize_lease_cfg(nil, _agent_id), do: nil
+  # Presence is DEFAULT-ON and best-effort: with no `:lease` key, an agent
+  # registers an `agent:/<id>` presence row on the plane (migration 042 routes it
+  # to the self-healing remote_heartbeat path). `lease: false` opts out entirely.
+  # A `:lease` map overrides the defaults (e.g. `required: true` to make it a
+  # gating lease, or a different `surface_id`).
+  defp normalize_lease_cfg(false, _agent_id), do: nil
+
+  defp normalize_lease_cfg(nil, agent_id), do: normalize_lease_cfg(%{}, agent_id)
 
   defp normalize_lease_cfg(%{} = cfg, agent_id) do
-    # Default surface is `agent:<id>`. NOTE: the lease plane's canonical scheme
-    # list (`file dialectic resident capture td`) does not yet include `agent`,
-    # so an `agent:` surface is rejected with invalid_scheme today. Adding the
-    # scheme touches Canonicalize in BOTH Elixir and Python (single-writer
-    # cross-repo coordination surface) — an operator/council follow-up. Callers
-    # can override `:surface_id` with a currently-valid scheme in the meantime.
     %{
-      required: Map.get(cfg, :required, true),
+      # Best-effort by default: presence should NOT gate spawning. A caller that
+      # genuinely needs a gating lease passes `required: true`.
+      required: Map.get(cfg, :required, false),
       holder_agent_uuid: Map.get(cfg, :holder_agent_uuid) || uuid4(),
-      surface_id: Map.get(cfg, :surface_id) || "agent:" <> agent_id,
+      surface_id: Map.get(cfg, :surface_id) || "agent:/" <> agent_id,
       ttl_s: Map.get(cfg, :ttl_s, Application.get_env(:agent_orchestrator, :default_lease_ttl_s, 300))
     }
   end
 
-  defp maybe_acquire_lease(%{lease_cfg: nil}), do: {:ok, nil}
+  # Returns {:ok, lease_id, presence} | {:error, :lease_denied, reason}.
+  # presence is :disabled | :registered | :unregistered — a distinguishable
+  # signal so a consumer of plane presence knows that an :unregistered agent is
+  # live-but-not-on-the-plane (absence from the plane ≠ not running).
+  defp maybe_acquire_lease(%{lease_cfg: nil}), do: {:ok, nil, :disabled}
 
-  defp maybe_acquire_lease(%{lease_cfg: cfg, lease_client: client}) do
+  defp maybe_acquire_lease(%{agent_id: agent_id, lease_cfg: cfg, lease_client: client}) do
     case client.acquire(cfg.surface_id, cfg.holder_agent_uuid, "remote_heartbeat", cfg.ttl_s) do
       {:ok, lease_id} ->
-        {:ok, lease_id}
+        {:ok, lease_id, :registered}
 
       {:error, reason} ->
         if cfg.required do
           {:error, :lease_denied, reason}
         else
-          Logger.warning("agent lease acquire failed (best-effort, proceeding): #{inspect(reason)}")
-          {:ok, nil}
+          # Best-effort: proceed, but emit a DISTINGUISHABLE signal. This agent is
+          # running yet has no plane presence row — anything querying the plane
+          # for "live agents" must not read this agent's absence as "not running."
+          # :no_bearer means presence is simply not configured (dev/test) → quiet;
+          # any other reason is a configured-but-unreachable plane → loud.
+          level = if reason == :no_bearer, do: :debug, else: :warning
+
+          Logger.log(
+            level,
+            "agent #{agent_id} presence UNREGISTERED (#{inspect(reason)}) — running " <>
+              "WITHOUT a presence row; plane-absence does NOT imply not-running"
+          )
+
+          {:ok, nil, :unregistered}
         end
     end
   end
@@ -389,6 +429,7 @@ defmodule AgentOrchestrator.AgentRunner do
       agent_id: state.agent_id,
       os_pid: state.os_pid,
       lease_id: state.lease_id,
+      presence: state.presence,
       exit_status: state.exit_status,
       running: state.exit_status == nil,
       lease_released: state.release_status == :ok,

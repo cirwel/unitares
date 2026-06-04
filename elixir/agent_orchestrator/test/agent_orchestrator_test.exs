@@ -6,6 +6,11 @@ defmodule AgentOrchestratorTest do
   setup do
     Application.put_env(:agent_orchestrator, :test_pid, self())
     Application.put_env(:agent_orchestrator, :stub_acquire_result, {:ok, "stub-lease"})
+    # Presence is default-on, so a spec WITHOUT an injected lease_client uses the
+    # real LeasePlaneClient. Null the bearer so that path is a deterministic
+    # no-network :no_bearer fast-fail (→ presence :unregistered) regardless of
+    # the shell env — tests must never hit the live plane.
+    Application.put_env(:agent_orchestrator, :lease_plane_bearer_token, nil)
 
     on_exit(fn ->
       Application.delete_env(:agent_orchestrator, :test_pid)
@@ -111,22 +116,25 @@ defmodule AgentOrchestratorTest do
     test "acquires on spawn and releases on exit" do
       {:ok, id, _} =
         AgentOrchestrator.run(%{
-          cmd: "echo",
-          args: ["done"],
+          # Brief sleep (not echo) so await/0 registers as a waiter before the
+          # process exits — avoids the await-after-fast-exit race under load.
+          cmd: "sh",
+          args: ["-c", "sleep 0.15"],
           lease: %{holder_agent_uuid: "11111111-1111-4111-8111-111111111111"},
           lease_client: StubLeaseClient
         })
 
       assert_receive {:lease_event,
                       {:acquire, surface_id, "11111111-1111-4111-8111-111111111111",
-                       "remote_heartbeat", 300}}
+                       "remote_heartbeat", 300}},
+                     500
 
-      assert surface_id == "agent:" <> id
+      assert surface_id == "agent:/" <> id
 
-      assert {:ok, %{lease_id: "stub-lease", exit_status: 0, lease_released: true}} =
+      assert {:ok, %{lease_id: "stub-lease", exit_status: 0, lease_released: true, presence: :registered}} =
                AgentOrchestrator.await(id)
 
-      assert_receive {:lease_event, {:release, "stub-lease", "normal"}}
+      assert_receive {:lease_event, {:release, "stub-lease", "normal"}}, 500
     end
 
     test "releases the lease when the port fails to open after acquire (no orphan)" do
@@ -141,25 +149,62 @@ defmodule AgentOrchestratorTest do
       assert_receive {:lease_event, {:release, "stub-lease", "normal"}}
     end
 
-    test "refuses to start when a required lease is denied" do
+    test "refuses to start only when a lease is explicitly required and denied" do
       Application.put_env(:agent_orchestrator, :stub_acquire_result, {:error, {:held_by_other, "other"}})
 
       assert {:error, {:lease_denied, {:held_by_other, "other"}}} =
-               AgentOrchestrator.run(%{cmd: "echo", args: ["x"], lease: %{}, lease_client: StubLeaseClient})
+               AgentOrchestrator.run(%{
+                 cmd: "echo",
+                 args: ["x"],
+                 lease: %{required: true},
+                 lease_client: StubLeaseClient
+               })
     end
 
-    test "best-effort lease proceeds even when acquire fails" do
-      Application.put_env(:agent_orchestrator, :stub_acquire_result, {:error, :no_bearer})
+    test "best-effort presence proceeds and reports :unregistered when acquire fails" do
+      Application.put_env(:agent_orchestrator, :stub_acquire_result, {:error, :plane_down})
 
       {:ok, id, _} =
+        AgentOrchestrator.run(%{cmd: "sleep", args: ["5"], lease_client: StubLeaseClient})
+
+      # snapshot while alive — the agent proceeded despite the acquire failure.
+      assert {:ok, %{lease_id: nil, presence: :unregistered, running: true}} =
+               AgentOrchestrator.snapshot(id)
+
+      assert :ok = AgentOrchestrator.stop(id)
+    end
+  end
+
+  describe "presence (default-on, best-effort)" do
+    # Long-lived agents + snapshot/0 (read while alive) — avoids the await race
+    # where a fast command exits and unregisters before the assertion runs.
+    test "registers agent:/<id> presence by default with no :lease key" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{cmd: "sleep", args: ["5"], lease_client: StubLeaseClient})
+
+      # required:false (best-effort), surface is the agent:/ presence surface.
+      assert_receive {:lease_event, {:acquire, surface_id, _uuid, "remote_heartbeat", 300}}, 500
+      assert surface_id == "agent:/" <> id
+      assert {:ok, %{presence: :registered, lease_id: "stub-lease", running: true}} =
+               AgentOrchestrator.snapshot(id)
+
+      assert :ok = AgentOrchestrator.stop(id)
+    end
+
+    test "lease: false disables presence (no acquire, :disabled)" do
+      {:ok, id, _} =
         AgentOrchestrator.run(%{
-          cmd: "echo",
-          args: ["x"],
-          lease: %{required: false},
+          cmd: "sleep",
+          args: ["5"],
+          lease: false,
           lease_client: StubLeaseClient
         })
 
-      assert {:ok, %{lease_id: nil, exit_status: 0}} = AgentOrchestrator.await(id)
+      refute_receive {:lease_event, {:acquire, _, _, _, _}}, 100
+      assert {:ok, %{presence: :disabled, lease_id: nil, running: true}} =
+               AgentOrchestrator.snapshot(id)
+
+      assert :ok = AgentOrchestrator.stop(id)
     end
   end
 end
