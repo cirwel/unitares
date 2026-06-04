@@ -145,8 +145,20 @@ defmodule AgentOrchestrator.AgentRunner do
   @spec stop(String.t(), term()) :: :ok | {:error, :not_found}
   def stop(agent_id, reason \\ :operator_stop) do
     case whereis(agent_id) do
-      nil -> {:error, :not_found}
-      pid -> GenServer.stop(pid, {:shutdown, reason})
+      nil ->
+        {:error, :not_found}
+
+      pid ->
+        # The agent can die between whereis/0 and this call (it is
+        # restart: :temporary and stops itself on exit; the Registry unregisters
+        # only on the async :DOWN). GenServer.stop then exits :noproc and would
+        # crash the caller — e.g. on_exit cleanup sweeping a just-exited agent.
+        # Stopping something that's already gone IS success, so treat it as :ok.
+        try do
+          GenServer.stop(pid, {:shutdown, reason})
+        catch
+          :exit, _ -> :ok
+        end
     end
   end
 
