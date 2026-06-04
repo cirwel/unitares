@@ -170,6 +170,11 @@ def _canonicalize_agent(path: str) -> str:
 
     A PRESENCE surface (unique per agent), routed to remote_heartbeat by the
     plane — not a mutex. Same reserved-char rules as resident:/. (Migration 042.)
+
+    Error-atom parity note (matches resident:/): a `?` in the path is rejected
+    here as ``invalid_scheme``, but the Elixir side catches `?` at the top level
+    and returns ``reserved_query_string``. The OK path is byte-identical across
+    languages; only the error label differs on `?`-bearing input.
     """
     if any(ch in path for ch in (" ", "\t", "\n", "?", "#", "&")):
         raise CanonicalizeError(
