@@ -116,6 +116,22 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert is_binary(lease["expires_at"])
     end
 
+    test "agent:/ surface routes to the remote_heartbeat self-healing path (migration 042)", _ctx do
+      agent_surface = "agent:/ag-" <> binary_part(random_uuid(), 0, 8)
+      on_exit(fn -> cleanup_surface(agent_surface) end)
+
+      # Body asks for local_beam (the acquire_body default); the plane routes by
+      # SCHEME, so an agent:/ surface is coerced to the remote_heartbeat path —
+      # a pure TTL row that self-heals, not a renewing local_beam holder.
+      resp = post_json("/v1/lease/acquire", acquire_body(agent_surface))
+
+      assert resp.status == 200
+      lease = parsed(resp)["lease"]
+      assert lease["surface_id"] == agent_surface
+      assert lease["holder_kind"] == "remote_heartbeat"
+      assert lease["heartbeat_required"] == true
+    end
+
     test "idempotent retry from same holder", ctx do
       body = acquire_body(ctx.surface)
 

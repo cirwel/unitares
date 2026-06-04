@@ -25,7 +25,7 @@ defmodule UnitaresLeasePlane.CanonicalizeTest do
     end
 
     test "canonical_schemes/0 returns the v0.8 list" do
-      assert Canonicalize.canonical_schemes() == ~w(file dialectic resident capture td)
+      assert Canonicalize.canonical_schemes() == ~w(file dialectic resident capture td agent)
     end
   end
 
@@ -194,6 +194,34 @@ defmodule UnitaresLeasePlane.CanonicalizeTest do
   end
 
   # ---------- file:// (full normalization, PR 7.5) ----------
+
+  describe "agent:/ (ephemeral-agent presence, migration 042)" do
+    test "preserves case and is a valid scheme" do
+      assert {:ok, "agent:/ag-7SDzA2Tm"} = Canonicalize.canonicalize("agent:/ag-7SDzA2Tm")
+    end
+
+    test "strips trailing slash" do
+      assert {:ok, "agent:/ag-abc"} = Canonicalize.canonicalize("agent:/ag-abc/")
+    end
+
+    test "accepts url-safe base64 ids (- and _)" do
+      assert {:ok, "agent:/FQSzK8iT_-x"} = Canonicalize.canonicalize("agent:/FQSzK8iT_-x")
+    end
+
+    test "rejects whitespace, # and & (parity with resident:/)" do
+      assert {:error, :invalid_scheme} = Canonicalize.canonicalize("agent:/with space")
+      assert {:error, :invalid_scheme} = Canonicalize.canonicalize("agent:/h#frag")
+      assert {:error, :invalid_scheme} = Canonicalize.canonicalize("agent:/a&b")
+    end
+
+    test "rejects ? at top level (parity)" do
+      assert {:error, :reserved_query_string} = Canonicalize.canonicalize("agent:/q?x=1")
+    end
+
+    test "is included in the canonical scheme list" do
+      assert "agent" in Canonicalize.canonical_schemes()
+    end
+  end
 
   describe "file:// (PR 7.5 full normalization)" do
     # Most file:// tests touch real filesystem state. async: false at the

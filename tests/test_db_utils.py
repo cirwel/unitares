@@ -135,6 +135,10 @@ async def ensure_test_database_schema() -> None:
         # lineage_last_eval_at, chain_obs_count to core.identities. Required for
         # the R2 provisional → confirmed/demoted/archived FSM (PR 1).
         await _execute_sql_file(conn, "db/postgres/migrations/036_r2_lineage_lifecycle.sql")
+        # Migration 042: agent:/ ephemeral-agent presence scheme (extends the 026
+        # grammar CHECK). Applied last here so the bootstrap order matches the
+        # production numeric apply-order (042 > 036); it only depends on 026.
+        await _execute_sql_file(conn, "db/postgres/migrations/042_lease_plane_agent_scheme.sql")
 
         # Ensure partitioned audit tables can accept inserts for current month.
         await _execute_sql_file(conn, "db/postgres/partitions.sql")
