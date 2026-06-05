@@ -114,6 +114,31 @@ async def _trigger_dialectic_for_stuck_agent(
         "note": note,
     }
 
+# Cadence-silence (soft) detection tunables. An agent that was checking in at a
+# regular ACTIVE cadence and then went silent for far longer than that cadence is
+# possibly hung/abandoned mid-work. Gated on prior-active-cadence so it does NOT
+# fire on orphans or naturally-slow/idle agents — which is exactly why the old
+# blunt "no updates > 30 min" rule was removed. Soft signal: surfaced (audit
+# trail), never auto-recovered. Origin: dogfood 2026-06-04 (agent finished a
+# task, was told "proceed on your own accord", wandered off-task + hung ~3h, and
+# nothing flagged it).
+CADENCE_MIN_UPDATES = 5                  # had a real session (>= this many check-ins)
+CADENCE_ACTIVE_MAX_GAP_MINUTES = 30.0   # avg gap <= this => an active cadence, not a slow cron
+CADENCE_SILENCE_FLOOR_MINUTES = 30.0    # never flag before this much silence
+CADENCE_SILENCE_MULTIPLIER = 6.0        # silent for >= this many times its own cadence
+# Upper bound: only flag agents that went quiet RECENTLY. Beyond this, an idle
+# agent is abandoned / archive-pending, not a fresh hang worth a live signal —
+# this is what keeps the audit trail from filling with finished-but-unarchived
+# ephemeral agents (which cadence cannot distinguish from a genuine hang).
+CADENCE_SILENCE_STALE_CAP_MINUTES = 1440.0   # 24h
+# NOTE on the cadence proxy: avg_gap is computed over the agent's WHOLE life
+# (created_at -> last_update), which is a coarse proxy for "recent rhythm." A
+# recent-window cadence (last N gaps) would be more precise but needs the
+# per-check-in timestamp series, which this path doesn't have. Coarse-but-safe:
+# it errs toward flagging, and the signal is soft. Also note the MULTIPLIER is
+# floor-dominated for fast agents (avg_gap < 5min => 6*gap < 30 => floor wins).
+
+
 def _detect_stuck_agents(
     max_age_minutes: float = 30.0,  # Unused, kept for API compatibility
     critical_margin_timeout_minutes: float = 5.0,
@@ -132,9 +157,16 @@ def _detect_stuck_agents(
     2. Tight margin + no updates > 15 min → potentially stuck (struggling)
     3. Cognitive loop pattern → stuck (repeating unproductive behavior)
     4. Time box exceeded → stuck (taking too long on a task)
+    5. Cadence-silence (SOFT) → reason "cadence_silence". An agent that HAD an
+       active check-in cadence and then went silent for >> that cadence. The one
+       inactivity-based signal — deliberately gated on prior-active-cadence
+       (>= CADENCE_MIN_UPDATES at avg gap <= CADENCE_ACTIVE_MAX_GAP_MINUTES) so it
+       does NOT regress to flagging idle agents. soft=True → surfaced via the
+       audit trail, never auto-recovered.
 
     NOT stuck:
-    - Simply being idle/inactive (that's normal, not stuck)
+    - Idle/inactive with NO prior active cadence (orphans, slow cron agents) —
+      raw inactivity alone is still not stuck.
     - Low update count (that's orphan/test agent, not stuck)
 
     Args:
@@ -186,6 +218,55 @@ def _detect_stuck_agents(
         except (ValueError, TypeError, AttributeError) as e:
             logger.debug(f"Could not parse last_update for {agent_id}: {e}")
             continue
+
+        # Detection rule 5 (SOFT): cadence-silence. An agent that HAD an active
+        # check-in cadence and then went silent for >> that cadence. Independent
+        # of margin/monitor (a silent agent's last margin reads healthy, which is
+        # exactly the blind spot). Gated on prior-active-cadence so orphans and
+        # slow/idle agents don't trip it. Surfaced via the audit trail; soft=True
+        # routes it past auto-recovery (the agent is gone, not in a recoverable
+        # in-process state, and it may simply have finished and idled).
+        try:
+            created_dt = last_update_dt
+            cstr = meta.created_at
+            if isinstance(cstr, str):
+                created_dt = datetime.fromisoformat(
+                    cstr.replace('Z', '+00:00') if 'Z' in cstr else cstr
+                )
+                if created_dt.tzinfo is None:
+                    created_dt = created_dt.replace(tzinfo=timezone.utc)
+            elif cstr is not None:
+                created_dt = cstr
+
+            span_minutes = (last_update_dt - created_dt).total_seconds() / 60
+            if total_updates >= CADENCE_MIN_UPDATES and span_minutes > 0:
+                avg_gap_minutes = span_minutes / (total_updates - 1)
+                if 0 < avg_gap_minutes <= CADENCE_ACTIVE_MAX_GAP_MINUTES:
+                    silence_threshold = max(
+                        CADENCE_SILENCE_FLOOR_MINUTES,
+                        CADENCE_SILENCE_MULTIPLIER * avg_gap_minutes,
+                    )
+                    # Window: recently went quiet, but not so long ago it's just
+                    # abandoned/archive-pending (which would be noise).
+                    if silence_threshold < age_minutes <= CADENCE_SILENCE_STALE_CAP_MINUTES:
+                        stuck_agents.append({
+                            "agent_id": agent_id,
+                            "reason": "cadence_silence",
+                            "age_minutes": round(age_minutes, 1),
+                            "soft": True,
+                            "details": (
+                                f"Active cadence ~{avg_gap_minutes:.1f} min over {total_updates} "
+                                f"updates, then silent {age_minutes:.0f} min "
+                                f"(> {silence_threshold:.0f} min threshold). Possibly hung/abandoned "
+                                f"mid-work — verify. Soft signal; not auto-recovered."
+                            ),
+                        })
+                        # A confirmed-silent agent: surface the soft signal and move
+                        # on — don't also margin-evaluate its STALE state below (which
+                        # would double-list it and is meaningless for a gone agent).
+                        continue
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.debug(f"cadence-silence check failed for {agent_id}: {e}")
 
         # Get current metrics to compute margin
         try:
@@ -499,6 +580,12 @@ async def handle_detect_stuck_agents(arguments: Dict[str, Any]) -> Sequence:
         recovered = []
         if auto_recover and stuck_agents:
             for stuck in stuck_agents:
+                # Soft signals (e.g. cadence_silence) are surfaced via the audit
+                # trail only — never auto-recovered. The agent is silent/gone, not
+                # in a recoverable in-process state, and it may simply have
+                # finished and idled; recovering it would be a phantom action.
+                if stuck.get("soft"):
+                    continue
                 result = await _try_recover_agent(stuck, note_cooldown_minutes)
                 if result:
                     recovered.extend(result if isinstance(result, list) else [result])
@@ -528,7 +615,7 @@ async def handle_detect_stuck_agents(arguments: Dict[str, Any]) -> Sequence:
                 "total_recovered": len(recovered) if auto_recover else 0,
                 "by_reason": {
                     reason: sum(1 for s in stuck_agents if s["reason"] == reason)
-                    for reason in ["critical_margin_timeout", "tight_margin_timeout", "cognitive_loop", "time_box_exceeded"]
+                    for reason in ["critical_margin_timeout", "tight_margin_timeout", "cognitive_loop", "time_box_exceeded", "cadence_silence"]
                 }
             }
         })
