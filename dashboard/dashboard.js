@@ -1085,7 +1085,12 @@ async function loadStuckAgents() {
         if (!countEl || !detailEl || !cardEl) return;
 
         if (result && result.success) {
-            const stuck = result.stuck_agents || [];
+            // Soft signals (e.g. cadence_silence) are surfaced via the audit
+            // trail, NOT as alarming "Stuck" badges/counts — they deliberately
+            // include benign finished-and-idle agents the rule can't distinguish
+            // from a genuine hang, so folding them into the stuck count/health
+            // metric would mislead. Hard (actionable) stuck only here.
+            const stuck = (result.stuck_agents || []).filter(s => !s.soft);
             cachedStuckAgents = stuck;
             const count = stuck.length;
             animateValue(countEl, count);

@@ -596,3 +596,102 @@ class TestBaselineRelativeMargin:
         assert result["margin"] == "warning"
         assert result["nearest_edge"] == "coherence"
         assert result["distance_to_edge"] < 0
+
+
+class TestDetectStuckAgentsCadenceSilence:
+    """Rule 5 (soft): an agent that HAD an active cadence then went silent."""
+
+    def _silent_meta(self, now, *, created_min_ago, last_update_min_ago, total_updates):
+        return _make_agent_meta(
+            created_at=now - timedelta(minutes=created_min_ago),
+            last_update=now - timedelta(minutes=last_update_min_ago),
+            total_updates=total_updates,
+        )
+
+    @patch(_PATCHES["mcp_server"])
+    def test_active_cadence_then_silent_flags_soft(self, mock_server):
+        # 13 updates over ~10 min (avg gap ~0.8 min => active), then silent 50 min.
+        now = datetime.now(timezone.utc)
+        mock_server.agent_metadata = {
+            "a1": self._silent_meta(now, created_min_ago=60, last_update_min_ago=50, total_updates=13),
+        }
+        mock_server.monitors = {}
+        mock_server.load_monitor_state.return_value = None
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+        result = _detect_stuck_agents()
+        cadence = [r for r in result if r["reason"] == "cadence_silence"]
+        assert len(cadence) == 1
+        assert cadence[0]["soft"] is True
+        assert cadence[0]["agent_id"] == "a1"
+
+    @patch(_PATCHES["mcp_server"])
+    def test_orphan_below_min_updates_not_flagged(self, mock_server):
+        # Only 3 updates => below CADENCE_MIN_UPDATES (5) => no active cadence.
+        now = datetime.now(timezone.utc)
+        mock_server.agent_metadata = {
+            "a1": self._silent_meta(now, created_min_ago=60, last_update_min_ago=50, total_updates=3),
+        }
+        mock_server.monitors = {}
+        mock_server.load_monitor_state.return_value = None
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+        result = _detect_stuck_agents()
+        assert [r for r in result if r["reason"] == "cadence_silence"] == []
+
+    @patch(_PATCHES["mcp_server"])
+    def test_slow_cron_cadence_not_flagged(self, mock_server):
+        # 6 updates over ~24h => avg gap ~270 min >> 30 => not an active cadence.
+        now = datetime.now(timezone.utc)
+        mock_server.agent_metadata = {
+            "a1": self._silent_meta(now, created_min_ago=24 * 60, last_update_min_ago=90, total_updates=6),
+        }
+        mock_server.monitors = {}
+        mock_server.load_monitor_state.return_value = None
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+        result = _detect_stuck_agents()
+        assert [r for r in result if r["reason"] == "cadence_silence"] == []
+
+    @patch(_PATCHES["mcp_server"])
+    def test_active_cadence_recent_silence_not_flagged(self, mock_server):
+        # Active cadence but only silent 10 min (< 30 min floor) => not yet flagged.
+        now = datetime.now(timezone.utc)
+        mock_server.agent_metadata = {
+            "a1": self._silent_meta(now, created_min_ago=60, last_update_min_ago=10, total_updates=13),
+        }
+        mock_server.monitors = {}
+        mock_server.load_monitor_state.return_value = None
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+        result = _detect_stuck_agents()
+        assert [r for r in result if r["reason"] == "cadence_silence"] == []
+
+    @patch(_PATCHES["mcp_server"])
+    def test_stale_silence_beyond_cap_not_flagged(self, mock_server):
+        # Active cadence but silent ~25h (> 24h stale cap) => abandoned, not a
+        # fresh hang => suppressed (the false-positive-noise guard).
+        now = datetime.now(timezone.utc)
+        mock_server.agent_metadata = {
+            "a1": self._silent_meta(now, created_min_ago=26 * 60, last_update_min_ago=25 * 60, total_updates=13),
+        }
+        mock_server.monitors = {}
+        mock_server.load_monitor_state.return_value = None
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+        result = _detect_stuck_agents()
+        assert [r for r in result if r["reason"] == "cadence_silence"] == []
+
+    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["mcp_server"])
+    def test_silent_agent_not_double_listed_with_margin(self, mock_server, mock_config):
+        # Fires cadence_silence AND has a (stale) critical-margin monitor: must
+        # appear ONCE (cadence_silence), not also as a margin entry — the
+        # `continue` after the cadence append is what guarantees this.
+        now = datetime.now(timezone.utc)
+        mock_server.agent_metadata = {
+            "a1": self._silent_meta(now, created_min_ago=60, last_update_min_ago=50, total_updates=13),
+        }
+        mock_server.monitors = {"a1": _make_monitor(risk=0.8, coherence=0.42)}
+        mock_config.compute_proprioceptive_margin.return_value = _margin_info(
+            "critical", nearest_edge="risk", distance=0.02
+        )
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+        result = [r for r in _detect_stuck_agents(critical_margin_timeout_minutes=5) if r["agent_id"] == "a1"]
+        assert len(result) == 1
+        assert result[0]["reason"] == "cadence_silence"
