@@ -19,10 +19,10 @@ from typing import Any
 
 from agents.common.findings import post_finding
 from agents.watcher._util import (
-    PROJECT_ROOT,
     hash_line_content,
     log,
     repo_relative_path,
+    watcher_state_dir,
 )
 from agents.watcher.calibration import (
     classify_file,
@@ -35,7 +35,7 @@ from agents.watcher.floor_state import FloorState, load_floor
 # Paths & Config
 # ---------------------------------------------------------------------------
 
-STATE_DIR = PROJECT_ROOT / "data" / "watcher"
+STATE_DIR = watcher_state_dir()
 FINDINGS_FILE = STATE_DIR / "findings.jsonl"
 DEDUP_FILE = STATE_DIR / "dedup.json"
 
