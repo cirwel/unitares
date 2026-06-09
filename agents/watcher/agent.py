@@ -77,6 +77,7 @@ from agents.watcher._util import (
     PROJECT_ROOT,
     hash_line_content,
     log,
+    migrate_legacy_watcher_state,
     repo_relative_path,
 )
 from agents.common.log import trim_log as _common_trim_log
@@ -562,11 +563,32 @@ def _do_checkin() -> None:
         client.continuity_token = identity["continuity_token"]
         client.agent_uuid = identity["agent_uuid"]
 
+        # Pass the continuity token as an explicit arg so process_agent_update
+        # resolves identity by cryptographic ownership proof (REST PATH 2.8
+        # rebind) instead of relying solely on the client_session_id cache.
+        # Observed mechanism (2026-06-05, verified against the live MCP/Redis):
+        # the Watcher's csid->uuid binding lives in Redis with a ~24h TTL and no
+        # durable row stands in for it (the agent_sessions table held it for no
+        # Watcher row). A csid-only check-in carries no proof, so once that cache
+        # entry lapses the resolver has nothing to rebind from and dispatch
+        # returns "Identity not resolved" — failures began exactly 24h after the
+        # last good check-in and stayed dark for ~11h. The token-bearing call
+        # rebinds via proof and re-warms the cache (TTL reset confirmed live), so
+        # check-ins self-heal across the TTL boundary. resolve_identity() runs
+        # before this in main() and refreshes the token; the empty-token guard
+        # below degrades gracefully to the old csid-only behavior if it is stale.
+        # The SDK still injects client_session_id alongside the token.
+        checkin_kwargs = {}
+        token = identity.get("continuity_token")
+        if token:
+            checkin_kwargs["continuity_token"] = token
+
         client.checkin(
             response_text=summary,
             complexity=complexity,
             confidence=confidence,
             response_mode="compact",
+            **checkin_kwargs,
         )
         log(f"check-in: {summary}")
     except Exception as e:
@@ -584,7 +606,8 @@ SKIP_PATH_FRAGMENTS = (
     "/build/",
     "/.pytest_cache/",
     "/data/logs/",
-    "/data/watcher/",  # never scan our own findings
+    "/data/watcher/",  # never scan our own findings (legacy checkout-relative state)
+    "/.unitares/watcher/",  # never scan our own findings (shared home-anchored state)
 )
 
 SKIP_EXTENSIONS = (
@@ -2125,6 +2148,10 @@ def list_findings(only_open: bool = False) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Carry forward any legacy checkout-relative state to the shared dir once
+    # per process, before anything reads/writes findings.
+    migrate_legacy_watcher_state()
+
     parser = argparse.ArgumentParser(description="UNITARES Watcher bug-pattern agent")
     parser.add_argument("--file", help="file to scan")
     parser.add_argument("--region", help="line range within file, e.g. L10-L40")

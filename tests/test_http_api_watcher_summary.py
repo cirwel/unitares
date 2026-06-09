@@ -9,7 +9,57 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.http_api import _watcher_summary_from_rows
+from src.http_api import _watcher_findings_path, _watcher_summary_from_rows
+
+
+class TestFindingsPathMatchesWriter:
+    """The reader (http_api) and the writer (Watcher agent) must resolve the
+    same findings.jsonl. They previously diverged across the dev/deploy
+    checkout split and the dashboard read zeroes."""
+
+    def test_reader_path_is_under_shared_state_dir(self, monkeypatch, tmp_path):
+        import agents.watcher._util as util
+
+        monkeypatch.setattr(util, "_state_dir_cache", None)
+        monkeypatch.setattr(util, "_legacy_migration_done", True)  # skip fs work
+        monkeypatch.setenv("UNITARES_WATCHER_DATA_DIR", str(tmp_path / "shared"))
+
+        # Reader resolves through the same shared resolver the writer uses.
+        assert _watcher_findings_path() == util.watcher_state_dir() / "findings.jsonl"
+        assert _watcher_findings_path() == tmp_path / "shared" / "findings.jsonl"
+
+    def test_falls_back_to_legacy_while_shared_empty(self, monkeypatch, tmp_path):
+        import agents.watcher._util as util
+
+        legacy = tmp_path / "legacy"
+        legacy.mkdir()
+        (legacy / "findings.jsonl").write_text('{"pattern":"P001"}\n')
+        shared = tmp_path / "shared"
+
+        monkeypatch.setattr(util, "_state_dir_cache", None)
+        monkeypatch.setattr(util, "_legacy_migration_done", True)  # skip migration copy
+        monkeypatch.setattr(util, "_LEGACY_STATE_DIR", legacy)
+        monkeypatch.setenv("UNITARES_WATCHER_DATA_DIR", str(shared))
+
+        # Shared dir has no data yet → read the live legacy file, not a frozen blank.
+        assert _watcher_findings_path() == legacy / "findings.jsonl"
+
+    def test_prefers_shared_once_populated(self, monkeypatch, tmp_path):
+        import agents.watcher._util as util
+
+        legacy = tmp_path / "legacy"
+        legacy.mkdir()
+        (legacy / "findings.jsonl").write_text("legacy\n")
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        (shared / "findings.jsonl").write_text("shared\n")
+
+        monkeypatch.setattr(util, "_state_dir_cache", None)
+        monkeypatch.setattr(util, "_legacy_migration_done", True)
+        monkeypatch.setattr(util, "_LEGACY_STATE_DIR", legacy)
+        monkeypatch.setenv("UNITARES_WATCHER_DATA_DIR", str(shared))
+
+        assert _watcher_findings_path() == shared / "findings.jsonl"
 
 
 NOW = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)

@@ -35,12 +35,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
-from agents.watcher._util import PROJECT_ROOT
+from agents.watcher._util import watcher_state_dir
 from agents.watcher.calibration import BucketStats
 
 
 FLOOR_FILE_NAME = "pattern_floor.json"
-DEFAULT_STATE_DIR = PROJECT_ROOT / "data" / "watcher"
+DEFAULT_STATE_DIR = watcher_state_dir()
 _KEY_SEP = "|"
 
 
