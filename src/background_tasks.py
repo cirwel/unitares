@@ -821,6 +821,64 @@ async def perf_monitor_persist_task(interval_minutes: float = 5.0):
                     )
             if written:
                 logger.debug(f"[PERF_PERSIST] wrote {written} series points")
+
+            # Wave 3 §14 prereq PR #6: drain the lease client's per-call
+            # measurement samples into audit.coordination_measurements
+            # (measurement.lease_plane.request — the disconfirmer-(B)
+            # baseline). Batched here so the lease hot path never touches
+            # the DB; sample timestamps are preserved per-row.
+            try:
+                import json as _json
+
+                from governance_core.coordination_events_helpers import (
+                    make_measurement_payload,
+                )
+                from src.coordination_events import MEASUREMENT_LEASE_PLANE_REQUEST
+                from src.db import get_db
+                from src.lease_plane.client import (
+                    drain_measurement_samples,
+                    measurement_samples_dropped,
+                )
+
+                samples = drain_measurement_samples()
+                if samples:
+                    rows = [
+                        (
+                            ts,
+                            MEASUREMENT_LEASE_PLANE_REQUEST,
+                            endpoint,
+                            elapsed_ms,
+                            outcome,
+                            payload_bytes,
+                            _json.dumps(
+                                make_measurement_payload(
+                                    endpoint=endpoint,
+                                    method=method,
+                                    status_code=None,
+                                    elapsed_ms=elapsed_ms,
+                                    payload_bytes=payload_bytes,
+                                )
+                                | {"samples_dropped_total": measurement_samples_dropped()}
+                            ),
+                        )
+                        for (ts, endpoint, method, outcome, elapsed_ms, payload_bytes) in samples
+                    ]
+                    db = get_db()
+                    async with db.acquire() as conn:
+                        await conn.executemany(
+                            """
+                            INSERT INTO audit.coordination_measurements
+                                (recorded_at, measurement_type, endpoint,
+                                 elapsed_ms, status, payload_bytes, meta)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+                            """,
+                            rows,
+                        )
+                    logger.debug(
+                        f"[PERF_PERSIST] wrote {len(rows)} lease measurement rows"
+                    )
+            except Exception as e:
+                logger.warning(f"[PERF_PERSIST] lease measurement drain failed: {e}")
         except asyncio.CancelledError:
             logger.info("[PERF_PERSIST] Task cancelled")
             break

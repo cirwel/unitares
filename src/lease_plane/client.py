@@ -14,8 +14,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import ValidationError
@@ -72,18 +74,64 @@ class LeaseHTTPRequest:
 LeaseTransport = Callable[[LeaseHTTPRequest], Mapping[str, Any]]
 
 
-def _record_lease_rpc_latency(path: str, start_perf: float, outcome: str) -> None:
-    """Record lease RPC latency to the in-process perf_monitor.
+# Wave 3 §14 prereq PR #6: per-call measurement samples for the disconfirmer
+# (B) baseline. The recorder below appends; the MCP server's
+# perf_monitor_persist_task drains every ~5min into
+# audit.coordination_measurements as measurement.lease_plane.request rows.
+# Client-perceived elapsed is the point — §0(B) budgets the FULL crossing
+# cost ("full request marshalling vs lease ack"), which plane-side timing
+# would understate. Processes without the persist task (plugin hooks,
+# short-lived scripts) never drain: the deque is bounded, oldest samples
+# drop, and the drop count is visible via measurement_samples_dropped() —
+# a documented coverage note, not silent truncation. Sample tuple shape:
+# (ts_utc, endpoint_path, method, outcome, elapsed_ms_int, payload_bytes).
+_MEASUREMENT_SAMPLES: deque = deque(maxlen=10_000)
+_MEASUREMENT_SAMPLES_DROPPED = 0
+
+
+def drain_measurement_samples() -> list[tuple]:
+    """Pop all pending measurement samples (deque ops are atomic)."""
+    out: list[tuple] = []
+    while True:
+        try:
+            out.append(_MEASUREMENT_SAMPLES.popleft())
+        except IndexError:
+            return out
+
+
+def measurement_samples_dropped() -> int:
+    """How many samples were dropped to the maxlen bound (coverage signal)."""
+    return _MEASUREMENT_SAMPLES_DROPPED
+
+
+def _record_lease_rpc_latency(
+    path: str,
+    start_perf: float,
+    outcome: str,
+    *,
+    method: str = "?",
+    payload_bytes: int | None = None,
+) -> None:
+    """Record lease RPC latency to the in-process perf_monitor + sample deque.
 
     Best-effort: a profile run with perf_monitor missing or import-broken must
     never break a lease call. Key shape: ``lease_plane.client.<path>.<outcome>``
     plus a coarser ``lease_plane.client.<path>`` aggregate.
     """
+    global _MEASUREMENT_SAMPLES_DROPPED
+    elapsed_ms = (time.perf_counter() - start_perf) * 1000.0
+    try:
+        if len(_MEASUREMENT_SAMPLES) == _MEASUREMENT_SAMPLES.maxlen:
+            _MEASUREMENT_SAMPLES_DROPPED += 1
+        _MEASUREMENT_SAMPLES.append(
+            (datetime.now(UTC), path, method, outcome, int(round(elapsed_ms)), payload_bytes)
+        )
+    except Exception:  # noqa: BLE001 — recorder must never break a lease call
+        pass
     try:
         from src.perf_monitor import record_ms
     except Exception:
         return
-    elapsed_ms = (time.perf_counter() - start_perf) * 1000.0
     op = path.lstrip("/").replace("/", ".")
     record_ms(f"lease_plane.client.{op}", elapsed_ms)
     record_ms(f"lease_plane.client.{op}.{outcome}", elapsed_ms)
@@ -350,14 +398,23 @@ class LeasePlaneClient:
             json_body=json_body,
             timeout_s=self.config.timeout_s,
         )
+        _body_bytes = (
+            len(json.dumps(json_body, separators=(",", ":")).encode("utf-8"))
+            if json_body is not None
+            else None
+        )
         _start = time.perf_counter()
         try:
             payload = self._transport(request)
         except Exception:
-            _record_lease_rpc_latency(path, _start, "transport_exception")
+            _record_lease_rpc_latency(
+                path, _start, "transport_exception", method=method, payload_bytes=_body_bytes
+            )
             return {"ok": False, "error": "service_unavailable"}
         if not isinstance(payload, Mapping):
-            _record_lease_rpc_latency(path, _start, "schema_invalid")
+            _record_lease_rpc_latency(
+                path, _start, "schema_invalid", method=method, payload_bytes=_body_bytes
+            )
             return {"ok": False, "error": "schema_invalid", "detail": "response was not an object"}
         # Default-True on `ok` is wrong: a malformed response without an `ok`
         # key (custom transport, future caller) would be silently recorded
@@ -369,7 +426,9 @@ class LeasePlaneClient:
         else:
             outcome = str(payload.get("error") or "unknown_error")
         _check_protocol_version(payload, path)
-        _record_lease_rpc_latency(path, _start, outcome)
+        _record_lease_rpc_latency(
+            path, _start, outcome, method=method, payload_bytes=_body_bytes
+        )
         return payload
 
 

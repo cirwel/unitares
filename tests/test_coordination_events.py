@@ -158,6 +158,10 @@ def test_measurement_constants_are_a_separate_channel():
     assert MEASUREMENT_EVENT_TYPES == {
         "measurement.governance_mcp.request",
         "measurement.governance_mcp.503_emission",
+        # §14 prereq PR #6 — lease-plane baseline + the Wave-3 boundary
+        # measurement (constant lands ahead per the Wave 3a precedent).
+        "measurement.lease_plane.request",
+        "measurement.beam_python_boundary.request",
     }
     for et in MEASUREMENT_EVENT_TYPES:
         assert re.fullmatch(r"measurement(\.[a-z0-9_]+)+", et), et

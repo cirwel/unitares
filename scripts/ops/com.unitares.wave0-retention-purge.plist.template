@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Daily 90-day retention purge for audit.coordination_measurements
+    (scripts/ops/wave-0-retention-purge.sh — flat-table DELETE; see that
+    script's header for the partition-roll adaptation note).
+
+    Before installing, substitute:
+      __UNITARES_ROOT__ → absolute path to the deploy worktree
+
+    Example:
+      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
+          scripts/ops/com.unitares.wave0-retention-purge.plist.template \
+          > ~/Library/LaunchAgents/com.unitares.wave0-retention-purge.plist
+      launchctl load ~/Library/LaunchAgents/com.unitares.wave0-retention-purge.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unitares.wave0-retention-purge</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__UNITARES_ROOT__/scripts/ops/wave-0-retention-purge.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__UNITARES_ROOT__</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>2</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__UNITARES_ROOT__/data/logs/wave0_retention_purge.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__UNITARES_ROOT__/data/logs/wave0_retention_purge.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>GOVERNANCE_DATABASE_URL</key>
+        <string>postgresql://postgres:postgres@localhost:5432/governance</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

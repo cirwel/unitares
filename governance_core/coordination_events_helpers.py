@@ -138,3 +138,57 @@ def make_shadow_divergence_payload(
         "kind": kind,
         "divergent_columns": list(divergent_columns),
     }
+
+
+def make_measurement_payload(
+    *,
+    endpoint: str,
+    method: str,
+    status_code: int | None,
+    elapsed_ms: int,
+    payload_bytes: int | None,
+) -> dict:
+    """Build the canonical measurement-channel payload (Wave 3 RFC §6.4).
+
+    Sibling of `make_boundary_payload` for the INFORMATIONAL channel
+    (`audit.coordination_measurements`, migration 041): successful boundary
+    crossings, lease RPC baselines, and the §3.2 cutover counters. The table
+    columns `endpoint` / `elapsed_ms` / `payload_bytes` are lifted from this
+    dict by the emitter; `method` and `status_code` ride in the table's
+    `meta` JSONB. Same enforcement rationale as the failure-channel helpers:
+    payload shape is pinned once, here, and lint-checked
+    (scripts/dev/check-boundary-event-helpers.sh).
+
+    Raises:
+        ValueError: if `endpoint` or `method` is empty/whitespace-only, or
+            if `elapsed_ms` / `payload_bytes` is negative.
+        TypeError: if `elapsed_ms` is not an int, or `status_code` /
+            `payload_bytes` is the wrong type when non-None. `status_code`
+            may be None — transport-level failures measured before a status
+            line exists (timeout, connect_error) still produce a measurement.
+    """
+    if not endpoint or not endpoint.strip():
+        raise ValueError("endpoint must be a non-empty stable identifier")
+    if not method or not method.strip():
+        raise ValueError("method must be a non-empty HTTP method")
+    if status_code is not None and not isinstance(status_code, int):
+        raise TypeError(f"status_code must be int or None, got {type(status_code).__name__}")
+    if not isinstance(elapsed_ms, int):
+        raise TypeError(f"elapsed_ms must be int, got {type(elapsed_ms).__name__}")
+    if elapsed_ms < 0:
+        raise ValueError("elapsed_ms must be >= 0")
+    if payload_bytes is not None:
+        if not isinstance(payload_bytes, int):
+            raise TypeError(
+                f"payload_bytes must be int or None, got {type(payload_bytes).__name__}"
+            )
+        if payload_bytes < 0:
+            raise ValueError("payload_bytes must be >= 0")
+
+    return {
+        "endpoint": endpoint,
+        "method": method,
+        "status_code": status_code,
+        "elapsed_ms": elapsed_ms,
+        "payload_bytes": payload_bytes,
+    }
