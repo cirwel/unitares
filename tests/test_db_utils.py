@@ -139,6 +139,10 @@ async def ensure_test_database_schema() -> None:
         # grammar CHECK). Applied last here so the bootstrap order matches the
         # production numeric apply-order (042 > 036); it only depends on 026.
         await _execute_sql_file(conn, "db/postgres/migrations/042_lease_plane_agent_scheme.sql")
+        # Migrations 043/044: Wave 3 §8.1 shadow tables (LIKE core.identities /
+        # core.agents INCLUDING ALL — depend only on schema.sql base tables).
+        await _execute_sql_file(conn, "db/postgres/migrations/043_identities_shadow.sql")
+        await _execute_sql_file(conn, "db/postgres/migrations/044_agents_shadow.sql")
 
         # Ensure partitioned audit tables can accept inserts for current month.
         await _execute_sql_file(conn, "db/postgres/partitions.sql")

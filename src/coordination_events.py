@@ -140,6 +140,57 @@ COORDINATION_FAILURE_WAVE_3A_ENVELOPE_INVALID = (
     "coordination_failure.wave_3a.envelope_invalid"
 )
 
+# Wave 3 §14 prereq PR #1 (RFC docs/proposals/beam-wave-3-handler-dispatch.md
+# §8.4): shadow-window divergence, ETS↔PG reconciliation divergence, and the
+# cutover 503 circuit-breaker breach. Constants land ahead of their emitters
+# per the Wave 3a precedent — the shadow comparator runner
+# (scripts/ops/wave3_shadow_divergence_check.py, this PR) is the first
+# shadow_divergence emitter; the ETS reconciliation (§10.3) and 503 aggregator
+# (§3.2) emitters land with the Wave 3 implementation.
+#
+# Payload shape (pinned at landing per the Stability discipline above):
+#
+#   shadow_divergence (§8.2; payloads built ONLY by
+#   governance_core.coordination_events_helpers.make_shadow_divergence_payload):
+#     payload = {
+#       "table_name": str,          # "identities" | "agents"
+#       "agent_id": str,            # join-key value of the divergent row
+#       "kind": str,                # "canonical_missing" | "shadow_missing" |
+#                                   # "column_mismatch"
+#       "divergent_columns": list,  # canonical column names; non-empty iff
+#                                   # kind == "column_mismatch"
+#     }
+#
+#   ets_pg_divergence (§10.3 pins {key, ets_value_hash, pg_value_hash};
+#   `store` is added here because TWO ETS tables share this event_type and
+#   §10.2's readiness-gated-:cold path is a second emitter — discriminators
+#   belong in the payload contract, not relitigated per call site):
+#     payload = {
+#       "store": str,               # "agent_baselines" | "feature_flags"
+#       "key": str,                 # agent_id or flag key
+#       "ets_value_hash": str | None,  # None when ETS side missing/cold
+#       "pg_value_hash": str | None,   # None when PG side missing
+#     }
+#
+#   cutover_503_rate_breach (§3.2; numerator/denominator are the
+#   MEASUREMENT_GOVERNANCE_MCP_* events below, same 60s window):
+#     payload = {
+#       "window_seconds": int,      # 60 per §3.2
+#       "rate": float,              # count_503 / count_request in the window
+#       "threshold": float,         # 0.01 per §3.2
+#       "count_503": int,
+#       "count_request": int,
+#     }
+COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_SHADOW_DIVERGENCE = (
+    "coordination_failure.beam_python_boundary.shadow_divergence"
+)
+COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_ETS_PG_DIVERGENCE = (
+    "coordination_failure.beam_python_boundary.ets_pg_divergence"
+)
+COORDINATION_FAILURE_GOVERNANCE_MCP_CUTOVER_503_RATE_BREACH = (
+    "coordination_failure.governance_mcp.cutover_503_rate_breach"
+)
+
 WAVE_0_EVENT_TYPES: frozenset[str] = frozenset({
     COORDINATION_FAILURE_ASYNCPG_CONNECT_ERROR,
     COORDINATION_FAILURE_ANYIO_CANCELLATION,
@@ -152,6 +203,40 @@ WAVE_0_EVENT_TYPES: frozenset[str] = frozenset({
     COORDINATION_FAILURE_WAVE_3A_FALLBACK,
     COORDINATION_FAILURE_WAVE_3A_TIMEOUT,
     COORDINATION_FAILURE_WAVE_3A_ENVELOPE_INVALID,
+    # Wave 3 §14 prereq PR #1 — see the §8.4 docstring above the constants.
+    # Migration 035/041's CHECK regex already accepts these — no DB follow-up.
+    COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_SHADOW_DIVERGENCE,
+    COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_ETS_PG_DIVERGENCE,
+    COORDINATION_FAILURE_GOVERNANCE_MCP_CUTOVER_503_RATE_BREACH,
+})
+
+# Wave 3 cutover measurement channel (RFC §3.2, §6.3): informational
+# numerator/denominator events for the 503 circuit-breaker. These target
+# `audit.coordination_measurements` (migration 041) — NOT
+# `audit.coordination_events` — so they are deliberately absent from
+# WAVE_0_EVENT_TYPES and rejected by `_validate_event_type` / `emit_event`,
+# which guard the failure channel only. Emitters land with prereq PR #6
+# (lease-plane measurement bridge) and PR #10 (transport 503 emission);
+# constants land first so those PRs emit without re-extending.
+#
+# Live-schema note (verified 2026-06-10): migration 041's CHECK is
+# `^measurement(\.[a-z0-9_]+)+$` — digits are legal (so `503_emission` is a
+# valid segment), and the `telemetry` family from the RFC §6.1 sketch was NOT
+# shipped; introducing telemetry.* later requires a migration.
+#
+#   measurement.governance_mcp.request  (denominator — emitted per request
+#     accepted for proxying during cutover):
+#     payload = {"request_path": str}
+#
+#   measurement.governance_mcp.503_emission  (numerator — emitted per 503
+#     returned during cutover):
+#     payload = {"request_path": str, "error_reason": str}
+MEASUREMENT_GOVERNANCE_MCP_REQUEST = "measurement.governance_mcp.request"
+MEASUREMENT_GOVERNANCE_MCP_503_EMISSION = "measurement.governance_mcp.503_emission"
+
+MEASUREMENT_EVENT_TYPES: frozenset[str] = frozenset({
+    MEASUREMENT_GOVERNANCE_MCP_REQUEST,
+    MEASUREMENT_GOVERNANCE_MCP_503_EMISSION,
 })
 
 # Cached emitter context — git_commit and host don't change at runtime.
