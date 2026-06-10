@@ -22,6 +22,14 @@ Two non-Wave-3-specific prerequisites moved after this RFC was drafted:
   that recorder if it still needs the `audit.coordination_measurements`
   channel.
 
+## What changed in v0.3.3 (vs v0.3.2)
+
+§5.2 boundary-cost audit executed (§14 row-1 deliverable, 2026-06-10; committed summary at `docs/proposals/wave-3-section-5-2-boundary-audit-summary.md`, full analysis in the operator-local dated handoff). Measured: helper compute 0.04–23 µs/call vs crossing floor 3.2–3.5 ms (PR #599 baseline) — every helper is crossing-dominated by raw ratio, so call placement is the operative rule: bundled-in-§5.6 stays Python; standalone-from-§5.1 ports.
+
+16. **§5.2 → §5.3 reclassifications** (the `_compare_against_timeout` pattern, caught before any BEAM code lands): `_read_proposed_conditions`, `check_hard_limits` (regex-dialect golden gate), `Resolution.sign`/`compute_signature`/`canonical_payload` (golden-vector **byte-parity** gate — the one load-bearing risk; documented fallback = a single bundled `sign_resolution` compute mode at 1 crossing/session), `Resolution.hash`. `verify_signatures` goes **dual** (BEAM verifies at runtime; Python retains archival verification of stored v1/v2 resolutions). §5.3's `_parse_timestamp` row flips to PORTS — its caller is `auto_resolve` (§5.1); the literal twin of the v0.3 `_compare_against_timeout` correction.
+17. **§5.2 `condition_parser` row split**: `parse_condition` (pure) ports-or-bundles; `apply_condition` is async state-mutation taking `mcp_server` (resolution.py:59) — coordination, not computation; it moves under §5.1's `execute_resolution` port.
+18. **§5.2 calibration row corrected**: `backfill_calibration_from_dialectic` is its own MCP tool (top-level entry, not a helper-crossing question); `update_calibration_from_dialectic`(+`_disagreement`) are imported-never-called — dead wiring to resolve (wire or remove) before the implementation gate.
+
 ## What changed in v0.3.2 (vs v0.3.1)
 
 v0.3 council (architect + code-reviewer + live-verifier) returned three CONCERNs, zero BLOCKs. Per §15 contract — no BLOCK + no new bias signature in §10 — this is not v0.4 substrate re-litigation territory. Mechanical findings landed as v0.3.1; design-decision findings are folded here as v0.3.2 against operator selection (2026-05-13).
@@ -196,18 +204,23 @@ a binding implementation spec. Council confirms before implementation gate.
 
 ### 5.2 Computation → stays Python, called from BEAM
 
-| File:line | Function | Why computation |
+*(Audited v0.3.3 — compute micro-benchmarked against the PR #599 crossing
+baseline; every row below is invoked INSIDE a §5.6 compute bundle, so its
+crossing cost is amortized. Rows whose callers are §5.1 coordination moved to
+§5.3; see the v0.3.3 changelog and the committed audit summary.)*
+
+| File:line | Function | Why computation (measured compute) |
 |-----------|----------|------------------|
-| `dialectic_protocol.py:1077-1162` | `calculate_authority_score` | numpy sigmoid + Jaccard + weighted aggregation; pure |
-| `dialectic_protocol.py:640-657` | `_normalize_condition_terms`, `_semantic_similarity_terms` | Term extraction + Jaccard; pure |
-| `dialectic_protocol.py:659-743` | `_merge_proposals` | Semantic matching (0.6 threshold); pure |
-| `dialectic_protocol.py:746-779` | `_conditions_conflict` | Regex + term-overlap heuristics; pure |
-| `dialectic_protocol.py:250-265` | `DialecticMessage.sign` | HMAC-SHA256; deterministic |
-| `dialectic_protocol.py:350-410` | `Resolution.compute_signature`, `verify_signatures` | HMAC keyed MAC; pure |
-| `dialectic_protocol.py:899-986` | `check_hard_limits` | Safety regex; stateless |
-| `mcp_handlers/dialectic/handlers.py:180-200` | `_read_proposed_conditions` | Input normalization; pure |
-| `mcp_handlers/dialectic/calibration.py` (imported 99-102) | calibration updates from session outcomes | Statistical correlation; numeric |
-| `mcp_handlers/support/condition_parser.py` | condition parsing/application | Numeric/text transformation; stateless |
+| `dialectic_protocol.py:1077-1162` | `calculate_authority_score` | numpy sigmoid + Jaccard + weighted aggregation; pure; bundled in `select_reviewer` (0.2 µs) |
+| `dialectic_protocol.py:640-657` | `_normalize_condition_terms`, `_semantic_similarity_terms` | Term extraction + Jaccard; pure; synthesize-bundle internals (1.0 / 2.5 µs) |
+| `dialectic_protocol.py:659-743` | `_merge_proposals` | Semantic matching (0.6 threshold); pure; synthesize bundle (23 µs) |
+| `dialectic_protocol.py:746-779` | `_conditions_conflict` | Regex + term-overlap heuristics; pure; synthesize bundle (1.5 µs) |
+| `mcp_handlers/support/condition_parser.py` | `parse_condition` ONLY | Pure text → ParsedCondition; ports-or-bundles. (`apply_condition` is async state-mutation taking `mcp_server` — moved under §5.1's `execute_resolution` port, v0.3.3.) |
+
+*Calibration row removed (v0.3.3): `backfill_calibration_from_dialectic` is
+its own MCP tool, not a helper-crossing question;
+`update_calibration_from_dialectic`(+`_disagreement`) are imported-never-called
+— dead wiring to resolve before the implementation gate.*
 
 ### 5.3 Boundary cases
 
@@ -215,9 +228,14 @@ a binding implementation spec. Council confirms before implementation gate.
 |-----------|----------|----------|--------|
 | `dialectic_protocol.py:995-1031` | `check_timeout` | **PORTS to BEAM.** Both the FSM-phase-gating wrapper AND the timestamp-comparison predicate (`_compare_against_timeout`) move; pure timestamp arithmetic is trivially native to Elixir's `DateTime` and avoids a boundary crossing for arithmetic | v0.2 had `_compare_against_timeout` staying Python; that introduced a boundary call for what's a `DateTime.diff/2` in Elixir. v0.3 corrects |
 | `mcp_handlers/dialectic/reviewer.py:55-119` | `_has_recently_reviewed` | **PORTS to BEAM** as part of session-keyed GenServer's reviewer-selection coordination. PG round-trip remains (Postgrex query directly), boundary crossing disappears | Splitting from selection saves nothing |
-| `mcp_handlers/dialectic/auto_resolve.py:32-51` | `_parse_timestamp` | Stays Python utility | Pure helper |
-| `dialectic_protocol.py:318-329` | `Resolution.hash` | Stays Python utility | Pure crypto |
-| `dialectic_protocol.py:331-347` | `Resolution.canonical_payload` | Stays Python utility (load-bearing for v2 signing) | Pure |
+| `mcp_handlers/dialectic/auto_resolve.py:32-51` | `_parse_timestamp` | **PORTS to BEAM** (v0.3.3; was "stays Python utility") | Caller is `auto_resolve` (§5.1, ports); `DateTime.from_iso8601/1` is native — the literal `_compare_against_timeout` twin (0.1 µs compute vs ms crossing) |
+| `mcp_handlers/dialectic/handlers.py:180-200` | `_read_proposed_conditions` | **PORTS to BEAM** (v0.3.3; was §5.2) | All three callers (handlers 281/1061/1350) are §5.1 coordination; trivial dict normalization = pattern-match in Elixir (0.04 µs compute) |
+| `dialectic_protocol.py:899-986` | `check_hard_limits` | **PORTS to BEAM** (v0.3.3; was §5.2), gated on regex-dialect golden tests (Python `re` vs Erlang `re`/PCRE) over the safety corpus | Production caller is `handle_reassign_reviewer` (§5.1); 2.5 µs compute. Side-flag: the docstring implies a resolution-accept gate that has no call site — operator to resolve |
+| `dialectic_protocol.py:250-265, 350-376` | `DialecticMessage.sign`, `Resolution.compute_signature` | **PORTS to BEAM** (v0.3.3; was §5.2), gated on golden-vector **byte-parity** (see canonical_payload row) | Callers are finalize/synthesis coordination (§5.1; protocol 791, 893-894); HMAC is `:crypto.mac(:hmac, :sha256, …)` native (0.9 µs compute). Fallback if parity proves brittle: one bundled `sign_resolution` compute mode (1 crossing/session) |
+| `dialectic_protocol.py:331-347` | `Resolution.canonical_payload` | **PORTS to BEAM** (v0.3.3; was "stays Python utility") — THE load-bearing parity risk: signatures are HMACs over `json.dumps`-canonicalized bytes; the Elixir port must be byte-identical (key order, escaping, separators) or stored v2 signatures break. Gate: golden-vector parity tests (§8 golden discipline extended to signature vectors) | Pure (1.7 µs) but byte-contract-bearing |
+| `dialectic_protocol.py:318-329` | `Resolution.hash` | **PORTS to BEAM** (v0.3.3; was "stays Python utility") | Callers are `execute_resolution` (§5.1; resolution.py 153/195); `:crypto.hash` native; same parity-gate family (3.3 µs) |
+| `dialectic_protocol.py:378-410` | `Resolution.verify_signatures` | **DUAL** (v0.3.3): BEAM verifies at runtime; Python RETAINS verification for archival/audit reads of stored v1/v2 resolutions | Verification must outlive the port for the stored-resolution history |
+| `mcp_handlers/support/condition_parser.py` | `apply_condition` | **Moves under §5.1** (v0.3.3; was §5.2 "stateless") | `async`, takes `mcp_server`, mutates agent state (resolution.py:59) — coordination glue, not computation |
 
 ### 5.4 Storage surfaces
 
