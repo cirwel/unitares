@@ -204,6 +204,22 @@ class TestGenerateAgentId:
             )
             assert ok == minted
 
+        # KNOWN GAP, pinned deliberately (council 2026-06-10): a model_type
+        # or client_hint that BEGINS with a reserved family word still mints
+        # a name the gate rejects — e.g. model_type="governance-core" →
+        # "Governance_Core_<date>" → reserved prefix 'governance_' (the gate
+        # lowercases before matching). Same incident class as the anonymous
+        # fallback, for NAMED callers; rare today (no real model/client name
+        # starts with a reserved word) and the mint-side remedy is an
+        # identity-surface design call — tracked as a follow-up. Pinned here
+        # so the gap stays visible instead of silent:
+        named_collision = self.generate(model_type="governance-core")
+        _, err = validate_agent_id_reserved_names(named_collision)
+        assert err is not None, (
+            "named reserved-word collision unexpectedly resolved — update "
+            "this pin, the coupling-test scope, and close the follow-up"
+        )
+
     def test_whitespace_model_type(self):
         result = self.generate(model_type="  claude-haiku  ")
         assert result.startswith("Claude_Haiku_")

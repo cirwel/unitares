@@ -133,7 +133,7 @@ def _generate_agent_id(model_type: Optional[str] = None, client_hint: Optional[s
     1. model_type with third-party client -> "Client_Model_20251227"
     2. model_type alone -> "Model_20251227"
     3. client_hint -> "client_20251227"
-    4. fallback -> "mcp_20251227"
+    4. fallback -> "anon_20251227"
 
     Args:
         model_type: Model identifier (e.g., "claude-opus-4-5", "gemini-pro")

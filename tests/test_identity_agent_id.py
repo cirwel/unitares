@@ -157,7 +157,7 @@ class TestResolveSessionIdentityAgentId:
 
     @pytest.mark.asyncio
     async def test_new_agent_without_model_uses_anon_fallback(self):
-        """New agent without model_type should get mcp_ prefix."""
+        """New agent without model_type falls back to the anon_ prefix."""
         from src.mcp_handlers.identity.handlers import resolve_session_identity
 
         today = datetime.now().strftime("%Y%m%d")
