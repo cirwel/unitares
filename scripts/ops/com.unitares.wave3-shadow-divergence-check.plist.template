@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Hourly Wave 3 §8.2 shadow-divergence comparator
+    (scripts/ops/wave3_shadow_divergence_check.py). Inert-by-construction
+    until the Wave 3 BEAM shadow writer populates core.identities_shadow /
+    core.agents_shadow — see the runner's docstring.
+
+    Before installing, substitute placeholders:
+      __UNITARES_ROOT__  → absolute path to the deploy worktree
+                           (the runner imports src/ + governance_core/)
+      __PYTHON3__        → absolute python3 with asyncpg installed
+                           (e.g. /Library/Frameworks/Python.framework/Versions/3.14/bin/python3)
+
+    Example:
+      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
+          -e "s|__PYTHON3__|/Library/Frameworks/Python.framework/Versions/3.14/bin/python3|g" \
+          scripts/ops/com.unitares.wave3-shadow-divergence-check.plist.template \
+          > ~/Library/LaunchAgents/com.unitares.wave3-shadow-divergence-check.plist
+      launchctl load ~/Library/LaunchAgents/com.unitares.wave3-shadow-divergence-check.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unitares.wave3-shadow-divergence-check</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON3__</string>
+        <string>__UNITARES_ROOT__/scripts/ops/wave3_shadow_divergence_check.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__UNITARES_ROOT__</string>
+
+    <key>StartInterval</key>
+    <integer>3600</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__UNITARES_ROOT__/data/logs/wave3_shadow_divergence_launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__UNITARES_ROOT__/data/logs/wave3_shadow_divergence_launchd.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>GOVERNANCE_DATABASE_URL</key>
+        <string>postgresql://postgres:postgres@localhost:5432/governance</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

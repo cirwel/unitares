@@ -146,3 +146,69 @@ class TestEnumIntegrity:
             "decode_error",
             "other",
         })
+
+
+class TestMakeShadowDivergencePayload:
+    """Wave 3 §8.2 shadow-divergence payload contract (prereq PR #1)."""
+
+    def _make(self, **overrides):
+        from governance_core.coordination_events_helpers import (
+            make_shadow_divergence_payload,
+        )
+
+        kwargs = dict(
+            table_name="identities",
+            agent_id="ag-123",
+            kind="column_mismatch",
+            divergent_columns=["status", "metadata"],
+        )
+        kwargs.update(overrides)
+        return make_shadow_divergence_payload(**kwargs)
+
+    def test_column_mismatch_happy_path_and_key_order(self):
+        payload = self._make()
+        assert payload == {
+            "table_name": "identities",
+            "agent_id": "ag-123",
+            "kind": "column_mismatch",
+            "divergent_columns": ["status", "metadata"],
+        }
+        assert list(payload.keys()) == [
+            "table_name", "agent_id", "kind", "divergent_columns",
+        ]
+
+    def test_missing_row_kinds_require_empty_columns(self):
+        payload = self._make(kind="shadow_missing", divergent_columns=[])
+        assert payload["divergent_columns"] == []
+        payload = self._make(kind="canonical_missing", divergent_columns=[])
+        assert payload["kind"] == "canonical_missing"
+
+    def test_column_mismatch_requires_columns(self):
+        with pytest.raises(ValueError, match="divergent column"):
+            self._make(divergent_columns=[])
+
+    def test_missing_kind_rejects_columns(self):
+        with pytest.raises(ValueError, match="wholesale"):
+            self._make(kind="shadow_missing", divergent_columns=["status"])
+
+    def test_unknown_table_rejected(self):
+        with pytest.raises(ValueError, match="table_name"):
+            self._make(table_name="dialectic_sessions")
+
+    def test_unknown_kind_rejected(self):
+        with pytest.raises(ValueError, match="kind"):
+            self._make(kind="drifted")
+
+    def test_empty_agent_id_rejected(self):
+        with pytest.raises(ValueError, match="agent_id"):
+            self._make(agent_id="  ")
+
+    def test_non_list_columns_rejected(self):
+        with pytest.raises(TypeError, match="divergent_columns"):
+            self._make(divergent_columns="status")
+
+    def test_returns_fresh_list(self):
+        cols = ["status"]
+        payload = self._make(divergent_columns=cols)
+        cols.append("mutated")
+        assert payload["divergent_columns"] == ["status"]

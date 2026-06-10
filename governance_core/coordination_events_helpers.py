@@ -73,3 +73,68 @@ def make_boundary_payload(
         "status_code": status_code,
         "elapsed_ms": elapsed_ms,
     }
+
+
+VALID_SHADOW_TABLES: Final[frozenset[str]] = frozenset({"identities", "agents"})
+
+VALID_DIVERGENCE_KINDS: Final[frozenset[str]] = frozenset({
+    "canonical_missing",
+    "shadow_missing",
+    "column_mismatch",
+})
+
+
+def make_shadow_divergence_payload(
+    *,
+    table_name: str,
+    agent_id: str,
+    kind: str,
+    divergent_columns: list[str],
+) -> dict:
+    """Build the Wave 3 §8.2 shadow-divergence payload.
+
+    Contract (pinned in `src/coordination_events.py` §8.4 comments):
+    `{table_name, agent_id, kind, divergent_columns}`. All
+    `coordination_failure.beam_python_boundary.shadow_divergence` emissions go
+    through this helper — same enforcement rationale as `make_boundary_payload`.
+
+    Raises:
+        ValueError: if `table_name` is not a shadowed table, `agent_id` is
+            empty, `kind` is outside the documented enum, or the
+            kind/column coherence rule is violated (`column_mismatch`
+            requires a non-empty column list; the missing-row kinds require
+            an empty one — the row diverged wholesale, not per-column).
+        TypeError: if `divergent_columns` is not a list of strings.
+    """
+    if table_name not in VALID_SHADOW_TABLES:
+        raise ValueError(
+            f"table_name={table_name!r} is not a shadowed table "
+            f"{sorted(VALID_SHADOW_TABLES)}"
+        )
+    if not agent_id or not agent_id.strip():
+        raise ValueError("agent_id must be the non-empty join-key of the divergent row")
+    if kind not in VALID_DIVERGENCE_KINDS:
+        raise ValueError(
+            f"kind={kind!r} is not in the documented enum "
+            f"{sorted(VALID_DIVERGENCE_KINDS)}"
+        )
+    if not isinstance(divergent_columns, list) or any(
+        not isinstance(c, str) for c in divergent_columns
+    ):
+        raise TypeError("divergent_columns must be a list of column-name strings")
+    if kind == "column_mismatch" and not divergent_columns:
+        raise ValueError(
+            "kind='column_mismatch' requires at least one divergent column"
+        )
+    if kind != "column_mismatch" and divergent_columns:
+        raise ValueError(
+            f"kind={kind!r} means the row is missing wholesale; "
+            "divergent_columns must be empty"
+        )
+
+    return {
+        "table_name": table_name,
+        "agent_id": agent_id,
+        "kind": kind,
+        "divergent_columns": list(divergent_columns),
+    }

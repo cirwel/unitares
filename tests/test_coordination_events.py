@@ -118,8 +118,52 @@ def test_event_type_constants_match_documented_set():
         "coordination_failure.wave_3a.fallback",
         "coordination_failure.wave_3a.timeout",
         "coordination_failure.wave_3a.envelope_invalid",
+        # Wave 3 §14 prereq PR #1 (§8.4) — shadow window, ETS reconciliation,
+        # cutover 503 breach. CHECK regex already accepts these.
+        "coordination_failure.beam_python_boundary.shadow_divergence",
+        "coordination_failure.beam_python_boundary.ets_pg_divergence",
+        "coordination_failure.governance_mcp.cutover_503_rate_breach",
     }
     assert WAVE_0_EVENT_TYPES == expected
+
+
+def test_wave3_prereq_constants_pass_validation_and_membership():
+    """The three §8.4 constants pass the client-side validator and are in the
+    failure-channel allowlist. Wire-up emitters: the shadow comparator runner
+    (this PR) for shadow_divergence; Wave 3 impl for the other two."""
+    from src.coordination_events import (
+        COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_ETS_PG_DIVERGENCE,
+        COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_SHADOW_DIVERGENCE,
+        COORDINATION_FAILURE_GOVERNANCE_MCP_CUTOVER_503_RATE_BREACH,
+    )
+
+    for et in (
+        COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_SHADOW_DIVERGENCE,
+        COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_ETS_PG_DIVERGENCE,
+        COORDINATION_FAILURE_GOVERNANCE_MCP_CUTOVER_503_RATE_BREACH,
+    ):
+        _validate_event_type(et)
+        assert et in WAVE_0_EVENT_TYPES
+
+
+def test_measurement_constants_are_a_separate_channel():
+    """Measurement constants (§3.2/§6.3) target audit.coordination_measurements,
+    NOT the failure channel: they match migration 041's CHECK regex
+    (`^measurement(\\.[a-z0-9_]+)+$`, digits legal), are absent from
+    WAVE_0_EVENT_TYPES, and are rejected by the failure-channel validator."""
+    import re
+
+    from src.coordination_events import MEASUREMENT_EVENT_TYPES
+
+    assert MEASUREMENT_EVENT_TYPES == {
+        "measurement.governance_mcp.request",
+        "measurement.governance_mcp.503_emission",
+    }
+    for et in MEASUREMENT_EVENT_TYPES:
+        assert re.fullmatch(r"measurement(\.[a-z0-9_]+)+", et), et
+        assert et not in WAVE_0_EVENT_TYPES
+        with pytest.raises(ValueError):
+            _validate_event_type(et)
 
 
 def test_beam_python_boundary_constants_pass_validation():
