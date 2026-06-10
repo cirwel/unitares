@@ -212,3 +212,67 @@ class TestMakeShadowDivergencePayload:
         payload = self._make(divergent_columns=cols)
         cols.append("mutated")
         assert payload["divergent_columns"] == ["status"]
+
+
+class TestMakeMeasurementPayload:
+    """Wave 3 RFC §6.4 measurement-channel payload contract (prereq PR #3)."""
+
+    def _make(self, **overrides):
+        from governance_core.coordination_events_helpers import (
+            make_measurement_payload,
+        )
+
+        kwargs = dict(
+            endpoint="lease_plane/v1/lease/acquire",
+            method="POST",
+            status_code=200,
+            elapsed_ms=28,
+            payload_bytes=512,
+        )
+        kwargs.update(overrides)
+        return make_measurement_payload(**kwargs)
+
+    def test_happy_path_and_key_order(self):
+        payload = self._make()
+        assert payload == {
+            "endpoint": "lease_plane/v1/lease/acquire",
+            "method": "POST",
+            "status_code": 200,
+            "elapsed_ms": 28,
+            "payload_bytes": 512,
+        }
+        assert list(payload.keys()) == [
+            "endpoint", "method", "status_code", "elapsed_ms", "payload_bytes",
+        ]
+
+    def test_status_code_none_allowed_for_transport_failures(self):
+        payload = self._make(status_code=None)
+        assert payload["status_code"] is None
+
+    def test_payload_bytes_none_allowed(self):
+        payload = self._make(payload_bytes=None)
+        assert payload["payload_bytes"] is None
+
+    def test_empty_endpoint_rejected(self):
+        with pytest.raises(ValueError, match="endpoint"):
+            self._make(endpoint="  ")
+
+    def test_empty_method_rejected(self):
+        with pytest.raises(ValueError, match="method"):
+            self._make(method="")
+
+    def test_elapsed_ms_required_int(self):
+        with pytest.raises(TypeError, match="elapsed_ms"):
+            self._make(elapsed_ms=None)
+        with pytest.raises(TypeError, match="elapsed_ms"):
+            self._make(elapsed_ms="28")
+
+    def test_negative_values_rejected(self):
+        with pytest.raises(ValueError, match="elapsed_ms"):
+            self._make(elapsed_ms=-1)
+        with pytest.raises(ValueError, match="payload_bytes"):
+            self._make(payload_bytes=-1)
+
+    def test_status_code_wrong_type(self):
+        with pytest.raises(TypeError, match="status_code"):
+            self._make(status_code="200")

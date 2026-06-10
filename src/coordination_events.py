@@ -231,12 +231,29 @@ WAVE_0_EVENT_TYPES: frozenset[str] = frozenset({
 #   measurement.governance_mcp.503_emission  (numerator — emitted per 503
 #     returned during cutover):
 #     payload = {"request_path": str, "error_reason": str}
+#
+#   measurement.lease_plane.request  (§14 prereq PR #6 — the disconfirmer-(B)
+#     Phase A baseline; one row per client lease RPC, drained in batches by
+#     perf_monitor_persist_task from src/lease_plane/client.py samples):
+#     meta payload = make_measurement_payload(...) + {"samples_dropped_total"}
+#     columns: endpoint = request path, status = outcome string,
+#     elapsed_ms = client-perceived wall clock (the §0(B) quantity).
+#
+#   measurement.beam_python_boundary.request  (§6.3 — Wave 3 impl emits per
+#     successful boundary call; constant lands ahead per the Wave 3a
+#     precedent):
+#     payload = {"endpoint": str, "method": str, "elapsed_ms": int,
+#                "payload_bytes": int}
 MEASUREMENT_GOVERNANCE_MCP_REQUEST = "measurement.governance_mcp.request"
 MEASUREMENT_GOVERNANCE_MCP_503_EMISSION = "measurement.governance_mcp.503_emission"
+MEASUREMENT_LEASE_PLANE_REQUEST = "measurement.lease_plane.request"
+MEASUREMENT_BEAM_PYTHON_BOUNDARY_REQUEST = "measurement.beam_python_boundary.request"
 
 MEASUREMENT_EVENT_TYPES: frozenset[str] = frozenset({
     MEASUREMENT_GOVERNANCE_MCP_REQUEST,
     MEASUREMENT_GOVERNANCE_MCP_503_EMISSION,
+    MEASUREMENT_LEASE_PLANE_REQUEST,
+    MEASUREMENT_BEAM_PYTHON_BOUNDARY_REQUEST,
 })
 
 # Cached emitter context — git_commit and host don't change at runtime.
