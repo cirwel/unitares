@@ -85,6 +85,35 @@ _CLASS_TAG_PRIORITY = (
     "ephemeral",
 )
 
+# Role families for the cross-role lineage envelope
+# (lineage_lifecycle.pre_check_cross_role). The envelope's unit of
+# enforcement is the FAMILY, not the atomic tag: S8a Phase-2 promotion
+# renames `ephemeral` → `engaged_ephemeral` on engagement, which is a
+# lifecycle stage within one role, not a role change — raw tag equality
+# therefore rejects every promoted-parent lineage (audited 2026-06-10:
+# 45/45 `lineage_cross_role_rejected` events were
+# engaged_ephemeral-parent/ephemeral-successor false positives; zero
+# true cross-role catches since the check shipped). Substrate tags stay
+# their own families — embodied↔persistent lineage remains rejected, as
+# the existing envelope tests pin.
+ROLE_FAMILIES = {
+    "embodied": "embodied",
+    "persistent": "persistent",
+    "ephemeral": "ephemeral",
+    "engaged_ephemeral": "ephemeral",
+    "session_like": "ephemeral",  # reserved tag — same family when it ships
+}
+
+
+def role_family(class_tag: str) -> str:
+    """Map an atomic class tag to its lineage-envelope role family.
+
+    Unknown tags map to themselves, so a future tag is strict by
+    default — it only matches lineage against its own kind until
+    explicitly placed in a family here.
+    """
+    return ROLE_FAMILIES.get(class_tag, class_tag)
+
 
 # ---------------------------------------------------------------------------
 # Dataclass — full record returned to internal callers (v3.1 §"Input signature")
