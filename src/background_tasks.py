@@ -840,6 +840,10 @@ async def perf_monitor_persist_task(interval_minutes: float = 5.0):
                     measurement_samples_dropped,
                 )
 
+                # Drain is permanent: if the INSERT below fails, the drained
+                # samples are lost (no re-queue into the bounded deque). A
+                # failed drain is a ~5-minute gap in a best-effort baseline,
+                # not a correctness failure — accepted by design.
                 samples = drain_measurement_samples()
                 if samples:
                     rows = [

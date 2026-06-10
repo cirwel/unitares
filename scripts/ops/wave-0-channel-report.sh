@@ -12,6 +12,11 @@
 # measurement.beam_python_boundary.request rows land in the same panel when
 # the implementation wires them.
 #
+# Status-column semantics differ by family (both schema-legal; council note,
+# PR #599): wave_3a rows carry HTTP status codes as text ("200","503");
+# lease_plane rows carry lifecycle outcomes ("ok","transport_exception",...).
+# Don't aggregate status across measurement_types.
+#
 # Usage: wave-0-channel-report.sh [WINDOW]     (default: '14 days')
 set -euo pipefail
 

@@ -121,6 +121,11 @@ def _record_lease_rpc_latency(
     global _MEASUREMENT_SAMPLES_DROPPED
     elapsed_ms = (time.perf_counter() - start_perf) * 1000.0
     try:
+        # len-check-then-increment is not atomic as a pair: assumes the
+        # standard GIL-enabled CPython build (free-threading is opt-in on
+        # 3.13+/3.14). Under a thread switch the counter can undercount —
+        # acceptable at coverage-signal precision; the deque's own maxlen
+        # still bounds memory regardless.
         if len(_MEASUREMENT_SAMPLES) == _MEASUREMENT_SAMPLES.maxlen:
             _MEASUREMENT_SAMPLES_DROPPED += 1
         _MEASUREMENT_SAMPLES.append(

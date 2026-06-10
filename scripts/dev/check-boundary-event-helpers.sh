@@ -35,7 +35,7 @@ violations=$(
     grep -v "src/coordination_events.py" |
     grep -v "governance_core/coordination_events_helpers.py" |
     grep -v "elixir/lease_plane/lib/unitares_lease_plane/coordination_payloads.ex" |
-    grep -v "/test/" |
+    grep -vE "/tests?/" |
     grep -v "scripts/dev/check-boundary-event-helpers.sh" |
     grep -v "scripts/ops/wave-3-shadow-divergence-check.sql" |
     grep -v "scripts/ops/wave-0-channel-report.sh" || true
