@@ -99,10 +99,22 @@ If R2 silently allows cross-role declarations through to the demotion path, the 
 **Pre-check rule.** At onboard, when `parent_agent_id` is provided:
 1. Look up parent's class tags (`core.identities.metadata.class_tags` per S8a).
 2. Compare to successor's class tags (which are stamped at onboard per S8a Phase 2).
-3. If the primary class tag differs, **reject the lineage declaration** with audit event `lineage_cross_role_rejected`, payload `{successor_class, parent_class, reason: "role_envelope_mismatch"}`.
+3. If the **role family** differs (`role_family()` in
+   `src/identity/trajectory_continuity.py`), **reject the lineage
+   declaration** with audit event `lineage_cross_role_rejected`, payload
+   `{successor_class, parent_class, successor_family, parent_family, reason:
+   "role_envelope_mismatch"}`. Raw-tag equality was the original rule; it
+   broke on S8a promotion (`ephemeral → engaged_ephemeral` renamed the
+   parent's tag, severing every promoted-parent lineage — 45 false
+   positives, zero true catches, audited 2026-06-10). Promotion is a
+   lifecycle stage within one role, so the ephemeral cohort
+   (`ephemeral`, `engaged_ephemeral`, reserved `session_like`) is one
+   family; this matches the rationale above — what the envelope protects
+   is R1's shared-operating-envelope assumption, which a within-role
+   lifecycle stage does not violate.
 4. Successor proceeds with no `parent_agent_id` recorded. The `parent_agent_id` value the agent supplied is logged in the audit event but not written to `core.identities`.
 
-**Caveat.** S8a's class-tag taxonomy is itself evolving. The pre-check defers to S8a's taxonomy of-the-day — if S8a adds or splits classes, R2 inherits the change without code modification. If the successor or parent has no class tag (orphan-record path before S8a backfill completes), the pre-check is skipped and the declaration proceeds as same-role (charitable default).
+**Caveat.** S8a's class-tag taxonomy is itself evolving. The pre-check defers to S8a's taxonomy of-the-day — if S8a adds or splits classes, R2 inherits the change without code modification **except** that a new atomic tag must be placed in `ROLE_FAMILIES` (unknown tags are strict-by-default: they match lineage only against their own kind). A tag-rename promotion path must keep source and target in one family — `test_role_family_map_covers_promotion_path` pins this against `class_promotion.py`'s constants. If the successor or parent has no class tag (orphan-record path before S8a backfill completes), the pre-check is skipped and the declaration proceeds as same-role (charitable default).
 
 **Open question #1 (was Q5 in v1):** should cross-role lineage be *flagged-but-allowed* rather than *rejected*? Allow-with-flag preserves operator visibility into "X tried to claim Y's lineage despite role mismatch," which can surface attempted fork-reclassifications. Reject-at-declaration is cleaner but loses that signal. v2 picks reject as default for clean audit semantics; revisit if operator wants the flagged-allow visibility.
 

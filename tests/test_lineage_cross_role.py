@@ -144,6 +144,155 @@ async def test_pre_check_embodied_parent_rejects_ephemeral():
 
 
 # ---------------------------------------------------------------------------
+# 6a. Role families — promotion is a lifecycle stage, not a role change
+#     (2026-06-10: all 45 rejections on record were
+#     engaged_ephemeral-parent false positives from raw tag equality)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pre_check_promoted_parent_accepts_ephemeral_successor():
+    """parent=engaged_ephemeral (S8a-promoted), successor=ephemeral → accept.
+
+    THE production false-positive case: S8a Phase-2 promotes an engaged
+    parent's tag from `ephemeral` to `engaged_ephemeral`, after which
+    every fresh spawn declaring it as parent was rejected under raw tag
+    equality. Same role family → None.
+    """
+    from src.db import get_db
+    backend = get_db()
+    backend.read_class_tag = AsyncMock(return_value="engaged_ephemeral")
+
+    result = await pre_check_cross_role("promoted-parent-uuid", "ephemeral")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_pre_check_ephemeral_parent_accepts_promoted_successor():
+    """Inverse direction: parent=ephemeral, successor=engaged_ephemeral → accept."""
+    from src.db import get_db
+    backend = get_db()
+    backend.read_class_tag = AsyncMock(return_value="ephemeral")
+
+    result = await pre_check_cross_role("plain-parent-uuid", "engaged_ephemeral")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_pre_check_session_like_in_ephemeral_family():
+    """Reserved `session_like` tag sits in the ephemeral family already."""
+    from src.db import get_db
+    backend = get_db()
+    backend.read_class_tag = AsyncMock(return_value="engaged_ephemeral")
+
+    result = await pre_check_cross_role("promoted-parent-uuid", "session_like")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_pre_check_promoted_parent_still_rejects_substrate_successor():
+    """Family fix does not loosen the substrate envelope.
+
+    parent=persistent, successor=engaged_ephemeral → still cross-family.
+    The rejection dict now carries both raw classes and their families
+    so the audit event distinguishes tag-level from family-level data.
+    """
+    from src.db import get_db
+    backend = get_db()
+    backend.read_class_tag = AsyncMock(return_value="persistent")
+
+    result = await pre_check_cross_role("resident-uuid", "engaged_ephemeral")
+
+    assert result is not None
+    assert result["parent_class"] == "persistent"
+    assert result["successor_class"] == "engaged_ephemeral"
+    assert result["parent_family"] == "persistent"
+    assert result["successor_family"] == "ephemeral"
+    assert result["reason"] == "role_envelope_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_pre_check_substrate_tags_stay_distinct_families():
+    """embodied vs persistent are different roles, not one substrate family.
+
+    The family map merges only lifecycle stages of the SAME role
+    (ephemeral cohort). Lumen declaring lineage to a resident — or vice
+    versa — remains cross-role.
+    """
+    from src.db import get_db
+    backend = get_db()
+    backend.read_class_tag = AsyncMock(return_value="embodied")
+
+    result = await pre_check_cross_role("lumen-uuid", "persistent")
+
+    assert result is not None
+    assert result["parent_family"] == "embodied"
+    assert result["successor_family"] == "persistent"
+
+
+@pytest.mark.asyncio
+async def test_pre_check_unknown_tag_stays_strict():
+    """A tag outside ROLE_FAMILIES maps to itself — strict by default.
+
+    An unknown future tag never silently joins an existing family;
+    against any known class it stays cross-family until explicitly
+    placed in `ROLE_FAMILIES`.
+    """
+    from src.db import get_db
+    backend = get_db()
+    backend.read_class_tag = AsyncMock(return_value="quarantined")
+
+    result = await pre_check_cross_role("odd-parent-uuid", "ephemeral")
+
+    assert result is not None
+    assert result["parent_class"] == "quarantined"
+    assert result["parent_family"] == "quarantined"
+    assert result["successor_family"] == "ephemeral"
+
+
+def test_role_family_map_covers_class_tag_priority():
+    """Every tag in `_CLASS_TAG_PRIORITY` has an explicit family.
+
+    Drift guard: a new atomic class tag added to the priority tuple
+    without a family placement would silently fall into
+    strict-by-default and reproduce the promotion false-positive
+    pattern this fix removed.
+    """
+    from src.identity.trajectory_continuity import (
+        _CLASS_TAG_PRIORITY,
+        ROLE_FAMILIES,
+    )
+
+    missing = [t for t in _CLASS_TAG_PRIORITY if t not in ROLE_FAMILIES]
+    assert missing == []
+
+
+def test_role_family_map_covers_promotion_path():
+    """The S8a promotion source AND target tags share one family.
+
+    Council fold (PR #601): the original bug was a tag RENAME
+    (ephemeral → engaged_ephemeral) splitting parent from successor.
+    `_CLASS_TAG_PRIORITY` is the scoring tuple, not the mutation path —
+    a future promotion target added to `class_promotion.py` without a
+    priority entry would dodge the guard above. Anchor the guard to the
+    actual tag-mutation constants so any rename keeps both endpoints in
+    the same family (a promotion must never sever lineage).
+    """
+    from src.grounding.class_promotion import (
+        PROMOTION_SOURCE_TAG,
+        PROMOTION_TARGET_TAG,
+    )
+    from src.identity.trajectory_continuity import ROLE_FAMILIES, role_family
+
+    assert PROMOTION_SOURCE_TAG in ROLE_FAMILIES
+    assert PROMOTION_TARGET_TAG in ROLE_FAMILIES
+    assert role_family(PROMOTION_SOURCE_TAG) == role_family(PROMOTION_TARGET_TAG)
+
+
+# ---------------------------------------------------------------------------
 # 7. read_class_tag — live DB shape (mirrors test_class_promotion.py
 #    pattern; the mocked backend can't validate JSONB operators)
 # ---------------------------------------------------------------------------

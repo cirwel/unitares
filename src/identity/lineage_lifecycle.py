@@ -50,7 +50,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Literal, Optional
 
 from src.db import get_db
-from src.identity.trajectory_continuity import score_trajectory_continuity
+from src.identity.trajectory_continuity import (
+    role_family,
+    score_trajectory_continuity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -190,9 +193,19 @@ async def pre_check_cross_role(
 ) -> Optional[Dict[str, Any]]:
     """R2 PR 3: cross-role envelope check.
 
-    Returns ``None`` if same-role (declaration may proceed); returns a
-    rejection dict ``{parent_class, successor_class, reason}`` if
-    cross-role.
+    Returns ``None`` if same role-family (declaration may proceed);
+    returns a rejection dict ``{parent_class, successor_class,
+    parent_family, successor_family, reason}`` if cross-family.
+
+    The comparison unit is the role FAMILY (``role_family``), not the
+    raw class tag: S8a Phase-2 promotion renames ``ephemeral`` →
+    ``engaged_ephemeral`` on engagement — a lifecycle stage within one
+    role, not a role change. Raw tag equality (the pre-2026-06-10
+    behavior) rejected every lineage declared against a promoted
+    parent: every ``lineage_cross_role_rejected`` event on record (45
+    at the 2026-06-10 audit, still accruing until this fix deployed)
+    was an engaged_ephemeral-parent/ephemeral-successor false positive,
+    and the check had never caught a true cross-role declaration.
 
     Charitable default: if either side has no class tag (orphan path
     before S8a backfill completes, or a parent that was created
@@ -216,11 +229,15 @@ async def pre_check_cross_role(
     parent_class = await backend.read_class_tag(parent_id)
     if parent_class is None or successor_class is None:
         return None
-    if parent_class == successor_class:
+    parent_family = role_family(parent_class)
+    successor_family = role_family(successor_class)
+    if parent_family == successor_family:
         return None
     return {
         "parent_class": parent_class,
         "successor_class": successor_class,
+        "parent_family": parent_family,
+        "successor_family": successor_family,
         "reason": "role_envelope_mismatch",
     }
 
