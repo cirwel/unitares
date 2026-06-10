@@ -214,3 +214,134 @@ def test_p003_async_def_get_or_create_monitor_also_protected():
         11: "    monitor = UNITARESMonitor(agent_id)",
     }
     assert _is_inside_get_or_create_monitor(11, snippet) is True
+
+
+# ---------------------------------------------------------------------------
+# P002 structural verifier refinements (false-positive sweep 2026-06-10:
+# 9 of 11 lifetime findings dismissed — cap-adjacent appends and
+# def/docstring/loop-header flags on bounded mutators)
+# ---------------------------------------------------------------------------
+
+
+def _p002_finding(line: int) -> Finding:
+    return Finding(
+        pattern="P002",
+        file="/repo/src/x.py",
+        line=line,
+        hint="unbounded growth",
+        severity="medium",
+        detected_at="2026-06-10T00:00:00Z",
+        model_used="test-stub",
+    )
+
+
+def test_p002_drops_def_line_flag():
+    """Flag on a bounded-mutator's def line has no growth op — required
+    token drop (agent_metadata_model.py:212 shape)."""
+    src_line = "def add_recent_update(self, timestamp: str, decision: str) -> None:"
+    snippet = {1: src_line}
+    f = _p002_finding(1)
+    assert _verify_finding_against_source(f, src_line, snippet) is False
+
+
+def test_p002_drops_loop_header_flag():
+    """Flag on a loop header has no growth op — required token drop
+    (event_detector.py:261 shape)."""
+    src_line = "for threshold in RISK_THRESHOLDS:"
+    snippet = {1: src_line}
+    f = _p002_finding(1)
+    assert _verify_finding_against_source(f, src_line, snippet) is False
+
+
+def test_p002_drops_append_with_len_cap_next_line():
+    """Append with the len-cap trim on the very next line is bounded —
+    the exact event_detector.py:414 dismissal."""
+    snippet = {
+        414: "self._recent_events.append(event)",
+        415: "if len(self._recent_events) > self._max_stored_events:",
+        416: "    self._recent_events = self._recent_events[-self._max_stored_events:]",
+    }
+    f = _p002_finding(414)
+    assert _verify_finding_against_source(f, snippet[414], snippet) is False
+
+
+def test_p002_drops_append_with_trim_a_few_lines_down():
+    """Multi-line append literal with the trim after the closing brace
+    (agent_metadata_model.add_lifecycle_event shape: trim at +5)."""
+    snippet = {
+        201: "self.lifecycle_events.append({",
+        202: '    "event": event,',
+        203: '    "timestamp": ts,',
+        204: '    "reason": reason',
+        205: "})",
+        206: "if len(self.lifecycle_events) > self.MAX_LIFECYCLE_EVENTS:",
+    }
+    f = _p002_finding(201)
+    assert _verify_finding_against_source(f, snippet[201], snippet) is False
+
+
+def test_p002_drops_append_to_deque_with_maxlen_nearby():
+    """A deque constructed with maxlen= in the window is bounded by
+    construction."""
+    snippet = {
+        10: "self._samples = deque(maxlen=10_000)",
+        11: "for item in batch:",
+        12: "    self._samples.append(item)",
+    }
+    f = _p002_finding(12)
+    assert _verify_finding_against_source(f, snippet[12], snippet) is False
+
+
+def test_p002_drops_pop_before_append():
+    """Evict-then-append idiom: `.pop(0)` just above the append is the
+    cap."""
+    snippet = {
+        30: "if len(self.history) >= self.cap:",
+        31: "    self.history.pop(0)",
+        32: "self.history.append(entry)",
+    }
+    f = _p002_finding(32)
+    assert _verify_finding_against_source(f, snippet[32], snippet) is False
+
+
+def test_p002_keeps_bare_unbounded_append():
+    """True-positive guard: an append with no bound cue anywhere in the
+    window must still surface — that's the real bug shape."""
+    snippet = {
+        100: "def on_event(self, event):",
+        101: "    self.events.append(event)",
+        102: "    self.notify(event)",
+    }
+    f = _p002_finding(101)
+    assert _verify_finding_against_source(f, snippet[101], snippet) is True
+
+
+def test_p002_keeps_unbounded_dict_assignment():
+    """True-positive guard: per-event dict growth with no eviction
+    survives, both spaced and unspaced assignment forms."""
+    snippet_spaced = {
+        200: "def register(self, key, value):",
+        201: "    self.registry[key] = value",
+    }
+    f = _p002_finding(201)
+    assert (
+        _verify_finding_against_source(f, snippet_spaced[201], snippet_spaced)
+        is True
+    )
+    snippet_unspaced = {201: "    self.registry[key]=value"}
+    f2 = _p002_finding(201)
+    assert (
+        _verify_finding_against_source(f2, snippet_unspaced[201], snippet_unspaced)
+        is True
+    )
+
+
+def test_p002_cue_outside_window_does_not_drop():
+    """Pins the window width: a len-cap check 8 lines below the append
+    (beyond _P002_CUE_LINES_AFTER=6) does not rescue the finding."""
+    snippet = {
+        50: "self.buffer.append(item)",
+        58: "if len(self.unrelated) > CAP:",
+    }
+    f = _p002_finding(50)
+    assert _verify_finding_against_source(f, snippet[50], snippet) is True

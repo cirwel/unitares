@@ -1302,6 +1302,17 @@ _PERSIST_VERB_PATTERN = re.compile(
 # finding is dropped as a false positive.
 _PATTERN_REQUIRED_TOKENS: dict[str, tuple[str, ...]] = {
     "P001": ("create_task(",),
+    # P002 needs the actual growth operation on the flagged line — an
+    # append/extend call or a subscript assignment (`x[key] = ...`,
+    # spaced or not). The model otherwise associates the finding with a
+    # nearby def line, docstring, dict literal, or loop header.
+    # False-positive sweep 2026-06-10: 7 of 9 dismissed lifetime P002
+    # findings had no growth op on the flagged line
+    # (agent_metadata_model.py:212-213 def+docstring of a bounded
+    # mutator, event_detector.py:261/:344 loop header + dict-literal
+    # value lines, identity_step.py:64/:106 drifted lines,
+    # agent_metadata_model.py:194 a bare asdict return).
+    "P002": (".append(", ".extend(", "] =", "]="),
     "P003": ("UNITARESMonitor(",),
     # P004 needs a literal Redis call marker on the flagged line.
     # Narrowed to Redis-only on 2026-05-23: asyncpg ops in MCP handlers are
@@ -1351,6 +1362,25 @@ _P001_TASK_ASSIGNMENT = re.compile(r"\b[a-zA-Z_]\w*\s*=\s*[^=].*create_task\(")
 # `create_tracked_task` contains the substring `create_task(`. Caught when
 # qwen3-coder-next flagged 2 sites in mcp_server_std.py on 2026-04-17.
 _P001_TRACKED_HELPER = re.compile(r"\bcreate_tracked_task\s*\(")
+
+# Regex: bounded-growth cues near a flagged P002 growth op — a len-cap
+# trim check (`if len(x) > CAP:`), an explicit eviction (`.pop(0)`,
+# `.popleft()`), or a deque bounded at construction (`maxlen=`). The
+# P002 library text requires growth "without a cap, LRU eviction, or
+# periodic sweep"; the model judges the append line in isolation and
+# misses the trim that sits right next to it. False-positive sweep
+# 2026-06-10: event_detector.py:291/:414 both have the len-cap trim on
+# the very next line; agent_metadata_model.py's bounded mutators trim
+# within three lines of the append.
+_P002_BOUND_CUE = re.compile(
+    r"\bif\s+len\s*\(|\bmaxlen\s*=|\.popleft\s*\(|\.pop\s*\(\s*0\s*\)"
+)
+# Window: multi-line `.append({...})` literals push the trim a few lines
+# past the flagged call (add_lifecycle_event's 5-line append → trim at
+# +5), so the after-window is wider than the before-window (pop-before-
+# append idioms sit within a line or two above).
+_P002_CUE_LINES_BEFORE = 3
+_P002_CUE_LINES_AFTER = 6
 
 # Regex: header line of `def get_or_create_monitor(` — when a P003 flag
 # lands inside the body of this function (which IS the cache), the
@@ -1764,6 +1794,24 @@ def _verify_finding_against_source(
             "warning",
         )
         return False
+    # P002 specifically: the library text requires growth "without a
+    # cap, LRU eviction, or periodic sweep". If a bound cue (len-cap
+    # trim, pop/popleft eviction, deque maxlen) sits within a few lines
+    # of the flagged growth op, the cap the rule asks for is present —
+    # the model just can't see past the single line.
+    if finding.pattern == "P002":
+        for cue_line_no in range(
+            finding.line - _P002_CUE_LINES_BEFORE,
+            finding.line + _P002_CUE_LINES_AFTER + 1,
+        ):
+            nearby = snippet_lines_by_num.get(cue_line_no, "")
+            if nearby and _P002_BOUND_CUE.search(nearby):
+                log(
+                    f"drop P002 {finding.file}:{finding.line} — bound cue at "
+                    f"line {cue_line_no}: {nearby.strip()[:80]}",
+                    "warning",
+                )
+                return False
     # P003 specifically: if the flagged line is inside the body of
     # get_or_create_monitor itself (the cache function), the
     # "instantiated outside the cache" rule does not apply.

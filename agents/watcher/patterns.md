@@ -60,6 +60,26 @@ calls). See `_P001_TRACKED_HELPER` in `agent.py`.
 `dict[key] = value` or `list.append(x)` inside a loop or per-event handler
 without a cap, LRU eviction, or periodic sweep.
 
+**NOT a match** (the cap the rule asks for is already present):
+
+- `collections.deque(maxlen=N)` containers — bounded by construction; appends
+  to them need no sweep.
+- A growth op with its trim adjacent — `x.append(...)` immediately followed by
+  `if len(x) > CAP:` + slice/del, or preceded by `.pop(0)` / `.popleft()`.
+  The append and its cap are one unit; read the surrounding lines before
+  flagging.
+- Bounded-mutator methods whose body enforces a declared cap (e.g.
+  `add_recent_update` → `MAX_RECENT_UPDATES`). Do not flag the `def` line or
+  docstring of such a method.
+- Flag the line holding the growth op itself — never a loop header, dict
+  literal value line, or function signature near it.
+
+False-positive sweep 2026-06-10: 9 of 11 lifetime P002 findings were dismissed
+— all were cap-adjacent appends or def/docstring lines of bounded mutators
+(`event_detector.py`, `agent_metadata_model.py`, `identity_step.py`). Verifier
+backstops: required growth-token on the flagged line + `_P002_BOUND_CUE`
+window drop in `agent.py`.
+
 **Seen in:** `adaptive_prediction.py`, `serialization.py` (Ogler finds, 2026-04),
 `lifecycle_events` cap fix (2026-04-07)
 
