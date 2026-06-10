@@ -82,3 +82,28 @@ def test_monitor_without_attribute_uses_getattr_default():
     bare = SimpleNamespace()
     assert _complexity_divergence_novel(bare, _cm(0.7, 0.3)) is True
     assert bare._last_surfaced_complexity_gap == pytest.approx(0.4)
+
+
+def test_simulate_update_does_not_consume_novelty():
+    """Council fold (PR #603): simulate_update runs the full governance
+    cycle, including result building, which advances the novelty gate.
+    The simulation must save/restore the gap so a dry run doesn't
+    consume the agent's first REAL surfacing of the complexity line."""
+    from src.governance_monitor import UNITARESMonitor
+
+    monitor = UNITARESMonitor(agent_id="test-sim-novelty-gap")
+    assert monitor._last_surfaced_complexity_gap is None
+
+    # Large reported-vs-derived gap: short text + complexity 0.9 is the
+    # shape the live verifier reproduced (derived ≈ 0, Δ ≈ 0.9).
+    agent_state = {"response_text": "ok", "complexity": 0.9}
+
+    monitor.simulate_update(dict(agent_state))
+    assert monitor._last_surfaced_complexity_gap is None, (
+        "simulation burned the novelty gate — the first real check-in "
+        "would silently lose the complexity line"
+    )
+
+    # The real path still engages the gate.
+    monitor.process_update(dict(agent_state))
+    assert monitor._last_surfaced_complexity_gap is not None

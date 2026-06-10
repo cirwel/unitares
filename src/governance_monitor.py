@@ -140,9 +140,12 @@ class UNITARESMonitor:
         self._last_drift_vector = None  # Concrete ethical drift (Δη)
         # Last signed complexity gap (self − derived) that was marked novel
         # for the mirror's calibration line. Monitor-lifetime only,
-        # deliberately not persisted: after a restart the line may fire once
-        # anew, which is acceptable session-scoped novelty. Written by
-        # monitor_result.build_monitor_result.
+        # deliberately not persisted: after a restart — or once per worker
+        # under multi-process serving (each worker caches its own monitor)
+        # — the line may fire anew, which is acceptable session-scoped
+        # novelty. Written by monitor_result._complexity_divergence_novel;
+        # simulate_update saves/restores it so simulations don't consume
+        # the agent's first real surfacing.
         self._last_surfaced_complexity_gap: Optional[float] = None
 
         # HCK v3.0: Track previous EISV for update coherence ρ(t) and state velocity
@@ -781,6 +784,10 @@ class UNITARESMonitor:
         saved_prev_verdict = self._prev_verdict_action
         saved_prev_norm = self._prev_drift_norm
         saved_prev_conf = self._prev_confidence
+        # The novelty gate for the mirror's complexity line mutates during
+        # result building (monitor_result._complexity_divergence_novel); a
+        # simulation must not consume the agent's first real surfacing.
+        saved_last_gap = self._last_surfaced_complexity_gap
         
         try:
             # OPTIMIZED: Shallow copy + selective deep copy
@@ -825,6 +832,7 @@ class UNITARESMonitor:
             self._prev_verdict_action = saved_prev_verdict
             self._prev_drift_norm = saved_prev_norm
             self._prev_confidence = saved_prev_conf
+            self._last_surfaced_complexity_gap = saved_last_gap
     
     def process_update(self, agent_state: Dict, confidence: Optional[float] = None, task_type: str = "mixed") -> Dict:
         """

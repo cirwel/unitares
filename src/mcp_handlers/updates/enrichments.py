@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from src.logging_utils import get_logger
+from src.monitor_result import DIVERGENCE_LINE_THRESHOLD
 from src.thread_identity import (
     LINEAGE_SPAWN_REASONS,
     classify_episode_fork,
@@ -1417,7 +1418,17 @@ def _get_complexity_disagreement(response_data: dict, meta: Any = None) -> dict 
             return None
 
         continuity = response_data.get("continuity", {})
-        if isinstance(continuity, dict) and continuity.get("complexity_divergence", 0) > 0.15:
+        if (
+            isinstance(continuity, dict)
+            and continuity.get("complexity_divergence", 0) > DIVERGENCE_LINE_THRESHOLD
+        ):
+            # Respect the novelty gate when the payload carries it: a stable
+            # session-long gap should not trigger a KG search on every
+            # check-in any more than it should repeat the mirror line
+            # (council fold, PR #603). A missing key (older builders) keeps
+            # the legacy always-fire behavior.
+            if continuity.get("divergence_novel") is False:
+                return None
             return {
                 "reported": continuity.get("self_reported_complexity"),
                 "derived": continuity.get("derived_complexity"),

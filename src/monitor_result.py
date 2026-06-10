@@ -9,11 +9,13 @@ from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
-# Mirror-line thresholds for the complexity-calibration signal: the line is
-# eligible above this divergence (matches response_formatter's gate) ...
-_DIVERGENCE_LINE_THRESHOLD = 0.15
-# ... and is NOVEL only on the first crossing or when the signed gap moves
-# by more than this since the last surfaced value.
+# Eligibility threshold for the complexity-calibration signal. CANONICAL —
+# response_formatter (mirror line) and updates/enrichments
+# (_get_complexity_disagreement, KG-search gate) import this rather than
+# repeating the literal, so the three gates can't drift apart.
+DIVERGENCE_LINE_THRESHOLD = 0.15
+# The signal is NOVEL only on the first crossing or when the signed gap
+# moves by more than this since the last surfaced value.
 _DIVERGENCE_NOVELTY_DELTA = 0.10
 
 
@@ -31,10 +33,13 @@ def _complexity_divergence_novel(monitor, cm) -> bool:
 
     Mutates ``monitor._last_surfaced_complexity_gap`` when returning
     True — deliberate, documented on the attribute
-    (governance_monitor.__init__). Not persisted: after a restart the
-    line may fire once anew (acceptable session-scoped novelty).
+    (governance_monitor.__init__). Not persisted, and per-monitor-
+    instance: after a restart — or once per worker under multi-process
+    serving, where each worker holds its own monitor cache — the line
+    may fire anew (acceptable session-scoped novelty; degrades toward
+    the old always-fire behavior, never to wrong output).
     """
-    if cm.complexity_divergence <= _DIVERGENCE_LINE_THRESHOLD:
+    if cm.complexity_divergence <= DIVERGENCE_LINE_THRESHOLD:
         return False
     self_cx = cm.self_complexity if cm.self_complexity is not None else 0.0
     signed_gap = self_cx - cm.derived_complexity

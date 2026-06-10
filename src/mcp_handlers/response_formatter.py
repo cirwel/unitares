@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
+from src.monitor_result import DIVERGENCE_LINE_THRESHOLD
 logger = get_logger(__name__)
 
 
@@ -263,7 +264,10 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
         pass  # Not enough history for meaningful complexity comparison
     else:
         continuity = response_data.get("continuity", {})
-        if isinstance(continuity, dict) and continuity.get("complexity_divergence", 0) > 0.15:
+        if (
+            isinstance(continuity, dict)
+            and continuity.get("complexity_divergence", 0) > DIVERGENCE_LINE_THRESHOLD
+        ):
             # Novelty gate (monitor_result computes it from the signed gap):
             # surface the line on the first crossing or when the gap
             # materially changes, not on every check-in of a stable
@@ -355,6 +359,9 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     # signal line — they sit top-level beside margin/nearest_edge, never
     # in the prose signals (dogfood 2026-06-10). NOT named "state": the
     # full payload has a deliberately-stripped duplicate key of that name.
+    # "Don't chase a number" still holds: these are governed-over values
+    # the agent cannot write, only influence through behavior — gaming
+    # coherence requires actually behaving more coherently.
     for state_key, state_val in (
         ("phi", metrics.get("phi")),
         ("coherence", metrics.get("coherence")),

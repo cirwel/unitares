@@ -898,9 +898,12 @@ class TestFormatMirror:
         meta = MagicMock()
         meta.total_updates = 1
         result = _format_mirror(data, saved_trust_tier=None, meta=meta)
-        # No complexity divergence signals should appear
-        for s in result["mirror"]:
-            assert "complexity=" not in s, f"Unexpected complexity signal on early check-in: {s}"
+        # No complexity divergence signals should appear. (Council fold,
+        # PR #603: the old assertion checked for "complexity=", a string
+        # no signal ever contained — a no-op that passed regardless.)
+        assert not any("Complexity calibration" in s for s in result["mirror"]), (
+            f"Unexpected complexity signal on early check-in: {result['mirror']}"
+        )
 
     def test_complexity_divergence_shown_after_baseline(self):
         """With meta.total_updates > 3, complexity divergence appears normally."""
