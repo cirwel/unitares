@@ -201,3 +201,47 @@ class TestShouldSearchKgByCheckinText:
     def test_signal_or_question_enables_kg_search(self):
         ctx = _make_ctx(response_text="I am stuck investigating a regression in auth.")
         assert _should_search_kg_by_checkin_text(ctx, signals=[], question="What unblocks you?") is True
+
+    def test_stale_complexity_gap_skips_kg_search(self):
+        """Council fold (PR #603): a stable session-long complexity gap is
+        novelty-gated out of the mirror line — the KG search it used to
+        trigger on every check-in must respect the same gate."""
+        ctx = _make_ctx(
+            response_text="Continuing the same long-running refactor as before.",
+            response_data={
+                "continuity": {
+                    "self_reported_complexity": 0.8,
+                    "derived_complexity": 0.22,
+                    "complexity_divergence": 0.58,
+                    "divergence_novel": False,
+                }
+            },
+        )
+        assert _should_search_kg_by_checkin_text(ctx, signals=[], question=None) is False
+
+    def test_novel_complexity_gap_still_enables_kg_search(self):
+        ctx = _make_ctx(
+            response_text="Continuing the same long-running refactor as before.",
+            response_data={
+                "continuity": {
+                    "self_reported_complexity": 0.8,
+                    "derived_complexity": 0.22,
+                    "complexity_divergence": 0.58,
+                    "divergence_novel": True,
+                }
+            },
+        )
+        assert _should_search_kg_by_checkin_text(ctx, signals=[], question=None) is True
+
+    def test_legacy_payload_without_novelty_key_still_enables_kg_search(self):
+        ctx = _make_ctx(
+            response_text="Continuing the same long-running refactor as before.",
+            response_data={
+                "continuity": {
+                    "self_reported_complexity": 0.8,
+                    "derived_complexity": 0.22,
+                    "complexity_divergence": 0.58,
+                }
+            },
+        )
+        assert _should_search_kg_by_checkin_text(ctx, signals=[], question=None) is True
