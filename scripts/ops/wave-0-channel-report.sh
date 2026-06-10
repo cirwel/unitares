@@ -23,10 +23,10 @@ echo
 echo "--- FAILURE panel (audit.coordination_events) ---"
 psql "$DSN" -c "
   SELECT event_type,
-         count(*)                                   AS events,
-         count(DISTINCT agent_id)                   AS agents,
-         coalesce(payload->>'error_class','-')      AS error_class,
-         count(*)                                   AS by_class
+         sum(count(*)) OVER (PARTITION BY event_type) AS events,
+         coalesce(payload->>'error_class','-')        AS error_class,
+         count(*)                                      AS by_class,
+         count(DISTINCT agent_id)                      AS agents
   FROM audit.coordination_events
   WHERE ts > now() - interval '$WINDOW'
   GROUP BY event_type, payload->>'error_class'
