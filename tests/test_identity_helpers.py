@@ -114,18 +114,18 @@ class TestGenerateAgentId:
         result = _generate_agent_id(model_type="claude-opus-4-5", client_hint="cursor")
         assert "Cursor_Claude_Opus_4_5" in result
 
-    def test_fallback_mcp(self):
+    def test_fallback_anon(self):
         result = _generate_agent_id()
-        assert result.startswith("mcp_")
+        assert result.startswith("anon_")
         assert datetime.now().strftime("%Y%m%d") in result
 
     def test_unknown_client_hint_falls_back(self):
         result = _generate_agent_id(client_hint="unknown")
-        assert result.startswith("mcp_")
+        assert result.startswith("anon_")
 
     def test_empty_client_hint_falls_back(self):
         result = _generate_agent_id(client_hint="")
-        assert result.startswith("mcp_")
+        assert result.startswith("anon_")
 
     def test_none_model_with_valid_client(self):
         result = _generate_agent_id(model_type=None, client_hint="vscode")
@@ -153,19 +153,19 @@ class TestClientHintLeakRegression:
         bug_input = "Anthropic Claude, mobile app, dogfooding UX review"
         result = _generate_agent_id(client_hint=bug_input)
         assert bug_input not in result
-        assert result.startswith("mcp_")
+        assert result.startswith("anon_")
 
     def test_long_hint_rejected(self):
         result = _generate_agent_id(client_hint="x" * 41)
-        assert result.startswith("mcp_")
+        assert result.startswith("anon_")
 
     def test_hint_with_spaces_rejected(self):
         result = _generate_agent_id(client_hint="cursor with extra context")
-        assert result.startswith("mcp_")
+        assert result.startswith("anon_")
 
     def test_hint_with_punctuation_rejected(self):
         result = _generate_agent_id(client_hint="cursor, v1.2.3")
-        assert result.startswith("mcp_")
+        assert result.startswith("anon_")
 
     def test_valid_short_hints_still_work(self):
         for hint in ("cursor", "vscode", "claude_desktop", "claude-code", "chatgpt"):

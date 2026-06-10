@@ -153,13 +153,13 @@ class TestGenerateAgentId:
 
     def test_client_hint_with_spaces_rejected(self):
         # Spaces are not valid in a client_hint shape — descriptors must not
-        # become identifiers. Falls through to mcp_DATE.
+        # become identifiers. Falls through to anon_DATE.
         result = self.generate(client_hint="my editor")
-        assert result.startswith("mcp_")
+        assert result.startswith("anon_")
 
     def test_fallback_no_args(self):
         result = self.generate()
-        assert result.startswith("mcp_")
+        assert result.startswith("anon_")
 
     def test_third_party_client_prefixed_with_model(self):
         result = self.generate(model_type="gemini-pro", client_hint="cursor")
@@ -172,11 +172,53 @@ class TestGenerateAgentId:
 
     def test_empty_client_hint_fallback(self):
         result = self.generate(client_hint="")
-        assert result.startswith("mcp_")
+        assert result.startswith("anon_")
 
     def test_unknown_client_hint_fallback(self):
         result = self.generate(client_hint="unknown")
-        assert result.startswith("mcp_")
+        assert result.startswith("anon_")
+
+    def test_auto_minted_names_pass_reserved_names_gate(self):
+        # The mint↔gate coupling test that was missing for months: the
+        # auto-mint MUST produce names the reserved-names security gate
+        # accepts. The historical default f"mcp_{timestamp}" was minted by
+        # the server and then rejected by the server ('mcp_' is in
+        # RESERVED_PREFIXES) — every anonymous poller failed every tool call
+        # with error_type=reserved_prefix, invisible until PR #543 made
+        # tool_usage.success honest (live incident, 2026-06-10).
+        from src.mcp_handlers.validators import validate_agent_id_reserved_names
+
+        for kwargs in (
+            {},                              # bare anonymous session
+            {"client_hint": "my editor"},    # invalid hint → fallback
+            {"client_hint": ""},             # empty hint → fallback
+            {"client_hint": "unknown"},      # filtered hint → fallback
+            {"model_type": "claude-opus-4-5", "client_hint": "claude_desktop"},
+            {"client_hint": "cursor"},
+        ):
+            minted = self.generate(**kwargs)
+            ok, err = validate_agent_id_reserved_names(minted)
+            assert err is None, (
+                f"auto-mint produced {minted!r} which the reserved-names "
+                f"gate rejects — server would refuse its own identity"
+            )
+            assert ok == minted
+
+        # KNOWN GAP, pinned deliberately (council 2026-06-10): a model_type
+        # or client_hint that BEGINS with a reserved family word still mints
+        # a name the gate rejects — e.g. model_type="governance-core" →
+        # "Governance_Core_<date>" → reserved prefix 'governance_' (the gate
+        # lowercases before matching). Same incident class as the anonymous
+        # fallback, for NAMED callers; rare today (no real model/client name
+        # starts with a reserved word) and the mint-side remedy is an
+        # identity-surface design call — tracked as a follow-up. Pinned here
+        # so the gap stays visible instead of silent:
+        named_collision = self.generate(model_type="governance-core")
+        _, err = validate_agent_id_reserved_names(named_collision)
+        assert err is not None, (
+            "named reserved-word collision unexpectedly resolved — update "
+            "this pin, the coupling-test scope, and close the follow-up"
+        )
 
     def test_whitespace_model_type(self):
         result = self.generate(model_type="  claude-haiku  ")

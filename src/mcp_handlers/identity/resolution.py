@@ -133,7 +133,7 @@ def _generate_agent_id(model_type: Optional[str] = None, client_hint: Optional[s
     1. model_type with third-party client -> "Client_Model_20251227"
     2. model_type alone -> "Model_20251227"
     3. client_hint -> "client_20251227"
-    4. fallback -> "mcp_20251227"
+    4. fallback -> "anon_20251227"
 
     Args:
         model_type: Model identifier (e.g., "claude-opus-4-5", "gemini-pro")
@@ -169,7 +169,16 @@ def _generate_agent_id(model_type: Optional[str] = None, client_hint: Optional[s
         client = client_hint.strip().lower()
         return f"{client}_{timestamp}"
     else:
-        return f"mcp_{timestamp}"
+        # Anonymous fallback. MUST NOT use a reserved prefix — the historical
+        # f"mcp_{timestamp}" mint collided with validators.
+        # validate_agent_id_reserved_names (RESERVED_PREFIXES includes 'mcp_'),
+        # so every anonymous session's tool calls were rejected with
+        # error_type=reserved_prefix. Invisible while tool_usage.success was
+        # hardcoded-true; surfaced 2026-06-10 after PR #543 made recording
+        # honest (~22-26k failure rows/day, all from auto-minted callers).
+        # The mint↔gate coupling is pinned by tests/test_identity_core.py::
+        # TestGenerateAgentId::test_auto_minted_names_pass_reserved_names_gate.
+        return f"anon_{timestamp}"
 
 
 def _generate_auto_label(model_type: Optional[str] = None, client_hint: Optional[str] = None) -> Optional[str]:

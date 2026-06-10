@@ -71,22 +71,24 @@ class TestGenerateAgentId:
         result = _generate_agent_id(model_type=None, client_hint="vscode")
         assert result == f"vscode_{today}"
 
-    def test_mcp_fallback(self):
-        """Without model_type or client_hint, should use 'mcp' prefix."""
+    def test_anon_fallback(self):
+        """Without model_type or client_hint, falls back to the 'anon' prefix
+        (non-reserved — 'mcp_' is in the validators' RESERVED_PREFIXES, and
+        minting it caused every anonymous caller to be rejected)."""
         from src.mcp_handlers.identity.handlers import _generate_agent_id
 
         today = datetime.now().strftime("%Y%m%d")
 
         # Neither model_type nor client_hint
         result = _generate_agent_id(model_type=None, client_hint=None)
-        assert result == f"mcp_{today}"
+        assert result == f"anon_{today}"
 
         # Empty strings should also fallback
         result = _generate_agent_id(model_type=None, client_hint="")
-        assert result == f"mcp_{today}"
+        assert result == f"anon_{today}"
 
         result = _generate_agent_id(model_type=None, client_hint="unknown")
-        assert result == f"mcp_{today}"
+        assert result == f"anon_{today}"
 
     def test_third_party_client_prefixed(self):
         """Third-party client using a model should be prefixed to prevent identity confusion."""
@@ -154,8 +156,8 @@ class TestResolveSessionIdentityAgentId:
             assert "agent_uuid" in result
 
     @pytest.mark.asyncio
-    async def test_new_agent_without_model_uses_mcp(self):
-        """New agent without model_type should get mcp_ prefix."""
+    async def test_new_agent_without_model_uses_anon_fallback(self):
+        """New agent without model_type falls back to the anon_ prefix."""
         from src.mcp_handlers.identity.handlers import resolve_session_identity
 
         today = datetime.now().strftime("%Y%m%d")
@@ -176,7 +178,7 @@ class TestResolveSessionIdentityAgentId:
             )
 
             assert result["created"] is True
-            assert result["agent_id"] == f"mcp_{today}"
+            assert result["agent_id"] == f"anon_{today}"
 
 
 class TestOnboardAgentIdResponse:
@@ -237,7 +239,7 @@ class TestEdgeCases:
         # Empty string - should not crash
         result = _generate_agent_id("")
         # Empty string is falsy, so should fallback to mcp_
-        assert result == f"mcp_{today}"
+        assert result == f"anon_{today}"
 
 
 if __name__ == "__main__":
