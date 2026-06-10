@@ -108,19 +108,30 @@ async def main() -> int:
                 # Shadow window not started for this table — see module docstring.
                 skipped_inert += 1
                 continue
-            payload = make_shadow_divergence_payload(
-                table_name=table_name,
-                agent_id=str(row["agent_id"]),
-                kind=_row_kind(row),
-                divergent_columns=_divergent_columns(row),
-            )
-            await emit_event(
-                pool,
-                service="governance_mcp",
-                event_type=COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_SHADOW_DIVERGENCE,
-                payload=payload,
-                agent_id=None,  # row agent_id may predate UUID discipline; carried in payload
-            )
+            try:
+                payload = make_shadow_divergence_payload(
+                    table_name=table_name,
+                    agent_id=str(row["agent_id"]),
+                    kind=_row_kind(row),
+                    divergent_columns=_divergent_columns(row),
+                )
+                await emit_event(
+                    pool,
+                    service="governance_mcp",
+                    event_type=COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_SHADOW_DIVERGENCE,
+                    payload=payload,
+                    agent_id=None,  # row agent_id may predate UUID discipline; carried in payload
+                )
+            except Exception as exc:  # noqa: BLE001 — clean exit-1 contract
+                # Already-emitted events stay committed (each emit is its own
+                # INSERT); fail the run loudly but with the documented exit
+                # code rather than a traceback.
+                print(
+                    f"[shadow-divergence] emit failed after {emitted} events "
+                    f"({table_name}/{row['agent_id']}): {exc!r}",
+                    file=sys.stderr,
+                )
+                return 1
             emitted += 1
 
         print(
