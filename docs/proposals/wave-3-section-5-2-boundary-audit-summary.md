@@ -30,21 +30,38 @@ call placement under §5.6's single compute endpoint:
 | Reclassified | Caller (all §5.1) | Gate |
 |---|---|---|
 | `_read_proposed_conditions` | handlers 281/1061/1350 | unit parity only |
-| `check_hard_limits` | handlers 1434 (reassign) | regex-dialect golden tests (Python `re` vs PCRE) |
-| `_parse_timestamp` (§5.3 flip) | auto_resolve | none — `DateTime.from_iso8601/1` |
+| `check_hard_limits` | handlers 1434 — synthesis finalize path, inside `handle_submit_synthesis` | regex-dialect golden tests (Python `re` vs PCRE) |
+| `_parse_timestamp` (§5.3 flip) | auto_resolve 83/108 | none — `DateTime.from_iso8601/1` |
 | `Resolution.hash` | execute_resolution 153/195 | canonical-payload parity family |
-| `Resolution.sign` + `compute_signature` + `canonical_payload` | finalize 791/893–894 | **golden-vector byte-parity** (see below) |
+| `compute_signature` + `canonical_payload` | finalize 893–894 | **golden-vector byte-parity** (see below) |
 
+- `DialecticMessage.sign` (council fold): NOT part of the parity cluster — it
+  is the legacy per-message signing path (sha256 over its own JSON + key, a
+  distinct serialization contract) with **zero live call sites** (uncapped
+  sweep 2026-06-10; the only reference is a docstring describing the replaced
+  pre-v2 pattern). Removal candidate at the implementation gate, not a port.
 - `verify_signatures` goes **DUAL**: BEAM verifies at runtime; Python retains
-  verification for archival reads of stored v1/v2 resolutions.
+  verification for archival reads of stored v1/v2 resolutions. The golden
+  corpus MUST include the three False-returning cases (`signature_version==1`
+  rows, empty signature, empty api_key) so dual parity covers the negative
+  paths, not just happy-path reproduction.
 - `condition_parser` row **splits**: `parse_condition` (pure) ports-or-bundles;
   `apply_condition` is async state-mutation taking `mcp_server`
   (resolution.py:59) — mis-filed as computation; it belongs to §5.1's
   `execute_resolution` port.
-- Calibration row was **mis-scoped**: `backfill_calibration_from_dialectic` is
-  its own MCP tool (not a helper-crossing question);
-  `update_calibration_from_dialectic`(+`_disagreement`) are
-  imported-never-called — dead-wiring to resolve before the implementation gate.
+- Calibration row was **mis-scoped, corrected twice** (council BLOCK fold):
+  `backfill_calibration_from_dialectic` is its own MCP tool (not a
+  helper-crossing question). `update_calibration_from_dialectic`
+  (+`_disagreement`) ARE live-wired — handlers 1479/1481 inside
+  `handle_submit_synthesis`'s convergence branch, plus calibration.py:243
+  (backfill) — firing at most once per resolved session (~1/month at live
+  volume): **production-rare, not dead**. Since their caller is §5.1
+  coordination that ports, their crossing is part of the synthesis-finalize
+  bundle question for the implementation PR; no pre-gate wiring action.
+  (The audit's original "imported-never-called" claim was a head-capped-sweep
+  artifact — both sweeps piped through `head -6` and the tool-registration
+  hits filled the window before the call sites appeared. Caught by council
+  live-verification; method lesson recorded in verify-discipline.)
 
 ## The one load-bearing risk
 
@@ -66,8 +83,15 @@ disconfirmer A.1's coordination-bound p99 — not here.
 
 ## Side observations (out of audit scope, flagged to operator)
 
-- `check_hard_limits`'s only production call site is the reviewer-reassign
-  path; the module docstring implies a resolution-accept safety gate that does
-  not appear to exist.
-- The per-outcome calibration update the §5.2 row describes does not currently
-  run anywhere.
+- The RFC's §5.1 line ranges have drifted from the code (e.g. it places
+  `handle_reassign_reviewer` at 1389-1506; the function actually starts at
+  1508 — line 1434 belongs to `handle_submit_synthesis`). Refresh the §5.1
+  line map at the implementation gate; this audit's caller attributions were
+  council-corrected against the live code, not the stale map.
+- `check_hard_limits` IS the resolution-accept safety gate (handlers:1434,
+  synthesis finalize) — the module docstring's example is accurate. The
+  earlier draft's claim that the gate "does not appear to exist" was an
+  artifact of the stale §5.1 line map.
+- The per-outcome calibration update fires only on the synthesis convergence
+  branch — at most once per resolved session, ~1/month at live volume. It is
+  effectively untested in production, which is its real risk; it is not dead.
