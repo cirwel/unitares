@@ -138,6 +138,12 @@ class UNITARESMonitor:
         self._last_continuity_metrics = None
         self._last_restorative_status = None
         self._last_drift_vector = None  # Concrete ethical drift (Δη)
+        # Last signed complexity gap (self − derived) that was marked novel
+        # for the mirror's calibration line. Monitor-lifetime only,
+        # deliberately not persisted: after a restart the line may fire once
+        # anew, which is acceptable session-scoped novelty. Written by
+        # monitor_result.build_monitor_result.
+        self._last_surfaced_complexity_gap: Optional[float] = None
 
         # HCK v3.0: Track previous EISV for update coherence ρ(t) and state velocity
         self._prev_E: Optional[float] = None

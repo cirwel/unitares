@@ -264,17 +264,31 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     else:
         continuity = response_data.get("continuity", {})
         if isinstance(continuity, dict) and continuity.get("complexity_divergence", 0) > 0.15:
-            reported = continuity.get("self_reported_complexity", 0)
-            derived = continuity.get("derived_complexity", 0)
-            divergence = continuity.get("complexity_divergence", 0)
-            # Neutral, recorded observation — not an interrogation. The derived
-            # value is a surface-feature proxy; the self-report is the richer
-            # signal, so a divergence is calibration data, not a demand to
-            # justify "difficulty" on an otherwise-healthy check-in.
-            mirror_signals.append(
-                f"Complexity calibration: you reported {reported:.2f}, surface estimate "
-                f"{derived:.2f} (Δ{divergence:.2f}) — logged for the calibration curve."
-            )
+            # Novelty gate (monitor_result computes it from the signed gap):
+            # surface the line on the first crossing or when the gap
+            # materially changes, not on every check-in of a stable
+            # session-long gap (dogfood 2026-06-10). Payloads without the
+            # key (older builders, hand-built dicts) keep the raw-threshold
+            # behavior.
+            divergence_novel = continuity.get("divergence_novel")
+            if divergence_novel is None:
+                divergence_novel = True
+            if divergence_novel:
+                reported = continuity.get("self_reported_complexity", 0)
+                derived = continuity.get("derived_complexity", 0)
+                divergence = continuity.get("complexity_divergence", 0)
+                # Neutral, recorded observation — not an interrogation. The
+                # derived value is a proxy, so name its basis inline: it
+                # measures output surface (response length/structure + tool
+                # mix), not task content. The self-report is the richer
+                # signal; a divergence is calibration data, not a demand to
+                # justify "difficulty" on an otherwise-healthy check-in.
+                mirror_signals.append(
+                    f"Complexity calibration: you reported {reported:.2f}; output-surface "
+                    f"estimate {derived:.2f} (Δ{divergence:.2f}) — estimate reads response "
+                    f"length/structure + tool mix, not task content; logged for the "
+                    f"calibration curve."
+                )
         else:
             # Fallback to calibration_feedback if continuity not present
             cal_feedback = response_data.get("calibration_feedback", {})
@@ -284,8 +298,9 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
                     reported = complexity_info.get("reported", 0)
                     derived = complexity_info.get("derived", 0)
                     mirror_signals.append(
-                        f"Complexity calibration: you reported {reported:.2f}, surface estimate "
-                        f"{derived:.2f} — logged for the calibration curve."
+                        f"Complexity calibration: you reported {reported:.2f}; output-surface "
+                        f"estimate {derived:.2f} — estimate reads response length/structure "
+                        f"+ tool mix, not task content; logged for the calibration curve."
                     )
 
     # 4. Pace — reflect cooldown-threshold state descriptively. NOT "Restorative
@@ -333,6 +348,21 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
         "mirror": mirror_signals if mirror_signals else ["No actionable signals — steady state"],
     }
 
+    # Proprioceptive numbers: phi is the primary basin discriminator
+    # (empirical, 2026-04-30) and coherence/risk are the pair the verdict
+    # reasons over. Without them a mirror-mode agent needs a second tool
+    # call (get_governance_metrics) to learn its own state. Data, not a
+    # signal line — they sit top-level beside margin/nearest_edge, never
+    # in the prose signals (dogfood 2026-06-10). NOT named "state": the
+    # full payload has a deliberately-stripped duplicate key of that name.
+    for state_key, state_val in (
+        ("phi", metrics.get("phi")),
+        ("coherence", metrics.get("coherence")),
+        ("risk_score", metrics.get("risk_score")),
+    ):
+        if state_val is not None:
+            result[state_key] = state_val
+
     if relevant_prior:
         result["relevant_prior_work"] = relevant_prior
 
@@ -377,6 +407,10 @@ def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_t
         "S": metrics.get("S"),
         "V": metrics.get("V"),
         "coherence": metrics.get("coherence"),
+        # phi is the primary basin discriminator (empirical, 2026-04-30);
+        # minimal carried every EISV channel except it. Compact already
+        # includes it — parity, not a new surface.
+        "phi": metrics.get("phi"),
         "risk_score": metrics.get("risk_score"),
         "risk_score_latest": metrics.get("latest_risk_score"),
     }

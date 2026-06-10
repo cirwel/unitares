@@ -9,6 +9,41 @@ from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+# Mirror-line thresholds for the complexity-calibration signal: the line is
+# eligible above this divergence (matches response_formatter's gate) ...
+_DIVERGENCE_LINE_THRESHOLD = 0.15
+# ... and is NOVEL only on the first crossing or when the signed gap moves
+# by more than this since the last surfaced value.
+_DIVERGENCE_NOVELTY_DELTA = 0.10
+
+
+def _complexity_divergence_novel(monitor, cm) -> bool:
+    """True when the complexity divergence is worth surfacing again.
+
+    Novelty gate for the mirror's complexity-calibration line: only the
+    first threshold crossing, or a materially changed SIGNED gap
+    (magnitude shift > _DIVERGENCE_NOVELTY_DELTA, which includes
+    direction flips), counts as novel. A stable session-long gap
+    repeating the same line on every check-in is noise, not signal
+    (dogfood 2026-06-10). The signed gap (self − derived) is tracked
+    rather than |divergence| so an over→under-reporting flip of equal
+    magnitude still registers.
+
+    Mutates ``monitor._last_surfaced_complexity_gap`` when returning
+    True — deliberate, documented on the attribute
+    (governance_monitor.__init__). Not persisted: after a restart the
+    line may fire once anew (acceptable session-scoped novelty).
+    """
+    if cm.complexity_divergence <= _DIVERGENCE_LINE_THRESHOLD:
+        return False
+    self_cx = cm.self_complexity if cm.self_complexity is not None else 0.0
+    signed_gap = self_cx - cm.derived_complexity
+    last_gap = getattr(monitor, '_last_surfaced_complexity_gap', None)
+    if last_gap is None or abs(signed_gap - last_gap) > _DIVERGENCE_NOVELTY_DELTA:
+        monitor._last_surfaced_complexity_gap = signed_gap
+        return True
+    return False
+
 
 def build_result(
     monitor,
@@ -56,10 +91,12 @@ def build_result(
     # Dual-log continuity metrics
     if monitor._last_continuity_metrics:
         cm = monitor._last_continuity_metrics
+        divergence_novel = _complexity_divergence_novel(monitor, cm)
         result['continuity'] = {
             'derived_complexity': cm.derived_complexity,
             'self_reported_complexity': cm.self_complexity,
             'complexity_divergence': cm.complexity_divergence,
+            'divergence_novel': divergence_novel,
             'overconfidence_signal': cm.overconfidence_signal,
             'underconfidence_signal': cm.underconfidence_signal,
             'E_input': cm.E_input,

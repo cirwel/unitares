@@ -111,6 +111,13 @@ class TestFormatMinimal:
         assert result["V"] == -0.02
         assert result["coherence"] == 0.92
 
+    def test_includes_phi(self):
+        """phi is the primary basin discriminator — minimal carried every
+        EISV channel except it (compact already includes it; parity)."""
+        data = _sample_response()
+        result = _format_minimal(data, using_default_mode=False, saved_trust_tier=None)
+        assert result["phi"] == 1.23
+
     def test_includes_margin(self):
         data = _sample_response()
         result = _format_minimal(data, using_default_mode=False, saved_trust_tier=None)
@@ -638,6 +645,70 @@ class TestFormatMirror:
             "what's driving" in s.lower() or "sense of difficulty" in s.lower()
             for s in result["mirror"]
         )
+        # The estimate's basis is disclosed inline — it reads output
+        # surface, not task content (dogfood 2026-06-10).
+        assert any("not task content" in s for s in result["mirror"])
+
+    def test_complexity_line_fires_when_divergence_novel(self):
+        data = _sample_response()
+        data["continuity"] = {
+            "self_reported_complexity": 0.7,
+            "derived_complexity": 0.3,
+            "complexity_divergence": 0.4,
+            "divergence_novel": True,
+        }
+        result = _format_mirror(data, saved_trust_tier=None)
+        line = next(s for s in result["mirror"] if "Complexity calibration" in s)
+        assert "you reported 0.70" in line
+        assert "0.30" in line
+        assert "not task content" in line
+
+    def test_complexity_line_suppressed_when_divergence_not_novel(self):
+        """A stable session-long gap must not repeat the same line on
+        every check-in — that's the noise this gate removes."""
+        data = _sample_response()
+        data["continuity"] = {
+            "self_reported_complexity": 0.7,
+            "derived_complexity": 0.3,
+            "complexity_divergence": 0.4,
+            "divergence_novel": False,
+        }
+        result = _format_mirror(data, saved_trust_tier=None)
+        assert not any("Complexity calibration" in s for s in result["mirror"])
+
+    def test_complexity_line_back_compat_without_novelty_key(self):
+        """Payloads built without divergence_novel (older builders,
+        hand-built dicts) keep the raw-threshold behavior."""
+        data = _sample_response()
+        data["continuity"] = {
+            "self_reported_complexity": 0.7,
+            "derived_complexity": 0.3,
+            "complexity_divergence": 0.4,
+        }
+        result = _format_mirror(data, saved_trust_tier=None)
+        assert any("Complexity calibration" in s for s in result["mirror"])
+
+    def test_proprioceptive_numbers_top_level(self):
+        """phi/coherence/risk_score surface as data beside margin —
+        without them a mirror-mode agent needs a second tool call to
+        learn its own state."""
+        data = _sample_response()
+        result = _format_mirror(data, saved_trust_tier=None)
+        assert result["phi"] == 1.23
+        assert result["coherence"] == 0.92
+        assert result["risk_score"] == 0.08
+        # Data keys, not prose — the signals list must not gain a
+        # numbers line out of this.
+        assert not any("phi" in s.lower() for s in result["mirror"])
+
+    def test_proprioceptive_numbers_omitted_when_absent(self):
+        data = _sample_response()
+        for key in ("phi", "coherence", "risk_score"):
+            data["metrics"].pop(key, None)
+        result = _format_mirror(data, saved_trust_tier=None)
+        assert "phi" not in result
+        assert "coherence" not in result
+        assert "risk_score" not in result
 
     def test_mirror_signals_from_enrichment(self):
         data = _sample_response()
