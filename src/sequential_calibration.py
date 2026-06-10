@@ -662,7 +662,7 @@ class SequentialCalibrationTracker:
 
         classifier(agent_id) returns the current class_tag (or None to bucket the
         agent's counters into UNKNOWN_CLASS_BUCKET). The walk is full-replacement —
-        old class_states are discarded so a promotion (ephemeral → session_like)
+        old class_states are discarded so a promotion (ephemeral → engaged_ephemeral)
         moves the counters cleanly rather than leaving the donor bucket inflated.
 
         IMPORTANT: the merged class_states is a descriptive-stats rollup, not an

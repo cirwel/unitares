@@ -115,6 +115,35 @@ The taxonomy + axioms provide a gate for each existing mechanism:
 
 A sequenced plan for these belongs in a separate document. The taxonomy + axioms let planning proceed without re-opening ontology.
 
+### Cross-role lineage envelope (role families)
+
+Lineage declaration is gated at onboard by a cross-role pre-check
+(`pre_check_cross_role`, `src/identity/lineage_lifecycle.py`): a successor
+may only declare a parent whose **role family** matches its own. The unit
+of enforcement is the family, not the atomic class tag, because tags
+encode two different things — *role* (ephemeral process vs. resident vs.
+embodied) and *lifecycle stage within a role* (S8a promotion renames
+`ephemeral → engaged_ephemeral` on engagement). Promotion is a lifecycle
+stage, not a role change: a promoted parent remains the same kind of
+thing its successor is, and severing lineage on promotion would punish
+exactly the agents that earned engagement (audited 2026-06-10: every
+`lineage_cross_role_rejected` event on record was this false positive).
+
+The families (`ROLE_FAMILIES`, `src/identity/trajectory_continuity.py`):
+the ephemeral cohort (`ephemeral`, `engaged_ephemeral`, reserved
+`session_like`) is one family; `embodied` and `persistent` are each their
+own family — substrate-to-substrate lineage (a Lumen declaring a resident,
+or vice versa) remains cross-role. Unknown tags are strict by default:
+they match only their own kind until explicitly placed in a family, and
+any tag-rename promotion path must keep source and target in one family
+(pinned by `test_role_family_map_covers_promotion_path`).
+
+What the envelope protects is R1's shared-operating-envelope assumption
+(per `r2-honest-memory-integration.md`): trajectory-continuity scoring
+compares EISV dynamics assuming comparable operating conditions. A
+within-role lifecycle stage does not violate that assumption; a role
+change does.
+
 ## Open questions
 
 - **Trajectory portability.** When a prior process-instance's trajectory informs a successor's priors, is the successor inheriting identity or inheriting data? Answer probably depends on whether the successor *integrates* the prior's trajectory (identity-adjacent, per axiom #12) or merely *reads* it (data-only).

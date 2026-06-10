@@ -270,6 +270,28 @@ def test_role_family_map_covers_class_tag_priority():
     assert missing == []
 
 
+def test_role_family_map_covers_promotion_path():
+    """The S8a promotion source AND target tags share one family.
+
+    Council fold (PR #601): the original bug was a tag RENAME
+    (ephemeral → engaged_ephemeral) splitting parent from successor.
+    `_CLASS_TAG_PRIORITY` is the scoring tuple, not the mutation path —
+    a future promotion target added to `class_promotion.py` without a
+    priority entry would dodge the guard above. Anchor the guard to the
+    actual tag-mutation constants so any rename keeps both endpoints in
+    the same family (a promotion must never sever lineage).
+    """
+    from src.grounding.class_promotion import (
+        PROMOTION_SOURCE_TAG,
+        PROMOTION_TARGET_TAG,
+    )
+    from src.identity.trajectory_continuity import ROLE_FAMILIES, role_family
+
+    assert PROMOTION_SOURCE_TAG in ROLE_FAMILIES
+    assert PROMOTION_TARGET_TAG in ROLE_FAMILIES
+    assert role_family(PROMOTION_SOURCE_TAG) == role_family(PROMOTION_TARGET_TAG)
+
+
 # ---------------------------------------------------------------------------
 # 7. read_class_tag — live DB shape (mirrors test_class_promotion.py
 #    pattern; the mocked backend can't validate JSONB operators)

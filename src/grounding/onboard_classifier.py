@@ -16,9 +16,10 @@ born outside the explicit onboard handler aren't left untagged. See
 the gap (72 of 200 in-window identities untagged, including a 441-update
 ``claude_desktop-claude`` row).
 
-The ``ephemeral → session_like`` promotion rule lives in the Vigil sweep
-that runs against the corpus this stamp produces; this module deliberately
-stamps only the floor-level class.
+The ``ephemeral → engaged_ephemeral`` promotion rule (S8a Phase-2;
+``session_like`` was the pre-ship name) lives in the Vigil sweep that runs
+against the corpus this stamp produces; this module deliberately stamps
+only the floor-level class.
 """
 from __future__ import annotations
 

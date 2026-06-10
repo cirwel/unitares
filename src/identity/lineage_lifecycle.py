@@ -202,8 +202,9 @@ async def pre_check_cross_role(
     ``engaged_ephemeral`` on engagement — a lifecycle stage within one
     role, not a role change. Raw tag equality (the pre-2026-06-10
     behavior) rejected every lineage declared against a promoted
-    parent: all 45 ``lineage_cross_role_rejected`` events on record
-    were engaged_ephemeral-parent/ephemeral-successor false positives,
+    parent: every ``lineage_cross_role_rejected`` event on record (45
+    at the 2026-06-10 audit, still accruing until this fix deployed)
+    was an engaged_ephemeral-parent/ephemeral-successor false positive,
     and the check had never caught a true cross-role declaration.
 
     Charitable default: if either side has no class tag (orphan path

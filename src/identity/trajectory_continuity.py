@@ -90,9 +90,10 @@ _CLASS_TAG_PRIORITY = (
 # enforcement is the FAMILY, not the atomic tag: S8a Phase-2 promotion
 # renames `ephemeral` → `engaged_ephemeral` on engagement, which is a
 # lifecycle stage within one role, not a role change — raw tag equality
-# therefore rejects every promoted-parent lineage (audited 2026-06-10:
-# 45/45 `lineage_cross_role_rejected` events were
-# engaged_ephemeral-parent/ephemeral-successor false positives; zero
+# therefore rejected every promoted-parent lineage (audited 2026-06-10:
+# every `lineage_cross_role_rejected` event on record — 45 at audit, 47
+# by council live-verification the same day — was an
+# engaged_ephemeral-parent/ephemeral-successor false positive; zero
 # true cross-role catches since the check shipped). Substrate tags stay
 # their own families — embodied↔persistent lineage remains rejected, as
 # the existing envelope tests pin.
@@ -101,7 +102,11 @@ ROLE_FAMILIES = {
     "persistent": "persistent",
     "ephemeral": "ephemeral",
     "engaged_ephemeral": "ephemeral",
-    "session_like": "ephemeral",  # reserved tag — same family when it ships
+    # Reserved: `session_like` was the ratified pre-ship name of the
+    # Phase-2 promotion target, renamed to `engaged_ephemeral` at ship
+    # (#252) — if it ever gets a stamp path it ships as this cohort, so
+    # ephemeral-family placement is rename-lineage, not a guess.
+    "session_like": "ephemeral",
 }
 
 
