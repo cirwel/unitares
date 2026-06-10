@@ -111,7 +111,7 @@ class TestGenerateAgentId:
 
     def test_fallback(self):
         result = self.generate()
-        assert result.startswith("mcp_")
+        assert result.startswith("anon_")
 
     def test_third_party_client_prefixed(self):
         result = self.generate(model_type="gemini-pro", client_hint="cursor")
@@ -119,11 +119,11 @@ class TestGenerateAgentId:
 
     def test_empty_client_hint_uses_fallback(self):
         result = self.generate(client_hint="")
-        assert result.startswith("mcp_")
+        assert result.startswith("anon_")
 
     def test_unknown_client_hint_uses_fallback(self):
         result = self.generate(client_hint="unknown")
-        assert result.startswith("mcp_")
+        assert result.startswith("anon_")
 
 
 # ============================================================================
