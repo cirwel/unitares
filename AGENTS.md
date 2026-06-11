@@ -156,6 +156,8 @@ Default happy path:
 2. `process_agent_update(response_text=..., complexity=..., client_session_id=...)` for in-process check-ins
 3. On a future process-instance, repeat step 1 with the new prior UUID — do not auto-resume
 
+Friendly workflow aliases: the same happy path can be spelled with task-verb names — `start_session` → `onboard`, `sync_state` → `process_agent_update`, `check_working_state` → `get_governance_metrics`, `search_shared_memory` → `knowledge(action="search")`, `record_result` → `outcome_event`, `request_review` → `dialectic(action="request")`. Same parameters, same identity rules (the registry canonicalizes before the #425 gates judge). Calls made via these names return the normalized agent-experience envelope — `next_action` / `state_summary` / `risk_summary` / `memory_suggestions` / `recovery_hint` first, full canonical payload under `raw_governance` — while canonical names keep the raw response shape byte-identical.
+
 Discovering the prior UUID for step 1:
 
 - **Plugin-loaded sessions** are the canonical path. The `unitares-governance-plugin` SessionStart banner surfaces the cached workspace UUID as a lineage candidate (S11, plugin PR #17); Codex sessions get the same hint via `commands/governance-start.md` (S11-a).

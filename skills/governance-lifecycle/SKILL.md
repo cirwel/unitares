@@ -4,17 +4,34 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-04-25"
+last_verified: "2026-06-11"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
   - unitares/src/mcp_handlers/identity/handlers.py
   - unitares/src/mcp_handlers/admin/handlers.py
+  - unitares/src/mcp_handlers/tool_stability.py
+  - unitares/src/mcp_handlers/middleware/envelope_step.py
 ---
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-05-01
+**Last Updated:** 2026-06-11
+
+## Friendly Workflow Names
+
+The core lifecycle can be driven with task-verb aliases. Each resolves to its canonical tool — same parameters, same identity rules — and returns a **normalized envelope**: the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`), with the full canonical payload preserved under `raw_governance`.
+
+| Task | Friendly name | Canonical tool |
+|------|---------------|----------------|
+| Start working | `start_session(force_new=true, ...)` | `onboard` |
+| Check in after meaningful work | `sync_state(response_text=..., complexity=...)` | `process_agent_update` |
+| Check your working state | `check_working_state()` | `get_governance_metrics` |
+| Avoid duplicate work | `search_shared_memory(query=...)` | `knowledge(action="search")` |
+| Record what actually happened | `record_result(...)` | `outcome_event` |
+| Ask for a structured review | `request_review(issue_description=...)` | `dialectic(action="request")` |
+
+Use whichever spelling you prefer; the canonical names keep their raw response shape, the friendly names add the envelope. Everything below applies to both.
 
 ## Starting a Session
 
