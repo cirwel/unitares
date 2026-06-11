@@ -16,6 +16,7 @@ from .trajectory_step import verify_trajectory
 from .params_step import unwrap_kwargs, resolve_alias, inject_identity, validate_params, _format_pydantic_error
 from .rate_limit_step import check_rate_limit, _tool_call_history
 from .pattern_step import track_patterns
+from .envelope_step import apply_experience_envelope
 
 # Type alias for middleware return
 MiddlewareResult = Union[
@@ -53,4 +54,11 @@ PRE_DISPATCH_STEPS = [
 POST_VALIDATION_STEPS = [
     check_rate_limit,
     track_patterns,
+]
+
+# Steps that run AFTER the handler, over its result (best-effort).
+# Signature: (name, arguments, ctx, result) -> result. The runner
+# guards each step; a failing step never breaks the response.
+POST_EXECUTION_STEPS = [
+    apply_experience_envelope,
 ]
