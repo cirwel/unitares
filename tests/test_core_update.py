@@ -765,6 +765,7 @@ class TestProcessAgentUpdateExtended:
 
         with patch("src.mcp_handlers.core.mcp_server", mock_server), \
              patch("src.mcp_handlers.core.require_agent_id", return_value=("agent-1", None)), \
+             patch("src.mcp_handlers.context.get_context_agent_id", return_value="agent-1"), \
              patch("src.governance_monitor.UNITARESMonitor") as MockClass:
 
             MockClass.get_eisv_labels.return_value = {
@@ -792,6 +793,7 @@ class TestProcessAgentUpdateExtended:
 
         with patch("src.mcp_handlers.core.mcp_server", mock_server), \
              patch("src.mcp_handlers.core.require_agent_id", return_value=("agent-1", None)), \
+             patch("src.mcp_handlers.context.get_context_agent_id", return_value="agent-1"), \
              patch("src.governance_monitor.UNITARESMonitor") as MockClass:
 
             MockClass.get_eisv_labels.return_value = {
