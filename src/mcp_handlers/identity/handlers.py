@@ -2191,9 +2191,27 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # When Claude.ai doesn't pass client_session_id, dispatch_tool() can
     # use this pin to inject the correct session ID based on transport fingerprint.
     # This prevents knowledge graph attribution from scattering across random UUIDs.
+    #
+    # Subagent onboards write the pin only-if-absent: a spawned helper
+    # shares the driver's exact fingerprint, and an unconditional write
+    # here CAPTURES the driver's argument-less resolution for the rest of
+    # the session (incident 2026-06-10 — see SUBAGENT_PIN_NX_SPAWN_REASONS
+    # in identity/session.py for the full mechanism).
+    #
+    # EXPLICITLY-DECLARED spawn_reason only — never the inferred
+    # `_spawn_reason`. infer_spawn_reason() classifies a succession
+    # onboard (parent_agent_id declared, spawn_reason omitted, thread
+    # has prior nodes) as "subagent" whenever client_hint isn't in the
+    # arguments, which would NX-block a legitimate fresh DRIVER behind
+    # its dead predecessor's still-live pin — the same wrong-resolution
+    # bug in the opposite direction (council block, PR #604). The cost:
+    # a subagent that omits spawn_reason keeps today's displacing write;
+    # that boundary is documented on the constant and in
+    # docs/ontology/identity.md.
     try:
         logger.debug(f"[ONBOARD_PIN] base_session_key={base_session_key!r}")
         base_fp = _extract_base_fingerprint(base_session_key)
+        from .session import SUBAGENT_PIN_NX_SPAWN_REASONS
         await set_onboard_pin(
             base_fp,
             agent_uuid,
@@ -2201,6 +2219,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             client_hint=client_hint,
             model_type=model_type,
             user_agent=signals.user_agent if signals else None,
+            if_absent=arguments.get("spawn_reason") in SUBAGENT_PIN_NX_SPAWN_REASONS,
         )
     except Exception as e:
         logger.warning(f"[ONBOARD_PIN] Could not set pin: {e}")

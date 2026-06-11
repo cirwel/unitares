@@ -144,6 +144,50 @@ compares EISV dynamics assuming comparable operating conditions. A
 within-role lifecycle stage does not violate that assumption; a role
 change does.
 
+### Transport-level continuity (a performative layer, named as such)
+
+For clients that do not echo `client_session_id`, the server bridges
+argument-less calls back to an onboarded identity via a short-TTL Redis
+pin keyed on the transport fingerprint (`recent_onboard:<ip:ua>`, with
+client/model-scoped variants — `set_onboard_pin` /
+`lookup_onboard_pin`, `src/mcp_handlers/identity/session.py`). By this
+document's own taxonomy that mechanism is **performative**: it treats
+"same fingerprint" as "same subject" without verification. It is kept
+because it makes the common case (one interactive driver per host)
+work; its assumptions and decay conditions are stated here so they are
+properties, not surprises:
+
+- **One driver per fingerprint.** Co-resident process-instances —
+  Task/Agent-tool subagents, concurrent terminal sessions — share the
+  fingerprint and violate the assumption. The fingerprint cannot
+  distinguish them, by construction.
+- **Subagent onboards do not displace the pin.** An onboard that
+  *explicitly declares* `spawn_reason="subagent"` writes the pin
+  only-if-absent (SET NX). This is matched against the declared
+  argument only, never `infer_spawn_reason()`'s guess: inference can
+  label a fresh driver's succession onboard "subagent," and NX-gating
+  on that would lock the new driver behind its dead predecessor's
+  still-live pin (incident class: 2026-06-10, where the inverse —
+  unconditional writes — let each council subagent capture the
+  driver's resolution; ~50 driver check-ins scattered across seven
+  subagent identities).
+- **Honor-system boundary.** A subagent that omits `spawn_reason`
+  keeps the displacing write; a non-echoing subagent resolves to the
+  driver's pin and its stray argument-less writes land on the driver
+  (contamination of one surviving stream — recoverable — rather than
+  fragmentation of the driver across ephemeral identities, which is
+  not). Both residuals vanish for conforming subagents.
+- **Staleness edge.** A dead driver's pin survives until TTL expiry
+  (lookups refresh TTL while anyone keeps resolving through it), and a
+  subagent's NX write will not clear it.
+- **The authoritative path is not the pin.** Echoing
+  `client_session_id` (resolution step 2) yields `tier: strong`;
+  pin-resolved calls are honestly labeled
+  (`session_source: pinned_onboard_session` /
+  `continuity_claim: resumed_by_recent_onboard_pin`, tier weak-medium).
+  Long-running drivers should record the `client_session_id` their
+  onboard returns and pass it on every call.
+
 ## Open questions
 
 - **Trajectory portability.** When a prior process-instance's trajectory informs a successor's priors, is the successor inheriting identity or inheriting data? Answer probably depends on whether the successor *integrates* the prior's trajectory (identity-adjacent, per axiom #12) or merely *reads* it (data-only).
