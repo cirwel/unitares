@@ -938,7 +938,7 @@ async def main():
                     from src.mcp_handlers.context import (
                         SessionSignals, set_session_signals, reset_session_signals,
                         detect_client_from_user_agent, set_transport_client_hint, reset_transport_client_hint,
-                        set_mcp_session_id, reset_mcp_session_id
+                        set_mcp_session_id, reset_mcp_session_id, note_ua_fingerprint
                     )
                     headers = Headers(scope=scope)
 
@@ -949,6 +949,7 @@ async def main():
                     ua = headers.get("user-agent", "unknown")
                     import hashlib
                     ua_fingerprint = hashlib.md5(ua.encode()).hexdigest()[:6]
+                    note_ua_fingerprint(ua_fingerprint, ua)
                     x_session_id = headers.get("x-session-id")
                     x_client_id = headers.get("x-client-id") or headers.get("x-mcp-client-id")
 

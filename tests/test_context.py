@@ -304,3 +304,62 @@ class TestSessionSignalsPeerPid:
         from src.mcp_handlers.context import SessionSignals
         src = inspect.getsource(SessionSignals)
         assert '"uds"' in src
+
+
+class TestNoteUaFingerprint:
+    """note_ua_fingerprint logs the fingerprint -> raw-UA preimage once per
+    distinct hash (session keys carry only md5(UA)[:6], which is one-way —
+    the f304dd hunt in the stage-1 strict-identity burn-in had no way to
+    recover the client behind a fingerprint)."""
+
+    def setup_method(self):
+        from src.mcp_handlers import context
+        context._logged_ua_fingerprints.clear()
+
+    def test_logs_once_per_fingerprint(self, caplog):
+        import logging
+        from src.mcp_handlers.context import note_ua_fingerprint
+
+        with caplog.at_level(logging.INFO, logger="src.mcp_handlers.context"):
+            note_ua_fingerprint("f304dd", "Some-Client/1.2.3")
+            note_ua_fingerprint("f304dd", "Some-Client/1.2.3")
+            note_ua_fingerprint("f304dd", "Some-Client/1.2.3")
+
+        hits = [r for r in caplog.records if "[UA_FINGERPRINT]" in r.getMessage()]
+        assert len(hits) == 1
+        assert "f304dd" in hits[0].getMessage()
+        assert "Some-Client/1.2.3" in hits[0].getMessage()
+
+    def test_distinct_fingerprints_each_logged(self, caplog):
+        import logging
+        from src.mcp_handlers.context import note_ua_fingerprint
+
+        with caplog.at_level(logging.INFO, logger="src.mcp_handlers.context"):
+            note_ua_fingerprint("aaaaaa", "Client-A/1.0")
+            note_ua_fingerprint("bbbbbb", "Client-B/2.0")
+
+        hits = [r for r in caplog.records if "[UA_FINGERPRINT]" in r.getMessage()]
+        assert len(hits) == 2
+
+    def test_none_and_empty_fingerprint_ignored(self, caplog):
+        import logging
+        from src.mcp_handlers.context import note_ua_fingerprint
+
+        with caplog.at_level(logging.INFO, logger="src.mcp_handlers.context"):
+            note_ua_fingerprint(None, "Client/1.0")
+            note_ua_fingerprint("", "Client/1.0")
+
+        hits = [r for r in caplog.records if "[UA_FINGERPRINT]" in r.getMessage()]
+        assert hits == []
+
+    def test_set_is_capped(self, caplog):
+        import logging
+        from src.mcp_handlers import context
+        from src.mcp_handlers.context import note_ua_fingerprint
+
+        with caplog.at_level(logging.INFO, logger="src.mcp_handlers.context"):
+            for i in range(context._MAX_LOGGED_UA_FINGERPRINTS + 50):
+                note_ua_fingerprint(f"{i:06x}", f"Client/{i}")
+
+        hits = [r for r in caplog.records if "[UA_FINGERPRINT]" in r.getMessage()]
+        assert len(hits) == context._MAX_LOGGED_UA_FINGERPRINTS

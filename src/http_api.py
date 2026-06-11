@@ -59,6 +59,8 @@ def _build_http_session_signals(request):
         host = request.client.host if request.client else "unknown"
         import hashlib
         ua_fp = hashlib.md5(ua.encode()).hexdigest()[:6] if ua else "000000"
+        from src.mcp_handlers.context import note_ua_fingerprint
+        note_ua_fingerprint(ua_fp, ua)
         ip_ua_fp = f"{host}:{ua_fp}"
     except Exception:
         pass
