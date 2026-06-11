@@ -4,7 +4,7 @@ MCP Tool Decorators - Auto-registration and utilities
 Reduces boilerplate and enables auto-discovery of tools.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, Any, Callable, Optional, Sequence
 from functools import wraps
 import asyncio

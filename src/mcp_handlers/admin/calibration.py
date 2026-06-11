@@ -6,15 +6,9 @@ Extracted from admin.py for maintainability.
 
 from typing import Dict, Any, List, Sequence, Optional
 from mcp.types import TextContent
-import json
-import sys
-import os
-from datetime import datetime
-from pathlib import Path
-from ..utils import success_response, error_response, require_agent_id, require_registered_agent
+from ..utils import success_response, error_response
 from ..decorators import mcp_tool
 from src.logging_utils import get_logger
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = get_logger(__name__)
 
 

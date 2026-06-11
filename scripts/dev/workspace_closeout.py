@@ -6,7 +6,8 @@ they have modified the repo or started local services. It answers two
 questions the user should not have to audit manually:
 
 1. Is the git worktree still dirty?
-2. Are any long-running processes still rooted inside this workspace?
+2. Has local git state actually been delivered upstream?
+3. Are any long-running processes still rooted inside this workspace?
 
 By default the script reports only. With explicit flags it can stash dirty
 work and terminate or boot out repo-rooted processes.
@@ -39,6 +40,13 @@ class GitState:
     staged: list[str]
     unstaged: list[str]
     untracked: list[str]
+    detached: bool = False
+    head: str = ""
+    upstream: str | None = None
+    ahead: int | None = None
+    behind: int | None = None
+    delivery_status: str = "unknown"
+    delivery_detail: str = "delivery state not computed"
 
 
 @dataclass
@@ -205,7 +213,98 @@ def git_state(root: Path) -> GitState:
     state = parse_git_porcelain(status_stdout)
     rc_branch, branch_stdout, _ = _run(["git", "branch", "--show-current"], root)
     state.branch = branch_stdout.strip() if rc_branch == 0 else ""
+    state.detached = not bool(state.branch)
+    state.head = _git_stdout(["git", "rev-parse", "--short", "HEAD"], root)
+    upstream = _git_stdout(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        root,
+    )
+    state.upstream = upstream or None
+    if state.upstream:
+        state.ahead, state.behind = ahead_behind(root, state.upstream)
+    state.delivery_status, state.delivery_detail = compute_delivery_state(
+        state,
+        default_upstream=default_upstream(root),
+    )
     return state
+
+
+def _git_stdout(args: list[str], root: Path) -> str:
+    rc, stdout, _ = _run(args, root)
+    return stdout.strip() if rc == 0 else ""
+
+
+def ahead_behind(root: Path, upstream: str) -> tuple[int | None, int | None]:
+    rc, stdout, _ = _run(
+        ["git", "rev-list", "--left-right", "--count", f"HEAD...{upstream}"],
+        root,
+    )
+    if rc != 0:
+        return None, None
+    parts = stdout.strip().split()
+    if len(parts) != 2:
+        return None, None
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return None, None
+
+
+def default_upstream(root: Path) -> str | None:
+    """Return the best local name for origin's default branch."""
+    symbolic = _git_stdout(
+        ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+        root,
+    )
+    if symbolic:
+        return symbolic
+    for candidate in ("origin/master", "origin/main"):
+        if _git_stdout(["git", "rev-parse", "--verify", "--quiet", candidate], root):
+            return candidate
+    return None
+
+
+def compute_delivery_state(
+    state: GitState,
+    *,
+    default_upstream: str | None = None,
+) -> tuple[str, str]:
+    """Summarize whether local work is committed, pushed, and plausibly merged.
+
+    This is intentionally local-git based. It does not claim a feature branch is
+    merged unless the current checkout is clean and synced with the default
+    upstream; for feature branches it reports that PR/merge state is not proven.
+    """
+    if state.dirty:
+        return "local_changes", "not committed, not pushed, not merged"
+    if state.detached:
+        return "detached", "clean detached HEAD; switch/create a branch before delivery"
+    if not state.branch:
+        return "unknown", "could not identify the current branch"
+    if not state.upstream:
+        return "no_upstream", "clean branch has no upstream; push it before asking GitHub to merge"
+    if state.ahead is None or state.behind is None:
+        return "unknown", f"could not compare HEAD with {state.upstream}"
+    if state.ahead > 0 and state.behind > 0:
+        return (
+            "diverged",
+            f"{state.ahead} local commit(s) ahead and {state.behind} behind {state.upstream}",
+        )
+    if state.ahead > 0:
+        return "unpushed_commits", f"{state.ahead} local commit(s) not pushed to {state.upstream}"
+    if state.behind > 0:
+        return "behind_upstream", f"clean but {state.behind} commit(s) behind {state.upstream}"
+    if default_upstream and state.upstream == default_upstream:
+        return "synced_default", f"clean and synced with {state.upstream}"
+    return (
+        "pushed_branch",
+        f"clean and pushed to {state.upstream}; PR/merge state not proven by local git",
+    )
+
+
+def delivery_needs_attention(state: GitState) -> bool:
+    """Return true for delivery states that mean local work is definitely stuck."""
+    return state.delivery_status in {"local_changes", "unpushed_commits", "diverged"}
 
 
 def build_stash_message(branch: str, file_count: int, timestamp: str) -> str:
@@ -562,7 +661,11 @@ def start_check(
 
 
 def result_has_issues(result: CloseoutResult) -> bool:
-    return result.git.dirty or bool(result.repo_processes) or bool(result.errors)
+    return (
+        delivery_needs_attention(result.git)
+        or bool(result.repo_processes)
+        or bool(result.errors)
+    )
 
 
 def isolation_is_issue(result: StartCheckResult) -> bool:
@@ -597,6 +700,18 @@ def render_text(result: CloseoutResult) -> str:
             lines.append(f"  {entry}")
     else:
         lines.append("git: clean")
+
+    branch = result.git.branch or "(detached)"
+    upstream = result.git.upstream or "(none)"
+    ahead = "?" if result.git.ahead is None else str(result.git.ahead)
+    behind = "?" if result.git.behind is None else str(result.git.behind)
+    lines.append(
+        f"delivery: {result.git.delivery_status} - {result.git.delivery_detail}"
+    )
+    lines.append(
+        f"  branch={branch} head={result.git.head or '?'} "
+        f"upstream={upstream} ahead={ahead} behind={behind}"
+    )
 
     if result.stashed:
         lines.append(f"stash: created - {result.stash_message}")

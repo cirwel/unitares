@@ -26,7 +26,6 @@ from src.logging_utils import get_logger
 from config.governance_config import GovernanceConfig
 
 from .helpers import (
-    _invalidate_agent_cache,
     _archive_one_agent,
     _is_test_agent,
     _resume_with_persistence,

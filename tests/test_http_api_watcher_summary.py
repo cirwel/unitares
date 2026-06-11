@@ -22,6 +22,7 @@ class TestFindingsPathMatchesWriter:
 
         monkeypatch.setattr(util, "_state_dir_cache", None)
         monkeypatch.setattr(util, "_legacy_migration_done", True)  # skip fs work
+        monkeypatch.setattr(util, "_LEGACY_STATE_DIR", tmp_path / "missing-legacy")
         monkeypatch.setenv("UNITARES_WATCHER_DATA_DIR", str(tmp_path / "shared"))
 
         # Reader resolves through the same shared resolver the writer uses.

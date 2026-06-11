@@ -8,7 +8,7 @@ Ensures only active processes remain running.
 import os
 import time
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict
 
 try:
     import psutil

@@ -17,7 +17,6 @@ import re
 import sys
 from pathlib import Path
 from datetime import datetime
-from typing import Tuple, List
 
 
 class ReadmeMetadataUpdater:

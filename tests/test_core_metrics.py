@@ -939,11 +939,15 @@ class TestExportToFile:
             assert "error" in data or "not supported" in json.dumps(data).lower()
 
     @pytest.mark.asyncio
-    async def test_write_failure_returns_error(self, mock_server, mock_monitor):
+    async def test_write_failure_returns_error(self, mock_server, mock_monitor, tmp_path):
         """File write failure returns informative error."""
         mock_server.get_or_create_monitor.return_value = mock_monitor
-        # Set project_root to a non-writable path
-        mock_server.project_root = "/nonexistent/path/that/does/not/exist"
+        # Set project_root to a path whose parent is a regular file — mkdir/write
+        # under it fails with ENOTDIR even when running as root (a bare
+        # "/nonexistent/..." path is creatable by root, so it doesn't inject a failure)
+        blocker = tmp_path / "blocker"
+        blocker.write_text("")
+        mock_server.project_root = str(blocker / "not-a-dir")
 
         with patch("src.mcp_handlers.introspection.export.mcp_server", mock_server), \
              patch("src.mcp_handlers.introspection.export.require_registered_agent", return_value=("agent-1", None)):

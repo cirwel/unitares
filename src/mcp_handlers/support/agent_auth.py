@@ -1,7 +1,6 @@
 """Agent authentication and identity verification for MCP handlers."""
 from typing import Dict, Any, Tuple, Optional
 from mcp.types import TextContent
-import json
 from datetime import datetime
 
 from src.logging_utils import get_logger

@@ -11,13 +11,12 @@ Configuration Sources:
 4. Server constants: src/mcp_server_std.py (MAX_KEEP_PROCESSES, etc.)
 """
 
-import os
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
 # Import static configs
 from config import governance_config as static_config_module
-from governance_core.parameters import DynamicsParams, Theta
+from governance_core.parameters import DynamicsParams
 from src.runtime_config import get_thresholds, get_effective_threshold, set_thresholds as _set_thresholds
 
 

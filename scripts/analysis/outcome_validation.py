@@ -33,11 +33,10 @@ import argparse
 import asyncio
 import csv
 import json
-import math
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import asyncpg
 

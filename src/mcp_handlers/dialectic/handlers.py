@@ -6,23 +6,15 @@ Implements MCP tools for peer-review dialectic resolution of circuit breaker sta
 
 from typing import Dict, Any, Sequence, Optional, List
 from mcp.types import TextContent
-import asyncio
 import json
 from datetime import datetime, timedelta, timezone
-import random
 
 # Import type definitions
-from ..types import (
-    ToolArgumentsDict,
-    DialecticSessionDict,
-    ResolutionDict
-)
 
 from src.dialectic_protocol import (
     DialecticSession,
     DialecticMessage,
     DialecticPhase,
-    Resolution,
 )
 from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
@@ -33,7 +25,6 @@ from .responses import (
     default_escalate_steps,
     default_resume_steps,
     get_agent_not_found_recovery,
-    get_reviewer_stuck_recovery,
     get_session_exception_recovery,
     get_session_timeout_recovery,
     llm_failed_recovery,
@@ -62,8 +53,6 @@ async def _resolve_dialectic_agent_id(
         arguments, enforce_session_ownership=enforce_session_ownership
     )
 from src.logging_utils import get_logger
-import sys
-import os
 
 logger = get_logger(__name__)
 
@@ -74,12 +63,11 @@ from .session import (
     save_session,
     load_session,
     load_session_as_dict,
-    load_all_sessions,
+    load_all_sessions,  # noqa: F401 — re-exported for existing consumers
     list_all_sessions,
     ACTIVE_SESSIONS,
-    SESSION_STORAGE_DIR,
+    SESSION_STORAGE_DIR,  # noqa: F401 — re-exported for existing consumers
     _SESSION_METADATA_CACHE,
-    _CACHE_TTL,
     get_session_lock,
 )
 
@@ -88,7 +76,7 @@ from .session import (
 
 # Check if aiofiles is available for async I/O
 try:
-    import aiofiles
+    import aiofiles  # noqa: F401 — availability probe
     AIOFILES_AVAILABLE = True
 except ImportError:
     AIOFILES_AVAILABLE = False
@@ -99,7 +87,7 @@ except ImportError:
 from .calibration import (
     update_calibration_from_dialectic,
     update_calibration_from_dialectic_disagreement,
-    backfill_calibration_from_historical_sessions
+    backfill_calibration_from_historical_sessions,  # noqa: F401 — re-exported; tests patch via this module
 )
 from .resolution import execute_resolution
 from .reviewer import select_reviewer, is_agent_in_active_session
@@ -111,13 +99,10 @@ from src.dialectic_db import (
     update_session_reviewer_async as pg_update_reviewer,
     add_message_async as pg_add_message,
     resolve_session_async as pg_resolve_session,
-    get_session_async as pg_get_session,
-    get_session_by_agent_async as pg_get_session_by_agent,
     get_all_sessions_by_agent_async as pg_get_all_sessions_by_agent,
 )
 
 # Import database abstraction for dual-write (Phase 4 migration)
-from src.db import get_db
 
 # ==============================================================================
 # NOTE: Dialectic handlers (Feb 2026)
@@ -504,6 +489,37 @@ async def _apply_reviewer_reassignment(
         logger.error(f"Failed to persist reviewer reassignment: {e}")
         if strict_persistence:
             raise
+
+    # Wave-3 prereq PR #9 finding: disconfirmer (F)'s reassignment-rate
+    # metric had NO event-stream source — reassignments lived only in
+    # session transcripts (zero %reassign% rows in audit.events,
+    # all-time). This single chokepoint covers both the explicit
+    # `dialectic(reassign)` tool and the stuck-reviewer auto path, so
+    # one emission makes the (F) threshold settable. Fail-soft: the
+    # reassignment has already committed; only observability is at
+    # risk.
+    try:
+        from src.audit_db import append_audit_event_async
+        await append_audit_event_async({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event_type": "dialectic_reviewer_reassigned",
+            "agent_id": new_reviewer_id,
+            # Top-level session_id populates the indexed audit.events
+            # column (review fold — nested-only would land the column
+            # NULL); duplicated in details for payload self-containment.
+            "session_id": session_id,
+            "details": {
+                "session_id": session_id,
+                "old_reviewer_id": old_reviewer_id,
+                "new_reviewer_id": new_reviewer_id,
+                "reason": reason,
+            },
+        })
+    except Exception as exc:
+        logger.warning(
+            "dialectic_reviewer_reassigned audit emit failed: session=%s err=%s",
+            session_id, exc,
+        )
 
     return {
         "old_reviewer_id": old_reviewer_id,
@@ -956,7 +972,6 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
         )]
 
     except Exception as e:
-        import traceback
         # SECURITY: Log full traceback internally but sanitize for client
         logger.error(f"Error getting dialectic session: {e}", exc_info=True)
         return [error_response(
@@ -1755,7 +1770,7 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
     # Persist as a proper dialectic session via the DialecticSession protocol
     session_id = None
     try:
-        from src.dialectic_protocol import DialecticSession, DialecticMessage as DMsg, Resolution
+        from src.dialectic_protocol import DialecticSession, DialecticMessage as DMsg
         session = DialecticSession(
             paused_agent_id=agent_uuid,
             reviewer_agent_id="llm-synthetic-reviewer",

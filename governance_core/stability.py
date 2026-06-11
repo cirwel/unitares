@@ -17,7 +17,7 @@ Public API:
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 
@@ -28,7 +28,7 @@ from .parameters import (
     get_active_params,
     get_i_dynamics_mode,
 )
-from .coherence import coherence, lambda1 as _lambda1, lambda2 as _lambda2
+from .coherence import lambda2 as _lambda2
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +51,6 @@ def _compute_rhs(
     complexity: float = 0.5,
 ) -> np.ndarray:
     """Evaluate the ODE right-hand side F(x) at zero drift."""
-    from .utils import drift_norm
     derivs = _derivatives(state, 0.0, theta, params, 0.0, complexity, None)
     return np.array(derivs)
 

@@ -6,7 +6,6 @@ import logging
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Protocol
 
 from src.resident_progress.heartbeat import HeartbeatStatus
 from src.resident_progress.registry import (

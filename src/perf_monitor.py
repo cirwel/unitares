@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from dataclasses import dataclass
 import threading
-from typing import Any, Deque, Dict, Optional
+from typing import Any, Deque, Dict
 
 
 @dataclass(frozen=True)

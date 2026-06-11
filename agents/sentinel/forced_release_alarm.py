@@ -28,7 +28,6 @@ and `lease_plane.deprecated_schemes`. It does NOT write to either table.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any

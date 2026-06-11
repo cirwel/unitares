@@ -23,13 +23,13 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from governance_core.dynamics import (
-    compute_dynamics, compute_equilibrium, State, _derivatives,
+    compute_equilibrium, State, _derivatives,
 )
 from governance_core.parameters import (
     DynamicsParams, Theta, get_active_params, DEFAULT_THETA,
     get_i_dynamics_mode,
 )
-from governance_core.coherence import coherence, lambda1, lambda2
+from governance_core.coherence import lambda2
 from governance_core.utils import drift_norm
 
 

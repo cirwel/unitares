@@ -8,7 +8,7 @@ Consolidates validation logic from various scripts into a single MCP tool.
 import json
 import os
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 from datetime import datetime, timezone
 
 
@@ -223,8 +223,8 @@ def check_workspace_status() -> Dict[str, Any]:
     # Check if dependencies are installed (basic check)
     dependencies_installed = True
     try:
-        import mcp
-        import numpy
+        import mcp  # noqa: F401 — availability probe
+        import numpy  # noqa: F401 — availability probe
     except ImportError:
         dependencies_installed = False
     
@@ -234,7 +234,6 @@ def check_workspace_status() -> Dict[str, Any]:
         # Try to import the server module
         from src._imports import ensure_project_root
         ensure_project_root()
-        import src.agent_state
     except Exception:
         mcp_servers_responding = False
     

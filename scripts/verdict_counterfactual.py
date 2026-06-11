@@ -25,7 +25,7 @@ import math
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 
 try:
     import psycopg2
