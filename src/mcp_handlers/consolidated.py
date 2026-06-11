@@ -102,6 +102,10 @@ handle_knowledge = action_router(
     },
     timeout=120.0,
     description="Unified knowledge graph operations: store, search, get, list, update, details, note, cleanup, synthesize, stats, supersede, audit",
+    # #425 action-level identity: browsable READS may serve unbound
+    # (fleet-scoped KG queries — the dashboard's search/stats calls);
+    # every write/admin action stays identity-gated.
+    pre_onboard_actions={"search", "get", "list", "details", "stats"},
     param_maps={
         "search": {"query": "search_query"},
         "store": {"content": "details"},  # Allow 'content' as alias for 'details'
@@ -133,6 +137,10 @@ handle_agent = action_router(
     },
     timeout=20.0,
     description="Unified agent lifecycle operations: list, get, update, archive, resume, delete",
+    # #425 action-level identity: fleet reads unbound; lifecycle writes
+    # (update/archive/resume/delete) stay identity-gated — the dashboard's
+    # operator buttons will need an operator credential under strict.
+    pre_onboard_actions={"list", "get"},
     examples=[
         "agent(action='list')",
         "agent(action='get', agent_id='claude-opus-20251215')",
@@ -157,6 +165,10 @@ handle_calibration = action_router(
     timeout=60.0,
     description="Unified calibration operations: check, update, backfill, rebuild",
     default_action="check",
+    # #425 action-level identity: 'check' is a fleet-scoped read (the
+    # dashboard's check_calibration); update/backfill/rebuild mutate
+    # calibration state.
+    pre_onboard_actions={"check"},
     examples=[
         "calibration(action='check')",
         "calibration(action='update', ground_truth=True)",
@@ -176,6 +188,9 @@ handle_config = action_router(
     timeout=15.0,
     description="Unified configuration operations: get, set thresholds",
     default_action="get",
+    # #425 action-level identity: threshold reads unbound; 'set' is an
+    # operator write.
+    pre_onboard_actions={"get"},
     examples=[
         "config(action='get')",
         "config(action='set', thresholds={'PAUSE_RISK_THRESHOLD': 0.75})",
@@ -218,6 +233,10 @@ handle_observe = action_router(
     },
     timeout=15.0,
     description="Unified observability operations: agent, compare, similar, anomalies, aggregate, telemetry, audit_events",
+    # #425 action-level identity: the analysis reads (incl. the
+    # dashboard's anomalies/compare) serve unbound; telemetry and
+    # audit_events are operator surfaces and stay identity-gated.
+    pre_onboard_actions={"agent", "compare", "similar", "anomalies", "aggregate"},
     examples=[
         "observe(action='agent', agent_id='claude-opus-20251215')",
         "observe(action='compare', agent_ids=['agent1', 'agent2'])",
@@ -250,6 +269,9 @@ handle_dialectic = action_router(
     timeout=60.0,
     description="Dialectic operations: get, list, request, thesis, antithesis, synthesis, reassign",
     default_action="list",
+    # #425 action-level identity: session browsing (get/list) serves
+    # unbound; every session-mutating action stays identity-gated.
+    pre_onboard_actions={"get", "list"},
     examples=[
         "dialectic(action='list')",
         "dialectic(action='get', session_id='abc123')",

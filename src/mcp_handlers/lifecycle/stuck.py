@@ -531,7 +531,7 @@ async def _try_recover_agent(stuck: dict, note_cooldown_minutes: float) -> list:
     return results
 
 
-@mcp_tool("detect_stuck_agents", timeout=15.0, rate_limit_exempt=True)
+@mcp_tool("detect_stuck_agents", timeout=15.0, rate_limit_exempt=True, requires_identity="pre_onboard")
 async def handle_detect_stuck_agents(arguments: Dict[str, Any]) -> Sequence:
     """Detect stuck agents using proprioceptive margin + patterns.
 

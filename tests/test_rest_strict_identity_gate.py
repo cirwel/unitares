@@ -74,7 +74,7 @@ def test_gate_exempts_pre_onboard_tools(strict_on, unbound_context):
 
 
 def test_gate_refuses_unbound_required_tool(strict_on, unbound_context):
-    refusal = _strict_identity_refusal_or_none("knowledge", {})
+    refusal = _strict_identity_refusal_or_none("knowledge", {"action": "store"})
     assert refusal == strict_identity_refusal_payload("knowledge")
 
 
@@ -113,7 +113,7 @@ def test_gate_passes_explicit_agent_id(strict_on, unbound_context):
 def test_gate_refuses_unresolved_credentials(strict_on, unbound_context, args):
     """Credential presence is NOT identity: a credential that resolved
     has a context binding by gate time; one that didn't is unbound."""
-    refusal = _strict_identity_refusal_or_none("knowledge", args)
+    refusal = _strict_identity_refusal_or_none("knowledge", {**args, "action": "store"})
     assert refusal is not None
     assert refusal["status"] == "identity_required"
 
@@ -127,7 +127,7 @@ def test_gate_passes_context_bound_callers(strict_on):
         return_value="bound-agent",
     ):
         assert _strict_identity_refusal_or_none(
-            "knowledge", {"client_session_id": "agent-bound-123"}
+            "knowledge", {"action": "store", "client_session_id": "agent-bound-123"}
         ) is None
 
 
@@ -165,8 +165,12 @@ async def test_execute_refuses_with_transport_injected_session(strict_on, unboun
         result = await execute_http_tool(
             "knowledge",
             {
-                "action": "search",
-                "query": "x",
+                # 'store' (a WRITE) — knowledge.search became action-level
+                # pre_onboard in the action-classification PR and now
+                # legitimately passes; the transport-injection pin lives on
+                # the identity-gated action class.
+                "action": "store",
+                "summary": "x",
                 "client_session_id": "http:127.0.0.1:9aaaaac6dead",
             },
         )
@@ -181,7 +185,7 @@ async def test_execute_refuses_before_fallback(strict_on, unbound_context):
     with patch(
         "src.services.http_tool_service.execute_http_dispatch_fallback", fallback
     ), patch("src.services.http_tool_service.record_tool_usage"):
-        result = await execute_http_tool("knowledge", {"action": "search", "query": "x"})
+        result = await execute_http_tool("knowledge", {"action": "store", "summary": "x"})
 
     assert result["status"] == "identity_required"
     assert result["rollout_flag"] == "STRICT_IDENTITY_REQUIRED"
@@ -199,7 +203,7 @@ async def test_execute_refuses_before_beam_routing(strict_on, unbound_context):
     ), patch(
         "src.services.http_tool_service.proxy_to_beam", proxy
     ), patch("src.services.http_tool_service.record_tool_usage"):
-        result = await execute_http_tool("knowledge", {})
+        result = await execute_http_tool("knowledge", {"action": "store"})
 
     assert result["status"] == "identity_required"
     proxy.assert_not_awaited()
@@ -213,7 +217,7 @@ async def test_execute_flag_off_falls_through(strict_off, unbound_context):
     ), patch(
         "src.services.http_tool_service.wave3a_get_route", return_value=None
     ), patch("src.services.http_tool_service.record_tool_usage"):
-        result = await execute_http_tool("knowledge", {"action": "search", "query": "x"})
+        result = await execute_http_tool("knowledge", {"action": "store", "summary": "x"})
 
     assert result == {"ok": True}
     fallback.assert_awaited_once()

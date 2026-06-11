@@ -165,8 +165,12 @@ def _strict_identity_refusal_or_none(
 
     if not is_strict_identity_required():
         return None
-    from src.mcp_handlers.decorators import get_tool_identity_requirement
-    if get_tool_identity_requirement(tool_name) == "pre_onboard":
+    # Call-level resolution (alias-aware): legacy names like
+    # detect_anomalies canonicalize to observe(anomalies) at dispatch,
+    # and mixed tools split read/write by action — judge the canonical
+    # CALL, not the tool string (#425 action-level fold).
+    from src.mcp_handlers.decorators import get_call_identity_requirement
+    if get_call_identity_requirement(tool_name, arguments) == "pre_onboard":
         return None
     try:
         from src.mcp_handlers.context import get_context_agent_id
