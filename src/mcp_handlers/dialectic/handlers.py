@@ -505,6 +505,34 @@ async def _apply_reviewer_reassignment(
         if strict_persistence:
             raise
 
+    # Wave-3 prereq PR #9 finding: disconfirmer (F)'s reassignment-rate
+    # metric had NO event-stream source — reassignments lived only in
+    # session transcripts (zero %reassign% rows in audit.events,
+    # all-time). This single chokepoint covers both the explicit
+    # `dialectic(reassign)` tool and the stuck-reviewer auto path, so
+    # one emission makes the (F) threshold settable. Fail-soft: the
+    # reassignment has already committed; only observability is at
+    # risk.
+    try:
+        from datetime import timezone as _tz
+        from src.audit_db import append_audit_event_async
+        await append_audit_event_async({
+            "timestamp": datetime.now(_tz.utc).isoformat(),
+            "event_type": "dialectic_reviewer_reassigned",
+            "agent_id": new_reviewer_id,
+            "details": {
+                "session_id": session_id,
+                "old_reviewer_id": old_reviewer_id,
+                "new_reviewer_id": new_reviewer_id,
+                "reason": reason,
+            },
+        })
+    except Exception as exc:
+        logger.warning(
+            "dialectic_reviewer_reassigned audit emit failed: session=%s err=%s",
+            session_id, exc,
+        )
+
     return {
         "old_reviewer_id": old_reviewer_id,
         "new_reviewer_id": new_reviewer_id,

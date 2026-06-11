@@ -1,6 +1,6 @@
 # Wave 3 RFC: handler dispatch + identity middleware + dialectic resolution → BEAM
 
-**Status:** v0.3.2 + 2026-05-20 status fold. Full redraft superseding v0.2 (which superseded v0.1.x). Each prior version is preserved on its branch as a historical record. v0.3 closes the architectural irony the v0.2 council surfaced: cache coherence and feature-flag state move off PostgreSQL into BEAM-native ETS, so the RFC stops piling new PG-coordination load onto the substrate it exists to relieve.
+**Status:** v0.3.4 (§11 criterion-10 pin + reassignment event stream, 2026-06-11; v0.3.3 §5.2-audit fold 2026-06-10). Full redraft superseding v0.2 (which superseded v0.1.x). Each prior version is preserved on its branch as a historical record. v0.3 closes the architectural irony the v0.2 council surfaced: cache coherence and feature-flag state move off PostgreSQL into BEAM-native ETS, so the RFC stops piling new PG-coordination load onto the substrate it exists to relieve.
 **Parent:** `docs/proposals/beam-footprint-roadmap-v0.md` v0.3.3.
 **Sibling, completed:** `docs/proposals/beam-wave-1-sentinel.md` (Surface 1+2 shipped; Surface 3 in flight).
 **Sibling, completed:** `docs/proposals/surface-lease-plane-v0.md` Phase A + Wave 2 hardening + resident Phase B + lease RPC recorder/persistence (#412/#414/#417/#418/#419/#476/#480/#481).
@@ -21,6 +21,10 @@ Two non-Wave-3-specific prerequisites moved after this RFC was drafted:
   acquire p50/p99 snapshots to `metrics.series`. §6/§14 PR #6 should build on
   that recorder if it still needs the `audit.coordination_measurements`
   channel.
+
+## What changed in v0.3.4 (vs v0.3.3)
+
+19. **§11 criterion 10 pinned (prereq PR #9 executed, 2026-06-11).** The (F) baseline is formally unpinnable — trailing 30-day window held 1 session vs the ≥30 the haltspec requires — so the pin records the halt condition plus 90d/all-time context rates. The deeper finding: (F)'s reassignment-rate metric had no measurement source (reassignments were transcript-only; zero matching `audit.events` rows all-time). `_apply_reviewer_reassignment` now emits `dialectic_reviewer_reassigned`, making the threshold settable from the emission's deploy forward. Volume recovery (dialectic-rework arc) is upstream of any future re-pin.
 
 ## What changed in v0.3.3 (vs v0.3.2)
 
@@ -747,6 +751,7 @@ Each criterion names its measurement source. If any source is missing at gate, g
 8. **(D / state-ownership gate)** §3 surface-by-surface analysis at gate finds no irreducible per-request semantics beyond the eight surfaces.
 9. **(E / opportunity cost gate)** operator's `docs/proposals/wave-3-go-decision-<date>.md` includes §"Calendar reasoning" naming current slip vs original target on each of {paper, fellowship, HLH, R2 Phase 2}; no item slips >25% of original deadline window. **No acceptance-memo escape.** Wave 1 elapsed time concretely named in the document; (E)'s "× 3" cap derives from the actual measured Wave 1 elapsed.
 10. **(F / dialectic-quality gate)** session-resolution rate regression ≤5% AND reviewer-reassignment rate increase ≤20% vs baseline. Baseline (mean + σ) computed from trailing 30 days of `core.dialectic_sessions`; pinned in this §11 prior to implementation start (prereq PR #9). Gate halts if baseline volume insufficient (<30 sessions in window).
+    **Pin (prereq PR #9, 2026-06-11 — `docs/handoffs/wave-3-dialectic-baseline-2026-06-11.md`):** trailing 30-day window held **1 session** → **(F) halts on its own volume haltspec; no 30-day mean/σ pinnable.** Context: 90-day n=9 → resolution 0.556 (binomial σ≈0.166); all-time n=48 → 0.646; monthly volume collapsed ~20/mo (2025-12) → ~1/mo (2026-05), coupled to the dialectic-rework arc — volume recovery is upstream of this gate. **Second-metric source created:** reviewer-reassignment rate previously had NO event stream (zero `%reassign%` rows in `audit.events` all-time; transcript-only — a violation of §0's source-naming discipline). `_apply_reviewer_reassignment` now emits `dialectic_reviewer_reassigned` (the single chokepoint for both the explicit reassign tool and the stuck-reviewer auto path); the reassignment baseline accrues from that deploy forward. Re-pin when any trailing-30d window holds ≥30 sessions.
 11. **Operator-led behavioral parity.** Existing Watcher / Sentinel / SDK clients hit governance MCP with no behavioral diff; REST contract preserved per §7.2 byte-equivalence definition.
 12. **Test-class green.** ExUnit + Python + integration + golden-response-parity classes all green at gate.
 
