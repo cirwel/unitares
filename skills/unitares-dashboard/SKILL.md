@@ -7,7 +7,7 @@ description: >
   they were visible: file allowlist, Chart.js dark-theme defaults, the
   authFetch helper, the script-load chain, and the .panel layout
   contract. A repo-specific reference — not general dashboard advice.
-last_verified: "2026-04-25"
+last_verified: "2026-06-11"
 freshness_days: 30
 source_files:
   - unitares/dashboard/index.html
@@ -32,7 +32,7 @@ When adding a new panel, every item below must be done:
 
 | # | Do | File | Why |
 |---|----|----|-----|
-| 1 | Add filename to `allowed_files` list | `src/http_api.py::http_dashboard_static()` | Static handler 404s anything not on the allowlist — the browser silently fails to load |
+| 1 | Add filename to `allowed_files` list | `src/http_api.py::http_dashboard_static()` | Static handler rejects (403) anything not on the allowlist — the browser silently fails to load |
 | 2 | Add `<script src="/dashboard/NAME.js"></script>` **without** `defer` | `dashboard/index.html` (Layer 2 block) | All peer modules load non-deferred and the IIFE has its own `DOMContentLoaded` guard |
 | 3 | Use `authFetch(url)` from `utils.js` | module JS | Shared helper reads the canonical `unitares_api_token` localStorage key; don't re-invent |
 | 4 | Set `Chart.defaults.color`, `.font.family`, `.borderColor` from body CSS vars | before `new Chart()` | Chart.js defaults to dark-grey ticks on your dark-grey background — invisible axis labels |
@@ -106,7 +106,7 @@ The reference implementation is `dashboard/eisv-charts.js::makeChartOptions`. Co
 
 ## The Allowlist Trap (Item 1)
 
-`src/http_api.py::http_dashboard_static()` has a hardcoded `allowed_files` list. A file not on it returns JSON `{"error": "File not allowed"}` — NOT a 404, but a 200 with an error body. The browser still fails to load the script and `Console` shows a SyntaxError deep in the JSON. Easy to miss.
+`src/http_api.py::http_dashboard_static()` has a hardcoded `allowed_files` list. A file not on it returns a **403** with JSON body `{"error": "File not allowed"}` — not a 404. The browser still fails to load the script and `Console` shows the failed request. Easy to miss.
 
 Verify by `curl`:
 ```bash

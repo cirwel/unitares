@@ -1,7 +1,7 @@
 # BEAM Footprint Roadmap
 
 **Created:** May 3, 2026
-**Last Updated:** May 28, 2026 (v0.3.1b amendment — ODE profile landed; the "7s locked-phase floor" framing falsified; post-lock enrichment was the actual user-visible floor, Python-fixed in PR #533, and re-benchmarked at 8/16 concurrent workers)
+**Last Updated:** June 11, 2026 (v0.3.4 resolution — Wave 3 re-litigation resolves as (α): defer pending the §14 measurement window opened by PR #599; corrected §129 gate reads zero substrate-tax incidents for the Wave 1 window)
 **Status:** v0.3 — destination is **A′ (committed, operator-decision-driven, 2026-05-05)**. Stateful coordination ports to BEAM in waves; stateless computation (numpy ODE, embeddings, LLM SDK calls) stays Python and is called from BEAM via Ports / HTTP. v0.2 had reopened the destination after PR #350's verdict; v0.3 closes it again on operator call after four Python-fixable PRs (#350 / #354 / #360 / #361) closed every measured floor without moving the user-visible ~11s p50 per-turn overhead. **Read the V0.3 RESOLUTION block first**, then the V0.3.1 amendment for what changed on 2026-05-28. v0 / v0.1 / v0.2 bodies preserved as historical record.
 **Council pass v0.1 (2026-05-04):** dialectic-knowledge-architect (2B/4C/3D/4N), feature-dev:code-reviewer (2B/3C/2D/2N), live-verifier (7 VERIFIED, 6 DRIFT, 0 REFUTED, 1 SOURCE_ONLY) — all findings folded inline. Architect C3 + reviewer C3 both flagged "v0.1 destination committed pre-experiment"; the v0.1 conditionality block was the fold for that finding, and v0.2 was the realization of it.
 **Council pass v0.3:** none on the migration call itself — that's an operator decision after a multi-session debate, and adversarial review of the call after operator commitment is the relitigation pattern v0.3 is trying to end. Council passes ARE expected on technical scope (Wave 1 supervisor topology, BEAM↔Python boundary contracts, identity-state migration) once those land as RFCs.
@@ -345,6 +345,29 @@ A' or resolve the Wave 3 re-litigation question.
 - **ODE profile persistence also landed.** PR #481 persists
   `ode.numpy_step_ms.p50` / `.p99`; the remaining question is the 7+ day
   reading, not whether the longitudinal storage path exists.
+
+---
+
+## V0.3.4 RESOLUTION 2026-06-11 — Wave 3 re-litigation resolves as (α); measurement window binds
+
+Operator-endorsed 2026-06-11 (remote session, after a full-state review of the migration). This closes the v0.3.2 re-litigation question that has been open since 2026-05-09. **A′ destination unchanged. Shipped surfaces unchanged.**
+
+**Decision: (α) — defer Wave 3 RFC iteration pending the prereq measurement window.** No v0.4 redraft. No (δ) override. Wave-3-specific implementation work stays paused, exactly as v0.3.2 prescribed; the non-Wave-3-specific measurement prereqs are now in place and running.
+
+**Evidence at decision time:**
+
+1. **The corrected §129 gate reads zero.** The T+14 re-evaluation (due 2026-06-02, gate fixed 2026-06-03 via PR #576 — see `docs/proposals/section-129-measurement-fix-2026-06-03.md`) establishes the true substrate-tax incident count for the Wave 1 window is **0**. The 69 in-window rows were graceful-shutdown fanout noise across 8 server restarts, not anyio substrate-coupling. The production substrate signal Wave 3's urgency argument depends on is currently absent.
+2. **Every measured floor in project history has resolved Python-side** (#350/#354/#360/#361, then PR #533's 104× user-visible collapse). The 16-worker sustained loadgen ceiling is sub-second (V0.3.1b table). "Wave 3 as latency rescue" has no current empirical footing; the surviving argument is architectural-ceiling only.
+3. **The bias-signature pattern reads as structural, not redraft-artifact.** Five signatures across four RFC iterations, each a fresh shape of PG-as-arbiter coordination, because the Wave 3 surfaces (handler dispatch, identity middleware, dialectic) all hold PG-canonical state. The v0.3.2 architect diagnosis is accepted as the operative read.
+4. **The §14 prereq 14-day measurement clock started 2026-06-10** (PR #599). Disconfirmer (B) thresholds cannot be set before the window closes (~**2026-06-24**). Deciding before that date would repeat the design-against-absent-data pattern that produced the bias signatures in the first place.
+
+**What this resolution binds:**
+
+- **No Wave 3 RFC redraft and no Wave-3-specific implementation before the §14 window closes** (~2026-06-24) and its data is read at the gate.
+- **Resume shape when the window closes:** re-attempt with measurement in hand. (β) (dialectic-resolution-only scope reduction) and (γ) (non-PG-canonical ports, e.g. process-local caches → ETS) are the favored shapes. The full handler-dispatch + identity-middleware port proceeds only if the (B) boundary-cost data is affordable **and** a genuine substrate signal appears on the corrected §129 channel — absence of both at the gate means Wave 3 proper stays deferred, not that it auto-proceeds.
+- **Substrate-bias accountability, both poles:** `feedback_substrate-migration-status-quo-bias.md` warns against reflexive resistance to migration. This resolution is not that pole — the shipped BEAM footprint (lease plane Phase B, Wave 1 Sentinel, orchestrator Layer A, Wave 3a plumbing) is affirmed and γ-shaped expansion stays open. The specific claim deferred is that PG-canonical-state surfaces should port on evidence that keeps resolving Python-side.
+
+**What this resolution does NOT change:** A′ destination commitment; Wave 1 / Wave 2 / Wave 3a shipped status; the lease-plane v0 RFC; the Wave 0 channel design; the MCP SDK gate framing; CLAUDE.md substrate-tax framing (still load-bearing while on the substrate).
 
 ---
 

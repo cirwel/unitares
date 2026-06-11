@@ -311,6 +311,23 @@ def extract_token_agent_uuid(token: str) -> Optional[str]:
         return None
 
 
+def extract_token_agent_uuid_safe(token: object) -> Optional[str]:
+    """Best-effort `extract_token_agent_uuid`: None for falsy or invalid input.
+
+    The MCP dispatch middleware (identity_step) and the REST prebind path
+    (http_api._resolve_http_bound_agent) both need "token → agent UUID, or
+    None" without exception handling at the call site. Single-sourced here
+    so the str() coercion and swallow-everything posture cannot drift
+    between transports.
+    """
+    if not token:
+        return None
+    try:
+        return extract_token_agent_uuid(str(token))
+    except Exception:
+        return None
+
+
 def resolve_continuity_token(
     token: str,
     *,
