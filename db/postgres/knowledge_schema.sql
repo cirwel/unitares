@@ -24,10 +24,13 @@ CREATE TABLE IF NOT EXISTS knowledge.discoveries (
     id                  TEXT PRIMARY KEY,
     agent_id            TEXT NOT NULL,
     type                TEXT NOT NULL,
+    -- severity/status/response_type CHECK sets widened by migration 047;
+    -- backported here so base DDL is honest. Single-sourced from
+    -- src/knowledge_graph.py (see tests/test_knowledge_enum_sync.py).
     severity            TEXT DEFAULT 'low'
-                        CHECK (severity IN ('low', 'medium', 'high')),
+                        CHECK (severity IN ('low', 'medium', 'high', 'critical')),
     status              TEXT NOT NULL DEFAULT 'open'
-                        CHECK (status IN ('open', 'resolved', 'archived')),
+                        CHECK (status IN ('open', 'resolved', 'archived', 'disputed', 'closed', 'wont_fix', 'superseded')),
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ,
     resolved_at         TIMESTAMPTZ,
@@ -43,7 +46,7 @@ CREATE TABLE IF NOT EXISTS knowledge.discoveries (
 
     -- Response chain (dialectic)
     response_to_id      TEXT REFERENCES knowledge.discoveries(id) ON DELETE SET NULL,
-    response_type       TEXT CHECK (response_type IN ('extend', 'question', 'disagree', 'support')),
+    response_type       TEXT CHECK (response_type IN ('extend', 'question', 'disagree', 'support', 'answer', 'follow_up', 'correction', 'elaboration', 'supersedes')),
 
     -- Confidence/calibration
     confidence          REAL,
@@ -100,7 +103,7 @@ CREATE TABLE IF NOT EXISTS knowledge.discovery_edges (
     src_id              TEXT NOT NULL REFERENCES knowledge.discoveries(id) ON DELETE CASCADE,
     dst_id              TEXT NOT NULL REFERENCES knowledge.discoveries(id) ON DELETE CASCADE,
     edge_type           TEXT NOT NULL,
-    response_type       TEXT CHECK (response_type IN ('extend', 'question', 'disagree', 'support')),
+    response_type       TEXT CHECK (response_type IN ('extend', 'question', 'disagree', 'support', 'answer', 'follow_up', 'correction', 'elaboration', 'supersedes')),
     weight              REAL DEFAULT 1.0,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_by          TEXT,

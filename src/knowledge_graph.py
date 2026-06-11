@@ -10,7 +10,7 @@ Backends:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Literal, Any
+from typing import Dict, List, Optional, Literal, Any, get_args
 from datetime import datetime, timezone
 import os
 import re
@@ -68,11 +68,28 @@ def normalize_tags(tags) -> List[str]:
     return result
 
 
+# Response-link and status vocabularies. Single source for the dataclass
+# Literal, the handler validation sets (src/mcp_handlers/knowledge/handlers.py),
+# and — via tests/test_knowledge_enum_sync.py — the SQL CHECK constraints in
+# db/postgres/knowledge_schema.sql and migration 047.
+ResponseType = Literal[
+    "extend", "question", "disagree", "support", "answer",
+    "follow_up", "correction", "elaboration", "supersedes",
+]
+VALID_RESPONSE_TYPES = frozenset(get_args(ResponseType))
+
+VALID_DISCOVERY_STATUSES = frozenset({
+    "open", "resolved", "archived", "disputed", "closed", "wont_fix", "superseded",
+})
+
+VALID_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
+
+
 @dataclass
 class ResponseTo:
     """Typed response link to another discovery"""
     discovery_id: str
-    response_type: Literal["extend", "question", "disagree", "support"]
+    response_type: ResponseType
 
 @dataclass
 class DiscoveryNode:
