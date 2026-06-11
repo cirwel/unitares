@@ -33,6 +33,8 @@ def git_repo(tmp_path):
         subprocess.run(["git", "init", "-q", "-b", "main"], check=True)
         subprocess.run(["git", "config", "user.email", "t@t"], check=True)
         subprocess.run(["git", "config", "user.name", "t"], check=True)
+        # Hermetic: host config may force commit signing (e.g. remote containers)
+        subprocess.run(["git", "config", "commit.gpgsign", "false"], check=True)
         (repo / "seed.py").write_text("seed\n")
         subprocess.run(["git", "add", "seed.py"], check=True)
         subprocess.run(["git", "commit", "-q", "-m", "seed"], check=True)
@@ -163,6 +165,53 @@ def test_closeout_stashes_dirty_repo_when_requested(closeout_module, git_repo, m
         check=True,
     )
     assert "workspace-closeout auto-stash" in stash_list.stdout
+
+
+def test_git_state_marks_dirty_work_as_not_delivered(closeout_module, git_repo):
+    (git_repo / "seed.py").write_text("dirty\n")
+
+    state = closeout_module.git_state(git_repo)
+
+    assert state.dirty is True
+    assert state.delivery_status == "local_changes"
+    assert closeout_module.delivery_needs_attention(state) is True
+
+
+def test_git_state_marks_unpushed_commits_as_not_delivered(
+    closeout_module, git_repo, tmp_path
+):
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=git_repo, check=True)
+    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=git_repo, check=True)
+
+    (git_repo / "seed.py").write_text("second\n")
+    subprocess.run(["git", "add", "seed.py"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "second"], cwd=git_repo, check=True)
+
+    state = closeout_module.git_state(git_repo)
+
+    assert state.dirty is False
+    assert state.upstream == "origin/main"
+    assert state.ahead == 1
+    assert state.behind == 0
+    assert state.delivery_status == "unpushed_commits"
+    assert closeout_module.delivery_needs_attention(state) is True
+
+
+def test_git_state_marks_synced_default_as_delivered(
+    closeout_module, git_repo, tmp_path
+):
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=git_repo, check=True)
+    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=git_repo, check=True)
+
+    state = closeout_module.git_state(git_repo)
+
+    assert state.dirty is False
+    assert state.delivery_status == "synced_default"
+    assert closeout_module.delivery_needs_attention(state) is False
 
 
 def _add_worktree(repo: Path, path: Path, branch: str) -> Path:

@@ -8,7 +8,6 @@ Migrated from src/unitaires-server/unitaires_core.py during cleanup.
 """
 
 from __future__ import annotations
-import random
 from dataclasses import asdict
 from typing import Dict
 

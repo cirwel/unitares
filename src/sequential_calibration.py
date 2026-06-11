@@ -56,7 +56,7 @@ from __future__ import annotations
 from collections import defaultdict
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Optional
 import fcntl
 import json
 import math

@@ -6,17 +6,15 @@ Uses peer agreement and disagreement signals to improve confidence calibration.
 """
 
 from typing import Dict, Any, Optional
-from pathlib import Path
-import json
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from src.dialectic_protocol import DialecticSession, Resolution
 from src.calibration import calibration_checker
 from src.audit_log import audit_logger
 from src.logging_utils import get_logger
 from .session import SESSION_STORAGE_DIR, load_session
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
+from src.mcp_handlers.shared import lazy_mcp_server as mcp_server  # noqa: F401 — tests patch {MODULE}.mcp_server
 logger = get_logger(__name__)
 
 async def update_calibration_from_dialectic(session: DialecticSession, resolution: Optional[Resolution] = None) -> bool:

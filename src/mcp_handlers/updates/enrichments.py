@@ -22,7 +22,6 @@ from src.thread_identity import (
 
 from .context import UpdateContext
 from .pipeline import enrichment
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = get_logger(__name__)
 
 # ─── Identity Reminder ─────────────────────────────────────────────────

@@ -46,7 +46,6 @@ except ImportError:
 from src.logging_utils import get_logger
 from src.services.identity_continuity import (
     format_identity_continuity_startup_message,
-    get_identity_continuity_status,
     probe_identity_continuity_status,
 )
 logger = get_logger(__name__)
@@ -77,7 +76,7 @@ from src.agent_state import (
 from src.tool_schemas import get_tool_definitions
 from src.lock_cleanup import cleanup_stale_state_locks
 from src.services.tool_usage_recorder import classify_tool_result, record_tool_usage
-from src.background_tasks import create_tracked_task
+from src.background_tasks import create_tracked_task  # noqa: F401 — re-exported for consumers of this module
 
 # ============================================================================
 # MCP Server Instance

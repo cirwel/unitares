@@ -1,7 +1,7 @@
 # Wave 3 RFC: handler dispatch + identity middleware + dialectic resolution → BEAM
 
-**Status:** v0.3.2 + 2026-05-20 status fold. Full redraft superseding v0.2 (which superseded v0.1.x). Each prior version is preserved on its branch as a historical record. v0.3 closes the architectural irony the v0.2 council surfaced: cache coherence and feature-flag state move off PostgreSQL into BEAM-native ETS, so the RFC stops piling new PG-coordination load onto the substrate it exists to relieve.
-**Parent:** `docs/proposals/beam-footprint-roadmap-v0.md` v0.3.3.
+**Status:** DEFERRED per parent-roadmap V0.3.4 RESOLUTION (2026-06-11) — the v0.3.2 re-litigation resolved as (α): no redraft and no Wave-3-specific implementation before the §14 prereq 14-day measurement window (opened by PR #599, 2026-06-10) closes ~2026-06-24 and its data is read at the gate. Resume shapes favor (β)/(γ); see the parent roadmap. Body below preserved at v0.3.2 + 2026-05-20 status fold. Full redraft superseding v0.2 (which superseded v0.1.x). Each prior version is preserved on its branch as a historical record. v0.3 closes the architectural irony the v0.2 council surfaced: cache coherence and feature-flag state move off PostgreSQL into BEAM-native ETS, so the RFC stops piling new PG-coordination load onto the substrate it exists to relieve.
+**Parent:** `docs/proposals/beam-footprint-roadmap-v0.md` v0.3.4.
 **Sibling, completed:** `docs/proposals/beam-wave-1-sentinel.md` (Surface 1+2 shipped; Surface 3 in flight).
 **Sibling, completed:** `docs/proposals/surface-lease-plane-v0.md` Phase A + Wave 2 hardening + resident Phase B + lease RPC recorder/persistence (#412/#414/#417/#418/#419/#476/#480/#481).
 **Wave 0 channel:** `audit.coordination_events` exists with `event_type ~ '^(coordination_failure)(\.[a-z_]+)+$'` CHECK constraint; zero rows as of 2026-05-09. The constraint scopes the table to failure events only — informational latency lives in the parallel channel introduced in §6.

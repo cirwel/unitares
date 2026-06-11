@@ -6,23 +6,15 @@ Implements MCP tools for peer-review dialectic resolution of circuit breaker sta
 
 from typing import Dict, Any, Sequence, Optional, List
 from mcp.types import TextContent
-import asyncio
 import json
 from datetime import datetime, timedelta, timezone
-import random
 
 # Import type definitions
-from ..types import (
-    ToolArgumentsDict,
-    DialecticSessionDict,
-    ResolutionDict
-)
 
 from src.dialectic_protocol import (
     DialecticSession,
     DialecticMessage,
     DialecticPhase,
-    Resolution,
 )
 from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
@@ -33,7 +25,6 @@ from .responses import (
     default_escalate_steps,
     default_resume_steps,
     get_agent_not_found_recovery,
-    get_reviewer_stuck_recovery,
     get_session_exception_recovery,
     get_session_timeout_recovery,
     llm_failed_recovery,
@@ -62,8 +53,6 @@ async def _resolve_dialectic_agent_id(
         arguments, enforce_session_ownership=enforce_session_ownership
     )
 from src.logging_utils import get_logger
-import sys
-import os
 
 logger = get_logger(__name__)
 
@@ -74,12 +63,11 @@ from .session import (
     save_session,
     load_session,
     load_session_as_dict,
-    load_all_sessions,
+    load_all_sessions,  # noqa: F401 — re-exported for existing consumers
     list_all_sessions,
     ACTIVE_SESSIONS,
-    SESSION_STORAGE_DIR,
+    SESSION_STORAGE_DIR,  # noqa: F401 — re-exported for existing consumers
     _SESSION_METADATA_CACHE,
-    _CACHE_TTL,
     get_session_lock,
 )
 
@@ -88,7 +76,7 @@ from .session import (
 
 # Check if aiofiles is available for async I/O
 try:
-    import aiofiles
+    import aiofiles  # noqa: F401 — availability probe
     AIOFILES_AVAILABLE = True
 except ImportError:
     AIOFILES_AVAILABLE = False
@@ -99,7 +87,7 @@ except ImportError:
 from .calibration import (
     update_calibration_from_dialectic,
     update_calibration_from_dialectic_disagreement,
-    backfill_calibration_from_historical_sessions
+    backfill_calibration_from_historical_sessions,  # noqa: F401 — re-exported; tests patch via this module
 )
 from .resolution import execute_resolution
 from .reviewer import select_reviewer, is_agent_in_active_session
@@ -111,13 +99,10 @@ from src.dialectic_db import (
     update_session_reviewer_async as pg_update_reviewer,
     add_message_async as pg_add_message,
     resolve_session_async as pg_resolve_session,
-    get_session_async as pg_get_session,
-    get_session_by_agent_async as pg_get_session_by_agent,
     get_all_sessions_by_agent_async as pg_get_all_sessions_by_agent,
 )
 
 # Import database abstraction for dual-write (Phase 4 migration)
-from src.db import get_db
 
 # ==============================================================================
 # NOTE: Dialectic handlers (Feb 2026)
@@ -956,7 +941,6 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
         )]
 
     except Exception as e:
-        import traceback
         # SECURITY: Log full traceback internally but sanitize for client
         logger.error(f"Error getting dialectic session: {e}", exc_info=True)
         return [error_response(
@@ -1755,7 +1739,7 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
     # Persist as a proper dialectic session via the DialecticSession protocol
     session_id = None
     try:
-        from src.dialectic_protocol import DialecticSession, DialecticMessage as DMsg, Resolution
+        from src.dialectic_protocol import DialecticSession, DialecticMessage as DMsg
         session = DialecticSession(
             paused_agent_id=agent_uuid,
             reviewer_agent_id="llm-synthetic-reviewer",

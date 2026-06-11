@@ -7,7 +7,6 @@ Each phase reads/writes fields on this dataclass instead of relying on closure s
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 @dataclass
 class UpdateContext:
     """Carries state between extracted update phases and enrichments."""

@@ -4,10 +4,9 @@ Pattern detection helpers for tool handlers.
 Detects code changes and prompts for testing.
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 from src.pattern_tracker import get_pattern_tracker
 from src.logging_utils import get_logger
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = get_logger(__name__)
 
 def detect_code_changes(tool_name: str, arguments: Dict[str, Any]) -> Optional[Dict[str, Any]]:

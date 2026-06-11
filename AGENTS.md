@@ -16,7 +16,7 @@ Codex has no hook system analogous to Claude's. **Nothing is automatic.** You de
 - `/checkin` — governance update after meaningful work
 - `/diagnose` — identity, state, and operator diagnostics
 - `/dialectic` — structured review
-- `/closeout` — final workspace hygiene check; reports dirty files and repo-rooted processes, and can stash/stop them when cleanup is requested
+- `/closeout` — final workspace hygiene check; reports dirty files, Git delivery state (local vs pushed/merged), and repo-rooted processes; can stash/stop when cleanup is requested
 
 Raw tool flow when slash commands are unavailable: `onboard(force_new=true, parent_agent_id=<prior uuid if continuing>, spawn_reason="new_session")` → save `uuid` + `client_session_id` → `process_agent_update(response_text, complexity, client_session_id=...)` → `get_governance_metrics()` for read-only checks → `health_check()` only if system health is suspect.
 
@@ -44,6 +44,22 @@ Use `--agent-id` when resolving or dismissing so the audit trail stays attribute
 
 - `.claude/CLAUDE.md` — Claude-only machine-local overlay.
 - `~/.claude/projects/.../memory/MEMORY.md` — Claude's memory system; Codex uses `.unitares/session.json` instead.
+
+### Delivery state is part of closeout
+
+Codex must not leave the operator to infer GitHub state from "tests passed".
+Before a final response after edits, run `/closeout` or
+`python3 scripts/dev/workspace_closeout.py` and report the delivery line:
+
+- `local_changes` means not committed, not pushed, not merged.
+- `unpushed_commits` means committed locally but not pushed.
+- `pushed_branch` means pushed, but PR/merge state is not proven by local git.
+- `synced_default` means the current checkout is clean and synced with the
+  default upstream.
+
+If the operator asks whether something is merged, answer from this delivery
+state plus any explicit GitHub check you performed. Do not imply local edits
+are merged.
 
 <!-- BEGIN SHARED CONTRACT — keep byte-identical across AGENTS.md and CLAUDE.md; scripts/dev/check-shared-contract.sh enforces parity -->
 

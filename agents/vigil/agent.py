@@ -37,7 +37,6 @@ from typing import Any, Dict, List, Optional, Tuple
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-import httpx
 
 from agents.common.config import GOV_MCP_URL
 from unitares_sdk.agent import CycleResult, GovernanceAgent

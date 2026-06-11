@@ -14,8 +14,6 @@ With contextvars, session context is set once at dispatch entry and accessible e
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
-import os
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 # =============================================================================
 # SESSION SIGNALS (unified transport signal capture)
 # =============================================================================

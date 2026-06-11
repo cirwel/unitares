@@ -41,7 +41,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional
 
 from src.db import get_db
-from src.db.base import IdentityRecord, AgentStateRecord
+from src.db.base import AgentStateRecord
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
