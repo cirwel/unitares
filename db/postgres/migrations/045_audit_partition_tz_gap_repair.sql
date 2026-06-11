@@ -1,17 +1,38 @@
--- Partition Management for audit.events and audit.tool_usage
--- Run after schema.sql
+-- 045_audit_partition_tz_gap_repair.sql
 --
--- Partition strategy: Monthly, with 180-day retention for events, 90-day for tool_usage
+-- Incident (found 2026-06-11): audit partitions through 2026-05 carry
+-- UTC-midnight bounds while 2026-06/07 carry America/Denver-midnight bounds,
+-- leaving a six-hour hole [2026-05-31 18:00-06, 2026-06-01 00:00-06) in
+-- audit.events, audit.tool_usage, and audit.outcome_events. Root cause: the
+-- create-partition helpers computed bounds from DATE values, which cast to
+-- timestamptz using the *session* TimeZone — the weekly maintenance task's
+-- session default flipped from UTC to America/Denver between runs. Inserts
+-- in the hole fail with "no partition of relation found for row"; the
+-- lease-plane audit outbox forwarder (ORDER BY ts ASC LIMIT 100) head-of-line
+-- blocked on 2,199 such rows and forwarded nothing after 2026-06-01.
 --
--- Usage:
---   1. Run this file to create initial partitions
---   2. Schedule partition_maintenance() weekly via pg_cron or external cron
+-- This migration makes partition management timezone-deterministic and
+-- self-healing:
+--   1. audit.month_partition_bounds() — deterministic month edges pinned to
+--      America/Denver (matching the live 2026-06/07 bounds so the chain
+--      continues without overlap), snapped to neighboring partitions' bounds
+--      so creation is gapless and overlap-free by construction.
+--   2. audit.ensure_partition_indexes() — shared per-parent index DDL.
+--   3. The three create_*_partition helpers rebuilt on (1)+(2).
+--   4. audit.partition_gaps() — diagnostic: holes between consecutive bounds.
+--   5. audit.partition_maintenance() — now fills any detected gap with a
+--      bounds-exact filler partition (raising a WARNING for observability)
+--      before the usual create/drop cycle.
+--   6. Runs partition_maintenance() once, which repairs the live hole and
+--      unblocks the forwarder backlog.
+--
+-- db/postgres/partitions.sql (the fresh-install bootstrap) is updated in the
+-- same commit; keep the two in sync.
 
--- =============================================================================
--- PARTITION CREATION FUNCTIONS
--- =============================================================================
+-- ---------------------------------------------------------------------------
+-- 1. Deterministic, neighbor-snapped month bounds
+-- ---------------------------------------------------------------------------
 
--- Timezone-deterministic month bounds, snapped to neighbors (migration 045)
 CREATE OR REPLACE FUNCTION audit.month_partition_bounds(
     p_parent REGCLASS,
     p_year INTEGER,
@@ -71,7 +92,10 @@ COMMENT ON FUNCTION audit.month_partition_bounds(REGCLASS, INTEGER, INTEGER) IS
     'snapped to neighboring partition bounds so creation is gapless and '
     'overlap-free regardless of what convention older partitions used.';
 
--- Shared per-parent index DDL (migration 045)
+-- ---------------------------------------------------------------------------
+-- 2. Shared per-parent index DDL
+-- ---------------------------------------------------------------------------
+
 CREATE OR REPLACE FUNCTION audit.ensure_partition_indexes(
     p_parent TEXT,
     p_partition TEXT
@@ -104,7 +128,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Create a monthly partition for audit.events
+-- ---------------------------------------------------------------------------
+-- 3. Rebuild the three create helpers on (1) + (2)
+-- ---------------------------------------------------------------------------
+
 CREATE OR REPLACE FUNCTION audit.create_events_partition(
     p_year INTEGER,
     p_month INTEGER
@@ -142,7 +169,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Create a monthly partition for audit.tool_usage
 CREATE OR REPLACE FUNCTION audit.create_tool_usage_partition(
     p_year INTEGER,
     p_month INTEGER
@@ -180,7 +206,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Create a monthly partition for audit.outcome_events
 CREATE OR REPLACE FUNCTION audit.create_outcome_partition(
     p_year INTEGER,
     p_month INTEGER
@@ -218,132 +243,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- =============================================================================
--- RETENTION / CLEANUP FUNCTIONS
--- =============================================================================
-
--- Drop old event partitions (older than retention_days)
-CREATE OR REPLACE FUNCTION audit.drop_old_events_partitions(
-    p_retention_days INTEGER DEFAULT 180
-)
-RETURNS TABLE(partition_name TEXT, action TEXT) AS $$
-DECLARE
-    v_cutoff DATE;
-    v_rec RECORD;
-BEGIN
-    v_cutoff := current_date - (p_retention_days || ' days')::INTERVAL;
-
-    FOR v_rec IN
-        SELECT c.relname as partition_name,
-               pg_get_expr(c.relpartbound, c.oid) as partition_bound
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        JOIN pg_inherits i ON i.inhrelid = c.oid
-        JOIN pg_class parent ON parent.oid = i.inhparent
-        WHERE n.nspname = 'audit'
-          AND parent.relname = 'events'
-          AND c.relkind = 'r'
-    LOOP
-        -- Extract end date from partition bound (e.g., "FOR VALUES FROM ('2025-01-01') TO ('2025-02-01')")
-        -- If end date < cutoff, drop it
-        IF v_rec.partition_bound ~ 'TO \(''(\d{4}-\d{2}-\d{2})' THEN
-            DECLARE
-                v_end_date DATE;
-            BEGIN
-                v_end_date := (regexp_match(v_rec.partition_bound, 'TO \(''(\d{4}-\d{2}-\d{2})'))[1]::DATE;
-                IF v_end_date < v_cutoff THEN
-                    EXECUTE format('DROP TABLE IF EXISTS audit.%I', v_rec.partition_name);
-                    partition_name := v_rec.partition_name;
-                    action := 'dropped';
-                    RETURN NEXT;
-                END IF;
-            END;
-        END IF;
-    END LOOP;
-END;
-$$ LANGUAGE plpgsql;
-
--- Drop old tool_usage partitions (older than retention_days)
-CREATE OR REPLACE FUNCTION audit.drop_old_tool_usage_partitions(
-    p_retention_days INTEGER DEFAULT 90
-)
-RETURNS TABLE(partition_name TEXT, action TEXT) AS $$
-DECLARE
-    v_cutoff DATE;
-    v_rec RECORD;
-BEGIN
-    v_cutoff := current_date - (p_retention_days || ' days')::INTERVAL;
-
-    FOR v_rec IN
-        SELECT c.relname as partition_name,
-               pg_get_expr(c.relpartbound, c.oid) as partition_bound
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        JOIN pg_inherits i ON i.inhrelid = c.oid
-        JOIN pg_class parent ON parent.oid = i.inhparent
-        WHERE n.nspname = 'audit'
-          AND parent.relname = 'tool_usage'
-          AND c.relkind = 'r'
-    LOOP
-        IF v_rec.partition_bound ~ 'TO \(''(\d{4}-\d{2}-\d{2})' THEN
-            DECLARE
-                v_end_date DATE;
-            BEGIN
-                v_end_date := (regexp_match(v_rec.partition_bound, 'TO \(''(\d{4}-\d{2}-\d{2})'))[1]::DATE;
-                IF v_end_date < v_cutoff THEN
-                    EXECUTE format('DROP TABLE IF EXISTS audit.%I', v_rec.partition_name);
-                    partition_name := v_rec.partition_name;
-                    action := 'dropped';
-                    RETURN NEXT;
-                END IF;
-            END;
-        END IF;
-    END LOOP;
-END;
-$$ LANGUAGE plpgsql;
-
--- Drop old outcome_events partitions (older than retention_days)
-CREATE OR REPLACE FUNCTION audit.drop_old_outcome_partitions(
-    p_retention_days INTEGER DEFAULT 365
-)
-RETURNS TABLE(partition_name TEXT, action TEXT) AS $$
-DECLARE
-    v_cutoff DATE;
-    v_rec RECORD;
-BEGIN
-    v_cutoff := current_date - (p_retention_days || ' days')::INTERVAL;
-
-    FOR v_rec IN
-        SELECT c.relname as partition_name,
-               pg_get_expr(c.relpartbound, c.oid) as partition_bound
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        JOIN pg_inherits i ON i.inhrelid = c.oid
-        JOIN pg_class parent ON parent.oid = i.inhparent
-        WHERE n.nspname = 'audit'
-          AND parent.relname = 'outcome_events'
-          AND c.relkind = 'r'
-    LOOP
-        IF v_rec.partition_bound ~ 'TO \(''(\d{4}-\d{2}-\d{2})' THEN
-            DECLARE
-                v_end_date DATE;
-            BEGIN
-                v_end_date := (regexp_match(v_rec.partition_bound, 'TO \(''(\d{4}-\d{2}-\d{2})'))[1]::DATE;
-                IF v_end_date < v_cutoff THEN
-                    EXECUTE format('DROP TABLE IF EXISTS audit.%I', v_rec.partition_name);
-                    partition_name := v_rec.partition_name;
-                    action := 'dropped';
-                    RETURN NEXT;
-                END IF;
-            END;
-        END IF;
-    END LOOP;
-END;
-$$ LANGUAGE plpgsql;
-
--- =============================================================================
--- MAINTENANCE FUNCTION (call weekly)
--- =============================================================================
+-- ---------------------------------------------------------------------------
+-- 4. Gap diagnostic
+-- ---------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION audit.partition_gaps()
 RETURNS TABLE(parent TEXT, gap_start TIMESTAMPTZ, gap_end TIMESTAMPTZ) AS $$
@@ -375,6 +277,10 @@ COMMENT ON FUNCTION audit.partition_gaps() IS
     'Holes between consecutive partition bounds of the monthly-partitioned '
     'audit parents. Non-empty output means inserts in the hole fail with '
     '"no partition of relation found for row".';
+
+-- ---------------------------------------------------------------------------
+-- 5. Maintenance now self-heals gaps
+-- ---------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION audit.partition_maintenance()
 RETURNS JSONB AS $$
@@ -476,57 +382,21 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- =============================================================================
--- INITIAL PARTITION CREATION
--- Create partitions for current month and next 2 months
--- =============================================================================
+-- ---------------------------------------------------------------------------
+-- 6. Repair the live hole now (guarded for fresh installs where the audit
+--    tables may not exist yet when this file is applied out of order)
+-- ---------------------------------------------------------------------------
 
 DO $$
-DECLARE
-    v_year INTEGER;
-    v_month INTEGER;
-    v_i INTEGER;
 BEGIN
-    FOR v_i IN 0..2 LOOP
-        v_year := EXTRACT(YEAR FROM current_date + (v_i || ' month')::INTERVAL)::INTEGER;
-        v_month := EXTRACT(MONTH FROM current_date + (v_i || ' month')::INTERVAL)::INTEGER;
-
-        PERFORM audit.create_events_partition(v_year, v_month);
-        PERFORM audit.create_tool_usage_partition(v_year, v_month);
-        PERFORM audit.create_outcome_partition(v_year, v_month);
-    END LOOP;
+    IF to_regclass('audit.events') IS NOT NULL
+       AND to_regclass('audit.tool_usage') IS NOT NULL
+       AND to_regclass('audit.outcome_events') IS NOT NULL THEN
+        PERFORM audit.partition_maintenance();
+    END IF;
 END $$;
 
--- =============================================================================
--- OPTIONAL: pg_cron SCHEDULING
--- Uncomment if pg_cron is installed
--- =============================================================================
-
--- SELECT cron.schedule(
---     'partition-maintenance',
---     '0 3 * * 0',  -- Every Sunday at 3 AM
---     'SELECT audit.partition_maintenance()'
--- );
-
--- =============================================================================
--- UTILITY VIEWS
--- =============================================================================
-
--- List all partitions with row counts and sizes
-CREATE OR REPLACE VIEW audit.v_partition_stats AS
-SELECT
-    n.nspname as schema_name,
-    parent.relname as parent_table,
-    c.relname as partition_name,
-    pg_get_expr(c.relpartbound, c.oid) as partition_bounds,
-    pg_size_pretty(pg_relation_size(c.oid)) as size,
-    (SELECT count(*) FROM pg_class WHERE oid = c.oid) as approx_rows
-FROM pg_class c
-JOIN pg_namespace n ON n.oid = c.relnamespace
-JOIN pg_inherits i ON i.inhrelid = c.oid
-JOIN pg_class parent ON parent.oid = i.inhparent
-WHERE n.nspname = 'audit'
-  AND c.relkind = 'r'
-ORDER BY parent.relname, c.relname;
-
-COMMENT ON VIEW audit.v_partition_stats IS 'Shows all audit partitions with sizes and bounds';
+-- Register migration
+INSERT INTO core.schema_migrations (version, name, applied_at)
+VALUES (45, 'audit_partition_tz_gap_repair', NOW())
+ON CONFLICT (version) DO NOTHING;
