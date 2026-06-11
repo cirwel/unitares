@@ -827,6 +827,16 @@ async def _lookup_onboard_pin_inner(base_fingerprint: str, *, refresh_ttl: bool)
 # keep identity continuity the documented way (echoing the
 # client_session_id their onboard returned); the NX write below only
 # matters for the argument-less fallback they should not win.
+#
+# Matched against the EXPLICITLY-DECLARED spawn_reason argument only,
+# never infer_spawn_reason()'s output: inference can label a fresh
+# driver's succession onboard "subagent" (parent declared, reason
+# omitted, client_hint not in arguments), and NX-gating on that would
+# lock the new driver behind its dead predecessor's still-live pin.
+# Honor-system boundary, accepted deliberately: a subagent that omits
+# spawn_reason keeps the displacing write (today's behavior). The
+# authoritative continuity path was never the pin — it is echoing
+# client_session_id (resolution step 2, tier strong).
 SUBAGENT_PIN_NX_SPAWN_REASONS = frozenset({"subagent"})
 
 

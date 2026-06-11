@@ -459,15 +459,19 @@ class TestOnboardPin:
             assert result is False
 
 
-def _nx_fake_redis(stored_data):
+def _nx_fake_redis(stored_data, set_calls=None):
     """Dict-backed raw-Redis fake supporting setex, get, expire, and
-    SET NX (the if_absent path)."""
+    SET NX (the if_absent path). ``set_calls`` (optional list) records
+    (key, ex, nx) per set() call so tests can assert TTL is carried on
+    the NX path too."""
     mock_raw = AsyncMock()
 
     async def mock_setex(key, ttl, value):
         stored_data[key] = value
 
     async def mock_set(key, value, ex=None, nx=False):
+        if set_calls is not None:
+            set_calls.append((key, ex, nx))
         if nx and key in stored_data:
             return None  # redis-py returns None when NX blocks the write
         stored_data[key] = value
@@ -522,16 +526,19 @@ class TestSubagentPinCapture:
     @pytest.mark.asyncio
     async def test_subagent_if_absent_claims_empty_slot(self):
         """No standing pin (subagent on a fresh fingerprint) → the
-        subagent may claim it, preserving its own continuity."""
+        subagent may claim it, preserving its own continuity. The NX
+        write must carry the same TTL as the SETEX path."""
         from src.mcp_handlers.identity.handlers import (
             lookup_onboard_pin,
             set_onboard_pin,
         )
+        from src.mcp_handlers.identity.session import _PIN_TTL
 
         stored = {}
+        set_calls = []
 
         async def _get_raw():
-            return _nx_fake_redis(stored)
+            return _nx_fake_redis(stored, set_calls)
 
         with patch("src.cache.redis_client.get_redis", new=_get_raw):
             claimed = await set_onboard_pin(
@@ -540,6 +547,10 @@ class TestSubagentPinCapture:
             )
             assert claimed is True
             assert await lookup_onboard_pin("ua:fresh1") == "agent-subagent-9999"
+        assert set_calls, "NX path must go through set(), not setex()"
+        for _key, ex, nx in set_calls:
+            assert nx is True
+            assert ex == _PIN_TTL
 
     @pytest.mark.asyncio
     async def test_driver_onboard_still_displaces(self):
@@ -1927,6 +1938,43 @@ class TestHandleOnboardV2:
                 "client_session_id": "onboard-driver-wiring",
                 "force_new": True,
                 "spawn_reason": "new_session",
+            })
+        data = parse_result(result)
+        assert data["success"] is True
+        pin_mock.assert_awaited_once()
+        assert pin_mock.await_args.kwargs.get("if_absent") is False
+
+    @pytest.mark.asyncio
+    async def test_driver_succession_inference_never_triggers_nx(self, patch_onboard_deps, mock_db, mock_redis):
+        """Council block (PR #604): the textbook succession onboard —
+        parent_agent_id declared, spawn_reason OMITTED, thread already
+        has nodes — lets infer_spawn_reason label the fork 'subagent'
+        (client_hint absent from arguments). The NX gate must key on the
+        EXPLICIT argument only, so this driver still takes the pin
+        (if_absent=False) instead of being locked behind its dead
+        predecessor's still-live pin."""
+        from src.mcp_handlers.identity import handlers as h
+
+        mock_redis.get.return_value = None
+        mock_db.get_session.return_value = None
+        mock_db.find_agent_by_label.return_value = None
+        mock_db.get_identity.side_effect = [
+            None, None, SimpleNamespace(identity_id="ni", metadata={}),
+        ]
+        # Charitable lineage path: parent has no class tag.
+        mock_db.read_class_tag = AsyncMock(return_value=None)
+        # Existing thread nodes make the inference branch reachable.
+        mock_db.get_thread_nodes.return_value = [
+            {"agent_uuid": "dead-predecessor", "position": 1},
+        ]
+
+        pin_mock = AsyncMock(return_value=True)
+        with patch.object(h, "set_onboard_pin", pin_mock):
+            result = await h.handle_onboard_v2({
+                "client_session_id": "onboard-succession-wiring",
+                "force_new": True,
+                "parent_agent_id": "11111111-2222-3333-4444-555555555555",
+                # spawn_reason deliberately omitted — inference territory
             })
         data = parse_result(result)
         assert data["success"] is True
