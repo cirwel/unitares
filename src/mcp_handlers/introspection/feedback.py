@@ -55,6 +55,14 @@ def get_calibration_feedback(include_complexity: bool = True) -> Dict[str, Any]:
                         show_message = True
 
                     calibration_feedback['confidence'] = {
+                        # Fleet-wide singleton data (calibration_checker
+                        # aggregates across ALL agents). The scope label is
+                        # unconditional — the explanatory message below is
+                        # cache-gated and absent most of the time, which left
+                        # bare fleet numbers in agent-scoped responses
+                        # looking like personal calibration (dogfood
+                        # 2026-06-10; same class as the #572 mirror fix).
+                        'scope': 'fleet',
                         'system_accuracy': overall_accuracy,
                         'mean_confidence': mean_confidence,
                         'calibration_error': calibration_error
