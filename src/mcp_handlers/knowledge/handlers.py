@@ -917,7 +917,7 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
     except Exception as e:
         return [error_response(f"Failed to store knowledge: {str(e)}")]
 
-@mcp_tool("search_knowledge_graph", timeout=15.0, rate_limit_exempt=True)
+@mcp_tool("search_knowledge_graph", timeout=15.0, rate_limit_exempt=True, requires_identity="pre_onboard")
 async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Search knowledge graph (indexed filters; optional FTS query).
 

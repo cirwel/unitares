@@ -604,12 +604,17 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
             # list_tools, describe_tool, get_governance_metrics, skills,
             # identity, onboard, bind_session} now lives as decorator
             # arguments on those handlers.
-            from src.mcp_handlers.decorators import get_tool_identity_requirement
-            if get_tool_identity_requirement(canonical_name) == "pre_onboard":
+            # Call-level resolution (#425 action-level fold): mixed
+            # read-write tools (knowledge/dialectic/agent/...) declare
+            # pre_onboard_actions so their browsable READ actions serve
+            # unbound while writes stay identity-gated — tool-level
+            # classification can't express that split.
+            from src.mcp_handlers.decorators import get_call_identity_requirement
+            if get_call_identity_requirement(canonical_name, arguments) == "pre_onboard":
                 logger.info(
                     "[DISPATCH] session_resolve_miss for %s under %s... "
                     "— leaving request unbound (no middleware auto-mint, "
-                    "tool declared requires_identity=pre_onboard)",
+                    "call resolved to pre_onboard)",
                     name, session_key[:20],
                 )
             else:

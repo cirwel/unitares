@@ -767,6 +767,24 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
         session_id = arguments.get('session_id')
         agent_id = arguments.get('agent_id')
         check_timeout = arguments.get('check_timeout', False)
+        # #425 council finding (PR #611): check_timeout turns this read
+        # into a WRITE (reviewer auto-reassignment, transcript appends,
+        # phase flip to FAILED) — an argument-gated mutation the action-
+        # level identity gate can't see, since dialectic.get is
+        # pre_onboard-classified. Unbound callers get the read only; the
+        # janitorial sweep stays available to bound callers and the
+        # background reaper.
+        if check_timeout:
+            try:
+                from src.mcp_handlers.context import get_context_agent_id
+                if not get_context_agent_id():
+                    logger.info(
+                        "[DIALECTIC] check_timeout ignored for unbound "
+                        "caller — pre_onboard reads must not mutate"
+                    )
+                    check_timeout = False
+            except Exception:
+                check_timeout = False
 
         # If session_id provided, use it directly
         if session_id:

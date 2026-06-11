@@ -35,12 +35,19 @@ class ToolDefinition:
     #   "pre_onboard"  — protocol-inspection or identity-lifecycle tool;
     #                    callable without a bound identity.
     #   "scoped"       — admin-token gated; separate auth path.
-    # The attribute is *informational* in this PR — middleware does not
-    # yet branch on it. Replacing the hardcoded read-only-tool allowlist
-    # at identity_step.py with attribute lookup, and replacing auto-mint
-    # with typed-refusal for "required" tools, is a separate behavior
-    # change that needs explicit rollout review.
     requires_identity: str = "required"
+    # Action-level identity exemptions for consolidated (action_router)
+    # tools whose tool-level requirement is "required" but whose READ
+    # actions may serve unbound (e.g. knowledge.search vs knowledge.store).
+    # Consulted by get_call_identity_requirement — both #425 gates (MCP
+    # middleware + REST) resolve at CALL granularity, not tool granularity,
+    # because tool-level classification of a mixed read-write tool either
+    # opens its writes (pre_onboard) or refuses its browsable reads
+    # (required). None for single-purpose tools.
+    pre_onboard_actions: Optional[frozenset] = None
+    # Mirror of action_router's default_action so the call-level resolver
+    # treats an action-less call exactly as the router will route it.
+    default_action: Optional[str] = None
 
 _TOOL_DEFINITIONS: Dict[str, ToolDefinition] = {}
 
@@ -55,6 +62,8 @@ def mcp_tool(
     superseded_by: Optional[str] = None,
     register: bool = True,
     requires_identity: str = "required",
+    pre_onboard_actions: Optional[set] = None,
+    default_action: Optional[str] = None,
 ):
     """
     Decorator for MCP tool handlers with auto-registration and timeout protection.
@@ -96,6 +105,18 @@ def mcp_tool(
                 f"Tool {tool_name!r}: requires_identity must be one of "
                 f"'required', 'pre_onboard', 'scoped'; got {requires_identity!r}"
             )
+        if pre_onboard_actions is not None and requires_identity != "required":
+            raise ValueError(
+                f"Tool {tool_name!r}: pre_onboard_actions only applies to "
+                f"requires_identity='required' tools (a 'pre_onboard' tool "
+                f"already exempts every action); got {requires_identity!r}"
+            )
+        _pre_onboard_actions = (
+            frozenset(a.lower() for a in pre_onboard_actions)
+            if pre_onboard_actions
+            else None
+        )
+        _default_action = default_action.lower() if default_action else None
 
         # Attach metadata to function for introspection
         func._mcp_tool_name = tool_name
@@ -214,6 +235,8 @@ def mcp_tool(
                 superseded_by=superseded_by,
                 rate_limit_exempt=rate_limit_exempt,
                 requires_identity=requires_identity,
+                pre_onboard_actions=_pre_onboard_actions,
+                default_action=_default_action,
             )
 
         return wrapper
@@ -275,6 +298,76 @@ def get_tool_identity_requirement(tool_name: str) -> str:
     return td.requires_identity if td else "required"
 
 
+def get_call_identity_requirement(tool_name: str, arguments) -> str:
+    """Identity requirement for a CALL: tool + action, alias-aware.
+
+    The #425 gates (MCP dispatch middleware and the REST gate in
+    http_tool_service) resolve at call granularity because the mixed
+    read-write tools (knowledge/dialectic/agent/...) cannot be honestly
+    classified at tool level — 'pre_onboard' would open their writes,
+    'required' refuses their browsable reads.
+
+    Resolution order:
+    1. Alias-canonicalize the tool name (tool_stability) — legacy names
+       like detect_anomalies route to observe(anomalies) at dispatch, so
+       the gate must judge the canonical call, not the alias string. The
+       alias's inject_action stands in when the caller sent no action.
+    2. Tool-level 'pre_onboard' or 'scoped' wins outright.
+    3. For 'required' tools with pre_onboard_actions: resolve the action
+       exactly as action_router will (explicit `action`/`op`, else the
+       tool's default_action); membership → 'pre_onboard'.
+    4. Otherwise the tool-level value; unknown tools fail closed to
+       'required'.
+    """
+    canonical = tool_name
+    implied_action = None
+    try:
+        from src.mcp_handlers.tool_stability import resolve_tool_alias
+        canonical, alias = resolve_tool_alias(tool_name)
+        if alias is not None:
+            implied_action = getattr(alias, "inject_action", None)
+            if implied_action:
+                # Normalize here so the membership check below has ONE
+                # authoritative normalization point regardless of how a
+                # future ToolAlias spells its inject_action.
+                implied_action = str(implied_action).lower()
+    except ImportError:
+        # Deferred/cold module load (test collection, import cycles) —
+        # judging on the raw tool_name fails closed, which is safe.
+        pass
+    except Exception:
+        # Anything else is a REGRESSION in alias resolution with a
+        # security consequence (every alias call would refuse under
+        # strict) — fail closed but never silently (council fold,
+        # PR #611: the bare except ate a wrong-import-name bug during
+        # development).
+        logger.warning(
+            "get_call_identity_requirement: alias resolution failed for "
+            "%r — judging on the raw name (fails closed)",
+            tool_name,
+            exc_info=True,
+        )
+
+    td = _TOOL_DEFINITIONS.get(canonical)
+    if td is None:
+        return "required"
+    if td.requires_identity != "required":
+        return td.requires_identity
+    if not td.pre_onboard_actions:
+        return td.requires_identity
+
+    action = None
+    if isinstance(arguments, dict):
+        action = arguments.get("action") or arguments.get("op")
+    # Every branch below is already lowercase: explicit actions are
+    # lowered here, implied_action at alias resolution above,
+    # default_action and the exemption set at registration (mcp_tool).
+    action = (str(action).lower() if action else None) or implied_action or td.default_action
+    if action and action in td.pre_onboard_actions:
+        return "pre_onboard"
+    return td.requires_identity
+
+
 def get_tool_definition(tool_name: str) -> Optional[ToolDefinition]:
     """Get the full ToolDefinition for a registered tool."""
     return _TOOL_DEFINITIONS.get(tool_name)
@@ -304,6 +397,7 @@ def action_router(
     default_action: Optional[str] = None,
     param_maps: Optional[Dict[str, Dict[str, str]]] = None,
     examples: Optional[list] = None,
+    pre_onboard_actions: Optional[set] = None,
 ):
     """
     Create a consolidated MCP tool from an action→handler mapping.
@@ -330,7 +424,29 @@ def action_router(
     _param_maps = param_maps or {}
     _examples = examples or [f"{name}(action='{valid_actions[0]}')"]
 
-    @mcp_tool(name, timeout=timeout, description=description)
+    if pre_onboard_actions:
+        # Compare lowercase-to-lowercase: action keys are lowercase by
+        # convention everywhere today, but a mixed-case key would
+        # otherwise make this guard fire a confusing false positive on a
+        # CORRECT exemption (council fold, PR #611).
+        unknown = set(a.lower() for a in pre_onboard_actions) - set(
+            a.lower() for a in valid_actions
+        )
+        if unknown:
+            raise ValueError(
+                f"action_router {name!r}: pre_onboard_actions contains "
+                f"unregistered actions {sorted(unknown)!r} — the exemption "
+                f"set must be a subset of the action map so a typo can't "
+                f"silently widen or narrow the identity gate."
+            )
+
+    @mcp_tool(
+        name,
+        timeout=timeout,
+        description=description,
+        pre_onboard_actions=pre_onboard_actions,
+        default_action=default_action,
+    )
     async def router(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         # Support both 'action' and 'op' (op is alias for consistency with other tools)
         action = (arguments.get("action") or arguments.get("op") or "").lower() or default_action

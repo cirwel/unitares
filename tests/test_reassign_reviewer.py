@@ -338,7 +338,8 @@ async def test_stuck_reviewer_triggers_reassignment():
          patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=None), \
          patch(f"{DIALECTIC}.select_reviewer", new_callable=AsyncMock, return_value="agent-candidate"), \
          patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock):
+         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch("src.mcp_handlers.context.get_context_agent_id", return_value="test-bound-agent"):
         from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session
         result = parse_result(await handle_get_dialectic_session({
             "session_id": session.session_id,
@@ -373,7 +374,8 @@ async def test_stuck_reviewer_no_replacement_awaits_facilitation():
          patch(f"{DIALECTIC}.ACTIVE_SESSIONS", {session.session_id: session}), \
          patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=None), \
          patch(f"{DIALECTIC}.select_reviewer", new_callable=AsyncMock, return_value=None), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock):
+         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch("src.mcp_handlers.context.get_context_agent_id", return_value="test-bound-agent"):
         from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session
         result = parse_result(await handle_get_dialectic_session({
             "session_id": session.session_id,
