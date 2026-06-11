@@ -24,7 +24,7 @@ from src.mcp_handlers.identity.handlers import (
     handle_identity_adapter,
     handle_onboard_v2,
 )
-from src.mcp_handlers.core import handle_process_agent_update
+from src.mcp_handlers.core import handle_process_agent_update, unbound_metrics_payload
 from src.mcp_handlers.utils import require_agent_id
 from src.services.http_dispatch_fallback import execute_http_dispatch_fallback
 from src.services.runtime_queries import get_governance_metrics_data, get_health_check_data
@@ -80,6 +80,21 @@ def _normalize_direct_http_result(result: Any) -> Any:
     return result
 
 async def _execute_http_get_governance_metrics(arguments: Dict[str, Any]) -> Any:
+    # Read-purity (trust contract §3.5), REST half: this direct handler
+    # bypasses handle_get_governance_metrics, so without its own guard an
+    # unbound REST caller reached require_agent_id FALLBACK 2 and minted a
+    # fresh in-memory auto_* identity + monitor per call — the cold-probe
+    # transport from the 2026-06-10 incident, caught by PR #608 review
+    # after the first fix only covered the MCP handler. Same shared
+    # ignorance payload, guard carried per-transport.
+    if not arguments.get("agent_id"):
+        try:
+            from src.mcp_handlers.context import get_context_agent_id
+            bound_agent_id = get_context_agent_id()
+        except Exception:
+            bound_agent_id = None
+        if not bound_agent_id:
+            return unbound_metrics_payload()
     agent_id, error = require_agent_id(arguments)
     if error:
         return [error]

@@ -110,6 +110,36 @@ def _assess_thermodynamic_significance(
     }
 
 
+def unbound_metrics_payload() -> dict:
+    """The unbound ignorance shape for get_governance_metrics (trust
+    contract §5). ONE definition shared by the MCP handler below and the
+    REST direct handler (`http_tool_service._execute_http_get_governance_
+    metrics`) — review of PR #608 found the REST shortcut bypassed the
+    handler-level guard entirely, so each transport carries the guard but
+    both return this payload.
+
+    #428: wraps the bare "unbound" string with meaning + next_action; the
+    peer next_action carries the same hint with a tool + example, and the
+    wrapped verdict carries the canonical glossary entry so the two
+    surfaces can't drift.
+    """
+    from src.governance_glossary import explain_verdict
+    return {
+        "status": "⚪ unbound",
+        "verdict": explain_verdict("unbound"),
+        "guidance": "Establish identity before reading agent metrics.",
+        "next_action": {
+            "tool": "identity",
+            "example": "identity() or onboard(force_new=true, spawn_reason='new_session')",
+            "note": (
+                "get_governance_metrics is read-only; it creates no "
+                "identity and no state for unbound callers."
+            ),
+        },
+        "related_tools": ["identity", "onboard", "process_agent_update"],
+    }
+
+
 @mcp_tool("get_governance_metrics", timeout=10.0, requires_identity="pre_onboard")
 async def handle_get_governance_metrics(arguments: ToolArgumentsDict) -> Sequence[TextContent]:
     """Get current governance state and metrics for an agent without updating state.
@@ -133,25 +163,7 @@ async def handle_get_governance_metrics(arguments: ToolArgumentsDict) -> Sequenc
         except Exception:
             bound_agent_id = None
         if not bound_agent_id:
-            # #428: wrap the bare "unbound" string with meaning + next_action.
-            # The peer next_action below carries the same hint with a tool +
-            # example; the wrapped verdict carries the canonical glossary
-            # entry so the two surfaces can't drift.
-            from src.governance_glossary import explain_verdict
-            return success_response({
-                "status": "⚪ unbound",
-                "verdict": explain_verdict("unbound"),
-                "guidance": "Establish identity before reading agent metrics.",
-                "next_action": {
-                    "tool": "identity",
-                    "example": "identity() or onboard(force_new=true, spawn_reason='new_session')",
-                    "note": (
-                        "get_governance_metrics is read-only; it creates no "
-                        "identity and no state for unbound callers."
-                    ),
-                },
-                "related_tools": ["identity", "onboard", "process_agent_update"],
-            })
+            return success_response(unbound_metrics_payload())
 
     agent_id, error = require_agent_id(arguments)
     if error:

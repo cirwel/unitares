@@ -287,7 +287,13 @@ class TestGetGovernanceMetrics:
 
     @pytest.mark.asyncio
     async def test_get_metrics_requires_agent_id(self, mock_mcp_server):
-        """Should return error when agent_id is missing."""
+        """Should return error when require_agent_id itself errors.
+
+        DEPENDS on the class-level bound_context fixture: only a bound
+        caller reaches require_agent_id at all — the unbound guard would
+        otherwise short-circuit to the unbound shape and this test would
+        silently stop covering the error path (PR #608 review note).
+        """
         from mcp.types import TextContent
         error = TextContent(type="text", text='{"error": "agent_id required"}')
 
