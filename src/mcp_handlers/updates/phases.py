@@ -46,6 +46,10 @@ _STRONG_IDENTITY_SOURCES = {
     "mcp_session_id",
     "x_session_id",
     "oauth_client_id",
+    # X-Unitares-Operator bearer token, validated against the env allowlist
+    # on every call (#425 dashboard-identity decision) — per-call proof,
+    # stronger than the stable-header sources above.
+    "operator_token",
 }
 
 _MEDIUM_IDENTITY_SOURCES = {
