@@ -7,6 +7,7 @@
 #
 # Usage:
 #   ./scripts/dev/test-cache.sh              # default: pytest tests/ agents/ -q --tb=short -x
+#   ./scripts/dev/test-cache.sh --quick      # same gate without coverage instrumentation
 #   ./scripts/dev/test-cache.sh --staged     # hash staged commit candidate
 #   ./scripts/dev/test-cache.sh --fresh      # ignore cache, force run
 #   ./scripts/dev/test-cache.sh -- -k "test_foo"  # extra pytest args after --
@@ -26,11 +27,13 @@ cd "$PROJECT_ROOT"
 # --- parse args ---
 FRESH=false
 STAGED=false
+QUICK=false
 PYTEST_EXTRA=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --fresh) FRESH=true; shift ;;
         --staged) STAGED=true; shift ;;
+        --quick) QUICK=true; shift ;;
         --)      shift; PYTEST_EXTRA=("$@"); break ;;
         *)       PYTEST_EXTRA+=("$1"); shift ;;
     esac
@@ -227,10 +230,15 @@ else
     TREE_HASH=$(_hash_worktree_inputs)
 fi
 
+TEST_PROFILE="coverage"
+if [[ "$QUICK" == true ]]; then
+    TEST_PROFILE="quick"
+fi
+
 PYTEST_ARGS_HASH=$(_hash_pytest_args ${PYTEST_EXTRA[@]+"${PYTEST_EXTRA[@]}"})
-CACHE_KEY=$(printf '%s\0%s\0%s\0%s\0%s\0' "$CACHE_VERSION" "$HASH_MODE" "$TREE_HASH" "$PYTEST_ARGS_HASH" "$RUNTIME_HASH" | shasum -a 256 | cut -d' ' -f1)
+CACHE_KEY=$(printf '%s\0%s\0%s\0%s\0%s\0%s\0' "$CACHE_VERSION" "$HASH_MODE" "$TEST_PROFILE" "$TREE_HASH" "$PYTEST_ARGS_HASH" "$RUNTIME_HASH" | shasum -a 256 | cut -d' ' -f1)
 CACHE_FILE="$CACHE_DIR/$CACHE_KEY"
-CACHE_LABEL="$HASH_MODE inputs $TREE_HASH runtime $RUNTIME_HASH"
+CACHE_LABEL="$HASH_MODE inputs $TREE_HASH profile $TEST_PROFILE runtime $RUNTIME_HASH"
 if [[ ${#PYTEST_EXTRA[@]} -gt 0 ]]; then
     CACHE_LABEL="$CACHE_LABEL args $PYTEST_ARGS_HASH"
 fi
@@ -292,10 +300,15 @@ fi
 mkdir -p "$CACHE_DIR"
 echo "[test-cache] MISS — $CACHE_LABEL, running pytest..."
 
-PYTEST_CMD=("$PYTHON" -m pytest tests/ agents/ -q --tb=short -x \
-	--cov=src --cov=agents/sdk/src/unitares_sdk --cov=agents \
-	--cov-report=term-missing --cov-fail-under=25 \
-	${PYTEST_EXTRA[@]+"${PYTEST_EXTRA[@]}"})
+if [[ "$QUICK" == true ]]; then
+    PYTEST_CMD=("$PYTHON" -m pytest tests/ agents/ -q --tb=short -x \
+        ${PYTEST_EXTRA[@]+"${PYTEST_EXTRA[@]}"})
+else
+    PYTEST_CMD=("$PYTHON" -m pytest tests/ agents/ -q --tb=short -x \
+        --cov=src --cov=agents/sdk/src/unitares_sdk --cov=agents \
+        --cov-report=term-missing --cov-fail-under=25 \
+        ${PYTEST_EXTRA[@]+"${PYTEST_EXTRA[@]}"})
+fi
 TMPOUT=$(mktemp)
 set +e
 "${PYTEST_CMD[@]}" 2>&1 | tee "$TMPOUT"

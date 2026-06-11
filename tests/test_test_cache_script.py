@@ -60,6 +60,7 @@ fi
 
 if [[ "${1:-}" == "-m" && "${2:-}" == "pytest" ]]; then
     count_file="${FAKE_PYTEST_COUNT:?}"
+    printf "%s\\n" "$*" > "${FAKE_PYTEST_ARGS:?}"
     count=0
     if [[ -f "$count_file" ]]; then
         count="$(cat "$count_file")"
@@ -81,6 +82,7 @@ exit 99
     env["UNITARES_PYTHON"] = str(fake_python)
     env["UNITARES_TEST_CACHE_LOCK_DIR"] = str(repo / "test-cache.lock")
     env["FAKE_PYTEST_COUNT"] = str(repo / "pytest-count.txt")
+    env["FAKE_PYTEST_ARGS"] = str(repo / "pytest-args.txt")
     return repo, env
 
 
@@ -100,6 +102,10 @@ def _pytest_count(repo: Path) -> int:
     if not path.exists():
         return 0
     return int(path.read_text(encoding="utf-8").strip())
+
+
+def _pytest_args(repo: Path) -> str:
+    return (repo / "pytest-args.txt").read_text(encoding="utf-8")
 
 
 def test_tracked_sql_change_invalidates_worktree_cache(cache_repo):
@@ -144,6 +150,29 @@ def test_untracked_test_file_invalidates_worktree_cache(cache_repo):
     third = _run_cache(repo, env)
     assert third.returncode == 0, third.stdout + third.stderr
     assert "[test-cache] MISS" in third.stdout
+    assert _pytest_count(repo) == 2
+
+
+def test_quick_mode_omits_coverage_and_uses_separate_cache(cache_repo):
+    repo, env = cache_repo
+
+    quick_first = _run_cache(repo, env, "--quick")
+    assert quick_first.returncode == 0, quick_first.stdout + quick_first.stderr
+    assert "[test-cache] MISS" in quick_first.stdout
+    assert "profile quick" in quick_first.stdout
+    assert "--cov=src" not in _pytest_args(repo)
+    assert _pytest_count(repo) == 1
+
+    full = _run_cache(repo, env)
+    assert full.returncode == 0, full.stdout + full.stderr
+    assert "[test-cache] MISS" in full.stdout
+    assert "profile coverage" in full.stdout
+    assert "--cov=src" in _pytest_args(repo)
+    assert _pytest_count(repo) == 2
+
+    quick_second = _run_cache(repo, env, "--quick")
+    assert quick_second.returncode == 0, quick_second.stdout + quick_second.stderr
+    assert "[test-cache] HIT" in quick_second.stdout
     assert _pytest_count(repo) == 2
 
 

@@ -1,5 +1,5 @@
 # Makefile for governance-mcp-v1
-.PHONY: help test test-quick test-smoke version version-check version-bump restart logs serve docs clean
+.PHONY: help test test-cache-quick test-quick test-smoke version version-check version-bump restart logs serve docs clean
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -24,6 +24,9 @@ test: ## Run full test suite with coverage
 	@python3 -m pytest \
 		--cov=src --cov=agents/sdk/src/unitares_sdk --cov=agents \
 		--cov-report=term-missing --cov-fail-under=25
+
+test-cache-quick: ## Run cached full test suite without coverage
+	@./scripts/dev/test-cache.sh --quick
 
 test-quick: ## Run tests without coverage
 	@python3 -m pytest -o addopts= -q
