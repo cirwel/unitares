@@ -14,6 +14,7 @@ from enum import Enum
 from datetime import datetime
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from .support.tool_hints import KNOWLEDGE_SEARCH_SIMILARITY_MIGRATION_NOTE
+from .support.param_normalization import ParamNormalizer, normalize_unit_interval
 class ToolStability(Enum):
     """Tool stability tier - helps users know what to expect"""
     STABLE = "stable"  # Production-ready, won't change
@@ -29,6 +30,10 @@ class ToolAlias:
     deprecated_since: Optional[datetime] = None
     migration_note: Optional[str] = None
     inject_action: Optional[str] = None  # For consolidated tools: auto-inject this action parameter
+    # Friendly aliases may absorb agent vocabulary (named levels, explicit
+    # scale objects) before validation; canonical tools stay strict. Runs in
+    # resolve_alias; transforms are disclosed via normalized_parameters.
+    param_normalizer: Optional[ParamNormalizer] = None
 
 @dataclass
 class ToolLifecycle:
@@ -50,6 +55,8 @@ class ToolLifecycle:
 # ============================================================================
 # When tools are renamed/consolidated, add aliases here so old names still work
 # This prevents breaking existing code/agents
+
+_CHECKIN_COMPLEXITY_NORMALIZER = normalize_unit_interval("complexity")
 
 _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # Identity tools - all point to identity() (the primary identity tool)
@@ -111,24 +118,36 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         reason="intuitive_alias",
         migration_note="Use onboard() - auto-creates identity, no login needed"
     ),
-    # Logging work aliases
+    # Logging work aliases. All carry the complexity normalizer: the friendly
+    # surface accepts named levels and {'value', 'scale'} objects while the
+    # canonical tool stays strict 0-1.
     "checkin": ToolAlias(
         old_name="checkin",
         new_name="process_agent_update",
         reason="intuitive_alias",
-        migration_note="Use process_agent_update() to check in your work"
+        migration_note="Use process_agent_update() to check in your work",
+        param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
     ),
     "log": ToolAlias(
         old_name="log",
         new_name="process_agent_update",
         reason="intuitive_alias",
-        migration_note="Use process_agent_update() to log your work"
+        migration_note="Use process_agent_update() to log your work",
+        param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
     ),
     "update": ToolAlias(
         old_name="update",
         new_name="process_agent_update",
         reason="intuitive_alias",
-        migration_note="Use process_agent_update() to log your work"
+        migration_note="Use process_agent_update() to log your work",
+        param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
+    ),
+    "sync_state": ToolAlias(
+        old_name="sync_state",
+        new_name="process_agent_update",
+        reason="intuitive_alias",
+        migration_note="Use process_agent_update() to sync your state",
+        param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
     ),
     "authenticate": ToolAlias(
         old_name="authenticate",

@@ -33,6 +33,7 @@ class DispatchContext:
     context_token: Optional[object] = None
     trajectory_confidence_token: Optional[object] = None
     migration_note: Optional[str] = None
+    normalized_parameters: Optional[Dict[str, Any]] = None
     original_name: Optional[str] = None
     client_hint: Optional[str] = None
     identity_result: Optional[dict] = None

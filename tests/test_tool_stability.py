@@ -104,6 +104,25 @@ class TestResolveToolAlias:
         name, alias = resolve_tool_alias("checkin")
         assert name == "process_agent_update"
 
+    def test_sync_state_alias(self):
+        name, alias = resolve_tool_alias("sync_state")
+        assert name == "process_agent_update"
+        assert alias.reason == "intuitive_alias"
+
+    def test_checkin_aliases_carry_complexity_normalizer(self):
+        """All intuitive check-in aliases normalize complexity, so the agent
+        experience is consistent regardless of which friendly name is used."""
+        for alias_name in ("checkin", "log", "update", "sync_state"):
+            _, alias = resolve_tool_alias(alias_name)
+            assert alias.param_normalizer is not None, alias_name
+
+    def test_canonical_tools_have_no_normalizer(self):
+        """Tolerance lives on the friendly aliases only — no alias of a
+        non-check-in tool grows a normalizer by accident."""
+        for name, alias in _TOOL_ALIASES.items():
+            if alias.new_name != "process_agent_update":
+                assert alias.param_normalizer is None, name
+
     def test_pi_health_alias(self):
         pytest.importorskip("unitares_pi_plugin")
         import unitares_pi_plugin as _plugin
