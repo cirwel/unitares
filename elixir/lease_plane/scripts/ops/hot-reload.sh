@@ -8,7 +8,19 @@
 # actually run the new code.
 #
 #   scripts/ops/hot-reload.sh UnitaresLeasePlane.HTTPRouter [More.Modules ...]
-#   scripts/ops/hot-reload.sh --changed     # reload every module recompiled just now
+#   scripts/ops/hot-reload.sh --changed     # reload every module whose loaded
+#                                           # md5 differs from the on-disk beam
+#
+# --changed compares GROUND TRUTH: the md5 of each module loaded in the node
+# vs the md5 of the beam on disk after compile. It deliberately does NOT use
+# "what did this invocation's compile rewrite" — that mtime heuristic was
+# defeated 2026-06-11 when something else compiled the tree between the
+# deploy pull and the reload, so `mix compile` no-oped, the marker matched
+# nothing, and the script reported "node already runs current code" while the
+# node demonstrably ran the OLD code (PR #614's forwarder fix had to be
+# loaded by naming the modules explicitly). Modules present on disk but not
+# loaded in the node are skipped: the node's code path points at this ebin,
+# so they load the current disk version on first use anyway.
 #
 # Requires:
 #   - LEASE_PLANE_NODE_COOKIE in ~/.config/cirwel/secrets.env
@@ -49,20 +61,10 @@ export ERL_EPMD_ADDRESS="127.0.0.1"
 cd "$LEASE_PLANE_DIR"
 
 declare -a MODS=()
+HR_MODE="explicit"
 if [[ "${1:-}" == "--changed" ]]; then
-    # Reference instant: anything mix rewrites *during* the compile below is
-    # strictly newer than this marker; an unchanged tree rewrites nothing.
-    MARK="$(mktemp)"
-    touch "$MARK"
+    HR_MODE="changed"
     mix compile >/dev/null
-    while IFS= read -r beam; do
-        MODS+=("$(basename "$beam" .beam)")   # e.g. Elixir.UnitaresLeasePlane.HTTPRouter
-    done < <(find "$EBIN" -name '*.beam' -newer "$MARK")
-    rm -f "$MARK"
-    if [[ ${#MODS[@]} -eq 0 ]]; then
-        echo "[hot-reload] nothing recompiled — node already runs current code."
-        exit 0
-    fi
 else
     if [[ $# -lt 1 ]]; then
         echo "usage: hot-reload.sh <Module> [Module ...] | --changed" >&2
@@ -80,7 +82,39 @@ case Node.ping(node) do
     IO.puts(:stderr, "[hot-reload] cannot reach #{inspect(node)} — node named + cookie correct?")
     System.halt(1)
 end
-mods = Enum.map(System.argv(), &String.to_atom/1)
+
+mods =
+  case System.get_env("HR_MODE") do
+    "changed" ->
+      # Ground truth: a module needs reloading iff the md5 the node is
+      # RUNNING differs from the md5 of the beam ON DISK. Immune to who
+      # compiled the tree, and when.
+      ebin = System.get_env("HR_EBIN")
+
+      Path.wildcard(Path.join(ebin, "*.beam"))
+      |> Enum.flat_map(fn beam ->
+        with {:ok, {mod, disk_md5}} <- :beam_lib.md5(String.to_charlist(beam)),
+             {:file, _} <- :rpc.call(node, :code, :is_loaded, [mod]),
+             loaded_md5 when is_binary(loaded_md5) <-
+               :rpc.call(node, mod, :module_info, [:md5]),
+             true <- loaded_md5 != disk_md5 do
+          [mod]
+        else
+          # not loaded in the node (loads fresh from disk on first use),
+          # already current, or beam unreadable — nothing to swap
+          _ -> []
+        end
+      end)
+
+    _ ->
+      Enum.map(System.argv(), &String.to_atom/1)
+  end
+
+if mods == [] do
+  IO.puts("[hot-reload] node matches disk beams (md5-verified) — nothing to reload.")
+  System.halt(0)
+end
+
 Enum.each(mods, fn m ->
   :rpc.call(node, :code, :purge, [m])
   case :rpc.call(node, :code, :load_file, [m]) do
@@ -93,7 +127,7 @@ end)
 IO.puts("[hot-reload] reloaded #{length(mods)} module(s) on #{inspect(node)} — no restart")
 '
 
-HR_NODE="$TARGET_NODE" exec elixir \
+HR_NODE="$TARGET_NODE" HR_MODE="$HR_MODE" HR_EBIN="$EBIN" exec elixir \
     --sname "hotreload$$" \
     --cookie "$LEASE_PLANE_NODE_COOKIE" \
-    -e "$CTRL" -- "${MODS[@]}"
+    -e "$CTRL" -- "${MODS[@]+"${MODS[@]}"}"
