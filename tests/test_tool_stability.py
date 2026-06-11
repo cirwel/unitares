@@ -119,6 +119,31 @@ class TestResolveToolAlias:
 
 
 # ============================================================================
+# Agent-experience aliases (Jun 2026)
+# ============================================================================
+
+class TestAgentExperienceAliases:
+    """Task-verb aliases for the core agent workflow. Pins the full
+    six-alias map so a rename or removal fails here, not in an agent
+    session."""
+
+    @pytest.mark.parametrize("friendly,canonical,inject_action", [
+        ("start_session", "onboard", None),
+        ("sync_state", "process_agent_update", None),
+        ("check_working_state", "get_governance_metrics", None),
+        ("search_shared_memory", "knowledge", "search"),
+        ("record_result", "outcome_event", None),
+        ("request_review", "dialectic", "request"),
+    ])
+    def test_resolution(self, friendly, canonical, inject_action):
+        name, alias = resolve_tool_alias(friendly)
+        assert name == canonical
+        assert alias is not None
+        assert alias.reason == "intuitive_alias"
+        assert alias.inject_action == inject_action
+
+
+# ============================================================================
 # get_tool_stability
 # ============================================================================
 

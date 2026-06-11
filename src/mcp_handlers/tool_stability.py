@@ -306,6 +306,34 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         migration_note="Use knowledge(action='cleanup')", inject_action="cleanup"),
     "get_lifecycle_stats": ToolAlias(old_name="get_lifecycle_stats", new_name="knowledge", reason="consolidated",
         migration_note="Use knowledge(action='stats')", inject_action="stats"),
+
+    # ==========================================================================
+    # Agent-experience aliases (Jun 2026) — task-verb names for the core
+    # agent workflow. Additive layer: canonical tools, schemas, and EISV
+    # semantics are unchanged underneath. Identity classification is
+    # inherited automatically: get_call_identity_requirement canonicalizes
+    # through this registry (alias + inject_action) before judging.
+    # ==========================================================================
+    "start_session": ToolAlias(
+        old_name="start_session", new_name="onboard", reason="intuitive_alias",
+        migration_note="Resolves to onboard() - creates identity and returns templates"),
+    "sync_state": ToolAlias(
+        old_name="sync_state", new_name="process_agent_update", reason="intuitive_alias",
+        migration_note="Resolves to process_agent_update() - check in your working state"),
+    "check_working_state": ToolAlias(
+        old_name="check_working_state", new_name="get_governance_metrics", reason="intuitive_alias",
+        migration_note="Resolves to get_governance_metrics() - your current EISV working state"),
+    "search_shared_memory": ToolAlias(
+        old_name="search_shared_memory", new_name="knowledge", reason="intuitive_alias",
+        migration_note="Resolves to knowledge(action='search') - find prior discoveries, avoid duplicate work",
+        inject_action="search"),
+    "record_result": ToolAlias(
+        old_name="record_result", new_name="outcome_event", reason="intuitive_alias",
+        migration_note="Resolves to outcome_event() - record what actually happened"),
+    "request_review": ToolAlias(
+        old_name="request_review", new_name="dialectic", reason="intuitive_alias",
+        migration_note="Resolves to dialectic(action='request', issue_description='...') - ask for a structured review",
+        inject_action="request"),
 }
 
 # Reverse mapping: new_name -> list of old names
