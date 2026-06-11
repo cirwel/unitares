@@ -829,7 +829,7 @@ class KnowledgeGraphAGE:
         set_parts: List[str] = []
         params: List[Any] = []
 
-        for key in ("status", "severity", "type", "summary", "details", "last_referenced"):
+        for key in ("status", "severity", "type", "summary", "details"):
             if key in updates:
                 params.append(updates[key])
                 set_parts.append(f"{key} = ${len(params)}")
@@ -861,8 +861,11 @@ class KnowledgeGraphAGE:
         """Update discovery fields in AGE graph.
 
         Supports updating: status, resolved_at, updated_at, tags, severity, type,
-        summary, details, and last_referenced.
+        summary, and details.
         Falls back to direct SQL UPDATE when the discovery has no AGE node.
+        Retries once on AGE concurrent-update conflicts ("Entity failed to be
+        updated"), which AGE raises instead of re-evaluating the tuple the way
+        plain PostgreSQL UPDATE does under READ COMMITTED.
         """
         db = await self._get_db()
 
@@ -880,7 +883,7 @@ class KnowledgeGraphAGE:
             updates["tags"] = normalize_tags(updates["tags"])
 
         for key, value in updates.items():
-            if key in ("status", "resolved_at", "updated_at", "severity", "type", "last_referenced", "summary", "details"):
+            if key in ("status", "resolved_at", "updated_at", "severity", "type", "summary", "details"):
                 param_name = f"val_{key}"
                 set_parts.append(f"d.{key} = ${{{param_name}}}")
                 params[param_name] = value
@@ -899,19 +902,32 @@ class KnowledgeGraphAGE:
             RETURN d.id
         """
 
-        try:
-            async with db.transaction() as conn:
-                result = await db.graph_query(cypher, params, conn=conn)
-                if not result or (isinstance(result[0], dict) and "error" in result[0]):
-                    # No AGE node — fall back to SQL for SQL-only orphans.
-                    return await self._sql_update_discovery(discovery_id, updates)
-                await self._sync_updated_discovery_row(conn, discovery_id, updates)
-            if "summary" in updates or "details" in updates:
-                await self._refresh_embedding(discovery_id)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to update discovery {discovery_id}: {e}")
-            return False
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async with db.transaction() as conn:
+                    result = await db.graph_query(cypher, params, conn=conn)
+                    if not result or (isinstance(result[0], dict) and "error" in result[0]):
+                        # No AGE node — fall back to SQL for SQL-only orphans.
+                        return await self._sql_update_discovery(discovery_id, updates)
+                    await self._sync_updated_discovery_row(conn, discovery_id, updates)
+                if "summary" in updates or "details" in updates:
+                    await self._refresh_embedding(discovery_id)
+                return True
+            except Exception as e:
+                # AGE raises TM_Updated ("Entity failed to be updated: 3") on a
+                # write-write race; the conflict is transient once the other
+                # transaction commits, so one retry resolves it.
+                if "Entity failed to be updated" in str(e) and attempt < max_attempts:
+                    logger.warning(
+                        f"Concurrent update conflict on discovery {discovery_id}; "
+                        f"retrying (attempt {attempt + 1} of {max_attempts})"
+                    )
+                    await asyncio.sleep(0.05 * attempt)
+                    continue
+                logger.error(f"Failed to update discovery {discovery_id}: {e}")
+                return False
+        return False
 
     async def get_stats(
         self,
@@ -2230,6 +2246,12 @@ class KnowledgeGraphAGE:
 
         Stale discoveries are old, unresolved items that might need
         archiving or resolution.
+
+        Staleness is creation-time based (d.timestamp). Read-recency, if a
+        future predicate wants it, is durably recorded in audit.events as
+        knowledge_read events (via _broadcast_knowledge_read) — do not
+        reintroduce a per-read vertex property for it; that caused AGE
+        TM_Updated write-write races (removed 2026-06-11).
 
         Args:
             older_than_days: Find discoveries older than this

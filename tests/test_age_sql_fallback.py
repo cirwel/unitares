@@ -458,3 +458,105 @@ class TestUpdateDiscoverySQLFallback:
         assert ok is True
         db.graph_query.assert_not_awaited()
         db._pool.fetchval.assert_not_awaited()
+
+
+# ===========================================================================
+# update_discovery concurrent-update retry (AGE TM_Updated)
+# ===========================================================================
+
+@pytest.mark.asyncio
+class TestUpdateDiscoveryConcurrentRetry:
+    """AGE raises "Entity failed to be updated: <TM_Result>" on a write-write
+    race instead of re-evaluating the tuple like plain PostgreSQL UPDATE.
+    The conflict is transient, so update_discovery retries once."""
+
+    def _kg_with_age_node(self, db):
+        db._pool.fetchval = AsyncMock(return_value=None)
+        return db
+
+    async def test_retries_once_on_concurrent_update_conflict(self):
+        db = _make_db(graph_available=True)
+        db.graph_query = AsyncMock(
+            side_effect=[
+                Exception("Entity failed to be updated: 3"),
+                [{"d.id": "disc-age-001"}],
+            ]
+        )
+        kg = await _make_kg(db)
+        kg._sync_updated_discovery_row = AsyncMock()  # type: ignore[assignment]
+        kg._refresh_embedding = AsyncMock()  # type: ignore[assignment]
+
+        ok = await kg.update_discovery("disc-age-001", {"status": "resolved"})
+
+        assert ok is True
+        assert db.graph_query.await_count == 2
+        kg._sync_updated_discovery_row.assert_awaited_once()
+
+    async def test_returns_false_when_conflict_persists(self):
+        db = _make_db(graph_available=True)
+        db.graph_query = AsyncMock(
+            side_effect=Exception("Entity failed to be updated: 3")
+        )
+        kg = await _make_kg(db)
+
+        ok = await kg.update_discovery("disc-age-001", {"status": "resolved"})
+
+        assert ok is False
+        assert db.graph_query.await_count == 2  # initial attempt + one retry
+
+    async def test_no_retry_on_unrelated_errors(self):
+        db = _make_db(graph_available=True)
+        db.graph_query = AsyncMock(side_effect=ValueError("boom"))
+        kg = await _make_kg(db)
+
+        ok = await kg.update_discovery("disc-age-001", {"status": "resolved"})
+
+        assert ok is False
+        assert db.graph_query.await_count == 1
+
+
+# ===========================================================================
+# last_referenced removed from the update surface
+# ===========================================================================
+
+@pytest.mark.asyncio
+class TestLastReferencedRemoved:
+    """last_referenced was a write-only AGE vertex property: no reader
+    anywhere, no SQL column, and its fire-and-forget touches raced between
+    concurrent sessions producing TM_Updated error storms. It is no longer
+    an updatable field on either path."""
+
+    async def test_age_path_treats_last_referenced_as_noop(self):
+        db = _make_db(graph_available=True)
+        kg = await _make_kg(db)
+
+        ok = await kg.update_discovery(
+            "disc-age-001", {"last_referenced": "2026-06-11T00:00:00+00:00"}
+        )
+
+        assert ok is True
+        db.graph_query.assert_not_awaited()
+        db._pool.fetchval.assert_not_awaited()
+
+    async def test_sql_fallback_treats_last_referenced_as_noop(self):
+        db = _make_db(graph_available=False)
+        kg = await _make_kg(db)
+
+        ok = await kg._sql_update_discovery(
+            "disc-sql-001", {"last_referenced": "2026-06-11T00:00:00+00:00"}
+        )
+
+        assert ok is True
+        db._pool.fetchval.assert_not_awaited()
+
+    async def test_update_discovery_last_referenced_noop_when_graph_unavailable(self):
+        db = _make_db(graph_available=False)
+        kg = await _make_kg(db)
+
+        ok = await kg.update_discovery(
+            "disc-sql-001", {"last_referenced": "2026-06-11T00:00:00+00:00"}
+        )
+
+        assert ok is True
+        db.graph_query.assert_not_awaited()
+        db._pool.fetchval.assert_not_awaited()
