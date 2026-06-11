@@ -46,6 +46,8 @@ def cache_repo(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    # Hermetic: host config may force commit signing (e.g. remote containers)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True)
 
