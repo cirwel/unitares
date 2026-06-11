@@ -254,6 +254,63 @@ async def test_explicit_agent_id_bypasses_guard():
     data_mock.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_unbound_rest_direct_handler_mints_nothing():
+    """REST half of read purity (PR #608 review block): the
+    `_DIRECT_HTTP_TOOL_HANDLERS` shortcut bypasses the MCP handler, so
+    it carries its own guard. This is the exact transport the
+    2026-06-10 cold probes used."""
+    from src.services.http_tool_service import (
+        _execute_http_get_governance_metrics,
+    )
+
+    args = {}
+    with patch(
+        "src.mcp_handlers.context.get_context_agent_id", return_value=None
+    ):
+        result = await _execute_http_get_governance_metrics(args)
+
+    assert isinstance(result, dict)
+    assert result["status"] == "⚪ unbound"
+    assert result["verdict"]["value"] == "unbound"
+    assert "agent_id" not in args
+
+
+@pytest.mark.asyncio
+async def test_bound_rest_direct_handler_proceeds():
+    from src.services.http_tool_service import (
+        _execute_http_get_governance_metrics,
+    )
+
+    data_mock = AsyncMock(return_value={"ok": True})
+    with patch(
+        "src.mcp_handlers.context.get_context_agent_id",
+        return_value="agent-rest-bound",
+    ), patch(
+        "src.services.http_tool_service.require_agent_id",
+        return_value=("agent-rest-bound", None),
+    ), patch(
+        "src.services.http_tool_service.get_governance_metrics_data", data_mock
+    ):
+        result = await _execute_http_get_governance_metrics({})
+
+    assert result == {"ok": True}
+    data_mock.assert_awaited_once()
+
+
+def test_mcp_and_rest_guards_share_one_payload():
+    """Single source per shape (trust contract §3.4): both transports
+    must return the SAME unbound payload object structure — the REST
+    guard imports the MCP handler's helper, never a copy."""
+    from src.mcp_handlers.core import unbound_metrics_payload
+    import src.services.http_tool_service as hts
+
+    assert hts.unbound_metrics_payload is unbound_metrics_payload
+    payload = unbound_metrics_payload()
+    assert payload["status"] == "⚪ unbound"
+    assert payload["verdict"]["value"] == "unbound"
+
+
 def test_fleet_calibration_feedback_carries_scope_label():
     """The fleet-wide calibration numbers must self-identify as fleet
     data even when the cache-gated explanatory message is absent."""
