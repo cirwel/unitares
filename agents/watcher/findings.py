@@ -289,6 +289,13 @@ _STATUS_TIMESTAMP_FIELD = {
 }
 
 
+def _finding_target_exists(finding: dict[str, Any]) -> bool:
+    path = finding.get("file", "")
+    if not path:
+        return False
+    return Path(path).exists()
+
+
 def update_finding_status(
     fingerprint_prefix: str,
     new_status: str,
@@ -399,8 +406,7 @@ def _sweep_stale_quiet() -> int:
     kept: list[dict[str, Any]] = []
     dropped = 0
     for f in findings:
-        path = f.get("file", "")
-        if path and Path(path).exists():
+        if _finding_target_exists(f):
             kept.append(f)
         else:
             dropped += 1
@@ -772,6 +778,7 @@ def print_unresolved(scope_root: Path | None = None) -> int:
         f
         for f in _iter_findings_raw()
         if f.get("status", "open") in ("open", "surfaced")
+        and _finding_target_exists(f)
     ]
     in_scope, out_groups = _partition_findings_by_scope(findings, scope_root)
 
