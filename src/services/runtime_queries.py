@@ -252,6 +252,15 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             standardized_metrics["regime"] = None
         if "phi" in standardized_metrics:
             standardized_metrics["phi"] = None
+        # _build_eisv_semantics merged seed phi/regime into the nested
+        # ode_diagnostics block before this branch ran — null them there
+        # too, or the full response contradicts its own top-level nulls
+        # (review fold, PR #605).
+        ode_diag = standardized_metrics.get("ode_diagnostics")
+        if isinstance(ode_diag, dict):
+            for seed_key in ("phi", "regime"):
+                if seed_key in ode_diag:
+                    ode_diag[seed_key] = None
         v41 = standardized_metrics.get("unitares_v41")
         if isinstance(v41, dict) and "basin" in v41:
             v41["basin"] = None

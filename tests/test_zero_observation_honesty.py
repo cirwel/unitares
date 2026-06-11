@@ -67,11 +67,20 @@ async def test_uninitialized_full_shape_withholds_assessments():
     for key in ("health", "mode", "basin", "trajectory", "guidance"):
         assert key not in data["state"]
     # Seed-derived analysis blocks are withheld, not reported as measurement.
-    if "stability" in data:
-        assert data["stability"]["status"] == "pending (first check-in required)"
-        assert "stable" not in data["stability"]
+    # stability is ALWAYS present in the full shape (get_monitor_metrics
+    # emits it unconditionally) — assert presence so a regression that
+    # drops the block entirely cannot silently skip these checks.
+    assert "stability" in data
+    assert data["stability"]["status"] == "pending (first check-in required)"
+    assert "stable" not in data["stability"]
     assert data.get("regime") is None
     assert data.get("phi") is None
+    # The nested ode_diagnostics block must not contradict the top-level
+    # nulls with seed values (review fold).
+    ode_diag = data.get("ode_diagnostics")
+    if isinstance(ode_diag, dict):
+        assert ode_diag.get("phi") is None
+        assert ode_diag.get("regime") is None
     v41 = data.get("unitares_v41")
     if isinstance(v41, dict):
         assert v41.get("basin") is None
