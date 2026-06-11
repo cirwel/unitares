@@ -287,6 +287,17 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         if unitares_state:
             sat_diag = compute_saturation_diagnostics(unitares_state, theta)
             standardized_metrics["saturation_diagnostics"] = {
+                # Provenance (trust-contract §2): these are properties of
+                # the ODE CONFIGURATION evaluated at the current state
+                # vector — legitimate model diagnostics even pre-check-in,
+                # but at zero observations the state input is the seed, so
+                # the values describe the config, not this agent. Labeled,
+                # not suppressed (external re-probe finding, 2026-06-11).
+                "source": (
+                    "config_derived (parameters + seed state — no observations yet)"
+                    if is_uninitialized
+                    else "derived (parameters + current state)"
+                ),
                 "sat_margin": sat_diag["sat_margin"],
                 "dynamics_mode": sat_diag["dynamics_mode"],
                 "will_saturate": sat_diag["will_saturate"],

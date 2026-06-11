@@ -84,6 +84,11 @@ async def test_uninitialized_full_shape_withholds_assessments():
     v41 = data.get("unitares_v41")
     if isinstance(v41, dict):
         assert v41.get("basin") is None
+    # saturation_diagnostics is legitimate config-derived math — labeled,
+    # not suppressed (external re-probe finding, 2026-06-11). Present on
+    # every fresh monitor (unitaires_state initializes at construction).
+    assert "saturation_diagnostics" in data
+    assert data["saturation_diagnostics"]["source"].startswith("config_derived")
     # Fleet-scoped calibration has no place in a zero-history response.
     assert "calibration_feedback" not in data
 
@@ -143,6 +148,8 @@ async def test_initialized_agent_keeps_interpretation():
     assert data.get("phi") is not None
     if "stability" in data:
         assert "stable" in data["stability"]
+    if "saturation_diagnostics" in data:
+        assert data["saturation_diagnostics"]["source"].startswith("derived")
 
     lite = await get_governance_metrics_data(
         "test-zeroobs-active", {"lite": True}, server=_server_for(monitor)
