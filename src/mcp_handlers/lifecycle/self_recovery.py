@@ -43,7 +43,7 @@ from ..decorators import mcp_tool
 from ..support.coerce import safe_float, resolve_agent_uuid
 from .helpers import (
     _resume_with_persistence,
-    clear_loop_detector_state,  # re-exported for legacy imports from this module
+    clear_loop_detector_state,  # noqa: F401 — re-exported for legacy imports from this module
 )
 from src import agent_storage
 from src.logging_utils import get_logger

@@ -10,7 +10,7 @@ Agents call models for reasoning, generation, or analysis.
 Usage tracked in EISV (Energy consumption) for self-regulation.
 """
 
-from typing import Dict, Any, Sequence, Optional
+from typing import Dict, Any, Sequence
 from mcp.types import TextContent
 import os
 

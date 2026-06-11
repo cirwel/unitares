@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Union, Literal, Dict, Any, List, Sequence
+from typing import Optional, Union, Literal, Dict, Any, List
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .mixins import AgentIdentityMixin
 

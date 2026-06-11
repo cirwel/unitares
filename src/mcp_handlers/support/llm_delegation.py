@@ -25,7 +25,6 @@ import os
 import json
 
 from src.logging_utils import get_logger
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = get_logger(__name__)
 
 # Check if OpenAI SDK available

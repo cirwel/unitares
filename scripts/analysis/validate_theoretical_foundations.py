@@ -10,10 +10,7 @@ Usage:
 """
 
 import sys
-import re
-import ast
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent
@@ -24,10 +21,8 @@ sys.path.insert(0, str(project_root))
 GOVERNANCE_CORE_SOURCE = project_root / "governance_core"
 HAS_SOURCE = GOVERNANCE_CORE_SOURCE.is_dir() and (GOVERNANCE_CORE_SOURCE / "dynamics.py").exists()
 
-from governance_core.dynamics import compute_dynamics, State
-from governance_core.coherence import coherence, lambda1, lambda2
-from governance_core.parameters import DEFAULT_PARAMS, DEFAULT_THETA, Theta, DynamicsParams
-from config.governance_config import config
+from governance_core.coherence import coherence, lambda1
+from governance_core.parameters import DEFAULT_PARAMS, DEFAULT_THETA, Theta
 
 
 class ValidationResult:

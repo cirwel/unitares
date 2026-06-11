@@ -59,6 +59,8 @@ def two_worktrees(tmp_path):
     _git(main, "init", "-q", "-b", "main")
     _git(main, "config", "user.email", "t@t.t")
     _git(main, "config", "user.name", "t")
+    # Hermetic: host config may force commit signing (e.g. remote containers)
+    _git(main, "config", "commit.gpgsign", "false")
     src = main / "src"
     src.mkdir()
     file_main = src / "x.py"

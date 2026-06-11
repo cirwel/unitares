@@ -1,4 +1,4 @@
-from typing import Optional, Union, Literal, Dict, Any, List, Sequence
+from typing import Optional
 from pydantic import BaseModel, Field
 
 class AgentIdentityMixin(BaseModel):

@@ -9,8 +9,7 @@ import os
 import json
 import time
 from pathlib import Path
-from typing import List, Dict, Tuple
-import sys
+from typing import Dict, Tuple
 
 # Import structured logging
 from src.logging_utils import get_logger

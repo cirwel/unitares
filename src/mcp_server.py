@@ -36,12 +36,9 @@ import asyncio
 import argparse
 import time
 from pathlib import Path
-from typing import Any, Dict, Set, Optional
+from typing import Dict, Optional
 from datetime import datetime, timedelta, timezone
-from contextlib import asynccontextmanager
 import json
-import traceback
-import uuid
 
 # Load environment variables from ~/.env.mcp
 try:
@@ -62,7 +59,6 @@ project_root = ensure_project_root()
 from src.logging_utils import get_logger
 from src.services.identity_continuity import (
     format_identity_continuity_startup_message,
-    get_identity_continuity_status,
     probe_identity_continuity_status,
 )
 from src.versioning import load_version_from_file
@@ -88,7 +84,7 @@ from src.connection_tracker import (
 try:
     from mcp.server import FastMCP
     from mcp.server.fastmcp import Context
-    from mcp.types import TextContent
+    from mcp.types import TextContent  # noqa: F401 — availability probe
     MCP_SDK_AVAILABLE = True
 except ImportError as e:
     MCP_SDK_AVAILABLE = False
@@ -97,7 +93,7 @@ except ImportError as e:
     sys.exit(1)
 
 # Import dispatch_tool from handlers (reuse all existing tool logic)
-from src.mcp_handlers import dispatch_tool, TOOL_HANDLERS
+from src.mcp_handlers import dispatch_tool
 # Wave 3a per-tool routing table imports — hoisted to module load time so
 # (a) the per-call ~200-500ns import cost vanishes from the dispatch hot
 # path, and (b) ``patch("src.wave3a_routing.get_route")`` style mocks
@@ -644,7 +640,7 @@ from src.process_management import (
     write_server_pid_file, remove_server_pid_file,
     acquire_server_lock, release_server_lock,
     ensure_server_pid_file, ensure_server_lock,
-    SERVER_PID_FILE, SERVER_LOCK_FILE, CURRENT_PID,
+    SERVER_PID_FILE, SERVER_LOCK_FILE,
 )
 
 
@@ -813,7 +809,7 @@ async def main():
     # Run the governance MCP server
     try:
         import uvicorn
-        from starlette.applications import Starlette
+        from starlette.applications import Starlette  # noqa: F401 — availability probe
         from starlette.responses import JSONResponse
         from starlette.middleware.cors import CORSMiddleware
         from mcp.server.streamable_http_manager import StreamableHTTPSessionManager

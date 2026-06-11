@@ -13,12 +13,10 @@ Usage:
     python scripts/cleanup_data_directory.py --clean     # Actually clean files
 """
 
-import os
 import sys
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Dict, Tuple
-import json
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent

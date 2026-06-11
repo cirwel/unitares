@@ -5,10 +5,9 @@ Parses natural language conditions into structured format and applies them.
 """
 
 import re
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, Optional
 from datetime import datetime
 from src.logging_utils import get_logger
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = get_logger(__name__)
 
 class ParsedCondition:

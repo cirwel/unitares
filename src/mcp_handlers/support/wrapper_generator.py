@@ -16,7 +16,6 @@ import logging
 from typing import Annotated, Any, Callable, Optional, Union
 
 from pydantic import ConfigDict, Field
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = logging.getLogger(__name__)
 
 def create_typed_wrapper(

@@ -4,11 +4,10 @@ Export tool handlers.
 
 from typing import Dict, Any, Sequence
 from mcp.types import TextContent
-import sys
 import os
 import json
 from datetime import datetime
-from ..utils import success_response, error_response, require_agent_id, require_registered_agent
+from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server

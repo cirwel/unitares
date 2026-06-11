@@ -13,7 +13,7 @@ The ODE's E, I, S, V values in EISVMetrics may differ from the behavioral
 state's E, I, S, V (which are EMA-smoothed observations).
 """
 
-from typing import Dict, Optional, Tuple, NamedTuple
+from typing import Dict, NamedTuple
 from dataclasses import dataclass
 
 
