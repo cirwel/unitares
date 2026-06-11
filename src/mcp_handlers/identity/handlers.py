@@ -2191,9 +2191,16 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # When Claude.ai doesn't pass client_session_id, dispatch_tool() can
     # use this pin to inject the correct session ID based on transport fingerprint.
     # This prevents knowledge graph attribution from scattering across random UUIDs.
+    #
+    # Subagent onboards write the pin only-if-absent: a spawned helper
+    # shares the driver's exact fingerprint, and an unconditional write
+    # here CAPTURES the driver's argument-less resolution for the rest of
+    # the session (incident 2026-06-10 — see SUBAGENT_PIN_NX_SPAWN_REASONS
+    # in identity/session.py for the full mechanism).
     try:
         logger.debug(f"[ONBOARD_PIN] base_session_key={base_session_key!r}")
         base_fp = _extract_base_fingerprint(base_session_key)
+        from .session import SUBAGENT_PIN_NX_SPAWN_REASONS
         await set_onboard_pin(
             base_fp,
             agent_uuid,
@@ -2201,6 +2208,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             client_hint=client_hint,
             model_type=model_type,
             user_agent=signals.user_agent if signals else None,
+            if_absent=_spawn_reason in SUBAGENT_PIN_NX_SPAWN_REASONS,
         )
     except Exception as e:
         logger.warning(f"[ONBOARD_PIN] Could not set pin: {e}")

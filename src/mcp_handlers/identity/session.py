@@ -814,6 +814,22 @@ async def _lookup_onboard_pin_inner(base_fingerprint: str, *, refresh_ttl: bool)
     return pinned_session_id
 
 
+# Spawn reasons whose onboards must NOT displace an existing pin. The pin
+# bridges argument-less calls from ONE long-lived client per fingerprint
+# (the driver) back to its onboarded identity; in-process-spawned helpers
+# (Task/Agent-tool subagents) share the driver's exact fingerprint (same
+# host, same binary → same IP:UA, same client_hint, usually same model
+# scope), so an unconditional pin write at their onboard CAPTURES the
+# driver's fallback resolution. Incident 2026-06-10: across one operator
+# session, each council dispatch's last-onboarded subagent took the pin —
+# ~50 of the driver's check-ins scattered over seven subagent identities
+# while the driver's own trajectory froze at its first hour. Subagents
+# keep identity continuity the documented way (echoing the
+# client_session_id their onboard returned); the NX write below only
+# matters for the argument-less fallback they should not win.
+SUBAGENT_PIN_NX_SPAWN_REASONS = frozenset({"subagent"})
+
+
 async def set_onboard_pin(
     base_fingerprint: str,
     agent_uuid: str,
@@ -822,6 +838,7 @@ async def set_onboard_pin(
     client_hint: Optional[str] = None,
     model_type: Optional[str] = None,
     user_agent: Optional[str] = None,
+    if_absent: bool = False,
 ) -> bool:
     """Set a pin mapping a transport fingerprint to an onboarded agent.
 
@@ -831,8 +848,14 @@ async def set_onboard_pin(
         base_fingerprint: Output of _extract_base_fingerprint(), e.g. "ua:d20c2f"
         agent_uuid: The newly onboarded agent's UUID
         client_session_id: The stable session ID to inject on subsequent calls
+        if_absent: Write each candidate pin only when no pin exists for it
+            (Redis SET NX). Used for subagent onboards
+            (SUBAGENT_PIN_NX_SPAWN_REASONS) so a spawned helper never
+            displaces the live driver's pin; on a fingerprint with no
+            standing pin the subagent may still claim it.
 
-    Returns: True if the pin was set successfully.
+    Returns: True if the pin was set successfully (with ``if_absent``,
+    True when at least one candidate slot was claimed).
     """
     if not base_fingerprint:
         logger.debug("[ONBOARD_PIN] No fingerprint — skip pin-set")
@@ -846,6 +869,7 @@ async def set_onboard_pin(
                 client_hint=client_hint,
                 model_type=model_type,
                 user_agent=user_agent,
+                if_absent=if_absent,
             ),
             timeout=_PIN_REDIS_TIMEOUT,
         )
@@ -868,6 +892,7 @@ async def _set_onboard_pin_inner(
     client_hint: Optional[str] = None,
     model_type: Optional[str] = None,
     user_agent: Optional[str] = None,
+    if_absent: bool = False,
 ) -> bool:
     from src.cache.redis_client import get_redis
     import json as _json
@@ -889,8 +914,27 @@ async def _set_onboard_pin_inner(
         "agent_uuid": agent_uuid,
         "client_session_id": client_session_id,
     })
+    wrote_any = False
     for fp in candidates:
         pin_key = f"recent_onboard:{fp}"
+        if if_absent:
+            # SET NX + EX: claim the slot only when empty. A standing pin
+            # (the driver's) is left untouched — including its TTL, which
+            # the driver's own lookups refresh.
+            claimed = await raw_redis.set(pin_key, pin_data, ex=_PIN_TTL, nx=True)
+            if claimed:
+                wrote_any = True
+                logger.info(
+                    f"[ONBOARD_PIN] Claimed empty pin slot for agent "
+                    f"{agent_uuid[:8]}... (nx)"
+                )
+            else:
+                logger.info(
+                    f"[ONBOARD_PIN] Pin slot already held — subagent "
+                    f"{agent_uuid[:8]}... does not displace it (nx)"
+                )
+            continue
         await raw_redis.setex(pin_key, _PIN_TTL, pin_data)
+        wrote_any = True
         logger.info(f"[ONBOARD_PIN] Set pin for agent {agent_uuid[:8]}...")
-    return True
+    return wrote_any

@@ -459,6 +459,121 @@ class TestOnboardPin:
             assert result is False
 
 
+def _nx_fake_redis(stored_data):
+    """Dict-backed raw-Redis fake supporting setex, get, expire, and
+    SET NX (the if_absent path)."""
+    mock_raw = AsyncMock()
+
+    async def mock_setex(key, ttl, value):
+        stored_data[key] = value
+
+    async def mock_set(key, value, ex=None, nx=False):
+        if nx and key in stored_data:
+            return None  # redis-py returns None when NX blocks the write
+        stored_data[key] = value
+        return True
+
+    async def mock_get(key):
+        return stored_data.get(key)
+
+    async def mock_expire(key, ttl):
+        pass
+
+    mock_raw.setex = mock_setex
+    mock_raw.set = mock_set
+    mock_raw.get = mock_get
+    mock_raw.expire = mock_expire
+    return mock_raw
+
+
+class TestSubagentPinCapture:
+    """Incident 2026-06-10: every subagent onboard displaced the driver's
+    fingerprint pin (unconditional SETEX, last-writer-wins on a
+    host-shared key), so the driver's argument-less calls resolved to
+    the most recently onboarded subagent — ~50 driver check-ins
+    scattered across seven subagent identities in one session. Subagent
+    onboards now write the pin only-if-absent."""
+
+    @pytest.mark.asyncio
+    async def test_subagent_if_absent_does_not_displace_driver_pin(self):
+        """THE incident shape: driver pins, subagent onboards, driver's
+        fingerprint must still resolve to the driver."""
+        from src.mcp_handlers.identity.handlers import (
+            lookup_onboard_pin,
+            set_onboard_pin,
+        )
+
+        stored = {}
+
+        async def _get_raw():
+            return _nx_fake_redis(stored)
+
+        with patch("src.cache.redis_client.get_redis", new=_get_raw):
+            assert await set_onboard_pin(
+                "ua:d20c2f", "driver-uuid", "agent-driver-123456"
+            ) is True
+            claimed = await set_onboard_pin(
+                "ua:d20c2f", "subagent-uuid", "agent-subagent-9999",
+                if_absent=True,
+            )
+            assert claimed is False
+            assert await lookup_onboard_pin("ua:d20c2f") == "agent-driver-123456"
+
+    @pytest.mark.asyncio
+    async def test_subagent_if_absent_claims_empty_slot(self):
+        """No standing pin (subagent on a fresh fingerprint) → the
+        subagent may claim it, preserving its own continuity."""
+        from src.mcp_handlers.identity.handlers import (
+            lookup_onboard_pin,
+            set_onboard_pin,
+        )
+
+        stored = {}
+
+        async def _get_raw():
+            return _nx_fake_redis(stored)
+
+        with patch("src.cache.redis_client.get_redis", new=_get_raw):
+            claimed = await set_onboard_pin(
+                "ua:fresh1", "subagent-uuid", "agent-subagent-9999",
+                if_absent=True,
+            )
+            assert claimed is True
+            assert await lookup_onboard_pin("ua:fresh1") == "agent-subagent-9999"
+
+    @pytest.mark.asyncio
+    async def test_driver_onboard_still_displaces(self):
+        """Driver succession is preserved: a later non-subagent onboard
+        (fresh driver session on the same host) takes the pin."""
+        from src.mcp_handlers.identity.handlers import (
+            lookup_onboard_pin,
+            set_onboard_pin,
+        )
+
+        stored = {}
+
+        async def _get_raw():
+            return _nx_fake_redis(stored)
+
+        with patch("src.cache.redis_client.get_redis", new=_get_raw):
+            await set_onboard_pin("ua:d20c2f", "old-driver", "agent-old-111111")
+            await set_onboard_pin("ua:d20c2f", "new-driver", "agent-new-222222")
+            assert await lookup_onboard_pin("ua:d20c2f") == "agent-new-222222"
+
+    def test_spawn_reason_set_membership(self):
+        """The NX set covers the Agent-tool dispatch convention."""
+        from src.mcp_handlers.identity.session import (
+            SUBAGENT_PIN_NX_SPAWN_REASONS,
+        )
+
+        assert "subagent" in SUBAGENT_PIN_NX_SPAWN_REASONS
+        # Driver-shaped spawn reasons must NOT be in the set — a fresh
+        # driver session declaring lineage uses new_session and must be
+        # able to take over the host fingerprint.
+        assert "new_session" not in SUBAGENT_PIN_NX_SPAWN_REASONS
+        assert None not in SUBAGENT_PIN_NX_SPAWN_REASONS
+
+
 # ============================================================================
 # handle_identity_v2 (tool handler, not the decorator adapter)
 # ============================================================================
@@ -1767,6 +1882,56 @@ class TestHandleOnboardV2:
         assert "session_continuity" not in data
         assert "workflow" not in data
         assert "what_this_does" not in data
+
+    @pytest.mark.asyncio
+    async def test_subagent_onboard_passes_if_absent_to_pin(self, patch_onboard_deps, mock_db, mock_redis):
+        """spawn_reason='subagent' must reach set_onboard_pin as
+        if_absent=True (the NX write) — the wiring half of the
+        2026-06-10 pin-capture fix."""
+        from src.mcp_handlers.identity import handlers as h
+
+        mock_redis.get.return_value = None
+        mock_db.get_session.return_value = None
+        mock_db.find_agent_by_label.return_value = None
+        mock_db.get_identity.side_effect = [
+            None, None, SimpleNamespace(identity_id="ni", metadata={}),
+        ]
+
+        pin_mock = AsyncMock(return_value=True)
+        with patch.object(h, "set_onboard_pin", pin_mock):
+            result = await h.handle_onboard_v2({
+                "client_session_id": "onboard-subagent-wiring",
+                "force_new": True,
+                "spawn_reason": "subagent",
+            })
+        data = parse_result(result)
+        assert data["success"] is True
+        pin_mock.assert_awaited_once()
+        assert pin_mock.await_args.kwargs.get("if_absent") is True
+
+    @pytest.mark.asyncio
+    async def test_driver_onboard_passes_if_absent_false(self, patch_onboard_deps, mock_db, mock_redis):
+        """new_session (and absent) spawn reasons keep last-writer-wins."""
+        from src.mcp_handlers.identity import handlers as h
+
+        mock_redis.get.return_value = None
+        mock_db.get_session.return_value = None
+        mock_db.find_agent_by_label.return_value = None
+        mock_db.get_identity.side_effect = [
+            None, None, SimpleNamespace(identity_id="ni", metadata={}),
+        ]
+
+        pin_mock = AsyncMock(return_value=True)
+        with patch.object(h, "set_onboard_pin", pin_mock):
+            result = await h.handle_onboard_v2({
+                "client_session_id": "onboard-driver-wiring",
+                "force_new": True,
+                "spawn_reason": "new_session",
+            })
+        data = parse_result(result)
+        assert data["success"] is True
+        pin_mock.assert_awaited_once()
+        assert pin_mock.await_args.kwargs.get("if_absent") is False
 
     @pytest.mark.asyncio
     async def test_arg_less_onboard_gates_to_fresh_per_v2_ontology(self, patch_onboard_deps, mock_db, mock_redis, caplog):
