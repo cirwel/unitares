@@ -433,6 +433,9 @@ async def test_reassignment_emits_audit_event():
     emit.assert_awaited_once()
     event = emit.await_args.args[0]
     assert event["event_type"] == "dialectic_reviewer_reassigned"
+    # Top-level session_id feeds the indexed audit.events column
+    # (review fold: nested-only landed the column NULL).
+    assert event["session_id"] == session.session_id
     assert event["details"]["session_id"] == session.session_id
     assert event["details"]["old_reviewer_id"] == "agent-reviewer"
     assert event["details"]["new_reviewer_id"] == "agent-new"

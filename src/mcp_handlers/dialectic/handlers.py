@@ -514,12 +514,15 @@ async def _apply_reviewer_reassignment(
     # reassignment has already committed; only observability is at
     # risk.
     try:
-        from datetime import timezone as _tz
         from src.audit_db import append_audit_event_async
         await append_audit_event_async({
-            "timestamp": datetime.now(_tz.utc).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "event_type": "dialectic_reviewer_reassigned",
             "agent_id": new_reviewer_id,
+            # Top-level session_id populates the indexed audit.events
+            # column (review fold — nested-only would land the column
+            # NULL); duplicated in details for payload self-containment.
+            "session_id": session_id,
             "details": {
                 "session_id": session_id,
                 "old_reviewer_id": old_reviewer_id,
