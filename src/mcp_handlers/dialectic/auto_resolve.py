@@ -12,7 +12,6 @@ from typing import Dict, Any
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from src.dialectic_db import (
-    get_dialectic_db,
     get_active_sessions_async,
     update_session_status_async,
     update_session_reviewer_async,

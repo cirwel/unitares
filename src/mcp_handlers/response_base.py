@@ -1,5 +1,5 @@
 """Response formatting utilities for MCP handlers."""
-from typing import Dict, Any, Sequence, Optional
+from typing import Dict, Any, Sequence
 from mcp.types import TextContent
 import json
 from datetime import datetime

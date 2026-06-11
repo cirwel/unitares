@@ -11,7 +11,6 @@ LITE MODEL SUPPORT:
 from typing import Dict, Any, Optional, Tuple, List
 from mcp.types import TextContent
 from .utils import error_response
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -74,7 +73,6 @@ def validate_file_path_policy(file_path: str) -> Tuple[Optional[str], Optional[T
         Returns warning, not error, to inform but not block.
     """
     import os
-    from pathlib import Path
     if file_path is None:
         return (None, None)
     file_path = os.path.normpath(file_path)

@@ -5,10 +5,9 @@ Extracted from core.py to reduce its size and make response modes independently 
 """
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 from src.logging_utils import get_logger
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from src.monitor_result import DIVERGENCE_LINE_THRESHOLD
 logger = get_logger(__name__)
 

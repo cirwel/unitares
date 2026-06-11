@@ -12,7 +12,6 @@ Generates tools/README.md with comprehensive tool documentation.
 """
 
 import ast
-import inspect
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass

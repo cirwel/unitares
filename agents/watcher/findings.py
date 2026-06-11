@@ -19,7 +19,6 @@ from typing import Any
 
 from agents.common.findings import post_finding
 from agents.watcher._util import (
-    hash_line_content,
     log,
     repo_relative_path,
     watcher_state_dir,

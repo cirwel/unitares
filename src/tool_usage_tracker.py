@@ -14,7 +14,6 @@ from typing import Dict, List, Optional
 import json
 import fcntl
 import os
-import sys
 
 # Import structured logging
 from src.logging_utils import get_logger

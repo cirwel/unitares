@@ -93,3 +93,34 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "@abstractmethod",
 ]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# Dead-code gate: unused imports only, kept at zero by CI.
+# F841/F811/ERA cleanups are tracked separately — widen this list as they reach zero.
+select = ["F401"]
+
+[tool.ruff.lint.per-file-ignores]
+# Package __init__ re-export surfaces
+"**/__init__.py" = ["F401"]
+# Pytest imports fixtures/plugins that ruff cannot see as used
+"tests/**" = ["F401"]
+"agents/*/tests/**" = ["F401"]
+"agents/sdk/tests/**" = ["F401"]
+# Declared re-export facades (docstring-marked); consumers import moved names through them
+"src/agent_state.py" = ["F401"]
+"src/mcp_handlers/utils.py" = ["F401"]
+"src/mcp_handlers/cirs/protocol.py" = ["F401"]
+"src/mcp_handlers/lifecycle/handlers.py" = ["F401"]
+"src/mcp_handlers/identity/core.py" = ["F401"]
+"src/mcp_handlers/identity/handlers.py" = ["F401"]
+# Re-export hub for watcher tests/hooks (tests monkeypatch.setattr these names on the agent module)
+"agents/watcher/agent.py" = ["F401"]
+# Surfaces owned by in-flight PRs #619/#622 — clean up after those land
+"src/http_api.py" = ["F401"]
+"src/mcp_handlers/middleware/identity_step.py" = ["F401"]
+"src/mcp_handlers/identity/session.py" = ["F401"]
+"src/mcp_handlers/tool_stability.py" = ["F401"]
+"src/mcp_handlers/consolidated.py" = ["F401"]

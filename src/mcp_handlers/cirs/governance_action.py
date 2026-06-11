@@ -2,7 +2,7 @@
 CIRS governance_action handler — initiate, respond, query, status.
 """
 
-from typing import Dict, Any, Sequence, Optional
+from typing import Dict, Any, Sequence
 from datetime import datetime
 import uuid
 
