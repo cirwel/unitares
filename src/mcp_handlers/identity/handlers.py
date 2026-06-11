@@ -1736,18 +1736,22 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                     # Do NOT re-import here — it shadows the module binding
                     # for the entire function scope and breaks every other
                     # success_response call in handle_onboard_v2.
-                    return success_response({
-                        "status": "lineage_declaration_required",
-                        "tool": "onboard",
-                        "hint": (
+                    # Single-sourced refusal shape (council fold, PR #610) —
+                    # the status override is deliberate: Path B is not
+                    # "you lack identity" but "your onboard is ambiguous".
+                    from src.mcp_handlers.identity_bootstrap import (
+                        strict_identity_refusal_payload,
+                    )
+                    return success_response(strict_identity_refusal_payload(
+                        "onboard",
+                        status="lineage_declaration_required",
+                        hint=(
                             "Bare onboard() is ambiguous — pass "
                             "parent_agent_id=<prior UUID> to continue prior "
                             "work, OR force_new=true to confirm a fresh "
                             "process-instance with no lineage."
                         ),
- "ontology_ref": "",
-                        "rollout_flag": "STRICT_IDENTITY_REQUIRED",
-                    })
+                    ))
                 logger.info(
                     "[ONBOARD] No existing session for session_key=%s... "
                     "minting fresh in-memory identity (spawn_reason=%s)",

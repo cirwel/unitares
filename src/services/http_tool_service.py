@@ -130,19 +130,33 @@ def _strict_identity_refusal_or_none(
     The MCP dispatch middleware's typed refusal never ran on this
     surface — under STRICT_IDENTITY_REQUIRED, unbound REST reads
     succeeded and unbound writes failed with an off-contract generic
-    SESSION_ERROR. Mirror the middleware's decision exactly:
+    SESSION_ERROR.
 
-    - flag off → None (inert; today's default)
-    - tool declared ``requires_identity="pre_onboard"`` → None (the
-      tool serves its own unbound shape; unknown tools fail closed to
-      "required" in get_tool_identity_requirement)
-    - caller presents ANY identity-bearing signal (explicit agent_id,
-      client_session_id, continuity_token in arguments, or a context
-      binding established by ``_resolve_http_bound_agent``) → None;
-      downstream resolution owns credential VALIDITY — a stale
-      credential is an auth error, not an identity-required refusal
-    - otherwise → the single-sourced typed-refusal payload (same dict
-      the MCP middleware wraps; transports cannot drift)
+    The pass-decision keys on the RESOLVED BINDING, never on credential
+    presence: ``http_call_tool`` transport-injects a synthetic
+    ``client_session_id`` into every request before this gate runs (its
+    own comment: "DO NOT TRUST client_session_id FOR AUTH —
+    TRANSPORT-INJECTED HERE, NOT CLIENT-ASSERTED"), so a
+    presence-based bypass would never fire on real traffic — the
+    council's live battery proved exactly that, the same
+    argument-presence trap PR #608's review caught one layer down. A
+    caller whose credential RESOLVED has a context binding by the time
+    this runs (``_resolve_http_bound_agent`` precedes
+    ``execute_http_tool`` and calls ``update_context_agent_id`` on
+    success — valid session ids, valid continuity tokens, and explicit
+    UUIDs all land there); a garbage or synthetic credential resolves
+    to nothing and is treated as what it is: unbound.
+
+    - flag off → None (inert; today's default everywhere)
+    - ``requires_identity="pre_onboard"`` → None (the tool serves its
+      own unbound shape; unknown tools fail closed to "required"; the
+      reserved third tier ``scoped`` deliberately refuses here until a
+      first scoped tool defines its semantics)
+    - resolved context binding → None
+    - explicit non-UUID ``agent_id`` argument → None (legacy-name
+      reference; require_agent_id + downstream ownership checks own it)
+    - otherwise → the single-sourced typed refusal (same payload the
+      MCP middleware wraps; transports cannot drift)
     """
     from src.mcp_handlers.identity_bootstrap import (
         is_strict_identity_required,
@@ -154,18 +168,14 @@ def _strict_identity_refusal_or_none(
     from src.mcp_handlers.decorators import get_tool_identity_requirement
     if get_tool_identity_requirement(tool_name) == "pre_onboard":
         return None
-    if isinstance(arguments, dict) and (
-        arguments.get("agent_id")
-        or arguments.get("client_session_id")
-        or arguments.get("continuity_token")
-    ):
-        return None
     try:
         from src.mcp_handlers.context import get_context_agent_id
         if get_context_agent_id():
             return None
     except Exception:
         pass
+    if isinstance(arguments, dict) and arguments.get("agent_id"):
+        return None
     logger.info(
         "[HTTP] %s unbound under STRICT_IDENTITY_REQUIRED — returning "
         "typed refusal (no auto-mint)",
@@ -197,8 +207,11 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
     try:
         # #425 strict-identity gate — REST parity with the MCP dispatch
         # middleware (stage-1 burn-in fold). Sits ahead of Wave-3a routing:
-        # a BEAM-routed handler never runs the Python identity middleware,
-        # so an unbound strict call must refuse before it can be proxied.
+        # the BEAM listener deliberately implements no identity middleware
+        # (Wave-3a RFC — middleware is the 3b port), so this gate is the
+        # ONLY enforcement on a proxied call. Forward-protection today
+        # (every 3a-routed tool is pre_onboard and passes anyway); load-
+        # bearing the day a `required` tool routes to BEAM.
         refusal = _strict_identity_refusal_or_none(tool_name, arguments)
         if refusal is not None:
             latency_ms = int((time.monotonic() - t0) * 1000)
