@@ -32,27 +32,50 @@ defmodule UnitaresLeasePlane.AuditOutboxForwarder do
       end
 
     with {:ok, events} <- Repo.unforwarded_events(limit, opts) do
-      {forwarded, failed} =
-        Enum.reduce(events, {0, 0}, fn event, {ok_count, fail_count} ->
+      {forwarded, failed, failures_by_reason} =
+        Enum.reduce(events, {0, 0, %{}}, fn event, {ok_count, fail_count, by_reason} ->
           case Repo.forward_outbox_event(event.event_id) do
             :ok ->
-              {ok_count + 1, fail_count}
+              {ok_count + 1, fail_count, by_reason}
 
             {:error, :not_found} ->
-              {ok_count, fail_count}
+              {ok_count, fail_count, by_reason}
 
             {:error, reason} ->
-              Logger.warning(
-                "lease_plane audit forward failed for #{event.event_id}: #{inspect(reason)}"
-              )
+              key = failure_key(reason)
 
-              {ok_count, fail_count + 1}
+              by_reason =
+                Map.update(by_reason, key, {1, event.event_id}, fn {n, sample} ->
+                  {n + 1, sample}
+                end)
+
+              {ok_count, fail_count + 1, by_reason}
           end
         end)
+
+      # One warning per distinct failure shape per run, not one per row — a
+      # stuck batch of 100 rows sharing a single root cause (e.g. a missing
+      # audit partition) previously wrote 200 near-identical lines per
+      # minute, growing the log by hundreds of MB per week while saying
+      # nothing new.
+      Enum.each(failures_by_reason, fn {key, {count, sample_event_id}} ->
+        Logger.warning(
+          "lease_plane audit forward failed for #{count} event(s) " <>
+            "(sample #{sample_event_id}): #{key}"
+        )
+      end)
 
       {:ok, %{forwarded: forwarded, failed: failed}}
     end
   end
+
+  # Collapse failure terms into a stable grouping key: Postgrex errors keep
+  # code + message (connection_id and friends vary per row and would defeat
+  # the grouping); everything else falls back to inspect/1.
+  defp failure_key(%Postgrex.Error{postgres: %{code: code, message: message}}),
+    do: "postgres #{code}: #{message}"
+
+  defp failure_key(reason), do: inspect(reason)
 
   defp positive_arg(args, string_key, atom_key, default) do
     value = Map.get(args, string_key, Map.get(args, atom_key, default))

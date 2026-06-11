@@ -529,6 +529,13 @@ defmodule UnitaresLeasePlane.Repo do
         :error -> {"forwarded_at IS NULL", [limit]}
       end
 
+    # forward_attempts ASC before ts ASC: rows that keep failing sink behind
+    # fresh work instead of head-of-line blocking the batch, but are still
+    # retried once fresher rows drain — so a repaired downstream (e.g. the
+    # 2026-06 audit partition gap, migration 045) self-heals with no operator
+    # action and no parked/dead-letter state. The wedge this fixes: 2,199
+    # rows stuck on a partition hole monopolized every ORDER BY ts ASC batch
+    # for 11 days — zero forwards, 31k attempts per row.
     sql = """
     SELECT
       event_id::text AS event_id,
@@ -538,7 +545,7 @@ defmodule UnitaresLeasePlane.Repo do
       holder_class, advisory_mode, payload, earned_status
     FROM lease_plane.lease_plane_events
     WHERE #{where}
-    ORDER BY ts ASC
+    ORDER BY forward_attempts ASC, ts ASC
     LIMIT $1
     """
 
