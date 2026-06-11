@@ -88,13 +88,52 @@ def _risk_summary(coherence: Optional[float], risk: Optional[float]) -> Optional
     return ", ".join(parts)
 
 
-def _recovery_hint(coherence: Optional[float], risk: Optional[float]) -> Optional[str]:
-    """Only speaks when the existing numbers say something is off."""
-    risky = risk is not None and risk >= _RECOVERY_RISK_CEILING
-    drifting = coherence is not None and coherence < _RECOVERY_COHERENCE_FLOOR
-    if not (risky or drifting):
+def _verdict_value(payload: Dict[str, Any]) -> Optional[str]:
+    verdict = payload.get("verdict")
+    if isinstance(verdict, dict):
+        value = verdict.get("value") or verdict.get("action") or verdict.get("verdict")
+    else:
+        value = verdict
+    return str(value).lower() if value is not None else None
+
+
+def _needs_attention(payload: Dict[str, Any]) -> bool:
+    verdict = _verdict_value(payload)
+    if verdict in {"guide", "pause", "reject"}:
+        return True
+    margin = str(payload.get("margin", "")).lower()
+    return margin in {"tight", "boundary", "near_edge"}
+
+
+def _compact_eisv(snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    state = snapshot.get("primary_eisv") or snapshot.get("eisv")
+    if not isinstance(state, dict):
         return None
-    if drifting or (risk is not None and risk >= 0.7):
+    compact = _lift(state, "E", "I", "S", "V")
+    source = snapshot.get("primary_eisv_source")
+    if source is not None:
+        compact["source"] = source
+    return compact or None
+
+
+def _recovery_hint(
+    payload: Dict[str, Any],
+    coherence: Optional[float],
+    risk: Optional[float],
+) -> Optional[str]:
+    """Only speaks when the existing verdict/risk says something is off.
+
+    The quick_resume/self_recovery thresholds are recovery-tool thresholds,
+    not a live-state alarm. Coherence often sits near 0.5 in healthy governed
+    operation, so coherence alone must not produce a recovery warning.
+    """
+    risky = risk is not None and risk >= _RECOVERY_RISK_CEILING
+    attention = _needs_attention(payload)
+    if not (risky or attention):
+        return None
+    severe = _verdict_value(payload) in {"pause", "reject"} or (risk is not None and risk >= 0.7)
+    drifting = coherence is not None and coherence < _RECOVERY_COHERENCE_FLOOR
+    if severe or (attention and drifting):
         return (
             "Working state looks degraded - pause and call "
             "self_recovery_review(reflection='...') before continuing."
@@ -138,6 +177,8 @@ def build_experience_envelope(
         "tool": friendly_name,
     }
     envelope.update(_lift(payload, "agent_uuid", "client_session_id"))
+    if "agent_uuid" not in envelope and payload.get("uuid") is not None:
+        envelope["agent_uuid"] = payload["uuid"]
 
     coherence, risk = _coherence_and_risk(payload)
 
@@ -192,10 +233,12 @@ def build_experience_envelope(
         )
 
     elif canonical_name == "outcome_event":
-        state_summary = _lift(payload, "outcome_id", "recorded_at")
+        state_summary = _lift(payload, "outcome_id", "outcome_type", "outcome_score", "recorded_at")
         snapshot = payload.get("eisv_snapshot")
         if isinstance(snapshot, dict):
-            state_summary["eisv_snapshot"] = snapshot
+            compact = _compact_eisv(snapshot)
+            if compact:
+                state_summary["working_state"] = compact
         next_action = "Outcome recorded - continue, or sync_state to fold it into your working state."
 
     elif canonical_name == "dialectic":
@@ -219,7 +262,7 @@ def build_experience_envelope(
     if suggestions:
         envelope["memory_suggestions"] = suggestions
 
-    hint = _recovery_hint(coherence, risk)
+    hint = _recovery_hint(payload, coherence, risk)
     if hint:
         envelope["recovery_hint"] = hint
 

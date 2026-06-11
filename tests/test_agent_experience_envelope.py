@@ -150,11 +150,12 @@ async def test_builder_failure_returns_raw(monkeypatch):
 def test_onboard_envelope_surfaces_predecessor():
     payload = {
         "success": True,
-        "agent_uuid": "u-new",
+        "uuid": "u-new",
         "lineage_state": "no_lineage_declared",
         "thread_context": {"predecessor": {"uuid": "u-prior"}},
     }
     env = build_experience_envelope("start_session", "onboard", payload)
+    assert env["agent_uuid"] == "u-new"
     assert env["state_summary"]["predecessor_uuid"] == "u-prior"
     assert "parent_agent_id" in env["next_action"]
     assert env["raw_governance"] is payload
@@ -178,11 +179,26 @@ def test_sync_state_envelope_summarizes_decision_and_risk():
 def test_sync_state_envelope_emits_recovery_hint_when_degraded():
     payload = {
         "success": True,
+        "verdict": {"value": "pause"},
         "metrics": {"coherence": 0.45, "risk_score": 0.75},
     }
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
     assert "self_recovery_review" in env["recovery_hint"]
     assert env["risk_summary"].startswith("risk high")
+
+
+def test_sync_state_envelope_does_not_warn_on_low_risk_proceed_mid_coherence():
+    """Coherence near 0.5 is normal in the governed range; a proceed
+    verdict with low risk should not tell agents to self-recover."""
+    payload = {
+        "success": True,
+        "verdict": {"value": "proceed"},
+        "coherence": 0.49,
+        "risk_score": 0.26,
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert env["risk_summary"] == "risk low (0.26), coherence 0.49"
+    assert "recovery_hint" not in env
 
 
 def test_sync_state_envelope_surfaces_discoveries():
@@ -224,11 +240,20 @@ def test_record_result_envelope_lifts_outcome():
     payload = {
         "success": True,
         "outcome_id": "o-1",
-        "eisv_snapshot": {"E": 0.7, "I": 0.6, "S": 0.8, "V": 0.1},
+        "outcome_type": "task_completed",
+        "outcome_score": 1.0,
+        "eisv_snapshot": {
+            "primary_eisv": {"E": 0.7, "I": 0.6, "S": 0.8, "V": 0.1},
+            "primary_eisv_source": "ode_fallback",
+            "state_semantics": {"long": "kept under raw_governance only"},
+        },
     }
     env = build_experience_envelope("record_result", "outcome_event", payload)
     assert env["state_summary"]["outcome_id"] == "o-1"
-    assert env["state_summary"]["eisv_snapshot"]["E"] == 0.7
+    assert env["state_summary"]["outcome_type"] == "task_completed"
+    assert env["state_summary"]["working_state"]["E"] == 0.7
+    assert env["state_summary"]["working_state"]["source"] == "ode_fallback"
+    assert "state_semantics" not in env["state_summary"]["working_state"]
 
 
 def test_request_review_envelope_threads_session_id():
