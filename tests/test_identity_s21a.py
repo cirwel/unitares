@@ -491,11 +491,24 @@ class TestStrictIdentityRequiredFlag:
             "Strict-mode branch must call the shared is_strict_identity_required() "
             "helper so all auto-mint paths use one gate (#425)."
         )
-        assert '"status": "identity_required"' in retry_window, (
+        # The payload moved to identity_bootstrap.strict_identity_refusal_payload
+        # (REST-gate parity, 2026-06-11) so both transports share one shape;
+        # the middleware must reference the shared helper, and the helper
+        # itself must carry the contract fields.
+        assert 'strict_identity_refusal_payload' in retry_window, (
+            "Typed-refusal must come from the single-sourced "
+            "strict_identity_refusal_payload so the MCP and REST gates "
+            "cannot drift."
+        )
+        from src.mcp_handlers.identity_bootstrap import (
+            strict_identity_refusal_payload,
+        )
+        payload = strict_identity_refusal_payload("any_tool")
+        assert payload["status"] == "identity_required", (
             "Typed-refusal must carry status='identity_required' so callers "
             "can structurally distinguish it from a success or error."
         )
-        assert '"hint":' in retry_window and 'onboard()' in retry_window, (
+        assert "onboard()" in payload["hint"], (
             "Typed-refusal must hint at the next action (onboard call)."
         )
         # Auto-mint branch must still exist for non-strict mode (default).

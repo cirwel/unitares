@@ -17,8 +17,11 @@ cutover sequence) + architect FIND-A4 (dispatch-path question).
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any, Awaitable, Callable, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 from src.mcp_handlers.identity.handlers import (
     handle_identity_adapter,
@@ -119,6 +122,58 @@ def get_direct_http_tool_handler(tool_name: str) -> Optional[ToolHandler]:
     return _DIRECT_HTTP_TOOL_HANDLERS.get(tool_name)
 
 
+def _strict_identity_refusal_or_none(
+    tool_name: str, arguments: Dict[str, Any]
+) -> Optional[dict]:
+    """#425 REST parity gate (stage-1 burn-in fold, 2026-06-11).
+
+    The MCP dispatch middleware's typed refusal never ran on this
+    surface — under STRICT_IDENTITY_REQUIRED, unbound REST reads
+    succeeded and unbound writes failed with an off-contract generic
+    SESSION_ERROR. Mirror the middleware's decision exactly:
+
+    - flag off → None (inert; today's default)
+    - tool declared ``requires_identity="pre_onboard"`` → None (the
+      tool serves its own unbound shape; unknown tools fail closed to
+      "required" in get_tool_identity_requirement)
+    - caller presents ANY identity-bearing signal (explicit agent_id,
+      client_session_id, continuity_token in arguments, or a context
+      binding established by ``_resolve_http_bound_agent``) → None;
+      downstream resolution owns credential VALIDITY — a stale
+      credential is an auth error, not an identity-required refusal
+    - otherwise → the single-sourced typed-refusal payload (same dict
+      the MCP middleware wraps; transports cannot drift)
+    """
+    from src.mcp_handlers.identity_bootstrap import (
+        is_strict_identity_required,
+        strict_identity_refusal_payload,
+    )
+
+    if not is_strict_identity_required():
+        return None
+    from src.mcp_handlers.decorators import get_tool_identity_requirement
+    if get_tool_identity_requirement(tool_name) == "pre_onboard":
+        return None
+    if isinstance(arguments, dict) and (
+        arguments.get("agent_id")
+        or arguments.get("client_session_id")
+        or arguments.get("continuity_token")
+    ):
+        return None
+    try:
+        from src.mcp_handlers.context import get_context_agent_id
+        if get_context_agent_id():
+            return None
+    except Exception:
+        pass
+    logger.info(
+        "[HTTP] %s unbound under STRICT_IDENTITY_REQUIRED — returning "
+        "typed refusal (no auto-mint)",
+        tool_name,
+    )
+    return strict_identity_refusal_payload(tool_name)
+
+
 async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
     """Execute a tool for the HTTP API.
 
@@ -140,6 +195,17 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
     agent_id = arguments.get("agent_id") if isinstance(arguments, dict) else None
     t0 = time.monotonic()
     try:
+        # #425 strict-identity gate — REST parity with the MCP dispatch
+        # middleware (stage-1 burn-in fold). Sits ahead of Wave-3a routing:
+        # a BEAM-routed handler never runs the Python identity middleware,
+        # so an unbound strict call must refuse before it can be proxied.
+        refusal = _strict_identity_refusal_or_none(tool_name, arguments)
+        if refusal is not None:
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            record_tool_usage(tool_name=tool_name, agent_id=None,
+                              success=True, latency_ms=latency_ms)
+            return refusal
+
         # Wave 3a routing — HTTP path symmetric with MCP-protocol wrapper.
         # On BEAM success we return the unwrapped envelope payload. On any
         # BEAM failure (timeout, connect_error, envelope_invalid, etc.) the

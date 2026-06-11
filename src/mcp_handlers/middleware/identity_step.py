@@ -620,7 +620,10 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                 # a structured success-shape, not an MCP error: error
                 # responses invite retry-with-mint catch paths and would
                 # reintroduce the leak.
-                from src.mcp_handlers.identity_bootstrap import is_strict_identity_required
+                from src.mcp_handlers.identity_bootstrap import (
+                    is_strict_identity_required,
+                    strict_identity_refusal_payload,
+                )
                 if is_strict_identity_required():
                     logger.info(
                         "[DISPATCH] session_resolve_miss for %s... "
@@ -629,18 +632,10 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                         session_key[:20],
                     )
                     from src.mcp_handlers.response_base import success_response
-                    return success_response({
-                        "status": "identity_required",
-                        "tool": name,
-                        "tool_class": "required",
-                        "hint": (
-                            "Call onboard() first to mint a governance identity. "
-                            "If continuing prior work, pass parent_agent_id to "
-                            "declare lineage; otherwise pass force_new=true."
-                        ),
- "ontology_ref": "",
-                        "rollout_flag": "STRICT_IDENTITY_REQUIRED",
-                    })
+                    # Single-sourced payload — the REST gate returns the
+                    # same dict, so the two transports cannot drift
+                    # (stage-1 burn-in fold, 2026-06-11).
+                    return success_response(strict_identity_refusal_payload(name))
                 logger.info(
                     "[DISPATCH] session_resolve_miss for %s... — minting "
                     "ephemeral dispatch identity (S21-a, spawn_reason="
