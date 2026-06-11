@@ -49,6 +49,14 @@ BEGIN
     -- already use Denver-midnight bounds — pinning UTC would overlap them
     -- at the next month boundary. make_timestamptz() with an explicit zone
     -- is immune to the session-TimeZone drift that caused the 2026-06 hole.
+    -- NOTE: on a FRESH install the pin is the sole bound-determinant (no
+    -- neighbor to snap to), so a future UTC-tz host bootstraps
+    -- Denver-offset bounds by design — internally consistent and gapless,
+    -- but offset from UTC month edges. Intended end-state is an
+    -- operator-gated detach/reattach normalization to uniform UTC bounds;
+    -- until then this pin and partitions.sql must stay in agreement.
+    -- (Denver DST transitions fire at 02:00 local on Sundays; month-firsts
+    -- at 00:00 are never skipped or ambiguous, verified 2000-2040.)
     v_start := make_timestamptz(p_year, p_month, 1, 0, 0, 0, 'America/Denver');
     IF p_month = 12 THEN
         v_end := make_timestamptz(p_year + 1, 1, 1, 0, 0, 0, 'America/Denver');
@@ -276,7 +284,11 @@ $$ LANGUAGE sql STABLE;
 COMMENT ON FUNCTION audit.partition_gaps() IS
     'Holes between consecutive partition bounds of the monthly-partitioned '
     'audit parents. Non-empty output means inserts in the hole fail with '
-    '"no partition of relation found for row".';
+    '"no partition of relation found for row". Blind spot: DEFAULT and '
+    'MINVALUE/MAXVALUE partitions do not match the bound regex and are '
+    'excluded — if a DEFAULT partition is ever added to these parents, '
+    'gaps adjacent to it become invisible here (rows route to the DEFAULT '
+    'instead of failing).';
 
 -- ---------------------------------------------------------------------------
 -- 5. Maintenance now self-heals gaps
@@ -302,6 +314,24 @@ BEGIN
         v_fill_name := format('%s_fill_%s', v_gap.parent,
                               to_char(v_gap.gap_start AT TIME ZONE 'UTC',
                                       'YYYYMMDD_HH24MI'));
+        -- An orphaned table squatting on the filler name would make
+        -- CREATE TABLE IF NOT EXISTS silently skip while the gap stays
+        -- open — surface that instead of warning identically every week.
+        IF EXISTS (
+            SELECT 1 FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'audit' AND c.relname = v_fill_name
+              AND NOT EXISTS (
+                  SELECT 1 FROM pg_inherits i
+                  JOIN pg_class p ON p.oid = i.inhparent
+                  WHERE i.inhrelid = c.oid AND p.relname = v_gap.parent
+              )
+        ) THEN
+            RAISE WARNING 'audit.% exists but is not attached to audit.%; '
+                'gap [% - %) cannot be auto-filled — manual intervention required',
+                v_fill_name, v_gap.parent, v_gap.gap_start, v_gap.gap_end;
+            CONTINUE;
+        END IF;
         EXECUTE format(
             'CREATE TABLE IF NOT EXISTS audit.%I PARTITION OF audit.%I
              FOR VALUES FROM (%L) TO (%L)',
