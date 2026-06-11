@@ -1430,6 +1430,47 @@ def test_print_unresolved_does_not_mutate_status(watcher_module):
     assert after[0]["status"] == "open"
 
 
+def test_print_unresolved_filters_missing_targets_without_mutating(
+    watcher_module, tmp_path, capsys
+):
+    existing = tmp_path / "alive.py"
+    existing.write_text("print('still here')\n")
+    missing = tmp_path / "deleted-worktree" / "ghost.py"
+    _seed_findings(
+        watcher_module,
+        [
+            _make_raw_entry("alive___00000000", file=str(existing), status="open"),
+            _make_raw_entry("ghost___00000000", file=str(missing), status="open"),
+        ],
+    )
+    before = watcher_module.FINDINGS_FILE.read_text()
+
+    rc = watcher_module.print_unresolved(scope_root=tmp_path)
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "alive.py" in out
+    assert "ghost.py" not in out
+    assert watcher_module.FINDINGS_FILE.read_text() == before
+
+
+def test_print_unresolved_silent_when_only_missing_targets(
+    watcher_module, tmp_path, capsys
+):
+    missing = tmp_path / "deleted-worktree" / "ghost.py"
+    _seed_findings(
+        watcher_module,
+        [_make_raw_entry("ghost___00000000", file=str(missing), status="surfaced")],
+    )
+    before = watcher_module.FINDINGS_FILE.read_text()
+
+    rc = watcher_module.print_unresolved(scope_root=tmp_path)
+
+    assert rc == 0
+    assert capsys.readouterr().out == ""
+    assert watcher_module.FINDINGS_FILE.read_text() == before
+
+
 def test_print_unresolved_silent_on_empty(watcher_module, capsys):
     rc = watcher_module.print_unresolved()
     assert rc == 0
@@ -1457,19 +1498,23 @@ def test_print_unresolved_silent_when_only_resolved(watcher_module, capsys):
 def test_print_unresolved_partitions_findings_by_scope(watcher_module, tmp_path, capsys):
     """In-scope findings render in the body; out-of-scope ones collapse to a
     single footer line keyed by their `.worktrees/<name>` segment."""
-    in_scope_file = str(tmp_path / "in_scope.py")
-    out_a = "/some/other/.worktrees/branch-a/src/foo.py"
-    out_b = "/some/other/.worktrees/branch-b/src/bar.py"
+    scope_root = tmp_path / "current"
+    in_scope_file = scope_root / "in_scope.py"
+    out_a = tmp_path / "other" / ".worktrees" / "branch-a" / "src" / "foo.py"
+    out_b = tmp_path / "other" / ".worktrees" / "branch-b" / "src" / "bar.py"
+    for path in (in_scope_file, out_a, out_b):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("print('fixture')\n")
     _seed_findings(
         watcher_module,
         [
-            _make_raw_entry("inside__00000000", status="open", file=in_scope_file),
-            _make_raw_entry("brancha_00000000", status="open", file=out_a),
-            _make_raw_entry("branchb_00000000", status="open", file=out_b),
-            _make_raw_entry("brancha2_0000000", status="surfaced", file=out_a),
+            _make_raw_entry("inside__00000000", status="open", file=str(in_scope_file)),
+            _make_raw_entry("brancha_00000000", status="open", file=str(out_a)),
+            _make_raw_entry("branchb_00000000", status="open", file=str(out_b)),
+            _make_raw_entry("brancha2_0000000", status="surfaced", file=str(out_a)),
         ],
     )
-    rc = watcher_module.print_unresolved(scope_root=tmp_path)
+    rc = watcher_module.print_unresolved(scope_root=scope_root)
     assert rc == 0
     out = capsys.readouterr().out
     assert "inside__" in out
@@ -1485,12 +1530,16 @@ def test_print_unresolved_emits_footer_only_when_in_scope_empty(
 ):
     """When every finding is out-of-scope, still emit a minimal block so the
     agent knows the backlog exists rather than appearing clean."""
-    out_path = "/some/other/.worktrees/branch-x/src/foo.py"
+    scope_root = tmp_path / "current"
+    scope_root.mkdir()
+    out_path = tmp_path / "other" / ".worktrees" / "branch-x" / "src" / "foo.py"
+    out_path.parent.mkdir(parents=True)
+    out_path.write_text("print('fixture')\n")
     _seed_findings(
         watcher_module,
-        [_make_raw_entry("x_______00000000", status="open", file=out_path)],
+        [_make_raw_entry("x_______00000000", status="open", file=str(out_path))],
     )
-    rc = watcher_module.print_unresolved(scope_root=tmp_path)
+    rc = watcher_module.print_unresolved(scope_root=scope_root)
     assert rc == 0
     out = capsys.readouterr().out
     assert "<unitares-watcher-findings>" in out
