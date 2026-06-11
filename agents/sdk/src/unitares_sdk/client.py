@@ -18,7 +18,6 @@ from unitares_sdk.errors import (
     GovernanceConnectionError,
     GovernanceTimeoutError,
     IdentityDriftError,
-    VerdictError,
 )
 from unitares_sdk.models import (
     ArchiveResult,

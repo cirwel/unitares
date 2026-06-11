@@ -15,7 +15,6 @@ Agents can operate without providing trajectory signatures; this is additive.
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-import json
 import math
 
 from src.logging_utils import get_logger

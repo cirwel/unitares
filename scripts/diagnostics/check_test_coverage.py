@@ -20,7 +20,7 @@ def run_coverage_check():
     
     # Check if pytest-cov is available
     try:
-        import pytest_cov
+        import pytest_cov  # noqa: F401 — availability probe
     except ImportError:
         print("⚠️  pytest-cov not installed. Install with: pip install pytest-cov")
         print("Running basic test discovery instead...")

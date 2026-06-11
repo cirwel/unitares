@@ -34,7 +34,7 @@ import time
 from collections import deque
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent
@@ -44,7 +44,6 @@ from agents.common.config import GOV_MCP_URL, GOV_WS_URL
 from unitares_sdk.agent import CycleResult, GovernanceAgent
 from unitares_sdk.client import GovernanceClient
 from unitares_sdk.models import CheckinResult
-from unitares_sdk.errors import GovernanceError, VerdictError
 from unitares_sdk.utils import notify
 from agents.common.findings import post_finding, compute_fingerprint
 from agents.sentinel.phase_b_promotion import (

@@ -11,8 +11,7 @@ from typing import Dict, List, Optional, Tuple
 from governance_core import (
     State, Theta,
     DEFAULT_STATE, DEFAULT_THETA,
-    lambda1 as lambda1_from_theta,
-    DynamicsParams, DEFAULT_PARAMS
+    lambda1 as lambda1_from_theta
 )
 from governance_core.parameters import get_active_params
 

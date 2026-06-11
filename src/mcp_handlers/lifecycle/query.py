@@ -6,7 +6,7 @@ Extracted from handlers.py for maintainability.
 
 import hashlib
 import uuid
-from typing import Dict, Any, Optional, Sequence
+from typing import Any, Optional, Sequence
 from mcp.types import TextContent
 from datetime import datetime, timedelta, timezone
 
@@ -18,13 +18,11 @@ from ..utils import (
     error_response,
 )
 from ..error_helpers import (
-    agent_not_found_error,
     system_error as system_error_helper,
 )
 from ..decorators import mcp_tool
-from ..support.coerce import safe_float, resolve_agent_uuid
+from ..support.coerce import safe_float
 from src.logging_utils import get_logger
-from src.cache import get_metadata_cache
 from src.agent_monitor_state import ensure_hydrated
 
 from .helpers import _is_test_agent

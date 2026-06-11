@@ -7,7 +7,6 @@ that have already caused agents to surface outdated architecture claims.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 
