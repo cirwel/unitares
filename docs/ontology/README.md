@@ -36,21 +36,22 @@ So `r1-verify-lineage-claim.md` resolves row R1 in `plan.md`; `s1-continuity-tok
 **Research RFCs** (R-rows, *inventive* primitives):
 - [`r1-verify-lineage-claim.md`](r1-verify-lineage-claim.md) — behavioral-continuity verification (shipped)
 - [`r2-honest-memory-integration.md`](r2-honest-memory-integration.md) — honest memory integration (Phase 1 shipped)
-- [`r5-memory-deepening-reality.md`](r5-memory-deepening-reality.md) — memory-deepening-reality tooling
 - [`r6-episode-fork-response-shape.md`](r6-episode-fork-response-shape.md) — R6 sub-item, episode-fork API shape
-- [`r6-candidate-envelope-evaluation-2026-05-19.md`](r6-candidate-envelope-evaluation-2026-05-19.md) — R6 dogfood envelope evaluation
-- [`r6-h1-h5-dogfood-20260429.md`](r6-h1-h5-dogfood-20260429.md) — R6 dogfood run
 
 **System RFCs** (S-rows, *descriptive* cleanups):
 - [`s1-continuity-token-retirement.md`](s1-continuity-token-retirement.md) — token deprecation plan
-- [`s7-kg-provenance-lineage-schema.md`](s7-kg-provenance-lineage-schema.md) — KG provenance schema
 - [`s8a-tag-discipline-audit.md`](s8a-tag-discipline-audit.md) · [`s8a-phase2-prep.md`](s8a-phase2-prep.md) — tag discipline + phase 2
 - [`s10-fleet-aggregation-plan.md`](s10-fleet-aggregation-plan.md) — fleet aggregation
-- [`s11a-skill-text-drift.md`](s11a-skill-text-drift.md) — skill text drift detection
 - [`s15-server-side-skills.md`](s15-server-side-skills.md) — server-side skills surface
-- [`s20-cache-scope-narrowing.md`](s20-cache-scope-narrowing.md) — cache-scope narrowing
-- [`s21-session-resolution-bypass-incident.md`](s21-session-resolution-bypass-incident.md) · [`s21-fix-council-review.md`](s21-fix-council-review.md) · [`s21b-auth-consistency.md`](s21b-auth-consistency.md) · [`s21b-items-5-6-council-review-2026-04-30.md`](s21b-items-5-6-council-review-2026-04-30.md) — S21 series
+- [`s21-session-resolution-bypass-incident.md`](s21-session-resolution-bypass-incident.md) — S21 incident record
 - [`v7-fhat-spec-v5-amendment.md`](v7-fhat-spec-v5-amendment.md) — v5 amendment to v7 spec
+
+**Dated records**:
+- [`ledger-triage-2026-06-11.md`](ledger-triage-2026-06-11.md) — read-only triage of the deferred/blocked `plan.md` rows against their unblock triggers
+
+## Operator-archived docs
+
+Not every doc cited by a `plan.md` row is in this folder. On 2026-05-21 the internal-dialogue artifacts — council review notes, dated dogfood reports, implementation handoffs — were moved to the operator's private archive (commits `27642d1` / `4ad624a`); the load-bearing specs above were restored, the rest stayed archived. Archived from this folder: the R5 memory-deepening spec, the R6 dogfood/envelope evaluations, the S7 KG-provenance schema, S11-a skill-text drift, S20 cache-scope narrowing, and the S21 council-review series (`s21-fix-council-review`, `s21b-*`). `plan.md` still cites them by filename — that's intentional; the ledger is the historical record. `docs/handoffs/` is gitignored for the same reason (operator-local handoffs, cited from public docs as provenance).
 
 ## How rows resolve
 
