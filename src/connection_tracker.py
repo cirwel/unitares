@@ -480,6 +480,8 @@ class ConnectionTrackingMiddleware:
                 client = scope.get("client")
                 client_ip = client[0] if (client and len(client) >= 1) else "unknown"
                 ua_fingerprint = hashlib.md5(ua.encode()).hexdigest()[:6]
+                from src.mcp_handlers.context import note_ua_fingerprint
+                note_ua_fingerprint(ua_fingerprint, ua)
                 base_id = f"{client_ip}:{ua_fingerprint}"
 
             # Build SessionSignals for legacy paths (if not already set)
