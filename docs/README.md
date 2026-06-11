@@ -16,6 +16,8 @@ This is the documentation tree for the [UNITARES governance MCP server](../READM
 ### Canonical reference
 
 - **[`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)** — the canonical architecture doc. End-to-end picture of the server, state model, transports, and storage.
+- **[`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md)** — guided tour for reviewers evaluating the project.
+- **[`trust-contract.md`](trust-contract.md)** — what the system guarantees, what it does not, and what honest failure looks like.
 - **[`CHANGELOG.md`](CHANGELOG.md)** — release history.
 
 ### `guides/` — getting started
@@ -24,6 +26,7 @@ User- and integrator-facing how-tos. Thin by design — most architecture lives 
 
 - [`START_HERE.md`](guides/START_HERE.md) — workflow + canonical-sources pointer
 - [`TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) — common failures
+- [`CIRS_PROTOCOL.md`](guides/CIRS_PROTOCOL.md) — multi-agent coordination protocol (specialized; not a general architecture overview)
 
 ### `install/` — installation
 
@@ -48,6 +51,9 @@ How to run this in production. Most readers can skip these.
 - [`DEFINITIVE_PORTS.md`](operations/DEFINITIVE_PORTS.md) — port assignments across services
 - [`database_architecture.md`](operations/database_architecture.md) — single-Postgres / schema-isolation model
 - [`lease-plane-operator-runbook.md`](operations/lease-plane-operator-runbook.md) — Elixir lease-plane operations
+- [`branch-hygiene-runbook.md`](operations/branch-hygiene-runbook.md) — resident branch-hygiene sweep (`agents/vigil_hygiene`)
+- [`DATA_NOTES.md`](operations/DATA_NOTES.md) — operational data dictionary for the production governance database
+- [`DEPLOYMENT_DATA_CAVEAT.md`](operations/DEPLOYMENT_DATA_CAVEAT.md) — what the cited deployment numbers do and don't mean
 
 ### `dev/` — developer-internal
 
@@ -60,6 +66,8 @@ For people working on UNITARES itself, not using it.
 ### `proposals/` — RFCs
 
 Active and resolved RFCs that don't (yet) belong in `ontology/`. The Plexus / lease-plane / BEAM-coordination thread lives here. Each doc carries its own resolution status in the body.
+
+→ Status-grouped index at **[`proposals/README.md`](proposals/README.md)**.
 
 ### `assets/`
 
