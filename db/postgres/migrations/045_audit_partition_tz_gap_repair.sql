@@ -109,11 +109,15 @@ CREATE OR REPLACE FUNCTION audit.ensure_partition_indexes(
     p_partition TEXT
 ) RETURNS VOID AS $$
 BEGIN
-    EXECUTE format(
-        'CREATE INDEX IF NOT EXISTS idx_%s_agent_ts ON audit.%I (agent_id, ts DESC)',
-        p_partition, p_partition
-    );
+    -- The three original audit parents predate partitioned indexes and carry
+    -- per-partition index DDL. Parents whose indexes are declared ON the
+    -- partitioned table (e.g. r1_score_audit, relkind 'I' indexes) cascade
+    -- automatically and need nothing here.
     IF p_parent = 'events' THEN
+        EXECUTE format(
+            'CREATE INDEX IF NOT EXISTS idx_%s_agent_ts ON audit.%I (agent_id, ts DESC)',
+            p_partition, p_partition
+        );
         EXECUTE format(
             'CREATE INDEX IF NOT EXISTS idx_%s_type_ts ON audit.%I (event_type, ts DESC)',
             p_partition, p_partition
@@ -124,10 +128,18 @@ BEGIN
         );
     ELSIF p_parent = 'tool_usage' THEN
         EXECUTE format(
+            'CREATE INDEX IF NOT EXISTS idx_%s_agent_ts ON audit.%I (agent_id, ts DESC)',
+            p_partition, p_partition
+        );
+        EXECUTE format(
             'CREATE INDEX IF NOT EXISTS idx_%s_tool_ts ON audit.%I (tool_name, ts DESC)',
             p_partition, p_partition
         );
     ELSIF p_parent = 'outcome_events' THEN
+        EXECUTE format(
+            'CREATE INDEX IF NOT EXISTS idx_%s_agent_ts ON audit.%I (agent_id, ts DESC)',
+            p_partition, p_partition
+        );
         EXECUTE format(
             'CREATE INDEX IF NOT EXISTS idx_%s_type_ts ON audit.%I (outcome_type, ts DESC)',
             p_partition, p_partition
@@ -251,6 +263,48 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- audit.r1_score_audit (migration 031) copied the same DATE-cast pattern and
+-- — worse — had NO scheduled creation path at all: partitions existed only
+-- through 2026-07, so R1 score persistence (record_r1_score_audit, a plain
+-- INSERT that fails soft to False) would have silently stopped on 2026-08-01.
+-- Rebuild it on the deterministic bounds and wire it into maintenance below.
+-- No per-partition index DDL: r1's indexes are declared on the partitioned
+-- parent (relkind 'I') and cascade to new partitions automatically.
+CREATE OR REPLACE FUNCTION audit.create_r1_score_audit_partition(
+    p_year  INTEGER,
+    p_month INTEGER
+)
+RETURNS TEXT AS $$
+DECLARE
+    v_partition_name TEXT;
+    v_bounds RECORD;
+BEGIN
+    v_partition_name := format('r1_score_audit_%s_%s', p_year, lpad(p_month::text, 2, '0'));
+
+    IF EXISTS (
+        SELECT 1 FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid
+        WHERE n.nspname = 'audit' AND c.relname = v_partition_name
+    ) THEN
+        RETURN format('Partition %s already exists', v_partition_name);
+    END IF;
+
+    SELECT * INTO v_bounds
+      FROM audit.month_partition_bounds('audit.r1_score_audit'::regclass, p_year, p_month);
+    IF v_bounds.v_start >= v_bounds.v_end THEN
+        RETURN format('Month %s-%s already covered by existing partitions',
+                      p_year, lpad(p_month::text, 2, '0'));
+    END IF;
+
+    EXECUTE format(
+        'CREATE TABLE IF NOT EXISTS audit.%I PARTITION OF audit.r1_score_audit
+         FOR VALUES FROM (%L) TO (%L)',
+        v_partition_name, v_bounds.v_start, v_bounds.v_end
+    );
+
+    RETURN format('Created partition %s', v_partition_name);
+END;
+$$ LANGUAGE plpgsql;
+
 -- ---------------------------------------------------------------------------
 -- 4. Gap diagnostic
 -- ---------------------------------------------------------------------------
@@ -268,7 +322,8 @@ RETURNS TABLE(parent TEXT, gap_start TIMESTAMPTZ, gap_end TIMESTAMPTZ) AS $$
         JOIN pg_class parent ON parent.oid = i.inhparent
         JOIN pg_namespace n ON n.oid = parent.relnamespace
         WHERE n.nspname = 'audit'
-          AND parent.relname IN ('events', 'tool_usage', 'outcome_events')
+          AND parent.relname IN ('events', 'tool_usage', 'outcome_events',
+                                 'r1_score_audit')
           AND c.relkind = 'r'
     ), ordered AS (
         SELECT parent, lo, hi,
@@ -381,6 +436,20 @@ BEGIN
 
     v_msg := audit.create_outcome_partition(v_next_year, v_next_month);
     v_result := v_result || jsonb_build_object('outcome_events_next', v_msg);
+
+    -- r1_score_audit (migration 031) — guarded because the fresh-install
+    -- bootstrap (partitions.sql) defines this maintenance function before
+    -- migration 031 creates the r1 table. No retention drop by design: the
+    -- audit table keeps full score history (public KG nodes are the
+    -- 30-day-archived projection, see r1_maintenance.py).
+    IF to_regclass('audit.r1_score_audit') IS NOT NULL
+       AND to_regprocedure('audit.create_r1_score_audit_partition(integer, integer)') IS NOT NULL THEN
+        v_msg := audit.create_r1_score_audit_partition(v_current_year, v_current_month);
+        v_result := v_result || jsonb_build_object('r1_score_audit_current', v_msg);
+
+        v_msg := audit.create_r1_score_audit_partition(v_next_year, v_next_month);
+        v_result := v_result || jsonb_build_object('r1_score_audit_next', v_msg);
+    END IF;
 
     -- Clean up old partitions
     v_result := v_result || jsonb_build_object(
