@@ -158,6 +158,20 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
     include_state = arguments.get("include_state", False)
     metrics = monitor.get_metrics(include_state=include_state)
 
+    # Zero-observation honesty (dogfood 2026-06-10, cold-caller probe):
+    # everything below that ASSESSES the agent (summary, health/mode/
+    # basin/trajectory/guidance, stability, regime, phi, fleet
+    # calibration) is gated on this flag. On zero observations those
+    # values are functions of the default seed vector — identical for
+    # every fresh agent, zero information about THIS one — and
+    # presenting them unlabeled beside the honest "uninitialized"
+    # status fabricates a measurement that never happened. Same flag
+    # the lite status/coherence/risk treatment already uses.
+    is_uninitialized = (
+        metrics.get("initialized") is False
+        or metrics.get("status") == "uninitialized"
+    )
+
     from src.governance_monitor import UNITARESMonitor
     from src.mcp_handlers.utils import format_metrics_report, get_calibration_feedback
 
@@ -192,33 +206,67 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         standardized_metrics["purpose"] = meta.purpose
 
     calibration_feedback = {}
-    try:
-        if meta:
-            derived_complexity = metrics.get("complexity", None)
-            if derived_complexity is not None:
-                calibration_feedback["complexity"] = {
-                    "derived": derived_complexity,
-                    "message": f"System-derived complexity: {derived_complexity:.2f} (based on current state)",
-                }
-    except Exception as e:
-        logger.debug(f"Could not add complexity calibration feedback: {e}")
+    if not is_uninitialized:
+        try:
+            if meta:
+                derived_complexity = metrics.get("complexity", None)
+                if derived_complexity is not None:
+                    calibration_feedback["complexity"] = {
+                        "derived": derived_complexity,
+                        "message": f"System-derived complexity: {derived_complexity:.2f} (based on current state)",
+                    }
+        except Exception as e:
+            logger.debug(f"Could not add complexity calibration feedback: {e}")
 
-    confidence_feedback = get_calibration_feedback(include_complexity=False)
-    if confidence_feedback:
-        calibration_feedback.update(confidence_feedback)
+        confidence_feedback = get_calibration_feedback(include_complexity=False)
+        if confidence_feedback:
+            calibration_feedback.update(confidence_feedback)
     if calibration_feedback:
         standardized_metrics["calibration_feedback"] = calibration_feedback
 
-    try:
-        risk_score = metrics.get("risk_score") or metrics.get("latest_risk_score")
-        interpreted_state = monitor.state.interpret_state(risk_score=risk_score)
-        standardized_metrics["state"] = interpreted_state
-        health = interpreted_state.get("health", "unknown")
-        mode = interpreted_state.get("mode", "unknown")
-        basin = interpreted_state.get("basin", "unknown")
-        standardized_metrics["summary"] = f"{health} | {mode} | {basin} basin"
-    except Exception as e:
-        logger.debug(f"Could not generate state interpretation: {e}")
+    if is_uninitialized:
+        # No interpret_state call: health/mode/basin/trajectory/guidance
+        # would describe the seed vector, and its borderline branch emits
+        # "Pattern may be shifting" on an agent with no pattern.
+        standardized_metrics["summary"] = "uninitialized | no observations yet"
+        standardized_metrics["state"] = {
+            "status": "pending (first check-in required)",
+            "note": (
+                "health/mode/basin/trajectory are withheld until the first "
+                "check-in — on zero observations they would describe the "
+                "default seed vector, identically for every fresh agent."
+            ),
+        }
+        # Same treatment for the analysis blocks get_metrics() derives
+        # from the seed state: real math, no agent-specific signal.
+        if "stability" in standardized_metrics:
+            standardized_metrics["stability"] = {
+                "status": "pending (first check-in required)",
+                "note": (
+                    "Lyapunov analysis runs on the default seed vector until "
+                    "observations accumulate; reporting it would imply a "
+                    "measurement of this agent."
+                ),
+            }
+        if "regime" in standardized_metrics:
+            standardized_metrics["regime"] = None
+        if "phi" in standardized_metrics:
+            standardized_metrics["phi"] = None
+        v41 = standardized_metrics.get("unitares_v41")
+        if isinstance(v41, dict) and "basin" in v41:
+            v41["basin"] = None
+            v41["basin_note"] = "pending (first check-in required)"
+    else:
+        try:
+            risk_score = metrics.get("risk_score") or metrics.get("latest_risk_score")
+            interpreted_state = monitor.state.interpret_state(risk_score=risk_score)
+            standardized_metrics["state"] = interpreted_state
+            health = interpreted_state.get("health", "unknown")
+            mode = interpreted_state.get("mode", "unknown")
+            basin = interpreted_state.get("basin", "unknown")
+            standardized_metrics["summary"] = f"{health} | {mode} | {basin} basin"
+        except Exception as e:
+            logger.debug(f"Could not generate state interpretation: {e}")
 
     try:
         from governance_core import compute_saturation_diagnostics
@@ -281,9 +329,16 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
                 standardized_metrics.get("primary_eisv_source")
             ),
             "summary": standardized_metrics.get("summary"),
-            "guidance": state.get("guidance"),
+            "guidance": (
+                "Submit one check-in to activate governance."
+                if is_uninitialized
+                else state.get("guidance")
+            ),
         })
-        if state_present:
+        # basin/mode are assessments — withheld for uninitialized agents
+        # (the pending state dict has no basin/mode keys; explain_*(None)
+        # would leak {"value": null} without a meaning).
+        if state_present and not is_uninitialized:
             standard_metrics["basin"] = explain_basin(state.get("basin"))
             standard_metrics["mode"] = explain_mode(state.get("mode"))
         if public_agent_id != agent_id:
@@ -305,7 +360,8 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             "critical": "🔴",
             "unknown": "⚪",
         }.get(health, "⚪")
-        is_uninitialized = metrics.get("initialized") is False or metrics.get("status") == "uninitialized"
+        # is_uninitialized computed once, function-scope, right after
+        # get_metrics() — the same flag gates summary/state/stability up top.
 
         if is_uninitialized:
             status_display = "⚪ uninitialized"
@@ -366,7 +422,9 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         lite_metrics["primary_eisv_source_meta"] = explain_eisv_source(
             standardized_metrics.get("primary_eisv_source")
         )
-        if "state" in standardized_metrics:
+        # mode/basin are assessments — withheld for uninitialized agents
+        # (the pending state dict carries no mode/basin keys).
+        if "state" in standardized_metrics and not is_uninitialized:
             lite_metrics["mode"] = explain_mode(standardized_metrics["state"].get("mode"))
             lite_metrics["basin"] = explain_basin(standardized_metrics["state"].get("basin"))
         if is_uninitialized:
