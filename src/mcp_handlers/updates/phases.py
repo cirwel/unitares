@@ -980,18 +980,19 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
                 "(#425 Path C)",
                 (ctx.agent_id or "")[:12],
             )
+            from src.mcp_handlers.identity_bootstrap import (
+                strict_identity_refusal_payload,
+            )
             from src.mcp_handlers.response_base import success_response
-            return success_response({
-                "status": "identity_required",
-                "tool": "process_agent_update",
-                "tool_class": "required",
-                "hint": (
+            # Single-sourced refusal shape (council fold, PR #610) — only
+            # the hint is Path-C-specific.
+            return success_response(strict_identity_refusal_payload(
+                "process_agent_update",
+                hint=(
                     "Agent is not registered. Call onboard() first to "
                     "mint identity, then retry the update."
                 ),
- "ontology_ref": "",
-                "rollout_flag": "STRICT_IDENTITY_REQUIRED",
-            })
+            ))
 
         purpose = ctx.arguments.get("purpose")
         purpose_str = purpose.strip() if purpose and isinstance(purpose, str) else None
