@@ -158,6 +158,102 @@ async def test_initialized_agent_keeps_interpretation():
     assert "basin" in lite
 
 
+# ---------------------------------------------------------------------------
+# Read purity (trust contract §3.5 / §7): a read endpoint must not mint.
+# Before this guard, an unbound get_governance_metrics call reached
+# require_agent_id FALLBACK 2, which auto-generated a fresh in-memory
+# `auto_<ts>_<hex>` identity (and a monitor) per call — three cold probes
+# on 2026-06-10 produced three distinct ghosts.
+# ---------------------------------------------------------------------------
+
+
+def _parse_tc(result):
+    import json
+    return json.loads(result[0].text)
+
+
+@pytest.mark.asyncio
+async def test_unbound_read_returns_unbound_shape_and_mints_nothing():
+    from src.mcp_handlers.core import handle_get_governance_metrics
+
+    args = {}
+    with patch(
+        "src.mcp_handlers.context.get_context_agent_id", return_value=None
+    ):
+        result = await handle_get_governance_metrics(args)
+
+    data = _parse_tc(result)
+    assert data["status"] == "⚪ unbound"
+    assert data["verdict"]["value"] == "unbound"
+    # THE read-purity assertion: FALLBACK 2 never ran, so no ghost
+    # agent_id was injected into the caller's arguments.
+    assert "agent_id" not in args
+
+
+@pytest.mark.asyncio
+async def test_unbound_read_with_stale_session_id_same_shape():
+    """Regression for the original (narrower) guard: stale
+    client_session_id still gets the unbound shape, no mint."""
+    from src.mcp_handlers.core import handle_get_governance_metrics
+
+    args = {"client_session_id": "agent-stale-deadbeef"}
+    with patch(
+        "src.mcp_handlers.context.get_context_agent_id", return_value=None
+    ):
+        result = await handle_get_governance_metrics(args)
+
+    data = _parse_tc(result)
+    assert data["status"] == "⚪ unbound"
+    assert "agent_id" not in args
+
+
+@pytest.mark.asyncio
+async def test_bound_context_read_proceeds_to_data():
+    """A genuinely bound session bypasses the guard and reaches the
+    data path with the bound identity — the guard must not over-block."""
+    from src.mcp_handlers import core as core_mod
+
+    data_mock = AsyncMock(return_value={"ok": True, "agent_id": "agent-bound"})
+    with patch(
+        "src.mcp_handlers.context.get_context_agent_id",
+        return_value="agent-bound",
+    ), patch(
+        "src.mcp_handlers.core.require_agent_id",
+        return_value=("agent-bound", None),
+    ), patch(
+        "src.services.runtime_queries.get_governance_metrics_data", data_mock
+    ):
+        result = await core_mod.handle_get_governance_metrics({})
+
+    data = _parse_tc(result)
+    assert data.get("ok") is True
+    data_mock.assert_awaited_once()
+    assert data_mock.await_args.args[0] == "agent-bound"
+
+
+@pytest.mark.asyncio
+async def test_explicit_agent_id_bypasses_guard():
+    """An explicit agent_id is an explicit cross-agent read request —
+    the unbound guard does not apply (downstream ownership checks do)."""
+    from src.mcp_handlers import core as core_mod
+
+    data_mock = AsyncMock(return_value={"ok": True})
+    with patch(
+        "src.mcp_handlers.context.get_context_agent_id", return_value=None
+    ), patch(
+        "src.mcp_handlers.core.require_agent_id",
+        return_value=("explicit-agent", None),
+    ), patch(
+        "src.services.runtime_queries.get_governance_metrics_data", data_mock
+    ):
+        result = await core_mod.handle_get_governance_metrics(
+            {"agent_id": "explicit-agent"}
+        )
+
+    assert _parse_tc(result).get("ok") is True
+    data_mock.assert_awaited_once()
+
+
 def test_fleet_calibration_feedback_carries_scope_label():
     """The fleet-wide calibration numbers must self-identify as fleet
     data even when the cache-gated explanatory message is absent."""

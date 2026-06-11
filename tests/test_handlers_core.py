@@ -16,6 +16,21 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 
+@pytest.fixture
+def bound_context():
+    """Bind the transport context to agent-1 (read-purity guard, trust
+    contract §3.5): handle_get_governance_metrics serves the unbound
+    shape unless an actual binding exists — patching require_agent_id
+    alone no longer simulates a bound caller. Tests that need the
+    UNBOUND path re-patch get_context_agent_id to None inside their own
+    `with` block (innermost patch wins)."""
+    with patch(
+        "src.mcp_handlers.context.get_context_agent_id",
+        return_value="agent-1",
+    ):
+        yield
+
+
 # ============================================================================
 # _assess_thermodynamic_significance (pure function - no mocks needed)
 # ============================================================================
@@ -232,6 +247,7 @@ class TestSimulateUpdate:
 # handle_get_governance_metrics (mocked monitor + mcp_server)
 # ============================================================================
 
+@pytest.mark.usefixtures("bound_context")
 class TestGetGovernanceMetrics:
     """Tests for get_governance_metrics handler."""
 

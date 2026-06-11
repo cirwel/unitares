@@ -118,7 +118,15 @@ async def handle_get_governance_metrics(arguments: ToolArgumentsDict) -> Sequenc
         verbosity: 'minimal' (default), 'standard', or 'full'. Replaces lite param.
         lite: Backward compat — lite=true maps to verbosity=minimal, lite=false to full.
     """
-    if arguments.get("client_session_id") and not arguments.get("agent_id"):
+    # Read-purity (trust contract §3.5): a read must not mint. This tool is
+    # requires_identity="pre_onboard", so the dispatch middleware correctly
+    # leaves unbound callers unbound — but require_agent_id's handler-layer
+    # FALLBACK 2 then auto-generated a fresh in-memory `auto_<ts>_<hex>`
+    # identity (plus a monitor) on EVERY unbound call (cold-probe evidence
+    # 2026-06-10: three probes, three distinct ghosts). Guard on the actual
+    # binding for ALL no-explicit-agent_id calls, not just the
+    # stale-client_session_id case this block originally covered.
+    if not arguments.get("agent_id"):
         try:
             from src.mcp_handlers.context import get_context_agent_id
             bound_agent_id = get_context_agent_id()
@@ -138,8 +146,8 @@ async def handle_get_governance_metrics(arguments: ToolArgumentsDict) -> Sequenc
                     "tool": "identity",
                     "example": "identity() or onboard(force_new=true, spawn_reason='new_session')",
                     "note": (
-                        "get_governance_metrics is read-only and will not create "
-                        "an identity for an unbound or stale client_session_id."
+                        "get_governance_metrics is read-only; it creates no "
+                        "identity and no state for unbound callers."
                     ),
                 },
                 "related_tools": ["identity", "onboard", "process_agent_update"],

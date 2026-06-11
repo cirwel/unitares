@@ -31,6 +31,24 @@ from tests.helpers import patch_lifecycle_server
 from mcp.types import TextContent
 
 
+@pytest.fixture
+def bound_context():
+    """Bind the transport context to agent-1 for handler tests.
+
+    handle_get_governance_metrics now guards on the ACTUAL context
+    binding for all no-explicit-agent_id calls (read-purity, trust
+    contract §3.5) — patching require_agent_id alone no longer
+    simulates a bound caller. Classes exercising the bound path opt in
+    via @pytest.mark.usefixtures("bound_context"); the unbound path is
+    pinned in tests/test_zero_observation_honesty.py.
+    """
+    with patch(
+        "src.mcp_handlers.context.get_context_agent_id",
+        return_value="agent-1",
+    ):
+        yield
+
+
 # ============================================================================
 # Helpers
 # ============================================================================
@@ -347,6 +365,7 @@ class TestAssessThermodynamicSignificance:
 # handle_get_governance_metrics
 # ============================================================================
 
+@pytest.mark.usefixtures("bound_context")
 class TestGetGovernanceMetrics:
     """Tests for get_governance_metrics handler."""
 
@@ -1072,6 +1091,7 @@ class TestMarkResponseComplete:
 # Edge cases & integration-like tests
 # ============================================================================
 
+@pytest.mark.usefixtures("bound_context")
 class TestEdgeCases:
     """Edge cases and cross-cutting concerns."""
 
@@ -1464,6 +1484,7 @@ class TestGenerateContextualReflection:
 # Verbosity Tiers
 # ============================================================================
 
+@pytest.mark.usefixtures("bound_context")
 class TestVerbosityTiers:
     """Tests for the verbosity parameter on get_governance_metrics."""
 
