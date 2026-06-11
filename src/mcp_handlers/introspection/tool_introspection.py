@@ -143,27 +143,31 @@ def _getting_started_path() -> List[Dict[str, Any]]:
     return [
         {
             "step": 1,
-            "tool": "onboard",
-            "call": "onboard(force_new=true)",
+            "tool": "start_session",
+            "call": "start_session(force_new=true)",
+            "canonical_tool": "onboard",
             "why": "Mint a fresh process identity. If continuing prior work, include parent_agent_id and spawn_reason='new_session'.",
         },
         {
             "step": 2,
-            "tool": "process_agent_update",
-            "call": "process_agent_update(response_text='what changed', complexity=0.5, confidence=0.7)",
+            "tool": "sync_state",
+            "call": "sync_state(response_text='what changed', complexity=0.5, confidence=0.7)",
+            "canonical_tool": "process_agent_update",
             "why": "Record meaningful work and receive a governance verdict.",
         },
         {
             "step": 3,
-            "tool": "get_governance_metrics",
-            "call": "get_governance_metrics()",
+            "tool": "check_working_state",
+            "call": "check_working_state()",
+            "canonical_tool": "get_governance_metrics",
             "why": "Inspect current EISV state without mutating history.",
         },
         {
             "step": 4,
-            "tool": "knowledge",
-            "call": "knowledge(action='search', query='topic') or knowledge(action='note', content='short note')",
-            "why": "Reuse shared memory before writing; leave lightweight notes when useful.",
+            "tool": "search_shared_memory",
+            "call": "search_shared_memory(query='topic')",
+            "canonical_tool": "knowledge(action='search')",
+            "why": "Reuse shared memory before writing duplicate discoveries.",
         },
         {
             "step": 5,
@@ -201,7 +205,8 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     
     # Get actual registered tools from TOOL_HANDLERS registry
     from src.mcp_handlers import TOOL_HANDLERS
-    registered_tool_names = sorted(TOOL_HANDLERS.keys())
+    from ..tool_stability import AGENT_WORKFLOW_ALIASES
+    registered_tool_names = sorted(set(TOOL_HANDLERS.keys()) | set(AGENT_WORKFLOW_ALIASES))
     
     # Parse filter parameters (handle string booleans from MCP transport)
     essential_only = coerce_bool(arguments.get("essential_only"), False)
@@ -218,10 +223,40 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # Deprecated tools - hidden from list_tools by default
     # Source of truth: tool_stability.py (aliases handle routing)
     from ..tool_stability import list_all_aliases
-    DEPRECATED_TOOLS = set(list_all_aliases().keys())
+    DEPRECATED_TOOLS = set(list_all_aliases().keys()) - set(AGENT_WORKFLOW_ALIASES)
 
     # Define tool relationships and workflows
     tool_relationships = {
+        "start_session": {
+            "depends_on": [],
+            "related_to": ["onboard", "identity"],
+            "category": "identity",
+        },
+        "sync_state": {
+            "depends_on": [],
+            "related_to": ["process_agent_update", "check_working_state"],
+            "category": "core",
+        },
+        "check_working_state": {
+            "depends_on": [],
+            "related_to": ["get_governance_metrics", "sync_state"],
+            "category": "core",
+        },
+        "search_shared_memory": {
+            "depends_on": [],
+            "related_to": ["knowledge", "leave_note"],
+            "category": "knowledge",
+        },
+        "record_result": {
+            "depends_on": ["sync_state"],
+            "related_to": ["outcome_event", "process_agent_update"],
+            "category": "core",
+        },
+        "request_review": {
+            "depends_on": ["sync_state"],
+            "related_to": ["dialectic", "self_recovery"],
+            "category": "dialectic",
+        },
         "process_agent_update": {
             "depends_on": [],  # No deps - identity auto-creates
             "related_to": ["simulate_update", "get_governance_metrics", "get_system_history"],
@@ -606,6 +641,12 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # Build tools list dynamically from registered tools
     # Description mapping for tools (fallback to generic if not found)
     tool_descriptions = {
+        "start_session": "Start a UNITARES session; alias for onboard(force_new=true, parent_agent_id=...)",
+        "sync_state": "Check in after meaningful work; alias for process_agent_update(...)",
+        "check_working_state": "Read current EISV state without mutating history; alias for get_governance_metrics()",
+        "search_shared_memory": "Search shared memory before writing; alias for knowledge(action='search')",
+        "record_result": "Record real task/tool/test outcome; alias for outcome_event(...)",
+        "request_review": "Ask for structured review/recovery; alias for dialectic(action='request')",
         "onboard": "Register fresh process-instance with governance. Per v2 ontology, declare lineage via parent_agent_id rather than resume via token.",
         "identity": "🪞 Check who you are or set your display name. Per v2 ontology, arg-less identity() with no proof signal mints fresh; pass continuity_token / agent_uuid + proof to resume.",
         "process_agent_update": "💬 Share your work and get supportive feedback. Your main check-in tool",
@@ -795,9 +836,14 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             lite_tools = [lite_tools_dict[name] for name in ordered_lite_names if name in lite_tools_dict]
         else:
             # Default workflow order
-            order = ["onboard", "identity", "process_agent_update", "get_governance_metrics",
-                     "list_tools", "describe_tool", "list_agents", "health_check",
-                     "store_knowledge_graph", "search_knowledge_graph", "leave_note"]
+            order = [
+                "start_session", "sync_state", "check_working_state",
+                "search_shared_memory", "record_result", "request_review",
+                "onboard", "identity", "process_agent_update",
+                "get_governance_metrics", "list_tools", "describe_tool",
+                "agent", "knowledge", "dialectic", "health_check",
+                "store_knowledge_graph", "search_knowledge_graph", "leave_note",
+            ]
             lite_tools.sort(key=lambda x: order.index(x["name"]) if x["name"] in order else 99)
         
         # Group by category for better organization
@@ -861,13 +907,20 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             },
             # Quick workflows (v2.5.0+) - progressive disclosure
             "workflows": {
-                "new_agent": ["onboard(force_new=true)", "process_agent_update(response_text='...', complexity=0.5)", "agent(action='list') or list_agents()"],
-                "check_in": ["process_agent_update(response_text='...', complexity=0.5)"],
+                "new_agent": ["start_session(force_new=true)", "sync_state(response_text='...', complexity=0.5)", "agent(action='list')"],
+                "check_in": ["sync_state(response_text='...', complexity=0.5)"],
                 "save_insight": ["knowledge(action='note', content='...')", "OR knowledge(action='store', summary='...', tags=[...])"],
-                "find_info": ["knowledge(action='search', query='...')", "OR knowledge(action='search', tags=[...])"]
+                "find_info": ["search_shared_memory(query='...')", "OR knowledge(action='search', tags=[...])"],
+                "recover": ["request_review(issue_description='...')", "OR self_recovery(action='review', reflection='...')"],
             },
             # Common signatures (type hints at a glance)
             "signatures": {
+                "start_session": "(force_new:bool=true, parent_agent_id?:str, spawn_reason?:str)",
+                "sync_state": "(response_text?:str, complexity?:float, confidence?:float, task_type?:str)",
+                "check_working_state": "(lite?:bool, include_state?:bool)",
+                "search_shared_memory": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
+                "record_result": "(outcome_type:str, confidence?:float, prediction_id?:str, detail?:dict)",
+                "request_review": "(issue_description:str, reason?:str)",
                 "process_agent_update": "(complexity:float, response_text?:str, confidence?:float, task_type?:str)",
                 "store_knowledge_graph": "(summary:str, tags?:list, severity?:str, details?:str)",
                 "search_knowledge_graph": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
@@ -876,7 +929,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             },
             "more": "list_tools(lite=false) for all tools with full category details",
             "tip": "describe_tool(tool_name=...) for parameter details and examples",
-            "quick_start": "Start fresh with onboard(force_new=true); use parent_agent_id for lineage, not bare UUID resume",
+            "quick_start": "Start fresh with start_session(force_new=true); use parent_agent_id for lineage, not bare UUID resume",
             "getting_started_path": _getting_started_path(),
             "essential_toolkit": _essential_toolkit(),
         }
@@ -1168,8 +1221,8 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
     Shows only required params + key optional params with simple examples.
     """
     try:
-        tool_name = (arguments.get("tool_name") or "").strip()
-        if not tool_name:
+        requested_tool_name = (arguments.get("tool_name") or "").strip()
+        if not requested_tool_name:
             return [error_response(
                 "tool_name is required",
                 recovery={
@@ -1183,22 +1236,68 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
         # LITE-FIRST: Simpler schemas by default for local models
         lite = arguments.get("lite", True)
 
-        from src.tool_schemas import get_tool_definitions
-        tools = get_tool_definitions(verbosity="full")
-        tool = next((t for t in tools if t.name == tool_name), None)
-        if tool is None:
+        from ..tool_stability import resolve_tool_alias
+        tool_name, alias_info = resolve_tool_alias(requested_tool_name)
+
+        from src.tool_descriptions import TOOL_DESCRIPTIONS
+        from src.tool_schemas import get_pydantic_schemas
+
+        schema_model = get_pydantic_schemas().get(tool_name)
+        tool_schema = None
+        if schema_model is not None:
+            tool_schema = schema_model.model_json_schema()
+            description = TOOL_DESCRIPTIONS.get(tool_name) or schema_model.__doc__ or f"Tool: {tool_name}"
+        else:
+            # Fallback for decorator-defined/plugin tools that are not backed
+            # by a Pydantic Params model. Avoid rebuilding every Tool object
+            # just to describe one name.
+            from ..decorators import get_tool_definition
+
+            definition = get_tool_definition(tool_name)
+            if definition is not None:
+                description = definition.description or TOOL_DESCRIPTIONS.get(tool_name) or f"Tool: {tool_name}"
+                tool_schema = {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                }
+            else:
+                # Compatibility path for test/plugin tool objects that are
+                # only discoverable through the MCP Tool schema builder. The
+                # common Pydantic path above still avoids rebuilding the full
+                # registry for normal describe_tool calls.
+                from src.tool_schemas import get_tool_definitions
+
+                description = None
+                for candidate in get_tool_definitions():
+                    if candidate.name == tool_name:
+                        description = (
+                            candidate.description
+                            or TOOL_DESCRIPTIONS.get(tool_name)
+                            or f"Tool: {tool_name}"
+                        )
+                        tool_schema = candidate.inputSchema or {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": True,
+                        }
+                        break
+
+        if tool_schema is None:
             return [error_response(
                 f"Unknown tool: {tool_name}",
                 recovery={
                     "action": "Call list_tools to see available tool names",
                     "related_tools": ["list_tools"],
                 },
-                context={"tool_name": tool_name},
+                context={
+                    "tool_name": requested_tool_name,
+                    "resolved_tool_name": tool_name,
+                },
             )]
 
-        description = tool.description
         if not include_full_description:
-            description = (tool.description or "").splitlines()[0].strip() if tool.description else ""
+            description = (description or "").splitlines()[0].strip() if description else ""
 
         # Helper function to get common patterns (shared between both branches)
         def get_common_patterns(tool_name: str) -> dict:
@@ -1208,6 +1307,30 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                         "basic": "process_agent_update(complexity=0.5)  # identity auto-injected",
                         "with_response": "process_agent_update(response_text=\"Fixed bug\", complexity=0.3, confidence=0.9)",
                         "task_type": "process_agent_update(complexity=0.7, task_type=\"divergent\")"
+                    },
+                    "start_session": {
+                        "fresh": "start_session(force_new=true)",
+                        "lineage": "start_session(force_new=true, parent_agent_id=\"...\", spawn_reason=\"new_session\")",
+                    },
+                    "sync_state": {
+                        "basic": "sync_state(response_text=\"Fixed bug\", complexity=0.3, confidence=0.9)",
+                        "mirror": "sync_state(response_text=\"Finished task\", complexity=0.5, response_mode=\"mirror\")",
+                    },
+                    "check_working_state": {
+                        "basic": "check_working_state()",
+                        "full": "check_working_state(lite=false)",
+                    },
+                    "search_shared_memory": {
+                        "by_query": "search_shared_memory(query=\"identity continuity\", limit=5)",
+                        "with_details": "search_shared_memory(query=\"calibration\", include_details=true)",
+                    },
+                    "record_result": {
+                        "test_passed": "record_result(outcome_type=\"test_passed\", confidence=0.8)",
+                        "linked": "record_result(outcome_type=\"task_completed\", prediction_id=\"...\", detail={\"summary\":\"...\"})",
+                    },
+                    "request_review": {
+                        "recovery": "request_review(issue_description=\"Paused after conflicting evidence\")",
+                        "with_reason": "request_review(issue_description=\"Need adversarial review\", reason=\"uncertain root cause\")",
                     },
                     "store_knowledge_graph": {
                         "insight": "store_knowledge_graph(summary=\"Key insight about X\", tags=[\"insight\"])",
@@ -1266,10 +1389,9 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
             # Try Pydantic schema first for structured lite output
             lite_schema = None
             try:
-                from src.tool_schemas import get_pydantic_schemas
-                pydantic_model = get_pydantic_schemas().get(tool_name)
+                pydantic_model = schema_model
                 if pydantic_model:
-                    schema = pydantic_model.model_json_schema()
+                    schema = tool_schema or pydantic_model.model_json_schema()
                     properties = schema.get("properties", {})
                     required_fields = schema.get("required", [])
 
@@ -1325,7 +1447,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                 params_simple = lite_schema["params_simple"]
 
                 # Get common patterns
-                common_patterns = get_common_patterns(tool_name)
+                common_patterns = get_common_patterns(requested_tool_name) or get_common_patterns(tool_name)
 
                 # Get parameter aliases for discoverability
                 from ..validators import PARAM_ALIASES
@@ -1334,9 +1456,10 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                 # UX FIX (Feb 2026): Add tier information to help agents understand tool complexity
                 from src.tool_modes import TOOL_TIERS, TOOL_OPERATIONS
                 tool_tier = "common"  # Default
-                if tool_name in TOOL_TIERS["essential"]:
+                tier_lookup_name = requested_tool_name if alias_info else tool_name
+                if tier_lookup_name in TOOL_TIERS["essential"] or tool_name in TOOL_TIERS["essential"]:
                     tool_tier = "essential"
-                elif tool_name in TOOL_TIERS["advanced"]:
+                elif tier_lookup_name in TOOL_TIERS["advanced"] or tool_name in TOOL_TIERS["advanced"]:
                     tool_tier = "advanced"
 
                 tier_guidance = {
@@ -1346,14 +1469,22 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                 }
 
                 response_data = {
-                    "tool": tool_name,
+                    "tool": requested_tool_name,
                     "description": (description or "").splitlines()[0].strip(),
                     "tier": tool_tier,
                     "tier_note": tier_guidance.get(tool_tier, ""),
-                    "operation": TOOL_OPERATIONS.get(tool_name, "read"),  # read/write/admin
+                    "operation": TOOL_OPERATIONS.get(tier_lookup_name, TOOL_OPERATIONS.get(tool_name, "read")),  # read/write/admin
                     "parameters": params_simple,
                     "note": "Lite mode - use describe_tool(tool_name=..., lite=false) for full schema"
                 }
+                if alias_info:
+                    response_data["canonical_tool"] = tool_name
+                    response_data["alias"] = {
+                        "reason": alias_info.reason,
+                        "canonical_tool": alias_info.new_name,
+                        "injected_action": alias_info.inject_action,
+                        "note": alias_info.migration_note,
+                    }
 
                 deprecation = _describe_tool_deprecation_block(tool_name)
                 if deprecation is not None:
@@ -1371,7 +1502,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                 return success_response(response_data)
             else:
                 # Fallback: extract from inputSchema
-                schema = tool.inputSchema or {}
+                schema = tool_schema or {}
                 properties = schema.get("properties", {})
                 required = schema.get("required", [])
                 
@@ -1394,18 +1525,26 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     params_simple.append(f"... and {total_optional - shown_count} more (use lite=false for full schema)")
                 
                 # Get common patterns using shared helper
-                common_patterns = get_common_patterns(tool_name)
+                common_patterns = get_common_patterns(requested_tool_name) or get_common_patterns(tool_name)
 
                 # Get parameter aliases for discoverability
                 from ..validators import PARAM_ALIASES
                 tool_aliases = PARAM_ALIASES.get(tool_name, {})
 
                 response_data = {
-                    "tool": tool_name,
+                    "tool": requested_tool_name,
                     "description": (description or "").splitlines()[0].strip(),
                     "parameters": params_simple,
                     "note": "Lite mode - use describe_tool(tool_name=..., lite=false) for full schema"
                 }
+                if alias_info:
+                    response_data["canonical_tool"] = tool_name
+                    response_data["alias"] = {
+                        "reason": alias_info.reason,
+                        "canonical_tool": alias_info.new_name,
+                        "injected_action": alias_info.inject_action,
+                        "note": alias_info.migration_note,
+                    }
 
                 deprecation = _describe_tool_deprecation_block(tool_name)
                 if deprecation is not None:
@@ -1423,11 +1562,19 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
 
         full_response: Dict[str, Any] = {
             "tool": {
-                "name": tool.name,
+                "name": requested_tool_name,
                 "description": description,
-                "inputSchema": tool.inputSchema if include_schema else None,
+                "inputSchema": tool_schema if include_schema else None,
             }
         }
+        if alias_info:
+            full_response["tool"]["canonical_name"] = tool_name
+            full_response["alias"] = {
+                "reason": alias_info.reason,
+                "canonical_tool": alias_info.new_name,
+                "injected_action": alias_info.inject_action,
+                "note": alias_info.migration_note,
+            }
         deprecation = _describe_tool_deprecation_block(tool_name)
         if deprecation is not None:
             full_response["deprecation"] = deprecation
