@@ -130,7 +130,7 @@ The three patterns below were the pre-ExecutorPool workarounds. They are **retir
 
 Rollout sequence:
 
-1. Local dev (your shell) → set the flag, run a session through, watch for typed refusals where you expected work.
+1. Local dev (your shell) → set the flag, run a session through, watch for typed refusals where you expected work. **Stage 1 run 2026-06-11** (`docs/handoffs/strict-identity-stage1-burnin-2026-06-11.md`): typed refusal works as designed on the MCP transport — but **the flag does not reach the REST surface** (`/v1/tools/call` skips `identity_step`): unbound REST reads still succeed under strict, writes refuse with an off-contract generic `SESSION_ERROR`. Since the real unbound population is REST (dashboard 30s sweep, gateway-proxied connector traffic), a REST-side strict gate + a dashboard-identity decision are prerequisites before stages 2–4 achieve the rollout's goal.
 2. Lumen (Pi) → flag the Pi env, observe resident agents (vigil/sentinel/watcher/chronicler) for refusals at scheduled boundaries; fix offenders by adding `parent_agent_id` to their bootstrap.
 3. Dispatch (the Discord bridge / dispatch worker) → flag, observe per-thread agent spawns.
 4. Flip the default in code only after all three burn-ins are clean for ≥1 week.
