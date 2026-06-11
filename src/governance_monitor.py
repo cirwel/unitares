@@ -12,7 +12,6 @@ Version History:
 
 import os
 import numpy as np
-from dataclasses import field
 from typing import Dict, Optional, Any
 from datetime import datetime
 from pathlib import Path
@@ -51,9 +50,8 @@ from governance_core import (
     State, Theta,
     DEFAULT_STATE, DEFAULT_THETA, DEFAULT_PARAMS,
     step_state, coherence,
-    phi_objective, verdict_from_phi,
-    compute_ethical_drift,
-)
+    phi_objective, verdict_from_phi,  # noqa: F401 — re-exported; consumers import them from this module
+    )
 
 # UNITARES params profile selection (optional v4.1 alignment)
 from governance_core.parameters import get_active_params

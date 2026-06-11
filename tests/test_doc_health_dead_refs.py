@@ -207,6 +207,24 @@ def test_dead_ref_check_skips_private_ontology_plan_ledger(tmp_path, monkeypatch
     assert doc_health.check_dead_refs([plan]) == []
 
 
+def test_dead_ref_check_skips_operator_local_handoffs_refs(tmp_path, monkeypatch, doc_health):
+    """Refs into docs/handoffs/ are operator-local (the dir is gitignored).
+
+    Public docs cite private handoffs by filename as provenance — e.g. the
+    AGENTS.md strict-identity stage-1 burn-in note. Those paths are expected
+    to be unresolvable in the public tree, from any doc, not just the
+    skip-listed ledger files.
+    """
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text(
+        "Stage 1 run (`docs/handoffs/strict-identity-stage1-burnin-2026-06-11.md`)\n"
+    )
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+
+    assert doc_health.check_dead_refs([agents]) == []
+
+
 def test_get_db_call_is_internal_helper_not_ghost_tool(tmp_path, monkeypatch, doc_health):
     """AGENTS.md mentions get_db() as an internal helper, not an MCP tool claim."""
     agents = tmp_path / "AGENTS.md"

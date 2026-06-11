@@ -4,7 +4,7 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, verdicts, coherence, calibration. Reference material for interpreting governance
   metrics and understanding the thermodynamic model.
-last_verified: "2026-04-25"
+last_verified: "2026-06-11"
 freshness_days: 14
 source_files:
   - unitares/config/governance_config.py
@@ -51,14 +51,16 @@ Use `get_governance_metrics()` as the source of truth for the current basin/mode
 
 ## Verdicts
 
-Governance issues a verdict after each check-in:
+Governance issues a decision after each check-in. The response's `verdict` field wraps the decision **action**, which is binary — `proceed` or `pause` — qualified by a `sub_action`:
 
-| Verdict | Meaning | Action |
-|---------|---------|--------|
-| **proceed** | State is healthy | Continue working normally |
-| **guide** | Something is slightly off | Read the guidance text, adjust approach |
-| **pause** | Needs attention | Stop current work, reflect, consider dialectic review |
-| **reject** | Significant concern | Requires dialectic review or human input |
+| Action | Sub-action | Meaning | What to do |
+|--------|-----------|---------|------------|
+| **proceed** | `approve` | State is healthy | Continue working normally |
+| **proceed** | `guide` | Something is slightly off | Read the guidance text, adjust approach |
+| **pause** | `reject` | Risk threshold reached | Stop current work, reflect; dialectic review or human input |
+| **pause** | `void_pause`, `coherence_pause`, `basin_pause`, `risk_pause`, `cirs_block` | A specific subsystem tripped | Read the `reason`/`guidance` fields; consider dialectic review |
+
+Separately, `metrics.verdict` carries the internal UNITARES verdict from phi scoring — `safe` / `caution` / `high-risk`. It drives the decision above; read it as context, not as the action itself.
 
 A `margin: tight` flag means you are near a basin edge. Be more careful with next steps.
 

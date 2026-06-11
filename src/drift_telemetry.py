@@ -21,12 +21,11 @@ DATA COLLECTED:
 
 import gzip
 import json
-import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
-from dataclasses import dataclass, field
+from typing import Dict, Any, Optional, List
+from dataclasses import dataclass
 import threading
 
 from src.logging_utils import get_logger

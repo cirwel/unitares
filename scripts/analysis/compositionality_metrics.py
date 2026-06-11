@@ -15,7 +15,7 @@ import math
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Tuple
 
 import numpy as np
 

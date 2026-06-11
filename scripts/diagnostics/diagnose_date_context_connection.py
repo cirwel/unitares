@@ -10,7 +10,6 @@ import sys
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent

@@ -3,7 +3,7 @@ name: knowledge-graph
 description: >
   Use when an agent needs to search the shared knowledge graph, contribute a discovery,
   or update existing entries. Covers search, tagging, discovery types, and status lifecycle.
-last_verified: "2026-04-25"
+last_verified: "2026-06-11"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/knowledge/handlers.py
@@ -15,7 +15,7 @@ source_files:
 
 ## What It Is
 
-The knowledge graph is shared institutional memory across all agents. It is backed by PostgreSQL with Apache AGE for graph queries. Every agent can search, contribute, and update entries. Discoveries persist across sessions and are available to all agents in the system.
+The knowledge graph is shared institutional memory across all agents. It is backed by PostgreSQL — full-text search is the canonical default backend, with Apache AGE as an optional graph backend (`UNITARES_KNOWLEDGE_BACKEND=age`). Every agent can search, contribute, and update entries. Discoveries persist across sessions and are available to all agents in the system.
 
 ## Search Before Creating
 
@@ -59,7 +59,10 @@ For more control, use the `knowledge()` tool with an action parameter:
 | `details` | Get full details including graph relationships |
 | `note` | Same as `leave_note()` but through the unified interface |
 | `cleanup` | Run lifecycle cleanup for stale entries |
+| `synthesize` | Roll up a topic's discoveries into a summary row (see below) |
 | `stats` | Get knowledge graph statistics |
+| `supersede` | Mark a discovery as superseding another (creates a SUPERSEDES edge) |
+| `audit` | Read-only staleness/health scoring of open entries |
 
 ## Discovery Types
 
@@ -86,7 +89,9 @@ open  -->  resolved    (problem solved, finding addressed)
 
 - **open**: Active, still relevant, may need attention
 - **resolved**: The issue or finding has been addressed
-- **archived**: No longer relevant (outdated, superseded, or duplicate)
+- **archived**: No longer relevant (outdated or duplicate)
+
+The runtime accepts more terminal states than the two above: `disputed` (contested finding), `closed` (terminal, generic), `wont_fix` (acknowledged, deliberately not addressed), and `superseded` (replaced by a newer entry — pair with `knowledge(action="supersede")`). Check the live tool schema for the authoritative set.
 
 ## Tagging Best Practices
 

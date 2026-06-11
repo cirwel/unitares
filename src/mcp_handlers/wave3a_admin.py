@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Set
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse

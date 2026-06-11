@@ -1,6 +1,6 @@
 """Ethical drift vector computation for governance monitor."""
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 from governance_core import (
     coherence, compute_ethical_drift, get_agent_baseline,

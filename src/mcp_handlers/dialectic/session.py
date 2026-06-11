@@ -10,14 +10,13 @@ from pathlib import Path
 import json
 import os
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from src.dialectic_protocol import DialecticSession, DialecticPhase
 from src.db.acquire_compat import compatible_acquire
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 # PostgreSQL backend (cross-process shared state)
 from src.dialectic_db import (
     get_session_async as pg_get_session,

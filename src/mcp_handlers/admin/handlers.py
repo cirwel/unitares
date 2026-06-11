@@ -2,14 +2,12 @@
 Admin tool handlers.
 """
 
-from typing import Dict, Any, List, Sequence, Optional
+from typing import Dict, Any, Sequence, Optional
 from mcp.types import TextContent
-import json
 import sys
-import os
 from datetime import datetime
 from pathlib import Path
-from ..utils import success_response, error_response, require_agent_id, require_registered_agent
+from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
 from ..validators import validate_file_path_policy
 from src.logging_utils import get_logger
@@ -465,8 +463,6 @@ async def handle_get_workspace_health(arguments: Dict[str, Any]) -> Sequence[Tex
         health_data = get_workspace_health()
         return success_response(health_data)
     except Exception as e:
-        import traceback
-        import sys
         # SECURITY: Log full traceback internally but sanitize for client
         logger.error(f"Error checking workspace health: {e}", exc_info=True)
         return [error_response(

@@ -15,7 +15,6 @@ Usage:
 
 import argparse
 import sys
-import readline  # enables arrow keys / history in input()
 
 from smolagents import tool, ToolCollection, OpenAIServerModel, CodeAgent
 

@@ -6,12 +6,7 @@ Extracted from admin.py for maintainability.
 
 from typing import Dict, Any, List, Sequence, Optional
 from mcp.types import TextContent
-import json
-import sys
-import os
-from datetime import datetime
-from pathlib import Path
-from ..utils import success_response, error_response, require_agent_id, require_registered_agent
+from ..utils import success_response, error_response
 from ..decorators import mcp_tool
 from ..support.coerce import coerce_bool
 from src.logging_utils import get_logger
