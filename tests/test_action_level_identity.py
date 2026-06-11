@@ -184,12 +184,17 @@ async def test_unbound_dialectic_get_ignores_check_timeout():
 async def test_bound_dialectic_get_keeps_check_timeout():
     """Bound callers (and the background reaper) keep the janitorial
     sweep — the suppression is unbound-only."""
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, MagicMock
     from src.mcp_handlers.dialectic import handlers as dh
 
     fast = AsyncMock()
     stuck = AsyncMock(return_value=False)
-    session = AsyncMock()
+    # MagicMock, not AsyncMock: the handler calls session methods
+    # synchronously (check_timeout(), transcript.append) — an AsyncMock
+    # session leaks unawaited coroutines, which the repo's leak detector
+    # rightly fails the run on.
+    session = MagicMock()
+    session.check_timeout = MagicMock(return_value=None)
     with patch(
         "src.mcp_handlers.context.get_context_agent_id",
         return_value="bound-agent",

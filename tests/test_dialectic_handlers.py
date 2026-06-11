@@ -184,6 +184,18 @@ def mock_select_reviewer():
 
 
 @pytest.fixture
+def mock_context_agent_bound():
+    """Bound-context variant: handle_get_dialectic_session now suppresses
+    check_timeout for UNBOUND callers (PR #611 — the janitorial sweep is
+    a write behind a pre_onboard read), so tests exercising the timeout/
+    reassignment paths must simulate a bound caller."""
+    return patch(
+        "src.mcp_handlers.context.get_context_agent_id",
+        return_value="test-bound-agent",
+    )
+
+
+@pytest.fixture
 def mock_context_agent():
     """Mock get_context_agent_id used by success_response and error_response.
 
@@ -1555,7 +1567,7 @@ class TestHandleGetDialecticSession:
 
     @pytest.mark.asyncio
     async def test_session_timed_out(
-        self, mock_pg_add_message, mock_pg_update_phase, mock_context_agent,
+        self, mock_pg_add_message, mock_pg_update_phase, mock_context_agent_bound,
     ):
         """Session that has timed out returns failure with recovery guidance."""
         from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session, ACTIVE_SESSIONS
@@ -1567,7 +1579,7 @@ class TestHandleGetDialecticSession:
         # Mock check_timeout to return a timeout reason
         with patch.object(session, "check_timeout",
                           return_value="Session timeout - total time exceeded 6 hours"), \
-             mock_pg_add_message, mock_pg_update_phase, mock_context_agent:
+             mock_pg_add_message, mock_pg_update_phase, mock_context_agent_bound:
             result = await handle_get_dialectic_session({
                 "session_id": session.session_id,
                 "check_timeout": True,
@@ -1580,7 +1592,7 @@ class TestHandleGetDialecticSession:
 
     @pytest.mark.asyncio
     async def test_reviewer_stuck_detection(
-        self, mock_pg_add_message, mock_pg_update_phase, mock_context_agent,
+        self, mock_pg_add_message, mock_pg_update_phase, mock_context_agent_bound,
     ):
         """Reviewer stuck causes session to be marked as failed."""
         from src.mcp_handlers.dialectic.handlers import handle_get_dialectic_session, ACTIVE_SESSIONS
@@ -1597,7 +1609,7 @@ class TestHandleGetDialecticSession:
                    return_value=True), \
              patch(f"{DIALECTIC}.select_reviewer", new_callable=AsyncMock,
                    return_value=None), \
-             mock_pg_add_message, mock_pg_update_phase, mock_context_agent:
+             mock_pg_add_message, mock_pg_update_phase, mock_context_agent_bound:
             result = await handle_get_dialectic_session({
                 "session_id": session.session_id,
                 "check_timeout": True,
