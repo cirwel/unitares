@@ -4,11 +4,9 @@ Configuration tool handlers.
 
 from typing import Dict, Any, Sequence
 from mcp.types import TextContent
-import json
-import sys
 from ..utils import success_response, error_response
 from ..decorators import mcp_tool
-from ..error_helpers import agent_not_found_error, authentication_error
+from ..error_helpers import agent_not_found_error
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = get_logger(__name__)

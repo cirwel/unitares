@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import numpy as np
-from filterpy.kalman import UnscentedKalmanFilter, MerweScaledSigmaPoints, rts_smoother
+from filterpy.kalman import UnscentedKalmanFilter, MerweScaledSigmaPoints
 
 from .ode import fx as _fx
 

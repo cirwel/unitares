@@ -6,8 +6,7 @@ import asyncio
 import math
 from typing import Dict, Any, Sequence
 from mcp.types import TextContent
-import sys
-from ..utils import success_response, error_response, require_argument, require_registered_agent
+from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -388,7 +387,6 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
     
     IMPROVEMENT #5: Agent comparison templates
     """
-    from src.governance_monitor import UNITARESMonitor
     # SECURITY FIX: Require registered agent (prevents phantom agent_ids)
     agent_id, error = require_registered_agent(arguments)
     if error:
@@ -718,7 +716,6 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
                     all_anomalies.extend(result)
                 elif isinstance(result, Exception):
                     # Log but continue
-                    import sys
                     logger.warning(f"Error processing agent in detect_anomalies: {result}", exc_info=True)
     except Exception as e:
         logger.error(f"Error in detect_anomalies: {e}", exc_info=True)

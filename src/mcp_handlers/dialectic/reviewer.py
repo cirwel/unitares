@@ -17,7 +17,7 @@ import json
 import asyncio
 import contextvars
 
-from src.dialectic_protocol import calculate_authority_score, DialecticPhase, DialecticSession
+from src.dialectic_protocol import calculate_authority_score, DialecticPhase
 from src.logging_utils import get_logger
 
 # Reentrancy guard for the auto-resolve pre-check inside is_agent_in_active_session.
@@ -35,7 +35,6 @@ from .session import (
     _SESSION_METADATA_CACHE,
     _CACHE_TTL
 )
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 # Import PostgreSQL async functions for cross-process visibility
 from src.dialectic_db import (
     is_agent_in_active_session_async as pg_is_agent_in_active_session,

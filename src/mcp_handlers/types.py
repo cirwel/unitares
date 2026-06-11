@@ -4,8 +4,7 @@ Type definitions for MCP tool handlers.
 Provides TypedDict definitions for better type safety and IDE support.
 """
 
-from typing import TypedDict, Optional, List, Dict, Any, Sequence
-from datetime import datetime
+from typing import TypedDict, Optional, List, Dict, Any
 
 
 class AgentMetadataDict(TypedDict, total=False):

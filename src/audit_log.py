@@ -6,7 +6,6 @@ JSONL is the raw truth log. PostgreSQL provides queryable indexing.
 """
 
 import json
-import sys
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Iterator, List, Optional

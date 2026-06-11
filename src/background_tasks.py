@@ -7,7 +7,6 @@ Each task runs as an asyncio coroutine, started during server initialization.
 
 import asyncio
 import gzip
-import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path

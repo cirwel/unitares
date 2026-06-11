@@ -22,7 +22,6 @@ from .persistence import (
     _get_agent_label,
     _get_agent_status,
     _get_agent_id_from_metadata,
-    _find_agent_by_label,
 )
 
 from config.governance_config import GovernanceConfig

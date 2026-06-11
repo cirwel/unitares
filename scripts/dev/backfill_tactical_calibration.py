@@ -22,7 +22,6 @@ from typing import Dict, List
 from src.sequential_calibration import sequential_calibration_tracker
 from src.calibration import calibration_checker
 from src.mcp_handlers.observability.outcome_events import (
-    HARD_EXOGENOUS_TYPES,
     _HARD_EXOGENOUS_TYPE_TO_CHANNEL,
 )
 
@@ -144,7 +143,6 @@ async def backfill(days: int, dry_run: bool) -> Dict[str, int]:
         # flush by awaiting the postgres write directly.
         try:
             from src.db import get_db
-            from collections import defaultdict
             db = get_db()
             state_data = {
                 'bins': {k: dict(v) for k, v in calibration_checker.bin_stats.items()},

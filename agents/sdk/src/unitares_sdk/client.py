@@ -19,7 +19,6 @@ from unitares_sdk.errors import (
     GovernanceTimeoutError,
     GovernanceUnavailableError,
     IdentityDriftError,
-    VerdictError,
     extract_retry_after_seconds,
     parse_retry_after_header,
 )

@@ -11,7 +11,6 @@ Usage:
 
 import sys
 from pathlib import Path
-from datetime import datetime
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent
@@ -23,7 +22,7 @@ def check_small_markdowns():
     archive_path = project_root / "scripts" / "archive"
     if str(archive_path) not in sys.path:
         sys.path.insert(0, str(archive_path))
-    from check_small_markdowns import find_small_markdowns, ESSENTIAL_DOCS, SKIP_DIRS
+    from check_small_markdowns import find_small_markdowns
     
     docs_dir = project_root / "docs"
     small_files = find_small_markdowns(docs_dir)
