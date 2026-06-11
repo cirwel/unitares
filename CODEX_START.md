@@ -21,12 +21,17 @@ Connect to a running UNITARES governance server, preserve continuity cleanly, an
 
 If you are not using commands directly, the equivalent raw tool flow is:
 
-1. First run or fresh process: `onboard(force_new=true)` and save `uuid`
-2. Fresh process continuing prior work: `onboard(force_new=true, parent_agent_id=<saved uuid>, spawn_reason="new_session")`
-3. `process_agent_update()` after meaningful work
+1. First run or fresh process: `start_session(force_new=true)` and save `agent_uuid` / `client_session_id`
+2. Fresh process continuing prior work: `start_session(force_new=true, parent_agent_id=<saved uuid>, spawn_reason="new_session")`
+3. `sync_state()` after meaningful work
 4. Same live owner / proof-owned rebind only: `identity(agent_uuid=..., continuity_token=..., resume=true)`
-5. `get_governance_metrics()` for read-only state checks
+5. `check_working_state()` for read-only state checks
 6. `health_check()` only if the system itself may be part of the problem
+
+Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and
+`get_governance_metrics(...)`. Friendly alias calls return the agent-experience
+envelope with `next_action`, compact state fields, and the full canonical
+payload under `raw_governance`.
 
 ## Codex Reality
 

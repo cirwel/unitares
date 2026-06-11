@@ -6,22 +6,27 @@ Status: thin entrypoint kept for compatibility. README is the primary overview; 
 
 Use this unless you have a specific reason not to:
 
-1. First run or fresh process: call `onboard(force_new=true)` and save `uuid` from response
-2. Fresh process continuing prior work: call `onboard(force_new=true, parent_agent_id=<saved uuid>, spawn_reason="new_session")`
-3. Call `process_agent_update()` after meaningful work
-4. Call `get_governance_metrics()` for state
+1. First run or fresh process: call `start_session(force_new=true)` and save `agent_uuid` / `client_session_id` from the response
+2. Fresh process continuing prior work: call `start_session(force_new=true, parent_agent_id=<saved uuid>, spawn_reason="new_session")`
+3. Call `sync_state()` after meaningful work
+4. Call `check_working_state()` for state
 5. Use `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)` only for same-owner proof-owned rebinds
+
+Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and
+`get_governance_metrics(...)`. The friendly aliases return the
+agent-experience envelope, with the full canonical payload preserved under
+`raw_governance`.
 
 ```python
 # First run:
-result = onboard(force_new=True)
-save_to_file(result["uuid"])
+result = start_session(force_new=True)
+save_to_file(result["agent_uuid"])
 
 # New process inheriting prior work:
-onboard(force_new=True, parent_agent_id=saved_uuid, spawn_reason="new_session")
+start_session(force_new=True, parent_agent_id=saved_uuid, spawn_reason="new_session")
 
 # After work:
-process_agent_update(response_text="What you did", complexity=0.5)
+sync_state(response_text="What you did", complexity=0.5)
 ```
 
 ## Identity Rule
