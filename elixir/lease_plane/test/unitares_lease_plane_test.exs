@@ -391,6 +391,49 @@ defmodule UnitaresLeasePlaneTest do
     end
   end
 
+  describe "audit outbox selection ordering" do
+    # Regression: 2026-06 partition-gap wedge. 2,199 permanently-failing rows
+    # at the head of ORDER BY ts ASC monopolized every LIMIT-100 batch for 11
+    # days — zero forwards. Selection now orders by forward_attempts ASC
+    # first, so failing rows sink behind fresh work but are still retried
+    # once fresher rows drain (self-healing after the underlying repair, no
+    # parked/dead-letter state).
+    test "failing rows do not head-of-line block fresh rows", ctx do
+      insert_event = fn ts_offset_s, attempts ->
+        %{rows: [[event_id]]} =
+          Postgrex.query!(
+            UnitaresLeasePlane.DB,
+            """
+            INSERT INTO lease_plane.lease_plane_events
+              (ts, event_type, surface_id, surface_kind, advisory_mode,
+               payload, forward_attempts)
+            VALUES (now() - make_interval(secs => $1), 'acquire', $2,
+                    'dialectic', true, '{}'::jsonb, $3)
+            RETURNING event_id::text
+            """,
+            [ts_offset_s, ctx.surface, attempts]
+          )
+
+        event_id
+      end
+
+      poison_old = insert_event.(300, 7)
+      poison_older = insert_event.(600, 7)
+      fresh = insert_event.(30, 0)
+
+      # A batch smaller than the backlog must pick the fresh row first, even
+      # though both poison rows are older.
+      assert {:ok, [first]} = Repo.unforwarded_events(1, surface_id: ctx.surface)
+      assert first.event_id == fresh
+
+      # Failing rows are deprioritized, not dropped: a batch large enough for
+      # everything still includes them, oldest-first within the same attempt
+      # count.
+      assert {:ok, events} = Repo.unforwarded_events(10, surface_id: ctx.surface)
+      assert Enum.map(events, & &1.event_id) == [fresh, poison_older, poison_old]
+    end
+  end
+
   describe "status/1" do
     test "returns nil for unknown surface" do
       assert {:ok, nil} = UnitaresLeasePlane.status("test:elixir/never-acquired")
