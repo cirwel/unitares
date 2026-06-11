@@ -115,7 +115,17 @@ def test_standalone_read_tools_classified():
 def test_write_actions_never_in_exemption_sets():
     """THE drift guard: no mutating action may ever appear in a
     pre_onboard_actions set. A future edit that adds one fails here
-    before it opens an unbound write path."""
+    before it opens an unbound write path.
+
+    KNOWN LIMIT (council, PR #611): this guard reasons over action
+    NAMES — an argument-gated write inside a read-named action is
+    invisible to it. The one known instance, dialectic(get,
+    check_timeout=true) (reviewer reassignment + transcript appends +
+    phase flip), is closed by suppressing check_timeout for unbound
+    callers in the handler itself — pinned by
+    test_unbound_dialectic_get_ignores_check_timeout below. Any new
+    pre_onboard action that reads a mutation-triggering argument needs
+    the same handler-level suppression + pin."""
     writes = {
         "knowledge": {"store", "update", "note", "cleanup", "synthesize", "supersede", "audit"},
         "agent": {"update", "archive", "resume", "delete"},
@@ -144,6 +154,54 @@ def test_exemption_sets_match_declared_inventory():
     for tool, actions in expected.items():
         td = get_tool_definition(tool)
         assert td.pre_onboard_actions == frozenset(actions), tool
+
+
+@pytest.mark.asyncio
+async def test_unbound_dialectic_get_ignores_check_timeout():
+    """The argument-gated write inside the pre_onboard read: an unbound
+    caller passing check_timeout=true must get the plain read (fast
+    path), never the janitorial mutation sweep."""
+    from unittest.mock import AsyncMock
+    from src.mcp_handlers.dialectic import handlers as dh
+
+    fast = AsyncMock(return_value={"session_id": "s1", "phase": "thesis"})
+    stuck = AsyncMock()
+    with patch(
+        "src.mcp_handlers.context.get_context_agent_id", return_value=None
+    ), patch.object(dh, "load_session_as_dict", fast), patch.object(
+        dh, "check_reviewer_stuck", stuck
+    ):
+        result = await dh.handle_get_dialectic_session(
+            {"session_id": "s1", "check_timeout": True}
+        )
+
+    fast.assert_awaited_once()       # served as the read-only fast path
+    stuck.assert_not_awaited()       # the mutation sweep never ran
+    assert result
+
+
+@pytest.mark.asyncio
+async def test_bound_dialectic_get_keeps_check_timeout():
+    """Bound callers (and the background reaper) keep the janitorial
+    sweep — the suppression is unbound-only."""
+    from unittest.mock import AsyncMock
+    from src.mcp_handlers.dialectic import handlers as dh
+
+    fast = AsyncMock()
+    stuck = AsyncMock(return_value=False)
+    session = AsyncMock()
+    with patch(
+        "src.mcp_handlers.context.get_context_agent_id",
+        return_value="bound-agent",
+    ), patch.object(dh, "load_session_as_dict", fast), patch.object(
+        dh, "check_reviewer_stuck", stuck
+    ), patch.object(dh, "load_session", AsyncMock(return_value=session)):
+        await dh.handle_get_dialectic_session(
+            {"session_id": "s1", "check_timeout": True}
+        )
+
+    fast.assert_not_awaited()        # slow path taken
+    stuck.assert_awaited()           # the sweep ran for the bound caller
 
 
 # ---------------------------------------------------------------------------

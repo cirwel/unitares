@@ -118,7 +118,11 @@ class LlmAssistedDialecticParams(AgentIdentityMixin):
 
 class DialecticParams(AgentIdentityMixin):
     """Parameters for dialectic"""
-    action: Literal["get", "list", "quick", "request", "thesis", "antithesis", "synthesis", "reassign"] = Field(..., description="Operation: get, list, quick, request, thesis, antithesis, synthesis, reassign")
+    # default mirrors action_router's default_action="list" — the schema
+    # validated BEFORE the router and a required field here made
+    # dialectic({}) error despite the router's fallback (PR #611 council
+    # live battery, probe 3g).
+    action: Literal["get", "list", "quick", "request", "thesis", "antithesis", "synthesis", "reassign"] = Field("list", description="Operation: get, list, quick, request, thesis, antithesis, synthesis, reassign")
     session_id: Optional[str] = Field(None, description="Dialectic session ID")
     agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get or list)")
     status: Optional[str] = Field(None, description="Filter by phase (for action=list)")

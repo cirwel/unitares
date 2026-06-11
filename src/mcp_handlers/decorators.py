@@ -116,6 +116,7 @@ def mcp_tool(
             if pre_onboard_actions
             else None
         )
+        _default_action = default_action.lower() if default_action else None
 
         # Attach metadata to function for introspection
         func._mcp_tool_name = tool_name
@@ -235,7 +236,7 @@ def mcp_tool(
                 rate_limit_exempt=rate_limit_exempt,
                 requires_identity=requires_identity,
                 pre_onboard_actions=_pre_onboard_actions,
-                default_action=default_action,
+                default_action=_default_action,
             )
 
         return wrapper
@@ -325,8 +326,27 @@ def get_call_identity_requirement(tool_name: str, arguments) -> str:
         canonical, alias = resolve_tool_alias(tool_name)
         if alias is not None:
             implied_action = getattr(alias, "inject_action", None)
-    except Exception:
+            if implied_action:
+                # Normalize here so the membership check below has ONE
+                # authoritative normalization point regardless of how a
+                # future ToolAlias spells its inject_action.
+                implied_action = str(implied_action).lower()
+    except ImportError:
+        # Deferred/cold module load (test collection, import cycles) —
+        # judging on the raw tool_name fails closed, which is safe.
         pass
+    except Exception:
+        # Anything else is a REGRESSION in alias resolution with a
+        # security consequence (every alias call would refuse under
+        # strict) — fail closed but never silently (council fold,
+        # PR #611: the bare except ate a wrong-import-name bug during
+        # development).
+        logger.warning(
+            "get_call_identity_requirement: alias resolution failed for "
+            "%r — judging on the raw name (fails closed)",
+            tool_name,
+            exc_info=True,
+        )
 
     td = _TOOL_DEFINITIONS.get(canonical)
     if td is None:
@@ -339,8 +359,11 @@ def get_call_identity_requirement(tool_name: str, arguments) -> str:
     action = None
     if isinstance(arguments, dict):
         action = arguments.get("action") or arguments.get("op")
+    # Every branch below is already lowercase: explicit actions are
+    # lowered here, implied_action at alias resolution above,
+    # default_action and the exemption set at registration (mcp_tool).
     action = (str(action).lower() if action else None) or implied_action or td.default_action
-    if action and action.lower() in td.pre_onboard_actions:
+    if action and action in td.pre_onboard_actions:
         return "pre_onboard"
     return td.requires_identity
 
@@ -402,7 +425,13 @@ def action_router(
     _examples = examples or [f"{name}(action='{valid_actions[0]}')"]
 
     if pre_onboard_actions:
-        unknown = set(a.lower() for a in pre_onboard_actions) - set(valid_actions)
+        # Compare lowercase-to-lowercase: action keys are lowercase by
+        # convention everywhere today, but a mixed-case key would
+        # otherwise make this guard fire a confusing false positive on a
+        # CORRECT exemption (council fold, PR #611).
+        unknown = set(a.lower() for a in pre_onboard_actions) - set(
+            a.lower() for a in valid_actions
+        )
         if unknown:
             raise ValueError(
                 f"action_router {name!r}: pre_onboard_actions contains "
