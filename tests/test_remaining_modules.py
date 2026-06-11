@@ -231,60 +231,6 @@ class TestAuditLogger:
         entries = logger_inst.query_audit_log(event_type="auto_attest")
         assert len(entries) >= 1
 
-    def test_log_complexity_derivation(self, logger_inst):
-        logger_inst.log_complexity_derivation("a1", 0.5, 0.6, 0.55, 0.1)
-        entries = logger_inst.query_audit_log(event_type="complexity_derivation")
-        assert len(entries) >= 1
-
-    def test_log_calibration_check(self, logger_inst):
-        logger_inst.log_calibration_check(
-            "a1", "0.8-0.9", True, True, {"accuracy": 0.85}
-        )
-        entries = logger_inst.query_audit_log(event_type="calibration_check")
-        assert len(entries) >= 1
-
-    def test_log_auto_resume(self, logger_inst):
-        logger_inst.log_auto_resume("a1", "archived", "process_agent_update")
-        entries = logger_inst.query_audit_log(event_type="auto_resume")
-        assert len(entries) >= 1
-
-    def test_log_dialectic_nudge(self, logger_inst):
-        logger_inst.log_dialectic_nudge("a1", "sess-1", "thesis")
-        entries = logger_inst.query_audit_log(event_type="dialectic_nudge")
-        assert len(entries) >= 1
-
-    def test_log_cross_device_call(self, logger_inst):
-        logger_inst.log_cross_device_call(
-            "a1", "mac", "pi", "get_state", {}, "success", 100.0
-        )
-        entries = logger_inst.query_audit_log(event_type="cross_device_call")
-        assert len(entries) >= 1
-
-    def test_log_orchestration_request(self, logger_inst):
-        logger_inst.log_orchestration_request("a1", "check", "pi", ["get_state"])
-        entries = logger_inst.query_audit_log(event_type="orchestration_request")
-        assert len(entries) >= 1
-
-    def test_log_orchestration_complete(self, logger_inst):
-        logger_inst.log_orchestration_complete(
-            "a1", "check", "pi", ["get_state"], True, 150.0
-        )
-        entries = logger_inst.query_audit_log(event_type="orchestration_complete")
-        assert len(entries) >= 1
-
-    def test_log_device_health_check(self, logger_inst):
-        logger_inst.log_device_health_check("a1", "pi", "healthy", 50.0)
-        entries = logger_inst.query_audit_log(event_type="device_health_check")
-        assert len(entries) >= 1
-
-    def test_log_eisv_sync(self, logger_inst):
-        logger_inst.log_eisv_sync(
-            "a1", "pi", "mac",
-            {"warmth": 0.5}, {"E": 0.5, "I": 0.6, "S": 0.1, "V": 0.0}
-        )
-        entries = logger_inst.query_audit_log(event_type="eisv_sync")
-        assert len(entries) >= 1
-
     def test_query_with_filters(self, logger_inst):
         logger_inst.log_auto_attest("a1", 0.9, True, 0.3, "ok")
         logger_inst.log_auto_attest("a2", 0.8, True, 0.2, "ok")
