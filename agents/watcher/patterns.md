@@ -208,27 +208,15 @@ failure the caller needs to know about.
      experimental section for the original definition. -->
 
 
-### P008 — Unchecked shell input (severity: critical, violation_class: VOI)
+<!-- P008 has been demoted to the EXPERIMENTAL section below (2026-06-12).
+     The local model cannot apply the rule's own firing condition: both
+     historical findings flagged safe LIST-FORM subprocess calls (and not
+     even the call lines — adjacent lines that merely mentioned subprocess
+     context). 100% dismiss rate over 2 months, zero true positives; the
+     `p008_actually_fires` AST post-filter in agent.py caught every FP and
+     stays in place as defense-in-depth should the model emit P008 anyway.
+     See the experimental section for the original definition. -->
 
-Fire **only** when both conditions hold:
-1. The call is `subprocess.*(..., shell=True)` OR `os.system(...)` OR `os.popen(...)`.
-2. The command string includes user/external input without `shlex.quote`.
-
-**Do NOT fire** on list-form subprocess calls — those bypass the shell entirely
-and are the recommended safe form. Examples that must NOT be flagged:
-```python
-subprocess.run(["find", path, "-name", "*.py"], check=True)
-subprocess.run(["wc", "-l"] + files, capture_output=True)
-subprocess.Popen(["git", "log", "--oneline"])
-```
-
-Examples that SHOULD be flagged:
-```python
-subprocess.run(f"find {path} -name '*.py'", shell=True)  # unquoted interpolation
-os.system("rm -rf " + user_input)                         # shell + external input
-```
-
-**Hint template:** `shell injection — use shlex.quote or list-form subprocess`
 
 ### P009 — Runaway polling without iteration cap (severity: medium, violation_class: ENT)
 
@@ -472,6 +460,31 @@ no per-pool tracking exists. See `src/db/postgres_backend.py:170-205` for the
 post-fix reference shape.
 
 **Seen in:** `src/db/postgres_backend.py` pool mismatch bug
+
+### EXP-P008 — Unchecked shell input (critical, violation_class: VOI)
+
+Fire **only** when both conditions hold:
+1. The call is `subprocess.*(..., shell=True)` OR `os.system(...)` OR `os.popen(...)`.
+2. The command string includes user/external input without `shlex.quote`.
+
+List-form subprocess calls (`subprocess.run(["wc", "-l"] + files)`) bypass the
+shell entirely and must NOT be flagged.
+
+**Why disabled (2026-06-12):** the local model cannot reliably distinguish
+shell-form from list-form subprocess calls — both historical findings
+(chronicler/scrapers.py:63 and :71, 2026-04-23) flagged lines NEAR safe
+list-form calls, neither of which used `shell=True`. 100% dismiss rate, zero
+true positives in 2 months. The deterministic `p008_actually_fires` AST
+post-filter in `agent.py` (commit d37c1b57) correctly suppressed every FP and
+remains active as defense-in-depth. Re-promote when a model can apply
+condition (1) — i.e. actually verify `shell=True` is present — or replace
+with a pure-AST detector that doesn't need the LLM at all (the post-filter is
+already 90% of one).
+
+**Seen in:** no true positives to date; rule imported from generic security
+practice rather than a project incident.
+
+**Hint template:** `shell injection — use shlex.quote or list-form subprocess`
 
 ## Adding new patterns
 
