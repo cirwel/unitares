@@ -207,7 +207,7 @@ class TestSentinelTriggerNamesMatchEmittedTypes:
     Discovery 2026-04-25T10:49:00 documented production divergence: Vigil watched for
     `verdict_distribution_shift` / `correlated_governance_events`, but Sentinel emits
     `verdict_shift` / `correlated_events` (agents/sentinel/agent.py:249,266). The
-    short names are also the canonical taxonomy entries (agents/common/violation_taxonomy.yaml).
+    short names are also the canonical taxonomy entries (src/violation_taxonomy.yaml).
     Tests previously passed because their fixtures used the long names too — the
     integration-level mismatch was invisible.
     """

@@ -1,7 +1,12 @@
 """Violation taxonomy loader, validator, and reverse-lookup index.
 
-Loads agents/common/violation_taxonomy.yaml once, builds a reverse index
-from surface IDs to class IDs. Used by Watcher and Sentinel at init.
+Loads src/violation_taxonomy.yaml once, builds a reverse index from surface
+IDs to class IDs. The taxonomy is server-owned fleet vocabulary — it maps
+Watcher patterns, Sentinel finding types, and broadcast event types to
+violation classes. In-repo residents and external consumers read it via the
+``/v1/taxonomy`` endpoint rather than importing this module; cross-contract
+tests (``tests/test_sentinel_taxonomy.py``) pin that resident-emitted names
+stay mapped.
 """
 
 from __future__ import annotations

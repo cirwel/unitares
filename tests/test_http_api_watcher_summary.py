@@ -13,40 +13,75 @@ from src.http_api import _watcher_findings_path, _watcher_summary_from_rows
 
 
 class TestFindingsPathMatchesWriter:
-    """The reader (http_api) and the writer (Watcher agent) must resolve the
-    same findings.jsonl. They previously diverged across the dev/deploy
-    checkout split and the dashboard read zeroes."""
+    """The reader (src.watcher_state_reader) and the writer
+    (agents.watcher._util) must resolve the same findings.jsonl. They
+    previously diverged across the dev/deploy checkout split and the dashboard
+    read zeroes.
+
+    The two implementations are deliberately import-independent — the server
+    must not import resident example code — so this class IS the contract
+    holding them together: if either side's resolution drifts, fail here
+    instead of silently zeroing the panel."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_both_sides(self, monkeypatch, tmp_path):
+        import agents.watcher._util as util
+
+        import src.watcher_state_reader as reader
+
+        for mod in (util, reader):
+            monkeypatch.setattr(mod, "_state_dir_cache", None)
+            monkeypatch.setattr(mod, "_legacy_migration_done", True)  # skip fs work
+            monkeypatch.setattr(mod, "_LEGACY_STATE_DIR", tmp_path / "missing-legacy")
+        yield
+
+    def test_default_resolution_parity(self, monkeypatch, tmp_path):
+        import agents.watcher._util as util
+
+        import src.watcher_state_reader as reader
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.delenv("UNITARES_WATCHER_DATA_DIR", raising=False)
+
+        assert reader.watcher_state_dir() == util.watcher_state_dir()
+        assert reader.watcher_state_dir() == tmp_path / ".unitares" / "watcher"
+
+    def test_env_override_parity_expands_user(self, monkeypatch, tmp_path):
+        import agents.watcher._util as util
+
+        import src.watcher_state_reader as reader
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("UNITARES_WATCHER_DATA_DIR", "~/elsewhere")
+
+        assert reader.watcher_state_dir() == util.watcher_state_dir()
+        assert reader.watcher_state_dir() == tmp_path / "elsewhere"
 
     def test_reader_path_is_under_shared_state_dir(self, monkeypatch, tmp_path):
         import agents.watcher._util as util
 
-        monkeypatch.setattr(util, "_state_dir_cache", None)
-        monkeypatch.setattr(util, "_legacy_migration_done", True)  # skip fs work
-        monkeypatch.setattr(util, "_LEGACY_STATE_DIR", tmp_path / "missing-legacy")
         monkeypatch.setenv("UNITARES_WATCHER_DATA_DIR", str(tmp_path / "shared"))
 
-        # Reader resolves through the same shared resolver the writer uses.
+        # Reader and writer resolve the same shared dir from the same env.
         assert _watcher_findings_path() == util.watcher_state_dir() / "findings.jsonl"
         assert _watcher_findings_path() == tmp_path / "shared" / "findings.jsonl"
 
     def test_falls_back_to_legacy_while_shared_empty(self, monkeypatch, tmp_path):
-        import agents.watcher._util as util
+        import src.watcher_state_reader as reader
 
         legacy = tmp_path / "legacy"
         legacy.mkdir()
         (legacy / "findings.jsonl").write_text('{"pattern":"P001"}\n')
         shared = tmp_path / "shared"
 
-        monkeypatch.setattr(util, "_state_dir_cache", None)
-        monkeypatch.setattr(util, "_legacy_migration_done", True)  # skip migration copy
-        monkeypatch.setattr(util, "_LEGACY_STATE_DIR", legacy)
+        monkeypatch.setattr(reader, "_LEGACY_STATE_DIR", legacy)
         monkeypatch.setenv("UNITARES_WATCHER_DATA_DIR", str(shared))
 
         # Shared dir has no data yet → read the live legacy file, not a frozen blank.
         assert _watcher_findings_path() == legacy / "findings.jsonl"
 
     def test_prefers_shared_once_populated(self, monkeypatch, tmp_path):
-        import agents.watcher._util as util
+        import src.watcher_state_reader as reader
 
         legacy = tmp_path / "legacy"
         legacy.mkdir()
@@ -55,12 +90,28 @@ class TestFindingsPathMatchesWriter:
         shared.mkdir()
         (shared / "findings.jsonl").write_text("shared\n")
 
-        monkeypatch.setattr(util, "_state_dir_cache", None)
-        monkeypatch.setattr(util, "_legacy_migration_done", True)
-        monkeypatch.setattr(util, "_LEGACY_STATE_DIR", legacy)
+        monkeypatch.setattr(reader, "_LEGACY_STATE_DIR", legacy)
         monkeypatch.setenv("UNITARES_WATCHER_DATA_DIR", str(shared))
 
         assert _watcher_findings_path() == shared / "findings.jsonl"
+
+    def test_migration_copies_legacy_state_once(self, monkeypatch, tmp_path):
+        import src.watcher_state_reader as reader
+
+        legacy = tmp_path / "legacy"
+        legacy.mkdir()
+        (legacy / "findings.jsonl").write_text("from-legacy\n")
+        shared = tmp_path / "shared"
+
+        monkeypatch.setattr(reader, "_legacy_migration_done", False)
+        monkeypatch.setattr(reader, "_LEGACY_STATE_DIR", legacy)
+        monkeypatch.setenv("UNITARES_WATCHER_DATA_DIR", str(shared))
+
+        reader.migrate_legacy_watcher_state()
+
+        assert (shared / "findings.jsonl").read_text() == "from-legacy\n"
+        # Source left untouched so an old-code writer mid-rollout isn't disrupted.
+        assert (legacy / "findings.jsonl").exists()
 
 
 NOW = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
