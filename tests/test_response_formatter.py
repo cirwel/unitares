@@ -964,6 +964,21 @@ def _make_governance_state_mocks():
     return mock_gs_module, mock_core_module
 
 
+def _policy_enforcement_fields():
+    return {
+        "policy_evaluation": {
+            "policy_name": "monitor_decision",
+            "action": "pause",
+            "measurement_role": "EISV/risk/coherence are policy inputs, not the actuator itself.",
+        },
+        "enforcement": {
+            "requested": True,
+            "applied": False,
+            "mode": "circuit_breaker_candidate",
+        },
+    }
+
+
 class TestFormatStandardPreservesPredictionId:
     """_format_standard must pass prediction_id and warnings through (spec §6 + §2).
 
@@ -1001,6 +1016,16 @@ class TestFormatStandardPreservesPredictionId:
         }
         result = self._call_format_standard(response_data)
         assert result.get("warnings") == ["evidence record failed for tool=pytest"]
+
+    def test_policy_and_enforcement_pass_through(self):
+        response_data = {
+            "decision": {"action": "pause"},
+            "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
+            **_policy_enforcement_fields(),
+        }
+        result = self._call_format_standard(response_data)
+        assert result.get("policy_evaluation") == response_data["policy_evaluation"]
+        assert result.get("enforcement") == response_data["enforcement"]
 
     def test_no_prediction_id_when_absent(self):
         response_data = {
@@ -1040,6 +1065,17 @@ class TestFormatMirrorPreservesPredictionId:
         result = _format_mirror(response_data, saved_trust_tier=None, meta=None)
         assert result.get("warnings") == ["W"]
 
+    def test_policy_and_enforcement_pass_through(self):
+        from src.mcp_handlers.response_formatter import _format_mirror
+        response_data = {
+            "decision": {"action": "pause"},
+            "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
+            **_policy_enforcement_fields(),
+        }
+        result = _format_mirror(response_data, saved_trust_tier=None, meta=None)
+        assert result.get("policy_evaluation") == response_data["policy_evaluation"]
+        assert result.get("enforcement") == response_data["enforcement"]
+
     def test_no_prediction_id_when_absent(self):
         from src.mcp_handlers.response_formatter import _format_mirror
         response_data = {
@@ -1070,6 +1106,17 @@ class TestFormatCompactPreservesPredictionId:
         }
         result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
         assert result.get("warnings") == ["compact-warning"]
+
+    def test_policy_and_enforcement_pass_through(self):
+        from src.mcp_handlers.response_formatter import _format_compact
+        response_data = {
+            "decision": {"action": "pause"},
+            "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
+            **_policy_enforcement_fields(),
+        }
+        result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
+        assert result.get("policy_evaluation") == response_data["policy_evaluation"]
+        assert result.get("enforcement") == response_data["enforcement"]
 
     def test_no_prediction_id_when_absent(self):
         from src.mcp_handlers.response_formatter import _format_compact

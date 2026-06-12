@@ -73,6 +73,51 @@ class TestListAgentsLite:
             assert "test_agent_1" not in ids
 
     @pytest.mark.asyncio
+    async def test_identity_health_buckets_test_agents_separately(self, mock_mcp_server):
+        mock_mcp_server.agent_metadata = {
+            "real-agent": make_agent_meta(label="Real", total_updates=10),
+            # itest-labeled with zero updates: must land in "test", not "real"
+            "11111111-aaaa-bbbb-cccc-000000000001": make_agent_meta(
+                label="itest-plugin#deadbeef_11111111", total_updates=0
+            ),
+            "22222222-aaaa-bbbb-cccc-000000000002": make_agent_meta(
+                label="cli-pytest-worker", total_updates=1
+            ),
+            # Unlabeled zero-update artifact: ghost, even though nothing test-y
+            "33333333-aaaa-bbbb-cccc-000000000003": make_agent_meta(
+                label=None, total_updates=0
+            ),
+        }
+
+        with patch_lifecycle_server(mock_mcp_server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({"lite": True})
+
+            data = json.loads(result[0].text)
+            health = data["identity_health"]
+            assert health["test"] == 2
+            assert health["ghosts"] == 1
+            assert health["real"] == 1  # total 4 - 1 ghost - 2 test
+
+    @pytest.mark.asyncio
+    async def test_identity_health_ghost_wins_over_test_pattern(self, mock_mcp_server):
+        # Unlabeled zero-update agent whose id matches the test pattern:
+        # buckets are mutually exclusive and ghost classification wins.
+        mock_mcp_server.agent_metadata = {
+            "test_orphan_1": make_agent_meta(label=None, total_updates=0),
+        }
+
+        with patch_lifecycle_server(mock_mcp_server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({"lite": True})
+
+            data = json.loads(result[0].text)
+            health = data["identity_health"]
+            assert health["ghosts"] == 1
+            assert health["test"] == 0
+            assert health["real"] == 0
+
+    @pytest.mark.asyncio
     async def test_includes_test_agents_when_requested(self, mock_mcp_server):
         mock_mcp_server.agent_metadata = {
             "real-agent": make_agent_meta(label="Real"),

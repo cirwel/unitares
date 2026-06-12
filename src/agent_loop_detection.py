@@ -43,6 +43,31 @@ _governance_pause_timestamps: deque[datetime] = deque(maxlen=100)
 _background_tasks: set[asyncio.Task] = set()
 
 
+def mark_circuit_breaker_enforcement_applied(
+    result: Dict[str, Any],
+    *,
+    actor: str,
+    effect: str,
+) -> None:
+    """Mark that the runtime actuator applied a policy-requested pause.
+
+    ``monitor_result`` records policy evaluation and an unapplied enforcement
+    candidate. The authenticated update boundary is where that candidate becomes
+    an actual circuit breaker by mutating agent metadata. Keep the mutation
+    explicit so measurement, policy, and actuator state remain inspectable.
+    """
+    result["enforcement"] = {
+        "requested": True,
+        "applied": True,
+        "mode": "circuit_breaker",
+        "actor": actor,
+        "effect": effect,
+        "note": "Circuit breaker applied at the runtime boundary after policy evaluation.",
+    }
+    result["paused"] = True
+    result["circuit_breaker_triggered"] = True
+
+
 def get_circuit_breaker_telemetry() -> Dict[str, Any]:
     """Return governance circuit breaker telemetry snapshot."""
     now = datetime.now(timezone.utc)
@@ -541,8 +566,11 @@ async def process_update_authenticated_async(
             decision_reason = result.get('decision', {}).get('reason', 'Circuit breaker triggered')
             meta.add_lifecycle_event("paused", decision_reason)
             logger.warning(f"⚠️  Circuit breaker triggered for agent '{agent_id}': {decision_reason}")
-            result["paused"] = True
-            result["circuit_breaker_triggered"] = True
+            mark_circuit_breaker_enforcement_applied(
+                result,
+                actor="agent_loop_detection",
+                effect="agent_metadata.status=paused",
+            )
 
             # P011: persist paused_at + the lifecycle event so they survive
             # the next load_metadata_async(force=True). Without this, the

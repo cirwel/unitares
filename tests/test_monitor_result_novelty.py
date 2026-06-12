@@ -84,6 +84,88 @@ def test_monitor_without_attribute_uses_getattr_default():
     assert bare._last_surfaced_complexity_gap == pytest.approx(0.4)
 
 
+def test_build_result_exposes_policy_and_unapplied_enforcement_layers():
+    """process_update payloads should not collapse EISV measurement,
+    policy choice, and actuator state into one opaque decision field."""
+    from src.monitor_result import build_result
+
+    monitor = SimpleNamespace(
+        agent_id="agent-policy-separation",
+        _last_continuity_metrics=None,
+        _last_restorative_status=None,
+        _last_drift_vector=None,
+        _gains_modulated=False,
+        adaptive_governor=None,
+        state=SimpleNamespace(CE_history=[], resonance_events=0, damping_applied_count=0),
+    )
+    decision = {
+        "action": "pause",
+        "sub_action": "coherence_pause",
+        "reason": "Coherence needs attention",
+        "guidance": "Simplify and regroup",
+        "critical": True,
+        "basin": "low",
+        "margin": "critical",
+        "nearest_edge": "coherence",
+    }
+    metrics = {
+        "E": 0.42,
+        "I": 0.38,
+        "S": 0.41,
+        "V": -0.18,
+        "coherence": 0.31,
+        "risk_score": 0.72,
+        "phi": 0.24,
+        "verdict": "high-risk",
+        "void_active": False,
+    }
+    oscillation = SimpleNamespace(oi=0.0, flips=0, resonant=False, trigger=None)
+
+    result = build_result(
+        monitor,
+        status="critical",
+        decision=decision,
+        metrics=metrics,
+        confidence=0.67,
+        confidence_metadata={"source": "external"},
+        task_type_adjustment=None,
+        trajectory_validation=None,
+        oscillation_state=oscillation,
+        response_tier="proceed",
+        cirs_result=None,
+        damping_result=None,
+    )
+
+    assert result["decision"] == decision
+    assert result["policy_evaluation"] == {
+        "policy_name": "monitor_decision",
+        "policy_version": "v1",
+        "action": "pause",
+        "sub_action": "coherence_pause",
+        "reason": "Coherence needs attention",
+        "guidance": "Simplify and regroup",
+        "inputs": {
+            "basin": "low",
+            "coherence": 0.31,
+            "margin": "critical",
+            "nearest_edge": "coherence",
+            "phi": 0.24,
+            "risk_score": 0.72,
+            "verdict": "high-risk",
+            "void_active": False,
+        },
+        "measurement_role": "EISV/risk/coherence are policy inputs, not the actuator itself.",
+    }
+    assert result["enforcement"] == {
+        "requested": True,
+        "applied": False,
+        "mode": "circuit_breaker_candidate",
+        "actor": None,
+        "effect": None,
+        "note": "Policy requested enforcement; actuator state is applied by the caller/runtime boundary.",
+    }
+
+
 def test_simulate_update_does_not_consume_novelty():
     """Council fold (PR #603): simulate_update runs the full governance
     cycle, including result building, which advances the novelty gate.

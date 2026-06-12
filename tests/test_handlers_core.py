@@ -394,6 +394,13 @@ class TestGetGovernanceMetrics:
             assert data["primary_eisv"]["E"] == 0.7
             assert data["ode_eisv"]["E"] == 0.65
             assert "state_semantics" in data
+            semantics = data["state_semantics"]
+            assert semantics["measurement_policy_contract"] == (
+                "EISV measurements feed governance policy; policy evaluation chooses guidance/action; "
+                "enforcement is a separate runtime boundary."
+            )
+            assert "feeds governance policy" in semantics["behavioral_eisv_role"]
+            assert "Determines proceed/guide/pause/reject" not in semantics["behavioral_eisv_role"]
 
     @pytest.mark.asyncio
     async def test_get_metrics_standard_mode_wraps_basin_mode_verdict(self, mock_mcp_server):

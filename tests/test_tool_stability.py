@@ -161,6 +161,23 @@ class TestAgentExperienceAliases:
         assert alias.reason == "intuitive_alias"
         assert alias.inject_action == inject_action
 
+    def test_experience_alias_map_is_the_flagged_set(self):
+        """experience_alias_map() is the single source the discoverability
+        surfaces key off — it must be exactly the experience-flagged
+        aliases, mapped to their canonical tool."""
+        from src.mcp_handlers.tool_stability import experience_alias_map
+
+        mapping = experience_alias_map()
+        assert mapping == {
+            "start_session": "onboard",
+            "sync_state": "process_agent_update",
+            "check_working_state": "get_governance_metrics",
+            "search_shared_memory": "knowledge",
+            "record_result": "outcome_event",
+            "request_review": "dialectic",
+        }
+        assert set(mapping) == {n for n, a in _TOOL_ALIASES.items() if a.experience}
+
 
 # ============================================================================
 # get_tool_stability
