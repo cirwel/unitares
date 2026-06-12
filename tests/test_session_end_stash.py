@@ -47,6 +47,8 @@ def git_repo(tmp_path):
         subprocess.run(["git", "init", "-q", "-b", "main"], check=True)
         subprocess.run(["git", "config", "user.email", "t@t"], check=True)
         subprocess.run(["git", "config", "user.name", "t"], check=True)
+        # Hermetic: host config may force commit signing (e.g. remote containers)
+        subprocess.run(["git", "config", "commit.gpgsign", "false"], check=True)
         (repo / "seed.py").write_text("seed\n")
         subprocess.run(["git", "add", "seed.py"], check=True)
         subprocess.run(["git", "commit", "-q", "-m", "seed"], check=True)

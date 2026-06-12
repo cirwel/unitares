@@ -32,7 +32,6 @@ import sys
 import json
 import asyncio
 import argparse
-import os
 import httpx
 from pathlib import Path
 from typing import Dict, Any, Optional

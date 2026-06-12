@@ -28,7 +28,7 @@ import json
 import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import Dict, Optional
 import logging
 
 logger = logging.getLogger(__name__)

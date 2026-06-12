@@ -1,0 +1,26 @@
+{
+  "build_date": "<MASKED_TIMESTAMP>",
+  "current_pid": "<MASKED_PID>",
+  "current_uptime_formatted": "<MASKED_TIMESTAMP>",
+  "current_uptime_seconds": "<MASKED_COUNTER>",
+  "health": "healthy",
+  "max_keep_processes": 3,
+  "ok": true,
+  "pid_file": "/repo/data/.mcp_server.pid",
+  "pid_file_exists": true,
+  "protocol_version": "wave3a.v1",
+  "server_processes": [
+    {
+      "is_current": true,
+      "pid": "<MASKED_PID>",
+      "status": "running",
+      "uptime_formatted": "<MASKED_TIMESTAMP>",
+      "uptime_seconds": "<MASKED_COUNTER>"
+    }
+  ],
+  "server_version": "0.42.0",
+  "tool_count": 100,
+  "total_server_processes": 1,
+  "transport": "HTTP",
+  "version": "0.42.0"
+}

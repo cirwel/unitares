@@ -8,7 +8,6 @@ and project-level constants shared across agent_state sub-modules.
 from __future__ import annotations
 
 import sys
-import os
 import threading
 from pathlib import Path
 from dataclasses import dataclass, asdict

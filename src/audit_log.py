@@ -6,7 +6,6 @@ JSONL is the raw truth log. PostgreSQL provides queryable indexing.
 """
 
 import json
-import sys
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Iterator, List, Optional
@@ -221,119 +220,6 @@ class AuditLogger:
         )
         self._write_entry(entry)
     
-    def log_complexity_derivation(self, agent_id: str, reported_complexity: Optional[float],
-                                 derived_complexity: float, final_complexity: float,
-                                 discrepancy: Optional[float] = None, details: Dict = None):
-        """
-        Log complexity derivation for tracking and calibration.
-        
-        Tracks reported vs derived complexity to:
-        - Calibrate the 0.3 discrepancy threshold
-        - Identify gaming attempts
-        - Validate effectiveness of derivation
-        """
-        entry = AuditEntry(
-            timestamp=datetime.now().isoformat(),
-            agent_id=agent_id,
-            event_type="complexity_derivation",
-            confidence=1.0,  # Not a confidence event, but required field
-            details={
-                "reported_complexity": reported_complexity,
-                "derived_complexity": round(derived_complexity, 3),
-                "final_complexity": round(final_complexity, 3),
-                "discrepancy": round(discrepancy, 3) if discrepancy is not None else None,
-                "discrepancy_threshold_exceeded": discrepancy is not None and abs(discrepancy) > 0.3 if discrepancy is not None else False,
-                **(details or {})
-            }
-        )
-        self._write_entry(entry)
-    
-    def log_calibration_check(self, agent_id: str, confidence_bin: str, 
-                            predicted_correct: bool, actual_correct: bool,
-                            calibration_metrics: Dict):
-        """Log a calibration check result"""
-        entry = AuditEntry(
-            timestamp=datetime.now().isoformat(),
-            agent_id=agent_id,
-            event_type="calibration_check",
-            confidence=float(confidence_bin.split('-')[0]) if '-' in confidence_bin else 0.0,
-            details={
-                "confidence_bin": confidence_bin,
-                "predicted_correct": predicted_correct,
-                "actual_correct": actual_correct,
-                "calibration_metrics": calibration_metrics
-            }
-        )
-        self._write_entry(entry)
-    
-    def log_auto_resume(self, agent_id: str, previous_status: str, 
-                       trigger: str, archived_at: Optional[str] = None,
-                       details: Optional[Dict] = None):
-        """
-        Log an auto-resume event when an archived agent engages with the system.
-        
-        Args:
-            agent_id: Agent identifier
-            previous_status: Previous lifecycle status (should be "archived")
-            trigger: What triggered the auto-resume (e.g., "process_agent_update")
-            archived_at: ISO timestamp when agent was archived (if available)
-            details: Additional context (e.g., days_since_archive)
-        """
-        entry = AuditEntry(
-            timestamp=datetime.now().isoformat(),
-            agent_id=agent_id,
-            event_type="auto_resume",
-            confidence=1.0,  # Not a confidence event, but required field
-            details={
-                "previous_status": previous_status,
-                "trigger": trigger,
-                "archived_at": archived_at,
-                **(details or {})
-            }
-        )
-        self._write_entry(entry)
-
-    def log_identity_claim(self, agent_id: str, claimed_name: str,
-                          session_key: str, details: Dict = None):
-        """Log an identity claim event (name-based identity resolution)."""
-        entry = AuditEntry(
-            timestamp=datetime.now().isoformat(),
-            agent_id=agent_id,
-            event_type="identity_claim",
-            confidence=1.0,
-            details={
-                "claimed_name": claimed_name,
-                "session_key": session_key,
-                **(details or {})
-            }
-        )
-        self._write_entry(entry)
-
-    def log_dialectic_nudge(self, agent_id: str, session_id: str, phase: str,
-                            next_actor: Optional[str] = None,
-                            idle_seconds: Optional[float] = None,
-                            details: Optional[Dict] = None):
-        """
-        Log a lightweight dialectic/exploration 'nudge' event.
-
-        This is intentionally low-ceremony and does NOT mutate session transcripts
-        (so it won't interfere with timeout/auto-resolve logic).
-        """
-        entry = AuditEntry(
-            timestamp=datetime.now().isoformat(),
-            agent_id=agent_id or "system",
-            event_type="dialectic_nudge",
-            confidence=1.0,
-            details={
-                "session_id": session_id,
-                "phase": phase,
-                "next_actor": next_actor,
-                "idle_seconds": idle_seconds,
-                **(details or {})
-            }
-        )
-        self._write_entry(entry)
-    
     # NOTE: log_knowledge_visibility_warning removed (knowledge layer archived November 28, 2025)
 
     # ============================================================
@@ -508,6 +394,7 @@ class AuditLogger:
             }
         )
         self._write_entry(entry)
+
 
     def log_concurrent_session_binding_observed(
         self,

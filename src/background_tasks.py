@@ -7,7 +7,6 @@ Each task runs as an asyncio coroutine, started during server initialization.
 
 import asyncio
 import gzip
-import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1750,6 +1749,12 @@ def start_all_background_tasks(connection_tracker, set_ready):
 
     _supervised_create_task(perf_monitor_persist_task(interval_minutes=5.0), name="perf_monitor_persist")
     logger.info("[PERF_PERSIST] Started perf_monitor snapshot persistence (every 5m)")
+
+    # Wave 3 §3.2 cutover 503-rate halt aggregator (§14 prereq PR #10).
+    # Inert unless WAVE3_CUTOVER_503_AGGREGATOR is set; the task logs and
+    # returns immediately when the flag is off.
+    from src.mcp_transport import cutover_503_aggregator_task
+    _supervised_create_task(cutover_503_aggregator_task(), name="cutover_503_aggregator")
 
     _supervised_create_task(periodic_telemetry_rotation(), name="telemetry_rotation")
     _supervised_create_task(periodic_audit_log_rotation(), name="audit_log_rotation")

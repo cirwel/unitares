@@ -407,3 +407,54 @@ def test_get_awaiting_facilitation_recovery():
     r = get_awaiting_facilitation_recovery("session-123")
     assert "facilitation" in r["action"].lower()
     assert "session-123" in str(r["what_you_can_do"])
+
+
+# ============================================================================
+# dialectic_reviewer_reassigned audit emission (Wave-3 prereq PR #9):
+# disconfirmer (F)'s reassignment-rate metric had NO event-stream source
+# (transcript-only, zero %reassign% audit rows all-time). The single
+# chokepoint _apply_reviewer_reassignment now emits it.
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_reassignment_emits_audit_event():
+    session = _make_session()
+    emit = AsyncMock(return_value=True)
+    with patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock), \
+         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch("src.audit_db.append_audit_event_async", emit):
+        from src.mcp_handlers.dialectic.handlers import _apply_reviewer_reassignment
+        result = await _apply_reviewer_reassignment(
+            session.session_id, session, "agent-new", reason="stuck reviewer",
+        )
+
+    assert result["new_reviewer_id"] == "agent-new"
+    emit.assert_awaited_once()
+    event = emit.await_args.args[0]
+    assert event["event_type"] == "dialectic_reviewer_reassigned"
+    # Top-level session_id feeds the indexed audit.events column
+    # (review fold: nested-only landed the column NULL).
+    assert event["session_id"] == session.session_id
+    assert event["details"]["session_id"] == session.session_id
+    assert event["details"]["old_reviewer_id"] == "agent-reviewer"
+    assert event["details"]["new_reviewer_id"] == "agent-new"
+    assert event["details"]["reason"] == "stuck reviewer"
+
+
+@pytest.mark.asyncio
+async def test_reassignment_emit_failure_is_fail_soft():
+    """The reassignment has already committed when the emit runs —
+    observability failure must not propagate."""
+    session = _make_session()
+    emit = AsyncMock(side_effect=RuntimeError("audit db down"))
+    with patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock), \
+         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch("src.audit_db.append_audit_event_async", emit):
+        from src.mcp_handlers.dialectic.handlers import _apply_reviewer_reassignment
+        result = await _apply_reviewer_reassignment(
+            session.session_id, session, "agent-new", reason="r",
+        )
+
+    assert result["new_reviewer_id"] == "agent-new"
+    assert session.reviewer_agent_id == "agent-new"

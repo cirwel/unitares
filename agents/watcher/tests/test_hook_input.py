@@ -171,6 +171,8 @@ def test_extract_regions_works_against_real_repo(hook_input_module, tmp_path):
         subprocess.run(["git", "init", "-q"], check=True)
         subprocess.run(["git", "config", "user.email", "t@t"], check=True)
         subprocess.run(["git", "config", "user.name", "t"], check=True)
+        # Hermetic: host config may force commit signing (e.g. remote containers)
+        subprocess.run(["git", "config", "commit.gpgsign", "false"], check=True)
         target = repo / "foo.py"
         target.write_text("\n".join(f"line{i}" for i in range(1, 51)) + "\n")
         subprocess.run(["git", "add", "foo.py"], check=True)

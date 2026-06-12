@@ -32,7 +32,6 @@ import os
 import sys
 from dataclasses import dataclass, asdict
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional
 
 import psycopg2  # type: ignore
 import psycopg2.extras  # type: ignore

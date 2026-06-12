@@ -26,7 +26,7 @@ class ToolAlias:
     """Alias mapping for renamed/consolidated tools"""
     old_name: str
     new_name: str
-    reason: str  # "renamed", "consolidated", "deprecated"
+    reason: str  # "renamed", "consolidated", "deprecated", "intuitive_alias"
     deprecated_since: Optional[datetime] = None
     migration_note: Optional[str] = None
     inject_action: Optional[str] = None  # For consolidated tools: auto-inject this action parameter
@@ -34,6 +34,7 @@ class ToolAlias:
     # scale objects) before validation; canonical tools stay strict. Runs in
     # resolve_alias; transforms are disclosed via normalized_parameters.
     param_normalizer: Optional[ParamNormalizer] = None
+    experience: bool = False  # Agent-experience alias: response gets the normalized envelope
 
 @dataclass
 class ToolLifecycle:
@@ -59,6 +60,66 @@ class ToolLifecycle:
 _CHECKIN_COMPLEXITY_NORMALIZER = normalize_unit_interval("complexity")
 
 _TOOL_ALIASES: Dict[str, ToolAlias] = {
+    # Agent workflow aliases — first-class UX names for the core loop.
+    # These are intentionally advertised/registered, unlike most historical
+    # compatibility aliases, so cold MCP agents can discover task verbs.
+    "start_session": ToolAlias(
+        old_name="start_session",
+        new_name="onboard",
+        reason="intuitive_alias",
+        migration_note=(
+            "Workflow alias for onboard(force_new=true, parent_agent_id=...). "
+            "Starts a fresh process identity or declares lineage."
+        ),
+    ),
+    "sync_state": ToolAlias(
+        old_name="sync_state",
+        new_name="process_agent_update",
+        reason="intuitive_alias",
+        migration_note=(
+            "Workflow alias for process_agent_update(response_text='...', "
+            "complexity=..., confidence=...)."
+        ),
+    ),
+    "check_working_state": ToolAlias(
+        old_name="check_working_state",
+        new_name="get_governance_metrics",
+        reason="intuitive_alias",
+        migration_note=(
+            "Workflow alias for get_governance_metrics(). Reads current EISV "
+            "state without writing a check-in."
+        ),
+    ),
+    "search_shared_memory": ToolAlias(
+        old_name="search_shared_memory",
+        new_name="knowledge",
+        reason="intuitive_alias",
+        migration_note=(
+            "Workflow alias for knowledge(action='search', query='...'). "
+            "Search shared memory before writing a duplicate discovery."
+        ),
+        inject_action="search",
+    ),
+    "record_result": ToolAlias(
+        old_name="record_result",
+        new_name="outcome_event",
+        reason="intuitive_alias",
+        migration_note=(
+            "Workflow alias for outcome_event(...). Records the real outcome "
+            "of a task, test, tool call, or external validation signal."
+        ),
+    ),
+    "request_review": ToolAlias(
+        old_name="request_review",
+        new_name="dialectic",
+        reason="intuitive_alias",
+        migration_note=(
+            "Workflow alias for dialectic(action='request', "
+            "issue_description='...'). Starts structured review/recovery."
+        ),
+        inject_action="request",
+    ),
+
     # Identity tools - all point to identity() (the primary identity tool)
     # NOTE: who_am_i has its own handler in admin.py, so NOT aliased
     #
@@ -140,13 +201,6 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         new_name="process_agent_update",
         reason="intuitive_alias",
         migration_note="Use process_agent_update() to log your work",
-        param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
-    ),
-    "sync_state": ToolAlias(
-        old_name="sync_state",
-        new_name="process_agent_update",
-        reason="intuitive_alias",
-        migration_note="Use process_agent_update() to sync your state",
         param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
     ),
     "authenticate": ToolAlias(
@@ -325,6 +379,41 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         migration_note="Use knowledge(action='cleanup')", inject_action="cleanup"),
     "get_lifecycle_stats": ToolAlias(old_name="get_lifecycle_stats", new_name="knowledge", reason="consolidated",
         migration_note="Use knowledge(action='stats')", inject_action="stats"),
+
+    # ==========================================================================
+    # Agent-experience aliases (Jun 2026) — task-verb names for the core
+    # agent workflow. Additive layer: canonical tools, schemas, and EISV
+    # semantics are unchanged underneath. Identity classification is
+    # inherited automatically: get_call_identity_requirement canonicalizes
+    # through this registry (alias + inject_action) before judging.
+    # `experience=True` opts the response into the normalized envelope
+    # (middleware/envelope_step.py) — canonical names stay byte-identical.
+    # ==========================================================================
+    "start_session": ToolAlias(
+        old_name="start_session", new_name="onboard", reason="intuitive_alias",
+        migration_note="Resolves to onboard() - creates identity and returns templates",
+        experience=True),
+    "sync_state": ToolAlias(
+        old_name="sync_state", new_name="process_agent_update", reason="intuitive_alias",
+        migration_note="Resolves to process_agent_update() - check in your working state",
+        param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
+        experience=True),
+    "check_working_state": ToolAlias(
+        old_name="check_working_state", new_name="get_governance_metrics", reason="intuitive_alias",
+        migration_note="Resolves to get_governance_metrics() - your current EISV working state",
+        experience=True),
+    "search_shared_memory": ToolAlias(
+        old_name="search_shared_memory", new_name="knowledge", reason="intuitive_alias",
+        migration_note="Resolves to knowledge(action='search') - find prior discoveries, avoid duplicate work",
+        inject_action="search", experience=True),
+    "record_result": ToolAlias(
+        old_name="record_result", new_name="outcome_event", reason="intuitive_alias",
+        migration_note="Resolves to outcome_event() - record what actually happened",
+        experience=True),
+    "request_review": ToolAlias(
+        old_name="request_review", new_name="dialectic", reason="intuitive_alias",
+        migration_note="Resolves to dialectic(action='request', issue_description='...') - ask for a structured review",
+        inject_action="request", experience=True),
 }
 
 # Reverse mapping: new_name -> list of old names
@@ -333,6 +422,16 @@ for alias in _TOOL_ALIASES.values():
     if alias.new_name not in _ALIAS_REVERSE:
         _ALIAS_REVERSE[alias.new_name] = []
     _ALIAS_REVERSE[alias.new_name].append(alias.old_name)
+
+
+AGENT_WORKFLOW_ALIASES: tuple[str, ...] = (
+    "start_session",
+    "sync_state",
+    "check_working_state",
+    "search_shared_memory",
+    "record_result",
+    "request_review",
+)
 
 # ============================================================================
 # Tool Stability Registry
@@ -401,6 +500,13 @@ def get_tool_stability(tool_name: str) -> ToolStability:
     """Get stability tier for a tool"""
     return _TOOL_STABILITY.get(tool_name, _DEFAULT_STABILITY)
 
+
+def is_experience_alias(tool_name: str) -> bool:
+    """True when the INVOKED name is an agent-experience alias whose
+    response should receive the normalized envelope."""
+    alias = _TOOL_ALIASES.get(tool_name)
+    return bool(alias and alias.experience)
+
 def list_all_aliases() -> Dict[str, ToolAlias]:
     """Get all tool aliases (for admin/debugging)"""
     return _TOOL_ALIASES.copy()
@@ -420,4 +526,3 @@ def register_extra_aliases(aliases: Dict[str, ToolAlias]) -> None:
                 f"'{_TOOL_ALIASES[old_name].new_name}'"
             )
         _TOOL_ALIASES[old_name] = alias
-

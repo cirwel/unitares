@@ -63,6 +63,7 @@ from src.mcp_handlers.wave3a_probe import mask_timestamps  # noqa: E402
 
 GOLDEN_DIR = project_root / "tests" / "fixtures" / "wave3a_response_golden"
 HEALTH_CHECK_GOLDEN = GOLDEN_DIR / "health_check.json"
+GET_SERVER_INFO_GOLDEN = GOLDEN_DIR / "get_server_info.json"
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +236,117 @@ def test_lite_filter_drops_diagnostic_fields():
 
 
 # ---------------------------------------------------------------------------
+# get_server_info parity (PR #6)
+# ---------------------------------------------------------------------------
+#
+# The BEAM handler
+# (`elixir/wave3a_handlers/lib/wave3a_handlers/handlers/get_server_info.ex`)
+# is a verbatim pass-through of the probe's `data` payload, which is built
+# by the SAME Python function the in-process MCP handler uses
+# (`build_server_info_payload`). Parity therefore reduces to two pins:
+#
+#   1. The simulated BEAM response (envelope merge over the fixture payload)
+#      matches the committed golden fixture byte-for-byte after masking.
+#   2. The fixture's key set matches the live builder's key set — the drift
+#      guard that catches a payload-shape change that forgot this contract.
+#
+# FIND-R3 / RFC §6 Q2 (resolved: option 1): `current_pid`, `is_current`,
+# and `transport` in this payload describe the PYTHON backend process even
+# when the response is served via the BEAM proxy. The golden fixture masks
+# the PID values, and this comment is the contract documentation Q2 asked
+# for — the semantics are accepted, not an oversight.
+
+SERVER_INFO_FIXTURE: Dict[str, Any] = {
+    "transport": "HTTP",
+    "server_version": "0.42.0",
+    "version": "0.42.0",
+    "build_date": "2026-06-01",
+    "tool_count": 100,
+    "current_pid": 12345,
+    "current_uptime_seconds": 5400,
+    "current_uptime_formatted": "1h 30m",
+    "total_server_processes": 1,
+    "server_processes": [
+        {
+            "pid": 12345,
+            "is_current": True,
+            "uptime_seconds": 5400,
+            "uptime_formatted": "1h 30m",
+            "status": "running",
+        }
+    ],
+    "pid_file_exists": True,
+    "pid_file": "/repo/data/.mcp_server.pid",
+    "max_keep_processes": 3,
+    "health": "healthy",
+}
+
+
+def _simulate_beam_server_info_response(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Simulate what the BEAM get_server_info handler returns.
+
+    The BEAM handler extracts the probe envelope's `data` and passes it
+    through verbatim (dropping the probe-surface `meta` annotation); the
+    HTTP router merges `ok: true` and the pinned `protocol_version`.
+    """
+    return {"ok": True, "protocol_version": "wave3a.v1", **payload}
+
+
+def test_get_server_info_parity():
+    """Wire-level shape parity for get_server_info (RFC §2.6, PR #6)."""
+    simulated = _simulate_beam_server_info_response(SERVER_INFO_FIXTURE)
+    masked = mask_timestamps(simulated)
+
+    assert GET_SERVER_INFO_GOLDEN.exists(), (
+        f"golden fixture missing: {GET_SERVER_INFO_GOLDEN}; regenerate via "
+        "the script block at the bottom of this file."
+    )
+    golden = json.loads(GET_SERVER_INFO_GOLDEN.read_text())
+
+    assert masked == golden, (
+        "Wave 3a §2.6 parity violation: BEAM-side simulated response does "
+        "not match the golden fixture. Diff:\n"
+        f"  simulated: {json.dumps(masked, indent=2, sort_keys=True)}\n"
+        f"  golden:    {json.dumps(golden, indent=2, sort_keys=True)}"
+    )
+
+
+def test_get_server_info_golden_envelope_and_pid_masking():
+    """Envelope keys + the Q2/FIND-R3 PID-masking contract on the fixture."""
+    golden = json.loads(GET_SERVER_INFO_GOLDEN.read_text())
+    assert golden.get("ok") is True
+    assert golden.get("protocol_version") == "wave3a.v1"
+    # Q2 documentation-in-fixture: PID fields are masked because they are
+    # volatile, AND they refer to the Python backend process (accepted
+    # semantics per RFC §6 Q2 option 1).
+    assert golden.get("current_pid") == "<MASKED_PID>"
+    assert golden["server_processes"][0]["pid"] == "<MASKED_PID>"
+    assert golden["server_processes"][0]["is_current"] is True
+
+
+def test_server_info_fixture_keys_match_live_builder():
+    """Drift guard: the fixture key set IS the live builder's key set.
+
+    `build_server_info_payload` is the single-sourced payload builder used
+    by both the MCP handler and the Wave 3a probe. If a future change adds
+    or removes a payload key without updating this fixture (and the golden,
+    and the BEAM-side test fixture in
+    `elixir/wave3a_handlers/test/handlers/get_server_info_test.exs`), this
+    test fails before the parity contract silently rots.
+    """
+    from src.mcp_handlers.admin.handlers import build_server_info_payload
+
+    live_payload = build_server_info_payload()
+    assert set(SERVER_INFO_FIXTURE.keys()) == set(live_payload.keys()), (
+        "get_server_info payload keys drifted from the parity fixture; "
+        "update SERVER_INFO_FIXTURE, regenerate the golden fixture, and "
+        "audit the BEAM pass-through handler.\n"
+        f"  fixture-only: {set(SERVER_INFO_FIXTURE) - set(live_payload)}\n"
+        f"  builder-only: {set(live_payload) - set(SERVER_INFO_FIXTURE)}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # End-to-end round-trip (operator-led, skipped when prerequisites unmet)
 # ---------------------------------------------------------------------------
 
@@ -333,13 +445,21 @@ def test_health_check_live_roundtrip():
 
 if __name__ == "__main__":
     if "--regenerate" in sys.argv:
+        GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
+
         simulated = _simulate_beam_response(SNAPSHOT_FIXTURE, CACHE_FIXTURE)
         masked = mask_timestamps(simulated)
-        HEALTH_CHECK_GOLDEN.parent.mkdir(parents=True, exist_ok=True)
         HEALTH_CHECK_GOLDEN.write_text(
             json.dumps(masked, indent=2, sort_keys=True) + "\n"
         )
         print(f"wrote {HEALTH_CHECK_GOLDEN}")
+
+        simulated_si = _simulate_beam_server_info_response(SERVER_INFO_FIXTURE)
+        masked_si = mask_timestamps(simulated_si)
+        GET_SERVER_INFO_GOLDEN.write_text(
+            json.dumps(masked_si, indent=2, sort_keys=True) + "\n"
+        )
+        print(f"wrote {GET_SERVER_INFO_GOLDEN}")
     else:
         print(
             "Usage: python tests/integration/test_wave_3a_response_parity.py "

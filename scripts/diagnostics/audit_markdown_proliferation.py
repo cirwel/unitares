@@ -11,11 +11,10 @@ Usage:
 """
 
 import sys
-import re
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, List, Tuple, Set
+from typing import Dict, List
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent

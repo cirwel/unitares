@@ -4,31 +4,51 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-04-25"
+last_verified: "2026-06-11"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
   - unitares/src/mcp_handlers/identity/handlers.py
   - unitares/src/mcp_handlers/admin/handlers.py
+  - unitares/src/mcp_handlers/tool_stability.py
+  - unitares/src/mcp_handlers/middleware/envelope_step.py
 ---
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-05-01
+**Last Updated:** 2026-06-11
+
+## Friendly Workflow Names
+
+The core lifecycle can be driven with task-verb aliases. Each resolves to its canonical tool — same parameters, same identity rules — and returns a **normalized envelope**: the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`), with the full canonical payload preserved under `raw_governance`.
+
+| Task | Friendly name | Canonical tool |
+|------|---------------|----------------|
+| Start working | `start_session(force_new=true, ...)` | `onboard` |
+| Check in after meaningful work | `sync_state(response_text=..., complexity=...)` | `process_agent_update` |
+| Check your working state | `check_working_state()` | `get_governance_metrics` |
+| Avoid duplicate work | `search_shared_memory(query=...)` | `knowledge(action="search")` |
+| Record what actually happened | `record_result(...)` | `outcome_event` |
+| Ask for a structured review | `request_review(issue_description=...)` | `dialectic(action="request")` |
+
+Use whichever spelling you prefer; the canonical names keep their raw response shape, the friendly names add the envelope. Everything below applies to both.
 
 ## Starting a Session
 
 Choose creation, lineage, or proof-owned resume explicitly:
 
 ~~~text
-onboard(force_new=true)                                              # first run / fresh process
-onboard(force_new=true, parent_agent_id="<prior-uuid>",
-        spawn_reason="new_session")                                  # fresh process inheriting prior work
+start_session(force_new=true)                                        # first run / fresh process
+start_session(force_new=true, parent_agent_id="<prior-uuid>",
+              spawn_reason="new_session")                            # fresh process inheriting prior work
 identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true) # same live owner / proof-owned rebind
 ~~~
 
+Use canonical `onboard(...)` instead when targeting older servers or when you
+need the unwrapped raw response.
+
 Returns:
-- **UUID**: The server identity anchor for this process instance
+- **agent_uuid / UUID**: The server identity anchor for this process instance
 - **client_session_id**: In-session transport continuity metadata
 - **continuity_token**: Short-lived ownership proof for PATH 0 anti-hijack, not indefinite cross-process continuity
 - **session diagnostics**: `session_resolution_source`, `identity_assurance`, and deprecation warnings when relevant
@@ -39,10 +59,10 @@ Returns:
 
 Default rules:
 
-1. Fresh first run: call `onboard(force_new=true)`.
-2. New process continuing prior work: call `onboard(force_new=true, parent_agent_id="<prior-uuid>", spawn_reason="new_session")`.
+1. Fresh first run: call `start_session(force_new=true)`.
+2. New process continuing prior work: call `start_session(force_new=true, parent_agent_id="<prior-uuid>", spawn_reason="new_session")`.
 3. Same live process or explicit ownership rebind: call `identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true)`.
-4. Ordinary check-ins: pass `continuity_token` when available, otherwise rely on the active session binding.
+4. Ordinary check-ins: rely on the active session binding or `client_session_id`; reserve `continuity_token` for explicit proof-owned rebinds.
 
 Avoid these patterns:
 
@@ -54,15 +74,18 @@ Avoid these patterns:
 
 ## Check-ins
 
-Call `process_agent_update()` after meaningful work:
+Call `sync_state()` after meaningful work:
 
 ~~~text
-process_agent_update(
+sync_state(
   response_text: "Brief summary of what you did",
   complexity: 0.0-1.0,   # Task difficulty estimate
   confidence: 0.0-1.0    # How confident you are (be honest)
 )
 ~~~
+
+Use canonical `process_agent_update(...)` when you need the raw handler
+payload; alias responses preserve it under `raw_governance`.
 
 ### When to Check In
 
@@ -118,12 +141,12 @@ Recovery is not a shortcut — `self_recovery()` examines your EISV state and de
 
 ### Essential (use in every session)
 
-- `onboard(force_new=true, parent_agent_id=...)` — Create a fresh process identity, optionally declaring lineage
-- `process_agent_update()` — Check in with work summary, complexity, confidence
-- `get_governance_metrics()` — Read your current EISV state
+- `start_session(force_new=true, parent_agent_id=...)` / `onboard(...)` — Create a fresh process identity, optionally declaring lineage
+- `sync_state()` / `process_agent_update()` — Check in with work summary, complexity, confidence
+- `check_working_state()` / `get_governance_metrics()` — Read your current EISV state
 - `identity()` — Confirm who the runtime thinks you are and how continuity was resolved; include `continuity_token` for proof-owned UUID rebinds
 - `health_check()` — Check operator-facing server health when behavior seems odd
-- `knowledge(action="search", ...)` — Find existing knowledge before creating new entries
+- `search_shared_memory(query=...)` / `knowledge(action="search", ...)` — Find existing knowledge before creating new entries
 - `knowledge(action="note", ...)` — Quick contribution to the knowledge graph
 
 ### Common (use when needed)

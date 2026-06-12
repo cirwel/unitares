@@ -15,7 +15,7 @@ Multi-agent fleets fly blind. The agent-identity layer tells you *who* is callin
 
 ### How it works in one read
 
-An agent calls `process_agent_update()` after a unit of work. It sends a self-reported `confidence`, a self-reported `complexity`, the `response_text`, and any `recent_tool_results` (test outcomes, exit codes, lint output, file modifications — things the system doesn't have to trust the agent about). UNITARES tracks four numbers per agent — **EISV** for short:
+An agent calls `sync_state()` after a unit of work (`process_agent_update(...)` is the canonical/raw equivalent). It sends a self-reported `confidence`, a self-reported `complexity`, the `response_text`, and any `recent_tool_results` (test outcomes, exit codes, lint output, file modifications — things the system doesn't have to trust the agent about). UNITARES tracks four numbers per agent — **EISV** for short:
 
 - **E (Energy)** — is the work advancing? Tool calls succeeding and decisions resolving raise E; thrashing, retries, no-progress lower it.
 - **I (Integrity)** — do claims match outcomes? Confidence calibrated to observed success rate raises I; high confidence with low actual success lowers it.
@@ -26,7 +26,7 @@ Each check-in returns a verdict — `proceed` / `guide` / `pause` / `reject` —
 
 ### Why an agent can't just lie about its confidence
 
-Self-reported confidence is one input. UNITARES also observes **hard exogenous outcomes** — test pass/fail, exit codes, tool results — fed back through the `outcome_event` tool. Over many tasks it tracks whether the agent's claimed confidence matches its actual success rate. An agent that reports `confidence=0.9` while succeeding only 50% of the time accumulates calibration error; integrity drops; the verdict shifts to `guide` or `pause`. The signal is grounded in what actually happened, not what the agent claimed.
+Self-reported confidence is one input. UNITARES also observes **hard exogenous outcomes** — test pass/fail, exit codes, tool results — fed back through `record_result()` (`outcome_event(...)` canonically). Over many tasks it tracks whether the agent's claimed confidence matches its actual success rate. An agent that reports `confidence=0.9` while succeeding only 50% of the time accumulates calibration error; integrity drops; the verdict shifts to `guide` or `pause`. The signal is grounded in what actually happened, not what the agent claimed.
 
 After ~30 check-ins the four numbers are graded against the agent's own running baseline, not a universal threshold. Absolute safety floors still apply.
 
@@ -36,7 +36,7 @@ Running continuously since November 2025. State stored in PostgreSQL + AGE. The 
 
 If you're running **multiple long-lived autonomous agents** — tool-using, multi-step, doing real work over hours or days — and you've had the experience of an agent quietly drifting without anyone noticing until something visible broke, UNITARES is for you. The check-in loop surfaces drift while it's still numerical (integrity slipping, calibration error climbing) instead of at the point a human user complains. It does not replace evals or guardrails; it runs in parallel as a state layer the agent itself can read.
 
-**Integration cost:** one MCP / REST call per agent unit-of-work, plus an `outcome_event` callback for any task with a hard exogenous outcome (tests, exit codes, tool results). Dashboard, knowledge graph, dialectic, and continuity are downstream of that.
+**Integration cost:** one MCP / REST `sync_state` call per agent unit-of-work, plus a `record_result` callback for any task with a hard exogenous outcome (tests, exit codes, tool results). Dashboard, knowledge graph, dialectic, and continuity are downstream of that. Older clients can use the canonical names `process_agent_update` and `outcome_event`.
 
 **Not yet a good fit for** short-lived chatbot interactions where per-turn governance overhead exceeds the value, or teams without the ability to instrument their agent loop. External adoption is the open question; the [Production snapshot](#production-snapshot) is honest about it.
 
@@ -48,7 +48,7 @@ docker compose up -d --wait         # Postgres+AGE+pgvector+Redis+server, bound 
 make demo                           # 60-second scripted trajectory
 ```
 
-`make demo` onboards a synthetic agent, drives seven check-ins (clean work → calibration drift → confusion), and prints the verdict + state at each step. Source: [`scripts/demo/quick_demo.py`](scripts/demo/quick_demo.py). Then point any MCP client at `http://localhost:8767/mcp/`.
+`make demo` starts a synthetic agent session, drives seven check-ins (clean work → calibration drift → confusion), and prints the verdict + state at each step. Source: [`scripts/demo/quick_demo.py`](scripts/demo/quick_demo.py). Then point any MCP client at `http://localhost:8767/mcp/`.
 
 If you already run UNITARES locally and port `8767` is live, skip `docker compose up` and run `make demo` directly. If Docker reports that `5432`, `6379`, or `8767` is already allocated, pick alternate host ports:
 
@@ -74,7 +74,9 @@ Additional services (started via launchd, not bundled into `docker compose up`):
 | Gateway MCP (reduced surface) | `8768` | `http://localhost:8768/mcp/` |
 | Surface lease plane (bearer-auth) | `8788` | `http://localhost:8788/v1/lease/*` |
 
-**Workflow:** `onboard(force_new=true)` → `process_agent_update()` → `get_governance_metrics()`. Use `parent_agent_id` for fresh-process lineage — details in [Getting Started](docs/guides/START_HERE.md).
+**Workflow:** `start_session(force_new=true)` → `sync_state()` → `check_working_state()`. Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and `get_governance_metrics(...)`. Use `parent_agent_id` for fresh-process lineage — details in [Getting Started](docs/guides/START_HERE.md).
+
+**Resident agents:** for long-running or scheduled agents, start with the SDK in [`agents/sdk/README.md`](agents/sdk/README.md). It handles MCP connection, identity anchors, check-ins, heartbeats, log rotation, state persistence, and pause hooks.
 
 **Transports:** MCP on `/mcp/` (Streamable HTTP) · REST on `/v1/tools/call` · Dashboard on `/dashboard`
 
@@ -91,13 +93,15 @@ Additional services (started via launchd, not bundled into `docker compose up`):
 
 ```python
 # Inside the agent's loop
-result = process_agent_update(response_text=output, complexity=0.6, confidence=0.8)
+result = sync_state(response_text=output, complexity=0.6, confidence=0.8)
+raw = result.get("raw_governance", result)  # alias envelope preserves the full canonical payload
+metrics = raw.get("metrics", raw)
 
-if result["metrics"]["integrity"] < 0.4:
+if metrics["integrity"] < 0.4:
     agent.require_human_review("integrity low — pausing autonomous actions")
-elif result["metrics"]["entropy"] > 0.7:
+elif metrics["entropy"] > 0.7:
     agent.narrow_scope()            # fewer tools, tighter search
-elif result["metrics"]["energy"] < 0.2:
+elif metrics["energy"] < 0.2:
     agent.stop_and_summarize()      # avoid thrashing
 ```
 
@@ -170,15 +174,20 @@ Frozen public snapshot from May 6, 2026 (single-operator deployment — self-tra
 ## Quick Start
 
 ```
-1. onboard(force_new=true)      → Get a fresh process identity
-2. process_agent_update()       → Log your work
-3. get_governance_metrics()     → Check your state
+1. start_session(force_new=true)  → Get a fresh process identity
+2. sync_state()                   → Log your work
+3. check_working_state()          → Check your state
 ```
 
-Example check-in (non-mirror responses include full `metrics`, `decision`, etc.):
+These names return the agent-experience envelope: `next_action`, compact state
+fields, and the full canonical payload under `raw_governance`. The canonical
+tool names still work: `onboard(...)`, `process_agent_update(...)`, and
+`get_governance_metrics(...)`.
+
+Example check-in:
 
 ```jsonc
-process_agent_update({
+sync_state({
   "response_text": "Refactored auth module, added rate limiting",
   "complexity": 0.6,
   "confidence": 0.8,
@@ -187,26 +196,30 @@ process_agent_update({
 })
 ```
 
-**`response_mode: "mirror"`** shapes the payload for self-awareness: `mirror` is a **list of strings** (actionable signals), not a nested object. Optional top-level `question` and `relevant_prior_work` surface a targeted nudge and knowledge-graph items when relevant. See `_format_mirror` in [`src/mcp_handlers/response_formatter.py`](src/mcp_handlers/response_formatter.py).
+**`response_mode: "mirror"`** shapes the canonical payload for self-awareness: `mirror` is a **list of strings** (actionable signals), not a nested object. When calling through `sync_state`, read it under `raw_governance`. Optional top-level `reflection` and `relevant_prior_work` surface a state reflection and knowledge-graph items when relevant. See `_format_mirror` in [`src/mcp_handlers/response_formatter.py`](src/mcp_handlers/response_formatter.py).
 
 ```jsonc
 {
-  "verdict": "proceed",
+  "verdict": {
+    "value": "proceed",
+    "meaning": "State is healthy.",
+    "next_action": "Continue working normally."
+  },
   "_mode": "mirror",
   "mirror": [
     "Fleet calibration: 72% accuracy over 12 fleet-wide decisions (high-conf: 0.8, low-conf: 0.5)",
     "Complexity divergence: you reported 0.60 but system derives 0.45 (divergence=0.15)"
   ],
-  "question": "What's driving your sense of difficulty?",
+  "reflection": "Complexity estimate is diverging from the output-surface proxy.",
   "relevant_prior_work": [
     { "summary": "Rate limiter bypass in auth …", "by": "agent-abc", "relevance": 0.82 }
   ]
 }
 ```
 
-**Verdict field:** Responses expose `verdict` from `decision.action`. Governance actions are **`proceed` / `guide` / `pause` / `reject`** ([Architecture](docs/UNIFIED_ARCHITECTURE.md)). If `action` is absent, formatters fall back to **`continue`** — see `response_formatter.py`.
+**Verdict field:** Mirror/compact responses wrap the verdict with `value`, `meaning`, and `next_action`. Governance actions are **`proceed` / `guide` / `pause` / `reject`** ([Architecture](docs/UNIFIED_ARCHITECTURE.md)). If `action` is absent, formatters fall back to **`continue`** — see `response_formatter.py`.
 
-The `onboard()` response includes `agent_uuid`. Store it as an identity anchor. On a fresh process that continues prior work, call `onboard(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")`. Use `identity(agent_uuid=..., continuity_token=..., resume=true)` only for same-owner proof-owned rebinds.
+The `start_session()` envelope includes `agent_uuid` and `client_session_id` at the top level. Store `agent_uuid` as an identity anchor. On a fresh process that continues prior work, call `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")`. Use canonical `onboard(...)` instead if you need the raw response shape. Use `identity(agent_uuid=..., continuity_token=..., resume=true)` only for same-owner proof-owned rebinds.
 
 ### Installation
 
@@ -251,7 +264,7 @@ The EISV ODE engine lives in this repo at `governance_core/` (pure Python, no se
 
 Client-specific JSON (Cursor / Claude Code / Claude Desktop), endpoint table, and bind-address security: [`docs/integration/MCP_CLIENTS.md`](docs/integration/MCP_CLIENTS.md).
 
-Agent identity: save `agent_uuid` from `onboard()` as an anchor; declare fresh-process lineage with `parent_agent_id`; use `continuity_token` only as short-lived ownership proof for explicit UUID rebinds. See [Getting Started](docs/guides/START_HERE.md) and [Operator Runbook](docs/operations/OPERATOR_RUNBOOK.md).
+Agent identity: save `agent_uuid` from `start_session()` / `onboard()` as an anchor; declare fresh-process lineage with `parent_agent_id`; use `continuity_token` only as short-lived ownership proof for explicit UUID rebinds. See [Getting Started](docs/guides/START_HERE.md) and [Operator Runbook](docs/operations/OPERATOR_RUNBOOK.md).
 
 ---
 

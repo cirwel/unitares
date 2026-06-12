@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 import os
 import re
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 def detect_interface_context() -> Dict[str, str]:
     """
     Detect interface and context information for name generation.

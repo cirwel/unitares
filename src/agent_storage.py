@@ -41,7 +41,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional
 
 from src.db import get_db
-from src.db.base import IdentityRecord, AgentStateRecord
+from src.db.base import AgentStateRecord
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -144,14 +144,6 @@ async def get_agent(agent_id: str) -> Optional[AgentRecord]:
         identity_id=identity.identity_id,
         metadata=identity.metadata,
     )
-
-
-async def agent_exists(agent_id: str) -> bool:
-    """Check if agent exists."""
-    await _ensure_db_ready()
-    db = get_db()
-    identity = await db.get_identity(agent_id)
-    return identity is not None
 
 
 async def create_agent(

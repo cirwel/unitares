@@ -19,6 +19,10 @@ TOOL_MODE = os.getenv("GOVERNANCE_TOOL_MODE", "lite").lower()
 
 # Minimal mode: Essential tools + list_tools for discovery
 MINIMAL_MODE_TOOLS: Set[str] = {
+    # Agent workflow aliases (task verbs over canonical implementation names)
+    "start_session",
+    "sync_state",
+    "check_working_state",
     "onboard",                # 🚀 Portal tool - call this FIRST (Dec 2025)
     "identity",               # Check/set identity (auto-creates on first call)
     "process_agent_update",   # Log your work (ongoing)
@@ -31,6 +35,14 @@ MINIMAL_MODE_TOOLS: Set[str] = {
 # THIS IS THE SINGLE SOURCE OF TRUTH - admin.py imports from here
 # Updated Feb 2026: Use consolidated tools to reduce cognitive load
 LITE_MODE_TOOLS: Set[str] = {
+    # Agent workflow aliases (visible, first-class UX names)
+    "start_session",              # Alias for onboard
+    "sync_state",                 # Alias for process_agent_update
+    "check_working_state",        # Alias for get_governance_metrics
+    "search_shared_memory",       # Alias for knowledge(action='search')
+    "record_result",              # Alias for outcome_event
+    "request_review",             # Alias for dialectic(action='request')
+
     # Core governance
     "process_agent_update",       # Log agent work
     "get_governance_metrics",     # Check agent state
@@ -120,6 +132,12 @@ OPERATOR_RECOVERY_MODE_TOOLS: Set[str] = OPERATOR_READONLY_MODE_TOOLS | {
 # ============================================================================
 TOOL_TIERS: dict[str, Set[str]] = {
     "essential": {  # Tier 1: Core workflow tools (~10 tools)
+        "start_session",          # Workflow alias for onboard
+        "sync_state",             # Workflow alias for process_agent_update
+        "check_working_state",    # Workflow alias for get_governance_metrics
+        "search_shared_memory",   # Workflow alias for knowledge(search)
+        "record_result",          # Workflow alias for outcome_event
+        "request_review",         # Workflow alias for dialectic(request)
         "onboard",                # 🚀 Portal tool - call FIRST (Dec 2025)
         "identity",               # Primary identity tool (auto-creates on first call)
         "process_agent_update",   # Log agent work
@@ -184,6 +202,14 @@ TOOL_TIERS: dict[str, Set[str]] = {
 # admin: System administration (may read or write internal state)
 # ============================================================================
 TOOL_OPERATIONS: dict[str, str] = {
+    # Agent workflow aliases
+    "start_session": "read",
+    "sync_state": "write",
+    "check_working_state": "read",
+    "search_shared_memory": "read",
+    "record_result": "write",
+    "request_review": "write",
+
     # Identity & Onboarding
     "onboard": "read",                    # Returns identity + templates (creates if new)
     "identity": "read",                   # Returns identity (creates if new)
@@ -265,11 +291,15 @@ TOOL_OPERATIONS: dict[str, str] = {
 # Tool categories for selective loading (excludes deprecated tools)
 TOOL_CATEGORIES = {
     "core": {
+        "sync_state",
+        "check_working_state",
+        "record_result",
         "process_agent_update",
         "get_governance_metrics",
         "simulate_update",
     },
     "identity": {
+        "start_session",
         "onboard",                # Dec 2025: Portal tool - call FIRST
         "identity",               # Dec 2025: Primary identity tool (auto-creates on first call)
         "list_agents",
@@ -308,6 +338,7 @@ TOOL_CATEGORIES = {
         "aggregate_metrics",
     },
     "knowledge": {
+        "search_shared_memory",
         "store_knowledge_graph",   # Primary: add knowledge (handles responses via response_to)
         "get_discovery_details",   # Drill into discovery (includes related/chain)
         "leave_note",
@@ -316,6 +347,7 @@ TOOL_CATEGORIES = {
         "get_lifecycle_stats",       # Lifecycle statistics (Dec 2025)
     },
     "dialectic": {
+        "request_review",
         "request_dialectic_review",      # Create dialectic session
         "submit_thesis",                 # Paused agent explains reasoning
         "submit_antithesis",             # Reviewer raises concerns

@@ -916,6 +916,49 @@ class TestHandleCompareMeToSimilar:
 # handle_detect_anomalies
 # ---------------------------------------------------------------------------
 
+class TestAnomalyChangeToken:
+    """The emit-on-change dedup token must key on data, not the description string."""
+
+    def _anomaly(self, *, ts, prev=0.33, cur=0.55, agent="a", typ="risk_spike"):
+        return {
+            "type": typ,
+            "agent_id": agent,
+            "timestamp": ts,
+            "description": f"Risk increased from {prev:.2f} to {cur:.2f}",
+            "context": {"previous_risk": prev, "current_risk": cur, "change": cur - prev},
+        }
+
+    def test_frozen_history_yields_stable_token(self):
+        from src.mcp_handlers.observability.handlers import anomaly_change_token
+        a = self._anomaly(ts="2026-06-11T15:25:00")
+        # Same underlying data evaluated twice (e.g. two sweeps over a frozen
+        # idle agent) must produce an identical token -> suppressed downstream.
+        assert anomaly_change_token(a) == anomaly_change_token(dict(a))
+
+    def test_recover_then_respike_to_same_values_emits(self):
+        from src.mcp_handlers.observability.handlers import anomaly_change_token
+        # Identical rounded values, but a NEW newest-sample timestamp (the agent
+        # recovered and genuinely re-spiked). Token must differ so it is NOT
+        # silently suppressed — the over-suppression failure mode.
+        first = self._anomaly(ts="2026-06-11T15:25:00")
+        respike = self._anomaly(ts="2026-06-12T09:00:00")
+        assert anomaly_change_token(first) != anomaly_change_token(respike)
+
+    def test_token_independent_of_description_wording(self):
+        from src.mcp_handlers.observability.handlers import anomaly_change_token
+        a = self._anomaly(ts="2026-06-11T15:25:00")
+        b = dict(a, description="completely different wording, same data")
+        # A future edit to the description f-string must not change the token
+        # (else every idle agent re-fires once on deploy).
+        assert anomaly_change_token(a) == anomaly_change_token(b)
+
+    def test_distinct_agents_get_distinct_tokens(self):
+        from src.mcp_handlers.observability.handlers import anomaly_change_token
+        a = self._anomaly(ts="2026-06-11T15:25:00", agent="a")
+        b = self._anomaly(ts="2026-06-11T15:25:00", agent="b")
+        assert anomaly_change_token(a) != anomaly_change_token(b)
+
+
 class TestHandleDetectAnomalies:
     """Tests for handle_detect_anomalies."""
 

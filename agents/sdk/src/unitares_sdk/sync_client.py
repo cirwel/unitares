@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -12,7 +13,10 @@ from typing import Any
 from unitares_sdk.errors import (
     GovernanceConnectionError,
     GovernanceTimeoutError,
+    GovernanceUnavailableError,
     IdentityDriftError,
+    extract_retry_after_seconds,
+    parse_retry_after_header,
 )
 from unitares_sdk.models import (
     ArchiveResult,
@@ -316,28 +320,59 @@ class SyncGovernanceClient:
     def _rest_call(
         self, tool_name: str, arguments: dict, *, timeout: float | None = None
     ) -> dict:
-        """POST to /v1/tools/call and parse the response envelope."""
+        """POST to /v1/tools/call and parse the response envelope.
+
+        Wave 3 §3.2 (prereq PR #10 consumer contract): an HTTP 503 carrying
+        the typed-unavailable body is retried once after the server-suggested
+        delay (``Retry-After`` header, falling back to the body's
+        ``retry_after_seconds``), then surfaced as
+        ``GovernanceUnavailableError`` so resident cycle loops can back off
+        with the server's delay instead of guessing.
+        """
         effective_timeout = timeout or self.timeout
         payload = json.dumps({"name": tool_name, "arguments": arguments}).encode()
-        req = urllib.request.Request(
-            self.rest_url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=effective_timeout) as resp:
-                data = json.loads(resp.read().decode())
-        except TimeoutError as e:
-            raise GovernanceTimeoutError(
-                f"{tool_name} timed out after {effective_timeout}s"
-            ) from e
-        except urllib.error.URLError as e:
-            if isinstance(getattr(e, "reason", None), TimeoutError):
+
+        data: dict | None = None
+        for attempt in range(2):
+            req = urllib.request.Request(
+                self.rest_url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=effective_timeout) as resp:
+                    data = json.loads(resp.read().decode())
+                break
+            except TimeoutError as e:
                 raise GovernanceTimeoutError(
                     f"{tool_name} timed out after {effective_timeout}s"
                 ) from e
-            raise GovernanceConnectionError(f"REST call to {self.rest_url} failed: {e}") from e
+            except urllib.error.HTTPError as e:
+                if e.code == 503:
+                    retry_after = self._extract_503_retry_after(e)
+                    if attempt == 0:
+                        logger.warning(
+                            "%s unavailable (HTTP 503), retrying in %.1fs",
+                            tool_name, retry_after,
+                        )
+                        time.sleep(retry_after)
+                        continue
+                    raise GovernanceUnavailableError(
+                        f"{tool_name}: governance temporarily unavailable "
+                        f"(retry_after_seconds={retry_after})",
+                        retry_after_seconds=retry_after,
+                    ) from e
+                raise GovernanceConnectionError(
+                    f"REST call to {self.rest_url} failed: {e}"
+                ) from e
+            except urllib.error.URLError as e:
+                if isinstance(getattr(e, "reason", None), TimeoutError):
+                    raise GovernanceTimeoutError(
+                        f"{tool_name} timed out after {effective_timeout}s"
+                    ) from e
+                raise GovernanceConnectionError(f"REST call to {self.rest_url} failed: {e}") from e
+        assert data is not None  # loop either broke with data or raised
 
         if not data.get("success", False):
             error = data.get("error", "Unknown error")
@@ -456,3 +491,18 @@ class SyncGovernanceClient:
         if raw.get("success") is False:
             error = raw.get("error", "Unknown error")
             raise GovernanceConnectionError(f"Tool {tool_name} failed: {error}")
+
+    @staticmethod
+    def _extract_503_retry_after(e: urllib.error.HTTPError) -> float:
+        """Server-suggested delay from a 503: ``Retry-After`` header first,
+        then the §3.2 body's ``retry_after_seconds``, else 5.0 (bounded by
+        the errors-module cap either way)."""
+        retry_after = parse_retry_after_header(e.headers.get("Retry-After"))
+        if retry_after is not None:
+            return retry_after
+        try:
+            body = json.loads(e.read().decode())
+        except Exception:  # noqa: BLE001 — non-JSON 503 body
+            body = None
+        retry_after = extract_retry_after_seconds(body)
+        return retry_after if retry_after is not None else 5.0

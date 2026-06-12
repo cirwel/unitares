@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import time
 from typing import Any, Iterable, Optional
 
 import httpx
@@ -20,6 +21,12 @@ DEFAULT_URL = os.environ.get(
     "UNITARES_FINDINGS_URL", "http://localhost:8767/api/findings"
 )
 DEFAULT_TIMEOUT_SECONDS = 3.0
+
+# Wave 3 §3.2 (prereq PR #10): one bounded retry on HTTP 503, honoring the
+# server's Retry-After header / retry_after_seconds body field. Capped low —
+# post_finding sits on agent-cycle hot paths and must stay near-instant even
+# when the server is mid-cutover.
+MAX_503_RETRY_SLEEP_SECONDS = 5.0
 
 
 def compute_fingerprint(parts: Iterable[Any]) -> str:
@@ -36,6 +43,21 @@ def compute_fingerprint(parts: Iterable[Any]) -> str:
 def _httpx_post(url: str, json: dict, headers: dict, timeout: float):
     """Thin wrapper so tests can monkeypatch this single call."""
     return httpx.post(url, json=json, headers=headers, timeout=timeout)
+
+
+def _retry_after_from_503(resp: Any) -> float:
+    """Bounded server-suggested delay from a 503 response: Retry-After
+    header first, then the §3.2 body's retry_after_seconds, else the cap."""
+    try:
+        raw = resp.headers.get("Retry-After")
+        if raw is None:
+            raw = resp.json().get("retry_after_seconds")
+        seconds = float(raw)
+        if seconds < 0:
+            return MAX_503_RETRY_SLEEP_SECONDS
+        return min(seconds, MAX_503_RETRY_SLEEP_SECONDS)
+    except Exception:  # noqa: BLE001 — malformed header/body
+        return MAX_503_RETRY_SLEEP_SECONDS
 
 
 def post_finding(
@@ -77,6 +99,12 @@ def post_finding(
 
     try:
         resp = _httpx_post(url, json=body, headers=headers, timeout=timeout)
+        if getattr(resp, "status_code", 0) == 503:
+            # §3.2 typed-unavailable from a mid-cutover transport: honor the
+            # server's delay (bounded) and retry exactly once. Still never
+            # raises; a second 503 falls through to the non-200 return below.
+            time.sleep(_retry_after_from_503(resp))
+            resp = _httpx_post(url, json=body, headers=headers, timeout=timeout)
     except Exception as exc:
         log.debug("post_finding failed: %s", exc)
         return False

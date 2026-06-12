@@ -295,162 +295,32 @@ class TestLogAutoAttest:
 # ===========================================================================
 # log_complexity_derivation
 # ===========================================================================
-class TestLogComplexityDerivation:
-    def test_writes_valid_jsonl(self, tmp_path):
-        logger = _make_logger(tmp_path)
-        logger.log_complexity_derivation(
-            agent_id="agent-3",
-            reported_complexity=0.7,
-            derived_complexity=0.5123456,
-            final_complexity=0.6001,
-            discrepancy=0.2,
-        )
-        entries = _read_jsonl(logger.log_file)
-        assert len(entries) == 1
-        e = entries[0]
-        assert e["event_type"] == "complexity_derivation"
-        assert e["confidence"] == 1.0
-        assert e["details"]["reported_complexity"] == 0.7
-        assert e["details"]["derived_complexity"] == 0.512
-        assert e["details"]["final_complexity"] == 0.6
-        assert e["details"]["discrepancy"] == 0.2
-
-    def test_none_reported_complexity(self, tmp_path):
-        logger = _make_logger(tmp_path)
-        logger.log_complexity_derivation("a", None, 0.5, 0.5)
-        entries = _read_jsonl(logger.log_file)
-        assert entries[0]["details"]["reported_complexity"] is None
-        assert entries[0]["details"]["discrepancy"] is None
-
-    def test_discrepancy_threshold_exceeded(self, tmp_path):
-        logger = _make_logger(tmp_path)
-        logger.log_complexity_derivation("a", 0.9, 0.4, 0.4, discrepancy=0.5)
-        entries = _read_jsonl(logger.log_file)
-        assert entries[0]["details"]["discrepancy_threshold_exceeded"] is True
-
-    def test_discrepancy_threshold_not_exceeded(self, tmp_path):
-        logger = _make_logger(tmp_path)
-        logger.log_complexity_derivation("a", 0.5, 0.4, 0.4, discrepancy=0.1)
-        entries = _read_jsonl(logger.log_file)
-        assert entries[0]["details"]["discrepancy_threshold_exceeded"] is False
-
-    def test_with_extra_details(self, tmp_path):
-        logger = _make_logger(tmp_path)
-        logger.log_complexity_derivation(
-            "a", 0.5, 0.5, 0.5, discrepancy=0.0,
-            details={"method": "heuristic"},
-        )
-        entries = _read_jsonl(logger.log_file)
-        assert entries[0]["details"]["method"] == "heuristic"
-
-
 # ===========================================================================
 # log_calibration_check
 # ===========================================================================
-class TestLogCalibrationCheck:
-    def test_writes_valid_jsonl(self, tmp_path):
-        logger = _make_logger(tmp_path)
-        logger.log_calibration_check(
-            agent_id="agent-4",
-            confidence_bin="0.8-0.9",
-            predicted_correct=True,
-            actual_correct=False,
-            calibration_metrics={"ece": 0.05},
-        )
-        entries = _read_jsonl(logger.log_file)
-        assert len(entries) == 1
-        e = entries[0]
-        assert e["event_type"] == "calibration_check"
-        assert e["confidence"] == 0.8
-        assert e["details"]["confidence_bin"] == "0.8-0.9"
-        assert e["details"]["predicted_correct"] is True
-        assert e["details"]["actual_correct"] is False
-        assert e["details"]["calibration_metrics"]["ece"] == 0.05
-
-    def test_confidence_bin_without_dash(self, tmp_path):
-        logger = _make_logger(tmp_path)
-        logger.log_calibration_check("a", "high", True, True, {})
-        entries = _read_jsonl(logger.log_file)
-        assert entries[0]["confidence"] == 0.0
-
-
 # ===========================================================================
 # log_auto_resume
 # ===========================================================================
-class TestLogAutoResume:
-    def test_writes_valid_jsonl(self, tmp_path):
-        logger = _make_logger(tmp_path)
-        logger.log_auto_resume(
-            agent_id="agent-5",
-            previous_status="archived",
-            trigger="process_agent_update",
-            archived_at="2025-01-01T00:00:00",
-        )
-        entries = _read_jsonl(logger.log_file)
-        assert len(entries) == 1
-        e = entries[0]
-        assert e["event_type"] == "auto_resume"
-        assert e["confidence"] == 1.0
-        assert e["details"]["previous_status"] == "archived"
-        assert e["details"]["trigger"] == "process_agent_update"
-        assert e["details"]["archived_at"] == "2025-01-01T00:00:00"
-
-    def test_with_extra_details(self, tmp_path):
-        logger = _make_logger(tmp_path)
-        logger.log_auto_resume(
-            "a", "archived", "manual",
-            details={"days_since_archive": 7},
-        )
-        entries = _read_jsonl(logger.log_file)
-        assert entries[0]["details"]["days_since_archive"] == 7
-
-    def test_no_archived_at(self, tmp_path):
-        logger = _make_logger(tmp_path)
-        logger.log_auto_resume("a", "archived", "manual")
-        entries = _read_jsonl(logger.log_file)
-        assert entries[0]["details"]["archived_at"] is None
-
-
 # ===========================================================================
 # log_dialectic_nudge
 # ===========================================================================
-class TestLogDialecticNudge:
-    def test_writes_valid_jsonl(self, tmp_path):
-        logger = _make_logger(tmp_path)
-        logger.log_dialectic_nudge(
-            agent_id="agent-6",
-            session_id="sess-123",
-            phase="thesis",
-            next_actor="reviewer",
-            idle_seconds=300.5,
-        )
-        entries = _read_jsonl(logger.log_file)
-        assert len(entries) == 1
-        e = entries[0]
-        assert e["event_type"] == "dialectic_nudge"
-        assert e["details"]["session_id"] == "sess-123"
-        assert e["details"]["phase"] == "thesis"
-        assert e["details"]["next_actor"] == "reviewer"
-        assert e["details"]["idle_seconds"] == 300.5
-
-    def test_none_agent_id_defaults_to_system(self, tmp_path):
-        logger = _make_logger(tmp_path)
-        logger.log_dialectic_nudge(None, "sess-1", "idle")
-        entries = _read_jsonl(logger.log_file)
-        assert entries[0]["agent_id"] == "system"
-
-    def test_with_extra_details(self, tmp_path):
-        logger = _make_logger(tmp_path)
-        logger.log_dialectic_nudge(
-            "a", "sess-1", "idle",
-            details={"nudge_count": 3},
-        )
-        entries = _read_jsonl(logger.log_file)
-        assert entries[0]["details"]["nudge_count"] == 3
-
-
 # ===========================================================================
 # log_cross_device_call
+# ===========================================================================
+# ===========================================================================
+# log_orchestration_request
+# ===========================================================================
+# ===========================================================================
+# log_orchestration_complete
+# ===========================================================================
+# ===========================================================================
+# log_device_health_check
+# ===========================================================================
+# ===========================================================================
+# log_eisv_sync
+# ===========================================================================
+# ===========================================================================
+# _write_entry internals
 # ===========================================================================
 class TestLogCrossDeviceCall:
     def test_writes_valid_jsonl(self, tmp_path):
@@ -1137,20 +1007,16 @@ class TestEdgeCases:
         logger = _make_logger(tmp_path)
         logger.log_lambda1_skip("a", 0.5, 0.8, 1)
         logger.log_auto_attest("a", 0.9, True, 0.1, "ok")
-        logger.log_auto_resume("a", "archived", "manual")
-        logger.log_dialectic_nudge("a", "sess", "idle")
-        logger.log_cross_device_call("a", "mac", "pi", "tool", {})
-        logger.log_device_health_check("a", "pi", "healthy")
-        logger.log_eisv_sync("a", "pi", "mac", {}, {})
+        logger.log_attest_gap_suppressed("a", 5.0, 0.1, "low_risk", 2)
 
         all_entries = logger.query_audit_log()
-        assert len(all_entries) == 7
+        assert len(all_entries) == 3
 
         skips = logger.query_audit_log(event_type="lambda1_skip")
         assert len(skips) == 1
 
-        resumes = logger.query_audit_log(event_type="auto_resume")
-        assert len(resumes) == 1
+        attests = logger.query_audit_log(event_type="auto_attest")
+        assert len(attests) == 1
 
     def test_query_start_time_only(self, tmp_path):
         logger = _make_logger(tmp_path)

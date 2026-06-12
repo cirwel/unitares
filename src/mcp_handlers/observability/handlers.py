@@ -6,8 +6,7 @@ import asyncio
 import math
 from typing import Dict, Any, Sequence
 from mcp.types import TextContent
-import sys
-from ..utils import success_response, error_response, require_argument, require_registered_agent
+from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -388,7 +387,6 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
     
     IMPROVEMENT #5: Agent comparison templates
     """
-    from src.governance_monitor import UNITARESMonitor
     # SECURITY FIX: Require registered agent (prevents phantom agent_ids)
     agent_id, error = require_registered_agent(arguments)
     if error:
@@ -639,6 +637,27 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
     
     return success_response(comparison_data)
 
+def anomaly_change_token(anomaly: Dict[str, Any]) -> str:
+    """Emit-on-change dedup token for a persisting anomaly.
+
+    Keyed on the data the anomaly was computed from — its type, agent, the
+    full-precision context values, and the newest analyzed sample's timestamp —
+    NOT on the human-readable description. This means the token advances exactly
+    when a new state sample lands: a frozen/idle history yields an identical
+    token every evaluation (suppressed), while a genuine recovery-then-respike
+    produces a new timestamp and therefore a new token (emitted), even if the
+    rounded values happen to match. Deliberately independent of the description
+    f-string so message-format edits can never silently re-fire the idle fleet.
+    """
+    import hashlib
+    ctx = anomaly.get("context") or {}
+    ctx_repr = "|".join(f"{k}={ctx[k]}" for k in sorted(ctx))
+    basis = (
+        f"{anomaly.get('type')}|{anomaly.get('agent_id')}|"
+        f"{anomaly.get('timestamp')}|{ctx_repr}"
+    )
+    return hashlib.sha256(basis.encode()).hexdigest()[:16]
+
 @mcp_tool("detect_anomalies", timeout=15.0, register=False)
 async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Detect anomalies across agents"""
@@ -718,7 +737,6 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
                     all_anomalies.extend(result)
                 elif isinstance(result, Exception):
                     # Log but continue
-                    import sys
                     logger.warning(f"Error processing agent in detect_anomalies: {result}", exc_info=True)
     except Exception as e:
         logger.error(f"Error in detect_anomalies: {e}", exc_info=True)
@@ -738,6 +756,7 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
             ).hexdigest()[:16]
             stored = event_detector.record_event({
                 "fingerprint": fp,
+                "change_token": anomaly_change_token(a),
                 "type": a.get("type"),
                 "severity": a.get("severity"),
                 "agent_id": a.get("agent_id"),

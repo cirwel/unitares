@@ -20,7 +20,7 @@ import time as _time
 import numpy as np
 
 from config.governance_config import config
-from governance_core.parameters import get_active_params, get_params_profile_name, DEFAULT_WEIGHTS
+from governance_core.parameters import get_params_profile_name, DEFAULT_WEIGHTS
 from governance_core.scoring import phi_objective, verdict_from_phi
 from governance_core import approximate_stability_check
 from src.health_thresholds import HealthThresholds

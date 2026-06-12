@@ -61,12 +61,16 @@ UUID is an identity anchor, not sufficient proof that the current execution cont
 
 Standard agent workflow:
 
-1. Fresh process: `onboard(force_new=true)` — save the returned `agent_uuid`
-2. Fresh process inheriting prior work: `onboard(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")`
+1. Fresh process: `start_session(force_new=true)` — save the returned `agent_uuid` / `client_session_id`
+2. Fresh process inheriting prior work: `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")`
 3. Same live owner / proof-owned rebind: `identity(agent_uuid=..., continuity_token=..., resume=true)`
-4. `process_agent_update()` for work logging
-5. `get_governance_metrics()` for read-only state
+4. `sync_state()` for work logging
+5. `check_working_state()` for read-only state
 6. `identity()` to confirm current binding
+
+Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and
+`get_governance_metrics(...)`. Use them for older clients or when inspecting
+the unwrapped handler payload directly.
 
 `continuity_token` is now a short-lived ownership proof for PATH 0 anti-hijack, not indefinite cross-process continuity. `client_session_id` remains in-session transport continuity metadata. For fresh process instances, prefer lineage declaration over silent UUID resume.
 
@@ -186,7 +190,7 @@ Symptom:
 
 Fix:
 
-- rerun `onboard(force_new=true)`
+- rerun `start_session(force_new=true)` (`onboard(...)` canonically)
 - if the process is continuing prior work, include `parent_agent_id=<prior uuid>` and `spawn_reason="new_session"`
 - avoid bare `identity(agent_uuid=..., resume=true)`; use a matching `continuity_token` only for same-owner rebinding
 
@@ -208,7 +212,7 @@ When something feels wrong, do the checks in this order:
 1. Run `./scripts/diagnostics/check_health.sh`
 2. If HTTP is up, call `health_check()`
 3. If an agent identity looks wrong, call `identity()`
-4. If the issue is governance-state related, call `get_governance_metrics()`
+4. If the issue is governance-state related, call `check_working_state()` (`get_governance_metrics(...)` canonically)
 5. Only after that inspect logs or restart services
 
 This order matters because many apparent "agent bugs" are actually continuity or process issues, and many apparent "graph bugs" are now observable directly through `health_check()` without guessing from symptoms.

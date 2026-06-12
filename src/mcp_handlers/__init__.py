@@ -194,7 +194,7 @@ async def dispatch_tool(name: str, arguments: Optional[Dict[str, Any]]) -> Seque
     Pipeline: kwargs → identity → trajectory → alias → inject → validate → rate limit → patterns → execute.
     Each step is defined in middleware.py for testability.
     """
-    from .middleware import PRE_DISPATCH_STEPS, POST_VALIDATION_STEPS
+    from .middleware import PRE_DISPATCH_STEPS, POST_VALIDATION_STEPS, POST_EXECUTION_STEPS
     from src.services.tool_dispatch_service import run_tool_dispatch_pipeline
 
     return await run_tool_dispatch_pipeline(
@@ -202,4 +202,5 @@ async def dispatch_tool(name: str, arguments: Optional[Dict[str, Any]]) -> Seque
         arguments=arguments,
         pre_steps=PRE_DISPATCH_STEPS,
         post_steps=POST_VALIDATION_STEPS,
+        post_execution_steps=POST_EXECUTION_STEPS,
     )

@@ -513,7 +513,7 @@ class TestDescribeTool:
         with patch("src.tool_schemas.get_tool_definitions",
                     side_effect=ImportError("module not found")):
             from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
-            result = await handle_describe_tool({"tool_name": "health_check"})
+            result = await handle_describe_tool({"tool_name": "custom_error_tool"})
 
             data = parse_result(result)
             assert data["success"] is False
@@ -1805,7 +1805,7 @@ class TestListTools:
             assert data["success"] is True
             assert "tools" in data
             assert data["shown"] > 0
-            assert data["getting_started_path"][0]["tool"] == "onboard"
+            assert data["getting_started_path"][0]["tool"] == "start_session"
             assert data["essential_toolkit"]["preferred_consolidated_tools"]["dialectic"].startswith("Use action='quick'")
 
     @pytest.mark.asyncio
@@ -1850,7 +1850,7 @@ class TestListTools:
             assert "categories" in data
             assert "workflows" in data
             assert "tool_map" in data
-            assert data["getting_started"]["path"][0]["tool"] == "onboard"
+            assert data["getting_started"]["path"][0]["tool"] == "start_session"
             assert "knowledge" in data["getting_started"]["essential_toolkit"]["preferred_consolidated_tools"]
             assert data["total_tools"] >= 0
 

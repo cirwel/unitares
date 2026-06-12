@@ -80,6 +80,47 @@ async def test_process_agent_update_lite_mentions_current_parameters():
 
 
 @pytest.mark.asyncio
+async def test_workflow_alias_describe_resolves_to_canonical_schema():
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
+    result = await handle_describe_tool({"tool_name": "sync_state", "lite": True})
+    data = json.loads(result[0].text)
+    params = "\n".join(data["parameters"])
+
+    assert data["tool"] == "sync_state"
+    assert data["canonical_tool"] == "process_agent_update"
+    assert data["alias"]["reason"] == "intuitive_alias"
+    assert "response_text" in params
+    assert "complexity" in params
+    assert "confidence" in params
+    assert "sync_state(" in json.dumps(data["common_patterns"])
+
+
+@pytest.mark.asyncio
+async def test_list_tools_lite_surfaces_workflow_aliases():
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
+
+    result = await handle_list_tools({"essential_only": True, "lite": True})
+    data = json.loads(result[0].text)
+    names = [tool["name"] for tool in data["tools"]]
+
+    for alias in (
+        "start_session",
+        "sync_state",
+        "check_working_state",
+        "search_shared_memory",
+        "record_result",
+        "request_review",
+    ):
+        assert alias in names
+
+    assert data["getting_started_path"][0]["tool"] == "start_session"
+    assert data["getting_started_path"][1]["tool"] == "sync_state"
+
+
+@pytest.mark.asyncio
 async def test_outcome_event_lite_mentions_calibration_parameters():
     import json
     from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool

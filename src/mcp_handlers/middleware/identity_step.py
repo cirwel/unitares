@@ -1,9 +1,8 @@
 """Step 1: Resolve Session Identity."""
 
 import asyncio
-import os
 import time as _time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from src.logging_utils import get_logger
@@ -300,6 +299,73 @@ async def _invalidate_binding_redis_async(key: str) -> None:
         pass
 
 
+@dataclass
+class StickyConsult:
+    """Result of `consult_sticky_binding` — the single-sourced sticky-cache
+    consult shared by the MCP dispatch middleware (`resolve_identity`) and
+    the REST prebind path (`http_api._resolve_http_bound_agent`).
+
+    `transport_key` is the raw cache key for the signals (None when the
+    transport is uncacheable). `cacheable` is True only when the consult
+    guard passed — no force_new / client_session_id / continuity_token /
+    explicit UUID on the request — i.e. when a caller that resolves
+    identity afterwards may write the result back under `transport_key`.
+    The REST path writes back only when `cacheable`; the middleware
+    deliberately writes back on the raw key even for proof-carrying
+    requests (e.g. PATH 0 agent_uuid passthrough).
+    """
+    transport_key: Optional[str]
+    binding: Optional[TransportBinding]
+    cacheable: bool
+
+
+async def consult_sticky_binding(
+    signals,
+    arguments: Optional[Dict[str, Any]],
+    *,
+    has_explicit_uuid: bool = False,
+    redis_recovery: bool = True,
+) -> StickyConsult:
+    """Consult the sticky transport-binding cache (MCP middleware + REST).
+
+    Single-sources the consult guard, the TTL check, and (optionally) the
+    Redis restart-recovery fallback so the two transports cannot drift —
+    the REST copy of this logic had already diverged silently (no Redis
+    recovery, no explicit-UUID guard) before consolidation.
+    `redis_recovery=False` preserves the REST path's historical behavior:
+    it only ever consulted the in-memory cache, never Redis after a
+    restart. The divergence is now an explicit parameter instead of a
+    drifting copy.
+    """
+    transport_key = _transport_cache_key(signals)
+    args = arguments if isinstance(arguments, dict) else {}
+    cacheable = bool(
+        transport_key
+        and not args.get("force_new")
+        and not args.get("client_session_id")
+        and not args.get("continuity_token")
+        and not has_explicit_uuid
+    )
+    if not cacheable:
+        return StickyConsult(transport_key, None, False)
+    cached = _transport_identity_cache.get(transport_key)
+    if not cached and redis_recovery:
+        cached = await _load_binding_from_redis(transport_key)
+    if cached and (_time.monotonic() - cached.bound_at) < _TRANSPORT_CACHE_TTL:
+        return StickyConsult(transport_key, cached, True)
+    return StickyConsult(transport_key, None, True)
+
+
+def sticky_resolution_source(binding: TransportBinding) -> str:
+    """The S3 cache-hit envelope ``sticky_cache:<original>``, single-sourced.
+
+    Both transports must emit the identical envelope so
+    `_compute_identity_assurance` applies the same decay-by-one against the
+    original proof tier regardless of which surface served the hit.
+    """
+    return f"sticky_cache:{binding.original_session_source}"
+
+
 def _evict_stale_entries() -> None:
     """Lazy TTL eviction + max size enforcement."""
     now = _time.monotonic()
@@ -334,64 +400,58 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
         canonical_name = name
 
     # --- Sticky transport binding: early return if cached ---
-    transport_key = _transport_cache_key(signals)
+    consult = await consult_sticky_binding(
+        signals,
+        arguments,
+        has_explicit_uuid=bool(arguments and arguments.get("agent_uuid")),
+    )
+    transport_key = consult.transport_key
     ctx._transport_key = transport_key
 
-    _has_agent_uuid = bool(arguments and arguments.get("agent_uuid"))
-    if (transport_key
-        and not force_new
-        and not client_session_id
-        and not continuity_token
-        and not _has_agent_uuid):
-        cached = _transport_identity_cache.get(transport_key)
-        # On miss, try Redis (survives restarts)
-        if not cached:
-            cached = await _load_binding_from_redis(transport_key)
-        if cached and (_time.monotonic() - cached.bound_at) < _TRANSPORT_CACHE_TTL:
-            logger.debug(
-                f"[STICKY] Cache hit for {transport_key}: agent={cached.agent_uuid[:8]}... "
-                f"session_key={cached.session_key[:30]}..."
-            )
-            core_status = await _lookup_core_agent_row_status(
-                cached.agent_uuid,
-                "STICKY",
-            )
-            # Reuse cached binding — set context and return early.
-            # S3: mark session_resolution_source with the cache-hit envelope
-            # `sticky_cache:<original>` so the tier mapper can apply
-            # decay-by-one (strong→medium, medium→weak, weak→weak) against
-            # the original proof, instead of treating every cache hit as
-            # uniformly weak. See `_compute_identity_assurance`.
-            from ..context import set_session_context, set_session_resolution_source
-            set_session_resolution_source(
-                f"sticky_cache:{cached.original_session_source}"
-            )
-            client_hint = arguments.get("client_hint") if arguments else None
-            identity_result = {
-                "agent_uuid": cached.agent_uuid,
-                "source": "sticky_cache",
-                "original_session_source": cached.original_session_source,
-                "core_agent_row_status": core_status,
-            }
-            context_token = set_session_context(
-                session_key=cached.session_key,
-                client_session_id=client_session_id,
-                agent_id=cached.agent_uuid,
-                client_hint=client_hint,
-                identity_result=identity_result,
-            )
-            ctx.session_key = cached.session_key
-            ctx.client_session_id = client_session_id
-            ctx.bound_agent_id = cached.agent_uuid
-            ctx.context_token = context_token
-            ctx.client_hint = client_hint
-            ctx.identity_result = identity_result
-            _attach_middleware_identity(
-                arguments,
-                session_key=cached.session_key,
-                identity_result=identity_result,
-            )
-            return name, arguments, ctx
+    if consult.binding is not None:
+        cached = consult.binding
+        logger.debug(
+            f"[STICKY] Cache hit for {transport_key}: agent={cached.agent_uuid[:8]}... "
+            f"session_key={cached.session_key[:30]}..."
+        )
+        core_status = await _lookup_core_agent_row_status(
+            cached.agent_uuid,
+            "STICKY",
+        )
+        # Reuse cached binding — set context and return early.
+        # S3: mark session_resolution_source with the cache-hit envelope
+        # `sticky_cache:<original>` so the tier mapper can apply
+        # decay-by-one (strong→medium, medium→weak, weak→weak) against
+        # the original proof, instead of treating every cache hit as
+        # uniformly weak. See `_compute_identity_assurance`.
+        from ..context import set_session_context, set_session_resolution_source
+        set_session_resolution_source(sticky_resolution_source(cached))
+        client_hint = arguments.get("client_hint") if arguments else None
+        identity_result = {
+            "agent_uuid": cached.agent_uuid,
+            "source": "sticky_cache",
+            "original_session_source": cached.original_session_source,
+            "core_agent_row_status": core_status,
+        }
+        context_token = set_session_context(
+            session_key=cached.session_key,
+            client_session_id=client_session_id,
+            agent_id=cached.agent_uuid,
+            client_hint=client_hint,
+            identity_result=identity_result,
+        )
+        ctx.session_key = cached.session_key
+        ctx.client_session_id = client_session_id
+        ctx.bound_agent_id = cached.agent_uuid
+        ctx.context_token = context_token
+        ctx.client_hint = client_hint
+        ctx.identity_result = identity_result
+        _attach_middleware_identity(
+            arguments,
+            session_key=cached.session_key,
+            identity_result=identity_result,
+        )
+        return name, arguments, ctx
 
     # Invalidate cache on force_new
     if force_new and transport_key:
@@ -436,14 +496,10 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     if _direct_uuid and name in ("identity", "onboard"):
         # Identity Honesty Part C: require matching continuity_token.
         # Matches the handler-layer gate in identity/handlers.py PATH 0.
-        _partc_token_aid = None
-        _partc_token = arguments.get("continuity_token") if arguments else None
-        if _partc_token:
-            try:
-                from ..identity.session import extract_token_agent_uuid
-                _partc_token_aid = extract_token_agent_uuid(str(_partc_token))
-            except Exception:
-                _partc_token_aid = None
+        from ..identity.session import extract_token_agent_uuid_safe
+        _partc_token_aid = extract_token_agent_uuid_safe(
+            arguments.get("continuity_token") if arguments else None
+        )
         _partc_owned = _partc_token_aid == _direct_uuid
 
         if not _partc_owned:
@@ -561,13 +617,10 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
         return name, arguments, ctx
 
     # Extract agent UUID from continuity token for PATH 2.8 direct lookup
-    _token_agent_uuid = None
-    if arguments and arguments.get("continuity_token"):
-        try:
-            from ..identity.session import extract_token_agent_uuid
-            _token_agent_uuid = extract_token_agent_uuid(str(arguments["continuity_token"]))
-        except Exception:
-            pass
+    from ..identity.session import extract_token_agent_uuid_safe
+    _token_agent_uuid = extract_token_agent_uuid_safe(
+        arguments.get("continuity_token") if arguments else None
+    )
 
     bound_agent_id = None
     identity_result = None
