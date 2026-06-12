@@ -695,3 +695,135 @@ class TestDetectStuckAgentsCadenceSilence:
         result = [r for r in _detect_stuck_agents(critical_margin_timeout_minutes=5) if r["agent_id"] == "a1"]
         assert len(result) == 1
         assert result[0]["reason"] == "cadence_silence"
+
+
+class TestMarginStaleCap:
+    """Margin timeout rules must not fire on abandoned identities (> 24h idle).
+
+    An abandoned agent's margin is computed from its frozen state — no new
+    check-ins ever arrive to move it off critical — so without the cap it is
+    "stuck" forever (observed 2026-06-12: ~24 day-old identities pinned the
+    stuck KPI and re-fired the audit trail on every sweep).
+    """
+
+    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["mcp_server"])
+    def test_abandoned_critical_margin_suppressed(self, mock_server, mock_config):
+        """Critical margin but idle > MARGIN_STUCK_STALE_CAP_MINUTES → not stuck."""
+        old_time = datetime.now(timezone.utc) - timedelta(hours=25)
+        mock_server.agent_metadata = {
+            "a1": _make_agent_meta(last_update=old_time),
+        }
+        mock_server.monitors = {"a1": _make_monitor(risk=0.8, coherence=0.42)}
+        mock_config.compute_proprioceptive_margin.return_value = _margin_info(
+            "critical", nearest_edge="risk", distance=0.02
+        )
+
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+        result = _detect_stuck_agents(
+            critical_margin_timeout_minutes=5,
+            include_pattern_detection=False,
+        )
+        assert result == []
+
+    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["mcp_server"])
+    def test_old_but_under_cap_still_stuck(self, mock_server, mock_config):
+        """Idle 23h (< cap) with critical margin → still detected."""
+        old_time = datetime.now(timezone.utc) - timedelta(hours=23)
+        mock_server.agent_metadata = {
+            "a1": _make_agent_meta(last_update=old_time),
+        }
+        mock_server.monitors = {"a1": _make_monitor(risk=0.8, coherence=0.42)}
+        mock_config.compute_proprioceptive_margin.return_value = _margin_info(
+            "critical", nearest_edge="risk", distance=0.02
+        )
+
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+        result = _detect_stuck_agents(
+            critical_margin_timeout_minutes=5,
+            include_pattern_detection=False,
+        )
+        assert len(result) == 1
+        assert result[0]["reason"] == "critical_margin_timeout"
+
+
+class TestStuckAuditDedupe:
+    """stuck_detected audit writes are emit-on-change (stuck_change_token).
+
+    The handler runs on every dashboard refresh plus a 5-min background sweep;
+    unconditional writes produced ~250 identical audit rows/hour (2026-06-12).
+    """
+
+    def setup_method(self):
+        import src.mcp_handlers.lifecycle.stuck as stuck_module
+        stuck_module._last_stuck_audit_token = None
+
+    def _stuck_set(self, *ids_reasons):
+        return [
+            {"agent_id": aid, "reason": reason, "age_minutes": 10.0}
+            for aid, reason in ids_reasons
+        ]
+
+    def test_token_stable_across_order(self):
+        from src.mcp_handlers.lifecycle.stuck import stuck_change_token
+        a = self._stuck_set(("a1", "critical_margin_timeout"), ("a2", "cadence_silence"))
+        b = self._stuck_set(("a2", "cadence_silence"), ("a1", "critical_margin_timeout"))
+        assert stuck_change_token(a) == stuck_change_token(b)
+
+    def test_token_changes_on_membership_and_reason(self):
+        from src.mcp_handlers.lifecycle.stuck import stuck_change_token
+        base = self._stuck_set(("a1", "critical_margin_timeout"))
+        grown = self._stuck_set(("a1", "critical_margin_timeout"), ("a2", "cadence_silence"))
+        reasoned = self._stuck_set(("a1", "tight_margin_timeout"))
+        assert stuck_change_token(base) != stuck_change_token(grown)
+        assert stuck_change_token(base) != stuck_change_token(reasoned)
+
+    @pytest.mark.asyncio
+    async def test_unchanged_set_writes_audit_once(self):
+        stuck_set = self._stuck_set(("a1", "critical_margin_timeout"))
+        with patch(_PATCHES["mcp_server"]) as mock_server, \
+             patch("src.mcp_handlers.lifecycle.stuck._detect_stuck_agents", return_value=stuck_set) as mock_detect, \
+             patch("src.audit_log.audit_logger._write_entry") as mock_write:
+            mock_server.load_metadata_async = MagicMock(return_value=_async_none())
+            from src.mcp_handlers.lifecycle.stuck import handle_detect_stuck_agents
+            await handle_detect_stuck_agents({})
+            # Pin the executor argument order: (max_age, critical_timeout,
+            # tight_timeout, include_patterns, min_updates)
+            mock_detect.assert_called_once_with(30.0, 5.0, 15.0, True, 1)
+            mock_server.load_metadata_async = MagicMock(return_value=_async_none())
+            await handle_detect_stuck_agents({})
+            assert mock_write.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_changed_set_writes_again(self):
+        first = self._stuck_set(("a1", "critical_margin_timeout"))
+        second = self._stuck_set(("a1", "critical_margin_timeout"), ("a2", "cadence_silence"))
+        with patch(_PATCHES["mcp_server"]) as mock_server, \
+             patch("src.mcp_handlers.lifecycle.stuck._detect_stuck_agents", side_effect=[first, second]), \
+             patch("src.audit_log.audit_logger._write_entry") as mock_write:
+            mock_server.load_metadata_async = MagicMock(side_effect=lambda: _async_none())
+            from src.mcp_handlers.lifecycle.stuck import handle_detect_stuck_agents
+            await handle_detect_stuck_agents({})
+            await handle_detect_stuck_agents({})
+            assert mock_write.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_cleared_set_resets_token(self):
+        """non-empty → empty → same non-empty set again must log twice."""
+        stuck_set = self._stuck_set(("a1", "critical_margin_timeout"))
+        with patch(_PATCHES["mcp_server"]) as mock_server, \
+             patch("src.mcp_handlers.lifecycle.stuck._detect_stuck_agents", side_effect=[stuck_set, [], stuck_set]), \
+             patch("src.audit_log.audit_logger._write_entry") as mock_write:
+            mock_server.load_metadata_async = MagicMock(side_effect=lambda: _async_none())
+            from src.mcp_handlers.lifecycle.stuck import handle_detect_stuck_agents
+            await handle_detect_stuck_agents({})
+            await handle_detect_stuck_agents({})
+            await handle_detect_stuck_agents({})
+            assert mock_write.call_count == 2
+
+
+def _async_none():
+    async def _coro():
+        return None
+    return _coro()
