@@ -26,6 +26,15 @@ If `UNITARES_HTTP_API_TOKEN` is configured, provide the token either as:
 
 The `authFetch` helper and `DashboardAPI` attach the bearer token for dashboard REST and tool calls.
 
+### Operator token (write actions under STRICT_IDENTITY_REQUIRED)
+
+The operator write buttons (archive/resume, config-set, dialectic-request) additionally need an operator credential once `STRICT_IDENTITY_REQUIRED` is on (#425): the server resolves a valid `X-Unitares-Operator` token to a stable operator identity, and that resolved binding is what passes the strict gate — reads keep working without it. Provide the token either as:
+
+- `?operator_token=<token>` in the dashboard URL
+- `localStorage.unitares_operator_token`
+
+The token must be present in the server's `UNITARES_OPERATOR_TOKENS` allowlist (CSV env var; see `src/mcp_handlers/identity/operator.py` for storage and rotation guidance). With the flag off, the header is optional and changes nothing.
+
 ## Current Surfaces
 
 - **Stats:** fleet coherence, active/total agents, stuck agents, discoveries, dialectic sessions, system health, calibration, anomalies, and trust-tier distribution.

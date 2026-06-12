@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-04-25"
+last_verified: "2026-06-11"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -14,15 +14,30 @@ source_files:
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-05-01
+**Last Updated:** 2026-06-11
+
+## Friendly Workflow Names
+
+Current UNITARES servers expose task-verb aliases for the core agent workflow.
+Prefer them when you want the most agent-readable response shape; use the
+canonical names when you need legacy/raw compatibility.
+
+| Job | Friendly alias | Canonical tool |
+| --- | --- | --- |
+| Start working | `start_session(force_new=true, ...)` | `onboard` |
+| Check in after meaningful work | `sync_state(response_text=..., complexity=...)` | `process_agent_update` |
+| Check your working state | `check_working_state()` | `get_governance_metrics` |
+| Avoid duplicate work | `search_shared_memory(query=...)` | `knowledge(action="search")` |
+| Record what actually happened | `record_result(...)` | `outcome_event` |
+| Ask for a structured review | `request_review(issue_description=...)` | `dialectic(action="request")` |
 
 ## Starting a Session
 
 Choose creation, lineage, or proof-owned resume explicitly:
 
 ~~~text
-onboard(force_new=true)                                              # first run / fresh process
-onboard(force_new=true, parent_agent_id="<prior-uuid>",
+start_session(force_new=true)                                        # first run / fresh process
+start_session(force_new=true, parent_agent_id="<prior-uuid>",
         spawn_reason="new_session")                                  # fresh process inheriting prior work
 identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true) # same live owner / proof-owned rebind
 ~~~
@@ -39,8 +54,8 @@ Returns:
 
 Default rules:
 
-1. Fresh first run: call `onboard(force_new=true)`.
-2. New process continuing prior work: call `onboard(force_new=true, parent_agent_id="<prior-uuid>", spawn_reason="new_session")`.
+1. Fresh first run: call `start_session(force_new=true)`.
+2. New process continuing prior work: call `start_session(force_new=true, parent_agent_id="<prior-uuid>", spawn_reason="new_session")`.
 3. Same live process or explicit ownership rebind: call `identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true)`.
 4. Ordinary check-ins: pass `continuity_token` when available, otherwise rely on the active session binding.
 
@@ -54,10 +69,10 @@ Avoid these patterns:
 
 ## Check-ins
 
-Call `process_agent_update()` after meaningful work:
+Call `sync_state()` after meaningful work:
 
 ~~~text
-process_agent_update(
+sync_state(
   response_text: "Brief summary of what you did",
   complexity: 0.0-1.0,   # Task difficulty estimate
   confidence: 0.0-1.0    # How confident you are (be honest)
@@ -118,12 +133,12 @@ Recovery is not a shortcut — `self_recovery()` examines your EISV state and de
 
 ### Essential (use in every session)
 
-- `onboard(force_new=true, parent_agent_id=...)` — Create a fresh process identity, optionally declaring lineage
-- `process_agent_update()` — Check in with work summary, complexity, confidence
-- `get_governance_metrics()` — Read your current EISV state
+- `start_session(force_new=true, parent_agent_id=...)` / `onboard(...)` — Create a fresh process identity, optionally declaring lineage
+- `sync_state()` / `process_agent_update()` — Check in with work summary, complexity, confidence
+- `check_working_state()` / `get_governance_metrics()` — Read your current EISV state
 - `identity()` — Confirm who the runtime thinks you are and how continuity was resolved; include `continuity_token` for proof-owned UUID rebinds
 - `health_check()` — Check operator-facing server health when behavior seems odd
-- `knowledge(action="search", ...)` — Find existing knowledge before creating new entries
+- `search_shared_memory(query=...)` / `knowledge(action="search", ...)` — Find existing knowledge before creating new entries
 - `knowledge(action="note", ...)` — Quick contribution to the knowledge graph
 
 ### Common (use when needed)

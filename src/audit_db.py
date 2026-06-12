@@ -74,31 +74,6 @@ async def query_audit_events_async(
     ]
 
 
-async def search_audit_events_async(
-    query: str,
-    agent_id: Optional[str] = None,
-    limit: int = 200,
-) -> List[Dict[str, Any]]:
-    """Full-text search on audit events via PostgreSQL."""
-    from src.db import get_db
-    db = get_db()
-    if not hasattr(db, '_pool') or db._pool is None:
-        await db.init()
-
-    events = await db.search_audit_events(query, agent_id, limit)
-    return [
-        {
-            "timestamp": e.ts.isoformat() if e.ts else None,
-            "agent_id": e.agent_id,
-            "event_type": e.event_type,
-            "confidence": e.confidence,
-            "details": e.payload,
-            "event_id": e.event_id,
-        }
-        for e in events
-    ]
-
-
 async def append_tool_usage_async(
     agent_id: Optional[str],
     tool_name: str,

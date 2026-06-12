@@ -575,7 +575,6 @@ async def _derive_session_key_impl(
     8. Contextvars fallback             — backward compat (remove once all callers pass signals)
     9. stdio fallback                   — single-user / Claude Desktop
     """
-    from ..context import SessionSignals  # type hint import
 
     arguments = arguments or {}
 

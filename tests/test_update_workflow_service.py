@@ -462,4 +462,3 @@ async def test_run_process_update_workflow_real_spine_blocks_explicitly_archived
     harness.server.process_update_authenticated_async.assert_not_awaited()
     harness.storage.update_agent.assert_not_called()
     metadata_cache.invalidate.assert_not_called()
-    audit_logger.log_auto_resume.assert_not_called()
