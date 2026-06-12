@@ -31,7 +31,11 @@ import time
 from ..utils import success_response, error_response, require_argument, require_agent_id, require_registered_agent
 from ..decorators import mcp_tool
 from ..validators import apply_param_aliases
-from src.knowledge_graph import get_knowledge_graph, DiscoveryNode, ResponseTo, normalize_tags
+from src.knowledge_graph import (
+    get_knowledge_graph, DiscoveryNode, ResponseTo, normalize_tags,
+    VALID_RESPONSE_TYPES, VALID_DISCOVERY_STATUSES,
+    VALID_SEVERITIES as _SHARED_VALID_SEVERITIES,
+)
 from src.mcp_handlers.knowledge.limits import MAX_SUMMARY_LEN, MAX_DETAILS_LEN
 from config.governance_config import config
 from src.logging_utils import get_logger
@@ -56,7 +60,10 @@ VALID_DISCOVERY_TYPES = {
     # by agents directly.
     "topic_rollup",
 }
-VALID_SEVERITIES = {"low", "medium", "high", "critical"}
+# Single-sourced in src.knowledge_graph next to the status/response_type
+# vocabularies; tests/test_knowledge_enum_sync.py pins all three against the
+# SQL CHECK constraints.
+VALID_SEVERITIES = _SHARED_VALID_SEVERITIES
 SEVERITY_ALIASES = {
     "info": "low",
     "informational": "low",
@@ -632,11 +639,9 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
 
                 # Validate response_type enum
                 response_type = resp_data["response_type"]
-                VALID_RESPONSE_TYPES = {"extend", "question", "disagree", "support", "answer", "follow_up", "correction", "elaboration", "supersedes"}
                 if response_type not in VALID_RESPONSE_TYPES:
                     return error_response(f"Invalid response_type '{response_type}'. Valid: {sorted(VALID_RESPONSE_TYPES)}")
 
-                from src.knowledge_graph import ResponseTo
                 response_to = ResponseTo(
                     discovery_id=parent_id,
                     response_type=response_type
@@ -1931,10 +1936,9 @@ async def handle_update_discovery_status_graph(arguments: Dict[str, Any]) -> Seq
         updates = {"updated_at": _utc_now_iso()}
 
         if status is not None:
-            VALID_STATUSES = {"open", "resolved", "archived", "disputed", "closed", "wont_fix", "superseded"}
             status = str(status).lower()
-            if status not in VALID_STATUSES:
-                return [error_response(f"Invalid status '{status}'. Valid: {sorted(VALID_STATUSES)}")]
+            if status not in VALID_DISCOVERY_STATUSES:
+                return [error_response(f"Invalid status '{status}'. Valid: {sorted(VALID_DISCOVERY_STATUSES)}")]
             updates["status"] = status
             if status == "resolved":
                 updates["resolved_at"] = _utc_now_iso()
@@ -2175,7 +2179,6 @@ async def _handle_store_knowledge_graph_batch(arguments: Dict[str, Any], agent_i
                             continue
 
                         response_type = resp_data["response_type"]
-                        VALID_RESPONSE_TYPES = {"extend", "question", "disagree", "support", "answer", "follow_up", "correction", "elaboration", "supersedes"}
                         if response_type in VALID_RESPONSE_TYPES:
                             response_to = ResponseTo(
                                 discovery_id=parent_id,
@@ -2434,7 +2437,6 @@ async def handle_leave_note(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
                 # Validate response_type enum
                 response_type = resp_data["response_type"]
-                VALID_RESPONSE_TYPES = {"extend", "question", "disagree", "support", "answer", "follow_up", "correction", "elaboration", "supersedes"}
                 if response_type not in VALID_RESPONSE_TYPES:
                     return error_response(f"Invalid response_type '{response_type}'. Valid: {sorted(VALID_RESPONSE_TYPES)}")
 
