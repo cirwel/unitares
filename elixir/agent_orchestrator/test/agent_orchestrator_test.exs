@@ -337,6 +337,76 @@ defmodule AgentOrchestratorTest do
     end
   end
 
+
+  describe "server-url provisioning" do
+    test "provisions UNITARES_SERVER_URL into the child env" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", "echo $UNITARES_SERVER_URL"],
+          server_url: "http://localhost:9999"
+        })
+
+      assert {:ok, %{output: ["http://localhost:9999"], exit_status: 0}} =
+               AgentOrchestrator.await(id)
+    end
+
+    test "an explicit env entry wins over the provisioned URL" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", "echo $UNITARES_SERVER_URL"],
+          env: [{"UNITARES_SERVER_URL", "http://caller:1"}],
+          server_url: "http://provisioned:2"
+        })
+
+      assert {:ok, %{output: ["http://caller:1"]}} = AgentOrchestrator.await(id)
+    end
+
+    test "refuses a URL without an http(s) scheme (no acquire, no child)" do
+      assert {:error, {:invalid_server_url, {:server_url_not_http, "localhost:8767"}}} =
+               AgentOrchestrator.run(%{
+                 cmd: "echo",
+                 args: ["x"],
+                 server_url: "localhost:8767",
+                 lease_client: StubLeaseClient
+               })
+
+      refute_receive {:lease_event, _}, 100
+    end
+
+    test "refuses a non-string server_url" do
+      assert {:error, {:invalid_server_url, {:server_url_not_string, 8767}}} =
+               AgentOrchestrator.run(%{cmd: "echo", args: ["x"], server_url: 8767})
+    end
+
+    test "env: nil with server_url provisions without crashing" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", "echo $UNITARES_SERVER_URL"],
+          env: nil,
+          server_url: "http://localhost:9999"
+        })
+
+      assert {:ok, %{output: ["http://localhost:9999"], exit_status: 0}} =
+               AgentOrchestrator.await(id)
+    end
+
+    test "composes with lineage provisioning" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", ~s(echo "$UNITARES_PARENT_AGENT_ID|$UNITARES_SERVER_URL")],
+          lineage: %{parent_agent_uuid: "44444444-4444-4444-8444-444444444444"},
+          server_url: "https://gov.example:8767"
+        })
+
+      assert {:ok, %{output: ["44444444-4444-4444-8444-444444444444|https://gov.example:8767"]}} =
+               AgentOrchestrator.await(id)
+    end
+  end
+
   describe "presence (default-on, best-effort)" do
     # Long-lived agents + snapshot/0 (read while alive) — avoids the await race
     # where a fast command exits and unregisters before the assertion runs.

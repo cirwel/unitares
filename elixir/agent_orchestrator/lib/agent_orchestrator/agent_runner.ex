@@ -34,7 +34,8 @@ defmodule AgentOrchestrator.AgentRunner do
         lease: nil | false | lease_cfg,    # default (absent/nil) = best-effort agent:/ presence;
                                            # false = no presence; map = override
         lease_client: module(),            # injectable, default LeasePlaneClient
-        lineage: nil | lineage_cfg         # default nil = no lineage provisioning
+        lineage: nil | lineage_cfg,        # default nil = no lineage provisioning
+        server_url: String.t() | nil       # default nil = no server-URL provisioning
       }
 
       lease_cfg :: %{
@@ -69,6 +70,17 @@ defmodule AgentOrchestrator.AgentRunner do
   surfaces downstream as false ancestry in the lineage DAG. The result's
   `:lineage` field reports `:provisioned` or `:none`.
 
+  ## Server-URL provisioning
+
+  `server_url:` provisions `UNITARES_SERVER_URL` into the child env under
+  the same explicit-wins rule. Without it, a child whose governance hooks
+  default to `http://localhost:8767` silently talks to the wrong server
+  whenever the spawner targets a non-default one. This is transport config,
+  not lineage, hence a top-level key rather than a `lineage_cfg` field. A
+  value without an `http(s)://` scheme refuses the spawn (`{:error,
+  {:invalid_server_url, _}}`) — a malformed URL fails at the child as a
+  confusing OFFLINE, far from its cause.
+
   ## Presence
 
   By default an agent registers an `agent:/<id>` PRESENCE row on the lease plane
@@ -96,6 +108,7 @@ defmodule AgentOrchestrator.AgentRunner do
 
   # Lineage-provisioning env vars surfaced to the child (candidate
   # declarations — see "Lineage provisioning" in the moduledoc).
+  @server_url_var "UNITARES_SERVER_URL"
   @lineage_parent_var "UNITARES_PARENT_AGENT_ID"
   @lineage_reason_var "UNITARES_SPAWN_REASON"
   @default_spawn_reason "subagent"
@@ -228,19 +241,25 @@ defmodule AgentOrchestrator.AgentRunner do
         {:stop, {:invalid_lineage, reason}}
 
       {:ok, lineage_cfg} ->
-        state = %__MODULE__{
-          agent_id: agent_id,
-          lease_client: lease_client,
-          lease_cfg: lease_cfg,
-          lineage: if(lineage_cfg, do: :provisioned, else: :none),
-          max_output_lines: Map.get(spec, :max_output_lines, @default_max_lines)
-        }
+        case normalize_server_url(Map.get(spec, :server_url)) do
+          {:error, reason} ->
+            {:stop, {:invalid_server_url, reason}}
 
-        init_with_lease(state, spec, lineage_cfg)
+          {:ok, server_url} ->
+            state = %__MODULE__{
+              agent_id: agent_id,
+              lease_client: lease_client,
+              lease_cfg: lease_cfg,
+              lineage: if(lineage_cfg, do: :provisioned, else: :none),
+              max_output_lines: Map.get(spec, :max_output_lines, @default_max_lines)
+            }
+
+            init_with_lease(state, spec, candidate_env(lineage_cfg, server_url))
+        end
     end
   end
 
-  defp init_with_lease(state, spec, lineage_cfg) do
+  defp init_with_lease(state, spec, candidates) do
     # Not a `with`: the acquired lease_id must be in scope on the port-open
     # failure path so we can release it. A `with/else` only sees the failing
     # clause's value, so the acquired lease_id would be invisible there and the
@@ -253,7 +272,7 @@ defmodule AgentOrchestrator.AgentRunner do
       {:ok, lease_id, presence} ->
         state = %{state | lease_id: lease_id, presence: presence}
 
-        case open_port(spec, lineage_cfg) do
+        case open_port(spec, candidates) do
           {:ok, port, os_pid} ->
             Logger.info(
               "agent #{state.agent_id} started os_pid=#{os_pid} lease=#{lease_id || "none"} cmd=#{Map.get(spec, :cmd)}"
@@ -450,7 +469,7 @@ defmodule AgentOrchestrator.AgentRunner do
     end
   end
 
-  defp open_port(spec, lineage_cfg) do
+  defp open_port(spec, candidates) do
     cmd = Map.fetch!(spec, :cmd)
 
     case resolve_executable(cmd) do
@@ -471,7 +490,7 @@ defmodule AgentOrchestrator.AgentRunner do
             {:line, @line_max_bytes},
             {:args, Map.get(spec, :args, [])}
           ]
-          |> maybe_opt(:env, encode_env(env ++ lineage_env(lineage_cfg, env)))
+          |> maybe_opt(:env, encode_env(env ++ provisioned_env(candidates, env)))
           |> maybe_opt(:cd, Map.get(spec, :cd))
 
         try do
@@ -512,18 +531,41 @@ defmodule AgentOrchestrator.AgentRunner do
 
   defp normalize_lineage_cfg(other), do: {:error, {:lineage_not_map, other}}
 
-  defp lineage_env(nil, _env), do: []
+  # Scheme check only — a value with no http(s):// scheme fails at the child
+  # as a confusing OFFLINE far from its cause; refuse it at the boundary.
+  defp normalize_server_url(nil), do: {:ok, nil}
 
-  defp lineage_env(%{} = cfg, env) do
+  defp normalize_server_url(url) when is_binary(url) do
+    if String.starts_with?(url, ["http://", "https://"]) do
+      {:ok, url}
+    else
+      {:error, {:server_url_not_http, url}}
+    end
+  end
+
+  defp normalize_server_url(other), do: {:error, {:server_url_not_string, other}}
+
+  # The full provisioned-candidate list for the child env, built from the
+  # already-validated configs.
+  defp candidate_env(lineage_cfg, server_url) do
+    lineage =
+      case lineage_cfg do
+        nil -> []
+        cfg -> [{@lineage_parent_var, cfg.parent_agent_uuid}, {@lineage_reason_var, cfg.spawn_reason}]
+      end
+
+    server = if server_url, do: [{@server_url_var, server_url}], else: []
+    lineage ++ server
+  end
+
+  defp provisioned_env([], _env), do: []
+
+  defp provisioned_env(candidates, env) do
     explicit = MapSet.new(env, fn {k, _v} -> k end)
 
     # Explicit env wins: the caller setting the var directly has made the more
     # specific statement; silently overriding it would be the invasive version.
-    [
-      {@lineage_parent_var, cfg.parent_agent_uuid},
-      {@lineage_reason_var, cfg.spawn_reason}
-    ]
-    |> Enum.reject(fn {k, _v} -> MapSet.member?(explicit, k) end)
+    Enum.reject(candidates, fn {k, _v} -> MapSet.member?(explicit, k) end)
   end
 
   defp maybe_opt(opts, _key, nil), do: opts
