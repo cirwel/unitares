@@ -359,6 +359,16 @@ async def test_routing_table_hit_timeout_to_fallback(stub_server, captured_event
     assert fallback_payload["tool_name"] == "slow_tool"
     assert fallback_payload["trigger"] == "timeout"
 
+    # Wave 0 step 2 dedup contract (§129 follow-up from
+    # section-129-measurement-fix-2026-06-03.md): every coordination_failure
+    # emit carries incident_id, and the timeout + fallback pair describe the
+    # SAME incident — one occurrence must not count as two distinct
+    # incidents under COUNT(DISTINCT incident_id).
+    import uuid as _uuid
+
+    assert timeout_payload["incident_id"] == fallback_payload["incident_id"]
+    _uuid.UUID(timeout_payload["incident_id"])  # raises if not a valid UUID
+
 
 # ---------------------------------------------------------------------------
 # Test 4 — routing-table-hit envelope-invalid fallback
@@ -396,6 +406,11 @@ async def test_routing_table_hit_envelope_invalid_fallback(stub_server, captured
     # The stub returns ok=true + WRONG protocol_version — the violation
     # should name the protocol mismatch, not a missing key.
     assert "protocol_version_mismatch" in envelope_payload["detail"]
+
+    # Dedup contract: incident_id present on every coordination_failure emit.
+    import uuid as _uuid
+
+    _uuid.UUID(envelope_payload["incident_id"])
 
 
 # ---------------------------------------------------------------------------
