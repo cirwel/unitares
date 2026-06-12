@@ -270,6 +270,29 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
         update_context_agent_id(explicit_agent_id)
         return explicit_agent_id
 
+    # Operator credential (#425 dashboard-identity decision): a valid
+    # X-Unitares-Operator token resolves to a stable, persisted operator
+    # identity through the canonical resolver. The credential EARNS a
+    # resolved binding — the strict gate keys on the binding, never on
+    # header presence (council finding, PR #610). Checked ahead of the
+    # sticky consult, and the binding is deliberately NEVER written to the
+    # IP:UA transport cache: a same-host caller without the header must
+    # not inherit operator identity from a shared fingerprint.
+    from src.mcp_handlers.identity.operator import resolve_operator_identity
+    try:
+        operator_identity = await resolve_operator_identity(signals)
+    except Exception as e:
+        # Valid-token-but-resolver-error degrades to unbound (writes refuse
+        # under strict) — a visible failure, never a silent bypass.
+        logger.warning("[OPERATOR] identity resolution failed: %s", e)
+        operator_identity = None
+    if operator_identity:
+        agent_uuid = operator_identity["agent_uuid"]
+        update_context_agent_id(agent_uuid)
+        arguments["agent_id"] = agent_uuid
+        set_session_resolution_source("operator_token")
+        return agent_uuid
+
     # Sticky transport cache: single-sourced consult shared with the MCP
     # middleware (identity_step.consult_sticky_binding), which prevents
     # identity fragmentation for repeat callers from the same IP:UA
