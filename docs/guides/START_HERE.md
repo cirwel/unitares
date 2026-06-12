@@ -12,16 +12,27 @@ Use this unless you have a specific reason not to:
 4. Call `get_governance_metrics()` for state
 5. Use `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)` only for same-owner proof-owned rebinds
 
+Agent-facing workflow aliases are also registered:
+
+| Job | Workflow alias | Canonical tool |
+| --- | --- | --- |
+| Start working | `start_session(force_new=true, ...)` | `onboard` |
+| Check in after meaningful work | `sync_state(response_text=..., complexity=...)` | `process_agent_update` |
+| Check current state | `check_working_state()` | `get_governance_metrics` |
+| Search shared memory | `search_shared_memory(query=...)` | `knowledge(action="search")` |
+| Record a real outcome | `record_result(...)` | `outcome_event` |
+| Ask for review | `request_review(issue_description=...)` | `dialectic(action="request")` |
+
 ```python
 # First run:
-result = onboard(force_new=True)
+result = start_session(force_new=True)
 save_to_file(result["uuid"])
 
 # New process inheriting prior work:
-onboard(force_new=True, parent_agent_id=saved_uuid, spawn_reason="new_session")
+start_session(force_new=True, parent_agent_id=saved_uuid, spawn_reason="new_session")
 
 # After work:
-process_agent_update(response_text="What you did", complexity=0.5)
+sync_state(response_text="What you did", complexity=0.5)
 ```
 
 ## Identity Rule

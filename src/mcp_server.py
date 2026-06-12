@@ -510,10 +510,16 @@ auto_register_all_tools()
 # agents can use intuitive names like status() without "Unknown tool" errors.
 
 def _register_common_aliases():
-    from src.mcp_handlers.tool_stability import resolve_tool_alias
-    from src.mcp_handlers.support.wrapper_generator import create_typed_wrapper
+    from src.mcp_handlers.tool_stability import (
+        AGENT_WORKFLOW_ALIASES,
+        resolve_tool_alias,
+    )
+    from src.mcp_handlers.support.wrapper_generator import (
+        create_typed_wrapper,
+        enable_extra_argument_passthrough,
+    )
 
-    common = ["status", "list_agents", "observe_agent"]
+    common = list(AGENT_WORKFLOW_ALIASES)
     count = 0
     for alias_name in common:
         actual, info = resolve_tool_alias(alias_name)
@@ -568,6 +574,15 @@ def _register_common_aliases():
             )
             desc = f"{info.migration_note or f'Alias for {actual}'}"
             mcp.tool(description=desc, structured_output=False)(wrapper)
+            if actual in EXTRA_ARGUMENT_PASSTHROUGH_TOOLS:
+                tool_manager = getattr(mcp, "_tool_manager", None)
+                registered_tool = (
+                    tool_manager.get_tool(alias_name)
+                    if tool_manager and hasattr(tool_manager, "get_tool")
+                    else None
+                )
+                if registered_tool is not None:
+                    enable_extra_argument_passthrough(registered_tool)
             count += 1
         except Exception as e:
             logger.debug(f"[ALIAS] Failed to register {alias_name}: {e}")
@@ -575,7 +590,7 @@ def _register_common_aliases():
     if count:
         logger.info(f"[AUTO_REGISTER] Registered {count} common aliases")
 
-# _register_common_aliases()  # Removed: aliases inflate tool count; use consolidated forms
+_register_common_aliases()
 
 # ============================================================================
 # LEGACY MANUAL REGISTRATIONS (kept for reference, will be removed)
