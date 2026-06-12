@@ -232,3 +232,85 @@ class TestRecordEvent:
                                           "agent_id": "x", "agent_name": "n", "fingerprint": "fp"})
         assert "timestamp" in stored
         assert stored["timestamp"].endswith("+00:00") or stored["timestamp"].endswith("Z")
+
+    def test_change_token_suppresses_unchanged_condition_across_window(self, monkeypatch):
+        """A frozen/persisting condition (same change_token) must NOT re-emit even
+        after the time window lapses. This is the stale-history risk_spike bug:
+        an idle agent's one-time spike re-fired every 30-min sweep. Emit-on-change
+        suppression is time-independent, so the time jump must not resurrect it."""
+        from datetime import datetime, timedelta, timezone
+        detector = GovernanceEventDetector(max_stored_events=10)
+        t0 = datetime(2026, 6, 12, 1, 0, 0, tzinfo=timezone.utc)
+
+        class FakeDatetime:
+            @staticmethod
+            def now(tz=None):
+                return FakeDatetime._current
+            _current = t0
+
+        monkeypatch.setattr("src.event_detector.datetime", FakeDatetime)
+        FakeDatetime._current = t0
+        first = detector.record_event({
+            "type": "risk_spike", "severity": "medium",
+            "message": "m", "agent_id": "idle", "agent_name": "n",
+            "fingerprint": "fp", "change_token": "tok_033_055",
+        })
+        # Three sweeps, each well past the 30-min window — the frozen window
+        # yields the identical token every time and must stay suppressed.
+        suppressed = []
+        for mins in (31, 62, 120):
+            FakeDatetime._current = t0 + timedelta(minutes=mins)
+            suppressed.append(detector.record_event({
+                "type": "risk_spike", "severity": "medium",
+                "message": "m", "agent_id": "idle", "agent_name": "n",
+                "fingerprint": "fp", "change_token": "tok_033_055",
+            }))
+        assert first is not None
+        assert all(s is None for s in suppressed)
+        assert len(detector.get_recent_events(limit=10)) == 1
+
+    def test_change_token_emits_when_condition_changes(self):
+        """When the underlying data moves, the token changes and the event emits."""
+        detector = GovernanceEventDetector(max_stored_events=10)
+        first = detector.record_event({
+            "type": "risk_spike", "severity": "medium", "message": "m",
+            "agent_id": "a", "agent_name": "n",
+            "fingerprint": "fp", "change_token": "tok_v1",
+        })
+        same = detector.record_event({
+            "type": "risk_spike", "severity": "medium", "message": "m",
+            "agent_id": "a", "agent_name": "n",
+            "fingerprint": "fp", "change_token": "tok_v1",
+        })
+        changed = detector.record_event({
+            "type": "risk_spike", "severity": "high", "message": "m2",
+            "agent_id": "a", "agent_name": "n",
+            "fingerprint": "fp", "change_token": "tok_v2",
+        })
+        assert first is not None
+        assert same is None
+        assert changed is not None
+        assert len(detector.get_recent_events(limit=10)) == 2
+
+    def test_token_and_tokenless_paths_coexist(self):
+        """Token-less events keep the original time-window dedup; token events do
+        not pollute that path (backward compatibility)."""
+        detector = GovernanceEventDetector(max_stored_events=10)
+        a = detector.record_event({"type": "t", "severity": "info", "message": "m",
+                                    "agent_id": "x", "agent_name": "n", "fingerprint": "tl"})
+        a_dup = detector.record_event({"type": "t", "severity": "info", "message": "m",
+                                       "agent_id": "x", "agent_name": "n", "fingerprint": "tl"})
+        assert a is not None
+        assert a_dup is None  # time-window dedup still active for token-less
+
+    def test_change_tokens_dict_is_bounded(self):
+        """The change-token map must not grow unbounded across many agents."""
+        detector = GovernanceEventDetector(max_stored_events=10)
+        detector._max_change_tokens = 50
+        for i in range(120):
+            detector.record_event({
+                "type": "risk_spike", "severity": "medium", "message": "m",
+                "agent_id": f"agent_{i}", "agent_name": "n",
+                "fingerprint": f"fp_{i}", "change_token": f"tok_{i}",
+            })
+        assert len(detector._change_tokens) <= detector._max_change_tokens

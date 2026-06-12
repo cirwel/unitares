@@ -179,6 +179,16 @@ class GovernanceEventDetector:
         # Key: fingerprint string. Value: datetime of last emit.
         self._recent_fingerprints: Dict[str, datetime] = {}
         self._dedup_window_seconds: int = 1800  # 30 minutes
+        # Change-token dedup for *persisting* conditions (emit-on-change).
+        # Key: fingerprint string. Value: last-emitted change token.
+        # Unlike the time window above, this suppression does NOT lapse with
+        # elapsed time — only when the underlying data changes. This is the
+        # correct dedup for a frozen condition: an idle agent's one-time
+        # historical risk_spike must not re-fire every sweep once the 30-min
+        # window elapses (see project_stale-history-riskspike-refire). Bounded
+        # by (#agents x #condition types) ever seen; capped below.
+        self._change_tokens: Dict[str, str] = {}
+        self._max_change_tokens: int = 5000
 
     def seed_known_agents(self, agents: list[tuple[str, str]]) -> int:
         """Pre-populate _prev_state so known agents don't fire agent_new after restart.
@@ -386,6 +396,14 @@ class GovernanceEventDetector:
         seen inside ``_dedup_window_seconds`` are dropped (returns None) so
         periodic re-emitters like Sentinel do not flood Discord.
 
+        If the caller supplies a ``change_token``, dedup switches to
+        emit-on-change: the event is dropped whenever the token equals the last
+        token emitted for this fingerprint, with NO time component. This is the
+        correct behavior for persisting/frozen conditions — e.g. an idle agent
+        whose one-time historical risk_spike would otherwise re-fire every sweep
+        once the 30-minute window lapses. A token-bearing event emits exactly
+        once per distinct underlying condition, however many sweeps observe it.
+
         Stamps ``event_id`` and ``timestamp`` in-place and returns the stored dict.
         """
         fingerprint = event.get("fingerprint")
@@ -393,18 +411,31 @@ class GovernanceEventDetector:
             return None
 
         now = datetime.now(timezone.utc)
-        last_seen = self._recent_fingerprints.get(fingerprint)
-        if last_seen is not None:
-            age_seconds = (now - last_seen).total_seconds()
-            if age_seconds < self._dedup_window_seconds:
+        change_token = event.get("change_token")
+        if change_token is not None:
+            # Emit-on-change path: time-independent suppression of an unchanged
+            # persisting condition. Keyed purely on whether the data moved.
+            if self._change_tokens.get(fingerprint) == change_token:
                 return None
+            self._change_tokens[fingerprint] = change_token
+            if len(self._change_tokens) > self._max_change_tokens:
+                # Drop ~10% oldest by insertion order to bound memory.
+                drop = max(1, self._max_change_tokens // 10)
+                for stale_fp in list(self._change_tokens)[:drop]:
+                    del self._change_tokens[stale_fp]
+        else:
+            last_seen = self._recent_fingerprints.get(fingerprint)
+            if last_seen is not None:
+                age_seconds = (now - last_seen).total_seconds()
+                if age_seconds < self._dedup_window_seconds:
+                    return None
 
-        # Sweep fingerprints older than 2x window so the dict does not grow forever
-        cutoff = now - timedelta(seconds=2 * self._dedup_window_seconds)
-        self._recent_fingerprints = {
-            fp: ts for fp, ts in self._recent_fingerprints.items() if ts > cutoff
-        }
-        self._recent_fingerprints[fingerprint] = now
+            # Sweep fingerprints older than 2x window so the dict does not grow forever
+            cutoff = now - timedelta(seconds=2 * self._dedup_window_seconds)
+            self._recent_fingerprints = {
+                fp: ts for fp, ts in self._recent_fingerprints.items() if ts > cutoff
+            }
+            self._recent_fingerprints[fingerprint] = now
 
         if "timestamp" not in event:
             event["timestamp"] = now.isoformat()

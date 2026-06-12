@@ -637,6 +637,27 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
     
     return success_response(comparison_data)
 
+def anomaly_change_token(anomaly: Dict[str, Any]) -> str:
+    """Emit-on-change dedup token for a persisting anomaly.
+
+    Keyed on the data the anomaly was computed from — its type, agent, the
+    full-precision context values, and the newest analyzed sample's timestamp —
+    NOT on the human-readable description. This means the token advances exactly
+    when a new state sample lands: a frozen/idle history yields an identical
+    token every evaluation (suppressed), while a genuine recovery-then-respike
+    produces a new timestamp and therefore a new token (emitted), even if the
+    rounded values happen to match. Deliberately independent of the description
+    f-string so message-format edits can never silently re-fire the idle fleet.
+    """
+    import hashlib
+    ctx = anomaly.get("context") or {}
+    ctx_repr = "|".join(f"{k}={ctx[k]}" for k in sorted(ctx))
+    basis = (
+        f"{anomaly.get('type')}|{anomaly.get('agent_id')}|"
+        f"{anomaly.get('timestamp')}|{ctx_repr}"
+    )
+    return hashlib.sha256(basis.encode()).hexdigest()[:16]
+
 @mcp_tool("detect_anomalies", timeout=15.0, register=False)
 async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Detect anomalies across agents"""
@@ -735,6 +756,7 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
             ).hexdigest()[:16]
             stored = event_detector.record_event({
                 "fingerprint": fp,
+                "change_token": anomaly_change_token(a),
                 "type": a.get("type"),
                 "severity": a.get("severity"),
                 "agent_id": a.get("agent_id"),
