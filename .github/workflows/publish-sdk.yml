@@ -14,6 +14,11 @@ on:
     tags:
       - "sdk-v*"
 
+# Restrictive default for all jobs; the publish job widens itself with
+# id-token: write for PyPI Trusted Publishing.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
