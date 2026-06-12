@@ -322,6 +322,182 @@ class TestLogAutoAttest:
 # ===========================================================================
 # _write_entry internals
 # ===========================================================================
+class TestLogCrossDeviceCall:
+    def test_writes_valid_jsonl(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_cross_device_call(
+            agent_id="agent-7",
+            source_device="mac",
+            target_device="pi",
+            tool_name="get_state",
+            arguments={"include": ["sensors"]},
+            status="success",
+            latency_ms=142.5,
+        )
+        entries = _read_jsonl(logger.log_file)
+        assert len(entries) == 1
+        e = entries[0]
+        assert e["event_type"] == "cross_device_call"
+        assert e["details"]["source_device"] == "mac"
+        assert e["details"]["target_device"] == "pi"
+        assert e["details"]["tool_name"] == "get_state"
+        assert e["details"]["status"] == "success"
+        assert e["details"]["latency_ms"] == 142.5
+        assert e["details"]["error"] is None
+
+    def test_error_status(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_cross_device_call(
+            "a", "pi", "mac", "health_check", {},
+            status="error", error="Connection timeout",
+        )
+        entries = _read_jsonl(logger.log_file)
+        assert entries[0]["details"]["status"] == "error"
+        assert entries[0]["details"]["error"] == "Connection timeout"
+
+    def test_with_extra_details(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_cross_device_call(
+            "a", "mac", "pi", "say", {"text": "hi"},
+            details={"retry_count": 2},
+        )
+        entries = _read_jsonl(logger.log_file)
+        assert entries[0]["details"]["retry_count"] == 2
+
+
+# ===========================================================================
+# log_orchestration_request
+# ===========================================================================
+class TestLogOrchestrationRequest:
+    def test_writes_valid_jsonl(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_orchestration_request(
+            agent_id="agent-8",
+            workflow="morning_check",
+            target_device="pi",
+            tools_planned=["get_state", "read_sensors", "say"],
+            context={"trigger": "scheduled"},
+        )
+        entries = _read_jsonl(logger.log_file)
+        assert len(entries) == 1
+        e = entries[0]
+        assert e["event_type"] == "orchestration_request"
+        assert e["details"]["workflow"] == "morning_check"
+        assert e["details"]["tools_planned"] == ["get_state", "read_sensors", "say"]
+        assert e["details"]["context"]["trigger"] == "scheduled"
+
+    def test_no_context(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_orchestration_request("a", "check", "pi", ["tool1"])
+        entries = _read_jsonl(logger.log_file)
+        assert entries[0]["details"]["context"] is None
+
+
+# ===========================================================================
+# log_orchestration_complete
+# ===========================================================================
+class TestLogOrchestrationComplete:
+    def test_writes_valid_jsonl(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_orchestration_complete(
+            agent_id="agent-9",
+            workflow="morning_check",
+            target_device="pi",
+            tools_executed=["get_state", "read_sensors"],
+            success=True,
+            total_latency_ms=1234.5,
+        )
+        entries = _read_jsonl(logger.log_file)
+        assert len(entries) == 1
+        e = entries[0]
+        assert e["event_type"] == "orchestration_complete"
+        assert e["details"]["success"] is True
+        assert e["details"]["total_latency_ms"] == 1234.5
+        assert e["details"]["errors"] == []
+
+    def test_with_errors(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_orchestration_complete(
+            "a", "wf", "pi", ["t1"], False, 5000.0,
+            errors=["timeout on t1"],
+        )
+        entries = _read_jsonl(logger.log_file)
+        assert entries[0]["details"]["errors"] == ["timeout on t1"]
+        assert entries[0]["details"]["success"] is False
+
+    def test_with_results_summary(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_orchestration_complete(
+            "a", "wf", "pi", ["t1"], True, 100.0,
+            results_summary={"sensors_ok": True},
+        )
+        entries = _read_jsonl(logger.log_file)
+        assert entries[0]["details"]["results_summary"]["sensors_ok"] is True
+
+
+# ===========================================================================
+# log_device_health_check
+# ===========================================================================
+class TestLogDeviceHealthCheck:
+    def test_writes_valid_jsonl(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_device_health_check(
+            agent_id="agent-10",
+            device="pi",
+            status="healthy",
+            latency_ms=50.0,
+            components={"sensors": "ok", "display": "ok"},
+        )
+        entries = _read_jsonl(logger.log_file)
+        assert len(entries) == 1
+        e = entries[0]
+        assert e["event_type"] == "device_health_check"
+        assert e["details"]["device"] == "pi"
+        assert e["details"]["status"] == "healthy"
+        assert e["details"]["components"]["sensors"] == "ok"
+
+    def test_no_components(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_device_health_check("a", "mac", "degraded")
+        entries = _read_jsonl(logger.log_file)
+        assert entries[0]["details"]["components"] == {}
+
+
+# ===========================================================================
+# log_eisv_sync
+# ===========================================================================
+class TestLogEisvSync:
+    def test_writes_valid_jsonl(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_eisv_sync(
+            agent_id="agent-11",
+            source_device="pi",
+            target_device="mac",
+            anima_state={"warmth": 0.7, "clarity": 0.6, "stability": 0.8, "presence": 0.5},
+            eisv_mapped={"energy": 0.7, "integrity": 0.6, "entropy": 0.2, "void": 0.5},
+            sync_direction="pi_to_mac",
+        )
+        entries = _read_jsonl(logger.log_file)
+        assert len(entries) == 1
+        e = entries[0]
+        assert e["event_type"] == "eisv_sync"
+        assert e["details"]["anima_state"]["warmth"] == 0.7
+        assert e["details"]["eisv_mapped"]["energy"] == 0.7
+        assert e["details"]["sync_direction"] == "pi_to_mac"
+
+    def test_with_extra_details(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_eisv_sync(
+            "a", "pi", "mac", {}, {},
+            details={"drift_detected": True},
+        )
+        entries = _read_jsonl(logger.log_file)
+        assert entries[0]["details"]["drift_detected"] is True
+
+
+# ===========================================================================
+# _write_entry internals
+# ===========================================================================
 class TestWriteEntry:
     def test_multiple_entries_append(self, tmp_path):
         logger = _make_logger(tmp_path)

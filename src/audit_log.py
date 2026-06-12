@@ -222,6 +222,180 @@ class AuditLogger:
     
     # NOTE: log_knowledge_visibility_warning removed (knowledge layer archived November 28, 2025)
 
+    # ============================================================
+    # Cross-Device Audit Events (Mac↔Pi Orchestration)
+    # ============================================================
+
+    def log_cross_device_call(self, agent_id: str, source_device: str, target_device: str,
+                              tool_name: str, arguments: Dict, status: str = "initiated",
+                              latency_ms: Optional[float] = None, error: Optional[str] = None,
+                              details: Optional[Dict] = None):
+        """
+        Log a cross-device MCP tool call (Mac↔Pi orchestration).
+
+        Args:
+            agent_id: Agent making the call
+            source_device: Device initiating call ("mac" or "pi")
+            target_device: Device receiving call ("mac" or "pi")
+            tool_name: Name of the tool being called
+            arguments: Tool arguments (sanitized - no secrets)
+            status: "initiated", "success", "error", "timeout"
+            latency_ms: Round-trip latency in milliseconds
+            error: Error message if status is "error"
+            details: Additional context
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="cross_device_call",
+            confidence=1.0,
+            details={
+                "source_device": source_device,
+                "target_device": target_device,
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "status": status,
+                "latency_ms": latency_ms,
+                "error": error,
+                **(details or {})
+            }
+        )
+        self._write_entry(entry)
+
+    def log_orchestration_request(self, agent_id: str, workflow: str, target_device: str,
+                                  tools_planned: List[str], context: Optional[Dict] = None,
+                                  details: Optional[Dict] = None):
+        """
+        Log an orchestration request (Mac planning multi-step Pi coordination).
+
+        Args:
+            agent_id: Agent initiating orchestration
+            workflow: Name of the workflow being executed
+            target_device: Target device for orchestration
+            tools_planned: List of tools to be called
+            context: Workflow context (e.g., trigger, goals)
+            details: Additional metadata
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="orchestration_request",
+            confidence=1.0,
+            details={
+                "workflow": workflow,
+                "target_device": target_device,
+                "tools_planned": tools_planned,
+                "context": context,
+                **(details or {})
+            }
+        )
+        self._write_entry(entry)
+
+    def log_orchestration_complete(self, agent_id: str, workflow: str, target_device: str,
+                                   tools_executed: List[str], success: bool,
+                                   total_latency_ms: float, errors: Optional[List[str]] = None,
+                                   results_summary: Optional[Dict] = None,
+                                   details: Optional[Dict] = None):
+        """
+        Log orchestration completion with summary metrics.
+
+        Args:
+            agent_id: Agent that ran orchestration
+            workflow: Name of the completed workflow
+            target_device: Target device
+            tools_executed: List of tools that were executed
+            success: Whether all tools completed successfully
+            total_latency_ms: Total workflow latency
+            errors: List of any errors encountered
+            results_summary: High-level summary of results
+            details: Additional metadata
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="orchestration_complete",
+            confidence=1.0,
+            details={
+                "workflow": workflow,
+                "target_device": target_device,
+                "tools_executed": tools_executed,
+                "success": success,
+                "total_latency_ms": total_latency_ms,
+                "errors": errors or [],
+                "results_summary": results_summary,
+                **(details or {})
+            }
+        )
+        self._write_entry(entry)
+
+    def log_device_health_check(self, agent_id: str, device: str, status: str,
+                                latency_ms: Optional[float] = None,
+                                components: Optional[Dict[str, str]] = None,
+                                details: Optional[Dict] = None):
+        """
+        Log a device health check (connectivity, service status).
+
+        Args:
+            agent_id: Agent performing health check
+            device: Device being checked ("mac" or "pi")
+            status: "healthy", "degraded", "unreachable", "error"
+            latency_ms: Health check latency
+            components: Component-level status (e.g., {"sensors": "ok", "display": "ok"})
+            details: Additional context
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="device_health_check",
+            confidence=1.0,
+            details={
+                "device": device,
+                "status": status,
+                "latency_ms": latency_ms,
+                "components": components or {},
+                **(details or {})
+            }
+        )
+        self._write_entry(entry)
+
+    def log_eisv_sync(self, agent_id: str, source_device: str, target_device: str,
+                      anima_state: Dict, eisv_mapped: Dict, sync_direction: str = "pi_to_mac",
+                      details: Optional[Dict] = None):
+        """
+        Log EISV state synchronization between devices.
+
+        Maps Anima state (Pi) to EISV governance state (Mac):
+        - Warmth → Energy (E)
+        - Clarity → Integrity (I)
+        - 1 - Stability → Entropy (S)
+        - (1 - Presence) × 0.3 → Void (V)  [observation-layer seed; ODE evolves independently]
+
+        Args:
+            agent_id: Agent performing sync
+            source_device: Device providing state
+            target_device: Device receiving state
+            anima_state: Raw anima values from Pi
+            eisv_mapped: Mapped EISV values
+            sync_direction: "pi_to_mac" or "mac_to_pi"
+            details: Additional context
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="eisv_sync",
+            confidence=1.0,
+            details={
+                "source_device": source_device,
+                "target_device": target_device,
+                "anima_state": anima_state,
+                "eisv_mapped": eisv_mapped,
+                "sync_direction": sync_direction,
+                **(details or {})
+            }
+        )
+        self._write_entry(entry)
+
+
     def log_concurrent_session_binding_observed(
         self,
         *,
