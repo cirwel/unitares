@@ -35,6 +35,18 @@ def test_compute_change_token_is_stable_and_condition_scoped():
     assert len(compute_change_token(base)) == 16
 
 
+def test_compute_change_token_handles_non_jsonish_context():
+    parts = {
+        "type": "sentinel_finding",
+        "severity": "high",
+        "message": "fleet coherence dipped",
+        "extra": {1: ("a", "b"), "set": {"x", "y"}},
+    }
+
+    assert compute_change_token(parts) == compute_change_token(parts)
+    assert len(compute_change_token(parts)) == 16
+
+
 def test_post_finding_success(monkeypatch):
     calls = []
 

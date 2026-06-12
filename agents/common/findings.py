@@ -49,8 +49,34 @@ def compute_change_token(parts: dict[str, Any]) -> str:
     event ingestion can suppress repeat emissions indefinitely; if severity,
     message, or stable context changes, it emits once for the new condition.
     """
-    normalized = json.dumps(parts, sort_keys=True, separators=(",", ":"), default=str)
+    normalized = json.dumps(
+        _stable_json_value(parts),
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
     return hashlib.sha256(normalized.encode()).hexdigest()[:16]
+
+
+def _stable_json_value(value: Any) -> Any:
+    """Return a deterministic JSON-ish shape for hashing.
+
+    ``post_finding`` is best-effort and must not raise just because optional
+    finding context has non-string keys, tuples, sets, or non-JSON leaf values.
+    """
+    if isinstance(value, dict):
+        return {
+            str(k): _stable_json_value(v)
+            for k, v in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_stable_json_value(v) for v in value]
+    if isinstance(value, set):
+        return sorted(
+            (_stable_json_value(v) for v in value),
+            key=lambda item: repr(item),
+        )
+    return value
 
 
 def _httpx_post(url: str, json: dict, headers: dict, timeout: float):
