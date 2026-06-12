@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agents.common.findings import compute_fingerprint, post_finding
+from agents.common.findings import compute_change_token, compute_fingerprint, post_finding
 
 
 def test_compute_fingerprint_is_stable():
@@ -18,6 +18,21 @@ def test_compute_fingerprint_differs_on_input():
     fp1 = compute_fingerprint(["sentinel", "a"])
     fp2 = compute_fingerprint(["sentinel", "b"])
     assert fp1 != fp2
+
+
+def test_compute_change_token_is_stable_and_condition_scoped():
+    base = {
+        "type": "sentinel_finding",
+        "severity": "high",
+        "message": "fleet coherence dipped",
+        "extra": {"violation_class": "BEH"},
+    }
+    same = dict(base)
+    changed = {**base, "severity": "critical"}
+
+    assert compute_change_token(base) == compute_change_token(same)
+    assert compute_change_token(base) != compute_change_token(changed)
+    assert len(compute_change_token(base)) == 16
 
 
 def test_post_finding_success(monkeypatch):
@@ -50,7 +65,72 @@ def test_post_finding_success(monkeypatch):
     assert body["type"] == "sentinel_finding"
     assert body["violation_class"] == "BEH"
     assert body["fingerprint"] == "abcd1234"
+    assert body["change_token"] == compute_change_token({
+        "type": "sentinel_finding",
+        "severity": "high",
+        "message": "fleet coherence dipped",
+        "extra": {"violation_class": "BEH"},
+    })
     assert calls[0]["url"].endswith("/api/findings")
+
+
+def test_post_finding_accepts_explicit_change_token(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json, headers, timeout):  # noqa: A002
+        captured["body"] = json
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {"success": True, "deduped": False}
+
+        return FakeResp()
+
+    monkeypatch.setattr("agents.common.findings._httpx_post", fake_post)
+    post_finding(
+        event_type="sentinel_finding",
+        severity="high",
+        message="fleet coherence dipped",
+        agent_id="sentinel-01",
+        agent_name="Sentinel",
+        fingerprint="abcd1234",
+        change_token="condition-v2",
+        extra={"change_token": "legacy-extra-token", "violation_class": "BEH"},
+    )
+
+    assert captured["body"]["change_token"] == "condition-v2"
+    assert captured["body"]["violation_class"] == "BEH"
+
+
+def test_post_finding_preserves_legacy_extra_change_token(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json, headers, timeout):  # noqa: A002
+        captured["body"] = json
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {"success": True, "deduped": False}
+
+        return FakeResp()
+
+    monkeypatch.setattr("agents.common.findings._httpx_post", fake_post)
+    post_finding(
+        event_type="watcher_finding",
+        severity="critical",
+        message="persistent finding",
+        agent_id="watcher",
+        agent_name="Watcher",
+        fingerprint="fp",
+        extra={"change_token": "legacy-token", "pattern": "P005"},
+    )
+
+    assert captured["body"]["change_token"] == "legacy-token"
+    assert captured["body"]["pattern"] == "P005"
 
 
 def test_post_finding_swallows_network_errors(monkeypatch):

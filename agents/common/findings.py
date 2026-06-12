@@ -8,6 +8,7 @@ token is only sent if UNITARES_HTTP_API_TOKEN is set in env.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import time
@@ -40,6 +41,18 @@ def compute_fingerprint(parts: Iterable[Any]) -> str:
     return hashlib.sha256(normalized.encode()).hexdigest()[:16]
 
 
+def compute_change_token(parts: dict[str, Any]) -> str:
+    """16-hex-char SHA-256 prefix for an underlying finding condition.
+
+    Unlike ``fingerprint`` (which names the finding identity), this token names
+    the currently observed condition. If the same finding persists unchanged,
+    event ingestion can suppress repeat emissions indefinitely; if severity,
+    message, or stable context changes, it emits once for the new condition.
+    """
+    normalized = json.dumps(parts, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(normalized.encode()).hexdigest()[:16]
+
+
 def _httpx_post(url: str, json: dict, headers: dict, timeout: float):
     """Thin wrapper so tests can monkeypatch this single call."""
     return httpx.post(url, json=json, headers=headers, timeout=timeout)
@@ -68,6 +81,7 @@ def post_finding(
     agent_id: str,
     agent_name: str,
     fingerprint: str,
+    change_token: Optional[str] = None,
     extra: Optional[dict] = None,
     url: str = DEFAULT_URL,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
@@ -79,6 +93,27 @@ def post_finding(
 
     This function MUST NOT raise. It's called from hot paths in agent cycles.
     """
+    explicit_extra_change_token = None
+    if extra and extra.get("change_token") is not None:
+        explicit_extra_change_token = str(extra["change_token"])
+
+    resolved_change_token = (
+        str(change_token)
+        if change_token is not None
+        else explicit_extra_change_token
+    )
+    if resolved_change_token is None:
+        stable_extra = {
+            k: v for k, v in (extra or {}).items()
+            if k != "change_token"
+        }
+        resolved_change_token = compute_change_token({
+            "type": event_type,
+            "severity": severity,
+            "message": message,
+            "extra": stable_extra,
+        })
+
     body: dict = {
         "type": event_type,
         "severity": severity,
@@ -86,6 +121,7 @@ def post_finding(
         "agent_id": agent_id,
         "agent_name": agent_name,
         "fingerprint": fingerprint,
+        "change_token": resolved_change_token,
     }
     if extra:
         for k, v in extra.items():
