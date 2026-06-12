@@ -1,0 +1,85 @@
+name: Publish SDK to PyPI
+
+# Publishes unitares-sdk from agents/sdk/ when an `sdk-v*` tag is pushed
+# (e.g. `git tag sdk-v0.1.0 && git push origin sdk-v0.1.0`). The tag version
+# must match pyproject.toml's version — the guard step enforces it.
+#
+# Auth is PyPI Trusted Publishing (OIDC) — no API token secret. One-time
+# setup on pypi.org: project "unitares-sdk" → Publishing → add GitHub
+# publisher (owner: cirwel, repo: unitares, workflow: publish-sdk.yml,
+# environment: pypi).
+
+on:
+  push:
+    tags:
+      - "sdk-v*"
+
+# Restrictive default for all jobs; the publish job widens itself with
+# id-token: write for PyPI Trusted Publishing.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install SDK with dev extras
+        run: pip install -e "agents/sdk[dev]"
+
+      - name: Run SDK test suite
+        run: pytest agents/sdk/tests -q
+
+      - name: Standalone import smoke (no repo on path)
+        run: |
+          cd /tmp
+          python -c "
+          import unitares_sdk
+          from unitares_sdk.agent import GovernanceAgent
+          from unitares_sdk.client import GovernanceClient
+          from unitares_sdk.lease_plane import PROTOCOL_VERSION
+          print('standalone import OK, lease-plane protocol', PROTOCOL_VERSION)
+          "
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # OIDC for PyPI Trusted Publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Guard — tag matches pyproject version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#sdk-v}"
+          PYPROJECT_VERSION=$(python -c "import tomllib; print(tomllib.load(open('agents/sdk/pyproject.toml','rb'))['project']['version'])")
+          if [ "$TAG_VERSION" != "$PYPROJECT_VERSION" ]; then
+            echo "Tag sdk-v$TAG_VERSION != pyproject version $PYPROJECT_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Build sdist + wheel
+        run: |
+          pip install build twine
+          python -m build agents/sdk
+          twine check agents/sdk/dist/*
+
+      - name: Publish to PyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: agents/sdk/dist
