@@ -121,11 +121,13 @@ Both shapes respect `cycle_timeout_seconds` and auto-trim `log_file`.
 
 ## Not in the SDK (on purpose)
 
-- `agents/common/findings.py`, `agents/common/taxonomy.py`, and
-  `agents/common/config.py` are internal to the reference residents
-  in this repo. If you need findings-posting in your own resident,
-  vendor the helper or POST to `/api/findings` yourself — the REST
-  contract is the public surface.
+- `agents/common/findings.py` and `agents/common/config.py` are
+  internal to the reference residents in this repo. If you need
+  findings-posting in your own resident, vendor the helper or POST to
+  `/api/findings` yourself — the REST contract is the public surface.
+- The violation taxonomy is server-owned vocabulary
+  (`src/violation_taxonomy.yaml`); consume it via the `/v1/taxonomy`
+  endpoint rather than importing server code.
 - Watcher (`agents/watcher/agent.py`) uses a different execution
   model (sync, hook-driven, one-shot per tool-use event) and does not
   subclass `GovernanceAgent`.

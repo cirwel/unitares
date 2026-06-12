@@ -1,9 +1,10 @@
-"""Test that Sentinel findings include violation_class."""
+"""Cross-contract test: Sentinel's emitted finding types stay mapped in the
+server-owned violation taxonomy (src/violation_taxonomy.yaml)."""
 
 
 def test_findings_have_violation_class():
     """All finding types emitted by FleetState must have taxonomy mapping."""
-    from agents.common.taxonomy import class_for_sentinel_finding
+    from src.violation_taxonomy import class_for_sentinel_finding
 
     sentinel_finding_types = [
         "coordinated_degradation",
