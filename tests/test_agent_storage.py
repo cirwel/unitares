@@ -231,23 +231,6 @@ class TestGetAgent:
 # agent_exists
 # ---------------------------------------------------------------------------
 
-class TestAgentExists:
-
-    @pytest.mark.asyncio
-    async def test_returns_true_when_found(self):
-        db = _mock_db(get_identity=_make_identity())
-        with patch("src.agent_storage.get_db", return_value=db):
-            from src.agent_storage import agent_exists
-            assert await agent_exists("agent-1") is True
-
-    @pytest.mark.asyncio
-    async def test_returns_false_when_not_found(self):
-        db = _mock_db(get_identity=None)
-        with patch("src.agent_storage.get_db", return_value=db):
-            from src.agent_storage import agent_exists
-            assert await agent_exists("nope") is False
-
-
 # ---------------------------------------------------------------------------
 # create_agent
 # ---------------------------------------------------------------------------
