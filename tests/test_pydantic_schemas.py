@@ -25,6 +25,42 @@ class TestPydanticSchemas:
             ProcessAgentUpdateParams(complexity=-0.1, response_text="Test")
         assert "greater than or equal to 0" in str(exc.value).lower()
 
+    def test_string_complexity_strict(self):
+        """String inputs must get the same 0-1 enforcement as floats. ge/le on
+        Union[float, str, None] used to raise a bare TypeError for strings,
+        which dispatch middleware swallowed — '5' reached handlers
+        unvalidated and 'abc' degraded to a silent default."""
+        from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
+
+        # In-range numeric strings still coerce
+        ok = ProcessAgentUpdateParams(complexity="0.7", response_text="T")
+        assert ok.complexity == 0.7
+
+        # Out-of-range numeric string rejects via the field's own range check
+        with pytest.raises(ValidationError) as exc:
+            ProcessAgentUpdateParams(complexity="5", response_text="T")
+        assert "less than or equal to 1" in str(exc.value).lower()
+
+        # Unparseable string rejects instead of silently becoming 0.5
+        with pytest.raises(ValidationError) as exc:
+            ProcessAgentUpdateParams(complexity="medium", response_text="T")
+        assert "checkin" in str(exc.value)  # error teaches the alias path
+
+        # Same for confidence
+        with pytest.raises(ValidationError):
+            ProcessAgentUpdateParams(confidence="5", response_text="T")
+        with pytest.raises(ValidationError):
+            ProcessAgentUpdateParams(confidence="abc", response_text="T")
+
+    def test_simulate_update_string_complexity_strict(self):
+        from src.mcp_handlers.schemas.core import SimulateUpdateParams
+
+        assert SimulateUpdateParams(complexity="0.4").complexity == 0.4
+        with pytest.raises(ValidationError):
+            SimulateUpdateParams(complexity="5")
+        with pytest.raises(ValidationError):
+            SimulateUpdateParams(complexity="lots")
+
     def test_ethical_drift_bounds(self):
         """Test ethical drift lists are correctly bounded."""
         from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams

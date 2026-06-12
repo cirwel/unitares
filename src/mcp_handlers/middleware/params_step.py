@@ -63,7 +63,7 @@ async def unwrap_kwargs(name: str, arguments: Dict[str, Any], ctx) -> Any:
 
 
 async def resolve_alias(name: str, arguments: Dict[str, Any], ctx) -> Any:
-    """Resolve tool aliases and inject action parameters."""
+    """Resolve tool aliases, inject action parameters, normalize alias params."""
     from ..tool_stability import resolve_tool_alias
 
     ctx.original_name = name
@@ -76,6 +76,37 @@ async def resolve_alias(name: str, arguments: Dict[str, Any], ctx) -> Any:
         if alias_info.inject_action and "action" not in arguments:
             arguments["action"] = alias_info.inject_action
             logger.debug(f"[ALIAS] Injected action='{alias_info.inject_action}' for consolidated tool '{actual_name}'")
+
+        if alias_info.param_normalizer:
+            from ..support.param_normalization import ParamNormalizationError
+
+            try:
+                records = alias_info.param_normalizer(arguments)
+            except ParamNormalizationError as exc:
+                return [error_response(
+                    str(exc),
+                    error_code="PARAMETER_ERROR",
+                    error_category="validation_error",
+                    details={
+                        "error_type": "ambiguous_parameter_value",
+                        "tool_name": ctx.original_name,
+                        "canonical_tool": actual_name,
+                        "parameter": exc.parameter,
+                        "provided_value": exc.provided,
+                    },
+                    recovery={
+                        "action": (
+                            f"Re-call {ctx.original_name} with {exc.parameter} as a 0-1 float, "
+                            f"a named level (e.g. 'medium'), or {{'value': N, 'scale': M}}"
+                        ),
+                        "related_tools": ["describe_tool"],
+                    },
+                )]
+            if records:
+                ctx.normalized_parameters = records
+                logger.info(
+                    f"[ALIAS] Normalized parameters for '{ctx.original_name}' → '{actual_name}': {records}"
+                )
 
     return name, arguments, ctx
 

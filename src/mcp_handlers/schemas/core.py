@@ -30,6 +30,43 @@ ProcessUpdateEpistemicClass = Literal[
 ]
 
 
+_COMPLEXITY_ALIAS_HINT = (
+    " For 1-10 or other scales, call a check-in alias (checkin/log/update/"
+    "sync_state) with complexity={'value': N, 'scale': M} or a named level "
+    "like 'medium'."
+)
+
+
+def _coerce_unit_string_fields(data: Any, *field_names: str, alias_hint: str = "") -> Any:
+    """Coerce numeric strings to float BEFORE field validation.
+
+    ge/le on Union[float, str, None] raises a bare TypeError when the value
+    is a string, which the dispatch middleware's generic except treats as
+    "validation unavailable" — so '5' and 'abc' used to reach handlers
+    unvalidated. Coercing here lets the field's own ge/le enforce the 0-1
+    range; unparseable strings reject instead of silently degrading.
+    Canonical check-in tools are strict; friendly aliases (checkin/log/
+    update/sync_state) normalize richer vocabulary upstream."""
+    if not isinstance(data, dict):
+        return data
+    coerced = None
+    for field_name in field_names:
+        value = data.get(field_name)
+        if isinstance(value, str):
+            try:
+                numeric = float(value)
+            except ValueError:
+                hint = alias_hint if field_name == "complexity" else ""
+                raise ValueError(
+                    f"{field_name} must be a number between 0 and 1, got "
+                    f"{value!r}.{hint}"
+                )
+            if coerced is None:
+                coerced = dict(data)
+            coerced[field_name] = numeric
+    return coerced if coerced is not None else data
+
+
 def _infer_tool_result_kind(tool: Any, summary: Any = "") -> str:
     text = f"{tool or ''} {summary or ''}".strip().lower()
     tool_text = str(tool or "").lower()
@@ -126,18 +163,15 @@ class SimulateUpdateParams(AgentIdentityMixin):
         description="If true, returns minimalist output."
     )
 
+    @model_validator(mode='before')
+    @classmethod
+    def coerce_unit_strings(cls, data):
+        return _coerce_unit_string_fields(
+            data, "complexity", "confidence", alias_hint=_COMPLEXITY_ALIAS_HINT
+        )
+
     @model_validator(mode='after')
     def coerce_types(self):
-        if isinstance(self.complexity, str):
-            try:
-                self.complexity = float(self.complexity)
-            except ValueError:
-                self.complexity = 0.5
-        if isinstance(self.confidence, str):
-            try:
-                self.confidence = float(self.confidence)
-            except ValueError:
-                self.confidence = None
         if isinstance(self.lite, str):
             self.lite = self.lite.lower() in ('true', '1', 'yes')
         return self
@@ -222,9 +256,14 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
     )
     complexity: Union[float, str, None] = Field(
         default=0.5,
-        ge=0.0, 
+        ge=0.0,
         le=1.0,
-        description="Estimated task complexity (0-1, optional)."
+        description=(
+            "Estimated task complexity, strictly 0-1. Check-in aliases "
+            "(checkin/log/update/sync_state) also accept named levels "
+            "('trivial'|'low'|'medium'|'high'|'very_high') and explicit "
+            "scale objects like {'value': 5, 'scale': 10}."
+        )
     )
     confidence: Union[float, str, None] = Field(
         default=None,
@@ -299,18 +338,15 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
     task_outcome: Optional[str] = Field(None, description="S22 H5 provenance: outcome label for the bounded task")
     memory_context: Optional[str] = Field(None, description="S22 provenance: memory/KG/transcript surfaces visible to the writer")
 
+    @model_validator(mode='before')
+    @classmethod
+    def coerce_unit_strings(cls, data):
+        return _coerce_unit_string_fields(
+            data, "complexity", "confidence", alias_hint=_COMPLEXITY_ALIAS_HINT
+        )
+
     @model_validator(mode='after')
     def coerce_types(self):
-        if isinstance(self.complexity, str):
-            try:
-                self.complexity = float(self.complexity)
-            except ValueError:
-                self.complexity = 0.5
-        if isinstance(self.confidence, str):
-            try:
-                self.confidence = float(self.confidence)
-            except ValueError:
-                self.confidence = None
         if isinstance(self.lite, str):
             val = str(self.lite).lower() in ('true', '1', 'yes')
             if val and self.response_mode == "auto":

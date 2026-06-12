@@ -2,9 +2,33 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Optional, Sequence
 
 from mcp.types import TextContent
+
+
+def _disclose_normalized_parameters(result: Any, normalized: Dict[str, Any]) -> Any:
+    """Add the alias-layer normalized_parameters record to the response payload.
+
+    Best-effort: only JSON-object payloads are annotated; anything else is
+    returned untouched so disclosure can never break a working response.
+    """
+    try:
+        if not result or not isinstance(result, (list, tuple)):
+            return result
+        first = result[0]
+        text = getattr(first, "text", None)
+        if not text:
+            return result
+        payload = json.loads(text)
+        if not isinstance(payload, dict):
+            return result
+        payload["normalized_parameters"] = normalized
+        first.text = json.dumps(payload, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+    return result
 
 
 async def run_tool_dispatch_pipeline(
@@ -75,6 +99,8 @@ async def run_tool_dispatch_pipeline(
 
     try:
         result = await handler(arguments)
+        if ctx.normalized_parameters:
+            result = _disclose_normalized_parameters(result, ctx.normalized_parameters)
         if result:
             if isinstance(result, (list, tuple)) and len(result) > 0:
                 if hasattr(result[0], "text") and "Handler not yet extracted" in result[0].text:
