@@ -14,7 +14,7 @@ rollout advances.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -221,3 +221,29 @@ async def test_execute_flag_off_falls_through(strict_off, unbound_context):
 
     assert result == {"ok": True}
     fallback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_refusal_audit_row_is_failure_not_success(strict_on, unbound_context):
+    """A typed refusal must land in audit.tool_usage as a FAILURE with
+    error_type='identity_required'. Recording success=True made every
+    strict-gate refusal indistinguishable from a succeeding anonymous
+    call — poisoning the burn-in question 'did any unbound write get
+    through?' (found day 1 of the 2026-06-12 stage 2-4 burn-in; #543
+    audit-honesty class)."""
+    recorder = MagicMock()
+    fallback = AsyncMock()
+    with patch(
+        "src.services.http_tool_service.execute_http_dispatch_fallback", fallback
+    ), patch("src.services.http_tool_service.record_tool_usage", recorder):
+        result = await execute_http_tool(
+            "knowledge",
+            {"action": "store", "summary": "x"},
+        )
+
+    assert result["status"] == "identity_required"
+    recorder.assert_called_once()
+    kwargs = recorder.call_args.kwargs
+    assert kwargs["success"] is False
+    assert kwargs["error_type"] == "identity_required"
+    assert kwargs["agent_id"] is None
