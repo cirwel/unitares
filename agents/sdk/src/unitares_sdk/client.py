@@ -17,7 +17,10 @@ from mcp.client.streamable_http import streamable_http_client
 from unitares_sdk.errors import (
     GovernanceConnectionError,
     GovernanceTimeoutError,
+    GovernanceUnavailableError,
     IdentityDriftError,
+    extract_retry_after_seconds,
+    parse_retry_after_header,
 )
 from unitares_sdk.models import (
     ArchiveResult,
@@ -273,6 +276,25 @@ class GovernanceClient:
                 with anyio.fail_after(effective_timeout):
                     result = await self._session.call_tool(tool_name, injected_args)
                 raw = self._parse_mcp_result(result)
+                # Wave 3 §3.2: the cutover proxy / fail-fast writer surfaces a
+                # typed-unavailable payload. Honor retry_after_seconds with one
+                # retry (prereq PR #10 consumer contract), then raise typed so
+                # resident cycle loops can back off with the server's delay.
+                retry_after = extract_retry_after_seconds(raw)
+                if retry_after is not None:
+                    last_error = GovernanceUnavailableError(
+                        f"{tool_name}: governance temporarily unavailable "
+                        f"(retry_after_seconds={retry_after})",
+                        retry_after_seconds=retry_after,
+                    )
+                    if attempt == 0:
+                        logger.warning(
+                            "%s unavailable (503-equivalent), retrying in %.1fs",
+                            tool_name, retry_after,
+                        )
+                        await asyncio.sleep(retry_after)
+                        continue
+                    raise last_error
                 # Centralized failure check. The MCP transport can succeed at
                 # the HTTP layer but carry a structured tool failure inside
                 # the JSON payload. Without this check, callers like onboard()
@@ -289,6 +311,35 @@ class GovernanceClient:
                     logger.warning("Timeout on %s, retrying in %.1fs", tool_name, self.retry_delay)
                     await asyncio.sleep(self.retry_delay)
                     continue
+            except httpx.HTTPStatusError as e:
+                # §3.2 cutover 503 surfacing at the HTTP layer instead of as a
+                # parsed tool payload. Honor Retry-After; other statuses keep
+                # the pre-existing connection-error treatment.
+                status = e.response.status_code if e.response is not None else None
+                if status == 503:
+                    retry_after = (
+                        parse_retry_after_header(
+                            e.response.headers.get("Retry-After")
+                        )
+                        if e.response is not None
+                        else None
+                    ) or 5.0
+                    last_error = GovernanceUnavailableError(
+                        f"{tool_name}: HTTP 503 from governance transport "
+                        f"(retry_after_seconds={retry_after})",
+                        retry_after_seconds=retry_after,
+                    )
+                    if attempt == 0:
+                        logger.warning(
+                            "HTTP 503 on %s, retrying in %.1fs", tool_name, retry_after
+                        )
+                        await asyncio.sleep(retry_after)
+                        continue
+                else:
+                    last_error = GovernanceConnectionError(str(e))
+                    if attempt == 0:
+                        await asyncio.sleep(self.retry_delay)
+                        continue
             except (httpx.ConnectError, httpx.TimeoutException, ConnectionError, OSError) as e:
                 last_error = GovernanceConnectionError(str(e))
                 if attempt == 0:

@@ -1,5 +1,7 @@
 """SDK exception hierarchy."""
 
+from __future__ import annotations
+
 
 class GovernanceError(Exception):
     """Base exception for all SDK errors."""
@@ -11,6 +13,69 @@ class GovernanceConnectionError(GovernanceError):
 
 class GovernanceTimeoutError(GovernanceError):
     """MCP call exceeded timeout (likely anyio deadlock)."""
+
+
+class GovernanceUnavailableError(GovernanceError):
+    """Server returned the Wave 3 §3.2 typed-unavailable response (HTTP 503
+    body ``{"ok": false, "error": "governance_temporarily_unavailable",
+    "retry_after_seconds": N}`` with a matching ``Retry-After`` header).
+
+    Raised after the client's retry budget is exhausted. Carries the
+    server-suggested delay so calling layers with their own scheduling
+    (resident cycle loops) can back off honestly instead of guessing.
+    """
+
+    def __init__(self, message: str, retry_after_seconds: float = 5.0):
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(message)
+
+
+# Pinned by docs/proposals/beam-wave-3-handler-dispatch.md §3.2 step 3; the
+# server-side single source is src/mcp_transport.py::make_unavailable_body.
+UNAVAILABLE_ERROR = "governance_temporarily_unavailable"
+
+# Server-suggested delays are honored but bounded — a misconfigured or
+# malicious Retry-After must not park a resident cycle indefinitely.
+MAX_RETRY_AFTER_SECONDS = 30.0
+DEFAULT_RETRY_AFTER_SECONDS = 5.0
+
+
+def extract_retry_after_seconds(payload: object) -> float | None:
+    """Return the bounded retry delay when ``payload`` is the §3.2
+    typed-unavailable body, else ``None``.
+
+    Detection keys on ``error == "governance_temporarily_unavailable"`` —
+    NOT on the bare presence of ``retry_after_seconds``, which the deep
+    health endpoint also uses for an unrelated warming-up shape.
+    """
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("error") != UNAVAILABLE_ERROR:
+        return None
+    return _bound_retry_after(payload.get("retry_after_seconds"))
+
+
+def parse_retry_after_header(value: object) -> float | None:
+    """Parse an HTTP ``Retry-After`` header (delta-seconds form only — the
+    HTTP-date form is not used by the §3.2 contract). Returns the bounded
+    delay, or ``None`` when absent/unparseable."""
+    if value is None:
+        return None
+    try:
+        seconds = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return _bound_retry_after(seconds)
+
+
+def _bound_retry_after(value: object) -> float:
+    try:
+        seconds = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return DEFAULT_RETRY_AFTER_SECONDS
+    if seconds < 0:
+        return DEFAULT_RETRY_AFTER_SECONDS
+    return min(seconds, MAX_RETRY_AFTER_SECONDS)
 
 
 class IdentityDriftError(GovernanceError):

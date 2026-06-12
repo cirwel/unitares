@@ -870,6 +870,13 @@ async def main():
             server_ready_fn=lambda: SERVER_READY,
             server_version=SERVER_VERSION,
         )
+
+        # === Wave 3 §3.2 numerator capture (§14 prereq PR #10) ===
+        # One measurement.governance_mcp.503_emission row per 503 the
+        # transport returns. Single emission point — the Wave 3 cutover proxy
+        # must NOT emit its own numerator row (see src/mcp_transport.py).
+        from src.mcp_transport import Transport503EmissionMiddleware
+        app.add_middleware(Transport503EmissionMiddleware)
         
         # === Start all background tasks ===
         from src.background_tasks import start_all_background_tasks, stop_all_background_tasks
