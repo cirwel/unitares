@@ -34,6 +34,8 @@ Call `onboard()` against UNITARES using the strongest honest mode:
 - include `model_type` when the current runtime is clear from context
 - do not invent a display name unless the user asked for one
 
+`start_session(...)` is an equivalent alias (same parameters, same rules). Invoking the alias returns the normalized agent-experience envelope — `next_action`/`state_summary` first, `agent_uuid` and `client_session_id` lifted to the top level, and the full canonical payload (including `session_resolution_source` and the other cache fields below) under `raw_governance`.
+
 Do not use bare `identity(agent_uuid=<uuid>, resume=true)`. UUID alone is an unsigned claim and is hijack-shaped under strict identity mode.
 
 Do not use `onboard(continuity_token=...)` as cross-process resume; after S1-c it returns `status=continuity_token_resume_rejected`.

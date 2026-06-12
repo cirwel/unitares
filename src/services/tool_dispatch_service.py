@@ -13,8 +13,14 @@ async def run_tool_dispatch_pipeline(
     arguments: Optional[Dict[str, Any]],
     pre_steps,
     post_steps,
+    post_execution_steps=(),
 ) -> Sequence[TextContent] | None:
-    """Run a configurable middleware pipeline and execute the resolved handler."""
+    """Run a configurable middleware pipeline and execute the resolved handler.
+
+    ``post_execution_steps`` run over the handler RESULT
+    ((name, arguments, ctx, result) -> result) and are best-effort:
+    a raising step is logged and skipped, never breaking the response.
+    """
     from src.mcp_handlers import TOOL_HANDLERS
     from src.mcp_handlers.context import reset_session_context, reset_trajectory_confidence
     from src.mcp_handlers.error_helpers import tool_not_found_error
@@ -103,6 +109,17 @@ async def run_tool_dispatch_pipeline(
                     )
             except Exception:
                 pass
+
+        for exec_step in post_execution_steps:
+            try:
+                result = await exec_step(name, arguments, ctx, result)
+            except Exception:
+                logger.warning(
+                    "post-execution step %s failed for tool %r - response returned unmodified",
+                    getattr(exec_step, "__name__", exec_step),
+                    name,
+                    exc_info=True,
+                )
 
         return result
     finally:

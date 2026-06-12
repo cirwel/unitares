@@ -7,7 +7,7 @@ from typing import Dict, Optional
 
 async def execute_http_dispatch_fallback(name: str, arguments: Optional[Dict[str, object]]):
     """Run dispatch-like middleware for HTTP after session context is already set."""
-    from src.mcp_handlers.middleware import POST_VALIDATION_STEPS
+    from src.mcp_handlers.middleware import POST_EXECUTION_STEPS, POST_VALIDATION_STEPS
     from src.mcp_handlers.middleware.params_step import (
         inject_identity,
         resolve_alias,
@@ -28,4 +28,5 @@ async def execute_http_dispatch_fallback(name: str, arguments: Optional[Dict[str
             validate_params,
         ],
         post_steps=POST_VALIDATION_STEPS,
+        post_execution_steps=POST_EXECUTION_STEPS,
     )

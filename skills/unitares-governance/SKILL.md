@@ -30,14 +30,17 @@ UNITARES evaluates agent state with the **EISV** model:
 - `S`: entropy / disorder / instability
 - `V`: valence (signed E-I imbalance)
 
-Agents typically start with `onboard(force_new=true)` and continue with
-`process_agent_update()` as their main check-in loop.
+Agents typically start with `start_session(force_new=true)` and continue with
+`sync_state()` as their main check-in loop. These are friendly aliases over the
+canonical `onboard(...)` and `process_agent_update(...)` tools; the full
+canonical payload remains available under `raw_governance`.
 
 ## Session Continuity
 
-Use `onboard(force_new=true)` to register a fresh process identity. If the
+Use `start_session(force_new=true)` to register a fresh process identity. If the
 process is continuing prior work, declare that with
 `parent_agent_id=<prior uuid>` and `spawn_reason="new_session"`.
+Use canonical `onboard(...)` instead for older servers or raw response shape.
 
 Use `identity(agent_uuid=..., continuity_token=..., resume=true)` only when
 rebinding the same live owner to an existing UUID. The `continuity_token` is
@@ -51,8 +54,9 @@ subsequent invocations to maintain transport continuity within a single
 process. `client_session_id` is in-session continuity only — weak across
 processes, not identity proof on its own.
 
-Use `process_agent_update()` after meaningful work to record progress,
-complexity, and confidence, then read the returned governance verdict.
+Use `sync_state()` after meaningful work to record progress, complexity, and
+confidence, then read the returned governance verdict. Use canonical
+`process_agent_update()` when you need the raw handler response.
 
 ## Knowledge Layer
 

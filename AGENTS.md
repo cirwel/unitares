@@ -18,7 +18,7 @@ Codex has no hook system analogous to Claude's. **Nothing is automatic.** You de
 - `/dialectic` — structured review
 - `/closeout` — final workspace hygiene check; reports dirty files, Git delivery state (local vs pushed/merged), and repo-rooted processes; can stash/stop when cleanup is requested
 
-Raw tool flow when slash commands are unavailable: `onboard(force_new=true, parent_agent_id=<prior uuid if continuing>, spawn_reason="new_session")` → save `uuid` + `client_session_id` → `process_agent_update(response_text, complexity, client_session_id=...)` → `get_governance_metrics()` for read-only checks → `health_check()` only if system health is suspect.
+Raw tool flow when slash commands are unavailable: `start_session(force_new=true, parent_agent_id=<prior uuid if continuing>, spawn_reason="new_session")` → save `agent_uuid` + `client_session_id` → `sync_state(response_text, complexity, client_session_id=...)` → `check_working_state()` for read-only checks → `health_check()` only if system health is suspect. Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and `get_governance_metrics(...)`.
 
 ### Local continuity cache
 
@@ -171,6 +171,8 @@ Default happy path:
 1. `onboard(force_new=true, parent_agent_id="<prior UUID if continuing this workspace>", spawn_reason="new_session")` → save `agent_uuid` and `client_session_id` from response
 2. `process_agent_update(response_text=..., complexity=..., client_session_id=...)` for in-process check-ins
 3. On a future process-instance, repeat step 1 with the new prior UUID — do not auto-resume
+
+Friendly workflow aliases: the same happy path can be spelled with task-verb names — `start_session` → `onboard`, `sync_state` → `process_agent_update`, `check_working_state` → `get_governance_metrics`, `search_shared_memory` → `knowledge(action="search")`, `record_result` → `outcome_event`, `request_review` → `dialectic(action="request")`. Same parameters, same identity rules (the registry canonicalizes before the #425 gates judge). Calls made via these names return the normalized agent-experience envelope — `next_action` / `state_summary` / `risk_summary` / `memory_suggestions` / `recovery_hint` first, full canonical payload under `raw_governance` — while canonical names keep the raw response shape byte-identical.
 
 Discovering the prior UUID for step 1:
 
