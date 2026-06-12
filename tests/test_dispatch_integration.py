@@ -356,6 +356,113 @@ class TestCheckRateLimit:
         assert not _is_short_circuit(result)
 
 
+class TestPerCallerRateBuckets:
+    """Per-caller bucketing: one anonymous flood must not lock out other
+    callers' onboard() (the 2026-06-12 bootstrap-lockout incident)."""
+
+    @pytest.fixture(autouse=True)
+    def fresh_limiter_and_history(self):
+        from src.rate_limiter import get_rate_limiter
+        get_rate_limiter().reset()
+        _tool_call_history.clear()
+        yield
+        get_rate_limiter().reset()
+        _tool_call_history.clear()
+
+    def _set_signals(self, fp):
+        from src.mcp_handlers.context import set_session_signals, SessionSignals
+        return set_session_signals(SessionSignals(ip_ua_fingerprint=fp))
+
+    @pytest.mark.asyncio
+    async def test_flooded_fingerprint_does_not_block_other_callers(self):
+        """Exhausting one unbound caller's bucket leaves other unbound
+        callers — including a fresh session calling onboard — unaffected."""
+        from src.mcp_handlers.context import reset_session_signals
+        from src.rate_limiter import get_rate_limiter
+        ctx = _make_ctx()
+
+        tok = self._set_signals("127.0.0.1:f100dd")
+        try:
+            limiter = get_rate_limiter()
+            # Saturate the flooding caller's per-minute budget directly.
+            for _ in range(limiter.max_per_minute):
+                limiter.check_rate_limit("anon:127.0.0.1:f100dd")
+            result = await check_rate_limit("onboard", {}, ctx)
+            assert _is_short_circuit(result), "flooding caller should be limited"
+        finally:
+            reset_session_signals(tok)
+
+        tok = self._set_signals("127.0.0.1:a200bb")
+        try:
+            result = await check_rate_limit("onboard", {}, ctx)
+            assert not _is_short_circuit(result), (
+                "a different caller must not inherit the flooder's bucket"
+            )
+        finally:
+            reset_session_signals(tok)
+
+    @pytest.mark.asyncio
+    async def test_unbound_call_buckets_on_fingerprint(self):
+        """Unbound calls are keyed anon:<ip_ua_fingerprint>, not 'anonymous'."""
+        from src.mcp_handlers.context import reset_session_signals
+        from src.rate_limiter import get_rate_limiter
+        ctx = _make_ctx()
+        tok = self._set_signals("127.0.0.1:b300cc")
+        try:
+            result = await check_rate_limit("process_agent_update", {}, ctx)
+            assert not _is_short_circuit(result)
+            stats = get_rate_limiter().get_stats("anon:127.0.0.1:b300cc")
+            assert stats["requests_last_minute"] == 1
+        finally:
+            reset_session_signals(tok)
+
+    @pytest.mark.asyncio
+    async def test_bound_agent_without_injected_arg_uses_bound_id(self):
+        """When inject_identity skipped injection, ctx.bound_agent_id keys
+        the bucket (attribution to the bound agent, not 'anonymous')."""
+        from src.rate_limiter import get_rate_limiter
+        ctx = _make_ctx(bound_agent_id="agent-bound-1")
+        result = await check_rate_limit("process_agent_update", {}, ctx)
+        assert not _is_short_circuit(result)
+        stats = get_rate_limiter().get_stats("agent-bound-1")
+        assert stats["requests_last_minute"] == 1
+
+    @pytest.mark.asyncio
+    async def test_pre_onboard_reads_skip_general_limit(self):
+        """Declared pre_onboard_actions reads (knowledge search, agent list,
+        dialectic get, ...) skip the general limiter even for a saturated
+        caller; writes on the same tools do not."""
+        from src.mcp_handlers.context import reset_session_signals
+        from src.rate_limiter import get_rate_limiter
+        import src.mcp_handlers  # noqa: F401 — ensure tool registration
+        ctx = _make_ctx()
+        tok = self._set_signals("127.0.0.1:c400dd")
+        try:
+            limiter = get_rate_limiter()
+            for _ in range(limiter.max_per_minute):
+                limiter.check_rate_limit("anon:127.0.0.1:c400dd")
+            result = await check_rate_limit("knowledge", {"action": "search"}, ctx)
+            assert not _is_short_circuit(result), "knowledge search is a pre-onboard read"
+            result = await check_rate_limit("dialectic", {"action": "get"}, ctx)
+            assert not _is_short_circuit(result), "dialectic get is a pre-onboard read"
+            result = await check_rate_limit("knowledge", {"action": "store"}, ctx)
+            assert _is_short_circuit(result), "knowledge store must stay limited"
+        finally:
+            reset_session_signals(tok)
+
+    @pytest.mark.asyncio
+    async def test_loop_detection_matches_canonical_agent_list(self):
+        """list_agents arrives at this step as agent(action=list) after
+        resolve_alias — loop detection must key on the canonical call."""
+        ctx = _make_ctx()
+        now = time.time()
+        history = _tool_call_history["agent:list"]
+        for _ in range(20):
+            history.append(now - 1)
+        result = await check_rate_limit("agent", {"action": "list"}, ctx)
+        assert _is_short_circuit(result)
+        text = _extract_text(result)
+        assert "loop detected" in text.lower()
 
 
 class TestResolveToolAlias:
@@ -446,8 +553,11 @@ class TestDispatchToolIntegration:
     @pytest.fixture
     def clean_rate_limit(self):
         """Clear rate limit history and reset rate limiter."""
+        from src.rate_limiter import get_rate_limiter
+        get_rate_limiter().reset()
         _tool_call_history.clear()
         yield
+        get_rate_limiter().reset()
         _tool_call_history.clear()
 
     @pytest.mark.asyncio
