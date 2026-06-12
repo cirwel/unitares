@@ -53,6 +53,29 @@ function getOperatorToken() {
         new URLSearchParams(window.location.search).get('operator_token');
 }
 
+/**
+ * One-time ?operator_token=... handoff: persist it to localStorage and
+ * scrub it from the address bar, so the credential survives reloads
+ * without re-entering browser history on every navigation. Private
+ * browsing (localStorage throws) keeps the URL fallback untouched.
+ */
+(function persistOperatorTokenFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = params.get('operator_token');
+    if (!fromUrl) return;
+    try {
+        localStorage.setItem('unitares_operator_token', fromUrl);
+    } catch (e) {
+        return;
+    }
+    params.delete('operator_token');
+    const qs = params.toString();
+    window.history.replaceState(
+        null, '',
+        window.location.pathname + (qs ? '?' + qs : '') + window.location.hash
+    );
+})();
+
 class DashboardAPI {
     /**
      * Centralized API client with retry logic, error handling, and caching.
