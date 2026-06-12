@@ -48,6 +48,7 @@ import os
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+from uuid import uuid4
 
 import httpx
 
@@ -347,12 +348,19 @@ async def proxy_to_beam(
         )
     except asyncio.TimeoutError:
         elapsed_ms = int((time.monotonic() - start) * 1000)
+        # Wave 0 step 2 dedup contract: every coordination_failure emit
+        # carries an incident_id (§129 counts DISTINCT incident_id). One
+        # failure occurrence = one id — the timeout and fallback events
+        # below describe the SAME incident, so they share it rather than
+        # inflating the distinct-incident count to two.
+        incident_id = str(uuid4())
         _spawn_emit(
             COORDINATION_FAILURE_WAVE_3A_TIMEOUT,
             {
                 "tool_name": tool_name,
                 "elapsed_ms": elapsed_ms,
                 "budget_ms": BEAM_TIMEOUT_MS,
+                "incident_id": incident_id,
             },
         )
         _spawn_emit(
@@ -361,6 +369,7 @@ async def proxy_to_beam(
                 "tool_name": tool_name,
                 "trigger": "timeout",
                 "elapsed_ms": elapsed_ms,
+                "incident_id": incident_id,
             },
         )
         logger.info(
@@ -380,6 +389,7 @@ async def proxy_to_beam(
                 "trigger": "non_200",
                 "elapsed_ms": elapsed_ms,
                 "status_code": exc.response.status_code if exc.response else None,
+                "incident_id": str(uuid4()),
             },
         )
         logger.info(
@@ -399,6 +409,7 @@ async def proxy_to_beam(
                 "tool_name": tool_name,
                 "trigger": "connect_error",
                 "elapsed_ms": elapsed_ms,
+                "incident_id": str(uuid4()),
             },
         )
         logger.info(
@@ -421,6 +432,7 @@ async def proxy_to_beam(
                 "tool_name": tool_name,
                 "trigger": trigger,
                 "elapsed_ms": elapsed_ms,
+                "incident_id": str(uuid4()),
             },
         )
         logger.info(
@@ -444,6 +456,7 @@ async def proxy_to_beam(
                 "tool_name": tool_name,
                 "detail": violation,
                 "envelope_keys": envelope_keys,
+                "incident_id": str(uuid4()),
             },
         )
         logger.info(
