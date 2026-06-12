@@ -60,7 +60,7 @@ def _build_calibration_guidance(
     }
 
 
-@mcp_tool("check_calibration", timeout=10.0, rate_limit_exempt=True, register=False)
+@mcp_tool("check_calibration", timeout=10.0, register=False)
 async def handle_check_calibration(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Check calibration of confidence estimates.
@@ -274,7 +274,7 @@ async def handle_check_calibration(arguments: Dict[str, Any]) -> Sequence[TextCo
     
     return success_response(response)
 
-@mcp_tool("rebuild_calibration", timeout=60.0, rate_limit_exempt=True, register=False)
+@mcp_tool("rebuild_calibration", timeout=60.0, register=False)
 async def handle_rebuild_calibration(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Rebuild calibration from scratch using auto ground truth collection.
@@ -445,7 +445,7 @@ async def handle_update_calibration_ground_truth(arguments: Dict[str, Any]) -> S
         except Exception as e:
             return [error_response(str(e))]
 
-@mcp_tool("backfill_calibration_from_dialectic", timeout=20.0, rate_limit_exempt=True, register=False)
+@mcp_tool("backfill_calibration_from_dialectic", timeout=20.0, register=False)
 async def handle_backfill_calibration_from_dialectic(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Retroactively update calibration from historical resolved verification-type dialectic sessions.

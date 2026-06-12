@@ -922,7 +922,7 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
     except Exception as e:
         return [error_response(f"Failed to store knowledge: {str(e)}")]
 
-@mcp_tool("search_knowledge_graph", timeout=15.0, rate_limit_exempt=True, requires_identity="pre_onboard")
+@mcp_tool("search_knowledge_graph", timeout=15.0, requires_identity="pre_onboard")
 async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Search knowledge graph (indexed filters; optional FTS query).
 
@@ -1702,7 +1702,7 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
     except Exception as e:
         return [error_response(f"Failed to search knowledge: {str(e)}")]
 
-@mcp_tool("get_knowledge_graph", timeout=15.0, rate_limit_exempt=True, register=False)
+@mcp_tool("get_knowledge_graph", timeout=15.0, register=False)
 async def handle_get_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Get all knowledge for an agent - summaries only (use get_discovery_details for full content)"""
     # SECURITY FIX: Verify agent_id is registered (prevents phantom agent_ids)
@@ -1776,7 +1776,7 @@ async def handle_get_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Text
     except Exception as e:
         return [error_response(f"Failed to retrieve knowledge: {str(e)}")]
 
-@mcp_tool("list_knowledge_graph", timeout=10.0, rate_limit_exempt=True, register=False)
+@mcp_tool("list_knowledge_graph", timeout=10.0, register=False)
 async def handle_list_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """List knowledge graph statistics — raw status aggregate.
 
@@ -1994,7 +1994,7 @@ async def handle_update_discovery_status_graph(arguments: Dict[str, Any]) -> Seq
     except Exception as e:
         return [error_response(f"Failed to update discovery: {str(e)}")]
 
-@mcp_tool("get_discovery_details", timeout=10.0, rate_limit_exempt=True, register=False)
+@mcp_tool("get_discovery_details", timeout=10.0, register=False)
 async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Get full details for a specific discovery with optional pagination and response chain.
 
@@ -2661,7 +2661,7 @@ async def handle_synthesize_knowledge_graph(arguments: Dict[str, Any]) -> Sequen
     except Exception as e:
         return [error_response(f"Failed to synthesize knowledge graph: {str(e)}")]
 
-@mcp_tool("get_lifecycle_stats", timeout=30.0, rate_limit_exempt=True, register=False)
+@mcp_tool("get_lifecycle_stats", timeout=30.0, register=False)
 async def handle_get_lifecycle_stats(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Get knowledge graph lifecycle statistics.
 

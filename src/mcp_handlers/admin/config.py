@@ -13,7 +13,7 @@ logger = get_logger(__name__)
 
 # Import from mcp_server_std module (using shared utility)
 
-@mcp_tool("get_thresholds", timeout=10.0, rate_limit_exempt=True, register=False)
+@mcp_tool("get_thresholds", timeout=10.0, register=False)
 async def handle_get_thresholds(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Get current governance threshold configuration"""
     from src.runtime_config import get_thresholds
