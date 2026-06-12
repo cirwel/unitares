@@ -15,12 +15,27 @@ from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 
 logger = get_logger(__name__)
 
-@mcp_tool("get_server_info", timeout=10.0, rate_limit_exempt=True, requires_identity="pre_onboard")
-async def handle_get_server_info(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Get MCP server version, process information, and health status"""
+def build_server_info_payload() -> Dict[str, Any]:
+    """Build the ``get_server_info`` response payload.
+
+    Single source of truth for the payload shape, shared by the MCP handler
+    below and the Wave 3a probe endpoint
+    (``src/mcp_handlers/wave3a_probe.py::_server_info``). The Wave 3a §2.6
+    parity contract pins this key set via the golden fixture at
+    ``tests/fixtures/wave3a_response_golden/get_server_info.json`` — shape
+    changes here require regenerating that fixture and auditing the BEAM
+    pass-through handler
+    (``elixir/wave3a_handlers/lib/wave3a_handlers/handlers/get_server_info.ex``).
+
+    FIND-R3 / RFC §6 Q2: ``current_pid``, ``is_current``, and ``transport``
+    describe THIS Python process. When served via the Wave 3a BEAM proxy the
+    values still refer to the Python backend, not the BEAM listener — Q2
+    resolved to accepting Python-PID semantics rather than injecting
+    BEAM-side overrides.
+    """
     import time
     import os
-    
+
     # Detect transport from current process args (HTTP vs stdio).
     # This prevents HTTP from accidentally reporting stdio processes (and vice versa).
     argv = [str(a) for a in getattr(sys, "argv", [])]
@@ -108,7 +123,7 @@ async def handle_get_server_info(arguments: Dict[str, Any]) -> Sequence[TextCont
     project_root = Path(__file__).resolve().parent.parent.parent
     pid_file = (project_root / "data" / ".mcp_server.pid") if is_http else (project_root / "data" / ".mcp_server_std.pid")
 
-    return success_response({
+    return {
         "transport": transport,
         "server_version": server_version,
         "version": server_version,  # Alias for consistency
@@ -123,7 +138,13 @@ async def handle_get_server_info(arguments: Dict[str, Any]) -> Sequence[TextCont
         "pid_file": str(pid_file),
         "max_keep_processes": getattr(mcp_server, "MAX_KEEP_PROCESSES", None),
         "health": "healthy"
-    })
+    }
+
+
+@mcp_tool("get_server_info", timeout=10.0, rate_limit_exempt=True, requires_identity="pre_onboard")
+async def handle_get_server_info(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """Get MCP server version, process information, and health status"""
+    return success_response(build_server_info_payload())
 
 @mcp_tool("check_continuity_health", timeout=15.0, register=False)
 async def handle_check_continuity_health(arguments: Dict[str, Any]) -> Sequence[TextContent]:
