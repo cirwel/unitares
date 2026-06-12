@@ -5,6 +5,21 @@ scheduled) process that checks in to governance, carries an EISV state
 vector, and participates in the shared knowledge graph. Vigil, Sentinel,
 and Chronicler are reference implementations.
 
+## Install
+
+```bash
+pip install unitares-sdk
+```
+
+Or from a checkout of the [unitares repo](https://github.com/cirwel/unitares):
+
+```bash
+pip install -e agents/sdk
+```
+
+The package is standalone — it talks to a UNITARES server over MCP/REST and
+never needs the server codebase importable. Fully typed (`py.typed`).
+
 ## The 30-line resident
 
 ```python

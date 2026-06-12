@@ -1,11 +1,25 @@
 [build-system]
-requires = ["setuptools>=68.0"]
+# >=77 for PEP 639 (SPDX `license` string + `license-files`).
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "unitares-sdk"
 version = "0.1.0"
-description = "Agent SDK for UNITARES governance"
+description = "Agent SDK for UNITARES governance — check-in loop, EISV state, identity anchors, and lease-plane client for long-lived AI agents"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "cirwel" }]
+keywords = ["ai-agents", "governance", "mcp", "multi-agent-systems", "observability"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+]
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.27.0",
@@ -18,6 +32,12 @@ dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/cirwel/unitares"
+Documentation = "https://github.com/cirwel/unitares/blob/master/agents/sdk/README.md"
+Source = "https://github.com/cirwel/unitares"
+Issues = "https://github.com/cirwel/unitares/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
