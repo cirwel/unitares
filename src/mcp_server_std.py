@@ -75,7 +75,11 @@ from src.agent_state import (
 
 from src.tool_schemas import get_tool_definitions
 from src.lock_cleanup import cleanup_stale_state_locks
-from src.services.tool_usage_recorder import classify_tool_result, record_tool_usage
+from src.services.tool_usage_recorder import (
+    classify_tool_result,
+    record_tool_usage,
+    resolve_minted_agent_id,
+)
 from src.background_tasks import create_tracked_task  # noqa: F401 — re-exported for consumers of this module
 
 # ============================================================================
@@ -459,7 +463,9 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
         latency_ms = int((time.monotonic() - t0) * 1000)
         if result is not None:
             success, error_type = classify_tool_result(result)
-            record_tool_usage(tool_name=name, agent_id=agent_id, success=success,
+            record_tool_usage(tool_name=name,
+                              agent_id=resolve_minted_agent_id(name, agent_id, result),
+                              success=success,
                               error_type=error_type, latency_ms=latency_ms)
             return result
         record_tool_usage(tool_name=name, agent_id=agent_id, success=False,

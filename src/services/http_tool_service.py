@@ -31,7 +31,11 @@ from src.mcp_handlers.core import handle_process_agent_update, unbound_metrics_p
 from src.mcp_handlers.utils import require_agent_id
 from src.services.http_dispatch_fallback import execute_http_dispatch_fallback
 from src.services.runtime_queries import get_governance_metrics_data, get_health_check_data
-from src.services.tool_usage_recorder import classify_tool_result, record_tool_usage
+from src.services.tool_usage_recorder import (
+    classify_tool_result,
+    record_tool_usage,
+    resolve_minted_agent_id,
+)
 from src.wave3a_beam_proxy import proxy_to_beam
 from src.wave3a_routing import get_route as wave3a_get_route
 
@@ -252,13 +256,15 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
             result = await handler(arguments)
             latency_ms = int((time.monotonic() - t0) * 1000)
             success, error_type = classify_tool_result(result)
-            record_tool_usage(tool_name=tool_name, agent_id=agent_id,
+            record_tool_usage(tool_name=tool_name,
+                              agent_id=resolve_minted_agent_id(tool_name, agent_id, result),
                               success=success, error_type=error_type, latency_ms=latency_ms)
             return _normalize_direct_http_result(result)
         result = await execute_http_dispatch_fallback(tool_name, arguments)
         latency_ms = int((time.monotonic() - t0) * 1000)
         success, error_type = classify_tool_result(result)
-        record_tool_usage(tool_name=tool_name, agent_id=agent_id,
+        record_tool_usage(tool_name=tool_name,
+                          agent_id=resolve_minted_agent_id(tool_name, agent_id, result),
                           success=success, error_type=error_type, latency_ms=latency_ms)
         return result
     except Exception as e:
