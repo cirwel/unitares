@@ -177,6 +177,7 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
             total_all = 0  # Count all agents before filtering
             ghost_count = 0
             ephemeral_count = 0
+            test_count = 0
             for agent_id, meta in list(mcp_server.agent_metadata.items()):
                 total_all += 1
                 # Ghost: no label, no purpose, zero check-ins — session-binding artifact
@@ -189,6 +190,12 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                 )
                 if is_ghost:
                     ghost_count += 1
+                elif _is_test_agent(agent_id, getattr(meta, 'label', None)):
+                    # Test agents (pytest/itest suites) get their own health
+                    # bucket — they carry labels, so without this they'd
+                    # inflate "real". Buckets are mutually exclusive; ghost
+                    # classification wins for unlabeled test-pattern ids.
+                    test_count += 1
                 elif meta.total_updates <= 2 and not has_label:
                     # Short-lived but did some work — legitimate ephemeral
                     ephemeral_count += 1
@@ -295,7 +302,8 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                 "identity_health": {
                     "ghosts": ghost_count,
                     "ephemeral": ephemeral_count,
-                    "real": total_all - ghost_count,
+                    "test": test_count,
+                    "real": total_all - ghost_count - test_count,
                 },
             }
 
