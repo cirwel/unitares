@@ -67,6 +67,7 @@ defmodule Wave3aHandlers.Handlers.HealthCheck do
   in-process dispatch, never a silent skip.
   """
 
+  alias Wave3aHandlers.Handlers.ProbeErrors
   alias Wave3aHandlers.ProbeClient
 
   @doc """
@@ -93,48 +94,11 @@ defmodule Wave3aHandlers.Handlers.HealthCheck do
         body = build_response(snapshot_payload, lite)
         {:ok, body, 200}
 
-      {:error, :probe_token_unset} ->
-        {:ok,
-         %{
-           error: "service_unavailable",
-           reason: "WAVE_3A_PROBE_TOKEN not configured"
-         }, 503}
-
-      {:error, :timeout} ->
-        {:ok,
-         %{
-           error: "probe_timeout",
-           reason: "Python probe exceeded 500ms budget"
-         }, 504}
-
-      {:error, :connect_error} ->
-        {:ok,
-         %{
-           error: "probe_unavailable",
-           reason: "could not reach Python probe"
-         }, 502}
-
-      {:error, {:non_200, status}} ->
-        {:ok,
-         %{
-           error: "probe_non_200",
-           reason: "Python probe returned non-2xx",
-           probe_status: status
-         }, 502}
-
-      {:error, :decode_error} ->
-        {:ok,
-         %{
-           error: "probe_decode_error",
-           reason: "Python probe body was not valid JSON"
-         }, 502}
-
-      {:error, :envelope_invalid} ->
-        {:ok,
-         %{
-           error: "probe_envelope_invalid",
-           reason: "Python probe response lacked ok: true"
-         }, 502}
+      {:error, reason} ->
+        # Shared probe-failure → typed-envelope mapping (extracted in
+        # PR #6); the error/reason literals are unchanged from PR #5.
+        {body, status} = ProbeErrors.body(reason)
+        {:ok, body, status}
     end
   end
 

@@ -94,9 +94,14 @@ defmodule Wave3aHandlers.HTTPRouter do
   end
 
   # ---------- /v1/handlers/:tool_name ----------
-  # PR #5 wires `health_check` as the first cutover (RFC §5 PR #5). Every
-  # other tool name still returns 501; subsequent PRs in the §1.1 list
-  # (get_server_info, list_tools, describe_tool) add their own clauses.
+  # Dispatch table for the wired §1.1 handlers. PR #5 cut over
+  # `health_check`; PR #6 adds `get_server_info`. Every other tool name
+  # returns 501; subsequent PRs (list_tools, describe_tool) add rows here.
+  @handler_modules %{
+    "health_check" => Wave3aHandlers.Handlers.HealthCheck,
+    "get_server_info" => Wave3aHandlers.Handlers.GetServerInfo
+  }
+
   post "/v1/handlers/:tool_name" do
     arguments =
       case conn.body_params do
@@ -105,16 +110,16 @@ defmodule Wave3aHandlers.HTTPRouter do
         _ -> %{}
       end
 
-    case tool_name do
-      "health_check" ->
-        {:ok, body, status} = Wave3aHandlers.Handlers.HealthCheck.call(arguments)
+    case Map.fetch(@handler_modules, tool_name) do
+      {:ok, handler_module} ->
+        {:ok, body, status} = handler_module.call(arguments)
         # The handler returns the BODY payload; success/error is signalled
         # by the HTTP status. The router stamps `ok` based on status and
         # adds the pinned `protocol_version`.
         ok = status == 200
         json(conn, status, Map.put(body, :ok, ok))
 
-      _ ->
+      :error ->
         json(conn, 501, %{
           ok: false,
           error: "not_implemented",

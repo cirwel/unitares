@@ -66,7 +66,12 @@ _ENV_FLAG_ROUTES: Dict[str, Dict[str, str]] = {
         "tool_name": "health_check",
         "beam_url": "http://127.0.0.1:8770/v1/handlers/health_check",
     },
-    # PR #6/#7/#8 add their rows here. Each row independent so the operator
+    # RFC §5 PR #6 — second cutover.
+    "WAVE_3A_GET_SERVER_INFO_ON_BEAM": {
+        "tool_name": "get_server_info",
+        "beam_url": "http://127.0.0.1:8770/v1/handlers/get_server_info",
+    },
+    # PR #7/#8 add their rows here. Each row independent so the operator
     # can cut over handlers one at a time and roll them back independently.
 }
 

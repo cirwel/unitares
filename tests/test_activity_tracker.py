@@ -159,15 +159,14 @@ def test_activity_tracker_integration(tmp_path):
     should_trigger, reason = tracker.track_tool_call(agent_id, "write")
     assert not should_trigger  # Turn 3, tool 3
 
-    # Get summary
-    summary = tracker.get_activity_summary(agent_id)
-    assert summary['tool_calls'] == 3
-    assert summary['files_modified'] == 1  # write is high-impact
+    # Inspect tracked state
+    activity = tracker.get_or_create(agent_id)
+    assert activity.tool_calls == 3
+    assert activity.files_modified == 1  # write is high-impact
 
     # Reset
     tracker.reset_after_governance_update(agent_id)
-    summary = tracker.get_activity_summary(agent_id)
-    assert summary['tool_calls'] == 0
+    assert tracker.get_or_create(agent_id).tool_calls == 0
 
 
 def test_prompted_vs_autonomous_patterns(tmp_path):
@@ -182,12 +181,12 @@ def test_prompted_vs_autonomous_patterns(tmp_path):
     # Pattern 1: Prompted agent (low autonomy, high turn/tool ratio)
     prompted_id = "prompted_agent"
     for _ in range(5):
-        tracker.track_conversation_turn(prompted_id)
+        tracker.get_or_create(prompted_id).conversation_turns += 1
         tracker.track_tool_call(prompted_id, "read")
 
-    summary = tracker.get_activity_summary(prompted_id)
-    assert summary['conversation_turns'] == 5
-    assert summary['tool_calls'] == 5
+    prompted = tracker.get_or_create(prompted_id)
+    assert prompted.conversation_turns == 5
+    assert prompted.tool_calls == 5
     # Should trigger on turns
     should_trigger, reason = tracker.get_or_create(prompted_id).should_trigger_update(config)
     assert should_trigger
@@ -195,13 +194,13 @@ def test_prompted_vs_autonomous_patterns(tmp_path):
 
     # Pattern 2: Autonomous agent (high autonomy, low turn/tool ratio)
     autonomous_id = "autonomous_agent"
-    tracker.track_conversation_turn(autonomous_id)  # One user request
+    tracker.get_or_create(autonomous_id).conversation_turns += 1  # One user request
     for i in range(15):
         tracker.track_tool_call(autonomous_id, "analyze" if i < 10 else "write")
 
-    summary = tracker.get_activity_summary(autonomous_id)
-    assert summary['conversation_turns'] == 1
-    assert summary['tool_calls'] == 15
+    autonomous = tracker.get_or_create(autonomous_id)
+    assert autonomous.conversation_turns == 1
+    assert autonomous.tool_calls == 15
     # Should trigger on tools
     should_trigger, reason = tracker.get_or_create(autonomous_id).should_trigger_update(config)
     assert should_trigger

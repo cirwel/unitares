@@ -32,7 +32,25 @@ function authFetch(url, options = {}) {
             'Authorization': `Bearer ${token}`
         });
     }
+    const operatorToken = getOperatorToken();
+    if (operatorToken) {
+        options.headers = Object.assign({}, options.headers, {
+            'X-Unitares-Operator': operatorToken
+        });
+    }
     return fetch(url, options);
+}
+
+/**
+ * Operator token (X-Unitares-Operator) from localStorage or URL params.
+ * Under STRICT_IDENTITY_REQUIRED the server resolves this to a stable
+ * operator identity, which is what authorizes the dashboard's write
+ * buttons (archive/resume/config-set/dialectic-request). Reads work
+ * without it.
+ */
+function getOperatorToken() {
+    return localStorage.getItem('unitares_operator_token') ||
+        new URLSearchParams(window.location.search).get('operator_token');
 }
 
 class DashboardAPI {
@@ -153,6 +171,11 @@ class DashboardAPI {
         const token = this.getAuthToken();
         if (token) {
             headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const operatorToken = getOperatorToken();
+        if (operatorToken) {
+            headers['X-Unitares-Operator'] = operatorToken;
         }
 
         // Ensure toolArguments is a plain object
