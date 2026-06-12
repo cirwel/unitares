@@ -60,7 +60,17 @@ def classify_tool_result(result: Any) -> Tuple[bool, Optional[str]]:
         category = payload.get("error_category")
         if category in _EISV_CAUSED_ERROR_CATEGORIES:
             return True, None  # governance-caused refusal — not an EISV-blind failure
-        error_type = category or payload.get("error_code") or "tool_error"
+        # Legacy error_response() refusals (e.g. the reserved-prefix guard in
+        # validators.py) carry only a details-spread "error_type" — without
+        # this fallback they audit as generic "tool_error". Six months of
+        # reserved_prefix refusals (~820k rows, surfaced by #543) were
+        # indistinguishable from real failures until a live repro.
+        error_type = (
+            category
+            or payload.get("error_code")
+            or payload.get("error_type")
+            or "tool_error"
+        )
         return False, str(error_type)
     return True, None
 
