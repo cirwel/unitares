@@ -106,6 +106,14 @@ def check_dead_refs(md_files: list[Path]) -> list[str]:
                     if ref_path in seen:
                         continue
                     seen.add(ref_path)
+                    # Refs INTO docs/handoffs/ are operator-local by
+                    # convention: the directory is gitignored and holds
+                    # private handoffs; public docs cite them by filename
+                    # as provenance (see e.g. AGENTS.md strict-identity
+                    # stage-1 burn-in, wave-3 §5.2 audit summary). They
+                    # are expected to be unresolvable in the public tree.
+                    if ref_path.startswith("docs/handoffs/"):
+                        continue
                     # Skip wildcards, placeholders, and example paths
                     if any(c in ref_path for c in "*<>{}"):
                         continue

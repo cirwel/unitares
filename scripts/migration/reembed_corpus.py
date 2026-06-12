@@ -20,7 +20,6 @@ import asyncio
 import os
 import sys
 import time
-from pathlib import Path
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -30,7 +29,6 @@ from src.embeddings import (
     KNOWN_MODELS,
     DEFAULT_MODEL_KEY,
     EmbeddingsService,
-    get_active_table_name,
 )
 
 

@@ -15,7 +15,6 @@ Usage:
 """
 import asyncio
 import sys
-import uuid as uuid_mod
 
 BATCH_SIZE = 100
 

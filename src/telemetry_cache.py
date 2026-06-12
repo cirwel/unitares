@@ -7,8 +7,6 @@ Helps future agents by reducing blocking file operations.
 
 from typing import Dict, Optional, Any
 from datetime import datetime, timedelta
-from collections import defaultdict
-import asyncio
 import hashlib
 import json
 import threading

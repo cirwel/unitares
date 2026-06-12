@@ -13,13 +13,13 @@ import time
 from pathlib import Path
 
 from src.logging_utils import get_logger
-from src.agent_metadata_model import project_root, logger as _model_logger
+from src.agent_metadata_model import project_root
 
 logger = get_logger(__name__)
 
 # Optional dependency flags
 try:
-    import aiofiles
+    import aiofiles  # noqa: F401 — availability probe
     AIOFILES_AVAILABLE = True
 except ImportError:
     AIOFILES_AVAILABLE = False

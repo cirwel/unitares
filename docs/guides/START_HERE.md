@@ -12,10 +12,19 @@ Use this unless you have a specific reason not to:
 4. Call `check_working_state()` for state
 5. Use `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)` only for same-owner proof-owned rebinds
 
-Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and
-`get_governance_metrics(...)`. The friendly aliases return the
-agent-experience envelope, with the full canonical payload preserved under
-`raw_governance`.
+Agent-facing workflow aliases are also registered:
+
+| Job | Workflow alias | Canonical tool |
+| --- | --- | --- |
+| Start working | `start_session(force_new=true, ...)` | `onboard` |
+| Check in after meaningful work | `sync_state(response_text=..., complexity=...)` | `process_agent_update` |
+| Check current state | `check_working_state()` | `get_governance_metrics` |
+| Search shared memory | `search_shared_memory(query=...)` | `knowledge(action="search")` |
+| Record a real outcome | `record_result(...)` | `outcome_event` |
+| Ask for review | `request_review(issue_description=...)` | `dialectic(action="request")` |
+
+The workflow aliases return the agent-experience envelope, with the full
+canonical payload preserved under `raw_governance`.
 
 ```python
 # First run:

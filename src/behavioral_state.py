@@ -10,7 +10,6 @@ from the agent's own characteristic operating point instead of fixed thresholds.
 
 from __future__ import annotations
 
-import math
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional

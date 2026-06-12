@@ -36,12 +36,9 @@ import asyncio
 import argparse
 import time
 from pathlib import Path
-from typing import Any, Dict, Set, Optional
+from typing import Dict, Optional
 from datetime import datetime, timedelta, timezone
-from contextlib import asynccontextmanager
 import json
-import traceback
-import uuid
 
 # Load environment variables from ~/.env.mcp
 try:
@@ -62,7 +59,6 @@ project_root = ensure_project_root()
 from src.logging_utils import get_logger
 from src.services.identity_continuity import (
     format_identity_continuity_startup_message,
-    get_identity_continuity_status,
     probe_identity_continuity_status,
 )
 from src.versioning import load_version_from_file
@@ -88,7 +84,7 @@ from src.connection_tracker import (
 try:
     from mcp.server import FastMCP
     from mcp.server.fastmcp import Context
-    from mcp.types import TextContent
+    from mcp.types import TextContent  # noqa: F401 — availability probe
     MCP_SDK_AVAILABLE = True
 except ImportError as e:
     MCP_SDK_AVAILABLE = False
@@ -97,7 +93,7 @@ except ImportError as e:
     sys.exit(1)
 
 # Import dispatch_tool from handlers (reuse all existing tool logic)
-from src.mcp_handlers import dispatch_tool, TOOL_HANDLERS
+from src.mcp_handlers import dispatch_tool
 # Wave 3a per-tool routing table imports — hoisted to module load time so
 # (a) the per-call ~200-500ns import cost vanishes from the dispatch hot
 # path, and (b) ``patch("src.wave3a_routing.get_route")`` style mocks
@@ -514,10 +510,16 @@ auto_register_all_tools()
 # agents can use intuitive names like status() without "Unknown tool" errors.
 
 def _register_common_aliases():
-    from src.mcp_handlers.tool_stability import resolve_tool_alias
-    from src.mcp_handlers.support.wrapper_generator import create_typed_wrapper
+    from src.mcp_handlers.tool_stability import (
+        AGENT_WORKFLOW_ALIASES,
+        resolve_tool_alias,
+    )
+    from src.mcp_handlers.support.wrapper_generator import (
+        create_typed_wrapper,
+        enable_extra_argument_passthrough,
+    )
 
-    common = ["status", "list_agents", "observe_agent"]
+    common = list(AGENT_WORKFLOW_ALIASES)
     count = 0
     for alias_name in common:
         actual, info = resolve_tool_alias(alias_name)
@@ -572,6 +574,15 @@ def _register_common_aliases():
             )
             desc = f"{info.migration_note or f'Alias for {actual}'}"
             mcp.tool(description=desc, structured_output=False)(wrapper)
+            if actual in EXTRA_ARGUMENT_PASSTHROUGH_TOOLS:
+                tool_manager = getattr(mcp, "_tool_manager", None)
+                registered_tool = (
+                    tool_manager.get_tool(alias_name)
+                    if tool_manager and hasattr(tool_manager, "get_tool")
+                    else None
+                )
+                if registered_tool is not None:
+                    enable_extra_argument_passthrough(registered_tool)
             count += 1
         except Exception as e:
             logger.debug(f"[ALIAS] Failed to register {alias_name}: {e}")
@@ -579,7 +590,7 @@ def _register_common_aliases():
     if count:
         logger.info(f"[AUTO_REGISTER] Registered {count} common aliases")
 
-# _register_common_aliases()  # Removed: aliases inflate tool count; use consolidated forms
+_register_common_aliases()
 
 # ============================================================================
 # LEGACY MANUAL REGISTRATIONS (kept for reference, will be removed)
@@ -644,7 +655,7 @@ from src.process_management import (
     write_server_pid_file, remove_server_pid_file,
     acquire_server_lock, release_server_lock,
     ensure_server_pid_file, ensure_server_lock,
-    SERVER_PID_FILE, SERVER_LOCK_FILE, CURRENT_PID,
+    SERVER_PID_FILE, SERVER_LOCK_FILE,
 )
 
 
@@ -813,7 +824,7 @@ async def main():
     # Run the governance MCP server
     try:
         import uvicorn
-        from starlette.applications import Starlette
+        from starlette.applications import Starlette  # noqa: F401 — availability probe
         from starlette.responses import JSONResponse
         from starlette.middleware.cors import CORSMiddleware
         from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -859,6 +870,13 @@ async def main():
             server_ready_fn=lambda: SERVER_READY,
             server_version=SERVER_VERSION,
         )
+
+        # === Wave 3 §3.2 numerator capture (§14 prereq PR #10) ===
+        # One measurement.governance_mcp.503_emission row per 503 the
+        # transport returns. Single emission point — the Wave 3 cutover proxy
+        # must NOT emit its own numerator row (see src/mcp_transport.py).
+        from src.mcp_transport import Transport503EmissionMiddleware
+        app.add_middleware(Transport503EmissionMiddleware)
         
         # === Start all background tasks ===
         from src.background_tasks import start_all_background_tasks, stop_all_background_tasks
@@ -938,7 +956,7 @@ async def main():
                     from src.mcp_handlers.context import (
                         SessionSignals, set_session_signals, reset_session_signals,
                         detect_client_from_user_agent, set_transport_client_hint, reset_transport_client_hint,
-                        set_mcp_session_id, reset_mcp_session_id
+                        set_mcp_session_id, reset_mcp_session_id, note_ua_fingerprint
                     )
                     headers = Headers(scope=scope)
 
@@ -949,6 +967,7 @@ async def main():
                     ua = headers.get("user-agent", "unknown")
                     import hashlib
                     ua_fingerprint = hashlib.md5(ua.encode()).hexdigest()[:6]
+                    note_ua_fingerprint(ua_fingerprint, ua)
                     x_session_id = headers.get("x-session-id")
                     x_client_id = headers.get("x-client-id") or headers.get("x-mcp-client-id")
 

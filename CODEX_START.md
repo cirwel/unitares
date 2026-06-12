@@ -18,6 +18,7 @@ Connect to a running UNITARES governance server, preserve continuity cleanly, an
 4. Run `/checkin` after a meaningful milestone
 5. Run `/diagnose` when continuity or governance state looks wrong
 6. Use `/dialectic` when you need structured review
+7. Run `/closeout` before saying edited work is done
 
 If you are not using commands directly, the equivalent raw tool flow is:
 
@@ -103,12 +104,34 @@ open GitHub PRs, and unresolved Watcher output. For automation, add
 or narrow it with comma-separated categories such as
 `--fail-on-attention worktrees,watcher`.
 
+Use closeout before the final response after edits:
+
+```bash
+python3 scripts/dev/workspace_closeout.py
+```
+
+The `delivery:` line is mandatory context. In particular:
+
+- `local_changes` means not committed, not pushed, not merged.
+- `unpushed_commits` means committed locally but not pushed.
+- `pushed_branch` means pushed, but PR/merge state is not proven by local git.
+- `synced_default` means clean and synced with the default upstream.
+
+If you want Codex to ship the current staged change, use:
+
+```bash
+./scripts/dev/ship.sh "type(scope): concise message"
+```
+
+That helper chooses direct push versus PR+auto-merge based on the staged files.
+
 ## Commands
 
 - `/governance-start` to create or declare lineage and refresh local continuity state
 - `/checkin` for a governance update after meaningful work
 - `/diagnose` for identity, state, and operator diagnostics
 - `/dialectic` for structured review
+- `/closeout` for workspace hygiene and explicit GitHub delivery state
 
 ## Watcher
 

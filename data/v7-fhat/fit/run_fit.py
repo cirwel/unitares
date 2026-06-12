@@ -32,7 +32,6 @@ from .em import (
     SIGMA_TRANS_MAX,
     SIGMA_TRANS_MIN,
 )
-from .ode import fx as ode_fx
 from .ukf_smoother import run_ukf_smoother
 
 REPO = pathlib.Path(__file__).resolve().parents[3]

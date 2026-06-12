@@ -18,6 +18,8 @@ started repo-rooted processes.
 Report:
 
 - whether git is clean
+- the `delivery:` line, including whether work is local-only, unpushed,
+  pushed-but-not-proven-merged, or synced with default upstream
 - any staged, unstaged, or untracked files
 - any repo-rooted processes still running
 - whether a remaining process is managed by a LaunchAgent label
@@ -34,6 +36,14 @@ Rules:
   committed/stashed.
 - If there are staged changes, decide whether to commit, unstage, or stash
   before final response; do not leave them ambiguous.
+- If `delivery` is `local_changes`, say plainly: not committed, not pushed,
+  not merged.
+- If `delivery` is `unpushed_commits`, say plainly: committed locally but not
+  pushed or merged.
+- If `delivery` is `pushed_branch`, do not claim merge completion unless you
+  also checked GitHub PR state explicitly.
+- If the operator asks "merged?", answer directly from delivery state and any
+  GitHub check performed.
 - If there are unrelated dirty files, preserve them in a labeled stash rather
   than reverting them.
 - Stop only processes rooted inside the current workspace. Do not stop services

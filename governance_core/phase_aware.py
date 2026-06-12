@@ -26,7 +26,6 @@ Authors: Well_Tempered_Claude_CLI, claude_opus_governance_explorer_20251127
 Date: 2025-11-27
 """
 
-import math
 import numpy as np
 from typing import List, Dict, Tuple
 from dataclasses import dataclass

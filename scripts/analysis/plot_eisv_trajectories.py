@@ -23,7 +23,7 @@ import numpy as np
 
 from governance_core.dynamics import State, compute_dynamics
 from governance_core.parameters import DEFAULT_THETA, get_active_params
-from governance_core.scoring import phi_objective, verdict_from_phi
+from governance_core.scoring import phi_objective
 
 
 def run_scenario(state, delta_eta, steps, complexity=0.5, dt=0.1):

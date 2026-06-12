@@ -14,8 +14,6 @@ With contextvars, session context is set once at dispatch entry and accessible e
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
-import os
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 # =============================================================================
 # SESSION SIGNALS (unified transport signal capture)
 # =============================================================================
@@ -278,6 +276,33 @@ def reset_trajectory_confidence(token: object) -> None:
 def get_trajectory_confidence() -> Optional[float]:
     """Get trajectory confidence from context, or None if not set."""
     return _trajectory_confidence.get()
+
+_logged_ua_fingerprints: set = set()
+_MAX_LOGGED_UA_FINGERPRINTS = 512
+
+
+def note_ua_fingerprint(ua_fingerprint: Optional[str], user_agent: Optional[str]) -> None:
+    """Record the fingerprint -> raw User-Agent preimage, once per distinct
+    hash per process lifetime.
+
+    Session keys carry only md5(UA)[:6], which is one-way: when an unbound
+    caller shows up in the logs as e.g. ``127.0.0.1:f304dd:*`` there is
+    nothing in the system that says what client that actually is (the
+    stage-1 strict-identity burn-in spent a candidate hunt on exactly that
+    and gave up with "revisit with a header capture" — this is that
+    capture). One INFO line per distinct fingerprint; the set is capped so
+    a UA-randomizing caller cannot grow it unbounded.
+    """
+    if not ua_fingerprint or ua_fingerprint in _logged_ua_fingerprints:
+        return
+    if len(_logged_ua_fingerprints) >= _MAX_LOGGED_UA_FINGERPRINTS:
+        return
+    _logged_ua_fingerprints.add(ua_fingerprint)
+    import logging
+    logging.getLogger(__name__).info(
+        "[UA_FINGERPRINT] %s -> %r", ua_fingerprint, user_agent
+    )
+
 
 def detect_client_from_user_agent(user_agent: str) -> Optional[str]:
     """

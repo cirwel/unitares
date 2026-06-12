@@ -4,7 +4,7 @@ description: >
   Use when an agent is participating in a UNITARES dialectic session — paused and needs to
   submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
   Covers structured argumentation and convergence.
-last_verified: "2026-04-25"
+last_verified: "2026-06-11"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/dialectic/handlers.py
@@ -27,7 +27,7 @@ Dialectics are not punishment. They are a structured way to resolve disagreement
 
 ## Phase 1: Thesis
 
-The paused or requesting agent submits their position:
+The paused agent submits their position (the protocol rejects a thesis from anyone else):
 
 ```
 submit_thesis(
@@ -84,6 +84,7 @@ Convergence happens when both sides agree on conditions. The synthesis should re
 | **resume** | Agent continues with agreed conditions |
 | **block** | Agent stays paused — conditions not met or agreement not reached |
 | **escalate** | Needs human/operator intervention |
+| **cooldown** | Temporary pause — retry after a delay |
 
 ## How to Participate Well
 

@@ -76,6 +76,8 @@ Additional services (started via launchd, not bundled into `docker compose up`):
 
 **Workflow:** `start_session(force_new=true)` → `sync_state()` → `check_working_state()`. Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and `get_governance_metrics(...)`. Use `parent_agent_id` for fresh-process lineage — details in [Getting Started](docs/guides/START_HERE.md).
 
+**Resident agents:** for long-running or scheduled agents, start with the SDK in [`agents/sdk/README.md`](agents/sdk/README.md). It handles MCP connection, identity anchors, check-ins, heartbeats, log rotation, state persistence, and pause hooks.
+
 **Transports:** MCP on `/mcp/` (Streamable HTTP) · REST on `/v1/tools/call` · Dashboard on `/dashboard`
 
 **Stack:** Python 3.12+ · PostgreSQL + AGE + pgvector · Redis (optional)
@@ -194,24 +196,28 @@ sync_state({
 })
 ```
 
-**`response_mode: "mirror"`** shapes the canonical payload for self-awareness: `mirror` is a **list of strings** (actionable signals), not a nested object. When calling through `sync_state`, read it under `raw_governance`. Optional top-level `question` and `relevant_prior_work` surface a targeted nudge and knowledge-graph items when relevant. See `_format_mirror` in [`src/mcp_handlers/response_formatter.py`](src/mcp_handlers/response_formatter.py).
+**`response_mode: "mirror"`** shapes the canonical payload for self-awareness: `mirror` is a **list of strings** (actionable signals), not a nested object. When calling through `sync_state`, read it under `raw_governance`. Optional top-level `reflection` and `relevant_prior_work` surface a state reflection and knowledge-graph items when relevant. See `_format_mirror` in [`src/mcp_handlers/response_formatter.py`](src/mcp_handlers/response_formatter.py).
 
 ```jsonc
 {
-  "verdict": "proceed",
+  "verdict": {
+    "value": "proceed",
+    "meaning": "State is healthy.",
+    "next_action": "Continue working normally."
+  },
   "_mode": "mirror",
   "mirror": [
     "Fleet calibration: 72% accuracy over 12 fleet-wide decisions (high-conf: 0.8, low-conf: 0.5)",
     "Complexity divergence: you reported 0.60 but system derives 0.45 (divergence=0.15)"
   ],
-  "question": "What's driving your sense of difficulty?",
+  "reflection": "Complexity estimate is diverging from the output-surface proxy.",
   "relevant_prior_work": [
     { "summary": "Rate limiter bypass in auth …", "by": "agent-abc", "relevance": 0.82 }
   ]
 }
 ```
 
-**Verdict field:** Responses expose `verdict` from `decision.action`. Governance actions are **`proceed` / `guide` / `pause` / `reject`** ([Architecture](docs/UNIFIED_ARCHITECTURE.md)). If `action` is absent, formatters fall back to **`continue`** — see `response_formatter.py`.
+**Verdict field:** Mirror/compact responses wrap the verdict with `value`, `meaning`, and `next_action`. Governance actions are **`proceed` / `guide` / `pause` / `reject`** ([Architecture](docs/UNIFIED_ARCHITECTURE.md)). If `action` is absent, formatters fall back to **`continue`** — see `response_formatter.py`.
 
 The `start_session()` envelope includes `agent_uuid` and `client_session_id` at the top level. Store `agent_uuid` as an identity anchor. On a fresh process that continues prior work, call `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")`. Use canonical `onboard(...)` instead if you need the raw response shape. Use `identity(agent_uuid=..., continuity_token=..., resume=true)` only for same-owner proof-owned rebinds.
 

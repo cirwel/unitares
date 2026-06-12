@@ -11,7 +11,6 @@ class _LazyNumpy:
         return getattr(numpy, name)
 np = _LazyNumpy()
 
-import re
 import os
 
 

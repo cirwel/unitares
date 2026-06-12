@@ -59,6 +59,8 @@ def _build_http_session_signals(request):
         host = request.client.host if request.client else "unknown"
         import hashlib
         ua_fp = hashlib.md5(ua.encode()).hexdigest()[:6] if ua else "000000"
+        from src.mcp_handlers.context import note_ua_fingerprint
+        note_ua_fingerprint(ua_fp, ua)
         ip_ua_fp = f"{host}:{ua_fp}"
     except Exception:
         pass
@@ -268,42 +270,61 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
         update_context_agent_id(explicit_agent_id)
         return explicit_agent_id
 
-    # Sticky transport cache: the MCP middleware path (identity_step.py) consults
-    # this cache before calling resolve_session_identity, which prevents identity
-    # fragmentation for repeat callers from the same IP:UA fingerprint. The REST
-    # path previously bypassed this cache entirely — every call went through
-    # PATH 3 creation, producing mcp_YYYYMMDD ghost identities at a rate of
-    # hundreds per day (see identity-ghost-proliferation investigation 2026-04-15).
-    # Mirror the same check here so REST gets the same ghost protection.
-    force_new = bool(arguments.get("force_new"))
-    client_session_id = arguments.get("client_session_id")
-    continuity_token = arguments.get("continuity_token")
-    transport_key = None
-    if not force_new and not client_session_id and not continuity_token:
-        try:
-            import time as _time
-            from src.mcp_handlers.middleware.identity_step import (
-                _TRANSPORT_CACHE_TTL,
-                _transport_cache_key,
-                _transport_identity_cache,
-            )
-            transport_key = _transport_cache_key(signals)
-            if transport_key:
-                cached = _transport_identity_cache.get(transport_key)
-                if cached and (_time.monotonic() - cached.bound_at) < _TRANSPORT_CACHE_TTL:
-                    update_context_agent_id(cached.agent_uuid)
-                    arguments["agent_id"] = cached.agent_uuid
-                    # S3: emit the cache-hit envelope `sticky_cache:<original>`
-                    # so `_compute_identity_assurance` can apply decay-by-one
-                    # against the original proof tier. Pre-S3 Redis entries
-                    # (and bindings created before this field was threaded)
-                    # carry original="unknown" and continue to map to weak.
-                    set_session_resolution_source(
-                        f"sticky_cache:{cached.original_session_source}"
-                    )
-                    return cached.agent_uuid
-        except Exception as e:
-            logger.debug("[STICKY-REST] cache check failed: %s", e)
+    # Operator credential (#425 dashboard-identity decision): a valid
+    # X-Unitares-Operator token resolves to a stable, persisted operator
+    # identity through the canonical resolver. The credential EARNS a
+    # resolved binding — the strict gate keys on the binding, never on
+    # header presence (council finding, PR #610). Checked ahead of the
+    # sticky consult, and the binding is deliberately NEVER written to the
+    # IP:UA transport cache: a same-host caller without the header must
+    # not inherit operator identity from a shared fingerprint.
+    from src.mcp_handlers.identity.operator import resolve_operator_identity
+    try:
+        operator_identity = await resolve_operator_identity(signals)
+    except Exception as e:
+        # Valid-token-but-resolver-error degrades to unbound (writes refuse
+        # under strict) — a visible failure, never a silent bypass.
+        logger.warning("[OPERATOR] identity resolution failed: %s", e)
+        operator_identity = None
+    if operator_identity:
+        agent_uuid = operator_identity["agent_uuid"]
+        update_context_agent_id(agent_uuid)
+        arguments["agent_id"] = agent_uuid
+        set_session_resolution_source("operator_token")
+        return agent_uuid
+
+    # Sticky transport cache: single-sourced consult shared with the MCP
+    # middleware (identity_step.consult_sticky_binding), which prevents
+    # identity fragmentation for repeat callers from the same IP:UA
+    # fingerprint. The REST path previously bypassed this cache entirely —
+    # every call went through PATH 3 creation, producing mcp_YYYYMMDD ghost
+    # identities at a rate of hundreds per day (see identity-ghost-
+    # proliferation investigation 2026-04-15). redis_recovery=False
+    # preserves this surface's historical in-memory-only consult: REST
+    # never recovered bindings from Redis after a restart.
+    from src.mcp_handlers.identity.session import extract_token_agent_uuid_safe
+    from src.mcp_handlers.middleware.identity_step import (
+        consult_sticky_binding,
+        sticky_resolution_source,
+        update_transport_binding,
+    )
+
+    consult = None
+    try:
+        consult = await consult_sticky_binding(signals, arguments, redis_recovery=False)
+        if consult.binding is not None:
+            cached = consult.binding
+            update_context_agent_id(cached.agent_uuid)
+            arguments["agent_id"] = cached.agent_uuid
+            # S3: emit the cache-hit envelope `sticky_cache:<original>`
+            # so `_compute_identity_assurance` can apply decay-by-one
+            # against the original proof tier. Pre-S3 Redis entries
+            # (and bindings created before this field was threaded)
+            # carry original="unknown" and continue to map to weak.
+            set_session_resolution_source(sticky_resolution_source(cached))
+            return cached.agent_uuid
+    except Exception as e:
+        logger.debug("[STICKY-REST] cache check failed: %s", e)
 
     session_key = await derive_session_key(signals, arguments)
 
@@ -312,13 +333,7 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
     # distinguish \"Watcher owns agent-907e3195-c64\" from \"some prior REST
     # caller claimed that session_key and got cached\", and PATH 1 happily
     # returns whichever agent the cache holds (issue #110).
-    _token_agent_uuid = None
-    if continuity_token:
-        try:
-            from src.mcp_handlers.identity.session import extract_token_agent_uuid
-            _token_agent_uuid = extract_token_agent_uuid(str(continuity_token))
-        except Exception:
-            pass
+    _token_agent_uuid = extract_token_agent_uuid_safe(arguments.get("continuity_token"))
 
     resolved = await resolve_session_identity(
         session_key,
@@ -335,18 +350,22 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
             arguments["agent_id"] = agent_uuid
             # Populate sticky cache so subsequent REST calls from the same
             # fingerprint hit the cache path above and skip resolution entirely.
-            if transport_key:
+            # Write back only when the consult guard passed (`cacheable`):
+            # proof-carrying requests (client_session_id / continuity_token /
+            # force_new) are never cached under the bare fingerprint on this
+            # surface.
+            writeback_key = (
+                consult.transport_key if (consult and consult.cacheable) else None
+            )
+            if writeback_key:
                 try:
-                    from src.mcp_handlers.middleware.identity_step import (
-                        update_transport_binding,
-                    )
                     # `resolved.source` is the proof source from
                     # resolve_session_identity — exactly what the tier mapper
                     # consumes. Mirror it as the binding's original_session_source
                     # so future cache hits decay against it.
                     _original = resolved.get("source") or "rest_resolution"
                     update_transport_binding(
-                        transport_key,
+                        writeback_key,
                         agent_uuid,
                         session_key,
                         source="rest",

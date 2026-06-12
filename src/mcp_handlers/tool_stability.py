@@ -53,6 +53,66 @@ class ToolLifecycle:
 # This prevents breaking existing code/agents
 
 _TOOL_ALIASES: Dict[str, ToolAlias] = {
+    # Agent workflow aliases — first-class UX names for the core loop.
+    # These are intentionally advertised/registered, unlike most historical
+    # compatibility aliases, so cold MCP agents can discover task verbs.
+    "start_session": ToolAlias(
+        old_name="start_session",
+        new_name="onboard",
+        reason="intuitive_alias",
+        migration_note=(
+            "Workflow alias for onboard(force_new=true, parent_agent_id=...). "
+            "Starts a fresh process identity or declares lineage."
+        ),
+    ),
+    "sync_state": ToolAlias(
+        old_name="sync_state",
+        new_name="process_agent_update",
+        reason="intuitive_alias",
+        migration_note=(
+            "Workflow alias for process_agent_update(response_text='...', "
+            "complexity=..., confidence=...)."
+        ),
+    ),
+    "check_working_state": ToolAlias(
+        old_name="check_working_state",
+        new_name="get_governance_metrics",
+        reason="intuitive_alias",
+        migration_note=(
+            "Workflow alias for get_governance_metrics(). Reads current EISV "
+            "state without writing a check-in."
+        ),
+    ),
+    "search_shared_memory": ToolAlias(
+        old_name="search_shared_memory",
+        new_name="knowledge",
+        reason="intuitive_alias",
+        migration_note=(
+            "Workflow alias for knowledge(action='search', query='...'). "
+            "Search shared memory before writing a duplicate discovery."
+        ),
+        inject_action="search",
+    ),
+    "record_result": ToolAlias(
+        old_name="record_result",
+        new_name="outcome_event",
+        reason="intuitive_alias",
+        migration_note=(
+            "Workflow alias for outcome_event(...). Records the real outcome "
+            "of a task, test, tool call, or external validation signal."
+        ),
+    ),
+    "request_review": ToolAlias(
+        old_name="request_review",
+        new_name="dialectic",
+        reason="intuitive_alias",
+        migration_note=(
+            "Workflow alias for dialectic(action='request', "
+            "issue_description='...'). Starts structured review/recovery."
+        ),
+        inject_action="request",
+    ),
+
     # Identity tools - all point to identity() (the primary identity tool)
     # NOTE: who_am_i has its own handler in admin.py, so NOT aliased
     #
@@ -350,6 +410,16 @@ for alias in _TOOL_ALIASES.values():
         _ALIAS_REVERSE[alias.new_name] = []
     _ALIAS_REVERSE[alias.new_name].append(alias.old_name)
 
+
+AGENT_WORKFLOW_ALIASES: tuple[str, ...] = (
+    "start_session",
+    "sync_state",
+    "check_working_state",
+    "search_shared_memory",
+    "record_result",
+    "request_review",
+)
+
 # ============================================================================
 # Tool Stability Registry
 # ============================================================================
@@ -443,4 +513,3 @@ def register_extra_aliases(aliases: Dict[str, ToolAlias]) -> None:
                 f"'{_TOOL_ALIASES[old_name].new_name}'"
             )
         _TOOL_ALIASES[old_name] = alias
-

@@ -21,7 +21,6 @@ L2 λ=0.01, seed=42.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import json
 import pathlib
 from typing import Iterable
 

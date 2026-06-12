@@ -34,6 +34,15 @@ Claude Desktop does not support `type: http` natively; use `mcp-remote` as a std
 
 Agents self-identify through `start_session()` (`onboard(...)` canonically); no hardcoded agent-name header is required.
 
+Agent-facing workflow aliases are registered for the core loop:
+
+- `start_session(...)` → `onboard(...)`
+- `sync_state(...)` → `process_agent_update(...)`
+- `check_working_state(...)` → `get_governance_metrics(...)`
+- `search_shared_memory(...)` → `knowledge(action="search", ...)`
+- `record_result(...)` → `outcome_event(...)`
+- `request_review(...)` → `dialectic(action="request", ...)`
+
 ## Endpoints
 
 | Endpoint | Transport | Use case |

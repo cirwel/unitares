@@ -14,7 +14,6 @@ import os
 import re
 import secrets
 import time
-from datetime import datetime
 from typing import Optional, Sequence
 
 from mcp.types import TextContent
@@ -29,7 +28,6 @@ from ..support.tool_hints import (
     KNOWLEDGE_SEARCH_SUGGESTION,
     KNOWLEDGE_OPEN_QUESTIONS_WORKFLOW,
 )
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = get_logger(__name__)
 
 _ALLOWED_EPISTEMIC_CLASSES = {
@@ -46,6 +44,10 @@ _STRONG_IDENTITY_SOURCES = {
     "mcp_session_id",
     "x_session_id",
     "oauth_client_id",
+    # X-Unitares-Operator bearer token, validated against the env allowlist
+    # on every call (#425 dashboard-identity decision) — per-call proof,
+    # stronger than the stable-header sources above.
+    "operator_token",
 }
 
 _MEDIUM_IDENTITY_SOURCES = {
@@ -362,8 +364,7 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
                 try:
                     from ..support.naming_helpers import (
                         detect_interface_context,
-                        generate_name_suggestions,
-                        format_naming_guidance
+                        generate_name_suggestions
                     )
                     existing_names = [
                         getattr(m, 'label', None)

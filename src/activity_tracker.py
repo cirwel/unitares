@@ -108,23 +108,6 @@ class AgentActivity:
         self.cumulative_complexity += complexity
         self.complexity_samples.append(complexity)
 
-    def get_average_complexity(self) -> float:
-        """Get average complexity over recent samples"""
-        if not self.complexity_samples:
-            return 0.0
-        return sum(self.complexity_samples) / len(self.complexity_samples)
-
-    def get_session_duration_minutes(self) -> float:
-        """Get session duration in minutes"""
-        if not self.session_start:
-            return 0.0
-
-        try:
-            start = datetime.fromisoformat(self.session_start)
-            return (datetime.now() - start).total_seconds() / 60
-        except (ValueError, TypeError):
-            return 0.0
-
     def to_dict(self) -> Dict:
         """Convert to dictionary for JSON serialization"""
         data = asdict(self)
@@ -242,42 +225,11 @@ class ActivityTracker:
 
         return should_trigger, reason
 
-    def track_conversation_turn(self, agent_id: str) -> Tuple[bool, Optional[str]]:
-        """
-        Explicitly track a conversation turn (if detectable).
-
-        Returns:
-            (should_trigger: bool, reason: str or None)
-        """
-        activity = self.get_or_create(agent_id)
-        activity.conversation_turns += 1
-        activity.last_activity = datetime.now().isoformat()
-
-        should_trigger, reason = activity.should_trigger_update(self.config)
-        self._save_activity(activity)
-
-        return should_trigger, reason
-
     def reset_after_governance_update(self, agent_id: str):
         """Reset activity counters after governance update"""
         activity = self.get_or_create(agent_id)
         activity.reset_after_update()
         self._save_activity(activity)
-
-    def get_activity_summary(self, agent_id: str) -> Dict:
-        """Get current activity summary for agent"""
-        activity = self.get_or_create(agent_id)
-        return {
-            'agent_id': agent_id,
-            'conversation_turns': activity.conversation_turns,
-            'tool_calls': activity.tool_calls,
-            'files_modified': activity.files_modified,
-            'cumulative_complexity': activity.cumulative_complexity,
-            'average_complexity': activity.get_average_complexity(),
-            'session_duration_minutes': activity.get_session_duration_minutes(),
-            'last_activity': activity.last_activity,
-            'last_governance_update': activity.last_governance_update
-        }
 
     def _load_activity(self, agent_id: str) -> Optional[AgentActivity]:
         """Load activity from disk"""

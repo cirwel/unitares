@@ -96,6 +96,16 @@ def test_legacy_alias_canonicalizes_with_injected_action():
     assert get_call_identity_requirement("list_agents", {}) == "pre_onboard"
 
 
+def test_workflow_alias_identity_classification_matches_canonical_calls():
+    assert get_call_identity_requirement("start_session", {"force_new": True}) == "pre_onboard"
+    assert get_call_identity_requirement("check_working_state", {}) == "pre_onboard"
+    assert get_call_identity_requirement("search_shared_memory", {}) == "pre_onboard"
+
+    assert get_call_identity_requirement("sync_state", {}) == "required"
+    assert get_call_identity_requirement("record_result", {}) == "required"
+    assert get_call_identity_requirement("request_review", {}) == "required"
+
+
 def test_legacy_write_alias_stays_required():
     """A write-implying alias (request_dialectic_review →
     dialectic(request)) must NOT inherit read treatment."""

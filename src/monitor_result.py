@@ -1,7 +1,7 @@
 """Result assembly for governance monitor process_update."""
 
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict
 
 from governance_core import get_agent_baseline
 from src.drift_telemetry import record_drift

@@ -11,7 +11,6 @@ import json
 import time
 import fcntl
 import asyncio
-import threading
 from pathlib import Path
 from datetime import datetime, timezone
 

@@ -11,12 +11,10 @@ Usage:
     python3 scripts/diagnostics/count_tools.py --by-module  # Breakdown by module
 """
 
-import os
 import re
-import sys
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 

@@ -40,6 +40,11 @@ jobs:
       run: |
         python scripts/diagnostics/check_doc_drift.py
 
+    - name: Dead-code gate (unused imports)
+      run: |
+        pip install "ruff>=0.15"
+        ruff check .
+
     - name: Run smoke tests
       run: |
         make test-smoke

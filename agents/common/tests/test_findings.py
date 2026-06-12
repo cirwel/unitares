@@ -173,3 +173,78 @@ def test_compute_fingerprint_format_is_locked():
     assert actual == actual.lower()
     assert len(actual) == 16
     assert all(c in "0123456789abcdef" for c in actual)
+
+
+# --- Wave 3 §3.2 retry-on-503 (§14 prereq PR #10) ---
+
+
+def _resp(status_code: int, body: dict | None = None, headers: dict | None = None):
+    class FakeResp:
+        pass
+
+    resp = FakeResp()
+    resp.status_code = status_code
+    resp.headers = headers or {}
+    resp.json = lambda: body if body is not None else {}
+    return resp
+
+
+def test_post_finding_retries_once_on_503(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("agents.common.findings.time.sleep", sleeps.append)
+    responses = [
+        _resp(503, headers={"Retry-After": "2"}),
+        _resp(200, {"success": True, "deduped": False}),
+    ]
+    calls = []
+
+    def fake_post(url, json, headers, timeout):  # noqa: A002
+        calls.append(url)
+        return responses.pop(0)
+
+    monkeypatch.setattr("agents.common.findings._httpx_post", fake_post)
+    ok = post_finding(
+        event_type="sentinel_finding", severity="high", message="m",
+        agent_id="sentinel-01", agent_name="Sentinel", fingerprint="fp",
+    )
+    assert ok is True
+    assert len(calls) == 2
+    assert sleeps == [2.0]
+
+
+def test_post_finding_503_twice_returns_false(monkeypatch):
+    monkeypatch.setattr("agents.common.findings.time.sleep", lambda s: None)
+    body = {
+        "ok": False,
+        "error": "governance_temporarily_unavailable",
+        "retry_after_seconds": 5,
+    }
+
+    def fake_post(url, json, headers, timeout):  # noqa: A002
+        return _resp(503, body)
+
+    monkeypatch.setattr("agents.common.findings._httpx_post", fake_post)
+    # Still never raises — best-effort contract holds through cutover.
+    assert post_finding(
+        event_type="vigil_finding", severity="critical", message="m",
+        agent_id="vigil", agent_name="Vigil", fingerprint="fp",
+    ) is False
+
+
+def test_post_finding_503_sleep_is_capped(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("agents.common.findings.time.sleep", sleeps.append)
+    responses = [
+        _resp(503, {"retry_after_seconds": 600}),
+        _resp(200, {"success": True, "deduped": False}),
+    ]
+    monkeypatch.setattr(
+        "agents.common.findings._httpx_post",
+        lambda url, json, headers, timeout: responses.pop(0),
+    )
+    post_finding(
+        event_type="sentinel_finding", severity="low", message="m",
+        agent_id="s", agent_name="S", fingerprint="fp",
+    )
+    # Hot-path cap: never parks an agent cycle longer than 5s.
+    assert sleeps == [5.0]
