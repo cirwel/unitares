@@ -10,7 +10,7 @@ Tests enforce:
 """
 
 import pytest
-from agents.common.taxonomy import (
+from src.violation_taxonomy import (
     load_taxonomy,
     get_taxonomy,
     validate_class_id,

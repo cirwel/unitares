@@ -1330,36 +1330,14 @@ def _watcher_findings_path() -> Path:
     """Resolve Watcher's findings.jsonl via the shared, checkout-independent
     state dir.
 
-    Must match where the Watcher agent writes. A checkout-relative path here
-    (``__file__``-derived) silently zeroed the dashboard once the MCP began
-    serving from the deploy worktree while the agent kept writing to the dev
-    checkout — see ``agents.watcher._util.watcher_state_dir``. Resolved lazily
-    (not at import) so ``agents`` need not be importable at module load.
-
-    Mid-rollout safety: if the shared findings file is still empty/absent but a
-    legacy checkout-relative file has data, read the legacy file. This collapses
-    the cutover window where the new reader is live but an old-code Watcher is
-    still appending to the legacy dir (which would otherwise leave the panel
-    frozen on the migration snapshot). The fallback can be dropped once the
-    writer is confirmed on the shared dir.
+    Must match where the Watcher agent writes — the reader-side contract
+    (shared dir, legacy fallback, migration) lives in
+    ``src.watcher_state_reader``, kept import-independent from the
+    ``agents.watcher`` writer and pinned to it by a parity test.
     """
-    from agents.watcher._util import (
-        _LEGACY_STATE_DIR,
-        migrate_legacy_watcher_state,
-        watcher_state_dir,
-    )
+    from src.watcher_state_reader import watcher_findings_path
 
-    migrate_legacy_watcher_state()  # one-time, idempotent
-    shared = watcher_state_dir() / "findings.jsonl"
-    try:
-        if shared.exists() and shared.stat().st_size > 0:
-            return shared
-        legacy = _LEGACY_STATE_DIR / "findings.jsonl"
-        if legacy.exists() and legacy.stat().st_size > 0:
-            return legacy
-    except OSError:
-        pass
-    return shared
+    return watcher_findings_path()
 
 
 _WATCHER_DAILY_WINDOW_DAYS = 30
@@ -2517,7 +2495,7 @@ async def http_taxonomy(request):
         return _http_unauthorized()
 
     try:
-        from agents.common import taxonomy as taxonomy_mod
+        from src import violation_taxonomy as taxonomy_mod
         data = taxonomy_mod.load_taxonomy()
         # Build reverse index (taxonomy.py keeps it private; reconstruct here
         # so we don't depend on its internal _get_reverse implementation).

@@ -7,7 +7,7 @@ Reference implementations of Unitares governance agents. These are **not** part 
 | Path        | Role                                                                           |
 |-------------|--------------------------------------------------------------------------------|
 | `sdk/`      | **Integral.** Public agent-to-governance contract (`unitares-sdk` package).   |
-| `common/`   | Shared helpers used by the residents in this tree (findings, config, log, taxonomy). |
+| `common/`   | Shared helpers used by the residents in this tree (findings, config, log). |
 | `vigil/`    | Reference **janitorial** resident — runs on a schedule, posts health findings. |
 | `sentinel/` | Reference **fleet-monitor** resident — continuous, WebSocket-driven.          |
 | `chronicler/` | Reference **archive** resident — daily external-source capture.            |
