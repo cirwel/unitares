@@ -507,6 +507,20 @@ def is_experience_alias(tool_name: str) -> bool:
     alias = _TOOL_ALIASES.get(tool_name)
     return bool(alias and alias.experience)
 
+
+def experience_alias_map() -> Dict[str, str]:
+    """Friendly experience-alias name -> canonical tool name.
+
+    Single source for the discoverability surfaces (list_tools catalog)
+    so the advertised friendly names can never drift from the registry.
+    """
+    return {
+        name: alias.new_name
+        for name, alias in _TOOL_ALIASES.items()
+        if alias.experience
+    }
+
+
 def list_all_aliases() -> Dict[str, ToolAlias]:
     """Get all tool aliases (for admin/debugging)"""
     return _TOOL_ALIASES.copy()
