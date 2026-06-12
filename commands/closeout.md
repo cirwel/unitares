@@ -24,6 +24,17 @@ Report:
 - any repo-rooted processes still running
 - whether a remaining process is managed by a LaunchAgent label
 
+If work should be delivered instead of left local, stage the intentional files
+and use the ship helper:
+
+- `./scripts/dev/ship.sh --plan "commit message"` previews the delivery route
+- `./scripts/dev/ship.sh --draft-pr "commit message"` commits, pushes, and opens
+  a draft PR
+- `./scripts/dev/ship.sh "commit message"` uses the default route: runtime or
+  detached work becomes a draft PR; ordinary non-runtime branch work direct-pushes
+- `./scripts/dev/ship.sh --auto-merge "commit message"` opts into the old
+  auto-merge-on-green behavior for PR-routed work
+
 If the operator asked to clean the workspace, or if you are finishing a task
 whose intended work is already committed/stashed, run:
 
@@ -37,9 +48,12 @@ Rules:
 - If there are staged changes, decide whether to commit, unstage, or stash
   before final response; do not leave them ambiguous.
 - If `delivery` is `local_changes`, say plainly: not committed, not pushed,
-  not merged.
+  not merged. If the changes are intentional, name the ship command that would
+  move them to a branch or draft PR.
 - If `delivery` is `unpushed_commits`, say plainly: committed locally but not
   pushed or merged.
+- If the checkout is detached, do not direct-push. Use `ship.sh --draft-pr` or
+  create a named branch first.
 - If `delivery` is `pushed_branch`, do not claim merge completion unless you
   also checked GitHub PR state explicitly.
 - If the operator asks "merged?", answer directly from delivery state and any
