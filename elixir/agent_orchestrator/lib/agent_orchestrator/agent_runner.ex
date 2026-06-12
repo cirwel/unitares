@@ -33,7 +33,8 @@ defmodule AgentOrchestrator.AgentRunner do
         max_output_lines: pos_integer(),   # buffer cap (default 1000)
         lease: nil | false | lease_cfg,    # default (absent/nil) = best-effort agent:/ presence;
                                            # false = no presence; map = override
-        lease_client: module()             # injectable, default LeasePlaneClient
+        lease_client: module(),            # injectable, default LeasePlaneClient
+        lineage: nil | lineage_cfg         # default nil = no lineage provisioning
       }
 
       lease_cfg :: %{
@@ -42,6 +43,31 @@ defmodule AgentOrchestrator.AgentRunner do
         holder_agent_uuid: String.t(),     # the agent's governance UUID (generated if absent)
         ttl_s: pos_integer()               # default from config :default_lease_ttl_s
       }
+
+      lineage_cfg :: %{
+        parent_agent_uuid: String.t(),     # spawner's governance UUID (required, UUID-shaped)
+        spawn_reason: String.t()           # default "subagent" (server vocabulary also has
+                                           # compaction | new_session | explicit)
+      }
+
+  ## Lineage provisioning (not injection)
+
+  A spawner that knows its own governance UUID can pass `lineage:`, and the
+  child env gains `UNITARES_PARENT_AGENT_ID` / `UNITARES_SPAWN_REASON`. These
+  are CANDIDATE declarations, consistent with the declaration-based identity
+  ontology (identity.md v2): the child declares lineage in its own
+  onboard/start_session call — or declines to. The orchestrator cannot and
+  does not make a governance call on the child's behalf; it only puts the
+  ground-truth parent UUID where the child (or its session-start hook) can
+  find it, so lineage correctness comes from the spawn context instead of a
+  prompt convention someone has to remember.
+
+  Explicit `env:` entries win over provisioned ones — a caller that sets
+  `UNITARES_PARENT_AGENT_ID` itself has made the more specific statement. A
+  malformed `parent_agent_uuid` refuses the spawn (`{:error,
+  {:invalid_lineage, _}}`): a garbage candidate at the provisioning boundary
+  surfaces downstream as false ancestry in the lineage DAG. The result's
+  `:lineage` field reports `:provisioned` or `:none`.
 
   ## Presence
 
@@ -68,6 +94,15 @@ defmodule AgentOrchestrator.AgentRunner do
   @default_max_lines 1000
   @line_max_bytes 65_536
 
+  # Lineage-provisioning env vars surfaced to the child (candidate
+  # declarations — see "Lineage provisioning" in the moduledoc).
+  @lineage_parent_var "UNITARES_PARENT_AGENT_ID"
+  @lineage_reason_var "UNITARES_SPAWN_REASON"
+  @default_spawn_reason "subagent"
+
+  # Shape check only (8-4-4-4-12 hex) — ancestry truth is the server's call.
+  @uuid_re ~r/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+
   defstruct [
     :agent_id,
     :port,
@@ -76,6 +111,9 @@ defmodule AgentOrchestrator.AgentRunner do
     :lease_client,
     :lease_cfg,
     :presence,
+    # :provisioned | :none — provisioning status only; the lineage_cfg map
+    # itself is consumed in init/1 and never stored.
+    :lineage,
     :exit_status,
     :release_status,
     output: [],
@@ -183,13 +221,26 @@ defmodule AgentOrchestrator.AgentRunner do
     lease_client = Map.get(spec, :lease_client, LeasePlaneClient)
     lease_cfg = normalize_lease_cfg(Map.get(spec, :lease), agent_id)
 
-    state = %__MODULE__{
-      agent_id: agent_id,
-      lease_client: lease_client,
-      lease_cfg: lease_cfg,
-      max_output_lines: Map.get(spec, :max_output_lines, @default_max_lines)
-    }
+    # Validate lineage BEFORE the lease acquire: a refused spawn must not have
+    # touched the plane (no acquire-then-release churn for a config error).
+    case normalize_lineage_cfg(Map.get(spec, :lineage)) do
+      {:error, reason} ->
+        {:stop, {:invalid_lineage, reason}}
 
+      {:ok, lineage_cfg} ->
+        state = %__MODULE__{
+          agent_id: agent_id,
+          lease_client: lease_client,
+          lease_cfg: lease_cfg,
+          lineage: if(lineage_cfg, do: :provisioned, else: :none),
+          max_output_lines: Map.get(spec, :max_output_lines, @default_max_lines)
+        }
+
+        init_with_lease(state, spec, lineage_cfg)
+    end
+  end
+
+  defp init_with_lease(state, spec, lineage_cfg) do
     # Not a `with`: the acquired lease_id must be in scope on the port-open
     # failure path so we can release it. A `with/else` only sees the failing
     # clause's value, so the acquired lease_id would be invisible there and the
@@ -202,10 +253,10 @@ defmodule AgentOrchestrator.AgentRunner do
       {:ok, lease_id, presence} ->
         state = %{state | lease_id: lease_id, presence: presence}
 
-        case open_port(spec) do
+        case open_port(spec, lineage_cfg) do
           {:ok, port, os_pid} ->
             Logger.info(
-              "agent #{agent_id} started os_pid=#{os_pid} lease=#{lease_id || "none"} cmd=#{Map.get(spec, :cmd)}"
+              "agent #{state.agent_id} started os_pid=#{os_pid} lease=#{lease_id || "none"} cmd=#{Map.get(spec, :cmd)}"
             )
 
             {:ok, %{state | port: port, os_pid: os_pid}}
@@ -399,7 +450,7 @@ defmodule AgentOrchestrator.AgentRunner do
     end
   end
 
-  defp open_port(spec) do
+  defp open_port(spec, lineage_cfg) do
     cmd = Map.fetch!(spec, :cmd)
 
     case resolve_executable(cmd) do
@@ -407,6 +458,11 @@ defmodule AgentOrchestrator.AgentRunner do
         {:error, {:executable_not_found, cmd}}
 
       path ->
+        # `|| []` not just a default: an explicit `env: nil` (spec built from
+        # nullable config) must not crash the merge below — that exception
+        # escapes open_port's rescue and orphans the just-acquired lease.
+        env = Map.get(spec, :env, []) || []
+
         opts =
           [
             :binary,
@@ -415,7 +471,7 @@ defmodule AgentOrchestrator.AgentRunner do
             {:line, @line_max_bytes},
             {:args, Map.get(spec, :args, [])}
           ]
-          |> maybe_opt(:env, encode_env(Map.get(spec, :env, [])))
+          |> maybe_opt(:env, encode_env(env ++ lineage_env(lineage_cfg, env)))
           |> maybe_opt(:cd, Map.get(spec, :cd))
 
         try do
@@ -430,6 +486,44 @@ defmodule AgentOrchestrator.AgentRunner do
 
   defp resolve_executable(cmd) do
     if String.contains?(cmd, "/"), do: cmd, else: System.find_executable(cmd)
+  end
+
+  # Lineage PROVISIONING (see moduledoc): candidate declarations only — the
+  # child makes its own onboard call. Validated up front because a malformed
+  # parent UUID does not fail here; it fails later as false ancestry in the
+  # governance lineage DAG, attributed to whatever agent declared it.
+  defp normalize_lineage_cfg(nil), do: {:ok, nil}
+
+  defp normalize_lineage_cfg(%{} = cfg) do
+    parent = Map.get(cfg, :parent_agent_uuid)
+    spawn_reason = Map.get(cfg, :spawn_reason, @default_spawn_reason)
+
+    cond do
+      not (is_binary(parent) and Regex.match?(@uuid_re, parent)) ->
+        {:error, {:parent_agent_uuid_not_uuid, parent}}
+
+      not (is_binary(spawn_reason) and spawn_reason != "") ->
+        {:error, {:spawn_reason_invalid, spawn_reason}}
+
+      true ->
+        {:ok, %{parent_agent_uuid: parent, spawn_reason: spawn_reason}}
+    end
+  end
+
+  defp normalize_lineage_cfg(other), do: {:error, {:lineage_not_map, other}}
+
+  defp lineage_env(nil, _env), do: []
+
+  defp lineage_env(%{} = cfg, env) do
+    explicit = MapSet.new(env, fn {k, _v} -> k end)
+
+    # Explicit env wins: the caller setting the var directly has made the more
+    # specific statement; silently overriding it would be the invasive version.
+    [
+      {@lineage_parent_var, cfg.parent_agent_uuid},
+      {@lineage_reason_var, cfg.spawn_reason}
+    ]
+    |> Enum.reject(fn {k, _v} -> MapSet.member?(explicit, k) end)
   end
 
   defp maybe_opt(opts, _key, nil), do: opts
@@ -469,6 +563,7 @@ defmodule AgentOrchestrator.AgentRunner do
       os_pid: state.os_pid,
       lease_id: state.lease_id,
       presence: state.presence,
+      lineage: state.lineage,
       exit_status: state.exit_status,
       running: state.exit_status == nil,
       lease_released: state.release_status == :ok,

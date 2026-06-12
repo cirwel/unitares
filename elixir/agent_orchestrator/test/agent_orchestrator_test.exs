@@ -227,6 +227,116 @@ defmodule AgentOrchestratorTest do
     end
   end
 
+  describe "lineage provisioning" do
+    @parent_uuid "33333333-3333-4333-8333-333333333333"
+
+    test "provisions UNITARES_PARENT_AGENT_ID and UNITARES_SPAWN_REASON into the child env" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", ~s(echo "$UNITARES_PARENT_AGENT_ID|$UNITARES_SPAWN_REASON")],
+          lineage: %{parent_agent_uuid: @parent_uuid, spawn_reason: "explicit"}
+        })
+
+      assert {:ok, result} = AgentOrchestrator.await(id)
+      assert result.output == ["#{@parent_uuid}|explicit"]
+      assert result.lineage == :provisioned
+    end
+
+    test "spawn_reason defaults to subagent" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", "echo $UNITARES_SPAWN_REASON"],
+          lineage: %{parent_agent_uuid: @parent_uuid}
+        })
+
+      assert {:ok, %{output: ["subagent"]}} = AgentOrchestrator.await(id)
+    end
+
+    test "an explicit env entry wins over the provisioned value" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", ~s(echo "$UNITARES_PARENT_AGENT_ID|$UNITARES_SPAWN_REASON")],
+          env: [{"UNITARES_PARENT_AGENT_ID", "caller-override"}],
+          lineage: %{parent_agent_uuid: @parent_uuid}
+        })
+
+      # Parent var overridden by the explicit entry; spawn_reason still provisioned.
+      assert {:ok, %{output: ["caller-override|subagent"]}} = AgentOrchestrator.await(id)
+    end
+
+    test "without :lineage nothing is provisioned and the result says :none" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          # ${VAR-unset}: distinguish absent from empty.
+          args: ["-c", ~s(echo "${UNITARES_PARENT_AGENT_ID-unset}")]
+        })
+
+      assert {:ok, result} = AgentOrchestrator.await(id)
+      assert result.output == ["unset"]
+      assert result.lineage == :none
+    end
+
+    test "refuses to spawn on a malformed parent UUID (no acquire, no child)" do
+      assert {:error, {:invalid_lineage, {:parent_agent_uuid_not_uuid, "not-a-uuid"}}} =
+               AgentOrchestrator.run(%{
+                 cmd: "echo",
+                 args: ["x"],
+                 lineage: %{parent_agent_uuid: "not-a-uuid"},
+                 lease_client: StubLeaseClient
+               })
+
+      # Validation runs before the lease path — no plane churn for a config error.
+      refute_receive {:lease_event, _}, 100
+    end
+
+    test "refuses a lineage map with no parent_agent_uuid" do
+      assert {:error, {:invalid_lineage, {:parent_agent_uuid_not_uuid, nil}}} =
+               AgentOrchestrator.run(%{cmd: "echo", args: ["x"], lineage: %{}})
+    end
+
+    test "refuses a non-map lineage value" do
+      assert {:error, {:invalid_lineage, {:lineage_not_map, "bad"}}} =
+               AgentOrchestrator.run(%{cmd: "echo", args: ["x"], lineage: "bad"})
+    end
+
+    test "refuses an empty spawn_reason" do
+      assert {:error, {:invalid_lineage, {:spawn_reason_invalid, ""}}} =
+               AgentOrchestrator.run(%{
+                 cmd: "echo",
+                 args: ["x"],
+                 lineage: %{parent_agent_uuid: @parent_uuid, spawn_reason: ""}
+               })
+    end
+
+    test "the inverse partial override: explicit spawn_reason, provisioned parent" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", ~s(echo "$UNITARES_PARENT_AGENT_ID|$UNITARES_SPAWN_REASON")],
+          env: [{"UNITARES_SPAWN_REASON", "caller-reason"}],
+          lineage: %{parent_agent_uuid: @parent_uuid}
+        })
+
+      assert {:ok, %{output: ["#{@parent_uuid}|caller-reason"]}} = AgentOrchestrator.await(id)
+    end
+
+    test "env: nil with lineage provisions without crashing (lease-orphan regression)" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", "echo $UNITARES_SPAWN_REASON"],
+          env: nil,
+          lineage: %{parent_agent_uuid: @parent_uuid}
+        })
+
+      assert {:ok, %{output: ["subagent"], exit_status: 0}} = AgentOrchestrator.await(id)
+    end
+  end
+
   describe "presence (default-on, best-effort)" do
     # Long-lived agents + snapshot/0 (read while alive) — avoids the await race
     # where a fast command exits and unregisters before the assertion runs.
