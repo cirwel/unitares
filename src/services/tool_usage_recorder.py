@@ -65,6 +65,41 @@ def classify_tool_result(result: Any) -> Tuple[bool, Optional[str]]:
     return True, None
 
 
+# Tools whose successful response MINTS (or freshly resolves) the caller's
+# identity. Their audit rows can never be attributed from the request side —
+# the UUID does not exist until the handler returns — so attribution falls
+# back to the response payload. Kept to the minting family on purpose: a
+# generic response-side fallback would silently re-attribute every
+# auto-minted anonymous call and change the meaning of existing
+# agent_id=NULL rows. Found 2026-06-12: onboard rows carried agent_id=NULL,
+# making onboard→first-checkin conversion unmeasurable from audit.tool_usage.
+_IDENTITY_MINTING_TOOLS = frozenset({"onboard", "start_session"})
+
+
+def resolve_minted_agent_id(tool_name: str, agent_id: Optional[str], result: Any) -> Optional[str]:
+    """Return the audit-attribution agent_id for a completed tool call.
+
+    Request-side identity always wins. For identity-minting tools with no
+    request-side identity, fall back to the UUID in the response payload —
+    top-level ``uuid`` (canonical onboard), ``raw_governance.uuid`` (alias
+    envelope, e.g. start_session), or ``agent_signature.uuid``. Returns the
+    incoming ``agent_id`` unchanged in every other case; never raises.
+    """
+    if agent_id or tool_name not in _IDENTITY_MINTING_TOOLS:
+        return agent_id
+    payload = _payload_from_result(result)
+    if not isinstance(payload, dict):
+        return agent_id
+    raw = payload.get("raw_governance")
+    signature = payload.get("agent_signature")
+    uuid = (
+        payload.get("uuid")
+        or (raw.get("uuid") if isinstance(raw, dict) else None)
+        or (signature.get("uuid") if isinstance(signature, dict) else None)
+    )
+    return str(uuid) if uuid else agent_id
+
+
 def record_tool_usage(
     tool_name: str,
     agent_id: Optional[str],
