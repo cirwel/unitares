@@ -22,6 +22,39 @@ Two non-Wave-3-specific prerequisites moved after this RFC was drafted:
   that recorder if it still needs the `audit.coordination_measurements`
   channel.
 
+## §14 prereq execution status fold (2026-06-12)
+
+Bookkeeping only — no spec change, no redraft; the (α) deferral binds until
+the PR #599 window closes (~2026-06-24). Rows executed so far, in landing
+order:
+
+- **Row 1** — shadow DDL (migrations 043/044), comparator/replay tooling,
+  event-type constants, ODE profile, and the §5.2 boundary-cost audit
+  (v0.3.3 fold above).
+- **Row 3** — `governance_core/coordination_events_helpers.py` +
+  `scripts/dev/check-boundary-event-helpers.sh`.
+- **Row 6** — `audit.coordination_measurements` bridge + retention; PR #599
+  opened the 14-day window 2026-06-10.
+- **Row 9** — dialectic baseline pin + reassignment event stream, PR #626
+  (v0.3.4 fold above).
+- **Row 10** — transport 503 emission + sliding-window breach aggregator
+  (inert behind `WAVE3_CUTOVER_503_AGGREGATOR`) + consumer retry-on-503
+  (SDK async/sync clients, `post_finding`), PR #628. `src/mcp_transport.py`
+  is the §3.2 single source; cross-repo consumers (dispatch worker, plugin)
+  remain follow-ups in their own repos.
+- **Row 4** — `tests/integration/test_identity_path2_ipua_pin_pipeline.py`
+  per §7.3: end-to-end `handle_onboard_v2` through the real PATH 7 pin
+  lookup and resolution-source contextvar, pinning the strict-mode
+  passthrough invariant (`agent_id`/`agent_uuid` are proof), the no-proof
+  strict fresh-mint + alert, pin-left-intact on strict refusal, and the
+  log-mode resume. `drive_onboard` is the §7.3 swap point for the BEAM-side
+  parity run.
+
+Remaining: **row 5** (golden captures — parked while PR #619's response
+envelope is in flight), **rows 2 / 7 / 8a / 8b** (Wave-3-specific
+implementation — paused under (α); 8b additionally gated on the row-6
+14-day window by `check-wave3-prereq-data-window.sh`).
+
 ## What changed in v0.3.4 (vs v0.3.3)
 
 19. **§11 criterion 10 pinned (prereq PR #9 executed, 2026-06-11).** The (F) baseline is formally unpinnable — trailing 30-day window held 1 session vs the ≥30 the haltspec requires — so the pin records the halt condition plus 90d/all-time context rates. The deeper finding: (F)'s reassignment-rate metric had no measurement source (reassignments were transcript-only; zero matching `audit.events` rows all-time). `_apply_reviewer_reassignment` now emits `dialectic_reviewer_reassigned`, making the threshold settable from the emission's deploy forward. Volume recovery (dialectic-rework arc) is upstream of any future re-pin.
