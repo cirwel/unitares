@@ -1008,3 +1008,78 @@ class TestStateFileOverride:
         agent.save_state({"marker": 1})
         assert custom.exists()
         assert not (other_dir / "state.json").exists()
+
+
+class TestRunForeverBackoff:
+    """run_forever treats the typed 503 as an expected condition and backs
+    off with the server-suggested delay instead of hammering on interval."""
+
+    @staticmethod
+    def _run(agent, interval):
+        """Drive run_forever for exactly one failing iteration, capturing
+        the loop's sleep delay. fake_sleep flips running=False so the loop
+        exits after the first backoff sleep."""
+        from unitares_sdk.errors import GovernanceUnavailableError  # noqa: F401
+
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay):
+            sleeps.append(delay)
+            agent.running = False
+
+        async def _go():
+            with patch("unitares_sdk.agent.GovernanceClient") as mock_cm:
+                mock_client = AsyncMock()
+                mock_cm.return_value.__aenter__.return_value = mock_client
+                mock_cm.return_value.__aexit__.return_value = None
+                with patch.object(type(agent), "_ensure_identity", AsyncMock()):
+                    with patch.object(type(agent), "_install_signal_handlers"):
+                        with patch("unitares_sdk.agent.notify"):
+                            with patch("unitares_sdk.agent.asyncio.sleep", fake_sleep):
+                                await agent.run_forever(interval=interval)
+        return _go, sleeps
+
+    @pytest.mark.asyncio
+    async def test_unavailable_honors_server_retry_after(self):
+        from unitares_sdk.errors import GovernanceUnavailableError
+
+        class UnavailableAgent(GovernanceAgent):
+            async def run_cycle(self, client):
+                raise GovernanceUnavailableError(
+                    "503", retry_after_seconds=17.0
+                )
+
+        agent = UnavailableAgent(name="U", mcp_url="http://127.0.0.1:9999/mcp/")
+        go, sleeps = self._run(agent, interval=1)
+        await go()
+        assert sleeps == [17.0]
+
+    @pytest.mark.asyncio
+    async def test_unavailable_never_shrinks_interval(self):
+        """A server delay shorter than the cycle interval must not speed
+        the loop up."""
+        from unitares_sdk.errors import GovernanceUnavailableError
+
+        class UnavailableAgent(GovernanceAgent):
+            async def run_cycle(self, client):
+                raise GovernanceUnavailableError(
+                    "503", retry_after_seconds=0.5
+                )
+
+        agent = UnavailableAgent(name="U", mcp_url="http://127.0.0.1:9999/mcp/")
+        go, sleeps = self._run(agent, interval=30)
+        await go()
+        assert sleeps == [30.0]
+
+    @pytest.mark.asyncio
+    async def test_connection_error_keeps_interval(self):
+        from unitares_sdk.errors import GovernanceConnectionError
+
+        class DownAgent(GovernanceAgent):
+            async def run_cycle(self, client):
+                raise GovernanceConnectionError("refused")
+
+        agent = DownAgent(name="D", mcp_url="http://127.0.0.1:9999/mcp/")
+        go, sleeps = self._run(agent, interval=5)
+        await go()
+        assert sleeps == [5.0]

@@ -485,10 +485,13 @@ class GovernanceClient:
         # audit.events authoritative until each resident's individual canary
         # completes (PR 8 env-var gate). Skipped silently for non-resident
         # callers (matched against KNOWN_RESIDENT_NAMES in _substrate.py).
+        # The lease-plane client is synchronous (2s timeout); run it in a
+        # worker thread so it never blocks this event loop mid-checkin.
         try:
             from unitares_sdk._substrate import emit_substrate_observation
             if self.resident_name and self.agent_uuid and metrics:
-                emit_substrate_observation(
+                await asyncio.to_thread(
+                    emit_substrate_observation,
                     resident_name=self.resident_name,
                     holder_uuid=self.agent_uuid,
                     metrics=metrics,

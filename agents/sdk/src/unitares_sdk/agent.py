@@ -22,6 +22,7 @@ from unitares_sdk.client import GovernanceClient
 from unitares_sdk.errors import (
     GovernanceConnectionError,
     GovernanceTimeoutError,
+    GovernanceUnavailableError,
     IdentityDriftError,
     VerdictError,
 )
@@ -263,12 +264,22 @@ class GovernanceAgent:
                     await self._send_heartbeat(client)
 
         while self.running:
+            delay = float(interval)
             try:
                 if self.cycle_timeout_seconds is None:
                     await _iteration()
                 else:
                     await asyncio.wait_for(_iteration(), self.cycle_timeout_seconds)
 
+            except GovernanceUnavailableError as e:
+                # Typed 503 — an expected, server-scheduled condition, not an
+                # "unexpected error". Honor the server-suggested delay (already
+                # bounded by MAX_RETRY_AFTER_SECONDS in errors.py) so the next
+                # cycle backs off honestly instead of hammering on `interval`.
+                logger.warning("%s: governance temporarily unavailable: %s", self.name, e)
+                delay = max(delay, e.retry_after_seconds)
+                if self.notify_on_error:
+                    notify(self.name, f"Governance unavailable: {e}")
             except (GovernanceConnectionError, GovernanceTimeoutError) as e:
                 logger.warning("%s: governance unavailable: %s", self.name, e)
                 if self.notify_on_error:
@@ -290,7 +301,7 @@ class GovernanceAgent:
                     trim_log(self.log_file, self.max_log_lines)
 
             if self.running:
-                await asyncio.sleep(interval)
+                await asyncio.sleep(delay)
 
     # --- Identity resolution ---
 
@@ -463,7 +474,7 @@ class GovernanceAgent:
             try:
                 legacy_data = load_json_state(self.legacy_session_file)
                 if legacy_data:
-                    self.session_file.parent.mkdir(parents=True, exist_ok=True)
+                    # save_json_state/atomic_write creates parent dirs 0o700.
                     save_json_state(self.session_file, legacy_data)
                     logger.info(
                         "%s: migrated session from %s to %s",
@@ -490,7 +501,7 @@ class GovernanceAgent:
             data["continuity_token"] = self.continuity_token
         if self.agent_uuid:
             data["agent_uuid"] = self.agent_uuid
-        self.session_file.parent.mkdir(parents=True, exist_ok=True)
+        # save_json_state/atomic_write creates parent dirs 0o700.
         save_json_state(self.session_file, data)
 
     def _sync_from_client(self, client: GovernanceClient) -> None:
