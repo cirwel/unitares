@@ -223,8 +223,16 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
         refusal = _strict_identity_refusal_or_none(tool_name, arguments)
         if refusal is not None:
             latency_ms = int((time.monotonic() - t0) * 1000)
+            # A typed refusal is NOT a tool success. Recording success=True
+            # here made every strict-gate refusal look like a SUCCEEDING
+            # anonymous call in audit.tool_usage — poisoning exactly the
+            # burn-in question "did any unbound write get through?" (#543
+            # honesty class; found day 1 of the 2026-06-12 stage 2-4
+            # burn-in). error_type mirrors the refusal payload's status so
+            # triage queries can subtract refusals without log archaeology.
             record_tool_usage(tool_name=tool_name, agent_id=None,
-                              success=True, latency_ms=latency_ms)
+                              success=False, error_type="identity_required",
+                              latency_ms=latency_ms)
             return refusal
 
         # Wave 3a routing — HTTP path symmetric with MCP-protocol wrapper.
