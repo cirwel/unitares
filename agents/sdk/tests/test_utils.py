@@ -209,3 +209,101 @@ def test_validate_malformed_token():
 def test_notify_does_not_raise():
     """notify is best-effort; should never raise regardless of platform."""
     notify("Test", "This is a test notification")
+
+
+def test_notify_escapes_applescript_metacharacters(monkeypatch):
+    """Exception text reaches notify(); a quote in it must not break out of
+    the AppleScript string literal (injection on the operator's Mac)."""
+    import subprocess
+    import sys
+
+    import unitares_sdk.utils as utils
+
+    captured = []
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(
+        subprocess, "Popen", lambda args, **kw: captured.append(args)
+    )
+
+    utils.notify('Ti"tle', 'pwned" with title "x')
+
+    assert captured, "notify should have invoked osascript"
+    script = captured[0][2]
+    # Every interior quote is escaped — the only unescaped quotes are the
+    # literal delimiters of the AppleScript string.
+    assert 'Ti\\"tle' in script
+    assert 'pwned\\" with title \\"x' in script
+
+
+def test_notify_bounds_message_length(monkeypatch):
+    import subprocess
+    import sys
+
+    import unitares_sdk.utils as utils
+
+    captured = []
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(
+        subprocess, "Popen", lambda args, **kw: captured.append(args)
+    )
+
+    utils.notify("T", "x" * 10_000)
+
+    script = captured[0][2]
+    assert len(script) < 1_000
+
+
+def test_applescript_escape_backslash_then_quote():
+    from unitares_sdk.utils import _applescript_escape
+
+    # Backslash escaped first, so a pre-escaped \" cannot sneak through.
+    assert _applescript_escape('\\"') == '\\\\\\"'
+
+
+# --- atomic_write failure propagation ---
+
+
+def test_atomic_write_raises_on_failure_and_preserves_target(tmp_path, monkeypatch):
+    """A failed anchor write must be loud: silently swallowing it means the
+    next restart loses identity (the 2026-04-19 silent-fork class). The
+    existing target and temp-file hygiene survive the failure."""
+    import os as os_mod
+
+    target = tmp_path / "anchor.json"
+    target.write_text('{"agent_uuid": "original"}')
+
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os_mod, "replace", boom)
+
+    with pytest.raises(OSError):
+        atomic_write(target, '{"agent_uuid": "new"}')
+
+    assert target.read_text() == '{"agent_uuid": "original"}'
+    assert not list(tmp_path.glob("*.tmp")), "temp file must be cleaned up"
+
+
+def test_atomic_write_creates_private_parent_dirs(tmp_path):
+    """Anchor/state dirs are agent-private — created 0o700, not umask default."""
+    target = tmp_path / "anchors" / "deep" / "anchor.json"
+    atomic_write(target, "x")
+    for d in (tmp_path / "anchors", tmp_path / "anchors" / "deep"):
+        assert (d.stat().st_mode & 0o777) == 0o700
+
+
+# --- load_json_state corruption visibility ---
+
+
+def test_load_corrupt_json_logs_warning(tmp_path, caplog):
+    """A corrupt anchor silently becoming {} is the first step of a silent
+    identity fork — the corruption must be visible in the log."""
+    import logging
+
+    path = tmp_path / "state.json"
+    path.write_text('{"agent_uuid": truncated-mid-wri')
+
+    with caplog.at_level(logging.WARNING, logger="unitares_sdk.utils"):
+        assert load_json_state(path) == {}
+
+    assert any("corrupt" in rec.message for rec in caplog.records)

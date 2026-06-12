@@ -545,7 +545,7 @@ class SentinelAgent(GovernanceAgent):
         instances on the same Mac would surface here as held_by_other.
         Outcome does NOT gate execution per RFC v0.5 §6.1.
         """
-        from src.lease_plane.advisory import lease_advisory_scope, new_holder_uuid
+        from unitares_sdk.lease_plane.advisory import lease_advisory_scope, new_holder_uuid
 
         # Migrated from "sentinel:cycle" → "resident:/sentinel_cycle" per RFC v0.8 §7.2.1.
         with lease_advisory_scope(

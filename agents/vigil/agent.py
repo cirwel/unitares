@@ -779,7 +779,7 @@ class VigilAgent(GovernanceAgent):
         fires) surface in telemetry. Outcome does NOT gate execution; held
         leases proceed normally per RFC v0.5 §6.1.
         """
-        from src.lease_plane.advisory import lease_advisory_scope, new_holder_uuid
+        from unitares_sdk.lease_plane.advisory import lease_advisory_scope, new_holder_uuid
 
         # Migrated from "vigil:cycle" → "resident:/vigil_cycle" per RFC v0.8 §7.2.1.
         with lease_advisory_scope(

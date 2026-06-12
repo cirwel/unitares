@@ -8,7 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from src.lease_plane.canonicalize import CANONICAL_SCHEMES, canonicalize
+from .canonicalize import CANONICAL_SCHEMES, canonicalize
 
 HolderClass: TypeAlias = Literal["process_instance", "substrate_earned"]
 HolderKind: TypeAlias = Literal["local_beam", "remote_heartbeat"]
@@ -103,7 +103,7 @@ class AcquireRequest(LeasePlaneModel):
     `surface_id` auto-canonicalizes via field_validator per RFC v0.8 §7.12.5:
     rejects NUL bytes, ?-bearing strings (reserved for v1 modifier form per
     §7.12.4), non-canonical schemes (per §7.2.1 list); auto-canonicalizes
-    via `src.lease_plane.canonicalize`.
+    via `unitares_sdk.lease_plane.canonicalize`.
     """
 
     surface_id: str = Field(min_length=1)

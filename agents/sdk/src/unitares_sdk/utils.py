@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -12,6 +13,24 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
+
+
+def _mkdir_private(directory: Path) -> None:
+    """Create ``directory`` and any missing ancestors with mode 0o700.
+
+    ``Path.mkdir(parents=True, mode=...)`` applies the mode only to the leaf;
+    intermediate dirs (e.g. ``~/.unitares`` under ``~/.unitares/anchors``)
+    would silently get umask defaults.
+    """
+    missing = []
+    current = directory
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for d in reversed(missing):
+        d.mkdir(mode=0o700, exist_ok=True)
 
 
 def atomic_write(path: Path, data: str, mode: int = 0o600) -> None:
@@ -22,13 +41,24 @@ def atomic_write(path: Path, data: str, mode: int = 0o600) -> None:
     ``os.fchmod`` is called explicitly as defense-in-depth: anchor and
     session files carry continuity tokens, and a future Python/OS change
     to mkstemp defaults would silently regress every caller.
+
+    Parent directories are created 0o700 (umask-masked) — anchor/state dirs
+    are agent-private. The file is fsync'd before the rename so a crash
+    cannot replace a good anchor with an empty one.
+
+    Raises on failure (OSError etc.) after cleaning up the temp file —
+    callers persisting identity anchors must hear about a failed write, or
+    the next restart silently loses identity (the 2026-04-19 silent-fork
+    class). Existing call sites already wrap in try/except where best-effort
+    behavior is intended.
     """
     fd = None
     tmp = None
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        _mkdir_private(path.parent)
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
         os.write(fd, data.encode())
+        os.fsync(fd)
         os.fchmod(fd, mode)
         os.close(fd)
         fd = None
@@ -40,6 +70,7 @@ def atomic_write(path: Path, data: str, mode: int = 0o600) -> None:
                 os.close(fd)
             except OSError:
                 pass
+        raise
     finally:
         if tmp and os.path.exists(tmp):
             try:
@@ -48,10 +79,29 @@ def atomic_write(path: Path, data: str, mode: int = 0o600) -> None:
                 pass
 
 
+def _applescript_escape(text: str) -> str:
+    """Escape a string for embedding in a double-quoted AppleScript literal.
+
+    Notification text includes exception messages, which can carry
+    server-influenced content — without escaping, an embedded ``"`` breaks
+    out of the literal and the remainder executes as AppleScript.
+    """
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+_NOTIFY_MAX_LEN = 256
+
+
 def notify(title: str, message: str) -> None:
-    """Send a macOS notification via osascript. No-op on non-macOS."""
+    """Send a macOS notification via osascript. No-op on non-macOS.
+
+    Title and message are escaped (and bounded) before being embedded in
+    the AppleScript literal — see :func:`_applescript_escape`.
+    """
     if sys.platform != "darwin":
         return
+    title = _applescript_escape(title[:_NOTIFY_MAX_LEN])
+    message = _applescript_escape(message[:_NOTIFY_MAX_LEN])
     try:
         subprocess.Popen(
             [
@@ -70,7 +120,10 @@ def load_json_state(path: Path) -> dict:
     """Load JSON state from file. Returns {} if missing or corrupt.
 
     Handles the current dict format and legacy bare-string format
-    (migrated to dict on read).
+    (migrated to dict on read). A file that exists but cannot be read as
+    state logs a warning — for identity anchors, silently returning {}
+    is the first step of a silent identity fork, so the corruption must
+    at least be visible in the agent's log.
     """
     if not path.exists():
         return {}
@@ -80,6 +133,7 @@ def load_json_state(path: Path) -> dict:
             return data
         if isinstance(data, str) and data:
             return {"client_session_id": data}
+        logger.warning("state file %s has unexpected shape %s; ignoring", path, type(data).__name__)
         return {}
     except (json.JSONDecodeError, OSError):
         try:
@@ -88,6 +142,7 @@ def load_json_state(path: Path) -> dict:
                 return {"client_session_id": text}
         except Exception:
             pass
+    logger.warning("state file %s exists but is unreadable/corrupt; treating as empty", path)
     return {}
 
 
