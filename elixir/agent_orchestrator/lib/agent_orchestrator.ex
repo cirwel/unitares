@@ -12,6 +12,18 @@ defmodule AgentOrchestrator do
 
       {:ok, id, _} = AgentOrchestrator.run(%{cmd: "claude", args: ["-p", task], lease: %{}})
 
+  Lineage-provisioned — the child env gains `UNITARES_PARENT_AGENT_ID` /
+  `UNITARES_SPAWN_REASON` as CANDIDATE declarations the child declares (or
+  declines) in its own onboard call; the orchestrator never onboards on the
+  child's behalf:
+
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "claude",
+          args: ["-p", task],
+          lineage: %{parent_agent_uuid: spawner_governance_uuid}
+        })
+
   See `AgentOrchestrator.AgentRunner` for the full spec.
   """
 

@@ -23,6 +23,7 @@ sys.path.insert(0, str(project_root))
 
 from src.mcp_handlers.identity.operator import (
     _operator_identity_cache,
+    _operator_mint_locks,
     operator_session_key,
     operator_token_fingerprint,
     resolve_operator_identity,
@@ -51,8 +52,10 @@ VALID_TOKEN = "op-secret-token-1"
 @pytest.fixture(autouse=True)
 def clean_operator_cache():
     _operator_identity_cache.clear()
+    _operator_mint_locks.clear()
     yield
     _operator_identity_cache.clear()
+    _operator_mint_locks.clear()
 
 
 @pytest.fixture
@@ -123,7 +126,12 @@ class TestResolution:
             "src.mcp_handlers.identity.handlers.resolve_session_identity",
             new_callable=AsyncMock,
             side_effect=[_miss(), _resumed("uuid-operator-minted")],
-        ) as mock_resolve:
+        ) as mock_resolve, patch(
+            "src.mcp_handlers.identity.operator._persisted_operator_uuid",
+            new_callable=AsyncMock,
+            # adopt-winner PG readback (#644): row names our mint
+            return_value="uuid-operator-minted",
+        ):
             result = await resolve_operator_identity(signals)
 
         assert result["agent_uuid"] == "uuid-operator-minted"
@@ -197,6 +205,103 @@ class TestCacheAndRotation:
             result = await resolve_operator_identity(signals)
         assert result["agent_uuid"] == "uuid-fresh"
         mock_resolve.assert_awaited_once()
+
+
+class TestMintRace:
+    """First-use single-flight + adopt-winner (issue #644).
+
+    Live 2026-06-12: two dashboard tabs' cold-cache sweep burst minted 5
+    operator identities for one token fingerprint — every in-flight request
+    took the resume-miss→force_new path before the first session row landed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_concurrent_first_use_mints_exactly_once(self, allowlist):
+        import asyncio
+
+        signals = FakeSignals(unitares_operator_token=VALID_TOKEN)
+        minted = []
+        persisted = {"uuid": None}
+
+        async def fake_resolver(session_key, **kwargs):
+            # Simulate the real PG semantics: resume misses until a mint
+            # persists the row; force_new always mints a fresh UUID but only
+            # the FIRST mint's row wins (create_session ON CONFLICT DO
+            # NOTHING). The sleep(0) yields the event loop so the gather
+            # genuinely interleaves — without it the first task runs to
+            # completion uninterrupted and the lock is never contended.
+            await asyncio.sleep(0)
+            if kwargs.get("force_new"):
+                uuid = f"uuid-mint-{len(minted) + 1}"
+                minted.append(uuid)
+                if persisted["uuid"] is None:
+                    persisted["uuid"] = uuid
+                return {"agent_uuid": uuid, "source": "created", "created": True}
+            if persisted["uuid"] is not None:
+                return _resumed(persisted["uuid"])
+            return _miss()
+
+        async def fake_pg_readback(session_key):
+            await asyncio.sleep(0)
+            return persisted["uuid"]
+
+        with patch(
+            "src.mcp_handlers.identity.handlers.resolve_session_identity",
+            new=fake_resolver,
+        ), patch(
+            "src.mcp_handlers.identity.operator._persisted_operator_uuid",
+            new=fake_pg_readback,
+        ):
+            results = await asyncio.gather(
+                *[resolve_operator_identity(signals) for _ in range(10)]
+            )
+
+        assert len(minted) == 1, f"expected single-flight mint, got {minted}"
+        uuids = {r["agent_uuid"] for r in results}
+        assert uuids == {persisted["uuid"]}
+
+    @pytest.mark.asyncio
+    async def test_lost_persist_race_adopts_winner(self, allowlist):
+        """If our session-row insert lost (second process / pre-lock burst),
+        the post-mint PG readback adopts the persisted identity, not our
+        ghost. The readback must bypass the resolver entirely — PATH 1
+        (Redis) holds our own racing mint at this point."""
+        signals = FakeSignals(unitares_operator_token=VALID_TOKEN)
+        with patch(
+            "src.mcp_handlers.identity.handlers.resolve_session_identity",
+            new_callable=AsyncMock,
+            side_effect=[
+                _miss(),                     # initial resume: no row yet
+                _resumed("uuid-our-ghost"),  # our mint
+            ],
+        ), patch(
+            "src.mcp_handlers.identity.operator._persisted_operator_uuid",
+            new_callable=AsyncMock,
+            return_value="uuid-the-winner",  # PG row: another writer won
+        ):
+            result = await resolve_operator_identity(signals)
+
+        assert result["agent_uuid"] == "uuid-the-winner"
+        fp = operator_token_fingerprint(VALID_TOKEN)
+        assert _operator_identity_cache[fp][0] == "uuid-the-winner"
+
+    @pytest.mark.asyncio
+    async def test_pg_readback_failure_keeps_our_mint(self, allowlist):
+        """Adopt-winner is best-effort: a failed PG readback keeps the
+        minted identity rather than degrading to unbound."""
+        signals = FakeSignals(unitares_operator_token=VALID_TOKEN)
+        with patch(
+            "src.mcp_handlers.identity.handlers.resolve_session_identity",
+            new_callable=AsyncMock,
+            side_effect=[_miss(), _resumed("uuid-our-mint")],
+        ), patch(
+            "src.mcp_handlers.identity.operator._persisted_operator_uuid",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            result = await resolve_operator_identity(signals)
+
+        assert result["agent_uuid"] == "uuid-our-mint"
 
 
 class TestRestPrebindIntegration:

@@ -40,6 +40,7 @@ Token storage:
   so a compromise can be revoked without disrupting all operators.
 """
 
+import asyncio
 import hashlib
 import os
 import time
@@ -123,6 +124,20 @@ _OPERATOR_IDENTITY_TTL = 300.0  # seconds; bounds DB lookups, not authorization
 # rotation revokes immediately; the cache only skips re-resolution.
 _operator_identity_cache: Dict[str, Tuple[str, float]] = {}
 
+# Single-flight guard for the miss→mint path. First use of a token arrives
+# as a concurrent burst (two dashboard tabs × a multi-tool sweep); without
+# this, every in-flight request takes the resume-miss→force_new path and
+# mints its own identity (2026-06-12: 5 mints in one burst, issue #644).
+# Keyed per fingerprint so distinct tokens never serialize each other.
+_operator_mint_locks: Dict[str, "asyncio.Lock"] = {}
+
+
+def _operator_mint_lock(fingerprint: str) -> "asyncio.Lock":
+    lock = _operator_mint_locks.get(fingerprint)
+    if lock is None:
+        lock = _operator_mint_locks.setdefault(fingerprint, asyncio.Lock())
+    return lock
+
 
 def operator_token_fingerprint(token: str) -> str:
     """Stable, non-reversible fingerprint used to key operator identity.
@@ -141,6 +156,33 @@ def operator_session_key(token: str) -> str:
     transport-derived sessions.
     """
     return f"operator:{operator_token_fingerprint(token)}"
+
+
+async def _persisted_operator_uuid(session_key: str) -> Optional[str]:
+    """UUID named by the PG session row for ``session_key``, or None.
+
+    Deliberately bypasses the Redis session cache: this is the
+    adopt-winner ground-truth read, and the cache may hold the calling
+    process's own racing mint. Best-effort — any failure returns None
+    and the caller keeps its minted identity.
+    """
+    try:
+        from src.db import get_db
+        db = get_db()
+        if hasattr(db, "init"):
+            await db.init()
+        session = await db.get_session(session_key)
+        stored = session.agent_id if session else None
+        # PATH 2 convention: rows may carry a UUID or a legacy model+date
+        # id; operator rows are always UUID-keyed, so require that shape.
+        if stored and len(stored) == 36 and stored.count("-") == 4:
+            return stored
+    except Exception as e:
+        logger.debug(
+            "[OPERATOR] adopt-winner PG readback failed for %s...: %s",
+            session_key[:24], e,
+        )
+    return None
 
 
 async def resolve_operator_identity(
@@ -177,29 +219,58 @@ async def resolve_operator_identity(
 
     from src.mcp_handlers.identity.handlers import resolve_session_identity
 
-    identity = await resolve_session_identity(
-        session_key,
-        persist=True,
-        client_hint="operator",
-        resume=True,
-    )
-    if (identity.get("resume_failed")
-            and identity.get("error") == "session_resolve_miss"):
-        # First use of this token: mint explicitly (S21-a fail-closed PATH 2
-        # means resume never silently creates). spawn_reason makes the mint
-        # legible in the lineage audit trail.
+    async with _operator_mint_lock(fingerprint):
+        # Re-check under the lock: a concurrent request may have resolved
+        # (or minted) while this one waited.
+        cached = _operator_identity_cache.get(fingerprint)
+        if cached and (time.monotonic() - cached[1]) < _OPERATOR_IDENTITY_TTL:
+            return {
+                "agent_uuid": cached[0],
+                "session_key": session_key,
+                "source": "operator_token",
+            }
+
         identity = await resolve_session_identity(
             session_key,
             persist=True,
             client_hint="operator",
-            force_new=True,
-            spawn_reason="operator_credential",
+            resume=True,
         )
-        logger.info(
-            "[OPERATOR] minted operator identity %s... for token fp=%s",
-            (identity.get("agent_uuid") or "")[:8],
-            fingerprint,
-        )
+        if (identity.get("resume_failed")
+                and identity.get("error") == "session_resolve_miss"):
+            # First use of this token: mint explicitly (S21-a fail-closed
+            # PATH 2 means resume never silently creates). spawn_reason makes
+            # the mint legible in the lineage audit trail.
+            identity = await resolve_session_identity(
+                session_key,
+                persist=True,
+                client_hint="operator",
+                force_new=True,
+                spawn_reason="operator_credential",
+            )
+            logger.info(
+                "[OPERATOR] minted operator identity %s... for token fp=%s",
+                (identity.get("agent_uuid") or "")[:8],
+                fingerprint,
+            )
+            # Adopt-winner: create_session is ON CONFLICT DO NOTHING, so if
+            # another writer (a second server process, or a pre-lock burst)
+            # persisted the row first, OUR mint is the ghost. Read the PG row
+            # DIRECTLY — resolve_session_identity(resume=True) consults the
+            # Redis cache (PATH 1) first, and PATH 3 just populated it with
+            # OUR mint, so the resolver can never surface a cross-process
+            # winner (council finding on this fix).
+            winner_uuid = await _persisted_operator_uuid(session_key)
+            our_uuid = identity.get("agent_uuid")
+            if winner_uuid and our_uuid and winner_uuid != our_uuid:
+                logger.info(
+                    "[OPERATOR] adopting persisted operator identity %s... "
+                    "over our racing mint %s... for token fp=%s",
+                    winner_uuid[:8],
+                    our_uuid[:8],
+                    fingerprint,
+                )
+                identity = {"agent_uuid": winner_uuid, "source": "postgres"}
 
     agent_uuid = identity.get("agent_uuid")
     if not agent_uuid:
