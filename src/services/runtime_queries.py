@@ -99,14 +99,19 @@ def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, An
                 "ODE otherwise. Check primary_eisv_source for which is active."
             ),
             "behavioral_eisv_role": (
-                "PRIMARY for verdicts. Observation-first EMA of actual agent behavior. "
-                "Determines proceed/guide/pause/reject decisions."
+                "PRIMARY measurement source for governance policy when confidence >= 0.3. "
+                "Observation-first EMA of actual agent behavior; feeds governance policy "
+                "rather than directly acting as an actuator."
             ),
             "ode_eisv_role": (
                 "DIAGNOSTIC only. ODE dynamics with universal attractor. "
                 "Used for convergence tracking and phi calculation. NOT used for verdicts."
             ),
             "ode_diagnostics_role": "Thermostat dynamics diagnostics (phi, regime, lambda1)",
+            "measurement_policy_contract": (
+                "EISV measurements feed governance policy; policy evaluation chooses guidance/action; "
+                "enforcement is a separate runtime boundary."
+            ),
             "verdict_source": primary_source,
             "verdict_source_meta": primary_source_meta,
             "hierarchy": [

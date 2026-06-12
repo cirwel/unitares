@@ -19,6 +19,58 @@ DIVERGENCE_LINE_THRESHOLD = 0.15
 _DIVERGENCE_NOVELTY_DELTA = 0.10
 
 
+_POLICY_INPUT_FIELDS = (
+    "coherence",
+    "risk_score",
+    "phi",
+    "verdict",
+    "void_active",
+)
+
+
+def _build_policy_evaluation(decision: Dict, metrics: Dict) -> Dict:
+    """Describe the policy layer that consumed measurements.
+
+    EISV/risk/coherence are instrument readings. ``monitor_decision`` is the
+    policy layer that maps those readings to guidance/action. Keeping this
+    envelope distinct from ``decision`` lets clients and operators inspect the
+    policy without treating the measurement itself as the actuator.
+    """
+    inputs = {
+        "basin": decision.get("basin"),
+        **{field: metrics.get(field) for field in _POLICY_INPUT_FIELDS},
+        "margin": decision.get("margin"),
+        "nearest_edge": decision.get("nearest_edge"),
+    }
+    return {
+        "policy_name": "monitor_decision",
+        "policy_version": "v1",
+        "action": decision.get("action"),
+        "sub_action": decision.get("sub_action"),
+        "reason": decision.get("reason"),
+        "guidance": decision.get("guidance"),
+        "inputs": inputs,
+        "measurement_role": "EISV/risk/coherence are policy inputs, not the actuator itself.",
+    }
+
+
+def _build_enforcement_stub(decision: Dict) -> Dict:
+    """Describe actuator state before the runtime boundary applies it."""
+    requested = decision.get("action") in {"pause", "reject"}
+    return {
+        "requested": requested,
+        "applied": False,
+        "mode": "circuit_breaker_candidate" if requested else "advisory",
+        "actor": None,
+        "effect": None,
+        "note": (
+            "Policy requested enforcement; actuator state is applied by the caller/runtime boundary."
+            if requested else
+            "No enforcement requested by policy."
+        ),
+    }
+
+
 def _complexity_divergence_novel(monitor, cm) -> bool:
     """True when the complexity divergence is worth surfacing again.
 
@@ -74,6 +126,8 @@ def build_result(
     result = {
         'status': status,
         'decision': decision,
+        'policy_evaluation': _build_policy_evaluation(decision, metrics),
+        'enforcement': _build_enforcement_stub(decision),
         'metrics': metrics,
         'timestamp': datetime.now().isoformat(),
         'confidence_reliability': {

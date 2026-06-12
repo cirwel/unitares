@@ -191,7 +191,11 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
     identity_notifications = response_data.get("_identity_notifications")
     if identity_notifications:
         result["identity_notifications"] = identity_notifications
-    _copy_passthrough_fields(response_data, result, ("prediction_id", "warnings"))
+    _copy_passthrough_fields(
+        response_data,
+        result,
+        ("prediction_id", "warnings", "policy_evaluation", "enforcement"),
+    )
     return result
 
 def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None) -> dict:
@@ -396,7 +400,11 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     if identity_notifications:
         result["identity_notifications"] = identity_notifications
 
-    _copy_passthrough_fields(response_data, result, ("prediction_id", "warnings"))
+    _copy_passthrough_fields(
+        response_data,
+        result,
+        ("prediction_id", "warnings", "policy_evaluation", "enforcement"),
+    )
     return result
 
 
@@ -517,7 +525,11 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
     if identity_notifications:
         result["identity_notifications"] = identity_notifications
 
-    _copy_passthrough_fields(response_data, result, ("prediction_id", "warnings"))
+    _copy_passthrough_fields(
+        response_data,
+        result,
+        ("prediction_id", "warnings", "policy_evaluation", "enforcement"),
+    )
     return result
 
 def _strip_context(response_data: dict, is_new_agent: bool, key_was_generated: bool, api_key_auto_retrieved: bool):

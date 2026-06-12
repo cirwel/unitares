@@ -55,8 +55,9 @@ Important current semantics:
 
 - `response_text` is the primary check-in input
 - `complexity` and `confidence` are optional reflective inputs, not the sole substrate
-- Behavioral EISV is primary for verdicts
+- Behavioral EISV is the primary measurement source for governance policy when its confidence is sufficient
 - ODE state is diagnostic/fallback, not the main verdict source
+- Governance responses separate measurement (`primary_eisv`, `behavioral_eisv`, `ode_eisv`), policy evaluation (`policy_evaluation`), and actuator state (`enforcement`)
 
 ## Read Next
 
@@ -70,4 +71,4 @@ Important current semantics:
 
 This file used to be a larger onboarding guide from an earlier MCP/tooling phase. It is intentionally kept small now to avoid duplicated explanations drifting out of sync with the runtime.
 
-**Last Updated:** 2026-04-25 (identity guidance aligned with S1-a token narrowing and lineage-first fresh process flow)
+**Last Updated:** 2026-06-12 (measurement-policy-enforcement semantics aligned with runtime response layers)
