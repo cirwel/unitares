@@ -126,7 +126,7 @@ def _is_operator_request() -> bool:
         return False
 
 
-@mcp_tool("list_agents", timeout=15.0, rate_limit_exempt=True, register=False)
+@mcp_tool("list_agents", timeout=15.0, register=False)
 async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextContent]:
     """List all agents currently being monitored with lifecycle metadata and health status
 

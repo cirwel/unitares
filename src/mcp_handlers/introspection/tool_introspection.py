@@ -186,7 +186,7 @@ def _essential_toolkit() -> Dict[str, Any]:
         },
     }
 
-@mcp_tool("list_tools", timeout=10.0, rate_limit_exempt=True, requires_identity="pre_onboard")
+@mcp_tool("list_tools", timeout=10.0, requires_identity="pre_onboard")
 async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """List all available governance tools with descriptions and categories
     
@@ -1206,7 +1206,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     
     return success_response(tools_info)
 
-@mcp_tool("describe_tool", timeout=10.0, rate_limit_exempt=True, requires_identity="pre_onboard")
+@mcp_tool("describe_tool", timeout=10.0, requires_identity="pre_onboard")
 async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Return full details for a single tool (full description + full schema) on demand.

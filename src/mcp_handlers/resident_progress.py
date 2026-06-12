@@ -17,7 +17,7 @@ from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
-@mcp_tool("record_progress_pulse", timeout=5.0, register=True, rate_limit_exempt=False)
+@mcp_tool("record_progress_pulse", timeout=5.0, register=True)
 async def handle_record_progress_pulse(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:

@@ -455,7 +455,7 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
             ]
         })
 
-@mcp_tool("ping_agent", timeout=5.0, rate_limit_exempt=True, register=False)
+@mcp_tool("ping_agent", timeout=5.0, register=False)
 async def handle_ping_agent(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Ping an agent to check if it's responsive/alive.
 
@@ -546,7 +546,7 @@ async def handle_ping_agent(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         logger.error(f"Error pinging agent: {e}", exc_info=True)
         return [error_response(f"Error pinging agent: {str(e)}")]
 
-@mcp_tool("archive_old_test_agents", timeout=20.0, rate_limit_exempt=True, register=False)
+@mcp_tool("archive_old_test_agents", timeout=20.0, register=False)
 async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Archive stale agents - test agents by default, or ALL stale agents with include_all=true
 
@@ -615,7 +615,7 @@ async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[
         "action": "preview - use dry_run=false to execute" if dry_run else "archived"
     })
 
-@mcp_tool("archive_orphan_agents", timeout=30.0, rate_limit_exempt=True)
+@mcp_tool("archive_orphan_agents", timeout=30.0)
 async def handle_archive_orphan_agents(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Aggressively archive orphan agents to prevent proliferation.
 

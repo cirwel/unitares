@@ -767,7 +767,7 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
         "note": note
     })
 
-@mcp_tool("get_dialectic_session", timeout=10.0, rate_limit_exempt=True, register=False)
+@mcp_tool("get_dialectic_session", timeout=10.0, register=False)
 async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     View an active or past dialectic session.
@@ -979,7 +979,7 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
             recovery=get_session_exception_recovery(),
         )]
 
-@mcp_tool("list_dialectic_sessions", timeout=15.0, rate_limit_exempt=True, register=False)
+@mcp_tool("list_dialectic_sessions", timeout=15.0, register=False)
 async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     List all dialectic sessions with optional filtering.
