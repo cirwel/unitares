@@ -42,33 +42,76 @@ def analyze_trend(values: List[float], window: int = 5) -> str:
         return "decreasing"
 
 
+def _window_advance_key(timestamps: List[str], history: List[float]) -> str:
+    """Identity of the newest analyzed sample — the data-advancement key.
+
+    Prefer the newest sample's timestamp (parallel array maintained by the
+    monitor). Histories observed without timestamps fall back to a
+    length+tail proxy; the tail covers the detector's full recent window (not
+    just the last value) so advancement stays detectable even when the history
+    is at its trim cap and the newest sample repeats the evicted one's value.
+    """
+    if timestamps:
+        return str(timestamps[-1])
+    if history:
+        return f"len:{len(history)}|tail:{[float(v) for v in history[-3:]]}"
+    return "empty"
+
+
 def detect_anomalies_in_history(
     risk_history: List[float],
     coherence_history: List[float],
-    timestamps: List[str]
+    timestamps: List[str],
+    emitted_windows: Optional[Dict[str, str]] = None,
 ) -> List[Dict]:
     """
     Detect anomalies in agent history.
-    
+
     Returns list of anomaly dicts with type, severity, timestamp, description.
+
+    ``emitted_windows`` is the detector-layer freshness guard (#637): a
+    mutable per-agent mapping of anomaly type -> the window-advance key at
+    which that anomaly was last reported. An idle agent's history is frozen,
+    so re-evaluating it recomputes the *identical* spike indefinitely; the
+    guard annotates each anomaly with ``stale`` — True when the newest
+    analyzed sample is unchanged since this anomaly type was last reported,
+    False when new data produced it. Anomalies are always returned (reads
+    stay non-destructive and consumer-order-independent): display surfaces
+    filter or demote ``stale`` entries instead of presenting them as current
+    findings, while event persistence is dedup'd separately by the
+    record_event change_token. Keyed on data advancement, never wall-clock —
+    a frozen window cannot contain a new spike, but a window that advances
+    refreshes immediately. The registry's check-then-set is not atomic;
+    concurrent evaluations of the same agent can at worst both label the
+    same window fresh, which downstream change_token dedup absorbs.
+    ``None`` (stateless callers, e.g. direct library use) keeps the legacy
+    pure behavior with no ``stale`` field.
     """
     anomalies = []
-    
+
+    def _staleness(anomaly_type: str, history: List[float]) -> Optional[bool]:
+        if emitted_windows is None:
+            return None
+        key = _window_advance_key(timestamps, history)
+        stale = emitted_windows.get(anomaly_type) == key
+        emitted_windows[anomaly_type] = key
+        return stale
+
     if len(risk_history) < 3:
         return anomalies
-    
+
     # Risk spike detection
     recent_risk = risk_history[-3:]
     older_risk = risk_history[-6:-3] if len(risk_history) >= 6 else risk_history[:-3]
-    
+
     if len(older_risk) > 0:
         recent_mean = np.mean(recent_risk)
         older_mean = np.mean(older_risk)
         change = recent_mean - older_mean
-        
+
         if change > 0.15:  # 15% increase
             severity = "high" if change > 0.25 else "medium"
-            anomalies.append({
+            anomaly = {
                 "type": "risk_spike",
                 "severity": severity,
                 "timestamp": timestamps[-1] if timestamps else None,
@@ -78,7 +121,11 @@ def detect_anomalies_in_history(
                     "current_risk": float(recent_mean),
                     "change": float(change)
                 }
-            })
+            }
+            stale = _staleness("risk_spike", risk_history)
+            if stale is not None:
+                anomaly["stale"] = stale
+            anomalies.append(anomaly)
     
     # Coherence drop detection
     if len(coherence_history) >= 5:
@@ -92,7 +139,7 @@ def detect_anomalies_in_history(
             
             if change > 0.05:  # 5% drop
                 severity = "high" if change > 0.10 else "medium"
-                anomalies.append({
+                anomaly = {
                     "type": "coherence_drop",
                     "severity": severity,
                     "timestamp": timestamps[-1] if timestamps else None,
@@ -102,7 +149,11 @@ def detect_anomalies_in_history(
                         "current_coherence": float(recent_mean),
                         "change": float(-change)
                     }
-                })
+                }
+                stale = _staleness("coherence_drop", coherence_history)
+                if stale is not None:
+                    anomaly["stale"] = stale
+                anomalies.append(anomaly)
     
     return anomalies
 
@@ -218,12 +269,28 @@ def analyze_agent_patterns(
     else:
         patterns["trend"] = "stable"
 
-    # Anomaly detection
+    # Anomaly detection — with the per-monitor freshness guard (#637).
+    # Monitors are cached per agent (get_or_create_monitor, never evicted),
+    # so this dict remembers across evaluations which window each anomaly was
+    # last reported at; frozen idle histories get their recomputed spike
+    # labeled stale=True instead of masquerading as a current finding on
+    # every observe/detect_anomalies poll. In-memory only: a restart labels
+    # each persisting anomaly fresh once, then staleness tracking resumes.
+    # The isinstance check (not getattr-default) keeps MagicMock-based
+    # monitors from masquerading as a registry.
+    emitted_windows = getattr(monitor, "_anomaly_emitted_windows", None)
+    if not isinstance(emitted_windows, dict):
+        emitted_windows = {}
+        try:
+            monitor._anomaly_emitted_windows = emitted_windows
+        except (AttributeError, TypeError):
+            pass  # slotted/frozen monitor: degrade to per-call (legacy) behavior
     timestamps = state.timestamp_history if hasattr(state, 'timestamp_history') else []
     anomalies = detect_anomalies_in_history(
         state.risk_history,
         state.coherence_history,
-        timestamps
+        timestamps,
+        emitted_windows=emitted_windows,
     )
 
     # Summary statistics
