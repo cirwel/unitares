@@ -377,7 +377,7 @@ def _watcher_findings_holder_uuid(agent_id: str | None):
     """Use the operator/Watcher UUID when valid; otherwise mint a process UUID."""
     from uuid import UUID
 
-    from src.lease_plane.advisory import new_holder_uuid
+    from unitares_sdk.lease_plane.advisory import new_holder_uuid
 
     identity = get_watcher_identity() or {}
     for candidate in (agent_id, identity.get("agent_uuid")):
@@ -406,7 +406,7 @@ def _run_with_watcher_findings_lease(
     if mode == "off":
         return mutation()
 
-    from src.lease_plane import (
+    from unitares_sdk.lease_plane import (
         AcquireHeldByOther,
         AcquireOk,
         AcquirePermissionDenied,
@@ -414,7 +414,7 @@ def _run_with_watcher_findings_lease(
         AcquireSchemaInvalid,
         AcquireServiceUnavailable,
     )
-    from src.lease_plane.advisory import make_advisory_client, release_advisory
+    from unitares_sdk.lease_plane.advisory import make_advisory_client, release_advisory
 
     client = make_advisory_client()
     lease_id = None
@@ -1122,7 +1122,7 @@ def scan_commits(since: str = "30 days ago", repo_path: Path | None = None) -> i
     """
     repo_root = repo_path or PROJECT_ROOT
 
-    from src.lease_plane.advisory import lease_advisory_scope, new_holder_uuid
+    from unitares_sdk.lease_plane.advisory import lease_advisory_scope, new_holder_uuid
 
     # Sanitize repo path into a resident:/ surface_id (slashes → underscores).
     sanitized = str(repo_root).replace("/", "_").strip("_")

@@ -1,80 +1,31 @@
-"""Python contract for the UNITARES lease plane.
+"""Back-compat aliases — the canonical home of this package is
+``unitares_sdk.lease_plane`` (moved so the SDK is standalone: the public
+agent contract must not import ``src.*``, and the substrate-emission path
+in ``unitares_sdk._substrate`` depends on this client).
 
-The Elixir/OTP node owns live coordination, but Python callers use this
-package as the stable boundary. Raw HTTP calls should stay behind this module.
+These are *aliases*, not re-exports: ``sys.modules`` entries for every
+``src.lease_plane[.submodule]`` name point at the SAME module objects as
+the canonical names. Imports and ``patch()`` targets using either spelling
+therefore hit identical module dicts — existing server code and tests keep
+working unchanged, including attribute monkeypatching (e.g.
+``src.lease_plane.PROTOCOL_VERSION``, ``src.lease_plane.client`` transport
+internals).
+
+New code should import from ``unitares_sdk.lease_plane`` directly.
 """
 
-# Wave 2 §"Lease-integration boundary hardening" — versioned contracts.
-# Bumped when the lease-plane response shapes change in a way that requires
-# a coordinated client/server deploy. Mirrored on the Elixir side at
-# `elixir/lease_plane/lib/unitares_lease_plane/http_router.ex` —
-# `@protocol_version`. Kept in sync by:
-#   - `tests/test_lease_plane_protocol_version.py` on the Python side
-#   - `test/unitares_lease_plane/http_router_protocol_version_test.exs` on the
-#     Elixir side (each pinning the literal "v1.0")
-# Mismatch behavior: Python client logs WARNING, does NOT fail (rollout
-# grace). See `LeasePlaneClient._request_json`.
-PROTOCOL_VERSION = "v1.0"
+import sys
 
-from .client import LeasePlaneClient, LeasePlaneClientConfig, LeasePlaneDisabledClient
-from .models import (
-    AcquireHeldByOther,
-    AcquireOk,
-    AcquirePermissionDenied,
-    AcquireRequest,
-    AcquireResult,
-    AcquireSchemaInvalid,
-    AcquireServiceUnavailable,
-    EarnedStatus,
-    ForceReleaseRequest,
-    HandoffAcceptRequest,
-    HandoffOfferRequest,
-    HealthOk,
-    HealthResult,
-    HealthUnavailable,
-    HeartbeatRequest,
-    LeaseRecord,
-    ReleaseReason,
-    ReleaseRequest,
-    RenewRequest,
-    SimpleError,
-    SimpleOk,
-    SimpleResult,
-    StatusOk,
-    StatusResult,
-    StatusSchemaInvalid,
-    StatusServiceUnavailable,
-)
+import unitares_sdk.lease_plane as _canonical
+from unitares_sdk.lease_plane import advisory, canonicalize, client, models
 
-__all__ = [
-    "PROTOCOL_VERSION",
-    "AcquireHeldByOther",
-    "AcquireOk",
-    "AcquirePermissionDenied",
-    "AcquireRequest",
-    "AcquireResult",
-    "AcquireSchemaInvalid",
-    "AcquireServiceUnavailable",
-    "EarnedStatus",
-    "ForceReleaseRequest",
-    "HandoffAcceptRequest",
-    "HandoffOfferRequest",
-    "HealthOk",
-    "HealthResult",
-    "HealthUnavailable",
-    "HeartbeatRequest",
-    "LeasePlaneClient",
-    "LeasePlaneClientConfig",
-    "LeasePlaneDisabledClient",
-    "LeaseRecord",
-    "ReleaseReason",
-    "ReleaseRequest",
-    "RenewRequest",
-    "SimpleError",
-    "SimpleOk",
-    "SimpleResult",
-    "StatusOk",
-    "StatusResult",
-    "StatusSchemaInvalid",
-    "StatusServiceUnavailable",
-]
+for _name, _mod in (
+    ("client", client),
+    ("models", models),
+    ("advisory", advisory),
+    ("canonicalize", canonicalize),
+):
+    sys.modules[f"{__name__}.{_name}"] = _mod
+
+# Self-replacement: ``src.lease_plane`` *is* the canonical package object.
+sys.modules[__name__] = _canonical

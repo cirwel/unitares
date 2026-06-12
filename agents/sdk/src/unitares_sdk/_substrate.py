@@ -92,20 +92,15 @@ def _build_substrate_state(metrics: dict[str, Any]) -> dict[str, Any]:
 def _make_client():
     """Build a lease-plane client lazily.
 
-    Importing happens at first emission attempt so the SDK doesn't require
-    the unitares parent to be importable at module-load time. Returns None
-    if the lease-plane SDK isn't on path or no bearer token configured —
-    skip emission silently in those cases.
+    Imported lazily to keep module load light. The lease-plane client is
+    part of this SDK (``unitares_sdk.lease_plane``); emission is skipped
+    silently when no bearer token is configured.
     """
-    try:
-        from src.lease_plane.client import (
-            LeasePlaneClient,
-            LeasePlaneClientConfig,
-            LeasePlaneDisabledClient,
-        )
-    except ImportError as exc:
-        logger.debug("[substrate] lease-plane client unavailable: %r", exc)
-        return None
+    from unitares_sdk.lease_plane.client import (
+        LeasePlaneClient,
+        LeasePlaneClientConfig,
+        LeasePlaneDisabledClient,
+    )
 
     token = os.environ.get("LEASE_PLANE_BEARER_TOKEN", "").strip()
     base_url = os.environ.get(
@@ -157,11 +152,7 @@ def emit_substrate_observation(
     observed_at = datetime.now(UTC)
 
     if cache.lease_id is None:
-        try:
-            from src.lease_plane.models import AcquireOk, AcquireRequest
-        except ImportError as exc:
-            logger.debug("[substrate] lease-plane models unavailable: %r", exc)
-            return False
+        from unitares_sdk.lease_plane.models import AcquireOk, AcquireRequest
 
         try:
             request = AcquireRequest(
@@ -192,10 +183,7 @@ def emit_substrate_observation(
         logger.debug("[substrate] %s acquire non-OK: %r", matched, type(result).__name__)
         return False
 
-    try:
-        from src.lease_plane.models import RenewRequest, SimpleOk
-    except ImportError:
-        return False
+    from unitares_sdk.lease_plane.models import RenewRequest, SimpleOk
 
     try:
         renew_request = RenewRequest(

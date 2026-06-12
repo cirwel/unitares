@@ -133,6 +133,9 @@ def _record_lease_rpc_latency(
         )
     except Exception:  # noqa: BLE001 — recorder must never break a lease call
         pass
+    # Optional host hook: when running inside the unitares server checkout,
+    # bridge timings into its perf monitor. Silently absent everywhere else —
+    # the SDK package itself never requires src.* to be importable.
     try:
         from src.perf_monitor import record_ms
     except Exception:
@@ -240,7 +243,7 @@ class LeasePlaneClient:
 
         # AcquireHeldByOther is the only retry-triggering result type;
         # AcquireOk no longer needed here (NIT-1 fix from council pass).
-        from src.lease_plane import AcquireHeldByOther
+        from .models import AcquireHeldByOther
 
         sleep_fn = sleep or time.sleep
         rand_fn = rng or random.random
@@ -464,7 +467,7 @@ def _check_protocol_version(payload: Mapping[str, Any], path: str) -> None:
     aren't is expected and shouldn't generate noise.
     """
     # Local import keeps tests free to monkeypatch the module-level constant.
-    from src.lease_plane import PROTOCOL_VERSION
+    from unitares_sdk.lease_plane import PROTOCOL_VERSION
 
     server_version = payload.get("protocol_version")
     if server_version is None:

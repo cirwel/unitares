@@ -170,7 +170,7 @@ class ChroniclerAgent(GovernanceAgent):
         --dry could overlap) surface in telemetry. Outcome does NOT gate
         execution per RFC v0.5 §6.1.
         """
-        from src.lease_plane.advisory import lease_advisory_scope, new_holder_uuid
+        from unitares_sdk.lease_plane.advisory import lease_advisory_scope, new_holder_uuid
 
         # Migrated from "chronicler:scrape" → "resident:/chronicler_scrape" per RFC v0.8 §7.2.1.
         with lease_advisory_scope(
