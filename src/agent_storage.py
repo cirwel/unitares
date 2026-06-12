@@ -146,14 +146,6 @@ async def get_agent(agent_id: str) -> Optional[AgentRecord]:
     )
 
 
-async def agent_exists(agent_id: str) -> bool:
-    """Check if agent exists."""
-    await _ensure_db_ready()
-    db = get_db()
-    identity = await db.get_identity(agent_id)
-    return identity is not None
-
-
 async def create_agent(
     agent_id: str,
     api_key: str,

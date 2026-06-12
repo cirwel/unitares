@@ -74,7 +74,9 @@ Additional services (started via launchd, not bundled into `docker compose up`):
 | Gateway MCP (reduced surface) | `8768` | `http://localhost:8768/mcp/` |
 | Surface lease plane (bearer-auth) | `8788` | `http://localhost:8788/v1/lease/*` |
 
-**Workflow:** `onboard(force_new=true)` → `process_agent_update()` → `get_governance_metrics()`. Use `parent_agent_id` for fresh-process lineage — details in [Getting Started](docs/guides/START_HERE.md).
+**Workflow:** `start_session(force_new=true)` → `sync_state()` → `check_working_state()`. These are first-class aliases for `onboard`, `process_agent_update`, and `get_governance_metrics`. Use `parent_agent_id` for fresh-process lineage — details in [Getting Started](docs/guides/START_HERE.md).
+
+**Resident agents:** for long-running or scheduled agents, start with the SDK in [`agents/sdk/README.md`](agents/sdk/README.md). It handles MCP connection, identity anchors, check-ins, heartbeats, log rotation, state persistence, and pause hooks.
 
 **Transports:** MCP on `/mcp/` (Streamable HTTP) · REST on `/v1/tools/call` · Dashboard on `/dashboard`
 
@@ -91,7 +93,7 @@ Additional services (started via launchd, not bundled into `docker compose up`):
 
 ```python
 # Inside the agent's loop
-result = process_agent_update(response_text=output, complexity=0.6, confidence=0.8)
+result = sync_state(response_text=output, complexity=0.6, confidence=0.8)
 
 if result["metrics"]["integrity"] < 0.4:
     agent.require_human_review("integrity low — pausing autonomous actions")
@@ -170,15 +172,15 @@ Frozen public snapshot from May 6, 2026 (single-operator deployment — self-tra
 ## Quick Start
 
 ```
-1. onboard(force_new=true)      → Get a fresh process identity
-2. process_agent_update()       → Log your work
-3. get_governance_metrics()     → Check your state
+1. start_session(force_new=true) → Get a fresh process identity
+2. sync_state()                  → Log your work
+3. check_working_state()         → Check your state
 ```
 
 Example check-in (non-mirror responses include full `metrics`, `decision`, etc.):
 
 ```jsonc
-process_agent_update({
+sync_state({
   "response_text": "Refactored auth module, added rate limiting",
   "complexity": 0.6,
   "confidence": 0.8,
@@ -187,26 +189,30 @@ process_agent_update({
 })
 ```
 
-**`response_mode: "mirror"`** shapes the payload for self-awareness: `mirror` is a **list of strings** (actionable signals), not a nested object. Optional top-level `question` and `relevant_prior_work` surface a targeted nudge and knowledge-graph items when relevant. See `_format_mirror` in [`src/mcp_handlers/response_formatter.py`](src/mcp_handlers/response_formatter.py).
+**`response_mode: "mirror"`** shapes the payload for self-awareness: `mirror` is a **list of strings** (actionable signals), not a nested object. Optional top-level `reflection` and `relevant_prior_work` surface a state reflection and knowledge-graph items when relevant. See `_format_mirror` in [`src/mcp_handlers/response_formatter.py`](src/mcp_handlers/response_formatter.py).
 
 ```jsonc
 {
-  "verdict": "proceed",
+  "verdict": {
+    "value": "proceed",
+    "meaning": "State is healthy.",
+    "next_action": "Continue working normally."
+  },
   "_mode": "mirror",
   "mirror": [
     "Fleet calibration: 72% accuracy over 12 fleet-wide decisions (high-conf: 0.8, low-conf: 0.5)",
     "Complexity divergence: you reported 0.60 but system derives 0.45 (divergence=0.15)"
   ],
-  "question": "What's driving your sense of difficulty?",
+  "reflection": "Complexity estimate is diverging from the output-surface proxy.",
   "relevant_prior_work": [
     { "summary": "Rate limiter bypass in auth …", "by": "agent-abc", "relevance": 0.82 }
   ]
 }
 ```
 
-**Verdict field:** Responses expose `verdict` from `decision.action`. Governance actions are **`proceed` / `guide` / `pause` / `reject`** ([Architecture](docs/UNIFIED_ARCHITECTURE.md)). If `action` is absent, formatters fall back to **`continue`** — see `response_formatter.py`.
+**Verdict field:** Mirror/compact responses wrap the verdict with `value`, `meaning`, and `next_action`. Governance actions are **`proceed` / `guide` / `pause` / `reject`** ([Architecture](docs/UNIFIED_ARCHITECTURE.md)). If `action` is absent, formatters fall back to **`continue`** — see `response_formatter.py`.
 
-The `onboard()` response includes `agent_uuid`. Store it as an identity anchor. On a fresh process that continues prior work, call `onboard(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")`. Use `identity(agent_uuid=..., continuity_token=..., resume=true)` only for same-owner proof-owned rebinds.
+The `start_session()` / `onboard()` response includes `agent_uuid`. Store it as an identity anchor. On a fresh process that continues prior work, call `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")`. Use `identity(agent_uuid=..., continuity_token=..., resume=true)` only for same-owner proof-owned rebinds.
 
 ### Installation
 

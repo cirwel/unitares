@@ -118,9 +118,7 @@ select = ["F401"]
 "src/mcp_handlers/identity/handlers.py" = ["F401"]
 # Re-export hub for watcher tests/hooks (tests monkeypatch.setattr these names on the agent module)
 "agents/watcher/agent.py" = ["F401"]
-# Surfaces owned by in-flight PRs #619/#622 — clean up after those land
+# Surfaces owned by in-flight PR #619 — clean up after it lands
 "src/http_api.py" = ["F401"]
-"src/mcp_handlers/middleware/identity_step.py" = ["F401"]
-"src/mcp_handlers/identity/session.py" = ["F401"]
 "src/mcp_handlers/tool_stability.py" = ["F401"]
 "src/mcp_handlers/consolidated.py" = ["F401"]

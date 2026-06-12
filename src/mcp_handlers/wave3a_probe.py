@@ -510,89 +510,14 @@ async def _server_info(request: Request) -> JSONResponse:
             request, auth_err, endpoint=endpoint, start_monotonic=start
         )
 
-    # Reproduce the get_server_info data shape WITHOUT going through the MCP
-    # handler (avoids TextContent wrapping). The fields here mirror the
-    # success_response payload returned by handle_get_server_info — golden
-    # parity is enforced in PR #6, not here.
-    import sys
+    # PR #6: the payload is single-sourced from the same builder the MCP
+    # handler uses (`build_server_info_payload`), so the probe response is
+    # the handler's success_response payload by construction — the §2.6
+    # parity contract no longer depends on a hand-mirrored copy staying in
+    # sync. Lazy import so test patches at module scope work.
+    from src.mcp_handlers.admin.handlers import build_server_info_payload
 
-    from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
-
-    argv = [str(a) for a in getattr(sys, "argv", [])]
-    is_http = any("mcp_server.py" in a for a in argv)
-    is_stdio = any("mcp_server_std.py" in a for a in argv)
-    transport = "HTTP" if is_http else ("STDIO" if is_stdio else "unknown")
-
-    current_pid = os.getpid()
-    server_version = getattr(mcp_server, "SERVER_VERSION", None) or "unknown"
-    server_build_date = getattr(mcp_server, "SERVER_BUILD_DATE", None) or "unknown"
-
-    server_processes = []
-    current_uptime = 0.0
-    if mcp_server.PSUTIL_AVAILABLE:
-        import psutil
-
-        target_script = (
-            "mcp_server.py" if is_http else ("mcp_server_std.py" if is_stdio else None)
-        )
-        try:
-            for proc in psutil.process_iter(["pid", "name", "cmdline", "create_time", "status"]):
-                try:
-                    cmdline = proc.info.get("cmdline", [])
-                    if not cmdline:
-                        continue
-                    if target_script:
-                        if not any(target_script in str(arg) for arg in cmdline):
-                            continue
-                    else:
-                        if not any(
-                            ("mcp_server_std.py" in str(arg) or "mcp_server.py" in str(arg))
-                            for arg in cmdline
-                        ):
-                            continue
-                    pid = proc.info["pid"]
-                    create_time = proc.info.get("create_time", 0)
-                    uptime_seconds = time.time() - create_time
-                    server_processes.append(
-                        {
-                            "pid": pid,
-                            "is_current": pid == current_pid,
-                            "uptime_seconds": int(uptime_seconds),
-                            "status": proc.info.get("status", "unknown"),
-                        }
-                    )
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-        except Exception as exc:
-            server_processes = [{"error": f"Could not enumerate processes: {exc}"}]
-
-        try:
-            current_proc = psutil.Process(current_pid)
-            current_uptime = time.time() - current_proc.create_time()
-            if not server_processes:
-                server_processes.append(
-                    {
-                        "pid": current_pid,
-                        "is_current": True,
-                        "uptime_seconds": int(current_uptime),
-                        "status": getattr(current_proc, "status", lambda: "unknown")(),
-                    }
-                )
-        except Exception:
-            current_uptime = 0.0
-
-    from src.mcp_handlers import TOOL_HANDLERS
-
-    payload = {
-        "transport": transport,
-        "server_version": server_version,
-        "build_date": server_build_date,
-        "tool_count": len(TOOL_HANDLERS),
-        "current_pid": current_pid,
-        "current_uptime_seconds": int(current_uptime),
-        "server_processes": server_processes,
-        "health": "healthy",
-    }
+    payload = build_server_info_payload()
     # FIND-R3 fold: BEAM caller knows this PID/transport describes the
     # Python probe process and may inject its own values before returning
     # to its caller.
