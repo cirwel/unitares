@@ -77,6 +77,6 @@ classes:
       Action taken despite insufficient validation, hidden failure state,
       or unresolved uncertainty.
     surfaces:
-      watcher_patterns: [P006, P008, P013, P014, P015]
+      watcher_patterns: [P006, P013, P014, P015]  # P008 demoted to experimental 2026-06-12 (#659); re-add on re-promotion
       sentinel_findings: []
       broadcast_events: []
