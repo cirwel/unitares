@@ -169,18 +169,31 @@ def _strip_schema_descriptions(node: Any) -> Any:
     return node
 
 
-# Identity params that session injection auto-populates (AgentIdentityMixin +
-# agent_name). They stay on the Pydantic model — the handler still accepts them
-# as a same-process escape hatch — but are hidden from the *advertised* schema
-# for tools where the session-start binding fills them in. The effect: a check-in
-# reads as one ambient binding, not four hand-threaded identifiers. This mirrors
-# the existing `inject_action` strip in mcp_server._register_common_aliases:
-# if the surface auto-injects a value, clients shouldn't have to provide it.
+# Identity params hidden from the *advertised* check-in schema. They stay on the
+# Pydantic model — the handler still accepts them as a same-process escape hatch
+# (EXTRA_ARGUMENT_PASSTHROUGH + extra="allow") — but a check-in reads as an
+# ambient binding rather than hand-threaded identifiers. Mirrors the existing
+# `inject_action` strip in mcp_server._register_common_aliases.
+#
+# SCOPE IS DELIBERATELY agent_id + agent_name ONLY. client_session_id and
+# continuity_token are NOT stripped, and that is load-bearing:
+#   - A claude.ai remote-connector client only sends params present in the
+#     advertised inputSchema. These two tools are in
+#     TOOLS_NEEDING_SESSION_INJECTION, so when the client omits client_session_id
+#     the server injects one from context — but for stateless streamable transport
+#     (no Mcp-Session-Id) that injected value is the ip_ua_fingerprint, which
+#     derive_session_key launders into `explicit_client_session_id` (strong/1.0).
+#     The effect: multiple distinct agents behind one gateway IP+UA collapse onto
+#     a single shared-fingerprint identity. Advertising client_session_id lets a
+#     well-behaved agent send its unique agent-{uuid} key instead, keeping
+#     attribution isolated. See tests/test_onboard_pin.py::TestToolSchemaClientSessionId.
+#   - continuity_token has NO injection fallback; stripping it would break
+#     claude.ai cross-instance PATH-0 resume outright.
+# agent_id (structured handle, auto-resolved) and agent_name (cosmetic; the
+# name-claim resolution path was removed 2026-04-17) carry no such dependency.
 _AUTO_INJECTED_IDENTITY_PARAMS = (
     "agent_id",
     "agent_name",
-    "client_session_id",
-    "continuity_token",
 )
 # Canonical tools whose session is auto-injected (TOOLS_NEEDING_SESSION_INJECTION).
 # Their aliases (sync_state, check_working_state) inherit this schema downstream,
