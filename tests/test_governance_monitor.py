@@ -1118,6 +1118,19 @@ class TestMakeDecision:
         assert decision['action'] == 'pause'
         assert decision['critical'] is not None
 
+    def test_high_risk_guidance_states_self_reported_provenance(self, monitor):
+        """Dogfood 2026-06-13 P0: guidance must not claim the system
+        "detected high ethical risk" — the verdict is driven by self-reported
+        signals, not an independent measurement. The copy must say so."""
+        decision = monitor.make_decision(0.8, unitares_verdict='high-risk')
+        guidance = decision['guidance'].lower()
+        # The overclaiming copy is gone...
+        assert 'detected high ethical risk' not in guidance
+        assert 'protecting you' not in guidance
+        # ...replaced with honest provenance.
+        assert 'reported' in guidance
+        assert 'self-attested' in guidance
+
     def test_caution_verdict_low_risk(self, monitor):
         """Caution verdict with low risk should proceed."""
         decision = monitor.make_decision(0.1, unitares_verdict='caution')

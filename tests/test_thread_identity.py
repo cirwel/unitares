@@ -183,6 +183,47 @@ class TestBuildForkContext:
         )
         assert ctx["thread_size"] == 4
 
+    def test_position_note_when_nodes_pruned(self):
+        """Dogfood 2026-06-13 P2.9: position (monotonic claim counter) can
+        exceed thread_size (live node count) when forks are pruned/archived.
+        Label the gap so it isn't read as a contradiction."""
+        # 19 live nodes, but this fork claimed the 24th position ever.
+        nodes = [
+            {"agent_id": f"uuid-{i}", "thread_position": i}
+            for i in range(1, 20)
+        ]
+        ctx = build_fork_context(
+            thread_id="t-pruned",
+            position=24,
+            parent_uuid=None,
+            spawn_reason="new_session",
+            all_nodes=nodes,
+            agent_uuid="uuid-24",
+        )
+        assert ctx["position"] == 24
+        assert ctx["thread_size"] == 19
+        assert "position_note" in ctx
+        assert "24" in ctx["position_note"]
+        assert "19" in ctx["position_note"]
+        assert "prune" in ctx["position_note"].lower()
+
+    def test_no_position_note_when_consistent(self):
+        """No note when position == thread_size (nothing pruned), so the
+        common case stays uncluttered and shape-compatible."""
+        nodes = [
+            {"agent_id": f"uuid-{i}", "thread_position": i}
+            for i in range(1, 5)
+        ]
+        ctx = build_fork_context(
+            thread_id="t-clean",
+            position=4,
+            parent_uuid=None,
+            spawn_reason="new_session",
+            all_nodes=nodes,
+            agent_uuid="uuid-4",
+        )
+        assert "position_note" not in ctx
+
     def test_handler_call_site_signature_contract(self):
         """Pin exact kwargs handlers.py:1946 passes after the 2026-05-02 fix.
 

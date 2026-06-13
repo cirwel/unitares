@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from numbers import Real
 from typing import Any, Dict
@@ -906,7 +906,10 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
             "first_action": first_action,
             "identity_continuity_mode": continuity_status.get("mode", "unknown"),
         },
-        "timestamp": datetime.now().isoformat(),
+        # tz-aware UTC so the health timestamp carries an explicit offset,
+        # matching server_time elsewhere (dogfood 2026-06-13 P1: bare-local
+        # timestamps next to +00:00 fields made duration math 6h wrong).
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
     # Circuit breaker telemetry — surfaced in both lite and full so dashboards

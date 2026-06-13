@@ -164,7 +164,21 @@ def make_decision(
             'action': 'pause',
             'sub_action': 'risk_pause',
             'reason': f'UNITARES high-risk verdict (risk_score={risk_score:.2f}) - safety pause suggested',
-            'guidance': 'This is a safety check, not a failure. The system detected high ethical risk and is protecting you from potential issues. Consider simplifying your approach.',
+            # Honest provenance: the verdict is driven by the signals the caller
+            # reported (ethical_drift, complexity, confidence), not by an
+            # independent measurement of behavior. Saying "the system detected
+            # high ethical risk" overclaimed — at current maturity the only
+            # non-self-attested signal (behavioral text model) does not carry
+            # this weight. See result['risk_attribution'] for the decomposition
+            # (dogfood 2026-06-13, P0).
+            'guidance': (
+                'This is a safety check, not a failure. Based on the signals you '
+                'reported (ethical_drift, complexity, confidence), this check-in '
+                'scored high-risk. These inputs are self-attested — the verdict '
+                'reflects what you reported, not an independent measurement of '
+                'your behavior (see risk_attribution). Consider simplifying your '
+                'approach.'
+            ),
             'critical': is_critical,
             'basin': basin,
             'margin': 'critical',
