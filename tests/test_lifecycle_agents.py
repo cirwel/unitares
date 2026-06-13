@@ -23,6 +23,60 @@ from tests.helpers import parse_result as _parse, make_agent_meta, make_mock_ser
 
 
 # ============================================================================
+# lifecycle schemas
+# ============================================================================
+
+class TestAgentListSchemas:
+    """Schema regressions for dashboard/MCP agent list arguments."""
+
+    def test_consolidated_agent_schema_exposes_list_options(self):
+        from src.mcp_handlers.schemas.lifecycle import AgentParams
+
+        for field in (
+            "include_metrics",
+            "recent_days",
+            "limit",
+            "min_updates",
+            "status_filter",
+            "grouped",
+        ):
+            assert field in AgentParams.model_fields
+
+    def test_agent_list_advanced_options_imply_full_mode(self):
+        from src.mcp_handlers.schemas.lifecycle import AgentParams
+
+        params = AgentParams.model_validate({
+            "action": "list",
+            "include_metrics": True,
+            "recent_days": "30",
+            "limit": "200",
+            "min_updates": "0",
+            "status_filter": "all",
+            "grouped": "false",
+        }).model_dump()
+
+        assert params["lite"] is False
+        assert params["include_metrics"] is True
+        assert params["recent_days"] == 30
+        assert params["limit"] == 200
+        assert params["min_updates"] == 0
+        assert params["status_filter"] == "all"
+        assert params["grouped"] is False
+
+    def test_explicit_lite_true_is_respected_with_list_options(self):
+        from src.mcp_handlers.schemas.lifecycle import AgentParams
+
+        params = AgentParams.model_validate({
+            "action": "list",
+            "lite": "true",
+            "include_metrics": True,
+            "limit": 200,
+        }).model_dump()
+
+        assert params["lite"] is True
+
+
+# ============================================================================
 # handle_list_agents - Lite Mode
 # ============================================================================
 

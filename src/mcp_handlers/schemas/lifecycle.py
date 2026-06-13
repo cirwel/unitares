@@ -3,20 +3,117 @@ from pydantic import Field, model_validator
 from .mixins import AgentIdentityMixin
 
 
-class ListAgentsParams(AgentIdentityMixin):
-    """
-    List all agents currently being monitored with lifecycle metadata and health status
-    """
+def _coerce_optional_bool(value):
+    if isinstance(value, str):
+        return value.lower() in ('true', '1', 'yes')
+    return value
+
+
+def _coerce_optional_int(value):
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    return value
+
+
+class ListAgentOptionsMixin:
     lite: Union[bool, str, None] = Field(
         default=True,
         description="LITE MODE: Use lite=true for minimal response (~1KB vs ~15KB)."
     )
+    grouped: Union[bool, str] = Field(
+        default=True,
+        description="Group returned agents by lifecycle status in full mode."
+    )
+    include_metrics: Union[bool, str] = Field(
+        default=True,
+        description="Include governance metrics and health status in full mode."
+    )
+    loaded_only: Union[bool, str] = Field(
+        default=False,
+        description="Only include agents whose monitors are already loaded in memory."
+    )
+    summary_only: Union[bool, str] = Field(
+        default=False,
+        description="Return only summary counts instead of agent rows."
+    )
+    standardized: Union[bool, str] = Field(
+        default=True,
+        description="Include standardized response fields."
+    )
+    include_test_agents: Union[bool, str] = Field(
+        default=False,
+        description="Include test/pytest agents; filtered out by default."
+    )
+    named_only: Union[bool, str, None] = Field(
+        default=None,
+        description="If true, include only labeled agents. If omitted, compact mode hides ghosts."
+    )
+    status_filter: str = Field(
+        default="active",
+        description="Lifecycle status filter: active, waiting_input, paused, archived, deleted, unknown, or all."
+    )
+    min_updates: Union[int, str] = Field(
+        default=0,
+        description="Minimum total update/check-in count."
+    )
+    recent_days: Optional[Union[int, str]] = Field(
+        default=None,
+        description="Only include agents active in the last N days. Use 0 for all."
+    )
+    limit: Optional[Union[int, str]] = Field(
+        default=None,
+        description="Maximum number of agents to return."
+    )
+    offset: Union[int, str] = Field(
+        default=0,
+        description="Pagination offset for full-mode responses."
+    )
 
     @model_validator(mode='after')
-    def coerce_booleans(self):
-        if isinstance(self.lite, str):
-            self.lite = self.lite.lower() in ('true', '1', 'yes')
+    def coerce_list_options(self):
+        provided_fields = set(getattr(self, 'model_fields_set', set()))
+        for field in (
+            'lite',
+            'grouped',
+            'include_metrics',
+            'loaded_only',
+            'summary_only',
+            'standardized',
+            'include_test_agents',
+            'named_only',
+        ):
+            setattr(self, field, _coerce_optional_bool(getattr(self, field)))
+        for field in ('min_updates', 'recent_days', 'limit', 'offset'):
+            setattr(self, field, _coerce_optional_int(getattr(self, field)))
+        if 'lite' not in provided_fields:
+            advanced_requested = (
+                ('include_metrics' in provided_fields and self.include_metrics is True)
+                or ('limit' in provided_fields and self.limit is not None)
+                or ('offset' in provided_fields and self.offset is not None)
+                or (
+                    'status_filter' in provided_fields
+                    and self.status_filter not in (None, 'active')
+                )
+                or (
+                    'include_test_agents' in provided_fields
+                    and self.include_test_agents is True
+                )
+                or ('summary_only' in provided_fields and self.summary_only is True)
+                or ('grouped' in provided_fields and self.grouped is False)
+            )
+            if advanced_requested:
+                self.lite = False
         return self
+
+
+class ListAgentsParams(ListAgentOptionsMixin, AgentIdentityMixin):
+    """
+    List all agents currently being monitored with lifecycle metadata and health status
+    """
+    pass
 
 
 class GetAgentMetadataParams(AgentIdentityMixin):
@@ -198,7 +295,7 @@ class PingAgentParams(AgentIdentityMixin):
         ..., description="UUID or label of agent to ping."
     )
 
-class AgentParams(AgentIdentityMixin):
+class AgentParams(ListAgentOptionsMixin, AgentIdentityMixin):
     """Parameters for agent"""
     action: Literal["list", "get", "update", "archive", "resume", "delete"] = Field(..., description="Operation to perform (alias: op)")
     op: Optional[Literal["list", "get", "update", "archive", "resume", "delete"]] = Field(None, description="Alias for action. Use action or op.")
@@ -224,5 +321,3 @@ class OperatorResumeAgentParams(AgentIdentityMixin):
 
 class DirectResumeIfSafeParams(AgentIdentityMixin):
     """Parameters for direct_resume_if_safe"""
-
-
