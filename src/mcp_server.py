@@ -545,30 +545,10 @@ def _register_common_aliases():
                 actual_schema["required"] = [r for r in req if r != "action"]
 
         try:
-            # Create a handler that resolves the alias to the actual tool name
-            # and auto-injects the action parameter if the alias defines one
-            inject_action = info.inject_action
-            def make_alias_handler(actual_name, action_to_inject):
-                """Closure factory — captures actual_name and action per alias."""
-                base_handler = get_tool_wrapper(actual_name)
-                if action_to_inject:
-                    async def aliased_handler(**kwargs):
-                        kwargs.setdefault("action", action_to_inject)
-                        return await base_handler(**kwargs)
-                    return aliased_handler
-                return base_handler
-
-            alias_handler = make_alias_handler(actual, inject_action)
-
-            # get_handler is called with tool_name at dispatch time, so we
-            # return the pre-built alias_handler regardless of the name passed in
-            def alias_get_handler(name, _h=alias_handler):
-                return _h
-
             wrapper = create_typed_wrapper(
                 tool_name=alias_name,
                 input_schema=actual_schema,
-                get_handler=alias_get_handler,
+                get_handler=get_tool_wrapper,
                 inject_session=actual in TOOLS_NEEDING_SESSION_INJECTION,
                 session_extractor=_session_id_from_ctx,
             )
