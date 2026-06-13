@@ -297,3 +297,49 @@ async def test_mixin_runs_partition_maintenance_once_for_missing_outcome_partiti
     assert "verification_source" in conn.calls[0][0]
     assert "SELECT audit.partition_maintenance()" == conn.calls[1][0]
     assert "verification_source" in conn.calls[2][0]
+
+
+@pytest.mark.asyncio
+async def test_mixin_stamps_corroboration_metadata_into_detail():
+    conn = _FakeOutcomeConn(["outcome-id"])
+    db = _OutcomeMixinHarness(conn)
+
+    result = await db.record_outcome_event(
+        agent_id="agent-1",
+        outcome_type="task_completed",
+        is_bad=False,
+        detail={"summary": "I completed the task."},
+        verification_source="agent_reported_tool_result",
+    )
+
+    assert result == "outcome-id"
+    detail = json.loads(conn.calls[0][1][13])
+    assert detail["corroboration_grade"] == "claim_only"
+    assert detail["evidence_weight"] == 0.10
+    assert detail["claim_risk"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_inline_outcome_response_echoes_corroboration_metadata():
+    from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+
+    db = MagicMock()
+    db.get_latest_eisv_by_agent_id = AsyncMock(return_value=None)
+    db.get_latest_confidence_before = AsyncMock(return_value=None)
+    db.record_outcome_event = AsyncMock(return_value="outcome-id")
+
+    with patch("src.db.get_db", return_value=db):
+        payload = await _record_outcome_event_inline({
+            "agent_id": "agent-1",
+            "outcome_type": "task_completed",
+            "detail": {"summary": "Finished the work."},
+            "verification_source": "agent_reported_tool_result",
+        })
+
+    assert payload["corroboration_grade"] == "claim_only"
+    assert payload["evidence_weight"] == 0.10
+    assert payload["claim_risk"] == "high"
+    persisted_detail = db.record_outcome_event.await_args.kwargs["detail"]
+    assert persisted_detail["corroboration_grade"] == "claim_only"
+    assert persisted_detail["eprocess_eligible"] is False
+    assert persisted_detail["hard_exogenous"] is False

@@ -1751,6 +1751,22 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                 _db = get_db()
                 if _db:
                     _summary = ctx.response_text[:500] if len(ctx.response_text) > 500 else ctx.response_text
+                    _detail = {
+                        'source': 'auto_checkin',
+                        'complexity': ctx.complexity,
+                        'confidence': ctx.arguments.get('confidence'),
+                        'summary': _summary,
+                    }
+                    from src.outcome_corroboration import (
+                        GRADE_WEIGHTS,
+                        TOOL_OBSERVED,
+                        assess_outcome_corroboration,
+                    )
+                    _assessment = assess_outcome_corroboration(
+                        'task_completed',
+                        _detail,
+                        'agent_reported_tool_result',
+                    )
                     ctx.outcome_event_id = await _db.record_outcome_event(
                         agent_id=agent_id,
                         outcome_type='task_completed',
@@ -1765,12 +1781,7 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                         eisv_verdict=ctx.metrics_dict.get('verdict'),
                         eisv_coherence=ctx.metrics_dict.get('coherence'),
                         eisv_regime=ctx.metrics_dict.get('regime'),
-                        detail={
-                            'source': 'auto_checkin',
-                            'complexity': ctx.complexity,
-                            'confidence': ctx.arguments.get('confidence'),
-                            'summary': _summary,
-                        },
+                        detail=_detail,
                         # Inferred from keyword regex over agent's own
                         # response_text — closest match in v1 enum.
                         verification_source='agent_reported_tool_result',
@@ -1779,7 +1790,10 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                         logger.debug(f"Auto-emitted outcome event {ctx.outcome_event_id} for {agent_id}")
                         # Record calibration from auto-emitted positive outcome
                         _conf = ctx.confidence
-                        if _conf is not None:
+                        if (
+                            _conf is not None
+                            and _assessment.evidence_weight >= GRADE_WEIGHTS[TOOL_OBSERVED]
+                        ):
                             try:
                                 from src.calibration import calibration_checker
                                 _outcome_score = min(1.0, _coherence_for_outcome * 1.5)
@@ -1802,6 +1816,23 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                     if _db:
                         _summary = ctx.response_text[:500] if len(ctx.response_text) > 500 else ctx.response_text
                         _bad_score = max(0.0, 1.0 - _coherence_for_outcome * 1.5)
+                        _detail = {
+                            'source': 'auto_checkin',
+                            'complexity': ctx.complexity,
+                            'confidence': ctx.arguments.get('confidence'),
+                            'summary': _summary,
+                            'is_negative': True,
+                        }
+                        from src.outcome_corroboration import (
+                            GRADE_WEIGHTS,
+                            TOOL_OBSERVED,
+                            assess_outcome_corroboration,
+                        )
+                        _assessment = assess_outcome_corroboration(
+                            'task_failed',
+                            _detail,
+                            'agent_reported_tool_result',
+                        )
                         _bad_oid = await _db.record_outcome_event(
                             agent_id=agent_id,
                             outcome_type='task_failed',
@@ -1816,13 +1847,7 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                             eisv_verdict=ctx.metrics_dict.get('verdict'),
                             eisv_coherence=ctx.metrics_dict.get('coherence'),
                             eisv_regime=ctx.metrics_dict.get('regime'),
-                            detail={
-                                'source': 'auto_checkin',
-                                'complexity': ctx.complexity,
-                                'confidence': ctx.arguments.get('confidence'),
-                                'summary': _summary,
-                                'is_negative': True,
-                            },
+                            detail=_detail,
                             # Same regex-on-response-text inference as
                             # task_completed above; not server-observed.
                             verification_source='agent_reported_tool_result',
@@ -1830,7 +1855,10 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                         if _bad_oid:
                             logger.debug(f"Auto-emitted negative outcome event {_bad_oid} for {agent_id}")
                             _conf = ctx.confidence
-                            if _conf is not None:
+                            if (
+                                _conf is not None
+                                and _assessment.evidence_weight >= GRADE_WEIGHTS[TOOL_OBSERVED]
+                            ):
                                 try:
                                     from src.calibration import calibration_checker
                                     calibration_checker.record_prediction(

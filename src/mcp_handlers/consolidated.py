@@ -7,7 +7,7 @@ Reduces cognitive load for AI agents by consolidating related tools:
 - calibration: 4 actions → 1 tool (check, update, backfill, rebuild)
 - config: 2 actions → 1 tool (get, set)
 - export: 2 actions → 1 tool (history, file)
-- observe: 5 actions → 1 tool (agent, compare, similar, anomalies, aggregate)
+- observe: observation and audit actions → 1 tool
 - pi: 12 actions → 1 tool (tools, context, health, sync_eisv, display, say, message, qa, query, workflow, git_pull, power)
 - dialectic: 2 actions → 1 tool (get, list)
 
@@ -63,6 +63,7 @@ from .observability.handlers import (
     handle_compare_me_to_similar,
     handle_detect_anomalies,
     handle_aggregate_metrics,
+    handle_outcome_evidence,
     handle_audit_events,
 )
 from .dialectic.handlers import (
@@ -230,12 +231,14 @@ handle_observe = action_router(
         "aggregate": handle_aggregate_metrics,
         "telemetry": handle_get_telemetry_metrics,
         "audit_events": handle_audit_events,
+        "outcome_evidence": handle_outcome_evidence,
     },
     timeout=15.0,
-    description="Unified observability operations: agent, compare, similar, anomalies, aggregate, telemetry, audit_events",
+    description="Unified observability operations: agent, compare, similar, anomalies, aggregate, telemetry, audit_events, outcome_evidence",
     # #425 action-level identity: the analysis reads (incl. the
-    # dashboard's anomalies/compare) serve unbound; telemetry and
-    # audit_events are operator surfaces and stay identity-gated.
+    # dashboard's anomalies/compare) serve unbound; telemetry,
+    # audit_events, and outcome_evidence are operator surfaces and stay
+    # identity-gated.
     pre_onboard_actions={"agent", "compare", "similar", "anomalies", "aggregate"},
     examples=[
         "observe(action='agent', agent_id='claude-opus-20251215')",
@@ -245,6 +248,7 @@ handle_observe = action_router(
         "observe(action='aggregate')",
         "observe(action='telemetry')",
         "observe(action='audit_events', event_type='continuity_token_deprecated_accept', since='14d')",
+        "observe(action='outcome_evidence', diagnostic='claim_only_task_completed')",
     ],
 )
 

@@ -156,7 +156,7 @@ def test_write_actions_never_in_exemption_sets():
         "calibration": {"update", "backfill", "rebuild"},
         "config": {"set"},
         "dialectic": {"quick", "request", "thesis", "antithesis", "synthesis", "reassign"},
-        "observe": {"telemetry", "audit_events"},  # operator surfaces, kept gated
+        "observe": {"telemetry", "audit_events", "outcome_evidence"},  # operator surfaces, kept gated
     }
     for tool, write_set in writes.items():
         td = get_tool_definition(tool)

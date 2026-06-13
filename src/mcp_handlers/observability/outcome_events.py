@@ -15,7 +15,14 @@ from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from src.services.runtime_queries import _build_eisv_semantics
 from src.monitor_prediction import lookup_prediction, consume_prediction
+from src.outcome_corroboration import (
+    GRADE_WEIGHTS,
+    TOOL_OBSERVED,
+    enrich_detail_with_corroboration,
+)
 logger = get_logger(__name__)
+
+_MIN_TACTICAL_EVIDENCE_WEIGHT = GRADE_WEIGHTS[TOOL_OBSERVED]
 
 # Outcome types that are considered "bad" by default
 BAD_OUTCOME_TYPES = {"test_failed", "tool_rejected", "drawing_abandoned", "task_failed"}
@@ -263,7 +270,21 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     if decision_action is None and outcome_type in {"test_passed", "test_failed"}:
         decision_action = "proceed"
 
+    # Pydantic validation (params_step.py) fills defaults before the MCP
+    # entry point runs, so the schema default ("agent_reported_tool_result")
+    # is already present in `arguments` for that path. In-process callers
+    # (Phase-5 evidence loop, dialectic resolution) pass their own value
+    # explicitly. Default here is the v1 schema default for safety.
+    verification_source = arguments.get("verification_source") or "agent_reported_tool_result"
+    detail = enrich_detail_with_corroboration(
+        detail,
+        outcome_type=outcome_type,
+        verification_source=verification_source,
+    )
+    evidence_weight = float(detail.get("evidence_weight") or 0.0)
     hard_exogenous_signal = _classify_hard_exogenous_signal(outcome_type, detail)
+    if evidence_weight < _MIN_TACTICAL_EVIDENCE_WEIGHT:
+        hard_exogenous_signal = None
     eprocess_eligible = bool(hard_exogenous_signal and _confidence is not None)
 
     detail["reported_confidence"] = _confidence
@@ -274,12 +295,6 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     detail["prediction_id"] = prediction_id
     detail["prediction_source"] = prediction_source
     detail["prediction_binding"] = prediction_binding
-    # Pydantic validation (params_step.py) fills defaults before the MCP
-    # entry point runs, so the schema default ("agent_reported_tool_result")
-    # is already present in `arguments` for that path. In-process callers
-    # (Phase-5 evidence loop, dialectic resolution) pass their own value
-    # explicitly. Default here is the v1 schema default for safety.
-    verification_source = arguments.get("verification_source") or "agent_reported_tool_result"
 
     # Insert
     outcome_id = await db.record_outcome_event(
@@ -309,7 +324,7 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     )
 
     # Record calibration from outcome event
-    if _confidence is not None:
+    if _confidence is not None and evidence_weight >= _MIN_TACTICAL_EVIDENCE_WEIGHT:
         try:
             from src.calibration import calibration_checker
             calibration_checker.record_prediction(
@@ -370,6 +385,12 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
         "outcome_score": outcome_score,
         "eisv_snapshot": snapshot,
         "prediction_binding": prediction_binding,
+        "corroboration_grade": detail.get("corroboration_grade"),
+        "evidence_weight": detail.get("evidence_weight"),
+        "claim_risk": detail.get("claim_risk"),
+        "claimed_fields": detail.get("claimed_fields"),
+        "verified_fields": detail.get("verified_fields"),
+        "unverified_fields": detail.get("unverified_fields"),
     }
 
 

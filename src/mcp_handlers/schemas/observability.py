@@ -54,19 +54,25 @@ class AggregateMetricsParams(AgentIdentityMixin):
 
 class ObserveParams(AgentIdentityMixin):
     """Parameters for observe"""
-    action: Literal["agent", "compare", "similar", "anomalies", "aggregate", "telemetry", "audit_events"] = Field(..., description="Operation to perform")
+    action: Literal["agent", "compare", "similar", "anomalies", "aggregate", "telemetry", "audit_events", "outcome_evidence"] = Field(..., description="Operation to perform")
     target_agent_id: Optional[str] = Field(None, description="Agent to observe — UUID or label (for action=agent). Use list_agents to find.")
     agent_ids: Optional[List[Any]] = Field(None, description="Agent identifiers to compare (for action=compare, min 2)")
     include_history: bool = Field(True, description="Include recent history (for action=agent). Default true.")
     analyze_patterns: bool = Field(True, description="Perform pattern analysis (for action=agent). Default true.")
     compare_metrics: Optional[List[Any]] = Field(None, description="Metrics to compare (for action=compare). Default: risk_score, coherence, E, I, S, V")
-    limit: Optional[int] = Field(None, description="Max results to return (for action=similar, anomalies, audit_events)")
+    limit: Optional[int] = Field(None, description="Max results to return (for action=similar, anomalies, audit_events, outcome_evidence)")
     event_type: Optional[str] = Field(None, description="Audit event type to filter on (for action=audit_events)")
     event_types: Optional[List[str]] = Field(None, description="IN-list of audit event types (for action=audit_events, alternative to event_type)")
-    since: Optional[str] = Field(None, description="Window start: '14d'/'24h'/'30m' shorthand or ISO 8601 (for action=audit_events). Default 24h.")
+    since: Optional[str] = Field(None, description="Window start: '14d'/'24h'/'30m' shorthand or ISO 8601 (for action=audit_events/outcome_evidence). Default 7d.")
     until: Optional[str] = Field(None, description="Window end: ISO 8601 (for action=audit_events). Default now.")
-    include_events: bool = Field(False, description="Include event payloads in response (for action=audit_events). Default false — counts only.")
+    include_events: Optional[bool] = Field(None, description="Include event payloads in response. audit_events defaults false; outcome_evidence defaults true except agent_summary.")
     include_test_fixtures: bool = Field(True, description="Include agents matching Test_Agent_* fixture pattern (for action=audit_events). Default true.")
+    diagnostic: Optional[Literal["claim_only_task_completed", "agent_summary", "field_verification", "events"]] = Field(None, description="Outcome evidence diagnostic mode (for action=outcome_evidence).")
+    outcome_type: Optional[str] = Field(None, description="Outcome type filter (for action=outcome_evidence).")
+    corroboration_grade: Optional[str] = Field(None, description="Corroboration grade filter (for action=outcome_evidence).")
+    min_completions: Optional[int] = Field(None, description="Minimum task_completed rows before low-corroboration agent flagging.")
+    low_weight_threshold: Optional[float] = Field(None, description="Average evidence_weight threshold for low-corroboration agent flagging.")
+    include_detail: bool = Field(False, description="Include full outcome_event detail JSON in outcome_evidence events.")
 
 class OutcomeCorrelationParams(AgentIdentityMixin):
     """Run outcome correlation study: does EISV instability predict bad outcomes?"""

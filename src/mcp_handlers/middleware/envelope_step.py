@@ -233,7 +233,16 @@ def build_experience_envelope(
         )
 
     elif canonical_name == "outcome_event":
-        state_summary = _lift(payload, "outcome_id", "outcome_type", "outcome_score", "recorded_at")
+        state_summary = _lift(
+            payload,
+            "outcome_id",
+            "outcome_type",
+            "outcome_score",
+            "recorded_at",
+            "corroboration_grade",
+            "evidence_weight",
+            "claim_risk",
+        )
         snapshot = payload.get("eisv_snapshot")
         if isinstance(snapshot, dict):
             compact = _compact_eisv(snapshot)

@@ -1,4 +1,4 @@
-"""End-to-end: posting outcome_event must populate per-channel tactical state.
+"""End-to-end: posting corroborated outcome_event rows populate tactical state.
 
 The integration surface is heavy (mcp_server monitors, db pool, eisv snapshot
 pipeline). To stay focused on the wiring change in Task 3, this test mocks the
@@ -67,7 +67,7 @@ def _patch_handler_deps(monkeypatch, agent_id="test-agent"):
 
 @pytest.mark.asyncio
 class TestOutcomeEventToTacticalChannel:
-    async def test_task_completed_populates_tasks_channel(self, fresh_checker, monkeypatch):
+    async def test_claim_only_task_completed_does_not_populate_tasks_channel(self, fresh_checker, monkeypatch):
         _patch_handler_deps(monkeypatch)
 
         await handle_outcome_event({
@@ -75,6 +75,25 @@ class TestOutcomeEventToTacticalChannel:
             "agent_id": "test-agent",
             "confidence": 0.8,
             "outcome_score": 1.0,
+        })
+
+        per_channel = fresh_checker.compute_tactical_metrics_per_channel()
+        assert "tasks" not in per_channel
+
+    async def test_tool_observed_task_completed_populates_tasks_channel(self, fresh_checker, monkeypatch):
+        _patch_handler_deps(monkeypatch)
+
+        await handle_outcome_event({
+            "outcome_type": "task_completed",
+            "agent_id": "test-agent",
+            "confidence": 0.8,
+            "outcome_score": 1.0,
+            "detail": {
+                "phase5_emitter": True,
+                "kind": "command",
+                "tool": "make",
+                "exit_code": 0,
+            },
         })
 
         per_channel = fresh_checker.compute_tactical_metrics_per_channel()
@@ -89,6 +108,12 @@ class TestOutcomeEventToTacticalChannel:
             "agent_id": "test-agent",
             "confidence": 0.6,
             "outcome_score": 0.0,
+            "detail": {
+                "phase5_emitter": True,
+                "kind": "command",
+                "tool": "make",
+                "exit_code": 1,
+            },
         })
 
         per_channel = fresh_checker.compute_tactical_metrics_per_channel()
@@ -103,6 +128,12 @@ class TestOutcomeEventToTacticalChannel:
             "agent_id": "test-agent",
             "confidence": 0.9,
             "outcome_score": 1.0,
+            "detail": {
+                "phase5_emitter": True,
+                "kind": "test",
+                "tool": "pytest",
+                "exit_code": 0,
+            },
         })
 
         per_channel = fresh_checker.compute_tactical_metrics_per_channel()

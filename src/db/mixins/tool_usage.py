@@ -80,10 +80,16 @@ class ToolUsageMixin:
         the CHECK constraint rejects other strings. Optional for backwards
         compatibility with pre-Phase-1 callers; future migration will require it.
         """
+        from src.outcome_corroboration import enrich_detail_with_corroboration
         from config.governance_config import GovernanceConfig
+        corroborated_detail = enrich_detail_with_corroboration(
+            detail,
+            outcome_type=outcome_type,
+            verification_source=verification_source,
+        )
         async with self.acquire() as conn:
             def _detail_json(*, legacy_verification_source: bool = False) -> str:
-                payload = dict(detail or {})
+                payload = dict(corroborated_detail)
                 if legacy_verification_source and verification_source is not None:
                     payload.setdefault("verification_source", verification_source)
                 return json.dumps(payload)

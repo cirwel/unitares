@@ -86,7 +86,11 @@ _DESCRIPTION_APPENDICES = {
         "- decision_action: decision taken, e.g. proceed or pause\n"
         "- session_id: optional session id; falls back to client_session_id/context\n"
         "- verification_source: agent_reported_tool_result | server_observation | "
-        "external_signal"
+        "external_signal\n"
+        "- response/detail corroboration metadata: corroboration_grade, "
+        "evidence_weight, claim_risk, claimed_fields, verified_fields, "
+        "unverified_fields. Agent-reported task_completed summaries with no "
+        "independent evidence are claim_only and low-weight."
     ),
 }
 
