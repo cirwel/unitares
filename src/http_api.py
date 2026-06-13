@@ -1936,6 +1936,119 @@ async def http_record_finding(request):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+async def http_substrate_observe(request):
+    """POST /v1/substrate/observe — the identity-free check-in FLOOR.
+
+    A row here is a MEASUREMENT that a session ran but never onboarded — not a
+    claim that an agent declared an identity. This endpoint deliberately does
+    NOT go through the identity middleware: there is no sticky-cache resolution,
+    no auto-mint, no agent row. The caller's `slot_key` (the Claude session id,
+    sourced from the Stop-hook stdin) is stored verbatim as the disambiguator,
+    so parallel localhost sessions never collapse onto one identity. The
+    transport fingerprint is measured server-side for collision awareness only.
+
+    Nothing in the trajectory/trust/calibration/EISV/similarity path reads
+    core.substrate_observations. It exists to turn the silent 0 into a number.
+
+    Body: {"slot_key": "...", "event"?, "tool_count"?, "summary_excerpt"?,
+           "plugin_version"?}
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return _http_unauthorized()
+    try:
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"success": False, "error": "Invalid JSON"}, status_code=400)
+        if not isinstance(payload, dict):
+            return JSONResponse({"success": False, "error": "Body must be a JSON object"}, status_code=400)
+
+        slot_key = payload.get("slot_key")
+        if not isinstance(slot_key, str) or not slot_key.strip():
+            return JSONResponse(
+                {"success": False, "error": "Missing or invalid 'slot_key'"},
+                status_code=400,
+            )
+        slot_key = slot_key.strip()[:256]
+        event = str(payload.get("event") or "turn_stop")[:64]
+        try:
+            tool_count = int(payload.get("tool_count") or 0)
+        except (TypeError, ValueError):
+            tool_count = 0
+        tool_count = max(0, min(tool_count, 100000))
+        summary = payload.get("summary_excerpt")
+        summary = (str(summary)[:512] if summary is not None else None)
+        plugin_version = payload.get("plugin_version")
+        plugin_version = (str(plugin_version)[:64] if plugin_version is not None else None)
+
+        # Measure the transport fingerprint server-side (collision awareness only).
+        try:
+            fingerprint = _build_http_session_signals(request).ip_ua_fingerprint
+        except Exception:
+            fingerprint = None
+
+        from src.db import get_db
+        db = get_db()
+        async with db.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO core.substrate_observations
+                    (slot_key, fingerprint, event, tool_count, summary_excerpt, plugin_version)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                """,
+                slot_key, fingerprint, event, tool_count, summary, plugin_version,
+            )
+        return JSONResponse({"success": True}, status_code=201)
+    except Exception as e:
+        logger.error(f"Error recording substrate observation: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+async def http_substrate_dark_sessions(request):
+    """GET /v1/substrate/dark_sessions?window_hours=24 — the coverage-gap dial.
+
+    Counts the floor: distinct session slots that produced substrate
+    observations in the window (sessions that ran but never onboarded), plus
+    the raw observation count. This is the measured form of the old silent 0 —
+    a compliance-gap metric, NOT a coverage success. `adoption_kpi.py` must
+    keep it separate from real check-in coverage.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return _http_unauthorized()
+    try:
+        try:
+            window_hours = float(request.query_params.get("window_hours", "24"))
+        except (TypeError, ValueError):
+            window_hours = 24.0
+        window_hours = max(0.1, min(window_hours, 24 * 90))
+
+        from src.db import get_db
+        db = get_db()
+        async with db.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT COUNT(DISTINCT slot_key) AS distinct_slots,
+                       COUNT(*)                 AS total_observations,
+                       COUNT(DISTINCT slot_key) FILTER (WHERE claimed_by_uuid IS NULL) AS unclaimed_slots
+                FROM core.substrate_observations
+                WHERE observed_at >= now() - make_interval(secs => $1)
+                """,
+                window_hours * 3600.0,
+            )
+        return JSONResponse({
+            "success": True,
+            "window_hours": window_hours,
+            "dark_sessions": int(row["distinct_slots"]) if row else 0,
+            "unclaimed_sessions": int(row["unclaimed_slots"]) if row else 0,
+            "total_observations": int(row["total_observations"]) if row else 0,
+        })
+    except Exception as e:
+        logger.error(f"Error reading substrate dark sessions: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
 # Incident history endpoint (anomalies + stuck agents from audit log)
 async def http_incidents(request):
     """Return historical anomaly and stuck-agent incidents from the audit trail."""
@@ -2661,6 +2774,8 @@ def register_http_routes(
     app.routes.append(Route("/v1/lifecycle/recent", http_lifecycle_recent, methods=["GET"]))
     app.routes.append(Route("/api/events", http_events, methods=["GET"]))
     app.routes.append(Route("/api/findings", http_record_finding, methods=["POST"]))
+    app.routes.append(Route("/v1/substrate/observe", http_substrate_observe, methods=["POST"]))
+    app.routes.append(Route("/v1/substrate/dark_sessions", http_substrate_dark_sessions, methods=["GET"]))
     app.routes.append(Route("/v1/metrics", http_post_metric, methods=["POST"]))
     app.routes.append(Route("/v1/metrics/series", http_get_metrics, methods=["GET"]))
     app.routes.append(Route("/v1/metrics/catalog", http_get_metrics_catalog, methods=["GET"]))
