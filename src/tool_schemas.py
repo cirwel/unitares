@@ -169,6 +169,47 @@ def _strip_schema_descriptions(node: Any) -> Any:
     return node
 
 
+# Identity params that session injection auto-populates (AgentIdentityMixin +
+# agent_name). They stay on the Pydantic model — the handler still accepts them
+# as a same-process escape hatch — but are hidden from the *advertised* schema
+# for tools where the session-start binding fills them in. The effect: a check-in
+# reads as one ambient binding, not four hand-threaded identifiers. This mirrors
+# the existing `inject_action` strip in mcp_server._register_common_aliases:
+# if the surface auto-injects a value, clients shouldn't have to provide it.
+_AUTO_INJECTED_IDENTITY_PARAMS = (
+    "agent_id",
+    "agent_name",
+    "client_session_id",
+    "continuity_token",
+)
+# Canonical tools whose session is auto-injected (TOOLS_NEEDING_SESSION_INJECTION).
+# Their aliases (sync_state, check_working_state) inherit this schema downstream,
+# so stripping here at the canonical source covers the alias surfaces too.
+_HIDE_IDENTITY_PARAMS_TOOLS = {
+    "process_agent_update",
+    "get_governance_metrics",
+}
+
+
+def _hide_auto_injected_identity(schema: Any) -> Any:
+    """Drop session-auto-injected identity params from an advertised schema.
+
+    Returns a copy; never mutates the (pydantic-cached) input dict.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    import copy
+    schema = copy.deepcopy(schema)
+    props = schema.get("properties")
+    if isinstance(props, dict):
+        for name in _AUTO_INJECTED_IDENTITY_PARAMS:
+            props.pop(name, None)
+    req = schema.get("required")
+    if isinstance(req, list):
+        schema["required"] = [r for r in req if r not in _AUTO_INJECTED_IDENTITY_PARAMS]
+    return schema
+
+
 def get_tool_definitions(verbosity: str | None = None) -> list[Tool]:
     """Build the list of MCP Tool objects from Pydantic schemas + descriptions."""
     if verbosity is None:
@@ -240,6 +281,8 @@ def get_tool_definitions(verbosity: str | None = None) -> list[Tool]:
 
     # Apply verbosity and field description stripping
     for t in all_tools:
+        if t.name in _HIDE_IDENTITY_PARAMS_TOOLS:
+            t.inputSchema = _hide_auto_injected_identity(t.inputSchema)
         if verbosity == "short":
             t.description = _first_line(t.description)
         if strip_field_descriptions:
