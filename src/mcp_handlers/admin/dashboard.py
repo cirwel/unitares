@@ -3,6 +3,8 @@
 Bypasses session binding so visualizers and dashboards can see the full system.
 """
 
+import asyncio
+import os
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Sequence
 from mcp.types import TextContent
@@ -15,13 +17,55 @@ from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+# Inner deadline for the one slow external call — the full-fleet state read.
+# The @mcp_tool decorator's 15s timeout is a HARD backstop, not a fine-grained
+# guard: without an inner deadline a hung or scheduler-amplified DB read (see
+# CLAUDE.md "Substrate Tax" — a documented ~60x in-handler amplification) makes
+# the whole dashboard hang the full 15s and then fail outright, even though the
+# in-memory metadata and live ODE overlay needed for a useful overview are
+# already on hand. This budget degrades to that in-memory view fast instead.
+# Generous relative to the ≤500ms Redis guards because a full-fleet state query
+# legitimately does more work; override via env for tighter/looser tuning.
+_DASHBOARD_DB_BUDGET_S_DEFAULT = 5.0
+
+
+def _dashboard_db_budget_s() -> float:
+    """Inner DB-read budget in seconds (env-overridable, falls back on garbage)."""
+    raw = os.environ.get("UNITARES_DASHBOARD_DB_BUDGET_S")
+    if raw is None:
+        return _DASHBOARD_DB_BUDGET_S_DEFAULT
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return _DASHBOARD_DB_BUDGET_S_DEFAULT
+    return value if value > 0 else _DASHBOARD_DB_BUDGET_S_DEFAULT
+
 
 @mcp_tool("dashboard", timeout=15.0, description="Read-only system overview: all agents with EISV state. No session binding required.")
 async def handle_dashboard(arguments: ToolArgumentsDict) -> Sequence[TextContent]:
     """Return all active agents with their current EISV vectors."""
     try:
         db = get_db()
-        states = await db.get_all_latest_agent_states()
+
+        # Inner fast-fail guard. On a hung/amplified read we degrade to the
+        # in-memory overview rather than letting the decorator's 15s backstop
+        # hang the caller and then return nothing useful. A DB *exception*
+        # still falls through to the outer except (full error response) — only
+        # a *slow* read degrades here.
+        db_budget_s = _dashboard_db_budget_s()
+        degraded = False
+        try:
+            states = await asyncio.wait_for(
+                db.get_all_latest_agent_states(), timeout=db_budget_s
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Dashboard DB state read exceeded %.1fs budget — degrading to "
+                "in-memory metadata/ODE overlay (DB-derived EISV omitted this call)",
+                db_budget_s,
+            )
+            states = []
+            degraded = True
 
         # Index states by agent_id — E now comes from s.energy (extracted in _row_to_agent_state)
         state_by_agent: Dict[str, Any] = {}
@@ -139,13 +183,21 @@ async def handle_dashboard(arguments: ToolArgumentsDict) -> Sequence[TextContent
         total = len(agents)
         agents = agents[offset:offset + limit]
 
-        return success_response({
+        response: Dict[str, Any] = {
             "agents": agents,
             "total": total,
             "showing": len(agents),
             "offset": offset,
             "has_more": (offset + len(agents)) < total,
-        })
+            "degraded": degraded,
+        }
+        if degraded:
+            response["degraded_reason"] = (
+                f"DB state read exceeded {db_budget_s:.0f}s inner budget; showing "
+                "in-memory metadata and live ODE overlay only "
+                "(DB-derived EISV omitted this call)"
+            )
+        return success_response(response)
 
     except Exception as e:
         logger.error(f"Dashboard error: {e}")
