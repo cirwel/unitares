@@ -24,6 +24,12 @@ from .context import UpdateContext
 from .pipeline import enrichment
 logger = get_logger(__name__)
 
+# Below this blended relevance, a related-discovery match is noise rather than
+# signal and is not surfaced as a "build on these" suggestion. The score is the
+# post-blend value (semantic similarity blended with connectivity, then decayed),
+# so this floor sits well under the raw similarity gate.
+_RELATED_DISCOVERY_RELEVANCE_FLOOR = 0.1
+
 # ─── Identity Reminder ─────────────────────────────────────────────────
 
 @enrichment(order=10)
@@ -849,12 +855,23 @@ def enrich_saturation_diagnostics(ctx: UpdateContext) -> None:
                 'will_saturate': sat_diag['will_saturate'],
                 'at_boundary': sat_diag['at_boundary'],
                 'I_equilibrium': sat_diag['I_equilibrium_linear'],
+                # Disambiguate from unitares_v41.equilibrium.I_target: this is
+                # the *instantaneous* fixed-point implied by the linear I-channel
+                # at the current state/params, not the prescribed design target
+                # the controller converges toward (dogfood 2026-06-13: 0.52 here
+                # vs 1.0 there, surfaced side by side with no label).
+                'I_equilibrium_kind': 'instantaneous_linear_fixed_point',
                 'forcing_term_A': sat_diag['A'],
                 '_interpretation': (
                     "Positive sat_margin means push-to-boundary (logistic mode will saturate I->1)"
                     if sat_diag['sat_margin'] > 0
                     else "Negative sat_margin - stable interior equilibrium exists"
-                )
+                ),
+                '_equilibrium_note': (
+                    "I_equilibrium is the instantaneous linear fixed-point for current "
+                    "params/state; it is NOT unitares_v41.equilibrium.I_target (the "
+                    "prescribed design attractor the controller converges toward)."
+                ),
             }
     except Exception as e:
         logger.debug(f"Could not compute saturation diagnostics: {e}")
@@ -1067,6 +1084,13 @@ async def enrich_learning_context(ctx: UpdateContext) -> None:
                 if cal_insight is not None:
                     learning_context["calibration"] = {
                         "total_decisions": total,
+                        # Self-describe the denominator so it can't be confused
+                        # with calibration_feedback's sample count (dogfood
+                        # 2026-06-13: two calibration counts in one payload, no
+                        # indication of what each measured). Both count the same
+                        # fleet-wide STRATEGIC trajectory population.
+                        "scope": "fleet",
+                        "population": "strategic_trajectory_decisions",
                         "trajectory_health": round(trajectory_health, 2),
                         "high_confidence_trajectory_health": round(high_conf_trajectory_health, 2),
                         "low_confidence_trajectory_health": round(low_conf_trajectory_health, 2),
@@ -1377,17 +1401,29 @@ async def _search_kg_by_checkin_text(ctx: UpdateContext) -> list:
                 disc, score = item, 0
 
             if isinstance(disc, dict):
+                relevance = score or disc.get("relevance", disc.get("score", 0))
                 entry = {
                     "summary": disc.get("summary", "")[:200],
                     "agent_id": disc.get("agent_id", "unknown"),
-                    "relevance": score or disc.get("relevance", disc.get("score", 0)),
+                    "relevance": relevance,
                 }
             else:
+                relevance = score or getattr(disc, 'relevance', 0)
                 entry = {
                     "summary": getattr(disc, 'summary', "")[:200],
                     "agent_id": getattr(disc, 'agent_id', "unknown"),
-                    "relevance": score or getattr(disc, 'relevance', 0),
+                    "relevance": relevance,
                 }
+            # Drop noise-floor matches. The surfaced relevance is the *blended*
+            # score (similarity*0.7 + connectivity*0.3, then temporal/status
+            # decay), so an entry can clear semantic_search's similarity gate yet
+            # collapse to ~0.05 — surfacing it as "build on these" is noise, not
+            # signal (dogfood 2026-06-13).
+            try:
+                if float(relevance) < _RELATED_DISCOVERY_RELEVANCE_FLOOR:
+                    continue
+            except (TypeError, ValueError):
+                continue
             kg_results.append(entry)
         return kg_results
     except Exception as e:

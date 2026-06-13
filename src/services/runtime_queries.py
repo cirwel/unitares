@@ -308,11 +308,22 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
                 "will_saturate": sat_diag["will_saturate"],
                 "at_boundary": sat_diag["at_boundary"],
                 "I_equilibrium": sat_diag["I_equilibrium_linear"],
+                # Disambiguate from unitares_v41.equilibrium.I_target: this is
+                # the instantaneous linear fixed-point for current params/state,
+                # NOT the prescribed design attractor the controller converges
+                # toward (dogfood 2026-06-13: 0.52 here vs 1.0 there, side by
+                # side with no label).
+                "I_equilibrium_kind": "instantaneous_linear_fixed_point",
                 "forcing_term_A": sat_diag["A"],
                 "_interpretation": (
                     "⚠️ Positive sat_margin means push-to-boundary (logistic mode will saturate I→1)"
                     if sat_diag["sat_margin"] > 0
                     else "✓ Negative sat_margin - stable interior equilibrium exists"
+                ),
+                "_equilibrium_note": (
+                    "I_equilibrium is the instantaneous linear fixed-point for current "
+                    "params/state; it is NOT unitares_v41.equilibrium.I_target (the "
+                    "prescribed design attractor the controller converges toward)."
                 ),
             }
     except Exception as e:

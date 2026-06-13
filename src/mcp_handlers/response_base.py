@@ -2,7 +2,7 @@
 from typing import Dict, Any, Sequence
 from mcp.types import TextContent
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.logging_utils import get_logger
 
@@ -27,7 +27,7 @@ def format_metrics_report(
     standardized["agent_id"] = agent_id
 
     if include_timestamp:
-        standardized["timestamp"] = datetime.now().isoformat()
+        standardized["timestamp"] = datetime.now(timezone.utc).isoformat()
 
     if include_context:
         if "health_status" not in standardized and "health_status" in metrics:
@@ -95,7 +95,10 @@ def success_response(data: Dict[str, Any], agent_id: str = None, arguments: Dict
 
     response = {
         "success": True,
-        "server_time": datetime.now().isoformat(),
+        # tz-aware UTC so server_time carries an explicit offset, matching
+        # tz-aware fields like paused_at (dogfood 2026-06-13: a bare-local
+        # server_time next to a +00:00 paused_at made duration math 6h wrong).
+        "server_time": datetime.now(timezone.utc).isoformat(),
         **data
     }
 

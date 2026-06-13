@@ -1028,10 +1028,22 @@ class UNITARESMonitor:
             )
         else:
             confidence = float(confidence)
+            # Agent-reported confidence is taken at face value, but it has NOT
+            # been validated against any calibration history. Claiming
+            # reliability "high" here contradicted calibration_samples: 0 in the
+            # surfaced response (dogfood 2026-06-13): with zero backing samples
+            # the reliability of the *estimate* is unknown, not high.
             confidence_metadata = {
                 'source': 'external',
-                'reliability': 'high',
+                'reliability': 'unknown',
+                'calibration_applied': False,
+                'calibration_samples': 0,
+                'external_provided': True,
                 'value': confidence,
+                'honesty_note': (
+                    'Agent-reported confidence taken as-is; not validated '
+                    'against calibration history (0 samples).'
+                ),
             }
 
         # Store confidence and metadata for audit logging and transparency

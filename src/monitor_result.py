@@ -1,6 +1,6 @@
 """Result assembly for governance monitor process_update."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict
 
 from governance_core import get_agent_baseline
@@ -129,7 +129,7 @@ def build_result(
         'policy_evaluation': _build_policy_evaluation(decision, metrics),
         'enforcement': _build_enforcement_stub(decision),
         'metrics': metrics,
-        'timestamp': datetime.now().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
         'confidence_reliability': {
             'reliability': confidence_metadata.get('reliability', 'unknown'),
             'source': confidence_metadata.get('source', 'unknown'),

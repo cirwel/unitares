@@ -134,9 +134,41 @@ class TestUpdateDensity:
         for i in range(10):
             p.record_checkin(complexity=0.5, timestamp=now - 1800 + i * 180)
         density = p.update_density
+        assert density is not None
         assert density > 0
         # ~10 updates in 0.5 hours = ~20/hr
         assert density > 10
+
+    def test_short_window_does_not_extrapolate(self):
+        """Two check-ins 36s apart must NOT project to a ~350/hr rate.
+
+        Regression for the flat-prior overclaim (dogfood 2026-06-13): a tiny
+        sample over a few seconds should report None ("not enough window yet"),
+        not a per-hour rate extrapolated from the burst.
+        """
+        p = AgentProfile()
+        now = time.time()
+        p.record_checkin(complexity=0.5, timestamp=now - 36)
+        p.record_checkin(complexity=0.5, timestamp=now)
+        assert p.update_density is None
+
+    def test_short_window_summary_carries_honest_note(self):
+        p = AgentProfile()
+        now = time.time()
+        p.record_checkin(complexity=0.5, timestamp=now - 36)
+        p.record_checkin(complexity=0.5, timestamp=now)
+        summary = p.to_summary()
+        assert summary["update_density_per_hour"] is None
+        assert "update_density_note" in summary
+
+    def test_long_window_summary_has_no_note(self):
+        p = AgentProfile()
+        now = time.time()
+        for i in range(10):
+            p.record_checkin(complexity=0.5, timestamp=now - 1800 + i * 180)
+        summary = p.to_summary()
+        assert summary["update_density_per_hour"] is not None
+        assert "update_density_note" not in summary
 
 
 class TestSessionTenure:
