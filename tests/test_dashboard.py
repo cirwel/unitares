@@ -15,6 +15,7 @@ Tests cover:
 - Backward compatibility: new params default to current behavior
 """
 
+import asyncio
 import json
 import sys
 from dataclasses import dataclass, field
@@ -503,6 +504,78 @@ class TestDashboardErrors:
         data = parse_result(result)
         assert data["success"] is False
         assert "connection lost" in data["error"]
+
+
+# ============================================================================
+# Inner deadline / degraded fall-through (critique #6: timeout coarseness)
+# ============================================================================
+
+class TestDashboardInnerDeadline:
+
+    @pytest.mark.asyncio
+    async def test_slow_db_degrades_to_in_memory(self, mock_server, monkeypatch):
+        """A DB read that exceeds the inner budget degrades fast instead of
+        hanging the full 15s decorator timeout, and still returns the in-memory
+        overview with a degraded flag."""
+        monkeypatch.setenv("UNITARES_DASHBOARD_DB_BUDGET_S", "0.05")
+
+        async def _slow_states():
+            await asyncio.sleep(5)  # would blow the inner budget
+            return []
+
+        mock_db = AsyncMock()
+        mock_db.get_all_latest_agent_states = _slow_states
+        now = datetime.now(timezone.utc).isoformat()
+        mock_server.agent_metadata = {
+            "agent-1": make_metadata("agent-1", total_updates=5, last_update=now),
+        }
+        with patch("src.mcp_handlers.admin.dashboard.get_db", return_value=mock_db), \
+             patch("src.mcp_handlers.admin.dashboard.mcp_server", mock_server):
+            from src.mcp_handlers.admin.dashboard import handle_dashboard
+            result = await handle_dashboard({})
+
+        data = parse_result(result)
+        # Success (not a hard error) and the in-memory agent is still surfaced.
+        assert data["success"] is True
+        assert data["degraded"] is True
+        assert "degraded_reason" in data
+        assert data["total"] == 1
+        assert data["agents"][0]["id"] == "agent-1"
+        # No DB-derived EISV on the degraded call.
+        assert "eisv" not in data["agents"][0]
+
+    @pytest.mark.asyncio
+    async def test_fast_db_not_degraded(self, mock_db, mock_server):
+        """Normal (fast) DB read reports degraded=False."""
+        mock_server.agent_metadata = {
+            "agent-1": make_metadata("agent-1"),
+        }
+        with patch("src.mcp_handlers.admin.dashboard.get_db", return_value=mock_db), \
+             patch("src.mcp_handlers.admin.dashboard.mcp_server", mock_server):
+            from src.mcp_handlers.admin.dashboard import handle_dashboard
+            result = await handle_dashboard({})
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["degraded"] is False
+        assert "degraded_reason" not in data
+
+    def test_budget_env_override_and_fallback(self, monkeypatch):
+        from src.mcp_handlers.admin.dashboard import (
+            _dashboard_db_budget_s,
+            _DASHBOARD_DB_BUDGET_S_DEFAULT,
+        )
+
+        monkeypatch.delenv("UNITARES_DASHBOARD_DB_BUDGET_S", raising=False)
+        assert _dashboard_db_budget_s() == _DASHBOARD_DB_BUDGET_S_DEFAULT
+
+        monkeypatch.setenv("UNITARES_DASHBOARD_DB_BUDGET_S", "2.5")
+        assert _dashboard_db_budget_s() == 2.5
+
+        # Garbage / non-positive values fall back to the default.
+        for bad in ("not-a-number", "0", "-3"):
+            monkeypatch.setenv("UNITARES_DASHBOARD_DB_BUDGET_S", bad)
+            assert _dashboard_db_budget_s() == _DASHBOARD_DB_BUDGET_S_DEFAULT
 
 
 # ============================================================================
