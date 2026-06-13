@@ -611,6 +611,28 @@ async def handle_identity_v2(
 # DECORATOR-COMPATIBLE ADAPTER
 # =============================================================================
 
+def _resolve_response_client_hint(arguments: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Resolve client_hint for the response harness_context, matching onboard().
+
+    identity() previously reported ``harness_context.harness_type="unknown"``
+    on resume because its response builders received only
+    ``arguments.get("client_hint")`` — callers rarely repeat the hint on a
+    resume. onboard() falls back to the transport-bound hint
+    (handle_onboard_adapter, see get_context_client_hint). Mirror that
+    fallback so the descriptive harness_context is consistent across the two
+    surfaces within one session. Response-shape only — never feeds the
+    continuity-token pin or assurance tier.
+    """
+    hint = (arguments or {}).get("client_hint")
+    if not hint or hint == "unknown":
+        try:
+            from ..context import get_context_client_hint
+            hint = get_context_client_hint() or hint
+        except Exception:
+            pass
+    return hint
+
+
 def _build_identity_diag_payload_for_request(
     arguments: Dict[str, Any],
     model_type: Optional[str],
@@ -660,7 +682,7 @@ def _build_identity_diag_payload_for_request(
         identity_resolution_outcome=identity_resolution_outcome,
         provisional_lineage=provisional_lineage,
         lineage_state=lineage_state,
-        client_hint=arguments.get("client_hint"),
+        client_hint=_resolve_response_client_hint(arguments),
         model_type=model_type,
     )
 
@@ -1306,7 +1328,7 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
         verbose=verbose,
         provisional_lineage=_r2_prov_main,
         lineage_state=_r2_state_main,
-        client_hint=arguments.get("client_hint"),
+        client_hint=_resolve_response_client_hint(arguments),
     )
 
     # Auto-bind: automatically perform session binding so agents don't need a separate bind_session call
