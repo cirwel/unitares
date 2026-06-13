@@ -182,12 +182,13 @@ def build_fork_context(
                 "label": prev_node.get("label"),
             }
 
-    return {
+    thread_size = len(all_nodes)
+    context = {
         "thread_id": thread_id,
         "position": position,
         "spawn_reason": spawn_reason,
         "predecessor": predecessor,
-        "thread_size": len(all_nodes),
+        "thread_size": thread_size,
         "is_root": is_root,
         "is_fork": is_fork,
         "episode_fork_kind": episode_fork_kind,
@@ -198,3 +199,20 @@ def build_fork_context(
             spawn_reason,
         ),
     }
+
+    # position and thread_size measure different things and can legitimately
+    # diverge — position is a monotonic claim counter (the Nth node ever
+    # claimed in this thread, never reused), while thread_size is the count of
+    # currently-live nodes. Pruned/archived forks lower the count without
+    # rewinding the counter (dogfood 2026-06-13 saw position 24 vs thread_size
+    # 19). Label them so the gap isn't read as a contradiction.
+    if position > thread_size:
+        context["position_note"] = (
+            "position is the node's monotonic claim sequence (Nth ever claimed "
+            "in this thread); thread_size is the count of currently-live nodes. "
+            f"position ({position}) > thread_size ({thread_size}) means "
+            f"{position - thread_size} earlier node(s) were pruned or archived — "
+            "expected, not a contradiction."
+        )
+
+    return context

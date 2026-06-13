@@ -71,6 +71,92 @@ def _build_enforcement_stub(decision: Dict) -> Dict:
     }
 
 
+def _build_risk_attribution(
+    metrics: Dict,
+    drift_vector,
+    continuity_metrics,
+    behavioral_assessment,
+) -> Dict:
+    """Decompose the risk/verdict by signal provenance.
+
+    The verdict path is a self-report integrity mechanism, not an
+    adversary-resistant monitor: risk is driven primarily by the
+    caller-supplied ``ethical_drift`` vector (it dominates the phi-based
+    score) plus self-reported complexity/confidence. The only
+    non-self-attested signal is the behavioral text model, and at current
+    maturity it does not carry enforcement weight (verification layer
+    reserved for v2). Surfacing the decomposition lets a reader see *what*
+    drove the verdict and how much of it is self-attested vs measured
+    (dogfood 2026-06-13, P0). All inputs here are already computed elsewhere
+    in the result; this only re-exposes them grouped by provenance.
+    """
+    self_reported: Dict = {
+        "provenance": "self_attested",
+        "description": (
+            "Magnitude of the caller-supplied ethical_drift vector — the "
+            "dominant input to the phi-based risk score. Reported by the agent, "
+            "not independently verified."
+        ),
+        "ethical_drift_norm": (
+            float(drift_vector.norm)
+            if drift_vector is not None and hasattr(drift_vector, "norm")
+            else None
+        ),
+    }
+
+    derived: Dict = {
+        "provenance": "derived",
+        "description": (
+            "Gap between self-reported and server-derived complexity. Derived "
+            "from inputs, but the self-reported half is still caller-supplied."
+        ),
+        "complexity_divergence": (
+            float(continuity_metrics.complexity_divergence)
+            if continuity_metrics is not None
+            and hasattr(continuity_metrics, "complexity_divergence")
+            else None
+        ),
+    }
+
+    behavioral: Dict = {
+        "provenance": "measured",
+        "description": (
+            "Independent text-risk model — the only non-self-attested signal. "
+            "Not yet weighted into the enforcement verdict (verification layer "
+            "reserved for v2); shown for comparison against the self-reported "
+            "drivers."
+        ),
+        "risk": (
+            float(behavioral_assessment.risk)
+            if behavioral_assessment is not None
+            else None
+        ),
+        "verdict": (
+            behavioral_assessment.verdict
+            if behavioral_assessment is not None
+            else None
+        ),
+    }
+
+    return {
+        "risk_score": metrics.get("risk_score"),
+        "verdict": metrics.get("verdict"),
+        "primary_driver": "self_reported",
+        "note": (
+            "At current maturity this verdict is driven primarily by signals you "
+            "reported (ethical_drift, complexity, confidence). An agent that "
+            "under-reports ethical_drift lowers this risk regardless of its "
+            "actual behavior. The behavioral signal is the only non-self-attested "
+            "input and does not yet carry enforcement weight."
+        ),
+        "sources": {
+            "self_reported": self_reported,
+            "derived": derived,
+            "behavioral": behavioral,
+        },
+    }
+
+
 def _complexity_divergence_novel(monitor, cm) -> bool:
     """True when the complexity divergence is worth surfacing again.
 
@@ -140,6 +226,15 @@ def build_result(
             'honesty_note': confidence_metadata.get('honesty_note', 'No metadata available')
         }
     }
+
+    # Verdict provenance: decompose risk by signal source so a reader can see
+    # how much of the verdict is self-attested vs measured (dogfood P0).
+    result['risk_attribution'] = _build_risk_attribution(
+        metrics,
+        monitor._last_drift_vector,
+        monitor._last_continuity_metrics,
+        behavioral_assessment,
+    )
 
     if task_type_adjustment:
         result['task_type_adjustment'] = task_type_adjustment

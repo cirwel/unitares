@@ -166,6 +166,122 @@ def test_build_result_exposes_policy_and_unapplied_enforcement_layers():
     }
 
 
+def test_risk_attribution_decomposes_by_provenance():
+    """Dogfood 2026-06-13 P0: the verdict is self-attested, not measured.
+    The result must expose WHAT drove the risk, grouped by provenance, so a
+    reader sees that risk is driven by self-reported ethical_drift while the
+    only non-self-attested signal (behavioral) is shown for comparison."""
+    from src.monitor_result import _build_risk_attribution
+
+    drift = SimpleNamespace(norm=0.84)
+    cm = SimpleNamespace(complexity_divergence=0.55)
+    behavioral = SimpleNamespace(risk=0.006, verdict="safe")
+    metrics = {"risk_score": 0.72, "verdict": "high-risk"}
+
+    attr = _build_risk_attribution(metrics, drift, cm, behavioral)
+
+    assert attr["risk_score"] == 0.72
+    assert attr["verdict"] == "high-risk"
+    assert attr["primary_driver"] == "self_reported"
+    assert attr["sources"]["self_reported"]["provenance"] == "self_attested"
+    assert attr["sources"]["self_reported"]["ethical_drift_norm"] == pytest.approx(0.84)
+    assert attr["sources"]["derived"]["provenance"] == "derived"
+    assert attr["sources"]["derived"]["complexity_divergence"] == pytest.approx(0.55)
+    # The non-self-attested signal is labeled "measured" and surfaced even
+    # though it disagrees with the self-reported verdict (0.006 vs high-risk).
+    assert attr["sources"]["behavioral"]["provenance"] == "measured"
+    assert attr["sources"]["behavioral"]["risk"] == pytest.approx(0.006)
+    assert attr["sources"]["behavioral"]["verdict"] == "safe"
+
+
+def test_risk_attribution_handles_missing_signals():
+    """No drift/continuity/behavioral computed → None, never a crash, and
+    still labeled by provenance."""
+    from src.monitor_result import _build_risk_attribution
+
+    attr = _build_risk_attribution(
+        {"risk_score": 0.26, "verdict": "safe"}, None, None, None
+    )
+    assert attr["sources"]["self_reported"]["ethical_drift_norm"] is None
+    assert attr["sources"]["derived"]["complexity_divergence"] is None
+    assert attr["sources"]["behavioral"]["risk"] is None
+    assert attr["sources"]["behavioral"]["verdict"] is None
+
+
+def test_build_result_includes_risk_attribution():
+    """build_result must always surface risk_attribution so every verdict
+    states whether it was driven by self-reported vs measured signal."""
+    from src.monitor_result import build_result
+
+    monitor = SimpleNamespace(
+        agent_id="agent-risk-attr",
+        _last_continuity_metrics=SimpleNamespace(
+            complexity_divergence=0.3,
+            self_complexity=0.6,
+            derived_complexity=0.3,
+            overconfidence_signal=False,
+            underconfidence_signal=False,
+            E_input=0.5,
+            I_input=0.5,
+            S_input=0.2,
+            calibration_weight=1.0,
+        ),
+        _last_restorative_status=None,
+        _last_drift_vector=SimpleNamespace(
+            norm=0.9,
+            norm_squared=0.81,
+            calibration_deviation=0.1,
+            complexity_divergence=0.3,
+            coherence_deviation=0.2,
+            stability_deviation=0.1,
+        ),
+        _gains_modulated=False,
+        adaptive_governor=None,
+        _last_surfaced_complexity_gap=None,
+        _behavioral_state=SimpleNamespace(to_dict=lambda: {}, is_baselined=False),
+        state=SimpleNamespace(
+            CE_history=[],
+            resonance_events=0,
+            damping_applied_count=0,
+            update_count=5,
+            current_rho=0.0,
+            self_complexity=None,
+        ),
+    )
+    decision = {"action": "pause", "sub_action": "risk_pause", "basin": "high"}
+    metrics = {"risk_score": 0.72, "verdict": "high-risk"}
+    oscillation = SimpleNamespace(oi=0.0, flips=0, resonant=False, trigger=None)
+
+    behavioral = SimpleNamespace(
+        health="healthy",
+        verdict="safe",
+        risk=0.006,
+        coherence=0.9,
+        components={},
+        guidance="continue working normally.",
+    )
+
+    result = build_result(
+        monitor,
+        status="warning",
+        decision=decision,
+        metrics=metrics,
+        confidence=0.1,
+        confidence_metadata={"source": "external"},
+        task_type_adjustment=None,
+        trajectory_validation=None,
+        oscillation_state=oscillation,
+        response_tier="proceed",
+        cirs_result=None,
+        damping_result=None,
+        behavioral_assessment=behavioral,
+    )
+
+    assert "risk_attribution" in result
+    assert result["risk_attribution"]["sources"]["self_reported"]["ethical_drift_norm"] == pytest.approx(0.9)
+    assert result["risk_attribution"]["sources"]["behavioral"]["risk"] == pytest.approx(0.006)
+
+
 def test_simulate_update_does_not_consume_novelty():
     """Council fold (PR #603): simulate_update runs the full governance
     cycle, including result building, which advances the novelty gate.
