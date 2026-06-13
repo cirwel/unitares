@@ -24,8 +24,20 @@ logger = get_logger(__name__)
 def normalize_tags(tags) -> List[str]:
     """Normalize tags to canonical form for consistent search.
 
-    Applies: lowercase, strip whitespace, collapse separators (hyphens/underscores/spaces)
-    to single hyphens, deduplicate while preserving order.
+    Applies: lowercase, fold any run of separators/punctuation to a single
+    hyphen, strip edge hyphens, apply the formatting-layer spelling-variant
+    map (``postgresql`` → ``postgres``), deduplicate while preserving order.
+
+    This mirrors the governance-plugin client normalizer (``tag_normalize.py``)
+    so tags minted server-side, by non-plugin clients, or via the direct REST
+    path all converge on the same canonical form. Tag fragmentation is mostly
+    a formatting problem (``Postgres`` / ``postgres`` / ``PostgreSQL`` filed
+    three ways); this collapses it at every write and tag-filtered search.
+
+    Deliberately conservative: no plural stripping (``metrics`` → ``metric``
+    is lossy) and no semantic synonym merging (``auth`` vs ``identity``). The
+    semantic residue is handled by the lifecycle pass via
+    ``src.knowledge_ontology.apply_semantic_synonyms``, never here.
 
     Handles string input (JSON arrays or comma-separated) gracefully since MCP
     unified tools may pass tags as strings instead of lists.
@@ -33,11 +45,14 @@ def normalize_tags(tags) -> List[str]:
     Examples:
         ["EISV", "eisv-dynamics", "eisv_framework"] → ["eisv", "eisv-dynamics", "eisv-framework"]
         ["bug", "Bug Fix", "bug-fix", "bug_fix"] → ["bug", "bug-fix"]
+        ["Postgres", "postgres", "PostgreSQL"] → ["postgres"]
+        ["node.js", "C++"] → ["node-js", "c"]
         '["ux", "identity"]' → ["ux", "identity"]
         "ux, identity" → ["ux", "identity"]
     """
     if not tags:
         return []
+    from src.knowledge_ontology import SPELLING_VARIANTS
     # Handle string input: try JSON parse, then comma-split
     if isinstance(tags, str):
         import json
@@ -56,12 +71,16 @@ def normalize_tags(tags) -> List[str]:
         t = tag.strip().lower()
         if not t:
             continue
-        # Replace underscores and spaces with hyphens, collapse runs
-        t = re.sub(r'[\s_]+', '-', t)
-        # Collapse multiple hyphens
-        t = re.sub(r'-{2,}', '-', t)
+        # Fold any run of separators/punctuation (spaces, underscores, dots,
+        # slashes, etc.) to a single hyphen. A run collapses in one pass, so
+        # no separate multi-hyphen collapse is needed.
+        t = re.sub(r'[^a-z0-9]+', '-', t)
         # Strip leading/trailing hyphens
         t = t.strip('-')
+        if not t:
+            continue
+        # Formatting-layer spelling-variant map (postgresql → postgres).
+        t = SPELLING_VARIANTS.get(t, t)
         if t and t not in seen:
             seen.add(t)
             result.append(t)

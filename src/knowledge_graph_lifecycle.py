@@ -145,6 +145,7 @@ class KnowledgeGraphLifecycle:
             "discoveries_archived": 0,
             "discoveries_to_cold": 0,
             "ephemeral_archived": 0,
+            "tags_canonicalized": 0,
             "skipped_permanent": 0,
             "discoveries_deleted": 0,  # Always 0 - we don't delete
             "philosophy": "Never delete. Archive forever.",
@@ -153,6 +154,13 @@ class KnowledgeGraphLifecycle:
 
         try:
             graph = await self._get_graph()
+
+            # Step 0: Canonicalize tags via the curated semantic synonym map.
+            # Formatting fragmentation is fixed at write time by normalize_tags;
+            # this catches the semantic residue (db→database, auth→identity) on
+            # the active corpus, where the rewrite is visible and auditable.
+            canonicalized = await self._canonicalize_tags(now, dry_run)
+            summary["tags_canonicalized"] = len(canonicalized)
 
             # Step 1: Archive ephemeral discoveries (fastest deprecation)
             ephemeral = await self._archive_ephemeral(now, dry_run)
@@ -205,6 +213,49 @@ class KnowledgeGraphLifecycle:
                 )
         except Exception as e:
             logger.debug(f"PG sync skipped for lifecycle update: {e}")
+
+    async def _canonicalize_tags(self, now: datetime, dry_run: bool) -> List[str]:
+        """Apply the curated semantic synonym map to the active corpus.
+
+        Scans open + resolved discoveries and rewrites tags whose canonical
+        form (``normalize_tags`` then ``apply_semantic_synonyms``) differs from
+        what is stored. This is the lifecycle-only semantic layer — write-path
+        ``normalize_tags`` deliberately does not merge synonyms. Never deletes;
+        only rewrites the ``tags`` list in place.
+
+        Returns the list of discovery IDs whose tags changed.
+        """
+        from src.knowledge_graph import normalize_tags
+        from src.knowledge_ontology import apply_semantic_synonyms
+
+        graph = await self._get_graph()
+        changed: List[str] = []
+
+        # Active corpus only — archived/cold rows are not re-queried.
+        candidates = []
+        for status in ("open", "resolved"):
+            candidates.extend(await graph.query(status=status, limit=1000))
+
+        for discovery in candidates:
+            current = list(discovery.tags or [])
+            if not current:
+                continue
+            canonical = apply_semantic_synonyms(normalize_tags(current))
+            if canonical == current:
+                continue
+            changed.append(discovery.id)
+            if not dry_run:
+                await graph.update_discovery(discovery.id, {
+                    "tags": canonical,
+                    "updated_at": now.isoformat(),
+                })
+
+        logger.info(
+            "%s tags on %d discoveries via semantic synonym map",
+            "[DRY RUN] Would canonicalize" if dry_run else "Canonicalized",
+            len(changed),
+        )
+        return changed
 
     async def _archive_ephemeral(self, now: datetime, dry_run: bool) -> List[str]:
         """Archive ephemeral discoveries older than threshold."""
