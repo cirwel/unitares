@@ -169,6 +169,60 @@ def _strip_schema_descriptions(node: Any) -> Any:
     return node
 
 
+# Identity params hidden from the *advertised* check-in schema. They stay on the
+# Pydantic model — the handler still accepts them as a same-process escape hatch
+# (EXTRA_ARGUMENT_PASSTHROUGH + extra="allow") — but a check-in reads as an
+# ambient binding rather than hand-threaded identifiers. Mirrors the existing
+# `inject_action` strip in mcp_server._register_common_aliases.
+#
+# SCOPE IS DELIBERATELY agent_id + agent_name ONLY. client_session_id and
+# continuity_token are NOT stripped, and that is load-bearing:
+#   - A claude.ai remote-connector client only sends params present in the
+#     advertised inputSchema. These two tools are in
+#     TOOLS_NEEDING_SESSION_INJECTION, so when the client omits client_session_id
+#     the server injects one from context — but for stateless streamable transport
+#     (no Mcp-Session-Id) that injected value is the ip_ua_fingerprint, which
+#     derive_session_key launders into `explicit_client_session_id` (strong/1.0).
+#     The effect: multiple distinct agents behind one gateway IP+UA collapse onto
+#     a single shared-fingerprint identity. Advertising client_session_id lets a
+#     well-behaved agent send its unique agent-{uuid} key instead, keeping
+#     attribution isolated. See tests/test_onboard_pin.py::TestToolSchemaClientSessionId.
+#   - continuity_token has NO injection fallback; stripping it would break
+#     claude.ai cross-instance PATH-0 resume outright.
+# agent_id (structured handle, auto-resolved) and agent_name (cosmetic; the
+# name-claim resolution path was removed 2026-04-17) carry no such dependency.
+_AUTO_INJECTED_IDENTITY_PARAMS = (
+    "agent_id",
+    "agent_name",
+)
+# Canonical tools whose session is auto-injected (TOOLS_NEEDING_SESSION_INJECTION).
+# Their aliases (sync_state, check_working_state) inherit this schema downstream,
+# so stripping here at the canonical source covers the alias surfaces too.
+_HIDE_IDENTITY_PARAMS_TOOLS = {
+    "process_agent_update",
+    "get_governance_metrics",
+}
+
+
+def _hide_auto_injected_identity(schema: Any) -> Any:
+    """Drop session-auto-injected identity params from an advertised schema.
+
+    Returns a copy; never mutates the (pydantic-cached) input dict.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    import copy
+    schema = copy.deepcopy(schema)
+    props = schema.get("properties")
+    if isinstance(props, dict):
+        for name in _AUTO_INJECTED_IDENTITY_PARAMS:
+            props.pop(name, None)
+    req = schema.get("required")
+    if isinstance(req, list):
+        schema["required"] = [r for r in req if r not in _AUTO_INJECTED_IDENTITY_PARAMS]
+    return schema
+
+
 def get_tool_definitions(verbosity: str | None = None) -> list[Tool]:
     """Build the list of MCP Tool objects from Pydantic schemas + descriptions."""
     if verbosity is None:
@@ -240,6 +294,8 @@ def get_tool_definitions(verbosity: str | None = None) -> list[Tool]:
 
     # Apply verbosity and field description stripping
     for t in all_tools:
+        if t.name in _HIDE_IDENTITY_PARAMS_TOOLS:
+            t.inputSchema = _hide_auto_injected_identity(t.inputSchema)
         if verbosity == "short":
             t.description = _first_line(t.description)
         if strip_field_descriptions:
