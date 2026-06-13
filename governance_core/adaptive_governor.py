@@ -8,7 +8,13 @@ management. Thresholds are living per-agent state, not config constants.
 The D-term IS the damping. Oscillation produces large derivatives, which
 produce large corrections. The system self-stabilizes.
 
-Design: docs/plans/2026-02-19-cirs-v2-adaptive-governor-design.md
+Design lineage: the original design note
+(docs/plans/2026-02-19-cirs-v2-adaptive-governor-design.md) is not present in
+this repo. The paper's Table 5 remains the research baseline; the production
+thresholds below are the ratified operational calibration from unitares#661.
+The `# Paper:` annotations record provenance, not pending TODOs. Future moves
+toward Table 5 require replay/telemetry evidence that false pause/reject rates
+and oscillation stability do not regress.
 
 Update cycle (called from process_agent_update):
   1. Detect phase from EISV histories (calls governance_core.phase_aware.detect_phase)
@@ -38,15 +44,21 @@ class GovernorConfig:
     """
 
     # Default thresholds (starting point -- will adapt)
-    # Paper Table 5: tau=0.40, beta=0.60. Production values raised for operational stability.
-    tau_default: float = 0.44        # Paper: 0.40. Raised to sit just below typical coherence ~0.458
-    beta_default: float = 0.70       # Paper: 0.60. Raised to reduce false high-risk verdicts
+    # Production calibration decision (unitares#661, 2026-06-13): Table 5 is
+    # provenance, while these values are the ratified operational defaults.
+    # Recalibrate only after replay/telemetry shows no regression in false
+    # pause/reject rates or oscillation stability.
+    # Paper: 0.40. Sits just below typical coherence ~0.458.
+    tau_default: float = 0.44
+    # Paper: 0.60. Reduces false high-risk verdicts.
+    beta_default: float = 0.70
 
     # Hard safety bounds (cannot be overridden by adaptation)
     tau_floor: float = 0.25
     tau_ceiling: float = 0.75
     beta_floor: float = 0.20
-    beta_ceiling: float = 0.80       # Paper: 0.70. Raised to match RISK_REJECT_THRESHOLD
+    # Paper: 0.70. Matches RISK_REJECT_THRESHOLD.
+    beta_ceiling: float = 0.80
 
     # PID gains
     K_p: float = 0.05               # Proportional -- gentle
@@ -58,10 +70,11 @@ class GovernorConfig:
 
     # Phase reference points
     # Paper Table 5: exploration τ=0.35/β=0.55, integration τ=0.40/β=0.60
-    exploration_tau_ref: float = 0.38   # Paper: 0.35
+    # Paper: 0.35. Looser than integration without normalizing very low coherence.
+    exploration_tau_ref: float = 0.38
     exploration_beta_ref: float = 0.55  # Matches paper
-    integration_tau_ref: float = 0.44   # Paper: 0.40
-    integration_beta_ref: float = 0.70  # Paper: 0.60. Raised to match beta_default
+    integration_tau_ref: float = 0.44   # Paper: 0.40. Matches tau_default.
+    integration_beta_ref: float = 0.70  # Paper: 0.60. Matches beta_default.
 
     # Phase modulation of D-term
     exploration_d_factor: float = 0.5   # Gentler damping during exploration
