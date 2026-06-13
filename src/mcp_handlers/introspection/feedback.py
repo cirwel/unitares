@@ -63,6 +63,15 @@ def get_calibration_feedback(include_complexity: bool = True) -> Dict[str, Any]:
                         # looking like personal calibration (dogfood
                         # 2026-06-10; same class as the #572 mirror fix).
                         'scope': 'fleet',
+                        # Self-describe the denominator so it can't be confused
+                        # with learning_context.calibration.total_decisions
+                        # (dogfood 2026-06-13: two calibration counts in one
+                        # payload with no indication of what each measured).
+                        # Both count the same fleet-wide STRATEGIC trajectory
+                        # population, so when the strategic check is the source
+                        # they reconcile to the same n.
+                        'population': 'strategic_trajectory_decisions',
+                        'samples': total_samples,
                         'system_accuracy': overall_accuracy,
                         'mean_confidence': mean_confidence,
                         'calibration_error': calibration_error

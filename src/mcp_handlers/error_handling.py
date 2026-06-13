@@ -3,7 +3,7 @@ from typing import Dict, Any, Tuple, Optional
 from mcp.types import TextContent
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.logging_utils import get_logger
 
@@ -132,7 +132,7 @@ def error_response(
     response = {
         "success": False,
         "error": sanitized_message,
-        "server_time": datetime.now().isoformat()
+        "server_time": datetime.now(timezone.utc).isoformat()
     }
 
     if error_code:
@@ -174,7 +174,7 @@ def error_response(
                 "success": False,
                 "error": sanitized_message,
                 "error_code": error_code or "SERIALIZATION_ERROR",
-                "server_time": datetime.now().isoformat()
+                "server_time": datetime.now(timezone.utc).isoformat()
             }
             json_text = json.dumps(minimal_response, ensure_ascii=False)
 

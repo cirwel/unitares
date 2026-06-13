@@ -207,6 +207,12 @@ def get_monitor_metrics(monitor: Any, include_state: bool = True) -> Dict:
         "basin": basin,
         "basin_warning": basin_warning,
         "equilibrium": {
+            # Prescribed design attractor (profile-dependent) the controller
+            # converges toward — distinct from the instantaneous linear
+            # fixed-point in saturation_diagnostics.I_equilibrium, which is
+            # derived from current params/state (dogfood 2026-06-13: the two
+            # were surfaced side by side, 1.0 vs 0.52, with no label).
+            "kind": "design_attractor_target",
             "I_target": I_target,
             "S_target": S_target,
             "E_target": E_target,

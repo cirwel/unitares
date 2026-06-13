@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Sequence
 
 from mcp.types import TextContent
@@ -61,7 +61,7 @@ def serialize_process_update_response(
     try:
         if serializer is not None:
             return serializer(response_data, agent_id=agent_uuid, arguments=arguments)
-        payload = {"success": True, "server_time": datetime.now().isoformat(), **response_data}
+        payload = {"success": True, "server_time": datetime.now(timezone.utc).isoformat(), **response_data}
         return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, default=str))]
     except Exception as serialization_error:
         logger.error(f"Failed to serialize response: {serialization_error}", exc_info=True)

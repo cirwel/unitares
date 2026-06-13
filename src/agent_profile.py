@@ -28,6 +28,11 @@ from typing import Dict, Optional, List
 
 # Window sizes
 _DENSITY_WINDOW_S = 3600.0       # 1 hour for update density
+# Minimum observed span before a per-hour density is extrapolated. Below this,
+# a tiny sample (e.g. 2 check-ins 36s apart) would project to a wildly
+# overclaimed rate (~350/hr) — the same flat-prior seed-vector overclaim the
+# "uninitialized" honesty guards avoid elsewhere (dogfood 2026-06-13).
+_DENSITY_MIN_SPAN_S = 300.0      # 5 minutes
 _VERDICT_HISTORY_SIZE = 20       # Last 20 verdicts
 _COMPLEXITY_HISTORY_SIZE = 50    # Last 50 complexity values
 _DRIFT_HISTORY_SIZE = 50         # Last 50 drift magnitudes
@@ -120,16 +125,28 @@ class AgentProfile:
     # ── Computed metrics ──────────────────────────────────────────
 
     @property
-    def update_density(self) -> float:
-        """Updates per hour over the last hour window."""
+    def update_density(self) -> Optional[float]:
+        """Updates per hour over the last hour window.
+
+        Returns the count of check-ins observed in the trailing window when
+        there are too few (0 or 1) to span a rate — a low, honest number, not
+        an extrapolation. Returns None when there ARE two-plus check-ins but
+        they fall inside a window shorter than ``_DENSITY_MIN_SPAN_S``:
+        dividing a tiny sample by a few seconds of span overclaims (2 check-ins
+        36s apart project to ~350/hr; dogfood 2026-06-13). None signals "not
+        enough observation window yet", distinct from a measured rate.
+        """
         if len(self._recent_timestamps) < 2:
-            return 0.0
+            return float(len(self._recent_timestamps))
         now = time.time()
         cutoff = now - _DENSITY_WINDOW_S
         recent = [t for t in self._recent_timestamps if t >= cutoff]
         if len(recent) < 2:
             return float(len(recent))
-        return len(recent) / ((now - recent[0]) / 3600.0)
+        span_s = now - recent[0]
+        if span_s < _DENSITY_MIN_SPAN_S:
+            return None
+        return len(recent) / (span_s / 3600.0)
 
     @property
     def session_tenure_hours(self) -> float:
@@ -210,9 +227,10 @@ class AgentProfile:
 
     def to_summary(self) -> Dict:
         """Serializable summary for API responses."""
-        return {
+        density = self.update_density
+        summary = {
             "total_updates": self.total_updates,
-            "update_density_per_hour": round(self.update_density, 2),
+            "update_density_per_hour": round(density, 2) if density is not None else None,
             "session_tenure_hours": round(self.session_tenure_hours, 2),
             "complexity": self.complexity_stats,
             "confidence": self.confidence_stats,
@@ -220,6 +238,13 @@ class AgentProfile:
             "verdict_trajectory": self.verdict_trajectory,
             "verdict_trend": self.verdict_trend,
         }
+        if density is None:
+            summary["update_density_note"] = (
+                "Observation window too short to report a per-hour rate without "
+                f"over-extrapolating; populates once activity spans "
+                f"{int(_DENSITY_MIN_SPAN_S // 60)}+ minutes."
+            )
+        return summary
 
     def to_dict(self) -> Dict:
         """Full serialization for persistence."""
