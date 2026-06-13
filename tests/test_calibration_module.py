@@ -846,14 +846,18 @@ class TestComputeCorrectionFactors:
         factors = checker.compute_correction_factors(min_samples=5)
         assert factors["0.8-0.9"] >= 0.5
 
-    def test_factor_clipped_upper(self, checker):
-        # actual_accuracy/expected_accuracy could exceed 1.5
+    def test_factor_upper_reflects_underconfidence(self, checker):
+        # Critique #3: a 0.0-0.5 bin running at ~1.0 accuracy is severely
+        # underconfident (true factor ~4.0). The old symmetric clip hid this at
+        # 1.5; the widened upside reports it honestly (bounded at 4.0).
         checker.tactical_bin_stats["0.0-0.5"] = {
             "count": 20, "actual_correct": 20, "predicted_correct": 20,
             "confidence_sum": 5.0,  # avg 0.25, actual 1.0 -> factor 4.0
         }
         factors = checker.compute_correction_factors(min_samples=5)
-        assert factors["0.0-0.5"] <= 1.5
+        assert factors["0.0-0.5"] == pytest.approx(4.0, abs=0.01)
+        # And still bounded — never reports an unbounded factor.
+        assert factors["0.0-0.5"] <= 4.0
 
     def test_near_zero_expected_skipped(self, checker):
         checker.tactical_bin_stats["0.0-0.5"] = {
@@ -918,6 +922,44 @@ class TestApplyConfidenceCorrection:
         }
         corrected, info = checker.apply_confidence_correction(1.0, min_samples=5)
         assert 0.0 <= corrected <= 1.0
+
+    def test_underconfident_lower_bin_corrected_up(self, checker, monkeypatch):
+        # Critique #3 core: bin 0.0-0.5 reports ~0.25 confidence but is actually
+        # ~1.0 accurate. The old 1.5 factor cap left a 0.25 report at 0.375; the
+        # evidence-bounded fix lifts it toward the bin's measured accuracy.
+        monkeypatch.setattr(checker, "_tactical_signal_age_days", lambda: 0.5)
+        checker.tactical_bin_stats["0.0-0.5"] = {
+            "count": 20, "actual_correct": 20, "predicted_correct": 20,
+            "confidence_sum": 5.0,  # avg 0.25, actual 1.0
+        }
+        corrected, info = checker.apply_confidence_correction(0.25, min_samples=5)
+        # 0.25 * 4.0 = 1.0, bounded by measured accuracy (1.0).
+        assert corrected == pytest.approx(1.0, abs=1e-6)
+        # Strictly better than the old 1.5-cap ceiling of 0.375.
+        assert corrected > 0.375
+        assert info is not None and "calibration_adjusted" in info
+
+    def test_underconfidence_bounded_by_measured_accuracy(self, checker, monkeypatch):
+        # The lift never exceeds the bin's measured accuracy (evidence ceiling),
+        # even when reported * factor would overshoot it.
+        monkeypatch.setattr(checker, "_tactical_signal_age_days", lambda: 0.5)
+        checker.tactical_bin_stats["0.5-0.7"] = {
+            "count": 20, "actual_correct": 18, "predicted_correct": 20,
+            "confidence_sum": 11.0,  # avg 0.55, actual 0.90
+        }
+        # reported 0.69 (top of bin) * factor(0.90/0.55=1.636) = 1.13 -> capped at 0.90
+        corrected, info = checker.apply_confidence_correction(0.69, min_samples=5)
+        assert corrected == pytest.approx(0.90, abs=1e-6)
+
+    def test_overconfident_regime_unchanged(self, checker, monkeypatch):
+        # The overconfident path keeps the historical 0.5 floor behavior.
+        monkeypatch.setattr(checker, "_tactical_signal_age_days", lambda: 0.5)
+        checker.tactical_bin_stats["0.8-0.9"] = {
+            "count": 20, "actual_correct": 2, "predicted_correct": 20,
+            "confidence_sum": 17.0,  # avg 0.85, actual 0.10 -> raw factor 0.118, floored 0.5
+        }
+        corrected, info = checker.apply_confidence_correction(0.85, min_samples=5)
+        assert corrected == pytest.approx(0.85 * 0.5, abs=1e-6)
 
 
 # ===========================================================================

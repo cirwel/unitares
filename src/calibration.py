@@ -1045,8 +1045,15 @@ class CalibrationChecker:
                 # If expected 0.9 but actual 0.7, factor = 0.78
                 # If expected 0.5 but actual 0.6, factor = 1.2 (underconfident)
                 factor = actual_accuracy / expected_accuracy
-                # Clip to reasonable range [0.5, 1.5] to avoid extreme corrections
-                factor = max(0.5, min(1.5, factor))
+                # Asymmetric clip. The downside floor (0.5) guards against a
+                # single noisy low-accuracy sample cratering confidence. The
+                # upside is widened to 4.0 (was 1.5) so severe lower-bin
+                # underconfidence is reported honestly instead of silently
+                # capped — a 0.0-0.5 bin running near 1.0 accuracy has a true
+                # factor ~4x, which the old 1.5 cap hid. The production path
+                # (apply_confidence_correction) additionally bounds the applied
+                # output by the bin's measured accuracy.
+                factor = max(0.5, min(4.0, factor))
                 corrections[bin_key] = factor
 
         return corrections
@@ -1226,14 +1233,34 @@ class CalibrationChecker:
             return reported_confidence, None
 
         factor = actual_accuracy / expected_accuracy
-        factor = max(0.5, min(1.5, factor))  # Clip to reasonable range
 
-        corrected = reported_confidence * factor
+        if factor >= 1.0:
+            # Underconfident bin: the agent reports LESS confidence than the
+            # bin's measured accuracy warrants. The previous symmetric clip
+            # (factor capped at 1.5) mathematically blocked this correction — a
+            # 0.0-0.5 bin running near 1.0 accuracy needs a ~4x lift but was
+            # held to 1.5x, so the severe lower-bin underconfidence the
+            # calibration audit flagged (bins 0.0-0.5 / 0.5-0.7 / 0.7-0.8) was
+            # never actually corrected. Allow the full upward factor, bounded by
+            # the bin's *measured* accuracy: actual_accuracy is the evidence
+            # ceiling — never claim more confidence than the bin has achieved.
+            corrected = min(reported_confidence * factor, actual_accuracy)
+        else:
+            # Overconfident bin: keep the historical floor so a single noisy
+            # low-accuracy sample can't crater confidence. Regime unchanged.
+            factor = max(0.5, factor)
+            corrected = reported_confidence * factor
+
         corrected = max(0.0, min(1.0, corrected))  # Clamp to [0, 1]
 
-        # Only report if correction is significant (> 5%)
-        if abs(factor - 1.0) > 0.05:
-            info = f"calibration_adjusted: {reported_confidence:.2f} → {corrected:.2f} (factor={factor:.2f}, n={stats['count']})"
+        # Report when the *realized* correction is significant (> 5% absolute).
+        # Keyed on the applied delta rather than the raw factor, because the
+        # evidence ceiling can bound the correction below `factor`.
+        if abs(corrected - reported_confidence) > 0.05:
+            info = (
+                f"calibration_adjusted: {reported_confidence:.2f} → {corrected:.2f} "
+                f"(factor={factor:.2f}, actual={actual_accuracy:.2f}, n={stats['count']})"
+            )
             return corrected, info
 
         return corrected, None
