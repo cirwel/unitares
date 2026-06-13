@@ -353,6 +353,13 @@ def _create_session_wrapper(
             if isinstance(wrapped, dict):
                 kwargs.update(wrapped)
 
+        # Reset the injection flag per-call (self-healing; cannot leak True from
+        # a prior call on a reused context and falsely refuse a real caller).
+        try:
+            from src.mcp_handlers.context import set_csid_transport_injected
+            set_csid_transport_injected(False)
+        except Exception:
+            pass
         # Inject session if available and not already provided
         if session_extractor and ctx:
             session_id = session_extractor(ctx)
@@ -362,7 +369,6 @@ def _create_session_wrapper(
                 # Transport-injected, not caller-sent — mark so resolution does
                 # not treat it as caller-proven (parity with the REST inject site).
                 try:
-                    from src.mcp_handlers.context import set_csid_transport_injected
                     set_csid_transport_injected(True)
                 except Exception:
                     pass

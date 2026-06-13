@@ -271,6 +271,21 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
             try:
                 from src.db import get_db
                 exempt = await get_db().is_substrate_earned(ctx.agent_uuid)
+                if not exempt:
+                    # is_substrate_earned only checks core.substrate_claims +
+                    # the (currently sentinel-only) Pi allowlist. Also honor the
+                    # canonical substrate-earned pattern so embodied/anchored
+                    # residents that resolve by fingerprint are not refused —
+                    # notably Lumen (embodied tag, NOT in substrate_claims).
+                    # Key on `dedicated_substrate` (embodied, or persistent+
+                    # anchor) — the "real substrate-anchored resident" signal —
+                    # not full R4 `earned`, so a freshly-restarted resident that
+                    # hasn't yet met the tenure bar is still exempt. Fail-closed.
+                    from src.identity.substrate import verify_substrate_earned
+                    result = await verify_substrate_earned(ctx.agent_uuid)
+                    exempt = bool(
+                        (result.get("conditions") or {}).get("dedicated_substrate")
+                    )
             except Exception:
                 exempt = False
             if not exempt:

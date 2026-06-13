@@ -424,8 +424,17 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
         # decay-by-one (strong→medium, medium→weak, weak→weak) against
         # the original proof, instead of treating every cache hit as
         # uniformly weak. See `_compute_identity_assurance`.
-        from ..context import set_session_context, set_session_resolution_source
+        from ..context import (
+            set_session_context,
+            set_session_resolution_source,
+            set_session_proof_origin,
+        )
         set_session_resolution_source(sticky_resolution_source(cached))
+        # Sticky-cache hit = fingerprint resolution with no per-call proof. Stamp
+        # server_inferred so the strict write gate refuses it unless the resolved
+        # agent is substrate-earned (this early-return runs before _mark). Mirror
+        # of the REST sticky path in http_api._resolve_http_bound_agent.
+        set_session_proof_origin("server_inferred")
         client_hint = arguments.get("client_hint") if arguments else None
         identity_result = {
             "agent_uuid": cached.agent_uuid,
