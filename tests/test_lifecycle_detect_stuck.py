@@ -21,6 +21,8 @@ def _make_agent_meta(
     created_at=None,
     total_updates=5,
     tags=None,
+    parent_agent_id=None,
+    agent_uuid=None,
 ):
     """Create mock agent metadata."""
     now = datetime.now(timezone.utc)
@@ -30,6 +32,8 @@ def _make_agent_meta(
         created_at=(created_at or now).isoformat(),
         total_updates=total_updates,
         tags=tags or [],
+        parent_agent_id=parent_agent_id,
+        agent_uuid=agent_uuid,
     )
     return meta
 
@@ -827,3 +831,143 @@ def _async_none():
     async def _coro():
         return None
     return _coro()
+
+
+class TestLineageSuccession:
+    """A parent whose declared-lineage child is actively checking in is not
+    stuck — the process rotated, lineage continuous (KG 2026-05-06)."""
+
+    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["mcp_server"])
+    def test_parent_with_live_child_suppressed(self, mock_server, mock_config):
+        """Parent would fire critical_margin_timeout, but a live lineage child
+        checking in suppresses it entirely."""
+        old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+        recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+        mock_server.agent_metadata = {
+            "p1": _make_agent_meta(last_update=old_time),
+            "c1": _make_agent_meta(last_update=recent, parent_agent_id="p1"),
+        }
+        monitor = _make_monitor(risk=0.8, coherence=0.42)
+        mock_server.monitors = {"p1": monitor, "c1": _make_monitor()}
+        mock_config.compute_proprioceptive_margin.return_value = _margin_info(
+            "critical", nearest_edge="risk", distance=0.02
+        )
+
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+        result = _detect_stuck_agents(
+            critical_margin_timeout_minutes=5, include_pattern_detection=False
+        )
+        # p1 suppressed by lineage; c1 is recent + healthy → neither stuck.
+        assert result == []
+
+    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["mcp_server"])
+    def test_parent_matched_by_agent_uuid(self, mock_server, mock_config):
+        """Child declares the parent's agent_uuid (not the dict key) → suppressed."""
+        old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+        recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+        mock_server.agent_metadata = {
+            "p1": _make_agent_meta(last_update=old_time, agent_uuid="uuid-parent"),
+            "c1": _make_agent_meta(last_update=recent, parent_agent_id="uuid-parent"),
+        }
+        mock_server.monitors = {"p1": _make_monitor(risk=0.8), "c1": _make_monitor()}
+        mock_config.compute_proprioceptive_margin.return_value = _margin_info("critical")
+
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+        result = _detect_stuck_agents(
+            critical_margin_timeout_minutes=5, include_pattern_detection=False
+        )
+        assert result == []
+
+    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["mcp_server"])
+    def test_stale_child_does_not_suppress(self, mock_server, mock_config):
+        """A child that itself went silent (beyond the freshness window) does NOT
+        explain the parent's silence → parent still flagged."""
+        old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+        stale_child = datetime.now(timezone.utc) - timedelta(minutes=90)
+        mock_server.agent_metadata = {
+            "p1": _make_agent_meta(last_update=old_time),
+            "c1": _make_agent_meta(
+                last_update=stale_child, parent_agent_id="p1", total_updates=2
+            ),
+        }
+        mock_server.monitors = {"p1": _make_monitor(risk=0.8, coherence=0.42)}
+        mock_server.load_monitor_state.return_value = None
+        mock_config.compute_proprioceptive_margin.return_value = _margin_info(
+            "critical", nearest_edge="risk", distance=0.02
+        )
+
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+        result = _detect_stuck_agents(
+            critical_margin_timeout_minutes=5, include_pattern_detection=False
+        )
+        assert len(result) == 1
+        assert result[0]["agent_id"] == "p1"
+        assert result[0]["reason"] == "critical_margin_timeout"
+
+    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["mcp_server"])
+    def test_inactive_child_does_not_suppress(self, mock_server, mock_config):
+        """A non-active (paused/archived) child is not a live successor."""
+        old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+        recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+        mock_server.agent_metadata = {
+            "p1": _make_agent_meta(last_update=old_time),
+            "c1": _make_agent_meta(
+                status="paused", last_update=recent, parent_agent_id="p1"
+            ),
+        }
+        mock_server.monitors = {"p1": _make_monitor(risk=0.8, coherence=0.42)}
+        mock_config.compute_proprioceptive_margin.return_value = _margin_info(
+            "critical", nearest_edge="risk", distance=0.02
+        )
+
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+        result = _detect_stuck_agents(
+            critical_margin_timeout_minutes=5, include_pattern_detection=False
+        )
+        assert len(result) == 1
+        assert result[0]["agent_id"] == "p1"
+
+    @patch(_PATCHES["mcp_server"])
+    def test_self_referential_parent_id_ignored(self, mock_server):
+        """A child whose parent_agent_id points at its own id is not a successor
+        of itself — must not be added to the live-parent set."""
+        recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+        mock_server.agent_metadata = {
+            "a1": _make_agent_meta(
+                last_update=recent, parent_agent_id="a1", agent_uuid="a1"
+            ),
+        }
+        from src.mcp_handlers.lifecycle.stuck import _live_lineage_parent_ids
+        live = _live_lineage_parent_ids(datetime.now(timezone.utc))
+        assert live == set()
+
+    @pytest.mark.asyncio
+    async def test_archive_superseded_parents_archives_parent(self):
+        """auto_recover sweep retires a superseded parent as lineage_succession."""
+        old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+        recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+        with patch(_PATCHES["mcp_server"]) as mock_server, \
+             patch("src.mcp_handlers.lifecycle.helpers._archive_one_agent") as mock_arch:
+            mock_server.agent_metadata = {
+                "p1": _make_agent_meta(last_update=old_time),
+                "c1": _make_agent_meta(last_update=recent, parent_agent_id="p1"),
+            }
+            mock_server.monitors = {}
+
+            async def _ok(*a, **k):
+                return True
+            mock_arch.side_effect = _ok
+
+            from src.mcp_handlers.lifecycle.stuck import _archive_superseded_parents
+            results = await _archive_superseded_parents(datetime.now(timezone.utc))
+
+        assert len(results) == 1
+        assert results[0]["agent_id"] == "p1"
+        assert results[0]["reason"] == "lineage_succession"
+        # The child must never be archived — it is the live successor.
+        archived_ids = [c.args[0] for c in mock_arch.call_args_list]
+        assert archived_ids == ["p1"]

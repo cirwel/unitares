@@ -144,6 +144,73 @@ MARGIN_STUCK_STALE_CAP_MINUTES = 1440.0      # 24h, matches the cadence cap
 # it errs toward flagging, and the signal is soft. Also note the MULTIPLIER is
 # floor-dominated for fast agents (avg_gap < 5min => 6*gap < 30 => floor wins).
 
+# Lineage succession: a parent process is "succeeded" — not stuck — when a child
+# that declared it via parent_agent_id at onboard (the predecessor's UUID; see
+# the Minimal Agent Workflow in CLAUDE.md) is still active and has checked in
+# within this window. The process rotated, lineage continuous (KG 2026-05-06,
+# empirically the Discord-Dispatch turn chains). Matches CADENCE_ACTIVE_MAX_GAP:
+# the child counts as live only while it still has an active cadence.
+LINEAGE_SUCCESSION_FRESH_WINDOW_MINUTES = 30.0
+
+
+def _agent_age_minutes(meta, current_time) -> float | None:
+    """Minutes since meta.last_update (falling back to created_at). None if unparseable."""
+    try:
+        last_update_str = meta.last_update or meta.created_at
+        if isinstance(last_update_str, str):
+            dt = datetime.fromisoformat(
+                last_update_str.replace('Z', '+00:00') if 'Z' in last_update_str else last_update_str
+            )
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = last_update_str
+        return (current_time - dt).total_seconds() / 60
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _live_lineage_parent_ids(
+    current_time, window_minutes: float = LINEAGE_SUCCESSION_FRESH_WINDOW_MINUTES
+) -> set:
+    """Identities that have an active lineage child checking in recently.
+
+    One O(n) pass over the agent pool. A child declares its predecessor at
+    onboard via parent_agent_id; when that child is still active and has updated
+    within window_minutes, the predecessor's silence is explained by succession,
+    not a hang. Returns the set of parent_agent_id values that are currently
+    succeeded so callers can both (a) suppress stuck flags on the parent and
+    (b) archive it as lineage_succession.
+
+    Trusting parent_agent_id here is consistent with the current security
+    posture: the ghost-proliferation hijack surface was closed by PRs #78/#81/#83
+    (plugin #14); this is the leftover ergonomic surface that fix left open.
+    """
+    live: set = set()
+    for meta in mcp_server.agent_metadata.values():
+        parent = getattr(meta, "parent_agent_id", None)
+        if not parent:
+            continue
+        if getattr(meta, "status", None) != "active":
+            continue
+        # A child pointing at its own id is not a successor — guard self-loops.
+        if parent in (getattr(meta, "agent_uuid", None), getattr(meta, "agent_id", None)):
+            continue
+        age = _agent_age_minutes(meta, current_time)
+        if age is not None and age <= window_minutes:
+            live.add(parent)
+    return live
+
+
+def _is_superseded_by_lineage(agent_id, meta, live_parent_ids: set) -> bool:
+    """True if a live lineage child has taken over from this agent."""
+    if not live_parent_ids:
+        return False
+    return (
+        agent_id in live_parent_ids
+        or getattr(meta, "agent_uuid", None) in live_parent_ids
+    )
+
 
 def stuck_change_token(stuck_agents: list) -> str:
     """Emit-on-change dedup token for the stuck_detected audit write.
@@ -207,6 +274,9 @@ def _detect_stuck_agents(
     """
     stuck_agents = []
     current_time = datetime.now(timezone.utc)
+    # Parents whose declared-lineage child is actively checking in. Computed once
+    # per sweep so the per-agent supersession test below is O(1).
+    live_parent_ids = _live_lineage_parent_ids(current_time)
 
     for agent_id, meta in mcp_server.agent_metadata.items():
         # Skip if already archived/deleted
@@ -226,6 +296,14 @@ def _detect_stuck_agents(
         # Skip agents with too few updates (likely orphan/test agents)
         total_updates = getattr(meta, "total_updates", 0) or 0
         if total_updates < min_updates:
+            continue
+
+        # Lineage succession: a parent whose declared-lineage child is actively
+        # checking in is not stuck — the process rotated, lineage continuous
+        # (KG 2026-05-06). Suppress EVERY stuck reason for it (cadence-silence,
+        # margin, pattern); the auto_recover sweep archives it as
+        # lineage_succession via _archive_superseded_parents.
+        if _is_superseded_by_lineage(agent_id, meta, live_parent_ids):
             continue
 
         # Calculate age since last update
@@ -487,6 +565,44 @@ async def _handle_safe_active_agent(agent_id, meta, stuck, risk_score, coherence
     return results
 
 
+async def _archive_superseded_parents(current_time) -> list:
+    """Archive active parents whose declared-lineage child has taken over.
+
+    Mirrors the suppression in _detect_stuck_agents: a parent with a live
+    lineage successor is retired with a lineage_succession lifecycle event
+    rather than left to re-trip detection until the stale cap. Mutation path —
+    only called from the auto_recover sweep, never the read-only dashboard
+    refresh. Best-effort: _archive_one_agent persists-first and returns False
+    on DB failure, so a failed write simply leaves the parent for next sweep.
+    """
+    from .helpers import _archive_one_agent
+
+    results = []
+    live_parent_ids = _live_lineage_parent_ids(current_time)
+    if not live_parent_ids:
+        return results
+
+    for agent_id, meta in list(mcp_server.agent_metadata.items()):
+        if meta.status != "active":
+            continue
+        if not _is_superseded_by_lineage(agent_id, meta, live_parent_ids):
+            continue
+        # Self-managed agents own their lifecycle — same exclusion as detection.
+        agent_tags = getattr(meta, "tags", []) or []
+        if {"autonomous", "embodied", "anima"} & set(t.lower() for t in agent_tags):
+            continue
+        ok = await _archive_one_agent(
+            agent_id, meta, "lineage_succession", monitors=mcp_server.monitors
+        )
+        if ok:
+            results.append({
+                "agent_id": agent_id,
+                "action": "archived_lineage_succession",
+                "reason": "lineage_succession",
+            })
+    return results
+
+
 async def _try_recover_agent(stuck: dict, note_cooldown_minutes: float) -> list:
     """Attempt recovery for a single stuck agent. Returns list of recovery results."""
     agent_id = stuck["agent_id"]
@@ -613,7 +729,13 @@ async def handle_detect_stuck_agents(arguments: Dict[str, Any]) -> Sequence:
 
         # Auto-recover if requested
         recovered = []
-        if auto_recover and stuck_agents:
+        if auto_recover:
+            # Retire superseded parents first (lineage_succession). These were
+            # already suppressed from stuck_agents by detection; archiving them
+            # stops the next sweep from re-evaluating a process that rotated.
+            superseded = await _archive_superseded_parents(datetime.now(timezone.utc))
+            if superseded:
+                recovered.extend(superseded)
             for stuck in stuck_agents:
                 # Soft signals (e.g. cadence_silence) are surfaced via the audit
                 # trail only — never auto-recovered. The agent is silent/gone, not
@@ -641,7 +763,6 @@ async def handle_detect_stuck_agents(arguments: Dict[str, Any]) -> Sequence:
             if token != _last_stuck_audit_token:
                 _last_stuck_audit_token = token
                 from src.audit_log import audit_logger, AuditEntry
-                from datetime import datetime
                 audit_logger._write_entry(AuditEntry(
                     timestamp=datetime.now().isoformat(),
                     agent_id="system",
