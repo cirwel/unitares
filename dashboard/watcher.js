@@ -86,8 +86,21 @@
                 var td = document.createElement('td');
                 td.textContent = cells[c];
                 if (c === 4 && p.dismiss_ratio != null && p.dismiss_ratio >= 0.75) {
-                    td.className = 'watcher-dismiss-ratio-high';  // flag noisy rules
-                    td.title = 'Most closed findings for this rule were dismissed — likely false-positive heavy';
+                    // A high dismiss ratio is only a "noisy rule" signal when the
+                    // rule has never confirmed a real bug. When confirmed > 0, the
+                    // dismissals are the FP-filter pipeline catching known-benign
+                    // matches while the rule still earns its keep — don't paint it
+                    // as noise (the conflation that put healthy P003/P005/P016 on
+                    // the 2026-06-12 retirement triage; see PR #659).
+                    if (Number(p.confirmed) > 0) {
+                        td.className = 'watcher-dismiss-ratio-ok';
+                        td.title = 'High dismiss ratio, but this rule still confirms real bugs ('
+                            + p.confirmed + ' confirmed) — false-positive filters working, not noise'
+                            + (p.dismissed_fp ? ' · ' + p.dismissed_fp + ' dismissed as confirmed FPs' : '');
+                    } else {
+                        td.className = 'watcher-dismiss-ratio-high';  // genuine retirement candidate
+                        td.title = 'Mostly dismissed with zero confirmed bugs — candidate for review/retirement';
+                    }
                 }
                 tr.appendChild(td);
             }

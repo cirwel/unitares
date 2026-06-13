@@ -1354,7 +1354,9 @@ def _watcher_summary_from_rows(rows, now=None, window_days=_WATCHER_DAILY_WINDOW
 
     by_status = Counter()
     by_severity = Counter()   # open-only (surfaced + open) — the actionable queue
-    by_pattern = defaultdict(lambda: {"surfaced": 0, "confirmed": 0, "dismissed": 0, "other": 0})
+    by_pattern = defaultdict(
+        lambda: {"surfaced": 0, "confirmed": 0, "dismissed": 0, "dismissed_fp": 0, "other": 0}
+    )
     daily = defaultdict(int)  # yyyy-mm-dd → count of detected_at in that day
     resolutions_daily = defaultdict(lambda: {"confirmed": 0, "dismissed": 0})
 
@@ -1387,6 +1389,13 @@ def _watcher_summary_from_rows(rows, now=None, window_days=_WATCHER_DAILY_WINDOW
         bucket = by_pattern[pattern]
         if status in ("confirmed", "dismissed"):
             bucket[status] += 1
+            # A dismissal with reason "fp" is a *confirmed false positive* the
+            # verifier/operator caught — the detector fired on a known-benign
+            # shape. Tracking it separately lets the panel tell "FP filters
+            # working" apart from "rule produces no signal" (see findings.py
+            # DISMISSAL_REASONS / PRECISION_REASONS_TRUE_NEGATIVE).
+            if status == "dismissed" and str(row.get("resolution_reason") or "") == "fp":
+                bucket["dismissed_fp"] += 1
         elif status in ("surfaced", "open"):
             bucket["surfaced"] += 1
             by_severity[severity] += 1
@@ -1414,6 +1423,7 @@ def _watcher_summary_from_rows(rows, now=None, window_days=_WATCHER_DAILY_WINDOW
             "surfaced": b["surfaced"],
             "confirmed": b["confirmed"],
             "dismissed": b["dismissed"],
+            "dismissed_fp": b["dismissed_fp"],
             "other": b["other"],
             "dismiss_ratio": dismiss_ratio,
         })
