@@ -183,13 +183,16 @@ class TestStatusAndSeverityCounts:
 
 class TestPatternTable:
     def test_pattern_breakdown_with_dismiss_ratio(self):
-        """Patterns that get dismissed frequently are the false-positive-heavy
-        rules — surfacing dismiss_ratio on the panel lets an operator spot
-        noisy rules at a glance."""
+        """dismiss_ratio is a descriptive stat, not a noise verdict on its own.
+        A high ratio only signals a retirement candidate when the rule has
+        *also* never confirmed a real bug — when confirmed > 0 the dismissals
+        are the FP-filter pipeline catching known-benign matches (PR #659). The
+        panel makes that call via confirmed + dismissed_fp; this test just pins
+        the underlying counts the panel reads."""
         rows = [
             _row(pattern="P008", status="dismissed"),
             _row(pattern="P008", status="dismissed"),
-            _row(pattern="P008", status="dismissed"),   # 3/3 dismissed — noisy
+            _row(pattern="P008", status="dismissed"),   # 3/3 dismissed, 0 confirmed — retire
             _row(pattern="P001", status="confirmed"),
             _row(pattern="P001", status="confirmed"),   # 0/2 dismissed — signal
             _row(pattern="P001", status="surfaced"),    # 1 still open
@@ -200,6 +203,31 @@ class TestPatternTable:
         assert by["P008"]["dismiss_ratio"] == pytest.approx(1.0)
         assert by["P001"]["confirmed"] == 2 and by["P001"]["dismissed"] == 0
         assert by["P001"]["dismiss_ratio"] == pytest.approx(0.0)
+
+    def test_dismissed_fp_counts_only_false_positive_reason(self):
+        """dismissed_fp isolates dismissals closed as confirmed false positives
+        (reason='fp') from other dismissal reasons. This is the signal that
+        distinguishes 'FP filters working' from 'rule produces no usable
+        signal' — a healthy rule can have a high dismiss ratio made entirely of
+        fp closures while still confirming real bugs."""
+        rows = [
+            # P016: high dismiss ratio, but every dismissal is a caught FP and
+            # it still confirms a real bug — the PR #659 "keep it" shape.
+            _row(pattern="P016", status="dismissed", resolution_reason="fp"),
+            _row(pattern="P016", status="dismissed", resolution_reason="fp"),
+            _row(pattern="P016", status="dismissed", resolution_reason="fp"),
+            _row(pattern="P016", status="confirmed"),
+            # P777: dismissed for non-fp reasons (out of scope / won't fix) —
+            # not counted as caught false positives.
+            _row(pattern="P777", status="dismissed", resolution_reason="out_of_scope"),
+            _row(pattern="P777", status="dismissed", resolution_reason="wont_fix"),
+            _row(pattern="P777", status="dismissed"),  # no reason recorded
+        ]
+        out = _watcher_summary_from_rows(rows, now=NOW)
+        by = {p["pattern"]: p for p in out["patterns"]}
+        assert by["P016"]["dismissed"] == 3 and by["P016"]["dismissed_fp"] == 3
+        assert by["P016"]["confirmed"] == 1  # still earns its keep
+        assert by["P777"]["dismissed"] == 3 and by["P777"]["dismissed_fp"] == 0
 
     def test_dismiss_ratio_is_none_when_nothing_closed(self):
         """With no closed findings for a pattern, the ratio is undefined —
