@@ -60,11 +60,16 @@ def _patch_ctx(monkeypatch, *, agent_uuid, source, proof_origin):
     monkeypatch.setattr(ctxmod, "get_trajectory_confidence", lambda: None)
 
 
-def _patch_db(monkeypatch, *, earned):
+def _patch_db(monkeypatch, *, earned, dedicated=False):
     class _DB:
         async def is_substrate_earned(self, agent_id):
             return earned
     monkeypatch.setattr(dbmod, "get_db", lambda: _DB())
+    import src.identity.substrate as submod
+
+    async def _verify(agent_uuid, **kw):
+        return {"conditions": {"dedicated_substrate": dedicated}}
+    monkeypatch.setattr(submod, "verify_substrate_earned", _verify)
 
 
 def _is_refusal(result):
@@ -119,13 +124,27 @@ async def test_strict_allows_caller_asserted_write(monkeypatch):
 @pytest.mark.asyncio
 async def test_strict_exempts_substrate_earned_resident(monkeypatch):
     """A resident resolving by fingerprint (server_inferred) still writes —
-    the exemption is keyed on the resolved agent being substrate-earned."""
+    the exemption is keyed on the resolved agent being substrate-earned
+    (substrate_claims path)."""
     monkeypatch.setattr(ib, "is_strict_identity_required", lambda: True)
-    _patch_ctx(monkeypatch, agent_uuid="lumen-uuid",
+    _patch_ctx(monkeypatch, agent_uuid="sentinel-uuid",
                source="ip_ua_fingerprint", proof_origin="server_inferred")
     _patch_db(monkeypatch, earned=True)
     result = await resolve_identity_and_guards(_new_ctx())
     assert not _is_refusal(result), "substrate-earned resident must be exempt"
+
+
+@pytest.mark.asyncio
+async def test_strict_exempts_embodied_resident_not_in_substrate_claims(monkeypatch):
+    """Lumen case: embodied tag (dedicated_substrate) but NOT in substrate_claims.
+    is_substrate_earned returns False; verify_substrate_earned's dedicated_substrate
+    must still exempt it so an embodied resident isn't refused on deploy."""
+    monkeypatch.setattr(ib, "is_strict_identity_required", lambda: True)
+    _patch_ctx(monkeypatch, agent_uuid="lumen-uuid",
+               source="ip_ua_fingerprint", proof_origin="server_inferred")
+    _patch_db(monkeypatch, earned=False, dedicated=True)
+    result = await resolve_identity_and_guards(_new_ctx())
+    assert not _is_refusal(result), "embodied resident must be exempt via dedicated_substrate"
 
 
 @pytest.mark.asyncio
