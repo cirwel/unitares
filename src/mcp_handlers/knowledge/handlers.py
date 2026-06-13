@@ -996,10 +996,23 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
         fts_fallback_skipped_reason = None
         query_terms = str(query_text).split() if query_text else []
         query_term_count = len(query_terms)
-        # Broad agent-generated queries can spend the whole tool budget in
-        # hybrid fan-out or automatic OR recall fallback. Keep explicit caller
-        # intent available, but make auto mode cheap by default.
+        # Two DIFFERENT cost concerns, two limits (dogfood 2026-06-13 P2.8):
+        #
+        # - complex_query_term_limit gates the automatic AND→OR *recall*
+        #   fallback. OR across many terms explodes the FTS candidate set, so a
+        #   tight limit keeps a broad agent query from spending the whole tool
+        #   budget. Genuinely per-term expensive — stays low.
+        #
+        # - complex_hybrid_term_limit gates auto RRF fusion. Hybrid runs
+        #   semantic_search + an AND FTS query in parallel and fuses; the AND
+        #   FTS gets MORE restrictive (cheaper) with more terms and the
+        #   semantic side ignores term count entirely, so hybrid is NOT
+        #   per-term expensive. The old shared cap of 4 skipped fusion exactly
+        #   when normal multi-term conceptual queries (10 terms is normal for
+        #   agents) would benefit most. A generous cap restores fusion while
+        #   still bounding pathological term dumps.
         complex_query_term_limit = 4
+        complex_hybrid_term_limit = 12
 
         # Phase 3: cross-encoder reranker. When enabled, first-stage retrieval
         # fetches a wider pool (up to rerank_pool_size) so the reranker has
@@ -1099,12 +1112,12 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
             if (
                 hybrid_path
                 and search_mode_param == "auto"
-                and query_term_count > complex_query_term_limit
+                and query_term_count > complex_hybrid_term_limit
             ):
                 hybrid_path = False
                 hybrid_skipped_reason = (
                     f"auto hybrid skipped for {query_term_count}-term query "
-                    f"(limit {complex_query_term_limit}); use search_mode='hybrid' "
+                    f"(limit {complex_hybrid_term_limit}); use search_mode='hybrid' "
                     "to force RRF fusion"
                 )
             if hybrid_path:

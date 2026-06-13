@@ -1770,16 +1770,46 @@ class TestKgSearchComplexityCeiling:
         mock_graph.semantic_search = AsyncMock(return_value=[(disc, 0.82)])
         mock_graph.full_text_search = AsyncMock(return_value=[disc])
 
+        # 13 terms — above the (decoupled) hybrid cap of 12, so auto still
+        # skips RRF fusion for truly pathological term dumps.
         result = await handle_search_knowledge_graph({
-            "query": "one two three four five six",
+            "query": "a b c d e f g h i j k l m",
         })
         data = parse_result(result)
 
         assert data["success"] is True
         assert data["search_mode_used"] == "semantic"
         assert "hybrid_skipped_reason" in data
+        assert "limit 12" in data["hybrid_skipped_reason"]
         mock_graph.semantic_search.assert_awaited_once()
         mock_graph.full_text_search.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_auto_hybrid_runs_for_normal_multiterm_query(self, patch_common, monkeypatch):
+        """Dogfood 2026-06-13 P2.8: a 10-term conceptual query is normal for
+        agents and must get RRF fusion, not silently degrade to pure-semantic.
+        The hybrid cap is decoupled from the (lower) OR-recall cap."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        monkeypatch.setenv("UNITARES_ENABLE_HYBRID", "1")
+        disc = make_discovery(id="sem-1", summary="Semantic match")
+        mock_graph.semantic_search = AsyncMock(return_value=[(disc, 0.82)])
+        mock_graph.full_text_search = AsyncMock(return_value=[disc])
+
+        # 10 terms — above the old shared cap of 4, below the new hybrid cap.
+        result = await handle_search_knowledge_graph({
+            "query": "alpha beta gamma delta epsilon zeta eta theta iota kappa",
+        })
+        data = parse_result(result)
+
+        assert data["success"] is True
+        assert data["search_mode_used"] == "hybrid_rrf"
+        assert "hybrid_skipped_reason" not in data
+        # Hybrid fuses semantic + an AND FTS query.
+        mock_graph.semantic_search.assert_awaited()
+        mock_graph.full_text_search.assert_awaited()
+        assert mock_graph.full_text_search.await_args.kwargs["operator"] == "AND"
 
     @pytest.mark.asyncio
     async def test_long_fts_query_skips_automatic_or_fallback(self, patch_common):
