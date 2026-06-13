@@ -14,7 +14,8 @@ Claude Desktop compatible: All operations are async and non-blocking.
 
 from typing import Dict, Any, Sequence, Optional
 from mcp.types import TextContent
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import threading
 
 
 def _utc_now_iso() -> str:
@@ -27,6 +28,37 @@ def _utc_now_iso() -> str:
     timestamps must be UTC-aware.
     """
     return datetime.now(timezone.utc).isoformat()
+
+
+_discovery_id_lock = threading.Lock()
+_last_discovery_id_dt: Optional[datetime] = None
+
+
+def _new_discovery_id() -> str:
+    """Generate a strictly-monotonic UTC ISO timestamp for use as a discovery id.
+
+    Discovery ids double as the primary key *and* as a lex-sortable creation
+    timestamp (consumers parse them with ``datetime.fromisoformat`` and the
+    not-found helper prefix-matches them). A bare ``datetime.now()`` collides
+    when two writes land in the same microsecond — a batch loop or rapid
+    successive single stores — and the storage layer's
+    ``INSERT ... ON CONFLICT (id) DO UPDATE`` then *silently overwrites* the
+    first write (data loss, no error returned). Bumping by 1µs on collision
+    guarantees uniqueness within this process while preserving the
+    ISO-timestamp contract and chronological ordering.
+
+    Residual: two *separate* processes can still mint the same microsecond
+    id; closing that requires moving the primary key off a bare timestamp,
+    which is a contract change (docs + tests treat ids as parseable ISO
+    timestamps) and is out of scope here.
+    """
+    global _last_discovery_id_dt
+    with _discovery_id_lock:
+        now = datetime.now(timezone.utc)
+        if _last_discovery_id_dt is not None and now <= _last_discovery_id_dt:
+            now = _last_discovery_id_dt + timedelta(microseconds=1)
+        _last_discovery_id_dt = now
+        return now.isoformat()
 import time
 from ..utils import success_response, error_response, require_argument, require_agent_id, require_registered_agent
 from ..decorators import mcp_tool
@@ -625,8 +657,8 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
             raw_details = raw_details[:MAX_DETAILS_LEN] + "... [truncated]"
         
         # Create discovery node
-        discovery_id = _utc_now_iso()
-        
+        discovery_id = _new_discovery_id()
+
         # Parse response_to if provided (typed response to parent discovery)
         response_to = None
         if "response_to" in arguments and arguments["response_to"]:
@@ -848,7 +880,7 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
             await graph.update_discovery(supersedes_id, {
                 "status": "superseded",
                 "superseded_by": discovery_id,
-                "updated_at": datetime.now().isoformat(),
+                "updated_at": _utc_now_iso(),
             })
 
         # v2.5.3: Resolve UUID to display name for human-readable output
@@ -2133,7 +2165,8 @@ async def _handle_store_knowledge_graph_batch(arguments: Dict[str, Any], agent_i
         # Process each discovery with graceful error handling
         stored = []
         errors = []
-        
+        warnings: list[str] = []
+
         for idx, disc_data in enumerate(discoveries):
             try:
                 # Validate required fields
@@ -2179,8 +2212,8 @@ async def _handle_store_knowledge_graph_batch(arguments: Dict[str, Any], agent_i
                     details = details[:MAX_DETAILS_LEN] + "... [truncated]"
                 
                 # Create discovery node
-                discovery_id = _utc_now_iso()
-                
+                discovery_id = _new_discovery_id()
+
                 # Parse response_to if provided
                 response_to = None
                 if "response_to" in disc_data and disc_data["response_to"]:
@@ -2198,11 +2231,21 @@ async def _handle_store_knowledge_graph_batch(arguments: Dict[str, Any], agent_i
                                 response_type=response_type
                             )
                 
-                # Validate severity
+                # Validate severity. On an invalid value, store the entry with
+                # severity unset and warn — never fabricate a specific severity.
+                # (Previously this silently coerced to "medium", which both
+                # contradicts the documented "falls back to None" intent and
+                # invents a severity claim the writer never made.)
                 severity = disc_data.get("severity")
                 if severity is not None:
+                    severity = str(severity).lower()
                     if severity not in VALID_SEVERITIES:
-                        severity = "medium"  # Use default if invalid
+                        warnings.append(
+                            f"Discovery {idx}: invalid severity "
+                            f"'{disc_data.get('severity')}' ignored (stored unset). "
+                            f"Valid: {sorted(VALID_SEVERITIES)}"
+                        )
+                        severity = None
                 
                 # Parse confidence if provided
                 batch_confidence = None
@@ -2245,6 +2288,11 @@ async def _handle_store_knowledge_graph_batch(arguments: Dict[str, Any], agent_i
                 
                 # Add to graph (rate limiting handled internally)
                 await graph.add_discovery(discovery)
+                # Mirror the single-write path: batch writes were landing in
+                # the KG but never reaching the dashboard/bridge live timeline
+                # because they skipped this broadcast (the exact gap
+                # _broadcast_knowledge_write was created to close).
+                await _broadcast_knowledge_write(discovery, agent_id)
                 stored_item = {
                     "discovery_id": discovery_id,
                     "summary": summary,
@@ -2275,6 +2323,11 @@ async def _handle_store_knowledge_graph_batch(arguments: Dict[str, Any], agent_i
 
         if errors:
             response["errors"] = errors
+
+        # Non-fatal per-item notes (e.g. invalid severity ignored). The entry
+        # is still stored; the warning explains why it differs from the input.
+        if warnings:
+            response["warnings"] = warnings
 
         # Check if any items were truncated (v2.5.0+)
         truncated_count = sum(1 for s in stored if "_truncated" in s)
@@ -2817,7 +2870,7 @@ async def store_discovery_internal(
     from src.knowledge_graph import tag_provenance_source
 
     graph = await get_knowledge_graph()
-    discovery_id = _utc_now_iso()
+    discovery_id = _new_discovery_id()
     provenance = tag_provenance_source(extra_provenance, source)
     node = DiscoveryNode(
         id=discovery_id,

@@ -1484,6 +1484,108 @@ class TestUtcTimestamps:
         assert abs((id_dt - captured_dt).total_seconds()) < 1.0
 
 
+class TestMonotonicDiscoveryId:
+    """Discovery ids must be collision-free: a bare timestamp PK + the
+    storage layer's ON CONFLICT (id) DO UPDATE silently overwrote any two
+    writes that landed in the same microsecond (batch loops, rapid stores)."""
+
+    def test_new_discovery_id_strictly_monotonic_under_same_microsecond(self):
+        """Even when wall-clock now() repeats, ids are unique, increasing, ISO/UTC."""
+        from datetime import datetime, timezone
+        from unittest.mock import patch as _patch
+        import src.mcp_handlers.knowledge.handlers as h
+
+        frozen = datetime(2026, 6, 13, 20, 36, 40, 123456, tzinfo=timezone.utc)
+        with _patch.object(h, "_last_discovery_id_dt", None):
+            with _patch("src.mcp_handlers.knowledge.handlers.datetime") as mock_dt:
+                # now() always returns the same instant; fromisoformat/etc. pass through
+                mock_dt.now.return_value = frozen
+                ids = [h._new_discovery_id() for _ in range(5)]
+
+        assert len(set(ids)) == 5, f"ids collided: {ids}"
+        assert ids == sorted(ids), "ids must be strictly increasing"
+        for value in ids:
+            parsed = datetime.fromisoformat(value)
+            assert parsed.tzinfo is not None and parsed.utcoffset().total_seconds() == 0
+
+    @pytest.mark.asyncio
+    async def test_batch_store_produces_unique_ids(self, patch_common, registered_agent):
+        """A batch of discoveries never reuses a discovery_id."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "discoveries": [
+                {"discovery_type": "note", "summary": f"Note {i}"}
+                for i in range(5)
+            ],
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["success_count"] == 5
+        stored_ids = [d.id for (d,), _ in
+                      (c for c in mock_graph.add_discovery.call_args_list)]
+        assert len(set(stored_ids)) == 5, f"batch ids collided: {stored_ids}"
+
+
+class TestBatchStoreBroadcastAndSeverity:
+    @pytest.mark.asyncio
+    async def test_batch_store_emits_knowledge_write_per_item(
+        self, patch_common, registered_agent
+    ):
+        """Batch writes reach the live timeline (parity with single-write path)."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        with patch(
+            "src.mcp_handlers.knowledge.handlers.broadcaster_instance.broadcast_event",
+            new_callable=AsyncMock,
+        ) as bc:
+            result = await handle_store_knowledge_graph({
+                "agent_id": registered_agent,
+                "discoveries": [
+                    {"discovery_type": "note", "summary": "First"},
+                    {"discovery_type": "note", "summary": "Second"},
+                ],
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        write_calls = [
+            c for c in bc.await_args_list
+            if c.args and c.args[0] == "knowledge_write"
+        ]
+        assert len(write_calls) == 2, "expected one knowledge_write per stored item"
+
+    @pytest.mark.asyncio
+    async def test_batch_store_invalid_severity_stored_unset_with_warning(
+        self, patch_common, registered_agent
+    ):
+        """Invalid severity is dropped (not fabricated as 'medium') and warned."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "discoveries": [
+                {
+                    "discovery_type": "note",
+                    "summary": "Bad severity",
+                    "severity": "ultra_critical",
+                },
+            ],
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["success_count"] == 1
+        stored_discovery = mock_graph.add_discovery.call_args[0][0]
+        assert stored_discovery.severity is None, "invalid severity must not become 'medium'"
+        assert any("ultra_critical" in w for w in data.get("warnings", []))
+
+
 # ============================================================================
 # superseded_by field round-trip (KG hygiene v1)
 # ============================================================================
