@@ -178,3 +178,19 @@ async def test_injected_csid_classified_server_inferred():
     set_csid_transport_injected(True)  # transport synthesized it
     await derive_session_key(arguments={"client_session_id": "agent-abc123"})
     assert get_session_proof_origin() == "server_inferred"
+
+
+@pytest.mark.asyncio
+async def test_per_request_reset_prevents_injection_flag_leak():
+    """Self-heal contract: a prior request that injected (flag True) must not
+    bleed into a later caller-sent CSID. The transport resets the flag per
+    request (http_call_tool / wrapper_generator); with that reset a genuine
+    caller CSID is correctly caller_asserted, not falsely server_inferred."""
+    from src.mcp_handlers.identity.session import derive_session_key
+    from src.mcp_handlers.context import (
+        get_session_proof_origin, set_csid_transport_injected,
+    )
+    set_csid_transport_injected(True)   # prior request injected (would leak)
+    set_csid_transport_injected(False)  # transport's per-request reset
+    await derive_session_key(arguments={"client_session_id": "agent-real-caller"})
+    assert get_session_proof_origin() == "caller_asserted"

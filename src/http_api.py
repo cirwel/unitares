@@ -260,6 +260,7 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
 
     from src.mcp_handlers.context import (
         set_session_resolution_source,
+        set_session_proof_origin,
         update_context_agent_id,
     )
     from src.mcp_handlers.identity.handlers import derive_session_key, resolve_session_identity
@@ -291,6 +292,10 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
         update_context_agent_id(agent_uuid)
         arguments["agent_id"] = agent_uuid
         set_session_resolution_source("operator_token")
+        # Operator token is a per-call credential the caller transmitted —
+        # caller-proven. Stamp explicitly so this early-return (which never
+        # reaches derive_session_key/_mark) isn't left at a stale proof_origin.
+        set_session_proof_origin("caller_asserted")
         return agent_uuid
 
     # Sticky transport cache: single-sourced consult shared with the MCP
@@ -322,6 +327,15 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
             # (and bindings created before this field was threaded)
             # carry original="unknown" and continue to map to weak.
             set_session_resolution_source(sticky_resolution_source(cached))
+            # A sticky-cache hit resolves a binding by IP:UA fingerprint with NO
+            # per-call proof from the caller — it is the steady-state repeat of
+            # the same mis-attribution the gate exists to refuse (a concurrent
+            # same-host sibling can land on a cached binding). Stamp
+            # server_inferred so the strict gate refuses it unless the resolved
+            # agent is substrate-earned. Residents echo their CSID (→ explicit,
+            # caller_asserted) and never reach this path. This early-return runs
+            # before derive_session_key, so proof_origin must be set here.
+            set_session_proof_origin("server_inferred")
             return cached.agent_uuid
     except Exception as e:
         logger.debug("[STICKY-REST] cache check failed: %s", e)
@@ -508,6 +522,12 @@ async def http_call_tool(request):
         # For auth signals, read SessionSignals (headers) or continuity_token (HMAC-signed).
         # See PR #35 revert (gap #1) and PR #42 Part C rationale.
         client_session_id = None
+        # Reset the injection flag per-request so it can never leak True from a
+        # prior request on a reused context and mislabel this caller's genuine
+        # CSID as server-inferred (false refusal). Self-healing: set on every
+        # path, like session_resolution_source.
+        from src.mcp_handlers.context import set_csid_transport_injected
+        set_csid_transport_injected(False)
         if isinstance(arguments, dict) and "client_session_id" not in arguments:
             client_session_id = await _extract_client_session_id(request)
             arguments["client_session_id"] = client_session_id
@@ -515,7 +535,6 @@ async def http_call_tool(request):
             # mark it so identity resolution does not treat it as caller-proven
             # (otherwise a pin/fingerprint-derived injected CSID would satisfy
             # strict for a write under a sibling's identity).
-            from src.mcp_handlers.context import set_csid_transport_injected
             set_csid_transport_injected(True)
         elif isinstance(arguments, dict):
             client_session_id = arguments.get("client_session_id")
