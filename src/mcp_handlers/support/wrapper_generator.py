@@ -359,6 +359,13 @@ def _create_session_wrapper(
             if session_id and "client_session_id" not in kwargs:
                 kwargs["client_session_id"] = session_id
                 logger.debug(f"[TYPED_WRAPPER] {tool_name}: injected session_id={session_id}")
+                # Transport-injected, not caller-sent — mark so resolution does
+                # not treat it as caller-proven (parity with the REST inject site).
+                try:
+                    from src.mcp_handlers.context import set_csid_transport_injected
+                    set_csid_transport_injected(True)
+                except Exception:
+                    pass
 
         # Filter out None values
         filtered = {k: v for k, v in kwargs.items() if v is not None}

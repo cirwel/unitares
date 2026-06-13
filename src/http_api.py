@@ -511,6 +511,12 @@ async def http_call_tool(request):
         if isinstance(arguments, dict) and "client_session_id" not in arguments:
             client_session_id = await _extract_client_session_id(request)
             arguments["client_session_id"] = client_session_id
+            # This CSID was synthesized by the transport, not sent by the caller —
+            # mark it so identity resolution does not treat it as caller-proven
+            # (otherwise a pin/fingerprint-derived injected CSID would satisfy
+            # strict for a write under a sibling's identity).
+            from src.mcp_handlers.context import set_csid_transport_injected
+            set_csid_transport_injected(True)
         elif isinstance(arguments, dict):
             client_session_id = arguments.get("client_session_id")
 
