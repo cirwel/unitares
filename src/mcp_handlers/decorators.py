@@ -29,7 +29,6 @@ class ToolDefinition:
     deprecated: bool = False
     hidden: bool = False
     superseded_by: Optional[str] = None
-    rate_limit_exempt: bool = False
     # Identity-bootstrap declaration (#425). One of:
     #   "required"     — default; tool needs a bound identity.
     #   "pre_onboard"  — protocol-inspection or identity-lifecycle tool;
@@ -56,7 +55,6 @@ def mcp_tool(
     name: Optional[str] = None,
     timeout: float = 30.0,
     description: Optional[str] = None,
-    rate_limit_exempt: bool = False,
     deprecated: bool = False,
     hidden: bool = False,
     superseded_by: Optional[str] = None,
@@ -90,7 +88,6 @@ def mcp_tool(
         name: Tool name (defaults to function name without 'handle_' prefix)
         timeout: Timeout in seconds (default: 30.0)
         description: Tool description (defaults to function docstring)
-        rate_limit_exempt: If True, skip rate limiting for this tool
         deprecated: If True, tool still works but warns users to use superseded_by
         hidden: If True, tool is not shown in list_tools (internal use only)
         superseded_by: Name of tool that replaces this one (for deprecation messages)
@@ -121,7 +118,6 @@ def mcp_tool(
         # Attach metadata to function for introspection
         func._mcp_tool_name = tool_name
         func._mcp_timeout = timeout
-        func._mcp_rate_limit_exempt = rate_limit_exempt
         func._mcp_deprecated = deprecated
         func._mcp_hidden = hidden
         func._mcp_superseded_by = superseded_by
@@ -233,7 +229,6 @@ def mcp_tool(
                 deprecated=deprecated,
                 hidden=hidden,
                 superseded_by=superseded_by,
-                rate_limit_exempt=rate_limit_exempt,
                 requires_identity=requires_identity,
                 pre_onboard_actions=_pre_onboard_actions,
                 default_action=_default_action,

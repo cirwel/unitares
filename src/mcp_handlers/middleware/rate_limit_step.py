@@ -18,10 +18,9 @@ _tool_call_history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
 # registered tools (not aliases), so the names survive resolve_alias on
 # both the MCP and REST pipelines. Mixed read/write tools (knowledge,
 # agent, observe, ...) are exempted per-call below via their declared
-# pre_onboard_actions instead of by name. NOTE: the @mcp_tool
-# rate_limit_exempt flag is declared on ~25 tools but consulted nowhere —
-# it is NOT trusted here because its declarations include mutating tools
-# (archive_orphan_agents, cleanup_stale_locks); audit before wiring it.
+# pre_onboard_actions instead of by name. (A never-consulted
+# rate_limit_exempt decorator flag was removed 2026-06-12 — this set and
+# the pre_onboard_actions classification are the only exemption sources.)
 _READ_ONLY_TOOLS = {
     'health_check', 'get_server_info', 'list_tools', 'get_thresholds',
     'search_knowledge_graph', 'get_governance_metrics', 'skills',

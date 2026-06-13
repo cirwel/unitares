@@ -5273,6 +5273,12 @@ main {
     color: #f59e0b;
 }
 
+/* High dismiss ratio but the rule still confirms real bugs: FP filters are
+   working, not a noisy detector. Muted, not alarming. */
+.watcher-dismiss-ratio-ok {
+    color: var(--text-secondary);
+}
+
 .watcher-patterns-empty {
     color: var(--text-secondary);
     font-style: italic;

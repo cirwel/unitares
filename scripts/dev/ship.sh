@@ -3,17 +3,24 @@
 #
 # Routes changes to the right delivery path based on what they touch:
 #   - Runtime code (agents/, src/mcp_handlers/, src/mcp_server*, src/core.py,
-#     src/background_tasks.py) → feature branch + PR + auto-merge-on-green.
+#     src/background_tasks.py) → feature branch + draft PR by default.
+#   - Detached HEAD work → feature branch + draft PR by default.
 #   - Everything else → direct commit + push on the current branch.
 #
 # The split exists because multiple agents push to this repo concurrently.
 # Runtime changes need a rollback artifact (the PR) and cross-agent
 # visibility; docs/tests/helpers don't, and PR friction for every tiny
-# edit would slow the fleet down.
+# edit would slow the fleet down. Draft PRs make unfinished runtime/detached
+# work visible without pretending it is ready to merge.
 #
 # Usage:
 #   ./scripts/dev/ship.sh "commit message"
+#   ./scripts/dev/ship.sh --draft-pr "commit message"
+#   ./scripts/dev/ship.sh --open-pr "commit message"
+#   ./scripts/dev/ship.sh --auto-merge "commit message"
+#   ./scripts/dev/ship.sh --direct "commit message"
 #   ./scripts/dev/ship.sh --classify          # just print "runtime" or "other"
+#   ./scripts/dev/ship.sh --plan "commit message"
 #
 # Requirements: staged changes (git add already done), gh CLI authed.
 
@@ -88,26 +95,152 @@ collect_watcher_fingerprints() {
         | python3 "$PROJECT_ROOT/scripts/dev/_ship_watcher_fingerprints.py" "$findings"
 }
 
-if [[ "${1:-}" == "--classify" ]]; then
-    classify
-    exit 0
-fi
+usage() {
+    cat >&2 <<'USAGE'
+usage: ship.sh [--draft-pr|--open-pr|--auto-merge|--direct] "commit message"
+       ship.sh --classify
+       ship.sh --plan "commit message"
 
-MESSAGE="${1:-}"
+Modes:
+  auto         runtime or detached work -> draft PR; other branch work -> direct push
+  --draft-pr  commit, push current/new branch, and open a draft PR
+  --open-pr   commit, push current/new branch, and open a ready PR
+  --auto-merge
+               commit, push current/new branch, open a ready PR, and enable auto-merge
+  --direct    commit and push the current branch; refuses detached HEAD
+USAGE
+}
+
+MODE="${UNITARES_SHIP_MODE:-auto}"
+PLAN_ONLY=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --classify)
+            classify
+            exit 0
+            ;;
+        --plan|--dry-run)
+            PLAN_ONLY=1
+            shift
+            ;;
+        --draft-pr|--draft)
+            MODE="draft_pr"
+            shift
+            ;;
+        --open-pr|--pr)
+            MODE="open_pr"
+            shift
+            ;;
+        --auto-merge)
+            MODE="auto_merge"
+            shift
+            ;;
+        --direct)
+            MODE="direct"
+            shift
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --*)
+            echo "unknown option: $1" >&2
+            usage
+            exit 2
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+MESSAGE="${*:-}"
 if [[ -z "$MESSAGE" ]]; then
-    echo "usage: ship.sh \"commit message\"" >&2
+    usage
     exit 2
 fi
 
 KIND=$(classify)
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
+BRANCH=$(git branch --show-current)
+HEAD_SHORT=$(git rev-parse --short HEAD)
+DETACHED=0
+if [[ -z "$BRANCH" ]]; then
+    DETACHED=1
+fi
+
+normalize_mode() {
+    case "$1" in
+        auto|draft_pr|open_pr|auto_merge|direct)
+            echo "$1" ;;
+        draft-pr|draft)
+            echo "draft_pr" ;;
+        open-pr|pr)
+            echo "open_pr" ;;
+        auto-merge)
+            echo "auto_merge" ;;
+        *)
+            echo "invalid" ;;
+    esac
+}
+
+MODE=$(normalize_mode "$MODE")
+if [[ "$MODE" == "invalid" ]]; then
+    echo "invalid UNITARES_SHIP_MODE; expected auto, draft-pr, open-pr, auto-merge, or direct" >&2
+    exit 2
+fi
+
+DELIVERY="$MODE"
+FORCE_AUTO_BRANCH=0
+if [[ "$MODE" == "auto" ]]; then
+    if [[ "$KIND" == "runtime" ]]; then
+        DELIVERY="draft_pr"
+        FORCE_AUTO_BRANCH=1
+    elif [[ "$DETACHED" == "1" ]]; then
+        DELIVERY="draft_pr"
+        FORCE_AUTO_BRANCH=1
+    else
+        DELIVERY="direct"
+    fi
+elif [[ "$DETACHED" == "1" && "$MODE" != "direct" ]]; then
+    FORCE_AUTO_BRANCH=1
+fi
+
+if [[ "$KIND" == "empty" ]]; then
+    echo "nothing staged — stage files with 'git add' first" >&2
+    exit 2
+fi
+
+if [[ "$DELIVERY" == "direct" && "$DETACHED" == "1" ]]; then
+    echo "detached HEAD cannot use direct delivery; rerun with --draft-pr or create a branch" >&2
+    exit 2
+fi
+
+if [[ "$BRANCH" == "main" || "$BRANCH" == "master" ]]; then
+    case "$DELIVERY" in
+        draft_pr|open_pr|auto_merge)
+            FORCE_AUTO_BRANCH=1 ;;
+    esac
+fi
+
+if [[ "$PLAN_ONLY" == "1" ]]; then
+    branch_label="${BRANCH:-"(detached)"}"
+    echo "kind=$KIND"
+    echo "branch=$branch_label"
+    echo "head=$HEAD_SHORT"
+    echo "mode=$MODE"
+    echo "delivery=$DELIVERY"
+    echo "force_auto_branch=$FORCE_AUTO_BRANCH"
+    exit 0
+fi
 
 # Phase A advisory / Phase B enforcement lease. In advisory mode a
 # held_by_other or service_unavailable outcome is telemetry-only. When
 # LEASE_PLANE_ENFORCED_SURFACE_KINDS includes this surface kind, a missing
 # lease blocks the ship.
+LEASE_BRANCH="${BRANCH:-detached-$HEAD_SHORT}"
 LEASE_RESULT=$(python3 "$PROJECT_ROOT/scripts/dev/_ship_lease_advisory.py" acquire \
-    --surface-id="resident:/ship_sh_$BRANCH" \
+    --surface-id="resident:/ship_sh_$LEASE_BRANCH" \
     --surface-kind="ship_sh" \
     --intent="$MESSAGE" \
     --ttl-s=300 2>/dev/null || echo '{"outcome":"client_error","lease_id":null}')
@@ -148,42 +281,99 @@ if git diff --cached --name-only | grep -q '^skills/'; then
     fi
 fi
 
-case "$KIND" in
-    empty)
-        echo "nothing staged — stage files with 'git add' first" >&2
-        exit 2 ;;
-    runtime)
-        SLUG=$(printf '%s' "$MESSAGE" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-' | cut -c1-40)
-        # Agent-scoped prefix so concurrent agents' auto-branches are self-identifying.
-        # Override with UNITARES_SHIP_AGENT=<name>; otherwise detect from env.
-        AGENT_PREFIX="${UNITARES_SHIP_AGENT:-}"
-        if [[ -z "$AGENT_PREFIX" ]]; then
-            if [[ -n "${CLAUDECODE:-}" ]]; then
-                AGENT_PREFIX="claude"
-            else
-                AGENT_PREFIX="codex"
-            fi
+if [[ "$KIND" != "runtime" && "$KIND" != "other" ]]; then
+    echo "unknown staged-change classification: $KIND" >&2
+    exit 2
+fi
+
+create_auto_branch_if_needed() {
+    if [[ "$FORCE_AUTO_BRANCH" != "1" ]]; then
+        return 0
+    fi
+
+    local slug
+    slug=$(printf '%s' "$MESSAGE" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-' | cut -c1-40)
+    if [[ -z "$slug" ]]; then
+        slug="change"
+    fi
+
+    # Agent-scoped prefix so concurrent agents' auto-branches are self-identifying.
+    # Override with UNITARES_SHIP_AGENT=<name>; otherwise detect from env.
+    local agent_prefix="${UNITARES_SHIP_AGENT:-}"
+    if [[ -z "$agent_prefix" ]]; then
+        if [[ -n "${CLAUDECODE:-}" ]]; then
+            agent_prefix="claude"
+        else
+            agent_prefix="codex"
         fi
-        NEW_BRANCH="${AGENT_PREFIX}/auto/$(date +%Y%m%d-%H%M%S)-${SLUG}"
-        echo "[ship] runtime path → $NEW_BRANCH (PR + auto-merge)"
-        git checkout -b "$NEW_BRANCH"
-        git commit -m "$COMMIT_MESSAGE"
-        git push -u origin "$NEW_BRANCH"
-        # GitHub caps PR titles at 256 chars; conventional-commit subjects are
-        # ~72. Use only the first line so multi-line commit messages (subject +
-        # body) don't blow past the GraphQL limit and fail PR creation. See
-        # issue #289 — hit on PR #288 with a long-bodied commit.
-        PR_TITLE=$(printf '%s\n' "$MESSAGE" | head -n1)
-        PR_URL=$(gh pr create --title "$PR_TITLE" --body "Auto-shipped by ship.sh — runtime path. Auto-merge is enabled; CI gate applies.")
-        echo "$PR_URL"
-        gh pr merge --auto --squash "$PR_URL" || \
+    fi
+
+    local new_branch="${agent_prefix}/auto/$(date +%Y%m%d-%H%M%S)-${slug}"
+    echo "[ship] creating PR branch: $new_branch"
+    git checkout -b "$new_branch"
+    BRANCH="$new_branch"
+}
+
+create_or_show_pr() {
+    local pr_kind="$1"
+    local pr_title pr_body pr_url existing_url
+
+    # GitHub caps PR titles at 256 chars; conventional-commit subjects are
+    # ~72. Use only the first line so multi-line commit messages (subject +
+    # body) don't blow past the GraphQL limit and fail PR creation. See
+    # issue #289 — hit on PR #288 with a long-bodied commit.
+    pr_title=$(printf '%s\n' "$MESSAGE" | head -n1)
+
+    existing_url=$(gh pr view --json url --jq .url 2>/dev/null || true)
+    if [[ -n "$existing_url" ]]; then
+        echo "[ship] PR already exists for $BRANCH"
+        echo "$existing_url"
+        return 0
+    fi
+
+    case "$pr_kind" in
+        draft_pr)
+            pr_body="Auto-shipped by ship.sh as a draft PR. Local work is visible; mark ready after validation/review."
+            pr_url=$(gh pr create --draft --title "$pr_title" --body "$pr_body")
+            ;;
+        open_pr)
+            pr_body="Auto-shipped by ship.sh as an open PR. CI gate applies."
+            pr_url=$(gh pr create --title "$pr_title" --body "$pr_body")
+            ;;
+        auto_merge)
+            pr_body="Auto-shipped by ship.sh. Auto-merge requested; CI gate applies."
+            pr_url=$(gh pr create --title "$pr_title" --body "$pr_body")
+            ;;
+        *)
+            echo "internal error: unknown PR kind $pr_kind" >&2
+            exit 2
+            ;;
+    esac
+    echo "$pr_url"
+
+    if [[ "$pr_kind" == "auto_merge" ]]; then
+        gh pr merge --auto --squash "$pr_url" || \
             echo "[ship] auto-merge not enabled (branch protection may require manual setup); PR is open"
-        ;;
-    other)
-        echo "[ship] non-runtime → direct commit + push on $BRANCH"
+    fi
+}
+
+case "$DELIVERY" in
+    direct)
+        echo "[ship] direct path → commit + push on $BRANCH"
         git commit -m "$COMMIT_MESSAGE"
         # Push to the same-name branch on origin, not whatever upstream tracks
         # (a feature branch may track master and would otherwise push ambiguously).
-        git push origin "HEAD:$BRANCH"
+        git push -u origin "HEAD:$BRANCH"
+        ;;
+    draft_pr|open_pr|auto_merge)
+        create_auto_branch_if_needed
+        echo "[ship] PR path → $BRANCH ($DELIVERY)"
+        git commit -m "$COMMIT_MESSAGE"
+        git push -u origin "$BRANCH"
+        create_or_show_pr "$DELIVERY"
+        ;;
+    *)
+        echo "internal error: unknown delivery path $DELIVERY" >&2
+        exit 2
         ;;
 esac

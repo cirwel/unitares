@@ -190,7 +190,7 @@ def _filter_skills(
 # Handler
 # ---------------------------------------------------------------------
 
-@mcp_tool("skills", timeout=10.0, rate_limit_exempt=True, requires_identity="pre_onboard")
+@mcp_tool("skills", timeout=10.0, requires_identity="pre_onboard")
 async def handle_skills(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Return server-authored skill bundle for adapter consumption.
 

@@ -141,7 +141,7 @@ def build_server_info_payload() -> Dict[str, Any]:
     }
 
 
-@mcp_tool("get_server_info", timeout=10.0, rate_limit_exempt=True, requires_identity="pre_onboard")
+@mcp_tool("get_server_info", timeout=10.0, requires_identity="pre_onboard")
 async def handle_get_server_info(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Get MCP server version, process information, and health status"""
     return success_response(build_server_info_payload())
@@ -257,7 +257,7 @@ async def handle_check_continuity_health(arguments: Dict[str, Any]) -> Sequence[
         logger.error(f"Continuity health check failed: {e}", exc_info=True)
         return [error_response(f"Continuity health check failed: {e}")]
 
-@mcp_tool("get_tool_usage_stats", timeout=15.0, rate_limit_exempt=True, register=False)
+@mcp_tool("get_tool_usage_stats", timeout=15.0, register=False)
 async def handle_get_tool_usage_stats(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Get tool usage statistics to identify which tools are actually used vs unused"""
     from src.tool_usage_tracker import get_tool_usage_tracker
@@ -301,7 +301,7 @@ def set_workspace_last_agent(mcp_server, agent_id: str) -> None:
     except Exception:
         pass  # Non-critical
 
-@mcp_tool("health_check", timeout=5.0, rate_limit_exempt=True, requires_identity="pre_onboard")
+@mcp_tool("health_check", timeout=5.0, requires_identity="pre_onboard")
 async def handle_health_check(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Read the most recent cached health snapshot.
 
@@ -372,7 +372,7 @@ async def handle_health_check(arguments: Dict[str, Any]) -> Sequence[TextContent
     }
     return success_response(response)
 
-@mcp_tool("get_telemetry_metrics", timeout=15.0, rate_limit_exempt=True, register=False)
+@mcp_tool("get_telemetry_metrics", timeout=15.0, register=False)
 async def handle_get_telemetry_metrics(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Get comprehensive telemetry metrics: skip rates, confidence distributions, calibration status
     
@@ -450,7 +450,7 @@ async def handle_reset_monitor(arguments: Dict[str, Any]) -> Sequence[TextConten
         "agent_id": agent_id
     })
 
-@mcp_tool("cleanup_stale_locks", timeout=15.0, rate_limit_exempt=True, register=False)
+@mcp_tool("cleanup_stale_locks", timeout=15.0, register=False)
 async def handle_cleanup_stale_locks(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Clean up stale lock files that are no longer held by active processes"""
     try:
@@ -475,7 +475,7 @@ async def handle_cleanup_stale_locks(arguments: Dict[str, Any]) -> Sequence[Text
     except Exception as e:
         return [error_response(f"Error cleaning stale locks: {str(e)}")]
 
-@mcp_tool("get_workspace_health", timeout=20.0, rate_limit_exempt=True, register=False)
+@mcp_tool("get_workspace_health", timeout=20.0, register=False)
 async def handle_get_workspace_health(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Handle get_workspace_health tool - comprehensive workspace health status"""
     from src.workspace_health import get_workspace_health
@@ -494,7 +494,7 @@ async def handle_get_workspace_health(arguments: Dict[str, Any]) -> Sequence[Tex
             }
         )]
 
-@mcp_tool("debug_request_context", timeout=5.0, rate_limit_exempt=True, register=False)
+@mcp_tool("debug_request_context", timeout=5.0, register=False)
 async def handle_debug_request_context(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Debug request context - shows raw diagnostic info about session, identity, and bindings.
@@ -600,7 +600,7 @@ async def handle_debug_request_context(arguments: Dict[str, Any]) -> Sequence[Te
 
     return success_response(result)
 
-@mcp_tool("validate_file_path", timeout=5.0, rate_limit_exempt=True, register=False)
+@mcp_tool("validate_file_path", timeout=5.0, register=False)
 async def handle_validate_file_path(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Validate file path against project policies (anti-proliferation).
@@ -671,7 +671,7 @@ async def handle_validate_file_path(arguments: Dict[str, Any]) -> Sequence[TextC
         "message": "File path complies with project policies"
     })
 
-@mcp_tool("get_connection_status", timeout=5.0, rate_limit_exempt=True, register=False)
+@mcp_tool("get_connection_status", timeout=5.0, register=False)
 async def handle_get_connection_status(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Get MCP connection status and tool availability.

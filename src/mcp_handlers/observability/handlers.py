@@ -799,17 +799,24 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
     # Count by severity and type
     by_severity = {"high": 0, "medium": 0, "low": 0}
     by_type = {}
+    stale_count = 0
     for anomaly in all_anomalies:
         severity = anomaly.get("severity", "low")
         by_severity[severity] = by_severity.get(severity, 0) + 1
         anomaly_type = anomaly.get("type", "unknown")
         by_type[anomaly_type] = by_type.get(anomaly_type, 0) + 1
-    
+        if anomaly.get("stale") is True:
+            stale_count += 1
+
     # Add EISV labels for API documentation
     return success_response({
         "anomalies": all_anomalies,
         "summary": {
             "total_anomalies": len(all_anomalies),
+            # stale = recomputed from a frozen (idle) history window; already
+            # reported, not a current finding (#637). fresh + stale = total.
+            "fresh_anomalies": len(all_anomalies) - stale_count,
+            "stale_anomalies": stale_count,
             "by_severity": by_severity,
             "by_type": by_type
         },

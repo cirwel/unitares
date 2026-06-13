@@ -131,12 +131,39 @@ CADENCE_SILENCE_MULTIPLIER = 6.0        # silent for >= this many times its own 
 # this is what keeps the audit trail from filling with finished-but-unarchived
 # ephemeral agents (which cadence cannot distinguish from a genuine hang).
 CADENCE_SILENCE_STALE_CAP_MINUTES = 1440.0   # 24h
+# The margin timeout rules get the same upper bound. An abandoned identity's
+# margin is computed from its FROZEN state — no new check-ins ever arrive to
+# move it off critical/tight — so without a cap the agent stays "stuck" forever,
+# pinning the stuck KPI and re-firing the audit trail on every sweep (observed
+# 2026-06-12: ~24 day-old unnamed identities held the count indefinitely).
+MARGIN_STUCK_STALE_CAP_MINUTES = 1440.0      # 24h, matches the cadence cap
 # NOTE on the cadence proxy: avg_gap is computed over the agent's WHOLE life
 # (created_at -> last_update), which is a coarse proxy for "recent rhythm." A
 # recent-window cadence (last N gaps) would be more precise but needs the
 # per-check-in timestamp series, which this path doesn't have. Coarse-but-safe:
 # it errs toward flagging, and the signal is soft. Also note the MULTIPLIER is
 # floor-dominated for fast agents (avg_gap < 5min => 6*gap < 30 => floor wins).
+
+
+def stuck_change_token(stuck_agents: list) -> str:
+    """Emit-on-change dedup token for the stuck_detected audit write.
+
+    Keyed on the detected set itself — sorted (agent_id, reason) pairs — not on
+    counts or human-readable details, so the token advances exactly when an
+    agent enters or leaves the stuck set or its reason changes. Repeated sweeps
+    over an unchanged set yield an identical token and write nothing. Mirrors
+    anomaly_change_token (#638).
+    """
+    import hashlib
+    basis = "|".join(
+        sorted(f"{s.get('agent_id')}:{s.get('reason')}" for s in stuck_agents)
+    )
+    return hashlib.sha256(basis.encode()).hexdigest()[:16]
+
+
+# Last-written stuck_detected token (process-lifetime; a restart re-emits one
+# row for a persisting set, which is acceptable and self-documents the restart).
+_last_stuck_audit_token: str | None = None
 
 
 def _detect_stuck_agents(
@@ -267,6 +294,14 @@ def _detect_stuck_agents(
                         continue
         except (ValueError, TypeError, AttributeError) as e:
             logger.debug(f"cadence-silence check failed for {agent_id}: {e}")
+
+        # Stale cap (mirrors CADENCE_SILENCE_STALE_CAP_MINUTES): beyond this,
+        # an idle agent is abandoned/archive-pending, not a live hang. Its
+        # margin is frozen — no new check-ins will ever move it — so evaluating
+        # it below would flag it "stuck" on every sweep until the end of time.
+        # Skipping here also avoids hydrating monitors for dead agents.
+        if age_minutes > MARGIN_STUCK_STALE_CAP_MINUTES:
+            continue
 
         # Get current metrics to compute margin
         try:
@@ -531,7 +566,7 @@ async def _try_recover_agent(stuck: dict, note_cooldown_minutes: float) -> list:
     return results
 
 
-@mcp_tool("detect_stuck_agents", timeout=15.0, rate_limit_exempt=True, requires_identity="pre_onboard")
+@mcp_tool("detect_stuck_agents", timeout=15.0, requires_identity="pre_onboard")
 async def handle_detect_stuck_agents(arguments: Dict[str, Any]) -> Sequence:
     """Detect stuck agents using proprioceptive margin + patterns.
 
@@ -590,20 +625,35 @@ async def handle_detect_stuck_agents(arguments: Dict[str, Any]) -> Sequence:
                 if result:
                     recovered.extend(result if isinstance(result, list) else [result])
 
-        # Log stuck agents to audit trail (if any detected)
+        # Log stuck agents to audit trail — emit-on-change only. This handler
+        # runs on every dashboard refresh PLUS a 5-min background sweep;
+        # unconditional writes filled the audit trail with hundreds of identical
+        # rows per hour (observed ~250/h on 2026-06-12). Same pattern as
+        # anomaly_change_token (#638). A cleared set resets the token, so a
+        # genuine re-occurrence of the same set is logged again.
+        # Concurrency note: the read-compare-assign-write below is await-free,
+        # so under asyncio it runs atomically between suspension points —
+        # concurrent handler invocations serialize around it. No lock needed
+        # unless an await is ever introduced inside this block.
+        global _last_stuck_audit_token
         if stuck_agents:
-            from src.audit_log import audit_logger, AuditEntry
-            from datetime import datetime
-            audit_logger._write_entry(AuditEntry(
-                timestamp=datetime.now().isoformat(),
-                agent_id="system",
-                event_type="stuck_detected",
-                confidence=1.0,
-                details={
-                    "count": len(stuck_agents),
-                    "agents": [{"agent_id": s.get("agent_id"), "reason": s.get("reason"), "agent_name": s.get("agent_name", "")} for s in stuck_agents[:10]],
-                }
-            ))
+            token = stuck_change_token(stuck_agents)
+            if token != _last_stuck_audit_token:
+                _last_stuck_audit_token = token
+                from src.audit_log import audit_logger, AuditEntry
+                from datetime import datetime
+                audit_logger._write_entry(AuditEntry(
+                    timestamp=datetime.now().isoformat(),
+                    agent_id="system",
+                    event_type="stuck_detected",
+                    confidence=1.0,
+                    details={
+                        "count": len(stuck_agents),
+                        "agents": [{"agent_id": s.get("agent_id"), "reason": s.get("reason"), "agent_name": s.get("agent_name", "")} for s in stuck_agents[:10]],
+                    }
+                ))
+        else:
+            _last_stuck_audit_token = None
 
         return success_response({
             "stuck_agents": stuck_agents,

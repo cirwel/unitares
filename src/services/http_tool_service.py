@@ -31,7 +31,11 @@ from src.mcp_handlers.core import handle_process_agent_update, unbound_metrics_p
 from src.mcp_handlers.utils import require_agent_id
 from src.services.http_dispatch_fallback import execute_http_dispatch_fallback
 from src.services.runtime_queries import get_governance_metrics_data, get_health_check_data
-from src.services.tool_usage_recorder import classify_tool_result, record_tool_usage
+from src.services.tool_usage_recorder import (
+    classify_tool_result,
+    record_tool_usage,
+    resolve_minted_agent_id,
+)
 from src.wave3a_beam_proxy import proxy_to_beam
 from src.wave3a_routing import get_route as wave3a_get_route
 
@@ -219,8 +223,16 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
         refusal = _strict_identity_refusal_or_none(tool_name, arguments)
         if refusal is not None:
             latency_ms = int((time.monotonic() - t0) * 1000)
+            # A typed refusal is NOT a tool success. Recording success=True
+            # here made every strict-gate refusal look like a SUCCEEDING
+            # anonymous call in audit.tool_usage — poisoning exactly the
+            # burn-in question "did any unbound write get through?" (#543
+            # honesty class; found day 1 of the 2026-06-12 stage 2-4
+            # burn-in). error_type mirrors the refusal payload's status so
+            # triage queries can subtract refusals without log archaeology.
             record_tool_usage(tool_name=tool_name, agent_id=None,
-                              success=True, latency_ms=latency_ms)
+                              success=False, error_type="identity_required",
+                              latency_ms=latency_ms)
             return refusal
 
         # Wave 3a routing — HTTP path symmetric with MCP-protocol wrapper.
@@ -252,13 +264,15 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
             result = await handler(arguments)
             latency_ms = int((time.monotonic() - t0) * 1000)
             success, error_type = classify_tool_result(result)
-            record_tool_usage(tool_name=tool_name, agent_id=agent_id,
+            record_tool_usage(tool_name=tool_name,
+                              agent_id=resolve_minted_agent_id(tool_name, agent_id, result),
                               success=success, error_type=error_type, latency_ms=latency_ms)
             return _normalize_direct_http_result(result)
         result = await execute_http_dispatch_fallback(tool_name, arguments)
         latency_ms = int((time.monotonic() - t0) * 1000)
         success, error_type = classify_tool_result(result)
-        record_tool_usage(tool_name=tool_name, agent_id=agent_id,
+        record_tool_usage(tool_name=tool_name,
+                          agent_id=resolve_minted_agent_id(tool_name, agent_id, result),
                           success=success, error_type=error_type, latency_ms=latency_ms)
         return result
     except Exception as e:

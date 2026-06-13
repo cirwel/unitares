@@ -149,3 +149,21 @@ async def test_http_pause_verdict_records_success():
     kwargs = mock_tracker.log_tool_call.call_args.kwargs
     assert kwargs["success"] is True
     assert kwargs["error_type"] is None
+
+
+def test_details_spread_error_type_is_used_when_category_and_code_absent():
+    """Legacy error_response() refusals (reserved-prefix guard) carry only a
+    details-spread error_type; the audit row must not collapse to tool_error."""
+    payload = {"success": False, "error_type": "reserved_prefix",
+               "error": "SECURITY: agent_id 'mcp_x' uses reserved prefix"}
+    success, error_type = classify_tool_result(payload)
+    assert success is False
+    assert error_type == "reserved_prefix"
+
+
+def test_error_category_still_wins_over_details_error_type():
+    payload = {"success": False, "error_category": "identity_error",
+               "error_type": "reserved_prefix"}
+    success, error_type = classify_tool_result(payload)
+    assert success is False
+    assert error_type == "identity_error"

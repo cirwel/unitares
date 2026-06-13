@@ -1291,9 +1291,14 @@ async function loadAnomalies() {
         const detailEl = document.getElementById('anomalies-detail');
         if (!countEl || !detailEl) return;
         if (result && result.anomalies) {
-            const count = result.anomalies.length;
-            animateValue(countEl, count);
-            detailEl.textContent = count > 0 ? (result.anomalies[0]?.type || 'Detected') : 'None';
+            // stale=true marks an anomaly recomputed from a frozen (idle)
+            // history window — already reported, not a current finding (#637).
+            const fresh = result.anomalies.filter(a => a.stale !== true);
+            const staleCount = result.anomalies.length - fresh.length;
+            animateValue(countEl, fresh.length);
+            detailEl.textContent = fresh.length > 0
+                ? (fresh[0]?.type || 'Detected')
+                : (staleCount > 0 ? staleCount + ' stale' : 'None');
         } else {
             countEl.textContent = '-';
             detailEl.textContent = '';
@@ -2323,14 +2328,19 @@ if (anomaliesCard) {
             const r = await callTool('detect_anomalies', {});
             const anomalies = r?.anomalies || [];
 
-            // Current
+            // Current — fresh findings first; stale ones (recomputed from a
+            // frozen idle window, #637) are demoted and labeled, not hidden.
+            const ordered = anomalies.slice().sort((a, b) =>
+                (a.stale === true ? 1 : 0) - (b.stale === true ? 1 : 0));
             let html = '<div style="margin-bottom:16px;">';
-            if (anomalies.length === 0) {
+            if (ordered.length === 0) {
                 html += '<div style="padding:8px; opacity:0.6;">No anomalies currently detected</div>';
             } else {
-                html += anomalies.map(a =>
-                    '<div style="margin-bottom:10px; padding:8px; border-left:3px solid var(--accent-orange);">' +
-                    '<strong>' + escapeHtml(a.type || 'anomaly') + '</strong> ' + escapeHtml(a.severity || '') + '<br>' +
+                html += ordered.map(a =>
+                    '<div style="margin-bottom:10px; padding:8px; border-left:3px solid var(--accent-orange);' +
+                    (a.stale === true ? ' opacity:0.5;' : '') + '">' +
+                    '<strong>' + escapeHtml(a.type || 'anomaly') + '</strong> ' + escapeHtml(a.severity || '') +
+                    (a.stale === true ? ' <span style="font-size:11px; opacity:0.7;">(stale — idle window, already reported)</span>' : '') + '<br>' +
                     escapeHtml(a.description || '') + ' ' + (a.agent_id ? '<code>' + escapeHtml(a.agent_id) + '</code>' : '') +
                     '</div>'
                 ).join('');
