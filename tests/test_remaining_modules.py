@@ -1127,6 +1127,51 @@ class TestSelectReviewer:
             result = await select_reviewer("agent-1", metadata=metadata)
             assert result is None
 
+    @pytest.mark.asyncio
+    async def test_skips_resident_label_candidate(self):
+        # A known resident (Sentinel) has no thesis-response code path and must
+        # never be auto-assigned as reviewer, even when otherwise eligible.
+        metadata = {
+            "agent-1": {"status": "active"},
+            "agent-2": {"status": "active", "label": "Sentinel"},
+        }
+        with patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
+                    new_callable=AsyncMock, return_value=False), \
+             patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
+                    new_callable=AsyncMock, return_value=False):
+            result = await select_reviewer("agent-1", metadata=metadata)
+            assert result is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tag", ["autonomous", "embodied", "anima"])
+    async def test_skips_non_reasoning_tagged_candidate(self, tag):
+        # Non-reasoning substrate tags exclude a candidate regardless of label.
+        metadata = {
+            "agent-1": {"status": "active"},
+            "agent-2": {"status": "active", "tags": [tag]},
+        }
+        with patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
+                    new_callable=AsyncMock, return_value=False), \
+             patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
+                    new_callable=AsyncMock, return_value=False):
+            result = await select_reviewer("agent-1", metadata=metadata)
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_picks_reasoning_candidate_over_resident(self):
+        # A reasoning agent is selectable even when a resident is also present.
+        metadata = {
+            "agent-1": {"status": "active"},
+            "resident": {"status": "active", "tags": ["autonomous", "persistent"]},
+            "reasoner": {"status": "active"},
+        }
+        with patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
+                    new_callable=AsyncMock, return_value=False), \
+             patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
+                    new_callable=AsyncMock, return_value=False):
+            result = await select_reviewer("agent-1", metadata=metadata)
+            assert result == "reasoner"
+
 
 # ---------------------------------------------------------------------------
 # 8. dialectic_calibration  (45 % -> higher)

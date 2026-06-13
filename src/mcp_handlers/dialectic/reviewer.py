@@ -18,6 +18,7 @@ import asyncio
 import contextvars
 
 from src.dialectic_protocol import calculate_authority_score, DialecticPhase
+from src.grounding.class_indicator import KNOWN_RESIDENT_LABELS
 from src.logging_utils import get_logger
 
 # Reentrancy guard for the auto-resolve pre-check inside is_agent_in_active_session.
@@ -42,6 +43,42 @@ from src.dialectic_db import (
 )
 
 logger = get_logger(__name__)
+
+
+# Tags that mark an agent as a non-reasoning substrate with no thesis-response
+# code path. `autonomous` is a RESIDENT_TAG (the cron-driven resident fleet runs
+# deterministic scripts — pytest, threshold checks, regex scanners); `embodied`
+# is the physical-substrate / streaming-observer class; `anima` is the embodied
+# Pi-side persona. None of these can read a thesis and author an antithesis, so
+# none can serve as a dialectic reviewer. Mirrors the paused-agent skip in
+# handle_request_dialectic_review (handlers.py).
+NON_REASONING_TAGS = frozenset({"autonomous", "embodied", "anima"})
+
+
+def _can_perform_dialectic_review(
+    label: Optional[str], tags: Optional[List[str]]
+) -> bool:
+    """Whether a candidate has a code path that can author an antithesis.
+
+    Reviewer auto-selection (gated behind UNITARES_AUTOSELECT_REVIEWER) must
+    never assign an agent that cannot respond. The named resident fleet
+    (KNOWN_RESIDENT_LABELS: Lumen / Vigil / Sentinel / Watcher / Steward /
+    Chronicler) and anything carrying a NON_REASONING_TAGS tag are deterministic
+    processes — they have no dialectic-reasoning path. Assigning one as reviewer
+    leaves the session stuck at the ANTITHESIS phase until the stuck-reviewer
+    reaper times it out: wasted facilitation churn and a dishonest "reviewer
+    assigned" signal. The capability filter is independent of the autoselect
+    flag — enabling the flag asserts that *some* real reasoner now exists in the
+    pool, not that the residents have grown a reasoning path.
+
+    Unknown/untagged agents are treated as capable (return True); the filter
+    only excludes the classes we positively know cannot respond.
+    """
+    if label and label in KNOWN_RESIDENT_LABELS:
+        return False
+    if tags and (set(tags) & NON_REASONING_TAGS):
+        return False
+    return True
 
 
 def _autoselect_enabled() -> bool:
@@ -316,6 +353,20 @@ async def select_reviewer(paused_agent_id: str,
             continue
 
         if isinstance(agent_meta, str) or agent_meta is None:
+            continue
+
+        # Capability gate: never assign a reviewer that has no thesis-response
+        # code path. The resident fleet and embodied/autonomous agents are
+        # deterministic processes — assigning one strands the session at the
+        # ANTITHESIS phase until the stuck-reviewer reaper fails it. Cheap
+        # (pure tag/label inspection) so it runs before the PG/disk lookups.
+        label = agent_meta.get('label') if isinstance(agent_meta, dict) else getattr(agent_meta, 'label', None)
+        tags = agent_meta.get('tags') if isinstance(agent_meta, dict) else getattr(agent_meta, 'tags', None)
+        if not _can_perform_dialectic_review(label, tags):
+            logger.debug(
+                "[DIALECTIC] Skipping reviewer candidate '%s' — non-reasoning "
+                "agent (no antithesis code path)", agent_id[:8],
+            )
             continue
 
         status = agent_meta.get('status') if isinstance(agent_meta, dict) else getattr(agent_meta, 'status', None)
