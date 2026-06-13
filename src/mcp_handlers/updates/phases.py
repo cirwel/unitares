@@ -83,6 +83,7 @@ def _tier_for_source(source_key: str) -> tuple[str, str]:
 def _compute_identity_assurance(
     source: Optional[str],
     trajectory_confidence: Optional[float],
+    proof_origin: Optional[str] = None,
 ) -> dict:
     """Compute identity assurance tier for write-path governance updates.
 
@@ -90,10 +91,25 @@ def _compute_identity_assurance(
     proof source's tier is computed, then decayed one step (strong→medium,
     medium→weak, weak→weak) to honor the original mint while debiting
     for per-call proof absence.
+
+    `proof_origin` ('caller_asserted' | 'server_inferred') is authoritative
+    over the source label: a server-inferred binding (fingerprint pin,
+    transport-injected CSID, context fallback) is NEVER strong, regardless of
+    the source label it happens to wear. This closes the injected-CSID path
+    that previously reported strong/explicit/1.0 for a write resolved to a
+    concurrent sibling. The emitted `caller_proven` boolean is what the strict
+    gate keys on.
     """
     source_key = (source or "unknown").strip().lower()
+    caller_proven = (proof_origin == "caller_asserted")
 
-    if source_key.startswith(_STICKY_CACHE_PREFIX):
+    if proof_origin == "server_inferred":
+        # Authoritative downgrade — a server-guessed binding is weak proof no
+        # matter what source label resolution stamped on it.
+        tier = "weak"
+        score = _TIER_SCORES[tier]
+        reason = f"server-inferred binding ('{source_key}'); not caller-proven"
+    elif source_key.startswith(_STICKY_CACHE_PREFIX):
         original_key = source_key[len(_STICKY_CACHE_PREFIX):] or "unknown"
         original_tier, _ = _tier_for_source(original_key)
         tier = _DECAY_BY_ONE.get(original_tier, original_tier)
@@ -129,6 +145,8 @@ def _compute_identity_assurance(
         "session_source": source_key,
         "trajectory_confidence": trajectory_confidence,
         "reason": reason,
+        "caller_proven": caller_proven,
+        "proof_origin": proof_origin or "unknown",
     }
 
 # ─── Purpose Inference ─────────────────────────────────────────────────
@@ -209,20 +227,71 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
         get_context_agent_id,
         get_context_session_key,
         get_session_resolution_source,
+        get_session_proof_origin,
         get_trajectory_confidence,
     )
     ctx.agent_uuid = get_context_agent_id()
     ctx.session_key = get_context_session_key()
     ctx.session_resolution_source = get_session_resolution_source()
+    ctx.proof_origin = get_session_proof_origin()
     ctx.trajectory_confidence = get_trajectory_confidence()
     ctx.identity_assurance = _compute_identity_assurance(
         ctx.session_resolution_source,
         ctx.trajectory_confidence,
+        proof_origin=ctx.proof_origin,
     )
 
     if not ctx.agent_uuid:
         logger.error("No agent_uuid in context - identity_v2 resolution failed at dispatch")
         return [error_response("Identity not resolved. Try calling identity() first.")]
+
+    # #425 strict WRITE precondition (caller-proven binding required).
+    #
+    # The strict gate must key on whether the CALLER PROVED this binding, not on
+    # the mere presence of a resolved uuid. Otherwise a server-inferred
+    # fingerprint/pin/context resolution to a concurrent same-host SIBLING
+    # silently writes under the wrong identity (it resolved *something*, so the
+    # is_new_agent / "no uuid" gates never fire). caller_proven is False for an
+    # injected CSID, a pin match, ip_ua_fingerprint, and context fallback.
+    #
+    # Substrate-earned residents (Lumen, persistent residents) are EXEMPT — they
+    # legitimately re-resolve a stable identity across restarts via the
+    # substrate-earned pattern. The exemption is keyed on the RESOLVED agent, so
+    # a colliding sibling cannot borrow it. Fail-closed on predicate error.
+    #
+    # Conservative trigger: refuse only on an EXPLICIT server_inferred origin
+    # (injected CSID, pin, ip_ua_fingerprint, context fallback — the confirmed
+    # mis-attribution paths). proof_origin None/unknown is left to pass
+    # (fail-open) so paths that never ran derive_session_key are unaffected
+    # while the confirmed bug is closed; tightening those is a follow-up.
+    if ctx.identity_assurance.get("proof_origin") == "server_inferred":
+        from src.mcp_handlers.identity_bootstrap import is_strict_identity_required
+        if is_strict_identity_required():
+            exempt = False
+            try:
+                from src.db import get_db
+                exempt = await get_db().is_substrate_earned(ctx.agent_uuid)
+            except Exception:
+                exempt = False
+            if not exempt:
+                from src.mcp_handlers.identity_bootstrap import strict_identity_refusal_payload
+                from src.mcp_handlers.response_base import success_response
+                logger.info(
+                    "[PROCESS_UPDATE] STRICT refusing write: identity resolved via "
+                    "%s (proof_origin=%s, not caller-proven) for agent %s...",
+                    ctx.session_resolution_source,
+                    ctx.identity_assurance.get("proof_origin"),
+                    (ctx.agent_uuid or "")[:12],
+                )
+                return success_response(strict_identity_refusal_payload(
+                    "process_agent_update",
+                    hint=(
+                        "This write resolved your identity by transport fingerprint, "
+                        "not by a proof you supplied — under strict identity, writes "
+                        "require a caller-proven binding. Echo the client_session_id "
+                        "your onboard() returned (or pass continuity_token)."
+                    ),
+                ))
 
     if ctx.arguments.get("require_strong_identity"):
         if ctx.identity_assurance.get("tier") != "strong":

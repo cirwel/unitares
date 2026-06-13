@@ -612,10 +612,34 @@ async def _derive_session_key_impl(
         except Exception:
             pass
 
+    # Sources where the caller TRANSMITTED the proof in this request. Everything
+    # else (pin, fingerprint, context fallback, stdio, invalid token, and an
+    # INJECTED client_session_id) is server-inferred and must not satisfy strict
+    # for a write. continuity_token is verified above before it is marked.
+    _CALLER_ASSERTED_SOURCES = {
+        "continuity_token",
+        "mcp_session_id",
+        "x_session_id",
+        "oauth_client_id",
+        "x_client_id",
+    }
+
     def _mark(source: str) -> None:
         try:
-            from ..context import set_session_resolution_source
+            from ..context import (
+                set_session_resolution_source,
+                set_session_proof_origin,
+                get_csid_transport_injected,
+            )
             set_session_resolution_source(source)
+            if source in ("explicit_client_session_id", "explicit_client_session_id_scoped"):
+                # Caller-proven ONLY if the CSID was not transport-injected.
+                proof = "server_inferred" if get_csid_transport_injected() else "caller_asserted"
+            elif source in _CALLER_ASSERTED_SOURCES:
+                proof = "caller_asserted"
+            else:
+                proof = "server_inferred"
+            set_session_proof_origin(proof)
         except Exception:
             pass
 

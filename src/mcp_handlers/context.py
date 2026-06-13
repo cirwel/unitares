@@ -210,6 +210,43 @@ def get_session_resolution_source() -> Optional[str]:
     return _session_resolution_source.get()
 
 
+# proof_origin: distinguishes a binding the CALLER proved in this request
+# ("caller_asserted") from one the SERVER inferred from a shared transport
+# fingerprint / pin / context fallback ("server_inferred"). The strict gate
+# keys on this — NOT on mere presence of a resolved binding — so a fingerprint
+# fallback to a concurrent same-host sibling can no longer satisfy strict for a
+# write. Set alongside session_resolution_source in derive_session_key.
+_session_proof_origin: ContextVar[Optional[str]] = ContextVar('session_proof_origin', default=None)
+
+
+def set_session_proof_origin(origin: str) -> object:
+    """Set proof origin ('caller_asserted' | 'server_inferred') for this request."""
+    return _session_proof_origin.set(origin)
+
+
+def get_session_proof_origin() -> Optional[str]:
+    """Get proof origin for this request (None if resolution did not run)."""
+    return _session_proof_origin.get()
+
+
+# Set True at every point the transport INJECTS a synthetic client_session_id
+# into the arguments (REST: http_api; typed MCP wrapper: wrapper_generator).
+# An injected CSID is indistinguishable from a caller-sent one once in
+# arguments, so derive_session_key reads this flag to classify
+# explicit_client_session_id as caller_asserted vs server_inferred.
+_csid_transport_injected: ContextVar[bool] = ContextVar('csid_transport_injected', default=False)
+
+
+def set_csid_transport_injected(value: bool = True) -> object:
+    """Mark that the client_session_id in arguments was transport-injected, not caller-sent."""
+    return _csid_transport_injected.set(value)
+
+
+def get_csid_transport_injected() -> bool:
+    """True if the client_session_id was injected by transport (not caller-proven)."""
+    return _csid_transport_injected.get()
+
+
 # Pin scope detail. Set by derive_session_key when an onboard-pin lookup hits,
 # distinguishing which candidate form matched (client_model / client / model /
 # unscoped). Kept as a side-channel so the load-bearing exact-match comparison

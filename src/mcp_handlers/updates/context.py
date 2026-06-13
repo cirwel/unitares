@@ -23,6 +23,7 @@ class UpdateContext:
     is_new_agent: bool = False
     meta: Optional[Any] = None   # AgentMetadata instance
     session_resolution_source: Optional[str] = None
+    proof_origin: Optional[str] = None  # 'caller_asserted' | 'server_inferred'
     trajectory_confidence: Optional[float] = None
     identity_assurance: Dict[str, Any] = field(default_factory=dict)
 
