@@ -8,7 +8,11 @@ management. Thresholds are living per-agent state, not config constants.
 The D-term IS the damping. Oscillation produces large derivatives, which
 produce large corrections. The system self-stabilizes.
 
-Design: docs/plans/2026-02-19-cirs-v2-adaptive-governor-design.md
+Design: the original design note (docs/plans/2026-02-19-cirs-v2-adaptive-governor-
+design.md) is not present in this repo. Production thresholds intentionally
+deviate from the paper's Table 5 (see the `# Paper:` annotations on each
+GovernorConfig constant below); reconciling those deltas — ratify as permanent
+vs. recalibrate toward the paper — is tracked in unitares#661.
 
 Update cycle (called from process_agent_update):
   1. Detect phase from EISV histories (calls governance_core.phase_aware.detect_phase)
