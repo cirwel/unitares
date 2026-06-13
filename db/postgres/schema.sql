@@ -190,6 +190,31 @@ CREATE INDEX IF NOT EXISTS idx_agent_state_epistemic_class
     WHERE epistemic_class IS NOT NULL;
 
 -- -----------------------------------------------------------------------------
+-- Substrate Observations (identity-free check-in floor; migration 048)
+-- -----------------------------------------------------------------------------
+-- A measurement that a session ran but never onboarded — NOT an identity claim.
+-- Nothing in the trajectory/trust/calibration/EISV/similarity path reads this
+-- table. No FK to core.identities by design: the sink stays identity-free.
+CREATE TABLE IF NOT EXISTS core.substrate_observations (
+    observation_id   BIGSERIAL PRIMARY KEY,
+    slot_key         TEXT        NOT NULL,
+    fingerprint      TEXT,
+    event            TEXT        NOT NULL DEFAULT 'turn_stop',
+    tool_count       INTEGER     NOT NULL DEFAULT 0,
+    summary_excerpt  TEXT,
+    plugin_version   TEXT,
+    claimed_by_uuid  UUID,  -- nullable forward hook; set if an onboarded identity later claims this slot. No FK by design.
+    observed_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_substrate_obs_slot
+    ON core.substrate_observations (slot_key);
+CREATE INDEX IF NOT EXISTS idx_substrate_obs_observed_at
+    ON core.substrate_observations (observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_substrate_obs_unclaimed
+    ON core.substrate_observations (observed_at DESC)
+    WHERE claimed_by_uuid IS NULL;
+
+-- -----------------------------------------------------------------------------
 -- Schema Migrations (track applied migrations)
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS core.schema_migrations (
