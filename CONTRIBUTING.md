@@ -25,6 +25,18 @@ pytest tests/test_<specific>.py    # single test file
 
 New behavior needs a test. New tests should live in `tests/` alongside the existing ones; integration tests hit a real Postgres (not mocks) — see the test harness docs in `tests/` if you're touching the database layer.
 
+### Fresh / remote environments
+
+The project requires **Python 3.12+** (`pyproject.toml` `requires-python`), and `pytest` lives in `requirements-full.txt` — a bare `pip install -e .` won't pull it. Some cloud/CI/web containers (including Claude Code on the web) default `python3` to an older interpreter and don't pre-install the full deps, so set up an explicit 3.12 venv once per environment:
+
+```bash
+python3.12 -m venv .venv && . .venv/bin/activate   # use any 3.12+ interpreter
+pip install -r requirements-full.txt               # same set CI installs
+pytest tests/test_<specific>.py                    # now resolvable
+```
+
+Pure-unit suites (e.g. `tests/test_naming_helpers.py`, `tests/test_lifecycle_agents.py`) run without a live Postgres/AGE; database-backed tests still need the services from *Quick setup* above.
+
 ## Pull request conventions
 
 - **Commit messages:** imperative mood, scope prefix when useful (`docs:`, `feat(lease-plane):`, `fix(identity):`). Body explains the *why*. No AI-attribution footers.
