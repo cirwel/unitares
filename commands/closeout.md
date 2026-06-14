@@ -29,11 +29,13 @@ and use the ship helper:
 
 - `./scripts/dev/ship.sh --plan "commit message"` previews the delivery route
 - `./scripts/dev/ship.sh --draft-pr "commit message"` commits, pushes, and opens
-  a draft PR
-- `./scripts/dev/ship.sh "commit message"` uses the default route: runtime or
-  detached work becomes a draft PR; ordinary non-runtime branch work direct-pushes
-- `./scripts/dev/ship.sh --auto-merge "commit message"` opts into the old
-  auto-merge-on-green behavior for PR-routed work
+  a draft PR — **the default per `docs/operations/github-workflow-conventions.md`
+  (draft PR for everything; the operator is the merge gate)**
+- `./scripts/dev/ship.sh "commit message"` uses the bare `auto` route: runtime or
+  detached work becomes a draft PR, but ordinary non-runtime branch work
+  direct-pushes — prefer `--draft-pr` so docs/tests don't land unreviewed
+- `./scripts/dev/ship.sh --auto-merge "commit message"` opts into
+  auto-merge-on-green; use only when the operator explicitly asks, not by default
 
 If the operator asked to clean the workspace, or if you are finishing a task
 whose intended work is already committed/stashed, run:
