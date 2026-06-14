@@ -719,7 +719,8 @@ async def set_agent_label(agent_uuid: str, label: str, session_key: Optional[str
                             meta.structured_id = generate_structured_id(
                                 context=context,
                                 existing_ids=existing_ids,
-                                client_hint=get_context_client_hint()
+                                client_hint=get_context_client_hint(),
+                                agent_uuid=agent_uuid
                             )
                             logger.info(f"Migrated structured_id: {meta.structured_id}")
                         except Exception as e:
@@ -761,7 +762,8 @@ async def set_agent_label(agent_uuid: str, label: str, session_key: Optional[str
                         meta.structured_id = generate_structured_id(
                             context=context,
                             existing_ids=existing_ids,
-                            client_hint=get_context_client_hint()
+                            client_hint=get_context_client_hint(),
+                            agent_uuid=agent_uuid
                         )
                         logger.info(f"Generated structured_id: {meta.structured_id}")
                     except Exception as e:

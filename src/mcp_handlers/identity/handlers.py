@@ -1247,7 +1247,8 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
                     context=context,
                     existing_ids=existing_ids,
                     client_hint=get_context_client_hint(),
-                    model_type=model_type
+                    model_type=model_type,
+                    agent_uuid=agent_uuid
                 )
                 structured_id = meta.structured_id
                 logger.info(f"[IDENTITY] Regenerated structured_id with model: {structured_id}")
