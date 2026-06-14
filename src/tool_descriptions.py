@@ -8,9 +8,12 @@ _IDENTITY_DESCRIPTION_OVERRIDES = {
     "onboard": (
         "Start or create a UNITARES identity binding.\n\n"
         "Current identity posture (S1-c, 2026-05-23): use "
-        "onboard(force_new=true) for a fresh process. If this process is "
-        "continuing prior work, include parent_agent_id=<prior uuid> and "
-        "spawn_reason='new_session'. Do not rely on bare onboard() because "
+        "onboard(force_new=true) for a fresh process — co-location in a "
+        "workspace is not lineage. Declare parent_agent_id only for a real "
+        "causal event: a dispatched subagent (spawn_reason='subagent') or a "
+        "handoff from an exited prior session (spawn_reason='explicit'). "
+        "Declaring a currently-live agent as parent is rejected "
+        "(lineage_coincidental_rejected). Do not rely on bare onboard() because "
         "legacy weak session evidence can pin-resume an unrelated UUID.\n\n"
         "continuity_token is short-lived ownership proof for same-owner "
         "PATH 0 rebinds such as identity(agent_uuid=..., continuity_token=..., "
@@ -28,9 +31,11 @@ _IDENTITY_DESCRIPTION_OVERRIDES = {
         "continuity_token: identity(agent_uuid='...', continuity_token='...', "
         "resume=true). Bare identity(agent_uuid='...', resume=true) is an "
         "unsigned UUID claim and is hijack-shaped under strict identity mode.\n\n"
-        "For a fresh process continuing prior work, do not use identity() to "
-        "silently resume. Call onboard(force_new=true, parent_agent_id=<prior "
-        "uuid>, spawn_reason='new_session') so lineage is explicit."
+        "For a fresh process, do not use identity() to silently resume. Call "
+        "onboard(force_new=true) — a fresh session onboards fresh. Declare "
+        "parent_agent_id only for a real causal event: a dispatched subagent "
+        "(spawn_reason='subagent') or a handoff from an exited prior session "
+        "(spawn_reason='explicit'); declaring a live agent as parent is rejected."
     ),
 }
 
