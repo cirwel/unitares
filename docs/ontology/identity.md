@@ -70,6 +70,14 @@ The administrative label "resident" (Vigil/Sentinel/Watcher/Steward/Lumen) colla
 
 "Resident" remains a useful deployment label (launchd-registered, fleet-managed). It is not an ontological category.
 
+**Implementation note (2026-06-14):** this is now literally true in code — the
+resident roster is deployment configuration, not a hardcoded fleet. Named
+residents (incl. Lumen) are declared via the `UNITARES_RESIDENTS` env var and
+the resident-progress probe via `UNITARES_RESIDENT_PROGRESS_MANIFEST`, both
+empty by default. A fresh install inherits no operator-specific identities and
+no N=1 calibration classes; the reference fleet is opt-in. See
+`docs/operations/resident-roster.md`.
+
 ## Earned vs. performative today
 
 ### Earned
