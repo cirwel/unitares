@@ -20,7 +20,44 @@ from src.mcp_handlers.response_formatter import (
     _format_compact,
     _format_mirror,
     _strip_context,
+    _round_display_floats,
 )
+
+
+# ============================================================================
+# Display float rounding (#UX float-precision noise)
+# ============================================================================
+
+class TestRoundDisplayFloats:
+    def test_rounds_nested_floats_to_4dp(self):
+        obj = {"coherence": 0.498543340633004,
+               "metrics": {"phi": 0.14804268239681923, "risk_score": 0.2659786588015904}}
+        _round_display_floats(obj)
+        assert obj["coherence"] == 0.4985
+        assert obj["metrics"]["phi"] == 0.148
+        assert obj["metrics"]["risk_score"] == 0.266
+
+    def test_rounds_floats_in_lists(self):
+        obj = {"vec": [0.111111, 0.222222]}
+        _round_display_floats(obj)
+        assert obj["vec"] == [0.1111, 0.2222]
+
+    def test_preserves_bools_ints_strings_none(self):
+        obj = {"flag": True, "count": 3, "token": "v1.abc", "edge": None}
+        _round_display_floats(obj)
+        assert obj == {"flag": True, "count": 3, "token": "v1.abc", "edge": None}
+
+    def test_leaves_non_finite_alone(self):
+        nan = float("nan")
+        obj = {"a": float("inf"), "b": nan}
+        _round_display_floats(obj)
+        assert obj["a"] == float("inf")
+        assert obj["b"] != obj["b"]  # still NaN
+
+    def test_full_mode_not_rounded(self):
+        data = {"coherence": 0.498543340633004, "health_status": "healthy"}
+        out = format_response(data, {"response_mode": "full"})
+        assert out["coherence"] == 0.498543340633004
 
 
 # ============================================================================

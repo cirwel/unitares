@@ -12,6 +12,32 @@ from src.monitor_result import DIVERGENCE_LINE_THRESHOLD
 logger = get_logger(__name__)
 
 
+def _round_display_floats(obj: Any, ndigits: int = 4) -> Any:
+    """Recursively round float values for display, in-place where possible.
+
+    Display-only: the canonical EISV/risk state lives in GovernanceState; this
+    only tidies the response copy so agents don't read coherence as
+    0.498543340633004 (#UX float-precision noise). Ints, bools, strings, and
+    None pass through untouched. NaN/inf are left as-is (round() would raise or
+    propagate). Recurses into nested dicts/lists.
+    """
+    if isinstance(obj, bool):
+        return obj
+    if isinstance(obj, float):
+        # Leave non-finite values alone; round() on inf/nan is not meaningful.
+        if obj != obj or obj in (float("inf"), float("-inf")):
+            return obj
+        return round(obj, ndigits)
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            obj[k] = _round_display_floats(v, ndigits)
+        return obj
+    if isinstance(obj, list):
+        for i, v in enumerate(obj):
+            obj[i] = _round_display_floats(v, ndigits)
+        return obj
+    return obj
+
 def _copy_passthrough_fields(response_data: dict, result: dict, fields: tuple) -> None:
     """Copy named fields from response_data to result if present (not None).
 
@@ -128,6 +154,9 @@ def format_response(
     if response_mode in ("minimal", "compact", "mirror"):
         _strip_context(response_data, is_new_agent, key_was_generated, api_key_auto_retrieved)
 
+    # Display-only: round float noise (e.g. coherence 0.498543340633004 -> 0.4985).
+    # Skipped for "full" mode, which contracts to return values as-is (early return above).
+    _round_display_floats(response_data)
     return response_data
 
 def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any = None) -> dict:
