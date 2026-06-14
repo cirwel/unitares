@@ -66,8 +66,10 @@ regression (e.g. an unused import), then run the workflow via `workflow_dispatch
 
 ## Why surface-only (for now)
 
-This experiment is the **surface** half of a surface→fix loop. The **fix** half
-(dispatching an agent to open a fix PR) needs `anthropics/claude-code-action`
+This experiment is the **surface** half of a surface→fix→land relay. The **fix**
+half (dispatching an agent to open a fix PR) needs `anthropics/claude-code-action`
 plus an `ANTHROPIC_API_KEY` repo secret, and is intentionally out of scope here.
 The deduped `ci-finding` issues are the hand-off point a fix loop would later
-consume.
+consume. The **land** half — branch protection + operator-armed merge-when-green,
+with the agent stopping at ready-for-review — is planned in
+[`merge-automation-plan.md`](./merge-automation-plan.md).
