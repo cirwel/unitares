@@ -15,7 +15,7 @@ intent:
 
 - **`ship.sh` default (`auto`)** routed runtime code to a draft PR but
   direct-pushed docs/tests/"other" straight to the current branch — landing
-  immediately, no PR (`scripts/dev/ship.sh` `auto` branch, ~lines 195-204).
+  immediately, no PR.
 - **`ship.sh --auto-merge`** opened a PR and enabled GitHub
   auto-merge-on-green ("the old behavior").
 - **Claude on the web/cloud harness** was handed a fixed
@@ -26,7 +26,8 @@ So Codex tended to direct-push docs and could opt into auto-merge, while
 Claude-on-web parked draft PRs that sat until a human merged them. With many
 sessions running at once that is unpredictable: three branch-naming schemes,
 and merge behavior that depended on which tool and which agent shipped the
-change. This document collapses that to one rule set.
+change. This document collapses that to one rule set, and `ship.sh`'s default
+`auto` route now opens a draft PR for every change (see *Delivery* below).
 
 ## The convention
 
@@ -63,16 +64,21 @@ is the merge gate.
   is a deliberate human (or explicitly-instructed) action, taken only after CI
   is green and you've confirmed no collision with an in-flight branch.
 
-With `ship.sh`, use the explicit draft-PR route — not the bare `auto` route,
-whose docs/tests path would direct-push:
+`ship.sh` enforces this. Its default `auto` route now opens a **draft PR for
+every change** — runtime, docs, or tests:
 
 ```bash
-./scripts/dev/ship.sh --draft-pr "type(scope): concise message"
+./scripts/dev/ship.sh "type(scope): concise message"
 ```
 
-`./scripts/dev/ship.sh --plan "..."` previews the route without shipping.
-`--auto-merge` remains available for the rare case where the operator
-explicitly wants auto-merge-on-green; it is not the default.
+- Runtime and detached-HEAD work mint a fresh agent-prefixed branch and open
+  the draft PR there.
+- Non-runtime work on a named feature branch opens the draft PR on that branch.
+- `./scripts/dev/ship.sh --plan "..."` previews the route without shipping.
+- `--direct` is the opt-out, for docs/tests-only pushes where you knowingly
+  skip the PR.
+- `--auto-merge` remains available for the rare case where the operator
+  explicitly wants auto-merge-on-green; it is not the default.
 
 ### 3. Parallel / simultaneous work
 
@@ -93,19 +99,20 @@ guards keep concurrent sessions from clobbering each other:
 
 | Situation | Do this |
 | --- | --- |
-| Ship any change (Codex or Claude CLI) | `./scripts/dev/ship.sh --draft-pr "msg"` |
+| Ship any change (Codex or Claude CLI) | `./scripts/dev/ship.sh "msg"` — defaults to a draft PR |
 | Preview the route first | `./scripts/dev/ship.sh --plan "msg"` |
 | Claude on the web harness | Already parks a draft PR on its `claude/...` branch — nothing extra needed |
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
-| Tempted to direct-push docs | Don't — draft PR for everything |
+| Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping
 
-- **Codex (CLI):** stage, then `ship.sh --draft-pr`. Report the delivery line
-  at closeout (`/closeout`). Do not rely on bare `ship.sh` for non-runtime
-  changes — its `auto` route direct-pushes them.
-- **Claude (CLI, plugin harness):** same as Codex — `ship.sh --draft-pr`.
+- **Codex (CLI):** stage, then `ship.sh "msg"` — its default `auto` route opens
+  a draft PR for every change. Report the delivery line at closeout
+  (`/closeout`). Use `--direct` only for docs/tests-only pushes you knowingly
+  want to skip the PR for.
+- **Claude (CLI, plugin harness):** same as Codex — `ship.sh "msg"`.
 - **Claude (web/cloud harness):** the harness already enforces the convention
   (fixed `claude/...` branch + draft PR). Keep work on that branch; let the
   draft PR be the delivery artifact.

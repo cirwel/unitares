@@ -120,14 +120,14 @@ The `delivery:` line is mandatory context. In particular:
 If you want Codex to ship the current staged change, use:
 
 ```bash
-./scripts/dev/ship.sh --draft-pr "type(scope): concise message"
+./scripts/dev/ship.sh "type(scope): concise message"
 ```
 
 Per `docs/operations/github-workflow-conventions.md`, delivery is **draft PR for
 everything** — Codex and Claude share one contract so concurrent sessions stay
-predictable, and the operator is the merge gate. Prefer `--draft-pr`; the bare
-helper's `auto` route direct-pushes non-runtime changes, and `--auto-merge` is
-only for when the operator explicitly asks.
+predictable, and the operator is the merge gate. The default `auto` route now
+opens a draft PR for every change; `--direct` opts out for docs/tests-only
+pushes, and `--auto-merge` is only for when the operator explicitly asks.
 
 ## Commands
 

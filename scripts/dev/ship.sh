@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 # ship.sh — agent-friendly commit-and-deliver
 #
-# Routes changes to the right delivery path based on what they touch:
+# Default delivery is a draft PR for everything — Codex and Claude share one
+# contract so concurrent sessions stay predictable and the operator is the
+# merge gate (docs/operations/github-workflow-conventions.md). In `auto` mode:
 #   - Runtime code (agents/, src/mcp_handlers/, src/mcp_server*, src/core.py,
-#     src/background_tasks.py) → feature branch + draft PR by default.
-#   - Detached HEAD work → feature branch + draft PR by default.
-#   - Everything else → direct commit + push on the current branch.
+#     src/background_tasks.py) and detached HEAD work → fresh agent-prefixed
+#     branch + draft PR.
+#   - Everything else on a named feature branch → draft PR on that branch.
 #
-# The split exists because multiple agents push to this repo concurrently.
-# Runtime changes need a rollback artifact (the PR) and cross-agent
-# visibility; docs/tests/helpers don't, and PR friction for every tiny
-# edit would slow the fleet down. Draft PRs make unfinished runtime/detached
-# work visible without pretending it is ready to merge.
+# Multiple agents push to this repo concurrently, so every change wants a
+# rollback artifact (the PR) and cross-agent visibility. Draft PRs make work
+# visible without pretending it is ready to merge. Use --direct to opt out
+# (docs/tests only), or --auto-merge when the operator explicitly wants
+# auto-merge-on-green.
 #
 # Usage:
 #   ./scripts/dev/ship.sh "commit message"
@@ -102,7 +104,9 @@ usage: ship.sh [--draft-pr|--open-pr|--auto-merge|--direct] "commit message"
        ship.sh --plan "commit message"
 
 Modes:
-  auto         runtime or detached work -> draft PR; other branch work -> direct push
+  auto         draft PR for everything (the default convention); runtime/detached
+               work mints a fresh agent-prefixed branch, other work uses the
+               current branch. --direct opts out for docs/tests-only pushes.
   --draft-pr  commit, push current/new branch, and open a draft PR
   --open-pr   commit, push current/new branch, and open a ready PR
   --auto-merge
@@ -193,14 +197,14 @@ fi
 DELIVERY="$MODE"
 FORCE_AUTO_BRANCH=0
 if [[ "$MODE" == "auto" ]]; then
-    if [[ "$KIND" == "runtime" ]]; then
-        DELIVERY="draft_pr"
+    # Draft PR for everything: every session lands work as a draft PR regardless
+    # of agent or whether the change is runtime or docs/tests, so the operator
+    # stays the merge gate. Runtime and detached work additionally mint a fresh
+    # agent-prefixed branch; non-runtime work on a named feature branch opens the
+    # draft PR on that branch. --direct opts out for docs/tests-only pushes.
+    DELIVERY="draft_pr"
+    if [[ "$KIND" == "runtime" || "$DETACHED" == "1" ]]; then
         FORCE_AUTO_BRANCH=1
-    elif [[ "$DETACHED" == "1" ]]; then
-        DELIVERY="draft_pr"
-        FORCE_AUTO_BRANCH=1
-    else
-        DELIVERY="direct"
     fi
 elif [[ "$DETACHED" == "1" && "$MODE" != "direct" ]]; then
     FORCE_AUTO_BRANCH=1

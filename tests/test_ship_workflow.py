@@ -82,11 +82,28 @@ def test_auto_routes_detached_non_runtime_changes_to_draft_pr(ship_repo: Path) -
     assert plan["force_auto_branch"] == "1"
 
 
-def test_auto_routes_feature_branch_docs_to_direct_push(ship_repo: Path) -> None:
+def test_auto_routes_feature_branch_docs_to_draft_pr(ship_repo: Path) -> None:
+    # Draft PR for everything: non-runtime work on a named feature branch opens
+    # a draft PR on that branch rather than direct-pushing
+    # (docs/operations/github-workflow-conventions.md).
     run(["git", "checkout", "-q", "-b", "docs/workflow-note"], ship_repo)
     stage_file(ship_repo, "docs/workflow-note.md")
 
     plan = ship_plan(ship_repo)
+
+    assert plan["kind"] == "other"
+    assert plan["branch"] == "docs/workflow-note"
+    assert plan["delivery"] == "draft_pr"
+    assert plan["force_auto_branch"] == "0"
+
+
+def test_explicit_direct_opts_out_on_feature_branch(ship_repo: Path) -> None:
+    # --direct is the escape hatch from draft-PR-for-everything, for
+    # docs/tests-only pushes on a named feature branch.
+    run(["git", "checkout", "-q", "-b", "docs/workflow-note"], ship_repo)
+    stage_file(ship_repo, "docs/workflow-note.md")
+
+    plan = ship_plan(ship_repo, "--direct")
 
     assert plan["kind"] == "other"
     assert plan["branch"] == "docs/workflow-note"

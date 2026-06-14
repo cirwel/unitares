@@ -28,12 +28,12 @@ If work should be delivered instead of left local, stage the intentional files
 and use the ship helper:
 
 - `./scripts/dev/ship.sh --plan "commit message"` previews the delivery route
-- `./scripts/dev/ship.sh --draft-pr "commit message"` commits, pushes, and opens
-  a draft PR — **the default per `docs/operations/github-workflow-conventions.md`
-  (draft PR for everything; the operator is the merge gate)**
-- `./scripts/dev/ship.sh "commit message"` uses the bare `auto` route: runtime or
-  detached work becomes a draft PR, but ordinary non-runtime branch work
-  direct-pushes — prefer `--draft-pr` so docs/tests don't land unreviewed
+- `./scripts/dev/ship.sh "commit message"` is the default route: a **draft PR for
+  every change**, per `docs/operations/github-workflow-conventions.md` (the
+  operator is the merge gate). Runtime/detached work mints a fresh agent-prefixed
+  branch; non-runtime work on a named branch opens the draft PR on that branch
+- `./scripts/dev/ship.sh --direct "commit message"` opts out for docs/tests-only
+  pushes where you knowingly skip the PR
 - `./scripts/dev/ship.sh --auto-merge "commit message"` opts into
   auto-merge-on-green; use only when the operator explicitly asks, not by default
 
