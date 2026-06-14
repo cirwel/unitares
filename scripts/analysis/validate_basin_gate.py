@@ -226,11 +226,15 @@ async def run_live(dsn: Optional[str], limit: int) -> bool:
     try:
         rows = await conn.fetch(
             """
-            SELECT DISTINCT ON (agent_id) agent_id,
-                   state_json->'behavioral_eisv' AS beisv
-            FROM core.agent_state
-            WHERE state_json ? 'behavioral_eisv'
-            ORDER BY agent_id, created_at DESC
+            SELECT DISTINCT ON (s.identity_id)
+                   i.agent_id,
+                   i.metadata->>'label' AS label,
+                   s.state_json->'behavioral_eisv' AS beisv
+            FROM core.agent_state s
+            JOIN core.identities i USING(identity_id)
+            WHERE s.synthetic = false
+              AND s.state_json ? 'behavioral_eisv'
+            ORDER BY s.identity_id, s.recorded_at DESC
             LIMIT $1
             """,
             limit,

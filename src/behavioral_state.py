@@ -67,11 +67,28 @@ BASELINE_WARMUP_UPDATES = 30
 # The floor is retained as defense-in-depth: it bounds the raw z-magnitude in
 # the boundary region (where the gate is partially open) so a collapsed σ cannot
 # produce an absurd z there. It does NOT touch σ for unstable agents (it only
-# binds when std < the floor), so it never blunts meaningful variance. A flat
-# value still slightly over-floors slow-alpha dims (I) and under-floors fast-alpha
-# ones (S) since the per-dimension EMA step differs — but with the basin gate in
-# front, the exact value is far less load-bearing than it was under #686.
+# binds when std < the floor), so it never blunts meaningful variance. Default
+# alphas preserve the original 0.05 guard exactly; tuned per-agent alphas scale
+# the guard proportionally so the secondary floor follows the EMA smoothing step
+# restored from persistence.
 MIN_MEANINGFUL_EISV_STD = 0.05
+
+
+def eisv_min_std_for_dimension(dimension: str, alphas: Optional[Dict[str, float]] = None) -> float:
+    """Minimum z-score denominator scaled by the dimension's EMA alpha.
+
+    Default alphas preserve the #686/#696 floor exactly. If an agent tunes a
+    dimension to a slower or faster EMA, scale the secondary floor with that
+    persisted alpha so the boundary-region guard follows the smoothing step
+    instead of silently falling back to the fleet defaults.
+    """
+    default_alpha = DEFAULT_ALPHAS.get(dimension)
+    if not default_alpha:
+        return MIN_MEANINGFUL_EISV_STD
+    alpha = (alphas or DEFAULT_ALPHAS).get(dimension, default_alpha)
+    if alpha <= 0:
+        alpha = default_alpha
+    return MIN_MEANINGFUL_EISV_STD * (alpha / default_alpha)
 
 
 @dataclass
@@ -232,7 +249,7 @@ class BehavioralEISV:
         if stats is None or not self.is_baselined:
             return 0.0
         current = getattr(self, dimension, 0.5)
-        return stats.z_score(current, min_std=MIN_MEANINGFUL_EISV_STD)
+        return stats.z_score(current, min_std=eisv_min_std_for_dimension(dimension, self.alphas))
 
     def trend(self, dimension: str, window: int = 5) -> float:
         """Simple slope of recent history for a dimension.
