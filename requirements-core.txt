@@ -14,7 +14,7 @@ mcp>=1.26.0,<2.0.0
 numpy>=1.24.0,<3.0.0
 
 # Skill and taxonomy metadata parsing
-PyYAML>=6.0.0
+PyYAML>=6.0.0,<7.0.0
 
 # governance_core (EISV ODE engine) lives at top-level governance_core/
 # in this repo — no separate install. Was previously a private compiled wheel
