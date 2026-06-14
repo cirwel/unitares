@@ -50,6 +50,24 @@ def test_unknown_origin_is_not_proven_but_not_downgraded():
     assert a["tier"] == "strong"
 
 
+# ── #732: write-path assurance carries the how_to_strengthen breadcrumb ──
+
+def test_strong_write_assurance_omits_strengthen_breadcrumb():
+    a = _compute_identity_assurance(
+        "explicit_client_session_id", None, proof_origin="caller_asserted"
+    )
+    assert a["tier"] == "strong"
+    assert "how_to_strengthen" not in a
+
+
+def test_weak_write_assurance_carries_strengthen_breadcrumb():
+    a = _compute_identity_assurance(
+        "explicit_client_session_id", None, proof_origin="server_inferred"
+    )
+    assert a["tier"] == "weak"
+    assert "client_session_id" in a["how_to_strengthen"]
+
+
 # ── Gate: strict write precondition ────────────────────────────────────
 
 def _patch_ctx(monkeypatch, *, agent_uuid, source, proof_origin):

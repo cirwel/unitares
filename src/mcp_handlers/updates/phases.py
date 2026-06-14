@@ -80,6 +80,35 @@ def _tier_for_source(source_key: str) -> tuple[str, str]:
     return "weak", "heuristic or unknown session source"
 
 
+def _how_to_strengthen(
+    tier: str,
+    source_key: str,
+    proof_origin: Optional[str],
+) -> Optional[str]:
+    """One-line breadcrumb telling the agent how to reach a higher tier (#732).
+
+    Returns ``None`` for `strong` (no action needed). Mirrors
+    `services.identity_payloads._how_to_strengthen` so the write-path
+    assurance block agrees with the identity()/onboard read-path block.
+    """
+    if tier == "strong":
+        return None
+    if proof_origin == "server_inferred":
+        return (
+            "binding was server-inferred (not caller-proven); pass the "
+            "client_session_id from your onboard response explicitly in each "
+            "call to reach strong"
+        )
+    if tier == "medium":
+        return "pass an explicit client_session_id in each call to reach strong"
+    # weak
+    return (
+        "pass the client_session_id from your onboard response in each call to "
+        "reach strong; cross-process resumes need continuity_token + agent_uuid "
+        "(PATH 0)"
+    )
+
+
 def _compute_identity_assurance(
     source: Optional[str],
     trajectory_confidence: Optional[float],
@@ -139,7 +168,7 @@ def _compute_identity_assurance(
         except (TypeError, ValueError):
             pass
 
-    return {
+    assurance = {
         "tier": tier,
         "score": score,
         "session_source": source_key,
@@ -148,6 +177,10 @@ def _compute_identity_assurance(
         "caller_proven": caller_proven,
         "proof_origin": proof_origin or "unknown",
     }
+    hint = _how_to_strengthen(tier, source_key, proof_origin)
+    if hint:
+        assurance["how_to_strengthen"] = hint
+    return assurance
 
 # ─── Purpose Inference ─────────────────────────────────────────────────
 
