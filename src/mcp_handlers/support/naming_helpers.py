@@ -242,6 +242,66 @@ def generate_structured_id(
 
     return base_id
 
+
+def _uuid8_fragment(agent_uuid: Optional[str]) -> str:
+    """Return the first UUID block as a lowercase hex fragment, or ``""``.
+
+    Guards against non-UUID identifiers — test placeholders like ``agent-1``,
+    structured ids, or model names — that would otherwise contribute a garbage
+    suffix such as ``_agent``. Tolerates the ``agent-<hex>`` redacted form by
+    stripping that prefix before reading the first block. A canonical UUID's
+    first block is exactly 8 hex digits, so anything else yields no fragment.
+    """
+    if not agent_uuid:
+        return ""
+    raw = str(agent_uuid)
+    if raw.startswith("agent-"):
+        raw = raw[len("agent-"):]
+    candidate = raw.split("-")[0][:8].lower()
+    if len(candidate) == 8 and all(c in "0123456789abcdef" for c in candidate):
+        return candidate
+    return ""
+
+
+def disambiguate_public_handle(
+    public_agent_id: Optional[str],
+    structured_id: Optional[str] = None,
+    agent_uuid: Optional[str] = None,
+) -> Optional[str]:
+    """Return a per-agent-unique display handle for registry/dashboard views.
+
+    ``public_agent_id`` is the ``{Model}_{date}`` bucket form minted by
+    ``identity.resolution._generate_agent_id``. It carries no uniqueness
+    suffix, so every same-model/same-day mint collapses onto one label and
+    genuinely distinct agents (distinct UUIDs) render identically on the
+    dashboard — the apparent "agent duplication". This appends the agent's
+    uuid8 fragment (the first UUID block, the same convention
+    ``generate_structured_id`` and agent labels already use) so the bucket
+    prefix stays greppable while the handle is unique per agent. It covers
+    legacy rows that predate the unique ``structured_id`` too, since the
+    suffix derives from ``agent_uuid`` rather than from a stored field.
+
+    The fragment is only appended when ``agent_uuid`` is genuinely UUID-like
+    (see ``_uuid8_fragment``); a missing or non-UUID identifier leaves the
+    handle unchanged rather than tacking on a garbage suffix.
+
+    Preference: disambiguate ``public_agent_id`` when present (keeping the
+    readable capitalized bucket form); else fall back to ``structured_id``
+    (already uuid8-suffixed by ``generate_structured_id``). Returns ``None``
+    when no base handle is available so callers keep their own fallbacks.
+    """
+    fragment = _uuid8_fragment(agent_uuid)
+
+    if public_agent_id:
+        base = str(public_agent_id)
+        if fragment and not base.lower().endswith(fragment):
+            return f"{base}_{fragment}"
+        return base
+    if structured_id:
+        return str(structured_id)
+    return None
+
+
 def format_naming_guidance(
     suggestions: List[Dict[str, Any]],
     current_uuid: Optional[str] = None

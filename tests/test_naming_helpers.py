@@ -14,6 +14,7 @@ sys.path.insert(0, str(project_root))
 
 from src.mcp_handlers.support.naming_helpers import (
     detect_interface_context,
+    disambiguate_public_handle,
     generate_name_suggestions,
     generate_structured_id,
     format_naming_guidance,
@@ -235,6 +236,70 @@ class TestGenerateStructuredId:
         assert result.startswith("cursor_")
         # Trailing token is the 8-digit date, not a hex uuid fragment.
         assert result.split("_")[-1].isdigit()
+
+
+# ============================================================================
+# disambiguate_public_handle
+# ============================================================================
+
+class TestDisambiguatePublicHandle:
+    """The display layer must render distinct agents distinctly even when they
+    share the non-unique {Model}_{date} public_agent_id bucket — this is the
+    'agent duplication according to dashboard' fix."""
+
+    def test_two_same_bucket_agents_render_distinctly(self):
+        first = disambiguate_public_handle(
+            "Claude_20260602", None, "cc447979-aaaa-bbbb-cccc-dddddddddddd"
+        )
+        second = disambiguate_public_handle(
+            "Claude_20260602", None, "3cec10f9-aaaa-bbbb-cccc-dddddddddddd"
+        )
+        assert first == "Claude_20260602_cc447979"
+        assert second == "Claude_20260602_3cec10f9"
+        assert first != second
+
+    def test_keeps_greppable_bucket_prefix(self):
+        handle = disambiguate_public_handle(
+            "Claude_20260602", None, "cc447979-aaaa-bbbb-cccc-dddddddddddd"
+        )
+        assert handle.startswith("Claude_20260602")
+
+    def test_no_double_append_when_suffix_present(self):
+        handle = disambiguate_public_handle(
+            "Claude_20260602_cc447979", None, "cc447979-aaaa-bbbb-cccc-dddddddddddd"
+        )
+        assert handle == "Claude_20260602_cc447979"
+
+    def test_falls_back_to_structured_id_when_no_bucket(self):
+        # structured_id is already uuid8-suffixed by generate_structured_id.
+        handle = disambiguate_public_handle(
+            None, "claude_code_claude_20260602_cc447979", "cc447979-x"
+        )
+        assert handle == "claude_code_claude_20260602_cc447979"
+
+    def test_no_uuid_keeps_bucket_unchanged(self):
+        handle = disambiguate_public_handle("Claude_20260602", None, None)
+        assert handle == "Claude_20260602"
+
+    def test_non_uuid_identifier_adds_no_suffix(self):
+        # Placeholder/non-UUID ids (e.g. "agent-1") must not contribute a
+        # garbage fragment like "_agent" — regression for the CI failure where
+        # require_agent_id returned the placeholder "agent-1".
+        assert (
+            disambiguate_public_handle("Gpt_5_Codex_20260404", None, "agent-1")
+            == "Gpt_5_Codex_20260404"
+        )
+
+    def test_redacted_agent_prefix_uses_hex_tail(self):
+        # The "agent-<hex>" redacted form disambiguates on its hex tail, not
+        # on the literal "agent" token.
+        handle = disambiguate_public_handle(
+            "Claude_20260602", None, "agent-1234abcd5678"
+        )
+        assert handle == "Claude_20260602_1234abcd"
+
+    def test_returns_none_when_nothing_available(self):
+        assert disambiguate_public_handle(None, None, "cc447979-x") is None
 
 
 # ============================================================================
