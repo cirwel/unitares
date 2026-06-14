@@ -65,8 +65,9 @@ ABSOLUTE_V_CEILING = 0.50
 #
 # Healthy edge = BASIN_HIGH per-dimension EISV bounds. These MIRROR
 # config.governance_config.BASIN_HIGH; they are duplicated here (rather than
-# imported) to keep this scoring module free of the numpy/config import chain on
-# the hot path. Parity is drift-guarded by
+# imported) to keep this module's IMPORT free of the numpy/config chain —
+# importing config.governance_config pulls numpy at import time (an `np.ndarray`
+# annotation is evaluated at class-definition time). Parity is drift-guarded by
 # tests/test_stable_agent_risk_calibration.py::test_basin_gate_edges_match_config.
 # Danger edge = the ABSOLUTE_* floors/ceilings above.
 #

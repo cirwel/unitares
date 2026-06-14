@@ -156,6 +156,31 @@ coherence-based health. If longitudinal in-basin creep detection is later judged
 necessary, it belongs in a dedicated trend monitor, not in re-sensitizing the
 self-relative z-path inside the basin (which would reintroduce the false-pause).
 
+### Gate-exposed weakness of the absolute floors (live-verifier finding)
+
+The live-verifier's adversarial grid surfaced a class the gate **exposes but does
+not create**: a state breaching exactly ONE absolute floor while the other
+dimensions are healthy (e.g. E=0.20 with I=0.65, S=0.18, V=0.0) goes
+`before=0.60/high-risk → after=0.34/safe`. Root cause: a single absolute-floor
+breach contributes at most ~0.30 (E→0) or ~0.20 (S/|V|), both below the 0.35
+safe threshold. Pre-#689 such a state was held high-risk by the **false**
+self-relative σ-explosion on the *healthy* dimensions (counting I=0.65 as −3σ
+"dangerous"); the gate correctly removes that false contribution, leaving only
+the genuinely-weak floor backstop.
+
+Two things are true at once: (a) the gate never scores a baselined agent *below*
+what the system's own absolute fixed-threshold scoring gives a fresh agent at the
+identical state (E=0.20/healthy-rest scores 0.15 fresh vs 0.34 gated — the gate
+is the more conservative of the two), so it is not masking relative to the
+absolute standard; (b) the absolute floors were nonetheless never strong enough
+for a single hard danger-edge breach to stand on its own, and the gate makes that
+latent weakness reachable on more states. Strengthening the floors so one hard
+breach (E/I<0.30, S>0.70, |V|>0.50) alone crosses caution is a **fleet-wide
+calibration change** affecting fixed-threshold mode too, so it is tracked as a
+**separate follow-up** rather than folded in here. The live-verifier's `--db`
+sweep (`genuine-risk-masked` count) gates whether this is theoretical or live for
+the current 21 tight-σ agents; it is the operator-side pre-merge step.
+
 ## Acceptance mapping
 
 | Acceptance criterion | Status |
@@ -168,13 +193,25 @@ self-relative z-path inside the basin (which would reintroduce the false-pause).
 
 ## Council
 
-- **Architect** — design framing: is basin-gating the right principled fix vs
-  per-dim σ floor; is the healthy-edge=BASIN_HIGH / danger-edge=ABSOLUTE_* choice
-  sound; should the flat floor be kept or dropped.
-- **Code-reviewer** — the diff: gate correctness, no circularity with the risk
-  being computed, parity drift-guard, blast radius on `deviation()` callers.
-- **Live-verifier** — empirical rigor: re-run `validate_basin_gate.py --db`
-  across the 21 tight-σ agents on the live fleet, confirm 0 genuine-risk states
-  masked.
+- **Architect — APPROVE-WITH-CHANGES (addressed).** Confirmed basin-gating is
+  the right fix over a per-dim σ floor; confirmed the linear ramp (not assumed
+  in-basin membership) is what keeps the boundary-region Sentinel safe; confirmed
+  no circularity (gate reads only absolute EISV, never risk/coherence). Required:
+  document the in-basin slow-creep accepted cost (done, "Accepted cost" above).
+  Suggested: clarify the floor `max()` backstop in the docstring (done).
+- **Code-reviewer — APPROVE.** Verified gate math (no div-by-zero: the
+  `value>=healthy`/`value<=danger` early-returns precede the division), correct
+  component application (rho/CE ungated), the `max()` floor backstop, parity
+  drift-guard sufficiency, `deviation()` callers unaffected, and strong (non-
+  tautological) tests. Nit (addressed): reworded the import-avoidance comment.
+- **Live-verifier — APPROVE-WITH-CHANGES.** Audited the harness method (correct;
+  reads `state_json->'behavioral_eisv'`, not the entropy column). Reproduced the
+  default run; confirmed 0 violations of "gate never raises risk" across a 9,680-
+  point grid. Live DB not reachable from this container — the 21-agent `--db`
+  sweep is the operator-side pre-merge step. Found the gate-exposed single-floor-
+  breach masking class (documented above) — recommends running `--db` before
+  merge and a separate follow-up to strengthen the absolute floors.
 
-Operator is the merge gate; PR left as draft. Do not auto-merge.
+Operator is the merge gate; PR left as draft. Do not auto-merge. Pre-merge
+operator step: `python3 scripts/analysis/validate_basin_gate.py --db` in a
+DB-reachable env; a `genuine-risk-masked: 0` line clears the live sweep.
