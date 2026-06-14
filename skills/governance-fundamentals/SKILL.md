@@ -4,12 +4,13 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, verdicts, coherence, calibration. Reference material for interpreting governance
   metrics and understanding the thermodynamic model.
-last_verified: "2026-06-11"
+last_verified: "2026-06-15"
 freshness_days: 14
 source_files:
   - unitares/config/governance_config.py
   - unitares/src/auto_ground_truth.py
   - unitares/src/governance_monitor.py
+  - unitares/src/monitor_decision.py
   - unitares/src/mcp_handlers/core.py
 ---
 
@@ -62,7 +63,19 @@ Governance issues a decision after each check-in. The response's `verdict` field
 
 Separately, `metrics.verdict` carries the internal UNITARES verdict from phi scoring — `safe` / `caution` / `high-risk`. It drives the decision above; read it as context, not as the action itself.
 
-A `margin: tight` flag means you are near a basin edge. Be more careful with next steps.
+### Margin
+
+`margin` describes how much headroom you have before the nearest state-space edge. It is a small enum, not a number:
+
+| `margin` | Meaning | What to do |
+|----------|---------|------------|
+| `settling` | Warmup — fewer than 3 check-ins, so there is not enough history to judge headroom yet | Keep checking in; a real margin appears after 3+ check-ins |
+| `comfortable` | Clear of every edge by a healthy distance | Proceed normally |
+| `tight` | Within the edge threshold of the nearest boundary (or in the boundary basin) | Be more careful with next steps; avoid increasing complexity |
+
+When `margin` is `tight`, a companion `nearest_edge` field names which boundary you are closest to — `risk`, `coherence`, or `void`. On `comfortable` and `settling`, `nearest_edge` is `null` (there is no edge to warn about). Prefer the live `margin`/`nearest_edge` values over assuming a fixed enum across runtime versions — `get_governance_metrics()` is the source of truth.
+
+The plain-English `mirror` array in your check-in response already summarizes anything actionable (including a tight margin) — read that first; `margin`/`nearest_edge` are the underlying data behind it.
 
 ## Coherence
 
