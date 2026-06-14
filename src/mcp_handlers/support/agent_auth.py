@@ -180,7 +180,12 @@ def check_agent_can_operate(agent_uuid: str) -> Optional[TextContent]:
             error_code="AGENT_ARCHIVED",
             error_category="state_error",
             details={"agent_id": agent_uuid[:12], "status": "archived"},
-            recovery={"action": "Create a new agent or restore via agent(action='update')"}
+            recovery={"action": (
+                "Reclaim the SAME identity if this is the same live process: "
+                "onboard(resume=true) with your continuity_token or "
+                "client_session_id (auto-unarchives). Operator restore: "
+                "agent(action='update'). Otherwise onboard fresh."
+            )}
         )
 
     return None
@@ -449,14 +454,37 @@ def require_registered_agent(arguments: Dict[str, Any]) -> Tuple[str, Optional[T
             if agent_status not in _REGISTERED_AGENT_ALLOWED_STATUSES:
                 # Map to the inferer's keyword so error_code lands in the
                 # right category (AGENT_ARCHIVED / AGENT_DELETED / etc.).
-                return None, error_response(
-                    f"Agent '{agent_id}' is {agent_status} and cannot accept calls.",
-                    recovery={
+                if agent_status == "archived":
+                    # Archival is reversible for the SAME live process:
+                    # onboard(resume=true) auto-unarchives the same UUID. Route
+                    # there first so a (possibly falsely-)archived live agent
+                    # reclaims its identity + trajectory rather than being forced
+                    # to mint a new one. Forward-lineage is the fallback only
+                    # when continuity can't be proven.
+                    _recovery = {
+                        "error_type": "agent_archived",
+                        "agent_status": "archived",
+                        "action": (
+                            "If this is the same live process, reclaim the SAME "
+                            "identity: onboard(resume=true) with your "
+                            "continuity_token or client_session_id — this "
+                            "auto-unarchives the agent. Only if you cannot prove "
+                            "continuity, onboard fresh and declare this UUID as "
+                            "parent_agent_id (a new identity succeeding the "
+                            "archived one)."
+                        ),
+                        "related_tools": ["onboard", "self_recovery"],
+                    }
+                else:
+                    _recovery = {
                         "error_type": f"agent_{agent_status}",
                         "agent_status": agent_status,
                         "action": "Onboard a fresh identity with parent_agent_id set to this UUID to declare lineage.",
                         "related_tools": ["onboard"],
-                    },
+                    }
+                return None, error_response(
+                    f"Agent '{agent_id}' is {agent_status} and cannot accept calls.",
+                    recovery=_recovery,
                 )
 
         if not agent_found:

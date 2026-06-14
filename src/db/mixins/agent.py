@@ -88,8 +88,14 @@ class AgentMixin:
         parent_agent_id: Optional[str] = None,
         spawn_reason: Optional[str] = None,
         label: Optional[str] = None,
+        archived_at: Optional["datetime"] = None,
     ) -> bool:
-        """Partial update of core.agents (does NOT modify api_key)."""
+        """Partial update of core.agents (does NOT modify api_key).
+
+        ``archived_at`` is written when provided so core.agents stays
+        self-consistent with status='archived' (the timestamp previously
+        lived only in audit.events).
+        """
         async with self.acquire() as conn:
             try:
                 result = await conn.execute(
@@ -103,6 +109,7 @@ class AgentMixin:
                         parent_agent_id = COALESCE($6, parent_agent_id),
                         spawn_reason = COALESCE($7, spawn_reason),
                         label = COALESCE($8, label),
+                        archived_at = COALESCE($9, archived_at),
                         updated_at = now()
                     WHERE id = $1
                     """,
@@ -114,6 +121,7 @@ class AgentMixin:
                     parent_agent_id,
                     spawn_reason,
                     label,
+                    archived_at,
                 )
                 return "UPDATE 1" in result
             except Exception as e:
