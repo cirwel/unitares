@@ -114,10 +114,62 @@ defmodule UnitaresSentinel.GovernanceCheckin do
     end
   end
 
+  # A circuit-breaker / governance pause is NOT an ordinary tool error: the
+  # agent is dark to governance until recovered, and silently swallowing it
+  # (as a generic tool_error logged at :debug) is exactly how a paused
+  # resident stayed invisible for ~18h. Classify it distinctly so the caller
+  # can surface it and attempt a bounded, server-gated self-recovery.
+  defp ensure_tool_success(%{"success" => false, "error_code" => "AGENT_PAUSED"} = result),
+    do: {:error, {:agent_paused, pause_detail(result)}}
+
   defp ensure_tool_success(%{"success" => false} = result),
     do: {:error, {:tool_error, Map.get(result, "error", "unknown")}}
 
   defp ensure_tool_success(_result), do: :ok
+
+  defp pause_detail(result) do
+    %{
+      "error" => Map.get(result, "error", "Agent is paused and cannot process updates"),
+      "paused_at" => Map.get(result, "paused_at"),
+      "status" => Map.get(result, "status", "paused"),
+      "recovery" => Map.get(result, "recovery")
+    }
+  end
+
+  @doc """
+  Attempt a bounded self-recovery for a paused Sentinel identity.
+
+  Posts `self_recovery` (default `action=quick`) to the same `/v1/tools/call`
+  surface with the session anchor identity. Recovery is **server-gated**:
+  governance grants a quick resume only for safe states and refuses while the
+  underlying risk is still high (or coherence sits below the quick-resume gate),
+  so this never forces a resume or neuters the circuit breaker — it asks, and
+  governance decides. A refusal (e.g. `NOT_SAFE_FOR_QUICK_RESUME`) comes back as
+  `{:error, {:tool_error, _}}` and the caller stays surfaced for the operator.
+  """
+  @spec recover(keyword()) :: {:ok, map()} | {:error, term()}
+  def recover(opts \\ []) do
+    anchor = Keyword.get(opts, :anchor, %{})
+
+    arguments =
+      %{"action" => Keyword.get(opts, :recovery_action, "quick")}
+      |> put_optional(
+        "reason",
+        Keyword.get(opts, :reason, "sentinel automated bounded recovery after governance pause")
+      )
+      |> put_optional("agent_id", Keyword.get(opts, :agent_id) || Map.get(anchor, "agent_uuid"))
+      |> put_optional(
+        "client_session_id",
+        Keyword.get(opts, :client_session_id) || Map.get(anchor, "client_session_id")
+      )
+      |> put_optional(
+        "continuity_token",
+        Keyword.get(opts, :continuity_token) || Map.get(anchor, "continuity_token")
+      )
+
+    %{"name" => "self_recovery", "arguments" => arguments}
+    |> post_json(opts)
+  end
 
   defp headers do
     base = [{"Content-Type", "application/json"}]

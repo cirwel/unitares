@@ -86,4 +86,72 @@ defmodule UnitaresSentinel.GovernanceCheckinTest do
     assert {:error, %RuntimeError{message: "connection refused"}} =
              GovernanceCheckin.checkin(summary(), http_post: http_post)
   end
+
+  test "checkin classifies a circuit-breaker pause distinctly from a generic tool error" do
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      {:ok, 200,
+       Jason.encode!(%{
+         "success" => true,
+         "result" => %{
+           "success" => false,
+           "error" => "Agent is paused and cannot process updates",
+           "error_code" => "AGENT_PAUSED",
+           "paused_at" => "2026-06-13T23:40:11.993752+00:00",
+           "status" => "paused",
+           "recovery" => %{"action" => "Use self_recovery(action='quick')"}
+         }
+       })}
+    end
+
+    assert {:error, {:agent_paused, detail}} =
+             GovernanceCheckin.checkin(summary(), http_post: http_post)
+
+    assert detail["paused_at"] == "2026-06-13T23:40:11.993752+00:00"
+    assert detail["status"] == "paused"
+    assert detail["recovery"]["action"] =~ "self_recovery"
+  end
+
+  test "recover posts self_recovery (quick) carrying the session anchor identity" do
+    parent = self()
+
+    http_post = fn url, body, _headers, _timeout_ms ->
+      send(parent, {:posted, url, body})
+
+      {:ok, 200,
+       Jason.encode!(%{
+         "success" => true,
+         "result" => %{"lifecycle_status" => "active", "previous_status" => "paused"}
+       })}
+    end
+
+    assert {:ok, %{"lifecycle_status" => "active"}} =
+             GovernanceCheckin.recover(
+               url: "http://example.test/v1/tools/call",
+               http_post: http_post,
+               anchor: %{
+                 "agent_uuid" => @agent_uuid,
+                 "client_session_id" => @client_session_id
+               }
+             )
+
+    assert_receive {:posted, "http://example.test/v1/tools/call", body}
+    assert body["name"] == "self_recovery"
+    assert body["arguments"]["action"] == "quick"
+    assert body["arguments"]["agent_id"] == @agent_uuid
+    assert body["arguments"]["client_session_id"] == @client_session_id
+    assert body["arguments"]["reason"] =~ "bounded recovery"
+  end
+
+  test "recover surfaces a governance refusal as an error (never forces resume)" do
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      {:ok, 200,
+       Jason.encode!(%{
+         "success" => true,
+         "result" => %{"success" => false, "error" => "Recovery thresholds not met"}
+       })}
+    end
+
+    assert {:error, {:tool_error, "Recovery thresholds not met"}} =
+             GovernanceCheckin.recover(http_post: http_post)
+  end
 end

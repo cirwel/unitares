@@ -37,7 +37,9 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
           self_findings: [map()],
           posted_count: non_neg_integer(),
           checkin: map(),
-          checkin_result: {:ok, map()} | {:error, term()} | nil
+          checkin_result: {:ok, map()} | {:error, term()} | nil,
+          checkin_pause: map() | nil,
+          recovery_outcome: :recovered | :refused | :error | :not_attempted | :not_paused
         }
 
   @doc false
@@ -103,13 +105,97 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
         GovernanceCheckin.checkin(checkin, Keyword.get(opts, :checkin_opts, []))
       end
 
+    pause = handle_checkin_pause(checkin_result, self_agent_id, opts)
+
     %{
       fleet_findings: fleet_findings,
       self_findings: self_findings,
       posted_count: posted_count,
       checkin: checkin,
-      checkin_result: checkin_result
+      checkin_result: checkin_result,
+      checkin_pause: pause.detail,
+      recovery_outcome: pause.recovery_outcome
     }
+  end
+
+  # The governance check-in surfaced a circuit-breaker PAUSE. Make it loud
+  # (warning + a deduped self-finding so the dark state is visible on the
+  # dashboard) and, if recovery is armed for this episode, ask governance for
+  # a bounded `quick` resume. Recovery is server-gated, so a refusal just
+  # leaves the resident surfaced for the operator rather than looping.
+  defp handle_checkin_pause({:error, {:agent_paused, detail}}, self_agent_id, opts) do
+    paused_at = Map.get(detail, "paused_at")
+
+    Logger.warning(
+      "FleetFindingEmitter: governance check-in REFUSED (AGENT_PAUSED) for #{self_agent_id} " <>
+        "paused_at=#{inspect(paused_at)} — resident is DARK to governance until recovered."
+    )
+
+    if Keyword.get(opts, :emit_findings, true) do
+      finding = %{
+        type: "sentinel_self_pause",
+        severity: "high",
+        violation_class: "BEH",
+        self_observation: true,
+        summary:
+          "Sentinel governance check-in refused: agent is PAUSED (circuit breaker), " <>
+            "paused_at=#{inspect(paused_at)}. Check-ins are dark until recovered. " <>
+            "Bounded quick-resume is attempted once per episode but is server-gated on " <>
+            "coherence; a resident whose baseline coherence sits below that gate needs " <>
+            "operator review / threshold attention, not self-resume."
+      }
+
+      finding_opts =
+        opts
+        |> Keyword.get(:findings_opts, [])
+        |> Keyword.put_new(:agent_id, self_agent_id)
+        |> Keyword.put_new(:agent_name, agent_name(opts))
+
+      Findings.post_finding(finding, finding_opts)
+    end
+
+    %{detail: detail, recovery_outcome: maybe_recover(opts)}
+  end
+
+  defp handle_checkin_pause(_checkin_result, _self_agent_id, _opts),
+    do: %{detail: nil, recovery_outcome: :not_paused}
+
+  # Bounded, once-per-episode recovery: the GenServer disarms (`recovery_armed?:
+  # false`) after a governance refusal so a single episode never loops. Default
+  # armed so a standalone tick still attempts one server-gated resume.
+  defp maybe_recover(opts) do
+    armed? = Keyword.get(opts, :recovery_armed?, true)
+
+    auto? =
+      Keyword.get(opts, :auto_recover, Application.get_env(:unitares_sentinel, :auto_recover, true))
+
+    if armed? and auto? do
+      case GovernanceCheckin.recover(Keyword.get(opts, :checkin_opts, [])) do
+        {:ok, _result} ->
+          Logger.warning("FleetFindingEmitter: bounded self-recovery GRANTED by governance.")
+          :recovered
+
+        {:error, {:agent_paused, _}} ->
+          Logger.warning("FleetFindingEmitter: self-recovery REFUSED (still paused) — staying surfaced.")
+          :refused
+
+        {:error, {:tool_error, reason}} ->
+          Logger.warning(
+            "FleetFindingEmitter: self-recovery REFUSED by governance (#{inspect(reason)}) — staying surfaced for operator."
+          )
+
+          :refused
+
+        {:error, reason} ->
+          Logger.warning(
+            "FleetFindingEmitter: self-recovery transport error (#{inspect(reason)}) — will retry next cycle."
+          )
+
+          :error
+      end
+    else
+      :not_attempted
+    end
   end
 
   @impl true
@@ -168,7 +254,11 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
       lease_opts: Keyword.get(opts, :lease_opts, []),
       cycle_count: Keyword.get(opts, :cycle_count, 0),
       running?: false,
-      last_result: nil
+      last_result: nil,
+      # Disarmed for the rest of a pause episode once governance refuses a
+      # bounded recovery, so a single episode never loops pause→resume→pause.
+      # Re-armed when a check-in succeeds (episode cleared).
+      recovery_blocked_episode?: false
     }
 
     Process.send_after(self(), :tick, initial_delay_ms + sample_jitter(jitter_ms))
@@ -197,7 +287,13 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
             schedule_next_tick(state)
 
             {:noreply,
-             %{state | running?: false, last_result: result, cycle_count: state.cycle_count + 1}}
+             %{
+               state
+               | running?: false,
+                 last_result: result,
+                 cycle_count: state.cycle_count + 1,
+                 recovery_blocked_episode?: next_recovery_gate(state, result)
+             }}
 
           :timeout ->
             Logger.warning(
@@ -213,8 +309,18 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
     end
   end
 
-  defp await_runtime_tick(%{tick_timeout_ms: timeout_ms, opts: opts, cycle_count: cycle_count}) do
-    task = Task.async(fn -> tick(Keyword.put(opts, :cycle_count, cycle_count + 1)) end)
+  defp await_runtime_tick(%{
+         tick_timeout_ms: timeout_ms,
+         opts: opts,
+         cycle_count: cycle_count,
+         recovery_blocked_episode?: blocked?
+       }) do
+    tick_opts =
+      opts
+      |> Keyword.put(:cycle_count, cycle_count + 1)
+      |> Keyword.put(:recovery_armed?, not blocked?)
+
+    task = Task.async(fn -> tick(tick_opts) end)
     Process.unlink(task.pid)
 
     case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
@@ -255,6 +361,21 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
     cls_tag = if vcls == "", do: "", else: "[#{vcls}] "
     Logger.info("FleetFindingEmitter: [#{finding.severity}] #{cls_tag}#{finding.summary}")
   end
+
+  # Episode gate, in priority order:
+  #   1. A clean (non-paused) check-in means the episode cleared → re-arm.
+  #   2. Any recovery ATTEMPT this cycle (refused / granted / transport error)
+  #      disarms for the rest of the episode — strictly once-per-episode, so a
+  #      granted-but-still-paused or a flapping-transport outcome cannot loop.
+  #   3. Otherwise (paused, no attempt — already disarmed) hold the gate.
+  defp next_recovery_gate(_state, %{checkin_pause: nil}), do: false
+
+  defp next_recovery_gate(_state, %{recovery_outcome: outcome})
+       when outcome in [:refused, :recovered, :error],
+       do: true
+
+  defp next_recovery_gate(state, _result),
+    do: Map.get(state, :recovery_blocked_episode?, false)
 
   defp schedule_next_tick(state) do
     Process.send_after(self(), :tick, state.interval_ms + sample_jitter(state.jitter_ms))
