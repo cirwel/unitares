@@ -109,9 +109,9 @@ class DashboardAPI {
     /**
      * Check if cached data is still valid
      */
-    isCacheValid(cacheEntry) {
+    isCacheValid(cacheEntry, cacheTimeout = this.cacheTimeout) {
         if (!cacheEntry) return false;
-        return Date.now() - cacheEntry.timestamp < this.cacheTimeout;
+        return Date.now() - cacheEntry.timestamp < cacheTimeout;
     }
 
     /**
@@ -138,7 +138,7 @@ class DashboardAPI {
         if (useCache) {
             const cacheKey = this.getCacheKey(toolName, toolArguments);
             const cached = this.cache.get(cacheKey);
-            if (this.isCacheValid(cached)) {
+            if (this.isCacheValid(cached, cacheTimeout)) {
                 return cached.data;
             }
         }

@@ -16,8 +16,8 @@
     var formatRelativeTime = typeof DataProcessor !== 'undefined' ? DataProcessor.formatRelativeTime : function () { return ''; };
 
     var MAX_TIMELINE_ITEMS = 100;
-    var timelineEntries = []; // {ts, type, agent, message, verdict, className, violationClass}
-    var currentFilter = 'all';
+    var timelineEntries = []; // {ts, type, agent, message, verdict, className, violationClass, attentionLevel}
+    var currentFilter = 'important';
 
     // Violation taxonomy reverse-lookup index — populated from /v1/taxonomy.
     // Maps surface id (Watcher pattern, Sentinel finding type, broadcast event
@@ -123,6 +123,32 @@
         pause: 'tl-bad', reject: 'tl-bad'
     };
 
+    var ROUTINE_EVENT_TYPES = {
+        knowledge_read: true,
+        lifecycle_created: true,
+        lifecycle_resumed: true,
+        circuit_breaker_reset: true
+    };
+
+    function normalizeSeverity(severity) {
+        return String(severity || '').toLowerCase();
+    }
+
+    function verdictForSeverity(severity) {
+        var s = normalizeSeverity(severity);
+        if (s === 'critical') return 'pause';
+        if (s === 'high' || s === 'medium' || s === 'moderate' || s === 'warning') return 'caution';
+        return null;
+    }
+
+    function attentionLevelForSeverity(severity) {
+        return verdictForSeverity(severity) ? 'attention' : 'noise';
+    }
+
+    function isGreenVerdict(verdict) {
+        return verdict === 'proceed' || verdict === 'approve';
+    }
+
     function entryKey(e) {
         return e.type + '|' + (+e.ts) + '|' + (e.agent || '');
     }
@@ -155,10 +181,10 @@
     // VERDICT_ICONS is defined in utils.js and exported on window
 
     function isImportantEntry(e) {
-        // Show everything except check-ins, UNLESS the check-in has a non-proceed/approve verdict
-        if (e.type !== 'checkin') return true;
-        if (e.verdict && e.verdict !== 'proceed' && e.verdict !== 'approve') return true;
-        return false;
+        if (e.attentionLevel === 'noise') return false;
+        if (e.attentionLevel === 'attention') return true;
+        if (e.verdict) return !isGreenVerdict(e.verdict);
+        return e.type !== 'checkin';
     }
 
     function renderTimeline() {
@@ -206,7 +232,7 @@
             var verdictBadge = e.verdict ? '<span class="tl-verdict ' + (VERDICT_CLASSES[e.verdict] || '') + '">' + verdictIcon + escapeHtml(e.verdict) + '</span>' : '';
 
             var classBadge = classBadgeHtml(e.violationClass);
-            return '<div class="tl-entry ' + (e.className || '') + '" data-type="' + (e.type || '') + '" data-class="' + (e.violationClass || '') + '">' +
+            return '<div class="tl-entry ' + (e.className || '') + '" data-type="' + (e.type || '') + '" data-class="' + (e.violationClass || '') + '" data-attention="' + (e.attentionLevel || '') + '">' +
                 '<span class="tl-icon">' + typeIcon + '</span>' +
                 '<span class="tl-time" title="' + escapeHtml(timeStr + relStr) + '">' + timeStr + '</span>' +
                 agentStr + verdictBadge + classBadge +
@@ -237,18 +263,22 @@
             type: 'checkin',
             agent: agentLabel,
             message: 'checked in' + metricsStr,
-            verdict: verdict
+            verdict: verdict,
+            attentionLevel: verdict && !isGreenVerdict(verdict) ? 'attention' : 'noise'
         });
 
         // Events within the update
         if (data.events && data.events.length > 0) {
             data.events.forEach(function (event) {
+                var eventVerdict = verdictForSeverity(event.severity);
                 addTimelineEntry({
                     ts: event.timestamp ? new Date(event.timestamp) : new Date(),
                     type: 'verdict',
                     agent: agentLabel,
                     message: event.message || event.type,
-                    verdict: event.severity === 'warning' ? 'caution' : event.severity === 'critical' ? 'pause' : null
+                    verdict: eventVerdict,
+                    severity: normalizeSeverity(event.severity),
+                    attentionLevel: eventVerdict ? 'attention' : 'noise'
                 });
             });
         }
@@ -273,6 +303,8 @@
         var category = 'event';
         var message = t.replace(/_/g, ' ');
         var verdict = null;
+        var severity = normalizeSeverity(data.severity);
+        var attentionLevel = ROUTINE_EVENT_TYPES[t] ? 'noise' : null;
 
         var violationClass = classFor('broadcast_events', t);
 
@@ -288,11 +320,13 @@
             } else if (phase === 'resumed') {
                 verdict = 'proceed';
             }
+            if (verdict && !isGreenVerdict(verdict)) attentionLevel = 'attention';
             if (data.reason) message += ' — ' + data.reason;
         } else if (t.indexOf('identity_') === 0) {
             category = 'identity';
             message = t.slice('identity_'.length).replace(/_/g, ' ');
             if (t === 'identity_drift') verdict = 'caution';
+            if (verdict || verdictForSeverity(severity)) attentionLevel = 'attention';
             if (data.detail) message += ' — ' + data.detail;
         } else if (t.indexOf('knowledge_') === 0) {
             category = 'knowledge';
@@ -304,10 +338,13 @@
                 if (data.tags && data.tags.length) {
                     message += ' [' + data.tags.slice(0, 3).join(', ') + ']';
                 }
+                verdict = verdictForSeverity(severity);
+                attentionLevel = attentionLevelForSeverity(severity);
             } else if (t === 'knowledge_confidence_clamped') {
                 message = 'confidence clamped' +
                     (data.summary ? ': ' + data.summary : '');
                 verdict = 'caution';
+                attentionLevel = 'attention';
             }
         } else if (t.indexOf('circuit_breaker_') === 0) {
             category = 'circuit_breaker';
@@ -315,6 +352,10 @@
             message = 'breaker ' + action +
                 (data.reason ? ' — ' + data.reason : '');
             verdict = action === 'tripped' ? 'pause' : 'proceed';
+            if (action === 'tripped') attentionLevel = 'attention';
+        } else if (severity) {
+            verdict = verdictForSeverity(severity);
+            attentionLevel = attentionLevelForSeverity(severity);
         }
 
         // For knowledge_write events, prefer the explicit violation_class on
@@ -330,6 +371,9 @@
             agent: agent,
             message: message,
             verdict: verdict,
+            severity: severity,
+            sourceType: t,
+            attentionLevel: attentionLevel,
             violationClass: violationClass
         });
     }
