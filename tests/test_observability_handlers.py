@@ -2048,3 +2048,179 @@ class TestHandleAuditEvents:
             })
 
         assert captured["agent_id"] == "Hermes_Gpt_5_4_20260519"
+
+
+# ---------------------------------------------------------------------------
+# Outcome evidence diagnostics
+# ---------------------------------------------------------------------------
+
+class _FakeOutcomeAcquire:
+    def __init__(self, conn):
+        self.conn = conn
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeOutcomeEvidenceDB:
+    def __init__(self, rows):
+        self.rows = rows
+        self.captured = {}
+
+    def acquire(self):
+        return _FakeOutcomeAcquire(self)
+
+    async def fetch(self, sql, *args):
+        self.captured["sql"] = sql
+        self.captured["args"] = args
+        return self.rows
+
+
+class TestHandleOutcomeEvidence:
+    @staticmethod
+    def _row(
+        *,
+        outcome_id="outcome-1",
+        agent_id="agent-1",
+        outcome_type="task_completed",
+        verification_source="agent_reported_tool_result",
+        detail=None,
+    ):
+        from datetime import datetime, timezone
+
+        return {
+            "outcome_id": outcome_id,
+            "ts": datetime(2026, 6, 13, 12, 0, tzinfo=timezone.utc),
+            "agent_id": agent_id,
+            "session_id": "sess-1",
+            "outcome_type": outcome_type,
+            "outcome_score": 1.0,
+            "is_bad": False,
+            "verification_source": verification_source,
+            "detail": detail or {},
+        }
+
+    @pytest.mark.asyncio
+    async def test_claim_only_task_completed_lists_low_grade_rows(self):
+        rows = [
+            self._row(
+                outcome_id="claim-1",
+                detail={"summary": "Completed the task."},
+            ),
+            self._row(
+                outcome_id="refs-1",
+                detail={"pr": 661, "commit_sha": "abc123"},
+            ),
+        ]
+        db = _FakeOutcomeEvidenceDB(rows)
+
+        with patch("src.db.get_db", return_value=db):
+            from src.mcp_handlers.observability.handlers import handle_outcome_evidence
+            result = await handle_outcome_evidence({
+                "diagnostic": "claim_only_task_completed",
+                "since": "7d",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["returned_event_count"] == 1
+        assert data["events"][0]["outcome_id"] == "claim-1"
+        assert data["events"][0]["corroboration_grade"] == "claim_only"
+        assert data["events"][0]["claim_fields"]["unverified"] == []
+        # Default diagnostic scopes SQL to task_completed before Python grading.
+        assert db.captured["args"][3] == "task_completed"
+
+    @pytest.mark.asyncio
+    async def test_field_verification_shows_unverified_and_verified_claims(self):
+        rows = [
+            self._row(
+                outcome_id="untrusted-pr",
+                detail={"pr": 123, "commit_sha": "abc"},
+            ),
+            self._row(
+                outcome_id="verified-pr",
+                detail={
+                    "pr": 124,
+                    "commit_sha": "def",
+                    "evidence": [{
+                        "source": "github",
+                        "verified": True,
+                        "pr": 124,
+                        "commit_sha": "def",
+                    }],
+                },
+            ),
+        ]
+        db = _FakeOutcomeEvidenceDB(rows)
+
+        with patch("src.db.get_db", return_value=db):
+            from src.mcp_handlers.observability.handlers import handle_outcome_evidence
+            result = await handle_outcome_evidence({
+                "diagnostic": "field_verification",
+                "since": "7d",
+            })
+
+        data = parse_result(result)
+        by_id = {event["outcome_id"]: event for event in data["events"]}
+        assert set(by_id["untrusted-pr"]["claim_fields"]["unverified"]) == {"commit", "pr"}
+        assert by_id["untrusted-pr"]["claim_fields"]["verified"] == []
+        assert set(by_id["verified-pr"]["claim_fields"]["verified"]) == {"commit", "pr"}
+        assert by_id["verified-pr"]["claim_fields"]["unverified"] == []
+
+    @pytest.mark.asyncio
+    async def test_agent_summary_flags_high_completion_low_corroboration(self):
+        rows = [
+            self._row(outcome_id="a1", agent_id="agent-low", detail={"summary": "Done 1"}),
+            self._row(outcome_id="a2", agent_id="agent-low", detail={"summary": "Done 2"}),
+            self._row(outcome_id="a3", agent_id="agent-low", detail={"summary": "Done 3"}),
+            self._row(
+                outcome_id="b1",
+                agent_id="agent-verified",
+                verification_source="external_signal",
+                detail={"pr": 12, "commit_sha": "abc"},
+            ),
+            self._row(
+                outcome_id="b2",
+                agent_id="agent-verified",
+                outcome_type="test_passed",
+                detail={"phase5_emitter": True, "kind": "test", "tool": "pytest", "exit_code": 0},
+            ),
+        ]
+        db = _FakeOutcomeEvidenceDB(rows)
+
+        with patch("src.db.get_db", return_value=db):
+            from src.mcp_handlers.observability.handlers import handle_outcome_evidence
+            result = await handle_outcome_evidence({
+                "diagnostic": "agent_summary",
+                "since": "7d",
+                "min_completions": 3,
+            })
+
+        data = parse_result(result)
+        low = {agent["agent_id"] for agent in data["low_corroboration_agents"]}
+        assert low == {"agent-low"}
+        agent_low = next(a for a in data["agents"] if a["agent_id"] == "agent-low")
+        assert agent_low["claim_only_task_completed"] == 3
+        assert agent_low["low_corroboration"] is True
+        assert "events" not in data
+
+    @pytest.mark.asyncio
+    async def test_routed_through_observe(self):
+        db = _FakeOutcomeEvidenceDB([
+            self._row(outcome_id="claim-1", detail={"summary": "Done"}),
+        ])
+
+        with patch("src.db.get_db", return_value=db):
+            from src.mcp_handlers.consolidated import handle_observe
+            result = await handle_observe({
+                "action": "outcome_evidence",
+                "diagnostic": "claim_only_task_completed",
+                "since": "7d",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["events"][0]["outcome_id"] == "claim-1"

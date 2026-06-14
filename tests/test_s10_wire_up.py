@@ -55,6 +55,12 @@ class TestOutcomeEventsClassTagWireUp:
             await handle_outcome_event({
                 'outcome_type': 'test_passed',
                 'confidence': 0.9,
+                'detail': {
+                    'phase5_emitter': True,
+                    'kind': 'test',
+                    'tool': 'pytest',
+                    'exit_code': 0,
+                },
             })
 
         mock_seq_tracker.record_exogenous_tactical_outcome.assert_called_once()
@@ -89,6 +95,12 @@ class TestOutcomeEventsClassTagWireUp:
             await handle_outcome_event({
                 'outcome_type': 'test_passed',
                 'confidence': 0.9,
+                'detail': {
+                    'phase5_emitter': True,
+                    'kind': 'test',
+                    'tool': 'pytest',
+                    'exit_code': 0,
+                },
             })
 
         mock_seq_tracker.record_exogenous_tactical_outcome.assert_called_once()
@@ -123,6 +135,12 @@ class TestOutcomeEventsClassTagWireUp:
             await handle_outcome_event({
                 'outcome_type': 'test_passed',
                 'confidence': 0.9,
+                'detail': {
+                    'phase5_emitter': True,
+                    'kind': 'test',
+                    'tool': 'pytest',
+                    'exit_code': 0,
+                },
             })
 
         mock_seq_tracker.record_exogenous_tactical_outcome.assert_called_once()

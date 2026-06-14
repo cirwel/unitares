@@ -6,6 +6,7 @@ from .handlers import (
     handle_compare_me_to_similar,
     handle_detect_anomalies,
     handle_aggregate_metrics,
+    handle_outcome_evidence,
     handle_audit_events,
 )
 from .outcome_events import handle_outcome_event, handle_outcome_correlation
@@ -16,6 +17,7 @@ __all__ = [
     "handle_compare_me_to_similar",
     "handle_detect_anomalies",
     "handle_aggregate_metrics",
+    "handle_outcome_evidence",
     "handle_audit_events",
     "handle_outcome_event",
     "handle_outcome_correlation",

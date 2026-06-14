@@ -573,7 +573,8 @@ class TestObserveHandler:
         data = _parse_response(result)
         valid = sorted(data["recovery"]["valid_actions"])
         expected = sorted(["agent", "compare", "similar", "anomalies",
-                           "aggregate", "telemetry", "audit_events"])
+                           "aggregate", "telemetry", "audit_events",
+                           "outcome_evidence"])
         assert valid == expected
 
 

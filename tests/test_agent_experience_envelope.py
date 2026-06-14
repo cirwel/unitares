@@ -242,6 +242,9 @@ def test_record_result_envelope_lifts_outcome():
         "outcome_id": "o-1",
         "outcome_type": "task_completed",
         "outcome_score": 1.0,
+        "corroboration_grade": "claim_only",
+        "evidence_weight": 0.1,
+        "claim_risk": "high",
         "eisv_snapshot": {
             "primary_eisv": {"E": 0.7, "I": 0.6, "S": 0.8, "V": 0.1},
             "primary_eisv_source": "ode_fallback",
@@ -251,6 +254,8 @@ def test_record_result_envelope_lifts_outcome():
     env = build_experience_envelope("record_result", "outcome_event", payload)
     assert env["state_summary"]["outcome_id"] == "o-1"
     assert env["state_summary"]["outcome_type"] == "task_completed"
+    assert env["state_summary"]["corroboration_grade"] == "claim_only"
+    assert env["state_summary"]["claim_risk"] == "high"
     assert env["state_summary"]["working_state"]["E"] == 0.7
     assert env["state_summary"]["working_state"]["source"] == "ode_fallback"
     assert "state_semantics" not in env["state_summary"]["working_state"]

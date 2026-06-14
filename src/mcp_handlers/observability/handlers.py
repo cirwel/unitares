@@ -1063,6 +1063,239 @@ def _parse_window_arg(value: Any, default_hours: float = 24.0) -> "datetime":
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+@mcp_tool("outcome_evidence_query", timeout=15.0, register=False)
+async def handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """Audit outcome_events by corroboration grade and claim-field verification."""
+    import json
+    from src.db import get_db
+    from src.outcome_corroboration import assess_outcome_corroboration
+
+    diagnostic = str(
+        arguments.get("diagnostic") or arguments.get("mode") or "claim_only_task_completed"
+    ).lower()
+    valid_diagnostics = {
+        "claim_only_task_completed",
+        "agent_summary",
+        "field_verification",
+        "events",
+    }
+    if diagnostic not in valid_diagnostics:
+        return error_response(
+            f"invalid diagnostic {diagnostic!r}",
+            error_code="invalid_argument",
+            recovery={"valid_diagnostics": sorted(valid_diagnostics)},
+        )
+
+    since_arg = arguments.get("since")
+    window_defaulted = since_arg is None
+    try:
+        start_dt = _parse_window_arg(since_arg, default_hours=168.0)
+        end_dt = (
+            _parse_window_arg(arguments.get("until"), default_hours=0.0)
+            if arguments.get("until") is not None
+            else None
+        )
+    except (ValueError, KeyError) as e:
+        return error_response(
+            f"invalid window arg: {e}",
+            error_code="invalid_argument",
+        )
+
+    try:
+        limit = int(arguments.get("limit", 500))
+    except (TypeError, ValueError):
+        limit = 500
+    limit = max(1, min(limit, 5000))
+
+    try:
+        min_completions = int(arguments.get("min_completions", 3))
+    except (TypeError, ValueError):
+        min_completions = 3
+    min_completions = max(1, min(min_completions, 1000))
+
+    try:
+        low_weight_threshold = float(arguments.get("low_weight_threshold", 0.50))
+    except (TypeError, ValueError):
+        low_weight_threshold = 0.50
+
+    target_agent_id = arguments.get("target_agent_id")
+    outcome_type = arguments.get("outcome_type")
+    grade_filter = arguments.get("corroboration_grade")
+    include_events_arg = arguments.get("include_events")
+    include_events = (
+        bool(include_events_arg)
+        if include_events_arg is not None
+        else diagnostic != "agent_summary"
+    )
+    include_detail = bool(arguments.get("include_detail", False))
+
+    if diagnostic == "claim_only_task_completed":
+        outcome_type = outcome_type or "task_completed"
+        grade_filter = grade_filter or "claim_only"
+
+    db = get_db()
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+              outcome_id::text AS outcome_id,
+              ts,
+              agent_id,
+              session_id,
+              outcome_type,
+              outcome_score,
+              is_bad,
+              verification_source,
+              detail
+            FROM audit.outcome_events
+            WHERE ts >= $1
+              AND ($2::timestamptz IS NULL OR ts <= $2)
+              AND ($3::text IS NULL OR agent_id = $3)
+              AND ($4::text IS NULL OR outcome_type = $4)
+            ORDER BY ts DESC
+            LIMIT $5
+            """,
+            start_dt,
+            end_dt,
+            target_agent_id,
+            outcome_type,
+            limit,
+        )
+
+    def _row_detail(raw: Any) -> Dict[str, Any]:
+        if isinstance(raw, dict):
+            return dict(raw)
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+                return parsed if isinstance(parsed, dict) else {}
+            except json.JSONDecodeError:
+                return {}
+        return {}
+
+    by_grade: Dict[str, int] = {}
+    agent_stats: Dict[str, Dict[str, Any]] = {}
+    events: list[Dict[str, Any]] = []
+
+    for row in rows:
+        detail = _row_detail(row["detail"])
+        verification_source = row["verification_source"] or detail.get("verification_source")
+        assessment = assess_outcome_corroboration(
+            outcome_type=row["outcome_type"],
+            detail=detail,
+            verification_source=verification_source,
+        )
+        metadata = assessment.as_metadata()
+        grade = metadata["corroboration_grade"]
+        by_grade[grade] = by_grade.get(grade, 0) + 1
+
+        aid = row["agent_id"] or "<unknown>"
+        stats = agent_stats.setdefault(aid, {
+            "agent_id": aid,
+            "total_events": 0,
+            "task_completed": 0,
+            "claim_only_task_completed": 0,
+            "total_evidence_weight": 0.0,
+            "by_grade": {},
+        })
+        stats["total_events"] += 1
+        stats["total_evidence_weight"] += float(metadata["evidence_weight"])
+        stats["by_grade"][grade] = stats["by_grade"].get(grade, 0) + 1
+        if row["outcome_type"] == "task_completed":
+            stats["task_completed"] += 1
+            if grade == "claim_only":
+                stats["claim_only_task_completed"] += 1
+
+        include_row = True
+        if grade_filter and grade != str(grade_filter):
+            include_row = False
+        if diagnostic == "field_verification" and not metadata["claimed_fields"]:
+            include_row = False
+        if include_row and include_events:
+            event = {
+                "outcome_id": row["outcome_id"],
+                "ts": row["ts"].isoformat() if hasattr(row["ts"], "isoformat") else str(row["ts"]),
+                "agent_id": row["agent_id"],
+                "session_id": row["session_id"],
+                "outcome_type": row["outcome_type"],
+                "outcome_score": row["outcome_score"],
+                "is_bad": row["is_bad"],
+                "verification_source": verification_source,
+                **metadata,
+                "claim_fields": {
+                    "claimed": metadata["claimed_fields"],
+                    "verified": metadata["verified_fields"],
+                    "unverified": metadata["unverified_fields"],
+                },
+            }
+            if include_detail:
+                event["detail"] = detail
+            else:
+                event["detail_summary"] = {
+                    key: detail.get(key)
+                    for key in ("source", "summary", "tool", "kind", "exit_code")
+                    if key in detail
+                }
+            events.append(event)
+
+    agents: list[Dict[str, Any]] = []
+    for stats in agent_stats.values():
+        total = max(1, int(stats["total_events"]))
+        avg_weight = float(stats["total_evidence_weight"]) / total
+        task_completed = int(stats["task_completed"])
+        claim_only_completed = int(stats["claim_only_task_completed"])
+        stats.pop("total_evidence_weight", None)
+        stats["avg_evidence_weight"] = round(avg_weight, 4)
+        stats["claim_only_completion_ratio"] = (
+            round(claim_only_completed / task_completed, 4)
+            if task_completed else 0.0
+        )
+        stats["low_corroboration"] = (
+            task_completed >= min_completions
+            and (
+                avg_weight < low_weight_threshold
+                or claim_only_completed / max(1, task_completed) >= 0.5
+            )
+        )
+        agents.append(stats)
+
+    agents.sort(
+        key=lambda a: (
+            not a["low_corroboration"],
+            -a["task_completed"],
+            a["avg_evidence_weight"],
+            a["agent_id"],
+        )
+    )
+    low_agents = [a for a in agents if a["low_corroboration"]]
+
+    payload: Dict[str, Any] = {
+        "diagnostic": diagnostic,
+        "window": {
+            "since": start_dt.isoformat(),
+            "until": end_dt.isoformat() if end_dt else None,
+            "defaulted": window_defaulted,
+        },
+        "filters": {
+            "target_agent_id": target_agent_id,
+            "outcome_type": outcome_type,
+            "corroboration_grade": grade_filter,
+            "min_completions": min_completions,
+            "low_weight_threshold": low_weight_threshold,
+        },
+        "raw_row_count": len(rows),
+        "returned_event_count": len(events),
+        "by_grade": by_grade,
+        "agents": agents,
+        "low_corroboration_agents": low_agents,
+        "limit_reached": len(rows) >= limit,
+    }
+    if include_events:
+        payload["events"] = events
+
+    return success_response(payload)
+
+
 @mcp_tool("audit_events_query", timeout=15.0, register=False)
 async def handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Query the Postgres ``audit.events`` table by event_type + time window.

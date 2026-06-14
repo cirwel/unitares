@@ -333,6 +333,12 @@ class TestExplicitOutcomeEventCalibration:
             result = await handle_outcome_event({
                 'outcome_type': 'test_passed',
                 'confidence': 0.85,
+                'detail': {
+                    'phase5_emitter': True,
+                    'kind': 'test',
+                    'tool': 'pytest',
+                    'exit_code': 0,
+                },
             })
 
         parsed = parse_result(result)
@@ -392,6 +398,12 @@ class TestExplicitOutcomeEventCalibration:
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
                 'outcome_type': 'task_completed',
+                'detail': {
+                    'phase5_emitter': True,
+                    'kind': 'command',
+                    'tool': 'make',
+                    'exit_code': 0,
+                },
                 # No confidence param
             })
 
@@ -477,7 +489,13 @@ class TestExplicitOutcomeEventCalibration:
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
                 'outcome_type': 'test_passed',
-                'detail': {'tests': {'passed': 10, 'failed': 0}},
+                'detail': {
+                    'phase5_emitter': True,
+                    'kind': 'test',
+                    'tool': 'pytest',
+                    'exit_code': 0,
+                    'tests': {'passed': 10, 'failed': 0},
+                },
             })
 
         parsed = parse_result(result)
@@ -529,6 +547,12 @@ class TestExplicitOutcomeEventCalibration:
             result = await handle_outcome_event({
                 'outcome_type': 'test_failed',
                 'confidence': 0.9,  # Overconfident!
+                'detail': {
+                    'phase5_emitter': True,
+                    'kind': 'test',
+                    'tool': 'pytest',
+                    'exit_code': 1,
+                },
             })
 
         mock_checker.record_prediction.assert_called_once_with(
@@ -635,6 +659,12 @@ class TestPredictionIdLookup:
             result = await handle_outcome_event({
                 'outcome_type': 'test_passed',
                 'prediction_id': pid,
+                'detail': {
+                    'phase5_emitter': True,
+                    'kind': 'test',
+                    'tool': 'pytest',
+                    'exit_code': 0,
+                },
             })
 
         parsed = parse_result(result)
@@ -696,6 +726,12 @@ class TestPredictionIdLookup:
             result = await handle_outcome_event({
                 'outcome_type': 'task_completed',
                 'prediction_id': 'pid-stale',
+                'detail': {
+                    'phase5_emitter': True,
+                    'kind': 'command',
+                    'tool': 'make',
+                    'exit_code': 0,
+                },
             })
 
         parsed = parse_result(result)
