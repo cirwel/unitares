@@ -40,7 +40,7 @@ The token must be present in the server's `UNITARES_OPERATOR_TOKENS` allowlist (
 - **Stats:** fleet coherence, active/total agents, stuck agents, discoveries, dialectic sessions, system health, calibration, anomalies, and trust-tier distribution.
 - **Pulse:** latest governance decision, risk/confidence/complexity vitals, event sparkline, and pinned-agent support.
 - **EISV:** fleet and per-agent time-series charts backed by Chart.js.
-- **Agents:** searchable/filterable agent table with pagination, status, metrics, trust tiers, lineage badges, and operator actions.
+- **Agents:** searchable/filterable agent table with pagination, status, metrics, trust tiers, lineage/supersession badges, lifecycle reason display, and operator actions.
 - **Discoveries:** recent knowledge graph entries with filters and status actions.
 - **Dialectic:** peer-review/recovery sessions, phase/status counts, and transcript views.
 - **Activity:** timeline of check-ins, verdicts, discoveries, dialectic events, lifecycle events, and resident events.
@@ -109,6 +109,8 @@ Dedicated HTTP endpoints include:
 - `/v1/sentinel/summary`
 - `/v1/vigil/summary`
 - `/ws/eisv`
+
+Agent rows come from `agent(action="list", include_metrics=true, status_filter="all")`. The dashboard consumes compact list fields only: `parent_agent_id`, `spawn_reason`, `last_lifecycle_event`, `last_lifecycle_reason`, `last_lifecycle_at`, `superseded`, and `superseded_reason`. Full `identity_view` belongs to `get_agent_metadata` detail responses and is not required for the agent grid.
 
 ## Development
 

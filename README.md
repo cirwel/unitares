@@ -95,13 +95,19 @@ Additional services (started via launchd, not bundled into `docker compose up`):
 # Inside the agent's loop
 result = sync_state(response_text=output, complexity=0.6, confidence=0.8)
 raw = result.get("raw_governance", result)  # alias envelope preserves the full canonical payload
-metrics = raw.get("metrics", raw)
+metrics = raw.get("metrics") or {}
+eisv = (
+    raw.get("primary_eisv")
+    or raw.get("behavioral_eisv")
+    or metrics.get("eisv")
+    or metrics
+)
 
-if metrics["integrity"] < 0.4:
+if eisv.get("I") is not None and eisv["I"] < 0.4:
     agent.require_human_review("integrity low — pausing autonomous actions")
-elif metrics["entropy"] > 0.7:
+elif eisv.get("S") is not None and eisv["S"] > 0.7:
     agent.narrow_scope()            # fewer tools, tighter search
-elif metrics["energy"] < 0.2:
+elif eisv.get("E") is not None and eisv["E"] < 0.2:
     agent.stop_and_summarize()      # avoid thrashing
 ```
 
@@ -281,7 +287,7 @@ graph LR
     A[AI Agent] -->|check-in| M["MCP Server :8767"]
     M -->|observations| BS[Behavioral EISV]
     BS -->|"verdict + guidance"| M
-    M -->|parallel diagnostic| UC[unitares-core ODE]
+    M -->|parallel diagnostic| UC[governance_core ODE]
     UC -.->|analysis only| M
     M -->|"verdict + guidance"| A
     M <-->|"state, audit, calibration"| PG[("PostgreSQL + AGE")]
