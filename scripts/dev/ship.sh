@@ -108,10 +108,37 @@ classify_worktree() {
 # processed a Watcher chime — CLAUDE.md asks for fingerprints in commit
 # messages, but post-edit-hook → next-turn-chime is a separate channel from
 # commit-message authorship. This pulls them back together.
+watcher_findings_file() {
+    local primary legacy
+    primary=$(python3 - <<'PY'
+import os
+from pathlib import Path
+
+override = os.environ.get("UNITARES_WATCHER_DATA_DIR")
+if override:
+    state_dir = Path(override).expanduser()
+else:
+    state_dir = Path.home() / ".unitares" / "watcher"
+print(state_dir / "findings.jsonl")
+PY
+)
+    legacy="$PROJECT_ROOT/data/watcher/findings.jsonl"
+
+    if [[ -s "$primary" ]]; then
+        printf '%s\n' "$primary"
+    elif [[ -s "$legacy" ]]; then
+        printf '%s\n' "$legacy"
+    elif [[ -f "$primary" ]]; then
+        printf '%s\n' "$primary"
+    else
+        printf '%s\n' "$legacy"
+    fi
+}
+
 collect_watcher_fingerprints() {
     local files; files=$(git diff --cached --name-only)
     [[ -n "$files" ]] || return 0
-    local findings="$PROJECT_ROOT/data/watcher/findings.jsonl"
+    local findings; findings=$(watcher_findings_file)
     [[ -f "$findings" ]] || return 0
     awk -v root="$PROJECT_ROOT" '{print root"/"$0}' <<< "$files" \
         | python3 "$PROJECT_ROOT/scripts/dev/_ship_watcher_fingerprints.py" "$findings"
