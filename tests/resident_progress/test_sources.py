@@ -92,6 +92,28 @@ def test_chronicler_series_names_includes_tokei():
     assert "tokei.unitares.src.code" in CHRONICLER_SERIES_NAMES
 
 
+def test_chronicler_series_names_are_all_backed_by_a_scraper():
+    """Every name in CHRONICLER_SERIES_NAMES must be a key Chronicler actually
+    writes (a SCRAPERS entry). The two lists are hand-kept in sync via a comment
+    in sources.py; without this guard a rename/removal on the Chronicler side
+    leaves MetricsSeriesSource querying a series name nobody writes, which
+    returns 0 forever with no error — the silent-zero failure the comment warns
+    about.
+
+    Subset, not equality: SCRAPERS also contains the github.* traffic series,
+    which are deliberately excluded from CHRONICLER_SERIES_NAMES (they're
+    repo-traffic signals, not resident-progress signals).
+    """
+    from agents.chronicler.scrapers import SCRAPERS
+
+    orphans = sorted(n for n in CHRONICLER_SERIES_NAMES if n not in SCRAPERS)
+    assert not orphans, (
+        f"CHRONICLER_SERIES_NAMES entries with no backing scraper: {orphans}. "
+        "A series name here must match a key in agents/chronicler/scrapers.py "
+        "SCRAPERS, or MetricsSeriesSource will silently count zero for it."
+    )
+
+
 @pytest.mark.asyncio
 async def test_metrics_series_source_returns_uniform_count(test_db):
     src = MetricsSeriesSource(test_db)
