@@ -3,12 +3,16 @@
 import math
 import pytest
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 from src.agent_behavioral_baseline import (
     WelfordStats,
     AgentBehavioralBaseline,
     get_agent_behavioral_baseline,
     compute_anomaly_entropy,
+    schedule_baseline_save,
     _baselines,
+    _save_tasks,
 )
 
 
@@ -216,3 +220,40 @@ class TestGlobalRegistry:
         assert b1 is not b2
         b1.update("coherence", 0.9)
         assert b2._stats["coherence"].count == 0
+
+
+# ══════════════════════════════════════════════════
+#  schedule_baseline_save — fire-and-forget GC safety
+# ══════════════════════════════════════════════════
+
+class TestScheduleBaselineSave:
+    def setup_method(self):
+        _baselines.clear()
+        _save_tasks.clear()
+
+    def test_no_baseline_is_noop(self):
+        # No baseline registered → nothing scheduled, no error.
+        schedule_baseline_save("unknown-agent")
+        assert len(_save_tasks) == 0
+
+    def test_no_event_loop_is_noop(self):
+        # Called from sync context (no running loop) → skip silently.
+        get_agent_behavioral_baseline("agent-1")
+        schedule_baseline_save("agent-1")  # not inside a loop
+        assert len(_save_tasks) == 0
+
+    @pytest.mark.asyncio
+    async def test_task_ref_held_until_done(self):
+        get_agent_behavioral_baseline("agent-1")
+        mock_db = MagicMock()
+        mock_db.save_behavioral_baseline = AsyncMock()
+        with patch("src.db.get_db", return_value=mock_db):
+            schedule_baseline_save("agent-1")
+            # Strong ref is held while the save is in flight (guards against the
+            # event loop's weak-ref GC dropping the task mid-await).
+            assert len(_save_tasks) == 1
+            task = next(iter(_save_tasks))
+            await task
+            # Done-callback discards the ref so the set does not leak.
+            assert len(_save_tasks) == 0
+        mock_db.save_behavioral_baseline.assert_awaited_once()
