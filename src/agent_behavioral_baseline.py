@@ -125,6 +125,11 @@ class AgentBehavioralBaseline:
 
 _baselines: Dict[str, AgentBehavioralBaseline] = {}
 
+# Strong refs to in-flight save tasks. The event loop only keeps weak refs to
+# tasks, so a fire-and-forget create_task() can be GC'd mid-await before the DB
+# write completes. Holding the ref until done (then discarding) closes that race.
+_save_tasks: set = set()
+
 
 def get_agent_behavioral_baseline(agent_id: str) -> AgentBehavioralBaseline:
     """Get or create the behavioral baseline for an agent.
@@ -182,7 +187,9 @@ def schedule_baseline_save(agent_id: str) -> None:
 
     try:
         loop = asyncio.get_running_loop()
-        loop.create_task(_do_save())
+        task = loop.create_task(_do_save())
+        _save_tasks.add(task)
+        task.add_done_callback(_save_tasks.discard)
     except RuntimeError:
         pass  # No event loop — skip persistence (e.g. tests, CLI)
 
