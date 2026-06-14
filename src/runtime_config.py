@@ -50,6 +50,14 @@ def get_thresholds() -> Dict[str, float]:
         "lambda1_max": config.LAMBDA1_MAX,
         "target_coherence": config.TARGET_COHERENCE,
         "target_void_freq": config.TARGET_VOID_FREQ,
+        # Basin breakpoints along the I axis — the structural (non-overridable)
+        # I-axis projection of classify_basin. Exposed so the /phase view and
+        # other read clients render basin bands from the engine's own constants
+        # instead of hardcoding a copy that silently drifts. classify_basin is
+        # multi-dimensional (I, coherence, |V|, risk + the BASIN_HIGH box); these
+        # two values are only its I-axis breakpoints, not the full classifier.
+        "basin_low_i_ceil": config_module.BASIN_LOW_I_CEIL,
+        "basin_high_i_min": config_module.BASIN_HIGH.I_min,
     }
 
 
