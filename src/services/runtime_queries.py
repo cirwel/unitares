@@ -472,11 +472,16 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
                 "note": "get_governance_metrics is read-only; it does not initialize state.",
             }
             lite_metrics["related_tools"] = ["process_agent_update", "onboard", "identity"]
+        # Agent-facing reference points — sourced from the canonical decision
+        # constants so they never disagree with what governance actually does.
+        # Previously hardcoded 0.5/0.75, which did NOT match the real lines
+        # (RISK_APPROVE=0.45 = low/medium edge; RISK_REVISE=0.70 = the pause
+        # line, not 0.75). An agent reading these as its thresholds was misled.
         lite_metrics["thresholds"] = {
             "coherence_critical": GovernanceConfig.COHERENCE_CRITICAL_THRESHOLD,
-            "coherence_good": 0.50,
-            "risk_medium": 0.5,
-            "risk_high": 0.75,
+            "coherence_good": GovernanceConfig.TARGET_COHERENCE,
+            "risk_medium": GovernanceConfig.RISK_APPROVE_THRESHOLD,
+            "risk_high": GovernanceConfig.RISK_REVISE_THRESHOLD,
             "target_coherence": GovernanceConfig.TARGET_COHERENCE,
         }
         lite_metrics["_note"] = "Use lite=false for full diagnostics"
