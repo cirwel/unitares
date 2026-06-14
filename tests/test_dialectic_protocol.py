@@ -14,8 +14,16 @@ import sys
 import os
 sys.path.insert(0, 'src')
 
-# Skip if no PostgreSQL available
-pytestmark = pytest.mark.skip(reason="Requires PostgreSQL dialectic backend - run locally with DB setup")
+# Legacy operator drill. The deterministic handler and protocol coverage lives
+# in test_dialectic_handlers.py and test_dialectic_protocol_pure.py; this file
+# exercises live registration/session state and is opt-in.
+pytestmark = pytest.mark.skipif(
+    os.getenv("RUN_DIALECTIC_PROTOCOL_TESTS") != "1",
+    reason=(
+        "Legacy dialectic protocol drill requires "
+        "RUN_DIALECTIC_PROTOCOL_TESTS=1 and registered test agents"
+    ),
+)
 
 from mcp_handlers.dialectic import (
     handle_request_dialectic_review,
