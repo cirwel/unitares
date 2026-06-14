@@ -139,7 +139,10 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
         self_observation: true,
         summary:
           "Sentinel governance check-in refused: agent is PAUSED (circuit breaker), " <>
-            "paused_at=#{inspect(paused_at)}. Check-ins are dark until recovered."
+            "paused_at=#{inspect(paused_at)}. Check-ins are dark until recovered. " <>
+            "Bounded quick-resume is attempted once per episode but is server-gated on " <>
+            "coherence; a resident whose baseline coherence sits below that gate needs " <>
+            "operator review / threshold attention, not self-resume."
       }
 
       finding_opts =
@@ -359,15 +362,20 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
     Logger.info("FleetFindingEmitter: [#{finding.severity}] #{cls_tag}#{finding.summary}")
   end
 
-  # Episode gate: disarm recovery after a governance refusal (no looping),
-  # re-arm once a check-in succeeds (no pause), otherwise hold the gate.
-  defp next_recovery_gate(state, result) do
-    case result do
-      %{recovery_outcome: :refused} -> true
-      %{checkin_pause: nil} -> false
-      _ -> Map.get(state, :recovery_blocked_episode?, false)
-    end
-  end
+  # Episode gate, in priority order:
+  #   1. A clean (non-paused) check-in means the episode cleared → re-arm.
+  #   2. Any recovery ATTEMPT this cycle (refused / granted / transport error)
+  #      disarms for the rest of the episode — strictly once-per-episode, so a
+  #      granted-but-still-paused or a flapping-transport outcome cannot loop.
+  #   3. Otherwise (paused, no attempt — already disarmed) hold the gate.
+  defp next_recovery_gate(_state, %{checkin_pause: nil}), do: false
+
+  defp next_recovery_gate(_state, %{recovery_outcome: outcome})
+       when outcome in [:refused, :recovered, :error],
+       do: true
+
+  defp next_recovery_gate(state, _result),
+    do: Map.get(state, :recovery_blocked_episode?, false)
 
   defp schedule_next_tick(state) do
     Process.send_after(self(), :tick, state.interval_ms + sample_jitter(state.jitter_ms))

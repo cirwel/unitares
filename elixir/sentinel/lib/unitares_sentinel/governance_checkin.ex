@@ -142,10 +142,10 @@ defmodule UnitaresSentinel.GovernanceCheckin do
   Posts `self_recovery` (default `action=quick`) to the same `/v1/tools/call`
   surface with the session anchor identity. Recovery is **server-gated**:
   governance grants a quick resume only for safe states and refuses while the
-  underlying risk is still high, so this never forces a resume or neuters the
-  circuit breaker — it asks, and governance decides. A refusal comes back as a
-  `{:error, {:tool_error, _}}` (or `{:error, {:agent_paused, _}}`) and the
-  caller stays surfaced for the operator.
+  underlying risk is still high (or coherence sits below the quick-resume gate),
+  so this never forces a resume or neuters the circuit breaker — it asks, and
+  governance decides. A refusal (e.g. `NOT_SAFE_FOR_QUICK_RESUME`) comes back as
+  `{:error, {:tool_error, _}}` and the caller stays surfaced for the operator.
   """
   @spec recover(keyword()) :: {:ok, map()} | {:error, term()}
   def recover(opts \\ []) do

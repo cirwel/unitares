@@ -370,4 +370,52 @@ defmodule UnitaresSentinel.FleetFindingEmitterTest do
 
     GenServer.stop(pid)
   end
+
+  test "GenServer does not re-attempt recovery after a GRANTED resume that did not clear the pause" do
+    parent = self()
+
+    # Recovery is GRANTED, but process_agent_update keeps reporting paused (the
+    # resume did not take / re-paused). A buggy gate that only disarms on
+    # :refused would re-attempt every cycle; the once-per-episode invariant must
+    # disarm on any attempt, granted included.
+    checkin_http_post = fn _url, body, _headers, _timeout_ms ->
+      case body["name"] do
+        "process_agent_update" ->
+          {:ok, 200,
+           Jason.encode!(%{
+             "success" => true,
+             "result" => %{"success" => false, "error_code" => "AGENT_PAUSED", "status" => "paused"}
+           })}
+
+        "self_recovery" ->
+          send(parent, :recovery_attempted)
+
+          {:ok, 200,
+           Jason.encode!(%{"success" => true, "result" => %{"lifecycle_status" => "active"}})}
+      end
+    end
+
+    {:ok, pid} =
+      FleetFindingEmitter.start_link(
+        name: :"test_fleet_finding_emitter_granted_#{System.unique_integer([:positive])}",
+        initial_delay_ms: 60_000,
+        interval_ms: 60_000,
+        jitter_ms: 0,
+        lease_advisory: false,
+        snapshot: %{agents: %{}, events: []},
+        analysis_fun: fn _s, _o -> [] end,
+        self_agent_id: "sentinel-test",
+        emit_checkins: true,
+        findings_opts: [http_post: fn _u, _b, _h, _t -> {:ok, 200, ~s({"success":true})} end],
+        checkin_opts: [url: "http://example.test/v1/tools/call", http_post: checkin_http_post]
+      )
+
+    send(pid, :tick)
+    assert_receive :recovery_attempted, 1_000
+
+    send(pid, :tick)
+    refute_receive :recovery_attempted, 300
+
+    GenServer.stop(pid)
+  end
 end
