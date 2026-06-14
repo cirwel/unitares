@@ -243,6 +243,26 @@ def generate_structured_id(
     return base_id
 
 
+def _uuid8_fragment(agent_uuid: Optional[str]) -> str:
+    """Return the first UUID block as a lowercase hex fragment, or ``""``.
+
+    Guards against non-UUID identifiers — test placeholders like ``agent-1``,
+    structured ids, or model names — that would otherwise contribute a garbage
+    suffix such as ``_agent``. Tolerates the ``agent-<hex>`` redacted form by
+    stripping that prefix before reading the first block. A canonical UUID's
+    first block is exactly 8 hex digits, so anything else yields no fragment.
+    """
+    if not agent_uuid:
+        return ""
+    raw = str(agent_uuid)
+    if raw.startswith("agent-"):
+        raw = raw[len("agent-"):]
+    candidate = raw.split("-")[0][:8].lower()
+    if len(candidate) == 8 and all(c in "0123456789abcdef" for c in candidate):
+        return candidate
+    return ""
+
+
 def disambiguate_public_handle(
     public_agent_id: Optional[str],
     structured_id: Optional[str] = None,
@@ -261,14 +281,16 @@ def disambiguate_public_handle(
     legacy rows that predate the unique ``structured_id`` too, since the
     suffix derives from ``agent_uuid`` rather than from a stored field.
 
+    The fragment is only appended when ``agent_uuid`` is genuinely UUID-like
+    (see ``_uuid8_fragment``); a missing or non-UUID identifier leaves the
+    handle unchanged rather than tacking on a garbage suffix.
+
     Preference: disambiguate ``public_agent_id`` when present (keeping the
     readable capitalized bucket form); else fall back to ``structured_id``
     (already uuid8-suffixed by ``generate_structured_id``). Returns ``None``
     when no base handle is available so callers keep their own fallbacks.
     """
-    fragment = ""
-    if agent_uuid:
-        fragment = str(agent_uuid).split("-")[0].lower()
+    fragment = _uuid8_fragment(agent_uuid)
 
     if public_agent_id:
         base = str(public_agent_id)

@@ -281,6 +281,23 @@ class TestDisambiguatePublicHandle:
         handle = disambiguate_public_handle("Claude_20260602", None, None)
         assert handle == "Claude_20260602"
 
+    def test_non_uuid_identifier_adds_no_suffix(self):
+        # Placeholder/non-UUID ids (e.g. "agent-1") must not contribute a
+        # garbage fragment like "_agent" — regression for the CI failure where
+        # require_agent_id returned the placeholder "agent-1".
+        assert (
+            disambiguate_public_handle("Gpt_5_Codex_20260404", None, "agent-1")
+            == "Gpt_5_Codex_20260404"
+        )
+
+    def test_redacted_agent_prefix_uses_hex_tail(self):
+        # The "agent-<hex>" redacted form disambiguates on its hex tail, not
+        # on the literal "agent" token.
+        handle = disambiguate_public_handle(
+            "Claude_20260602", None, "agent-1234abcd5678"
+        )
+        assert handle == "Claude_20260602_1234abcd"
+
     def test_returns_none_when_nothing_available(self):
         assert disambiguate_public_handle(None, None, "cc447979-x") is None
 
