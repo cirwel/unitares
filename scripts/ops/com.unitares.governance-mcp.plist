@@ -48,6 +48,18 @@
 
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- Resident roster for this deployment (comma-separated labels).
+             Each named resident is its own N=1 calibration class. Omit or
+             leave empty for a user-agnostic install with no named residents.
+             MUST match the residents this deployment actually runs (and the
+             UNITARES_RESIDENTS set in each resident's plist). -->
+        <key>UNITARES_RESIDENTS</key>
+        <string>Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler</string>
+        <!-- Resident-progress probe manifest (JSON). Points at the shipped
+             canonical fleet; copy + edit for a different deployment, or omit
+             for a user-agnostic install that probes no residents. -->
+        <key>UNITARES_RESIDENT_PROGRESS_MANIFEST</key>
+        <string>/PATH/TO/UNITARES/config/resident_progress.example.json</string>
         <key>UNITARES_BIND_ALL_INTERFACES</key>
         <string>1</string>
         <key>UNITARES_MCP_ALLOWED_HOSTS</key>

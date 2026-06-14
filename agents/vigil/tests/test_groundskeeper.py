@@ -563,6 +563,50 @@ class TestDetectChangesGroundskeeper:
         assert len(gk_changes) == 1  # 15 > 0 + 10
 
 
+class TestDetectChangesArbitraryService:
+    """Health transitions are detected for ANY monitored service, not just a
+    hardcoded governance/lumen pair — so a deployment's own health-check
+    plugins (e.g. a 'redis' or 'gateway' check) get outage/recovery notes."""
+
+    def test_custom_service_outage_note(self):
+        prev = {"redis_healthy": True}
+        curr = {"redis_healthy": False, "redis_detail": "Redis: UNREACHABLE"}
+        changes = detect_changes(prev, curr)
+        outage = [c for c in changes if "redis" in c.get("tags", [])]
+        assert len(outage) == 1
+        assert "outage" in outage[0]["tags"]
+        assert "down" in outage[0]["summary"].lower()
+
+    def test_custom_service_recovery_note(self):
+        prev = {"redis_healthy": False}
+        curr = {"redis_healthy": True}
+        changes = detect_changes(prev, curr)
+        recovery = [c for c in changes if "recovery" in c.get("tags", [])]
+        assert len(recovery) == 1
+        assert "redis" in recovery[0]["tags"]
+
+    def test_custom_service_sustained_outage_note(self):
+        prev = {"redis_healthy": False, "redis_down_streak": 2}
+        curr = {"redis_healthy": False, "redis_down_streak": 3}
+        changes = detect_changes(prev, curr)
+        sustained = [c for c in changes if "sustained" in c.get("tags", [])]
+        assert len(sustained) == 1
+        assert "redis" in sustained[0]["tags"]
+        assert "consecutive" in sustained[0]["summary"].lower()
+
+    def test_lumen_sustained_note_unchanged(self):
+        """Regression: the canonical Lumen sustained-outage note still reads
+        exactly as before the generalization."""
+        prev = {"lumen_healthy": False, "lumen_down_streak": 2}
+        curr = {"lumen_healthy": False, "lumen_down_streak": 3}
+        changes = detect_changes(prev, curr)
+        sustained = [c for c in changes if "sustained" in c.get("tags", [])]
+        assert len(sustained) == 1
+        assert sustained[0]["summary"] == (
+            "Lumen unreachable for 3 consecutive cycles (~2h)"
+        )
+
+
 # =============================================================================
 # Tests: uptime tracking
 # =============================================================================
