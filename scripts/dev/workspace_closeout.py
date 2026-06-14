@@ -16,6 +16,8 @@ work and terminate or boot out repo-rooted processes.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import re
@@ -59,6 +61,21 @@ class ProcessInfo:
 
 
 @dataclass
+class BranchHygieneSummary:
+    dry_run: bool
+    branches_prunable: int
+    branches_pruned: int
+    worktrees_removable: int
+    worktrees_removed: int
+    origin_orphans_deletable: int
+    origin_orphans_deleted: int
+    holds_count: int
+    holds: list[str]
+    errors: list[str]
+    log_lines: list[str]
+
+
+@dataclass
 class CloseoutResult:
     workspace: str
     git: GitState
@@ -70,6 +87,7 @@ class CloseoutResult:
     stopped_processes: list[int]
     booted_out_labels: list[str]
     errors: list[str]
+    branch_hygiene: BranchHygieneSummary | None = None
 
 
 @dataclass
@@ -552,6 +570,32 @@ def stop_repo_processes(
     return stopped, labels, errors
 
 
+def run_branch_hygiene(root: Path, *, dry_run: bool) -> BranchHygieneSummary:
+    source_root = Path(__file__).resolve().parents[2]
+    if str(source_root) not in sys.path:
+        sys.path.insert(0, str(source_root))
+
+    from agents.vigil_hygiene.agent import sweep
+
+    log_buffer = io.StringIO()
+    with contextlib.redirect_stdout(log_buffer):
+        report = sweep(root, dry_run=dry_run)
+
+    return BranchHygieneSummary(
+        dry_run=report.dry_run,
+        branches_prunable=getattr(report, "branches_prunable", 0),
+        branches_pruned=report.branches_pruned,
+        worktrees_removable=getattr(report, "worktrees_removable", 0),
+        worktrees_removed=report.worktrees_removed,
+        origin_orphans_deletable=getattr(report, "origin_orphans_deletable", 0),
+        origin_orphans_deleted=report.origin_orphans_deleted,
+        holds_count=report.holds_count,
+        holds=list(report.holds),
+        errors=list(report.errors),
+        log_lines=[line for line in log_buffer.getvalue().splitlines() if line.strip()],
+    )
+
+
 def closeout(
     root: Path,
     *,
@@ -559,11 +603,14 @@ def closeout(
     stop_processes: bool = False,
     bootout_launch_agents: bool = False,
     use_baseline: bool = True,
+    branch_hygiene: bool = False,
+    branch_hygiene_live: bool = False,
 ) -> CloseoutResult:
     errors: list[str] = []
     state = git_state(root)
     stash_message: str | None = None
     stashed = False
+    hygiene_summary: BranchHygieneSummary | None = None
     baseline_keys = read_process_baseline(root) if use_baseline else set()
     baseline_file = baseline_path(root)
     baseline_used = bool(baseline_keys)
@@ -588,6 +635,16 @@ def closeout(
         errors.extend(stop_errors)
         processes = repo_rooted_processes(root, baseline_keys=baseline_keys)
 
+    if branch_hygiene or branch_hygiene_live:
+        try:
+            hygiene_summary = run_branch_hygiene(
+                root,
+                dry_run=not branch_hygiene_live,
+            )
+            state = git_state(root)
+        except Exception as exc:
+            errors.append(f"branch hygiene failed: {exc}")
+
     return CloseoutResult(
         workspace=str(root),
         git=state,
@@ -599,6 +656,7 @@ def closeout(
         stopped_processes=stopped,
         booted_out_labels=labels,
         errors=errors,
+        branch_hygiene=hygiene_summary,
     )
 
 
@@ -636,6 +694,7 @@ def start_check(
             stopped_processes=[],
             booted_out_labels=[],
             errors=[],
+            branch_hygiene=None,
         )
 
     baseline_written = False
@@ -661,10 +720,23 @@ def start_check(
 
 
 def result_has_issues(result: CloseoutResult) -> bool:
+    hygiene = result.branch_hygiene
+    hygiene_needs_attention = False
+    if hygiene is not None:
+        hygiene_needs_attention = bool(hygiene.errors or hygiene.holds_count)
+        if hygiene.dry_run:
+            hygiene_needs_attention = hygiene_needs_attention or any(
+                (
+                    hygiene.branches_prunable,
+                    hygiene.worktrees_removable,
+                    hygiene.origin_orphans_deletable,
+                )
+            )
     return (
         delivery_needs_attention(result.git)
         or bool(result.repo_processes)
         or bool(result.errors)
+        or hygiene_needs_attention
     )
 
 
@@ -734,6 +806,35 @@ def render_text(result: CloseoutResult) -> str:
         for pid in result.stopped_processes:
             lines.append(f"  {pid}")
 
+    if result.branch_hygiene is not None:
+        hygiene = result.branch_hygiene
+        mode = "dry-run" if hygiene.dry_run else "live"
+        if hygiene.dry_run:
+            action_detail = (
+                f"would_prune_branches={hygiene.branches_prunable} "
+                f"would_remove_worktrees={hygiene.worktrees_removable} "
+                f"would_delete_origin_branches={hygiene.origin_orphans_deletable}"
+            )
+        else:
+            action_detail = (
+                f"branches_pruned={hygiene.branches_pruned} "
+                f"worktrees_removed={hygiene.worktrees_removed} "
+                f"origin_branches_deleted={hygiene.origin_orphans_deleted}"
+            )
+        lines.append(
+            "branch hygiene: "
+            f"{mode} - {action_detail} "
+            f"holds={hygiene.holds_count} errors={len(hygiene.errors)}"
+        )
+        if hygiene.holds:
+            lines.append("branch hygiene holds:")
+            for branch in hygiene.holds:
+                lines.append(f"  {branch}")
+        if hygiene.log_lines:
+            lines.append("branch hygiene log:")
+            for line in hygiene.log_lines[-12:]:
+                lines.append(f"  {line}")
+
     if result.errors:
         lines.append("errors:")
         for error in result.errors:
@@ -794,6 +895,9 @@ def to_jsonable(result: CloseoutResult) -> dict[str, Any]:
         "stopped_processes": result.stopped_processes,
         "booted_out_labels": result.booted_out_labels,
         "errors": result.errors,
+        "branch_hygiene": (
+            asdict(result.branch_hygiene) if result.branch_hygiene else None
+        ),
         "clean": not result_has_issues(result),
     }
 
@@ -829,6 +933,22 @@ def main(argv: list[str] | None = None) -> int:
         "--bootout-launch-agents",
         action="store_true",
         help="on macOS, boot out matching LaunchAgent labels before SIGTERM",
+    )
+    parser.add_argument(
+        "--branch-hygiene",
+        action="store_true",
+        help=(
+            "run the branch/worktree hygiene sweep in dry-run mode and include "
+            "cleanup candidates in the closeout result"
+        ),
+    )
+    parser.add_argument(
+        "--branch-hygiene-live",
+        action="store_true",
+        help=(
+            "run the branch/worktree hygiene sweep with safe deletions enabled "
+            "(branches with unique commits and dirty worktrees are held)"
+        ),
     )
     parser.add_argument(
         "--write-baseline",
@@ -905,6 +1025,8 @@ def main(argv: list[str] | None = None) -> int:
             stop_processes=args.stop_repo_processes,
             bootout_launch_agents=args.bootout_launch_agents,
             use_baseline=not args.no_baseline,
+            branch_hygiene=args.branch_hygiene,
+            branch_hygiene_live=args.branch_hygiene_live,
         )
     except RuntimeError as exc:
         print(f"workspace-closeout: {exc}", file=sys.stderr)

@@ -167,6 +167,74 @@ def test_closeout_stashes_dirty_repo_when_requested(closeout_module, git_repo, m
     assert "workspace-closeout auto-stash" in stash_list.stdout
 
 
+def test_closeout_branch_hygiene_dry_run_surfaces_cleanup_candidates(
+    closeout_module, git_repo, monkeypatch
+):
+    monkeypatch.setattr(closeout_module, "repo_rooted_processes", lambda *a, **k: [])
+    calls = []
+
+    def fake_hygiene(root, *, dry_run):
+        calls.append((root, dry_run))
+        return closeout_module.BranchHygieneSummary(
+            dry_run=True,
+            branches_prunable=1,
+            branches_pruned=0,
+            worktrees_removable=1,
+            worktrees_removed=0,
+            origin_orphans_deletable=0,
+            origin_orphans_deleted=0,
+            holds_count=0,
+            holds=[],
+            errors=[],
+            log_lines=["DRY-RUN would branch -D 'codex/stale'"],
+        )
+
+    monkeypatch.setattr(closeout_module, "run_branch_hygiene", fake_hygiene)
+
+    result = closeout_module.closeout(git_repo, branch_hygiene=True)
+
+    assert calls == [(git_repo, True)]
+    assert closeout_module.result_has_issues(result) is True
+    rendered = closeout_module.render_text(result)
+    assert "branch hygiene: dry-run" in rendered
+    assert "would_prune_branches=1" in rendered
+    assert "DRY-RUN would branch -D 'codex/stale'" in rendered
+    assert closeout_module.to_jsonable(result)["clean"] is False
+
+
+def test_closeout_branch_hygiene_live_can_clear_without_issue(
+    closeout_module, git_repo, monkeypatch
+):
+    monkeypatch.setattr(closeout_module, "repo_rooted_processes", lambda *a, **k: [])
+    calls = []
+
+    def fake_hygiene(root, *, dry_run):
+        calls.append((root, dry_run))
+        return closeout_module.BranchHygieneSummary(
+            dry_run=False,
+            branches_prunable=1,
+            branches_pruned=1,
+            worktrees_removable=1,
+            worktrees_removed=1,
+            origin_orphans_deletable=0,
+            origin_orphans_deleted=0,
+            holds_count=0,
+            holds=[],
+            errors=[],
+            log_lines=["deleted local branch: codex/stale"],
+        )
+
+    monkeypatch.setattr(closeout_module, "run_branch_hygiene", fake_hygiene)
+
+    result = closeout_module.closeout(git_repo, branch_hygiene_live=True)
+
+    assert calls == [(git_repo, False)]
+    assert closeout_module.result_has_issues(result) is False
+    rendered = closeout_module.render_text(result)
+    assert "branch hygiene: live" in rendered
+    assert "branches_pruned=1" in rendered
+
+
 def test_git_state_marks_dirty_work_as_not_delivered(closeout_module, git_repo):
     (git_repo / "seed.py").write_text("dirty\n")
 

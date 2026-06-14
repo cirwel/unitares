@@ -46,8 +46,11 @@ class SweepReport:
     started_at: str
     duration_s: float = 0.0
     dry_run: bool = True
+    branches_prunable: int = 0
     branches_pruned: int = 0
+    worktrees_removable: int = 0
     worktrees_removed: int = 0
+    origin_orphans_deletable: int = 0
     origin_orphans_deleted: int = 0
     holds_count: int = 0
     holds: list[str] = field(default_factory=list)
@@ -214,6 +217,9 @@ def sweep(repo: Path, dry_run: bool = True) -> SweepReport:
 
     worktrees = list_worktrees(repo)
     branch_to_wt = {b: p for p, b in worktrees if b is not None}
+    protected_worktrees = {repo.resolve()}
+    if worktrees:
+        protected_worktrees.add(worktrees[0][0].resolve())
 
     # 2. Local [gone] cleanup
     for branch in list_gone_branches(repo):
@@ -235,6 +241,14 @@ def sweep(repo: Path, dry_run: bool = True) -> SweepReport:
 
         wt = branch_to_wt.get(branch)
         if wt is not None:
+            if wt.resolve() in protected_worktrees:
+                report.holds.append(branch)
+                report.holds_count += 1
+                log(
+                    f"HOLD gone-branch '{branch}': checked out in protected "
+                    f"worktree {wt}; move off the branch before removing it"
+                )
+                continue
             status = _safe_status(wt)
             if status is None:
                 log(f"SKIP gone-branch '{branch}': could not check worktree status")
@@ -243,6 +257,7 @@ def sweep(repo: Path, dry_run: bool = True) -> SweepReport:
             if not check.is_clean:
                 log(f"SKIP gone-branch '{branch}': worktree {wt} not clean ({check.reason})")
                 continue
+            report.worktrees_removable += 1
             if dry_run:
                 log(f"DRY-RUN would worktree-remove {wt}")
             else:
@@ -255,6 +270,7 @@ def sweep(repo: Path, dry_run: bool = True) -> SweepReport:
                     report.errors.append(f"worktree remove {wt}: {e.stderr}")
                     continue
 
+        report.branches_prunable += 1
         if dry_run:
             log(f"DRY-RUN would branch -D '{branch}': {cherry_result.reason}")
         else:
@@ -285,6 +301,7 @@ def sweep(repo: Path, dry_run: bool = True) -> SweepReport:
         elif result.verdict == CherryVerdict.SKIP:
             log(f"SKIP origin/{branch}: {result.reason}")
         elif result.verdict == CherryVerdict.DELETE:
+            report.origin_orphans_deletable += 1
             if dry_run:
                 log(f"DRY-RUN would delete origin/{branch}: {result.reason}")
             else:
@@ -299,7 +316,7 @@ def sweep(repo: Path, dry_run: bool = True) -> SweepReport:
     # 4. Branchless worktree sweep
     refreshed = list_worktrees(repo)
     for path, branch in refreshed:
-        if path == repo or branch is not None:
+        if path.resolve() in protected_worktrees or branch is not None:
             continue
         status = _safe_status(path)
         if status is None:
@@ -307,6 +324,7 @@ def sweep(repo: Path, dry_run: bool = True) -> SweepReport:
         check = check_worktree_clean(path, status)
         if not check.is_clean:
             continue
+        report.worktrees_removable += 1
         if dry_run:
             log(f"DRY-RUN would worktree-remove {path} (no branch)")
         else:

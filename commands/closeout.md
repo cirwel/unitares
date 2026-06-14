@@ -8,6 +8,8 @@ servers, BEAM residents, or any cleanup request from the operator.
 First run a non-mutating check:
 
 - `python3 scripts/dev/workspace_closeout.py`
+- `python3 scripts/dev/workspace_closeout.py --branch-hygiene` when branch or
+  worktree cleanup is part of the question
 
 This uses `.unitares/workspace-closeout-baseline.json` when present. The
 baseline is written by `/governance-start` through `workspace_closeout.py
@@ -23,6 +25,8 @@ Report:
 - any staged, unstaged, or untracked files
 - any repo-rooted processes still running
 - whether a remaining process is managed by a LaunchAgent label
+- the `branch hygiene:` line when requested, including cleanup candidates,
+  safe deletions performed, held branches, and sweep errors
 
 If work should be delivered instead of left local, stage the intentional files
 and use the ship helper:
@@ -40,7 +44,13 @@ and use the ship helper:
 If the operator asked to clean the workspace, or if you are finishing a task
 whose intended work is already committed/stashed, run:
 
-- `python3 scripts/dev/workspace_closeout.py --stash-dirty --stop-repo-processes --bootout-launch-agents`
+- `python3 scripts/dev/workspace_closeout.py --stash-dirty --stop-repo-processes --bootout-launch-agents --branch-hygiene-live`
+
+`--branch-hygiene-live` reuses the Vigil branch-hygiene safety contract in
+`docs/operations/branch-hygiene-runbook.md`: patch-equivalent or empty stale
+branches may be pruned, clean stale worktrees may be removed, and branches with
+unique commits, dirty worktrees, or a protected checkout are held for review
+instead of deleted.
 
 Rules:
 
@@ -64,5 +74,8 @@ Rules:
   than reverting them.
 - Stop only processes rooted inside the current workspace. Do not stop services
   rooted in sibling deploy repos unless the operator explicitly asks.
+- Treat branch hygiene holds as cleanup findings, not green lights. Report the
+  branch names and either salvage them or leave them for a follow-up cleanup
+  agent.
 - Include the stash name, commit hash, and stopped LaunchAgent labels in the
   final response.

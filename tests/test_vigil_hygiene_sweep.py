@@ -157,7 +157,44 @@ class TestSweepGoneBranchSalvageGuard:
         branches = _git(fake_repo, "branch", "--list", "codex/squash-merged").stdout
         assert "codex/squash-merged" not in branches
         assert report.holds == []
+        assert report.branches_prunable == 1
         assert report.branches_pruned == 1
+
+    def test_live_holds_current_gone_branch_in_sweep_repo(
+        self, fake_repo: Path, monkeypatch
+    ):
+        _git(fake_repo, "switch", "-c", "codex/current-merged")
+        (fake_repo / "current.txt").write_text("current branch work\n")
+        _git(fake_repo, "add", "current.txt")
+        _git(fake_repo, "commit", "-m", "current branch work")
+        feature_sha = _git(fake_repo, "rev-parse", "HEAD").stdout.strip()
+        _git(fake_repo, "push", "-u", "origin", "codex/current-merged")
+        _git(fake_repo, "switch", "master")
+        _git(fake_repo, "cherry-pick", feature_sha)
+        _git(fake_repo, "push", "origin", "master")
+        _git(fake_repo, "push", "origin", "--delete", "codex/current-merged")
+        _git(fake_repo, "switch", "codex/current-merged")
+        monkeypatch.setattr(agent_mod, "list_open_pr_branches", lambda repo: set())
+
+        report = sweep(fake_repo, dry_run=False)
+
+        branches = _git(fake_repo, "branch", "--list", "codex/current-merged").stdout
+        assert "codex/current-merged" in branches
+        assert "codex/current-merged" in report.holds
+        assert report.branches_pruned == 0
+
+    def test_branchless_primary_checkout_is_not_removable_from_linked_worktree(
+        self, fake_repo: Path, monkeypatch
+    ):
+        linked = fake_repo / ".worktrees" / "linked"
+        _git(fake_repo, "worktree", "add", "-b", "codex/linked", str(linked))
+        _git(fake_repo, "switch", "--detach")
+        monkeypatch.setattr(agent_mod, "list_open_pr_branches", lambda repo: set())
+
+        report = sweep(linked, dry_run=True)
+
+        assert fake_repo.exists()
+        assert report.worktrees_removable == 0
 
 
 class TestSweepHelpers:
