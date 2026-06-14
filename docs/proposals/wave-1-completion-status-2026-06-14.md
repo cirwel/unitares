@@ -107,20 +107,27 @@ on CI `mix test`. Remaining: the live cutover double-fire check.
 
 ### Condition 3 — supervision tree absorbs ≥1 induced fault, no manual intervention
 
-**Status: topology + unit-level induced-fault test present; no
-production-observed fault-absorption recorded.**
+**Status: mechanism proven by an automated induced-fault test; live
+production observation still owed.**
 
 - The OTP supervisor is `:one_for_one` (`application.ex`).
 - `forced_release_poller_structure_test.exs:51` ("tick on dead DB exits —
   supervisor restart preserves cursor") pins the §B6 path (b): a dead-DB
   tick *exits* (so the supervisor restarts and `init/1` re-reads the
   on-disk cursor) and does **not** write a partial shadow file.
+- **New 2026-06-14:** `supervision_restart_test.exs` closes the
+  mechanism directly — a `:one_for_one` supervisor (mirroring
+  `Application`'s strategy) restarts a **killed** `ForcedReleasePoller`
+  child with no manual intervention, a fresh pid appears under the same
+  name, and the restarted worker re-reads the on-disk cursor (de-dup fence
+  survives the fault).
 
 Gap to close: the roadmap's condition is operational — "kill a worker,
 supervisor restarts, no manual intervention" *observed in the running
-deployment*. The unit test demonstrates the mechanism; an induced-fault
-observation against the live `com.unitares.sentinel-beam` is what the
-condition asks for.
+deployment*. The automated test now demonstrates the mechanism end-to-end;
+the remaining item is a single induced-fault observation against the live
+`com.unitares.sentinel-beam` (which the automated test cannot stand in for
+under the condition-4 anti-enthusiasm guard).
 
 ### Condition 4 — anti-enthusiasm guard
 
@@ -136,7 +143,7 @@ but not sufficient.
 |-----------|-------------|----------------------|
 | 1 — §129 zero incidents | gate fixed (2026-06-03) | **No** — owes representative-load window |
 | 2 — alarm parity | yes (unit + cross-runtime state) | **No** — audit done + both dedup gaps fixed (2026-06-14, Elixir pending CI); live cutover double-fire check remains |
-| 3 — supervision fault absorption | yes (topology + unit test) | **No** — no live induced-fault observation |
+| 3 — supervision fault absorption | yes (topology + automated induced-fault test, 2026-06-14) | **No** — live induced-fault observation still owed |
 | 4 — anti-enthusiasm guard | n/a (guard) | guard holds |
 
 ## What would close Wave 1
