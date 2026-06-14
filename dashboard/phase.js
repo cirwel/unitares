@@ -12,8 +12,17 @@
     // ========================================================================
 
     var CFG = {
-        // Basin boundaries (governance_state.py _interpret_basin)
-        basin: { low: 0.4, high: 0.6 },
+        // Basin band boundaries along the I axis. These are an illustrative
+        // 1-D PROJECTION of the engine's multi-dimensional classifier
+        // (config/governance_config.py classify_basin, over I, coherence, |V|,
+        // risk, plus the BASIN_HIGH box) — the background bands cannot show the
+        // full classifier, so the authoritative per-agent label is the `basin`
+        // field rendered in each dot's tooltip, not the band an agent sits in.
+        // Values track the I-axis breakpoints of classify_basin:
+        //   low  = BASIN_LOW_I_CEIL (0.5): I below this forces the LOW basin.
+        //   high = BASIN_HIGH.I_min (0.7): I below this can never be HIGH.
+        // Keep in sync with those two constants if they change.
+        basin: { low: 0.5, high: 0.7 },
         // Steady-state equilibrium (governance_config.py calibration note)
         equilibrium: { E: 0.70, I: 0.75 },
         // ODE params (governance_config.py)
@@ -214,9 +223,9 @@
 
         // Basin labels (right-aligned, very subtle)
         var labels = [
-            { text: 'LOW BASIN', y: 0.2, color: '96,165,250' },
-            { text: 'BOUNDARY', y: 0.5, color: '251,191,36' },
-            { text: 'HIGH BASIN', y: 0.8, color: '52,211,153' }
+            { text: 'LOW BASIN', y: 0.25, color: '96,165,250' },
+            { text: 'BOUNDARY', y: 0.6, color: '251,191,36' },
+            { text: 'HIGH BASIN', y: 0.85, color: '52,211,153' }
         ];
         labels.forEach(function (l) {
             basins.append('text')
