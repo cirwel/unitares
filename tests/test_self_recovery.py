@@ -396,6 +396,67 @@ class TestQuickResume:
             assert data.get("success") is True or data.get("recovered") is True
 
     @pytest.mark.asyncio
+    async def test_quick_resume_allows_target_coherence(self):
+        # Coherence at the config target (~0.50) with low risk must quick-resume.
+        # The old hardcoded 0.60 gate sat ABOVE target, so a healthy agent at
+        # its target coherence could never quick-resume — that was the bug.
+        from src.mcp_handlers.lifecycle.self_recovery import handle_quick_resume
+        from config.governance_config import GovernanceConfig
+
+        mock_server = self._make_mock_server(coherence=GovernanceConfig.TARGET_COHERENCE + 0.02, risk=0.2)
+
+        with patch(
+            "src.mcp_handlers.lifecycle.self_recovery.require_registered_agent",
+            return_value=("test-agent", None),
+        ), patch(
+            "src.mcp_handlers.lifecycle.self_recovery.verify_agent_ownership",
+            return_value=True,
+        ), patch(
+            "src.mcp_handlers.lifecycle.self_recovery.mcp_server",
+            mock_server,
+        ), patch(
+            "src.mcp_handlers.lifecycle.self_recovery.store_discovery_internal",
+            new_callable=AsyncMock,
+            create=True,
+        ), patch(
+            "src.agent_storage.update_agent",
+            new_callable=AsyncMock,
+        ), patch(
+            "src.agent_storage.persist_runtime_state",
+            new_callable=AsyncMock,
+        ):
+            result = await handle_quick_resume({"_agent_uuid": "test-uuid"})
+            text = json.loads(result[0].text)
+            data = text.get("data", text)
+            assert data.get("success") is True or data.get("recovered") is True
+
+    @pytest.mark.asyncio
+    async def test_quick_resume_high_risk_still_refused_at_good_coherence(self):
+        # Re-anchoring the coherence gate must NOT weaken the substantive safety
+        # gate: a genuinely risky agent (risk > 0.40) is refused even at healthy
+        # coherence.
+        from src.mcp_handlers.lifecycle.self_recovery import handle_quick_resume
+
+        mock_server = self._make_mock_server(coherence=0.7, risk=0.6)
+
+        with patch(
+            "src.mcp_handlers.lifecycle.self_recovery.require_registered_agent",
+            return_value=("test-agent", None),
+        ), patch(
+            "src.mcp_handlers.lifecycle.self_recovery.verify_agent_ownership",
+            return_value=True,
+        ), patch(
+            "src.mcp_handlers.lifecycle.self_recovery.mcp_server",
+            mock_server,
+        ), patch(
+            "src.agent_storage.persist_runtime_state",
+            new_callable=AsyncMock,
+        ):
+            result = await handle_quick_resume({"_agent_uuid": "test-uuid"})
+            text = json.loads(result[0].text)
+            assert "error" in text or "NOT_SAFE" in str(text)
+
+    @pytest.mark.asyncio
     async def test_quick_resume_unsafe_state(self):
         from src.mcp_handlers.lifecycle.self_recovery import handle_quick_resume
         mock_server = self._make_mock_server(coherence=0.4, risk=0.6)

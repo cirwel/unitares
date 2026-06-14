@@ -42,6 +42,27 @@ BOOTSTRAP_UPDATES = 10
 # 30 gives stable mean/std estimates.
 BASELINE_WARMUP_UPDATES = 30
 
+# Minimum meaningful standard deviation for EISV self-relative scoring.
+#
+# This is an EMPIRICAL constant calibrated against the 2026-06-13 Sentinel
+# false-pause trace — NOT a value derived from EISV [0,1] semantics. Note the
+# baseline std is computed over EMA-SMOOTHED E/I/S/V (see _baseline updates
+# below), so a steady agent's std collapses toward ~0.01 partly because the
+# EMA has already eaten the raw observation noise. Without a floor, that
+# artifact makes z = Δ/σ explode: an ultra-stable monitor turns a small,
+# absolutely-healthy fluctuation into a many-sigma "severe deviation" and gets
+# falsely flagged high-risk → cirs_block → paused. The floor caps that
+# sensitivity while leaving genuine multi-tenth moves and the absolute safety
+# floors (E/I<0.30, S>0.70, |V|>0.50) untouched. Empirically: the Sentinel
+# pause (E 0.77→0.66, I 0.68→0.66 — both healthy) scored risk 0.94 (high-risk)
+# with no floor vs 0.33 (safe) at 0.05; genuine degradations are unchanged.
+#
+# A flat floor is the blunt form of the more principled fix (gate self-relative
+# risk by absolute basin health); see the "health-gating" follow-up. A flat
+# value also slightly over-floors slow-alpha dimensions (I) and under-floors
+# fast-alpha ones (S) since the per-dimension EMA step differs.
+MIN_MEANINGFUL_EISV_STD = 0.05
+
 
 @dataclass
 class BehavioralEISV:
@@ -201,7 +222,7 @@ class BehavioralEISV:
         if stats is None or not self.is_baselined:
             return 0.0
         current = getattr(self, dimension, 0.5)
-        return stats.z_score(current)
+        return stats.z_score(current, min_std=MIN_MEANINGFUL_EISV_STD)
 
     def trend(self, dimension: str, window: int = 5) -> float:
         """Simple slope of recent history for a dimension.

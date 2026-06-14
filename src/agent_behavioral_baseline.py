@@ -42,11 +42,21 @@ class WelfordStats:
     def std(self) -> float:
         return math.sqrt(self.variance)
 
-    def z_score(self, value: float) -> float:
-        """Z-score of value relative to running stats. Returns 0.0 if insufficient data."""
-        if self.count < 5 or self.std < 1e-9:
+    def z_score(self, value: float, min_std: float = 0.0) -> float:
+        """Z-score of value relative to running stats. Returns 0.0 if insufficient data.
+
+        ``min_std`` floors the denominator at a minimum meaningful resolution.
+        Without it, an ultra-stable signal (tiny baseline variance) turns a
+        small, characteristically-irrelevant change into a many-sigma event.
+        Default 0.0 keeps the bare ``1e-9`` div-by-zero guard for callers that
+        score signals with no meaningful absolute scale.
+        """
+        if self.count < 5:
             return 0.0
-        return (value - self.mean) / self.std
+        effective_std = max(self.std, min_std)
+        if effective_std < 1e-9:
+            return 0.0
+        return (value - self.mean) / effective_std
 
     def to_dict(self) -> dict:
         return {"count": self.count, "mean": self.mean, "m2": self.m2}
