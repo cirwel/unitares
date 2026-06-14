@@ -220,15 +220,30 @@ def resolve_identity(client) -> None:
     # token explicitly; generic client auto-injection is intentionally token-free.
     if saved.get("agent_uuid"):
         token = saved.get("continuity_token") or getattr(client, "continuity_token", None)
-        if token:
-            if not getattr(client, "continuity_token", None):
-                client.continuity_token = token
+        if token and not getattr(client, "continuity_token", None):
+            client.continuity_token = token
+        # Attempt PATH 0 even when token-less, provided we are UDS-anchored.
+        # A substrate-enrolled resident connecting over UNITARES_UDS_SOCKET
+        # resumes via kernel-attested peer match: the server's S19 PR3e gate
+        # treats the UDS peer credential as ownership proof equivalent to the
+        # continuity_token. The token-only anchor under UDS deliberately drops
+        # the token at rest (anchor-disclosure defense — a leaked token would
+        # otherwise satisfy PATH 0's _partc_owned and bypass peer attestation),
+        # so REQUIRING a token here would make an enrolled resident permanently
+        # unresumable (#727). Pass the token when we have it; otherwise rely on
+        # the server's substrate gate. Over plain HTTP a token-less resume has
+        # no proof channel and the server refuses, so we skip the pointless
+        # round-trip and fall through to the fresh-onboard guard.
+        uds_anchored = bool(os.environ.get("UNITARES_UDS_SOCKET"))
+        if token or uds_anchored:
             try:
-                client.identity(
-                    agent_uuid=saved["agent_uuid"],
-                    continuity_token=token,
-                    resume=True,
-                )
+                identity_kwargs: dict = {
+                    "agent_uuid": saved["agent_uuid"],
+                    "resume": True,
+                }
+                if token:
+                    identity_kwargs["continuity_token"] = token
+                client.identity(**identity_kwargs)
                 _sync_identity(client)
                 return
             except GovernanceTimeoutError as e:
@@ -240,7 +255,12 @@ def resolve_identity(client) -> None:
             except Exception as e:
                 log(f"uuid-direct resume failed: {e}", "warning")
         else:
-            log("uuid-direct resume skipped: missing continuity_token ownership proof", "warning")
+            log(
+                "uuid-direct resume skipped: no continuity_token and not UDS-anchored "
+                "(set UNITARES_UDS_SOCKET so a substrate-enrolled resident can resume "
+                "via kernel-attested peer match)",
+                "warning",
+            )
 
     # Step 1: Fresh onboard — only when no proof-owned UUID rebind works.
     # Silent-fork guard (added 2026-04-19 anchor-resilience series): Watcher
