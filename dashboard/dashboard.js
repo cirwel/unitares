@@ -42,7 +42,10 @@ const CONFIG = {
     COALESCE_WINDOW_MS: 30000,
 
     // Optional panel refresh cadence
-    OPTIONAL_REFRESH_EVERY_N_CYCLES: 3
+    OPTIONAL_REFRESH_EVERY_N_CYCLES: 3,
+
+    // Knowledge reads can be heavier and are not needed on every dashboard tick.
+    KNOWLEDGE_READ_CACHE_MS: 2 * 60 * 1000
 };
 
 // Verify dependencies loaded
@@ -626,7 +629,7 @@ document.addEventListener('click', async (event) => {
             const result = await callTool('update_discovery_status_graph', { discovery_id: discoveryId, status });
             if (result && result.success) {
                 discoveryStatusBtn.textContent = 'Done';
-                loadDiscoveries();
+                loadDiscoveries('', { force: true });
                 closeModal();
             } else {
                 discoveryStatusBtn.textContent = 'Failed';
@@ -1392,9 +1395,13 @@ function updateQuickStatus(agents, stuckAgents) {
  * Updates cachedDiscoveries and stats.
  * @returns {Promise<void>}
  */
-async function loadDiscoveries(searchQuery = '') {
+async function loadDiscoveries(searchQuery = '', options = {}) {
     try {
         console.log('Loading discoveries...', searchQuery ? `(search: ${searchQuery})` : '');
+        const force = options.force === true;
+        const readOptions = searchQuery
+            ? { useCache: !force }
+            : { useCache: !force, cacheTimeout: CONFIG.KNOWLEDGE_READ_CACHE_MS };
 
         // Single API call — get discoveries and derive count from results
         // Vigil is hidden by default: the Vigil panel (see vigil.js) shows
@@ -1411,7 +1418,7 @@ async function loadDiscoveries(searchQuery = '') {
             toolArgs.exclude_agent_labels = ['Vigil'];
         }
 
-        const searchResult = await callTool('search_knowledge_graph', toolArgs);
+        const searchResult = await callTool('search_knowledge_graph', toolArgs, readOptions);
 
         // Handle null/undefined result
         if (!searchResult) {
@@ -1508,7 +1515,7 @@ async function loadDiscoveries(searchQuery = '') {
         const loadedCount = enrichedDiscoveries.length;
         let totalDiscoveries = loadedCount;
         try {
-            const stats = await callTool('knowledge', { action: 'stats' });
+            const stats = await callTool('knowledge', { action: 'stats' }, readOptions);
             if (stats && stats.stats && stats.stats.total_discoveries !== undefined) {
                 totalDiscoveries = stats.stats.total_discoveries;
             }
@@ -1714,7 +1721,7 @@ async function refresh(options = {}) {
         console.log('Starting parallel load...');
         const results = await Promise.allSettled([
             loadAgents(),
-            loadDiscoveries(),
+            loadDiscoveries('', { force }),
             loadDialecticSessions(),
             loadStuckAgents(),
             loadSystemHealth(),
@@ -1958,7 +1965,7 @@ if (discoveryClearFiltersButton) {
     discoveryClearFiltersButton.addEventListener('click', () => {
         clearDiscoveryFilters();
         // Reset to full list from server
-        loadDiscoveries('');
+        loadDiscoveries('', { force: true });
     });
 }
 const discoveryLegend = document.getElementById('discoveries-type-legend');
