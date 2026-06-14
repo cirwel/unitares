@@ -204,6 +204,38 @@ class TestGenerateStructuredId:
         assert "_client" not in result
         assert "mcp" in result
 
+    def test_agent_uuid_appends_uuid8_fragment(self):
+        ctx = {"interface": "cursor", "model_hint": None, "environment": None}
+        result = generate_structured_id(
+            context=ctx, agent_uuid="a4be406c-1234-5678-9abc-def012345678"
+        )
+        assert result.endswith("_a4be406c")
+        assert "cursor" in result  # bucketable prefix preserved
+
+    def test_agent_uuid_disambiguates_same_model_same_day(self):
+        """Two agents with identical context but different UUIDs must not
+        collapse onto one structured id — this is the duplicate-id fix."""
+        ctx = {"interface": "claude_code", "model_hint": None, "environment": None}
+        first = generate_structured_id(
+            context=ctx, model_type="claude", agent_uuid="11111111-aaaa-bbbb-cccc-dddddddddddd"
+        )
+        second = generate_structured_id(
+            context=ctx, model_type="claude", agent_uuid="22222222-aaaa-bbbb-cccc-dddddddddddd"
+        )
+        assert first != second
+        assert first.endswith("_11111111")
+        assert second.endswith("_22222222")
+
+    def test_no_agent_uuid_keeps_legacy_bucket_format(self):
+        """Callers with no UUID in scope keep the legacy collision-counter
+        behavior (no uuid8 fragment appended)."""
+        ctx = {"interface": "cursor", "model_hint": None, "environment": None}
+        result = generate_structured_id(context=ctx)
+        # Legacy format is {interface}_{date} with no trailing uuid8 block.
+        assert result.startswith("cursor_")
+        # Trailing token is the 8-digit date, not a hex uuid fragment.
+        assert result.split("_")[-1].isdigit()
+
 
 # ============================================================================
 # format_naming_guidance

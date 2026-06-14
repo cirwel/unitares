@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+_Curated backfill of notable changes merged since 2.13.0 (2026-05-04). Versioned on the next release bump; `pyproject.toml`/`VERSION` remain at 2.13.0._
+
+### Added
+
+- **orchestrator:** BEAM-native ephemeral-agent orchestrator (Layer A, v0) with lineage + `server_url` provisioning for spawned agents (#581, #648, #650, #589, #588)
+- **lease-plane:** BEAM hot-code-reload via named node (#570); `agent:/` ephemeral-agent presence scheme, self-healing (#588)
+- **wave-3:** §14 prerequisites — shadow DDL, divergence comparator, event types, measurement helpers/lint/lease baseline (starts the 14-day clock) (#597, #599)
+- **floor:** identity-free substrate observation sink for un-onboarded sessions (#669)
+- **governance:** corroboration grading for outcome events (#681); escalate paused residents to the operator (#687)
+- **identity:** lifecycle visibility surface (#683)
+- **governance:** cadence-silence — soft detection of active-then-silent agents (#594)
+- **kg:** fold tag `normalize()` into the write path + lifecycle synonym pass + backfill (#671)
+- **dialectic:** heterogeneous structured-JSON reviewer replaces text-scrape (#563)
+- **lifecycle:** bucket test agents separately in `identity_health` counts (#645)
+- **sdk:** thread `connect_timeout`/`connect_retries` through `GovernanceAgent` (#560); PyPI-ready packaging + tag-driven trusted-publishing workflow (#649)
+- **dashboard:** persist one-time `?operator_token=` handoff into localStorage (#643)
+
+### Changed
+
+- **residents:** roster + progress registry are now deployment config, empty by default (#694)
+- **workflow:** unify Codex/Claude GitHub delivery conventions (#680); route stuck work to draft PRs (#651)
+- **mirror:** reflect, don't advise — strip prescription from mirror mode (#583); novelty-gate complexity line, disclose proxy basis, surface phi (#603)
+- **dashboard:** unify on a neutral color system (color = status) (#561); reduce knowledge polling (#684)
+- **watcher:** demote P008 to experimental (#659)
+- remove the never-consulted `rate_limit_exempt` decorator flag (#660)
+
+### Fixed
+
+- **governance/eisv:** gate self-relative risk by absolute basin health (#689, #696); floor z-score sensitivity for stable agents + anchor quick-resume to target coherence (#686); scale EISV z-floor by EMA alpha (#699); warmup structural grace suppresses cold-ODE false-pauses post-restart (#577); restore behavioral baseline on DB hydrate (#575)
+- **§129:** un-blind the substrate-tax gate (nesting) + stop counting shutdown noise (#576)
+- **identity:** strict gate keys on caller-proven binding, not binding-presence (#674, #675); single-flight + PG adopt-winner for operator-token first-use mint race (#646); stop laundering server-injected fingerprint CSID into the strong assurance tier (#682); anonymous auto-mint must not use the reserved `mcp_` prefix (#598); subagent onboards must not displace the driver's fingerprint pin (#604); lineage successor suppresses parent stuck-flag (#677)
+- **kg:** close write-path bugs — id collisions, naive ts, batch parity (#673); decouple auto-hybrid term cap from OR-recall cap (#672)
+- **calibration:** correct severe lower-bin underconfidence, not just cap it (#668)
+- **responses:** honest verdict provenance + reconcile position/thread_size (#670); reconcile six API-response honesty inconsistencies (#665)
+- **dashboard:** inner deadline degrades slow fleet read instead of a 15s hang (#666)
+- **dialectic:** real timer for stuck-session auto-resolve (#564); exclude non-reasoning agents from reviewer auto-selection (#664)
+- **watcher:** P002 required-token + bound-cue drops kill the cap-adjacent false-positive class (#602); checkout-independent state dir + proof-rebind on check-in (#595)
+- **anomalies:** label frozen-window anomalies stale instead of presenting them as current (#653)
+- **metrics:** zero-observation responses stop asserting seed-derived assessments (#605)
+- **sdk:** bound + retry the MCP connect handshake (#559); loud anchor-write failures + typed 503 backoff (#647)
+
+### Documentation
+
+- land the UNITARES trust contract (v0.2, grounded)
+- rewrite README for clarity, reduce invented jargon (#695)
+- wave-3 §5.2 boundary-cost audit summary + RFC v0.3.3 fold (#600)
+
+### Tests
+
+- strengthen suite and delivery gates (#693); guard `CHRONICLER_SERIES_NAMES` against scraper drift (#697); isolate the watcher suite from the live server and real log (#658)
+
+---
+
 ## [2.13.0] - 2026-05-04
 ### Added
 

@@ -1,6 +1,6 @@
 # Behavioral "running-hot" detector → orchestrator worker-state read (v0.1, plan)
 
-**Status:** v0.1 plan, pending council. Not an RFC yet — a scoped capture so a fresh (non-hot) session can council + execute. Born 2026-06-03 from a live demonstration during a marathon session.
+**Status:** v0.1 plan, parked — pending council. Not an RFC yet — a scoped capture so a fresh (non-hot) session can council + execute. Born 2026-06-03 from a live demonstration during a marathon session. **Blocked (as of 2026-06-14):** unbuilt — gated on step (a) of "Honest scope" below (the behavioral-EISV arm must actually emit signal before the index has anything to read; no running-hot index exists in `src/` yet). Revisit when [[project_eisv-validation-gap]] closes.
 
 ## Origin (why this doc exists)
 

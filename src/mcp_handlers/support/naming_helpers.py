@@ -143,7 +143,8 @@ def generate_structured_id(
     context: Optional[Dict[str, str]] = None,
     existing_ids: Optional[List[str]] = None,
     client_hint: Optional[str] = None,
-    model_type: Optional[str] = None
+    model_type: Optional[str] = None,
+    agent_uuid: Optional[str] = None
 ) -> str:
     """
     Generate a structured auto-id for an agent.
@@ -153,9 +154,23 @@ def generate_structured_id(
     - agent_id (structured) - this function, auto-generated
     - display_name (nickname) - user-chosen via identity(name=...)
 
-    Format: {interface}_{model}_{date} e.g., "chatgpt_claude_20251226"
-    Or without model: {interface}_{date} e.g., "cursor_20251226"
-    If collision, appends counter: "cursor_20251226_2"
+    Format: {interface}_{model}_{date}_{uuid8} e.g.,
+        "chatgpt_claude_20251226_a4be406c"
+    Or without model: {interface}_{date}_{uuid8} e.g.,
+        "cursor_20251226_a4be406c"
+
+    The {interface}_{model}_{date} prefix stays greppable/bucketable; the
+    uuid8 fragment (first block of agent_uuid, matching the existing label
+    convention) makes the id structurally unique per agent. Without it,
+    every same-model/same-day mint collapses onto one bucket label — and
+    the legacy collision-counter below only ever saw in-memory metadata, so
+    the suffix never fired across the persisted registry and produced
+    *exact* repeats (e.g. dozens of "Claude_20260613" sharing one id
+    string). Residents pin their structured id explicitly and never flow
+    through here, so their cross-restart continuity is unaffected.
+
+    When agent_uuid is omitted, falls back to the legacy collision-counter
+    suffix ("cursor_20251226_2") for callers that have no uuid in scope.
 
     Args:
         context: Interface context (from detect_interface_context)
@@ -164,6 +179,9 @@ def generate_structured_id(
                      Takes precedence over auto-detected interface
         model_type: Optional model identifier (e.g., "claude", "gemini", "gpt4")
                     When provided, creates distinct identity per model
+        agent_uuid: Optional agent UUID. When provided, its first block is
+                    appended as a uuid8 fragment so the id is unique per
+                    agent rather than a per-day bucket label.
 
     Returns:
         Unique structured ID string
@@ -198,6 +216,17 @@ def generate_structured_id(
         base_id = f"{interface}_{model}_{timestamp}"
     else:
         base_id = f"{interface}_{timestamp}"
+
+    # Append a uuid8 fragment when we have the agent's UUID. This is what
+    # makes the id unique per agent instead of a per-(interface,model,day)
+    # bucket; the fragment is the first UUID block (same convention as
+    # agent labels, e.g. "...claude_a4be406c"). A uuid-suffixed id is
+    # already unique, so the collision-counter below is a no-op for it and
+    # only serves the legacy (agent_uuid=None) callers.
+    if agent_uuid:
+        fragment = str(agent_uuid).split("-")[0].lower()
+        if fragment:
+            base_id = f"{base_id}_{fragment}"
 
     # Check for collisions
     if existing_ids:

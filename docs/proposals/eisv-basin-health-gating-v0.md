@@ -1,6 +1,6 @@
 # EISV self-relative risk: absolute-basin-health gating (issue #689)
 
-Status: proposed (design + implementation in `claude/eisv-basin-health-gating-bl7jcg`)
+Status: shipped — PR #696 (issue #689), 2026-06-14; refined by #699 (z-floor scaled by EMA alpha)
 Supersedes the blunt portion of: PR #686 (`MIN_MEANINGFUL_EISV_STD = 0.05`)
 Council: architect + code-reviewer + live-verifier (see "Council" below)
 

@@ -93,14 +93,17 @@ declared closed.**
 
 **Update 2026-06-14:** the documented parity audit now exists —
 `wave-1-condition-2-alarm-parity-audit-2026-06-14.md`. Its verdict: the four
-fleet-analysis rules and 2 of 3 forced-release alarm fingerprints are at
-parity, but **two confirmed dedup gaps remain** — (1) the conflict_batch
-fingerprint diverges across runtimes (`+00:00` vs `Z` ISO suffix; the
-§C3-flagged drift, untested by the self-referential BEAM test), and (2)
-fleet-finding fingerprints only dedup if `UNITARES_SENTINEL_AGENT_ID` is set
-to Python's anchor UUID. Both would cause double-fire at the cutover gap,
-which condition 2 exists to prevent. Condition 2 = fix both + add the §B2
-cross-runtime fingerprint contract test.
+fleet-analysis rules and 2 of 3 forced-release alarm fingerprints were at
+parity, with **two confirmed dedup gaps** — (1) the conflict_batch fingerprint
+diverged across runtimes (`+00:00` vs `Z` ISO suffix; the §C3-flagged drift,
+untested by the self-referential BEAM test), and (2) fleet-finding fingerprints
+only deduped if `UNITARES_SENTINEL_AGENT_ID` was set to Python's anchor UUID.
+Both would cause double-fire at the cutover gap, which condition 2 exists to
+prevent. **Both are now fixed in this branch** (`logic.ex` `iso8601_python/1`;
+`application.ex` threads the anchor UUID) with the §B2 cross-runtime contract
+pinned by `tests/test_sentinel_forced_release_fingerprint_parity.py` +
+the updated Elixir 3-class test. Python side validated locally; Elixir gated
+on CI `mix test`. Remaining: the live cutover double-fire check.
 
 ### Condition 3 — supervision tree absorbs ≥1 induced fault, no manual intervention
 
