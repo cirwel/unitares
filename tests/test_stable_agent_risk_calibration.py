@@ -12,7 +12,11 @@ resolution while preserving genuine multi-tenth moves and absolute floors.
 import pytest
 
 from src.agent_behavioral_baseline import WelfordStats
-from src.behavioral_state import BehavioralEISV, MIN_MEANINGFUL_EISV_STD
+from src.behavioral_state import (
+    BehavioralEISV,
+    MIN_MEANINGFUL_EISV_STD,
+    eisv_min_std_for_dimension,
+)
 from src.behavioral_assessment import assess_behavioral_state, RISK_CAUTION_THRESHOLD
 
 
@@ -105,6 +109,20 @@ class TestDeviationUsesFloor:
         z_E = state.deviation("E")
         assert z_E == pytest.approx((0.6608 - 0.7729981068548344) / MIN_MEANINGFUL_EISV_STD, rel=1e-2)
 
+    def test_default_alpha_floor_preserves_flat_floor(self):
+        assert eisv_min_std_for_dimension("E") == pytest.approx(MIN_MEANINGFUL_EISV_STD)
+        assert eisv_min_std_for_dimension("I") == pytest.approx(MIN_MEANINGFUL_EISV_STD)
+        assert eisv_min_std_for_dimension("S") == pytest.approx(MIN_MEANINGFUL_EISV_STD)
+        assert eisv_min_std_for_dimension("V") == pytest.approx(MIN_MEANINGFUL_EISV_STD)
+
+    def test_custom_alpha_scales_floor(self):
+        assert eisv_min_std_for_dimension("E", {"E": 0.06}) == pytest.approx(
+            MIN_MEANINGFUL_EISV_STD * 0.5
+        )
+
+    def test_non_positive_alpha_preserves_flat_floor(self):
+        assert eisv_min_std_for_dimension("E", {"E": 0.0}) == pytest.approx(MIN_MEANINGFUL_EISV_STD)
+
 
 # --- Issue #689: absolute-basin-health gating of self-relative risk -----------
 
@@ -193,6 +211,28 @@ class TestBasinGateSentinelTrace:
         )
         result = assess_behavioral_state(state, rho=0.0)
         assert result.verdict == "high-risk"
+
+    def test_custom_slow_alpha_floor_preserves_boundary_signal(self):
+        # Default 0.05 would make this small boundary-region move sub-threshold
+        # on an exact-zero baseline. A custom slow alpha carries a smaller
+        # persisted EMA step, so the secondary floor should preserve signal.
+        state = _baselined(
+            {
+                "E": (0.62, 0.0),
+                "I": (0.62, 0.0),
+                "S": (0.20, 0.0),
+                "V": (0.00, 0.0),
+            },
+            {"E": 0.59, "I": 0.59, "S": 0.20, "V": 0.0},
+            count=50,
+        )
+        state.alphas["E"] = 0.01
+        state.alphas["I"] = 0.01
+
+        result = assess_behavioral_state(state, rho=0.0)
+
+        assert result.components["low_E"] > 0.0
+        assert result.components["low_I"] > 0.0
 
 
 class TestBasinGateEdgesMatchConfig:
