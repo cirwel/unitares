@@ -84,6 +84,34 @@ def ship_plan(repo: Path, *options: str) -> dict[str, str]:
     return parsed
 
 
+def write_watcher_finding(findings: Path, repo: Path, relative_path: str, fp: str) -> None:
+    findings.parent.mkdir(parents=True, exist_ok=True)
+    findings.write_text(
+        json.dumps(
+            {
+                "file": str(repo / relative_path),
+                "fingerprint": fp,
+                "status": "surfaced",
+            }
+        )
+        + "\n"
+    )
+
+
+def run_direct_ship(repo: Path, *, env: dict[str, str]) -> tuple[str, str]:
+    result = run(
+        [
+            str(repo / "scripts" / "dev" / "ship.sh"),
+            "--direct",
+            "test: change",
+        ],
+        repo,
+        env=env,
+    )
+    message = run(["git", "log", "-1", "--format=%B"], repo).stdout
+    return result.stdout, message
+
+
 def test_auto_routes_runtime_changes_to_draft_pr_branch(ship_repo: Path) -> None:
     stage_file(ship_repo, "src/mcp_server.py")
 
@@ -173,32 +201,62 @@ def test_direct_ship_reads_shared_watcher_dir_for_commit_trailer(
     stage_file(ship_repo, "agents/foo.py")
 
     watcher_dir = tmp_path / "watcher"
-    watcher_dir.mkdir()
-    (watcher_dir / "findings.jsonl").write_text(
-        json.dumps(
-            {
-                "file": str(ship_repo / "agents" / "foo.py"),
-                "fingerprint": "abc123",
-                "status": "surfaced",
-            }
-        )
-        + "\n"
+    write_watcher_finding(
+        watcher_dir / "findings.jsonl",
+        ship_repo,
+        "agents/foo.py",
+        "abc123",
     )
 
     env = {
         **os.environ,
         "UNITARES_WATCHER_DATA_DIR": str(watcher_dir),
     }
-    result = run(
-        [
-            str(ship_repo / "scripts" / "dev" / "ship.sh"),
-            "--direct",
-            "test: change",
-        ],
-        ship_repo,
-        env=env,
-    )
-    message = run(["git", "log", "-1", "--format=%B"], ship_repo).stdout
+    stdout, message = run_direct_ship(ship_repo, env=env)
 
-    assert "[ship] appended Watcher-Findings trailer: abc123" in result.stdout
+    assert "[ship] appended Watcher-Findings trailer: abc123" in stdout
     assert "Watcher-Findings: abc123" in message
+
+
+def test_direct_ship_reads_default_shared_watcher_dir_for_commit_trailer(
+    ship_repo: Path,
+    tmp_path: Path,
+) -> None:
+    stage_file(ship_repo, "agents/default_path.py")
+
+    home = tmp_path / "home"
+    write_watcher_finding(
+        home / ".unitares" / "watcher" / "findings.jsonl",
+        ship_repo,
+        "agents/default_path.py",
+        "default123",
+    )
+
+    env = {**os.environ, "HOME": str(home)}
+    env.pop("UNITARES_WATCHER_DATA_DIR", None)
+    stdout, message = run_direct_ship(ship_repo, env=env)
+
+    assert "[ship] appended Watcher-Findings trailer: default123" in stdout
+    assert "Watcher-Findings: default123" in message
+
+
+def test_direct_ship_falls_back_to_legacy_watcher_dir_for_commit_trailer(
+    ship_repo: Path,
+    tmp_path: Path,
+) -> None:
+    stage_file(ship_repo, "agents/legacy_path.py")
+
+    home = tmp_path / "home-without-shared-state"
+    write_watcher_finding(
+        ship_repo / "data" / "watcher" / "findings.jsonl",
+        ship_repo,
+        "agents/legacy_path.py",
+        "legacy123",
+    )
+
+    env = {**os.environ, "HOME": str(home)}
+    env.pop("UNITARES_WATCHER_DATA_DIR", None)
+    stdout, message = run_direct_ship(ship_repo, env=env)
+
+    assert "[ship] appended Watcher-Findings trailer: legacy123" in stdout
+    assert "Watcher-Findings: legacy123" in message
