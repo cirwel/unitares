@@ -9,7 +9,7 @@ from .handlers import (
     handle_submit_synthesis,
     handle_llm_assisted_dialectic,
 )
-from .session import save_session, load_session
+from .session import ACTIVE_SESSIONS, save_session, load_session
 from .resolution import execute_resolution
 from .reviewer import select_reviewer
 from .calibration import update_calibration_from_dialectic
@@ -23,6 +23,7 @@ __all__ = [
     "handle_submit_antithesis",
     "handle_submit_synthesis",
     "handle_llm_assisted_dialectic",
+    "ACTIVE_SESSIONS",
     "save_session",
     "load_session",
     "execute_resolution",

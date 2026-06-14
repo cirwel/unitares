@@ -121,3 +121,21 @@ def test_explicit_draft_pr_uses_current_feature_branch(ship_repo: Path) -> None:
     assert plan["branch"] == "codex/workflow-note"
     assert plan["delivery"] == "draft_pr"
     assert plan["force_auto_branch"] == "0"
+
+
+def test_stage_all_plan_classifies_dirty_worktree_without_staging(ship_repo: Path) -> None:
+    path = ship_repo / "src" / "mcp_server.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("runtime\n")
+
+    plan = ship_plan(ship_repo, "--stage-all")
+
+    assert plan["kind"] == "runtime"
+    assert plan["delivery"] == "draft_pr"
+    assert plan["force_auto_branch"] == "1"
+    assert plan["stage_all"] == "1"
+
+    status = run(["git", "status", "--porcelain=v1"], ship_repo)
+    staged = run(["git", "diff", "--cached", "--name-only"], ship_repo)
+    assert "?? src/" in status.stdout
+    assert staged.stdout == ""

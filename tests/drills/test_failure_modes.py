@@ -17,6 +17,7 @@ Skip in CI with: pytest -m "not integration"
 import asyncio
 import inspect
 import json
+import os
 import time
 from typing import Dict, Any
 from unittest.mock import patch, AsyncMock
@@ -24,12 +25,16 @@ from unittest.mock import patch, AsyncMock
 import pytest
 httpx = pytest.importorskip("httpx", reason="httpx not installed")
 
-# Skip all tests in this module - these are integration tests requiring running servers
-pytestmark = pytest.mark.skip(reason="Integration tests require running governance server")
+# These are operator drills against live servers. Keep them out of the default
+# suite, but make the opt-in explicit so they do not become permanent dead code.
+pytestmark = pytest.mark.skipif(
+    os.getenv("RUN_GOVERNANCE_DRILLS") != "1",
+    reason="Integration drills require RUN_GOVERNANCE_DRILLS=1 and running governance server",
+)
 
 # Test configuration
-GOVERNANCE_URL = "http://localhost:8767/mcp/"
-PI_URL = "http://localhost:8766/mcp/"
+GOVERNANCE_URL = os.getenv("GOVERNANCE_URL", "http://localhost:8767/mcp/")
+PI_URL = os.getenv("PI_URL", "http://localhost:8766/mcp/")
 HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json, text/event-stream"

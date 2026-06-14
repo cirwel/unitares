@@ -325,6 +325,34 @@ def delivery_needs_attention(state: GitState) -> bool:
     return state.delivery_status in {"local_changes", "unpushed_commits", "diverged"}
 
 
+def delivery_next_step(state: GitState) -> str | None:
+    """Human guidance for the next delivery action.
+
+    The closeout output is the operator-facing source of truth for delivery
+    state. Include the next mechanical command so agents don't turn
+    "local_changes" into a vague status report when the standard delivery path
+    is already known.
+    """
+    if state.delivery_status == "local_changes":
+        return (
+            "ship with: ./scripts/dev/ship.sh --stage-all "
+            "\"type(scope): concise message\" if the whole worktree belongs; "
+            "otherwise stage intended files and run ./scripts/dev/ship.sh "
+            "\"type(scope): concise message\""
+        )
+    if state.delivery_status == "unpushed_commits":
+        return (
+            "push/open draft PR with: git push -u origin HEAD && "
+            "gh pr create --draft --fill"
+        )
+    if state.delivery_status == "detached":
+        return (
+            "create a branch or use ship.sh from staged changes; "
+            "auto mode will mint an agent-prefixed draft-PR branch"
+        )
+    return None
+
+
 def build_stash_message(branch: str, file_count: int, timestamp: str) -> str:
     branch_label = branch or "(detached)"
     return (
@@ -784,6 +812,9 @@ def render_text(result: CloseoutResult) -> str:
         f"  branch={branch} head={result.git.head or '?'} "
         f"upstream={upstream} ahead={ahead} behind={behind}"
     )
+    next_step = delivery_next_step(result.git)
+    if next_step:
+        lines.append(f"  next={next_step}")
 
     if result.stashed:
         lines.append(f"stash: created - {result.stash_message}")

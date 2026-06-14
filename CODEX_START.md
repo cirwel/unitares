@@ -123,6 +123,12 @@ If you want Codex to ship the current staged change, use:
 ./scripts/dev/ship.sh "type(scope): concise message"
 ```
 
+If the whole dirty worktree belongs in the PR, use:
+
+```bash
+./scripts/dev/ship.sh --stage-all "type(scope): concise message"
+```
+
 Per `docs/operations/github-workflow-conventions.md`, delivery is **draft PR for
 everything** — Codex and Claude share one contract so concurrent sessions stay
 predictable, and the operator is the merge gate. The default `auto` route now

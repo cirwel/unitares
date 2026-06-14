@@ -71,10 +71,15 @@ every change** — runtime, docs, or tests:
 ./scripts/dev/ship.sh "type(scope): concise message"
 ```
 
+- If all current worktree changes belong in the PR, use
+  `./scripts/dev/ship.sh --stage-all "type(scope): concise message"` to stage,
+  branch if needed, commit, push, and open the draft PR in one command.
 - Runtime and detached-HEAD work mint a fresh agent-prefixed branch and open
   the draft PR there.
 - Non-runtime work on a named feature branch opens the draft PR on that branch.
-- `./scripts/dev/ship.sh --plan "..."` previews the route without shipping.
+- `./scripts/dev/ship.sh --plan "..."` previews the route without shipping;
+  `--stage-all --plan` previews the route for the full dirty worktree without
+  mutating the index.
 - `--direct` is the opt-out, for docs/tests-only pushes where you knowingly
   skip the PR.
 - `--auto-merge` remains available for the rare case where the operator
@@ -100,6 +105,7 @@ guards keep concurrent sessions from clobbering each other:
 | Situation | Do this |
 | --- | --- |
 | Ship any change (Codex or Claude CLI) | `./scripts/dev/ship.sh "msg"` — defaults to a draft PR |
+| Ship the whole dirty worktree | `./scripts/dev/ship.sh --stage-all "msg"` |
 | Preview the route first | `./scripts/dev/ship.sh --plan "msg"` |
 | Claude on the web harness | Already parks a draft PR on its `claude/...` branch — nothing extra needed |
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |

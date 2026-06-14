@@ -23,7 +23,7 @@ version-bump: ## Bump version (usage: make version-bump PART=patch)
 test: ## Run full test suite with coverage
 	@python3 -m pytest \
 		--cov=src --cov=agents/sdk/src/unitares_sdk --cov=agents \
-		--cov-report=term-missing --cov-fail-under=25
+		--cov-report=term-missing --cov-fail-under=75
 
 test-cache-quick: ## Run cached full test suite without coverage
 	@./scripts/dev/test-cache.sh --quick

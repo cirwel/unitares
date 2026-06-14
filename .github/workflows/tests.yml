@@ -91,9 +91,9 @@ jobs:
 
     - name: Run tests with coverage
       run: |
-        python -m pytest tests/ -v \
+        python -m pytest tests/ agents/ -v \
           --cov=src --cov=agents/sdk/src/unitares_sdk --cov=agents \
-          --cov-report=term-missing --cov-report=html --cov-fail-under=25
+          --cov-report=term-missing --cov-report=html --cov-fail-under=75
 
     - name: Upload coverage report
       if: always()

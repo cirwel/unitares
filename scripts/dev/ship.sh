@@ -17,6 +17,7 @@
 #
 # Usage:
 #   ./scripts/dev/ship.sh "commit message"
+#   ./scripts/dev/ship.sh --stage-all "commit message"
 #   ./scripts/dev/ship.sh --draft-pr "commit message"
 #   ./scripts/dev/ship.sh --open-pr "commit message"
 #   ./scripts/dev/ship.sh --auto-merge "commit message"
@@ -24,7 +25,8 @@
 #   ./scripts/dev/ship.sh --classify          # just print "runtime" or "other"
 #   ./scripts/dev/ship.sh --plan "commit message"
 #
-# Requirements: staged changes (git add already done), gh CLI authed.
+# Requirements: staged changes (git add already done) unless --stage-all is
+# used, gh CLI authed.
 
 set -euo pipefail
 
@@ -67,8 +69,8 @@ RUNTIME_PATTERNS=(
     '^elixir/'
 )
 
-classify() {
-    local files; files=$(git diff --cached --name-only)
+classify_paths() {
+    local files="$1"
     if [[ -z "$files" ]]; then
         echo "empty"; return
     fi
@@ -80,6 +82,24 @@ classify() {
         done
     done <<< "$files"
     echo "other"
+}
+
+classify() {
+    local files; files=$(git diff --cached --name-only)
+    classify_paths "$files"
+}
+
+worktree_changed_files() {
+    {
+        git diff --name-only
+        git diff --cached --name-only
+        git ls-files --others --exclude-standard
+    } | sort -u
+}
+
+classify_worktree() {
+    local files; files=$(worktree_changed_files)
+    classify_paths "$files"
 }
 
 # Emit unresolved Watcher fingerprints touching staged files, comma-separated.
@@ -99,9 +119,9 @@ collect_watcher_fingerprints() {
 
 usage() {
     cat >&2 <<'USAGE'
-usage: ship.sh [--draft-pr|--open-pr|--auto-merge|--direct] "commit message"
+usage: ship.sh [--stage-all] [--draft-pr|--open-pr|--auto-merge|--direct] "commit message"
        ship.sh --classify
-       ship.sh --plan "commit message"
+       ship.sh [--stage-all] --plan "commit message"
 
 Modes:
   auto         draft PR for everything (the default convention); runtime/detached
@@ -112,11 +132,14 @@ Modes:
   --auto-merge
                commit, push current/new branch, open a ready PR, and enable auto-merge
   --direct    commit and push the current branch; refuses detached HEAD
+  --stage-all stage the full current worktree before classifying/committing.
+               With --plan, previews that route without mutating the index.
 USAGE
 }
 
 MODE="${UNITARES_SHIP_MODE:-auto}"
 PLAN_ONLY=0
+STAGE_ALL=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -126,6 +149,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --plan|--dry-run)
             PLAN_ONLY=1
+            shift
+            ;;
+        --stage-all|--all)
+            STAGE_ALL=1
             shift
             ;;
         --draft-pr|--draft)
@@ -165,7 +192,16 @@ if [[ -z "$MESSAGE" ]]; then
     exit 2
 fi
 
-KIND=$(classify)
+if [[ "$STAGE_ALL" == "1" && "$PLAN_ONLY" != "1" ]]; then
+    echo "[ship] staging all worktree changes"
+    git add -A
+fi
+
+if [[ "$STAGE_ALL" == "1" && "$PLAN_ONLY" == "1" ]]; then
+    KIND=$(classify_worktree)
+else
+    KIND=$(classify)
+fi
 BRANCH=$(git branch --show-current)
 HEAD_SHORT=$(git rev-parse --short HEAD)
 DETACHED=0
@@ -235,6 +271,7 @@ if [[ "$PLAN_ONLY" == "1" ]]; then
     echo "mode=$MODE"
     echo "delivery=$DELIVERY"
     echo "force_auto_branch=$FORCE_AUTO_BRANCH"
+    echo "stage_all=$STAGE_ALL"
     exit 0
 fi
 

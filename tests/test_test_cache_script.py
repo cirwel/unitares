@@ -169,7 +169,10 @@ def test_quick_mode_omits_coverage_and_uses_separate_cache(cache_repo):
     assert full.returncode == 0, full.stdout + full.stderr
     assert "[test-cache] MISS" in full.stdout
     assert "profile coverage" in full.stdout
-    assert "--cov=src" in _pytest_args(repo)
+    full_args = _pytest_args(repo)
+    assert "tests/ agents/" in full_args
+    assert "--cov=src" in full_args
+    assert "--cov-fail-under=75" in full_args
     assert _pytest_count(repo) == 2
 
     quick_second = _run_cache(repo, env, "--quick")

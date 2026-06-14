@@ -32,8 +32,7 @@ from src.auto_ground_truth import (
 # Paths
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).parent.parent
-PLUGIN_ROOT = PROJECT_ROOT.parent / "unitares-governance-plugin"
-SKILLS_DIR = PLUGIN_ROOT / "skills"
+SKILLS_DIR = PROJECT_ROOT / "skills"
 
 
 def _read_skill(name: str) -> str:
@@ -113,7 +112,7 @@ class TestGovernanceFundamentalsClaims:
         # S: [0, 1]
         assert "| **S** (Entropy) | [0, 1]" in content
         # V: [-1, 1]
-        assert "| **V** (Void) | [-1, 1]" in content
+        assert "| **V** (Valence) | [-1, 1]" in content
 
     def test_target_coherence_value(self):
         """Config TARGET_COHERENCE should be 0.50."""
