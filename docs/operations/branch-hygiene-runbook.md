@@ -3,6 +3,13 @@
 `agents/vigil_hygiene/agent.py` is the resident branch-hygiene sweep. It is
 designed to remove branch clutter without deleting salvageable work.
 
+The same safety contract is available during manual workspace closeout:
+
+- `python3 scripts/dev/workspace_closeout.py --branch-hygiene` reports stale
+  branch/worktree cleanup candidates without mutating them.
+- `python3 scripts/dev/workspace_closeout.py --branch-hygiene-live` performs the
+  safe sweep and surfaces held branches as closeout findings.
+
 ## Safety Contract
 
 For local branches whose upstream is gone:
@@ -17,6 +24,8 @@ For local branches whose upstream is gone:
 - unparseable or failed `git cherry` output means **SKIP**. Do not delete.
 - dirty worktrees, paused rebases, paused cherry-picks, merges, or bisects are
   never removed by the sweep.
+- a stale branch checked out in the sweep process's current repo is held; run
+  hygiene from another checkout to remove that worktree.
 
 For remote `origin/*` branches:
 
