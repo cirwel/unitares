@@ -6,6 +6,9 @@ from src.grounding.class_indicator import (
     classify_agent,
     classify_by_label_and_tags,
     KNOWN_RESIDENT_LABELS,
+    RESIDENT_ROSTER_ENV,
+    load_resident_labels,
+    parse_resident_roster,
     CLASS_EMBODIED,
     CLASS_RESIDENT_PERSISTENT,
     CLASS_EPHEMERAL,
@@ -16,6 +19,35 @@ from src.grounding.class_indicator import (
 
 def _meta(label=None, tags=None):
     return SimpleNamespace(label=label, tags=tags or [])
+
+
+def test_roster_env_default_empty(monkeypatch):
+    """Unset UNITARES_RESIDENTS => no named residents (user-agnostic default)."""
+    monkeypatch.delenv(RESIDENT_ROSTER_ENV, raising=False)
+    assert load_resident_labels() == frozenset()
+    assert parse_resident_roster(None) == frozenset()
+    assert parse_resident_roster("Vigil, Sentinel ,Lumen") == {
+        "Vigil", "Sentinel", "Lumen",
+    }
+
+
+def test_unnamed_resident_falls_through_to_tags(monkeypatch):
+    """With an empty roster, an agent named 'Lumen' is NOT its own class — it
+    classifies by tags (or default), proving the roster is config, not baked in."""
+    monkeypatch.setenv(RESIDENT_ROSTER_ENV, "")
+    roster = load_resident_labels()
+    # classify_by_label_and_tags resolves the label against whatever roster is
+    # passed via the module constant; simulate an empty-roster install by
+    # checking the label is absent and tag/default resolution wins.
+    assert "Lumen" not in roster
+    assert classify_by_label_and_tags("Lumen", ["embodied"], known=roster) == CLASS_EMBODIED
+    assert classify_by_label_and_tags("Lumen", [], known=roster) == CLASS_DEFAULT
+
+
+def test_named_resident_is_own_class_when_configured():
+    """When the roster names 'Lumen', it becomes its own N=1 calibration class."""
+    roster = parse_resident_roster("Lumen,Vigil")
+    assert classify_by_label_and_tags("Lumen", ["embodied"], known=roster) == "Lumen"
 
 
 def test_none_meta_returns_default():

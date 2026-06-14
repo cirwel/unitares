@@ -61,6 +61,11 @@
 
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- Must match UNITARES_RESIDENTS on the governance-mcp plist so the
+             SDK recognizes this resident's substrate emissions. Empty = no
+             named residents (user-agnostic install). -->
+        <key>UNITARES_RESIDENTS</key>
+        <string>Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler</string>
         <key>PATH</key>
         <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
     </dict>

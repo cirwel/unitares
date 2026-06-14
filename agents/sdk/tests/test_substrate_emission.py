@@ -164,12 +164,33 @@ def _metrics():
             "coherence": 0.7, "risk": 0.2}
 
 
-def test_resident_names_match_class_indicator():
-    """KNOWN_RESIDENT_NAMES MUST mirror src/grounding/class_indicator.py::
-    KNOWN_RESIDENT_LABELS (the source of truth for who's a resident). The
-    SDK can't import from src/, so this test guards against drift."""
-    expected = {"Lumen", "Vigil", "Sentinel", "Watcher", "Steward", "Chronicler"}
-    assert KNOWN_RESIDENT_NAMES == expected
+def test_resident_roster_loaded_from_env():
+    """The resident roster is deployment config read from UNITARES_RESIDENTS.
+
+    Both the SDK (_substrate.KNOWN_RESIDENT_NAMES) and core
+    (src/grounding/class_indicator.KNOWN_RESIDENT_LABELS) read the SAME env
+    var — the env var NAME is the cross-package contract, since the SDK
+    cannot import from src/. conftest.py configures the canonical fleet for
+    this suite; assert the roster reflects that configuration rather than a
+    hardcoded literal."""
+    from unitares_sdk._substrate import RESIDENT_ROSTER_ENV
+
+    assert RESIDENT_ROSTER_ENV == "UNITARES_RESIDENTS"
+    assert KNOWN_RESIDENT_NAMES == {
+        "Lumen", "Vigil", "Sentinel", "Watcher", "Steward", "Chronicler",
+    }
+
+
+def test_parse_resident_roster_default_empty():
+    """Unset/empty roster => no named residents (user-agnostic default)."""
+    from unitares_sdk._substrate import parse_resident_roster
+
+    assert parse_resident_roster(None) == frozenset()
+    assert parse_resident_roster("") == frozenset()
+    assert parse_resident_roster("  ") == frozenset()
+    assert parse_resident_roster("Vigil, Sentinel ,Lumen") == {
+        "Vigil", "Sentinel", "Lumen",
+    }
 
 
 def test_resolve_resident_name_known_returns_name():

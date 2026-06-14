@@ -27,6 +27,17 @@ os.environ.setdefault(
     str(Path(tempfile.gettempdir()) / "unitares-vigil-test.log"),
 )
 
+# The resident roster is now deployment config (UNITARES_RESIDENTS), empty by
+# default for user-agnostic installs. The test suite validates the resident
+# machinery against the canonical fleet, so configure it here BEFORE any test
+# imports src.grounding.class_indicator (KNOWN_RESIDENT_LABELS is resolved at
+# module-import time from this env var). Tests that need a different roster set
+# the env var and call class_indicator.load_resident_labels() directly.
+os.environ.setdefault(
+    "UNITARES_RESIDENTS",
+    "Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler",
+)
+
 # Filter ResourceWarnings globally before any imports
 warnings.filterwarnings("ignore", category=ResourceWarning)
 

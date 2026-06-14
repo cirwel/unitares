@@ -10,13 +10,49 @@ class, where fleet-wide constants apply.
 Returns a class name string used to key into the class-conditional scale
 maps in config/governance_config.py (S_SCALE_BY_CLASS, etc.).
 """
+import os
 from typing import Any, Iterable, Optional
+
+# The resident roster is *deployment configuration*, not a hardcoded fleet.
+# A deployment declares its named residents via the UNITARES_RESIDENTS env
+# var (comma-separated labels, e.g. "Vigil,Sentinel,Lumen"). Unset or empty
+# means this install has no named residents — every agent then classifies by
+# tag (embodied / persistent / ephemeral) or falls through to the default
+# class, where fleet-wide constants apply. This is what makes UNITARES
+# user-agnostic: a fresh install inherits no operator-specific identities.
+#
+# Each named resident becomes its own N=1 calibration class, so a deployment
+# that names residents must also provide their class-conditional scale
+# constants (config/governance_config.py) — guarded by
+# tests/test_grounding_scale_constants.py.
+#
+# The SDK mirrors this contract by reading the same env var; see
+# agents/sdk/src/unitares_sdk/_substrate.py. The env var NAME is the
+# cross-package contract (the SDK cannot import from src/).
+RESIDENT_ROSTER_ENV = "UNITARES_RESIDENTS"
+
+
+def parse_resident_roster(raw: Optional[str]) -> frozenset[str]:
+    """Parse a comma-separated resident roster string into a label set."""
+    if not raw:
+        return frozenset()
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+
+
+def load_resident_labels() -> frozenset[str]:
+    """Resident labels for this deployment, from ``UNITARES_RESIDENTS``.
+
+    Read once at import into ``KNOWN_RESIDENT_LABELS`` (server processes read
+    their roster at startup). Tests that vary the roster set the env var
+    before import (see tests/conftest.py) or call this helper directly.
+    """
+    return parse_resident_roster(os.environ.get(RESIDENT_ROSTER_ENV))
+
 
 # Specific labels that identify a unique resident agent. Each is its own
 # calibration class because population N=1 means class==agent in practice.
-KNOWN_RESIDENT_LABELS = frozenset(
-    {"Lumen", "Vigil", "Sentinel", "Watcher", "Steward", "Chronicler"}
-)
+# Empty by default; populated from UNITARES_RESIDENTS — see above.
+KNOWN_RESIDENT_LABELS = load_resident_labels()
 
 # Tag-derived class names.
 CLASS_EMBODIED = "embodied"
@@ -27,7 +63,9 @@ CLASS_DEFAULT = "default"
 
 
 def classify_by_label_and_tags(
-    label: Optional[str], tags: Optional[Iterable[str]]
+    label: Optional[str],
+    tags: Optional[Iterable[str]],
+    known: Optional[frozenset[str]] = None,
 ) -> str:
     """Canonical fold: return the calibration class name from raw label + tags.
 
@@ -56,8 +94,13 @@ def classify_by_label_and_tags(
     any transient state where both tags coexist (the promotion UPDATE
     strips ephemeral atomically, but the in-memory cache sync is best
     effort), the post-promotion class wins.
+
+    ``known`` overrides the resident roster (defaults to the deployment's
+    ``KNOWN_RESIDENT_LABELS``); pass an explicit set to classify against a
+    specific roster without mutating module state.
     """
-    if label and label in KNOWN_RESIDENT_LABELS:
+    roster = KNOWN_RESIDENT_LABELS if known is None else known
+    if label and label in roster:
         return label
 
     tags_set = set(tags) if tags else set()

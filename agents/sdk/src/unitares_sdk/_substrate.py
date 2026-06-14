@@ -12,10 +12,12 @@ swallowed to keep the checkin contract — RFC §7.13.4 contract: lease-plane
 failures MUST NOT fail the resident's checkin loop.
 
 Design:
-- `KNOWN_RESIDENT_NAMES` mirrors `src/grounding/class_indicator.py::
-  KNOWN_RESIDENT_LABELS`. Hardcoded here because the SDK is a standalone
-  package that should not import from `src/`. Drift between the two lists
-  is caught by `tests/test_substrate_resident_names_match_class_indicator.py`.
+- `KNOWN_RESIDENT_NAMES` is the deployment's resident roster, read from the
+  `UNITARES_RESIDENTS` env var (comma-separated labels). It mirrors
+  `src/grounding/class_indicator.py::KNOWN_RESIDENT_LABELS`, which reads the
+  same env var. The env var NAME is the cross-package contract — the SDK is
+  a standalone package that must not import from `src/`. Unset/empty means
+  this install has no named residents (the user-agnostic default).
 - Emission is GATED on `name in KNOWN_RESIDENT_NAMES` — non-resident agents
   using the SDK don't emit (the migration-034 `substrate_state_only_on_resident_kind`
   CHECK would reject them at the DB anyway; gating client-side is friendlier).
@@ -32,10 +34,22 @@ from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
-# Mirror of src/grounding/class_indicator.py::KNOWN_RESIDENT_LABELS.
-# Drift caught by tests/test_substrate_resident_names_match_class_indicator.py.
-KNOWN_RESIDENT_NAMES: frozenset[str] = frozenset(
-    {"Lumen", "Vigil", "Sentinel", "Watcher", "Steward", "Chronicler"}
+# Deployment resident roster, read from UNITARES_RESIDENTS (comma-separated
+# labels). Mirrors src/grounding/class_indicator.py::KNOWN_RESIDENT_LABELS,
+# which reads the same env var — the env var name is the cross-package
+# contract. Empty by default (user-agnostic install with no named residents).
+RESIDENT_ROSTER_ENV = "UNITARES_RESIDENTS"
+
+
+def parse_resident_roster(raw: str | None) -> frozenset[str]:
+    """Parse a comma-separated resident roster string into a label set."""
+    if not raw:
+        return frozenset()
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+
+
+KNOWN_RESIDENT_NAMES: frozenset[str] = parse_resident_roster(
+    os.environ.get(RESIDENT_ROSTER_ENV)
 )
 
 
