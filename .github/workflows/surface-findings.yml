@@ -1,0 +1,146 @@
+name: Surface Findings (experiment)
+
+# CI-side "issue surfacing" experiment. Runs the deterministic surfacing
+# collectors (scripts/ci/surface_findings.py) and turns NEW fingerprints into
+# deduped GitHub issues.
+#
+# Two triggers, deliberately different blast radius:
+#   workflow_dispatch -> opens/dedups GitHub issues (the experiment button)
+#   pull_request      -> writes a job-summary table only (no issue spam on
+#                        every push; proves the pipeline against the PR diff)
+#
+# Dedup: each issue body carries a hidden `<!-- finding-fingerprint: X -->`
+# marker. Before opening an issue the workflow searches open issues labeled
+# `ci-finding` for that marker and skips if one already exists — so re-running
+# never duplicates an issue for a still-present finding.
+
+on:
+  workflow_dispatch:
+    inputs:
+      collectors:
+        description: "Collectors to run (space-separated: ruff doctor)"
+        required: false
+        default: "ruff"
+  pull_request:
+    branches: [ master, main ]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  surface:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          # PR runs scope ruff to the diff; fetch base so the diff resolves.
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install ruff
+        run: pip install "ruff>=0.15"
+
+      - name: Compute changed Python files (PR only)
+        if: github.event_name == 'pull_request'
+        id: changed
+        run: |
+          base="origin/${{ github.base_ref }}"
+          files=$(git diff --name-only --diff-filter=d "$base"...HEAD -- '*.py' | tr '\n' ' ')
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+          echo "Changed Python files: ${files:-<none>}"
+
+      - name: Run surfacing collectors
+        id: surface
+        run: |
+          collectors="${{ github.event.inputs.collectors || 'ruff' }}"
+          paths="${{ steps.changed.outputs.files }}"
+          python3 scripts/ci/surface_findings.py \
+            --collectors $collectors \
+            ${paths:+--paths $paths} \
+            --output findings.json
+        # Advisory: a finding must not red-X the job (no --fail-on here).
+
+      - name: Write job summary
+        if: always()
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('findings.json')) {
+              core.summary.addRaw('No findings report produced.').write();
+              return;
+            }
+            const report = JSON.parse(fs.readFileSync('findings.json', 'utf8'));
+            const s = report.summary.by_severity;
+            core.summary.addHeading('CI Issue Surfacing', 2);
+            core.summary.addRaw(
+              `**${report.summary.total}** findings — ` +
+              `🔴 ${s.critical} critical · 🟠 ${s.high} high · ` +
+              `🟡 ${s.medium} medium · ⚪ ${s.low} low\n\n`);
+            const notes = Object.entries(report.collectors)
+              .map(([k, v]) => `- \`${k}\`: ${v}`).join('\n');
+            core.summary.addRaw(`**Collectors:**\n${notes}\n\n`);
+            if (report.findings.length) {
+              core.summary.addTable([
+                [{data: 'Severity', header: true}, {data: 'Source', header: true},
+                 {data: 'Location', header: true}, {data: 'Finding', header: true}],
+                ...report.findings.slice(0, 50).map(f => [
+                  f.severity, f.source,
+                  f.file ? `${f.file}:${f.line}` : '—',
+                  (f.title || '').slice(0, 100),
+                ]),
+              ]);
+            }
+            await core.summary.write();
+
+      - name: Open deduped issues (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('findings.json', 'utf8'));
+            const { owner, repo } = context.repo;
+
+            // One paginated read of open ci-finding issues; harvest the
+            // fingerprint markers already on the board so we never duplicate.
+            const existing = new Set();
+            for await (const res of github.paginate.iterator(
+                github.rest.issues.listForRepo,
+                { owner, repo, state: 'open', labels: 'ci-finding', per_page: 100 })) {
+              for (const issue of res.data) {
+                const m = (issue.body || '').match(/<!-- finding-fingerprint: ([0-9a-f]+) -->/);
+                if (m) existing.add(m[1]);
+              }
+            }
+
+            let opened = 0, skipped = 0;
+            for (const f of report.findings) {
+              if (existing.has(f.fingerprint)) { skipped++; continue; }
+              const loc = f.file ? `\n**Location:** \`${f.file}:${f.line}\`` : '';
+              const body =
+                `<!-- finding-fingerprint: ${f.fingerprint} -->\n` +
+                `Surfaced by the CI issue-surfacing experiment ` +
+                `(\`${f.source}\` collector).\n\n` +
+                `**Severity:** ${f.severity}${loc}\n` +
+                `**Rule:** \`${f.rule}\`\n\n` +
+                `${f.message}\n\n` +
+                `_Fingerprint \`${f.fingerprint}\`. Close this issue once fixed; ` +
+                `a still-present finding will not be re-opened while this issue stays open._`;
+              await github.rest.issues.create({
+                owner, repo,
+                title: `[ci-finding] ${f.title}`.slice(0, 120),
+                body,
+                labels: ['ci-finding', `severity:${f.severity}`, `source:${f.source}`],
+              });
+              opened++;
+            }
+            core.notice(`ci-finding issues — opened ${opened}, skipped ${skipped} (already open)`);
