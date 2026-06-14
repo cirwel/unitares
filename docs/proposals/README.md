@@ -29,9 +29,9 @@ Several of these are **single-writer surfaces** (see the shared contract in `AGE
 
 ### Other active
 
-| Doc | Status (as of 2026-06-11) |
+| Doc | Status (as of 2026-06-14) |
 |---|---|
-| [`behavioral-running-hot-detector-v0.md`](behavioral-running-hot-detector-v0.md) | v0.1 plan, pending council |
+| [`behavioral-running-hot-detector-v0.md`](behavioral-running-hot-detector-v0.md) | v0.1 plan, parked — pending council; unbuilt, blocked on the behavioral-EISV arm emitting signal |
 
 ## Shipped / resolved
 

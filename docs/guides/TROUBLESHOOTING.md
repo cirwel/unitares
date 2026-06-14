@@ -2,7 +2,7 @@
 
 Status: live troubleshooting guide. Use for failure diagnosis and operator recovery steps, not as the primary architecture reference.
 
-**Last Updated:** April 2026
+**Last Updated:** June 2026
 
 ---
 
@@ -314,4 +314,4 @@ curl http://localhost:8767/health | python3 -m json.tool
 
 ---
 
-*Last updated: March 2026*
+*Last updated: June 2026*
