@@ -230,7 +230,7 @@ def _score_self_relative(
     # information, not risk. Outside it, relative deviations are allowed to
     # contribute again, with a small per-dimension EMA-derived denominator
     # guard so exact-zero baselines do not become invisible.
-    z_E = state.deviation("E", min_std=eisv_min_std_for_dimension("E"))
+    z_E = state.deviation("E", min_std=eisv_min_std_for_dimension("E", state.alphas))
     if not absolute_eisv_safe and z_E < -SIGMA_MILD:
         severity = min(1.0, (-z_E - SIGMA_MILD) / (SIGMA_SEVERE - SIGMA_MILD))
         components["low_E"] = 0.30 * severity
@@ -238,7 +238,7 @@ def _score_self_relative(
         components["low_E"] = 0.0
 
     # --- Component 2: I deviation below baseline (weight: 0.30) ---
-    z_I = state.deviation("I", min_std=eisv_min_std_for_dimension("I"))
+    z_I = state.deviation("I", min_std=eisv_min_std_for_dimension("I", state.alphas))
     if not absolute_eisv_safe and z_I < -SIGMA_MILD:
         severity = min(1.0, (-z_I - SIGMA_MILD) / (SIGMA_SEVERE - SIGMA_MILD))
         components["low_I"] = 0.30 * severity
@@ -246,7 +246,7 @@ def _score_self_relative(
         components["low_I"] = 0.0
 
     # --- Component 3: S deviation above baseline (weight: 0.20) ---
-    z_S = state.deviation("S", min_std=eisv_min_std_for_dimension("S"))
+    z_S = state.deviation("S", min_std=eisv_min_std_for_dimension("S", state.alphas))
     task_type = ctx.get("task_type", "mixed")
     sigma_threshold = SIGMA_MILD
     if task_type == "convergent":
@@ -258,7 +258,7 @@ def _score_self_relative(
         components["high_S"] = 0.0
 
     # --- Component 4: |V| deviation above baseline (weight: 0.20) ---
-    z_V = state.deviation("V", min_std=eisv_min_std_for_dimension("V"))
+    z_V = state.deviation("V", min_std=eisv_min_std_for_dimension("V", state.alphas))
     if not absolute_eisv_safe and abs(z_V) > SIGMA_MILD:
         severity = min(1.0, (abs(z_V) - SIGMA_MILD) / (SIGMA_SEVERE - SIGMA_MILD))
         components["high_V"] = 0.20 * severity

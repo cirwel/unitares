@@ -119,6 +119,26 @@ class TestStableSentinelNotFalselyPaused:
         assert result.components["high_V"] > 0.0
         assert result.risk >= RISK_CAUTION_THRESHOLD
 
+    def test_custom_slow_alpha_floor_preserves_outside_gate_signal(self):
+        state = _baselined(
+            {
+                "E": (0.62, 0.0),
+                "I": (0.62, 0.0),
+                "S": (0.20, 0.0),
+                "V": (0.00, 0.0),
+            },
+            {"E": 0.59, "I": 0.59, "S": 0.20, "V": 0.0},
+            count=50,
+        )
+        state.alphas["E"] = 0.01
+        state.alphas["I"] = 0.01
+
+        result = assess_behavioral_state(state, rho=0.0)
+
+        assert result.components["low_E"] > 0.0
+        assert result.components["low_I"] > 0.0
+        assert result.risk >= RISK_CAUTION_THRESHOLD
+
 
 class TestDeviation:
     def test_default_deviation_uses_raw_baseline_std(self):
