@@ -18,10 +18,11 @@
         // risk, plus the BASIN_HIGH box) — the background bands cannot show the
         // full classifier, so the authoritative per-agent label is the `basin`
         // field rendered in each dot's tooltip, not the band an agent sits in.
-        // Values track the I-axis breakpoints of classify_basin:
-        //   low  = BASIN_LOW_I_CEIL (0.5): I below this forces the LOW basin.
-        //   high = BASIN_HIGH.I_min (0.7): I below this can never be HIGH.
-        // Keep in sync with those two constants if they change.
+        // These values are SOURCED LIVE from the server at init via
+        // config(action='get') -> thresholds.basin_low_i_ceil / basin_high_i_min
+        // (the I-axis breakpoints of classify_basin), so the bands cannot drift
+        // from the engine. The literals below are only a fallback if that fetch
+        // fails; they mirror BASIN_LOW_I_CEIL (0.5) and BASIN_HIGH.I_min (0.7).
         basin: { low: 0.5, high: 0.7 },
         // Steady-state equilibrium (governance_config.py calibration note)
         equilibrium: { E: 0.70, I: 0.75 },
@@ -646,15 +647,34 @@
     // Init
     // ========================================================================
 
+    // Source basin band breakpoints from the engine's own constants so the
+    // bands cannot drift from classify_basin. Falls back to CFG.basin literals
+    // on any failure (unauthenticated read, older server without the field).
+    function loadBasinThresholds() {
+        return callTool('config', { action: 'get' })
+            .then(function (result) {
+                var t = (result && result.thresholds) || {};
+                if (typeof t.basin_low_i_ceil === 'number') CFG.basin.low = t.basin_low_i_ceil;
+                if (typeof t.basin_high_i_min === 'number') CFG.basin.high = t.basin_high_i_min;
+            })
+            .catch(function (err) {
+                console.warn('[Phase] basin thresholds fetch failed, using fallback:', err);
+            });
+    }
+
     function init() {
         setupSVG();
-        drawBasins();
-        drawEquilibrium();
-        drawFlowField();
-        drawAxes();
-        loadAndRender();
-        startRefresh();
-        connectWebSocket();
+        // Fetch engine basin breakpoints before drawing the static bands so
+        // they reflect live config; fall through to fallback literals on error.
+        loadBasinThresholds().then(function () {
+            drawBasins();
+            drawEquilibrium();
+            drawFlowField();
+            drawAxes();
+            loadAndRender();
+            startRefresh();
+            connectWebSocket();
+        });
     }
 
     if (document.readyState === 'loading') {

@@ -45,6 +45,25 @@ class TestConfigManager:
         # Should have some threshold values
         assert len(thresholds) >= 0
 
+    def test_get_thresholds_exposes_basin_breakpoints(self):
+        """get_thresholds must expose the engine's I-axis basin breakpoints.
+
+        The /phase dashboard sources its basin bands from these keys so the
+        rendered bands cannot drift from classify_basin. Guard that the keys
+        exist and are wired to the canonical constants (not a hardcoded copy).
+        """
+        from src.runtime_config import get_thresholds
+        from config import governance_config as gc
+
+        thresholds = get_thresholds()
+
+        assert "basin_low_i_ceil" in thresholds
+        assert "basin_high_i_min" in thresholds
+        assert thresholds["basin_low_i_ceil"] == gc.BASIN_LOW_I_CEIL
+        assert thresholds["basin_high_i_min"] == gc.BASIN_HIGH.I_min
+        # Sanity: LOW/BOUNDARY edge must sit below BOUNDARY/HIGH edge.
+        assert thresholds["basin_low_i_ceil"] < thresholds["basin_high_i_min"]
+
     def test_get_threshold_with_default(self):
         """Test getting specific threshold with default"""
         from src.config_manager import ConfigManager
