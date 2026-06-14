@@ -4,6 +4,10 @@ Bootstrap for Claude Code sessions in this repo. Content below the `SHARED CONTR
 
 The installable Codex/Claude adapter bundle is canonical in the companion `unitares-governance-plugin` repo. This file only governs how Claude Code should behave while working directly inside the `unitares` server repo.
 
+## Operator constraints (read first)
+
+- **No paid LLM API budget.** Do not propose, scaffold, or depend on solutions that require an `ANTHROPIC_API_KEY` or any other paid model API — this rules out `anthropics/claude-code-action` and any CI/automation that calls a metered API. Prefer free / self-hosted paths: the local Ollama detector for Watcher, `GITHUB_TOKEN`-only CI, and deterministic CLI tools (ruff, the doctor, the surfacing collectors). If a feature genuinely needs a paid API, surface it as a *deferred, operator-funded* option and do not build it inert "just in case."
+
 ## Claude-specific wiring
 
 Claude Code runs through a plugin-style harness. The hook lifecycle is owned by the **`unitares-governance-plugin`** repo (canonical for the adapter bundle). This repo does not vendor or wire its own hook chain. The plugin's `hooks/session-start` and `hooks/post-edit` are what fire on Claude lifecycle events — when CLAUDE.md or AGENTS.md describes hook behavior, the source of truth is the plugin.
