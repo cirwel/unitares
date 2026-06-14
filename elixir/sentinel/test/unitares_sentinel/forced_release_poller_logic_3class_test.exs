@@ -162,8 +162,14 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic3ClassTest do
     assert alarm.kind == "conflict_batch"
     assert alarm.severity == "medium"
     assert alarm.summary == "held-by-other conflicts: dialectic:/conflict_test (count=7)"
-    # Fingerprint includes last_ts so a later cycle yields a distinct alarm
-    assert alarm.fingerprint == "forced_release:conflict_batch:dialectic:/conflict_test:#{DateTime.to_iso8601(row.last_ts)}"
+    # Fingerprint includes last_ts so a later cycle yields a distinct alarm.
+    # The timestamp MUST render in Python's isoformat shape ("+00:00", not
+    # "Z") for cross-runtime dedup parity — see Logic.iso8601_python/1 and the
+    # 2026-06-14 condition-2 parity audit. This literal must stay byte-equal to
+    # what `datetime(...).isoformat()` produces for the same instant (pinned on
+    # the Python side by tests/test_sentinel_forced_release_fingerprint_parity.py).
+    assert alarm.fingerprint ==
+             "forced_release:conflict_batch:dialectic:/conflict_test:2026-05-05T09:00:00+00:00"
     assert alarm.extra.surface_id == "dialectic:/conflict_test"
     assert alarm.extra.count == 7
     assert cursor == row.last_ts

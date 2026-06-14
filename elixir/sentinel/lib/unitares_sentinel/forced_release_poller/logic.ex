@@ -148,7 +148,14 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic do
       kind: "conflict_batch",
       severity: "medium",
       summary: "held-by-other conflicts: #{surface_id} (count=#{count})",
-      fingerprint: "forced_release:conflict_batch:#{surface_id}:#{DateTime.to_iso8601(last_ts)}",
+      # Byte-equivalent with Python's
+      # `forced_release:conflict_batch:{surface_id}:{last_ts.isoformat()}`
+      # (agents/sentinel/forced_release_alarm.py:203). MUST use the Python
+      # isoformat shape, not DateTime.to_iso8601/1 — the latter's "Z" suffix
+      # diverges from Python's "+00:00" and breaks cross-runtime dedup across
+      # the direct-flip cutover gap (RFC v0.1.1 §B2/§C3; parity audit
+      # 2026-06-14 GAP 1). ad_hoc/deprecation_batch are ID-only and unaffected.
+      fingerprint: "forced_release:conflict_batch:#{surface_id}:#{iso8601_python(last_ts)}",
       extra: %{
         surface_id: surface_id,
         surface_kind: row.surface_kind,
@@ -157,6 +164,30 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic do
         last_ts: DateTime.to_iso8601(last_ts)
       }
     }
+  end
+
+  # Mirror Python's `datetime.isoformat()` for tz-aware UTC values so the
+  # conflict_batch fingerprint is byte-equivalent across runtimes. Python
+  # renders the UTC offset as "+00:00" and omits the fractional part when
+  # microsecond == 0; `DateTime.to_iso8601/1` emits a "Z" suffix and carries
+  # Postgrex's 6-digit microsecond precision. Postgrex returns timestamptz as
+  # a UTC DateTime, so the seconds rendering always ends in "Z" before the
+  # suffix swap.
+  @spec iso8601_python(DateTime.t()) :: String.t()
+  defp iso8601_python(%DateTime{microsecond: {micro, _precision}} = dt) do
+    seconds =
+      %{dt | microsecond: {0, 0}}
+      |> DateTime.to_iso8601()
+      |> String.replace_suffix("Z", "")
+
+    frac =
+      if micro == 0 do
+        ""
+      else
+        "." <> String.pad_leading(Integer.to_string(micro), 6, "0")
+      end
+
+    seconds <> frac <> "+00:00"
   end
 
   # ---- combined --------------------------------------------------------

@@ -144,6 +144,28 @@ which condition 2's parity bar exists to prevent. Both are small and
 localized. Closing condition 2 = fix both + add the §B2 cross-runtime
 fingerprint contract test.
 
+## Update 2026-06-14 — both gaps fixed
+
+Both gaps are now addressed in this branch:
+
+- **GAP 1** — `logic.ex` gains a private `iso8601_python/1` helper (mirrors
+  Python's `isoformat()`: `+00:00` suffix, fraction omitted at whole seconds,
+  6-digit pad otherwise) and the conflict_batch fingerprint uses it. The
+  self-referential Elixir test is updated to the explicit `+00:00` literal.
+- **GAP 2** — `application.ex` threads the `SessionAnchor` `agent_uuid` into
+  the fleet-finding emitter via `:self_agent_id` (additive + graceful: any
+  anchor-load failure falls back to the prior config/env/default).
+- **§B2 contract test** — `tests/test_sentinel_forced_release_fingerprint_parity.py`
+  pins the Python side to exact literals; the BEAM 3-class test asserts the
+  identical conflict_batch literal. Both suites asserting the same strings is
+  the cross-runtime contract.
+
+Validation status: the Python side is validated in this session (all four
+fingerprint literals confirmed). The Elixir side is **not** run here (no
+`mix`); CI's `mix test` is the gate for `iso8601_python/1`, the updated 3-class
+test, and the `application.ex` wiring. Condition 2's remaining close work is
+the live cross-runtime double-fire check at cutover, once these land green.
+
 ## Caveat — BEAM-side validation pending
 
 This session has no Elixir/`mix` runtime, so the fixes above are **not

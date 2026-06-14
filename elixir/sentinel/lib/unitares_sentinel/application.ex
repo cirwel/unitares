@@ -108,7 +108,28 @@ defmodule UnitaresSentinel.Application do
       # windows overlap (KG 2026-05-08T02:14:43.822544+00:00).
       lease_opts: [surface_id: "resident:/sentinel_fleet_emit"]
     ]
+    |> maybe_add_self_agent_id()
     |> maybe_add_checkin_anchor()
+  end
+
+  # Thread the Sentinel's persisted agent_uuid into the fleet-finding emit
+  # path so cross-runtime finding fingerprints key on the SAME id the Python
+  # Sentinel uses — `compute_fingerprint(["sentinel", type, vclass, agent_uuid])`
+  # at agents/sentinel/agent.py:590. Without this the emitter falls back to the
+  # "sentinel" literal default and fleet findings would not dedup against the
+  # Python Sentinel across the direct-flip cutover gap (2026-06-14 condition-2
+  # parity audit, GAP 2). Identity continuity is otherwise wired only into the
+  # check-in path, not the finding-emit path. Additive + graceful: any
+  # anchor-load failure leaves the existing config/env/default resolution in
+  # place, and `put_new` lets an explicit opt override.
+  defp maybe_add_self_agent_id(opts) do
+    case UnitaresSentinel.SessionAnchor.load() do
+      {:ok, %{"agent_uuid" => uuid}} when is_binary(uuid) and uuid != "" ->
+        Keyword.put_new(opts, :self_agent_id, uuid)
+
+      _ ->
+        opts
+    end
   end
 
   defp maybe_add_checkin_anchor(opts) do

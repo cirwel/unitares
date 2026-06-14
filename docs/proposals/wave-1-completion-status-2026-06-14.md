@@ -132,7 +132,7 @@ but not sufficient.
 | Condition | Implemented | Operationally closed |
 |-----------|-------------|----------------------|
 | 1 — §129 zero incidents | gate fixed (2026-06-03) | **No** — owes representative-load window |
-| 2 — alarm parity | yes (unit + cross-runtime state) | **No** — audit done (2026-06-14); 2 dedup gaps found, both open |
+| 2 — alarm parity | yes (unit + cross-runtime state) | **No** — audit done + both dedup gaps fixed (2026-06-14, Elixir pending CI); live cutover double-fire check remains |
 | 3 — supervision fault absorption | yes (topology + unit test) | **No** — no live induced-fault observation |
 | 4 — anti-enthusiasm guard | n/a (guard) | guard holds |
 
