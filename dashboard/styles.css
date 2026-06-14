@@ -1429,6 +1429,12 @@ main {
     border: 1px solid rgba(255, 170, 80, 0.3);
 }
 
+.lineage-badge.lineage-superseded {
+    background: rgba(148, 163, 184, 0.14);
+    color: var(--text-secondary);
+    border: 1px solid rgba(148, 163, 184, 0.28);
+}
+
 /* Stuck badge — shown on agent cards when detect_stuck_agents flags them */
 .stuck-badge {
     font-size: 0.7em;

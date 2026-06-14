@@ -252,6 +252,33 @@ class TestListAgentsLite:
             assert by_id["orphan-agent"]["parent_agent_id"] is None
 
     @pytest.mark.asyncio
+    async def test_lite_exposes_compact_supersession_metadata(self, server):
+        meta = make_agent_meta(status="archived", label="Parent", total_updates=20)
+        meta.lifecycle_events = [{
+            "event": "archived",
+            "reason": "lineage_succession",
+            "timestamp": "2026-06-14T01:23:12+00:00",
+        }]
+        server.agent_metadata = {"parent-agent": meta}
+
+        with patch_lifecycle_server(server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({
+                "lite": True,
+                "status_filter": "all",
+                "recent_days": 0,
+            })
+            data = _parse(result)
+
+        agent = data["agents"][0]
+        assert agent["last_lifecycle_event"] == "archived"
+        assert agent["last_lifecycle_reason"] == "lineage_succession"
+        assert agent["last_lifecycle_at"] == "2026-06-14T01:23:12+00:00"
+        assert agent["superseded"] is True
+        assert agent["superseded_reason"] == "lineage_succession"
+        assert "identity_view" not in agent
+
+    @pytest.mark.asyncio
     async def test_lite_redacts_uuid_ids_for_non_operator(self, server):
         parent_uuid = "11111111-2222-3333-4444-555555555555"
         child_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -645,6 +672,102 @@ class TestGetAgentMetadata:
             data = _parse(result)
             assert data.get("days_since_update") is not None
             assert data["days_since_update"] >= 2
+
+    @pytest.mark.asyncio
+    async def test_get_metadata_identity_view_redacts_non_operator_target(self, server):
+        parent_uuid = "11111111-2222-3333-4444-555555555555"
+        child_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        child_meta = make_agent_meta(
+            label="Child",
+            total_updates=3,
+            parent_agent_id=parent_uuid,
+            spawn_reason="new_session",
+            active_session_key="mcp:secret-session",
+        )
+        child_meta.to_dict.return_value.update({
+            "agent_id": child_uuid,
+            "parent_agent_id": parent_uuid,
+            "active_session_key": "mcp:secret-session",
+        })
+        server.agent_metadata = {
+            parent_uuid: make_agent_meta(label="Parent", total_updates=20),
+            child_uuid: child_meta,
+        }
+        server.monitors = {}
+
+        with patch_lifecycle_server(server), \
+             patch("src.cache.get_metadata_cache", side_effect=Exception("no cache")):
+            from src.mcp_handlers.lifecycle.handlers import handle_get_agent_metadata
+            result = await handle_get_agent_metadata({"target_agent": child_uuid})
+            data = _parse(result)
+
+        view = data["identity_view"]
+        assert data["agent_id"] == "Child"
+        assert data["agent_id_redacted"] is True
+        assert data["parent_agent_id"] == "Parent"
+        assert data["parent_agent_id_redacted"] is True
+        assert "active_session_key" not in data
+        assert data["active_session_key_redacted"] is True
+        assert view["current"]["id"] == "Child"
+        assert view["current"]["id_redacted"] is True
+        assert "session_key" not in view["current"]
+        assert view["lineage"]["parent_agent_id"] == "Parent"
+        assert view["lineage"]["parent_agent_id_redacted"] is True
+        assert view["lineage"]["spawn_reason"] == "new_session"
+        assert view["lineage"]["lineage_state"] == "declared"
+        assert view["lineage"]["lineage_state_source"] == "derived"
+
+    @pytest.mark.asyncio
+    async def test_get_metadata_identity_view_self_includes_session_key(self, server):
+        self_uuid = "11111111-2222-3333-4444-555555555555"
+        meta = make_agent_meta(
+            label="Self",
+            total_updates=20,
+            active_session_key="mcp:self-session",
+        )
+        meta.to_dict.return_value.update({
+            "agent_id": self_uuid,
+            "active_session_key": "mcp:self-session",
+        })
+        server.agent_metadata = {self_uuid: meta}
+        server.monitors = {}
+
+        with patch_lifecycle_server(server, require_registered=(self_uuid, None)), \
+             patch("src.mcp_handlers.context.get_context_agent_id", return_value=self_uuid):
+            from src.mcp_handlers.lifecycle.handlers import handle_get_agent_metadata
+            result = await handle_get_agent_metadata({})
+            data = _parse(result)
+
+        view = data["identity_view"]
+        assert data["agent_id"] == self_uuid
+        assert data["active_session_key"] == "mcp:self-session"
+        assert view["current"]["id"] == self_uuid
+        assert view["current"]["id_redacted"] is False
+        assert view["current"]["session_key"] == "mcp:self-session"
+        assert view["lineage"]["lineage_state"] == "no_lineage_declared"
+
+    @pytest.mark.asyncio
+    async def test_get_metadata_identity_view_marks_lineage_succession(self, server):
+        meta = make_agent_meta(status="archived", label="Parent", total_updates=20)
+        meta.lifecycle_events = [{
+            "event": "archived",
+            "reason": "lineage_succession",
+            "timestamp": "2026-06-14T01:23:12+00:00",
+        }]
+        server.agent_metadata = {"agent-1": meta}
+        server.monitors = {}
+
+        with patch_lifecycle_server(server, require_registered=("agent-1", None)):
+            from src.mcp_handlers.lifecycle.handlers import handle_get_agent_metadata
+            result = await handle_get_agent_metadata({})
+            data = _parse(result)
+
+        lifecycle = data["identity_view"]["lifecycle"]
+        assert lifecycle["latest_event"] == "archived"
+        assert lifecycle["latest_reason"] == "lineage_succession"
+        assert lifecycle["latest_at"] == "2026-06-14T01:23:12+00:00"
+        assert lifecycle["superseded"] is True
+        assert lifecycle["superseded_reason"] == "lineage_succession"
 
 
 # ============================================================================

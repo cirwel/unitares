@@ -110,6 +110,154 @@ def _visible_related_agent_identifier(
     return f"agent-redacted-{digest}", True
 
 
+def _latest_lifecycle_event(meta: Any) -> Optional[dict[str, Any]]:
+    events = getattr(meta, "lifecycle_events", None) or []
+    for event in reversed(events):
+        if isinstance(event, dict):
+            return event
+    return None
+
+
+def _is_lineage_supersession(event: Optional[dict[str, Any]]) -> bool:
+    if not event:
+        return False
+    return (
+        event.get("event") == "archived"
+        and event.get("reason") == "lineage_succession"
+    )
+
+
+def _compact_lifecycle_fields(meta: Any) -> dict[str, Any]:
+    event = _latest_lifecycle_event(meta)
+    if not event:
+        return {}
+
+    fields = {
+        "last_lifecycle_event": event.get("event"),
+        "last_lifecycle_reason": event.get("reason"),
+    }
+    timestamp = event.get("timestamp") or event.get("ts")
+    if timestamp:
+        fields["last_lifecycle_at"] = timestamp
+
+    if _is_lineage_supersession(event):
+        fields["superseded"] = True
+        fields["superseded_reason"] = event.get("reason")
+
+    return fields
+
+
+def _identity_view(
+    agent_id: str,
+    meta: Any,
+    *,
+    caller_uuid: Optional[str],
+    operator_caller: bool,
+) -> dict[str, Any]:
+    visible_id, id_redacted = _visible_agent_identifier(
+        agent_id,
+        meta,
+        caller_uuid=caller_uuid,
+        operator_caller=operator_caller,
+    )
+    parent_agent_id = getattr(meta, "parent_agent_id", None)
+    visible_parent_id, parent_redacted = _visible_related_agent_identifier(
+        parent_agent_id,
+        caller_uuid=caller_uuid,
+        operator_caller=operator_caller,
+    )
+    lifecycle_event = _latest_lifecycle_event(meta)
+    lifecycle_timestamp = None
+    if lifecycle_event:
+        lifecycle_timestamp = lifecycle_event.get("timestamp") or lifecycle_event.get("ts")
+
+    current = {
+        "id": visible_id,
+        "id_redacted": id_redacted,
+        "label": getattr(meta, "label", None),
+        "display_name": getattr(meta, "display_name", None),
+        "public_handle": (
+            getattr(meta, "public_agent_id", None)
+            or getattr(meta, "structured_id", None)
+        ),
+    }
+    if (
+        (operator_caller or agent_id == caller_uuid)
+        and getattr(meta, "active_session_key", None)
+    ):
+        current["session_key"] = getattr(meta, "active_session_key")
+
+    superseded = _is_lineage_supersession(lifecycle_event)
+    lifecycle = {
+        "status": getattr(meta, "status", None),
+        "latest_event": lifecycle_event.get("event") if lifecycle_event else None,
+        "latest_reason": lifecycle_event.get("reason") if lifecycle_event else None,
+        "latest_at": lifecycle_timestamp,
+        "superseded": superseded,
+    }
+    if superseded:
+        lifecycle["superseded_reason"] = lifecycle_event.get("reason")
+
+    return {
+        "schema_version": "identity_view.v1",
+        "current": current,
+        "lineage": {
+            "parent_agent_id": visible_parent_id,
+            "parent_agent_id_redacted": parent_redacted,
+            "spawn_reason": getattr(meta, "spawn_reason", None),
+            "lineage_state": "declared" if parent_agent_id else "no_lineage_declared",
+            "lineage_state_source": "derived",
+        },
+        "lifecycle": lifecycle,
+    }
+
+
+def _metadata_dict_for_response(
+    agent_id: str,
+    meta: Any,
+    *,
+    caller_uuid: Optional[str],
+    operator_caller: bool,
+) -> dict[str, Any]:
+    metadata = dict(meta.to_dict())
+    sensitive_identity_allowed = operator_caller or agent_id == caller_uuid
+
+    visible_agent_id, uuid_redacted = _visible_agent_identifier(
+        agent_id,
+        meta,
+        caller_uuid=caller_uuid,
+        operator_caller=operator_caller,
+    )
+    if "agent_id" in metadata or uuid_redacted:
+        metadata["agent_id"] = visible_agent_id
+    if uuid_redacted:
+        metadata["agent_id_redacted"] = True
+        if "agent_uuid" in metadata:
+            metadata.pop("agent_uuid", None)
+            metadata["agent_uuid_redacted"] = True
+
+    parent_agent_id = getattr(meta, "parent_agent_id", None) or metadata.get("parent_agent_id")
+    visible_parent_id, parent_redacted = _visible_related_agent_identifier(
+        parent_agent_id,
+        caller_uuid=caller_uuid,
+        operator_caller=operator_caller,
+    )
+    if parent_agent_id or "parent_agent_id" in metadata:
+        metadata["parent_agent_id"] = visible_parent_id
+    if parent_redacted:
+        metadata["parent_agent_id_redacted"] = True
+
+    if not sensitive_identity_allowed:
+        if metadata.get("active_session_key"):
+            metadata["active_session_key_redacted"] = True
+        metadata.pop("active_session_key", None)
+        if metadata.get("api_key"):
+            metadata["api_key_redacted"] = True
+        metadata.pop("api_key", None)
+
+    return metadata
+
+
 def _context_agent_id() -> Optional[str]:
     try:
         from ..context import get_context_agent_id
@@ -252,6 +400,7 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                     "spawn_reason": getattr(meta, 'spawn_reason', None),
                     "event_driven": is_event_driven_label(label),
                 }
+                agent_entry.update(_compact_lifecycle_fields(meta))
                 if uuid_redacted:
                     agent_entry["uuid_redacted"] = True
                 if parent_redacted:
@@ -272,7 +421,7 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                         caller_uuid=caller_uuid,
                         operator_caller=operator_caller,
                     )
-                    agents.append({
+                    caller_entry = {
                         "id": caller_uuid,
                         "label": caller_label or caller_public,
                         "status": caller_meta.status,
@@ -284,7 +433,9 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                         "parent_agent_id": parent_id,
                         "spawn_reason": getattr(caller_meta, 'spawn_reason', None),
                         "you": True,
-                    })
+                    }
+                    caller_entry.update(_compact_lifecycle_fields(caller_meta))
+                    agents.append(caller_entry)
                     if parent_redacted:
                         agents[-1]["parent_agent_id_redacted"] = True
 
@@ -426,6 +577,7 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                 "spawn_reason": getattr(meta, 'spawn_reason', None),
                 "event_driven": is_event_driven_label(getattr(meta, 'label', None)),
             }
+            agent_info.update(_compact_lifecycle_fields(meta))
             if uuid_redacted:
                 agent_info["agent_id_redacted"] = True
             if parent_redacted:
@@ -689,6 +841,8 @@ async def handle_get_agent_metadata(arguments: Sequence[TextContent]) -> list:
     """
     # Check for target_agent parameter (allows looking up other agents by UUID or label)
     target_agent = arguments.get("target_agent") or arguments.get("agent_id")
+    caller_uuid = _context_agent_id()
+    operator_caller = _is_operator_request()
 
     if target_agent:
         # FAST PATH: Check Redis cache first (by UUID)
@@ -707,7 +861,12 @@ async def handle_get_agent_metadata(arguments: Sequence[TextContent]) -> list:
                 mcp_server.agent_metadata[agent_id] = meta
                 # Skip to response building (meta already loaded)
                 monitor = mcp_server.monitors.get(agent_id)
-                metadata_response = meta.to_dict()
+                metadata_response = _metadata_dict_for_response(
+                    agent_id,
+                    meta,
+                    caller_uuid=caller_uuid,
+                    operator_caller=operator_caller,
+                )
                 # Add computed fields
                 if monitor:
                     metadata_response["current_state"] = {
@@ -721,6 +880,12 @@ async def handle_get_agent_metadata(arguments: Sequence[TextContent]) -> list:
                     }
                 else:
                     metadata_response["current_state"] = None
+                metadata_response["identity_view"] = _identity_view(
+                    agent_id,
+                    meta,
+                    caller_uuid=caller_uuid,
+                    operator_caller=operator_caller,
+                )
                 # Add EISV labels (__import__('src.governance_monitor', fromlist=['UNITARESMonitor']).UNITARESMonitor imported at module level)
                 metadata_response["eisv_labels"] = __import__('src.governance_monitor', fromlist=['UNITARESMonitor']).UNITARESMonitor.get_eisv_labels()
                 return success_response(metadata_response)
@@ -760,6 +925,7 @@ async def handle_get_agent_metadata(arguments: Sequence[TextContent]) -> list:
         agent_id, error = require_registered_agent(arguments)
         if error:
             return [error]  # Returns onboarding guidance if not registered
+        caller_uuid = caller_uuid or agent_id
 
     meta = mcp_server.agent_metadata[agent_id]
     monitor = mcp_server.monitors.get(agent_id)
@@ -771,7 +937,18 @@ async def handle_get_agent_metadata(arguments: Sequence[TextContent]) -> list:
     except Exception as e:
         logger.debug(f"Failed to cache metadata: {e}")
 
-    metadata_response = meta.to_dict()
+    metadata_response = _metadata_dict_for_response(
+        agent_id,
+        meta,
+        caller_uuid=caller_uuid,
+        operator_caller=operator_caller,
+    )
+    metadata_response["identity_view"] = _identity_view(
+        agent_id,
+        meta,
+        caller_uuid=caller_uuid,
+        operator_caller=operator_caller,
+    )
 
     # Add computed fields
     if monitor:

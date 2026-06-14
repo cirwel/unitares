@@ -135,6 +135,27 @@
         return null;
     }
 
+    function formatLifecycleEventLabel(eventName) {
+        if (!eventName) return '-';
+        return String(eventName).replace(/_/g, ' ').replace(/\b\w/g, function (m) {
+            return m.toUpperCase();
+        });
+    }
+
+    function formatLifecycleReasonLabel(reason) {
+        if (!reason) return '-';
+        var labels = {
+            lineage_succession: 'Lineage succession'
+        };
+        return labels[reason] || formatLifecycleEventLabel(reason);
+    }
+
+    function getSupersededBadgeHtml(agent) {
+        if (!agent || agent.superseded !== true) return '';
+        var reason = formatLifecycleReasonLabel(agent.superseded_reason || agent.last_lifecycle_reason);
+        return '<span class="lineage-badge lineage-superseded" title="' + escapeHtml(reason) + '">Superseded</span>';
+    }
+
     // ========================================================================
     // Agent UI helpers
     // ========================================================================
@@ -309,6 +330,7 @@
             if (children.length > 0) {
                 lineageBadgeHtml += '<span class="lineage-badge lineage-parent" title="' + children.length + ' child agent(s) declared this as parent">' + children.length + ' child' + (children.length !== 1 ? 'ren' : '') + '</span>';
             }
+            var supersededBadgeHtml = getSupersededBadgeHtml(agent);
 
             var hasMetrics = agentHasMetrics(agent);
             var isPinned = state.get('pinnedAgentId') === agentId;
@@ -384,7 +406,7 @@
                         '<span class="agent-name">' + nameHtml + '</span>' +
                         stuckBadgeHtml + inactiveBadgeHtml +
                         healthBadgeHtml + staleBadgeHtml +
-                        trustTierHtml + lineageBadgeHtml + anomalyHtml +
+                        trustTierHtml + lineageBadgeHtml + supersededBadgeHtml + anomalyHtml +
                         sparklineHtml +
                         actionsHtml +
                     '</div>' +
@@ -648,6 +670,27 @@
                     escapeHtml(agent.last_update || '-') +
                 '</div>' +
             '</div>' +
+
+            (function () {
+                if (!agent.superseded && !agent.last_lifecycle_event && !agent.last_lifecycle_reason) return '';
+                var lifecycleEvent = agent.last_lifecycle_event || (agent.superseded ? 'archived' : '');
+                var lifecycleReason = agent.superseded_reason || agent.last_lifecycle_reason || '';
+                var lifecycleAt = agent.last_lifecycle_at
+                    ? DataProcessor.formatTimestamp(agent.last_lifecycle_at)
+                    : '-';
+                return '<div class="grid-2col mb-md">' +
+                    '<div>' +
+                        '<strong class="text-secondary-sm">Last Lifecycle:</strong><br>' +
+                        '<span class="status-chip ' + escapeHtml(status) + '">' + escapeHtml(formatLifecycleEventLabel(lifecycleEvent)) + '</span>' +
+                        (agent.superseded ? ' ' + getSupersededBadgeHtml(agent) : '') +
+                    '</div>' +
+                    '<div>' +
+                        '<strong class="text-secondary-sm">Lifecycle Reason:</strong><br>' +
+                        '<span class="detail-box-value">' + escapeHtml(formatLifecycleReasonLabel(lifecycleReason)) + '</span>' +
+                        '<br><span class="text-secondary-xs">' + escapeHtml(lifecycleAt) + '</span>' +
+                    '</div>' +
+                '</div>';
+            })() +
 
             (function () {
                 // Lineage section — parent and children, resolved against cachedAgents
@@ -987,6 +1030,11 @@
 
         hit.lifecycle_status = newStatus;
         hit.status = newStatus;  // some renderers read .status directly
+        hit.last_lifecycle_event = data.event || newStatus;
+        hit.last_lifecycle_reason = data.reason || null;
+        hit.last_lifecycle_at = data.timestamp || new Date().toISOString();
+        hit.superseded = newStatus === 'archived' && data.reason === 'lineage_succession';
+        hit.superseded_reason = hit.superseded ? data.reason : null;
 
         applyAgentFilters();
         flashAgentCard(data.agent_id);
