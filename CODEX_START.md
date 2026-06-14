@@ -123,7 +123,11 @@ If you want Codex to ship the current staged change, use:
 ./scripts/dev/ship.sh "type(scope): concise message"
 ```
 
-That helper chooses direct push versus PR+auto-merge based on the staged files.
+Per `docs/operations/github-workflow-conventions.md`, delivery is **draft PR for
+everything** — Codex and Claude share one contract so concurrent sessions stay
+predictable, and the operator is the merge gate. The default `auto` route now
+opens a draft PR for every change; `--direct` opts out for docs/tests-only
+pushes, and `--auto-merge` is only for when the operator explicitly asks.
 
 ## Commands
 
