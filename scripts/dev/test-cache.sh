@@ -306,7 +306,7 @@ if [[ "$QUICK" == true ]]; then
 else
     PYTEST_CMD=("$PYTHON" -m pytest tests/ agents/ -q --tb=short -x \
         --cov=src --cov=agents/sdk/src/unitares_sdk --cov=agents \
-        --cov-report=term-missing --cov-fail-under=25 \
+        --cov-report=term-missing --cov-fail-under=75 \
         ${PYTEST_EXTRA[@]+"${PYTEST_EXTRA[@]}"})
 fi
 TMPOUT=$(mktemp)

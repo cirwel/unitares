@@ -175,6 +175,7 @@ def test_git_state_marks_dirty_work_as_not_delivered(closeout_module, git_repo):
     assert state.dirty is True
     assert state.delivery_status == "local_changes"
     assert closeout_module.delivery_needs_attention(state) is True
+    assert "--stage-all" in closeout_module.delivery_next_step(state)
 
 
 def test_git_state_marks_unpushed_commits_as_not_delivered(
@@ -197,6 +198,7 @@ def test_git_state_marks_unpushed_commits_as_not_delivered(
     assert state.behind == 0
     assert state.delivery_status == "unpushed_commits"
     assert closeout_module.delivery_needs_attention(state) is True
+    assert "gh pr create --draft" in closeout_module.delivery_next_step(state)
 
 
 def test_git_state_marks_synced_default_as_delivered(
@@ -358,3 +360,16 @@ def test_start_check_existing_baseline_blocks_leftover_process(
     assert result.checked_existing_baseline is True
     assert result.baseline_written is False
     assert result.closeout.repo_processes == [leftover]
+
+
+def test_render_text_includes_delivery_next_step_for_dirty_repo(
+    closeout_module, git_repo, monkeypatch,
+):
+    monkeypatch.setattr(closeout_module, "repo_rooted_processes", lambda *a, **k: [])
+    (git_repo / "seed.py").write_text("dirty\n")
+
+    result = closeout_module.closeout(git_repo)
+    rendered = closeout_module.render_text(result)
+
+    assert "delivery: local_changes" in rendered
+    assert "next=ship with: ./scripts/dev/ship.sh --stage-all" in rendered

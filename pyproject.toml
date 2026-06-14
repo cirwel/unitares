@@ -53,7 +53,7 @@ testpaths = ["tests", "agents"]
 pythonpath = [".", "agents/sdk/src"]
 addopts = ["-v"]
 # Coverage is opt-in: `make test`, `scripts/dev/test-cache.sh`, and CI pass
-# `--cov=...` / `--cov-fail-under=25` explicitly. Enabling it in addopts caused
+# `--cov=...` / `--cov-fail-under=75` explicitly. Enabling it in addopts caused
 # `pytest --collect-only` to measure ~14% and fail the gate (no tests run).
 # HTML: add `--cov-report=html` to a full run when needed (22MB+ per run).
 markers = [
