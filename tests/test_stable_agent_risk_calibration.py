@@ -59,6 +59,18 @@ class TestWelfordSigmaFloor:
             s.update(v)
         assert s.z_score(0.9, min_std=0.05) == 0.0
 
+    def test_zero_variance_with_floor_scores_at_floor(self):
+        # Exactly-zero variance: with min_std=0 the 1e-9 guard returns 0.0
+        # (unchanged); with min_std=0.05 a move now scores at the floor scale
+        # rather than being invisible. Intended regime change — pinned here.
+        s = WelfordStats()
+        for _ in range(10):
+            s.update(0.5)
+        assert s.std == 0.0
+        assert s.z_score(0.6) == 0.0  # default min_std=0.0 → unchanged
+        assert s.z_score(0.6, min_std=0.05) == pytest.approx((0.6 - 0.5) / 0.05)
+        assert s.z_score(0.5, min_std=0.05) == 0.0  # no move → no deviation
+
     def test_large_move_still_scores_with_floor(self):
         # A genuine, large deviation must still register even with the floor.
         s = WelfordStats()
