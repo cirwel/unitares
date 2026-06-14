@@ -183,6 +183,19 @@ class TestSweepGoneBranchSalvageGuard:
         assert "codex/current-merged" in report.holds
         assert report.branches_pruned == 0
 
+    def test_branchless_primary_checkout_is_not_removable_from_linked_worktree(
+        self, fake_repo: Path, monkeypatch
+    ):
+        linked = fake_repo / ".worktrees" / "linked"
+        _git(fake_repo, "worktree", "add", "-b", "codex/linked", str(linked))
+        _git(fake_repo, "switch", "--detach")
+        monkeypatch.setattr(agent_mod, "list_open_pr_branches", lambda repo: set())
+
+        report = sweep(linked, dry_run=True)
+
+        assert fake_repo.exists()
+        assert report.worktrees_removable == 0
+
 
 class TestSweepHelpers:
     def test_list_worktrees_includes_main_and_added(self, fake_repo: Path):

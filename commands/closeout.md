@@ -49,8 +49,8 @@ whose intended work is already committed/stashed, run:
 `--branch-hygiene-live` reuses the Vigil branch-hygiene safety contract in
 `docs/operations/branch-hygiene-runbook.md`: patch-equivalent or empty stale
 branches may be pruned, clean stale worktrees may be removed, and branches with
-unique commits, dirty worktrees, or the current sweep checkout are held for
-review instead of deleted.
+unique commits, dirty worktrees, or a protected checkout are held for review
+instead of deleted.
 
 Rules:
 

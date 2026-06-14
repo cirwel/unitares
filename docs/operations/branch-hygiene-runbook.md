@@ -24,8 +24,9 @@ For local branches whose upstream is gone:
 - unparseable or failed `git cherry` output means **SKIP**. Do not delete.
 - dirty worktrees, paused rebases, paused cherry-picks, merges, or bisects are
   never removed by the sweep.
-- a stale branch checked out in the sweep process's current repo is held; run
-  hygiene from another checkout to remove that worktree.
+- a stale branch checked out in the sweep process's current repo or in the
+  primary checkout is held; move that checkout off the branch before removing
+  it.
 
 For remote `origin/*` branches:
 

@@ -217,6 +217,9 @@ def sweep(repo: Path, dry_run: bool = True) -> SweepReport:
 
     worktrees = list_worktrees(repo)
     branch_to_wt = {b: p for p, b in worktrees if b is not None}
+    protected_worktrees = {repo.resolve()}
+    if worktrees:
+        protected_worktrees.add(worktrees[0][0].resolve())
 
     # 2. Local [gone] cleanup
     for branch in list_gone_branches(repo):
@@ -238,12 +241,12 @@ def sweep(repo: Path, dry_run: bool = True) -> SweepReport:
 
         wt = branch_to_wt.get(branch)
         if wt is not None:
-            if wt.resolve() == repo.resolve():
+            if wt.resolve() in protected_worktrees:
                 report.holds.append(branch)
                 report.holds_count += 1
                 log(
-                    f"HOLD gone-branch '{branch}': checked out in sweep repo {repo}; "
-                    "run hygiene from another checkout before removing this worktree"
+                    f"HOLD gone-branch '{branch}': checked out in protected "
+                    f"worktree {wt}; move off the branch before removing it"
                 )
                 continue
             status = _safe_status(wt)
@@ -313,7 +316,7 @@ def sweep(repo: Path, dry_run: bool = True) -> SweepReport:
     # 4. Branchless worktree sweep
     refreshed = list_worktrees(repo)
     for path, branch in refreshed:
-        if path == repo or branch is not None:
+        if path.resolve() in protected_worktrees or branch is not None:
             continue
         status = _safe_status(path)
         if status is None:
