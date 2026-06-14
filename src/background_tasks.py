@@ -1172,6 +1172,19 @@ _silence_critical_alerted: set[str] = set()
 _silence_duplicate_warned: set[str] = set()
 _silence_server_start: datetime | None = None  # set on first iteration
 
+# Resident-pause escalation. The silence detector above only inspects
+# status=="active" agents, so a PAUSED resident is invisible to it — that is
+# exactly how a paused Sentinel stayed dark for ~18h. A one-shot lifecycle_paused
+# event fires at pause time, but it is not critical-severity and does not
+# distinguish a load-bearing resident from a routine ephemeral-agent pause, so it
+# scrolls away. This watchdog re-checks the explicit paused state of configured
+# residents and escalates (critical → #alerts via the bridge), re-nagging while
+# the resident stays paused. Keyed on the explicit status, so it is immune to the
+# silence-inference fragilities (proxy-alive suppression, server-restart clock
+# reset, duplicate-identity blindness).
+_resident_pause_alerted: dict[str, datetime] = {}  # agent_id -> last escalation time
+RESIDENT_PAUSE_REALERT_SECONDS = 3600  # re-nag at most hourly while still paused
+
 # Proxy agents whose recent activity proves another agent is alive.
 # Maps agent label → label of the proxy agent that calls the same host.
 # When the proxy has checked in recently, a missing direct check-in is
@@ -1427,6 +1440,81 @@ async def _silence_check_iteration() -> None:
     _silence_duplicate_warned.intersection_update(active_ids)
 
 
+async def _resident_pause_check_iteration() -> None:
+    """Escalate configured residents stuck in a paused (circuit-breaker) state.
+
+    The silence detector skips non-active agents, so a paused resident is
+    otherwise unmonitored. Keyed on the explicit ``meta.status == "paused"``
+    state (not silence inference), so proxy-alive suppression, server-restart
+    clock resets, and duplicate-identity blindness cannot hide it. Emits a
+    critical ``lifecycle_resident_paused`` event (the bridge routes
+    severity=critical to #alerts) and re-nags at most hourly while still paused.
+    """
+    from src.agent_metadata_model import agent_metadata
+    from src.broadcaster import broadcaster_instance
+    from src.audit_db import append_audit_event_async
+
+    try:
+        from src.grounding.class_indicator import KNOWN_RESIDENT_LABELS
+    except Exception:
+        KNOWN_RESIDENT_LABELS = frozenset()
+
+    now = datetime.now(timezone.utc)
+    paused_resident_ids: set[str] = set()
+
+    for agent_id, meta in list(agent_metadata.items()):
+        if getattr(meta, "status", None) != "paused":
+            continue
+        label = getattr(meta, "label", None)
+        if not label or label not in KNOWN_RESIDENT_LABELS:
+            continue
+
+        paused_resident_ids.add(agent_id)
+
+        last_alert = _resident_pause_alerted.get(agent_id)
+        if last_alert is not None and (now - last_alert).total_seconds() < RESIDENT_PAUSE_REALERT_SECONDS:
+            continue  # already escalated recently — don't spam
+
+        _resident_pause_alerted[agent_id] = now
+
+        paused_at_dt = _parse_last_update_aware(getattr(meta, "paused_at", None) or "")
+        paused_minutes = (now - paused_at_dt).total_seconds() / 60 if paused_at_dt else None
+        dur = f"{paused_minutes:.0f}m" if paused_minutes is not None else "unknown duration"
+
+        logger.error(
+            f"[RESIDENT_PAUSE] CRITICAL: resident {label} ({agent_id[:12]}) paused for {dur} "
+            "— dark to governance until recovered; escalating to operator."
+        )
+        await broadcaster_instance.broadcast_event(
+            "lifecycle_resident_paused",
+            agent_id=agent_id,
+            payload={
+                "severity": "critical",
+                "label": label,
+                "paused_at": getattr(meta, "paused_at", None),
+                "paused_minutes": round(paused_minutes, 1) if paused_minutes is not None else None,
+                "note": (
+                    "Configured resident is paused and dark to governance. "
+                    "Operator action: review and resume."
+                ),
+            },
+        )
+        await append_audit_event_async({
+            "timestamp": now.isoformat(),
+            "event_type": "resident_paused_escalation",
+            "agent_id": agent_id,
+            "details": {
+                "label": label,
+                "paused_minutes": round(paused_minutes, 1) if paused_minutes is not None else None,
+            },
+        })
+
+    # Re-arm: forget residents that are no longer paused so a future pause
+    # escalates immediately rather than waiting out the re-nag window.
+    for aid in [aid for aid in _resident_pause_alerted if aid not in paused_resident_ids]:
+        del _resident_pause_alerted[aid]
+
+
 async def check_agent_silence():
     """Detect persistent agents that have missed expected check-ins."""
     await asyncio.sleep(120)  # startup delay
@@ -1435,6 +1523,11 @@ async def check_agent_silence():
             await _silence_check_iteration()
         except Exception as e:
             logger.debug(f"[SILENCE] Check failed: {e}")
+
+        try:
+            await _resident_pause_check_iteration()
+        except Exception as e:
+            logger.debug(f"[RESIDENT_PAUSE] Check failed: {e}")
 
         await asyncio.sleep(600)  # every 10 minutes
 
