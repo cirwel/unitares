@@ -587,9 +587,33 @@ async def _archive_superseded_parents(current_time) -> list:
             continue
         if not _is_superseded_by_lineage(agent_id, meta, live_parent_ids):
             continue
+        # Initializing agents (never checked in) are ghosts, not retired
+        # predecessors — declaring parent_agent_id attests ancestry, not that
+        # the parent has exited. A fresh session that onboarded and is working
+        # but hasn't checked in yet (total_updates == 0) must never be archived
+        # out from under itself the moment a concurrent same-workspace sibling
+        # declares it parent. This mirrors classify_for_archival's ghost
+        # protection, which this lineage-succession path was bypassing.
+        # (Incident 2026-06-14: agent 1b4172bb archived 22 min into active work,
+        # 0 check-ins, because sibling ad111882 onboarded declaring it parent.)
+        if int(getattr(meta, "total_updates", 0) or 0) == 0:
+            continue
         # Self-managed agents own their lifecycle — same exclusion as detection.
         agent_tags = getattr(meta, "tags", []) or []
         if {"autonomous", "embodied", "anima"} & set(t.lower() for t in agent_tags):
+            continue
+        # Final, conceptually-correct guard: a parent with a LIVE process
+        # binding is a running process, not a rotated-out predecessor. A child
+        # declaring parent_agent_id attests ancestry, not that the parent
+        # exited — so a still-running parent (e.g. mid long tool call or
+        # subagent dispatch, silent past the 30-min window) must not be
+        # archived just because a concurrent sibling onboarded behind it. The
+        # updates==0 guard above is a cheap no-DB fallback for the not-yet-bound
+        # case; this is the real liveness signal. Best-effort: get_live_bindings
+        # returns [] on DB error, falling back to prior behavior rather than
+        # blocking cleanup.
+        from src.mcp_handlers.identity.process_binding import get_live_bindings
+        if await get_live_bindings(agent_id):
             continue
         ok = await _archive_one_agent(
             agent_id, meta, "lineage_succession", monitors=mcp_server.monitors

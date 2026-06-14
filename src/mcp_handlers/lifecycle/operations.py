@@ -592,6 +592,15 @@ async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[
             archived_agents.append({"id": agent_id, "reason": "low_updates", "updates": meta.total_updates})
             continue
 
+        # Initializing agents (never checked in) are ghosts, not orphans —
+        # mirrors classify_for_archival's protection so a fresh, still-working
+        # session isn't age-archived out from under itself when an operator runs
+        # this sweep with a short max_age_hours. Test/ping cruft is already
+        # handled by the immediate-archive block above; manual archive_agent
+        # still works for deliberate removal.
+        if int(getattr(meta, "total_updates", 0) or 0) == 0:
+            continue
+
         # Age-based archive
         age_h = _agent_age_hours(meta)
         if age_h is None or age_h < max_age_hours:

@@ -951,7 +951,8 @@ class TestLineageSuccession:
         old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
         recent = datetime.now(timezone.utc) - timedelta(minutes=2)
         with patch(_PATCHES["mcp_server"]) as mock_server, \
-             patch("src.mcp_handlers.lifecycle.helpers._archive_one_agent") as mock_arch:
+             patch("src.mcp_handlers.lifecycle.helpers._archive_one_agent") as mock_arch, \
+             patch("src.mcp_handlers.identity.process_binding.get_live_bindings") as mock_live:
             mock_server.agent_metadata = {
                 "p1": _make_agent_meta(last_update=old_time),
                 "c1": _make_agent_meta(last_update=recent, parent_agent_id="p1"),
@@ -962,6 +963,10 @@ class TestLineageSuccession:
                 return True
             mock_arch.side_effect = _ok
 
+            async def _no_bindings(*a, **k):
+                return []
+            mock_live.side_effect = _no_bindings
+
             from src.mcp_handlers.lifecycle.stuck import _archive_superseded_parents
             results = await _archive_superseded_parents(datetime.now(timezone.utc))
 
@@ -971,3 +976,89 @@ class TestLineageSuccession:
         # The child must never be archived — it is the live successor.
         archived_ids = [c.args[0] for c in mock_arch.call_args_list]
         assert archived_ids == ["p1"]
+
+    @pytest.mark.asyncio
+    async def test_archive_superseded_parents_skips_initializing_ghost(self):
+        """A parent that has never checked in (total_updates == 0) is an
+        initializing ghost and must NOT be archived even when a live child
+        declares it — declaring parent_agent_id attests ancestry, not exit.
+
+        Regression for the 2026-06-14 incident: a fresh session working but
+        not yet checked in was archived out from under itself the moment a
+        concurrent same-workspace sibling onboarded declaring it parent.
+        Mirrors classify_for_archival's ghost protection.
+        """
+        recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+        with patch(_PATCHES["mcp_server"]) as mock_server, \
+             patch("src.mcp_handlers.lifecycle.helpers._archive_one_agent") as mock_arch, \
+             patch("src.mcp_handlers.identity.process_binding.get_live_bindings") as mock_live:
+            mock_server.agent_metadata = {
+                # ghost: superseded by a live child but 0 check-ins → protected
+                "ghost": _make_agent_meta(last_update=recent, total_updates=0),
+                "c_ghost": _make_agent_meta(
+                    last_update=recent, parent_agent_id="ghost"
+                ),
+                # checked-in parent superseded by a live child → still archived
+                "done": _make_agent_meta(last_update=recent, total_updates=4),
+                "c_done": _make_agent_meta(
+                    last_update=recent, parent_agent_id="done"
+                ),
+            }
+            mock_server.monitors = {}
+
+            async def _ok(*a, **k):
+                return True
+            mock_arch.side_effect = _ok
+
+            async def _no_bindings(*a, **k):
+                return []
+            mock_live.side_effect = _no_bindings
+
+            from src.mcp_handlers.lifecycle.stuck import _archive_superseded_parents
+            results = await _archive_superseded_parents(datetime.now(timezone.utc))
+
+        archived_ids = [c.args[0] for c in mock_arch.call_args_list]
+        # ghost protected; only the checked-in superseded parent retired.
+        assert archived_ids == ["done"]
+        assert [r["agent_id"] for r in results] == ["done"]
+
+    @pytest.mark.asyncio
+    async def test_archive_superseded_parents_skips_live_process_binding(self):
+        """A checked-in parent that is STILL a running process (live process
+        binding) must NOT be archived even when a live child declares it —
+        lineage declaration attests ancestry, not that the parent exited.
+
+        Covers the residual hole the updates==0 guard alone leaves: a parent
+        that checked in (total_updates >= 1) then works silently past the
+        succession window (long tool call / subagent dispatch) while a sibling
+        onboards declaring it parent. The live process binding is the
+        conceptually-correct liveness signal (architect council finding).
+        """
+        recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+        with patch(_PATCHES["mcp_server"]) as mock_server, \
+             patch("src.mcp_handlers.lifecycle.helpers._archive_one_agent") as mock_arch, \
+             patch("src.mcp_handlers.identity.process_binding.get_live_bindings") as mock_live:
+            mock_server.agent_metadata = {
+                # checked-in parent, superseded by a live child, but its own
+                # process is still alive → must survive.
+                "alive": _make_agent_meta(last_update=recent, total_updates=7),
+                "c_alive": _make_agent_meta(
+                    last_update=recent, parent_agent_id="alive"
+                ),
+            }
+            mock_server.monitors = {}
+
+            async def _ok(*a, **k):
+                return True
+            mock_arch.side_effect = _ok
+
+            async def _live_for_alive(agent_id, *a, **k):
+                return [{"pid": 123, "last_seen": recent.isoformat()}] if agent_id == "alive" else []
+            mock_live.side_effect = _live_for_alive
+
+            from src.mcp_handlers.lifecycle.stuck import _archive_superseded_parents
+            results = await _archive_superseded_parents(datetime.now(timezone.utc))
+
+        # The parent's live binding protects it — nothing archived.
+        assert mock_arch.call_args_list == []
+        assert results == []
