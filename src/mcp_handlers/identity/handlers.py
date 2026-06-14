@@ -1952,10 +1952,11 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                     _parent_agent_id,
                     name,
                     mcp_server.agent_metadata.get(agent_uuid),
+                    _spawn_reason,
                 )
-                if _r2_state == "rejected_cross_role":
+                if _r2_state in ("rejected_cross_role", "rejected_coincidental"):
                     _parent_agent_id = None
-                    _lineage_for_response = "rejected_cross_role"
+                    _lineage_for_response = _r2_state
                 else:
                     _lineage_for_response = "provisional"
                     from src.background_tasks import create_tracked_task
@@ -2048,10 +2049,11 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                     _parent_agent_id,
                     name,
                     mcp_server.agent_metadata.get(agent_uuid),
+                    _spawn_reason,
                 )
-                if _r2_state == "rejected_cross_role":
+                if _r2_state in ("rejected_cross_role", "rejected_coincidental"):
                     _parent_agent_id = None
-                    _lineage_for_response = "rejected_cross_role"
+                    _lineage_for_response = _r2_state
                 else:
                     _lineage_for_response = "provisional"
                     try:
@@ -2683,6 +2685,7 @@ async def _r2_pre_check_and_declare(
     parent_id: str,
     name: Optional[str],
     meta: Optional[Any],
+    spawn_reason: Optional[str] = None,
 ) -> tuple[str, Optional[Dict[str, Any]]]:
     """R2 PR 3 — cross-role pre-check + lineage_declared emission.
 
@@ -2730,6 +2733,81 @@ async def _r2_pre_check_and_declare(
     from src.grounding.onboard_classifier import default_tags_for_onboard
     from src.db import get_db
 
+    backend = get_db()
+
+    # Liveness pre-check (declaration-time concurrent-sibling guard).
+    # Declaring parent_agent_id attests ancestry, not that the parent exited.
+    # If the named parent is a CURRENTLY-LIVE process, the declarant is a
+    # concurrent sibling, not a successor — minting the edge is what produced
+    # the 2026-06-14 false-archival chain (1b4172bb -> ad111882 -> d8c219dd).
+    # Reject (clear + audit), mirroring the cross-role path. Symmetric with
+    # PR #720's archival-time liveness guard.
+    #   - subagent: exempt — the dispatcher is alive by design.
+    #   - compaction: exempt — the same live session continuing past a context
+    #     boundary legitimately has a live "parent".
+    #   - explicit / new_session: a live parent means concurrent sibling → reject.
+    #     A dead parent stays provisional and R1 adjudicates (preserves the
+    #     genuine serial-handoff signal).
+    # Best-effort: get_live_bindings returns [] on DB error → treated as
+    # not-live → allow, same fail-open posture as #720.
+    if spawn_reason not in ("subagent", "compaction"):
+        from src.mcp_handlers.identity.process_binding import get_live_bindings
+        parent_uuid = parent_id
+        try:
+            _prec = await backend.get_identity(parent_id)
+            if _prec:
+                parent_uuid = (
+                    _prec.get("agent_uuid")
+                    or _prec.get("id")
+                    or _prec.get("uuid")
+                    or parent_id
+                )
+        except Exception:
+            pass
+        try:
+            live_bindings = await get_live_bindings(parent_uuid)
+        except Exception as e:
+            logger.warning(
+                f"[R2] liveness pre-check failed for {agent_uuid[:8]}...: {e}"
+            )
+            live_bindings = []
+        if live_bindings:
+            try:
+                await backend.clear_lineage_declaration(agent_uuid)
+            except Exception as e:
+                logger.warning(
+                    f"[R2] coincidental: failed to clear lineage declaration "
+                    f"for {agent_uuid[:8]}...: {e}"
+                )
+            if meta is not None:
+                try:
+                    meta.parent_agent_id = None
+                    meta.spawn_reason = None
+                except Exception:
+                    pass
+            try:
+                await _emit_audit(
+                    "lineage_coincidental_rejected",
+                    agent_uuid,
+                    details={
+                        "claimed_parent_id": parent_id,
+                        "reason": "parent_live_at_declaration",
+                        "spawn_reason": spawn_reason,
+                        "live_binding_count": len(live_bindings),
+                    },
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[R2] coincidental audit emit failed for "
+                    f"{agent_uuid[:8]}...: {e}"
+                )
+            logger.info(
+                f"[R2] Coincidental lineage rejected: {agent_uuid[:8]}... -> "
+                f"{parent_id[:8]}... (parent live: {len(live_bindings)} "
+                f"binding(s), spawn_reason={spawn_reason})"
+            )
+            return "rejected_coincidental", None
+
     # Determine the successor's would-be primary class. The classifier
     # returns None when existing_tags is non-empty (caller-asserted
     # class) — in that branch use the caller's tags directly so the
@@ -2741,7 +2819,6 @@ async def _r2_pre_check_and_declare(
     successor_class = successor_tags[0] if successor_tags else None
 
     rejection = await pre_check_cross_role(parent_id, successor_class)
-    backend = get_db()
 
     if rejection is not None:
         # Clear parent_agent_id AND spawn_reason from the storage row
