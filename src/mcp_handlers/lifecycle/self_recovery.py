@@ -186,7 +186,7 @@ async def handle_self_recovery(arguments: Dict[str, Any]) -> Sequence[TextConten
 
     Actions:
         check  - See what recovery options are available (read-only)
-        quick  - Fast resume for safe states (coherence > 0.60, risk < 0.40)
+        quick  - Fast resume for safe states (coherence >= target ~0.50, risk < 0.40)
         review - Full recovery with reflection (for moderate states)
 
     Natural workflow:
@@ -325,7 +325,7 @@ async def handle_quick_resume(arguments: Dict[str, Any]) -> Sequence[TextContent
     Quick resume for agents in clearly safe states - no reflection required.
     
     This is the fastest path to recovery when:
-    - coherence > 0.60 (high confidence state)
+    - coherence >= target coherence (~0.50, "good" or better)
     - risk < 0.40 (low risk)
     - no void active
     - status is waiting_input or paused
@@ -395,8 +395,13 @@ async def handle_quick_resume(arguments: Dict[str, Any]) -> Sequence[TextContent
     except Exception as e:
         return [error_response(f"Could not assess state: {e}")]
     
-    # Strict safety checks for quick_resume (stricter than self_recovery_review)
-    QUICK_RESUME_MIN_COHERENCE = 0.60
+    # Strict safety checks for quick_resume (stricter than self_recovery_review).
+    # Coherence gate is anchored to the config's target/"good" coherence rather
+    # than a hardcoded 0.60: the old value sat ABOVE TARGET_COHERENCE (0.50), so
+    # an agent at its healthy target coherence could never quick-resume. risk_low
+    # (<=0.40) remains the substantive safety gate — a genuinely risky paused
+    # agent still cannot quick-resume regardless of coherence.
+    QUICK_RESUME_MIN_COHERENCE = GovernanceConfig.TARGET_COHERENCE  # 0.50
     QUICK_RESUME_MAX_RISK = 0.40
 
     # Uninitialized agents (0 check-ins) have default EISV values (~0.5) which
