@@ -84,9 +84,11 @@ def test_build_canary_ticks_appends_sequential_bounded_envelopes(tmp_path: Path)
     assert [tick["tick_id"] for tick in saved] == [tick["tick_id"] for tick in ticks]
 
 
-def test_cli_can_emit_two_canary_ticks_without_process_update(tmp_path: Path) -> None:
+def test_cli_summary_avoids_echoing_private_tick_content(tmp_path: Path) -> None:
     state_path = tmp_path / "resident-canary.jsonl"
     script = Path("scripts/diagnostics/resident_validation_canary.py")
+    private_observation = "Private observation: token-like material stays in state only."
+    private_prediction = "Private prediction: resident may mention sensitive local context."
 
     completed = subprocess.run(
         [
@@ -103,9 +105,9 @@ def test_cli_can_emit_two_canary_ticks_without_process_update(tmp_path: Path) ->
             "--cadence-seconds",
             "600",
             "--observation",
-            "No actionable friction observed.",
+            private_observation,
             "--prediction",
-            "Next tick remains bounded.",
+            private_prediction,
             "--confidence",
             "0.72",
             "--observed-at",
@@ -124,7 +126,14 @@ def test_cli_can_emit_two_canary_ticks_without_process_update(tmp_path: Path) ->
 
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(completed.stdout)
-    assert [tick["tick_index"] for tick in payload["ticks"]] == [1, 2]
-    assert payload["resident_id"] == "resident-dogfood-1"
-    assert payload["state_path"] == str(state_path)
+    assert payload == {
+        "event_type": "resident_validation_canary_batch",
+        "first_tick_index": 1,
+        "last_tick_index": 2,
+        "tick_count": 2,
+    }
+    assert private_observation not in completed.stdout
+    assert private_prediction not in completed.stdout
+    assert "resident-dogfood-1" not in completed.stdout
+    assert str(state_path) not in completed.stdout
     assert len(state_path.read_text(encoding="utf-8").splitlines()) == 2

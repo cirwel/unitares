@@ -82,14 +82,15 @@ def main(argv: list[str] | None = None) -> int:
         confidence=args.confidence,
         now=_parse_observed_at(args.observed_at),
     )
+    first_tick_index = ticks[0]["tick_index"]
+    last_tick_index = ticks[-1]["tick_index"]
     print(
         json.dumps(
             {
                 "event_type": "resident_validation_canary_batch",
-                "cohort_id": args.cohort_id,
-                "resident_id": args.resident_id,
-                "state_path": str(args.state_path),
-                "ticks": ticks,
+                "first_tick_index": first_tick_index,
+                "last_tick_index": last_tick_index,
+                "tick_count": len(ticks),
             },
             sort_keys=True,
         )
