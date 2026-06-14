@@ -56,6 +56,31 @@ enforces this. Residents with no constants fall back to fleet defaults via the
 `.get(agent_class, *_DEFAULT)` lookups, so an *unnamed* agent is always safe;
 the constraint only applies to names you place in the roster.
 
+## Resident-progress manifest (`UNITARES_RESIDENT_PROGRESS_MANIFEST`)
+
+The resident-**progress probe** (liveness/output monitoring in the server's
+background tasks) has its own roster, because it needs more than a name per
+resident: a metric source, window, threshold, and heartbeat cadence. It is
+loaded from a JSON manifest pointed to by `UNITARES_RESIDENT_PROGRESS_MANIFEST`,
+**empty by default** (no residents probed).
+
+The canonical fleet ships as `config/resident_progress.example.json`. Point the
+env var at it (or a deployment-specific copy):
+
+```
+UNITARES_RESIDENT_PROGRESS_MANIFEST=/path/to/unitares/config/resident_progress.example.json
+```
+
+Set this on the **governance server** plist (the probe runs there). Each entry's
+`source` must match a source registered in `src/background_tasks.py`
+(`kg_writes`, `watcher_findings`, `eisv_sync_rows`, `metrics_series`,
+`sentinel_pulse`, `agent_checkins`). Labels are lowercase to match the anchor
+filenames under `~/.unitares/anchors/`.
+
+`UNITARES_RESIDENTS` (names/calibration) and this manifest (progress probing)
+are related but distinct: a deployment that runs residents typically sets both,
+listing the same residents in each.
+
 ## Cross-package contract
 
 The env var **name** (`UNITARES_RESIDENTS`) is the contract between core and the

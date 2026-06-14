@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -40,19 +41,82 @@ class ResidentConfig:
             )
 
 
-RESIDENT_PROGRESS_REGISTRY: dict[str, ResidentConfig] = {
-    "vigil":      ResidentConfig("kg_writes",        "rows_written", timedelta(minutes=60),  1, expected_cadence_s=1800),
-    "watcher":    ResidentConfig("watcher_findings", "rows_any",     timedelta(hours=6),     1, expected_cadence_s=None),
-    "steward":    ResidentConfig("eisv_sync_rows",   "rows_written", timedelta(minutes=30),  1, expected_cadence_s=300),
-    "chronicler": ResidentConfig("metrics_series",   "rows_written", timedelta(hours=26),    1, expected_cadence_s=86400),
-    # Sentinel runs on the Elixir/BEAM runtime (com.unitares.sentinel-beam). It
-    # does NOT post record_progress_pulse (Python-only) but it DOES check in via
-    # process_agent_update like every other resident — so it's measured on the
-    # substrate-agnostic `agent_checkins` source (core.agent_state), not the
-    # Python pulse. PR #566 retired it as a stopgap; this is the real re-key.
-    # Cadence is the BEAM fleet-cycle (~5min), not the old Python 60s loop.
-    "sentinel":   ResidentConfig("agent_checkins",   "checkin_count", timedelta(minutes=30),  1, expected_cadence_s=300),
-}
+# The resident-progress roster is deployment configuration, not a hardcoded
+# fleet. It is loaded from a JSON manifest pointed to by the
+# UNITARES_RESIDENT_PROGRESS_MANIFEST env var; unset/missing => no residents
+# are probed (the user-agnostic default). The canonical fleet ships as
+# config/resident_progress.example.json — a deployment points the env var at
+# that file or its own copy. See docs/operations/resident-roster.md.
+#
+# Manifest shape (one entry per resident label, lowercase to match anchor
+# filenames):
+#   {
+#     "vigil": {
+#       "source": "kg_writes",          # must be a source registered in
+#                                        # background_tasks.py's sources dict
+#       "metric": "rows_written",        # human-readable label on the snapshot
+#       "window_seconds": 3600,
+#       "threshold": 1,                  # candidate fires when metric < threshold
+#       "expected_cadence_s": 1800       # null for event-driven residents
+#     }
+#   }
+RESIDENT_PROGRESS_MANIFEST_ENV = "UNITARES_RESIDENT_PROGRESS_MANIFEST"
+
+
+def parse_resident_progress_manifest(doc: dict) -> dict[str, ResidentConfig]:
+    """Build the label→ResidentConfig registry from a parsed manifest dict."""
+    registry: dict[str, ResidentConfig] = {}
+    for label, entry in doc.items():
+        # Underscore-prefixed keys (e.g. "_comment") are manifest metadata.
+        if label.startswith("_") or not isinstance(entry, dict):
+            continue
+        cadence = entry.get("expected_cadence_s")
+        registry[label] = ResidentConfig(
+            source=entry["source"],
+            metric=entry["metric"],
+            window=timedelta(seconds=int(entry["window_seconds"])),
+            threshold=int(entry["threshold"]),
+            expected_cadence_s=None if cadence is None else int(cadence),
+        )
+    return registry
+
+
+def load_resident_progress_registry(
+    path: str | Path | None = None,
+) -> dict[str, ResidentConfig]:
+    """Load the resident-progress registry from a JSON manifest.
+
+    Reads ``path`` if given, else ``UNITARES_RESIDENT_PROGRESS_MANIFEST``.
+    Unset, empty, missing, or unreadable => empty registry (no residents
+    probed), the user-agnostic default. Read once at import; tests that vary
+    the roster set the env/path and call this helper directly.
+    """
+    raw = str(path) if path is not None else os.environ.get(
+        RESIDENT_PROGRESS_MANIFEST_ENV, ""
+    )
+    if not raw.strip():
+        return {}
+    manifest_path = Path(raw)
+    try:
+        doc = json.loads(manifest_path.read_text())
+    except FileNotFoundError:
+        logger.warning(
+            "resident-progress manifest %s not found; probing no residents",
+            manifest_path,
+        )
+        return {}
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(
+            "resident-progress manifest %s unreadable (%s); probing no residents",
+            manifest_path, e,
+        )
+        return {}
+    return parse_resident_progress_manifest(doc)
+
+
+RESIDENT_PROGRESS_REGISTRY: dict[str, ResidentConfig] = (
+    load_resident_progress_registry()
+)
 
 
 def is_event_driven_label(label: str | None) -> bool:

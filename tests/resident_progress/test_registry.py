@@ -7,11 +7,61 @@ from pathlib import Path
 import pytest
 
 from src.resident_progress.registry import (
+    RESIDENT_PROGRESS_MANIFEST_ENV,
     RESIDENT_PROGRESS_REGISTRY,
     ResidentConfig,
     is_event_driven_label,
+    load_resident_progress_registry,
+    parse_resident_progress_manifest,
     resolve_resident_uuid,
 )
+
+
+def test_load_registry_empty_by_default(monkeypatch):
+    """Unset manifest => no residents probed (user-agnostic default)."""
+    monkeypatch.delenv(RESIDENT_PROGRESS_MANIFEST_ENV, raising=False)
+    assert load_resident_progress_registry() == {}
+    # Empty/whitespace path is also treated as "no manifest".
+    assert load_resident_progress_registry("") == {}
+
+
+def test_load_registry_missing_file_is_empty(tmp_path):
+    """A pointed-but-absent manifest degrades to empty, not a crash."""
+    assert load_resident_progress_registry(tmp_path / "nope.json") == {}
+
+
+def test_load_registry_from_manifest(tmp_path):
+    manifest = tmp_path / "residents.json"
+    manifest.write_text(json.dumps({
+        "_comment": "metadata keys are ignored",
+        "vigil": {
+            "source": "kg_writes", "metric": "rows_written",
+            "window_seconds": 3600, "threshold": 1,
+            "expected_cadence_s": 1800,
+        },
+        "watcher": {
+            "source": "watcher_findings", "metric": "rows_any",
+            "window_seconds": 21600, "threshold": 1,
+            "expected_cadence_s": None,
+        },
+    }))
+    reg = load_resident_progress_registry(manifest)
+    assert set(reg) == {"vigil", "watcher"}
+    assert reg["vigil"].window == timedelta(seconds=3600)
+    assert reg["vigil"].expected_cadence_s == 1800
+    assert reg["watcher"].expected_cadence_s is None
+
+
+def test_parse_manifest_skips_metadata_and_nondict():
+    reg = parse_resident_progress_manifest({
+        "_comment": "ignored",
+        "_version": 1,
+        "vigil": {
+            "source": "kg_writes", "metric": "rows",
+            "window_seconds": 60, "threshold": 1, "expected_cadence_s": 30,
+        },
+    })
+    assert set(reg) == {"vigil"}
 
 
 def test_registry_has_five_residents():
