@@ -659,10 +659,12 @@ def _build_identity_diag_payload_for_request(
 
     stable_session_id = make_client_session_id(agent_uuid)
     try:
-        from ..context import get_session_resolution_source
+        from ..context import get_session_resolution_source, get_session_proof_origin
         continuity_source = get_session_resolution_source()
+        proof_origin = get_session_proof_origin()
     except Exception:
         continuity_source = None
+        proof_origin = None
     continuity_support = continuity_token_support_status()
     continuity_token = create_continuity_token(
         agent_uuid,
@@ -684,6 +686,7 @@ def _build_identity_diag_payload_for_request(
         lineage_state=lineage_state,
         client_hint=_resolve_response_client_hint(arguments),
         model_type=model_type,
+        proof_origin=proof_origin,
     )
 
 
@@ -1265,10 +1268,12 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
         client_hint=arguments.get("client_hint"),
     )
     try:
-        from ..context import get_session_resolution_source
+        from ..context import get_session_resolution_source, get_session_proof_origin
         continuity_source = get_session_resolution_source()
+        proof_origin = get_session_proof_origin()
     except Exception:
         continuity_source = None
+        proof_origin = None
     continuity_support = continuity_token_support_status()
 
     verbose = coerce_bool(arguments.get("verbose"), default=False) if arguments else False
@@ -1329,6 +1334,7 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
         provisional_lineage=_r2_prov_main,
         lineage_state=_r2_state_main,
         client_hint=_resolve_response_client_hint(arguments),
+        proof_origin=proof_origin,
     )
 
     # Auto-bind: automatically perform session binding so agents don't need a separate bind_session call
@@ -2273,10 +2279,12 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # STEP 6: Build response
     verbose = coerce_bool(arguments.get("verbose"), default=False)
     try:
-        from ..context import get_session_resolution_source
+        from ..context import get_session_resolution_source, get_session_proof_origin
         continuity_source = get_session_resolution_source()
+        proof_origin = get_session_proof_origin()
     except Exception:
         continuity_source = None
+        proof_origin = None
     continuity_support = continuity_token_support_status()
     continuity_token = create_continuity_token(
         agent_uuid,
@@ -2380,6 +2388,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         tool_mode_info=tool_mode_info,
         lineage_state=_lineage_for_response,
         provisional_lineage=_r2_provisional_lineage,
+        proof_origin=proof_origin,
     )
 
     # Bootstrap check-in (onboard-bootstrap-checkin §3.5). Conditional on

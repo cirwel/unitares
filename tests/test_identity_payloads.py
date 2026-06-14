@@ -142,3 +142,100 @@ def test_identity_response_context_distinguishes_uuid_label_harness_and_assuranc
     assert context["harness_context"]["is_identity_proof"] is False
     assert context["identity_assurance"]["tier"] == "medium"
     assert context["continuity_claim"] == "resumed_by_recent_onboard_pin"
+
+
+# ── #679: server-injected fingerprint must not be laundered into strong ──
+#
+# On the stateless streamable transport (claude.ai remote connector), the
+# typed wrapper injects `signals.ip_ua_fingerprint` as `client_session_id`
+# when the caller omits one. Resolution then labels it
+# `explicit_client_session_id` (a strong source). The write-path assurance
+# (`phases._compute_identity_assurance`) already downgrades server-inferred
+# bindings to weak via proof_origin; these tests pin the SAME honesty into
+# the identity()/onboard RESPONSE assurance so the two surfaces agree.
+
+
+def test_injected_explicit_csid_is_downgraded_to_weak_in_response():
+    context = build_identity_response_context(
+        agent_uuid="uuid-1",
+        agent_id="agent-1",
+        display_name=None,
+        session_resolution_source="explicit_client_session_id",
+        identity_status="resumed",
+        proof_origin="server_inferred",
+    )
+    assurance = context["identity_assurance"]
+    assert assurance["tier"] == "weak"
+    assert assurance["score"] == 0.35
+    assert assurance["caller_proven"] is False
+    assert assurance["proof_origin"] == "server_inferred"
+
+
+def test_server_inferred_overrides_even_a_strong_source_label():
+    """proof_origin is authoritative over the source label — a strong label
+    (mcp_session_id) resolved by server inference is still weak."""
+    context = build_identity_response_context(
+        agent_uuid="uuid-2",
+        agent_id="agent-2",
+        display_name=None,
+        session_resolution_source="mcp_session_id",
+        identity_status="resumed",
+        proof_origin="server_inferred",
+    )
+    assert context["identity_assurance"]["tier"] == "weak"
+
+
+def test_caller_asserted_explicit_csid_stays_strong():
+    context = build_identity_response_context(
+        agent_uuid="uuid-3",
+        agent_id="agent-3",
+        display_name=None,
+        session_resolution_source="explicit_client_session_id",
+        identity_status="resumed",
+        proof_origin="caller_asserted",
+    )
+    assurance = context["identity_assurance"]
+    assert assurance["tier"] == "strong"
+    assert assurance["caller_proven"] is True
+
+
+def test_unknown_proof_origin_leaves_tier_unchanged_backward_compat():
+    """Legacy callers that don't thread provenance keep today's behavior
+    (fail-open) — an explicit source with no proof_origin stays strong."""
+    context = build_identity_response_context(
+        agent_uuid="uuid-4",
+        agent_id="agent-4",
+        display_name=None,
+        session_resolution_source="explicit_client_session_id",
+        identity_status="resumed",
+    )
+    assurance = context["identity_assurance"]
+    assert assurance["tier"] == "strong"
+    assert assurance["caller_proven"] is False
+    assert assurance["proof_origin"] == "unknown"
+
+
+def test_onboard_response_threads_server_inferred_downgrade():
+    """End-to-end through the onboard builder: an injected CSID surfaces as
+    weak in the onboard() response identity_assurance."""
+    payload = build_onboard_response_data(
+        agent_uuid="uuid-5",
+        structured_agent_id="agent-5",
+        agent_label=None,
+        stable_session_id="sess-5",
+        is_new=False,
+        force_new=False,
+        client_hint="claude",
+        was_archived=False,
+        trajectory_result=None,
+        parent_agent_id=None,
+        thread_context=None,
+        verbose=False,
+        continuity_source="explicit_client_session_id",
+        continuity_support={"enabled": False},
+        continuity_token=None,
+        system_activity=None,
+        tool_mode_info=None,
+        proof_origin="server_inferred",
+    )
+    assert payload["identity_assurance"]["tier"] == "weak"

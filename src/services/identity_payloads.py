@@ -46,6 +46,7 @@ def build_identity_response_data(
     provisional_lineage: bool = False,
     lineage_state: Optional[str] = None,
     client_hint: Optional[str] = None,
+    proof_origin: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the identity() response payload."""
     identity_context = build_identity_response_context(
@@ -57,6 +58,7 @@ def build_identity_response_data(
         identity_resolution_outcome=identity_resolution_outcome,
         client_hint=client_hint,
         model_type=model_type,
+        proof_origin=proof_origin,
     )
     response_data = {
         "uuid": agent_uuid,
@@ -144,6 +146,7 @@ def build_identity_diag_payload(
     lineage_state: Optional[str] = None,
     client_hint: Optional[str] = None,
     model_type: Optional[str] = None,
+    proof_origin: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the lightweight identity diagnostic payload used by fast-return paths."""
     identity_context = build_identity_response_context(
@@ -155,6 +158,7 @@ def build_identity_diag_payload(
         identity_resolution_outcome=identity_resolution_outcome,
         client_hint=client_hint,
         model_type=model_type,
+        proof_origin=proof_origin,
     )
     payload = {
         "uuid": agent_uuid,
@@ -208,6 +212,7 @@ def build_onboard_response_data(
     identity_resolution_outcome: Optional[str] = None,
     lineage_state: Optional[str] = None,
     provisional_lineage: bool = False,
+    proof_origin: Optional[str] = None,
 ) -> dict:
     """Build the onboard() response payload."""
     identity_status = "created" if is_new else ("reactivated" if was_archived else "resumed")
@@ -220,6 +225,7 @@ def build_onboard_response_data(
         identity_resolution_outcome=identity_resolution_outcome,
         client_hint=client_hint,
         model_type=None,
+        proof_origin=proof_origin,
     )
     next_calls = [
         {
@@ -395,6 +401,7 @@ def build_identity_response_context(
     identity_resolution_outcome: Optional[str] = None,
     client_hint: Optional[str] = None,
     model_type: Optional[str] = None,
+    proof_origin: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build S22 response annotation for identity/onboard payloads.
 
@@ -405,7 +412,7 @@ def build_identity_response_context(
     strength of the session-resolution signal.
     """
     source_key = _normalize_source(session_resolution_source)
-    identity_assurance = _identity_assurance_from_source(source_key)
+    identity_assurance = _identity_assurance_from_source(source_key, proof_origin)
     continuity_claim = _continuity_claim(
         source_key,
         identity_status=identity_status,
@@ -466,7 +473,10 @@ def _tier_for_source(source_key: str) -> str:
     return "weak"
 
 
-def _identity_assurance_from_source(source_key: str) -> Dict[str, Any]:
+def _identity_assurance_from_source(
+    source_key: str,
+    proof_origin: Optional[str] = None,
+) -> Dict[str, Any]:
     """Compute assurance tier from a session-resolution source.
 
     Recognizes the S3 `sticky_cache:<original>` envelope: the original
@@ -474,7 +484,33 @@ def _identity_assurance_from_source(source_key: str) -> Dict[str, Any]:
     (strong→medium, medium→weak, weak→weak). Mirrors the same logic in
     `mcp_handlers/updates/phases.py:_compute_identity_assurance` so the
     identity() response and update-path tier stay consistent.
+
+    `proof_origin` ('caller_asserted' | 'server_inferred' | None) is
+    authoritative over the source label (#679). A server-inferred binding
+    (transport-injected CSID, fingerprint pin, context fallback) is NEVER
+    strong, no matter what source label resolution stamped on it — this is
+    what closes the laundering path where an injected `ip_ua_fingerprint`
+    wore the `explicit_client_session_id` label and was reported strong/1.0.
+    `None` (unknown origin) leaves the tier unchanged so legacy callers that
+    don't thread provenance keep today's behavior (fail-open), exactly like
+    the write-path `_compute_identity_assurance`.
     """
+    if proof_origin == "server_inferred":
+        # Authoritative downgrade — a server-guessed binding is weak proof no
+        # matter what source label resolution stamped on it (#679).
+        score, _ = _TIER_PAYLOADS["weak"]
+        return {
+            "tier": "weak",
+            "score": score,
+            "session_source": source_key,
+            "trajectory_confidence": None,
+            "reason": f"server-inferred binding ('{source_key}'); not caller-proven",
+            "caller_proven": False,
+            "proof_origin": proof_origin,
+        }
+
+    caller_proven = (proof_origin == "caller_asserted")
+
     if source_key.startswith(_STICKY_CACHE_PREFIX):
         original_key = source_key[len(_STICKY_CACHE_PREFIX):] or "unknown"
         original_tier = _tier_for_source(original_key)
@@ -496,6 +532,8 @@ def _identity_assurance_from_source(source_key: str) -> Dict[str, Any]:
             "session_source": source_key,
             "trajectory_confidence": None,
             "reason": reason,
+            "caller_proven": caller_proven,
+            "proof_origin": proof_origin or "unknown",
         }
 
     tier = _tier_for_source(source_key)
@@ -506,6 +544,8 @@ def _identity_assurance_from_source(source_key: str) -> Dict[str, Any]:
         "session_source": source_key,
         "trajectory_confidence": None,
         "reason": reason,
+        "caller_proven": caller_proven,
+        "proof_origin": proof_origin or "unknown",
     }
 
 
