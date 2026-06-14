@@ -11,34 +11,40 @@
 
 Status: live. First public commit 2025-12-04. Cold evaluators can start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md); architecture details are in [docs/UNIFIED_ARCHITECTURE.md](docs/UNIFIED_ARCHITECTURE.md).
 
-Multi-agent fleets fly blind. The agent-identity layer tells you *who* is calling. The evaluation layer tells you *whether a model is good enough to deploy*. Neither tells you **what the fleet is actually doing right now, whether it's still coherent, or whether it's drifting from its baseline**. That layer is what UNITARES is.
+**UNITARES watches a fleet of AI agents while they work and tells you — and each agent — when one is starting to go off the rails, before anything visibly breaks.**
+
+When you run many autonomous agents, you can already tell *who* is calling (identity) and *whether a model is good enough to deploy* (evals). What you usually can't see is what the fleet is doing **right now**: whether each agent is still making real progress, whether its confidence matches its actual results, and whether it's drifting away from how it normally behaves. That live picture is what UNITARES provides. It runs alongside your evals and guardrails — it doesn't replace them.
 
 ### How it works in one read
 
-An agent calls `sync_state()` after a unit of work (`process_agent_update(...)` is the canonical/raw equivalent). It sends a self-reported `confidence`, a self-reported `complexity`, the `response_text`, and any `recent_tool_results` (test outcomes, exit codes, lint output, file modifications — things the system doesn't have to trust the agent about). UNITARES tracks four numbers per agent — **EISV** for short:
+After each unit of work, an agent checks in by calling `sync_state()`. The check-in includes a self-reported `confidence`, a self-reported `complexity`, the `response_text`, and any `recent_tool_results` — test outcomes, exit codes, lint output, file changes — i.e. things the system can verify instead of taking the agent's word for.
 
-- **E (Energy)** — is the work advancing? Tool calls succeeding and decisions resolving raise E; thrashing, retries, no-progress lower it.
-- **I (Integrity)** — do claims match outcomes? Confidence calibrated to observed success rate raises I; high confidence with low actual success lowers it.
-- **S (Entropy)** — is behavior diverging from the agent's own baseline? Stable trajectory and consistent claims keep S low; drift and divergence push it up.
-- **V (Valence)** — derived: a signed E−I imbalance. Positive = energetic-but-incoherent; negative = coherent-but-depleted.
+> **A note on tool names:** every tool has a plain task-verb name (`sync_state`, `start_session`, `record_result`) and an older canonical name (`process_agent_update`, `onboard`, `outcome_event`). They're the same calls. This README uses the task-verb names throughout; the full mapping is in [Tool names](#tool-names).
 
-Each check-in returns a verdict — `proceed` / `guide` / `pause` / `reject` — so the agent can self-regulate before external circuit breakers fire. Humans read the same state on a dashboard; peer agents read it over the API.
+From each check-in, UNITARES tracks four numbers per agent — together called **EISV**:
 
-### Why an agent can't just lie about its confidence
+- **E (Energy)** — is the work advancing? Tool calls succeeding and decisions resolving raise E; thrashing, retries, and no-progress lower it.
+- **I (Integrity)** — do the agent's claims match its results? Confidence that lines up with the observed success rate raises I; high confidence with low actual success lowers it.
+- **S (Entropy)** — is the agent drifting from its own normal behavior? A steady, consistent trajectory keeps S low; erratic, divergent behavior pushes it up.
+- **V (Valence)** — a single summary number derived from the gap between E and I. Positive means *energetic but incoherent* (lots of motion, claims not matching outcomes); negative means *coherent but running low on progress*.
 
-Self-reported confidence is one input. UNITARES also observes **hard exogenous outcomes** — test pass/fail, exit codes, tool results — fed back through `record_result()` (`outcome_event(...)` canonically). Over many tasks it tracks whether the agent's claimed confidence matches its actual success rate. An agent that reports `confidence=0.9` while succeeding only 50% of the time accumulates calibration error; integrity drops; the verdict shifts to `guide` or `pause`. The signal is grounded in what actually happened, not what the agent claimed.
+Each check-in returns a plain verdict — `proceed` / `guide` / `pause` / `reject` — so the agent can correct itself before any external safety system has to step in. Humans read the same state on a dashboard; other agents can read it over the API.
 
-After ~30 check-ins the four numbers are graded against the agent's own running baseline, not a universal threshold. Absolute safety floors still apply.
+### Why an agent can't just inflate its own confidence
 
-Running continuously since November 2025. State stored in PostgreSQL + AGE. The theory and the dynamical-systems version of this model live in [Paper v6](https://github.com/cirwel/unitares-paper-v6) (DOI 10.5281/zenodo.19647159) — readers who want the full derivation start there.
+Self-reported confidence is only one input. UNITARES also watches **real outcomes it can verify** — test pass/fail, exit codes, tool results — sent back via `record_result()`. Over many tasks it compares the agent's *claimed* confidence against its *actual* success rate. An agent that reports `confidence=0.9` while only succeeding 50% of the time builds up a track record of being overconfident; its Integrity (I) drops, and the verdict shifts to `guide` or `pause`. The signal is anchored to what actually happened, not to what the agent said about itself.
+
+After about 30 check-ins, the four numbers are graded against the agent's *own* running history rather than a one-size-fits-all threshold. Absolute safety floors still apply on top of that.
+
+Running continuously since November 2025. State is stored in PostgreSQL + AGE. The underlying theory and the math (dynamical-systems) version of this model are in [Paper v6](https://github.com/cirwel/unitares-paper-v6) (DOI 10.5281/zenodo.19647159) — start there if you want the full derivation.
 
 ### Who should integrate this
 
-If you're running **multiple long-lived autonomous agents** — tool-using, multi-step, doing real work over hours or days — and you've had the experience of an agent quietly drifting without anyone noticing until something visible broke, UNITARES is for you. The check-in loop surfaces drift while it's still numerical (integrity slipping, calibration error climbing) instead of at the point a human user complains. It does not replace evals or guardrails; it runs in parallel as a state layer the agent itself can read.
+UNITARES is for you if you run **multiple long-lived autonomous agents** — tool-using, multi-step, doing real work over hours or days — and you've watched an agent quietly drift without anyone noticing until something visible broke. The check-in loop surfaces that drift while it's still just numbers moving (Integrity slipping, overconfidence climbing) instead of waiting for a user to complain. It runs in parallel with your evals and guardrails as a live state layer the agent itself can read.
 
-**Integration cost:** one MCP / REST `sync_state` call per agent unit-of-work, plus a `record_result` callback for any task with a hard exogenous outcome (tests, exit codes, tool results). Dashboard, knowledge graph, dialectic, and continuity are downstream of that. Older clients can use the canonical names `process_agent_update` and `outcome_event`.
+**Integration cost:** one MCP/REST `sync_state` call per agent unit-of-work, plus a `record_result` callback for any task with a verifiable outcome (tests, exit codes, tool results). The dashboard, knowledge graph, peer review, and continuity features are all downstream of those two calls.
 
-**Not yet a good fit for** short-lived chatbot interactions where per-turn governance overhead exceeds the value, or teams without the ability to instrument their agent loop. External adoption is the open question; the [Production snapshot](#production-snapshot) is honest about it.
+**Probably not worth it yet for** short-lived chatbot turns, where per-turn overhead outweighs the benefit, or for teams that can't instrument their agent loop. Whether this is useful outside the author's own deployment is still an open question — the [Production snapshot](#production-snapshot) is honest about that.
 
 ### Try it
 
@@ -48,7 +54,7 @@ docker compose up -d --wait         # Postgres+AGE+pgvector+Redis+server, bound 
 make demo                           # 60-second scripted trajectory
 ```
 
-`make demo` starts a synthetic agent session, drives seven check-ins (clean work → calibration drift → confusion), and prints the verdict + state at each step. Source: [`scripts/demo/quick_demo.py`](scripts/demo/quick_demo.py). Then point any MCP client at `http://localhost:8767/mcp/`.
+`make demo` starts a synthetic agent session, drives seven check-ins (clean work → confidence drifting from results → confusion), and prints the verdict + state at each step. Source: [`scripts/demo/quick_demo.py`](scripts/demo/quick_demo.py). Then point any MCP client at `http://localhost:8767/mcp/`.
 
 If you already run UNITARES locally and port `8767` is live, skip `docker compose up` and run `make demo` directly. If Docker reports that `5432`, `6379`, or `8767` is already allocated, pick alternate host ports:
 
@@ -74,9 +80,9 @@ Additional services (started via launchd, not bundled into `docker compose up`):
 | Gateway MCP (reduced surface) | `8768` | `http://localhost:8768/mcp/` |
 | Surface lease plane (bearer-auth) | `8788` | `http://localhost:8788/v1/lease/*` |
 
-**Workflow:** `start_session(force_new=true)` → `sync_state()` → `check_working_state()`. Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and `get_governance_metrics(...)`. Use `parent_agent_id` for fresh-process lineage — details in [Getting Started](docs/guides/START_HERE.md).
+**Workflow:** `start_session(force_new=true)` → `sync_state()` → `check_working_state()`. Use `parent_agent_id` to link a fresh process to prior work — details in [Getting Started](docs/guides/START_HERE.md).
 
-**Resident agents:** for long-running or scheduled agents, start with the SDK in [`agents/sdk/README.md`](agents/sdk/README.md). It handles MCP connection, identity anchors, check-ins, heartbeats, log rotation, state persistence, and pause hooks.
+**Resident agents:** for long-running or scheduled agents, start with the SDK in [`agents/sdk/README.md`](agents/sdk/README.md). It handles the MCP connection, identity, check-ins, heartbeats, log rotation, state persistence, and pause hooks.
 
 **Transports:** MCP on `/mcp/` (Streamable HTTP) · REST on `/v1/tools/call` · Dashboard on `/dashboard`
 
@@ -87,14 +93,14 @@ Additional services (started via launchd, not bundled into `docker compose up`):
 ## The self-regulation loop
 
 1. **Agent acts** — tool call, response, decision.
-2. **Unitares updates state** — four numbers that summarize how it's going.
+2. **UNITARES updates state** — the four numbers that summarize how it's going.
 3. **Agent reads its own state back** in the check-in response.
 4. **Agent applies its own policy** — proceed, narrow scope, ask for review, or stop.
 
 ```python
 # Inside the agent's loop
 result = sync_state(response_text=output, complexity=0.6, confidence=0.8)
-raw = result.get("raw_governance", result)  # alias envelope preserves the full canonical payload
+raw = result.get("raw_governance", result)  # full payload lives here when using sync_state
 metrics = raw.get("metrics") or {}
 eisv = (
     raw.get("primary_eisv")
@@ -111,21 +117,21 @@ elif eisv.get("E") is not None and eisv["E"] < 0.2:
     agent.stop_and_summarize()      # avoid thrashing
 ```
 
-The agent reads its own metrics and adjusts *before* external controls have to fire. Humans see the same state on the dashboard; peer agents read it over the API. Unitares isn't an output validator (guardrails, evals) or a behavioral sandbox (permissions, container limits) — it's a state layer the agent itself can read.
+The agent reads its own metrics and adjusts *before* external controls have to fire. Humans see the same state on the dashboard; other agents read it over the API. UNITARES isn't an output validator (guardrails, evals) or a sandbox (permissions, container limits) — it's a state layer the agent itself can read.
 
 ## What makes the signal trustworthy
 
-**No ethics oracle.** The four numbers come from things UNITARES already measures — calibration error, complexity divergence, behavioral drift. No hand-labeled "is this ethical?" classifier.
+**No "ethics" classifier.** The four numbers come from things UNITARES already measures — how well confidence matches outcomes, how far reported complexity is from observed complexity, how far behavior has drifted. There's no hand-labeled "is this ethical?" model in the loop.
 
-**Trajectory as identity.** Long-run EISV patterns answer continuity questions ("still the same agent across restarts?") and surface drift no single check-in could see.
+**Trajectory as identity.** An agent's EISV pattern over time answers continuity questions ("is this still the same agent across restarts?") and surfaces slow drift that no single check-in could catch.
 
-**Peer review when needed.** When an agent's confidence and the system's assessment disagree, UNITARES runs a short adversarial review with peer agents — or with an LLM when no peers are around — before anything halts. See [dialectic-dataset](https://github.com/cirwel/dialectic-dataset).
+**Peer review when it matters.** When an agent's confidence and the system's assessment disagree, UNITARES runs a short back-and-forth review with other agents — or with an LLM when no peers are around — before anything halts. (In the codebase and papers this is called *dialectic*.) See [dialectic-dataset](https://github.com/cirwel/dialectic-dataset).
 
 ---
 
 ## Production snapshot
 
-Frozen public snapshot from May 6, 2026 (single-operator deployment — self-traffic, not external adoption). Headline: **351K+ governance events processed · ≈94K in the last 7 days**.
+Frozen public snapshot from May 6, 2026 (single-operator deployment — the author's own traffic, not external adoption). Headline: **351K+ governance events processed · ≈94K in the last 7 days**.
 
 <details>
 <summary><strong>Full metrics table</strong></summary>
@@ -142,7 +148,7 @@ Frozen public snapshot from May 6, 2026 (single-operator deployment — self-tra
 
 </details>
 
-*What these numbers are good for:* a stress test that the pipeline holds up under sustained volume. *What they are not:* evidence of product-market traction. External adoption is the open question.
+*What these numbers show:* the pipeline holds up under sustained volume. *What they don't show:* product-market traction. External adoption is the open question.
 
 <p align="center">
   <img src="docs/assets/dashboard.png" width="80%" alt="Unitares dashboard — stats overview with fleet coherence, agent count, discoveries, and system health"/>
@@ -164,7 +170,7 @@ Frozen public snapshot from May 6, 2026 (single-operator deployment — self-tra
 <p align="center">
   <img src="docs/assets/dashboard-dialectic.png" width="80%" alt="Dialectic sessions — recovery and review history"/>
 </p>
-<p align="center"><em>Dialectic sessions — failed, resolved, and active recovery sessions with message counts</em></p>
+<p align="center"><em>Peer-review sessions — failed, resolved, and active recovery sessions with message counts</em></p>
 
 <p align="center">
   <img src="docs/assets/dashboard-activity.png" width="80%" alt="Activity timeline — check-ins, verdicts, discoveries"/>
@@ -185,11 +191,6 @@ Frozen public snapshot from May 6, 2026 (single-operator deployment — self-tra
 3. check_working_state()          → Check your state
 ```
 
-These names return the agent-experience envelope: `next_action`, compact state
-fields, and the full canonical payload under `raw_governance`. The canonical
-tool names still work: `onboard(...)`, `process_agent_update(...)`, and
-`get_governance_metrics(...)`.
-
 Example check-in:
 
 ```jsonc
@@ -202,7 +203,7 @@ sync_state({
 })
 ```
 
-**`response_mode: "mirror"`** shapes the canonical payload for self-awareness: `mirror` is a **list of strings** (actionable signals), not a nested object. When calling through `sync_state`, read it under `raw_governance`. Optional top-level `reflection` and `relevant_prior_work` surface a state reflection and knowledge-graph items when relevant. See `_format_mirror` in [`src/mcp_handlers/response_formatter.py`](src/mcp_handlers/response_formatter.py).
+`response_mode` controls how much detail comes back. **`mirror`** is built for self-awareness: it returns a short list of plain-text signals the agent can act on (under `raw_governance` when you call through `sync_state`). Optional `reflection` and `relevant_prior_work` fields surface a one-line state read and related knowledge-graph items when there are any. See `_format_mirror` in [`src/mcp_handlers/response_formatter.py`](src/mcp_handlers/response_formatter.py).
 
 ```jsonc
 {
@@ -223,9 +224,22 @@ sync_state({
 }
 ```
 
-**Verdict field:** Mirror/compact responses wrap the verdict with `value`, `meaning`, and `next_action`. Governance actions are **`proceed` / `guide` / `pause` / `reject`** ([Architecture](docs/UNIFIED_ARCHITECTURE.md)). If `action` is absent, formatters fall back to **`continue`** — see `response_formatter.py`.
+**Verdicts** are always one of **`proceed` / `guide` / `pause` / `reject`** ([Architecture](docs/UNIFIED_ARCHITECTURE.md)). Mirror/compact responses wrap each one with `value`, `meaning`, and `next_action`. If no verdict is present, formatters fall back to `continue` (see `response_formatter.py`).
 
-The `start_session()` envelope includes `agent_uuid` and `client_session_id` at the top level. Store `agent_uuid` as an identity anchor. On a fresh process that continues prior work, call `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")`. Use canonical `onboard(...)` instead if you need the raw response shape. Use `identity(agent_uuid=..., continuity_token=..., resume=true)` only for same-owner proof-owned rebinds.
+The `start_session()` response includes `agent_uuid` and `client_session_id` at the top level. Save `agent_uuid` — it's the agent's identity anchor. When a fresh process continues earlier work, call `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")` to record the link. (`identity(agent_uuid=..., continuity_token=..., resume=true)` is only for same-owner rebinds where you can prove ownership.)
+
+### Tool names
+
+Every tool has a plain task-verb name and an older canonical name. They make the same call; the task-verb versions just return a friendlier, self-awareness-oriented response shape (with the full payload preserved under `raw_governance`). Use whichever you prefer.
+
+| Task-verb name (used in this README) | Canonical name |
+|---|---|
+| `start_session` | `onboard` |
+| `sync_state` | `process_agent_update` |
+| `check_working_state` | `get_governance_metrics` |
+| `record_result` | `outcome_event` |
+| `search_shared_memory` | `knowledge(action="search")` |
+| `request_review` | `dialectic(action="request")` |
 
 ### Installation
 
@@ -264,19 +278,19 @@ python src/mcp_server.py --port 8767
 
 `requirements-full.txt` is the default for almost everything — running the local server, running tests (`pytest` is in `full` only), and handler development. `requirements-core.txt` is a 2-package subset (`mcp` + `numpy`) for thin stdio/proxy setups where the governance server runs elsewhere and you only need a local client. Database bring-up details (PostgreSQL 17 + AGE + pgvector compile): [db/postgres/README.md](db/postgres/README.md).
 
-The EISV ODE engine lives in this repo at `governance_core/` (pure Python, no separate install). To skip the ODE entirely and run with behavioral-EISV only: `export UNITARES_DISABLE_ODE=1`.
+The EISV math engine lives in this repo at `governance_core/` (pure Python, no separate install). To run with the observed-behavior signal only and skip the math model: `export UNITARES_DISABLE_ODE=1`.
 
 ### MCP configuration
 
 Client-specific JSON (Cursor / Claude Code / Claude Desktop), endpoint table, and bind-address security: [`docs/integration/MCP_CLIENTS.md`](docs/integration/MCP_CLIENTS.md).
 
-Agent identity: save `agent_uuid` from `start_session()` / `onboard()` as an anchor; declare fresh-process lineage with `parent_agent_id`; use `continuity_token` only as short-lived ownership proof for explicit UUID rebinds. See [Getting Started](docs/guides/START_HERE.md) and [Operator Runbook](docs/operations/OPERATOR_RUNBOOK.md).
+Agent identity: save `agent_uuid` from `start_session()` as an anchor; link a fresh process to prior work with `parent_agent_id`; use `continuity_token` only as short-lived ownership proof for explicit UUID rebinds. See [Getting Started](docs/guides/START_HERE.md) and [Operator Runbook](docs/operations/OPERATOR_RUNBOOK.md).
 
 ---
 
 ## State ranges and pipeline
 
-E, I, S each live in `[0, 1]`; V in `[-1, 1]`. Verdict thresholds and the absolute safety floors are in [`src/behavioral_assessment.py`](src/behavioral_assessment.py). Implementation: EMA-smoothed observations primary (`src/behavioral_state.py`); a coupled ODE in `governance_core/` runs in parallel as a diagnostic fallback. The full pipeline (drift → entropy, calibration, circuit breaker, dialectic) and the ODE derivation are in [Architecture](docs/UNIFIED_ARCHITECTURE.md) and [Paper v6](https://github.com/cirwel/unitares-paper-v6).
+E, I, and S each live in `[0, 1]`; V in `[-1, 1]`. Verdict thresholds and the absolute safety floors are in [`src/behavioral_assessment.py`](src/behavioral_assessment.py). The primary signal is smoothed from observed behavior (`src/behavioral_state.py`); a separate math model in `governance_core/` runs in parallel as a diagnostic cross-check. The full pipeline (drift → entropy, calibration, circuit breaker, peer review) and the math derivation are in [Architecture](docs/UNIFIED_ARCHITECTURE.md) and [Paper v6](https://github.com/cirwel/unitares-paper-v6).
 
 ---
 
@@ -299,7 +313,7 @@ graph LR
     style UC fill:#2d2d2d,stroke:#666,color:#fff
 ```
 
-**Use cases:** Fleet monitoring and early warning, inter-agent state observation, trajectory-based identity and continuity, outcome-calibrated confidence tracking, dialectic peer review, persistent knowledge graph with staleness awareness.
+**Use cases:** Fleet monitoring and early warning, watching one agent's state from another, trajectory-based identity and continuity, outcome-calibrated confidence tracking, peer review, and a persistent knowledge graph with staleness awareness.
 
 ---
 
@@ -354,6 +368,6 @@ Kenny Wang ([ORCID 0009-0006-7544-2374](https://orcid.org/0009-0006-7544-2374)),
 
 ---
 
-**Apache License 2.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Covers server, dashboard, tooling, and the ODE dynamics engine in `governance_core/`. Attribution requested per the NOTICE file for redistributions and derivative works.
+**Apache License 2.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Covers server, dashboard, tooling, and the math dynamics engine in `governance_core/`. Attribution requested per the NOTICE file for redistributions and derivative works.
 
 Built by [@cirwel](https://github.com/cirwel)
