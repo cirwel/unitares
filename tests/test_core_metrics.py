@@ -422,6 +422,40 @@ class TestGetGovernanceMetrics:
             assert data["purpose"] == "test purpose"
 
     @pytest.mark.asyncio
+    async def test_lite_thresholds_sourced_from_canonical_constants(
+        self, mock_server, mock_monitor
+    ):
+        """Agent-facing 'thresholds' hints must match the real decision lines.
+
+        These were hardcoded 0.5/0.75, which disagreed with the actual
+        governance thresholds (RISK_APPROVE=0.45 low/medium edge, RISK_REVISE
+        =0.70 pause line) — misleading any agent that read them. Guard that
+        they are sourced from the constants, not a hardcoded copy.
+        """
+        from config.governance_config import GovernanceConfig
+
+        meta = _make_metadata(purpose="t")
+        mock_server.agent_metadata = {"agent-1": meta}
+        mock_server.get_or_create_monitor.return_value = mock_monitor
+
+        with patch("src.mcp_handlers.core.mcp_server", mock_server), \
+             patch("src.mcp_handlers.core.require_agent_id", return_value=("agent-1", None)), \
+             patch("src.governance_monitor.UNITARESMonitor") as MockClass:
+            MockClass.get_eisv_labels.return_value = {
+                "E": "Energy", "I": "Information", "S": "Entropy", "V": "Void"
+            }
+            from src.mcp_handlers.core import handle_get_governance_metrics
+            result = await handle_get_governance_metrics({})
+
+            t = _parse(result)["thresholds"]
+            assert t["risk_medium"] == GovernanceConfig.RISK_APPROVE_THRESHOLD
+            assert t["risk_high"] == GovernanceConfig.RISK_REVISE_THRESHOLD
+            assert t["coherence_good"] == GovernanceConfig.TARGET_COHERENCE
+            assert t["coherence_critical"] == GovernanceConfig.COHERENCE_CRITICAL_THRESHOLD
+            # The pause line must be the real one, not the old 0.75 literal.
+            assert t["risk_high"] != 0.75
+
+    @pytest.mark.asyncio
     async def test_full_mode(self, mock_server, mock_monitor):
         """Full mode returns interpretation and reflection."""
         meta = _make_metadata(purpose=None)
