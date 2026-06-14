@@ -91,9 +91,19 @@ declared closed.**
   `.sentinel_state.beam` fixture (and the symmetric direction in
   `cycle_state_test.exs`).
 
-Gap to close: a documented end-to-end parity audit — same input event stream,
-both runtimes, finding payloads compared (modulo runtime-bound fields) — at
-the fleet-analysis rule level, not just the cursor/fingerprint level.
+**Update 2026-06-14:** the documented parity audit now exists —
+`wave-1-condition-2-alarm-parity-audit-2026-06-14.md`. Its verdict: the four
+fleet-analysis rules and 2 of 3 forced-release alarm fingerprints were at
+parity, with **two confirmed dedup gaps** — (1) the conflict_batch fingerprint
+diverged across runtimes (`+00:00` vs `Z` ISO suffix; the §C3-flagged drift,
+untested by the self-referential BEAM test), and (2) fleet-finding fingerprints
+only deduped if `UNITARES_SENTINEL_AGENT_ID` was set to Python's anchor UUID.
+Both would cause double-fire at the cutover gap, which condition 2 exists to
+prevent. **Both are now fixed in this branch** (`logic.ex` `iso8601_python/1`;
+`application.ex` threads the anchor UUID) with the §B2 cross-runtime contract
+pinned by `tests/test_sentinel_forced_release_fingerprint_parity.py` +
+the updated Elixir 3-class test. Python side validated locally; Elixir gated
+on CI `mix test`. Remaining: the live cutover double-fire check.
 
 ### Condition 3 — supervision tree absorbs ≥1 induced fault, no manual intervention
 
@@ -125,7 +135,7 @@ but not sufficient.
 | Condition | Implemented | Operationally closed |
 |-----------|-------------|----------------------|
 | 1 — §129 zero incidents | gate fixed (2026-06-03) | **No** — owes representative-load window |
-| 2 — alarm parity | yes (unit + cross-runtime state) | **No** — no rule-level parity audit declared |
+| 2 — alarm parity | yes (unit + cross-runtime state) | **No** — audit done + both dedup gaps fixed (2026-06-14, Elixir pending CI); live cutover double-fire check remains |
 | 3 — supervision fault absorption | yes (topology + unit test) | **No** — no live induced-fault observation |
 | 4 — anti-enthusiasm guard | n/a (guard) | guard holds |
 
