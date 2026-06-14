@@ -12,6 +12,7 @@
 
 | Script | Description |
 |--------|-------------|
+| `autopilot_closeout.py` | Policy-bounded workflow wrapper for Watcher diagnostics, optional test-cache, closeout, branch hygiene, and explicit ship.sh plan/delivery |
 | `bump_epoch.py` | Bump governance epoch |
 | `check_ci_python_version_sync.py` | Verify CI Python version matches project |
 | `doc_audit.sh` | Check all three Unitares repos for stale docs |
