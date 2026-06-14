@@ -81,6 +81,21 @@ filenames under `~/.unitares/anchors/`.
 are related but distinct: a deployment that runs residents typically sets both,
 listing the same residents in each.
 
+## Vigil health-check targets
+
+Vigil's health checks are pluggable (`VIGIL_CHECK_PLUGINS`, see
+`agents/vigil/checks/registry.py`). The built-in checks are governance health,
+resident-tag hygiene, and plugin-hook liveness; the **Lumen/anima health check
+is an external plugin**, not shipped in this repo — a residentless install
+simply doesn't register it (Vigil reports Lumen as `not configured` and
+healthy, so nothing breaks).
+
+Any health check a deployment registers — its own `redis`, `gateway`, etc. —
+now gets full per-service bookkeeping (`{svc}_healthy` / `_detail` /
+`_up_cycles` / `_down_streak`) and outage/recovery/sustained-outage change
+notes, the same treatment governance and Lumen get. No service names are
+hardcoded into the change-detection path.
+
 ## Cross-package contract
 
 The env var **name** (`UNITARES_RESIDENTS`) is the contract between core and the

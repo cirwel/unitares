@@ -128,8 +128,15 @@ def detect_changes(prev: Dict[str, Any], current: Dict[str, Any]) -> List[Dict[s
     """Compare previous and current cycle state. Returns list of notable changes."""
     notes: List[Dict[str, str]] = []
 
-    # Health status transitions
-    for service in ("governance", "lumen"):
+    # Health status transitions — for EVERY monitored service, not just a
+    # hardcoded (governance, lumen) pair. Services are discovered from the
+    # `{svc}_healthy` keys that _collect_health_state emits for each
+    # registered check, so a deployment's own health-check plugins get
+    # outage/recovery notes automatically.
+    services = sorted(
+        k[: -len("_healthy")] for k in current if k.endswith("_healthy")
+    )
+    for service in services:
         prev_ok = prev.get(f"{service}_healthy")
         curr_ok = current.get(f"{service}_healthy")
         if prev_ok is not None and prev_ok != curr_ok:
@@ -144,15 +151,16 @@ def detect_changes(prev: Dict[str, Any], current: Dict[str, Any]) -> List[Dict[s
                     "tags": ["vigil", "outage", service],
                 })
 
-    # Consecutive Lumen outage
-    prev_streak = prev.get("lumen_down_streak", 0)
-    curr_streak = current.get("lumen_down_streak", 0)
-    if curr_streak >= 3 and curr_streak > prev_streak and curr_streak % 3 == 0:
-        hours = curr_streak * 0.5  # 30-min cycles
-        notes.append({
-            "summary": f"Lumen unreachable for {curr_streak} consecutive cycles (~{hours:.0f}h)",
-            "tags": ["vigil", "outage", "lumen", "sustained"],
-        })
+    # Sustained outage — any service tracking a consecutive down-streak.
+    for service in services:
+        prev_streak = prev.get(f"{service}_down_streak", 0)
+        curr_streak = current.get(f"{service}_down_streak", 0)
+        if curr_streak >= 3 and curr_streak > prev_streak and curr_streak % 3 == 0:
+            hours = curr_streak * 0.5  # 30-min cycles
+            notes.append({
+                "summary": f"{service.title()} unreachable for {curr_streak} consecutive cycles (~{hours:.0f}h)",
+                "tags": ["vigil", "outage", service, "sustained"],
+            })
 
     # EISV drift
     prev_coherence = prev.get("coherence")
@@ -219,6 +227,28 @@ def _collect_health_state(
 
     if lumen_r and lumen_r.detail:
         state.update(lumen_r.detail)
+
+    # Any other registered checks (deployment-specific health-check plugins)
+    # get the same per-service bookkeeping — {svc}_healthy / _detail /
+    # _up_cycles / _down_streak — so detect_changes emits outage/recovery
+    # notes for them too. governance and lumen keep their bespoke keys above
+    # (governance's uptime counter is `gov_up_cycles`, not
+    # `governance_up_cycles`, and lumen is always present even when absent).
+    for svc, r in by_key.items():
+        if svc in ("governance", "lumen"):
+            continue
+        healthy = r.ok if r else True
+        state[f"{svc}_healthy"] = healthy
+        state[f"{svc}_detail"] = r.summary if r else "not configured"
+        state[f"{svc}_up_cycles"] = (
+            prev_state.get(f"{svc}_up_cycles", 0) + (1 if healthy else 0)
+        )
+        svc_streak = 0
+        if r and not healthy:
+            svc_streak = prev_state.get(f"{svc}_down_streak", 0) + 1
+        state[f"{svc}_down_streak"] = svc_streak
+        if r and r.detail:
+            state.update(r.detail)
 
     return state
 

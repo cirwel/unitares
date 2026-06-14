@@ -113,3 +113,36 @@ def test_lumen_down_streak_resets_on_recovery():
         prev_state={"lumen_down_streak": 5},
     )
     assert state["lumen_down_streak"] == 0
+
+
+def test_arbitrary_service_gets_full_bookkeeping():
+    """A deployment-specific health check (not governance/lumen) gets the same
+    per-service keys, so it participates in uptime + change-note tracking."""
+    from agents.vigil.agent import _collect_health_state
+
+    gov_check = _FakeCheck("governance_health", "governance")
+    gov_result = CheckResult(ok=True, summary="ok")
+    redis_check = _FakeCheck("redis_health", "redis")
+    redis_result = CheckResult(
+        ok=False, summary="Redis: UNREACHABLE", severity="critical",
+        fingerprint_key="redis_down",
+    )
+
+    state = _collect_health_state(
+        [(gov_check, gov_result), (redis_check, redis_result)],
+        prev_state={"redis_up_cycles": 4, "redis_down_streak": 1},
+    )
+    assert state["redis_healthy"] is False
+    assert state["redis_detail"] == "Redis: UNREACHABLE"
+    assert state["redis_up_cycles"] == 4  # not incremented while down
+    assert state["redis_down_streak"] == 2
+
+    # Recovery clears the streak and advances uptime.
+    state2 = _collect_health_state(
+        [(gov_check, gov_result),
+         (redis_check, CheckResult(ok=True, summary="Redis: ok"))],
+        prev_state={"redis_up_cycles": 4, "redis_down_streak": 2},
+    )
+    assert state2["redis_healthy"] is True
+    assert state2["redis_up_cycles"] == 5
+    assert state2["redis_down_streak"] == 0
