@@ -8,6 +8,8 @@
 
 **Reading order:** the **Status board** directly below is the live, scannable view of every row. The **Ledger** further down is the *history of record* — its cells carry the full decision trail, including withdrawn options and reversals, and are intentionally dense. Read the board first; drill into a ledger row only when you need the trail.
 
+**Archived citations (not broken links):** some specs cited below by filename were moved to the operator's private archive on 2026-05-21 and are intentionally *not* in this folder — the ledger keeps the citation as the historical record. As of this writing the dangling ontology citations are `r5-memory-deepening-reality.md`, `s7-kg-provenance-lineage-schema.md`, `s11a-skill-text-drift.md`, `s20-cache-scope-narrowing.md`, and `s21b-items-5-6-council-review-2026-04-30.md`; `docs/handoffs/*` snapshots are gitignored (operator-local) and likewise absent in a clone. If a cited path 404s, it is archived, not lost — see the canonical inventory in [`README.md`](README.md) § "Operator-archived docs" (do not re-add the files here without an operator decision).
+
 ---
 
 ## Status board (as of 2026-06-14)
