@@ -27,6 +27,55 @@ def clear_loop_detector_state(meta) -> None:
     meta.recent_decisions = []
 
 
+# Spawn reasons that represent an intentional, causal lineage edge — as opposed
+# to the noisy co-location ``new_session`` default that the SessionStart nudge
+# mints between unrelated same-workspace sessions. Mirrors the taxonomy in
+# docs/proposals/lineage-causal-only-semantics.md (PR #721): a child declaring
+# one of these attests a real dependency, so its parent is something an operator
+# probably does not mean to sweep in a bulk "archive everyone" pass.
+_CAUSAL_SPAWN_REASONS = frozenset({"subagent", "compaction", "explicit", "dispatch"})
+
+
+async def manual_archive_liveness_signals(
+    agent_uuid: str,
+    meta: AgentMetadata,
+) -> list[str]:
+    """Return human-readable reasons the target looks live / intentionally kept.
+
+    An empty list means "safe to archive without force". Used by the manual
+    ``archive_agent`` path to refuse silent archival of an agent that is
+    plainly still in use, so a bulk "archive everyone" sweep can't strand a
+    running workflow (2026-06-14 council-agent incident). Best-effort and
+    fail-open: any signal lookup that errors is simply omitted.
+
+    Two orthogonal signals, deliberately matching the posture of the
+    auto-archival guards in PR #720/#721:
+      1. A live process binding — the conceptually-correct "running right now"
+         signal. (Recent ``last_update`` is intentionally NOT used: a check-in
+         minutes ago does not mean the process is still running, and gating on
+         it would block the routine archive-the-agent-I-just-looked-at flow.)
+      2. A declared *causal* lineage edge — the agent is a parent/successor in
+         an intentional chain (subagent/dispatch/explicit/compaction), not a
+         coincidental ``new_session`` co-location edge.
+    """
+    signals: list[str] = []
+
+    try:
+        from src.mcp_handlers.identity.process_binding import get_live_bindings
+        bindings = await get_live_bindings(agent_uuid)
+        if bindings:
+            signals.append(f"{len(bindings)} live process binding(s)")
+    except Exception as e:  # pragma: no cover - defensive, fail-open
+        logger.debug(f"manual_archive liveness binding check failed: {e}")
+
+    parent = getattr(meta, "parent_agent_id", None)
+    spawn = (getattr(meta, "spawn_reason", None) or "").lower()
+    if parent and spawn in _CAUSAL_SPAWN_REASONS:
+        signals.append(f"declared lineage (spawn_reason={spawn})")
+
+    return signals
+
+
 async def _resume_with_persistence(
     meta,
     *,
