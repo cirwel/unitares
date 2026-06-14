@@ -174,12 +174,14 @@ identical state (E=0.20/healthy-rest scores 0.15 fresh vs 0.34 gated — the gat
 is the more conservative of the two), so it is not masking relative to the
 absolute standard; (b) the absolute floors were nonetheless never strong enough
 for a single hard danger-edge breach to stand on its own, and the gate makes that
-latent weakness reachable on more states. Strengthening the floors so one hard
-breach (E/I<0.30, S>0.70, |V|>0.50) alone crosses caution is a **fleet-wide
-calibration change** affecting fixed-threshold mode too, so it is tracked as a
-**separate follow-up** rather than folded in here. The live-verifier's `--db`
-sweep (`genuine-risk-masked` count) gates whether this is theoretical or live for
-the current 21 tight-σ agents; it is the operator-side pre-merge step.
+latent weakness reachable on more states.
+
+**Operator decision (2026-06-14): leave as-is, no follow-up.** Because the gated
+score is already the more conservative of the two relative to the absolute
+baseline, the single-floor-breach behavior is accepted as the intended floor
+semantics; the absolute floors are not being strengthened now. Documented here
+so the behavior is discoverable and not later mistaken for a regression
+introduced by the gate.
 
 ## Acceptance mapping
 
