@@ -550,14 +550,21 @@ async def handle_ping_agent(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Archive stale agents - test agents by default, or ALL stale agents with include_all=true
 
-    Use include_all=true to clean up any agent inactive for max_age_days (default: 3 days)
+    Use include_all=true to clean up any agent inactive for max_age_days (default: 3 days).
+
+    PREVIEW-FIRST: this sweep defaults to dry_run=true (mirrors
+    archive_orphan_agents) so a fleet-wide ``include_all`` pass shows what it
+    WOULD archive before touching anything. Pass dry_run=false to execute.
     """
     from src.agent_lifecycle import _agent_age_hours
 
     max_age_hours = arguments.get("max_age_hours", 6)
     max_age_days = arguments.get("max_age_days")
     include_all = arguments.get("include_all", False)
-    dry_run = arguments.get("dry_run", False)
+    # Default to preview: a bulk archival lever that executes immediately is the
+    # "archive everyone" footgun (2026-06-14 incident). Opt into execution
+    # explicitly with dry_run=false.
+    dry_run = arguments.get("dry_run", True)
 
     if include_all and max_age_days is None and "max_age_hours" not in arguments:
         max_age_days = 3

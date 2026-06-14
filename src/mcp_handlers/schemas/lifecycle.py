@@ -154,6 +154,10 @@ class ArchiveAgentParams(AgentIdentityMixin):
     target_agent: str = Field(
         ..., description="UUID or label of agent to archive."
     )
+    force: Union[bool, str, None] = Field(
+        default=False,
+        description="Archive even if the agent looks live (running process, recent activity, or declared causal lineage). Default false refuses such archives."
+    )
 
 
 class ResumeAgentParams(AgentIdentityMixin):
@@ -189,11 +193,17 @@ class ArchiveOldTestAgentsParams(AgentIdentityMixin):
         default=3,
         description="Agents inactive for this many days will be archived (default: 3)."
     )
+    dry_run: Union[bool, str, None] = Field(
+        default=True,
+        description="If true (default), returns what WOULD be archived without taking action. Pass false to execute."
+    )
 
     @model_validator(mode='after')
     def coerce_booleans(self):
         if isinstance(self.include_all, str):
             self.include_all = self.include_all.lower() in ('true', '1', 'yes')
+        if isinstance(self.dry_run, str):
+            self.dry_run = self.dry_run.lower() in ('true', '1', 'yes')
         if isinstance(self.max_age_days, str):
             try:
                 self.max_age_days = int(self.max_age_days)
@@ -303,6 +313,7 @@ class AgentParams(ListAgentOptionsMixin, AgentIdentityMixin):
     tags: Optional[List[Any]] = Field(None, description="Tags to set (for action=update)")
     notes: Optional[str] = Field(None, description="Notes to set (for action=update)")
     confirm: Optional[bool] = Field(None, description="Confirm deletion (for action=delete)")
+    force: Optional[Union[bool, str]] = Field(None, description="For action=archive: archive even if the agent looks live (running process, recent activity, or declared causal lineage).")
 
 
 class SelfRecoveryParams(AgentIdentityMixin):

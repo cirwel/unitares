@@ -200,6 +200,35 @@ async def handle_archive_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
             }
         )]
 
+    # Liveness guard: refuse to silently archive an agent that is plainly still
+    # in use unless the caller opts in with force=true. A bulk "archive
+    # everyone" pass (the 2026-06-14 council-agent incident) should not be able
+    # to strand a running workflow without the operator confirming. Best-effort
+    # and fail-open — if no liveness signal is found, archival proceeds.
+    force = arguments.get("force", False)
+    if isinstance(force, str):
+        force = force.strip().lower() in ("true", "1", "yes")
+    if not force:
+        from .helpers import manual_archive_liveness_signals
+        live_signals = await manual_archive_liveness_signals(agent_uuid, meta)
+        if live_signals:
+            return [error_response(
+                f"Agent '{agent_id}' looks live or intentionally retained "
+                f"({'; '.join(live_signals)}). Archiving it now may strand an "
+                "active workflow. Pass force=true to archive anyway.",
+                error_code="AGENT_LOOKS_LIVE",
+                error_category="validation_error",
+                details={"agent_id": agent_id, "liveness_signals": live_signals},
+                recovery={
+                    "action": "Confirm the agent is really idle, then re-issue with force=true",
+                    "related_tools": ["observe", "ping_agent", "get_agent_metadata"],
+                    "workflow": [
+                        "1. Check recent activity: observe(action='agent', target_agent_id='...')",
+                        "2. If genuinely done, archive with force=true",
+                    ],
+                },
+            )]
+
     reason = arguments.get("reason", "Manual archive")
     keep_in_memory = arguments.get("keep_in_memory", False)
 
