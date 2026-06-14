@@ -398,7 +398,13 @@ async def archive_agent(
     )
 
     if hasattr(db, "update_agent_fields"):
-        await db.update_agent_fields(agent_id=agent_id, status="archived")
+        # Write archived_at alongside status so core.agents stays
+        # self-consistent (previously the timestamp landed only in
+        # core.identities.disabled_at + audit.events, leaving
+        # core.agents.archived_at NULL).
+        await db.update_agent_fields(
+            agent_id=agent_id, status="archived", archived_at=disabled_at
+        )
 
     # S21-b §3
     try:

@@ -223,12 +223,17 @@ class DatabaseBackend(ABC):
         parent_agent_id: Optional[str] = None,
         spawn_reason: Optional[str] = None,
         label: Optional[str] = None,
+        archived_at: Optional[datetime] = None,
     ) -> bool:
         """
         Update selected fields on core.agents WITHOUT touching api_key.
 
         Safer than upsert_agent() for routine metadata edits (purpose/notes/tags),
         because it avoids accidental overwrites of api_key or created_at.
+
+        ``archived_at`` is written when provided so ``core.agents`` stays
+        self-consistent (status='archived' ⟺ archived_at set) instead of
+        leaving the timestamp only in audit.events.
         """
         pass
 
