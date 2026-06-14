@@ -104,3 +104,104 @@ class TestDeviationUsesFloor:
         # floor this is ~-4.7 sigma, with the 0.05 floor it is ~-2.24.
         z_E = state.deviation("E")
         assert z_E == pytest.approx((0.6608 - 0.7729981068548344) / MIN_MEANINGFUL_EISV_STD, rel=1e-2)
+
+
+# --- Issue #689: absolute-basin-health gating of self-relative risk -----------
+
+from src.behavioral_assessment import (  # noqa: E402
+    _basin_health_gate,
+    _score_self_relative,
+    RISK_SAFE_THRESHOLD,
+    BASIN_E_HEALTHY,
+    BASIN_I_HEALTHY,
+    BASIN_S_HEALTHY,
+    BASIN_V_HEALTHY,
+)
+
+
+class TestBasinHealthGate:
+    def test_gate_closed_inside_basin(self):
+        # All EISV dims comfortably inside BASIN_HIGH → every gate is 0.
+        st = BehavioralEISV()
+        st.E, st.I, st.S, st.V = 0.75, 0.80, 0.15, 0.02
+        gate = _basin_health_gate(st)
+        assert gate == {"low_E": 0.0, "low_I": 0.0, "high_S": 0.0, "high_V": 0.0}
+
+    def test_gate_full_at_absolute_edge(self):
+        # At/below the absolute floors the gate is fully open (1.0).
+        st = BehavioralEISV()
+        st.E, st.I, st.S, st.V = 0.30, 0.30, 0.70, 0.50
+        gate = _basin_health_gate(st)
+        assert gate == {"low_E": 1.0, "low_I": 1.0, "high_S": 1.0, "high_V": 1.0}
+
+    def test_gate_ramps_linearly_in_boundary(self):
+        # E halfway between healthy edge (0.60) and danger floor (0.30) → 0.5.
+        st = BehavioralEISV()
+        st.E, st.I, st.S, st.V = 0.45, 0.80, 0.15, 0.0
+        assert _basin_health_gate(st)["low_E"] == pytest.approx(0.5)
+
+    def test_gate_zeroes_self_relative_inside_basin(self):
+        # An ultra-stable agent firmly inside the basin: even a many-σ move from
+        # its own norm produces NO self-relative EISV risk (gate is 0).
+        st = _baselined(
+            {"E": (0.75, 0.01), "I": (0.80, 0.01), "S": (0.15, 0.01), "V": (0.0, 0.01)},
+            {"E": 0.66, "I": 0.72, "S": 0.24, "V": 0.10},
+        )
+        comps = _score_self_relative(st, rho=0.0, continuity_energy=0.0, ctx={})
+        assert comps["low_E"] == 0.0
+        assert comps["low_I"] == 0.0
+        assert comps["high_S"] == 0.0
+        assert comps["high_V"] == 0.0
+
+
+class TestBasinGateSentinelTrace:
+    def test_sentinel_pause_is_well_below_caution(self):
+        # The gate (not just the flat floor) drives the real Sentinel false-pause
+        # trace deep into safe territory: 0.94 ungated → ~0.05 gated.
+        state = _baselined(_SENTINEL_BASELINE, _SENTINEL_PAUSE_STATE)
+        result = assess_behavioral_state(state, rho=0.0)
+        assert result.verdict == "safe"
+        assert result.risk < RISK_SAFE_THRESHOLD
+
+    def test_gate_never_raises_risk(self):
+        # The gate is a [0,1] multiplier: gated risk <= ungated risk for any state.
+        import src.behavioral_assessment as ba
+        state = _baselined(_SENTINEL_BASELINE, _SENTINEL_PAUSE_STATE)
+        gated = assess_behavioral_state(state, rho=0.0).risk
+        original = ba._basin_health_gate
+        ba._basin_health_gate = lambda s: {"low_E": 1.0, "low_I": 1.0, "high_S": 1.0, "high_V": 1.0}
+        try:
+            ungated = assess_behavioral_state(state, rho=0.0).risk
+        finally:
+            ba._basin_health_gate = original
+        assert gated <= ungated + 1e-9
+
+    def test_genuine_basin_exit_still_high_risk(self):
+        # A real multi-dimensional basin exit on a tight baseline must still pause.
+        state = _baselined(
+            {"E": (0.74, 0.08), "I": (0.78, 0.08), "S": (0.18, 0.08), "V": (0.0, 0.08)},
+            {"E": 0.35, "I": 0.45, "S": 0.65, "V": 0.20},
+        )
+        result = assess_behavioral_state(state, rho=0.0)
+        assert result.verdict == "high-risk"
+
+    def test_absolute_floor_breach_pauses_regardless_of_gate(self):
+        # Below the absolute floors, the floors fire and the gate is fully open.
+        state = _baselined(
+            {"E": (0.74, 0.08), "I": (0.78, 0.08), "S": (0.18, 0.08), "V": (0.0, 0.08)},
+            {"E": 0.20, "I": 0.25, "S": 0.80, "V": 0.10},
+        )
+        result = assess_behavioral_state(state, rho=0.0)
+        assert result.verdict == "high-risk"
+
+
+class TestBasinGateEdgesMatchConfig:
+    def test_basin_gate_edges_match_config(self):
+        # Drift-guard: the healthy-edge constants duplicated in behavioral_assessment
+        # (kept local to avoid the numpy/config import chain on the hot path) must
+        # stay byte-identical to config.governance_config.BASIN_HIGH.
+        from config.governance_config import BASIN_HIGH
+        assert BASIN_E_HEALTHY == BASIN_HIGH.E_min
+        assert BASIN_I_HEALTHY == BASIN_HIGH.I_min
+        assert BASIN_S_HEALTHY == BASIN_HIGH.S_max
+        assert BASIN_V_HEALTHY == BASIN_HIGH.V_abs_max

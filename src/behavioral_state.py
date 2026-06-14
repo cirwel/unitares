@@ -57,10 +57,20 @@ BASELINE_WARMUP_UPDATES = 30
 # pause (E 0.77→0.66, I 0.68→0.66 — both healthy) scored risk 0.94 (high-risk)
 # with no floor vs 0.33 (safe) at 0.05; genuine degradations are unchanged.
 #
-# A flat floor is the blunt form of the more principled fix (gate self-relative
-# risk by absolute basin health); see the "health-gating" follow-up. A flat
-# value also slightly over-floors slow-alpha dimensions (I) and under-floors
-# fast-alpha ones (S) since the per-dimension EMA step differs.
+# As of issue #689 this flat floor is SECONDARY. The principled fix — gating
+# self-relative deviation risk by absolute basin health — lives in
+# behavioral_assessment._basin_health_gate: inside the healthy basin the
+# self-relative components are multiplied by 0, so a tight-σ agent's small,
+# absolutely-healthy wobble raises no risk regardless of how many σ it spans.
+# That gate, not this constant, is what now keeps the Sentinel trace safe.
+#
+# The floor is retained as defense-in-depth: it bounds the raw z-magnitude in
+# the boundary region (where the gate is partially open) so a collapsed σ cannot
+# produce an absurd z there. It does NOT touch σ for unstable agents (it only
+# binds when std < the floor), so it never blunts meaningful variance. A flat
+# value still slightly over-floors slow-alpha dims (I) and under-floors fast-alpha
+# ones (S) since the per-dimension EMA step differs — but with the basin gate in
+# front, the exact value is far less load-bearing than it was under #686.
 MIN_MEANINGFUL_EISV_STD = 0.05
 
 

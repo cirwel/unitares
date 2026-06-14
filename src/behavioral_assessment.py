@@ -6,6 +6,12 @@ Assessment is auditable — you can trace exactly why a verdict was issued.
 After warmup, scoring switches from fixed universal thresholds to
 self-relative z-score deviations from the agent's own behavioral baseline.
 Absolute safety floors always apply regardless of baseline.
+
+Self-relative deviation risk is gated by absolute basin health (issue #689):
+inside the healthy basin a deviation from your own norm is information, not
+danger, so it raises no risk; outside the basin the gate opens and the absolute
+floors fire. This replaces the flat MIN_MEANINGFUL_EISV_STD σ-floor as the
+principled fix for the 2026-06-13 ultra-stable-agent false-pause (#686).
 """
 
 from __future__ import annotations
@@ -49,10 +55,71 @@ ABSOLUTE_I_FLOOR = 0.30
 ABSOLUTE_S_CEILING = 0.70
 ABSOLUTE_V_CEILING = 0.50
 
+# --- Absolute-basin-health gate edges (issue #689) ----------------------------
+# Self-relative z-deviation risk is gated by how far the ABSOLUTE EISV value sits
+# between the healthy-basin edge and the absolute danger edge. Inside the healthy
+# basin "you moved from your own norm" is information, not danger, so the gate is
+# 0 and self-relative deviations contribute no risk; as a dimension leaves the
+# basin toward its absolute floor the gate ramps 0→1, restoring full self-relative
+# sensitivity exactly where it matters (and where σ resolution is meaningful).
+#
+# Healthy edge = BASIN_HIGH per-dimension EISV bounds. These MIRROR
+# config.governance_config.BASIN_HIGH; they are duplicated here (rather than
+# imported) to keep this module's IMPORT free of the numpy/config chain —
+# importing config.governance_config pulls numpy at import time (an `np.ndarray`
+# annotation is evaluated at class-definition time). Parity is drift-guarded by
+# tests/test_stable_agent_risk_calibration.py::test_basin_gate_edges_match_config.
+# Danger edge = the ABSOLUTE_* floors/ceilings above.
+#
+# This is the principled replacement for the flat MIN_MEANINGFUL_EISV_STD floor:
+# it does not touch σ at all, so it never blunts the meaningful variance of a
+# genuinely unstable agent, and it sidesteps the EMA double-smoothing artifact
+# (a tight σ inside the basin no longer matters because the gate is 0 there).
+BASIN_E_HEALTHY = 0.60   # == BASIN_HIGH.E_min
+BASIN_I_HEALTHY = 0.70   # == BASIN_HIGH.I_min
+BASIN_S_HEALTHY = 0.25   # == BASIN_HIGH.S_max
+BASIN_V_HEALTHY = 0.15   # == BASIN_HIGH.V_abs_max
+
 # Sigma thresholds for self-relative scoring
 SIGMA_MILD = 1.5      # noticeably different from self
 SIGMA_MODERATE = 2.0   # concerning
 SIGMA_SEVERE = 3.0     # severe deviation
+
+
+def _basin_health_gate(state: BehavioralEISV) -> Dict[str, float]:
+    """Per-dimension absolute-health gate in [0, 1] for self-relative risk.
+
+    0.0 == dimension is inside the healthy basin (deviation is information, not
+    danger); 1.0 == dimension has reached its absolute danger edge (full
+    self-relative sensitivity). Linear ramp between the basin edge and the
+    absolute floor. Keyed by the risk-component name the gate multiplies.
+
+    Uses ONLY the absolute EISV value — never risk or coherence — so there is no
+    circularity with the risk score being computed.
+    """
+
+    def _floor_gate(value: float, healthy: float, danger: float) -> float:
+        # lower-is-worse dimensions (E, I): gate opens as value falls below healthy
+        if value >= healthy:
+            return 0.0
+        if value <= danger:
+            return 1.0
+        return (healthy - value) / (healthy - danger)
+
+    def _ceiling_gate(value: float, healthy: float, danger: float) -> float:
+        # higher-is-worse dimensions (S, |V|): gate opens as value rises above healthy
+        if value <= healthy:
+            return 0.0
+        if value >= danger:
+            return 1.0
+        return (value - healthy) / (danger - healthy)
+
+    return {
+        "low_E": _floor_gate(state.E, BASIN_E_HEALTHY, ABSOLUTE_E_FLOOR),
+        "low_I": _floor_gate(state.I, BASIN_I_HEALTHY, ABSOLUTE_I_FLOOR),
+        "high_S": _ceiling_gate(state.S, BASIN_S_HEALTHY, ABSOLUTE_S_CEILING),
+        "high_V": _ceiling_gate(abs(state.V), BASIN_V_HEALTHY, ABSOLUTE_V_CEILING),
+    }
 
 
 def assess_behavioral_state(
@@ -203,14 +270,27 @@ def _score_self_relative(
 
     Same components and weights as fixed-threshold mode, but triggers are based
     on sigma-deviations from the agent's characteristic operating point.
+
+    Each EISV-derived component is then multiplied by an absolute-basin-health
+    gate (issue #689): inside the healthy basin the gate is 0, so a deviation
+    from your own norm raises no risk; as a dimension leaves the basin toward its
+    absolute floor the gate ramps 0→1, restoring full self-relative sensitivity.
+    The rho and continuity-energy components are absolute signals (not baseline-
+    relative) and are intentionally NOT gated.
+
+    NOTE: a gated-to-0 component here does NOT mean the dimension cannot raise
+    risk — ``assess_behavioral_state`` takes ``max()`` of this result with
+    ``_score_absolute_floors`` per component, so the absolute floors remain a
+    hard backstop regardless of the gate.
     """
     components: Dict[str, float] = {}
+    gate = _basin_health_gate(state)
 
     # --- Component 1: E deviation below baseline (weight: 0.30) ---
     z_E = state.deviation("E")
     if z_E < -SIGMA_MILD:
         severity = min(1.0, (-z_E - SIGMA_MILD) / (SIGMA_SEVERE - SIGMA_MILD))
-        components["low_E"] = 0.30 * severity
+        components["low_E"] = 0.30 * severity * gate["low_E"]
     else:
         components["low_E"] = 0.0
 
@@ -218,7 +298,7 @@ def _score_self_relative(
     z_I = state.deviation("I")
     if z_I < -SIGMA_MILD:
         severity = min(1.0, (-z_I - SIGMA_MILD) / (SIGMA_SEVERE - SIGMA_MILD))
-        components["low_I"] = 0.30 * severity
+        components["low_I"] = 0.30 * severity * gate["low_I"]
     else:
         components["low_I"] = 0.0
 
@@ -230,7 +310,7 @@ def _score_self_relative(
         sigma_threshold = SIGMA_MODERATE
     if z_S > sigma_threshold:
         severity = min(1.0, (z_S - sigma_threshold) / (SIGMA_SEVERE - sigma_threshold))
-        components["high_S"] = 0.20 * severity
+        components["high_S"] = 0.20 * severity * gate["high_S"]
     else:
         components["high_S"] = 0.0
 
@@ -238,7 +318,7 @@ def _score_self_relative(
     z_V = state.deviation("V")
     if abs(z_V) > SIGMA_MILD:
         severity = min(1.0, (abs(z_V) - SIGMA_MILD) / (SIGMA_SEVERE - SIGMA_MILD))
-        components["high_V"] = 0.20 * severity
+        components["high_V"] = 0.20 * severity * gate["high_V"]
     else:
         components["high_V"] = 0.0
 
