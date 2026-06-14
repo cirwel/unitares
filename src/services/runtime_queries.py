@@ -10,6 +10,7 @@ from typing import Any, Dict
 from config.governance_config import GovernanceConfig
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
+from src.mcp_handlers.support.naming_helpers import disambiguate_public_handle
 from src.services.identity_continuity import get_identity_continuity_status
 
 logger = get_logger(__name__)
@@ -17,9 +18,14 @@ logger = get_logger(__name__)
 
 def _resolve_agent_identity_view(agent_uuid: str, meta: Any) -> tuple[str, str | None]:
     """Resolve the public-facing handle and display name for a UUID-bound agent."""
+    # Disambiguate the {Model}_{date} bucket handle with the agent's uuid8 so
+    # same-model/same-day mints don't surface as identical "duplicate" handles.
     public_agent_id = (
-        getattr(meta, "public_agent_id", None)
-        or getattr(meta, "structured_id", None)
+        disambiguate_public_handle(
+            getattr(meta, "public_agent_id", None),
+            getattr(meta, "structured_id", None),
+            agent_uuid,
+        )
         or agent_uuid
     ) if meta else agent_uuid
     display_name = (

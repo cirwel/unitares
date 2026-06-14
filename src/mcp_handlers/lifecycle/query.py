@@ -22,6 +22,7 @@ from ..error_helpers import (
 )
 from ..decorators import mcp_tool
 from ..support.coerce import safe_float
+from ..support.naming_helpers import disambiguate_public_handle
 from src.logging_utils import get_logger
 from src.agent_monitor_state import ensure_hydrated
 
@@ -50,7 +51,18 @@ def _is_uuid_like_agent_id(value: Any) -> bool:
 
 
 def _public_agent_identifier(agent_id: str, meta: Any) -> str:
-    for attr in ("public_agent_id", "structured_id", "label", "display_name"):
+    # Disambiguate the bucket-form public_agent_id ({Model}_{date}) with the
+    # agent's uuid8 fragment so distinct agents minted same-model/same-day do
+    # not render as identical "duplicate" rows. agent_id is the registry UUID
+    # in the primary call path, so it backstops a missing meta.agent_uuid.
+    handle = disambiguate_public_handle(
+        getattr(meta, "public_agent_id", None),
+        getattr(meta, "structured_id", None),
+        getattr(meta, "agent_uuid", None) or agent_id,
+    )
+    if handle:
+        return handle
+    for attr in ("label", "display_name"):
         value = getattr(meta, attr, None)
         if value:
             return str(value)
@@ -176,9 +188,10 @@ def _identity_view(
         "id_redacted": id_redacted,
         "label": getattr(meta, "label", None),
         "display_name": getattr(meta, "display_name", None),
-        "public_handle": (
-            getattr(meta, "public_agent_id", None)
-            or getattr(meta, "structured_id", None)
+        "public_handle": disambiguate_public_handle(
+            getattr(meta, "public_agent_id", None),
+            getattr(meta, "structured_id", None),
+            getattr(meta, "agent_uuid", None) or agent_id,
         ),
     }
     if (
@@ -373,7 +386,11 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                         pass  # Keep agents with unparseable dates
 
                 label = getattr(meta, 'label', None)
-                public_id = getattr(meta, 'public_agent_id', None) or getattr(meta, 'structured_id', None)
+                public_id = disambiguate_public_handle(
+                    getattr(meta, 'public_agent_id', None),
+                    getattr(meta, 'structured_id', None),
+                    getattr(meta, 'agent_uuid', None) or agent_id,
+                )
                 from src.resident_progress.registry import is_event_driven_label
                 visible_id, uuid_redacted = _visible_agent_identifier(
                     agent_id,
@@ -415,7 +432,11 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                 caller_meta = mcp_server.agent_metadata.get(caller_uuid)
                 if caller_meta:
                     caller_label = getattr(caller_meta, 'label', None)
-                    caller_public = getattr(caller_meta, 'public_agent_id', None) or getattr(caller_meta, 'structured_id', None)
+                    caller_public = disambiguate_public_handle(
+                        getattr(caller_meta, 'public_agent_id', None),
+                        getattr(caller_meta, 'structured_id', None),
+                        getattr(caller_meta, 'agent_uuid', None) or caller_uuid,
+                    )
                     parent_id, parent_redacted = _visible_related_agent_identifier(
                         getattr(caller_meta, 'parent_agent_id', None),
                         caller_uuid=caller_uuid,
