@@ -38,11 +38,15 @@ Use whichever spelling you prefer; the canonical names keep their raw response s
 Choose creation, lineage, or proof-owned resume explicitly:
 
 ~~~text
-start_session(force_new=true)                                        # first run / fresh process
-start_session(force_new=true, parent_agent_id="<prior-uuid>",
-              spawn_reason="new_session")                            # fresh process inheriting prior work
+start_session(force_new=true)                                        # any fresh session — the default; co-location is not lineage
+start_session(force_new=true, parent_agent_id="<dispatcher-uuid>",
+              spawn_reason="subagent")                               # dispatched subagent (usually set automatically by the dispatcher)
+start_session(force_new=true, parent_agent_id="<exited-uuid>",
+              spawn_reason="explicit")                               # handoff from an EXITED prior session
 identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true) # same live owner / proof-owned rebind
 ~~~
+
+Declaring a currently-live agent as parent is rejected (`lineage_coincidental_rejected`): a live agent is a concurrent sibling, not a predecessor. `subagent` and `compaction` are exempt — their parent is legitimately live. A genuine handoff to an exited predecessor stays provisional until R1 confirms it.
 
 Use canonical `onboard(...)` instead when targeting older servers or when you
 need the unwrapped raw response.
@@ -59,8 +63,8 @@ Returns:
 
 Default rules:
 
-1. Fresh first run: call `start_session(force_new=true)`.
-2. New process continuing prior work: call `start_session(force_new=true, parent_agent_id="<prior-uuid>", spawn_reason="new_session")`.
+1. Any fresh session: call `start_session(force_new=true)` with no parent. Co-location in a workspace is not lineage.
+2. Declare lineage only for a real causal event — a dispatched subagent (`parent_agent_id="<dispatcher-uuid>", spawn_reason="subagent"`, usually set automatically by the dispatcher) or a handoff from an EXITED prior session (`parent_agent_id="<exited-uuid>", spawn_reason="explicit"`). Declaring a currently-live agent as parent is rejected.
 3. Same live process or explicit ownership rebind: call `identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true)`.
 4. Ordinary check-ins: rely on the active session binding or `client_session_id`; reserve `continuity_token` for explicit proof-owned rebinds.
 

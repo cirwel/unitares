@@ -284,10 +284,12 @@ def require_agent_id(arguments: Dict[str, Any]) -> Tuple[str, Optional[TextConte
         if _partc_mode == "strict":
             return None, (
                 "No agent_id provided and no session-bound identity. "
-                "Call onboard(force_new=true, parent_agent_id='<prior UUID>' if continuing, "
-                "spawn_reason='new_session') per v2 ontology — declare lineage rather than "
-                "resume via token. Resume by proof requires identity(agent_uuid=X, "
-                "continuity_token=Y) with both signals."
+                "Call onboard(force_new=true) per v2 ontology — a fresh session "
+                "onboards fresh with no parent. Declare parent_agent_id only for a "
+                "real causal event: a dispatched subagent (spawn_reason='subagent') "
+                "or a handoff from an exited prior session (spawn_reason='explicit'); "
+                "declaring a live agent as parent is rejected. Resume by proof "
+                "requires identity(agent_uuid=X, continuity_token=Y) with both signals."
             )
         elif _partc_mode == "log":
             logger.warning(
@@ -483,8 +485,8 @@ def require_registered_agent(arguments: Dict[str, Any]) -> Tuple[str, Optional[T
                     "action": "Call onboard() first to create your identity, or call process_agent_update() to auto-create",
                     "related_tools": ["onboard", "process_agent_update", "identity", "list_tools"],
                     "workflow": [
-                        "1. Call onboard(force_new=true, parent_agent_id='<prior UUID>' if continuing prior work, spawn_reason='new_session')",
-                        "   — per v2 ontology, fresh process-instances mint fresh identity; lineage is declared, not resumed via token",
+                        "1. Call onboard(force_new=true) — a fresh session onboards fresh with no parent",
+                        "   — per v2 ontology, fresh process-instances mint fresh identity; declare parent_agent_id only for a real spawn (spawn_reason='subagent') or a handoff from an exited session (spawn_reason='explicit'); declaring a live agent as parent is rejected",
                         "2. Save client_session_id from response",
                         "3. Call identity(name='your_name') to set a cosmetic label",
                         "4. Include client_session_id in all future calls within this process-instance",

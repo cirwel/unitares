@@ -123,6 +123,26 @@ The taxonomy + axioms provide a gate for each existing mechanism:
 
 A sequenced plan for these belongs in a separate document. The taxonomy + axioms let planning proceed without re-opening ontology.
 
+### Lineage is causal, not coincidental
+
+Lineage records a real causal event, not the fact that two process-instances
+share a workspace. A fresh session onboards fresh — `onboard(force_new=true)`
+with no `parent_agent_id` — and stays `lineage_state: no_lineage_declared` by
+design. Declare a parent only when a causal relationship actually exists:
+
+- **Dispatched subagents** declare `parent_agent_id=<dispatcher UUID>,
+  spawn_reason="subagent"` (usually set by the dispatcher).
+- **A deliberate handoff from an EXITED prior session** declares
+  `spawn_reason="explicit"` — the successor inherits a predecessor that has
+  finished.
+
+Liveness gates the declaration: declaring a **currently-live** agent as parent
+is rejected at onboard (`lineage_coincidental_rejected`), because a live agent
+is a concurrent sibling, not a predecessor. `subagent` and `compaction` are
+exempt — their parent is legitimately still running. A genuine serial handoff
+to an exited predecessor is accepted and remains provisional until R1's
+behavioral-continuity check confirms it.
+
 ### Cross-role lineage envelope (role families)
 
 Lineage declaration is gated at onboard by a cross-role pre-check

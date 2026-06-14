@@ -172,20 +172,27 @@ When investigating a typed-refusal, the response carries `tool`, `hint`, `ontolo
 
 ## Minimal Agent Workflow
 
-Per identity.md v2 ontology, fresh process-instances mint fresh identity. Lineage is declared, not resumed via token.
+Per identity.md v2 ontology, fresh process-instances mint fresh identity. Lineage is causal — declared only for a genuine spawn or handoff event, never to claim continuity with a co-located predecessor.
 
 Default happy path:
 
-1. `onboard(force_new=true, parent_agent_id="<prior UUID if continuing this workspace>", spawn_reason="new_session")` → save `agent_uuid` and `client_session_id` from response
+1. `onboard(force_new=true)` with NO `parent_agent_id` → save `agent_uuid` and `client_session_id` from response. A fresh session onboards fresh; co-location in this workspace is not lineage.
 2. `process_agent_update(response_text=..., complexity=..., client_session_id=...)` for in-process check-ins
-3. On a future process-instance, repeat step 1 with the new prior UUID — do not auto-resume
+3. On a future process-instance, repeat step 1 — onboard fresh, do not auto-resume and do not declare the prior session as a parent.
+
+Declare lineage (`parent_agent_id`) ONLY for a real causal event:
+
+- **Dispatched subagents** — `parent_agent_id=<dispatcher UUID>, spawn_reason="subagent"`. Usually set automatically by the dispatcher.
+- **A deliberate handoff from an EXITED prior session** — `spawn_reason="explicit"`. The successor inherits a predecessor that has finished, not a sibling still running.
+
+Declaring a currently-LIVE agent as `parent_agent_id` is rejected server-side (`lineage_coincidental_rejected`): a live agent is a concurrent sibling, not a predecessor. `subagent` and `compaction` are exempt — their parent is legitimately live. A genuine serial handoff to an exited predecessor is accepted and stays provisional until R1 confirms it.
 
 Friendly workflow aliases: the same happy path can be spelled with task-verb names — `start_session` → `onboard`, `sync_state` → `process_agent_update`, `check_working_state` → `get_governance_metrics`, `search_shared_memory` → `knowledge(action="search")`, `record_result` → `outcome_event`, `request_review` → `dialectic(action="request")`. Same parameters, same identity rules (the registry canonicalizes before the #425 gates judge). Calls made via these names return the normalized agent-experience envelope — `next_action` / `state_summary` / `risk_summary` / `memory_suggestions` / `recovery_hint` first, full canonical payload under `raw_governance` — while canonical names keep the raw response shape byte-identical.
 
-Discovering the prior UUID for step 1:
+For an explicit handoff (rare — only when a prior session has EXITED):
 
-- **Plugin-loaded sessions** are the canonical path. The `unitares-governance-plugin` SessionStart banner surfaces the cached workspace UUID as a lineage candidate (S11, plugin PR #17); Codex sessions get the same hint via `commands/governance-start.md` (S11-a).
-- **Server-only sessions** (working directly inside this repo without the plugin's hook chain) have no pre-onboard discovery surface. Onboarding without `parent_agent_id` mints honestly as `lineage_state: no_lineage_declared`. The onboard response still returns `thread_context.predecessor.uuid` when a session-resolved predecessor exists — record it and declare it on the **next** fresh process-instance, not retroactively against the just-minted UUID.
+- **Plugin-loaded sessions** are the canonical path. The `unitares-governance-plugin` SessionStart banner surfaces the cached workspace UUID; Codex sessions get the same hint via `commands/governance-start.md` (S11-a). Treat that UUID as a handoff candidate only if that session has finished — if it is still running, it is a sibling and the server will reject it (`lineage_coincidental_rejected`). The default fresh onboard needs none of this.
+- **Server-only sessions** (working directly inside this repo without the plugin's hook chain) have no pre-onboard discovery surface. Onboarding without `parent_agent_id` mints honestly as `lineage_state: no_lineage_declared` — this is the expected default, not a degraded state. The onboard response returns `thread_context.predecessor.uuid` when a session-resolved predecessor exists; that is context, not a lineage instruction — do not declare it as a parent unless it represents a real handoff from an exited session.
 
 Identity rules:
 
@@ -194,6 +201,6 @@ Identity rules:
 - `continuity_token` is being narrowed (S1 in `docs/ontology/plan.md`) — present-day external clients can still resume with it, but plugin-internal flows declare lineage instead.
 - Substrate-anchored agents (Lumen, the long-lived residents) earn cross-process continuity via the substrate-earned identity pattern in `docs/ontology/identity.md` — they may use a hardcoded UUID across restarts.
 - Arg-less `onboard()` with no proof signal triggers the v2 fresh-instance gate — the server flips `force_new=true` and emits a `[FRESH_INSTANCE]` log line (S13).
-- Lineage is declared at onboard time and is one-shot. A UUID minted without `parent_agent_id` stays unlineaged for its lifetime — record any observed predecessor UUID for the next fresh process-instance instead.
+- Lineage is causal and declared at onboard time. The default fresh session declares no parent. Declare `parent_agent_id` only for a real spawn (`spawn_reason="subagent"`) or a handoff from an exited session (`spawn_reason="explicit"`); declaring a live agent as parent is rejected (`lineage_coincidental_rejected`).
 
 <!-- END SHARED CONTRACT -->

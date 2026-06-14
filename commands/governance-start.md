@@ -25,12 +25,12 @@ failure (strict mode) once the fleet reliably works in worktrees — the
 advisory→strict rollout mirrors the Surface Lease Plane. Rationale:
 `docs/proposals/worktree-isolation-vs-lease-default.md`.
 
-If the newest entry contains `parent_agent_id`, treat it as a lineage candidate, not ownership proof. Ignore any legacy `continuity_token` field for startup; tokens are only for explicit same-live-owner PATH 0 proof rebinds.
+A cached `parent_agent_id` from a prior session is context, not a lineage instruction: co-location in this workspace is not lineage, and the prior session is almost always still a sibling rather than an exited predecessor. Ignore any legacy `continuity_token` field for startup; tokens are only for explicit same-live-owner PATH 0 proof rebinds.
 
 Call `onboard()` against UNITARES using the strongest honest mode:
 
-- if this is a fresh process with no prior UUID, pass `force_new=true`
-- if this is a fresh process inheriting prior work, pass `force_new=true`, `parent_agent_id=<cached uuid>`, and `spawn_reason="new_session"`
+- default: a fresh session onboards fresh — pass `force_new=true` with no `parent_agent_id`
+- declare lineage only for a real causal event: a dispatched subagent (`parent_agent_id=<dispatcher uuid>`, `spawn_reason="subagent"`, usually set automatically by the dispatcher) or a handoff from an EXITED prior session (`parent_agent_id=<exited uuid>`, `spawn_reason="explicit"`). Declaring a currently-live agent as parent is rejected (`lineage_coincidental_rejected`).
 - include `model_type` when the current runtime is clear from context
 - do not invent a display name unless the user asked for one
 
