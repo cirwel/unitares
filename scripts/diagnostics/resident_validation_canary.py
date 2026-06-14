@@ -73,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         cadence_seconds=args.cadence_seconds,
         observation_scope=scope,
     )
-    ticks = build_canary_ticks(
+    build_canary_ticks(
         profile,
         state_path=args.state_path,
         count=args.count,
@@ -82,15 +82,11 @@ def main(argv: list[str] | None = None) -> int:
         confidence=args.confidence,
         now=_parse_observed_at(args.observed_at),
     )
-    first_tick_index = ticks[0]["tick_index"]
-    last_tick_index = ticks[-1]["tick_index"]
     print(
         json.dumps(
             {
                 "event_type": "resident_validation_canary_batch",
-                "first_tick_index": first_tick_index,
-                "last_tick_index": last_tick_index,
-                "tick_count": len(ticks),
+                "status": "state_appended",
             },
             sort_keys=True,
         )

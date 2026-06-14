@@ -128,9 +128,7 @@ def test_cli_summary_avoids_echoing_private_tick_content(tmp_path: Path) -> None
     payload = json.loads(completed.stdout)
     assert payload == {
         "event_type": "resident_validation_canary_batch",
-        "first_tick_index": 1,
-        "last_tick_index": 2,
-        "tick_count": 2,
+        "status": "state_appended",
     }
     assert private_observation not in completed.stdout
     assert private_prediction not in completed.stdout
