@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Optional
 
-from src.behavioral_state import BehavioralEISV
+from src.behavioral_state import BehavioralEISV, eisv_min_std_for_dimension
 
 
 @dataclass
@@ -38,6 +38,27 @@ class AssessmentResult:
 # Verdict thresholds
 RISK_SAFE_THRESHOLD = 0.35
 RISK_CAUTION_THRESHOLD = 0.60
+
+# Component-level fixed-threshold risk boundaries.
+FIXED_E_RISK_FLOOR = 0.40
+FIXED_I_RISK_FLOOR = 0.40
+FIXED_S_RISK_CEILING = 0.50
+FIXED_CONVERGENT_S_RISK_CEILING = 0.60
+FIXED_V_RISK_CEILING = 0.15
+
+# Non-circular absolute EISV-safe gate for self-relative scoring.
+#
+# This is deliberately not the stricter BASIN_HIGH target shape from
+# governance_config because that shape includes convergence targets
+# (I>=0.70, S<=0.25) that healthy boundary residents can miss without being
+# dangerous; using it here would not fix the 2026-06-13 Sentinel false pause.
+# It is also not classify_basin(), because that would be circular: this scorer
+# is creating the risk input classify_basin needs.
+EISV_SAFE_E_MIN = 0.60
+EISV_SAFE_I_MIN = 0.60
+EISV_SAFE_S_MAX = 0.50
+EISV_SAFE_CONVERGENT_S_MAX = 0.60
+EISV_SAFE_V_ABS_MAX = 0.15
 
 # Absolute safety floors — always active, override baseline.
 # These catch states that are genuinely dangerous regardless of an agent's
@@ -150,22 +171,19 @@ def _score_fixed_threshold(
     components: Dict[str, float] = {}
 
     # --- Component 1: Low Energy (weight: 0.30) ---
-    if state.E < 0.4:
-        components["low_E"] = 0.30 * (0.4 - state.E) / 0.4
+    if state.E < FIXED_E_RISK_FLOOR:
+        components["low_E"] = 0.30 * (FIXED_E_RISK_FLOOR - state.E) / FIXED_E_RISK_FLOOR
     else:
         components["low_E"] = 0.0
 
     # --- Component 2: Low Integrity (weight: 0.30) ---
-    if state.I < 0.4:
-        components["low_I"] = 0.30 * (0.4 - state.I) / 0.4
+    if state.I < FIXED_I_RISK_FLOOR:
+        components["low_I"] = 0.30 * (FIXED_I_RISK_FLOOR - state.I) / FIXED_I_RISK_FLOOR
     else:
         components["low_I"] = 0.0
 
     # --- Component 3: High Entropy (weight: 0.20) ---
-    s_threshold = 0.5
-    task_type = ctx.get("task_type", "mixed")
-    if task_type == "convergent":
-        s_threshold = 0.6
+    s_threshold = _fixed_s_risk_ceiling(ctx)
     if state.S > s_threshold:
         components["high_S"] = 0.20 * min(1.0, (state.S - s_threshold) / (1.0 - s_threshold))
     else:
@@ -173,8 +191,8 @@ def _score_fixed_threshold(
 
     # --- Component 4: High |V| imbalance (weight: 0.20) ---
     abs_v = abs(state.V)
-    if abs_v > 0.15:
-        components["high_V"] = 0.20 * min(1.0, (abs_v - 0.15) / 0.85)
+    if abs_v > FIXED_V_RISK_CEILING:
+        components["high_V"] = 0.20 * min(1.0, (abs_v - FIXED_V_RISK_CEILING) / (1.0 - FIXED_V_RISK_CEILING))
     else:
         components["high_V"] = 0.0
 
@@ -205,38 +223,43 @@ def _score_self_relative(
     on sigma-deviations from the agent's characteristic operating point.
     """
     components: Dict[str, float] = {}
+    absolute_eisv_safe = _is_absolute_eisv_safe(state, ctx)
 
     # --- Component 1: E deviation below baseline (weight: 0.30) ---
-    z_E = state.deviation("E")
-    if z_E < -SIGMA_MILD:
+    # Inside the absolute EISV-safe region, movement from self-baseline is
+    # information, not risk. Outside it, relative deviations are allowed to
+    # contribute again, with a small per-dimension EMA-derived denominator
+    # guard so exact-zero baselines do not become invisible.
+    z_E = state.deviation("E", min_std=eisv_min_std_for_dimension("E"))
+    if not absolute_eisv_safe and z_E < -SIGMA_MILD:
         severity = min(1.0, (-z_E - SIGMA_MILD) / (SIGMA_SEVERE - SIGMA_MILD))
         components["low_E"] = 0.30 * severity
     else:
         components["low_E"] = 0.0
 
     # --- Component 2: I deviation below baseline (weight: 0.30) ---
-    z_I = state.deviation("I")
-    if z_I < -SIGMA_MILD:
+    z_I = state.deviation("I", min_std=eisv_min_std_for_dimension("I"))
+    if not absolute_eisv_safe and z_I < -SIGMA_MILD:
         severity = min(1.0, (-z_I - SIGMA_MILD) / (SIGMA_SEVERE - SIGMA_MILD))
         components["low_I"] = 0.30 * severity
     else:
         components["low_I"] = 0.0
 
     # --- Component 3: S deviation above baseline (weight: 0.20) ---
-    z_S = state.deviation("S")
+    z_S = state.deviation("S", min_std=eisv_min_std_for_dimension("S"))
     task_type = ctx.get("task_type", "mixed")
     sigma_threshold = SIGMA_MILD
     if task_type == "convergent":
         sigma_threshold = SIGMA_MODERATE
-    if z_S > sigma_threshold:
+    if not absolute_eisv_safe and z_S > sigma_threshold:
         severity = min(1.0, (z_S - sigma_threshold) / (SIGMA_SEVERE - sigma_threshold))
         components["high_S"] = 0.20 * severity
     else:
         components["high_S"] = 0.0
 
     # --- Component 4: |V| deviation above baseline (weight: 0.20) ---
-    z_V = state.deviation("V")
-    if abs(z_V) > SIGMA_MILD:
+    z_V = state.deviation("V", min_std=eisv_min_std_for_dimension("V"))
+    if not absolute_eisv_safe and abs(z_V) > SIGMA_MILD:
         severity = min(1.0, (abs(z_V) - SIGMA_MILD) / (SIGMA_SEVERE - SIGMA_MILD))
         components["high_V"] = 0.20 * severity
     else:
@@ -255,6 +278,30 @@ def _score_self_relative(
         components["high_CE"] = 0.0
 
     return components
+
+
+def _fixed_s_risk_ceiling(ctx: Dict) -> float:
+    """Absolute S boundary used by fixed-threshold scoring."""
+    if ctx.get("task_type", "mixed") == "convergent":
+        return FIXED_CONVERGENT_S_RISK_CEILING
+    return FIXED_S_RISK_CEILING
+
+
+def _eisv_safe_s_max(ctx: Dict) -> float:
+    """Task-aware S boundary for the non-circular EISV-safe gate."""
+    if ctx.get("task_type", "mixed") == "convergent":
+        return EISV_SAFE_CONVERGENT_S_MAX
+    return EISV_SAFE_S_MAX
+
+
+def _is_absolute_eisv_safe(state: BehavioralEISV, ctx: Dict) -> bool:
+    """True when raw EISV is safe enough that self-relative movement is not risk."""
+    return (
+        state.E >= EISV_SAFE_E_MIN
+        and state.I >= EISV_SAFE_I_MIN
+        and state.S <= _eisv_safe_s_max(ctx)
+        and abs(state.V) <= EISV_SAFE_V_ABS_MAX
+    )
 
 
 def _score_absolute_floors(state: BehavioralEISV) -> Dict[str, float]:

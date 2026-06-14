@@ -1,18 +1,18 @@
 """Calibration: ultra-stable agents must not be falsely flagged high-risk for
-small, absolutely-healthy EISV wobbles.
+small, absolutely-safe EISV wobbles.
 
 Regression for the 2026-06-13 Sentinel pause: a long-running monitor with a
 very tight behavioral baseline (std ~0.007-0.024) had a perfectly healthy
 fluctuation (E 0.77->0.66, I 0.68->0.66) scored as a many-sigma "severe
-deviation" -> risk 0.94 -> high-risk -> cirs_block -> paused ~18h. The
-MIN_MEANINGFUL_EISV_STD floor caps z-score sensitivity at a meaningful
-resolution while preserving genuine multi-tenth moves and absolute floors.
+deviation" -> risk 0.94 -> high-risk -> cirs_block -> paused ~18h. The fix is
+to gate self-relative EISV risk by absolute EISV health: while raw E/I/S/V are
+safe, movement from the agent's own tight baseline is evidence, not danger.
 """
 
 import pytest
 
 from src.agent_behavioral_baseline import WelfordStats
-from src.behavioral_state import BehavioralEISV, MIN_MEANINGFUL_EISV_STD
+from src.behavioral_state import BehavioralEISV, eisv_min_std_for_dimension
 from src.behavioral_assessment import assess_behavioral_state, RISK_CAUTION_THRESHOLD
 
 
@@ -37,7 +37,7 @@ def _baselined(mean_m2, current, count=1239):
     return st
 
 
-class TestWelfordSigmaFloor:
+class TestWelfordMinStd:
     def test_min_std_caps_sensitivity_for_tight_variance(self):
         s = WelfordStats()
         for v in (0.500, 0.501, 0.499, 0.500, 0.501, 0.499):  # std ~0.0009
@@ -84,23 +84,55 @@ class TestStableSentinelNotFalselyPaused:
     def test_small_healthy_wobble_is_not_high_risk(self):
         state = _baselined(_SENTINEL_BASELINE, _SENTINEL_PAUSE_STATE)
         result = assess_behavioral_state(state, rho=0.0)
-        # With the floor this small, absolutely-healthy wobble is no longer
-        # high-risk (it scored 0.94 / high-risk before the floor).
+        # With absolute EISV-safe gating this small wobble is no longer
+        # high-risk (it scored 0.94 / high-risk before the gate).
         assert result.verdict != "high-risk"
         assert result.risk < RISK_CAUTION_THRESHOLD
+        assert result.components["low_E"] == 0.0
+        assert result.components["low_I"] == 0.0
+        assert result.components["high_S"] == 0.0
+        assert result.components["high_V"] == 0.0
+
+    def test_rho_and_continuity_energy_still_score_inside_safe_gate(self):
+        state = _baselined(_SENTINEL_BASELINE, _SENTINEL_PAUSE_STATE)
+        result = assess_behavioral_state(state, rho=-0.5, continuity_energy=1.0)
+        assert result.components["low_E"] == 0.0
+        assert result.components["low_I"] == 0.0
+        assert result.components["high_S"] == 0.0
+        assert result.components["adversarial_rho"] > 0.0
+        assert result.components["high_CE"] > 0.0
 
     def test_genuine_entropy_spike_still_flags(self):
         # The same tight baseline, but a real large entropy excursion must
-        # still produce a non-zero high_S risk component (floor preserves signal).
+        # still produce a non-zero high_S risk component once EISV leaves the
+        # absolute safe gate.
         state = _baselined(_SENTINEL_BASELINE, {"E": 0.773, "I": 0.681, "S": 0.70, "V": 0.092})
         result = assess_behavioral_state(state, rho=0.0)
         assert result.components.get("high_S", 0.0) > 0.0
 
+    def test_combined_basin_exit_still_flags(self):
+        state = _baselined(_SENTINEL_BASELINE, {"E": 0.35, "I": 0.34, "S": 0.65, "V": 0.20})
+        result = assess_behavioral_state(state, rho=0.0)
+        assert result.components["low_E"] > 0.0
+        assert result.components["low_I"] > 0.0
+        assert result.components["high_S"] > 0.0
+        assert result.components["high_V"] > 0.0
+        assert result.risk >= RISK_CAUTION_THRESHOLD
 
-class TestDeviationUsesFloor:
-    def test_deviation_applies_min_std(self):
+
+class TestDeviation:
+    def test_default_deviation_uses_raw_baseline_std(self):
         state = _baselined(_SENTINEL_BASELINE, _SENTINEL_PAUSE_STATE)
-        # E moved 0.112 from a baseline whose true std is ~0.024; without the
-        # floor this is ~-4.7 sigma, with the 0.05 floor it is ~-2.24.
         z_E = state.deviation("E")
-        assert z_E == pytest.approx((0.6608 - 0.7729981068548344) / MIN_MEANINGFUL_EISV_STD, rel=1e-2)
+        assert z_E == pytest.approx(
+            (0.6608 - 0.7729981068548344) / state._baseline_E.std,
+            rel=1e-2,
+        )
+
+    def test_deviation_accepts_ema_derived_min_std(self):
+        state = _baselined(_SENTINEL_BASELINE, _SENTINEL_PAUSE_STATE)
+        z_E = state.deviation("E", min_std=eisv_min_std_for_dimension("E"))
+        assert z_E == pytest.approx(
+            (0.6608 - 0.7729981068548344) / eisv_min_std_for_dimension("E"),
+            rel=1e-2,
+        )

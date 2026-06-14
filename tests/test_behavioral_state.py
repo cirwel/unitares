@@ -8,7 +8,10 @@ from src.behavioral_state import (
     BOOTSTRAP_S,
     BOOTSTRAP_V,
     BOOTSTRAP_UPDATES,
+    DEFAULT_ALPHAS,
+    EMA_STEP_STD_FLOOR_FRACTION,
     MAX_HISTORY,
+    eisv_min_std_for_dimension,
 )
 
 
@@ -31,6 +34,15 @@ class TestBehavioralEISVBasics:
         assert state.E != BOOTSTRAP_E  # should have moved toward 0.8
         assert state.I != BOOTSTRAP_I  # should have moved toward 0.7
         assert len(state.E_history) == 1
+
+    def test_min_std_is_derived_from_dimension_alpha(self):
+        assert eisv_min_std_for_dimension("E") == pytest.approx(
+            DEFAULT_ALPHAS["E"] * EMA_STEP_STD_FLOOR_FRACTION
+        )
+        assert eisv_min_std_for_dimension("I") == pytest.approx(
+            DEFAULT_ALPHAS["I"] * EMA_STEP_STD_FLOOR_FRACTION
+        )
+        assert eisv_min_std_for_dimension("unknown") == 0.0
 
     def test_v_ema_converges_toward_gap(self):
         """V should converge toward E-I gap after many constant updates."""
