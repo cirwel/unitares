@@ -226,4 +226,148 @@ defmodule UnitaresSentinel.FleetFindingEmitterTest do
 
     GenServer.stop(pid)
   end
+
+  defp paused_checkin_post(parent) do
+    fn _url, body, _headers, _timeout_ms ->
+      case body["name"] do
+        "process_agent_update" ->
+          send(parent, :checkin_attempted)
+
+          {:ok, 200,
+           Jason.encode!(%{
+             "success" => true,
+             "result" => %{
+               "success" => false,
+               "error" => "Agent is paused and cannot process updates",
+               "error_code" => "AGENT_PAUSED",
+               "paused_at" => "2026-06-13T23:40:11Z",
+               "status" => "paused"
+             }
+           })}
+
+        "self_recovery" ->
+          send(parent, {:recovery_attempted, body["arguments"]["action"]})
+
+          {:ok, 200,
+           Jason.encode!(%{"success" => true, "result" => %{"lifecycle_status" => "active"}})}
+      end
+    end
+  end
+
+  test "tick surfaces a governance pause and attempts a bounded server-gated recovery" do
+    parent = self()
+
+    findings_http_post = fn _url, body, _headers, _timeout_ms ->
+      send(parent, {:finding_posted, body})
+      {:ok, 200, ~s({"success":true})}
+    end
+
+    result =
+      FleetFindingEmitter.tick(
+        snapshot: %{agents: %{}, events: []},
+        analysis_fun: fn _s, _o -> [] end,
+        self_agent_id: "sentinel-test",
+        emit_checkins: true,
+        findings_opts: [http_post: findings_http_post],
+        checkin_opts: [
+          url: "http://example.test/v1/tools/call",
+          http_post: paused_checkin_post(parent),
+          agent_id: "sentinel-test"
+        ]
+      )
+
+    assert {:error, {:agent_paused, _}} = result.checkin_result
+    assert result.checkin_pause["status"] == "paused"
+    assert result.recovery_outcome == :recovered
+
+    assert_receive :checkin_attempted
+    assert_receive {:recovery_attempted, "quick"}
+    assert_receive {:finding_posted, finding}
+    assert finding["finding_type"] == "sentinel_self_pause"
+    assert finding["severity"] == "high"
+    assert finding["agent_id"] == "sentinel-test"
+  end
+
+  test "tick still surfaces a pause but does not attempt recovery when disarmed" do
+    parent = self()
+
+    findings_http_post = fn _url, body, _headers, _timeout_ms ->
+      send(parent, {:finding_posted, body})
+      {:ok, 200, ~s({"success":true})}
+    end
+
+    result =
+      FleetFindingEmitter.tick(
+        snapshot: %{agents: %{}, events: []},
+        analysis_fun: fn _s, _o -> [] end,
+        self_agent_id: "sentinel-test",
+        emit_checkins: true,
+        recovery_armed?: false,
+        findings_opts: [http_post: findings_http_post],
+        checkin_opts: [
+          url: "http://example.test/v1/tools/call",
+          http_post: paused_checkin_post(parent)
+        ]
+      )
+
+    assert result.recovery_outcome == :not_attempted
+    assert_receive {:finding_posted, finding}
+    assert finding["finding_type"] == "sentinel_self_pause"
+    refute_receive {:recovery_attempted, _action}, 100
+  end
+
+  test "GenServer attempts recovery only once per pause episode (no pause->resume loop)" do
+    parent = self()
+
+    # process_agent_update always reports paused; self_recovery is REFUSED, so
+    # the episode never clears and a buggy implementation would retry forever.
+    checkin_http_post = fn _url, body, _headers, _timeout_ms ->
+      case body["name"] do
+        "process_agent_update" ->
+          {:ok, 200,
+           Jason.encode!(%{
+             "success" => true,
+             "result" => %{
+               "success" => false,
+               "error_code" => "AGENT_PAUSED",
+               "status" => "paused"
+             }
+           })}
+
+        "self_recovery" ->
+          send(parent, :recovery_attempted)
+
+          {:ok, 200,
+           Jason.encode!(%{
+             "success" => true,
+             "result" => %{"success" => false, "error" => "Recovery thresholds not met"}
+           })}
+      end
+    end
+
+    {:ok, pid} =
+      FleetFindingEmitter.start_link(
+        name: :"test_fleet_finding_emitter_pause_#{System.unique_integer([:positive])}",
+        initial_delay_ms: 60_000,
+        interval_ms: 60_000,
+        jitter_ms: 0,
+        lease_advisory: false,
+        snapshot: %{agents: %{}, events: []},
+        analysis_fun: fn _s, _o -> [] end,
+        self_agent_id: "sentinel-test",
+        emit_checkins: true,
+        findings_opts: [http_post: fn _u, _b, _h, _t -> {:ok, 200, ~s({"success":true})} end],
+        checkin_opts: [url: "http://example.test/v1/tools/call", http_post: checkin_http_post]
+      )
+
+    send(pid, :tick)
+    assert_receive :recovery_attempted, 1_000
+
+    # Episode is now disarmed; a second tick on the same (still-paused) episode
+    # must NOT attempt recovery again.
+    send(pid, :tick)
+    refute_receive :recovery_attempted, 300
+
+    GenServer.stop(pid)
+  end
 end
