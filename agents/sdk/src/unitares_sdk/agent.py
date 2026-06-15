@@ -413,7 +413,10 @@ class GovernanceAgent:
         """
         if not (self.persistent and self.agent_uuid):
             return
-        if self._resident_tags_reconciled:
+        # getattr-guarded: instances built via __new__ (test stubs) skip
+        # __init__, so the attribute may be absent. Treat absent as "not yet
+        # reconciled" rather than crashing the identity path.
+        if getattr(self, "_resident_tags_reconciled", False):
             return
 
         try:
