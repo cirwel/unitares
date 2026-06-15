@@ -814,6 +814,41 @@ class TestFormatMirror:
         result = _format_mirror(data, saved_trust_tier=None)
         assert "margin" not in result
 
+    def test_string_margin_included_when_tight(self):
+        # Live shape: compute_margin returns enum strings, not floats.
+        data = _sample_response()
+        data["decision"]["margin"] = "tight"
+        data["decision"]["nearest_edge"] = "coherence"
+        result = _format_mirror(data, saved_trust_tier=None)
+        assert result["margin"] == "tight"
+        assert result["nearest_edge"] == "coherence"
+
+    def test_string_margin_excluded_when_comfortable(self):
+        # #733: a "comfortable" string margin (nearest_edge null) is steady-state
+        # noise the mirror signals array already covers — must not be re-emitted.
+        data = _sample_response()
+        data["decision"]["margin"] = "comfortable"
+        data["decision"]["nearest_edge"] = None
+        result = _format_mirror(data, saved_trust_tier=None)
+        assert "margin" not in result
+        assert "nearest_edge" not in result
+
+    def test_string_margin_excluded_when_settling(self):
+        # Warmup margin is also steady-state — keep it out of the mirror (#733).
+        data = _sample_response()
+        data["decision"]["margin"] = "settling"
+        data["decision"]["nearest_edge"] = None
+        result = _format_mirror(data, saved_trust_tier=None)
+        assert "margin" not in result
+
+    def test_string_margin_included_when_critical(self):
+        data = _sample_response()
+        data["decision"]["margin"] = "critical"
+        data["decision"]["nearest_edge"] = "void"
+        result = _format_mirror(data, saved_trust_tier=None)
+        assert result["margin"] == "critical"
+        assert result["nearest_edge"] == "void"
+
     def test_identity_notifications_surfaced(self):
         data = _sample_response()
         data["_identity_notifications"] = [{"message": "Identity accessed from new session"}]
