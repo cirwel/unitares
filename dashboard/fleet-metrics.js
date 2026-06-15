@@ -192,6 +192,28 @@
         });
     }
 
+    // Chronicler emits three unrelated metric families into one catalog:
+    // fleet/governance state, project/codebase stats, and runtime-infra
+    // latency. A flat dropdown made the panel "mean three things at once".
+    // Classify by series-name prefix so the picker reads as Fleet · Project ·
+    // Infra optgroups; anything unmatched falls through to Other so a new
+    // series never silently disappears. `.error` twins classify by their base
+    // name so a failing scraper sorts next to the series it shadows.
+    var METRIC_GROUPS = [
+        { label: 'Fleet', test: /^(agents|checkins|kg)\./ },
+        { label: 'Project', test: /^(github|tests|tokei)\./ },
+        { label: 'Infra', test: /^(lease_plane|ode)\./ },
+    ];
+    var METRIC_GROUP_ORDER = ['Fleet', 'Project', 'Infra', 'Other'];
+
+    function metricGroupLabel(name) {
+        var base = name.replace(/\.error$/, '');
+        for (var i = 0; i < METRIC_GROUPS.length; i++) {
+            if (METRIC_GROUPS[i].test.test(base)) return METRIC_GROUPS[i].label;
+        }
+        return 'Other';
+    }
+
     function populateDropdown(metrics) {
         var select = document.getElementById('fleet-metrics-select');
         if (!select) return;
@@ -203,14 +225,30 @@
             select.appendChild(opt);
             return;
         }
-        for (var i = 0; i < metrics.length; i++) {
-            var m = metrics[i];
-            var o = document.createElement('option');
-            o.value = m.name;
-            o.textContent = m.name;
-            if (m.description) o.title = m.description;
-            select.appendChild(o);
-        }
+
+        // Bucket by family, preserving catalog order within each bucket, then
+        // emit optgroups in fixed family order. Empty buckets are skipped so a
+        // family with no registered series doesn't clutter the picker.
+        var buckets = {};
+        metrics.forEach(function (m) {
+            var label = metricGroupLabel(m.name);
+            (buckets[label] = buckets[label] || []).push(m);
+        });
+        METRIC_GROUP_ORDER.forEach(function (groupLabel) {
+            var items = buckets[groupLabel];
+            if (!items || items.length === 0) return;
+            var group = document.createElement('optgroup');
+            group.label = groupLabel;
+            items.forEach(function (m) {
+                var o = document.createElement('option');
+                o.value = m.name;
+                o.textContent = m.name;
+                if (m.description) o.title = m.description;
+                group.appendChild(o);
+            });
+            select.appendChild(group);
+        });
+
         if (!currentName || !metrics.some(function (m) { return m.name === currentName; })) {
             currentName = metrics[0].name;
         }
