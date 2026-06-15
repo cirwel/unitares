@@ -104,17 +104,33 @@ def modulate_gains(K_p: float, K_i: float, rho: float,
     When rho(t) is low (misaligned updates), reduce controller aggressiveness
     to prevent instability.
 
+    The gain multiplier is a linear ramp ``(rho + 1) / 2`` clamped at
+    ``min_factor`` from below. With the default ``min_factor=0.5`` this gives a
+    *flat 0.5 floor for every rho <= 0*, then a linear rise to 1.0 over
+    rho in (0, 1]:
+
+        rho=1.0 -> factor=1.0
+        rho=0.5 -> factor=0.75
+        rho=0.0 -> factor=0.5   (floor; the ramp would give 0.5 here too)
+        rho<=0  -> factor=0.5   (clamped flat at the floor)
+
+    So the controller damps hard at and below neutral coherence rather than
+    smoothly interpolating down to the floor only at rho=-1. (See issue #765:
+    an earlier docstring claimed a smooth 0.5->0.75->1.0 curve; the floor-clamp
+    behavior below is the intended one and is what the tests pin.)
+
     Args:
         K_p: Base proportional gain
         K_i: Base integral gain
         rho: Update coherence [-1, 1]
-        min_factor: Minimum gain multiplier (default 0.5)
+        min_factor: Minimum gain multiplier (default 0.5). For min_factor < 0.5
+            the floor only engages below rho = 2*min_factor - 1.
 
     Returns:
         (K_p_adjusted, K_i_adjusted)
     """
-    # Map rho from [-1, 1] to [min_factor, 1.0]
-    # rho=1 -> factor=1.0, rho=0 -> factor=0.75, rho=-1 -> factor=0.5
+    # Linear ramp (rho+1)/2, clamped at min_factor. Default floor 0.5 => flat
+    # for rho<=0, linear up to 1.0 for rho in (0, 1]. See issue #765.
     coherence_factor = max(min_factor, (rho + 1) / 2)
 
     return K_p * coherence_factor, K_i * coherence_factor
