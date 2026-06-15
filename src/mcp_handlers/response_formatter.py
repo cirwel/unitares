@@ -11,6 +11,14 @@ from src.logging_utils import get_logger
 from src.monitor_result import DIVERGENCE_LINE_THRESHOLD
 logger = get_logger(__name__)
 
+# Margin enum values worth surfacing in mirror mode. `compute_margin`
+# (config/governance_config.py) returns one of settling/comfortable/tight/
+# warning/critical; only the last three carry a non-null `nearest_edge` and
+# warrant attention. `settling`/`comfortable` are steady-state — the mirror
+# signals array already conveys them, so re-emitting margin + a null
+# nearest_edge is pure vocabulary sprawl (#733).
+_ACTIONABLE_MARGINS = frozenset({"tight", "warning", "critical"})
+
 
 def _copy_passthrough_fields(response_data: dict, result: dict, fields: tuple) -> None:
     """Copy named fields from response_data to result if present (not None).
@@ -412,10 +420,18 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     if reflection:
         result["reflection"] = reflection
 
-    # Include margin/edge warnings
+    # Include margin/edge only when actionable. Live margins are strings from
+    # compute_margin — gate them by the actionable enum so a "comfortable"/
+    # "settling" margin (nearest_edge null in both) stays out of the mirror,
+    # already covered by the signals array above (#733). The numeric `< 0.1`
+    # path is retained for legacy/hand-built payloads that pass a raw distance.
     margin = decision.get("margin")
     if margin is not None:
-        if isinstance(margin, str) or (isinstance(margin, (int, float)) and margin < 0.1):
+        actionable = (
+            (isinstance(margin, str) and margin in _ACTIONABLE_MARGINS)
+            or (isinstance(margin, (int, float)) and margin < 0.1)
+        )
+        if actionable:
             result["margin"] = margin
             result["nearest_edge"] = decision.get("nearest_edge")
 

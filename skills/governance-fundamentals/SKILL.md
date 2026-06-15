@@ -72,10 +72,12 @@ Separately, `metrics.verdict` carries the internal UNITARES verdict from phi sco
 | `settling` | Warmup — fewer than 3 check-ins, so there is not enough history to judge headroom yet | Keep checking in; a real margin appears after 3+ check-ins |
 | `comfortable` | Clear of every edge by a healthy distance | Proceed normally |
 | `tight` | Within the edge threshold of the nearest boundary (or in the boundary basin) | Be more careful with next steps; avoid increasing complexity |
+| `warning` | An edge has just been crossed (less than 0.1 past the threshold) | Stop increasing complexity; reflect before the next step |
+| `critical` | An edge is crossed deeply (0.1 or more past the threshold) | Halt the current approach; recover or escalate |
 
-When `margin` is `tight`, a companion `nearest_edge` field names which boundary you are closest to — `risk`, `coherence`, or `void`. On `comfortable` and `settling`, `nearest_edge` is `null` (there is no edge to warn about). Prefer the live `margin`/`nearest_edge` values over assuming a fixed enum across runtime versions — `get_governance_metrics()` is the source of truth.
+The actionable levels are `tight`, `warning`, and `critical` — each carries a companion `nearest_edge` field naming which boundary you are closest to (`risk`, `coherence`, or `void`). On `comfortable` and `settling`, `nearest_edge` is `null` (there is no edge to warn about). Prefer the live `margin`/`nearest_edge` values over assuming a fixed enum across runtime versions — `get_governance_metrics()` is the source of truth.
 
-The plain-English `mirror` array in your check-in response already summarizes anything actionable (including a tight margin) — read that first; `margin`/`nearest_edge` are the underlying data behind it.
+The plain-English `mirror` array in your check-in response already summarizes anything actionable (including a tight/warning/critical margin) — read that first. In `mirror` mode `margin`/`nearest_edge` are surfaced **only** when actionable; a `comfortable`/`settling` margin is steady-state and stays out of the response (the mirror's "No actionable signals — steady state" line covers it).
 
 ## Coherence
 
