@@ -226,9 +226,11 @@ Also verify the shell token matches the running service token. Launchd deploymen
 - Read-only / non-gated tools (e.g. `onboard`) succeed on the **same** connection, so the MCP server and transport are healthy.
 - Most often hits the stateful/write tools (`process_agent_update` / check-ins, operator actions) while reads pass.
 
-**Cause:** This is a Claude Code **harness / remote-transport** limitation, *not* a UNITARES server defect — the governance server processes check-ins normally (residents and local/plugin clients are unaffected). When an MCP tool requires per-call approval, the **streamable HTTP transport in the web/remote environment has no way to surface and resolve the approval prompt**, so the tool-call POST hard-errors instead of pausing for approval. Because the gate is enforced at the transport/gateway layer, the local `permissions.allow` allowlist is not consulted, and two facts make a settings-based workaround impossible:
+**Cause:** This is a Claude Code **harness / remote-transport** limitation, *not* a UNITARES server defect — the governance server processes check-ins normally (residents and local/plugin clients are unaffected). When an MCP tool requires per-call approval, the **streamable HTTP transport in the web/remote environment has no way to surface and resolve the approval prompt**, so the tool-call POST hard-errors instead of pausing for approval. The gate is enforced at the **remote environment's MCP gateway, above Claude Code's local permission engine** — confirmed empirically: the call still returns `requires approval` even with `permissions.defaultMode: "bypassPermissions"` and an `mcp__<server>__*` wildcard set in `.claude/settings.local.json`. No repo-local setting overrides it. Two further facts make a settings-based workaround impossible even in principle:
 - environment-injected MCP servers have **ephemeral per-session IDs** (`mcp__<uuid>__…`), so an allow rule can't persist across sessions;
 - allow rules can't wildcard the server-name segment (`mcp__*__tool` is invalid), so there's no stable rule to write.
+
+The only place to "allow all" for the injected server is the **environment's permission policy** (chosen when the environment is created — see https://code.claude.com/docs/en/claude-code-on-the-web), not anything in the repo.
 
 **Workarounds:**
 
