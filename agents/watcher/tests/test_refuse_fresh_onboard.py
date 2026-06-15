@@ -101,3 +101,82 @@ def test_watcher_resume_path_unaffected_by_guard(
 
     assert client.identity_calls == 1
     assert client.onboard_calls == 0
+
+
+# ── #727: token-less UDS anchor must still attempt PATH 0 resume ──
+#
+# A substrate-enrolled resident under UNITARES_UDS_SOCKET deliberately writes
+# a token-less ("uuid_only") anchor. The server's S19 PR3e gate authorizes the
+# resume via kernel-attested peer match, so the client MUST attempt the
+# agent_uuid-direct resume even without a continuity_token. The pre-fix code
+# gated the attempt on token presence and skipped PATH 0 entirely, leaving an
+# enrolled resident permanently stuck-down.
+
+
+class _MockClientNoToken:
+    """Mock client that mirrors a fresh UDS connection: no pre-set token."""
+
+    client_session_id = "sess"
+    continuity_token = None
+    agent_uuid = "uuid"
+
+    def __init__(self):
+        self.onboard_calls = 0
+        self.identity_calls = 0
+        self.last_identity_kwargs = None
+
+    def onboard(self, *a, **kw):
+        self.onboard_calls += 1
+        return type("R", (), {"success": True})()
+
+    def identity(self, **kw):
+        self.identity_calls += 1
+        self.last_identity_kwargs = kw
+        return type("R", (), {"success": True})()
+
+
+def test_watcher_resumes_token_less_anchor_under_uds(
+    watcher_module, monkeypatch, tmp_path
+):
+    """Token-less anchor + UDS-anchored → attempt PATH 0 resume WITHOUT a
+    continuity_token, relying on the server's substrate peer-attestation gate."""
+    import json
+
+    session_file = tmp_path / "watcher.json"
+    session_file.write_text(json.dumps({"agent_uuid": "uuid"}))
+    monkeypatch.setattr(watcher_module, "SESSION_FILE", session_file)
+    monkeypatch.delenv("UNITARES_FIRST_RUN", raising=False)
+    monkeypatch.setenv("UNITARES_UDS_SOCKET", str(tmp_path / "gov.sock"))
+    monkeypatch.setattr(watcher_module, "_watcher_identity", None)
+
+    client = _MockClientNoToken()
+    watcher_module.resolve_identity(client)
+
+    assert client.identity_calls == 1
+    assert client.onboard_calls == 0
+    # Attempted token-free — no continuity_token in the call.
+    assert "continuity_token" not in client.last_identity_kwargs
+    assert client.last_identity_kwargs["agent_uuid"] == "uuid"
+    assert client.last_identity_kwargs["resume"] is True
+
+
+def test_watcher_skips_token_less_anchor_without_uds(
+    watcher_module, monkeypatch, tmp_path
+):
+    """Token-less anchor + NOT UDS-anchored → no proof channel, so PATH 0 is
+    skipped (no pointless round-trip) and the fresh-onboard guard refuses."""
+    import json
+
+    session_file = tmp_path / "watcher.json"
+    session_file.write_text(json.dumps({"agent_uuid": "uuid"}))
+    monkeypatch.setattr(watcher_module, "SESSION_FILE", session_file)
+    monkeypatch.delenv("UNITARES_FIRST_RUN", raising=False)
+    monkeypatch.delenv("UNITARES_UDS_SOCKET", raising=False)
+    monkeypatch.setattr(watcher_module, "_watcher_identity", None)
+
+    client = _MockClientNoToken()
+    watcher_module.resolve_identity(client)
+
+    assert client.identity_calls == 0
+    assert client.onboard_calls == 0
+    assert watcher_module.get_watcher_identity() is None
