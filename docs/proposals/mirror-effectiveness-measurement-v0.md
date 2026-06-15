@@ -1,6 +1,8 @@
 # Mirror effectiveness measurement — v0
 
-Status: proposal / not built. Follow-up from the 2026-06-14 mirror-mode scoping (PR #741, which closed the #583 "reflect, don't advise" seam in `_detect_gaming`). Defines a deterministic, operator-funded-free way to answer "does a surfaced mirror signal actually change agent behavior?" — replacing the current dogfood-only, qualitative tuning loop. **Recommends instrumentation + offline analysis first; no agent-facing behavior change in v0.**
+Status: **Phase 0 landed** (the rest proposed). Follow-up from the 2026-06-14 mirror-mode scoping (PR #741, which closed the #583 "reflect, don't advise" seam in `_detect_gaming`). Defines a deterministic, operator-funded-free way to answer "does a surfaced mirror signal actually change agent behavior?" — replacing the current dogfood-only, qualitative tuning loop. **Recommends instrumentation + offline analysis first; no agent-facing behavior change in v0.**
+
+Phase 0 shipped: `enrich_mirror_signals` now produces structured `_mirror_signal_records` (autopilot complexity/confidence variance + complexity divergence) and `response_formatter._emit_mirror_signal_records` logs one `mirror_signal.emit` audit event per fired check-in, tagged `surfaced = (response_mode == "mirror")`. Off-switch: `UNITARES_MIRROR_SIGNAL_EMIT=0`. Phases 1 (offline re-eval) and 2 (operator-gated feedback) remain proposed.
 
 ## Why
 

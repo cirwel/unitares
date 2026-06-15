@@ -23,6 +23,33 @@ def _copy_passthrough_fields(response_data: dict, result: dict, fields: tuple) -
         if value is not None:
             result[field] = value
 
+def _emit_mirror_signal_records(response_data: dict, response_mode: str, meta: Any) -> None:
+    """Phase 0 mirror-effectiveness instrumentation (mirror-effectiveness-measurement-v0).
+
+    Logs one ``mirror_signal.emit`` audit event per check-in that fired at least
+    one structured signal, tagged with ``surfaced = (response_mode == "mirror")``.
+    Always pops the internal ``_mirror_signal_records`` key so it never leaks into
+    a returned payload (including full mode). Fully best-effort: never raise into
+    the response path. Disable with ``UNITARES_MIRROR_SIGNAL_EMIT=0``.
+    """
+    records = response_data.pop("_mirror_signal_records", None)
+    if not records:
+        return
+    if os.getenv("UNITARES_MIRROR_SIGNAL_EMIT", "1").strip().lower() in ("0", "false", "no"):
+        return
+    try:
+        from src.audit_log import get_audit_log
+        get_audit_log().log_mirror_signal_emit(
+            agent_id=response_data.get("agent_id"),
+            update_index=getattr(meta, "total_updates", None) if meta else None,
+            response_mode=response_mode,
+            surfaced=(response_mode == "mirror"),
+            signals=records,
+        )
+    except Exception as e:
+        logger.debug(f"Could not emit mirror signal records: {e}")
+
+
 def format_response(
     response_data: dict,
     arguments: dict,
@@ -84,10 +111,6 @@ def format_response(
 
     using_default_mode = not arguments.get("response_mode") and not agent_verbosity_pref
 
-    # Full mode: no filtering
-    if response_mode == "full":
-        return response_data
-
     # AUTO MODE: Adaptive verbosity based on health status
     if response_mode == "auto":
         metrics = response_data.get("metrics", {}) if isinstance(response_data.get("metrics"), dict) else {}
@@ -107,6 +130,16 @@ def format_response(
             response_mode = "standard"
         else:
             response_mode = "compact"
+
+    # Phase 0 mirror-effectiveness instrumentation: emit structured signal
+    # records (every resolved mode) with surfaced = (mode == "mirror"), so the
+    # non-mirror population becomes the shadow control. Runs before the full
+    # early-return and before stripping; consumes/clears the internal key.
+    _emit_mirror_signal_records(response_data, response_mode, meta)
+
+    # Full mode: no filtering
+    if response_mode == "full":
+        return response_data
 
     # MIRROR MODE: Actionable self-awareness signals
     if response_mode == "mirror":
