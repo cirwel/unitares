@@ -215,6 +215,40 @@ Also verify the shell token matches the running service token. Launchd deploymen
 
 ---
 
+### Issue 8: Check-In (or Other Write Tool) Fails From a Web / Streamable-HTTP Session
+
+**Symptoms:**
+- A governance tool call fails with:
+  ```
+  Streamable HTTP error: Error POSTing to endpoint: MCP tool call requires approval
+  ```
+- It fails on every retry, even though a matching `permissions.allow` entry exists in `.claude/settings.local.json`.
+- Read-only / non-gated tools (e.g. `onboard`) succeed on the **same** connection, so the MCP server and transport are healthy.
+- Most often hits the stateful/write tools (`process_agent_update` / check-ins, operator actions) while reads pass.
+
+**Cause:** This is a Claude Code **harness / remote-transport** limitation, *not* a UNITARES server defect — the governance server processes check-ins normally (residents and local/plugin clients are unaffected). When an MCP tool requires per-call approval, the **streamable HTTP transport in the web/remote environment has no way to surface and resolve the approval prompt**, so the tool-call POST hard-errors instead of pausing for approval. The gate is enforced at the **remote environment's MCP gateway, above Claude Code's local permission engine** — confirmed empirically: the call still returns `requires approval` even with `permissions.defaultMode: "bypassPermissions"` and an `mcp__<server>__*` wildcard set in `.claude/settings.local.json`. No repo-local setting overrides it. Two further facts make a settings-based workaround impossible even in principle:
+- environment-injected MCP servers have **ephemeral per-session IDs** (`mcp__<uuid>__…`), so an allow rule can't persist across sessions;
+- allow rules can't wildcard the server-name segment (`mcp__*__tool` is invalid), so there's no stable rule to write.
+
+The only place to "allow all" for the injected server is the **environment's permission policy** (chosen when the environment is created — see https://code.claude.com/docs/en/claude-code-on-the-web), not anything in the repo.
+
+**Workarounds:**
+
+1. **Use a transport that supports approval / pre-exemption.** Local stdio or direct-loopback MCP (the plugin / `~/.claude.json` config against `http://localhost:8767`) handles the approval handshake. The `unitares-governance-plugin` session-start path calls the governance REST API directly and is unaffected.
+2. **Drive check-ins over REST instead of the gated MCP tool** when in a web session:
+   ```bash
+   curl -s -X POST http://127.0.0.1:8767/v1/tools/call \
+     -H "Authorization: Bearer $UNITARES_HTTP_API_TOKEN" \
+     -H "Content-Type: application/json" \
+     --data '{"name":"process_agent_update","arguments":{"client_session_id":"<sid>","response_text":"...","complexity":0.5}}'
+   ```
+3. **Pre-exempt the tool at the environment's MCP gateway** (the same mechanism that already lets `onboard` through), if you control the remote environment config.
+4. **Report it upstream** via `/feedback` in your Claude Code client — it is a transport-layer bug (approval handshake unsupported over streamable HTTP), not specific to this repo.
+
+**Note on governance coverage:** because of this, agents working in web/streamable-HTTP sessions **cannot complete check-ins through the MCP tool** and will run ungoverned unless they fall back to REST or a local transport. Onboard in-conversation (there is no plugin hook to auto-onboard a server-only/web session — that is the expected default), and use a REST/local path for the check-in loop.
+
+---
+
 ## Debugging Steps
 
 ### Step 1: Check Basic Connectivity
