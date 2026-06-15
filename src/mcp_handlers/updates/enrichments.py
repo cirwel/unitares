@@ -1294,9 +1294,13 @@ async def enrich_mirror_signals(ctx: UpdateContext) -> None:
         ctx.response_data["_has_sensor_data"] = has_sensor_data
 
         signals = []
+        # Phase 0 instrumentation: structured trigger records for the numeric
+        # signals, surfaced-or-not is decided later in response_formatter once
+        # the response_mode is resolved (mirror-effectiveness-measurement-v0).
+        signal_records: list = []
 
         # 1. Gaming / autopilot detection (low variance in recent reports)
-        signals.extend(_detect_gaming(ctx))
+        signals.extend(_detect_gaming(ctx, records=signal_records))
 
         # 2. Targeted reflection — descriptive, only when state warrants it
         reflection = _generate_mirror_reflection(ctx, signals)
@@ -1309,15 +1313,45 @@ async def enrich_mirror_signals(ctx: UpdateContext) -> None:
             if kg_results:
                 ctx.response_data["_mirror_kg_results"] = kg_results
 
+        # Complexity-divergence trigger record — same gate the surfaced line
+        # uses (_get_complexity_disagreement honors the >3-update baseline and
+        # the novelty gate), so the record fires exactly when the signal does.
+        disagreement = _get_complexity_disagreement(ctx.response_data, ctx.meta)
+        if disagreement and disagreement.get("divergence") is not None:
+            threshold = (
+                DIVERGENCE_LINE_THRESHOLD
+                if disagreement.get("source") == "continuity"
+                else 0.3
+            )
+            signal_records.append({
+                "signal_type": "complexity_divergence",
+                "metric": "complexity_divergence",
+                "value": disagreement.get("divergence"),
+                "threshold": threshold,
+                "reported": disagreement.get("reported"),
+                "derived": disagreement.get("derived"),
+                "source": disagreement.get("source"),
+            })
+
         if signals:
             ctx.response_data["_mirror_signals"] = signals
+        if signal_records:
+            ctx.response_data["_mirror_signal_records"] = signal_records
 
     except Exception as e:
         logger.debug(f"Could not enrich mirror signals: {e}")
 
 
-def _detect_gaming(ctx: UpdateContext) -> list:
-    """Detect low-variance reporting patterns that suggest autopilot."""
+_GAMING_VARIANCE_THRESHOLD = 0.005
+
+
+def _detect_gaming(ctx: UpdateContext, records: list | None = None) -> list:
+    """Detect low-variance reporting patterns that suggest autopilot.
+
+    When ``records`` is provided, append a structured trigger record per fired
+    signal (Phase 0 mirror-effectiveness instrumentation: signal_type, the
+    measured variance, and the threshold it crossed) alongside the prose line.
+    """
     signals = []
     try:
         mcp_server = ctx.mcp_server
@@ -1336,16 +1370,30 @@ def _detect_gaming(ctx: UpdateContext) -> list:
             import statistics
             if len(set(recent)) > 1:
                 variance = statistics.variance(recent)
-                if variance < 0.005:
+                if variance < _GAMING_VARIANCE_THRESHOLD:
                     signals.append(
                         f"Your last {len(recent)} complexity reports vary little "
                         f"(variance={variance:.4f}) — flat enough to read as autopilot."
                     )
+                    if records is not None:
+                        records.append({
+                            "signal_type": "autopilot_complexity",
+                            "metric": "complexity_variance",
+                            "value": variance,
+                            "threshold": _GAMING_VARIANCE_THRESHOLD,
+                        })
             elif len(set(recent)) == 1:
                 signals.append(
                     f"Your last {len(recent)} complexity reports were all {recent[0]:.2f} — "
                     "no variance, reads as autopilot."
                 )
+                if records is not None:
+                    records.append({
+                        "signal_type": "autopilot_complexity",
+                        "metric": "complexity_variance",
+                        "value": 0.0,
+                        "threshold": _GAMING_VARIANCE_THRESHOLD,
+                    })
 
         # Check confidence history variance
         if hasattr(state, 'confidence_history') and len(state.confidence_history) >= 5:
@@ -1354,16 +1402,30 @@ def _detect_gaming(ctx: UpdateContext) -> list:
                 import statistics
                 if len(set(recent_conf)) > 1:
                     conf_var = statistics.variance(recent_conf)
-                    if conf_var < 0.005:
+                    if conf_var < _GAMING_VARIANCE_THRESHOLD:
                         signals.append(
                             f"Your confidence reports show very low variance ({conf_var:.4f}) — "
                             "flat across recent check-ins."
                         )
+                        if records is not None:
+                            records.append({
+                                "signal_type": "autopilot_confidence",
+                                "metric": "confidence_variance",
+                                "value": conf_var,
+                                "threshold": _GAMING_VARIANCE_THRESHOLD,
+                            })
                 elif len(set(recent_conf)) == 1:
                     signals.append(
                         f"Your last {len(recent_conf)} confidence reports were all {recent_conf[0]:.2f} — "
                         "no variance across check-ins."
                     )
+                    if records is not None:
+                        records.append({
+                            "signal_type": "autopilot_confidence",
+                            "metric": "confidence_variance",
+                            "value": 0.0,
+                            "threshold": _GAMING_VARIANCE_THRESHOLD,
+                        })
     except Exception as e:
         logger.debug(f"Gaming detection failed: {e}")
     return signals

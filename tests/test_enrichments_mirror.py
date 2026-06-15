@@ -116,6 +116,30 @@ class TestDetectGaming:
         assert len(signals) >= 1
         assert any("variance" in s.lower() or "autopilot" in s.lower() for s in signals)
 
+    def test_records_capture_structured_trigger(self):
+        # Phase 0 instrumentation: structured trigger record alongside prose.
+        records = []
+        ctx = _make_ctx(
+            complexity_history=[0.5, 0.5, 0.5, 0.5, 0.5],
+            confidence_history=[0.8, 0.8, 0.8, 0.8, 0.8],
+        )
+        signals = _detect_gaming(ctx, records=records)
+        assert len(signals) >= 1
+        assert len(records) >= 1
+        types = {r["signal_type"] for r in records}
+        assert "autopilot_complexity" in types
+        assert "autopilot_confidence" in types
+        for r in records:
+            assert r["metric"].endswith("_variance")
+            assert r["threshold"] == 0.005
+            assert isinstance(r["value"], float)
+
+    def test_records_optional_back_compat(self):
+        # Called without records (the historical signature) still returns prose.
+        ctx = _make_ctx(complexity_history=[0.5, 0.5, 0.5, 0.5, 0.5])
+        signals = _detect_gaming(ctx)
+        assert any("autopilot" in s.lower() for s in signals)
+
     def test_signals_are_observational_not_interrogative(self):
         # #583 discipline ("reflect, don't advise") applies to the raw gaming
         # signals too, not just the distilled reflection: a mirror line states

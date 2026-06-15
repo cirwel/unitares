@@ -20,6 +20,7 @@ from src.mcp_handlers.response_formatter import (
     _format_compact,
     _format_mirror,
     _strip_context,
+    _emit_mirror_signal_records,
 )
 
 
@@ -944,6 +945,73 @@ class TestFormatResponseMirror:
         data = _sample_response()
         result = format_response(data, {"response_mode": "mirror"}, is_new_agent=False)
         assert "eisv_labels" not in result
+
+
+# ============================================================================
+# Phase 0: mirror_signal.emit instrumentation (mirror-effectiveness-measurement-v0)
+# ============================================================================
+
+class TestEmitMirrorSignalRecords:
+    """_emit_mirror_signal_records: shadow-emit signal records, tag surfaced."""
+
+    def _records(self):
+        return [{"signal_type": "autopilot_complexity", "metric": "complexity_variance",
+                 "value": 0.0, "threshold": 0.005}]
+
+    def test_surfaced_true_under_mirror(self):
+        data = _sample_response()
+        data["_mirror_signal_records"] = self._records()
+        meta = MagicMock()
+        meta.total_updates = 12
+        logger_mock = MagicMock()
+        with patch("src.audit_log.get_audit_log", return_value=logger_mock):
+            _emit_mirror_signal_records(data, "mirror", meta)
+        logger_mock.log_mirror_signal_emit.assert_called_once()
+        kwargs = logger_mock.log_mirror_signal_emit.call_args.kwargs
+        assert kwargs["surfaced"] is True
+        assert kwargs["response_mode"] == "mirror"
+        assert kwargs["update_index"] == 12
+        assert kwargs["agent_id"] == "test-agent-123"
+        # internal key always consumed
+        assert "_mirror_signal_records" not in data
+
+    def test_surfaced_false_under_non_mirror(self):
+        data = _sample_response()
+        data["_mirror_signal_records"] = self._records()
+        logger_mock = MagicMock()
+        with patch("src.audit_log.get_audit_log", return_value=logger_mock):
+            _emit_mirror_signal_records(data, "minimal", MagicMock())
+        kwargs = logger_mock.log_mirror_signal_emit.call_args.kwargs
+        assert kwargs["surfaced"] is False
+        assert "_mirror_signal_records" not in data
+
+    def test_no_records_no_emit(self):
+        data = _sample_response()
+        logger_mock = MagicMock()
+        with patch("src.audit_log.get_audit_log", return_value=logger_mock):
+            _emit_mirror_signal_records(data, "mirror", MagicMock())
+        logger_mock.log_mirror_signal_emit.assert_not_called()
+
+    def test_env_flag_disables_emit_but_still_consumes_key(self):
+        data = _sample_response()
+        data["_mirror_signal_records"] = self._records()
+        logger_mock = MagicMock()
+        with patch.dict(os.environ, {"UNITARES_MIRROR_SIGNAL_EMIT": "0"}):
+            with patch("src.audit_log.get_audit_log", return_value=logger_mock):
+                _emit_mirror_signal_records(data, "mirror", MagicMock())
+        logger_mock.log_mirror_signal_emit.assert_not_called()
+        assert "_mirror_signal_records" not in data
+
+    def test_full_mode_consumes_key_no_leak(self):
+        # full mode returns response_data as-is; the internal key must not leak.
+        data = _sample_response()
+        data["_mirror_signal_records"] = self._records()
+        logger_mock = MagicMock()
+        with patch("src.audit_log.get_audit_log", return_value=logger_mock):
+            result = format_response(data, {"response_mode": "full"}, meta=MagicMock())
+        assert "_mirror_signal_records" not in result
+        logger_mock.log_mirror_signal_emit.assert_called_once()
+        assert logger_mock.log_mirror_signal_emit.call_args.kwargs["surfaced"] is False
 
 
 # ============================================================================

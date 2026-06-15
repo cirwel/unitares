@@ -541,6 +541,41 @@ class AuditLogger:
         )
         self._write_entry(entry)
 
+    def log_mirror_signal_emit(
+        self,
+        *,
+        agent_id: Optional[str],
+        update_index: Optional[int],
+        response_mode: Optional[str],
+        surfaced: bool,
+        signals: List[Dict],
+    ) -> None:
+        """Phase 0 mirror-effectiveness instrumentation (mirror-effectiveness-measurement-v0).
+
+        Records, per check-in that fired at least one structured mirror signal,
+        what fired and whether the agent actually saw it. ``surfaced`` is the
+        lever: it is True only when the resolved ``response_mode`` was ``mirror``.
+        Agents on minimal/compact/standard/full compute the same signals (the
+        enrichment runs before mode filtering) but never see them — they are the
+        natural shadow control the Phase 1 analysis joins against.
+
+        Each entry in ``signals`` is a structured trigger record:
+        ``{"signal_type", "metric", "value", "threshold", ...}``.
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="mirror_signal.emit",
+            confidence=1.0,
+            details={
+                "update_index": update_index,
+                "response_mode": response_mode,
+                "surfaced": bool(surfaced),
+                "signals": signals,
+            },
+        )
+        self._write_entry(entry)
+
     def _write_entry(self, entry: AuditEntry):
         """Write audit entry to JSONL log file with locking.
 
