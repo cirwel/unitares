@@ -5,12 +5,12 @@ tracking: update coherence rho(t), continuity energy CE(t), and PI-gain
 modulation. They had no direct coverage. Pin the input->output contract so a
 change to the coherence/energy formulas is caught.
 
-NOTE — modulate_gains doc/behavior mismatch (surfaced by this test):
-the docstring's worked example claims `rho=0 -> factor=0.75`, but the
+NOTE — modulate_gains doc/behavior (resolved, issue #765):
+an earlier docstring claimed a smooth `rho=0 -> factor=0.75` curve, but the
 implementation computes `max(min_factor, (rho + 1) / 2)`, which yields 0.5 at
-rho=0 and a *flat* 0.5 floor for every rho <= 0. The tests below pin the actual
-implemented behavior (0.5), not the docstring's number. Flagged for a human to
-decide whether the doc or the formula is wrong.
+rho=0 and a *flat* 0.5 floor for every rho <= 0. The operator confirmed the
+floor-clamp formula is the intended behavior; the docstring was corrected to
+match. The tests below pin that implemented behavior (the 0.5 floor).
 """
 
 from __future__ import annotations
