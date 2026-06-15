@@ -30,6 +30,18 @@ def _emit(agent_id, update_index, surfaced, signal_type, value):
     }
 
 
+def _emit_f(agent_id, update_index, surfaced, signal_type, value, fired):
+    """Emit with an explicit fired flag (Phase 0.5)."""
+    return {
+        "agent_id": agent_id,
+        "ts": "2026-06-15T00:00:00+00:00",
+        "update_index": update_index,
+        "surfaced": surfaced,
+        "signals": [{"signal_type": signal_type, "value": value,
+                     "threshold": 0.005, "fired": fired}],
+    }
+
+
 # ---------------------------------------------------------------------------
 # flatten_emissions
 # ---------------------------------------------------------------------------
@@ -185,3 +197,65 @@ def test_evaluate_all_covers_every_known_signal(mod):
     verdicts = mod.evaluate_all([], min_agents=5, min_effect=0.0)
     assert {v.signal_type for v in verdicts} == set(mod.SIGNAL_DIRECTION)
     assert all(v.verdict == "insufficient_data" for v in verdicts)
+
+
+# ---------------------------------------------------------------------------
+# Phase 0.5: fired flag + threshold discontinuity (RDD)
+# ---------------------------------------------------------------------------
+
+def test_flatten_defaults_fired_true_for_legacy_rows(mod):
+    # Phase 0 rows had no fired key.
+    rows = mod.flatten_emissions([_emit("a1", 1, True, "autopilot_complexity", 0.001)])
+    assert rows[0]["fired"] is True
+
+
+def test_agent_trends_excludes_nonfired(mod):
+    # One fired + one non-fired -> only one fired obs -> no trend.
+    rows = mod.flatten_emissions([
+        _emit_f("a", 1, True, "autopilot_complexity", 0.004, True),
+        _emit_f("a", 2, True, "autopilot_complexity", 0.001, False),
+    ])
+    assert "a" not in mod._agent_trends(rows, "autopilot_complexity")
+
+
+def test_threshold_discontinuity_local_effect(mod):
+    st = "autopilot_complexity"
+    rows = mod.flatten_emissions(
+        # treated: first firing just below thr (0.004), recovers to 0.009 (+0.005)
+        [_emit_f(f"t{i}", 1, True, st, 0.004, True) for i in range(2)]
+        + [_emit_f(f"t{i}", 2, True, st, 0.009, True) for i in range(2)]
+        # control: first near-miss above thr (0.007), barely moves (+0.0005)
+        + [_emit_f(f"c{i}", 1, False, st, 0.007, False) for i in range(2)]
+        + [_emit_f(f"c{i}", 2, False, st, 0.0075, False) for i in range(2)]
+    )
+    d = mod.threshold_discontinuity(rows, st, min_per_side=2)
+    assert d.verdict == "local_effect"
+    assert d.treated_n == 2 and d.control_n == 2
+    assert d.discontinuity == pytest.approx(0.0045, abs=1e-9)
+
+
+def test_threshold_discontinuity_insufficient_without_control(mod):
+    st = "autopilot_complexity"
+    rows = mod.flatten_emissions([
+        _emit_f("t0", 1, True, st, 0.004, True),
+        _emit_f("t0", 2, True, st, 0.009, True),
+    ])
+    d = mod.threshold_discontinuity(rows, st, min_per_side=2)
+    assert d.verdict == "insufficient_data"
+    assert d.control_n == 0
+
+
+def test_rdd_assignment_by_first_observation(mod):
+    # First obs non-fired -> control, even though a later obs fired.
+    rows = mod.flatten_emissions([
+        _emit_f("a", 1, False, "autopilot_complexity", 0.007, False),
+        _emit_f("a", 2, True, "autopilot_complexity", 0.004, True),
+    ])
+    d = mod.threshold_discontinuity(rows, "autopilot_complexity", min_per_side=1)
+    assert d.control_n == 1 and d.treated_n == 0
+
+
+def test_evaluate_rdd_covers_rdd_signals(mod):
+    ds = mod.evaluate_rdd([], min_per_side=5)
+    assert {d.signal_type for d in ds} == set(mod.RDD_SIGNALS)
+    assert "complexity_divergence" not in mod.RDD_SIGNALS

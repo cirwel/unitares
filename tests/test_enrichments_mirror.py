@@ -134,6 +134,34 @@ class TestDetectGaming:
             assert r["threshold"] == 0.005
             assert isinstance(r["value"], float)
 
+    def test_fired_records_marked_fired(self):
+        records = []
+        _detect_gaming(_make_ctx(complexity_history=[0.5, 0.5, 0.5, 0.5, 0.5]), records=records)
+        assert records and all(r["fired"] is True for r in records)
+
+    def test_near_threshold_nonfired_records_logged(self):
+        # Phase 0.5: variance in [0.005, 0.010) -> NO prose, but a fired=False
+        # control record for the RDD. Histories below give variance ~0.008.
+        records = []
+        ctx = _make_ctx(
+            complexity_history=[0.5, 0.5, 0.5, 0.5, 0.7],
+            confidence_history=[0.8, 0.8, 0.8, 0.8, 1.0],
+        )
+        signals = _detect_gaming(ctx, records=records)
+        assert signals == []  # near-band fires no agent-facing line
+        assert len(records) == 2
+        for r in records:
+            assert r["fired"] is False
+            assert 0.005 <= r["value"] < 0.010
+
+    def test_high_variance_logs_nothing(self):
+        # Above the near band: no prose and no record at all.
+        records = []
+        signals = _detect_gaming(
+            _make_ctx(complexity_history=[0.3, 0.5, 0.7, 0.4, 0.9]), records=records)
+        assert signals == []
+        assert records == []
+
     def test_records_optional_back_compat(self):
         # Called without records (the historical signature) still returns prose.
         ctx = _make_ctx(complexity_history=[0.5, 0.5, 0.5, 0.5, 0.5])

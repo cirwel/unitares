@@ -1328,6 +1328,7 @@ async def enrich_mirror_signals(ctx: UpdateContext) -> None:
                 "metric": "complexity_divergence",
                 "value": disagreement.get("divergence"),
                 "threshold": threshold,
+                "fired": True,
                 "reported": disagreement.get("reported"),
                 "derived": disagreement.get("derived"),
                 "source": disagreement.get("source"),
@@ -1343,16 +1344,36 @@ async def enrich_mirror_signals(ctx: UpdateContext) -> None:
 
 
 _GAMING_VARIANCE_THRESHOLD = 0.005
+# Phase 0.5: the just-above-threshold band whose NON-fired check-ins we also log
+# as RDD control points (mirror-effectiveness-measurement-v0). Bounded so the
+# extra writes are only the near-miss neighbourhood of the cutoff, not every
+# high-variance check-in. These records carry fired=False and produce NO prose
+# signal — the agent sees nothing; they exist only for the offline re-eval.
+_GAMING_VARIANCE_NEAR_MAX = 0.010
 
 
 def _detect_gaming(ctx: UpdateContext, records: list | None = None) -> list:
     """Detect low-variance reporting patterns that suggest autopilot.
 
     When ``records`` is provided, append a structured trigger record per fired
-    signal (Phase 0 mirror-effectiveness instrumentation: signal_type, the
-    measured variance, and the threshold it crossed) alongside the prose line.
+    signal (signal_type, the measured variance, the threshold). Phase 0.5 also
+    appends ``fired=False`` records for check-ins whose variance lands in the
+    just-above-threshold band (``[threshold, NEAR_MAX)``) — the control side of
+    the threshold the offline RDD compares against. Non-fired records carry no
+    prose line, so they are emit-only and never reach the agent.
     """
     signals = []
+
+    def _record(signal_type: str, metric: str, value: float, fired: bool) -> None:
+        if records is not None:
+            records.append({
+                "signal_type": signal_type,
+                "metric": metric,
+                "value": value,
+                "threshold": _GAMING_VARIANCE_THRESHOLD,
+                "fired": fired,
+            })
+
     try:
         mcp_server = ctx.mcp_server
         if not mcp_server:
@@ -1375,25 +1396,15 @@ def _detect_gaming(ctx: UpdateContext, records: list | None = None) -> list:
                         f"Your last {len(recent)} complexity reports vary little "
                         f"(variance={variance:.4f}) — flat enough to read as autopilot."
                     )
-                    if records is not None:
-                        records.append({
-                            "signal_type": "autopilot_complexity",
-                            "metric": "complexity_variance",
-                            "value": variance,
-                            "threshold": _GAMING_VARIANCE_THRESHOLD,
-                        })
+                    _record("autopilot_complexity", "complexity_variance", variance, True)
+                elif variance < _GAMING_VARIANCE_NEAR_MAX:
+                    _record("autopilot_complexity", "complexity_variance", variance, False)
             elif len(set(recent)) == 1:
                 signals.append(
                     f"Your last {len(recent)} complexity reports were all {recent[0]:.2f} — "
                     "no variance, reads as autopilot."
                 )
-                if records is not None:
-                    records.append({
-                        "signal_type": "autopilot_complexity",
-                        "metric": "complexity_variance",
-                        "value": 0.0,
-                        "threshold": _GAMING_VARIANCE_THRESHOLD,
-                    })
+                _record("autopilot_complexity", "complexity_variance", 0.0, True)
 
         # Check confidence history variance
         if hasattr(state, 'confidence_history') and len(state.confidence_history) >= 5:
@@ -1407,25 +1418,15 @@ def _detect_gaming(ctx: UpdateContext, records: list | None = None) -> list:
                             f"Your confidence reports show very low variance ({conf_var:.4f}) — "
                             "flat across recent check-ins."
                         )
-                        if records is not None:
-                            records.append({
-                                "signal_type": "autopilot_confidence",
-                                "metric": "confidence_variance",
-                                "value": conf_var,
-                                "threshold": _GAMING_VARIANCE_THRESHOLD,
-                            })
+                        _record("autopilot_confidence", "confidence_variance", conf_var, True)
+                    elif conf_var < _GAMING_VARIANCE_NEAR_MAX:
+                        _record("autopilot_confidence", "confidence_variance", conf_var, False)
                 elif len(set(recent_conf)) == 1:
                     signals.append(
                         f"Your last {len(recent_conf)} confidence reports were all {recent_conf[0]:.2f} — "
                         "no variance across check-ins."
                     )
-                    if records is not None:
-                        records.append({
-                            "signal_type": "autopilot_confidence",
-                            "metric": "confidence_variance",
-                            "value": 0.0,
-                            "threshold": _GAMING_VARIANCE_THRESHOLD,
-                        })
+                    _record("autopilot_confidence", "confidence_variance", 0.0, True)
     except Exception as e:
         logger.debug(f"Gaming detection failed: {e}")
     return signals
