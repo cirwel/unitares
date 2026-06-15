@@ -48,6 +48,7 @@ The system's versioned identity ontology, the resolution ledger, and the working
 How to run this in production. Most readers can skip these.
 
 - [`OPERATOR_RUNBOOK.md`](operations/OPERATOR_RUNBOOK.md) — primary runbook
+- [`ablation-negative-controls.md`](operations/ablation-negative-controls.md) — synthetic bad-outcome fixtures for red-team ablation plumbing
 - [`DEFINITIVE_PORTS.md`](operations/DEFINITIVE_PORTS.md) — port assignments across services
 - [`database_architecture.md`](operations/database_architecture.md) — single-Postgres / schema-isolation model
 - [`lease-plane-operator-runbook.md`](operations/lease-plane-operator-runbook.md) — Elixir lease-plane operations
