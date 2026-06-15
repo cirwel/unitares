@@ -1338,13 +1338,13 @@ def _detect_gaming(ctx: UpdateContext) -> list:
                 variance = statistics.variance(recent)
                 if variance < 0.005:
                     signals.append(
-                        f"Your last {len(recent)} reports had nearly identical complexity "
-                        f"(variance={variance:.4f}). Real work varies -- are you on autopilot?"
+                        f"Your last {len(recent)} complexity reports vary little "
+                        f"(variance={variance:.4f}) — flat enough to read as autopilot."
                     )
             elif len(set(recent)) == 1:
                 signals.append(
-                    f"Your last {len(recent)} complexity reports were all {recent[0]:.2f}. "
-                    "Real work varies -- are you on autopilot?"
+                    f"Your last {len(recent)} complexity reports were all {recent[0]:.2f} — "
+                    "no variance, reads as autopilot."
                 )
 
         # Check confidence history variance
@@ -1356,13 +1356,13 @@ def _detect_gaming(ctx: UpdateContext) -> list:
                     conf_var = statistics.variance(recent_conf)
                     if conf_var < 0.005:
                         signals.append(
-                            f"Your confidence reports show very low variance ({conf_var:.4f}). "
-                            "Are you calibrating each report individually?"
+                            f"Your confidence reports show very low variance ({conf_var:.4f}) — "
+                            "flat across recent check-ins."
                         )
                 elif len(set(recent_conf)) == 1:
                     signals.append(
-                        f"Your last {len(recent_conf)} confidence reports were all {recent_conf[0]:.2f}. "
-                        "Consider calibrating each report individually."
+                        f"Your last {len(recent_conf)} confidence reports were all {recent_conf[0]:.2f} — "
+                        "no variance across check-ins."
                     )
     except Exception as e:
         logger.debug(f"Gaming detection failed: {e}")

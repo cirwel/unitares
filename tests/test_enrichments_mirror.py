@@ -116,6 +116,20 @@ class TestDetectGaming:
         assert len(signals) >= 1
         assert any("variance" in s.lower() or "autopilot" in s.lower() for s in signals)
 
+    def test_signals_are_observational_not_interrogative(self):
+        # #583 discipline ("reflect, don't advise") applies to the raw gaming
+        # signals too, not just the distilled reflection: a mirror line states
+        # the fact, it does not interrogate or prescribe.
+        ctx = _make_ctx(
+            complexity_history=[0.5, 0.5, 0.5, 0.5, 0.5],
+            confidence_history=[0.8, 0.8, 0.8, 0.8, 0.8],
+        )
+        signals = _detect_gaming(ctx)
+        assert len(signals) >= 1
+        for s in signals:
+            assert "?" not in s, f"gaming signal is interrogative: {s!r}"
+            assert "consider " not in s.lower(), f"gaming signal prescribes: {s!r}"
+
 
 # ============================================================================
 # _generate_mirror_reflection
@@ -177,7 +191,9 @@ class TestGenerateMirrorReflection:
 
     def test_autopilot_signal_reflects_repetition(self):
         ctx = _make_ctx()
-        reflection = _generate_mirror_reflection(ctx, signals=["Real work varies -- are you on autopilot?"])
+        reflection = _generate_mirror_reflection(
+            ctx, signals=["Your last 5 complexity reports were all 0.50 — no variance, reads as autopilot."]
+        )
         assert reflection is not None
         assert "repetitive" in reflection.lower()
         assert "?" not in reflection
