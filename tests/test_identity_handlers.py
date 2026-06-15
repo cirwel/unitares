@@ -1879,20 +1879,57 @@ class TestHandleOnboardV2:
         result = await handle_onboard_v2({"client_session_id": "onboard-new"})
         data = parse_result(result)
 
+        # #734: onboard now defaults to response_mode="minimal" — a lean
+        # envelope with a single identity_assurance block and no nested
+        # ontology / descriptive extras.
         assert data["success"] is True
         assert data["is_new"] is True
         assert data["identity_resolution_outcome"] == "minted_after_resume_miss"
+        assert data["response_mode"] == "minimal"
         assert "uuid" in data
         assert "client_session_id" in data
-        assert "session_resolution_source" in data
-        assert "continuity_token_supported" in data
-        assert "date_context" in data
+        assert "identity_assurance" in data
         assert "next_step" in data
-        # next_calls, session_continuity, workflow moved behind verbose=true
+        # Descriptive ontology + extras moved behind response_mode="full".
+        assert "identity_context" not in data
+        assert "session_resolution_source" not in data
+        assert "continuity_token_supported" not in data
+        assert "date_context" not in data
+        # next_calls, session_continuity, workflow are verbose/full-only.
         assert "next_calls" not in data
         assert "session_continuity" not in data
         assert "workflow" not in data
         assert "what_this_does" not in data
+
+    @pytest.mark.asyncio
+    async def test_onboard_full_mode_restores_descriptive_envelope(
+        self, patch_onboard_deps, mock_db, mock_redis
+    ):
+        """response_mode='full' returns the complete identity ontology and the
+        descriptive fields that minimal (the default) drops."""
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        mock_redis.get.return_value = None
+        mock_db.get_session.return_value = None
+        mock_db.find_agent_by_label.return_value = None
+        mock_db.get_identity.side_effect = [
+            None,
+            None,
+            SimpleNamespace(identity_id="new-ident", metadata={}),
+        ]
+
+        result = await handle_onboard_v2(
+            {"client_session_id": "onboard-full", "response_mode": "full"}
+        )
+        data = parse_result(result)
+
+        assert data["success"] is True
+        assert "response_mode" not in data  # full mode does not stamp the key
+        assert "identity_context" in data
+        assert "identity_assurance" in data
+        assert "session_resolution_source" in data
+        assert "continuity_token_supported" in data
+        assert "date_context" in data
 
     @pytest.mark.asyncio
     async def test_subagent_onboard_passes_if_absent_to_pin(self, patch_onboard_deps, mock_db, mock_redis):

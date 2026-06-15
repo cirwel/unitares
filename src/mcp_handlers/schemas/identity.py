@@ -115,13 +115,15 @@ class OnboardParams(AgentIdentityMixin):
         ),
     )
     response_mode: Optional[str] = Field(
-        default="full",
+        default="minimal",
         description=(
-            "Verbosity of the identity envelope. 'full' (default) returns the "
-            "complete identity ontology (identity_context + nested registry/"
-            "label/harness blocks). 'minimal' returns a lean payload — uuid, "
-            "agent_id, session id, a single identity_assurance block, the "
-            "resolution verdict, lineage flags, and a next_step hint."
+            "Verbosity of the identity envelope. 'minimal' (default) returns a "
+            "lean payload — uuid, agent_id, session id, a single "
+            "identity_assurance block, the resolution verdict, lineage flags, "
+            "and a next_step hint. 'full' returns the complete identity "
+            "ontology (identity_context + nested registry/label/harness blocks "
+            "and the descriptive session_resolution_source / "
+            "continuity_token_supported / date_context fields)."
         ),
     )
 
