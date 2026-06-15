@@ -25,13 +25,19 @@ cohort's by at least ``--min-effect`` in the intended direction, with both
 cohorts at >= ``--min-agents``. Otherwise ``no_measurable_effect`` (enough data,
 no edge) or ``insufficient_data`` (cohorts too small).
 
+Threshold discontinuity (RDD-flavored, Phase 0.5)
+-------------------------------------------------
+Phase 0.5 also logs the just-above-threshold NON-fired band, so a second,
+mode-independent estimator runs at the ``variance < 0.005`` cutoff: agents whose
+first near-threshold check-in fired (just below, *treated*) vs did not (just
+above, *control*) are compared on their subsequent value trend. The contrast is
+a mean difference at the cutoff, not a local-linear RDD fit — it corroborates
+surfaced-vs-shadow, it does not replace it. Only the autopilot signals have the
+non-fired band logged; complexity_divergence fires ABOVE its threshold and is
+excluded from the RDD.
+
 Honest scope (carry into any Phase 2 retire/keep call)
 ------------------------------------------------------
-* Phase 0 logs only *fired* check-ins, so the threshold regression-discontinuity
-  named in the proposal is NOT computable here: it needs the non-fired side of
-  the ``variance < 0.005`` cutoff. Implementing it requires a Phase 0 extension
-  that also logs near-threshold non-fired check-ins. This script reports that
-  gap rather than faking the RDD.
 * Per-check-in complexity is not persisted in ``core.agent_state`` (migration
   040), so the join the proposal sketched against agent_state is unavailable;
   the emission log is the panel instead. The trend therefore samples only
@@ -130,20 +136,25 @@ def flatten_emissions(events: list[dict]) -> list[dict]:
                 "surfaced": surfaced,
                 "signal_type": stype,
                 "value": value,
+                # Phase 0.5: legacy Phase 0 rows had no fired flag and only ever
+                # logged fired check-ins, so default True.
+                "fired": bool(sig.get("fired", True)),
             })
     return rows
 
 
 def _agent_trends(rows: list[dict], signal_type: str) -> dict[str, dict]:
-    """Per-agent firing trend for one signal type.
+    """Per-agent firing trend for one signal type (FIRED firings only).
 
     Returns {agent_id: {"trend": last-first, "first_surfaced": bool}} for agents
     with >= 2 firings of the signal. Sorted by order_key (None sorts first but
-    is rare — only when update_index was absent).
+    is rare — only when update_index was absent). Phase 0.5 non-fired control
+    rows are excluded here so the surfaced-vs-shadow estimator keeps its Phase 1
+    "trajectory across actual signal events" meaning; they feed the RDD instead.
     """
     by_agent: dict[str, list[dict]] = {}
     for r in rows:
-        if r["signal_type"] != signal_type:
+        if r["signal_type"] != signal_type or not r.get("fired", True):
             continue
         by_agent.setdefault(r["agent_id"], []).append(r)
 
@@ -215,6 +226,92 @@ def evaluate_all(rows: list[dict], *, min_agents: int, min_effect: float) -> lis
     return [
         evaluate_signal(rows, st, min_agents=min_agents, min_effect=min_effect)
         for st in SIGNAL_DIRECTION
+    ]
+
+
+# Signals with a `value < threshold` cutoff, for which Phase 0.5 logs the
+# just-above-threshold non-fired band — the only signals an RDD-flavored
+# threshold contrast can run on. (complexity_divergence fires ABOVE its
+# threshold and has no non-fired band logged, so it is excluded.)
+RDD_SIGNALS = ("autopilot_complexity", "autopilot_confidence")
+
+
+@dataclass
+class DiscontinuityVerdict:
+    signal_type: str
+    direction: int
+    treated_n: int           # first obs just below threshold (got the nudge)
+    control_n: int           # first obs just above threshold (Phase 0.5 control)
+    treated_mean_outcome: Optional[float]
+    control_mean_outcome: Optional[float]
+    discontinuity: Optional[float]  # treated advantage in the intended direction
+    verdict: str  # local_effect | no_local_effect | insufficient_data
+    detail: dict = field(default_factory=dict)
+
+
+def threshold_discontinuity(
+    rows: list[dict],
+    signal_type: str,
+    *,
+    min_per_side: int = DEFAULT_MIN_AGENTS,
+) -> DiscontinuityVerdict:
+    """RDD-flavored local contrast at the firing threshold.
+
+    Assignment is by the agent's FIRST near-threshold observation: *treated* if
+    it fired (value < threshold), *control* if it did not (value in the Phase 0.5
+    just-above band). Outcome is the subsequent trend (next observation's value
+    minus the first). The discontinuity is the treated-minus-control outcome
+    difference oriented to the intended direction. This is a mean-difference
+    contrast at the cutoff, not a local-linear RDD fit — treat it as the second,
+    mode-independent estimator that corroborates surfaced-vs-shadow, not proof.
+    """
+    direction = SIGNAL_DIRECTION.get(signal_type, +1)
+    by_agent: dict[str, list[dict]] = {}
+    for r in rows:
+        if r["signal_type"] != signal_type:
+            continue
+        by_agent.setdefault(r["agent_id"], []).append(r)
+
+    treated_outcomes: list[float] = []
+    control_outcomes: list[float] = []
+    for seq in by_agent.values():
+        seq_sorted = sorted(seq, key=lambda r: (r["order_key"] is None, r["order_key"]))
+        if len(seq_sorted) < 2:
+            continue
+        first, nxt = seq_sorted[0], seq_sorted[1]
+        outcome = nxt["value"] - first["value"]
+        if first.get("fired", True):
+            treated_outcomes.append(outcome)
+        else:
+            control_outcomes.append(outcome)
+
+    treated_mean = _mean(treated_outcomes)
+    control_mean = _mean(control_outcomes)
+
+    if len(treated_outcomes) < min_per_side or len(control_outcomes) < min_per_side:
+        return DiscontinuityVerdict(
+            signal_type=signal_type, direction=direction,
+            treated_n=len(treated_outcomes), control_n=len(control_outcomes),
+            treated_mean_outcome=treated_mean, control_mean_outcome=control_mean,
+            discontinuity=None, verdict="insufficient_data",
+            detail={"min_per_side": min_per_side},
+        )
+
+    discontinuity = direction * (treated_mean - control_mean)
+    verdict = "local_effect" if discontinuity > 0 else "no_local_effect"
+    return DiscontinuityVerdict(
+        signal_type=signal_type, direction=direction,
+        treated_n=len(treated_outcomes), control_n=len(control_outcomes),
+        treated_mean_outcome=treated_mean, control_mean_outcome=control_mean,
+        discontinuity=discontinuity, verdict=verdict,
+        detail={"min_per_side": min_per_side},
+    )
+
+
+def evaluate_rdd(rows: list[dict], *, min_per_side: int) -> list[DiscontinuityVerdict]:
+    return [
+        threshold_discontinuity(rows, st, min_per_side=min_per_side)
+        for st in RDD_SIGNALS
     ]
 
 
@@ -298,12 +395,14 @@ def _load_from_jsonl(path: str, start: datetime, end: datetime) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def render_text(window_start: str, window_end: str, source: str,
-                verdicts: list[SignalVerdict], total_events: int) -> str:
+                verdicts: list[SignalVerdict],
+                discontinuities: list[DiscontinuityVerdict], total_events: int) -> str:
     lines = [
-        "Mirror effectiveness re-eval (Phase 1)",
+        "Mirror effectiveness re-eval (Phases 1 + RDD)",
         f"Window: {window_start} -> {window_end}",
         f"Source: {source}   mirror_signal.emit events: {total_events}",
         "",
+        "== Surfaced-vs-shadow value trend ==",
     ]
     for v in verdicts:
         arrow = "higher=better" if v.direction > 0 else "lower=better"
@@ -321,9 +420,27 @@ def render_text(window_start: str, window_end: str, source: str,
         for k, val in v.detail.items():
             lines.append(f"    {k}: {val}")
         lines.append("")
+
+    lines.append("== Threshold discontinuity (RDD-flavored, Phase 0.5) ==")
+    for d in discontinuities:
+        arrow = "higher=better" if d.direction > 0 else "lower=better"
+        lines.append(f"[{d.verdict}] {d.signal_type} ({arrow})")
+        lines.append(
+            f"    treated (fired<thr): n={d.treated_n} "
+            f"mean_outcome={_fmt(d.treated_mean_outcome)}"
+        )
+        lines.append(
+            f"    control (near-miss): n={d.control_n} "
+            f"mean_outcome={_fmt(d.control_mean_outcome)}"
+        )
+        if d.discontinuity is not None:
+            lines.append(f"    discontinuity (intended dir): {_fmt(d.discontinuity)}")
+        for k, val in d.detail.items():
+            lines.append(f"    {k}: {val}")
+        lines.append("")
     lines.append(
-        "Note: threshold RDD not computed — Phase 0 logs only fired check-ins; "
-        "the non-fired side of the cutoff is required (see script docstring)."
+        "Note: the RDD is a mean-difference contrast at the cutoff, not a "
+        "local-linear fit; it corroborates surfaced-vs-shadow, it is not proof."
     )
     return "\n".join(lines)
 
@@ -340,7 +457,8 @@ def run(*, start: datetime, end: datetime, source: str, jsonl_path: Optional[str
         events = _load_from_postgres(start, end)
     rows = flatten_emissions(events)
     verdicts = evaluate_all(rows, min_agents=min_agents, min_effect=min_effect)
-    return events, verdicts
+    discontinuities = evaluate_rdd(rows, min_per_side=min_agents)
+    return events, verdicts, discontinuities
 
 
 def main() -> int:
@@ -367,8 +485,9 @@ def main() -> int:
         start = end - timedelta(days=args.days)
 
     source = "jsonl" if args.jsonl else "postgres"
-    events, verdicts = run(start=start, end=end, source=source, jsonl_path=args.jsonl,
-                           min_agents=args.min_agents, min_effect=args.min_effect)
+    events, verdicts, discontinuities = run(
+        start=start, end=end, source=source, jsonl_path=args.jsonl,
+        min_agents=args.min_agents, min_effect=args.min_effect)
 
     if args.json:
         print(json.dumps({
@@ -377,11 +496,14 @@ def main() -> int:
             "source": source,
             "total_events": len(events),
             "signals": [asdict(v) for v in verdicts],
+            "threshold_discontinuity": [asdict(d) for d in discontinuities],
         }, indent=2, default=str))
     else:
-        print(render_text(start.isoformat(), end.isoformat(), source, verdicts, len(events)))
+        print(render_text(start.isoformat(), end.isoformat(), source,
+                          verdicts, discontinuities, len(events)))
 
-    if all(v.verdict == "insufficient_data" for v in verdicts):
+    all_verdicts = [v.verdict for v in verdicts] + [d.verdict for d in discontinuities]
+    if all(v == "insufficient_data" for v in all_verdicts):
         return 2
     return 0
 
