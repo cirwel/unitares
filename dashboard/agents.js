@@ -101,6 +101,27 @@
         return agent.label || agent.display_name || agent.name || agent.agent_id || 'Unknown';
     }
 
+    function isCanonicalLineageId(value) {
+        return typeof value === 'string' &&
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+    }
+
+    function isAgentIdRedacted(agent) {
+        return !!(agent && (agent.agent_id_redacted || agent.id_redacted || agent.uuid_redacted));
+    }
+
+    function isParentIdRedacted(agent) {
+        return !!(agent && agent.parent_agent_id_redacted);
+    }
+
+    function canUseAgentLineageId(agent, value) {
+        return isCanonicalLineageId(value) && !isAgentIdRedacted(agent);
+    }
+
+    function canUseParentLineageId(agent, value) {
+        return isCanonicalLineageId(value) && !isParentIdRedacted(agent);
+    }
+
     function agentHasMetrics(agent) {
         var metrics = agent.metrics || {};
         return metrics && (metrics.E !== undefined || metrics.I !== undefined || metrics.S !== undefined);
@@ -234,9 +255,11 @@
             var la = cachedAgents[li];
             var laId = la.agent_id || la.id;
             if (!laId) continue;
-            agentsById[laId] = la;
+            if (canUseAgentLineageId(la, laId)) {
+                agentsById[laId] = la;
+            }
             var pid = la.parent_agent_id;
-            if (pid) {
+            if (pid && canUseParentLineageId(la, pid)) {
                 (childrenByParent[pid] = childrenByParent[pid] || []).push(laId);
             }
         }
@@ -318,7 +341,9 @@
             // the flat card list.
             var lineageBadgeHtml = '';
             var parentId = agent.parent_agent_id;
-            if (parentId) {
+            if (parentId && !canUseParentLineageId(agent, parentId)) {
+                lineageBadgeHtml += '<span class="lineage-badge lineage-child" title="Parent lineage exists but is redacted for this view">Lineage redacted</span>';
+            } else if (parentId) {
                 var parentAgent = agentsById[parentId];
                 var parentShort = parentAgent
                     ? getAgentDisplayName(parentAgent)
@@ -326,7 +351,7 @@
                 var spawn = agent.spawn_reason ? ' (' + escapeHtml(agent.spawn_reason) + ')' : '';
                 lineageBadgeHtml += '<span class="lineage-badge lineage-child" data-parent-uuid="' + escapeHtml(parentId) + '" title="Spawned from ' + escapeHtml(parentId) + spawn + '">↑ ' + escapeHtml(parentShort) + '</span>';
             }
-            var children = childrenByParent[agentId] || [];
+            var children = canUseAgentLineageId(agent, agentId) ? (childrenByParent[agentId] || []) : [];
             if (children.length > 0) {
                 lineageBadgeHtml += '<span class="lineage-badge lineage-parent" title="' + children.length + ' child agent(s) declared this as parent">' + children.length + ' child' + (children.length !== 1 ? 'ren' : '') + '</span>';
             }
@@ -702,12 +727,20 @@
                     var other = all[ki];
                     var oid = other.agent_id || other.id;
                     if (!oid) continue;
-                    byIdLocal[oid] = other;
-                    if (other.parent_agent_id === agentId) childrenLocal.push(other);
+                    if (canUseAgentLineageId(other, oid)) {
+                        byIdLocal[oid] = other;
+                    }
+                    if (canUseAgentLineageId(agent, agentId) &&
+                            canUseParentLineageId(other, other.parent_agent_id) &&
+                            other.parent_agent_id === agentId) {
+                        childrenLocal.push(other);
+                    }
                 }
                 if (!parentId && childrenLocal.length === 0) return '';
                 var parentHtml = '-';
-                if (parentId) {
+                if (parentId && !canUseParentLineageId(agent, parentId)) {
+                    parentHtml = '<span class="text-secondary-sm">Redacted in this view</span>';
+                } else if (parentId) {
                     var parentAgent = byIdLocal[parentId];
                     var parentName = parentAgent ? getAgentDisplayName(parentAgent) : (parentId.slice(0, 12) + '...');
                     var spawn = agent.spawn_reason ? ' <span class="text-secondary-xs">(' + escapeHtml(agent.spawn_reason) + ')</span>' : '';
