@@ -159,11 +159,18 @@ secrets/
 # LaunchAgent plists (contain secrets — installed copy lives in ~/Library/LaunchAgents/)
 scripts/ops/*.plist
 
-# Documentation — only docs/*.md and docs/guides/ tracked; everything else local
+# Documentation — docs/ subtrees are TRACKED by default (operations, ontology,
+# proposals, integration, install, dev, guides, assets). The entries below are
+# the explicit exceptions kept local-only: machine config, retired/handoff docs,
+# any *.local.md file, and personal workflow notes under docs/personal/.
 docs/INTERNAL_CONFIG.md
 docs/archive/
 docs/handoffs/
 *.local.md
+# Personal workflow patterns — local-only, never committed. Drop any file here
+# (no naming discipline needed) and it stays on your machine; intended for
+# non-coder operators keeping their own workflow notes.
+docs/personal/
 
 # Agent guides (generated onboarding docs, not project documentation)
 .agent-guides/
