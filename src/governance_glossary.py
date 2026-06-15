@@ -51,7 +51,7 @@ VERDICTS: Dict[str, Dict[str, str]] = {
     },
     "reject": {
         "meaning": "Significant concern.",
-        "next_action": "Requires dialectic review or human input.",
+        "next_action": "Open a dialectic review to resolve or contest it, or bring in a human.",
     },
     "uninitialized": {
         "meaning": "Agent has no recorded state yet.",
