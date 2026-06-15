@@ -156,7 +156,7 @@ Per identity.md v2 ontology, fresh process-instances mint fresh identity. Lineag
 Default happy path:
 
 1. `onboard(force_new=true)` with NO `parent_agent_id` → save `agent_uuid` and `client_session_id` from response. A fresh session onboards fresh; co-location in this workspace is not lineage.
-2. `process_agent_update(response_text=..., complexity=..., client_session_id=...)` for in-process check-ins
+2. `process_agent_update(response_text=..., complexity=..., client_session_id=...)` for in-process check-ins. **Check in per working turn, not once.** Governance is a trajectory, not a point: the first check-in returns `margin: "settling"` (warmup — fewer than 3 check-ins, so the server cannot judge headroom yet), and calibration (`auto_ground_truth`) only means something once it has the volume of repeated (prediction, outcome) pairs a cadence produces. A per-turn cadence is **not performative** — its value is longitudinal and invisible at the single-call altitude, so judging it by one turn's payload is an altitude error. Keep each check-in substantive (a real `confidence`, what changed, what you are now uncertain about) rather than rote; rote logging and no logging both starve the baseline.
 3. On a future process-instance, repeat step 1 — onboard fresh, do not auto-resume and do not declare the prior session as a parent.
 
 Declare lineage (`parent_agent_id`) ONLY for a real causal event:
