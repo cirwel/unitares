@@ -2281,12 +2281,24 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
     # STEP 6: Build response
     verbose = coerce_bool(arguments.get("verbose"), default=False)
-    # #734: opt-in lean onboard envelope. Default "full" preserves the
-    # existing response shape for dashboard/plugin consumers; "minimal"
-    # drops the nested identity ontology and verbose extras.
-    response_mode = str(arguments.get("response_mode") or "full").strip().lower()
+    # #734: lean onboard envelope is now the DEFAULT. "minimal" drops the
+    # nested identity ontology (identity_context) and the descriptive extras
+    # (session_resolution_source, continuity_token_supported, date_context),
+    # keeping uuid / agent_id / client_session_id / a single identity_assurance
+    # block / trajectory genesis+trust_tier / lineage flags / continuity_token /
+    # next_step. Callers that need the full self-description pass
+    # response_mode="full". The functional fields the plugin/dashboard rely on
+    # (uuid, client_session_id) are retained in both modes.
+    #
+    # verbose=True is the legacy "give me everything" signal; honor it as full
+    # so existing verbose callers keep the next_calls/session_continuity/
+    # tool_mode/workflow extras (minimal returns before those are built). An
+    # explicit response_mode always wins over the verbose-derived default.
+    response_mode = str(
+        arguments.get("response_mode") or ("full" if verbose else "minimal")
+    ).strip().lower()
     if response_mode not in {"full", "minimal"}:
-        response_mode = "full"
+        response_mode = "full" if verbose else "minimal"
     try:
         from ..context import get_session_resolution_source, get_session_proof_origin
         continuity_source = get_session_resolution_source()

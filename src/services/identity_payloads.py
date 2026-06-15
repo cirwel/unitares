@@ -336,6 +336,9 @@ def build_onboard_response_data(
         if was_archived:
             minimal["auto_resumed"] = True
             minimal["previous_status"] = "archived"
+        trajectory_block = _build_trajectory_block(trajectory_result)
+        if trajectory_block is not None:
+            minimal["trajectory"] = trajectory_block
         return minimal
 
     result = {
@@ -422,18 +425,32 @@ def build_onboard_response_data(
         result["auto_resumed"] = True
         result["previous_status"] = "archived"
 
-    if trajectory_result:
-        from src.governance_glossary import explain_trust_tier
-        result["trajectory"] = dict(trajectory_result)
-        # #428: glossary-sourced trust_tier with meaning + criteria.
-        # Preserves prior {tier, name, reason} shape and adds the explanation.
-        result["trajectory"]["trust_tier"] = explain_trust_tier({
-            "tier": 1,
-            "name": "emerging",
-            "reason": "Genesis stored at onboard. Identity will mature with behavioral consistency.",
-        })
+    trajectory_block = _build_trajectory_block(trajectory_result)
+    if trajectory_block is not None:
+        result["trajectory"] = trajectory_block
 
     return result
+
+
+def _build_trajectory_block(trajectory_result: Optional[dict]) -> Optional[dict]:
+    """Build the onboard `trajectory` block (genesis + glossary trust_tier).
+
+    Shared by the minimal and full onboard envelopes so the genesis/trust-tier
+    info an agent sees once at onboard stays identical across modes (#734).
+    Returns ``None`` when there is no trajectory result to surface.
+    """
+    if not trajectory_result:
+        return None
+    from src.governance_glossary import explain_trust_tier
+    block = dict(trajectory_result)
+    # #428: glossary-sourced trust_tier with meaning + criteria.
+    # Preserves prior {tier, name, reason} shape and adds the explanation.
+    block["trust_tier"] = explain_trust_tier({
+        "tier": 1,
+        "name": "emerging",
+        "reason": "Genesis stored at onboard. Identity will mature with behavioral consistency.",
+    })
+    return block
 
 
 def build_identity_response_context(
