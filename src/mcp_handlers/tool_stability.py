@@ -54,72 +54,13 @@ class ToolLifecycle:
 # ============================================================================
 # Tool Aliases Registry
 # ============================================================================
-# When tools are renamed/consolidated, add aliases here so old names still work
-# This prevents breaking existing code/agents
+# When tools are renamed/consolidated, add aliases here so old names still work.
+# Primary agent workflow names also live here: they dispatch through raw
+# implementation tools, but are the public first-run surface for agents.
 
 _CHECKIN_COMPLEXITY_NORMALIZER = normalize_unit_interval("complexity")
 
 _TOOL_ALIASES: Dict[str, ToolAlias] = {
-    # Agent workflow aliases — first-class UX names for the core loop.
-    # These are intentionally advertised/registered, unlike most historical
-    # compatibility aliases, so cold MCP agents can discover task verbs.
-    "start_session": ToolAlias(
-        old_name="start_session",
-        new_name="onboard",
-        reason="intuitive_alias",
-        migration_note=(
-            "Workflow alias for onboard(force_new=true, parent_agent_id=...). "
-            "Starts a fresh process identity or declares lineage."
-        ),
-    ),
-    "sync_state": ToolAlias(
-        old_name="sync_state",
-        new_name="process_agent_update",
-        reason="intuitive_alias",
-        migration_note=(
-            "Workflow alias for process_agent_update(response_text='...', "
-            "complexity=..., confidence=...)."
-        ),
-    ),
-    "check_working_state": ToolAlias(
-        old_name="check_working_state",
-        new_name="get_governance_metrics",
-        reason="intuitive_alias",
-        migration_note=(
-            "Workflow alias for get_governance_metrics(). Reads current EISV "
-            "state without writing a check-in."
-        ),
-    ),
-    "search_shared_memory": ToolAlias(
-        old_name="search_shared_memory",
-        new_name="knowledge",
-        reason="intuitive_alias",
-        migration_note=(
-            "Workflow alias for knowledge(action='search', query='...'). "
-            "Search shared memory before writing a duplicate discovery."
-        ),
-        inject_action="search",
-    ),
-    "record_result": ToolAlias(
-        old_name="record_result",
-        new_name="outcome_event",
-        reason="intuitive_alias",
-        migration_note=(
-            "Workflow alias for outcome_event(...). Records the real outcome "
-            "of a task, test, tool call, or external validation signal."
-        ),
-    ),
-    "request_review": ToolAlias(
-        old_name="request_review",
-        new_name="dialectic",
-        reason="intuitive_alias",
-        migration_note=(
-            "Workflow alias for dialectic(action='request', "
-            "issue_description='...'). Starts structured review/recovery."
-        ),
-        inject_action="request",
-    ),
-
     # Identity tools - all point to identity() (the primary identity tool)
     # NOTE: who_am_i has its own handler in admin.py, so NOT aliased
     #
@@ -381,9 +322,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         migration_note="Use knowledge(action='stats')", inject_action="stats"),
 
     # ==========================================================================
-    # Agent-experience aliases (Jun 2026) — task-verb names for the core
-    # agent workflow. Additive layer: canonical tools, schemas, and EISV
-    # semantics are unchanged underneath. Identity classification is
+    # Primary agent workflow names (Jun 2026) — task verbs for the core
+    # agent workflow. Additive layer: raw implementation tools, schemas,
+    # and EISV semantics are unchanged underneath. Identity classification is
     # inherited automatically: get_call_identity_requirement canonicalizes
     # through this registry (alias + inject_action) before judging.
     # `experience=True` opts the response into the normalized envelope
@@ -391,28 +332,28 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # ==========================================================================
     "start_session": ToolAlias(
         old_name="start_session", new_name="onboard", reason="intuitive_alias",
-        migration_note="Resolves to onboard() - creates identity and returns templates",
+        migration_note="Primary workflow name for starting a session; implemented by onboard().",
         experience=True),
     "sync_state": ToolAlias(
         old_name="sync_state", new_name="process_agent_update", reason="intuitive_alias",
-        migration_note="Resolves to process_agent_update() - check in your working state",
+        migration_note="Primary workflow name for checking in state; implemented by process_agent_update().",
         param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
         experience=True),
     "check_working_state": ToolAlias(
         old_name="check_working_state", new_name="get_governance_metrics", reason="intuitive_alias",
-        migration_note="Resolves to get_governance_metrics() - your current EISV working state",
+        migration_note="Primary workflow name for reading current EISV state; implemented by get_governance_metrics().",
         experience=True),
     "search_shared_memory": ToolAlias(
         old_name="search_shared_memory", new_name="knowledge", reason="intuitive_alias",
-        migration_note="Resolves to knowledge(action='search') - find prior discoveries, avoid duplicate work",
+        migration_note="Primary workflow name for memory search; implemented by knowledge(action='search').",
         inject_action="search", experience=True),
     "record_result": ToolAlias(
         old_name="record_result", new_name="outcome_event", reason="intuitive_alias",
-        migration_note="Resolves to outcome_event() - record what actually happened",
+        migration_note="Primary workflow name for recording outcomes; implemented by outcome_event().",
         experience=True),
     "request_review": ToolAlias(
         old_name="request_review", new_name="dialectic", reason="intuitive_alias",
-        migration_note="Resolves to dialectic(action='request', issue_description='...') - ask for a structured review",
+        migration_note="Primary workflow name for structured review; implemented by dialectic(action='request').",
         inject_action="request", experience=True),
 }
 
@@ -509,10 +450,10 @@ def is_experience_alias(tool_name: str) -> bool:
 
 
 def experience_alias_map() -> Dict[str, str]:
-    """Friendly experience-alias name -> canonical tool name.
+    """Primary agent workflow name -> raw implementation tool name.
 
     Single source for the discoverability surfaces (list_tools catalog)
-    so the advertised friendly names can never drift from the registry.
+    so the advertised primary names can never drift from the registry.
     """
     return {
         name: alias.new_name

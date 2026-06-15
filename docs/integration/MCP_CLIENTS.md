@@ -32,9 +32,10 @@ Claude Desktop does not support `type: http` natively; use `mcp-remote` as a std
 }
 ```
 
-Agents self-identify through `start_session()` (`onboard(...)` canonically); no hardcoded agent-name header is required.
+Agents self-identify through the primary `start_session()` tool; no hardcoded
+agent-name header is required. The raw implementation tool is `onboard(...)`.
 
-Agent-facing workflow aliases are registered for the core loop:
+Primary agent-facing workflow tools are registered for the core loop:
 
 - `start_session(...)` → `onboard(...)`
 - `sync_state(...)` → `process_agent_update(...)`
@@ -66,10 +67,10 @@ See [`scripts/ops/`](../../scripts/ops/) for an example LaunchAgent plist with b
 
 For a fresh process, call `start_session(force_new=true)`. If the process is continuing prior work, call `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")`.
 
-Use canonical `onboard(...)` instead when targeting older servers or when a raw
-canonical response shape is required. Friendly alias responses lift
+Use raw `onboard(...)` instead when targeting older servers or when a raw
+implementation response shape is required. Primary workflow responses lift
 `agent_uuid`, `client_session_id`, and `next_action` while preserving the full
-canonical payload under `raw_governance`.
+raw payload under `raw_governance`.
 
 For a same-owner rebind to an existing UUID, call `identity(agent_uuid=..., continuity_token=..., resume=true)` with the matching short-lived token. Do not teach clients to use bare `identity(agent_uuid=..., resume=true)`: UUID alone is an unsigned claim and is hijack-shaped under strict identity mode.
 

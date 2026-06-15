@@ -134,13 +134,14 @@ def _format_lite_parameter(
 
 
 def _getting_started_path() -> List[Dict[str, Any]]:
-    """Canonical low-friction path for first-time governance callers."""
+    """Primary low-friction path for first-time governance callers."""
     return [
         {
             "step": 1,
             "tool": "start_session",
             "call": "start_session(force_new=true)",
             "canonical_tool": "onboard",
+            "implementation_tool": "onboard",
             "why": "Mint a fresh process identity. If continuing prior work, include parent_agent_id and spawn_reason='new_session'.",
         },
         {
@@ -148,6 +149,7 @@ def _getting_started_path() -> List[Dict[str, Any]]:
             "tool": "sync_state",
             "call": "sync_state(response_text='what changed', complexity=0.5, confidence=0.7)",
             "canonical_tool": "process_agent_update",
+            "implementation_tool": "process_agent_update",
             "why": "Record meaningful work and receive a governance verdict.",
         },
         {
@@ -155,6 +157,7 @@ def _getting_started_path() -> List[Dict[str, Any]]:
             "tool": "check_working_state",
             "call": "check_working_state()",
             "canonical_tool": "get_governance_metrics",
+            "implementation_tool": "get_governance_metrics",
             "why": "Inspect current EISV state without mutating history.",
         },
         {
@@ -162,6 +165,7 @@ def _getting_started_path() -> List[Dict[str, Any]]:
             "tool": "search_shared_memory",
             "call": "search_shared_memory(query='topic')",
             "canonical_tool": "knowledge(action='search')",
+            "implementation_tool": "knowledge(action='search')",
             "why": "Reuse shared memory before writing duplicate discoveries.",
         },
         {
@@ -636,15 +640,15 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # Build tools list dynamically from registered tools
     # Description mapping for tools (fallback to generic if not found)
     tool_descriptions = {
-        "start_session": "Start a UNITARES session; alias for onboard(force_new=true, parent_agent_id=...)",
-        "sync_state": "Check in after meaningful work; alias for process_agent_update(...)",
-        "check_working_state": "Read current EISV state without mutating history; alias for get_governance_metrics()",
-        "search_shared_memory": "Search shared memory before writing; alias for knowledge(action='search')",
-        "record_result": "Record real task/tool/test outcome; alias for outcome_event(...)",
-        "request_review": "Ask for structured review/recovery; alias for dialectic(action='request')",
+        "start_session": "Start a UNITARES session; primary workflow name for onboarding",
+        "sync_state": "Check in after meaningful work; primary workflow name for state updates",
+        "check_working_state": "Read current EISV state without mutating history",
+        "search_shared_memory": "Search shared memory before writing duplicate discoveries",
+        "record_result": "Record real task/tool/test outcome for calibration",
+        "request_review": "Ask for structured review/recovery",
         "onboard": "Register fresh process-instance with governance. Per v2 ontology, declare lineage via parent_agent_id rather than resume via token.",
         "identity": "🪞 Check who you are or set your display name. Per v2 ontology, arg-less identity() with no proof signal mints fresh; pass continuity_token / agent_uuid + proof to resume.",
-        "process_agent_update": "💬 Share your work and get supportive feedback. Your main check-in tool",
+        "process_agent_update": "Raw implementation for sync_state(); updates agent governance state",
         "get_governance_metrics": "📊 Get current state and metrics without updating",
         "simulate_update": "🧪 Test decisions without persisting state",
         "get_thresholds": "⚙️ View current threshold configuration",
@@ -916,7 +920,6 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "search_shared_memory": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
                 "record_result": "(outcome_type:str, confidence?:float, prediction_id?:str, detail?:dict)",
                 "request_review": "(issue_description:str, reason?:str)",
-                "process_agent_update": "(complexity:float, response_text?:str, confidence?:float, task_type?:str)",
                 "store_knowledge_graph": "(summary:str, tags?:list, severity?:str, details?:str)",
                 "search_knowledge_graph": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
                 "knowledge_search": "(action='search', query?:str, tags?:list, limit?:int, include_details?:bool)",
@@ -932,8 +935,8 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         # Add first-time hint for new agents
         if is_new_agent:
             response_data["first_time"] = {
-                "hint": "👋 First time here? Start with onboard(force_new=true) to create your identity!",
-                "next_step": "Call onboard(force_new=true). If inheriting prior work, also pass parent_agent_id and spawn_reason='new_session'."
+                "hint": "First time here? Start with start_session(force_new=true) to create your identity.",
+                "next_step": "Call start_session(force_new=true). If inheriting prior work, also pass parent_agent_id and spawn_reason='new_session'."
             }
         
         # Add progressive metadata if enabled
@@ -1130,10 +1133,10 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         "note": "Use this tool to discover available capabilities. MCP protocol also provides tool definitions, but this provides categorized overview useful for onboarding. Use 'essential_only=true' or 'tier=essential' to reduce cognitive load by showing only core workflow tools (~10 tools).",
         "quick_start": {
             "new_agent": [
-                "1. Call onboard(force_new=true) - creates a fresh process identity",
+                "1. Call start_session(force_new=true) - creates a fresh process identity",
                 "2. If inheriting prior work, include parent_agent_id and spawn_reason='new_session'",
                 "3. Save uuid plus continuity diagnostics from response",
-                "4. Call process_agent_update() to share meaningful work",
+                "4. Call sync_state() to share meaningful work",
                 "5. Use identity(name='...') to set a cosmetic label"
             ],
             "categories_to_explore": [
@@ -1156,9 +1159,9 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 │  🚀 START                                                           │
 │     │                                                               │
 │     ▼                                                               │
-│  ┌─────────┐                                                        │
-│  │ onboard │──────────────────┐                                     │
-│  └────┬────┘                  │                                     │
+│  ┌───────────────┐                                                  │
+│  │ start_session │────────────┐                                     │
+│  └───────┬───────┘            │                                     │
 │       │                       ▼                                     │
 │       │              ┌──────────────┐                               │
 │       │              │   identity   │ ◄── name yourself             │
@@ -1166,7 +1169,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 │       │                                                             │
 │       ▼                                                             │
 │  ┌────────────────────────┐       ┌─────────────────────────────┐  │
-│  │ process_agent_update   │◄─────►│ get_governance_metrics      │  │
+│  │ sync_state             │◄─────►│ check_working_state         │  │
 │  │ (main check-in)        │       │ (view state)                │  │
 │  └───────────┬────────────┘       └─────────────────────────────┘  │
 │              │                                                      │
@@ -1176,8 +1179,8 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 │  ┌───────────────────────┐              ┌────────────────────────┐ │
 │  │ KNOWLEDGE GRAPH       │              │ OBSERVABILITY          │ │
 │  ├───────────────────────┤              ├────────────────────────┤ │
-│  │ store_knowledge_graph │              │ list_agents            │ │
-│  │ search_knowledge_graph│              │ observe_agent          │ │
+│  │ search_shared_memory  │              │ list_agents            │ │
+│  │ knowledge             │              │ observe_agent          │ │
 │  │ leave_note            │              │ compare_agents         │ │
 │  │ get_discovery_details │              │ detect_anomalies       │ │
 │  └───────────────────────┘              └────────────────────────┘ │
@@ -1221,7 +1224,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
             return [error_response(
                 "tool_name is required",
                 recovery={
-                    "action": "Call list_tools to find the canonical name, then call describe_tool(tool_name=...)",
+                    "action": "Call list_tools to find the primary tool name, then call describe_tool(tool_name=...)",
                     "related_tools": ["list_tools"],
                 },
             )]
@@ -1473,9 +1476,14 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     "note": "Lite mode - use describe_tool(tool_name=..., lite=false) for full schema"
                 }
                 if alias_info:
+                    response_data["primary_tool"] = requested_tool_name
+                    response_data["implementation_tool"] = tool_name
                     response_data["canonical_tool"] = tool_name
                     response_data["alias"] = {
                         "reason": alias_info.reason,
+                        "role": "primary_agent_workflow",
+                        "primary_tool": requested_tool_name,
+                        "implementation_tool": alias_info.new_name,
                         "canonical_tool": alias_info.new_name,
                         "injected_action": alias_info.inject_action,
                         "note": alias_info.migration_note,
@@ -1533,9 +1541,14 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     "note": "Lite mode - use describe_tool(tool_name=..., lite=false) for full schema"
                 }
                 if alias_info:
+                    response_data["primary_tool"] = requested_tool_name
+                    response_data["implementation_tool"] = tool_name
                     response_data["canonical_tool"] = tool_name
                     response_data["alias"] = {
                         "reason": alias_info.reason,
+                        "role": "primary_agent_workflow",
+                        "primary_tool": requested_tool_name,
+                        "implementation_tool": alias_info.new_name,
                         "canonical_tool": alias_info.new_name,
                         "injected_action": alias_info.inject_action,
                         "note": alias_info.migration_note,
@@ -1564,8 +1577,13 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
         }
         if alias_info:
             full_response["tool"]["canonical_name"] = tool_name
+            full_response["tool"]["implementation_name"] = tool_name
+            full_response["tool"]["role"] = "primary_agent_workflow"
             full_response["alias"] = {
                 "reason": alias_info.reason,
+                "role": "primary_agent_workflow",
+                "primary_tool": requested_tool_name,
+                "implementation_tool": alias_info.new_name,
                 "canonical_tool": alias_info.new_name,
                 "injected_action": alias_info.inject_action,
                 "note": alias_info.migration_note,

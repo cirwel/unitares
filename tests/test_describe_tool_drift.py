@@ -89,8 +89,11 @@ async def test_workflow_alias_describe_resolves_to_canonical_schema():
     params = "\n".join(data["parameters"])
 
     assert data["tool"] == "sync_state"
+    assert data["primary_tool"] == "sync_state"
+    assert data["implementation_tool"] == "process_agent_update"
     assert data["canonical_tool"] == "process_agent_update"
     assert data["alias"]["reason"] == "intuitive_alias"
+    assert data["alias"]["role"] == "primary_agent_workflow"
     assert "response_text" in params
     assert "complexity" in params
     assert "confidence" in params
@@ -115,6 +118,14 @@ async def test_list_tools_lite_surfaces_workflow_aliases():
         "request_review",
     ):
         assert alias in names
+
+    for raw_tool in (
+        "onboard",
+        "process_agent_update",
+        "get_governance_metrics",
+        "outcome_event",
+    ):
+        assert raw_tool not in names
 
     assert data["getting_started_path"][0]["tool"] == "start_session"
     assert data["getting_started_path"][1]["tool"] == "sync_state"

@@ -190,7 +190,7 @@ Symptom:
 
 Fix:
 
-- rerun `start_session(force_new=true)` (`onboard(...)` canonically)
+- rerun `start_session(force_new=true)` (raw implementation: `onboard(...)`)
 - if the process is continuing prior work, include `parent_agent_id=<prior uuid>` and `spawn_reason="new_session"`
 - avoid bare `identity(agent_uuid=..., resume=true)`; use a matching `continuity_token` only for same-owner rebinding
 
@@ -212,7 +212,7 @@ When something feels wrong, do the checks in this order:
 1. Run `./scripts/diagnostics/check_health.sh`
 2. If HTTP is up, call `health_check()`
 3. If an agent identity looks wrong, call `identity()`
-4. If the issue is governance-state related, call `check_working_state()` (`get_governance_metrics(...)` canonically)
+4. If the issue is governance-state related, call `check_working_state()` (raw implementation: `get_governance_metrics(...)`)
 5. Only after that inspect logs or restart services
 
 This order matters because many apparent "agent bugs" are actually continuity or process issues, and many apparent "graph bugs" are now observable directly through `health_check()` without guessing from symptoms.

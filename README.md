@@ -19,7 +19,7 @@ When you run many autonomous agents, you can already tell *who* is calling (iden
 
 After each unit of work, an agent checks in by calling `sync_state()`. The check-in includes a self-reported `confidence`, a self-reported `complexity`, the `response_text`, and any `recent_tool_results` — test outcomes, exit codes, lint output, file changes — i.e. things the system can verify instead of taking the agent's word for.
 
-> **A note on tool names:** every tool has a plain task-verb name (`sync_state`, `start_session`, `record_result`) and an older canonical name (`process_agent_update`, `onboard`, `outcome_event`). They're the same calls. This README uses the task-verb names throughout; the full mapping is in [Tool names](#tool-names).
+> **A note on tool names:** agents should use the primary task-verb tools (`sync_state`, `start_session`, `record_result`). Older raw implementation names (`process_agent_update`, `onboard`, `outcome_event`) remain stable for compatibility and debugging. This README uses the primary names throughout; the full mapping is in [Tool names](#tool-names).
 
 From each check-in, UNITARES tracks four numbers per agent — together called **EISV**:
 
@@ -230,9 +230,9 @@ The `start_session()` response includes `agent_uuid` and `client_session_id` at 
 
 ### Tool names
 
-Every tool has a plain task-verb name and an older canonical name. They make the same call; the task-verb versions just return a friendlier, self-awareness-oriented response shape (with the full payload preserved under `raw_governance`). Use whichever you prefer.
+Agents should use the primary task-verb tools. The older raw implementation names remain available for compatibility, older clients, and cases where you explicitly want the raw handler response shape. Primary tools return the agent-experience envelope, with the full payload preserved under `raw_governance`.
 
-| Task-verb name (used in this README) | Canonical name |
+| Primary workflow tool | Raw implementation tool |
 |---|---|
 | `start_session` | `onboard` |
 | `sync_state` | `process_agent_update` |

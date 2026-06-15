@@ -18,11 +18,11 @@ source_files:
 
 **Last Updated:** 2026-06-11
 
-## Friendly Workflow Names
+## Primary Workflow Names
 
-The core lifecycle can be driven with task-verb aliases. Each resolves to its canonical tool — same parameters, same identity rules — and returns a **normalized envelope**: the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`), with the full canonical payload preserved under `raw_governance`.
+The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same parameters and identity rules, and returns a **normalized envelope**: the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`), with the full raw payload preserved under `raw_governance`.
 
-| Task | Friendly name | Canonical tool |
+| Task | Primary workflow tool | Raw implementation tool |
 |------|---------------|----------------|
 | Start working | `start_session(force_new=true, ...)` | `onboard` |
 | Check in after meaningful work | `sync_state(response_text=..., complexity=...)` | `process_agent_update` |
@@ -31,7 +31,7 @@ The core lifecycle can be driven with task-verb aliases. Each resolves to its ca
 | Record what actually happened | `record_result(...)` | `outcome_event` |
 | Ask for a structured review | `request_review(issue_description=...)` | `dialectic(action="request")` |
 
-Use whichever spelling you prefer; the canonical names keep their raw response shape, the friendly names add the envelope. Everything below applies to both.
+Use the primary workflow tools by default. Use raw implementation names only for older servers, compatibility code, or when you explicitly need the unwrapped handler response.
 
 ## Starting a Session
 
@@ -48,7 +48,7 @@ identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true) # same li
 
 Declaring a currently-live agent as parent is rejected (`lineage_coincidental_rejected`): a live agent is a concurrent sibling, not a predecessor. `subagent` and `compaction` are exempt — their parent is legitimately live. A genuine handoff to an exited predecessor stays provisional until R1 confirms it.
 
-Use canonical `onboard(...)` instead when targeting older servers or when you
+Use raw `onboard(...)` instead when targeting older servers or when you
 need the unwrapped raw response.
 
 Returns:
@@ -88,8 +88,8 @@ sync_state(
 )
 ~~~
 
-Use canonical `process_agent_update(...)` when you need the raw handler
-payload; alias responses preserve it under `raw_governance`.
+Use raw `process_agent_update(...)` when you need the raw handler payload;
+primary workflow responses preserve it under `raw_governance`.
 
 ### When to Check In
 
@@ -145,12 +145,12 @@ Recovery is not a shortcut — `self_recovery()` examines your EISV state and de
 
 ### Essential (use in every session)
 
-- `start_session(force_new=true, parent_agent_id=...)` / `onboard(...)` — Create a fresh process identity, optionally declaring lineage
-- `sync_state()` / `process_agent_update()` — Check in with work summary, complexity, confidence
-- `check_working_state()` / `get_governance_metrics()` — Read your current EISV state
+- `start_session(force_new=true, parent_agent_id=...)` — Create a fresh process identity, optionally declaring lineage
+- `sync_state()` — Check in with work summary, complexity, confidence
+- `check_working_state()` — Read your current EISV state
 - `identity()` — Confirm who the runtime thinks you are and how continuity was resolved; include `continuity_token` for proof-owned UUID rebinds
 - `health_check()` — Check operator-facing server health when behavior seems odd
-- `search_shared_memory(query=...)` / `knowledge(action="search", ...)` — Find existing knowledge before creating new entries
+- `search_shared_memory(query=...)` — Find existing knowledge before creating new entries
 - `knowledge(action="note", ...)` — Quick contribution to the knowledge graph
 
 ### Common (use when needed)
