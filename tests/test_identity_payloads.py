@@ -239,3 +239,114 @@ def test_onboard_response_threads_server_inferred_downgrade():
         proof_origin="server_inferred",
     )
     assert payload["identity_assurance"]["tier"] == "weak"
+
+
+# ── #732: assurance carries a how_to_strengthen breadcrumb for non-strong ──
+
+
+def test_strong_assurance_has_no_strengthen_breadcrumb():
+    """A caller-proven strong binding needs no action — the breadcrumb is
+    omitted so the assurance block stays lean."""
+    context = build_identity_response_context(
+        agent_uuid="uuid-s",
+        agent_id="agent-s",
+        display_name=None,
+        session_resolution_source="explicit_client_session_id",
+        identity_status="resumed",
+        proof_origin="caller_asserted",
+    )
+    assurance = context["identity_assurance"]
+    assert assurance["tier"] == "strong"
+    assert "how_to_strengthen" not in assurance
+
+
+def test_weak_server_inferred_assurance_explains_how_to_reach_strong():
+    """The canonical #732 case: weak because server-inferred. The breadcrumb
+    tells the agent to pass client_session_id explicitly."""
+    context = build_identity_response_context(
+        agent_uuid="uuid-w",
+        agent_id="agent-w",
+        display_name=None,
+        session_resolution_source="server_inferred_binding",
+        identity_status="resumed",
+        proof_origin="server_inferred",
+    )
+    assurance = context["identity_assurance"]
+    assert assurance["tier"] == "weak"
+    hint = assurance["how_to_strengthen"]
+    assert "server-inferred" in hint
+    assert "client_session_id" in hint
+
+
+def test_medium_assurance_breadcrumb_points_at_explicit_session():
+    context = build_identity_response_context(
+        agent_uuid="uuid-m",
+        agent_id="agent-m",
+        display_name=None,
+        session_resolution_source="pinned_onboard_session",
+        identity_status="resumed",
+    )
+    assurance = context["identity_assurance"]
+    assert assurance["tier"] == "medium"
+    assert "client_session_id" in assurance["how_to_strengthen"]
+
+
+# ── #734: onboard response_mode="minimal" lean envelope ──
+
+
+def _onboard_kwargs(**overrides):
+    base = dict(
+        agent_uuid="uuid-min",
+        structured_agent_id="agent-min",
+        agent_label="Tester",
+        stable_session_id="sess-min",
+        is_new=True,
+        force_new=False,
+        client_hint="claude",
+        was_archived=False,
+        trajectory_result={"genesis_stored": True},
+        parent_agent_id=None,
+        thread_context=None,
+        verbose=True,
+        continuity_source="client_session_id",
+        continuity_support={"enabled": True},
+        continuity_token="token-min",
+        system_activity={"agents": {"active": 1}},
+        tool_mode_info={"current_mode": "lite"},
+        identity_resolution_outcome="minted_fresh",
+    )
+    base.update(overrides)
+    return base
+
+
+def test_onboard_minimal_mode_drops_nested_ontology_and_verbose_extras():
+    payload = build_onboard_response_data(**_onboard_kwargs(response_mode="minimal"))
+
+    # Lean essentials present.
+    assert payload["response_mode"] == "minimal"
+    assert payload["uuid"] == "uuid-min"
+    assert payload["agent_id"] == "agent-min"
+    assert payload["client_session_id"] == "sess-min"
+    assert payload["identity_assurance"]["tier"] == "strong"
+    assert payload["identity_resolution_outcome"] == "minted_fresh"
+    assert payload["next_step"]
+    # Functional fields retained.
+    assert payload["continuity_token"] == "token-min"
+
+    # The nested ontology and verbose extras are dropped — this is the #734 win.
+    assert "identity_context" not in payload
+    assert "session_continuity" not in payload
+    assert "next_calls" not in payload
+    assert "workflow" not in payload
+    assert "tool_mode" not in payload
+    assert "system_activity" not in payload
+
+
+def test_onboard_full_mode_is_unchanged_default():
+    """Default (full) keeps the complete envelope byte-compatibly — the
+    top-level assurance mirror and the nested ontology both remain."""
+    payload = build_onboard_response_data(**_onboard_kwargs())
+    assert "response_mode" not in payload  # full mode does not stamp the key
+    assert payload["identity_context"]["identity_is"] == "uuid"
+    assert payload["identity_assurance"]["tier"] == "strong"
+    assert payload["session_continuity"]["client_session_id"] == "sess-min"

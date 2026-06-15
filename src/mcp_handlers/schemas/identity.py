@@ -114,6 +114,16 @@ class OnboardParams(AgentIdentityMixin):
             "counts, and real-check-in counts."
         ),
     )
+    response_mode: Optional[str] = Field(
+        default="full",
+        description=(
+            "Verbosity of the identity envelope. 'full' (default) returns the "
+            "complete identity ontology (identity_context + nested registry/"
+            "label/harness blocks). 'minimal' returns a lean payload — uuid, "
+            "agent_id, session id, a single identity_assurance block, the "
+            "resolution verdict, lineage flags, and a next_step hint."
+        ),
+    )
 
     @model_validator(mode='after')
     def coerce_booleans(self):

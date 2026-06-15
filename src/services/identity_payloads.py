@@ -213,8 +213,22 @@ def build_onboard_response_data(
     lineage_state: Optional[str] = None,
     provisional_lineage: bool = False,
     proof_origin: Optional[str] = None,
+    response_mode: str = "full",
 ) -> dict:
-    """Build the onboard() response payload."""
+    """Build the onboard() response payload.
+
+    `response_mode` controls verbosity of the identity envelope (#734):
+
+    - ``"full"`` (default) returns the complete identity ontology —
+      `identity_context` with its nested registry/public_handle/label/
+      harness_context blocks, plus a top-level `identity_assurance` mirror.
+      Preserved byte-compatibly for existing consumers (dashboard, plugin).
+    - ``"minimal"`` returns a lean payload: uuid, agent_id, session id, the
+      single `identity_assurance` block, the resolution verdict, lineage
+      flags, and a `next_step` hint — dropping the nested ontology and the
+      `verbose` extras. Use this when the caller just needs "who am I and is
+      my binding trustworthy" without the full self-description.
+    """
     identity_status = "created" if is_new else ("reactivated" if was_archived else "resumed")
     identity_context = build_identity_response_context(
         agent_uuid=agent_uuid,
@@ -292,6 +306,37 @@ def build_onboard_response_data(
             "Existing identity reused. "
             f"Pass `client_session_id: \"{stable_session_id}\"` in all tool calls for consistent attribution."
         )
+
+    if response_mode == "minimal":
+        # #734: lean envelope — one assurance block, no nested ontology,
+        # no verbose extras. Functional fields (continuity_token, lineage
+        # flags, thread/predecessor context) are kept because downstream
+        # gates and callers derive from them; the self-description is dropped.
+        minimal: dict = {
+            "success": True,
+            "welcome": welcome,
+            "uuid": agent_uuid,
+            "agent_id": structured_agent_id,
+            "display_name": agent_label,
+            "is_new": is_new,
+            "client_session_id": stable_session_id,
+            "identity_assurance": identity_context["identity_assurance"],
+            "next_step": "Call process_agent_update with response_text describing your work",
+            "provisional_lineage": bool(provisional_lineage),
+            "response_mode": "minimal",
+        }
+        if identity_resolution_outcome:
+            minimal["identity_resolution_outcome"] = identity_resolution_outcome
+        if lineage_state is not None:
+            minimal["lineage_state"] = lineage_state
+        if continuity_token:
+            minimal["continuity_token"] = continuity_token
+        if thread_context:
+            minimal["thread_context"] = thread_context
+        if was_archived:
+            minimal["auto_resumed"] = True
+            minimal["previous_status"] = "archived"
+        return minimal
 
     result = {
         "success": True,
@@ -473,6 +518,38 @@ def _tier_for_source(source_key: str) -> str:
     return "weak"
 
 
+def _how_to_strengthen(
+    tier: str,
+    source_key: str,
+    proof_origin: Optional[str],
+) -> Optional[str]:
+    """One-line breadcrumb telling the agent how to reach a higher tier (#732).
+
+    Surfaces the *transition*, not just the state: a `weak`/`medium` binding
+    already carries the `reason` for being where it is, but nothing told the
+    agent what to do about it. Returns ``None`` for `strong` (no action
+    needed) so the assurance block stays lean (#734). Mirrored in
+    `mcp_handlers/updates/phases.py` so the read- and write-path assurance
+    blocks agree.
+    """
+    if tier == "strong":
+        return None
+    if proof_origin == "server_inferred":
+        return (
+            "binding was server-inferred (not caller-proven); pass the "
+            "client_session_id from your onboard response explicitly in each "
+            "call to reach strong"
+        )
+    if tier == "medium":
+        return "pass an explicit client_session_id in each call to reach strong"
+    # weak
+    return (
+        "pass the client_session_id from your onboard response in each call to "
+        "reach strong; cross-process resumes need continuity_token + agent_uuid "
+        "(PATH 0)"
+    )
+
+
 def _identity_assurance_from_source(
     source_key: str,
     proof_origin: Optional[str] = None,
@@ -498,55 +575,46 @@ def _identity_assurance_from_source(
     if proof_origin == "server_inferred":
         # Authoritative downgrade — a server-guessed binding is weak proof no
         # matter what source label resolution stamped on it (#679).
-        score, _ = _TIER_PAYLOADS["weak"]
-        return {
-            "tier": "weak",
-            "score": score,
-            "session_source": source_key,
-            "trajectory_confidence": None,
-            "reason": f"server-inferred binding ('{source_key}'); not caller-proven",
-            "caller_proven": False,
-            "proof_origin": proof_origin,
-        }
-
-    caller_proven = (proof_origin == "caller_asserted")
-
-    if source_key.startswith(_STICKY_CACHE_PREFIX):
-        original_key = source_key[len(_STICKY_CACHE_PREFIX):] or "unknown"
-        original_tier = _tier_for_source(original_key)
-        tier = _DECAY_BY_ONE.get(original_tier, original_tier)
+        tier = "weak"
         score, _ = _TIER_PAYLOADS[tier]
-        if original_tier == tier:
-            reason = (
-                f"cache hit; original proof '{original_key}' was {original_tier} "
-                "(no further decay)"
-            )
+        reason = f"server-inferred binding ('{source_key}'); not caller-proven"
+        caller_proven = False
+        resolved_origin = proof_origin
+    else:
+        caller_proven = (proof_origin == "caller_asserted")
+        resolved_origin = proof_origin or "unknown"
+        if source_key.startswith(_STICKY_CACHE_PREFIX):
+            original_key = source_key[len(_STICKY_CACHE_PREFIX):] or "unknown"
+            original_tier = _tier_for_source(original_key)
+            tier = _DECAY_BY_ONE.get(original_tier, original_tier)
+            score, _ = _TIER_PAYLOADS[tier]
+            if original_tier == tier:
+                reason = (
+                    f"cache hit; original proof '{original_key}' was {original_tier} "
+                    "(no further decay)"
+                )
+            else:
+                reason = (
+                    f"cache hit; original proof '{original_key}' was {original_tier}, "
+                    f"decayed one tier to {tier} for per-call proof absence"
+                )
         else:
-            reason = (
-                f"cache hit; original proof '{original_key}' was {original_tier}, "
-                f"decayed one tier to {tier} for per-call proof absence"
-            )
-        return {
-            "tier": tier,
-            "score": score,
-            "session_source": source_key,
-            "trajectory_confidence": None,
-            "reason": reason,
-            "caller_proven": caller_proven,
-            "proof_origin": proof_origin or "unknown",
-        }
+            tier = _tier_for_source(source_key)
+            score, reason = _TIER_PAYLOADS[tier]
 
-    tier = _tier_for_source(source_key)
-    score, reason = _TIER_PAYLOADS[tier]
-    return {
+    assurance: Dict[str, Any] = {
         "tier": tier,
         "score": score,
         "session_source": source_key,
         "trajectory_confidence": None,
         "reason": reason,
         "caller_proven": caller_proven,
-        "proof_origin": proof_origin or "unknown",
+        "proof_origin": resolved_origin,
     }
+    hint = _how_to_strengthen(tier, source_key, proof_origin)
+    if hint:
+        assurance["how_to_strengthen"] = hint
+    return assurance
 
 
 def _continuity_claim(

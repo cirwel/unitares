@@ -2281,6 +2281,12 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
     # STEP 6: Build response
     verbose = coerce_bool(arguments.get("verbose"), default=False)
+    # #734: opt-in lean onboard envelope. Default "full" preserves the
+    # existing response shape for dashboard/plugin consumers; "minimal"
+    # drops the nested identity ontology and verbose extras.
+    response_mode = str(arguments.get("response_mode") or "full").strip().lower()
+    if response_mode not in {"full", "minimal"}:
+        response_mode = "full"
     try:
         from ..context import get_session_resolution_source, get_session_proof_origin
         continuity_source = get_session_resolution_source()
@@ -2392,6 +2398,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         lineage_state=_lineage_for_response,
         provisional_lineage=_r2_provisional_lineage,
         proof_origin=proof_origin,
+        response_mode=response_mode,
     )
 
     # Bootstrap check-in (onboard-bootstrap-checkin §3.5). Conditional on
