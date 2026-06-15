@@ -8,17 +8,17 @@ The installable Codex/Claude adapter bundle is canonical in the companion `unita
 
 ## Codex-specific wiring
 
-Codex has no hook system analogous to Claude's. **Nothing is automatic.** You decide when to check in, diagnose, and surface Watcher findings.
+Codex has no hook system analogous to Claude's. **Nothing is automatic.** You decide when to check in, diagnose, and surface Watcher findings. The expected Codex baseline is one real check-in per assistant turn, with extra check-ins around high-risk or long-running work. Do not confuse that with per-tool or per-edit check-ins; those are usually noise.
 
 ### Slash commands (`commands/*.md`)
 
 - `/governance-start` — onboard or resume; refreshes local continuity state
-- `/checkin` — governance update after meaningful work
+- `/checkin` — governance update for the current turn, plus meaningful milestones
 - `/diagnose` — identity, state, and operator diagnostics
 - `/dialectic` — structured review
 - `/closeout` — final workspace hygiene check; reports dirty files, Git delivery state (local vs pushed/merged), and repo-rooted processes; can stash/stop when cleanup is requested
 
-Raw tool flow when slash commands are unavailable: `start_session(force_new=true, parent_agent_id=<prior uuid if continuing>, spawn_reason="new_session")` → save `agent_uuid` + `client_session_id` → `sync_state(response_text, complexity, client_session_id=...)` → `check_working_state()` for read-only checks → `health_check()` only if system health is suspect. Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and `get_governance_metrics(...)`.
+Raw tool flow when slash commands are unavailable: `start_session(force_new=true, parent_agent_id=<prior uuid if continuing>, spawn_reason="new_session")` → save `agent_uuid` + `client_session_id` → `sync_state(response_text, complexity, client_session_id=...)` once per assistant turn and at meaningful milestones → `check_working_state()` for read-only checks → `health_check()` only if system health is suspect. Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and `get_governance_metrics(...)`.
 
 ### Local continuity cache
 
