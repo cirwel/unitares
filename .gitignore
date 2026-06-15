@@ -37,7 +37,6 @@ data/.last_active_agent
 data/.metadata.lock
 data/locks/
 data/processes/
-data/watcher
 data/watcher/
 
 # Claude Code / Cursor local state (machine-specific, never commit)
