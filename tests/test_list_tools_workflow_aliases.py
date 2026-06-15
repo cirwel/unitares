@@ -1,10 +1,10 @@
 """Drift-guard: the list_tools catalog must keep advertising every
-agent-experience alias, and each must resolve to a real tool.
+primary agent-experience workflow tool, and each must resolve to a real tool.
 
-The friendly task-verb names (start_session, sync_state, ...) are
+The primary task-verb names (start_session, sync_state, ...) are
 surfaced for in-band discovery across the catalog's lite `signatures`
 and full tool list. Those are hand-maintained strings; this guard pins
-them to the registry (`experience_alias_map`) so a future alias rename
+them to the registry (`experience_alias_map`) so a future workflow rename
 or removal fails here instead of silently dropping a name from
 discovery while the registry still routes it.
 """
@@ -42,17 +42,17 @@ def _tool_names(obj, acc: set) -> set:
 
 
 def test_experience_aliases_discoverable_in_lite_catalog():
-    friendly = set(experience_alias_map())
+    primary_tools = set(experience_alias_map())
     signatures = set(_catalog({"lite": True}).get("signatures", {}))
-    missing = friendly - signatures
-    assert not missing, f"experience aliases absent from lite signatures: {sorted(missing)}"
+    missing = primary_tools - signatures
+    assert not missing, f"primary workflow tools absent from lite signatures: {sorted(missing)}"
 
 
 def test_experience_aliases_discoverable_in_full_catalog():
-    friendly = set(experience_alias_map())
+    primary_tools = set(experience_alias_map())
     advertised = _tool_names(_catalog({"lite": False}), set())
-    missing = friendly - advertised
-    assert not missing, f"experience aliases absent from full catalog: {sorted(missing)}"
+    missing = primary_tools - advertised
+    assert not missing, f"primary workflow tools absent from full catalog: {sorted(missing)}"
 
 
 def test_every_advertised_alias_resolves_to_a_registered_tool():
@@ -60,7 +60,7 @@ def test_every_advertised_alias_resolves_to_a_registered_tool():
     must resolve to a registered canonical handler."""
     from src.mcp_handlers import TOOL_HANDLERS
 
-    for friendly, canonical in experience_alias_map().items():
-        resolved, alias = resolve_tool_alias(friendly)
-        assert resolved == canonical, f"{friendly} -> {resolved}, expected {canonical}"
-        assert canonical in TOOL_HANDLERS, f"{friendly} -> {canonical} not registered"
+    for primary_tool, implementation_tool in experience_alias_map().items():
+        resolved, alias = resolve_tool_alias(primary_tool)
+        assert resolved == implementation_tool, f"{primary_tool} -> {resolved}, expected {implementation_tool}"
+        assert implementation_tool in TOOL_HANDLERS, f"{primary_tool} -> {implementation_tool} not registered"

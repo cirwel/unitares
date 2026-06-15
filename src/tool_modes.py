@@ -19,14 +19,11 @@ TOOL_MODE = os.getenv("GOVERNANCE_TOOL_MODE", "lite").lower()
 
 # Minimal mode: Essential tools + list_tools for discovery
 MINIMAL_MODE_TOOLS: Set[str] = {
-    # Agent workflow aliases (task verbs over canonical implementation names)
+    # Primary agent workflow tools (task verbs over raw implementation names)
     "start_session",
     "sync_state",
     "check_working_state",
-    "onboard",                # 🚀 Portal tool - call this FIRST (Dec 2025)
     "identity",               # Check/set identity (auto-creates on first call)
-    "process_agent_update",   # Log your work (ongoing)
-    "get_governance_metrics", # Check your state (as needed)
     "list_tools",             # Discover available tools (bootstrap)
     "describe_tool",          # Pull full details for a specific tool (lazy schema)
 }
@@ -35,20 +32,15 @@ MINIMAL_MODE_TOOLS: Set[str] = {
 # THIS IS THE SINGLE SOURCE OF TRUTH - admin.py imports from here
 # Updated Feb 2026: Use consolidated tools to reduce cognitive load
 LITE_MODE_TOOLS: Set[str] = {
-    # Agent workflow aliases (visible, first-class UX names)
-    "start_session",              # Alias for onboard
-    "sync_state",                 # Alias for process_agent_update
-    "check_working_state",        # Alias for get_governance_metrics
-    "search_shared_memory",       # Alias for knowledge(action='search')
-    "record_result",              # Alias for outcome_event
-    "request_review",             # Alias for dialectic(action='request')
-
-    # Core governance
-    "process_agent_update",       # Log agent work
-    "get_governance_metrics",     # Check agent state
+    # Primary agent workflow tools
+    "start_session",              # Start or declare lineage
+    "sync_state",                 # Log agent work
+    "check_working_state",        # Check agent state
+    "search_shared_memory",       # Search shared memory
+    "record_result",              # Record task/tool/test outcomes
+    "request_review",             # Ask for structured review
 
     # Identity (streamlined - Dec 2025)
-    "onboard",                    # 🚀 Portal tool - call this FIRST
     "identity",                   # Primary identity tool (auto-creates on first call)
 
     # Consolidated tools (Feb 2026)
@@ -70,9 +62,16 @@ LITE_MODE_TOOLS: Set[str] = {
     "leave_note",                 # Quick notes
     "call_model",                 # LLM access
 
-    # Session & calibration hooks (required by automation)
+    # Session hook (required by automation)
     "bind_session",               # Session-start hook for MCP identity sync
-    "outcome_event",              # PostToolUse hook for auto-calibration
+
+    # Raw implementation tools kept callable for compatibility wrappers/hooks.
+    # They are intentionally common-tier, not essential-tier: primary workflow
+    # names remain the promoted agent-facing surface.
+    "onboard",                    # Raw implementation for start_session
+    "process_agent_update",       # Raw implementation for sync_state
+    "get_governance_metrics",     # Raw implementation for check_working_state
+    "outcome_event",              # Raw implementation for record_result
 
     # Recovery
     "self_recovery",              # Primary recovery path for stuck agents
@@ -132,16 +131,13 @@ OPERATOR_RECOVERY_MODE_TOOLS: Set[str] = OPERATOR_READONLY_MODE_TOOLS | {
 # ============================================================================
 TOOL_TIERS: dict[str, Set[str]] = {
     "essential": {  # Tier 1: Core workflow tools (~10 tools)
-        "start_session",          # Workflow alias for onboard
-        "sync_state",             # Workflow alias for process_agent_update
-        "check_working_state",    # Workflow alias for get_governance_metrics
-        "search_shared_memory",   # Workflow alias for knowledge(search)
-        "record_result",          # Workflow alias for outcome_event
-        "request_review",         # Workflow alias for dialectic(request)
-        "onboard",                # 🚀 Portal tool - call FIRST (Dec 2025)
+        "start_session",          # Start or declare lineage
+        "sync_state",             # Log agent work
+        "check_working_state",    # Check state without updating
+        "search_shared_memory",   # Search shared memory
+        "record_result",          # Record outcomes
+        "request_review",         # Ask for structured review
         "identity",               # Primary identity tool (auto-creates on first call)
-        "process_agent_update",   # Log agent work
-        "get_governance_metrics", # Check state without updating
         "list_tools",             # Discover available tools
         "describe_tool",          # Get full tool details
         "list_agents",            # View all agents
@@ -150,6 +146,10 @@ TOOL_TIERS: dict[str, Set[str]] = {
         "leave_note",             # Quick notes
     },
     "common": {  # Tier 2: Regularly used tools
+        "onboard",                         # Raw implementation for start_session
+        "process_agent_update",            # Raw implementation for sync_state
+        "get_governance_metrics",          # Raw implementation for check_working_state
+        "outcome_event",                   # Raw implementation for record_result
         "update_discovery_status_graph",
         "observe_agent",
         "get_agent_metadata",
@@ -202,7 +202,7 @@ TOOL_TIERS: dict[str, Set[str]] = {
 # admin: System administration (may read or write internal state)
 # ============================================================================
 TOOL_OPERATIONS: dict[str, str] = {
-    # Agent workflow aliases
+    # Primary agent workflow tools
     "start_session": "read",
     "sync_state": "write",
     "check_working_state": "read",
@@ -294,13 +294,14 @@ TOOL_CATEGORIES = {
         "sync_state",
         "check_working_state",
         "record_result",
-        "process_agent_update",
-        "get_governance_metrics",
         "simulate_update",
+        "process_agent_update",     # raw implementation
+        "get_governance_metrics",   # raw implementation
+        "outcome_event",            # raw implementation
     },
     "identity": {
         "start_session",
-        "onboard",                # Dec 2025: Portal tool - call FIRST
+        "onboard",                # raw implementation
         "identity",               # Dec 2025: Primary identity tool (auto-creates on first call)
         "list_agents",
         "get_agent_metadata",

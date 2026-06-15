@@ -12,9 +12,10 @@ Use this unless you have a specific reason not to:
 4. Call `check_working_state()` for state
 5. Use `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)` only for same-owner proof-owned rebinds
 
-Agent-facing workflow aliases are also registered:
+These primary workflow tools are the agent-facing surface. Raw implementation
+tools remain available for older clients and debugging:
 
-| Job | Workflow alias | Canonical tool |
+| Job | Primary workflow tool | Raw implementation tool |
 | --- | --- | --- |
 | Start working | `start_session(force_new=true, ...)` | `onboard` |
 | Check in after meaningful work | `sync_state(response_text=..., complexity=...)` | `process_agent_update` |
@@ -23,8 +24,8 @@ Agent-facing workflow aliases are also registered:
 | Record a real outcome | `record_result(...)` | `outcome_event` |
 | Ask for review | `request_review(issue_description=...)` | `dialectic(action="request")` |
 
-The workflow aliases return the agent-experience envelope, with the full
-canonical payload preserved under `raw_governance`.
+The primary workflow tools return the agent-experience envelope, with the full
+raw implementation payload preserved under `raw_governance`.
 
 ```python
 # First run:

@@ -1,7 +1,7 @@
-"""Alias-layer parameter normalization for friendly check-in aliases.
+"""Primary-workflow parameter normalization for check-in tools.
 
-Canonical tools stay strict: process_agent_update rejects complexity outside
-0-1. The friendly aliases (checkin/log/update/sync_state) absorb common agent
+Raw implementation tools stay strict: process_agent_update rejects complexity
+outside 0-1. The workflow tools (checkin/log/update/sync_state) absorb common agent
 vocabulary by normalizing it BEFORE schema validation, and the dispatch
 envelope discloses every transform via ``normalized_parameters``.
 
@@ -12,7 +12,7 @@ or use a named level.
 
 from typing import Any, Callable, Dict
 
-# Named levels accepted on friendly aliases. Synonyms map to the same anchor
+# Named levels accepted on workflow tools. Synonyms map to the same anchor
 # values so the disclosure record stays unambiguous.
 NAMED_LEVELS: Dict[str, float] = {
     "trivial": 0.1,
@@ -35,7 +35,7 @@ ParamNormalizer = Callable[[Dict[str, Any]], NormalizationRecords]
 
 
 class ParamNormalizationError(ValueError):
-    """A parameter on a friendly alias could not be normalized unambiguously."""
+    """A workflow parameter could not be normalized unambiguously."""
 
     def __init__(self, message: str, *, parameter: str, provided: Any):
         super().__init__(message)

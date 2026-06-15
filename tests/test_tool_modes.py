@@ -37,14 +37,17 @@ class TestModeSets:
     """Tests for the mode tool sets."""
 
     def test_minimal_mode_has_essentials(self):
-        assert "onboard" in MINIMAL_MODE_TOOLS
-        assert "process_agent_update" in MINIMAL_MODE_TOOLS
-        assert "get_governance_metrics" in MINIMAL_MODE_TOOLS
+        assert "start_session" in MINIMAL_MODE_TOOLS
+        assert "sync_state" in MINIMAL_MODE_TOOLS
+        assert "check_working_state" in MINIMAL_MODE_TOOLS
         assert "list_tools" in MINIMAL_MODE_TOOLS
+        assert "onboard" not in MINIMAL_MODE_TOOLS
+        assert "process_agent_update" not in MINIMAL_MODE_TOOLS
+        assert "get_governance_metrics" not in MINIMAL_MODE_TOOLS
 
     def test_lite_mode_superset_of_minimal_essentials(self):
-        """Lite should include the core governance tools from minimal."""
-        for tool in ["onboard", "process_agent_update", "get_governance_metrics"]:
+        """Lite should include the primary workflow tools from minimal."""
+        for tool in ["start_session", "sync_state", "check_working_state"]:
             assert tool in LITE_MODE_TOOLS, f"{tool} should be in lite mode"
 
     def test_lite_mode_has_consolidated_tools(self):
@@ -119,7 +122,7 @@ class TestShouldIncludeTool:
     """Tests for should_include_tool()."""
 
     def test_tool_in_mode(self):
-        assert should_include_tool("onboard", mode="minimal") is True
+        assert should_include_tool("start_session", mode="minimal") is True
 
     def test_tool_not_in_mode(self):
         assert should_include_tool("call_model", mode="minimal") is False
@@ -145,7 +148,7 @@ class TestShouldIncludeTool:
 
     def test_non_claude_desktop_no_exclusion(self):
         """Non-Claude-Desktop clients should not be affected by exclusions."""
-        assert should_include_tool("onboard", mode="lite", client_type=None) is True
+        assert should_include_tool("start_session", mode="lite", client_type=None) is True
 
 
 # --- TOOL_TIERS Tests ---
@@ -160,8 +163,11 @@ class TestToolTiers:
         assert "advanced" in TOOL_TIERS
 
     def test_essential_has_core_tools(self):
-        assert "onboard" in TOOL_TIERS["essential"]
-        assert "process_agent_update" in TOOL_TIERS["essential"]
+        assert "start_session" in TOOL_TIERS["essential"]
+        assert "sync_state" in TOOL_TIERS["essential"]
+        assert "check_working_state" in TOOL_TIERS["essential"]
+        assert "onboard" not in TOOL_TIERS["essential"]
+        assert "process_agent_update" not in TOOL_TIERS["essential"]
         assert "health_check" in TOOL_TIERS["essential"]
 
     def test_tiers_are_sets(self):
