@@ -88,3 +88,43 @@ def test_onboard_description_keeps_v2_ontology_framing():
     assert "parent_agent_id" in desc, (
         "onboard description must point at parent_agent_id as lineage mechanism"
     )
+
+
+# -----------------------------------------------------------------------------
+# Served-description guards.
+#
+# The assertions above pin tool_descriptions.json, but _IDENTITY_DESCRIPTION_OVERRIDES
+# in tool_descriptions.py *shadows* the JSON for `onboard`/`identity` at load
+# time — so the override is what actually reaches every MCP client. The JSON
+# anti-pattern warning was dormant until restored to the override. These tests
+# guard the SERVED text so the Hermes-class safeguard cannot silently drop out
+# of what ships again.
+# -----------------------------------------------------------------------------
+
+def _served() -> dict:
+    from src.tool_descriptions import TOOL_DESCRIPTIONS
+    return TOOL_DESCRIPTIONS
+
+
+def test_served_onboard_description_warns_against_auto_injection():
+    desc = _served()["onboard"]
+    assert "ANTI-PATTERN" in desc, "served onboard description must flag the auto-injection anti-pattern"
+    assert "auto-inject continuity_token" in desc, (
+        "served onboard description must call out auto-injecting continuity_token"
+    )
+    assert "transport layer" in desc, "served onboard anti-pattern must name the client transport layer"
+    assert "silent-resurrection" in desc, "served onboard anti-pattern must name the silent-resurrection vector"
+    assert "Part C" in desc, "served onboard description must cite Part C as the source of the invariant"
+
+
+def test_served_identity_description_warns_against_auto_injection():
+    desc = _served()["identity"]
+    assert "ANTI-PATTERN" in desc, "served identity description must flag the auto-injection anti-pattern"
+    assert "auto-inject continuity_token" in desc, (
+        "served identity description must call out auto-injecting continuity_token"
+    )
+    assert "transport layer" in desc, "served identity anti-pattern must name the client transport layer"
+    assert "silent-resurrection" in desc, "served identity anti-pattern must name the silent-resurrection vector"
+    assert "parent_agent_id" in desc, (
+        "served identity description must point at parent_agent_id as the lineage mechanism"
+    )
