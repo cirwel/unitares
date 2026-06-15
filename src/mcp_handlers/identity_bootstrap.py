@@ -29,9 +29,10 @@ def is_strict_identity_required() -> bool:
 
 
 _DEFAULT_REFUSAL_HINT = (
-    "Call onboard() first to mint a governance identity. "
-    "If continuing prior work, pass parent_agent_id to "
-    "declare lineage; otherwise pass force_new=true."
+    "This tool works once you have a governance identity — call onboard() to "
+    "mint one and it's yours to use. If you're continuing work handed off from "
+    "an exited session, pass parent_agent_id to declare lineage; otherwise "
+    "pass force_new=true for a fresh identity."
 )
 
 
