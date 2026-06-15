@@ -90,6 +90,41 @@ def _mock_client_connected():
     return client
 
 
+def _call_tool_with_tags(existing_tags, *, fail_update=False):
+    """An AsyncMock for client.call_tool that answers get_agent_metadata with
+    ``existing_tags`` and records update_agent_metadata writes. ``fail_update``
+    makes the write raise (to exercise the non-fatal path)."""
+
+    async def _impl(tool, args, **kwargs):
+        if tool == "get_agent_metadata":
+            return {"success": True, "tags": list(existing_tags)}
+        if tool == "update_agent_metadata":
+            if fail_update:
+                raise RuntimeError("write down")
+            return {"success": True, "tags": args.get("tags")}
+        return {"success": True}
+
+    return AsyncMock(side_effect=_impl)
+
+
+def _tool_writes(client):
+    """The argument dicts passed to every update_agent_metadata call."""
+    return [
+        c.args[1]
+        for c in client.call_tool.await_args_list
+        if c.args and c.args[0] == "update_agent_metadata"
+    ]
+
+
+def _tool_reads(client):
+    """The target_agent of every get_agent_metadata call."""
+    return [
+        c.args[1].get("target_agent")
+        for c in client.call_tool.await_args_list
+        if c.args and c.args[0] == "get_agent_metadata"
+    ]
+
+
 # --- Identity resolution ---
 
 
@@ -175,6 +210,9 @@ class TestIdentityResolution:
         2026-04-20 because this path stamped only 'persistent'; once every 5min
         its sync was rejected, starving core.agent_state. RESIDENT_TAGS is the
         single source of truth.
+
+        Against a pre-Phase-1 server (no server-side onboard stamp) the
+        reconcile reads an empty tag set then writes RESIDENT_TAGS.
         """
         from unitares_sdk.agent import RESIDENT_TAGS
         assert "persistent" in RESIDENT_TAGS
@@ -183,18 +221,32 @@ class TestIdentityResolution:
         agent = SimpleAgent(session_file=tmp_path / ".test_session", persistent=True)
 
         client = _mock_client_connected()
+        client.call_tool = _call_tool_with_tags([])  # server hasn't stamped yet
         await agent._ensure_identity(client)
 
-        # Fresh onboard + subsequent update_agent_metadata call
+        # Fresh onboard, then read-then-write reconcile.
         client.onboard.assert_called_once()
-        client.call_tool.assert_awaited_once_with(
-            "update_agent_metadata",
-            {"agent_id": "uuid-test", "tags": RESIDENT_TAGS},
-        )
+        writes = _tool_writes(client)
+        assert writes == [{"agent_id": "uuid-test", "tags": RESIDENT_TAGS}]
+
+    @pytest.mark.asyncio
+    async def test_resident_tags_noop_on_fresh_onboard_when_server_stamped(self, tmp_path):
+        """Against a current server the onboard handler already stamped the tags,
+        so the SDK reconcile reads them present and issues no redundant write."""
+        from unitares_sdk.agent import RESIDENT_TAGS
+
+        agent = SimpleAgent(session_file=tmp_path / ".test_session", persistent=True)
+
+        client = _mock_client_connected()
+        client.call_tool = _call_tool_with_tags(list(RESIDENT_TAGS))
+        await agent._ensure_identity(client)
+
+        client.onboard.assert_called_once()
+        assert _tool_writes(client) == []  # read-only, no update
 
     @pytest.mark.asyncio
     async def test_persistent_tag_not_stamped_when_not_persistent(self, tmp_path):
-        """Default persistent=False must not call update_agent_metadata."""
+        """Default persistent=False must not touch metadata at all."""
         agent = SimpleAgent(session_file=tmp_path / ".test_session")
 
         client = _mock_client_connected()
@@ -204,34 +256,114 @@ class TestIdentityResolution:
         client.call_tool.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_persistent_tag_not_stamped_on_uuid_resume(self, tmp_path):
-        """Resuming an existing UUID skips tag stamping — it's already been tagged
-        on the original fresh onboard (or manually).
-        """
+    async def test_resident_tags_reconciled_on_uuid_resume_when_complete(self, tmp_path):
+        """Resuming a fully-tagged identity reads the tags but writes nothing."""
+        from unitares_sdk.agent import RESIDENT_TAGS
+
         agent = SimpleAgent(session_file=tmp_path / ".test_session", persistent=True)
         agent.agent_uuid = "uuid-test"  # triggers the resume fast path
 
         client = _mock_client_connected()
+        client.call_tool = _call_tool_with_tags(list(RESIDENT_TAGS))
         await agent._ensure_identity(client)
 
         client.identity.assert_awaited_once()
         client.onboard.assert_not_called()
-        client.call_tool.assert_not_called()
+        # Reconcile read happened, but no missing tag → no write.
+        assert _tool_reads(client) == ["uuid-test"]
+        assert _tool_writes(client) == []
 
     @pytest.mark.asyncio
-    async def test_persistent_tag_failure_is_non_fatal(self, tmp_path):
-        """If update_agent_metadata fails, the agent still onboards successfully."""
+    async def test_resident_tags_reconciled_on_uuid_resume_when_missing(self, tmp_path):
+        """Sentinel 2026-06-15 regression: a resident that always resumes via UUID
+        with a dropped 'autonomous' tag must self-heal on resume, not stay flagged
+        by Vigil forever. The fresh-onboard stamp never re-fires for these agents.
+        """
         agent = SimpleAgent(session_file=tmp_path / ".test_session", persistent=True)
+        agent.agent_uuid = "uuid-test"  # resume fast path
 
         client = _mock_client_connected()
-        client.call_tool = AsyncMock(side_effect=RuntimeError("db down"))
-
-        # Must not raise — the exception is caught and logged.
+        client.call_tool = _call_tool_with_tags(["persistent"])  # missing 'autonomous'
         await agent._ensure_identity(client)
 
-        client.onboard.assert_called_once()
-        client.call_tool.assert_awaited_once()
-        # Identity is still established.
+        client.identity.assert_awaited_once()
+        client.onboard.assert_not_called()
+        # Additive write restores the full set.
+        assert _tool_writes(client) == [
+            {"agent_id": "uuid-test", "tags": ["persistent", "autonomous"]},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_resident_tag_reconcile_preserves_role_tags(self, tmp_path):
+        """Reconcile is additive: role/cadence tags (cadence.10min) are preserved,
+        the missing required tag is appended. A bare RESIDENT_TAGS write would
+        clobber them because update_agent_metadata REPLACES the list.
+        """
+        agent = SimpleAgent(session_file=tmp_path / ".test_session", persistent=True)
+        agent.agent_uuid = "uuid-test"
+
+        client = _mock_client_connected()
+        client.call_tool = _call_tool_with_tags(["persistent", "cadence.10min"])
+        await agent._ensure_identity(client)
+
+        assert _tool_writes(client) == [
+            {"agent_id": "uuid-test", "tags": ["persistent", "cadence.10min", "autonomous"]},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_resident_tags_reconciled_once_per_process(self, tmp_path):
+        """A successful reconcile is not re-run on the next cycle (no per-cycle
+        get_agent_metadata read). _ensure_identity runs every cycle, so this
+        guards against a recurring substrate-tax read.
+        """
+        agent = SimpleAgent(session_file=tmp_path / ".test_session", persistent=True)
+        agent.agent_uuid = "uuid-test"
+
+        client = _mock_client_connected()
+        client.call_tool = _call_tool_with_tags(["persistent"])
+
+        await agent._ensure_identity(client)  # cycle 1: read + write
+        await agent._ensure_identity(client)  # cycle 2: must not re-check
+
+        assert _tool_reads(client) == ["uuid-test"]  # exactly one read total
+        assert len(_tool_writes(client)) == 1
+
+    @pytest.mark.asyncio
+    async def test_resident_tag_read_failure_is_non_fatal_and_retries(self, tmp_path):
+        """If the tag read fails we must NOT blind-write (clobber risk), must not
+        raise, and must leave the door open to retry on the next cycle."""
+        agent = SimpleAgent(session_file=tmp_path / ".test_session", persistent=True)
+        agent.agent_uuid = "uuid-test"
+
+        client = _mock_client_connected()
+        client.call_tool = AsyncMock(side_effect=RuntimeError("read down"))
+
+        # Must not raise — exception caught and logged.
+        await agent._ensure_identity(client)
+
+        client.identity.assert_awaited_once()
+        assert _tool_writes(client) == []  # never a blind write
+        assert agent._resident_tags_reconciled is False  # will retry next cycle
+
+    @pytest.mark.asyncio
+    async def test_resident_tag_write_failure_is_non_fatal_and_retries(self, tmp_path):
+        """If the reconcile write fails the agent still runs and the flag stays
+        unset so the next cycle retries the write."""
+        agent = SimpleAgent(session_file=tmp_path / ".test_session", persistent=True)
+        agent.agent_uuid = "uuid-test"
+
+        client = _mock_client_connected()
+        client.call_tool = _call_tool_with_tags(["persistent"], fail_update=True)
+
+        await agent._ensure_identity(client)
+
+        assert agent._resident_tags_reconciled is False
+        # Read succeeded, write was attempted (and failed) — both awaited.
+        assert _tool_reads(client) == ["uuid-test"]
+        assert _tool_writes(client) == [
+            {"agent_id": "uuid-test", "tags": ["persistent", "autonomous"]},
+        ]
+        # Identity is still established despite the write failure.
         assert agent.agent_uuid == "uuid-test"
 
 

@@ -167,6 +167,12 @@ class GovernanceAgent:
         self.continuity_token: str | None = None
         self.agent_uuid: str | None = None
         self._last_checkin_time: float = 0.0
+        # Resident tag reconciliation runs at most once per process. Tags don't
+        # drift mid-process, so a per-cycle re-check would just add a
+        # get_agent_metadata read every cycle (substrate-tax sensitive). Set
+        # True once a read succeeds; left False on a read/write failure so the
+        # next cycle retries. See _reconcile_resident_tags.
+        self._resident_tags_reconciled = False
 
     # --- Subclass interface ---
 
@@ -334,6 +340,11 @@ class GovernanceAgent:
                 self._sync_from_client(client)
                 self._save_session()
                 logger.info("%s: resumed via UUID %s", self.name, self.agent_uuid[:12])
+                # Reconcile resident tags on resume too — residents that always
+                # resume via UUID (refuse_fresh_onboard=True) never re-run the
+                # fresh-onboard stamp, so a dropped required tag would otherwise
+                # never self-heal (Sentinel 2026-06-15 resident_tag_gap finding).
+                await self._reconcile_resident_tags(client)
                 return
             except Exception as e:
                 logger.error(
@@ -362,39 +373,103 @@ class GovernanceAgent:
         self._save_session()
         logger.info("%s: onboarded fresh (UUID %s)", self.name, self.agent_uuid[:12] if self.agent_uuid else "?")
 
-        if self.persistent and self.agent_uuid:
-            # Residents need BOTH tags:
-            #   - 'persistent':  protects from auto_archive_orphan_agents
-            #   - 'autonomous':  exempts from loop-detection pattern 4
-            #                    (agent_loop_detection.py:216). Resident cadences
-            #                    can't respond to pause verdicts within the 30s
-            #                    cooldown, so pattern-4 rejection silently starves
-            #                    their state writes (Steward 2026-04-20 regression).
-            #
-            # S8a Phase-1 (2026-04-23): the server now stamps these tags in the
-            # onboard handler for any name matching KNOWN_RESIDENT_LABELS (see
-            # src/grounding/onboard_classifier.py + identity/handlers.py
-            # _stamp_default_tags_on_onboard). This client-side write is now
-            # redundant against a current server, but retained as backward
-            # compatibility for older server deploys that predate Phase 1. It
-            # is a no-op when the server already stamped the same tags.
-            try:
-                await client.call_tool(
-                    "update_agent_metadata",
-                    {"agent_id": self.agent_uuid, "tags": RESIDENT_TAGS},
-                )
-                logger.info(
-                    "%s: stamped resident tags %s",
-                    self.name, RESIDENT_TAGS,
-                )
-            except Exception as e:
-                # Non-fatal. The agent still runs; it's just vulnerable to
-                # archive_orphan_agents AND loop-detection until someone tags it.
-                logger.warning(
-                    "%s: failed to stamp resident tags: %s "
-                    "(will retry on next fresh onboard; manual tagging may be needed)",
-                    self.name, e,
-                )
+        # Stamp/reconcile resident tags after fresh onboard. The server already
+        # stamps these in the onboard handler for KNOWN_RESIDENT_LABELS (S8a
+        # Phase-1, 2026-04-23), so this is usually a no-op against a current
+        # server; it still covers pre-Phase-1 deploys where the server didn't.
+        await self._reconcile_resident_tags(client)
+
+    async def _reconcile_resident_tags(self, client: GovernanceClient) -> None:
+        """Ensure a persistent resident carries the full ``RESIDENT_TAGS`` set.
+
+        Residents need BOTH tags:
+          - ``persistent``:  protects from ``auto_archive_orphan_agents``
+            (``is_agent_protected`` in ``src/agent_lifecycle.py``).
+          - ``autonomous``:  exempts from loop-detection pattern 4
+            (``agent_loop_detection.py:216``). Resident cadences can't respond
+            to pause verdicts within the 30s cooldown, so pattern-4 rejection
+            silently starves their state writes (Steward 2026-04-20 regression).
+
+        Both the SDK fresh-onboard stamp and the server-side onboard stamp only
+        fire at *creation*. Residents like Sentinel set
+        ``refuse_fresh_onboard=True`` and ALWAYS resume via UUID, so neither
+        re-runs after the identity exists. If a required tag is ever dropped —
+        an identity minted before ``autonomous`` was required, an archive/resume
+        cycle, or a tag-replacing metadata write — nothing re-adds it and
+        Vigil's ``resident_tag_hygiene`` check flags the gap on every cycle
+        until someone manually re-tags (Sentinel 2026-06-15).
+
+        Reconcile instead: read the current tags and, if any ``RESIDENT_TAGS``
+        are missing, write back the UNION. Additive on purpose —
+        ``update_agent_metadata`` REPLACES the tag list, so a bare
+        ``RESIDENT_TAGS`` write would clobber role/cadence tags (e.g.
+        ``cadence.10min``). A no-op (no write) when the tags are already
+        present, and runs at most once per process (see
+        ``_resident_tags_reconciled``).
+
+        Non-fatal throughout: the agent still runs if reconciliation can't
+        complete; the gap just persists (and stays visible to Vigil) until a
+        later cycle or restart succeeds.
+        """
+        if not (self.persistent and self.agent_uuid):
+            return
+        # getattr-guarded: instances built via __new__ (test stubs) skip
+        # __init__, so the attribute may be absent. Treat absent as "not yet
+        # reconciled" rather than crashing the identity path.
+        if getattr(self, "_resident_tags_reconciled", False):
+            return
+
+        try:
+            raw = await client.call_tool(
+                "get_agent_metadata", {"target_agent": self.agent_uuid}
+            )
+        except Exception as e:
+            # Couldn't read current tags — do NOT blind-write (that would risk
+            # clobbering cadence/role tags). Leave the flag unset so the next
+            # cycle retries.
+            logger.warning(
+                "%s: could not read tags to reconcile resident tag set: %s "
+                "(will retry next cycle)",
+                self.name, e,
+            )
+            return
+
+        if not isinstance(raw, dict):
+            logger.debug(
+                "%s: resident tag reconcile skipped — unexpected "
+                "get_agent_metadata response shape",
+                self.name,
+            )
+            return
+
+        current = [t for t in (raw.get("tags") or []) if isinstance(t, str)]
+        missing = [t for t in RESIDENT_TAGS if t not in current]
+        if not missing:
+            # Already healthy — record success so we don't re-read every cycle.
+            self._resident_tags_reconciled = True
+            return
+
+        merged = current + missing  # additive — preserves role/cadence tags
+        try:
+            await client.call_tool(
+                "update_agent_metadata",
+                {"agent_id": self.agent_uuid, "tags": merged},
+            )
+            logger.info(
+                "%s: reconciled resident tags — added %s (now %s)",
+                self.name, missing, merged,
+            )
+            self._resident_tags_reconciled = True
+        except Exception as e:
+            # Non-fatal. The agent still runs; it's just vulnerable to
+            # archive_orphan_agents AND loop-detection until tagged. Flag stays
+            # unset so the next cycle retries.
+            logger.warning(
+                "%s: failed to write reconciled resident tags %s: %s "
+                "(vulnerable to orphan-sweep / loop-detection pattern 4 "
+                "until tagged)",
+                self.name, merged, e,
+            )
 
     # --- Check-in handling ---
 
