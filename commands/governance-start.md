@@ -62,7 +62,7 @@ When reporting back:
 - show the resolved display name or agent id
 - note whether continuity is strong or weak
 - mention the next useful command:
-  - `/checkin` after meaningful work
+  - `/checkin` for the turn baseline, then after meaningful milestones
   - `/diagnose` if continuity still looks wrong
 
 Do not dump raw JSON unless the user asks for it.

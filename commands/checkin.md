@@ -1,5 +1,5 @@
 ---
-description: "Manual UNITARES governance check-in after meaningful work"
+description: "Manual UNITARES governance check-in for the current turn"
 ---
 
 Before calling tools, check the local workspace cache inventory.
@@ -18,7 +18,7 @@ If this is a fresh process and no ownership proof is available, use `/governance
 
 If no local continuity state exists and the current identity is unclear, use `/governance-start` first.
 
-Call `process_agent_update` for the current agent after a meaningful unit of work.
+Call `process_agent_update` for the current agent once per assistant turn to establish a behavioral baseline. Also call it after meaningful milestones, before/after high-risk work, or when uncertainty/drift shows up.
 
 Inputs:
 
@@ -30,8 +30,9 @@ Inputs:
 
 Guidelines:
 
-- Do not check in after every trivial edit.
-- Prefer one check-in per meaningful milestone, completed step, or decision point.
+- Do not check in after every trivial edit or tool call.
+- Prefer one baseline check-in per assistant turn.
+- Add a check-in for meaningful milestones, completed steps, or decision points.
 - If you had to rebind with `identity()`, only use that restored binding when the response shows strong/proof-owned continuity.
 - If recent local edit context exists, use it to improve the summary, but do not report raw file churn as if it were real progress.
 - If deterministic results already happened in the workflow, mention them concretely instead of speaking in generalities.
