@@ -113,15 +113,19 @@ def emit(rows, gap: float, before: dict, after: dict) -> dict:
         gp = "-" if r["gap"] is None else f"{r['gap']:.3f}"
         print(f"  {r['bin']:<10} {r['count']:>4} {mc:>10} {ac:>9} {gp:>7}")
 
-    print("\nSECONDARY — server tactical channel (registered/capped confidence, global):")
-    print(f"  eligible_samples: {before['eligible_samples']} -> {after['eligible_samples']}")
-    print(f"  tests bad_rate:   {before['tests_bad_rate']} -> {after['tests_bad_rate']}")
-    print(f"  server tactical ECE: {before['server_ece']} -> {after['server_ece']}")
+    # Quarantine check: the grader marks every row synthetic_calibration_fixture,
+    # so the server guard excludes them — the global channel must NOT gain our
+    # rows. delta ~ 0 means the quarantine held; delta ~ len(rows) means it leaked.
+    delta = (after["eligible_samples"] or 0) - (before["eligible_samples"] or 0)
+    quarantine_ok = delta < max(1, len(pairs) * 0.5)
+    print("\nSECONDARY — quarantine (synthetic rows must be excluded from the global channel):")
+    print(f"  global eligible_samples: {before['eligible_samples']} -> {after['eligible_samples']} (delta={delta})")
+    print(f"  {'excluded (quarantine held)' if quarantine_ok else 'LEAKED into global calibration!'}")
 
-    print("\nv1.1 success criteria:")
+    print("\nsuccess criteria:")
     print(f"  [{'x' if ok_ece else ' '}] recovered ECE matches bias-aware expected within 0.05 (measurement sound)")
     print(f"  [{'x' if auc is not None and auc > 0.5 else ' '}] AUC > 0.5 (confidence now discriminates)")
-    print(f"  [{'x' if (after['eligible_samples'] or 0) > (before['eligible_samples'] or 0) else ' '}] tactical channel moved")
+    print(f"  [{'x' if quarantine_ok else ' '}] synthetic rows excluded from the global channel (quarantine enforced)")
     print("==================================================================\n")
     return {"injected_ece": injected, "expected_ece": expected, "recovered_ece": recovered_ece,
-            "ece_err": ece_err, "auc": auc, "rows": len(pairs), "ok": ok_ece}
+            "ece_err": ece_err, "auc": auc, "rows": len(pairs), "ok": ok_ece and quarantine_ok}

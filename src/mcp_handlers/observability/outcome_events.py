@@ -52,6 +52,17 @@ HARD_EXOGENOUS_TYPES = frozenset({
     "task_completed", "task_failed",
 })
 
+_CONTROLLED_FIXTURE_FLAGS = frozenset(
+    {
+        "synthetic_calibration_fixture",
+        "do_not_use_for_live_validation",
+        "synthetic_negative_control",
+        "do_not_persist",
+        "calibration_excluded",
+    }
+)
+_CONTROLLED_FIXTURE_BINDINGS = frozenset({"synthetic_negative_control"})
+
 _HARD_EXOGENOUS_TYPE_TO_CHANNEL = {
     "test_passed": "tests", "test_failed": "tests",
     "task_completed": "tasks", "task_failed": "tasks",
@@ -67,6 +78,26 @@ def _classify_hard_exogenous_signal(outcome_type: str, detail: Dict[str, Any]) -
         if detail.get(key):
             return label
     return None
+
+
+def _truthy_detail_flag(value: Any) -> bool:
+    """Interpret JSON-ish fixture flags conservatively."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return False
+
+
+def _is_controlled_validation_fixture(detail: Dict[str, Any]) -> bool:
+    """Return whether an outcome is self-declared controlled fixture evidence."""
+    if any(_truthy_detail_flag(detail.get(flag)) for flag in _CONTROLLED_FIXTURE_FLAGS):
+        return True
+    binding = detail.get("prediction_binding")
+    return bool(binding in _CONTROLLED_FIXTURE_BINDINGS)
+
 
 async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, Any]:
     """Shared body for outcome_event recording.
@@ -282,8 +313,16 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
         verification_source=verification_source,
     )
     evidence_weight = float(detail.get("evidence_weight") or 0.0)
+    # A row that declares itself a synthetic fixture (e.g. the calibration
+    # harness) is PERSISTED for the author's own per-agent analysis but must
+    # NEVER train calibration — otherwise a fixture accidentally pointed at live
+    # governance would poison the global tactical/strategic channels. This is the
+    # functional half of the harness's self-marking (the detail flag alone is
+    # only a forensic breadcrumb without this guard). Treat older red-team
+    # fixture boundary flags as equivalent calibration exclusions too.
+    calibration_excluded = _is_controlled_validation_fixture(detail)
     hard_exogenous_signal = _classify_hard_exogenous_signal(outcome_type, detail)
-    if evidence_weight < _MIN_TACTICAL_EVIDENCE_WEIGHT:
+    if evidence_weight < _MIN_TACTICAL_EVIDENCE_WEIGHT or calibration_excluded:
         hard_exogenous_signal = None
     eprocess_eligible = bool(hard_exogenous_signal and _confidence is not None)
 
@@ -292,6 +331,7 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     detail["hard_exogenous_signal"] = hard_exogenous_signal
     detail["hard_exogenous"] = bool(hard_exogenous_signal)
     detail["eprocess_eligible"] = eprocess_eligible
+    detail["calibration_excluded"] = calibration_excluded
     detail["prediction_id"] = prediction_id
     detail["prediction_source"] = prediction_source
     detail["prediction_binding"] = prediction_binding
@@ -323,8 +363,9 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
         outcome_type, is_bad, outcome_score, agent_id, eisv_verdict,
     )
 
-    # Record calibration from outcome event
-    if _confidence is not None and evidence_weight >= _MIN_TACTICAL_EVIDENCE_WEIGHT:
+    # Record calibration from outcome event (never for self-declared synthetic
+    # fixtures — they persist above but do not train the calibration channels).
+    if _confidence is not None and evidence_weight >= _MIN_TACTICAL_EVIDENCE_WEIGHT and not calibration_excluded:
         try:
             from src.calibration import calibration_checker
             calibration_checker.record_prediction(

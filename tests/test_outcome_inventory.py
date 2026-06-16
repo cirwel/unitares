@@ -2,6 +2,7 @@ from scripts.analysis.outcome_inventory import (
     OutcomeInventoryRow,
     build_inventory,
     format_inventory_report,
+    is_controlled_validation_fixture,
 )
 
 
@@ -125,3 +126,12 @@ def test_format_inventory_report_exposes_zero_bad_strict_and_prior_coverage():
     assert "task_failed" in report
     assert "prior_state_5m" in report
     assert "agent_reported_tool_result" in report
+
+
+def test_controlled_validation_fixture_detection_covers_legacy_and_new_markers():
+    assert is_controlled_validation_fixture({"test_name": "overconfidence_probe"})
+    assert is_controlled_validation_fixture({"synthetic_calibration_fixture": True})
+    assert is_controlled_validation_fixture({"do_not_use_for_live_validation": True})
+    assert is_controlled_validation_fixture({"prediction_binding": "synthetic_negative_control"})
+    assert is_controlled_validation_fixture({"calibration_excluded": True})
+    assert not is_controlled_validation_fixture({"test_name": "real_pytest_suite"})

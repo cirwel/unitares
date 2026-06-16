@@ -26,6 +26,16 @@ So v1 runs against a **dedicated server bound to `governance_test`**. That gives
 the isolated server its own calibration singleton; its global pool *is* the
 harness rows. `run_v1` refuses the live ports (`:8767`/`:8766`) unless `--i-know`.
 
+**Defense-in-depth (server-side exclusion).** The grader marks every row
+`detail.synthetic_calibration_fixture=true`, and the server now acts on it:
+`outcome_events` PERSISTS such rows but skips calibration registration entirely
+(`record_prediction` / `record_tactical_decision`). So even if the harness were
+accidentally pointed at live governance, its synthetic outcomes cannot poison the
+global tactical/strategic channels. The harness verifies this itself — `probe_one`
+and the report's SECONDARY check confirm the global channel count does NOT move
+(`delta ~ 0`). This is belt-and-suspenders behind the loopback guard, and it makes
+the self-marking functional rather than merely forensic.
+
 > `governance_test` is currently 2 migrations behind prod (046 vs 048). 047
 > (knowledge CHECK widen) and 048 (un-onboarded check-in floor) do not touch the
 > onboard → check-in → outcome → calibration path the harness uses, so 046 is
