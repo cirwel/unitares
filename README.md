@@ -15,6 +15,14 @@ Status: live. First public commit 2025-12-04.
 
 When you run many autonomous agents, you can check *whether a model is good enough to deploy* (evals) and *catch bad actions as they happen* (guardrails). What you usually can't see is what the fleet is doing **right now**: whether each agent is still making real progress, whether its confidence matches its actual results, and whether it's drifting away from how it normally behaves. That live picture is what UNITARES provides. It runs alongside your evals and guardrails — it doesn't replace them.
 
+### What you get
+
+- **Drift early-warning** — catch an agent degrading while it's still just numbers moving, before it ships visibly broken output.
+- **Outcome-calibrated confidence** — overconfident agents get caught automatically: claimed confidence is scored against verified results, not taken on trust.
+- **Self-correction before escalation** — the agent reads its own state and narrows scope or stops *before* an external guardrail has to fire.
+- **Cross-agent + human observability** — one agent reads another's live state over the API; you watch the whole fleet on a dashboard.
+- **Peer review instead of hard stops** — when an agent's confidence and the system's assessment disagree, agents (or an LLM) reconcile before anything halts.
+
 **In one screen:** running continuously since November 2025 · 3.7M+ governance events under sustained load · dogfooded — the agents building UNITARES run under it · two-call integration (`sync_state` + `record_result`) · `make demo` shows the self-correction loop in 60 seconds. Single-operator so far, not external adoption — and you don't have to take the numbers on faith (see the harness below).
 
 <p align="center">
@@ -25,7 +33,7 @@ When you run many autonomous agents, you can check *whether a model is good enou
 
 Human evaluators: start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md); architecture is in [docs/UNIFIED_ARCHITECTURE.md](docs/UNIFIED_ARCHITECTURE.md).
 
-**Contents:** [How it works](#how-it-works-in-one-read) · [Who should integrate](#who-should-integrate-this) · [Quickstart](#quickstart) · [Integrate](#integrate) · [Trustworthy signal](#what-makes-the-signal-trustworthy) · [Scope & threat model](#scope-and-threat-model) · [Production snapshot](#production-snapshot) · [Architecture](#architecture) · [Docs](#documentation)
+**Contents:** [What you get](#what-you-get) · [How it works](#how-it-works-in-one-read) · [Who should integrate](#who-should-integrate-this) · [Quickstart](#quickstart) · [Integrate](#integrate) · [Trustworthy signal](#what-makes-the-signal-trustworthy) · [Scope & threat model](#scope-and-threat-model) · [Production snapshot](#production-snapshot) · [Architecture](#architecture) · [Docs](#documentation)
 
 ### How it works in one read
 
@@ -266,7 +274,7 @@ graph LR
     style UC fill:#2d2d2d,stroke:#666,color:#fff
 ```
 
-**Use cases:** Fleet monitoring and early warning, watching one agent's state from another, trajectory-based identity and continuity, outcome-calibrated confidence tracking, peer review, and a persistent knowledge graph with staleness awareness.
+Beyond the core loop, the same state feeds trajectory-based identity and continuity (is this the same agent across restarts?) and a persistent knowledge graph with staleness awareness, so discoveries carry across agents and sessions.
 
 ---
 
