@@ -2,15 +2,22 @@
 //
 // Consumes:
 //   GET /v1/sentinel/summary — counts by severity + violation class, recent stream
+//                              (live in-memory ring buffer, wiped on mcp restart)
+//   GET /v1/sentinel/backlog — durable HIGH/critical findings from audit.events
+//                              (survives restarts; the "did I miss one?" view)
 //
 // Unlike Watcher, Sentinel findings are transient fleet-state signals with no
-// open/closed lifecycle. This panel is a chronological log with a class
-// breakdown — not an actionable queue.
+// open/closed lifecycle. The counts + class breakdown are always the live 24h
+// summary; the STREAM toggles between the live recent log and the durable HIGH
+// backlog so a finding that fired before a deploy is still reviewable.
 //
 // Auth + fetch go through `authFetch` from utils.js.
 
 (function () {
     'use strict';
+
+    // 'live' = summary.recent (ring buffer) · 'durable' = backlog (audit.events)
+    var streamMode = 'live';
 
     async function fetchSummary() {
         try {
@@ -23,6 +30,21 @@
             return data;
         } catch (e) {
             console.warn('[Sentinel] summary fetch failed:', e);
+            return null;
+        }
+    }
+
+    async function fetchBacklog() {
+        try {
+            var resp = await authFetch('/v1/sentinel/backlog?severity=high&window_hours=168');
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            var data = await resp.json();
+            if (!data || data.success === false) {
+                throw new Error((data && data.error) || 'unknown');
+            }
+            return data;
+        } catch (e) {
+            console.warn('[Sentinel] backlog fetch failed:', e);
             return null;
         }
     }
@@ -88,20 +110,19 @@
         return Math.floor(secs / 86400) + 'd ago';
     }
 
-    function renderStream(summary) {
+    function renderStreamRows(rows, emptyText) {
         var container = document.getElementById('sentinel-stream');
         if (!container) return;
         container.innerHTML = '';
-        var recent = summary.recent || [];
-        if (recent.length === 0) {
+        if (!rows || rows.length === 0) {
             var empty = document.createElement('div');
             empty.className = 'sentinel-stream-empty';
-            empty.textContent = 'No Sentinel findings in the last ' + (summary.window_hours || 24) + ' hours.';
+            empty.textContent = emptyText;
             container.appendChild(empty);
             return;
         }
-        for (var i = 0; i < recent.length; i++) {
-            var r = recent[i];
+        for (var i = 0; i < rows.length; i++) {
+            var r = rows[i];
             var row = document.createElement('div');
             row.className = 'sentinel-row';
 
@@ -131,32 +152,70 @@
         }
     }
 
-    function setFooter(summary) {
+    function setFooter(text) {
         var el = document.getElementById('sentinel-meta');
-        if (!el) return;
-        el.textContent = 'window: ' + (summary.window_hours || 24) + 'h'
-            + ' · ' + (summary.total || 0) + ' findings'
-            + ' · refreshed ' + formatRelative(summary.generated_at);
+        if (el) el.textContent = text;
+    }
+
+    // The counts + class breakdown are always the live 24h summary. Only the
+    // stream switches source.
+    async function refreshStream() {
+        if (streamMode === 'durable') {
+            var backlog = await fetchBacklog();
+            if (!backlog) {
+                renderStreamRows([], 'Durable backlog unavailable.');
+                return;
+            }
+            renderStreamRows(
+                backlog.findings,
+                'No durable HIGH findings in the last '
+                    + Math.round((backlog.window_hours || 168) / 24) + 'd.'
+            );
+            setFooter('stream: durable HIGH · ' + (backlog.count || 0)
+                + ' findings · ' + Math.round((backlog.window_hours || 168) / 24)
+                + 'd · survives restarts');
+        } else {
+            var summary = await fetchSummary();
+            if (!summary) {
+                renderStreamRows([], 'Live stream unavailable.');
+                return;
+            }
+            renderStreamRows(
+                summary.recent,
+                'No Sentinel findings in the last ' + (summary.window_hours || 24) + ' hours.'
+            );
+            setFooter('stream: live · ' + (summary.total || 0) + ' findings · '
+                + (summary.window_hours || 24) + 'h · refreshed '
+                + formatRelative(summary.generated_at));
+        }
     }
 
     async function refresh() {
         var summary = await fetchSummary();
-        if (!summary) {
+        if (summary) {
+            renderCounts(summary);
+            renderClassBreakdown(summary);
+        } else {
             setMetric('sentinel-count-total', '—');
             setMetric('sentinel-count-critical', '—');
             setMetric('sentinel-count-high', '—');
             setMetric('sentinel-count-medium', '—');
-            return;
         }
-        renderCounts(summary);
-        renderClassBreakdown(summary);
-        renderStream(summary);
-        setFooter(summary);
+        await refreshStream();
     }
 
     function wire() {
         var btn = document.getElementById('sentinel-refresh');
         if (btn) btn.addEventListener('click', refresh);
+        var toggle = document.getElementById('sentinel-toggle-durable');
+        if (toggle) {
+            toggle.addEventListener('click', function () {
+                streamMode = (streamMode === 'durable') ? 'live' : 'durable';
+                toggle.textContent = (streamMode === 'durable')
+                    ? 'Stream: Durable HIGH' : 'Stream: Live';
+                refreshStream();
+            });
+        }
         refresh();
     }
 
