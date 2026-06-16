@@ -15,7 +15,7 @@ import json
 import os
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Optional
 
@@ -1155,6 +1155,12 @@ _FINDING_SEVERITIES = frozenset({"info", "low", "medium", "warning", "high", "cr
 _FINDING_TYPE_SUFFIX = "_finding"
 # Required top-level fields on the posted JSON
 _FINDING_REQUIRED_FIELDS = ("type", "severity", "message", "agent_id", "agent_name", "fingerprint")
+# Sentinel finding event types as persisted in audit.events (the durable store
+# behind the transient ring buffer). The backlog endpoint reads these.
+_SENTINEL_FINDING_EVENT_TYPES = ("sentinel_finding", "sentinel_alarm_finding")
+# Default severities the operator cares about when reviewing "did I miss
+# something across restarts?" — the load-bearing findings.
+_SENTINEL_BACKLOG_DEFAULT_SEVERITIES = frozenset({"high", "critical"})
 
 
 async def http_post_metric(request):
@@ -2074,6 +2080,88 @@ async def http_substrate_dark_sessions(request):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+async def http_sentinel_backlog(request):
+    """GET /v1/sentinel/backlog?window_hours=168&limit=200&severity=high — durable backlog.
+
+    Sentinel findings are durably persisted to audit.events by the broadcast
+    path (broadcaster._persist_event), so the underlying record already
+    survives governance-mcp restarts. What was missing is a read surface:
+    /v1/sentinel/summary reads only the in-memory ring buffer (wiped on every
+    restart), and /v1/incidents queries anomaly/stuck events, not findings. This
+    endpoint reads the persisted finding rows so the operator can answer "did a
+    HIGH finding fire that I missed across a deploy?" by query, not memory.
+
+    Defaults to high/critical (the load-bearing findings). Pass severity=all to
+    include every severity, or severity=<value> to pin one. Read-only.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return _http_unauthorized()
+    try:
+        try:
+            window_hours = float(request.query_params.get("window_hours", "168"))
+        except (TypeError, ValueError):
+            window_hours = 168.0
+        window_hours = max(1.0, min(window_hours, 24 * 90))
+        try:
+            limit = int(request.query_params.get("limit", "200"))
+        except (TypeError, ValueError):
+            limit = 200
+        limit = max(1, min(limit, 1000))
+
+        severity_param = (request.query_params.get("severity") or "").strip().lower()
+        if severity_param == "all":
+            severity_filter = None  # no filter — every severity
+        elif severity_param in _FINDING_SEVERITIES:
+            severity_filter = {severity_param}
+        else:
+            severity_filter = set(_SENTINEL_BACKLOG_DEFAULT_SEVERITIES)
+
+        from src.audit_db import query_audit_events_async
+        start_time = (
+            datetime.now(timezone.utc) - timedelta(hours=window_hours)
+        ).isoformat()
+        # Over-fetch before the in-Python severity filter so the cap still
+        # yields up to `limit` matching rows.
+        events = await query_audit_events_async(
+            event_types=list(_SENTINEL_FINDING_EVENT_TYPES),
+            start_time=start_time,
+            order="desc",
+            limit=max(limit * 4, limit),
+        )
+
+        findings = []
+        for e in events:
+            details = e.get("details") or {}
+            severity = details.get("severity")
+            if severity_filter is not None and severity not in severity_filter:
+                continue
+            findings.append({
+                "timestamp": e.get("timestamp"),
+                "severity": severity,
+                "finding_type": details.get("finding_type") or details.get("alarm_kind"),
+                "violation_class": details.get("violation_class"),
+                "message": details.get("message"),
+                "agent_id": e.get("agent_id"),
+                "agent_name": details.get("agent_name"),
+                "fingerprint": details.get("fingerprint"),
+                "event_id": e.get("event_id"),
+            })
+            if len(findings) >= limit:
+                break
+
+        return JSONResponse({
+            "success": True,
+            "window_hours": window_hours,
+            "severity": "all" if severity_filter is None else sorted(severity_filter),
+            "count": len(findings),
+            "findings": findings,
+        })
+    except Exception as e:
+        logger.error(f"Error reading sentinel backlog: {e}")
+        return JSONResponse({"success": False, "error": str(e), "findings": []}, status_code=500)
+
+
 # Incident history endpoint (anomalies + stuck agents from audit log)
 async def http_incidents(request):
     """Return historical anomaly and stuck-agent incidents from the audit trail."""
@@ -2806,6 +2894,7 @@ def register_http_routes(
     app.routes.append(Route("/api/findings", http_record_finding, methods=["POST"]))
     app.routes.append(Route("/v1/substrate/observe", http_substrate_observe, methods=["POST"]))
     app.routes.append(Route("/v1/substrate/dark_sessions", http_substrate_dark_sessions, methods=["GET"]))
+    app.routes.append(Route("/v1/sentinel/backlog", http_sentinel_backlog, methods=["GET"]))
     app.routes.append(Route("/v1/metrics", http_post_metric, methods=["POST"]))
     app.routes.append(Route("/v1/metrics/series", http_get_metrics, methods=["GET"]))
     app.routes.append(Route("/v1/metrics/catalog", http_get_metrics_catalog, methods=["GET"]))

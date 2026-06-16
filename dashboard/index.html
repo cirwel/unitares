@@ -563,11 +563,15 @@
 
         <!-- Sentinel — fleet-anomaly findings stream. Unlike Watcher there's no
              open/resolved lifecycle: findings are transient state signals.
-             Backed by /v1/sentinel/summary. -->
+             Counts/breakdown backed by /v1/sentinel/summary (live ring buffer,
+             24h). The stream toggles between that live view and the durable
+             HIGH backlog (/v1/sentinel/backlog) which survives mcp restarts. -->
         <div class="panel" id="sentinel-section">
             <div class="panel-header">
                 <h2>Sentinel</h2>
                 <div class="panel-controls">
+                    <button id="sentinel-toggle-durable" class="panel-button" type="button"
+                            title="Live = recent ring-buffer findings (wiped on restart). Durable HIGH = persisted high/critical findings over 7d (survives restarts).">Stream: Live</button>
                     <button id="sentinel-refresh" class="panel-button" type="button">Refresh</button>
                 </div>
             </div>
