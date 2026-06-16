@@ -78,6 +78,7 @@ This complements evals, guardrails, and sandboxes. Evals ask whether a model sho
 
 ## Evidence to check
 
+- Deployed EISV formulas, with provenance tags and the deployed-vs-target-semantics table: [`docs/EISV_COMPUTATION.md`](EISV_COMPUTATION.md). Read this if the thermodynamic vocabulary makes you suspect hand-waving — it states exactly what the running code computes (auditable heuristic blends, EMA-smoothed) versus what the paper targets.
 - Public CI: tests, documentation validation, and CodeQL on the default branch.
 - Public release history: latest `v2.x` release in this repository.
 - Paper DOI: `10.5281/zenodo.19647159`.
