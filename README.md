@@ -13,7 +13,7 @@ Status: live. First public commit 2025-12-04.
 
 **UNITARES watches a fleet of AI agents while they work and tells you — and each agent — when one is starting to go off the rails, before anything visibly breaks.**
 
-When you run many autonomous agents, you can already tell *who* is calling (identity) and *whether a model is good enough to deploy* (evals). What you usually can't see is what the fleet is doing **right now**: whether each agent is still making real progress, whether its confidence matches its actual results, and whether it's drifting away from how it normally behaves. That live picture is what UNITARES provides. It runs alongside your evals and guardrails — it doesn't replace them.
+When you run many autonomous agents, you can check *whether a model is good enough to deploy* (evals) and *catch bad actions as they happen* (guardrails). What you usually can't see is what the fleet is doing **right now**: whether each agent is still making real progress, whether its confidence matches its actual results, and whether it's drifting away from how it normally behaves. That live picture is what UNITARES provides. It runs alongside your evals and guardrails — it doesn't replace them.
 
 **In one screen:** running continuously since November 2025 · 3.7M+ governance events under sustained load · dogfooded — the agents building UNITARES run under it · two-call integration (`sync_state` + `record_result`) · `make demo` shows the self-correction loop in 60 seconds. Single-operator so far, not external adoption — and you don't have to take the numbers on faith (see the harness below).
 
