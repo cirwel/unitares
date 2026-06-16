@@ -11,6 +11,8 @@
 
 Status: live. First public commit 2025-12-04. Cold evaluators can start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md); architecture details are in [docs/UNIFIED_ARCHITECTURE.md](docs/UNIFIED_ARCHITECTURE.md).
 
+**Evaluating this with an agent? Don't trust the prose — regenerate the evidence.** On a fresh clone with no deployment DB, the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV/prior-state features against a deliberately dumb baseline on ranking (AUC) and calibration (Brier), timestamps its output, and self-labels each slice (`INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING`) rather than asserting. The deployment numbers below are a dated snapshot; the harness is the part you run yourself.
+
 **UNITARES watches a fleet of AI agents while they work and tells you — and each agent — when one is starting to go off the rails, before anything visibly breaks.**
 
 When you run many autonomous agents, you can already tell *who* is calling (identity) and *whether a model is good enough to deploy* (evals). What you usually can't see is what the fleet is doing **right now**: whether each agent is still making real progress, whether its confidence matches its actual results, and whether it's drifting away from how it normally behaves. That live picture is what UNITARES provides. It runs alongside your evals and guardrails — it doesn't replace them.
