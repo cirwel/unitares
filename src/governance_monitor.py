@@ -485,6 +485,17 @@ class UNITARESMonitor:
             except (TypeError, ValueError, KeyError):
                 sensor_eisv = None
 
+        # Per-source coupling policy: decide whether THIS sensor source may spring
+        # into the ODE. `sensor_eisv` (the full submitted reading) is always kept
+        # for divergence; only `coupling_sensor` (possibly None) reaches the ODE.
+        # This is how the Lumen-only cut works: UNITARES_SENSOR_COUPLING=behavioral_only
+        # nulls physical coupling while leaving the behavioral fleet anchored.
+        from governance_core.parameters import sensor_coupling_allows
+        sensor_source = agent_state.get('sensor_eisv_source')
+        coupling_sensor = sensor_eisv if (
+            sensor_eisv is not None and sensor_coupling_allows(sensor_source)
+        ) else None
+
         # Store parameters for potential future use (deprecated - not used in coherence)
         # Note: param_coherence removed in favor of pure thermodynamic signal
         self.prev_parameters = parameters.copy() if len(parameters) > 0 else None
@@ -529,7 +540,7 @@ class UNITARESMonitor:
             noise_S=calibration_penalty,  # Overconfidence raises entropy
             params=active_params,
             complexity=complexity,  # Complexity now affects S dynamics
-            sensor_eisv=sensor_eisv,  # Compared (not coupled) unless UNITARES_SENSOR_COUPLING
+            sensor_eisv=coupling_sensor,  # per-source gated; None => no spring (still compared below)
         )
 
         # Compare, don't couple: record model<->body divergence as a signal.

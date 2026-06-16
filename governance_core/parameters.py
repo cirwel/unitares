@@ -185,6 +185,53 @@ def sensor_coupling_enabled() -> bool:
     return val.strip().lower() not in {"0", "false", "off", "no"}
 
 
+def sensor_coupling_mode() -> str:
+    """
+    Coupling policy from UNITARES_SENSOR_COUPLING, resolved to a canonical mode:
+
+      - 'on'              (default; any truthy / unset)  — couple every sensor source
+      - 'off'             ({0,false,off,no})             — couple nothing
+      - 'behavioral_only' — couple the behavioral sensor, NOT physical (cuts an
+                            embodied agent's spring while leaving the disembodied
+                            fleet anchored — the Lumen-only cut)
+      - 'physical_only'   — couple physical sensors, NOT the behavioral sensor
+
+    'behavioral_only'/'physical_only' read as truthy to the coarse
+    sensor_coupling_enabled() gate (they are not off-values), so the fine-grained
+    source decision lives in sensor_coupling_allows() and is applied where the
+    sensor source is known (the monitor).
+    """
+    val = os.getenv("UNITARES_SENSOR_COUPLING")
+    if val is None:
+        return "on"
+    v = val.strip().lower()
+    if v in {"0", "false", "off", "no"}:
+        return "off"
+    if v in {"behavioral_only", "physical_only", "on"}:
+        return v
+    return "on"  # any other truthy value (1/true/yes/...) couples everything
+
+
+def sensor_coupling_allows(source) -> bool:
+    """Whether a sensor of the given source ('physical' | 'behavioral' | None)
+    should spring-couple into the ODE under the current policy.
+
+    Unknown/None source is treated as physical: physical sensors are the
+    caller-published ``sensor_data["eisv"]``; only the behavioral sensor
+    self-identifies as 'behavioral'."""
+    mode = sensor_coupling_mode()
+    if mode == "on":
+        return True
+    if mode == "off":
+        return False
+    is_behavioral = source == "behavioral"
+    if mode == "behavioral_only":
+        return is_behavioral
+    if mode == "physical_only":
+        return not is_behavioral
+    return True
+
+
 def get_params_profile_name() -> str:
     """
     Returns the active parameters profile name.
