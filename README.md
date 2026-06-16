@@ -11,6 +11,8 @@
 
 Status: live. First public commit 2025-12-04. Cold evaluators can start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md); architecture details are in [docs/UNIFIED_ARCHITECTURE.md](docs/UNIFIED_ARCHITECTURE.md).
 
+**Evaluating this with an agent? Don't trust the prose — regenerate the evidence.** On a fresh clone with no deployment DB, the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV/prior-state features against a deliberately dumb baseline on ranking (AUC) and calibration (Brier), timestamps its output, and self-labels each slice (`INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING`) rather than asserting. The deployment numbers below are a dated snapshot; the harness is the part you run yourself.
+
 **UNITARES watches a fleet of AI agents while they work and tells you — and each agent — when one is starting to go off the rails, before anything visibly breaks.**
 
 When you run many autonomous agents, you can already tell *who* is calling (identity) and *whether a model is good enough to deploy* (evals). What you usually can't see is what the fleet is doing **right now**: whether each agent is still making real progress, whether its confidence matches its actual results, and whether it's drifting away from how it normally behaves. That live picture is what UNITARES provides. It runs alongside your evals and guardrails — it doesn't replace them.
@@ -43,6 +45,8 @@ Running continuously since November 2025. State is stored in PostgreSQL + AGE. T
 UNITARES is for you if you run **multiple long-lived autonomous agents** — tool-using, multi-step, doing real work over hours or days — and you've watched an agent quietly drift without anyone noticing until something visible broke. The check-in loop surfaces that drift while it's still just numbers moving (Integrity slipping, overconfidence climbing) instead of waiting for a user to complain. It runs in parallel with your evals and guardrails as a live state layer the agent itself can read.
 
 **Integration cost:** one MCP/REST `sync_state` call per agent unit-of-work, plus a `record_result` callback for any task with a verifiable outcome (tests, exit codes, tool results). The dashboard, knowledge graph, peer review, and continuity features are all downstream of those two calls.
+
+**The threshold that matters is check-in count, not wall-clock time.** Self-relative grading needs roughly **30 check-ins** to establish an agent's baseline (absolute safety floors apply before that). An agent doing dozens of units of work — over an hour or a week — crosses it; one that does three and exits never does. That's the real line for "is my session long enough to benefit," not a duration.
 
 **Probably not worth it yet for** short-lived chatbot turns, where per-turn overhead outweighs the benefit, or for teams that can't instrument their agent loop. Whether this is useful outside the author's own deployment is still an open question — the [Production snapshot](#production-snapshot) is honest about that.
 
@@ -129,20 +133,34 @@ The agent reads its own metrics and adjusts *before* external controls have to f
 
 ---
 
+## Scope and threat model
+
+UNITARES is **adversarial-aware, not adversarial-naive** — but its enforcement is deliberately conservative.
+
+**What resists gaming.** The signal is anchored to outcomes an agent can't fake: test pass/fail, exit codes, and tool results sent via `record_result()`. An agent can inflate its self-reported `confidence`, but not its actual success rate — sustained overconfidence drives Integrity (I) down regardless of what the agent claims. Drift (S) is graded against the agent's *own* prior trajectory, so there is no fixed threshold to pre-game, and calibration compounds over many tasks rather than judging any single check-in.
+
+**Why enforcement leans lenient.** Verdicts are biased toward `proceed`/`guide` over `pause`/`reject` by design. A false-positive pause on a productive agent is itself a failure mode — acutely so here, since the agents building UNITARES run under UNITARES. The verdict ladder exists so most signal arrives as information the agent can act on, not as a halt: high-confidence degradation trips a pause, ambiguity is surfaced rather than blocked.
+
+**What "no ethics classifier" does and doesn't mean.** It means there is no hand-labeled "is this ethical?" model in the loop — *not* that the system is value-free. Two consequences worth stating plainly: drift (S) is a *salience flag*, not a verdict — high entropy raises attention, it does not auto-fail, so beneficial exploration surfaces as something to look at rather than something to punish. And Integrity (I) is anchored to *ground truth* (outcomes), not to the agent's own history — an agent drifting toward better results shows *rising* I, not a penalty. The "past behavior was the desirable behavior" assumption applies only to S, not to the model as a whole.
+
+**The genuine open question.** Robustness against a *motivated* attacker deliberately optimizing the EISV proxy, at scale, is unproven. The deployment is single-operator with no red-team. That is the real limitation — not an absence of adversarial design, but an absence of adversarial *testing*.
+
+---
+
 ## Production snapshot
 
-Frozen public snapshot from May 6, 2026 (single-operator deployment — the author's own traffic, not external adoption). Headline: **351K+ governance events processed · ≈94K in the last 7 days**.
+Frozen public snapshot from June 16, 2026 (single-operator deployment — the author's own traffic, not external adoption). Headline: **3.7M+ governance events processed · ≈714K in the last 7 days**.
 
 <details>
 <summary><strong>Full metrics table</strong></summary>
 
 | Metric | Value |
 |--------|-------|
-| Agents onboarded | 3,660 total process-instances — overwhelmingly ephemeral CLI sessions from one operator's workstation plus a handful of long-running resident agents (launchd crons) |
-| Distinct event-emitting identities (last 21 days) | 1,144 total; mostly ephemeral local CLI sessions, not external adoption |
-| Unique agents active (last 7 days) | 135 distinct event emitters |
-| Governance events processed | 351,000+ (≈94K in the last 7 days) |
-| Knowledge graph discoveries | 860 |
+| Agents onboarded | 3,777 total process-instances — overwhelmingly ephemeral CLI sessions from one operator's workstation plus a handful of long-running resident agents (launchd crons) |
+| Distinct event-emitting identities (last 21 days) | 510; mostly ephemeral local CLI sessions, not external adoption (lower than earlier snapshots as identity-consolidation work cut phantom per-session identities) |
+| Unique agents active (last 7 days) | 369 distinct event emitters |
+| Governance events processed | 3,748,000+ (≈714K in the last 7 days) |
+| Knowledge graph discoveries | 1,054 |
 | V operating range | Active agents often within [-0.1, 0.1] |
 | Tests | 8,500+ collected · smoke/pre-push subset plus 25% min coverage gate |
 

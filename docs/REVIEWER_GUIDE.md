@@ -24,7 +24,8 @@ UNITARES is runtime state telemetry for long-lived AI-agent fleets: agents check
 
 - Not an output filter or guardrail classifier.
 - Not a sandbox or permission system.
-- Not a universal ethics oracle.
+- Not a universal ethics oracle. "No ethics classifier" means no hand-labeled ethics model — not that the system is value-free; drift is a salience flag, not a verdict, and Integrity is anchored to outcomes rather than to the agent's own history.
+- Not hardened against a motivated adversary gaming the EISV proxy. The design is adversarial-aware — outcomes can't be faked, baselines are self-relative — but enforcement leans lenient by intent and there has been no red-team. See [README → Scope and threat model](../README.md#scope-and-threat-model).
 - Not a claim of broad external adoption yet; the public deployment metrics describe a single-operator stress test.
 
 ## Fast path: three minutes
