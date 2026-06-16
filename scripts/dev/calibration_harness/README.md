@@ -90,28 +90,38 @@ measurement-plumbing proof. The server's tactical channel (registered/capped
 confidence) is reported as a SECONDARY view; the divergence between the two is the
 cap/corrector finding, not noise.
 
-### The confidence cap (v1 ceiling)
+### The confidence cap — lifted in v2 (`--transport mcp`, default)
 Weak-tier agents get `min(confidence, 0.55)` (`phases.py:667-669`), so the 0.6–1.0
-bins don't populate. **Reaching strong tier requires the MCP transport** — that is
-confirmed (a council agent on the MCP transport logged at strong/1.0). The plain
-REST `/v1/tools/call` surface this harness uses does **not** reach strong in
-testing: echoing `client_session_id` in the body and sending an `X-Session-ID`
-header both yield `proof_origin: unknown` → weak → capped (verified live, three
-ways). So the v2 lever stands: talk to the server over the MCP transport with
-caller-proven binding. (Earlier wording called the cap "structural to REST"; more
-precisely it's structural to *every REST handshake tested* — strong is confirmed
-only on the MCP transport.)
+bins can't populate. The fix, pinned live: **strong tier requires the MCP transport
+AND a `continuity_token`** passed on each call (`session.py:619-642` marks
+`continuity_token` → `caller_asserted` → strong). The plain REST `/v1/tools/call`
+surface *ignores* the token (it resolves identity by `ip_ua_fingerprint` → weak →
+capped); the MCP streamable-HTTP transport honors it. Verified three ways: REST +
+body-CSID, REST + `X-Session-ID`, and REST + `continuity_token` all stay weak;
+MCP + `continuity_token` reaches strong and removes the cap.
 
-Secondary lever: accept that tactical calibration scores the EISV-corrected
-confidence and frame v1.1 as "is the governance system's *own* confidence
-well-calibrated" — but that still needs the v1.1 knob to have any ground truth.
+`client_mcp.MCPGovernanceClient` implements this (same interface as the REST
+client; the runner/report are unchanged). At n=200, gap 0.2 it recovers the
+injected miscalibration across the **full** range — e.g. the 0.8–1.0 bin shows
+accuracy 0.73 vs mean confidence 0.92, recovering the ~0.2 overconfidence that was
+unreachable under the cap.
+
+Two operational notes:
+- **Identity rotation.** A single strong-tier agent accumulating synthetic
+  failures gets governance-*paused* mid-run; `run_v1` catches that, rotates to a
+  fresh identity, and retries (measurement-neutral — the report bins on stated
+  confidence, so identity is irrelevant).
+- **Per-call session.** The MCP client opens a short-lived session per call
+  (continuity_token is portable proof). Simple and correct; a persistent session
+  is a v2.1 perf optimization. Use `--transport rest` for faster capped runs.
 
 ## Files
 
 | file | role |
 |---|---|
 | `config.py` | bins, transport, the 0.65 gate constant |
-| `client.py` | thin REST wrapper over `/v1/tools/call` (onboard/check-in/outcome/calibration) |
+| `client.py` | thin REST wrapper over `/v1/tools/call` (weak tier, capped at 0.55) |
+| `client_mcp.py` | MCP streamable-HTTP client; `continuity_token` → strong tier → cap lifted (v2) |
 | `grader.py` | sandboxed subprocess runner → exit-code → external signal |
 | `miscalibration.py` | injected curve `true_accuracy(c)=clamp(c-gap)` + analytic injected ECE |
 | `episodes/` | `Episode` ABC + `CleanControl` (pass) / `SeededTestFail` (fail) source generators |

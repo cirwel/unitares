@@ -19,7 +19,7 @@ import random
 from pathlib import Path
 
 from . import report
-from .client import GovernanceClient
+from .client import GovernanceClient, GovernanceError
 from .config import BINS, EPISODE_COUNT, HARNESS_AGENT_NAME, Transport
 from .runner import run_slot
 from .sampler import plan
@@ -61,6 +61,9 @@ def main() -> int:
     ap.add_argument("--gap", type=float, default=0.2,
                     help="injected overconfidence gap; report should recover ~ this ECE")
     ap.add_argument("--out", type=str, default="data/calibration_harness/run_v1.csv")
+    ap.add_argument("--transport", choices=["mcp", "rest"], default="mcp",
+                    help="mcp: strong tier (continuity_token) -> no 0.55 cap, full confidence range. "
+                         "rest: weak tier, confidence capped at 0.55 (faster, no per-call handshake).")
     ap.add_argument("--i-know", action="store_true", help="bypass the prod-URL guard")
     args = ap.parse_args()
 
@@ -72,9 +75,15 @@ def main() -> int:
 
     transport = Transport()
     _guard_not_prod(transport.base_url, args.i_know)
-    client = GovernanceClient(transport)
+    if args.transport == "mcp":
+        from .client_mcp import MCPGovernanceClient
+        client = MCPGovernanceClient(transport)
+    else:
+        client = GovernanceClient(transport)
     rng = random.Random(SEED)
 
+    print(f"transport={args.transport} "
+          f"({'strong tier, full confidence range' if args.transport == 'mcp' else 'weak tier, capped at 0.55'})")
     ident = client.onboard(HARNESS_AGENT_NAME)
     print(f"onboarded harness identity: {ident.agent_uuid}")
 
@@ -83,10 +92,24 @@ def main() -> int:
     print(f"planned {len(slots)} episodes against {transport.base_url} (injected gap={args.gap})")
 
     rows = []
+    rotations = 0
     for k, slot in enumerate(slots):
-        rows.append(run_slot(client, ident, slot, rng, args.gap))
+        try:
+            rows.append(run_slot(client, ident, slot, rng, args.gap))
+        except GovernanceError:
+            # The agent accumulates synthetic failures and governance pauses it.
+            # Rotate to a fresh identity (the measurement bins on stated
+            # confidence, so identity is irrelevant) and retry the slot once.
+            rotations += 1
+            ident = client.onboard(HARNESS_AGENT_NAME)
+            try:
+                rows.append(run_slot(client, ident, slot, rng, args.gap))
+            except GovernanceError as e2:
+                print(f"  slot {k} dropped after rotation: {str(e2)[:120]}")
         if (k + 1) % 25 == 0:
             print(f"  {k + 1}/{len(slots)} done")
+    if rotations:
+        print(f"rotated identity {rotations}x (governance paused the agent on synthetic-failure volume)")
 
     after = report.snapshot_tactical(client)
 

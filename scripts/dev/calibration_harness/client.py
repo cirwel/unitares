@@ -32,6 +32,9 @@ class Identity:
     agent_uuid: str
     client_session_id: str | None
     raw: dict[str, Any]
+    # Signed ownership proof. Reaches strong tier (lifting the 0.55 cap) ONLY
+    # over the MCP transport; ignored by the REST surface. See client_mcp.py.
+    continuity_token: str | None = None
 
 
 def _first(d: dict[str, Any], *keys: str) -> Any:
@@ -79,7 +82,8 @@ class GovernanceClient:
         if not agent_uuid:
             raise GovernanceError(f"onboard returned no agent uuid; keys={list(res)}")
         csid = _first(res, "client_session_id", "session_id")
-        return Identity(agent_uuid=str(agent_uuid), client_session_id=csid, raw=res)
+        ct = res.get("continuity_token")
+        return Identity(agent_uuid=str(agent_uuid), client_session_id=csid, raw=res, continuity_token=ct)
 
     def check_in(
         self,
