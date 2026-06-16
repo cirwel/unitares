@@ -2537,11 +2537,16 @@ async def http_residents(request):
 # Resident tag-hygiene audit — Vigil consumes this to detect tag drift
 # ---------------------------------------------------------------------------
 
-# Tags every active resident must carry. Keep in sync with
+from src.grounding.onboard_classifier import RESIDENT_DEFAULT_TAGS
+
+# Tags every active resident must carry. Single-sourced from the server-side
+# RESIDENT_DEFAULT_TAGS (the same constant the creation-time stamp and the
+# check-in reconcile use) so the audit endpoint and the writers cannot drift
+# apart within this process. Keep in sync with the cross-process SDK copy
 # agents/sdk/src/unitares_sdk/agent.py::RESIDENT_TAGS. The Steward regression
 # of 2026-04-20 was caused by this set drifting across onboarding paths —
 # this endpoint exists so future drift is detectable in production.
-RESIDENT_REQUIRED_TAGS: frozenset[str] = frozenset({"persistent", "autonomous"})
+RESIDENT_REQUIRED_TAGS: frozenset[str] = frozenset(RESIDENT_DEFAULT_TAGS)
 
 
 async def http_resident_tag_audit(request):

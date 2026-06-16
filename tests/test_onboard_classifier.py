@@ -175,6 +175,160 @@ async def test_stamp_does_not_mutate_meta_when_persist_fails():
     fake_update.assert_awaited_once()
 
 
+# --- reconcile_resident_tags: server-side resume-equivalent reconcile (#754
+# server-side companion). Covers the BEAM Sentinel, which never calls onboard
+# and so never hits the creation-time stamp; it only attaches agent_id to
+# process_agent_update. -------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_reconcile_memo():
+    """The reconcile memo is process-global module state; clear it around each
+    test so memoization from one case never masks a write expected by another."""
+    from src.grounding import onboard_classifier
+    onboard_classifier._reconciled_residents.clear()
+    yield
+    onboard_classifier._reconciled_residents.clear()
+
+
+async def _run_reconcile(name, tags, *, missing_meta=False, meta_label=None, db_tags=None):
+    meta = None if missing_meta else _make_meta(tags=tags, label=meta_label)
+    agent_uuid = "uuid-resident-1"
+    fake_update = AsyncMock()
+    fake_get = AsyncMock(return_value=_make_meta(tags=db_tags) if db_tags is not None else None)
+
+    with patch("src.agent_storage.update_agent", fake_update), patch(
+        "src.agent_storage.get_agent", fake_get
+    ):
+        from src.grounding.onboard_classifier import reconcile_resident_tags
+        result = await reconcile_resident_tags(agent_uuid, name, meta=meta)
+
+    return meta, fake_update, result
+
+
+@pytest.mark.asyncio
+async def test_reconcile_adds_missing_autonomous_tag():
+    """The live Sentinel gap: persistent present, autonomous missing."""
+    meta, fake_update, result = await _run_reconcile("Sentinel", ["Sentinel", "persistent"])
+    assert result == ["Sentinel", "persistent", "autonomous"]
+    assert meta.tags == ["Sentinel", "persistent", "autonomous"]
+    fake_update.assert_awaited_once_with(
+        agent_id="uuid-resident-1", tags=["Sentinel", "persistent", "autonomous"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconcile_is_additive_preserving_role_tags():
+    """update_agent REPLACES, so the union must keep cadence/role tags."""
+    meta, fake_update, result = await _run_reconcile(
+        "Vigil", ["Vigil", "persistent", "cadence.30min"]
+    )
+    assert result == ["Vigil", "persistent", "cadence.30min", "autonomous"]
+    assert "cadence.30min" in meta.tags
+    fake_update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_healthy_resident_is_noop():
+    meta, fake_update, result = await _run_reconcile(
+        "Sentinel", ["Sentinel", "persistent", "autonomous"]
+    )
+    assert result is None
+    fake_update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_non_resident_label_is_noop():
+    meta, fake_update, result = await _run_reconcile("claude_desktop-claude", [])
+    assert result is None
+    fake_update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_writes_both_when_all_missing():
+    meta, fake_update, result = await _run_reconcile("Steward", ["Steward"])
+    assert result == ["Steward", "persistent", "autonomous"]
+    fake_update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_name_none_falls_back_to_meta_label():
+    meta, fake_update, result = await _run_reconcile(
+        None, ["Watcher", "persistent"], meta_label="Watcher"
+    )
+    assert result == ["Watcher", "persistent", "autonomous"]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_reads_db_tags_when_meta_absent():
+    """No in-memory meta — current tags come from PG so we don't clobber."""
+    meta, fake_update, result = await _run_reconcile(
+        "Sentinel", None, missing_meta=True, db_tags=["Sentinel", "persistent"]
+    )
+    assert result == ["Sentinel", "persistent", "autonomous"]
+    fake_update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_memoizes_after_success():
+    """Second call for the same UUID short-circuits — no second DB touch."""
+    from src.grounding.onboard_classifier import reconcile_resident_tags
+    meta = _make_meta(tags=["Sentinel", "persistent"], label="Sentinel")
+    fake_update = AsyncMock()
+    with patch("src.agent_storage.update_agent", fake_update):
+        first = await reconcile_resident_tags("uuid-memo", "Sentinel", meta=meta)
+        second = await reconcile_resident_tags("uuid-memo", "Sentinel", meta=meta)
+    assert first == ["Sentinel", "persistent", "autonomous"]
+    assert second is None
+    fake_update.assert_awaited_once()  # only the first call wrote
+
+
+@pytest.mark.asyncio
+async def test_reconcile_healthy_resident_is_memoized():
+    """A healthy resident memoizes too, so we stop re-comparing every check-in."""
+    from src.grounding import onboard_classifier as oc
+    meta = _make_meta(tags=["Sentinel", "persistent", "autonomous"], label="Sentinel")
+    await oc.reconcile_resident_tags("uuid-healthy", "Sentinel", meta=meta)
+    assert "uuid-healthy" in oc._reconciled_residents
+
+
+@pytest.mark.asyncio
+async def test_reconcile_warns_once_when_roster_empty():
+    """A real label with an empty roster means UNITARES_RESIDENTS is unset —
+    warn once so the silent-inert deploy is visible, and still no-op."""
+    from src.grounding import onboard_classifier as oc
+    oc._empty_roster_warned = False
+    fake_update = AsyncMock()
+    with patch.object(oc, "KNOWN_RESIDENT_LABELS", frozenset()), patch(
+        "src.agent_storage.update_agent", fake_update
+    ), patch.object(oc, "_warn_empty_roster_once", wraps=oc._warn_empty_roster_once) as warn:
+        r1 = await oc.reconcile_resident_tags(
+            "uuid-empty-1", "Sentinel", meta=_make_meta(tags=["Sentinel"], label="Sentinel")
+        )
+        r2 = await oc.reconcile_resident_tags(
+            "uuid-empty-2", "Sentinel", meta=_make_meta(tags=["Sentinel"], label="Sentinel")
+        )
+    assert r1 is None and r2 is None
+    fake_update.assert_not_awaited()
+    assert warn.call_count == 2  # guard is invoked each time...
+    # ...but the underlying logger.warning fires only once (guarded by the flag)
+    oc._empty_roster_warned = False
+
+
+@pytest.mark.asyncio
+async def test_reconcile_does_not_mutate_meta_or_memoize_on_persist_failure():
+    """P011-style: persist before in-memory mutation, and don't memoize a
+    failed write — the next check-in must retry."""
+    from src.grounding import onboard_classifier as oc
+    meta = _make_meta(tags=["Sentinel", "persistent"], label="Sentinel")
+    fake_update = AsyncMock(side_effect=RuntimeError("PG unavailable"))
+    with patch("src.agent_storage.update_agent", fake_update):
+        with pytest.raises(RuntimeError):
+            await oc.reconcile_resident_tags("uuid-fail", "Sentinel", meta=meta)
+    assert meta.tags == ["Sentinel", "persistent"]
+    assert "uuid-fail" not in oc._reconciled_residents
+
+
 @pytest.mark.asyncio
 async def test_onboard_wrapper_still_calls_through():
     """The thin ``_stamp_default_tags_on_onboard`` wrapper in identity/handlers.py
