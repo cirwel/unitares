@@ -1,7 +1,10 @@
-"""Per-episode loop: check-in -> attempt (sandboxed) -> grade -> outcome.
+"""Per-slot loop: draw confidence -> draw outcome from the injected curve ->
+check-in -> grade the matching subprocess -> outcome event.
 
-Binding is the whole point: the prediction_id from check-in is threaded into
-the outcome so the registered confidence (not a temporal proxy) is what scores.
+The outcome is decided by `Bernoulli(true_accuracy(confidence; gap))`, then a real
+pass/fail subprocess is run to realize it — so confidence and outcome are coupled
+by the known curve while the graded signal stays exogenous (a real exit code,
+external_signal). Binding is via prediction_id.
 """
 from __future__ import annotations
 
@@ -9,18 +12,19 @@ import random
 from dataclasses import dataclass
 
 from .client import GovernanceClient, Identity
-from .episodes import Episode, elicit_confidence
+from .episodes import CleanControl, SeededTestFail, elicit_confidence
 from .grader import grade_script
+from .miscalibration import true_accuracy
+from .sampler import Slot
 
 
 @dataclass
 class RunRow:
     label: str
-    kind: str
-    tag: str
     target_lo: float
     target_hi: float
     stated_confidence: float
+    injected_p_success: float
     is_bad: bool
     exit_code: int
     prediction_id: str
@@ -28,21 +32,24 @@ class RunRow:
     evidence_weight: float | None
 
 
-def run_episode(client: GovernanceClient, ident: Identity, ep: Episode, rng: random.Random) -> RunRow:
-    conf = elicit_confidence(ep.target_bin, rng)
+def run_slot(client: GovernanceClient, ident: Identity, slot: Slot, rng: random.Random, gap: float) -> RunRow:
+    conf = elicit_confidence(slot.target_bin, rng)
+    p_success = true_accuracy(conf, gap)
+    should_pass = rng.random() < p_success
+    label = f"[{slot.target_bin[0]:.1f}-{slot.target_bin[1]:.1f}]#{slot.index}{':'+slot.tag if slot.tag else ''}"
+
     pred_id = client.check_in(
         ident,
         confidence=conf,
-        response_text=f"[{ep.label}] attempting bounded task; constructed to {'fail' if ep.expected_bad else 'pass'}",
-        task_label=ep.label,
+        response_text=f"{label} confidence={conf:.3f} injected_p={p_success:.3f} -> {'pass' if should_pass else 'fail'}",
+        task_label=label,
     )
 
-    grade = grade_script(ep.build_source(), label=ep.label)
-    # Sanity: the grader must agree with the construction, else the fixture lies.
-    if grade.is_bad != ep.expected_bad:
-        raise RuntimeError(
-            f"{ep.label}: grader/construction mismatch (is_bad={grade.is_bad}, expected={ep.expected_bad})"
-        )
+    # Realize the drawn outcome with a real subprocess (exogenous exit code).
+    src = (CleanControl if should_pass else SeededTestFail)(slot.target_bin, index=slot.index).build_source()
+    grade = grade_script(src, label=label)
+    if grade.is_bad == should_pass:  # pass-source must pass, fail-source must fail
+        raise RuntimeError(f"{label}: subprocess outcome ({not grade.is_bad}) != drawn ({should_pass})")
 
     out = client.record_outcome(
         ident,
@@ -53,12 +60,11 @@ def run_episode(client: GovernanceClient, ident: Identity, ep: Episode, rng: ran
     )
     ew = out.get("evidence_weight")
     return RunRow(
-        label=ep.label,
-        kind=ep.kind,
-        tag=ep.tag,
-        target_lo=ep.target_bin[0],
-        target_hi=ep.target_bin[1],
+        label=label,
+        target_lo=slot.target_bin[0],
+        target_hi=slot.target_bin[1],
         stated_confidence=conf,
+        injected_p_success=round(p_success, 4),
         is_bad=grade.is_bad,
         exit_code=grade.exit_code,
         prediction_id=pred_id,

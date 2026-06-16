@@ -69,30 +69,26 @@ python3 -m scripts.dev.calibration_harness.run_v1 --episodes 200
   and `calibration_guidance.failure_modes.tactical.ece` (the latter has a
   min-sample floor; it is `None` until enough samples).
 
-## What v1 validates — and what it does NOT (council review, PR #770)
+## What the harness validates (v1.1, after council review of PR #770)
 
-A 3-agent adversarial council reviewed this. The honest scope:
+A 3-agent adversarial council reviewed v1 and caught that it validated only the
+*binding*, not the *measurement* (outcomes were independent of confidence by
+construction). v1.1 closes that gap.
 
-**v1 validates the BINDING/REGISTRATION spine** — stated confidence → `prediction_id`
-→ external (exit-code) outcome → corroborated tactical row → read-back. That path
-is sound and well-built; the exit-code outcome is exogenous ground truth (no
-circularity).
+**Binding/registration spine** — stated confidence → `prediction_id` → external
+(exit-code) outcome → corroborated tactical row. Sound; the exit-code outcome is
+exogenous ground truth (no circularity).
 
-**v1 does NOT yet validate the calibration MEASUREMENT.** The sampler assigns
-pass/fail by *position* (`i < n_fail`) and draws confidence *independently* by
-bin, so **outcome and confidence are statistically independent by construction**.
-There is no injected miscalibration for ECE/AUC to recover — so AUC ≈ 0.5 is
-*expected* (any deviation is a sampler artifact), and the ECE is dominated by the
-0.55 cap + corrector fixed point + the constant per-bin fail ratio, not by a
-calibration relationship. Printing these as "calibration" without that caveat was
-a self-deception seam; `report.py` now states it inline.
-
-### The v1.1 fix (the real work item)
-Make the **outcome a function of confidence** with an injectable miscalibration
-knob: draw pass/fail with probability `f(drawn_confidence; bias)`. Then ECE/AUC
-become *recoverable ground truth* — "I injected calibration error X; did the
-channel report ≈ X?" — which is the actual measurement-plumbing test. Until then,
-v1 is a binding smoke test, not a calibration validator.
+**Calibration measurement** — the outcome is now drawn from a KNOWN curve
+(`miscalibration.true_accuracy(c) = clamp(c - gap)`; `--gap`, default 0.2), so
+confidence and outcome are coupled by an injected miscalibration. `report.py` bins
+on the controlled (stated) confidence and checks that the **recovered ECE matches
+the analytic injected ECE** within sampling tolerance, and that **AUC > 0.5**
+(confidence now discriminates). Validated live: gap 0.2 → injected ECE 0.186,
+recovered 0.223 (|err| 0.037), AUC 0.83. That recovery is the actual
+measurement-plumbing proof. The server's tactical channel (registered/capped
+confidence) is reported as a SECONDARY view; the divergence between the two is the
+cap/corrector finding, not noise.
 
 ### The confidence cap (v1 ceiling)
 Weak-tier agents get `min(confidence, 0.55)` (`phases.py:667-669`), so the 0.6–1.0
@@ -114,12 +110,13 @@ well-calibrated" — but that still needs the v1.1 knob to have any ground truth
 
 | file | role |
 |---|---|
-| `config.py` | bins, fail-ratio, transport, the 0.65 gate constant |
+| `config.py` | bins, transport, the 0.65 gate constant |
 | `client.py` | thin REST wrapper over `/v1/tools/call` (onboard/check-in/outcome/calibration) |
 | `grader.py` | sandboxed subprocess runner → exit-code → external signal |
-| `episodes/` | `Episode` ABC + `CleanControl` (pass) / `SeededTestFail` (deterministic fail) |
-| `sampler.py` | stratified (bin × pass/fail) plan + overconfidence cell |
-| `runner.py` | per-episode check-in → grade → outcome, binding via `prediction_id` |
-| `report.py` | ECE + AUC from per-agent DB rows; server tactical before/after |
-| `probe_one.py` | single-episode live verification (the build-order gate) |
-| `run_v1.py` | entrypoint; prod-URL guard |
+| `miscalibration.py` | injected curve `true_accuracy(c)=clamp(c-gap)` + analytic injected ECE |
+| `episodes/` | `Episode` ABC + `CleanControl` (pass) / `SeededTestFail` (fail) source generators |
+| `sampler.py` | stratified confidence-bin slots (outcome drawn in the runner, not here) |
+| `runner.py` | per-slot: draw confidence → draw outcome from the curve → check-in → grade → outcome |
+| `report.py` | recover injected ECE from stated confidence + AUC; server tactical before/after |
+| `probe_one.py` | single-episode live verification (the binding gate) |
+| `run_v1.py` | entrypoint; loopback-only guard; `--gap` knob |

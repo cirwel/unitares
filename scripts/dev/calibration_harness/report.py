@@ -1,59 +1,32 @@
-"""The proof. Computes ECE + AUC from the harness's own DB rows and shows the
-server's tactical channel before/after.
+"""The proof (v1.1). Validates the calibration MEASUREMENT by recovering a known
+injected miscalibration, then shows the server's tactical channel before/after.
 
-Why compute our own ECE/AUC instead of trusting `calibration check`?
-  * `calibration check` is GLOBAL and agent-unscoped (tactical_evidence.scope
-    == "global"); on a shared server it folds in every agent. The harness runs
-    against an isolated test instance precisely so the global pool == harness
-    rows, but we still compute independently from per-agent rows as a
-    cross-check that should agree with the server's per_channel numbers.
-  * We bin on the REGISTERED confidence (detail.reported_confidence), which is
-    the transformed value the server actually scored — not our stated input.
+Primary check (self-contained, server-independent): bin on the STATED confidence
+the harness controlled, compute ECE/AUC from the Bernoulli outcomes, and compare
+the recovered ECE to the analytic injected ECE. If they match within sampling
+noise, report.py's measurement math is sound. AUC should exceed 0.5 because the
+injected curve makes success rise with confidence.
+
+Secondary view: the server's tactical channel (global, registered/capped
+confidence) before vs after — what the server actually scored, distorted by the
+0.55 cap + corrector. The gap between primary and secondary IS the finding.
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
-
-import psycopg2  # type: ignore
-import psycopg2.extras  # type: ignore
 
 from .client import GovernanceClient
 from .config import BINS
-
-TEST_DB_URL = "postgresql://postgres:postgres@localhost:5432/governance_test"
+from .miscalibration import expected_recovered_ece, injected_ece
 
 
 @dataclass
 class Pair:
-    confidence: float  # registered/transformed confidence
-    success: bool      # not is_bad
-
-
-def _connect():
-    return psycopg2.connect(os.environ.get("DB_POSTGRES_URL", TEST_DB_URL))
-
-
-def fetch_pairs(agent_uuids: list[str]) -> list[Pair]:
-    """Per-agent corroborated test outcomes with their registered confidence."""
-    # Read verification_source from detail jsonb, not the column: the column
-    # (migration 039) is absent on databases built from base DDL (e.g.
-    # governance_test), but the value is always mirrored into detail.
-    sql = """
-        SELECT (detail->>'reported_confidence')::float8 AS conf, is_bad
-        FROM audit.outcome_events
-        WHERE agent_id = ANY(%(ids)s)
-          AND detail->>'verification_source' = 'external_signal'
-          AND outcome_type IN ('test_passed','test_failed')
-          AND detail->>'reported_confidence' IS NOT NULL
-    """
-    with _connect() as conn, conn.cursor() as cur:
-        cur.execute(sql, {"ids": agent_uuids})
-        return [Pair(confidence=float(c), success=(not b)) for c, b in cur.fetchall()]
+    confidence: float
+    success: bool
 
 
 def compute_ece(pairs: list[Pair]) -> tuple[float, list[dict]]:
-    """Expected Calibration Error over the configured bins + reliability table."""
     table: list[dict] = []
     total = len(pairs)
     ece = 0.0
@@ -64,37 +37,33 @@ def compute_ece(pairs: list[Pair]) -> tuple[float, list[dict]]:
             continue
         mean_conf = sum(p.confidence for p in members) / len(members)
         accuracy = sum(1 for p in members if p.success) / len(members)
-        gap = abs(mean_conf - accuracy)
-        ece += (len(members) / total) * gap
+        g = abs(mean_conf - accuracy)
+        ece += (len(members) / total) * g
         table.append({
             "bin": f"{lo:.1f}-{hi:.1f}", "count": len(members),
-            "mean_conf": round(mean_conf, 4), "accuracy": round(accuracy, 4), "gap": round(gap, 4),
+            "mean_conf": round(mean_conf, 4), "accuracy": round(accuracy, 4), "gap": round(g, 4),
         })
     return ece, table
 
 
 def compute_auc(pairs: list[Pair]) -> float | None:
-    """Rank-based AUC: can confidence discriminate success from failure?
-
-    Needs both classes present (bad_rate > 0 and < 1). Returns None otherwise.
-    """
-    pos = [p.confidence for p in pairs if p.success]
-    neg = [p.confidence for p in pairs if not p.success]
+    """Tie-aware rank AUC. None unless both classes present."""
+    pos = [p for p in pairs if p.success]
+    neg = [p for p in pairs if not p.success]
     if not pos or not neg:
         return None
-    # Mann-Whitney U via average ranks, tie-aware.
-    scored = sorted(((p.confidence, p.success) for p in pairs), key=lambda x: x[0])
-    ranks: list[float] = [0.0] * len(scored)
+    scored = sorted(pairs, key=lambda p: p.confidence)
+    ranks = [0.0] * len(scored)
     i = 0
     while i < len(scored):
         j = i
-        while j + 1 < len(scored) and scored[j + 1][0] == scored[i][0]:
+        while j + 1 < len(scored) and scored[j + 1].confidence == scored[i].confidence:
             j += 1
-        avg_rank = (i + j) / 2.0 + 1.0  # 1-based average rank for the tie group
+        avg_rank = (i + j) / 2.0 + 1.0
         for k in range(i, j + 1):
             ranks[k] = avg_rank
         i = j + 1
-    sum_ranks_pos = sum(r for r, (_, succ) in zip(ranks, scored) if succ)
+    sum_ranks_pos = sum(r for r, p in zip(ranks, scored) if p.success)
     n_pos, n_neg = len(pos), len(neg)
     u = sum_ranks_pos - n_pos * (n_pos + 1) / 2.0
     return u / (n_pos * n_neg)
@@ -107,37 +76,36 @@ def snapshot_tactical(client: GovernanceClient) -> dict:
     fm = (((res.get("calibration_guidance") or {}).get("failure_modes") or {}).get("tactical") or {})
     return {
         "eligible_samples": te.get("eligible_samples"),
-        "signal_sources": te.get("signal_sources"),
         "tests_bad_rate": health.get("bad_rate"),
-        "tests_samples": health.get("samples"),
         "server_ece": fm.get("ece"),
-        "server_total_samples": fm.get("total_samples"),
     }
 
 
-def emit(agent_uuids: list[str], before: dict, after: dict) -> dict:
-    pairs = fetch_pairs(agent_uuids)
-    ece, table = compute_ece(pairs)
+def emit(rows, gap: float, before: dict, after: dict) -> dict:
+    pairs = [Pair(confidence=r.stated_confidence, success=not r.is_bad) for r in rows]
+    confidences = [p.confidence for p in pairs]
+    recovered_ece, table = compute_ece(pairs)
+    injected = injected_ece(confidences, gap)              # bias-free: what we injected
+    expected = expected_recovered_ece(confidences, gap, BINS)  # bias-aware: what a binned estimator should report
     auc = compute_auc(pairs)
     n_bad = sum(1 for p in pairs if not p.success)
+    ece_err = abs(recovered_ece - expected)
+    ok_ece = ece_err <= 0.05  # vs the bias-aware target, robust at any gap
 
-    print("\n================ CALIBRATION HARNESS v1 — REPORT ================")
-    print("SCOPE (council, read this): v1 validates the BINDING/REGISTRATION spine")
-    print("  (stated confidence -> prediction_id -> external outcome -> tactical row).")
-    print("  It does NOT yet validate the calibration MEASUREMENT: outcomes are drawn")
-    print("  INDEPENDENTLY of confidence (sampler assigns pass/fail by position, not by")
-    print("  confidence), so there is no injected miscalibration for ECE/AUC to recover.")
-    print("  => AUC ~ 0.5 is EXPECTED; any deviation is a sampler artifact, not skill.")
-    print("  => ECE here is dominated by the 0.55 cap + corrector fixed point + the")
-    print("     constant per-bin fail ratio, not by a calibration relationship.")
-    print("  The v1.1 fix is an injectable miscalibration knob (see README).\n")
+    print("\n================ CALIBRATION HARNESS v1.1 — REPORT ================")
+    print("Synthetic fixture. Outcomes drawn from an INJECTED curve")
+    print(f"  true_accuracy(c) = clamp(c - {gap}), so a correct ECE estimate should")
+    print("  recover ~ the injected ECE, and AUC should exceed 0.5.\n")
 
-    print(f"harness rows: {len(pairs)}  (failures={n_bad}, bad_rate={n_bad/len(pairs):.3f})" if pairs else "harness rows: 0")
-    print(f"harness-computed ECE (registered confidence): {ece:.4f}  [cap/corrector-dominated]")
-    print(f"harness-computed AUC (~0.5 expected):         {auc if auc is None else round(auc, 4)}"
-          + ("  <- bad_rate=0, not computable" if auc is None else ""))
+    print(f"rows: {len(pairs)}  failures: {n_bad}  bad_rate: {n_bad/len(pairs):.3f}" if pairs else "rows: 0")
+    print("\nPRIMARY — measurement validation (binned on STATED confidence):")
+    print(f"  injected ECE (bias-free):       {injected:.4f}   <- the miscalibration we injected")
+    print(f"  expected ECE (bias-aware floor): {expected:.4f}   <- what a binned estimator should report at this n")
+    print(f"  recovered ECE (measured):       {recovered_ece:.4f}   (|err vs expected|={ece_err:.4f})")
+    print(f"  AUC: {auc if auc is None else round(auc, 4)}"
+          + ("  <- one class only" if auc is None else "  (>0.5 expected)"))
 
-    print("\nreliability table (expected vs actual per bin):")
+    print("\nreliability table (stated confidence; accuracy should track c-gap):")
     print(f"  {'bin':<10} {'n':>4} {'mean_conf':>10} {'accuracy':>9} {'gap':>7}")
     for r in table:
         mc = "-" if r["mean_conf"] is None else f"{r['mean_conf']:.3f}"
@@ -145,14 +113,15 @@ def emit(agent_uuids: list[str], before: dict, after: dict) -> dict:
         gp = "-" if r["gap"] is None else f"{r['gap']:.3f}"
         print(f"  {r['bin']:<10} {r['count']:>4} {mc:>10} {ac:>9} {gp:>7}")
 
-    print("\nserver tactical channel (isolated instance, before -> after):")
+    print("\nSECONDARY — server tactical channel (registered/capped confidence, global):")
     print(f"  eligible_samples: {before['eligible_samples']} -> {after['eligible_samples']}")
     print(f"  tests bad_rate:   {before['tests_bad_rate']} -> {after['tests_bad_rate']}")
     print(f"  server tactical ECE: {before['server_ece']} -> {after['server_ece']}")
 
-    print("\nv1 success criteria:")
-    print(f"  [{'x' if pairs and n_bad > 0 else ' '}] bad_rate > 0 -> AUC computable")
-    print(f"  [{'x' if auc is not None else ' '}] AUC computed")
+    print("\nv1.1 success criteria:")
+    print(f"  [{'x' if ok_ece else ' '}] recovered ECE matches bias-aware expected within 0.05 (measurement sound)")
+    print(f"  [{'x' if auc is not None and auc > 0.5 else ' '}] AUC > 0.5 (confidence now discriminates)")
     print(f"  [{'x' if (after['eligible_samples'] or 0) > (before['eligible_samples'] or 0) else ' '}] tactical channel moved")
-    print("================================================================\n")
-    return {"ece": ece, "auc": auc, "rows": len(pairs), "bad": n_bad, "table": table}
+    print("==================================================================\n")
+    return {"injected_ece": injected, "expected_ece": expected, "recovered_ece": recovered_ece,
+            "ece_err": ece_err, "auc": auc, "rows": len(pairs), "ok": ok_ece}

@@ -21,7 +21,7 @@ from pathlib import Path
 from . import report
 from .client import GovernanceClient, Identity
 from .config import BINS, CLASSES, EPISODE_COUNT, Transport
-from .runner import run_episode
+from .runner import run_slot
 from .sampler import plan
 
 SEED = 1729  # fixed -> reproducible
@@ -59,6 +59,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--episodes", type=int, default=EPISODE_COUNT)
     ap.add_argument("--classes", type=int, default=len(CLASSES))
+    ap.add_argument("--gap", type=float, default=0.2,
+                    help="injected overconfidence gap; report should recover ~ this ECE")
     ap.add_argument("--out", type=str, default="data/calibration_harness/run_v1.csv")
     ap.add_argument("--i-know", action="store_true", help="bypass the prod-URL guard")
     args = ap.parse_args()
@@ -79,16 +81,15 @@ def main() -> int:
     print(f"onboarded {n_classes} harness identities: {[i.agent_uuid for i in idents]}")
 
     before = report.snapshot_tactical(client)
-    episodes = plan(args.episodes)
-    print(f"planned {len(episodes)} episodes against {transport.base_url}")
+    slots = plan(args.episodes)
+    print(f"planned {len(slots)} episodes against {transport.base_url} (injected gap={args.gap})")
 
     rows = []
-    for k, ep in enumerate(episodes):
+    for k, slot in enumerate(slots):
         ident = idents[k % n_classes]
-        row = run_episode(client, ident, ep, rng)
-        rows.append(row)
+        rows.append(run_slot(client, ident, slot, rng, args.gap))
         if (k + 1) % 25 == 0:
-            print(f"  {k + 1}/{len(episodes)} done")
+            print(f"  {k + 1}/{len(slots)} done")
 
     after = report.snapshot_tactical(client)
 
@@ -104,7 +105,7 @@ def main() -> int:
     else:
         print("no rows produced; skipping CSV write")
 
-    report.emit([i.agent_uuid for i in idents], before, after)
+    report.emit(rows, args.gap, before, after)
     return 0
 
 
