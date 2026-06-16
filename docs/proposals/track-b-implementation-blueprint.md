@@ -17,7 +17,8 @@ Two capabilities must stay separate:
 | Capability | Credential that may grant it | Must NOT be granted by delegate |
 |---|---|---|
 | Read-only identifier/lineage disclosure | full operator token **or** delegate grant | — |
-| Write/admin (`archive_agent`, `operator_resume_agent`, config-set, dialectic-request, wave3a admin) | full operator token only | ✅ delegate rejected |
+| Write/admin, operator-token axis (`archive_agent`, `operator_resume_agent`, wave3a admin) | full operator token only | ✅ delegate rejected |
+| Write/admin, ownership axis (`config(set)`, `dialectic(request)`) | owning agent's session (config-set also needs admin tag / 100+ updates) | ✅ delegate confers no ownership |
 | Per-call identity resolution (resume) | full operator token (today) | ✅ delegate never a resolution source |
 
 The delegate is **additive on the read path only**. Nothing already gated by the
@@ -92,8 +93,13 @@ identity (see test matrix).
 
 ### 4. Write/admin handlers — confirm they reject the delegate
 
-These currently key on full-operator presence and do **no** ownership check, so
-they are safe **iff** they keep calling `is_operator_caller` (not
+The write surface is gated on **two distinct axes**, and the delegate token
+satisfies **neither** — but the seam must not accidentally widen the operator-token
+axis. Both groups verified in-repo:
+
+**Axis 1 — operator-token, no ownership check.** These key on full-operator
+presence (or its HTTP mirror) and do **no** per-agent ownership check, so they are
+safe **iff** they keep gating on `is_operator_caller` / `_is_operator` (not
 `caller_can_disclose`):
 
 - `src/mcp_handlers/lifecycle/mutation.py` — `@mcp_tool("archive_agent", ...,
@@ -105,12 +111,23 @@ they are safe **iff** they keep calling `is_operator_caller` (not
 - `src/mcp_handlers/wave3a_admin.py` — gates via its own `_is_operator(request)`
   helper against `UNITARES_OPERATOR_TOKENS` (header `x-unitares-operator`, fresh
   allowlist read per request) **(verified)**. A delegate token is absent from
-  that allowlist, so it 401s here without any code change. config-set and
-  dialectic-request call sites **(confirm exact gate)**.
+  that allowlist, so it 401s here with no code change.
 
-Action: audit each to confirm it gates on `is_operator_caller` (or `_is_operator`
-for the wave3a HTTP surface). Add an explicit assertion/test that a delegate-only
-token is rejected by every one of them.
+**Axis 2 — session ownership (NOT the operator token).** These do **not** call
+`is_operator_caller` at all; they gate on `verify_agent_ownership` against the
+caller's bound UUID, so they are unaffected by the `caller_can_disclose` seam and
+reject a delegate token automatically (a delegate confers no session ownership):
+
+- `config(action='set')` → `handle_set_thresholds`
+  (`src/mcp_handlers/admin/config.py`) — requires `verify_agent_ownership` **plus**
+  an `admin` tag or 100+ updates (`is_admin or total_updates >= 100`) **(verified)**.
+- `dialectic(action='request')` → `handle_request_dialectic_review`
+  (`src/mcp_handlers/dialectic/handlers.py:532`) — gates on `verify_agent_ownership`
+  (line 549) **(verified)**.
+
+Action: keep Axis-1 handlers gating on `is_operator_caller` / `_is_operator`
+(never `caller_can_disclose`); Axis-2 needs no change. Add an explicit test that a
+delegate-only token is rejected by every handler in both groups.
 
 ### 5. Audit event
 
