@@ -58,7 +58,15 @@ def grade_script(source: str, *, label: str, timeout_s: float = 15.0) -> Grade:
         "exit_code": exit_code,
         "command": " ".join(cmd),
         "test_name": label,
+        # Calibration-harness rows are controlled fixtures. They are allowed to
+        # persist inside the isolated governance_test instance, but must be
+        # recognizable if accidentally pointed at live governance.
+        "synthetic_calibration_fixture": True,
+        "do_not_use_for_live_validation": True,
+        "fixture_scope": "calibration_harness",
     }
+    if is_bad:
+        detail["red_team_fixture"] = "calibration_harness_seeded_bad_outcome"
     if stderr_tail:
         detail["error_message"] = stderr_tail
     return Grade(is_bad=is_bad, score=0.0 if is_bad else 1.0, exit_code=exit_code, detail=detail)

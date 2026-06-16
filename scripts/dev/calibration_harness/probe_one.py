@@ -13,11 +13,13 @@ Run:  python -m scripts.dev.calibration_harness.probe_one
 """
 from __future__ import annotations
 
-import json
+import argparse
+from collections.abc import Sequence
 
 from .client import GovernanceClient
-from .config import MIN_TACTICAL_EVIDENCE_WEIGHT
+from .config import MIN_TACTICAL_EVIDENCE_WEIGHT, Transport
 from .grader import grade_script
+from .run_v1 import _guard_not_prod
 
 PASS_SCRIPT = "assert 1 + 1 == 2\n"
 FAIL_SCRIPT = "import sys\nassert 2 + 2 == 5, 'seeded failure'\nsys.exit(0)\n"
@@ -41,13 +43,29 @@ def _find_evidence_weight(resp: dict):
     return None, None
 
 
-def main() -> int:
-    client = GovernanceClient()
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse CLI arguments for the one-shot calibration probe."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--i-know", action="store_true", help="bypass the prod-URL guard")
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    transport = Transport()
+    _guard_not_prod(transport.base_url, args.i_know)
+    client = GovernanceClient(transport)
 
     print("== onboard (dedicated quarantined identity) ==")
     ident = client.onboard("calib-harness-probe")
     print(f"agent_uuid={ident.agent_uuid}  client_session_id={ident.client_session_id}")
     print("onboard result keys:", list(ident.raw)[:20])
+
+    def _tests_count() -> int:
+        te = (client.calibration_check(ident).get("tactical_evidence", {}) or {})
+        return (te.get("signal_sources") or {}).get("tests") or 0
+
+    before_tests = _tests_count()
 
     episodes = [
         ("clean_control", 0.90, PASS_SCRIPT, False),
@@ -82,21 +100,19 @@ def main() -> int:
             print(f"  !! GATE FAIL: need evidence_weight >= {MIN_TACTICAL_EVIDENCE_WEIGHT} to register tactically")
             ok = False
 
-    print("\n== calibration check (tactical channel; global-scope, isolated instance) ==")
-    cal = client.calibration_check(ident)
-    te = cal.get("tactical_evidence", {}) or {}
-    health = (cal.get("per_channel_health") or {}).get("tests", {}) or {}
-    print("tactical_evidence:", json.dumps(te)[:300])
-    print("per_channel_health.tests:", json.dumps(health))
-    tests_n = (te.get("signal_sources") or {}).get("tests") or 0
-    if tests_n < 1:
-        print("  !! GATE FAIL: tactical 'tests' channel did not register the outcomes")
+    print("\n== quarantine check (synthetic rows must NOT train calibration) ==")
+    after_tests = _tests_count()
+    delta = after_tests - before_tests
+    print(f"tactical 'tests' count: {before_tests} -> {after_tests} (delta={delta})")
+    # The grader marks every row synthetic_calibration_fixture=True, so the
+    # server-side guard excludes them: the global channel must NOT gain our rows.
+    if delta >= len(episodes):
+        print("  !! GATE FAIL: synthetic rows registered into the global channel (exclusion broken)")
         ok = False
-    if (health.get("bad_rate") or 0) <= 0:
-        print("  !! GATE FAIL: bad_rate still 0 -> AUC not computable")
-        ok = False
+    else:
+        print(f"  synthetic rows excluded from the global channel (delta < {len(episodes)}) — quarantine OK")
 
-    print("\nRESULT:", "PASS — spine corroborated, safe to scale" if ok else "FAIL — fix before scaling")
+    print("\nRESULT:", "PASS — binding corroborated + quarantine enforced" if ok else "FAIL — fix before scaling")
     return 0 if ok else 1
 
 

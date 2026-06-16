@@ -282,8 +282,15 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
         verification_source=verification_source,
     )
     evidence_weight = float(detail.get("evidence_weight") or 0.0)
+    # A row that declares itself a synthetic fixture (e.g. the calibration
+    # harness) is PERSISTED for the author's own per-agent analysis but must
+    # NEVER train calibration — otherwise a fixture accidentally pointed at live
+    # governance would poison the global tactical/strategic channels. This is the
+    # functional half of the harness's self-marking (the detail flag alone is
+    # only a forensic breadcrumb without this guard).
+    calibration_excluded = bool(detail.get("synthetic_calibration_fixture"))
     hard_exogenous_signal = _classify_hard_exogenous_signal(outcome_type, detail)
-    if evidence_weight < _MIN_TACTICAL_EVIDENCE_WEIGHT:
+    if evidence_weight < _MIN_TACTICAL_EVIDENCE_WEIGHT or calibration_excluded:
         hard_exogenous_signal = None
     eprocess_eligible = bool(hard_exogenous_signal and _confidence is not None)
 
@@ -292,6 +299,7 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     detail["hard_exogenous_signal"] = hard_exogenous_signal
     detail["hard_exogenous"] = bool(hard_exogenous_signal)
     detail["eprocess_eligible"] = eprocess_eligible
+    detail["calibration_excluded"] = calibration_excluded
     detail["prediction_id"] = prediction_id
     detail["prediction_source"] = prediction_source
     detail["prediction_binding"] = prediction_binding
@@ -323,8 +331,9 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
         outcome_type, is_bad, outcome_score, agent_id, eisv_verdict,
     )
 
-    # Record calibration from outcome event
-    if _confidence is not None and evidence_weight >= _MIN_TACTICAL_EVIDENCE_WEIGHT:
+    # Record calibration from outcome event (never for self-declared synthetic
+    # fixtures — they persist above but do not train the calibration channels).
+    if _confidence is not None and evidence_weight >= _MIN_TACTICAL_EVIDENCE_WEIGHT and not calibration_excluded:
         try:
             from src.calibration import calibration_checker
             calibration_checker.record_prediction(
