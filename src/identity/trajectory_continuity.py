@@ -20,10 +20,16 @@ Non-goals (explicit per spec):
   to do with it)
 
 Side effects:
-- Awaited write to `audit.r1_score_audit` (full record) — score_id is the
-  join key into the redacted public KG payload (v3.3-A)
-- Public KG emission writes the redacted `_build_public_payload` projection to
-  `knowledge.discoveries`; audit remains the durable full record
+- Awaited write to `audit.r1_score_audit` (full record) — the canonical,
+  durable home for every score.
+
+R1 scores are intentionally NOT emitted to the public knowledge graph. They
+are per-session machine telemetry (one redacted node per fresh-successor
+lineage claim), and the `audit.r1_score_audit` table is the right avenue.
+Emitting them as `knowledge.discoveries` nodes polluted the agent-authored
+discovery graph: fresh successors defeat the dedupe-by-pair node id, so the
+nodes accreted one-per-session with no reader, and the 30-day TTL sweep was
+never scheduled. The audit table already logs everything a consumer needs.
 
 Calibration status: every score record stamps `calibration_status='seeded'` by
 default until operator transitions the lifecycle to `earned` or
@@ -34,7 +40,6 @@ that gating lives at the consumer layer (PR 3), not here.
 
 from __future__ import annotations
 
-import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -52,12 +57,6 @@ _THRESHOLD_UNSUPPORTED = 0.55
 _DEFAULT_MIN_OBSERVATIONS = 5
 _DEFAULT_WINDOW = timedelta(days=30)
 _DIMENSIONS = ("E", "I", "S", "V")
-
-# UUIDv5 namespace for the public KG node ID per (parent, successor) pair.
-# Stable across processes — derived from NAMESPACE_OID + a fixed name. The
-# resulting node ID is `f"r1_score:{uuid5(...)}"`; ON CONFLICT (id) DO UPDATE
-# in `kg_add_discovery` gives v3.2-D dedupe-by-pair for free.
-_R1_KG_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_OID, "unitares.r1.trajectory_continuity_score")
 
 # Class tags recognized for R1's `class_tag` stamping (v3.3-G). Order matters
 # — most-specific first so calibration analyses can partition without
@@ -130,8 +129,8 @@ CalibrationStatus = Literal["seeded", "earned", "calibration_failed"]
 
 @dataclass
 class TrajectoryContinuityScore:
-    """Full per-call score record. Internal callers (policy layer) see this
-    dataclass; the public KG sees only `_build_public_payload(score)`."""
+    """Full per-call score record. Internal callers (the policy layer) see
+    this dataclass; the durable record is `audit.r1_score_audit`."""
     score_id: str
     plausibility: float
     verdict: Verdict
@@ -141,119 +140,6 @@ class TrajectoryContinuityScore:
     parent_mature: bool
     calibration_status: CalibrationStatus
     n_dims_used: int                             # number of components that contributed to plausibility
-
-
-# ---------------------------------------------------------------------------
-# Public payload builder — v3.3-A strict redaction
-# ---------------------------------------------------------------------------
-
-def _build_public_payload(score: TrajectoryContinuityScore) -> Dict[str, Any]:
-    """Redact the full score down to the four fields v3.3-A allows on the
-    public KG: verdict, calibration_status, n_dims_used, score_id.
-
-    No plausibility scalar. No per-dim observations. No parent_mature. No
-    reasons. The score_id is the join key into `audit.r1_score_audit` for
-    operator-only forensic access; no other field of the full record leaks
-    into the public KG.
-    """
-    return {
-        "verdict": score.verdict,
-        "calibration_status": score.calibration_status,
-        "n_dims_used": score.n_dims_used,
-        "score_id": score.score_id,
-    }
-
-
-def _public_kg_node_id(parent_id: str, successor_id: str) -> str:
-    """Deterministic node ID per (parent, successor) pair.
-
-    Per v3.2-D dedupe-by-pair: the N-th score for the same pair overwrites
-    the (N-1)-th in the public KG. ON CONFLICT (id) DO UPDATE in
-    `kg_add_discovery` (`src/db/mixins/knowledge_graph.py:82`) gives this
-    semantics for free as long as the id is deterministic from the pair.
-
-    Prefix `r1_score:` makes the id self-describing in logs/queries; the
-    UUIDv5 suffix is the deterministic-and-stable part.
-    """
-    return f"r1_score:{uuid.uuid5(_R1_KG_NAMESPACE, f'{parent_id}:{successor_id}')}"
-
-
-async def _emit_public_kg_node(
-    score: TrajectoryContinuityScore,
-    *,
-    parent_id: str,
-    successor_id: str,
-) -> bool:
-    """Publish the v3.3-A redacted score to the public KG.
-
-    Closes PR 2's deferred KG emission (commit 83e70aa: "KG public emission
-    deferred to PR 3 alongside consumer patches" — PR 3 stayed score-side,
-    so this is the actual write path).
-
-    Per v3.3-A:
-    - Public payload is exactly `{verdict, calibration_status, n_dims_used,
-      score_id}` — `_build_public_payload` produces this shape.
-    - Audit table is the canonical record; the public node is its redacted
-      projection joined by `score_id`.
-
-    Per v3.2-D:
-    - Dedupe by (parent_id, successor_id). N-th score overwrites (N-1)-th.
-      Achieved via deterministic node id + existing ON CONFLICT path.
-
-    Fail-soft contract: emission is observability, not a durability gate.
-    A failure here logs at warn but does not propagate — the audit row is
-    already written by the time we reach this helper, which is what
-    consumers needing forensic access read.
-
-    Returns True on successful write, False otherwise (so tests can assert
-    the side-effect path without parsing logs). False covers both the
-    "no data to score" skip below and the fail-soft exception path.
-    """
-    # When n_dims_used == 0 the verdict is forced to "inconclusive" by
-    # _classify_verdict's short-circuit (no channels had enough data to
-    # score). Emitting "I couldn't score this" to the public KG is noise:
-    # the audit row remains as the forensic anchor (canonical record per
-    # the v3.3-A docstring contract above), and downstream R2/sweep
-    # consumers operate on the audit table, not the KG node. Measured
-    # 2026-05-30: 24 of 26 new R1 KG discoveries were n_dims=0 from
-    # fresh-agent onboards that had no core.agent_state history yet.
-    if score.n_dims_used == 0:
-        return False
-    try:
-        from src.knowledge_graph import get_knowledge_graph
-        from src.knowledge_graph import DiscoveryNode
-
-        public = _build_public_payload(score)
-        node = DiscoveryNode(
-            id=_public_kg_node_id(parent_id, successor_id),
-            agent_id=successor_id,
-            type="trajectory_continuity_score",
-            summary=(
-                f"R1 lineage score: verdict={public['verdict']} "
-                f"calibration={public['calibration_status']} "
-                f"n_dims={public['n_dims_used']}"
-            ),
-            details=json.dumps(public),
-            tags=[
-                "r1",
-                "trajectory_continuity",
-                f"verdict:{public['verdict']}",
-                f"calibration:{public['calibration_status']}",
-            ],
-            severity="low",
-            status="open",
-        )
-        graph = await get_knowledge_graph()
-        await graph.add_discovery(node)
-        return True
-    except Exception as exc:
-        import logging
-        logging.getLogger(__name__).warning(
-            "[R1] public KG emission failed for score_id=%s parent=%s "
-            "successor=%s: %s",
-            score.score_id, parent_id[:8], successor_id[:8], exc,
-        )
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -271,9 +157,9 @@ async def score_trajectory_continuity(
     declared parent's, over the given window.
 
     See module docstring for the full contract. Returns a
-    `TrajectoryContinuityScore` dataclass. Side effects: awaited write to
-    `audit.r1_score_audit`, followed by fail-soft public KG emission of the
-    redacted `_build_public_payload(score)` projection.
+    `TrajectoryContinuityScore` dataclass. Side effect: awaited write to
+    `audit.r1_score_audit` (the canonical record). Scores are not emitted to
+    the public knowledge graph — see the module docstring for why.
 
     Threshold cuts (v3.1, seeded — calibration is shadow-mode work in PR 3+):
     - successor < min_observations rows OR parent_mature=False → inconclusive
@@ -383,11 +269,9 @@ async def score_trajectory_continuity(
         n_dims_used=n_dims_used,
     )
 
-    # Side effect: persist the full record to audit.r1_score_audit. Awaited
-    # so the score_id is durably present before any caller publishes the
-    # redacted KG payload that references it (v3.3-A join-semantics contract).
-    # If the write fails, we MUST refuse to return a score whose audit row is
-    # absent — otherwise PR 4's KG emission could publish a dangling score_id.
+    # Side effect: persist the full record to audit.r1_score_audit — the
+    # canonical, durable home for every score. If the write fails, we MUST
+    # refuse to return a score whose audit row is absent.
     persisted = await backend.record_r1_score_audit(_to_audit_record(
         score=score,
         parent_id=claimed_parent_id,
@@ -398,17 +282,12 @@ async def score_trajectory_continuity(
     if not persisted:
         raise RuntimeError(
             f"R1 audit write failed for score_id={score.score_id}; "
-            f"refusing to return a score whose audit anchor is absent "
-            f"(v3.3-A join-key durability contract)."
+            f"refusing to return a score whose audit anchor is absent."
         )
 
-    # v3.3-A public KG emission: redacted projection of the audit row,
-    # dedupe-by-pair via deterministic node id (v3.2-D). Fail-soft — audit
-    # is the durable record; this is the public observability surface.
-    await _emit_public_kg_node(
-        score, parent_id=claimed_parent_id, successor_id=successor_id,
-    )
-
+    # No public KG emission. R1 scores are per-session machine telemetry and
+    # live only in audit.r1_score_audit; emitting them as discovery nodes
+    # polluted the agent-authored knowledge graph (see module docstring).
     return score
 
 
