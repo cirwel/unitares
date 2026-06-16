@@ -8,8 +8,9 @@ import os
 from dataclasses import dataclass, field
 
 # --- Stratification (the whole point of the sampler) -----------------------
-# Five confidence bins; FAIL_RATIO failures per bin so BOTH calibration error
-# (per bin) AND discrimination (AUC, needs bad_rate > 0) are measurable.
+# Five confidence bins. v1.1 stratifies CONFIDENCE across these; the pass/fail
+# outcome is drawn in the runner from the injected curve (see miscalibration.py),
+# not assigned per bin — so there is no fixed fail-ratio knob anymore.
 BINS: list[tuple[float, float]] = [
     (0.0, 0.2),
     (0.2, 0.4),
@@ -17,19 +18,19 @@ BINS: list[tuple[float, float]] = [
     (0.6, 0.8),
     (0.8, 1.0),
 ]
-FAIL_RATIO: float = 0.4
 EPISODE_COUNT: int = 200
 
 # --- Evidence-weight gate (mirror of the server constant) ------------------
 # src/outcome_corroboration.py GRADE_WEIGHTS / observability/outcome_events.py
 # _MIN_TACTICAL_EVIDENCE_WEIGHT = GRADE_WEIGHTS[TOOL_OBSERVED] = 0.65.
 # An outcome below this weight is NOT registered into the tactical channel.
+# external_signal => grade externally_verified => weight 1.0, which clears it.
 MIN_TACTICAL_EVIDENCE_WEIGHT: float = 0.65
-EXTERNALLY_VERIFIED_WEIGHT: float = 1.00  # what external_signal should yield
 
 # --- Provenance / quarantine -----------------------------------------------
-# locus is a human-readable tag only; it is NOT a calibration filter. The real
-# quarantine boundary is the dedicated agent_id per class (see ClassSpec).
+# locus is a human-readable tag only; it is NOT a calibration filter and the
+# server has no per-agent calibration read scope. Quarantine is by isolated
+# INSTANCE (governance_test), not by tag or agent_id.
 LOCUS: str = "calibration_harness"
 
 # --- Transport -------------------------------------------------------------
