@@ -9,19 +9,25 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
 
-Status: live. First public commit 2025-12-04. Cold evaluators can start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md); architecture details are in [docs/UNIFIED_ARCHITECTURE.md](docs/UNIFIED_ARCHITECTURE.md).
-
-**Evaluating this with an agent? Don't trust the prose — regenerate the evidence.** On a fresh clone with no deployment DB, the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV/prior-state features against a deliberately dumb baseline on ranking (AUC) and calibration (Brier), timestamps its output, and self-labels each slice (`INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING`) rather than asserting. The deployment numbers below are a dated snapshot; the harness is the part you run yourself.
+Status: live. First public commit 2025-12-04.
 
 **UNITARES watches a fleet of AI agents while they work and tells you — and each agent — when one is starting to go off the rails, before anything visibly breaks.**
 
 When you run many autonomous agents, you can already tell *who* is calling (identity) and *whether a model is good enough to deploy* (evals). What you usually can't see is what the fleet is doing **right now**: whether each agent is still making real progress, whether its confidence matches its actual results, and whether it's drifting away from how it normally behaves. That live picture is what UNITARES provides. It runs alongside your evals and guardrails — it doesn't replace them.
 
+**In one screen:** running continuously since November 2025 · 3.7M+ governance events under sustained load · dogfooded — the agents building UNITARES run under it · two-call integration (`sync_state` + `record_result`) · `make demo` shows the self-correction loop in 60 seconds. Single-operator so far, not external adoption — and you don't have to take the numbers on faith (see the harness below).
+
+<p align="center">
+  <img src="docs/assets/dashboard.png" width="80%" alt="Unitares dashboard — fleet coherence, agent count, discoveries, and system health"/>
+</p>
+
+> **Evaluating with an agent?** Don't trust the prose — regenerate the evidence. On a fresh clone the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV/prior-state features against a deliberately dumb baseline (AUC, Brier) and self-labels each slice `INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING` rather than asserting — the harness is the part you run yourself.
+
+Human evaluators: start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md); architecture is in [docs/UNIFIED_ARCHITECTURE.md](docs/UNIFIED_ARCHITECTURE.md).
+
 ### How it works in one read
 
-After each unit of work, an agent checks in by calling `sync_state()`. The check-in includes a self-reported `confidence`, a self-reported `complexity`, the `response_text`, and any `recent_tool_results` — test outcomes, exit codes, lint output, file changes — i.e. things the system can verify instead of taking the agent's word for.
-
-> **A note on tool names:** agents should use the primary task-verb tools (`sync_state`, `start_session`, `record_result`). Older raw implementation names (`process_agent_update`, `onboard`, `outcome_event`) remain stable for compatibility and debugging. This README uses the primary names throughout; the full mapping is in [Tool names](#tool-names).
+After each unit of work, an agent checks in by calling `sync_state()`. The check-in includes a self-reported `confidence`, a self-reported `complexity`, the `response_text`, and any `recent_tool_results` — test outcomes, exit codes, lint output, file changes — i.e. things the system can verify instead of taking the agent's word for. (This README uses the primary task-verb tool names throughout; older raw names remain stable for compatibility — full mapping under [Tool names](#tool-names).)
 
 From each check-in, UNITARES tracks four numbers per agent — together called **EISV**:
 
@@ -50,7 +56,7 @@ UNITARES is for you if you run **multiple long-lived autonomous agents** — too
 
 **The threshold that matters is check-in count, not wall-clock time.** Self-relative grading needs roughly **30 check-ins** to establish an agent's baseline (absolute safety floors apply before that). An agent doing dozens of units of work — over an hour or a week — crosses it; one that does three and exits never does. That's the real line for "is my session long enough to benefit," not a duration.
 
-**Probably not worth it yet for** short-lived chatbot turns, where per-turn overhead outweighs the benefit, or for teams that can't instrument their agent loop. Whether this is useful outside the author's own deployment is still an open question — the [Production snapshot](#production-snapshot) is honest about that.
+**Probably not worth it yet for** short-lived chatbot turns, where per-turn overhead outweighs the benefit, or for teams that can't instrument their agent loop.
 
 ### Try it
 
@@ -170,12 +176,8 @@ Frozen public snapshot from June 16, 2026 (single-operator deployment — the au
 
 *What these numbers show:* the pipeline holds up under sustained volume. *What they don't show:* product-market traction. External adoption is the open question.
 
-<p align="center">
-  <img src="docs/assets/dashboard.png" width="80%" alt="Unitares dashboard — stats overview with fleet coherence, agent count, discoveries, and system health"/>
-</p>
-
 <details>
-<summary><strong>More dashboard views</strong> (pulse, EISV charts, agents, dialectic, activity)</summary>
+<summary><strong>Dashboard views</strong> (pulse, EISV charts, agents, dialectic, activity)</summary>
 
 <p align="center">
   <img src="docs/assets/dashboard-pulse.png" width="80%" alt="Pulse — live event feed and EISV time series"/>
