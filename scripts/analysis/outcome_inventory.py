@@ -120,6 +120,37 @@ def _normalized_detail(detail: Mapping[str, Any] | str | None) -> Mapping[str, A
     return detail if isinstance(detail, Mapping) else {}
 
 
+_CONTROLLED_FIXTURE_FLAGS = frozenset(
+    {
+        "synthetic_calibration_fixture",
+        "synthetic_negative_control",
+        "do_not_use_for_live_validation",
+        "do_not_persist",
+        "calibration_excluded",
+    }
+)
+_CONTROLLED_FIXTURE_BINDINGS = frozenset({"synthetic_negative_control"})
+_CONTROLLED_FIXTURE_TEST_NAMES = frozenset({"clean_control", "overconfidence_probe"})
+
+
+def is_controlled_validation_fixture(detail: Mapping[str, Any] | str | None) -> bool:
+    """Return whether an outcome detail belongs to a controlled validation fixture.
+
+    These rows are useful for harness plumbing and local red-team checks, but they
+    must not be counted as live fleet validation evidence. Keep this deliberately
+    conservative: explicit fixture flags win, and the legacy one-shot calibration
+    probe names cover rows written before the flags existed.
+    """
+    normalized = _normalized_detail(detail)
+    if any(_truthy(normalized.get(flag)) for flag in _CONTROLLED_FIXTURE_FLAGS):
+        return True
+    binding = normalized.get("prediction_binding")
+    if binding in _CONTROLLED_FIXTURE_BINDINGS:
+        return True
+    test_name = normalized.get("test_name")
+    return bool(test_name in _CONTROLLED_FIXTURE_TEST_NAMES)
+
+
 def _verification_source(row: OutcomeInventoryRow) -> str:
     """Prefer promoted verification_source column; fall back to detail JSON."""
     if row.verification_source:
@@ -403,7 +434,13 @@ async def fetch_rows(
         records = await conn.fetch(_build_fetch_query(leads), window_days, *leads)
     finally:
         await conn.close()
-    return [_row_from_record(record, leads) for record in records]
+    return [
+        row
+        for record in records
+        if not is_controlled_validation_fixture(
+            (row := _row_from_record(record, leads)).detail
+        )
+    ]
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

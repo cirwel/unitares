@@ -40,8 +40,19 @@ async def _run(extra_detail):
 
 
 @pytest.mark.asyncio
-async def test_synthetic_fixture_persists_but_excluded_from_calibration():
-    _, persisted, checker, db = await _run({"synthetic_calibration_fixture": True})
+@pytest.mark.parametrize(
+    "marker_detail",
+    [
+        {"synthetic_calibration_fixture": True},
+        {"do_not_use_for_live_validation": True},
+        {"synthetic_negative_control": True},
+        {"do_not_persist": True},
+        {"prediction_binding": "synthetic_negative_control"},
+        {"calibration_excluded": True},
+    ],
+)
+async def test_controlled_fixture_persists_but_excluded_from_calibration(marker_detail):
+    _, persisted, checker, db = await _run(marker_detail)
     # the row is still persisted (for per-agent analysis) ...
     db.record_outcome_event.assert_awaited_once()
     assert persisted["calibration_excluded"] is True

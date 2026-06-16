@@ -30,6 +30,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts.analysis.outcome_inventory import is_controlled_validation_fixture
+
 
 DEFAULT_DB_URL = os.environ.get(
     "GOVERNANCE_DATABASE_URL",
@@ -1062,7 +1067,13 @@ async def fetch_rows(
         )
     finally:
         await conn.close()
-    return [_row_from_record(record) for record in records]
+    return [
+        row
+        for record in records
+        if not is_controlled_validation_fixture(
+            (row := _row_from_record(record)).detail
+        )
+    ]
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

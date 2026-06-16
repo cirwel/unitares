@@ -52,6 +52,17 @@ HARD_EXOGENOUS_TYPES = frozenset({
     "task_completed", "task_failed",
 })
 
+_CONTROLLED_FIXTURE_FLAGS = frozenset(
+    {
+        "synthetic_calibration_fixture",
+        "do_not_use_for_live_validation",
+        "synthetic_negative_control",
+        "do_not_persist",
+        "calibration_excluded",
+    }
+)
+_CONTROLLED_FIXTURE_BINDINGS = frozenset({"synthetic_negative_control"})
+
 _HARD_EXOGENOUS_TYPE_TO_CHANNEL = {
     "test_passed": "tests", "test_failed": "tests",
     "task_completed": "tasks", "task_failed": "tasks",
@@ -67,6 +78,26 @@ def _classify_hard_exogenous_signal(outcome_type: str, detail: Dict[str, Any]) -
         if detail.get(key):
             return label
     return None
+
+
+def _truthy_detail_flag(value: Any) -> bool:
+    """Interpret JSON-ish fixture flags conservatively."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return False
+
+
+def _is_controlled_validation_fixture(detail: Dict[str, Any]) -> bool:
+    """Return whether an outcome is self-declared controlled fixture evidence."""
+    if any(_truthy_detail_flag(detail.get(flag)) for flag in _CONTROLLED_FIXTURE_FLAGS):
+        return True
+    binding = detail.get("prediction_binding")
+    return bool(binding in _CONTROLLED_FIXTURE_BINDINGS)
+
 
 async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, Any]:
     """Shared body for outcome_event recording.
@@ -287,8 +318,9 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     # NEVER train calibration — otherwise a fixture accidentally pointed at live
     # governance would poison the global tactical/strategic channels. This is the
     # functional half of the harness's self-marking (the detail flag alone is
-    # only a forensic breadcrumb without this guard).
-    calibration_excluded = bool(detail.get("synthetic_calibration_fixture"))
+    # only a forensic breadcrumb without this guard). Treat older red-team
+    # fixture boundary flags as equivalent calibration exclusions too.
+    calibration_excluded = _is_controlled_validation_fixture(detail)
     hard_exogenous_signal = _classify_hard_exogenous_signal(outcome_type, detail)
     if evidence_weight < _MIN_TACTICAL_EVIDENCE_WEIGHT or calibration_excluded:
         hard_exogenous_signal = None
