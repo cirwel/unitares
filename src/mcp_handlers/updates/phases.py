@@ -426,6 +426,34 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
             meta = mcp_server.agent_metadata[ctx.agent_uuid]
             meta.label = ctx.label
 
+    # Substrate-agnostic resident-tag reconcile: server-side equivalent of the
+    # SDK's GovernanceAgent._reconcile_resident_tags (#754). The creation-time
+    # stamp only fires at mint; residents resume an existing UUID and so never
+    # re-stamp. Crucially this covers the BEAM Sentinel, which never calls
+    # onboard — it only attaches agent_id to this check-in — so an onboard-path
+    # reconcile would never reach it. Memoized + subset-guarded: a no-op on the
+    # healthy path, a single additive write the one time a tag is missing.
+    if not ctx.is_new_agent:
+        try:
+            from src.grounding.onboard_classifier import reconcile_resident_tags
+            _resident_meta = mcp_server.agent_metadata.get(ctx.agent_uuid)
+            # Classify by meta.label (the canonical resident label), same
+            # source the tag_audit endpoint uses. ctx.label is unreliable here:
+            # the BEAM Sentinel attaches agent_id=<uuid>, so ctx.label is the
+            # UUID, not "Sentinel". Fall back to ctx.label only when meta has
+            # no label.
+            _resident_label = getattr(_resident_meta, "label", None) or ctx.label
+            reconciled = await reconcile_resident_tags(
+                ctx.agent_uuid, _resident_label, meta=_resident_meta
+            )
+            if reconciled is not None:
+                logger.info(
+                    f"[CHECKIN] resident-tag reconcile: {ctx.agent_uuid[:8]}... "
+                    f"-> {reconciled} (label={ctx.label!r})"
+                )
+        except Exception as e:
+            logger.debug(f"resident-tag reconcile failed (non-fatal): {e}")
+
     ctx.loop = asyncio.get_running_loop()
     ctx.key_was_generated = False
     ctx.api_key_auto_retrieved = False
