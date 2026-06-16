@@ -86,3 +86,28 @@ continues.
 
 After Track A is stable, proceed to Track B (`operator_delegate` design); do not
 delegate operator vision to any agent before Track A is enforced.
+
+## Council correction (2026-06-16) — the flag model above is imprecise
+
+The second-pass council (see ADR-001 §"Council review") refuted this runbook's
+"flip the flag and it's enforced" framing. Corrections, to apply on the next
+revision:
+
+- **There are two distinct flags this runbook conflates.**
+  `STRICT_IDENTITY_REQUIRED` (boolean, default `false`, `identity_bootstrap.py`)
+  gates auto-mint *refusal*; `UNITARES_IDENTITY_STRICT` (`IDENTITY_STRICT_MODE`,
+  three-mode, default `log`, `governance_config.py:1019`) gates the bare-UUID
+  resume path. They are not the same lever.
+- **Neither flag governs identifier disclosure.** Redaction in `query.py` keys on
+  `operator_caller` + `caller_uuid`, resolved independently of any strict flag.
+  Flipping these flags changes *mint/resume* behavior, not who-sees-which-UUID —
+  so Track A is a resume-hardening prerequisite, not a disclosure control.
+- **`IPUA_PIN_CHECK_MODE` already defaults to `strict`** (`governance_config.py:1095`),
+  so the "both default to `log`" claim is wrong for the pin-check leg.
+- **REST/BEAM enforcement gap.** The REST strict gate
+  (`http_tool_service._strict_identity_refusal_or_none`) only short-circuits
+  auto-mint and is disclosure-blind; BEAM/Wave-3a routing runs with no identity
+  middleware at all. Confirm the surface a caller lands on before assuming a flip
+  reaches it.
+- **Track B precondition tightened:** ship the delegate inert unless both resume
+  gates are `strict`, enforced by a startup assertion — not a prose prerequisite.

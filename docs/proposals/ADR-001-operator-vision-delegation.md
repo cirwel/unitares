@@ -99,3 +99,42 @@ Cited code anchors were re-verified directly against the repository when these
 docs were migrated in (the originating session read via `search_code` only).
 Council members independently reached "needs-design-first" from the
 composition-attack and category-error directions respectively.
+
+## Council review (2026-06-16, second pass)
+
+A three-lane parallel adversarial pass (architect/security red-team,
+code-reviewer, live-verifier) re-ran over this ADR and the Track A/B docs after
+they landed in-repo. **The decision stands and is strengthened** — the "operator
+token is not read-only" thesis is now triply grounded (see C4). But the pass
+surfaced five forcing findings: one is premise-level on Track B, one is a live
+standing hole independent of this work, and the Track A runbook's flag model is
+factually wrong. All findings are code-grounded; lane transcripts are
+ephemeral, so the load-bearing anchors are recorded here.
+
+| # | Finding | Evidence | Forces |
+|---|---|---|---|
+| **C1** | **The "single read seam" is a fiction.** Redaction lives only in `query.py` (`list_agents`/`get_agent_metadata`). `observe(action='agent'/'similar'/'compare')`, `dialectic(get/list)`, and `knowledge` provenance emit **raw cross-agent UUIDs with no operator gate** — several `pre_onboard`, reachable unbound under strict. A delegate scoped to `query.py`'s helpers is incomplete and built on a false premise. | `observe/handlers.py:231,307,364,449,593`; `knowledge/handlers.py:337,351`; `dialectic/handlers.py:961-966,1025-1028` | Track B (new prereq) |
+| **C2** | **Reusing the `operator_caller` boolean leaks resume credentials.** That flag also un-redacts `active_session_key` and `api_key`, not just UUID. Routing `caller_can_disclose()` through it hands a delegate the resume secrets. (Confirmed independently by two lanes.) | `query.py:197-201,236,263-269` | Track B design |
+| **C3** | **"Disclosure-only" composes into resume in the default config, and the runbook's flag model is wrong.** Bare-UUID resume refuses only under `strict`, but `UNITARES_IDENTITY_STRICT` defaults to `log`. Two flags are conflated — `STRICT_IDENTITY_REQUIRED` (bool, default false, `identity_bootstrap.py`) vs `UNITARES_IDENTITY_STRICT` (3-mode, `governance_config.py:1019`) — and **neither governs disclosure**. `IPUA_PIN_CHECK_MODE` defaults to `strict`, not `log`. | `handlers.py:795-824`; `governance_config.py:1019,1055,1095` | Track A correction |
+| **C4** | **The operator seam is write-capable, not read-only.** `resolve_operator_identity` mints a `caller_asserted` identity that bypasses every strict write gate (`phases.py` refuses only `server_inferred`). Confirms this ADR's thesis. | `operator.py:188-290`; `http_api.py:282-299`; `phases.py:300-342` | ADR confirmed |
+| **C5** | **Blueprint's gate-axis threat model is mislabeled.** `handle_archive_agent` has no app-level operator gate (transport bearer only); `handle_operator_resume_agent` does not exist (real handler `handle_resume_agent`). Right conclusion, wrong mechanism. | `mutation.py:164-186`; `operations.py:39` | Track B blueprint |
+
+### Non-forcing corrections folded forward
+
+- **Disjoint-token-list gap is unguarded** — needs a fail-closed startup assertion; `wave3a_admin.py:50-60` keeps a duplicate parser.
+- **REST mirror auto-shares the seam** — `list_agents`/`get_agent_metadata` fall through `execute_http_tool` to the same handlers, so any seam change is live on REST immediately; a delegate header must be captured in both `http_api.py:68-77` and `mcp_server.py:~989`, with REST rows in the test matrix. BEAM/Wave-3a has no identity middleware.
+- **`_emit_audit` is mis-cited** — it lives in `src/identity/lineage_lifecycle.py` (keyword-only `details=`), not `identity/handlers.py`.
+- **Divergent duplicate `_STRONG_IDENTITY_SOURCES`** in `services/identity_payloads.py` lacks `operator_token` — two sources of truth.
+- **PR #610 presence-bypass trap** — the delegate gate must key on the *resolved binding*, never header/arg presence (the REST synthetic-CSID path).
+
+### Confirmed clean
+- `verify_agent_ownership` is pure binding-identity → `config(set)` / `dialectic(request)` genuinely untouched by the seam.
+- v3.3-A `_build_public_payload` is write-time content redaction, not caller-keyed — cannot be widened by any caller scope (caveats: the node still carries raw `successor_id`; the `audit.r1_score_audit` read gate is unverified).
+
+### Standing security finding (independent of this ADR)
+
+`observe(action='agent', target_agent_id=<label>)` is an **open two-call
+UUID-disclosure oracle today** (`observe/handlers.py:231`, label-resolvable, no
+caller/operator check) — exactly the hijack the `list_agents` redaction was built
+to stop. This is a live hole, not a Track B footnote, and should be tracked
+separately.

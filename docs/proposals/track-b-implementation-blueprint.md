@@ -169,3 +169,40 @@ delegate.
    test-matrix behavior live.
 4. (Option 2) Replace the env allowlist with the per-session grant store behind
    the unchanged `caller_can_disclose` seam.
+
+## Council corrections (2026-06-16) — apply before treating this as apply-ready
+
+The second-pass council (see ADR-001 §"Council review") found this blueprint
+**not yet apply-ready**. Blocking and corrective items:
+
+- **C1 (blocking).** The blueprint assumes a single `query.py` seam. There is
+  not one — `observe`, `dialectic` get/list, and `knowledge` provenance disclose
+  raw cross-agent UUIDs outside it. Centralize disclosure first (Track-B design
+  Prereq 0); otherwise §2's "only behavioral widening" is false by omission.
+- **C2 (blocking).** Do **not** feed the existing `operator_caller` boolean from
+  `caller_can_disclose()`. That flag also un-redacts `active_session_key` and
+  `api_key` (`query.py:197-201,236,263-269`). Introduce a distinct
+  `can_disclose_uuid` parameter consumed only by `_can_disclose_agent_uuid`
+  (`query.py:73-83`); keep `operator_caller` as the sole gate for the
+  session_key/api_key branches.
+- **C5 (factual).** §4 mis-states the write surface. `handle_archive_agent`
+  (`mutation.py:164-186`) has **no** app-level operator gate (transport bearer
+  only); `handle_operator_resume_agent` **does not exist** — the real handler is
+  `handle_resume_agent` (`operations.py:39`). Reclassify both and re-derive their
+  test-matrix rows.
+- **REST mirror (matrix gap).** `list_agents`/`get_agent_metadata` fall through
+  `execute_http_tool` to the same handlers, so any seam change is live on REST
+  immediately. A delegate header must be captured in **both** `http_api.py:68-77`
+  and `mcp_server.py:~989`; add REST rows for both disclosure handlers. BEAM/
+  Wave-3a has no identity middleware.
+- **Disjoint-token-list (gap).** Nothing enforces the operator and delegate
+  allowlists being disjoint; `wave3a_admin.py:50-60` keeps a duplicate parser.
+  Add a single fail-closed startup assertion both parsers consult.
+- **Audit helper (mis-cited).** §5's `_emit_audit` lives in
+  `src/identity/lineage_lifecycle.py` (keyword-only `details=`), not
+  `identity/handlers.py`. Call `await _emit_audit("<event>", agent_id, details={...})`.
+- **Resolution-source caveat.** Keep the delegate out of resolution: never route
+  it through `resolve_operator_identity`, never add a delegate source to
+  `_STRONG_IDENTITY_SOURCES` (note the divergent duplicate in
+  `services/identity_payloads.py`). Gate on the *resolved binding*, never on
+  header/arg presence (the PR #610 synthetic-CSID trap).

@@ -93,3 +93,30 @@ write-time content contract and must remain non-bypassable by any delegate scope
 - No change to the resume/ownership model (PATH 0 continuity-token proof, S1-c).
 - No new write or admin capability for agents.
 - No widening of the KG public-payload contract.
+
+## Council finding (2026-06-16) — the "seam already exists" premise is false
+
+The second-pass council (see ADR-001 §"Council review", finding C1) **refuted**
+this design's load-bearing claim that `query.py`'s `_visible_*` helpers are the
+single disclosure seam. They are not: `observe(action='agent'/'similar'/'compare')`
+(`observe/handlers.py:231,307,364,449,593`), `dialectic` get/list
+(`dialectic/handlers.py:961-966,1025-1028`), and `knowledge` provenance
+(`knowledge/handlers.py:337,351`) all emit raw cross-agent UUIDs **without**
+routing through those helpers, several reachable unbound as `pre_onboard` reads.
+
+**Consequence:** an `operator_delegate` scoped to the `query.py` seam is both
+*incomplete* (the operator still cannot reason over lineage exposed only via
+`observe`/`knowledge`) and *unsound as a control* (those surfaces leak to any
+caller regardless of the grant). A real prerequisite is therefore added ahead of
+either Option:
+
+> **Prereq 0 — centralize disclosure.** Inventory every cross-agent
+> identifier-emitting path and route them through one redaction seam before a
+> delegate scope is meaningful. Until then `observe(action='agent')` is an open
+> UUID oracle (ADR-001 standing finding) and the delegate gates nothing.
+
+Additional council findings affecting this design: reusing the `operator_caller`
+boolean would also leak `active_session_key`/`api_key` (C2 — use a field-scoped
+predicate); the operator seam the delegate reuses is write-capable, not read-only
+(C4); and the delegate must never route through `resolve_operator_identity` nor
+appear in `_STRONG_IDENTITY_SOURCES`.
