@@ -688,15 +688,15 @@ class TestGetResponseChain:
         kg, mock_db = make_kg_with_mock_db()
         mock_db.graph_query.return_value = [
             {
-                "d": {"properties": {"id": "root", "agent_id": "a1", "summary": "root"}},
+                "node": {"properties": {"id": "root", "agent_id": "a1", "summary": "root"}},
                 "depth": 0,
             },
             {
-                "d": {"properties": {"id": "reply1", "agent_id": "a2", "summary": "reply"}},
+                "node": {"properties": {"id": "reply1", "agent_id": "a2", "summary": "reply"}},
                 "depth": 1,
             },
             {
-                "d": {"properties": {"id": "reply2", "agent_id": "a3", "summary": "deep reply"}},
+                "node": {"properties": {"id": "reply2", "agent_id": "a3", "summary": "deep reply"}},
                 "depth": 2,
             },
         ]
@@ -713,11 +713,11 @@ class TestGetResponseChain:
         kg, mock_db = make_kg_with_mock_db()
         mock_db.graph_query.return_value = [
             {
-                "d": {"properties": {"id": "disc-A", "agent_id": "a1", "summary": "A"}},
+                "node": {"properties": {"id": "disc-A", "agent_id": "a1", "summary": "A"}},
                 "depth": 0,
             },
             {
-                "d": {"properties": {"id": "disc-A", "agent_id": "a1", "summary": "A duplicate"}},
+                "node": {"properties": {"id": "disc-A", "agent_id": "a1", "summary": "A duplicate"}},
                 "depth": 3,
             },
         ]
@@ -727,11 +727,17 @@ class TestGetResponseChain:
         assert result[0].id == "disc-A"
 
     @pytest.mark.asyncio
-    async def test_handles_tuple_results(self):
-        """Should handle tuple/list result format."""
+    async def test_skips_non_dict_rows(self):
+        """Non-dict rows are skipped (single-column map convention).
+
+        The Cypher now projects a single ``RETURN {node: d, depth: length(p)}``
+        map, so every row decodes to a dict. A stray non-dict row (e.g. a bare
+        scalar) is skipped rather than crashing the chain.
+        """
         kg, mock_db = make_kg_with_mock_db()
         mock_db.graph_query.return_value = [
             ({"properties": {"id": "disc-X", "agent_id": "a1", "summary": "X"}}, 0),
+            {"node": {"properties": {"id": "disc-X", "agent_id": "a1", "summary": "X"}}, "depth": 0},
         ]
 
         result = await kg.get_response_chain("disc-X")
@@ -755,8 +761,8 @@ class TestGetResponseChain:
         """Should skip results that parse to no valid discovery."""
         kg, mock_db = make_kg_with_mock_db()
         mock_db.graph_query.return_value = [
-            {"d": {"properties": {"summary": "missing id"}}, "depth": 0},
-            {"d": {"properties": {"id": "valid", "agent_id": "a", "summary": "ok"}}, "depth": 1},
+            {"node": {"properties": {"summary": "missing id"}}, "depth": 0},
+            {"node": {"properties": {"id": "valid", "agent_id": "a", "summary": "ok"}}, "depth": 1},
         ]
 
         result = await kg.get_response_chain("root")
