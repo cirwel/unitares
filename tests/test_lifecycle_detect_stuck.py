@@ -23,6 +23,7 @@ def _make_agent_meta(
     tags=None,
     parent_agent_id=None,
     agent_uuid=None,
+    spawn_reason=None,
 ):
     """Create mock agent metadata."""
     now = datetime.now(timezone.utc)
@@ -34,6 +35,7 @@ def _make_agent_meta(
         tags=tags or [],
         parent_agent_id=parent_agent_id,
         agent_uuid=agent_uuid,
+        spawn_reason=spawn_reason,
     )
     return meta
 
@@ -945,6 +947,51 @@ class TestLineageSuccession:
         live = _live_lineage_parent_ids(datetime.now(timezone.utc))
         assert live == set()
 
+    @patch(_PATCHES["mcp_server"])
+    def test_subagent_child_does_not_supersede_parent(self, mock_server):
+        """A dispatched subagent has a LIVE parent by definition (the
+        dispatcher mid-dispatch) — its presence must not mark that parent
+        superseded. Regression for 2026-06-16: a council of subagents archived
+        the live main session, which had ~12.9k updates and had checked in
+        seconds before, because each subagent declared it as parent."""
+        recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+        mock_server.agent_metadata = {
+            "sub1": _make_agent_meta(
+                last_update=recent, parent_agent_id="main", spawn_reason="subagent"
+            ),
+        }
+        from src.mcp_handlers.lifecycle.stuck import _live_lineage_parent_ids
+        live = _live_lineage_parent_ids(datetime.now(timezone.utc))
+        assert live == set()
+
+    @patch(_PATCHES["mcp_server"])
+    def test_compaction_child_does_not_supersede_parent(self, mock_server):
+        """A compaction fork also has a live parent by design — same exemption."""
+        recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+        mock_server.agent_metadata = {
+            "fork1": _make_agent_meta(
+                last_update=recent, parent_agent_id="main", spawn_reason="compaction"
+            ),
+        }
+        from src.mcp_handlers.lifecycle.stuck import _live_lineage_parent_ids
+        live = _live_lineage_parent_ids(datetime.now(timezone.utc))
+        assert live == set()
+
+    @patch(_PATCHES["mcp_server"])
+    def test_explicit_handoff_child_still_supersedes_parent(self, mock_server):
+        """A genuine serial handoff (spawn_reason='explicit', from an EXITED
+        predecessor) is still a real succession — it must NOT be exempted, or
+        we'd never retire legitimately-handed-off predecessors."""
+        recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+        mock_server.agent_metadata = {
+            "succ": _make_agent_meta(
+                last_update=recent, parent_agent_id="pred", spawn_reason="explicit"
+            ),
+        }
+        from src.mcp_handlers.lifecycle.stuck import _live_lineage_parent_ids
+        live = _live_lineage_parent_ids(datetime.now(timezone.utc))
+        assert live == {"pred"}
+
     @pytest.mark.asyncio
     async def test_archive_superseded_parents_archives_parent(self):
         """auto_recover sweep retires a superseded parent as lineage_succession."""
@@ -1021,6 +1068,45 @@ class TestLineageSuccession:
         # ghost protected; only the checked-in superseded parent retired.
         assert archived_ids == ["done"]
         assert [r["agent_id"] for r in results] == ["done"]
+
+    @pytest.mark.asyncio
+    async def test_archive_superseded_parents_skips_parent_of_subagents(self):
+        """End-to-end regression for the 2026-06-16 incident: a live parent
+        whose only 'superseding' children are dispatched subagents must NOT be
+        archived — even with no live process binding (the parent's fingerprint
+        was churning, so the binding signal alone didn't protect it). The
+        spawn_reason exemption keeps the parent out of the superseded set
+        entirely, before the binding gate is ever consulted."""
+        recent = datetime.now(timezone.utc) - timedelta(minutes=1)
+        with patch(_PATCHES["mcp_server"]) as mock_server, \
+             patch("src.mcp_handlers.lifecycle.helpers._archive_one_agent") as mock_arch, \
+             patch("src.mcp_handlers.identity.process_binding.get_live_bindings") as mock_live:
+            mock_server.agent_metadata = {
+                # the main session — actively working, many updates
+                "main": _make_agent_meta(last_update=recent, total_updates=12900),
+                "sub1": _make_agent_meta(
+                    last_update=recent, parent_agent_id="main", spawn_reason="subagent"
+                ),
+                "sub2": _make_agent_meta(
+                    last_update=recent, parent_agent_id="main", spawn_reason="subagent"
+                ),
+            }
+            mock_server.monitors = {}
+
+            async def _ok(*a, **k):
+                return True
+            mock_arch.side_effect = _ok
+
+            async def _no_bindings(*a, **k):
+                return []  # fingerprint churn → no live binding seen
+            mock_live.side_effect = _no_bindings
+
+            from src.mcp_handlers.lifecycle.stuck import _archive_superseded_parents
+            results = await _archive_superseded_parents(datetime.now(timezone.utc))
+
+        # The parent of subagents is never superseded → nothing archived.
+        assert mock_arch.call_args_list == []
+        assert results == []
 
     @pytest.mark.asyncio
     async def test_archive_superseded_parents_skips_live_process_binding(self):
