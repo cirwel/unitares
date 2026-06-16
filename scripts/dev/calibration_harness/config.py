@@ -48,16 +48,9 @@ class Transport:
     timeout_s: float = 30.0
 
 
-@dataclass(frozen=True)
-class ClassSpec:
-    """One agent class == one dedicated, quarantined governance identity."""
-
-    key: str           # short tag, e.g. "harness_a"
-    display_name: str  # onboarded agent display name
-
-
-# v1 entrypoint runs 2 classes, ~200 episodes total (100 each).
-CLASSES: list[ClassSpec] = [
-    ClassSpec(key="harness_a", display_name="calib-harness-a"),
-    ClassSpec(key="harness_b", display_name="calib-harness-b"),
-]
+# A single dedicated harness identity. A multi-class structure used to live here,
+# but it was inert: the report bins on stated confidence across all rows and the
+# server has no per-class calibration read, so N identities measured the same
+# thing. The meaningful version (v1.2) would inject a DIFFERENT gap per class and
+# have the report break out by agent — until then, one identity is honest.
+HARNESS_AGENT_NAME: str = "calib-harness"
