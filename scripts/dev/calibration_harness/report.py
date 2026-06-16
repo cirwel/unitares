@@ -122,13 +122,19 @@ def emit(agent_uuids: list[str], before: dict, after: dict) -> dict:
     n_bad = sum(1 for p in pairs if not p.success)
 
     print("\n================ CALIBRATION HARNESS v1 — REPORT ================")
-    print("NOTE: synthetic fixture. ECE/AUC describe the harness's measurement,")
-    print("      NOT any agent's real calibration. Confidences are drawn to land")
-    print("      in target bins behind known outcomes.\n")
+    print("SCOPE (council, read this): v1 validates the BINDING/REGISTRATION spine")
+    print("  (stated confidence -> prediction_id -> external outcome -> tactical row).")
+    print("  It does NOT yet validate the calibration MEASUREMENT: outcomes are drawn")
+    print("  INDEPENDENTLY of confidence (sampler assigns pass/fail by position, not by")
+    print("  confidence), so there is no injected miscalibration for ECE/AUC to recover.")
+    print("  => AUC ~ 0.5 is EXPECTED; any deviation is a sampler artifact, not skill.")
+    print("  => ECE here is dominated by the 0.55 cap + corrector fixed point + the")
+    print("     constant per-bin fail ratio, not by a calibration relationship.")
+    print("  The v1.1 fix is an injectable miscalibration knob (see README).\n")
 
     print(f"harness rows: {len(pairs)}  (failures={n_bad}, bad_rate={n_bad/len(pairs):.3f})" if pairs else "harness rows: 0")
-    print(f"harness-computed ECE (registered confidence): {ece:.4f}")
-    print(f"harness-computed AUC (discrimination):        {auc if auc is None else round(auc, 4)}"
+    print(f"harness-computed ECE (registered confidence): {ece:.4f}  [cap/corrector-dominated]")
+    print(f"harness-computed AUC (~0.5 expected):         {auc if auc is None else round(auc, 4)}"
           + ("  <- bad_rate=0, not computable" if auc is None else ""))
 
     print("\nreliability table (expected vs actual per bin):")

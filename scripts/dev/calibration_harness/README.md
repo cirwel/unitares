@@ -69,34 +69,46 @@ python3 -m scripts.dev.calibration_harness.run_v1 --episodes 200
   and `calibration_guidance.failure_modes.tactical.ece` (the latter has a
   min-sample floor; it is `None` until enough samples).
 
-## Known limitation (v1 ceiling) & v2 levers
+## What v1 validates — and what it does NOT (council review, PR #770)
 
-**REST-onboarded agents are weak-tier, so confidence is capped at 0.55.** The
-REST surface binds identity by server inference (`caller_proven: false`,
-`proof_origin: server_inferred`) — it cannot reach `strong` even when
-`continuity_token` and `client_session_id` are passed (the #425 REST transport
-injects a synthetic session id). Weak tier triggers the `min(confidence, 0.55)`
-dampener, so **the 0.6–1.0 confidence bins are structurally unreachable over
-REST**, and the calibration the harness measures is of the *corrected, capped*
-confidence — not raw stated confidence across the full range.
+A 3-agent adversarial council reviewed this. The honest scope:
 
-Verified live: stated `0.93` → registered `0.55`; stated `0.138` → registered
-`0.18`. v1's success criteria (bad_rate > 0, AUC computable, tactical channel
-moves) still hold, but the reliability table only populates ≤ 0.55.
+**v1 validates the BINDING/REGISTRATION spine** — stated confidence → `prediction_id`
+→ external (exit-code) outcome → corroborated tactical row → read-back. That path
+is sound and well-built; the exit-code outcome is exogenous ground truth (no
+circularity).
 
-v2 levers, in order of leverage:
-1. **Strong identity over the MCP transport** — talk to the server via the MCP
-   streamable-HTTP/stdio transport with caller-proven process binding instead
-   of the REST token wrapper. Lifts the cap and unlocks the high bins. This is
-   the real fix and the main v2 work item.
-2. **Measure what the server actually scores** — accept that tactical
-   calibration scores the EISV-corrected/capped confidence and frame the report
-   as "is the governance system's *own* confidence well-calibrated," which is
-   arguably the more useful question. report.py already bins on the registered
-   value, so this needs only framing.
-3. **Pre-distort stated confidence** to hit target *registered* bins by
-   inverting the correction — brittle and does not defeat the 0.55 cap, so only
-   useful in combination with (1).
+**v1 does NOT yet validate the calibration MEASUREMENT.** The sampler assigns
+pass/fail by *position* (`i < n_fail`) and draws confidence *independently* by
+bin, so **outcome and confidence are statistically independent by construction**.
+There is no injected miscalibration for ECE/AUC to recover — so AUC ≈ 0.5 is
+*expected* (any deviation is a sampler artifact), and the ECE is dominated by the
+0.55 cap + corrector fixed point + the constant per-bin fail ratio, not by a
+calibration relationship. Printing these as "calibration" without that caveat was
+a self-deception seam; `report.py` now states it inline.
+
+### The v1.1 fix (the real work item)
+Make the **outcome a function of confidence** with an injectable miscalibration
+knob: draw pass/fail with probability `f(drawn_confidence; bias)`. Then ECE/AUC
+become *recoverable ground truth* — "I injected calibration error X; did the
+channel report ≈ X?" — which is the actual measurement-plumbing test. Until then,
+v1 is a binding smoke test, not a calibration validator.
+
+### The confidence cap (v1 ceiling)
+Weak-tier agents get `min(confidence, 0.55)` (`phases.py:667-669`), so the 0.6–1.0
+bins don't populate. **Reaching strong tier requires the MCP transport** — that is
+confirmed (a council agent on the MCP transport logged at strong/1.0). The plain
+REST `/v1/tools/call` surface this harness uses does **not** reach strong in
+testing: echoing `client_session_id` in the body and sending an `X-Session-ID`
+header both yield `proof_origin: unknown` → weak → capped (verified live, three
+ways). So the v2 lever stands: talk to the server over the MCP transport with
+caller-proven binding. (Earlier wording called the cap "structural to REST"; more
+precisely it's structural to *every REST handshake tested* — strong is confirmed
+only on the MCP transport.)
+
+Secondary lever: accept that tactical calibration scores the EISV-corrected
+confidence and frame v1.1 as "is the governance system's *own* confidence
+well-calibrated" — but that still needs the v1.1 knob to have any ground truth.
 
 ## Files
 

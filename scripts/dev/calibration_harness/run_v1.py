@@ -20,19 +20,38 @@ from pathlib import Path
 
 from . import report
 from .client import GovernanceClient, Identity
-from .config import CLASSES, EPISODE_COUNT, Transport
+from .config import BINS, CLASSES, EPISODE_COUNT, Transport
 from .runner import run_episode
 from .sampler import plan
 
 SEED = 1729  # fixed -> reproducible
 PROD_URL_MARKERS = (":8767", ":8766")  # the live governance ports on this host
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def _guard_not_prod(base_url: str, force: bool) -> None:
-    if not force and any(m in base_url for m in PROD_URL_MARKERS):
+    """Refuse anything that isn't a loopback address (council C1).
+
+    A port-substring blocklist was theater: a prod server fronted by nginx on
+    80/443 or a remote host without the magic ports would sail through. The
+    isolated instance is always local, so allowlist loopback instead.
+    """
+    if force:
+        return
+    from urllib.parse import urlparse
+
+    host = urlparse(base_url).hostname or ""
+    if host not in _LOOPBACK_HOSTS:
         raise SystemExit(
-            f"REFUSING to run against {base_url!r} — that looks like the live fleet. "
-            "Point GOVERNANCE_HTTP_URL at an isolated test instance, or pass --i-know."
+            f"REFUSING {base_url!r} — not a loopback address. The harness injects "
+            "synthetic failures into the GLOBAL tactical pool; run it only against a "
+            "local isolated instance (governance_test), or pass --i-know."
+        )
+    # belt-and-suspenders: never the known live ports, even on loopback
+    if any(m in base_url for m in PROD_URL_MARKERS):
+        raise SystemExit(
+            f"REFUSING {base_url!r} — that is a live governance port. "
+            "Point GOVERNANCE_HTTP_URL at the isolated instance (e.g. :8771), or pass --i-know."
         )
 
 
@@ -43,6 +62,12 @@ def main() -> int:
     ap.add_argument("--out", type=str, default="data/calibration_harness/run_v1.csv")
     ap.add_argument("--i-know", action="store_true", help="bypass the prod-URL guard")
     args = ap.parse_args()
+
+    if args.episodes < len(BINS):
+        raise SystemExit(
+            f"--episodes must be >= {len(BINS)} (one per confidence bin); got "
+            f"{args.episodes}. Fewer collapses the per-bin plan to empty (council H6)."
+        )
 
     transport = Transport()
     _guard_not_prod(transport.base_url, args.i_know)
@@ -67,14 +92,17 @@ def main() -> int:
 
     after = report.snapshot_tactical(client)
 
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with out.open("w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=[f.name for f in dataclasses.fields(rows[0])])
-        w.writeheader()
-        for r in rows:
-            w.writerow(dataclasses.asdict(r))
-    print(f"wrote {len(rows)} rows -> {out}")
+    if rows:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=[f.name for f in dataclasses.fields(rows[0])])
+            w.writeheader()
+            for r in rows:
+                w.writerow(dataclasses.asdict(r))
+        print(f"wrote {len(rows)} rows -> {out}")
+    else:
+        print("no rows produced; skipping CSV write")
 
     report.emit([i.agent_uuid for i in idents], before, after)
     return 0
