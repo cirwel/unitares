@@ -146,8 +146,9 @@ async def archive_stale_public_r1_scores(
     dry_run: bool = True,
     limit: Optional[int] = None,
     db: Any = None,
+    graph: Any = None,
 ) -> dict[str, Any]:
-    """Archive stale public R1 KG nodes.
+    """Archive stale public R1 KG nodes — through the DUAL-WRITE backend path.
 
     The audit table keeps score history. Public KG nodes are the redacted,
     deduped-by-pair projection and are archived after the TTL without re-score.
@@ -158,6 +159,14 @@ async def archive_stale_public_r1_scores(
     ``src/identity/trajectory_continuity.py``), so this age-agnostic mode is
     the one-shot backlog cleanup for the legacy nodes. It is idempotent: a
     second run finds nothing because the first archived them all.
+
+    Archival delegates to ``KnowledgeGraph.archive_discoveries_batch`` so BOTH
+    the AGE graph node (which the live search/dashboard reads) and the canonical
+    relational ``knowledge.discoveries`` row are updated. The earlier raw
+    ``UPDATE knowledge.discoveries`` only touched the relational mirror, leaving
+    the AGE node stale — so archived scores kept showing in the dashboard. The
+    candidate enumeration still uses the relational table (every discovery is
+    dual-written, so it is a valid membership source).
     """
     backend = db or _get_db()
     if ttl_days < 0:
@@ -165,34 +174,53 @@ async def archive_stale_public_r1_scores(
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive when provided")
 
-    async with backend.acquire() as conn:
-        if dry_run:
+    if dry_run:
+        async with backend.acquire() as conn:
             rows = await conn.fetch(
                 _stale_public_r1_scores_select_sql(limit=limit),
                 ttl_days,
             )
             sample = [_row_to_stale_score(r) for r in rows]
             count = await conn.fetchval(_stale_public_r1_scores_count_sql(), ttl_days)
-            return {
-                "dry_run": True,
-                "ttl_days": ttl_days,
-                "would_archive": int(count or 0),
-                "sample": sample,
-                "limit": limit,
-            }
+        return {
+            "dry_run": True,
+            "ttl_days": ttl_days,
+            "would_archive": int(count or 0),
+            "sample": sample,
+            "limit": limit,
+        }
 
+    # Enumerate stale candidate ids (no default cap — archive all matching,
+    # bounded only by an explicit ``limit``), then dual-write archive them.
+    async with backend.acquire() as conn:
         rows = await conn.fetch(
-            _stale_public_r1_scores_archive_sql(limit=limit),
+            _stale_public_r1_scores_ids_sql(limit=limit),
             ttl_days,
         )
-        archived = [_row_to_stale_score(r) for r in rows]
+    sample = [_row_to_stale_score(r) for r in rows]
+    ids = [r["id"] for r in rows]
+    if not ids:
         return {
             "dry_run": False,
             "ttl_days": ttl_days,
-            "archived": len(archived),
-            "sample": archived,
+            "archived": 0,
+            "sample": [],
             "limit": limit,
         }
+
+    kg = graph
+    if kg is None:
+        from src.knowledge_graph import get_knowledge_graph
+        kg = await get_knowledge_graph()
+    result = await kg.archive_discoveries_batch(ids, reason="r1_public_kg_ttl")
+    return {
+        "dry_run": False,
+        "ttl_days": ttl_days,
+        "archived": int(result.get("archived", 0)),
+        "errors": result.get("errors", []),
+        "sample": sample,
+        "limit": limit,
+    }
 
 
 async def _load_provisional_lineage_candidates(
@@ -252,25 +280,22 @@ def _stale_public_r1_scores_select_sql(*, limit: Optional[int]) -> str:
     """
 
 
-def _stale_public_r1_scores_archive_sql(*, limit: Optional[int]) -> str:
+def _stale_public_r1_scores_ids_sql(*, limit: Optional[int]) -> str:
+    """Enumerate stale public R1 score ids for the apply path.
+
+    Unlike the dry-run select (which caps the *sample* at 20), this returns
+    every matching id (bounded only by an explicit ``limit``) so the apply
+    path archives the whole stale set, not just a 20-row preview.
+    """
     limit_sql = f"LIMIT {int(limit)}" if limit is not None else ""
     return f"""
-        WITH stale AS (
-            SELECT id
-            FROM knowledge.discoveries
-            WHERE type = 'trajectory_continuity_score'
-              AND status = 'open'
-              AND COALESCE(updated_at, created_at) < now() - ($1::int * INTERVAL '1 day')
-            ORDER BY COALESCE(updated_at, created_at)
-            {limit_sql}
-        )
-        UPDATE knowledge.discoveries d
-        SET status = 'archived',
-            resolved_at = now(),
-            updated_at = now()
-        FROM stale
-        WHERE d.id = stale.id
-        RETURNING d.id, d.agent_id, d.created_at, d.updated_at, d.status
+        SELECT id, agent_id, created_at, updated_at, status
+        FROM knowledge.discoveries
+        WHERE type = 'trajectory_continuity_score'
+          AND status = 'open'
+          AND COALESCE(updated_at, created_at) < now() - ($1::int * INTERVAL '1 day')
+        ORDER BY COALESCE(updated_at, created_at)
+        {limit_sql}
     """
 
 

@@ -2444,24 +2444,48 @@ class TestArchiveDiscoveriesBatch:
 
     @pytest.mark.asyncio
     async def test_archives_successfully(self):
-        """Should archive all discoveries in a single batch query."""
+        """Should archive in BOTH stores; count comes from the relational
+        RETURNING, not the AGE UNWIND RETURN (which is empty on this build)."""
         kg, mock_db = make_kg_with_mock_db()
-        # Single batch UNWIND query returns all archived IDs
-        mock_db.graph_query.return_value = [{"id": "d1"}, {"id": "d2"}]
+        # AGE UNWIND-SET-RETURN yields nothing even on success — must not be
+        # used for accounting. The relational UPDATE RETURNING is authoritative.
+        mock_db.graph_query.return_value = []
+        mock_db._mock_conn.fetch.return_value = [{"id": "d1"}, {"id": "d2"}]
 
         result = await kg.archive_discoveries_batch(["d1", "d2"], reason="test_cleanup")
         assert result["success"] is True
         assert result["archived"] == 2
         assert result["reason"] == "test_cleanup"
-        # Should be a single graph_query call (batch UNWIND)
+
+    @pytest.mark.asyncio
+    async def test_dual_writes_both_stores_in_one_transaction(self):
+        """The archive must hit the AGE node (graph_query) AND the relational
+        row (conn.fetch UPDATE) within a single transaction — the regression
+        guard for the split-brain bug."""
+        kg, mock_db = make_kg_with_mock_db()
+        mock_db.graph_query.return_value = []
+        mock_db._mock_conn.fetch.return_value = [{"id": "d1"}]
+
+        await kg.archive_discoveries_batch(["d1"])
+
+        # AGE side: one UNWIND-SET on the Discovery nodes.
         assert mock_db.graph_query.await_count == 1
+        age_cypher = mock_db.graph_query.await_args.args[0]
+        assert "SET d.status = 'archived'" in age_cypher
+        # Relational side: an UPDATE on the canonical table, same conn/txn.
+        assert mock_db._mock_conn.fetch.await_count == 1
+        rel_sql = mock_db._mock_conn.fetch.await_args.args[0]
+        assert "UPDATE knowledge.discoveries" in rel_sql
+        assert "status = 'archived'" in rel_sql
+        mock_db.transaction.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_records_errors_for_failed_archives(self):
-        """Should record errors for discoveries not found in batch result."""
+        """Should record errors for ids the relational UPDATE did not return."""
         kg, mock_db = make_kg_with_mock_db()
-        # Batch returns only d1 (d2 was not found)
-        mock_db.graph_query.return_value = [{"id": "d1"}]
+        mock_db.graph_query.return_value = []
+        # Relational UPDATE returns only d1 (d2 had no row).
+        mock_db._mock_conn.fetch.return_value = [{"id": "d1"}]
 
         result = await kg.archive_discoveries_batch(["d1", "d2"])
         assert result["archived"] == 1
@@ -2470,11 +2494,10 @@ class TestArchiveDiscoveriesBatch:
 
     @pytest.mark.asyncio
     async def test_records_error_for_empty_result(self):
-        """Should record error when archive returns error result."""
+        """Nothing archived (no relational rows matched) → all errors."""
         kg, mock_db = make_kg_with_mock_db()
-        mock_db.graph_query.side_effect = [
-            [{"error": "not found"}],
-        ]
+        mock_db.graph_query.return_value = []
+        mock_db._mock_conn.fetch.return_value = []
 
         result = await kg.archive_discoveries_batch(["d1"])
         assert result["archived"] == 0
