@@ -27,6 +27,7 @@ from .dynamics import (
     compute_dynamics,
     step_state,
     compute_saturation_diagnostics,
+    eisv_divergence,
 )
 
 from .coherence import (
@@ -101,6 +102,7 @@ __all__ = [
     'compute_dynamics',
     'step_state',
     'compute_saturation_diagnostics',
+    'eisv_divergence',
 
     # Coherence functions
     'coherence',

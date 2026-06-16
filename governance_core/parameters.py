@@ -160,6 +160,31 @@ def get_i_dynamics_mode() -> str:
     return os.getenv("UNITARES_I_DYNAMICS", "linear").strip().lower()
 
 
+def sensor_coupling_enabled() -> bool:
+    """
+    Whether sensor-derived EISV spring-couples into the ODE.
+
+    Default ON — preserves current production behavior. This is a fleet-wide
+    switch, NOT Lumen-only: when an agent publishes no physical sensor, a
+    behavioral sensor EISV (derived from governance observables) is injected and
+    also spring-coupled (see src/mcp_handlers/updates/phases.py). Flipping the
+    default therefore changes the dynamics for every agent with ≥3 check-ins.
+
+    The "compare, don't couple" posture (disable this) lets the ODE evolve as an
+    independent predictor and compares the sensor against it via
+    ``governance_core.dynamics.eisv_divergence`` — recording divergence (cf.
+    allostatic load) rather than springing it away. That divergence is recorded
+    regardless of this flag, so an operator can review real divergence data
+    before deciding to cut the spring.
+
+    Disable with UNITARES_SENSOR_COUPLING in {0, false, off, no}.
+    """
+    val = os.getenv("UNITARES_SENSOR_COUPLING")
+    if val is None:
+        return True  # default: coupling on (no behavior change vs. pre-flag)
+    return val.strip().lower() not in {"0", "false", "off", "no"}
+
+
 def get_params_profile_name() -> str:
     """
     Returns the active parameters profile name.

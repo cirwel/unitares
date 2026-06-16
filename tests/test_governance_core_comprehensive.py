@@ -37,6 +37,7 @@ from governance_core import (
 from governance_core.utils import barrier
 from governance_core.dynamics import (
     compute_equilibrium, estimate_convergence, check_basin, compute_saturation_diagnostics,
+    eisv_divergence,
 )
 from governance_core.phase_aware import (
     detect_phase, get_phase_detection_details,
@@ -355,8 +356,9 @@ class TestDynamics:
         assert isinstance(diagnostics, dict)
         assert "will_saturate" in diagnostics or "I_current" in diagnostics
 
-    def test_sensor_anchor_pulls_state_toward_reference(self, default_theta, default_params):
-        """Sensor spring coupling should pull ODE state toward sensor values."""
+    def test_sensor_couples_by_default(self, default_theta, default_params, monkeypatch):
+        """Default ON: spring coupling pulls ODE state toward sensor values."""
+        monkeypatch.delenv("UNITARES_SENSOR_COUPLING", raising=False)
         # ODE state is high-E, sensor state is low-E
         ode_state = State(E=0.9, I=0.9, S=0.02, V=0.0)
         sensor = State(E=0.4, I=0.7, S=0.2, V=0.1)
@@ -374,6 +376,33 @@ class TestDynamics:
         assert new_state.E < ode_state.E
         # S should have increased (pulled toward 0.2 from 0.02)
         assert new_state.S > ode_state.S
+
+    def test_sensor_decoupled_when_disabled(self, default_theta, default_params, monkeypatch):
+        """Compare, don't couple: with coupling disabled a sensor must NOT pull.
+
+        UNITARES_SENSOR_COUPLING=off makes the ODE evolve as an independent
+        predictor — passing a sensor produces a result identical to not passing
+        one. The sensor is only compared against the result (eisv_divergence).
+        """
+        monkeypatch.setenv("UNITARES_SENSOR_COUPLING", "off")
+        ode_state = State(E=0.9, I=0.9, S=0.02, V=0.0)
+        sensor = State(E=0.4, I=0.7, S=0.2, V=0.1)
+
+        with_sensor = compute_dynamics(
+            state=ode_state, delta_eta=[0.0],
+            theta=default_theta, params=default_params, dt=0.1,
+            sensor_eisv=sensor,
+        )
+        without_sensor = compute_dynamics(
+            state=ode_state, delta_eta=[0.0],
+            theta=default_theta, params=default_params, dt=0.1,
+            sensor_eisv=None,
+        )
+
+        assert with_sensor.E == without_sensor.E
+        assert with_sensor.I == without_sensor.I
+        assert with_sensor.S == without_sensor.S
+        assert with_sensor.V == without_sensor.V
 
     def test_no_sensor_anchor_backward_compatible(self, default_state, default_theta, default_params):
         """sensor_eisv=None should produce identical results to not passing it."""
@@ -394,8 +423,9 @@ class TestDynamics:
         assert result_without.S == result_with_none.S
         assert result_without.V == result_with_none.V
 
-    def test_sensor_anchor_respects_bounds(self, default_theta, default_params):
-        """Even with extreme sensor values, state should stay in bounds."""
+    def test_sensor_anchor_respects_bounds(self, default_theta, default_params, monkeypatch):
+        """Even with extreme sensor values (coupling on), state stays in bounds."""
+        monkeypatch.setenv("UNITARES_SENSOR_COUPLING", "1")
         ode_state = State(E=0.5, I=0.5, S=0.5, V=0.0)
         # Extreme sensor values at the edges
         sensor = State(E=1.0, I=0.0, S=2.0, V=2.0)
@@ -410,6 +440,31 @@ class TestDynamics:
         assert 0.0 <= new_state.I <= 1.0
         assert 0.0 <= new_state.S <= 1.0
         assert -1.0 <= new_state.V <= 1.0
+
+    def test_eisv_divergence_signed_per_axis(self):
+        """eisv_divergence returns sensor - ode on each axis, plus L2 magnitude."""
+        sensor = State(E=0.4, I=0.7, S=0.30, V=0.10)
+        ode = State(E=0.9, I=0.6, S=0.02, V=-0.49)
+
+        div = eisv_divergence(sensor, ode)
+
+        assert div["dE"] == pytest.approx(0.4 - 0.9)
+        assert div["dI"] == pytest.approx(0.7 - 0.6)
+        assert div["dS"] == pytest.approx(0.30 - 0.02)
+        assert div["dV"] == pytest.approx(0.10 - (-0.49))
+        expected_mag = math.sqrt(
+            (0.4 - 0.9) ** 2 + (0.7 - 0.6) ** 2
+            + (0.30 - 0.02) ** 2 + (0.10 + 0.49) ** 2
+        )
+        assert div["magnitude"] == pytest.approx(expected_mag)
+
+    def test_eisv_divergence_zero_when_aligned(self):
+        """Identical sensor and ODE states diverge by zero."""
+        s = State(E=0.6, I=0.7, S=0.2, V=0.0)
+        div = eisv_divergence(s, s)
+        assert div["dE"] == 0.0 and div["dI"] == 0.0
+        assert div["dS"] == 0.0 and div["dV"] == 0.0
+        assert div["magnitude"] == 0.0
 
 
 # ============================================================================
