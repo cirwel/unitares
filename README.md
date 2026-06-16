@@ -28,7 +28,9 @@ From each check-in, UNITARES tracks four numbers per agent — together called *
 - **E (Energy)** — is the work advancing? Tool calls succeeding and decisions resolving raise E; thrashing, retries, and no-progress lower it.
 - **I (Integrity)** — do the agent's claims match its results? Confidence that lines up with the observed success rate raises I; high confidence with low actual success lowers it.
 - **S (Entropy)** — is the agent drifting from its own normal behavior? A steady, consistent trajectory keeps S low; erratic, divergent behavior pushes it up.
-- **V (Valence)** — a single summary number derived from the gap between E and I. Positive means *energetic but incoherent* (lots of motion, claims not matching outcomes); negative means *coherent but running low on progress*.
+- **V (Valence)** — a derived readout of the E−I gap, not an independent fourth dimension. Positive means *energetic but incoherent* (lots of motion, claims not matching outcomes); negative means *coherent but running low on progress*.
+
+These four numbers are computed from **auditable heuristic blends over observable behavior** — decision outcomes, calibration error (claimed confidence vs. verified success), drift from the agent's own baseline, tool results — then EMA-smoothed. There is no black box. The *information-theoretic* readings of E/I/S/V (entropy, mutual information, free energy) used in [Paper v6](https://github.com/cirwel/unitares-paper-v6) are **target semantics**, not what the running code computes today; the exact deployed formulas, with provenance tags, are in [How EISV is computed](docs/EISV_COMPUTATION.md).
 
 Each check-in returns a plain verdict — `proceed` / `guide` / `pause` / `reject` — so the agent can correct itself before any external safety system has to step in. Humans read the same state on a dashboard; other agents can read it over the API.
 
@@ -38,7 +40,7 @@ Self-reported confidence is only one input. UNITARES also watches **real outcome
 
 After about 30 check-ins, the four numbers are graded against the agent's *own* running history rather than a one-size-fits-all threshold. Absolute safety floors still apply on top of that.
 
-Running continuously since November 2025. State is stored in PostgreSQL + AGE. The underlying theory and the math (dynamical-systems) version of this model are in [Paper v6](https://github.com/cirwel/unitares-paper-v6) (DOI 10.5281/zenodo.19647159) — start there if you want the full derivation.
+Running continuously since November 2025; state in PostgreSQL + AGE. **The verdict path is the auditable behavioral model described above** — component risk plus self-relative z-scores, source in [`src/behavioral_assessment.py`](src/behavioral_assessment.py). A separate dynamical-systems model (`governance_core/`, the thermodynamic / free-energy formulation) runs **in parallel as a research cross-check and does not drive verdicts by default** ([`governance_monitor.py`](src/governance_monitor.py): *"the ODE runs in parallel but does NOT drive verdicts… primary verdicts come from behavioral assessment"*). Its derivation is in [Paper v6](https://github.com/cirwel/unitares-paper-v6) (DOI 10.5281/zenodo.19647159). Want the theory → start with the paper; want what actually fires → [How EISV is computed](docs/EISV_COMPUTATION.md).
 
 ### Who should integrate this
 
