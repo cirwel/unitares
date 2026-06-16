@@ -2308,9 +2308,23 @@ class KnowledgeGraphAGE:
         reason: str = "lifecycle_cleanup",
     ) -> Dict[str, Any]:
         """
-        Archive multiple discoveries in a batch.
+        Archive multiple discoveries in a batch — DUAL-WRITE.
 
-        Sets status to 'archived' and adds archive metadata.
+        Sets status to 'archived' on BOTH the AGE graph node and the canonical
+        relational ``knowledge.discoveries`` row, in a single transaction, so the
+        two stores stay consistent. The live search/dashboard reads the AGE
+        nodes; the relational table is the canonical row store. A previous
+        version updated only the AGE node, silently diverging the stores (an
+        archived discovery still showed `status='open'` in relational and vice
+        versa).
+
+        Accounting note: AGE's ``UNWIND … MATCH … SET … RETURN`` yields no rows
+        in the deployed AGE build even when the SET applies, so we must NOT
+        derive the archived count from that RETURN (the old code did, and always
+        reported `archived: 0 / all-errors` on success). We instead take the
+        authoritative affected-id list from the relational UPDATE's RETURNING —
+        valid because every discovery is dual-written, so the relational row is
+        the membership source of truth.
 
         Args:
             discovery_ids: List of discovery IDs to archive
@@ -2330,29 +2344,40 @@ class KnowledgeGraphAGE:
         from datetime import datetime
         archived_at = datetime.now().isoformat()
 
-        # Archive all discoveries in a single batch query
-        cypher = """
+        # AGE node update. No RETURN — the count comes from the relational side
+        # (AGE UNWIND-SET-RETURN is empty on this build even when SET succeeds).
+        age_cypher = """
             UNWIND ${ids} AS disc_id
             MATCH (d:Discovery {id: disc_id})
             SET d.status = 'archived',
                 d.archived_at = ${archived_at},
                 d.archive_reason = ${reason}
-            RETURN d.id as id
         """
 
         try:
-            results = await db.graph_query(cypher, {
-                "ids": discovery_ids,
-                "archived_at": archived_at,
-                "reason": reason,
-            })
-            archived_ids = set()
-            for r in results:
-                if isinstance(r, dict) and "error" not in r:
-                    rid = r.get("id") or r.get("discovery", {}).get("id")
-                    if rid:
-                        archived_ids.add(rid)
-
+            async with db.transaction() as conn:
+                # 1) AGE graph nodes (the store search/dashboard reads).
+                await db.graph_query(
+                    age_cypher,
+                    {"ids": discovery_ids, "archived_at": archived_at, "reason": reason},
+                    conn=conn,
+                )
+                # 2) Canonical relational rows — same transaction. RETURNING
+                #    gives the authoritative set of rows actually archived.
+                #    (relational has no archived_at/archive_reason columns; that
+                #    metadata lives only on the AGE node.)
+                rows = await conn.fetch(
+                    """
+                    UPDATE knowledge.discoveries
+                    SET status = 'archived',
+                        resolved_at = COALESCE(resolved_at, now()),
+                        updated_at = now()
+                    WHERE id = ANY($1::text[])
+                    RETURNING id
+                    """,
+                    discovery_ids,
+                )
+            archived_ids = {r["id"] for r in rows}
             errors = [
                 {"id": did, "error": "Not found or update failed"}
                 for did in discovery_ids if did not in archived_ids

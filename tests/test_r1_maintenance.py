@@ -198,31 +198,63 @@ async def test_archive_stale_public_r1_scores_dry_run_reports_count_and_sample()
     conn.fetchval.assert_awaited_once()
 
 
+class _FakeGraph:
+    """Stand-in for the KG backend; records the dual-write archive call."""
+
+    def __init__(self, archived=None):
+        self.calls = []
+        self._archived = archived
+
+    async def archive_discoveries_batch(self, ids, reason="lifecycle_cleanup"):
+        self.calls.append({"ids": list(ids), "reason": reason})
+        n = len(ids) if self._archived is None else self._archived
+        return {"success": True, "archived": n, "errors": [], "reason": reason}
+
+
 @pytest.mark.asyncio
-async def test_archive_stale_public_r1_scores_apply_archives_rows():
+async def test_archive_stale_public_r1_scores_apply_delegates_to_dual_write_batch():
+    """Apply path enumerates stale ids (relational), then archives via the
+    backend-aware DUAL-WRITE batch — NOT a raw relational UPDATE (which left
+    the AGE node stale, the original pollution bug)."""
     from src.identity.r1_maintenance import archive_stale_public_r1_scores
 
     now = datetime(2026, 5, 5, tzinfo=timezone.utc)
     conn = SimpleNamespace()
     conn.fetch = AsyncMock(return_value=[
-        {
-            "id": "r1_score:old",
-            "agent_id": "child",
-            "created_at": now,
-            "updated_at": now,
-            "status": "archived",
-        },
+        {"id": "r1_score:old", "agent_id": "child",
+         "created_at": now, "updated_at": now, "status": "open"},
     ])
     backend = _Backend(conn)
+    graph = _FakeGraph()
 
-    result = await archive_stale_public_r1_scores(db=backend, dry_run=False, limit=1)
+    result = await archive_stale_public_r1_scores(
+        db=backend, graph=graph, dry_run=False, limit=1
+    )
 
     assert result["dry_run"] is False
     assert result["archived"] == 1
-    assert result["sample"][0]["status"] == "archived"
+    # Enumeration is a SELECT, not a raw UPDATE.
     sql = conn.fetch.await_args.args[0]
-    assert "UPDATE knowledge.discoveries" in sql
+    assert "SELECT id" in sql and "UPDATE knowledge.discoveries" not in sql
     assert "LIMIT 1" in sql
+    # The dual-write batch was invoked with the enumerated ids.
+    assert graph.calls == [{"ids": ["r1_score:old"], "reason": "r1_public_kg_ttl"}]
+
+
+@pytest.mark.asyncio
+async def test_archive_stale_public_r1_scores_apply_no_candidates_skips_batch():
+    """No stale ids → return archived=0 without calling the batch archiver."""
+    from src.identity.r1_maintenance import archive_stale_public_r1_scores
+
+    conn = SimpleNamespace()
+    conn.fetch = AsyncMock(return_value=[])
+    backend = _Backend(conn)
+    graph = _FakeGraph()
+
+    result = await archive_stale_public_r1_scores(db=backend, graph=graph, dry_run=False)
+
+    assert result["archived"] == 0
+    assert graph.calls == []
 
 
 @pytest.mark.asyncio
@@ -235,17 +267,15 @@ async def test_archive_stale_public_r1_scores_ttl_zero_archives_all_regardless_o
     now = datetime(2026, 6, 16, tzinfo=timezone.utc)
     conn = SimpleNamespace()
     conn.fetch = AsyncMock(return_value=[
-        {
-            "id": "r1_score:today",
-            "agent_id": "child",
-            "created_at": now,
-            "updated_at": now,
-            "status": "archived",
-        },
+        {"id": "r1_score:today", "agent_id": "child",
+         "created_at": now, "updated_at": now, "status": "open"},
     ])
     backend = _Backend(conn)
+    graph = _FakeGraph()
 
-    result = await archive_stale_public_r1_scores(db=backend, ttl_days=0, dry_run=False)
+    result = await archive_stale_public_r1_scores(
+        db=backend, graph=graph, ttl_days=0, dry_run=False
+    )
 
     assert result["ttl_days"] == 0
     assert result["archived"] == 1
