@@ -25,6 +25,8 @@ When you run many autonomous agents, you can check *whether a model is good enou
 
 Human evaluators: start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md); architecture is in [docs/UNIFIED_ARCHITECTURE.md](docs/UNIFIED_ARCHITECTURE.md).
 
+**Contents:** [How it works](#how-it-works-in-one-read) · [Who should integrate](#who-should-integrate-this) · [Quickstart](#quickstart) · [Integrate](#integrate) · [Trustworthy signal](#what-makes-the-signal-trustworthy) · [Scope & threat model](#scope-and-threat-model) · [Production snapshot](#production-snapshot) · [Architecture](#architecture) · [Docs](#documentation)
+
 ### How it works in one read
 
 After each unit of work, an agent checks in by calling `sync_state()`. The check-in includes a self-reported `confidence`, a self-reported `complexity`, the `response_text`, and any `recent_tool_results` — test outcomes, exit codes, lint output, file changes — i.e. things the system can verify instead of taking the agent's word for. (This README uses the primary task-verb tool names throughout; older raw names remain stable for compatibility — full mapping under [Tool names](#tool-names).)
@@ -52,13 +54,13 @@ Running continuously since November 2025; state in PostgreSQL + AGE. **The verdi
 
 UNITARES is for you if you run **multiple long-lived autonomous agents** — tool-using, multi-step, doing real work over hours or days — and you've watched an agent quietly drift without anyone noticing until something visible broke. The check-in loop surfaces that drift while it's still just numbers moving (Integrity slipping, overconfidence climbing) instead of waiting for a user to complain. It runs in parallel with your evals and guardrails as a live state layer the agent itself can read.
 
-**Integration cost:** one MCP/REST `sync_state` call per agent unit-of-work, plus a `record_result` callback for any task with a verifiable outcome (tests, exit codes, tool results). The dashboard, knowledge graph, peer review, and continuity features are all downstream of those two calls.
-
 **The threshold that matters is check-in count, not wall-clock time.** Self-relative grading needs roughly **30 check-ins** to establish an agent's baseline (absolute safety floors apply before that). An agent doing dozens of units of work — over an hour or a week — crosses it; one that does three and exits never does. That's the real line for "is my session long enough to benefit," not a duration.
 
 **Probably not worth it yet for** short-lived chatbot turns, where per-turn overhead outweighs the benefit, or for teams that can't instrument their agent loop.
 
-### Try it
+---
+
+## Quickstart
 
 ```bash
 git clone https://github.com/cirwel/unitares.git && cd unitares
@@ -66,43 +68,40 @@ docker compose up -d --wait         # Postgres+AGE+pgvector+Redis+server, bound 
 make demo                           # 60-second scripted trajectory
 ```
 
-`make demo` starts a synthetic agent session, drives seven check-ins (clean work → confidence drifting from results → confusion), and prints the verdict + state at each step. Source: [`scripts/demo/quick_demo.py`](scripts/demo/quick_demo.py). Then point any MCP client at `http://localhost:8767/mcp/`.
+`make demo` drives a synthetic agent through seven check-ins (clean work → confidence drifting from results → confusion) and prints the verdict + state at each step ([`scripts/demo/quick_demo.py`](scripts/demo/quick_demo.py)). Then point any MCP client at `http://localhost:8767/mcp/`.
 
-If you already run UNITARES locally and port `8767` is live, skip `docker compose up` and run `make demo` directly. If Docker reports that `5432`, `6379`, or `8767` is already allocated, pick alternate host ports:
+<details>
+<summary><strong>Alternate ports, bare-metal, and thin clients</strong></summary>
+
+If `5432`, `6379`, or `8767` is already allocated, pick alternate host ports:
 
 ```bash
 POSTGRES_HOST_PORT=15432 REDIS_HOST_PORT=16379 GOVERNANCE_HOST_PORT=18767 docker compose up -d --wait
 UNITARES_DEMO_PORT=18767 make demo
 ```
 
-Bare-metal setup (Homebrew Postgres, native install) is in [Installation](#installation).
+**Bare-metal** (lower overhead, what the maintainer runs in production): PostgreSQL 16+ with Apache AGE + pgvector compiled and installed (examples use PG 17), Redis optional.
 
-**Service ports** (bound to `127.0.0.1` by default; override host-side via `.env`):
+```bash
+pip install -r requirements-full.txt
+export DB_BACKEND=postgres
+export DB_POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/governance
+export DB_AGE_GRAPH=governance_graph
+export UNITARES_KNOWLEDGE_BACKEND=age
+python src/mcp_server.py --port 8767
+```
 
-| Service | Port | Endpoint |
-|---|---|---|
-| Governance MCP server | `8767` | `http://localhost:8767/mcp/` |
-| Postgres + AGE + pgvector | `5432` | `postgresql://postgres:postgres@localhost:5432/governance` |
-| Redis (session cache) | `6379` | `redis://localhost:6379/0` |
+`requirements-full.txt` is the default (server, tests, handler dev); `requirements-core.txt` is a 2-package subset (`mcp` + `numpy`) for thin stdio/proxy clients. DB bring-up: [db/postgres/README.md](db/postgres/README.md). Run signal-only without the math model: `export UNITARES_DISABLE_ODE=1`.
 
-Additional services (started via launchd, not bundled into `docker compose up`):
+</details>
 
-| Service | Port | Endpoint |
-|---|---|---|
-| Gateway MCP (reduced surface) | `8768` | `http://localhost:8768/mcp/` |
-| Surface lease plane (bearer-auth) | `8788` | `http://localhost:8788/v1/lease/*` |
-
-**Workflow:** `start_session(force_new=true)` → `sync_state()` → `check_working_state()`. Use `parent_agent_id` to link a fresh process to prior work — details in [Getting Started](docs/guides/START_HERE.md).
-
-**Resident agents:** for long-running or scheduled agents, start with the SDK in [`agents/sdk/README.md`](agents/sdk/README.md). It handles the MCP connection, identity, check-ins, heartbeats, log rotation, state persistence, and pause hooks.
-
-**Transports:** MCP on `/mcp/` (Streamable HTTP) · REST on `/v1/tools/call` · Dashboard on `/dashboard`
-
-**Stack:** Python 3.12+ · PostgreSQL + AGE + pgvector · Redis (optional)
+**Stack:** Python 3.12+ · PostgreSQL + AGE + pgvector · Redis (optional). Transports: MCP on `/mcp/` (Streamable HTTP) · REST on `/v1/tools/call` · Dashboard on `/dashboard`. Full port map, gateway, and lease-plane: [`docs/operations/DEFINITIVE_PORTS.md`](docs/operations/DEFINITIVE_PORTS.md). MCP client config (Cursor / Claude Code / Claude Desktop) and bind-address security: [`docs/integration/MCP_CLIENTS.md`](docs/integration/MCP_CLIENTS.md).
 
 ---
 
-## The self-regulation loop
+## Integrate
+
+The loop is two calls; the dashboard, knowledge graph, peer review, and continuity features are all downstream of them.
 
 1. **Agent acts** — tool call, response, decision.
 2. **UNITARES updates state** — the four numbers that summarize how it's going.
@@ -129,11 +128,60 @@ elif eisv.get("E") is not None and eisv["E"] < 0.2:
     agent.stop_and_summarize()      # avoid thrashing
 ```
 
-The agent reads its own metrics and adjusts *before* external controls have to fire. Humans see the same state on the dashboard; other agents read it over the API. UNITARES isn't an output validator (guardrails, evals) or a sandbox (permissions, container limits) — it's a state layer the agent itself can read.
+The agent reads its own metrics and adjusts *before* external controls have to fire. UNITARES isn't an output validator (guardrails, evals) or a sandbox (permissions, container limits) — it's a state layer the agent itself can read.
+
+**Check-in shape.** `response_mode` controls how much detail comes back; **`mirror`** returns a short list of plain-text signals the agent can act on:
+
+```jsonc
+sync_state({
+  "response_text": "Refactored auth module, added rate limiting",
+  "complexity": 0.6,
+  "confidence": 0.8,
+  "task_type": "refactoring",
+  "response_mode": "mirror"  // or: minimal, compact, standard, full, auto
+})
+```
+
+<details>
+<summary><strong>Example <code>mirror</code> response</strong></summary>
+
+```jsonc
+{
+  "verdict": { "value": "proceed", "meaning": "State is healthy.", "next_action": "Continue working normally." },
+  "_mode": "mirror",
+  "mirror": [
+    "Fleet calibration: 72% accuracy over 12 fleet-wide decisions (high-conf: 0.8, low-conf: 0.5)",
+    "Complexity divergence: you reported 0.60 but system derives 0.45 (divergence=0.15)"
+  ],
+  "reflection": "Complexity estimate is diverging from the output-surface proxy.",
+  "relevant_prior_work": [ { "summary": "Rate limiter bypass in auth …", "by": "agent-abc", "relevance": 0.82 } ]
+}
+```
+
+Optional `reflection` and `relevant_prior_work` surface a one-line state read and related knowledge-graph items. See `_format_mirror` in [`src/mcp_handlers/response_formatter.py`](src/mcp_handlers/response_formatter.py).
+
+</details>
+
+**Verdicts** are always `proceed` / `guide` / `pause` / `reject` ([Architecture](docs/UNIFIED_ARCHITECTURE.md)); mirror/compact responses wrap each with `value`, `meaning`, and `next_action`.
+
+**Identity.** `start_session(force_new=true)` returns `agent_uuid` (save it — the identity anchor) and `client_session_id`. To link a fresh process to prior work: `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")`. (`continuity_token` is only short-lived ownership proof for explicit UUID rebinds.) For long-running or scheduled agents, the SDK in [`agents/sdk/README.md`](agents/sdk/README.md) handles connection, identity, check-ins, heartbeats, and pause hooks. More: [Getting Started](docs/guides/START_HERE.md) · [Operator Runbook](docs/operations/OPERATOR_RUNBOOK.md).
+
+### Tool names
+
+Use the primary task-verb tools; the older raw names remain for compatibility and for cases where you want the raw handler response shape. Primary tools return the agent-experience envelope, with the full payload under `raw_governance`.
+
+| Primary workflow tool | Raw implementation tool |
+|---|---|
+| `start_session` | `onboard` |
+| `sync_state` | `process_agent_update` |
+| `check_working_state` | `get_governance_metrics` |
+| `record_result` | `outcome_event` |
+| `search_shared_memory` | `knowledge(action="search")` |
+| `request_review` | `dialectic(action="request")` |
+
+---
 
 ## What makes the signal trustworthy
-
-**No "ethics" classifier.** The four numbers come from things UNITARES already measures — how well confidence matches outcomes, how far reported complexity is from observed complexity, how far behavior has drifted. There's no hand-labeled "is this ethical?" model in the loop.
 
 **Trajectory as identity.** An agent's EISV pattern over time answers continuity questions ("is this still the same agent across restarts?") and surfaces slow drift that no single check-in could catch.
 
@@ -143,15 +191,9 @@ The agent reads its own metrics and adjusts *before* external controls have to f
 
 ## Scope and threat model
 
-UNITARES is **adversarial-aware, not adversarial-naive** — but its enforcement is deliberately conservative.
+UNITARES is **adversarial-aware, not adversarial-naive**, with deliberately conservative enforcement. The signal is anchored to outcomes an agent can't fake — test pass/fail, exit codes, tool results via `record_result()`: an agent can inflate its self-reported `confidence` but not its actual success rate, and drift (S) is graded against its *own* prior trajectory, so there is no fixed threshold to pre-game. Verdicts lean toward `proceed`/`guide` over `pause`/`reject` by design — a false-positive pause on a productive agent is itself a failure mode (acutely so here, since the agents building UNITARES run under it). And "no ethics classifier" means no hand-labeled ethics model, *not* that the system is value-free: drift (S) is a salience flag, not a verdict, and Integrity (I) is anchored to ground-truth outcomes rather than to the agent's own history.
 
-**What resists gaming.** The signal is anchored to outcomes an agent can't fake: test pass/fail, exit codes, and tool results sent via `record_result()`. An agent can inflate its self-reported `confidence`, but not its actual success rate — sustained overconfidence drives Integrity (I) down regardless of what the agent claims. Drift (S) is graded against the agent's *own* prior trajectory, so there is no fixed threshold to pre-game, and calibration compounds over many tasks rather than judging any single check-in.
-
-**Why enforcement leans lenient.** Verdicts are biased toward `proceed`/`guide` over `pause`/`reject` by design. A false-positive pause on a productive agent is itself a failure mode — acutely so here, since the agents building UNITARES run under UNITARES. The verdict ladder exists so most signal arrives as information the agent can act on, not as a halt: high-confidence degradation trips a pause, ambiguity is surfaced rather than blocked.
-
-**What "no ethics classifier" does and doesn't mean.** It means there is no hand-labeled "is this ethical?" model in the loop — *not* that the system is value-free. Two consequences worth stating plainly: drift (S) is a *salience flag*, not a verdict — high entropy raises attention, it does not auto-fail, so beneficial exploration surfaces as something to look at rather than something to punish. And Integrity (I) is anchored to *ground truth* (outcomes), not to the agent's own history — an agent drifting toward better results shows *rising* I, not a penalty. The "past behavior was the desirable behavior" assumption applies only to S, not to the model as a whole.
-
-**The genuine open question.** Robustness against a *motivated* attacker deliberately optimizing the EISV proxy, at scale, is unproven. The deployment is single-operator with no red-team. That is the real limitation — not an absence of adversarial design, but an absence of adversarial *testing*.
+**The genuine open question.** Robustness against a *motivated* attacker deliberately optimizing the EISV proxy, at scale, is unproven — the deployment is single-operator with no red-team. That is the real limitation: an absence of adversarial *testing*, not of adversarial design.
 
 ---
 
@@ -201,122 +243,11 @@ Frozen public snapshot from June 16, 2026 (single-operator deployment — the au
 
 </details>
 
-> **Integrating an agent?** Jump to [Quick Start](#quick-start).
-
----
-
-## Quick Start
-
-```
-1. start_session(force_new=true)  → Get a fresh process identity
-2. sync_state()                   → Log your work
-3. check_working_state()          → Check your state
-```
-
-Example check-in:
-
-```jsonc
-sync_state({
-  "response_text": "Refactored auth module, added rate limiting",
-  "complexity": 0.6,
-  "confidence": 0.8,
-  "task_type": "refactoring",
-  "response_mode": "mirror"  // or: minimal, compact, standard, full, auto
-})
-```
-
-`response_mode` controls how much detail comes back. **`mirror`** is built for self-awareness: it returns a short list of plain-text signals the agent can act on (under `raw_governance` when you call through `sync_state`). Optional `reflection` and `relevant_prior_work` fields surface a one-line state read and related knowledge-graph items when there are any. See `_format_mirror` in [`src/mcp_handlers/response_formatter.py`](src/mcp_handlers/response_formatter.py).
-
-```jsonc
-{
-  "verdict": {
-    "value": "proceed",
-    "meaning": "State is healthy.",
-    "next_action": "Continue working normally."
-  },
-  "_mode": "mirror",
-  "mirror": [
-    "Fleet calibration: 72% accuracy over 12 fleet-wide decisions (high-conf: 0.8, low-conf: 0.5)",
-    "Complexity divergence: you reported 0.60 but system derives 0.45 (divergence=0.15)"
-  ],
-  "reflection": "Complexity estimate is diverging from the output-surface proxy.",
-  "relevant_prior_work": [
-    { "summary": "Rate limiter bypass in auth …", "by": "agent-abc", "relevance": 0.82 }
-  ]
-}
-```
-
-**Verdicts** are always one of **`proceed` / `guide` / `pause` / `reject`** ([Architecture](docs/UNIFIED_ARCHITECTURE.md)). Mirror/compact responses wrap each one with `value`, `meaning`, and `next_action`. If no verdict is present, formatters fall back to `continue` (see `response_formatter.py`).
-
-The `start_session()` response includes `agent_uuid` and `client_session_id` at the top level. Save `agent_uuid` — it's the agent's identity anchor. When a fresh process continues earlier work, call `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")` to record the link. (`identity(agent_uuid=..., continuity_token=..., resume=true)` is only for same-owner rebinds where you can prove ownership.)
-
-### Tool names
-
-Agents should use the primary task-verb tools. The older raw implementation names remain available for compatibility, older clients, and cases where you explicitly want the raw handler response shape. Primary tools return the agent-experience envelope, with the full payload preserved under `raw_governance`.
-
-| Primary workflow tool | Raw implementation tool |
-|---|---|
-| `start_session` | `onboard` |
-| `sync_state` | `process_agent_update` |
-| `check_working_state` | `get_governance_metrics` |
-| `record_result` | `outcome_event` |
-| `search_shared_memory` | `knowledge(action="search")` |
-| `request_review` | `dialectic(action="request")` |
-
-### Installation
-
-Two supported paths. Pick one.
-
-#### A. Docker Compose (recommended for evaluation)
-
-Zero host dependencies beyond Docker. Brings up Postgres+AGE+pgvector, Redis, and the governance server in one command.
-
-```bash
-git clone https://github.com/cirwel/unitares.git
-cd unitares
-cp .env.example .env       # optional — defaults work
-docker compose up
-# server: http://localhost:8767/mcp/
-```
-
-To override credentials or host-side ports (e.g. you already have Postgres on `5432`), edit `.env` first. Compose definition: [`docker-compose.yml`](docker-compose.yml). Postgres image: [`db/postgres/Dockerfile.age-vector`](db/postgres/Dockerfile.age-vector).
-
-#### B. Bare-metal (native Postgres + AGE)
-
-Lower overhead, faster iteration, what the maintainer runs in production. Requires PostgreSQL 16+ with Apache AGE + pgvector compiled and installed (examples use PostgreSQL 17). Redis optional (session cache only).
-
-```bash
-git clone https://github.com/cirwel/unitares.git
-cd unitares
-pip install -r requirements-full.txt
-
-export DB_BACKEND=postgres
-export DB_POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/governance
-export DB_AGE_GRAPH=governance_graph
-export UNITARES_KNOWLEDGE_BACKEND=age
-
-python src/mcp_server.py --port 8767
-```
-
-`requirements-full.txt` is the default for almost everything — running the local server, running tests (`pytest` is in `full` only), and handler development. `requirements-core.txt` is a 2-package subset (`mcp` + `numpy`) for thin stdio/proxy setups where the governance server runs elsewhere and you only need a local client. Database bring-up details (PostgreSQL 17 + AGE + pgvector compile): [db/postgres/README.md](db/postgres/README.md).
-
-The EISV math engine lives in this repo at `governance_core/` (pure Python, no separate install). To run with the observed-behavior signal only and skip the math model: `export UNITARES_DISABLE_ODE=1`.
-
-### MCP configuration
-
-Client-specific JSON (Cursor / Claude Code / Claude Desktop), endpoint table, and bind-address security: [`docs/integration/MCP_CLIENTS.md`](docs/integration/MCP_CLIENTS.md).
-
-Agent identity: save `agent_uuid` from `start_session()` as an anchor; link a fresh process to prior work with `parent_agent_id`; use `continuity_token` only as short-lived ownership proof for explicit UUID rebinds. See [Getting Started](docs/guides/START_HERE.md) and [Operator Runbook](docs/operations/OPERATOR_RUNBOOK.md).
-
----
-
-## State ranges and pipeline
-
-E, I, and S each live in `[0, 1]`; V in `[-1, 1]`. Verdict thresholds and the absolute safety floors are in [`src/behavioral_assessment.py`](src/behavioral_assessment.py). The primary signal is smoothed from observed behavior (`src/behavioral_state.py`); a separate math model in `governance_core/` runs in parallel as a diagnostic cross-check. The full pipeline (drift → entropy, calibration, circuit breaker, peer review) and the math derivation are in [Architecture](docs/UNIFIED_ARCHITECTURE.md) and [Paper v6](https://github.com/cirwel/unitares-paper-v6).
-
 ---
 
 ## Architecture
+
+E, I, and S live in `[0, 1]`, V in `[-1, 1]`. The primary signal is EMA-smoothed from observed behavior ([`src/behavioral_state.py`](src/behavioral_state.py)); verdict thresholds and absolute safety floors are in [`src/behavioral_assessment.py`](src/behavioral_assessment.py); the `governance_core/` math model runs in parallel as a diagnostic cross-check. Full pipeline (drift → entropy, calibration, circuit breaker, peer review) and the math derivation: [Architecture](docs/UNIFIED_ARCHITECTURE.md) and [Paper v6](https://github.com/cirwel/unitares-paper-v6).
 
 ```mermaid
 graph LR
@@ -344,6 +275,8 @@ graph LR
 | Guide | Purpose |
 |-------|---------|
 | [Getting Started](docs/guides/START_HERE.md) | Setup, workflows, tool modes |
+| [How EISV is computed](docs/EISV_COMPUTATION.md) | Deployed formulas vs. target semantics |
+| [Reviewer Guide](docs/REVIEWER_GUIDE.md) | Cold-evaluator path + falsifiability harness |
 | [MCP Clients](docs/integration/MCP_CLIENTS.md) | Cursor / Claude Code / Claude Desktop config |
 | [Architecture](docs/UNIFIED_ARCHITECTURE.md) | Pipeline, verdicts, recovery, storage |
 | [Troubleshooting](docs/guides/TROUBLESHOOTING.md) | Common issues |
