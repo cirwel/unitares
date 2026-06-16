@@ -804,6 +804,9 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
         sensor_eisv = sensor_data.get("eisv")
         if sensor_eisv and isinstance(sensor_eisv, dict):
             ctx.agent_state["sensor_eisv"] = sensor_eisv
+            # Caller-published physical sensor (e.g. Lumen's Pi). Source tag lets
+            # the monitor apply per-source coupling policy (sensor_coupling_allows).
+            ctx.agent_state["sensor_eisv_source"] = "physical"
 
     # Behavioral sensor: compute EISV from governance observables for non-embodied agents
     if "sensor_eisv" not in ctx.agent_state:
@@ -889,6 +892,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 )
                 if behavioral_eisv:
                     ctx.agent_state["sensor_eisv"] = behavioral_eisv
+                    ctx.agent_state["sensor_eisv_source"] = "behavioral"
                     logger.debug(f"Behavioral sensor_eisv injected for {ctx.agent_id}: {behavioral_eisv}")
         except Exception as e:
             logger.debug(f"Behavioral sensor skipped for {ctx.agent_id}: {e}")
