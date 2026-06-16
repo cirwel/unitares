@@ -70,6 +70,29 @@ class State:
 DEFAULT_STATE = State(E=0.7, I=0.8, S=0.2, V=0.0)
 
 
+def eisv_divergence(sensor_eisv: State, ode_state: State) -> dict:
+    """Per-axis divergence between the body (sensor) and the model (ODE).
+
+    Returns ``sensor - ode`` on each axis plus the L2 magnitude. This is the
+    "compare, don't couple" measurement: the ODE evolves as an independent
+    predictor and the sensor is the measured body, so their sustained
+    disagreement is itself the signal (cf. allostatic load) rather than noise
+    to be sprung away.
+
+    The values are in each axis's NATIVE units and are not comparable across
+    axes: the ODE's V is a signed E-I-imbalance accumulator in [-2, 2], whereas
+    a sensor layer (e.g. Lumen's Pi mapping V=(1-presence)*0.3) may put V in a
+    different range derived from a different quantity. Read the axes
+    individually; treat ``magnitude`` as a coarse "how far apart" scalar only.
+    """
+    dE = sensor_eisv.E - ode_state.E
+    dI = sensor_eisv.I - ode_state.I
+    dS = sensor_eisv.S - ode_state.S
+    dV = sensor_eisv.V - ode_state.V
+    magnitude = (dE * dE + dI * dI + dS * dS + dV * dV) ** 0.5
+    return {"dE": dE, "dI": dI, "dS": dS, "dV": dV, "magnitude": magnitude}
+
+
 def _derivatives(
     state: State,
     d_eta_sq: float,
@@ -137,7 +160,9 @@ def _derivatives(
         - params.delta * V
     )
 
-    # Sensor anchoring: spring coupling to observed sensor state
+    # Sensor anchoring: spring coupling to observed sensor state.
+    # Only reached when coupling is opt-in enabled — compute_dynamics passes
+    # sensor_eisv=None here by default (compare, don't couple).
     if sensor_eisv is not None:
         E_range = params.E_max - params.E_min
         S_range = params.S_max - params.S_min
@@ -275,9 +300,12 @@ def compute_dynamics(
         dt: Time step for integration
         noise_S: Optional noise term for S dynamics
         complexity: Task complexity [0, 1] - increases entropy S (default: 0.5)
-        sensor_eisv: Optional sensor-derived EISV state for anchoring (e.g. from Lumen's Pi).
-            When provided, adds a spring coupling term k_anchor*(sensor - state) to each
-            derivative, preventing the ODE from diverging from physical sensor reality.
+        sensor_eisv: Optional sensor-derived EISV state (e.g. from Lumen's Pi, or
+            the behavioral sensor for non-embodied agents). When coupling is
+            enabled (default; UNITARES_SENSOR_COUPLING), it adds a spring term
+            k_anchor*(sensor - state) to each derivative. When disabled, the ODE
+            evolves independently and callers compare against the sensor via
+            eisv_divergence() ("compare, don't couple").
 
     Returns:
         New state after dt time evolution
@@ -289,17 +317,24 @@ def compute_dynamics(
     d_eta = drift_norm(delta_eta)
     d_eta_sq = d_eta * d_eta
 
+    # Sensor EISV coupling is flag-gated (default ON; see
+    # parameters.sensor_coupling_enabled). When disabled, the ODE evolves as an
+    # independent predictor and callers instead compare the result against the
+    # sensor via eisv_divergence() — "compare, don't couple". Coupling can inject
+    # bias when the sensor->EISV mapping is not commensurate per-axis.
+    from .parameters import get_integrator_mode, sensor_coupling_enabled
+    coupling_sensor = sensor_eisv if sensor_coupling_enabled() else None
+
     # Select integrator
-    from .parameters import get_integrator_mode
     integrator = get_integrator_mode()
 
     if integrator == "euler":
         new_state = _integrate_euler(
-            state, d_eta_sq, theta, params, dt, noise_S, complexity, sensor_eisv,
+            state, d_eta_sq, theta, params, dt, noise_S, complexity, coupling_sensor,
         )
     else:
         new_state = _integrate_rk4(
-            state, d_eta_sq, theta, params, dt, noise_S, complexity, sensor_eisv,
+            state, d_eta_sq, theta, params, dt, noise_S, complexity, coupling_sensor,
         )
 
     # Post-integration: complexity-proportional entropy floor

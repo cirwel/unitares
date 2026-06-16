@@ -50,6 +50,7 @@ from governance_core import (
     State, Theta,
     DEFAULT_STATE, DEFAULT_THETA, DEFAULT_PARAMS,
     step_state, coherence,
+    eisv_divergence,
     phi_objective, verdict_from_phi,  # noqa: F401 — re-exported; consumers import them from this module
     )
 
@@ -254,6 +255,10 @@ class UNITARESMonitor:
         # Previous state for drift calculation
         self.prev_parameters: Optional[np.ndarray] = None
 
+        # Most recent model<->body divergence (compare, don't couple); None until
+        # a check-in arrives carrying sensor_eisv (embodied agents like Lumen).
+        self._last_sensor_divergence: Optional[dict] = None
+
         # Timestamps for agent lifecycle tracking
         self.created_at = datetime.now()
         self.last_update = datetime.now()
@@ -283,6 +288,9 @@ class UNITARESMonitor:
                 beh_data = data.pop('behavioral_eisv', None)
                 if beh_data:
                     self._behavioral_state = BehavioralEISV.from_dict(beh_data)
+                # Restore last divergence snapshot if present (transient; pop so
+                # GovernanceState.from_dict does not see an unknown key).
+                self._last_sensor_divergence = data.pop('sensor_divergence', None)
                 # Restore created_at if persisted; otherwise __init__ will fall
                 # back to now() for older state files that predate this field.
                 created_at_iso = data.pop('created_at_iso', None)
@@ -325,6 +333,11 @@ class UNITARESMonitor:
             state_data = self.state.to_dict_with_history()
             # Include behavioral EISV state for persistence
             state_data['behavioral_eisv'] = self._behavioral_state.to_dict_with_history()
+            # Persist the most recent model<->body divergence snapshot (transient
+            # signal; recomputed each check-in, kept for observability/debugging).
+            last_div = getattr(self, '_last_sensor_divergence', None)
+            if last_div is not None:
+                state_data['sensor_divergence'] = last_div
             # Persist created_at so agent age/maturity survives process restarts.
             created_at = getattr(self, 'created_at', None)
             if created_at is not None:
@@ -499,8 +512,29 @@ class UNITARESMonitor:
             noise_S=calibration_penalty,  # Overconfidence raises entropy
             params=active_params,
             complexity=complexity,  # Complexity now affects S dynamics
-            sensor_eisv=sensor_eisv,  # Spring coupling to physical sensors (if available)
+            sensor_eisv=sensor_eisv,  # Compared (not coupled) unless UNITARES_SENSOR_COUPLING
         )
+
+        # Compare, don't couple: record model<->body divergence as a signal.
+        # The ODE above evolved as an independent predictor; the sensor EISV is
+        # the measured body. Their disagreement (cf. allostatic load) is recorded
+        # for observability rather than sprung away. Coupling is opt-in and
+        # flag-gated inside step_state (see sensor_coupling_enabled()).
+        self._last_sensor_divergence = None
+        if sensor_eisv is not None:
+            self._last_sensor_divergence = eisv_divergence(
+                sensor_eisv, self.state.unitaires_state
+            )
+            logger.debug(
+                "sensor_divergence agent=%s magnitude=%.4f "
+                "dE=%+.3f dI=%+.3f dS=%+.3f dV=%+.3f",
+                self.agent_id,
+                self._last_sensor_divergence["magnitude"],
+                self._last_sensor_divergence["dE"],
+                self._last_sensor_divergence["dI"],
+                self._last_sensor_divergence["dS"],
+                self._last_sensor_divergence["dV"],
+            )
 
         # Epistemic humility safeguard: Enforce entropy floor (S >= 0.001) always
         # Perfect equilibrium (S=0.0) is dangerous and brittle - maintain epistemic humility at all times
