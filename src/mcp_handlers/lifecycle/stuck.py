@@ -196,6 +196,16 @@ def _live_lineage_parent_ids(
         # A child pointing at its own id is not a successor — guard self-loops.
         if parent in (getattr(meta, "agent_uuid", None), getattr(meta, "agent_id", None)):
             continue
+        # Subagent/compaction children do NOT supersede their parent: their
+        # parent is concurrent-by-design (a dispatcher mid-dispatch, a
+        # compaction fork), not an exited predecessor. Treating their presence
+        # as succession archives the LIVE parent out from under itself — which
+        # is exactly how a council of dispatched subagents archived the main
+        # session 2026-06-16 (parent had ~12.9k updates, last check-in seconds
+        # earlier). These spawn_reasons declare ancestry with a live parent by
+        # definition; only an exited predecessor is a genuine succession.
+        if (getattr(meta, "spawn_reason", None) or "") in ("subagent", "compaction"):
+            continue
         age = _agent_age_minutes(meta, current_time)
         if age is not None and age <= window_minutes:
             live.add(parent)
