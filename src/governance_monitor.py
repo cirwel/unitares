@@ -13,9 +13,13 @@ Version History:
 import os
 import numpy as np
 from typing import Dict, Optional, Any
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 import json
+
+# How many model<->body divergence samples to retain per agent for trend reads.
+SENSOR_DIVERGENCE_HISTORY_MAX = 200
 
 from config.governance_config import config
 
@@ -257,7 +261,10 @@ class UNITARESMonitor:
 
         # Most recent model<->body divergence (compare, don't couple); None until
         # a check-in arrives carrying sensor_eisv (embodied agents like Lumen).
+        # The bounded history makes the divergence legible as a TREND — the
+        # evidence of whether the EISV mapping holds without coupling forcing it.
         self._last_sensor_divergence: Optional[dict] = None
+        self._sensor_divergence_history: deque = deque(maxlen=SENSOR_DIVERGENCE_HISTORY_MAX)
 
         # Timestamps for agent lifecycle tracking
         self.created_at = datetime.now()
@@ -291,6 +298,12 @@ class UNITARESMonitor:
                 # Restore last divergence snapshot if present (transient; pop so
                 # GovernanceState.from_dict does not see an unknown key).
                 self._last_sensor_divergence = data.pop('sensor_divergence', None)
+                # Restore bounded divergence trend history (pop for the same reason).
+                div_hist = data.pop('sensor_divergence_history', None)
+                if div_hist:
+                    self._sensor_divergence_history = deque(
+                        div_hist, maxlen=SENSOR_DIVERGENCE_HISTORY_MAX
+                    )
                 # Restore created_at if persisted; otherwise __init__ will fall
                 # back to now() for older state files that predate this field.
                 created_at_iso = data.pop('created_at_iso', None)
@@ -338,6 +351,10 @@ class UNITARESMonitor:
             last_div = getattr(self, '_last_sensor_divergence', None)
             if last_div is not None:
                 state_data['sensor_divergence'] = last_div
+            # Persist the bounded divergence trend so it survives restarts.
+            div_hist = getattr(self, '_sensor_divergence_history', None)
+            if div_hist:
+                state_data['sensor_divergence_history'] = list(div_hist)
             # Persist created_at so agent age/maturity survives process restarts.
             created_at = getattr(self, 'created_at', None)
             if created_at is not None:
@@ -525,6 +542,9 @@ class UNITARESMonitor:
             self._last_sensor_divergence = eisv_divergence(
                 sensor_eisv, self.state.unitaires_state
             )
+            # Stamp + retain for trend reads (bounded by SENSOR_DIVERGENCE_HISTORY_MAX).
+            self._last_sensor_divergence["at"] = datetime.now().isoformat()
+            self._sensor_divergence_history.append(self._last_sensor_divergence)
             logger.debug(
                 "sensor_divergence agent=%s magnitude=%.4f "
                 "dE=%+.3f dI=%+.3f dS=%+.3f dV=%+.3f",
