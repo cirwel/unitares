@@ -150,11 +150,18 @@ async def archive_stale_public_r1_scores(
     """Archive stale public R1 KG nodes.
 
     The audit table keeps score history. Public KG nodes are the redacted,
-    deduped-by-pair projection and are archived after 30 days without re-score.
+    deduped-by-pair projection and are archived after the TTL without re-score.
+
+    ``ttl_days=0`` archives EVERY open ``trajectory_continuity_score`` node
+    regardless of age. R1 scores are no longer emitted to the public KG (the
+    emission was removed as KG pollution — see
+    ``src/identity/trajectory_continuity.py``), so this age-agnostic mode is
+    the one-shot backlog cleanup for the legacy nodes. It is idempotent: a
+    second run finds nothing because the first archived them all.
     """
     backend = db or _get_db()
-    if ttl_days <= 0:
-        raise ValueError("ttl_days must be positive")
+    if ttl_days < 0:
+        raise ValueError("ttl_days must be non-negative (0 = archive all)")
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive when provided")
 

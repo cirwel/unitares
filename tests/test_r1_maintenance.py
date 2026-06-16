@@ -223,3 +223,39 @@ async def test_archive_stale_public_r1_scores_apply_archives_rows():
     sql = conn.fetch.await_args.args[0]
     assert "UPDATE knowledge.discoveries" in sql
     assert "LIMIT 1" in sql
+
+
+@pytest.mark.asyncio
+async def test_archive_stale_public_r1_scores_ttl_zero_archives_all_regardless_of_age():
+    """ttl_days=0 is the one-shot backlog cleanup: the SQL predicate becomes
+    COALESCE(updated_at, created_at) < now(), matching every existing node.
+    The guard must accept 0 (the prior `<= 0` guard rejected it)."""
+    from src.identity.r1_maintenance import archive_stale_public_r1_scores
+
+    now = datetime(2026, 6, 16, tzinfo=timezone.utc)
+    conn = SimpleNamespace()
+    conn.fetch = AsyncMock(return_value=[
+        {
+            "id": "r1_score:today",
+            "agent_id": "child",
+            "created_at": now,
+            "updated_at": now,
+            "status": "archived",
+        },
+    ])
+    backend = _Backend(conn)
+
+    result = await archive_stale_public_r1_scores(db=backend, ttl_days=0, dry_run=False)
+
+    assert result["ttl_days"] == 0
+    assert result["archived"] == 1
+    # ttl_days=0 is passed through to the age predicate (now() - 0 days = now()).
+    assert conn.fetch.await_args.args[1] == 0
+
+
+@pytest.mark.asyncio
+async def test_archive_stale_public_r1_scores_rejects_negative_ttl():
+    from src.identity.r1_maintenance import archive_stale_public_r1_scores
+
+    with pytest.raises(ValueError, match="non-negative"):
+        await archive_stale_public_r1_scores(db=_Backend(SimpleNamespace()), ttl_days=-1)

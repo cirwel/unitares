@@ -8,8 +8,10 @@ Subcommands:
    scores call ``demote_lineage`` only when ``--apply-orphans`` is passed. The
    score evaluation itself writes the normal R1 audit/KG records.
 
-2. ``archive-public-kg`` — archive stale public R1 KG score nodes after the
-   v3.2-D TTL. Defaults to dry-run; pass ``--apply`` to update statuses.
+2. ``archive-public-kg`` — archive public R1 KG score nodes. Defaults to
+   dry-run; pass ``--apply`` to update statuses. ``--ttl-days 0`` archives
+   ALL open nodes regardless of age (one-shot backlog cleanup, since R1
+   scores are no longer emitted to the public KG).
 """
 
 from __future__ import annotations
@@ -55,7 +57,13 @@ async def main() -> int:
         "archive-public-kg",
         help="Archive stale public R1 KG score nodes after the TTL.",
     )
-    archive.add_argument("--ttl-days", type=int, default=30, help="TTL in days (default: 30).")
+    archive.add_argument(
+        "--ttl-days",
+        type=int,
+        default=30,
+        help="TTL in days (default: 30). Use 0 to archive ALL open nodes regardless of age "
+             "(one-shot backlog cleanup now that R1 scores are no longer emitted to the KG).",
+    )
     archive.add_argument("--limit", type=int, default=None, help="Limit rows archived.")
     archive.add_argument("--apply", action="store_true", help="Archive rows instead of dry-run.")
 
