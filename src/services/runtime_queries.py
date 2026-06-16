@@ -78,6 +78,19 @@ def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, An
         behavioral_eisv = None
         behavioral_confidence = 0.0
 
+    # Model<->body divergence (compare, don't couple). Present only for agents
+    # that submit a sensor EISV (embodied like Lumen, or behavioral). The recent
+    # trend is the evidence of whether the EISV mapping holds without the spring
+    # forcing agreement — read per-axis (dV is expected to drift for Lumen).
+    sensor_divergence = getattr(monitor, "_last_sensor_divergence", None)
+    sensor_divergence_recent = None
+    try:
+        hist = getattr(monitor, "_sensor_divergence_history", None)
+        if hist:
+            sensor_divergence_recent = list(hist)[-20:]
+    except Exception:
+        sensor_divergence_recent = None
+
     primary_source = "behavioral" if behavioral_confidence >= 0.3 else "ode_fallback"
     from src.governance_glossary import explain_eisv_source
     primary_source_meta = explain_eisv_source(primary_source)
@@ -98,6 +111,8 @@ def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, An
         "behavioral_eisv": behavioral_eisv,
         "ode_eisv": ode_eisv,
         "ode_diagnostics": ode_diagnostics,
+        "sensor_divergence": sensor_divergence,
+        "sensor_divergence_recent": sensor_divergence_recent,
         "state_semantics": {
             "flat_fields_mean": "primary_eisv",
             "primary_eisv_role": (
@@ -114,6 +129,11 @@ def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, An
                 "Used for convergence tracking and phi calculation. NOT used for verdicts."
             ),
             "ode_diagnostics_role": "Thermostat dynamics diagnostics (phi, regime, lambda1)",
+            "sensor_divergence_role": (
+                "Per-axis sensor - ODE gap (and recent trend). Evidence of whether the "
+                "EISV mapping holds without coupling forcing it; read per-axis in native "
+                "units (axes are not cross-comparable). Null when no sensor EISV is submitted."
+            ),
             "measurement_policy_contract": (
                 "EISV measurements feed governance policy; policy evaluation chooses guidance/action; "
                 "enforcement is a separate runtime boundary."
