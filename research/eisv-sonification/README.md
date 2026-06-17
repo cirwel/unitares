@@ -84,6 +84,26 @@ The harness is built and the verdict is honest; a *fair* test needs non-spurious
 pauses to accumulate (auto-`TIER_A` from 2026-06-08 on). This also redirects the mapping:
 on real data S, not V, is the channel doing the work — the opposite of the synthetic premise.
 
+## v0.2: one morphing field, no delivery artifacts (`sonify_v02.py`)
+
+A *sequence of bars* (v0/v0.1) smuggles in **tempo** (the chunk rate) and **melody**
+(the bar grid + E-quantization → a fixed A-G loop) as audible structure that encodes
+the *rendering method*, not the agent — "a graph accidentally presenting information
+about graphs." v0.2 removes them: the whole episode is **one sustained chord on a fixed
+root that morphs continuously**, in proportion to the **real check-in cadence**, so the
+rate of souring is the real rate of drift, not an imposed beat. The governing line:
+*mapping choices (EISV → harmony) are legitimate; delivery choices (chunking → beat,
+sequence → melody) are artifacts to remove. Every audible change must be an EISV change.*
+
+Mapping: S→dissonance (foreground), I→intonation (detune flat when low), E→brightness
+(low E = dull, not low-pitched — "tired" not "ominous"), risk→sub-bass + tremor **only
+above a gate** (so a healthy field is bright/restful, not horror), V→a near-inaudible
+cents bias (demoted integral). A healthy EISV renders as a bright, in-tune C-major
+"home"; drift sours away from it. (`v02_home_healthy.wav` = the consonant reference.)
+
+Still open (needs ears + the blinded sort): whether a held morphing field is *perceptible*
+enough to read — honesty is fixed, discriminability is not yet tested.
+
 ## Finding: the salience hierarchy is inverted (S is the signal, V is memory)
 
 Chasing *why* V is flat turned up a design principle, not just a data quirk.
