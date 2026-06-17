@@ -212,6 +212,32 @@ def _live_lineage_parent_ids(
     return live
 
 
+def _live_child_uuids(
+    current_time, window_minutes: float = LINEAGE_SUCCESSION_FRESH_WINDOW_MINUTES
+) -> set:
+    """UUIDs of the active, recent SUCCESSION children feeding _live_lineage_parent_ids.
+
+    Same selection as _live_lineage_parent_ids (active + recent + non-subagent/
+    compaction spawn_reason), but returns the CHILD UUIDs rather than their
+    declared parents — the seed set for transitive succession-ancestor lookups.
+    """
+    children: set = set()
+    for meta in mcp_server.agent_metadata.values():
+        parent = getattr(meta, "parent_agent_id", None)
+        if not parent:
+            continue
+        if getattr(meta, "status", None) != "active":
+            continue
+        if (getattr(meta, "spawn_reason", None) or "") in ("subagent", "compaction"):
+            continue
+        age = _agent_age_minutes(meta, current_time)
+        if age is not None and age <= window_minutes:
+            uid = getattr(meta, "agent_uuid", None) or getattr(meta, "agent_id", None)
+            if uid:
+                children.add(uid)
+    return children
+
+
 def _is_superseded_by_lineage(agent_id, meta, live_parent_ids: set) -> bool:
     """True if a live lineage child has taken over from this agent."""
     if not live_parent_ids:
@@ -591,6 +617,20 @@ async def _archive_superseded_parents(current_time) -> list:
     live_parent_ids = _live_lineage_parent_ids(current_time)
     if not live_parent_ids:
         return results
+
+    # SHADOW (observation-only, no mutation): measure what transitive
+    # succession-reachability WOULD add beyond this single-hop set, and log the
+    # AGE-vs-CTE topology agreement (evidence for the AGE-canonical step-1
+    # decision). Stays measurement-only until the liveness gate sources ephemeral
+    # agents from the lease plane — see lineage_reachability ACTIVATION
+    # PREREQUISITE. Never drives the archival loop below.
+    try:
+        from .lineage_reachability import measure_transitive_expansion
+        await measure_transitive_expansion(
+            _live_child_uuids(current_time), live_parent_ids
+        )
+    except Exception as e:  # pragma: no cover - observation must never block archival
+        logger.debug("transitive lineage shadow measure failed: %s", type(e).__name__)
 
     for agent_id, meta in list(mcp_server.agent_metadata.items()):
         if meta.status != "active":
