@@ -66,6 +66,35 @@ class TestSensorDivergenceTrend:
         # Bound is preserved on the restored deque.
         assert restored._sensor_divergence_history.maxlen == SENSOR_DIVERGENCE_HISTORY_MAX
 
+    def test_loads_pre780_state_file_without_divergence_keys(self, isolated_data_dir):
+        """Root-cause regression (incident 2026-06-16): an established agent whose
+        persisted state file predates the divergence fields loads via the
+        load_state branch, which SKIPS _initialize_fresh_state(). Before the fix
+        the attributes were set only in that method, so the monitor came up
+        WITHOUT them and rejected the next sensor-carrying check-in. They must now
+        be initialized unconditionally in __init__.
+        """
+        import json
+
+        # Seed a real save, then strip the divergence keys to mimic a pre-#780 file.
+        seed = UNITARESMonitor(agent_id="div_pre780", load_state=False)
+        seed.process_update(dict(BASE_STATE))
+        seed.save_persisted_state()
+
+        path = isolated_data_dir / "data" / "agents" / "div_pre780_state.json"
+        data = json.loads(path.read_text())
+        data.pop("sensor_divergence", None)
+        data.pop("sensor_divergence_history", None)
+        path.write_text(json.dumps(data))
+
+        # Load via the persisted-state branch — must still have the attributes.
+        restored = UNITARESMonitor(agent_id="div_pre780", load_state=True)
+        assert hasattr(restored, "_sensor_divergence_history")
+        assert hasattr(restored, "_last_sensor_divergence")
+        # And a sensor-carrying check-in records cleanly (no AttributeError).
+        restored.process_update({**BASE_STATE, "sensor_eisv": dict(SENSOR)})
+        assert len(restored._sensor_divergence_history) == 1
+
     def test_self_heals_when_attr_missing(self):
         """A monitor restored bypassing __init__ (a pickle/cache instance from
         before this attribute existed, or the Pi plugin's older build) lacks

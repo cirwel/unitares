@@ -132,7 +132,17 @@ class UNITARESMonitor:
         
         # Initialize last_update timestamp (needed for simulate_update)
         self.last_update = datetime.now()
-        
+
+        # Model<->body sensor divergence ("compare, don't couple"). MUST be set
+        # here, not only in _initialize_fresh_state(): the persisted-state branch
+        # below (load_state=True + state file present) skips _initialize_fresh_state
+        # entirely, so any established agent whose state file predates these fields
+        # would otherwise reach update_dynamics without them and reject its check-in
+        # with AttributeError (incident 2026-06-16, #800). load_persisted_state()
+        # overrides these when the file carries a divergence history.
+        self._last_sensor_divergence: Optional[dict] = None
+        self._sensor_divergence_history: deque = deque(maxlen=SENSOR_DIVERGENCE_HISTORY_MAX)
+
         # Initialize dual-log architecture for grounded EISV inputs
         # ContinuityLayer compares operational (server-derived) vs reflective (agent-reported)
         # to produce grounded complexity, divergence metrics, and EISV inputs
