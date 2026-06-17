@@ -662,8 +662,21 @@ async def _archive_superseded_parents(current_time) -> list:
         # case; this is the real liveness signal. Best-effort: get_live_bindings
         # returns [] on DB error, falling back to prior behavior rather than
         # blocking cleanup.
-        from src.mcp_handlers.identity.process_binding import get_live_bindings
+        #
+        # Two liveness sources, either of which protects: (1) a process binding
+        # (today only written when a client sends process_fingerprint — rare, so
+        # this is structurally blind to most ephemeral agents); (2) a live
+        # agent:/<uuid> lease-plane presence lease, the signal the check-in-path
+        # producer keeps fresh for exactly the ephemeral agents binding-liveness
+        # misses. Both fail-open (False on error) so a liveness lookup failure
+        # never blocks cleanup; either being live is sufficient to preserve.
+        from src.mcp_handlers.identity.process_binding import (
+            get_live_bindings,
+            has_live_agent_lease,
+        )
         if await get_live_bindings(agent_id):
+            continue
+        if await has_live_agent_lease(getattr(meta, "agent_uuid", None)):
             continue
         ok = await _archive_one_agent(
             agent_id, meta, "lineage_succession", monitors=mcp_server.monitors

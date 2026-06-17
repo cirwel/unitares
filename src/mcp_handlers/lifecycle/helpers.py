@@ -61,10 +61,17 @@ async def manual_archive_liveness_signals(
     signals: list[str] = []
 
     try:
-        from src.mcp_handlers.identity.process_binding import get_live_bindings
+        from src.mcp_handlers.identity.process_binding import (
+            get_live_bindings,
+            has_live_agent_lease,
+        )
         bindings = await get_live_bindings(agent_uuid)
         if bindings:
             signals.append(f"{len(bindings)} live process binding(s)")
+        # Lease-plane presence — the liveness signal for ephemeral agents that
+        # binding-liveness is structurally blind to (see has_live_agent_lease).
+        if await has_live_agent_lease(agent_uuid):
+            signals.append("live agent:/ lease-plane presence lease")
     except Exception as e:  # pragma: no cover - defensive, fail-open
         logger.debug(f"manual_archive liveness binding check failed: {e}")
 

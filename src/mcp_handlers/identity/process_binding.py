@@ -307,6 +307,47 @@ async def get_live_bindings(agent_id: str) -> List[Dict[str, Any]]:
         return []
 
 
+async def has_live_agent_lease(agent_uuid: Optional[str]) -> bool:
+    """True if the agent holds a live ``agent:/<uuid>`` lease-plane presence lease.
+
+    The lease-plane liveness signal for EPHEMERAL agents — the ones that don't
+    hold a ``local_beam`` resident lease and (today) write no process binding, so
+    ``get_live_bindings`` is structurally blind to them. The recurring
+    false-archival bug is exactly that blindness: an ephemeral agent with no
+    runtime liveness signal gets archived as a succeeded predecessor while still
+    working. Pairs with the check-in-path producer that acquires/heartbeats the
+    ``agent:/<uuid>`` lease.
+
+    Liveness = an unreleased ``agent:/`` surface lease whose TTL has not expired
+    (keyed on ``expires_at``, NOT ``last_heartbeat_at`` — resident leases leave
+    that NULL by design). Reads ``lease_plane.surface_leases`` directly (same
+    governance DB). Returns False on a missing uuid or ANY error, so the caller
+    falls back to its other liveness signals — this can only ADD protection,
+    never remove it.
+    """
+    if not agent_uuid:
+        return False
+    try:
+        from src.db import get_db
+        db = get_db()
+        async with db.acquire() as conn:
+            live = await conn.fetchval(
+                """
+                SELECT EXISTS(
+                    SELECT 1 FROM lease_plane.surface_leases
+                    WHERE surface_id = $1
+                      AND released_at IS NULL
+                      AND expires_at > NOW()
+                )
+                """,
+                f"agent:/{agent_uuid}",
+            )
+        return bool(live)
+    except Exception as e:  # pragma: no cover - defensive, fail-open to other signals
+        logger.debug(f"[PROCESS_BINDING] has_live_agent_lease failed (non-fatal): {e}")
+        return False
+
+
 async def process_binding_sweeper_task() -> None:
     """Periodic sweeper — runs every LIVE_WINDOW_SECONDS.
 
