@@ -102,12 +102,13 @@ of of a pre-seeded table row.
 > *is* the narrow reading. The narrow reading is therefore **forced by S19's
 > survival**, not a free reinterpretation.
 >
-> **What remains genuinely operator-intent:** only whether the operator, when
+> **What remained genuinely operator-intent:** only whether the operator, when
 > ratifying #810, *meant* the (now-shown-incoherent) universal or the (forced)
-> narrow scope. The merits no longer hinge on it — but since #810 is operator-
-> ratified and identity is writer-locked, confirm the reading before the cutover
-> row opens. The decision has shrunk from "is the third row legitimate?" to "ack
-> the narrow scope you were already committed to by keeping S19."
+> narrow scope. **✅ RATIFIED narrow, operator, 2026-06-17.** The narrow scope —
+> "no strong from the process's own self-assertion; substrate/runtime attestation
+> by a trusted witness is the honest strong path" — is the committed reading. The
+> third row is legitimate under it. (This unblocks the *design* gate only; the
+> cutover is still deferred to the 2026-06-24 Wave-3 read.)
 
 ## 2. Scope boundary (state plainly)
 
@@ -558,8 +559,7 @@ that travels."
   - **Pre-existing live defect surfaced:** `governance.sock` is mode 0666 not 0600
     (S19 connect population is wider than the listener claims) — flagged for a
     fix-first prerequisite at cutover, independent of this design.
-- **OPEN operator call (now intent-only):** acknowledge the narrow #810 scope
-  (§1 ⚠ box) before the cutover row opens. The merits are settled; only the
-  intent confirmation remains.
+- **✅ Operator call RESOLVED 2026-06-17: narrow #810 scope ratified** (§1 ⚠ box).
+  Design gate clear; cutover still deferred to the 2026-06-24 Wave-3 read.
 - **Implementation correctness: NOT GATED** — lives in the PoC tests + the
   deferred cutover's adversary suite.
