@@ -146,8 +146,14 @@ class DatabaseBackend(ABC):
         status: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
+        participated_only: bool = False,
     ) -> List[IdentityRecord]:
-        """List identities with optional filtering."""
+        """List identities with optional filtering.
+
+        ``participated_only=True`` restricts to identities with at least one
+        measured (``synthetic = false``) ``core.agent_state`` row. Default
+        ``False`` preserves the show-everything behavior.
+        """
         pass
 
     @abstractmethod

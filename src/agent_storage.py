@@ -453,16 +453,31 @@ async def list_agents(
     offset: int = 0,
     include_archived: bool = False,
     include_deleted: bool = False,
+    include_unparticipated: bool = False,
 ) -> List[AgentRecord]:
     """
     List agents with optional filtering.
 
     By default excludes archived and deleted agents unless explicitly included.
+
+    By default also excludes "never participated" identities — rows that
+    exist from an ``onboard()`` but whose process never recorded a real
+    (``synthetic = false``) check-in. ~48% of ``core.identities`` are this
+    class and they pollute listings and counts. Pass
+    ``include_unparticipated=True`` to restore the historic show-everything
+    behavior (operator audit / orphan classification / the cold-start
+    metadata cache load all opt in). This is **view-only**: it filters what
+    is returned and never archives, deletes, or mutates any identity.
     """
     await _ensure_db_ready()
     db = get_db()
 
-    identities = await db.list_identities(status=status, limit=limit, offset=offset)
+    identities = await db.list_identities(
+        status=status,
+        limit=limit,
+        offset=offset,
+        participated_only=(not include_unparticipated),
+    )
 
     # Fetch labels from core.agents in one batch query
     agent_labels = {}
