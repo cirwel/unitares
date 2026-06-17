@@ -214,7 +214,7 @@ UNITARES is **adversarial-aware, not adversarial-naive**, with deliberately cons
 
 ## Production snapshot
 
-Frozen public snapshot from June 16, 2026 (single-operator deployment — the author's own traffic, not external adoption). Headline: **3.7M+ governance events processed · ≈714K in the last 7 days**.
+Frozen public snapshot from June 16, 2026 (single-operator — the author's own traffic). Headline: **3.7M+ governance events processed · ≈714K in the last 7 days**.
 
 <details>
 <summary><strong>Full metrics table</strong></summary>
