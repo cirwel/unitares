@@ -111,6 +111,17 @@ defmodule AgentOrchestrator.HTTPRouterTest do
       assert body_json(conn)["error"] == "schema_invalid"
     end
 
+    test "415 on an unsupported media type" do
+      conn =
+        conn(:post, "/v1/agents", "cmd=echo")
+        |> put_req_header("content-type", "text/plain")
+        |> put_req_header("authorization", "Bearer " <> @token)
+        |> call()
+
+      assert conn.status == 415
+      assert body_json(conn)["error"] == "unsupported_media_type"
+    end
+
     test "422 when the executable does not exist" do
       conn = call(authed(:post, "/v1/agents", %{cmd: "definitely-not-a-real-binary-xyz"}))
       assert conn.status == 422
