@@ -558,53 +558,101 @@ async def resolve_session_identity(
                         # the current request's fingerprint. Mismatch fires
                         # identity_hijack_suspected with path="path1_session_id" and,
                         # in strict mode, falls through to a fresh session.
-                        cached_bind_fp = cached.get("bind_ip_ua")
-                        if cached_bind_fp:
+                        #
+                        # #802 per-path hardening: the `agent-` prefix shape also
+                        # honors UNITARES_PREFIX_BIND_FINGERPRINT, which may be set
+                        # stricter than the global default. Under that per-path mode an
+                        # ABSENT binding-time OR current fingerprint is itself
+                        # non-authorizing for the prefix shape (a UUID-derivable key
+                        # with no recorded fingerprint has no ownership proof — the
+                        # bind_ip_ua-absent hole). The per-path mode is scoped to the
+                        # prefix shape, so non-prefix keys and the default-off posture
+                        # stay byte-identical to prior behavior. Closes only the
+                        # cross-fingerprint hijack; same-fingerprint co-residents still
+                        # pass (residual needs the substrate/UDS path — see #802).
+                        from config.governance_config import (
+                            session_fingerprint_check_mode,
+                            prefix_bind_fingerprint_mode,
+                        )
+                        _is_prefix_key = session_key.startswith("agent-")
+                        _global_fp_mode = session_fingerprint_check_mode()
+                        _prefix_fp_mode = (
+                            prefix_bind_fingerprint_mode() if _is_prefix_key else "off"
+                        )
+                        _FP_RANK = {"off": 0, "log": 1, "strict": 2}
+                        _fp_mode = _global_fp_mode
+                        if _FP_RANK.get(_prefix_fp_mode, 0) > _FP_RANK.get(_global_fp_mode, 0):
+                            _fp_mode = _prefix_fp_mode
+                        # The absent-fingerprint branches fire ONLY when the per-path
+                        # flag is active (>=log). The global check must never penalize
+                        # a missing fingerprint — that is the legacy-cache backward-
+                        # compat contract (test_legacy_cache_without_bind_fp_no_event):
+                        # strict-mode promotion must not retroactively invalidate every
+                        # pre-existing session that predates the bind_ip_ua field.
+                        _prefix_active = _is_prefix_key and _prefix_fp_mode != "off"
+
+                        if _fp_mode != "off":
+                            cached_bind_fp = cached.get("bind_ip_ua")
                             try:
                                 from ..context import get_session_signals
                                 _sig = get_session_signals()
                                 current_fp = getattr(_sig, "ip_ua_fingerprint", None) if _sig else None
                             except Exception:
                                 current_fp = None
-                            if current_fp and current_fp != cached_bind_fp:
-                                from config.governance_config import session_fingerprint_check_mode
-                                _fp_mode = session_fingerprint_check_mode()
-                                if _fp_mode != "off":
-                                    logger.warning(
-                                        "[PATH1_FINGERPRINT_MISMATCH] session_key=%s... "
-                                        "bound_fp=%s current_fp=%s — suspected hijack of "
-                                        "agent=%s... (mode=%s)",
-                                        session_key[:20],
-                                        cached_bind_fp[:16],
-                                        current_fp[:16],
-                                        agent_uuid[:8],
-                                        _fp_mode,
-                                    )
-                                    try:
-                                        from .handlers import _broadcaster
-                                        _b = _broadcaster()
-                                        if _b is not None:
-                                            await _b.broadcast_event(
-                                                event_type="identity_hijack_suspected",
-                                                agent_id=agent_uuid,
-                                                payload={
-                                                    "path": "path1_session_id",
-                                                    "mode": _fp_mode,
-                                                    "source": "path1_fingerprint_mismatch",
-                                                    "bind_fp_prefix": cached_bind_fp[:8],
-                                                    "current_fp_prefix": current_fp[:8],
-                                                },
-                                            )
-                                    except Exception as _be:
-                                        logger.warning(
-                                            f"[PATH1_FINGERPRINT_MISMATCH] broadcast failed: {_be}"
+
+                            _violation = None
+                            if cached_bind_fp and current_fp and current_fp != cached_bind_fp:
+                                _violation = "fingerprint_mismatch"
+                            elif _prefix_active and not cached_bind_fp:
+                                _violation = "no_bind_fingerprint"
+                            elif _prefix_active and not current_fp:
+                                _violation = "no_current_fingerprint"
+
+                            if _violation:
+                                # NB: the session_key prefix is carried in the
+                                # structured broadcast payload below rather than in
+                                # this clear-text warning. session_key is a non-secret,
+                                # UUID-derivable identifier (the whole premise of #802),
+                                # but its name trips CodeQL's clear-text-logging name
+                                # heuristic; agent_uuid already identifies the subject.
+                                logger.warning(
+                                    "[PATH1_FINGERPRINT_MISMATCH] bound_fp=%s "
+                                    "current_fp=%s reason=%s — suspected hijack of "
+                                    "agent=%s... (mode=%s)",
+                                    (cached_bind_fp or "<none>")[:16],
+                                    (current_fp or "<none>")[:16],
+                                    _violation,
+                                    agent_uuid[:8],
+                                    _fp_mode,
+                                )
+                                try:
+                                    from .handlers import _broadcaster
+                                    _b = _broadcaster()
+                                    if _b is not None:
+                                        await _b.broadcast_event(
+                                            event_type="identity_hijack_suspected",
+                                            agent_id=agent_uuid,
+                                            payload={
+                                                "path": "path1_session_id",
+                                                "mode": _fp_mode,
+                                                "source": "path1_fingerprint_mismatch",
+                                                "reason": _violation,
+                                                "prefix_scoped": _prefix_active,
+                                                "session_key_prefix": session_key[:20],
+                                                "bind_fp_prefix": (cached_bind_fp or "")[:8],
+                                                "current_fp_prefix": (current_fp or "")[:8],
+                                            },
                                         )
-                                    if _fp_mode == "strict":
-                                        # Fall through to PATH 3 (fresh session).
-                                        # Do NOT delete the cache entry — the
-                                        # legitimate owner can still resume from
-                                        # the correct fingerprint.
-                                        resume = False
+                                except Exception as _be:
+                                    logger.warning(
+                                        f"[PATH1_FINGERPRINT_MISMATCH] broadcast failed: {_be}"
+                                    )
+                                if _fp_mode == "strict":
+                                    # Fall through to PATH 3 (fresh session).
+                                    # Do NOT delete the cache entry — the
+                                    # legitimate owner can still resume from
+                                    # the correct fingerprint.
+                                    resume = False
 
                         # If strict-mode fingerprint mismatch set resume=False
                         # above, skip the cached-resume return and fall through

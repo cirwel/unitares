@@ -1070,6 +1070,52 @@ def session_fingerprint_check_mode() -> str:
 
 
 # =============================================================================
+# PREFIX-BIND FINGERPRINT MODE (#802 — per-path hardening)
+# =============================================================================
+# The `agent-{uuid12}` prefix shape is resolvable from a victim's UUID alone
+# (logs, KG metadata, leaked anchor files), and PATH 1 resolves it to the
+# bound UUID. The global UNITARES_SESSION_FINGERPRINT_CHECK cannot safely flip
+# to `strict` fleet-wide because IP:UA is legitimately SHARED by co-resident
+# localhost clients (e.g. the bridge + gateway, both python-httpx) — strict
+# would false-reject real twins. But the prefix shape specifically warrants a
+# stricter ownership check than the global default, and — unlike the global
+# check — an ABSENT binding-time fingerprint on a prefix key is itself
+# non-authorizing: a UUID-derivable key with no recorded fingerprint carries
+# no ownership proof at all (the bind_ip_ua-absent hole at resolution.py
+# PATH 1, council finding for #802).
+#
+# This flag scopes that stricter check to the `agent-` prefix shape only,
+# leaving the global default untouched. Modes mirror the global flag and
+# follow the same staged off→log→strict ramp as STRICT_IDENTITY_REQUIRED
+# (#425):
+#   "off"    — no per-path check (DEFAULT; behavior identical to today)
+#   "log"    — emit [PATH1_FINGERPRINT_MISMATCH] + identity_hijack_suspected
+#              on a prefix-key ownership failure (fingerprint mismatch OR an
+#              absent binding/current fingerprint); resume still proceeds
+#   "strict" — same events, but the prefix resume falls through to a fresh
+#              session (PATH 3) instead of returning the cached UUID
+#
+# When set above the global mode, the per-path mode takes precedence for the
+# prefix shape. This closes only the CROSS-fingerprint hijack; a same-
+# fingerprint co-resident still passes (that residual needs the substrate/UDS
+# peer-credential path — see issue #802). Redaction stays load-bearing.
+# Override: UNITARES_PREFIX_BIND_FINGERPRINT env var.
+PREFIX_BIND_FINGERPRINT_MODE: str = os.getenv(
+    "UNITARES_PREFIX_BIND_FINGERPRINT", "off"
+).strip().lower()
+if PREFIX_BIND_FINGERPRINT_MODE not in _VALID_FINGERPRINT_MODES:
+    PREFIX_BIND_FINGERPRINT_MODE = "off"
+
+
+def prefix_bind_fingerprint_mode() -> str:
+    """Runtime accessor — respects env changes set after module load (tests)."""
+    m = os.getenv(
+        "UNITARES_PREFIX_BIND_FINGERPRINT", PREFIX_BIND_FINGERPRINT_MODE
+    ).strip().lower()
+    return m if m in _VALID_FINGERPRINT_MODES else "off"
+
+
+# =============================================================================
 # IP:UA ONBOARD PIN CHECK MODE (PATH 2 — council follow-up to #83)
 # =============================================================================
 # `derive_session_key` step 7 resolves an unauthenticated `onboard()` call
