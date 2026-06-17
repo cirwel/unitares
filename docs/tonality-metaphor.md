@@ -25,6 +25,15 @@ tonic of one key and a jarring accidental in another. Consonance is relational,
 and so is risk. Because both systems are relativistic in the same way, the
 mapping is structural rather than cosmetic.
 
+This is not a private coincidence. The claim that musical meaning *is* the
+maintenance and violation of expectation under a learned model has a lineage:
+Meyer ground affect in the inhibition and resolution of expectation [^meyer];
+Huron's ITPRA theory made it a prediction-error account of musical feeling
+[^huron]; and the predictive-processing reading of music states the FEP case
+directly — a listener is a generative model minimizing surprise, a key is its
+prior, chromaticism is precision-weighted prediction error [^koelsch]. The tonal
+lens on UNITARES is the same idea pointed at agent behavior instead of pitch.
+
 ## The core mapping
 
 | Music | UNITARES | Why it lines up |
@@ -75,6 +84,16 @@ C(V, Θ) = Cmax · 0.5 · (1 + tanh(Θ.C₁ · V))
 feedback that, left to run, resolves the tension. When `V → −∞`, `C → 0`
 (incoherent, integrity starved of energy); when `V → +∞`, `C → Cmax`.
 
+The affect, though, is not in the level of `V` but in its *trajectory*. A
+suspended chord is not tense because of where it sits; it is tense because of
+where it is heading. Three independent vocabularies converge on this: Huron's
+account locates musical feeling in the unfolding of expectation rather than any
+static chord [^huron]; active-inference models of emotion put valence at the
+**time-derivative of free energy** — falling free energy feels good, rising feels
+bad [^joffily]; and UNITARES's own contract insists a single check-in is
+uninformative (`margin: settling`) because the governed quantity is longitudinal.
+Read `dV/dt`, not `V` — the same reason you cannot hear a cadence in one note.
+
 ## Where the metaphor stops
 
 A metaphor that explains everything explains nothing, so the boundaries matter:
@@ -104,3 +123,22 @@ then go read the formulas.
   honest failure looks like.
 - [`ontology/identity.md`](ontology/identity.md) — what "an agent" (the thing
   whose key we are tracking) is.
+
+## References
+
+[^meyer]: Meyer, L. B. (1956). *Emotion and Meaning in Music.* University of
+    Chicago Press. Affect arises from the inhibition and resolution of
+    expectation — a pre-formal expectation/prediction-error account.
+
+[^huron]: Huron, D. (2006). *Sweet Anticipation: Music and the Psychology of
+    Expectation.* MIT Press. The ITPRA theory — musical feeling as the trajectory
+    of expectation, not any static event.
+
+[^koelsch]: Koelsch, S., Vuust, P., & Friston, K. (2019). "Predictive Processes
+    and the Peculiar Case of Music." *Trends in Cognitive Sciences*, 23(1),
+    63–77. Music perception as free-energy minimization; key as prior,
+    expectation violation as precision-weighted prediction error.
+
+[^joffily]: Joffily, M., & Coricelli, G. (2013). "Emotional Valence and the
+    Free-Energy Principle." *PLoS Computational Biology*, 9(6), e1003094. Valence
+    as the time-derivative of (variational) free energy.
