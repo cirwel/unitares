@@ -609,11 +609,16 @@ async def resolve_session_identity(
                                 _violation = "no_current_fingerprint"
 
                             if _violation:
+                                # NB: the session_key prefix is carried in the
+                                # structured broadcast payload below rather than in
+                                # this clear-text warning. session_key is a non-secret,
+                                # UUID-derivable identifier (the whole premise of #802),
+                                # but its name trips CodeQL's clear-text-logging name
+                                # heuristic; agent_uuid already identifies the subject.
                                 logger.warning(
-                                    "[PATH1_FINGERPRINT_MISMATCH] session_key=%s... "
-                                    "bound_fp=%s current_fp=%s reason=%s — suspected "
-                                    "hijack of agent=%s... (mode=%s)",
-                                    session_key[:20],
+                                    "[PATH1_FINGERPRINT_MISMATCH] bound_fp=%s "
+                                    "current_fp=%s reason=%s — suspected hijack of "
+                                    "agent=%s... (mode=%s)",
                                     (cached_bind_fp or "<none>")[:16],
                                     (current_fp or "<none>")[:16],
                                     _violation,
@@ -633,6 +638,7 @@ async def resolve_session_identity(
                                                 "source": "path1_fingerprint_mismatch",
                                                 "reason": _violation,
                                                 "prefix_scoped": _prefix_active,
+                                                "session_key_prefix": session_key[:20],
                                                 "bind_fp_prefix": (cached_bind_fp or "")[:8],
                                                 "current_fp_prefix": (current_fp or "")[:8],
                                             },
