@@ -226,11 +226,13 @@ class GraphMixin:
 
         except Exception as e:
             if self._is_column_arity_error(e):
+                # Do NOT log the query text — a caller-built cypher can carry
+                # inline sensitive literals (clear-text-logging). The message is
+                # self-explanatory and the re-raise preserves the traceback.
                 logger.error(
                     "Cypher query failed (column arity): graph_query supports a "
                     "single return expression — use a map literal "
-                    "RETURN {a: expr1, b: expr2} for multiple values. Query: %s",
-                    cypher,
+                    "RETURN {a: expr1, b: expr2} for multiple values."
                 )
                 raise
             # Never attempt DDL-based repair on a caller-owned transaction
