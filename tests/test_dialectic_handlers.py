@@ -282,7 +282,10 @@ class TestHandleRequestDialecticReview:
         assert data["reviewer_agent_id"] is None
         assert data["awaiting_reviewer"] is True
         assert "self-review" not in data["note"].lower()
-        assert "submit_antithesis" in data["note"]
+        # Default (synthetic reviewer ON): the note guides the agent to submit a
+        # thesis, which auto-completes via the synthetic reviewer. The slot is
+        # still left open at request time so a peer can claim it first.
+        assert "thesis" in data["note"].lower()
         # Persisted with a NULL reviewer (not the paused agent).
         assert pg_create.await_args.kwargs["reviewer_agent_id"] is None
         # Session flagged as awaiting an independent reviewer.

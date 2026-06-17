@@ -270,7 +270,11 @@ handle_dialectic = action_router(
         "synthesis": handle_submit_synthesis,
         "reassign": handle_reassign_reviewer,
     },
-    timeout=60.0,
+    # 90s: the thesis action can drive a full synthetic antithesis+synthesis
+    # inline (~30-45s on the local model). This router wait_for is the outer
+    # ceiling, so it must clear the submit_thesis handler timeout (90s) and the
+    # synthetic-review budget (~55s) with headroom. Other actions return fast.
+    timeout=90.0,
     description="Dialectic operations: get, list, request, thesis, antithesis, synthesis, reassign",
     default_action="list",
     # #425 action-level identity: session browsing (get/list) serves

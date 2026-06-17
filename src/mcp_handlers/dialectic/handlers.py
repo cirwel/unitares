@@ -6,7 +6,9 @@ Implements MCP tools for peer-review dialectic resolution of circuit breaker sta
 
 from typing import Dict, Any, Sequence, Optional, List
 from mcp.types import TextContent
+import asyncio
 import json
+import os
 from datetime import datetime, timedelta, timezone
 
 # Import type definitions
@@ -740,12 +742,22 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
 
     # Build response based on reviewer assignment
     if auto_awaiting_reviewer:
-        note = (
-            "No independent reviewer is currently available. The reviewer slot is "
-            "left open: submit your thesis now, and an independent reviewer "
-            "(summoned or operator-assigned) can claim it via submit_antithesis. "
-            "To proceed solo, recreate the session with reviewer_mode='self'."
-        )
+        if _synthetic_reviewer_enabled():
+            note = (
+                "No independent live reviewer is available. Submit your thesis "
+                "now (dialectic action='thesis' with root_cause + "
+                "proposed_conditions): a local synthetic reviewer will generate "
+                "the antithesis and drive the dialectic to a resolved synthesis "
+                "in that same call. If a peer reviewer claims the slot first, the "
+                "multi-agent path is used instead."
+            )
+        else:
+            note = (
+                "No independent reviewer is currently available. The reviewer slot is "
+                "left open: submit your thesis now, and an independent reviewer "
+                "(summoned or operator-assigned) can claim it via submit_antithesis. "
+                "To proceed solo, recreate the session with reviewer_mode='self'."
+            )
     elif session.reviewer_agent_id and session.reviewer_agent_id != agent_uuid:
         note = f"Reviewer assigned: {session.reviewer_agent_id[:12]}... Use submit_thesis to add your thesis."
     elif session.reviewer_agent_id:
@@ -1045,7 +1057,195 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
             }
         )]
 
-@mcp_tool("submit_thesis", timeout=10.0, register=True)
+# Stable reviewer id for the local synthetic reviewer. Matches the one-shot
+# handle_llm_assisted_dialectic so transcripts/calibration treat both the same.
+SYNTHETIC_REVIEWER_ID = "llm-synthetic-reviewer"
+
+
+def _synthetic_reviewer_enabled() -> bool:
+    """Whether submit_thesis auto-completes a no-live-reviewer session via the
+    local synthetic reviewer instead of leaving it to hang at awaiting_facilitation.
+
+    ON by default — this is the one path that drives a dialectic from thesis to a
+    resolved synthesis end-to-end without depending on a second live agent ever
+    showing up (the historical failure mode: auto-select is disabled, no peer
+    claims the slot, the session sits stuck for hours). The reviewer is a local
+    model (gemma4) heterogeneous to Claude, so it satisfies the independence
+    requirement the 2026-06-02 dialectic council set: a genuine antithesis, not a
+    self-review at one remove. Set UNITARES_DIALECTIC_SYNTHETIC_REVIEWER=0 to fall
+    back to pure peer/manual review (request leaves the slot open as before).
+    """
+    return os.environ.get(
+        "UNITARES_DIALECTIC_SYNTHETIC_REVIEWER", "1"
+    ).lower() in ("1", "true", "yes", "on")
+
+
+def _synthetic_review_budget(default: float = 55.0) -> float:
+    """Wall-clock cap for the inline synthetic review (antithesis + synthesis).
+    Kept under the submit_thesis handler timeout so an overrun degrades to
+    awaiting_facilitation (thesis already persisted) rather than killing the call.
+    Measured typical: ~27s on gemma4. Tunable via UNITARES_DIALECTIC_REVIEW_BUDGET."""
+    raw = os.environ.get("UNITARES_DIALECTIC_REVIEW_BUDGET")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return default
+
+
+def _snapshot_agent_state(agent_uuid: str) -> Optional[Dict[str, Any]]:
+    """EISV/risk snapshot for an agent, for grounding the synthetic antithesis.
+    Returns None when no live monitor exists (the reviewer then critiques on the
+    thesis alone). Mirrors the snapshot the one-shot llm_assisted path builds."""
+    try:
+        monitor = getattr(mcp_server, "monitors", {}).get(agent_uuid)
+        if not monitor:
+            return None
+        state = getattr(monitor, "state", None)
+        return {
+            "risk_score": getattr(monitor, "risk_score", None),
+            "coherence": getattr(state, "coherence", None) if state else None,
+            "E": getattr(state, "E", None) if state else None,
+            "I": getattr(state, "I", None) if state else None,
+            "S": getattr(state, "S", None) if state else None,
+            "V": getattr(state, "V", None) if state else None,
+        }
+    except Exception:
+        return None
+
+
+async def _run_synthetic_review(
+    session: "DialecticSession",
+    thesis: Dict[str, Any],
+    agent_uuid: str,
+    agent_state: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Drive an existing post-thesis session through antithesis → synthesis →
+    resolution using the local heterogeneous synthetic reviewer.
+
+    Preconditions: the session is at the ANTITHESIS phase (submit_thesis already
+    succeeded) with an OPEN reviewer slot (reviewer_agent_id is None). Returns a
+    dict with antithesis/synthesis/recommendation/resolved, or None if the local
+    model is unavailable or yields nothing — in which case the caller leaves the
+    session awaiting facilitation (the prior behaviour: nothing is lost, the
+    thesis stays recorded and a peer reviewer can still claim the slot).
+
+    Mirrors the proven step sequence in handle_llm_assisted_dialectic but operates
+    on the caller's existing session instead of minting a new one.
+    """
+    from ..support.llm_delegation import (
+        generate_antithesis,
+        generate_synthesis,
+        is_llm_available,
+    )
+
+    if not await is_llm_available():
+        logger.info("[DIALECTIC] Synthetic reviewer skipped — local LLM unavailable")
+        return None
+
+    antithesis = await generate_antithesis(thesis, agent_state)
+    if not antithesis:
+        logger.info("[DIALECTIC] Synthetic reviewer produced no antithesis")
+        return None
+
+    now = datetime.now(timezone.utc).isoformat()
+    anti_reasoning = (
+        antithesis.get("counter_reasoning")
+        or antithesis.get("raw_response", "")[:500]
+    )
+    anti_concerns = antithesis.get("concerns") or []
+    if isinstance(anti_concerns, str):
+        anti_concerns = [anti_concerns] if anti_concerns else []
+
+    anti_msg = DialecticMessage(
+        phase="antithesis",
+        agent_id=SYNTHETIC_REVIEWER_ID,
+        timestamp=now,
+        reasoning=anti_reasoning,
+        concerns=anti_concerns,
+    )
+    anti_result = session.submit_antithesis(anti_msg)
+    if not anti_result.get("success"):
+        logger.warning(
+            "[DIALECTIC] Synthetic antithesis rejected by protocol: %s",
+            anti_result.get("error"),
+        )
+        return None
+    await pg_add_message(
+        session_id=session.session_id,
+        agent_id=SYNTHETIC_REVIEWER_ID,
+        message_type="antithesis",
+        reasoning=anti_reasoning,
+        concerns=anti_concerns or None,
+    )
+    await pg_update_phase(session.session_id, session.phase.value)
+
+    synthesis = await generate_synthesis(thesis, antithesis, synthesis_round=1)
+    if not synthesis:
+        # Antithesis landed but synthesis failed: leave the session at SYNTHESIS
+        # for the paused agent/operator to finish. Better than no antithesis.
+        logger.warning("[DIALECTIC] Synthetic antithesis recorded but synthesis failed")
+        return {
+            "antithesis": antithesis,
+            "synthesis": None,
+            "recommendation": None,
+            "resolved": False,
+        }
+
+    synth_conditions = synthesis.get("merged_conditions") or []
+    if isinstance(synth_conditions, str):
+        synth_conditions = [synth_conditions] if synth_conditions else []
+    synth_msg = DialecticMessage(
+        phase="synthesis",
+        agent_id=SYNTHETIC_REVIEWER_ID,
+        timestamp=now,
+        root_cause=synthesis.get("agreed_root_cause", ""),
+        proposed_conditions=synth_conditions,
+        reasoning=synthesis.get("reasoning", ""),
+        agrees=True,
+    )
+    session.submit_synthesis(synth_msg)
+    await pg_add_message(
+        session_id=session.session_id,
+        agent_id=SYNTHETIC_REVIEWER_ID,
+        message_type="synthesis",
+        root_cause=synthesis.get("agreed_root_cause", ""),
+        proposed_conditions=synth_conditions or None,
+        reasoning=synthesis.get("reasoning", ""),
+        agrees=True,
+    )
+
+    resolved = False
+    if session.phase == DialecticPhase.RESOLVED:
+        paused_meta = mcp_server.agent_metadata.get(agent_uuid)
+        api_key_a = (
+            paused_meta.api_key
+            if paused_meta and getattr(paused_meta, "api_key", None)
+            else f"llm-{agent_uuid[:8]}"
+        )
+        try:
+            resolution_obj = session.finalize_resolution(api_key_a, "")
+            session.resolution = resolution_obj
+            await pg_resolve_session(
+                session_id=session.session_id,
+                resolution=resolution_obj.to_dict(),
+                status="resolved",
+            )
+            session.awaiting_facilitation = False
+            resolved = True
+        except Exception as e:
+            logger.warning("[DIALECTIC] Synthetic resolution finalize failed: %s", e)
+
+    return {
+        "antithesis": antithesis,
+        "synthesis": synthesis,
+        "recommendation": synthesis.get("recommendation", "ESCALATE"),
+        "resolved": resolved,
+    }
+
+
+@mcp_tool("submit_thesis", timeout=90.0, register=True)
 async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Paused agent submits thesis: "What I did, what I think happened"
@@ -1128,6 +1328,62 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                 await save_session(session)
             except Exception as e:
                 logger.warning(f"Could not save session after thesis: {e}")
+
+            # End-to-end completion: when no independent live reviewer has claimed
+            # the slot, drive the dialectic to a resolved synthesis with the local
+            # synthetic reviewer instead of stranding it at awaiting_facilitation.
+            # This is the one path that completes thesis → antithesis → synthesis
+            # without a second live agent. Bounded so an overrun degrades to the
+            # prior await-facilitation behaviour (thesis stays recorded above).
+            if session.reviewer_agent_id is None and _synthetic_reviewer_enabled():
+                thesis_dict = {
+                    "root_cause": arguments.get('root_cause'),
+                    "proposed_conditions": proposed_conditions,
+                    "reasoning": arguments.get('reasoning') or "",
+                }
+                agent_state = _snapshot_agent_state(agent_id)
+                try:
+                    review = await asyncio.wait_for(
+                        _run_synthetic_review(session, thesis_dict, agent_id, agent_state),
+                        timeout=_synthetic_review_budget(),
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[DIALECTIC] Synthetic review exceeded budget; session "
+                        "%s left awaiting facilitation", session_id,
+                    )
+                    review = None
+                except Exception as e:
+                    logger.warning("[DIALECTIC] Synthetic review failed: %s", e)
+                    review = None
+
+                if review:
+                    result["synthetic_review"] = True
+                    result["reviewer_agent_id"] = SYNTHETIC_REVIEWER_ID
+                    result["antithesis"] = {
+                        "concerns": review["antithesis"].get("concerns", []),
+                        "counter_reasoning": review["antithesis"].get("counter_reasoning", ""),
+                        "grounding_cited": review["antithesis"].get("grounding_cited", ""),
+                        "position": review["antithesis"].get("position", ""),
+                    }
+                    if review.get("synthesis"):
+                        result["synthesis"] = {
+                            "agreed_root_cause": review["synthesis"].get("agreed_root_cause", ""),
+                            "merged_conditions": review["synthesis"].get("merged_conditions", []),
+                            "reasoning": review["synthesis"].get("reasoning", ""),
+                        }
+                    result["recommendation"] = review.get("recommendation")
+                    result["phase"] = session.phase.value
+                    result["resolved"] = review.get("resolved", False)
+                    if review.get("resolved"):
+                        result["next_step"] = (
+                            f"Dialectic resolved by synthetic reviewer. "
+                            f"Recommendation: {review.get('recommendation')}. "
+                            "Review the merged_conditions, then proceed or self_recovery accordingly."
+                        )
+                        result["next_steps"] = _get_dialectic_next_steps(
+                            (review.get("recommendation") or "ESCALATE")
+                        )
 
         return success_response(result)
 
