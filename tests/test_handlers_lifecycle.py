@@ -711,3 +711,49 @@ class TestArchiveOldTestAgents:
             assert data["include_all"] is True
             # 5 days old > 3 day default for include_all
             assert data["archived_count"] >= 1
+
+
+# ============================================================================
+# list_agents participation split (summary surface — count consumers)
+# ============================================================================
+
+class TestListAgentsParticipation:
+
+    @pytest.fixture
+    def mock_mcp_server(self):
+        return make_mock_server()
+
+    @pytest.mark.asyncio
+    async def test_summary_splits_participated_vs_never(self, mock_mcp_server):
+        # 2 agents have checked in (total_updates >= 1), 2 never did (==0)
+        mock_mcp_server.agent_metadata = {
+            "p1": make_agent_meta(label="Worker1", total_updates=5),
+            "p2": make_agent_meta(label="Worker2", total_updates=1),
+            "n1": make_agent_meta(label="Never1", total_updates=0),
+            "n2": make_agent_meta(label="Never2", total_updates=0),
+        }
+
+        with patch_lifecycle_server(mock_mcp_server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({"summary_only": True})
+
+            data = json.loads(result[0].text)
+            assert data["participated"] == 2
+            assert data["never_participated"] == 2
+            # total accounts for both buckets — never-participated are not hidden
+            assert data["total"] == data["participated"] + data["never_participated"]
+
+    @pytest.mark.asyncio
+    async def test_summary_all_participated(self, mock_mcp_server):
+        mock_mcp_server.agent_metadata = {
+            "p1": make_agent_meta(label="Worker1", total_updates=4),
+            "p2": make_agent_meta(label="Worker2", total_updates=9),
+        }
+
+        with patch_lifecycle_server(mock_mcp_server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({"summary_only": True})
+
+            data = json.loads(result[0].text)
+            assert data["participated"] == 2
+            assert data["never_participated"] == 0

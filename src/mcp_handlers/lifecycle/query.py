@@ -780,6 +780,12 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
             "deleted": sum(1 for a in agents_list if a.get("lifecycle_status") == "deleted"),
             "unknown": sum(1 for a in agents_list if a.get("lifecycle_status") not in ["active", "waiting_input", "paused", "archived", "deleted"])
         }
+        # Participation split (before pagination): an agent has "participated"
+        # once it has recorded at least one check-in (total_updates >= 1). This
+        # is the same signal the lite-path ghost filter uses (total_updates < 1).
+        # Surfaced so count consumers can show working agents, not raw row count.
+        participated = sum(1 for a in agents_list if (a.get("total_updates") or 0) >= 1)
+        never_participated = total_count - participated
 
         # Apply pagination (optimization)
         if limit is not None:
@@ -808,7 +814,9 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                     "returned": len(agents_list),  # Number actually returned (after pagination)
                     "offset": offset,
                     "limit": limit,
-                    "by_status": status_counts  # Use counts from BEFORE pagination
+                    "by_status": status_counts,  # Use counts from BEFORE pagination
+                    "participated": participated,  # checked in >=1 time
+                    "never_participated": never_participated  # onboarded but never checked in
                 }
             }
 
@@ -830,7 +838,9 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                     "returned": len(agents_list),  # Number actually returned (after pagination)
                     "offset": offset,
                     "limit": limit,
-                    "by_status": status_counts  # Use counts from BEFORE pagination
+                    "by_status": status_counts,  # Use counts from BEFORE pagination
+                    "participated": participated,  # checked in >=1 time
+                    "never_participated": never_participated  # onboarded but never checked in
                 }
             }
 
