@@ -366,6 +366,38 @@ class TestIdentityResolution:
         # Identity is still established despite the write failure.
         assert agent.agent_uuid == "uuid-test"
 
+    @pytest.mark.asyncio
+    async def test_reconcile_never_crashes_resume_path(self, tmp_path):
+        """Chronicler 2026-06-14 outage class: residents run
+        refuse_fresh_onboard=True, so anything that escapes _ensure_identity is
+        fatal with no fallback — the resident goes dark. Resident-tag reconcile
+        is a cosmetic, self-healing convenience and must NEVER be able to crash
+        the identity path, even on an unexpected error the inner method's own
+        read/write guards don't cover. Resume itself already succeeded and is
+        persisted before reconcile runs.
+        """
+        agent = SimpleAgent(
+            session_file=tmp_path / ".test_session",
+            persistent=True,
+            refuse_fresh_onboard=True,
+        )
+        agent.agent_uuid = "uuid-test"  # resume fast path
+
+        client = _mock_client_connected()
+        # Simulate an unexpected failure the inner guards don't anticipate
+        # (bad response shape, future unguarded edit, non-standard payload).
+        agent._reconcile_resident_tags_inner = AsyncMock(
+            side_effect=RuntimeError("unexpected reconcile boom")
+        )
+
+        # Must NOT raise: the resume succeeded, the reconcile failure is
+        # swallowed by the guard wrapper.
+        await agent._ensure_identity(client)
+
+        client.identity.assert_awaited_once()
+        client.onboard.assert_not_called()  # never falls through to fresh onboard
+        assert agent.agent_uuid == "uuid-test"  # identity intact
+
 
 # --- Session persistence ---
 

@@ -340,18 +340,25 @@ class GovernanceAgent:
                 self._sync_from_client(client)
                 self._save_session()
                 logger.info("%s: resumed via UUID %s", self.name, self.agent_uuid[:12])
-                # Reconcile resident tags on resume too — residents that always
-                # resume via UUID (refuse_fresh_onboard=True) never re-run the
-                # fresh-onboard stamp, so a dropped required tag would otherwise
-                # never self-heal (Sentinel 2026-06-15 resident_tag_gap finding).
-                await self._reconcile_resident_tags(client)
-                return
             except Exception as e:
                 logger.error(
                     "%s: UUID lookup failed for %s: %s — refusing to create ghost",
                     self.name, self.agent_uuid[:12], e,
                 )
                 raise
+
+            # Resume already succeeded and is persisted above. Reconcile resident
+            # tags as a best-effort, non-fatal step OUTSIDE the resume try block:
+            # residents that always resume via UUID (refuse_fresh_onboard=True)
+            # never re-run the fresh-onboard stamp, so a dropped required tag
+            # would otherwise never self-heal (Sentinel 2026-06-15
+            # resident_tag_gap finding). Keeping it inside the try would let a
+            # cosmetic tag-reconcile error be misattributed as a fatal "UUID
+            # lookup failed" and re-raised, taking the resident offline over a
+            # non-critical metadata write (Chronicler 2026-06-14 outage class).
+            # _reconcile_resident_tags is itself guarded to never raise.
+            await self._reconcile_resident_tags(client)
+            return
 
         # First run — onboard, get a UUID, save it
         if self.refuse_fresh_onboard and os.environ.get("UNITARES_FIRST_RUN") != "1":
@@ -380,6 +387,28 @@ class GovernanceAgent:
         await self._reconcile_resident_tags(client)
 
     async def _reconcile_resident_tags(self, client: GovernanceClient) -> None:
+        """Non-fatal guard wrapper around :meth:`_reconcile_resident_tags_inner`.
+
+        Resident-tag reconciliation is a cosmetic, self-healing convenience —
+        it must NEVER be able to crash the identity path. The inner method
+        already guards its read and write, but a defensive top-level catch-all
+        here guarantees that even an unexpected error (a bad response shape, a
+        client raising a non-``Exception`` payload, a future edit that adds an
+        unguarded line) can never propagate out and take a resident offline
+        over a metadata write. See the Chronicler 2026-06-14 outage class:
+        residents run ``refuse_fresh_onboard=True``, so anything that escapes
+        ``_ensure_identity`` is fatal with no fallback.
+        """
+        try:
+            await self._reconcile_resident_tags_inner(client)
+        except Exception as e:  # pragma: no cover - defensive belt-and-suspenders
+            logger.warning(
+                "%s: resident tag reconcile raised unexpectedly (ignored, "
+                "non-fatal): %r",
+                self.name, e,
+            )
+
+    async def _reconcile_resident_tags_inner(self, client: GovernanceClient) -> None:
         """Ensure a persistent resident carries the full ``RESIDENT_TAGS`` set.
 
         Residents need BOTH tags:
