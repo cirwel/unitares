@@ -18,4 +18,18 @@ config :agent_orchestrator,
   # max caps the table under a churn burst within one TTL window.
   result_retention_ms: 300_000,
   result_sweep_interval_ms: 60_000,
-  result_store_max: 10_000
+  result_store_max: 10_000,
+  # Control surface (lib/agent_orchestrator/http_router.ex). Binds IPv4
+  # 127.0.0.1 only — a single localhost trust boundary, matching the lease
+  # plane (Bandit does not bind ::1, so the dotted-quad is intentional). The
+  # bearer is read from AGENT_ORCHESTRATOR_BEARER_TOKEN at boot (see
+  # application.ex); absent → HTTPAuth returns 503 (fail closed, never open).
+  # start_http is OFF under :test so the unit suite never binds a socket; the
+  # router is exercised in-process via Plug.Test.
+  start_http: config_env() != :test,
+  http_port: String.to_integer(System.get_env("AGENT_ORCHESTRATOR_HTTP_PORT", "8789")),
+  http_ip: {127, 0, 0, 1},
+  # Optional executable allowlist for POST /v1/agents (basenames). nil = parity
+  # with the in-VM AgentOrchestrator.run/1 (any cmd). Set e.g. ["claude", "sh"]
+  # to constrain what the authenticated control surface may spawn.
+  cmd_allowlist: nil

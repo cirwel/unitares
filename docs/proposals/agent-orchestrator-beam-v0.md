@@ -148,11 +148,49 @@ defer the architecture call." Fixed:
    `remote_heartbeat`, enforced by a DB CHECK. Callers must not infer accepted
    `remote_heartbeat` semantics from a 200.
 
+## v0.1 — HTTP control surface shipped (2026-06-17)
+
+The "spawn/list/stop agents from outside BEAM" item below is now built — the
+orchestrator is no longer drive-only-from-inside-the-VM.
+
+- **Routes** (`lib/agent_orchestrator/http_router.ex`, Plug + Bandit):
+  `GET /v1/health`, `POST /v1/agents` (spawn), `GET /v1/agents` (list),
+  `GET /v1/agents/:id` (snapshot), `POST /v1/agents/:id/await`,
+  `DELETE /v1/agents/:id` (stop). Typed JSON envelopes
+  (`schema_invalid`/`permission_denied`/`not_found`/`lease_denied`/
+  `await_timeout`/`service_unavailable`) + a `protocol_version` field, same
+  typed-absence discipline as the lease-plane router.
+- **Trust boundary = the lease plane's, and stricter in spirit.** Localhost-only
+  IPv4 bind + bearer auth (`AgentOrchestrator.HTTPAuth`,
+  `AGENT_ORCHESTRATOR_BEARER_TOKEN`) that **fails closed** (503 when no token is
+  configured). `POST /v1/agents` spawns an OS process, so it is an authenticated
+  RCE surface by design — the same capability the in-VM `run/1` already had,
+  exposed over one trust boundary. An optional `:cmd_allowlist` (default `nil` =
+  parity with the in-VM API) constrains which executables a caller may spawn.
+- **Spec translation is whitelist-only.** The JSON body → `AgentRunner` spec
+  mapping never `String.to_atom`s caller input (atom-exhaustion guard); lease /
+  lineage / server-url all route through the runner's existing validation, so a
+  bad parent UUID or non-http server URL refuses the spawn as a typed 422.
+- **`present/1` is JSON-safe.** `exit_status` is stringified on the abnormal
+  `{:port_closed, reason}` close path so a crashed agent's status cannot crash
+  the response encoder.
+- **Tests:** `test/http_router_test.exs` drives the router in-process via
+  `Plug.Test` (no socket, no live plane) — auth (503/401/case-insensitive
+  scheme), spawn→await round-trip, the 422/403/404/415/504 typed paths.
+- **Deploy:** `scripts/start.sh` (launchd entrypoint, sources secrets,
+  fail-closed). A `com.unitares.*` plist template is the remaining deploy step.
+
+Not yet covered by CI (the Elixir apps run `mix test` on the deploy host, not in
+GitHub Actions), so the operator's `mix deps.get && mix test` is the gate.
+
 ## Deferred (not in v0)
 
-- A control surface (HTTP/MCP) to spawn/list/stop agents from outside BEAM.
+- ~~A control surface (HTTP/MCP) to spawn/list/stop agents from outside BEAM.~~
+  **HTTP surface shipped in v0.1 (above).** An MCP-shaped surface is still
+  deferred.
 - Distributed Erlang multi-node fan-out.
 - The `agent:` surface scheme (finding 1) and any governance-onboarding env
   injection contract for spawned agents (so a spawned agent declares lineage to
   its orchestrator).
-- A launchd plist + deploy story (this is a library + smoke today, not a service).
+- ~~A launchd plist + deploy story~~ — `scripts/start.sh` shipped in v0.1; the
+  `com.unitares.agent-orchestrator.plist` template is the remaining piece.
