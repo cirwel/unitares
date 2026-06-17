@@ -83,6 +83,7 @@ and the registry's primary protectees.**
 | Lineage credit-assignment aggregation | `identity/provenance_chain.py:83/170` | Read/scoring half orphaned; write half produces empty chains (0/1056) | **DECIDE** — depends on whether discovery→lineage attribution is still a goal |
 | S22 H5 cross-harness coverage assessor | `identity/s22_h5_comparison.py:110/190/277` | Diagnostic-script-only; input data live (30k provenance rows) but no MCP surface reads the gate | **DECIDE** — surface via `get_governance_metrics`, or keep as a script |
 | `backfill_calibration_from_historical_sessions` | `mcp_handlers/dialectic/calibration.py:193` | One-shot admin migration util; no scheduled caller (by design) | **KEEP-DORMANT** — document as manual-only |
+| Cross-device / orchestration audit API (`AuditLogger.log_orchestration_request` / `log_orchestration_complete` / `log_cross_device_call` / `log_device_health_check` / `log_eisv_sync`) | `src/audit_log.py:229/265/294/331/361` | 0 in-repo callers — the consumer (Mac→Pi orchestration) was extracted to the external `unitares-pi-plugin` package in the Phase B1 Lumen decoupling (see `src/mcp_handlers/__init__.py:133`, `src/services/runtime_queries.py:849`). This repo owns the writer surface; the caller lives cross-repo. Same external-API shape as `register_extra_schemas` (Theme 5) | **KEEP-DORMANT** — cross-repo audit API; removal is a deprecation decision coordinated with `unitares-pi-plugin` |
 
 ## Theme 5 — Mechanical singletons (vulture cross-pass, 2026-06-16)
 
