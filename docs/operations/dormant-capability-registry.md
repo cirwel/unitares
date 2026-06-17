@@ -108,7 +108,7 @@ they are not re-flagged.
 | `get_reviewer_stuck_recovery` | `mcp_handlers/dialectic/responses.py:43` | 0 callers; same dead stuck-reviewer chain as `check_reviewer_stuck` (CUT below) | **CUT** — fold with `check_reviewer_stuck` |
 | `reranker_available` | `reranker.py:190` | 0 callers (`rrf_fuse`/`apply_tag_boost` are live; this flag-check is not) | **DECIDE** |
 | `register_extra_schemas` / `register_extra_descriptions` plugin entry-point API | `tool_schemas.py:20`; `tool_descriptions.py:145` | Published `governance_mcp.plugins` hook; **0 consumers** (incl. the plugin repo) | **KEEP-DORMANT** — extension hook, removal is a deprecation decision |
-| `gateway_server.py` `main()` script entrypoint | `gateway_server.py:99` | Has `__main__`; no plist/sh/import launches it | **DECIDE** — orphaned entrypoint or launched out-of-band |
+| `gateway_server.py` `main()` script entrypoint | `src/gateway_server.py:99` | Has `__main__`; launched out-of-band via the gateway plist *template* (`scripts/ops/com.unitares.gateway-mcp.plist.template`), not by any import — install state is deployment-specific | **DECIDE** — confirm the gateway plist is installed on the target deployment |
 
 ## Genuine cruft — CUT candidates (the only delete-safe set)
 

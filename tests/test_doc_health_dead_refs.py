@@ -235,6 +235,32 @@ def test_get_db_call_is_internal_helper_not_ghost_tool(tmp_path, monkeypatch, do
     assert doc_health.check_ghost_tools([agents], {"onboard"}) == []
 
 
+def test_ghost_tool_skip_file_suppresses_internal_fn_names(tmp_path, monkeypatch, doc_health):
+    """The dormant-capability-registry names internal functions, not MCP tools.
+
+    It lives under operations/ (not a _GHOST_SKIP_DIRS dir), so it is skipped
+    by exact path via _GHOST_SKIP_FILES — without blinding the check across
+    all of operations/.
+    """
+    reg = tmp_path / "docs" / "operations" / "dormant-capability-registry.md"
+    reg.parent.mkdir(parents=True)
+    reg.write_text("Repoint to `get_active_table_name()`; gate on `has_exogenous_signals()`.\n")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    assert doc_health.check_ghost_tools([reg], {"onboard"}) == []
+
+
+def test_ghost_tool_still_checks_other_operations_docs(tmp_path, monkeypatch, doc_health):
+    """The per-file skip must not leak to other operations/ runbooks."""
+    runbook = tmp_path / "docs" / "operations" / "OPERATOR_RUNBOOK.md"
+    runbook.parent.mkdir(parents=True)
+    runbook.write_text("Call `not_a_real_tool()` to recover.\n")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    warnings = doc_health.check_ghost_tools([runbook], {"onboard"})
+    assert len(warnings) == 1 and "not_a_real_tool" in warnings[0]
+
+
 def test_dedup_stripped_paths(stub_repo, doc_health):
     """Multiple refs to the same file with different line numbers dedupe to one warning."""
     content = (

@@ -311,6 +311,15 @@ _TOOL_ALLOWLIST = {
 _GHOST_SKIP_DIRS = {"plans", "superpowers", "specs", "handoffs",
                     "ontology", "proposals"}
 
+# Individual files (not whole dirs) where ghost-tool warnings are noise.
+# The dormant-capability-registry is, by definition, a catalogue of internal
+# functions referenced by name — the same "implementation details named as
+# part of analysis" rationale as _GHOST_SKIP_DIRS, but it lives under
+# operations/ where most docs ARE runbooks that legitimately name real MCP
+# tools (so a ghost there is a real bug). Skip this one file by name rather
+# than blinding the check across all of operations/.
+_GHOST_SKIP_FILES = {"docs/operations/dormant-capability-registry.md"}
+
 
 def check_ghost_tools(md_files: list[Path], tool_names: set[str]) -> list[str]:
     if not tool_names:
@@ -325,6 +334,8 @@ def check_ghost_tools(md_files: list[Path], tool_names: set[str]) -> list[str]:
     for fpath in md_files:
         # Skip plans/specs — they reference hypothetical code
         rel = fpath.relative_to(REPO_ROOT)
+        if rel.as_posix() in _GHOST_SKIP_FILES:
+            continue
         if any(d in rel.parts for d in _GHOST_SKIP_DIRS):
             continue
         for i, line in enumerate(fpath.read_text(errors="replace").splitlines(), 1):
