@@ -26,7 +26,7 @@ docker compose up -d --wait && make demo    # full stack + 60-second self-correc
   <img src="docs/assets/dashboard.png" width="80%" alt="Unitares dashboard — fleet coherence, agent count, discoveries, and system health"/>
 </p>
 
-It runs **alongside** your evals and guardrails, not instead of them — evals check whether a model is good enough to deploy, guardrails catch bad actions as they happen, and UNITARES shows what the fleet is doing *right now*. Running continuously since November 2025 · **3.7M+ governance events** under sustained load · dogfooded — the agents building UNITARES run under it. Single-operator so far, not external adoption — and you don't have to take the numbers on faith ([regenerate the evidence yourself ↓](#what-makes-the-signal-trustworthy)).
+It runs **alongside** your evals and guardrails, not instead of them — evals check whether a model is good enough to deploy, guardrails catch bad actions as they happen, and UNITARES shows what the fleet is doing *right now*. Running continuously since November 2025 · **3.7M+ governance events** under sustained load · dogfooded — the agents building UNITARES run under it. Every number here is verifiable on a fresh clone ([regenerate the evidence yourself ↓](#what-makes-the-signal-trustworthy)).
 
 **Contents:** [What you get](#what-you-get) · [How it works](#how-it-works-in-one-read) · [Who should integrate](#who-should-integrate-this) · [Quickstart](#quickstart) · [Integrate](#integrate) · [Trustworthy signal](#what-makes-the-signal-trustworthy) · [Scope & threat model](#scope-and-threat-model) · [Production snapshot](#production-snapshot) · [Architecture](#architecture) · [Docs](#documentation)
 
@@ -222,7 +222,7 @@ Frozen public snapshot from June 16, 2026 (single-operator deployment — the au
 | Metric | Value |
 |--------|-------|
 | Agents onboarded | 3,777 total process-instances — overwhelmingly ephemeral CLI sessions from one operator's workstation plus a handful of long-running resident agents (launchd crons) |
-| Distinct event-emitting identities (last 21 days) | 510; mostly ephemeral local CLI sessions, not external adoption (lower than earlier snapshots as identity-consolidation work cut phantom per-session identities) |
+| Distinct event-emitting identities (last 21 days) | 510; mostly ephemeral local CLI sessions (lower than earlier snapshots as identity-consolidation work cut phantom per-session identities) |
 | Unique agents active (last 7 days) | 369 distinct event emitters |
 | Governance events processed | 3,748,000+ (≈714K in the last 7 days) |
 | Knowledge graph discoveries | 1,054 |
