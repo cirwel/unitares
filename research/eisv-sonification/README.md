@@ -84,6 +84,39 @@ The harness is built and the verdict is honest; a *fair* test needs non-spurious
 pauses to accumulate (auto-`TIER_A` from 2026-06-08 on). This also redirects the mapping:
 on real data S, not V, is the channel doing the work — the opposite of the synthetic premise.
 
+## Finding: the salience hierarchy is inverted (S is the signal, V is memory)
+
+Chasing *why* V is flat turned up a design principle, not just a data quirk.
+
+`V` is `EMA(EMA(E) − EMA(I))` — doubly smoothed; the code comment calls it
+"accumulated, not instantaneous." It is the **integral/memory term** by construction
+(`src/behavioral_state.py`). Asking it to *lead* is asking the integral to predict.
+Measured ranges across the 3 TIER_A episodes:
+
+| | range V | range E−I | range S |
+|---|---|---|---|
+| ep1 | 0.006 | 0.036 | **0.081** |
+| ep2 | 0.003 | 0.008 | **0.110** |
+| ep3 | 0.012 | 0.042 | **0.075** |
+
+V's double-smoothing hides some signal (E−I moves 2–6× more than V), but the real point
+is the next column: **S moves 2–14× more than E−I.** The information lives on the
+entropy/uncertainty axis, not the imbalance axis — lagged or not.
+
+So the prototype **inverted its salience hierarchy**: it mapped the most musically
+prominent channel (harmonic tension/lean) to the quietest, most-lagged, least-informative
+coordinate (V), and mapped a subtler channel (chromaticism) to the loudest, fastest,
+most-informative one (S). The architecture predicts this — S is the fast channel
+(α=0.15, ~175s half-life); V is the doubly-smoothed integral.
+
+Tonal theory agrees once the mapping is right: **chromaticism is the leading edge of
+harmonic motion** — accidentals signal you're leaving the key *before* the harmony
+confirms it (the precision-weighted-prediction-error reading already in
+`docs/tonality-metaphor.md`). Design principle for v0.1: **audible salience should
+mirror the information/control hierarchy** — foreground the fast informative axes
+(S/chromaticism, and the S/risk *derivatives*), demote V/harmonic-lean to a slowly
+shifting background ground (the system's memory, not its alarm).
+
 ## Honesty notes
 
 - Real renders use genuine logged EISV but only the shallow *recent* window the
