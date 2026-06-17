@@ -601,6 +601,20 @@ async def _handle_safe_active_agent(agent_id, meta, stuck, risk_score, coherence
     return results
 
 
+def _transitive_archival_enabled() -> bool:
+    """Whether transitive succession-reachability DRIVES archival (vs shadow).
+
+    Default OFF: the activation prerequisite (lease-plane ephemeral liveness, so
+    the per-agent guard can tell a live ephemeral agent from an exited one) must
+    be proven live first. Toggle with ``UNITARES_LINEAGE_TRANSITIVE_ARCHIVAL=true``
+    — a no-redeploy kill switch for this archival-mutation behavior.
+    """
+    import os
+    return (os.getenv("UNITARES_LINEAGE_TRANSITIVE_ARCHIVAL") or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 async def _archive_superseded_parents(current_time) -> list:
     """Archive active parents whose declared-lineage child has taken over.
 
@@ -618,19 +632,32 @@ async def _archive_superseded_parents(current_time) -> list:
     if not live_parent_ids:
         return results
 
-    # SHADOW (observation-only, no mutation): measure what transitive
-    # succession-reachability WOULD add beyond this single-hop set, and log the
-    # AGE-vs-CTE topology agreement (evidence for the AGE-canonical step-1
-    # decision). Stays measurement-only until the liveness gate sources ephemeral
-    # agents from the lease plane — see lineage_reachability ACTIVATION
-    # PREREQUISITE. Never drives the archival loop below.
+    # Transitive succession-reachability. A parent whose lineage continued
+    # through a now-stale intermediate to a still-live descendant (P->M->C, M
+    # stale, C live) is also succeeded, but the single-hop pass above misses it.
+    #
+    # ACTIVE (UNITARES_LINEAGE_TRANSITIVE_ARCHIVAL=true): expand the superseded
+    # set with the CTE-authoritative transitive ancestors. Additive + recoverable
+    # — reachable_ancestors returns empty on any error, so a failure never
+    # expands. Every added ancestor still passes the per-agent guards below —
+    # crucially get_live_bindings AND has_live_agent_lease — so a still-running
+    # agent (now detectable via its lease-plane presence lease) is never archived
+    # regardless of lineage. Env-gated so it is a no-redeploy kill switch.
+    #
+    # SHADOW (default): measure-only — log what the expansion WOULD add plus the
+    # AGE-vs-CTE agreement, and drive nothing.
     try:
-        from .lineage_reachability import measure_transitive_expansion
-        await measure_transitive_expansion(
-            _live_child_uuids(current_time), live_parent_ids
-        )
-    except Exception as e:  # pragma: no cover - observation must never block archival
-        logger.debug("transitive lineage shadow measure failed: %s", type(e).__name__)
+        child_uuids = _live_child_uuids(current_time)
+        if _transitive_archival_enabled():
+            from .lineage_reachability import reachable_ancestors
+            ancestors = await reachable_ancestors(child_uuids)
+            if ancestors:
+                live_parent_ids = set(live_parent_ids) | ancestors
+        else:
+            from .lineage_reachability import measure_transitive_expansion
+            await measure_transitive_expansion(child_uuids, live_parent_ids)
+    except Exception as e:  # pragma: no cover - must never block archival
+        logger.debug("transitive lineage step failed: %s", type(e).__name__)
 
     for agent_id, meta in list(mcp_server.agent_metadata.items()):
         if meta.status != "active":
