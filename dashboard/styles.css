@@ -3715,6 +3715,51 @@ main {
 }
 
 /* ============================================
+   Never-checked-in (ghost) collapsed group
+   ============================================ */
+.agent-ghost-group {
+    margin-top: 10px;
+    border-top: 1px solid var(--border-color);
+}
+
+.agent-ghost-summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 10px 2px;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    user-select: none;
+}
+
+/* Suppress the native disclosure triangle; we render our own. */
+.agent-ghost-summary::-webkit-details-marker { display: none; }
+.agent-ghost-summary::marker { content: ''; }
+
+.agent-ghost-arrow {
+    display: inline-block;
+    transition: transform 0.15s ease;
+    color: var(--text-secondary);
+}
+
+.agent-ghost-group[open] > .agent-ghost-summary .agent-ghost-arrow {
+    transform: rotate(90deg);
+}
+
+.agent-ghost-hint {
+    font-size: 0.72rem;
+    opacity: 0.65;
+    font-style: italic;
+}
+
+.agent-ghost-list {
+    margin-top: 6px;
+    opacity: 0.82;
+}
+
+/* ============================================
    Production Toggle
    ============================================ */
 .prod-toggle {
