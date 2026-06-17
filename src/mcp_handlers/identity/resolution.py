@@ -310,6 +310,68 @@ async def _soft_verify_trajectory(
 # CORE IDENTITY RESOLUTION (3 paths)
 # =============================================================================
 
+async def _substrate_http_reject(agent_uuid: str, source: str):
+    """S19 extension (#802): a substrate-anchored UUID must not resume over a
+    non-UDS (HTTP) transport via ANY session path — not just continuity_token.
+
+    The original S19 gate (PATH 2.8 / the pre-PATH-1 token gate) only fires when
+    the caller presents a `continuity_token` (`token_agent_uuid`). A caller who
+    knows a substrate resident's UUID can EVADE it by resuming through the
+    `agent-{uuid12}` prefix-bind form (PATH 1 cache hit) or a PG session row
+    (PATH 2) with NO token — `token_agent_uuid` is None, so the gate is skipped
+    and the resident's UUID is returned. On a shared-fingerprint localhost host
+    the scope-(a) per-path fingerprint check also passes, so this is the
+    same-fingerprint co-resident residual called out in #802.
+
+    This helper applies the same substrate-claims gate to a session-resolved
+    `agent_uuid`. It is self-scoping: a UUID with no `core.substrate_claims` row
+    returns None (no rejection), so non-substrate and non-enrolled agents are
+    unaffected and future enrollment extends coverage with no code change. A
+    legitimate resident connects over UDS (peer_pid present) and via PATH 0
+    (agent_uuid direct), never the prefix/session path over HTTP, so a substrate
+    UUID arriving here without a kernel-attested peer PID is never legitimate.
+
+    Returns a `resume_failed` refusal dict when rejected, else None. Any
+    unexpected error fails OPEN (returns None) — never breaks resolution.
+    """
+    try:
+        from src.mcp_handlers.context import get_session_signals
+        _signals = get_session_signals()
+        _peer_pid = _signals.peer_pid if _signals else None
+        if _peer_pid is not None:
+            # UDS path — the kernel can attest the peer; let normal
+            # substrate verification (handler_gate) judge it.
+            return None
+        from src.substrate.verification import fetch_substrate_claim
+        _claim = await fetch_substrate_claim(agent_uuid)
+        if _claim is None:
+            return None  # not substrate-anchored — unaffected
+        logger.warning(
+            "[SUBSTRATE_HTTP_REJECT] %s resume for substrate-anchored UUID "
+            "%s... over HTTP — refusing. Resident must connect via "
+            "UNITARES_UDS_SOCKET.",
+            source, agent_uuid[:8],
+        )
+        return {
+            "resume_failed": True,
+            "error": "substrate_anchored_uuid_requires_uds",
+            "agent_uuid": agent_uuid,
+            "message": (
+                f"Agent {agent_uuid[:8]}... is substrate-anchored "
+                f"({_claim.expected_launchd_label}). Session/prefix resume is "
+                f"not accepted over HTTP. Connect via the UNITARES_UDS_SOCKET "
+                f"path so the kernel can attest peer credentials."
+            ),
+        }
+    except Exception as exc:
+        logger.warning(
+            "[SUBSTRATE_HTTP_REJECT] %s gate raised for %s...: %s; falling "
+            "through to existing resolution",
+            source, agent_uuid[:8], exc, exc_info=True,
+        )
+        return None
+
+
 async def resolve_session_identity(
 
     session_key: str,
@@ -512,6 +574,18 @@ async def resolve_session_identity(
                     # agent as the new identity's predecessor.
                     # See docs/specs/2026-04-16-sever-fingerprint-eisv-inheritance-design.md
                     if resume:
+
+                        # S19 extension (#802): refuse a substrate-anchored UUID
+                        # resumed via prefix-bind / cached session over HTTP. The
+                        # token gate above only covers continuity_token resume;
+                        # this closes the no-token prefix-bind evasion (and the
+                        # same-fingerprint co-resident residual). Self-scoping —
+                        # non-substrate UUIDs are unaffected.
+                        _sub_reject = await _substrate_http_reject(
+                            agent_uuid, source="path1_prefix_session"
+                        )
+                        if _sub_reject is not None:
+                            return _sub_reject
 
                         # PATH 1 token ownership cross-check (issue #110,
                         # 2026-04-23). When the caller provided a signed
@@ -811,6 +885,16 @@ async def resolve_session_identity(
                     agent_uuid = stored_id
 
                     agent_id = stored_id
+
+                # S19 extension (#802): same gate as PATH 1, for a UUID resolved
+                # from a PG session row (Redis cache miss → PG hit). A substrate
+                # UUID resumed via session/prefix over HTTP is refused; self-
+                # scoping, so non-substrate UUIDs pass through untouched.
+                _sub_reject = await _substrate_http_reject(
+                    agent_uuid, source="path2_pg_session"
+                )
+                if _sub_reject is not None:
+                    return _sub_reject
 
                 label = await _get_agent_label(agent_uuid)
 
