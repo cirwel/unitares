@@ -638,7 +638,9 @@ class TestListAgents:
             from src.agent_storage import list_agents
             await list_agents(status="paused", limit=50, offset=10)
 
-        db.list_identities.assert_awaited_once_with(status="paused", limit=50, offset=10)
+        db.list_identities.assert_awaited_once_with(
+            status="paused", limit=50, offset=10, participated_only=True
+        )
 
     @pytest.mark.asyncio
     async def test_health_from_state(self):
@@ -719,6 +721,26 @@ class TestListAgents:
 
         assert result[0].health_status == "unknown"
         db.get_latest_agent_state.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_defaults_to_participated_only(self):
+        """list_agents() defaults to participated_only=True at the DB layer."""
+        db = _mock_db(list_identities=[])
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import list_agents
+            await list_agents()
+        _, kwargs = db.list_identities.await_args
+        assert kwargs["participated_only"] is True
+
+    @pytest.mark.asyncio
+    async def test_include_unparticipated_disables_participated_filter(self):
+        """include_unparticipated=True passes participated_only=False through."""
+        db = _mock_db(list_identities=[])
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import list_agents
+            await list_agents(include_unparticipated=True)
+        _, kwargs = db.list_identities.await_args
+        assert kwargs["participated_only"] is False
 
 
 # ---------------------------------------------------------------------------

@@ -109,6 +109,14 @@ async def _load_metadata_from_postgres_async() -> dict:
         limit=10000,
         include_archived=True,
         include_deleted=False,
+        # This is the cold-start loader for the in-memory agent_metadata
+        # cache, which backs operator audit / orphan classification
+        # (lifecycle/operations.py) and onboarding-bug visibility. It MUST
+        # see every onboarded identity, including never-participated ones —
+        # filtering them here would silently hide the orphan population the
+        # operator tools exist to surface. The participated-only default is
+        # applied at user/dashboard-facing listing surfaces, not here.
+        include_unparticipated=True,
     )
 
     result = {}

@@ -101,27 +101,56 @@ class IdentityMixin:
         status: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
+        participated_only: bool = False,
     ) -> List[IdentityRecord]:
+        """List identities with optional filtering.
+
+        ``participated_only=True`` restricts the result to identities that
+        have actually checked in — i.e. those with at least one *measured*
+        (``synthetic = false``) row in ``core.agent_state``. This matches the
+        existing measured-only convention: substrate_interpretation rows
+        count as participation, bootstrap synthetic anchors do not. The
+        filter is a derived EXISTS predicate; it is **view-only** and never
+        archives, deletes, or mutates any row. Default ``False`` preserves
+        the historic "show every onboarded identity" behavior for callers
+        that opt out (operator audit / orphan classification / cache loads).
+        """
+        # core.identities is aliased ``i`` so the EXISTS subquery can
+        # correlate on i.identity_id without column ambiguity.
+        participated_clause = (
+            " AND EXISTS (SELECT 1 FROM core.agent_state s "
+            "WHERE s.identity_id = i.identity_id AND s.synthetic = false)"
+            if participated_only
+            else ""
+        )
         async with self.acquire() as conn:
             if status:
                 rows = await conn.fetch(
-                    """
-                    SELECT identity_id, agent_id, api_key_hash, created_at, updated_at,
-                           status, parent_agent_id, spawn_reason, disabled_at, last_activity_at, metadata
-                    FROM core.identities
-                    WHERE status = $1
-                    ORDER BY created_at DESC
+                    f"""
+                    SELECT i.identity_id, i.agent_id, i.api_key_hash, i.created_at, i.updated_at,
+                           i.status, i.parent_agent_id, i.spawn_reason, i.disabled_at, i.last_activity_at, i.metadata
+                    FROM core.identities i
+                    WHERE i.status = $1{participated_clause}
+                    ORDER BY i.created_at DESC
                     LIMIT $2 OFFSET $3
                     """,
                     status, limit, offset,
                 )
             else:
+                # No status filter: a WHERE clause may still be needed for the
+                # participated predicate. Build it so the EXISTS lands under
+                # WHERE (not a dangling AND) when there is no status.
+                no_status_where = (
+                    " WHERE" + participated_clause[len(" AND"):]
+                    if participated_only
+                    else ""
+                )
                 rows = await conn.fetch(
-                    """
-                    SELECT identity_id, agent_id, api_key_hash, created_at, updated_at,
-                           status, parent_agent_id, spawn_reason, disabled_at, last_activity_at, metadata
-                    FROM core.identities
-                    ORDER BY created_at DESC
+                    f"""
+                    SELECT i.identity_id, i.agent_id, i.api_key_hash, i.created_at, i.updated_at,
+                           i.status, i.parent_agent_id, i.spawn_reason, i.disabled_at, i.last_activity_at, i.metadata
+                    FROM core.identities i{no_status_where}
+                    ORDER BY i.created_at DESC
                     LIMIT $1 OFFSET $2
                     """,
                     limit, offset,
