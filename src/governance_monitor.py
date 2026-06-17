@@ -555,6 +555,13 @@ class UNITARESMonitor:
             )
             # Stamp + retain for trend reads (bounded by SENSOR_DIVERGENCE_HISTORY_MAX).
             self._last_sensor_divergence["at"] = datetime.now().isoformat()
+            # Self-heal: a monitor restored bypassing __init__ — a pickle/cache
+            # instance from before this attribute existed, or the Pi plugin's
+            # older build — can lack the deque. Initialize it lazily so a check-in
+            # never raises AttributeError here (the reads at :355 and
+            # runtime_queries already guard with getattr; this is the one write).
+            if not hasattr(self, "_sensor_divergence_history"):
+                self._sensor_divergence_history = deque(maxlen=SENSOR_DIVERGENCE_HISTORY_MAX)
             self._sensor_divergence_history.append(self._last_sensor_divergence)
             logger.debug(
                 "sensor_divergence agent=%s magnitude=%.4f "
