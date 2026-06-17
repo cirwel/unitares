@@ -84,6 +84,32 @@ and the registry's primary protectees.**
 | S22 H5 cross-harness coverage assessor | `identity/s22_h5_comparison.py:110/190/277` | Diagnostic-script-only; input data live (30k provenance rows) but no MCP surface reads the gate | **DECIDE** — surface via `get_governance_metrics`, or keep as a script |
 | `backfill_calibration_from_historical_sessions` | `mcp_handlers/dialectic/calibration.py:193` | One-shot admin migration util; no scheduled caller (by design) | **KEEP-DORMANT** — document as manual-only |
 
+## Theme 5 — Mechanical singletons (vulture cross-pass, 2026-06-16)
+
+A second, mechanical pass (vulture → cross-referenced every flagged symbol against the
+whole repo, py + json + plist + elixir + js + md, to catch string-based dispatch) found
+these smaller built-but-unwired functions the three-lens capability inventory above did
+not enumerate. Each has **zero static references repo-wide** after excluding this codebase's
+dynamic-dispatch patterns — the 73 reflectively-loaded `*Params` schemas, the 9
+`@enrichment(order=N)`-registered `enrich_*` functions, the 4 pydantic
+`@model_validator`/`@field_validator` methods, and the `importlib`-over-list-literal schema
+loader. Those exclusions are *why a naive vulture sweep is unsafe here* and are recorded so
+they are not re-flagged.
+
+| Capability | Location | Live evidence | Status |
+|---|---|---|---|
+| `create_indexes` AGE index-DDL builder | `db/age_queries.py:567` | 0 callers; AGE indexing is done by inline `CREATE INDEX` DDL in `storage/knowledge_graph_age.py` | **CUT** — dead duplicate, sibling of `query_response_chain` |
+| `create_temporally_near_edge` | `db/age_queries.py:537` | TEMPORALLY_NEAR edge writer, 0 callers | **DECIDE** — same per-query call as the orphaned analytics in Theme 1 |
+| `calibration_db.py` async wrapper layer (`get_calibration_async` / `update_calibration_async` / `calibration_health_check_async`) | `calibration_db.py:12/21/30` | 0 callers; live calibration writes go through `calibration.py` / `sequential_calibration.py` / `db/mixins/calibration.py` | **DECIDE/CUT** — NB the *store* `core.calibration` is busy (see false-dead list); these *wrappers* are the dead path, not the store |
+| `_get_pg_db` private accessor | `calibration.py:110` | 0 callers | **CUT** |
+| `check_idle_agents` / `get_recent_events_for_agent` | `event_detector.py:451/495` | 0 callers | **DECIDE** |
+| `list_restartable_tasks` | `background_tasks.py:1758` | 0 callers | **DECIDE** |
+| `reset_pin_match_scope` | `mcp_handlers/context.py:263` | 0 callers | **DECIDE** |
+| `get_reviewer_stuck_recovery` | `mcp_handlers/dialectic/responses.py:43` | 0 callers; same dead stuck-reviewer chain as `check_reviewer_stuck` (CUT below) | **CUT** — fold with `check_reviewer_stuck` |
+| `reranker_available` | `reranker.py:190` | 0 callers (`rrf_fuse`/`apply_tag_boost` are live; this flag-check is not) | **DECIDE** |
+| `register_extra_schemas` / `register_extra_descriptions` plugin entry-point API | `tool_schemas.py:20`; `tool_descriptions.py:145` | Published `governance_mcp.plugins` hook; **0 consumers** (incl. the plugin repo) | **KEEP-DORMANT** — extension hook, removal is a deprecation decision |
+| `gateway_server.py` `main()` script entrypoint | `gateway_server.py:99` | Has `__main__`; no plist/sh/import launches it | **DECIDE** — orphaned entrypoint or launched out-of-band |
+
 ## Genuine cruft — CUT candidates (the only delete-safe set)
 
 | Item | Location | Note |
