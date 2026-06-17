@@ -244,7 +244,6 @@
 
         updateAgentFilterInfo(agents.length);
         var agentEISVHistory = state.get('agentEISVHistory') || {};
-        var displayAgents = agents.slice(0, state.get('agentPageSize'));
 
         // Build lineage lookup maps from the full cached set, so a parent
         // filtered out of the current view still resolves its short label
@@ -264,7 +263,7 @@
             }
         }
 
-        var cardsHtml = displayAgents.map(function (agent) {
+        function buildAgentCard(agent) {
             var status = getAgentStatus(agent);
             var statusClass = status === 'paused' ? 'paused' :
                 status === 'archived' ? 'archived' :
@@ -491,22 +490,61 @@
                     '</div>';
                 })() +
             '</div>';
-        }).join('');
+        }
 
-        // Pagination footer
+        // Partition the filtered view: agents that have checked in at least once
+        // ("participated") render in the main list; agents that onboarded but
+        // never produced an observation (total_updates === 0) collapse into a
+        // single folded group. Without this, a server restart re-hydrates the
+        // entire stale 0-checkin cohort into the cache at once and floods the
+        // active list with "uninitialized" rows that look like a fresh swarm
+        // (2026-06-17). The split mirrors the summary headline's
+        // participated/never_participated counts surfaced by #822.
+        var participated = [];
+        var neverChecked = [];
+        for (var ai = 0; ai < agents.length; ai++) {
+            if ((agents[ai].total_updates || 0) >= 1) participated.push(agents[ai]);
+            else neverChecked.push(agents[ai]);
+        }
+
+        var displayAgents = participated.slice(0, state.get('agentPageSize'));
+        var cardsHtml = displayAgents.map(buildAgentCard).join('');
+
+        // Pagination footer — over the participated list only.
         var paginationHtml = '';
-        if (agents.length > state.get('agentPageSize')) {
+        if (participated.length > state.get('agentPageSize')) {
             paginationHtml = '<div class="agents-pagination">' +
-                '<span class="pagination-info">Showing ' + displayAgents.length + ' of ' + agents.length + ' agents</span>' +
+                '<span class="pagination-info">Showing ' + displayAgents.length + ' of ' + participated.length + ' agents</span>' +
                 '<button class="show-more-btn" type="button">Show more</button>' +
             '</div>';
-        } else if (agents.length > 0) {
+        } else if (participated.length > 0) {
             paginationHtml = '<div class="agents-pagination">' +
-                '<span class="pagination-info">Showing ' + agents.length + ' of ' + agents.length + ' agents</span>' +
+                '<span class="pagination-info">Showing ' + participated.length + ' of ' + participated.length + ' agents</span>' +
             '</div>';
         }
 
-        container.innerHTML = cardsHtml + paginationHtml;
+        // Collapsed "never checked in" group. Folded by default so it never
+        // floods the list; expandable for audit. Cards reuse buildAgentCard so
+        // pin/copy/detail delegation keeps working inside the <details>.
+        var ghostHtml = '';
+        if (neverChecked.length > 0) {
+            var emptyMainNote = participated.length === 0
+                ? '<div class="loading">No agents have checked in for the current filters. ' +
+                  neverChecked.length + ' onboarded but never produced an observation — see below.</div>'
+                : '';
+            paginationHtml = emptyMainNote + paginationHtml;
+            var ghostCards = neverChecked.map(buildAgentCard).join('');
+            ghostHtml = '<details class="agent-ghost-group">' +
+                '<summary class="agent-ghost-summary">' +
+                    '<span class="agent-ghost-arrow">▸</span> ' +
+                    'Never checked in — ' + neverChecked.length +
+                    '<span class="agent-ghost-hint">onboarded, no observations yet</span>' +
+                '</summary>' +
+                '<div class="agent-ghost-list">' + ghostCards + '</div>' +
+            '</details>';
+        }
+
+        container.innerHTML = cardsHtml + paginationHtml + ghostHtml;
     }
 
     // ========================================================================
