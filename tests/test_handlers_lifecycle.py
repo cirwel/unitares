@@ -164,6 +164,28 @@ class TestListAgentsLite:
             assert len(data["agents"]) == 3
 
     @pytest.mark.asyncio
+    async def test_limit_none_does_not_crash(self, mock_mcp_server):
+        """Regression: the MCP/Pydantic layer injects limit=None when the caller
+        omits it. The 'more' hint did `int(limit)` unconditionally, crashing the
+        whole list call with int(NoneType) and taking the dashboard read sweep
+        dark. limit=None must list all agents without raising. Incident 2026-06-16."""
+        mock_mcp_server.agent_metadata = {
+            f"agent-{i}": make_agent_meta(label=f"Agent {i}", total_updates=i)
+            for i in range(5)
+        }
+
+        with patch_lifecycle_server(mock_mcp_server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents(
+                {"lite": True, "limit": None, "recent_days": 0, "status_filter": "all"}
+            )
+
+            data = json.loads(result[0].text)
+            assert len(data["agents"]) == 5
+            assert data["shown"] == 5
+            assert "more" not in data  # no limit => no truncation hint
+
+    @pytest.mark.asyncio
     async def test_filters_stale_agents_by_recency(self, mock_mcp_server):
         recent = datetime.now(timezone.utc).isoformat()
         old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()

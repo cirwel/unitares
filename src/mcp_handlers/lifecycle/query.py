@@ -479,8 +479,12 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                 },
             }
 
-            # Add helpful hints
-            if len(agents) > int(limit):
+            # Add helpful hints. `limit` is None when the caller omits it and the
+            # Pydantic layer injects the null default (the lite-path default of 20
+            # only applies when the key is absent, not when it arrives as None), so
+            # guard int(limit) like the slices above (:470/:471) or the whole list
+            # call crashes with int(NoneType) — the dashboard's read sweep hit this.
+            if limit and len(agents) > int(limit):
                 result["more"] = f"Showing {limit} of {len(agents)} recent. Use limit=50 or recent_days=30 to see more."
             if recent_days:
                 result["filter"] = f"Active in last {recent_days} days. Use recent_days=0 for all."
