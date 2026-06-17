@@ -19,6 +19,7 @@ from unitares_sdk.errors import (
     GovernanceTimeoutError,
     GovernanceUnavailableError,
     IdentityDriftError,
+    extract_identity_refusal,
     extract_retry_after_seconds,
     parse_retry_after_header,
 )
@@ -461,6 +462,16 @@ class GovernanceClient:
 
         raw = await self.call_tool("process_agent_update", args)
         self._raise_for_tool_failure("process_agent_update", raw)
+
+        # #425: a strict-identity refusal comes back as a structured SUCCESS
+        # shape (no isError, no "error" key), so _raise_for_tool_failure passes
+        # it through. Left undetected, the verdict extraction below defaults to
+        # "proceed" and we report a successful check-in while the server
+        # recorded NOTHING — the resident goes silently dark (Chronicler
+        # 2026-06-14). Detect the refusal marker and fail loud instead.
+        refusal = extract_identity_refusal(raw)
+        if refusal is not None:
+            raise refusal
 
         # Extract verdict for potential error raising
         decision = raw.get("decision", {})

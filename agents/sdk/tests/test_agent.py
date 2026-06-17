@@ -91,14 +91,18 @@ def _mock_client_connected():
 
 
 def _call_tool_with_tags(existing_tags, *, fail_update=False):
-    """An AsyncMock for client.call_tool that answers get_agent_metadata with
-    ``existing_tags`` and records update_agent_metadata writes. ``fail_update``
-    makes the write raise (to exercise the non-fatal path)."""
+    """An AsyncMock for client.call_tool that answers the unified agent tool's
+    action=get with ``existing_tags`` and records action=update writes.
+    ``fail_update`` makes the write raise (to exercise the non-fatal path).
+
+    The standalone get_agent_metadata/update_agent_metadata tools were
+    consolidated into the unified ``agent`` tool; reconcile must use it (the
+    old names now return "Unknown tool" on a current server)."""
 
     async def _impl(tool, args, **kwargs):
-        if tool == "get_agent_metadata":
+        if tool == "agent" and args.get("action") == "get":
             return {"success": True, "tags": list(existing_tags)}
-        if tool == "update_agent_metadata":
+        if tool == "agent" and args.get("action") == "update":
             if fail_update:
                 raise RuntimeError("write down")
             return {"success": True, "tags": args.get("tags")}
@@ -108,20 +112,20 @@ def _call_tool_with_tags(existing_tags, *, fail_update=False):
 
 
 def _tool_writes(client):
-    """The argument dicts passed to every update_agent_metadata call."""
+    """The argument dicts passed to every agent(action=update) call."""
     return [
-        c.args[1]
+        {"agent_id": c.args[1].get("agent_id"), "tags": c.args[1].get("tags")}
         for c in client.call_tool.await_args_list
-        if c.args and c.args[0] == "update_agent_metadata"
+        if c.args and c.args[0] == "agent" and c.args[1].get("action") == "update"
     ]
 
 
 def _tool_reads(client):
-    """The target_agent of every get_agent_metadata call."""
+    """The agent_id of every agent(action=get) call."""
     return [
-        c.args[1].get("target_agent")
+        c.args[1].get("agent_id")
         for c in client.call_tool.await_args_list
-        if c.args and c.args[0] == "get_agent_metadata"
+        if c.args and c.args[0] == "agent" and c.args[1].get("action") == "get"
     ]
 
 

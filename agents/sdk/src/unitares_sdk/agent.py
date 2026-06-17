@@ -448,9 +448,15 @@ class GovernanceAgent:
         if getattr(self, "_resident_tags_reconciled", False):
             return
 
+        # Use the unified `agent` tool (action=get/update). The standalone
+        # get_agent_metadata / update_agent_metadata tools were consolidated
+        # away and now return "Unknown tool" on a current server, so #754's
+        # original calls failed every cycle (Chronicler launchd log
+        # 2026-06-17: "Unknown tool: get_agent_metadata"). The unified tool
+        # returns tags at the top level just the same.
         try:
             raw = await client.call_tool(
-                "get_agent_metadata", {"target_agent": self.agent_uuid}
+                "agent", {"action": "get", "agent_id": self.agent_uuid}
             )
         except Exception as e:
             # Couldn't read current tags — do NOT blind-write (that would risk
@@ -466,7 +472,7 @@ class GovernanceAgent:
         if not isinstance(raw, dict):
             logger.debug(
                 "%s: resident tag reconcile skipped — unexpected "
-                "get_agent_metadata response shape",
+                "agent(action=get) response shape",
                 self.name,
             )
             return
@@ -481,8 +487,8 @@ class GovernanceAgent:
         merged = current + missing  # additive — preserves role/cadence tags
         try:
             await client.call_tool(
-                "update_agent_metadata",
-                {"agent_id": self.agent_uuid, "tags": merged},
+                "agent",
+                {"action": "update", "agent_id": self.agent_uuid, "tags": merged},
             )
             logger.info(
                 "%s: reconciled resident tags — added %s (now %s)",
