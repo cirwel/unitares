@@ -28,7 +28,12 @@ defmodule AgentOrchestrator.MixProject do
 
   defp deps do
     [
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      # Control surface (lib/agent_orchestrator/http_router.ex). Plug 1.18+ for
+      # the Plug.Parsers.ParseError shape the router's error handler matches;
+      # Bandit is the localhost listener. Same stack as the lease plane.
+      {:plug, "~> 1.18"},
+      {:bandit, "~> 1.6"}
     ]
   end
 end
