@@ -13,7 +13,22 @@ Status: live. First public commit 2025-12-04.
 
 **UNITARES watches a fleet of AI agents while they work and tells you — and each agent — when one is starting to go off the rails, before anything visibly breaks.**
 
-When you run many autonomous agents, you can check *whether a model is good enough to deploy* (evals) and *catch bad actions as they happen* (guardrails). What you usually can't see is what the fleet is doing **right now**: whether each agent is still making real progress, whether its confidence matches its actual results, and whether it's drifting away from how it normally behaves. That live picture is what UNITARES provides. It runs alongside your evals and guardrails — it doesn't replace them.
+- **See drift early** — spot an agent degrading while it's still just numbers moving, not broken output.
+- **Confidence you can't fake** — claims are scored against real results (tests, exit codes, tool output), not the agent's word.
+- **The whole fleet, live** — one dashboard for humans; agents read each other and self-correct over the API.
+
+```bash
+git clone https://github.com/cirwel/unitares.git && cd unitares
+docker compose up -d --wait && make demo    # full stack + 60-second self-correction demo
+```
+
+<p align="center">
+  <img src="docs/assets/dashboard.png" width="80%" alt="Unitares dashboard — fleet coherence, agent count, discoveries, and system health"/>
+</p>
+
+It runs **alongside** your evals and guardrails, not instead of them — evals check whether a model is good enough to deploy, guardrails catch bad actions as they happen, and UNITARES shows what the fleet is doing *right now*. Running continuously since November 2025 · **3.7M+ governance events** under sustained load · dogfooded — the agents building UNITARES run under it. Single-operator so far, not external adoption — and you don't have to take the numbers on faith ([regenerate the evidence yourself ↓](#what-makes-the-signal-trustworthy)).
+
+**Contents:** [What you get](#what-you-get) · [How it works](#how-it-works-in-one-read) · [Who should integrate](#who-should-integrate-this) · [Quickstart](#quickstart) · [Integrate](#integrate) · [Trustworthy signal](#what-makes-the-signal-trustworthy) · [Scope & threat model](#scope-and-threat-model) · [Production snapshot](#production-snapshot) · [Architecture](#architecture) · [Docs](#documentation)
 
 ### What you get
 
@@ -23,17 +38,9 @@ When you run many autonomous agents, you can check *whether a model is good enou
 - **Cross-agent + human observability** — one agent reads another's live state over the API; you watch the whole fleet on a dashboard.
 - **Peer review instead of hard stops** — when an agent's confidence and the system's assessment disagree, agents (or an LLM) reconcile before anything halts.
 
-**In one screen:** running continuously since November 2025 · 3.7M+ governance events under sustained load · dogfooded — the agents building UNITARES run under it · two-call integration (`sync_state` + `record_result`) · `make demo` shows the self-correction loop in 60 seconds. Single-operator so far, not external adoption — and you don't have to take the numbers on faith (see the harness below).
-
-<p align="center">
-  <img src="docs/assets/dashboard.png" width="80%" alt="Unitares dashboard — fleet coherence, agent count, discoveries, and system health"/>
-</p>
-
 > **Evaluating with an agent?** Don't trust the prose — regenerate the evidence. On a fresh clone the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV/prior-state features against a deliberately dumb baseline (AUC, Brier) and self-labels each slice `INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING` rather than asserting — the harness is the part you run yourself.
 
 Human evaluators: start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md); architecture is in [docs/UNIFIED_ARCHITECTURE.md](docs/UNIFIED_ARCHITECTURE.md).
-
-**Contents:** [What you get](#what-you-get) · [How it works](#how-it-works-in-one-read) · [Who should integrate](#who-should-integrate-this) · [Quickstart](#quickstart) · [Integrate](#integrate) · [Trustworthy signal](#what-makes-the-signal-trustworthy) · [Scope & threat model](#scope-and-threat-model) · [Production snapshot](#production-snapshot) · [Architecture](#architecture) · [Docs](#documentation)
 
 ### How it works in one read
 
