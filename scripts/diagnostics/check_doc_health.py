@@ -126,6 +126,109 @@ def check_dead_refs(md_files: list[Path]) -> list[str]:
     return warnings
 
 
+# --- Check 1b: Broken relative .md links ---
+#
+# check_dead_refs only matches paths that START with a known repo root
+# ({src,config,scripts,docs,db,dashboard}/...). Bare or relative markdown
+# links to sibling docs — `[x](OPERATOR_RUNBOOK.md)`, `[x](../FOO.md)`,
+# `[x](./bar.md)` — never matched those patterns, so a wrong relative path
+# (e.g. a doc moved between `docs/` and `docs/operations/` keeping a stale
+# link) slipped through silently. This check resolves such links against the
+# linking file's own directory. Same skip surface as the dead-ref check:
+# proposals/specs/handoffs/plans and plan.md reference paths that don't (yet)
+# exist by design, so they stay exempt.
+
+_REL_MD_LINK = re.compile(r'\]\((\.{0,2}/?[^)\s#]+\.md)(?:#[^)]*)?\)')
+_REPO_ROOT_PREFIXES = ("src/", "config/", "scripts/", "docs/", "db/", "dashboard/")
+
+
+def check_relative_links(md_files: list[Path]) -> list[str]:
+    warnings = []
+    for fpath in md_files:
+        rel = fpath.relative_to(REPO_ROOT)
+        if rel.as_posix() in _DEAD_REF_SKIP_FILES:
+            continue
+        if any(d in rel.parts for d in _DEAD_REF_SKIP_DIRS):
+            continue
+        if rel.name.endswith(_REVIEW_SUFFIXES):
+            continue
+        for i, line in enumerate(fpath.read_text(errors="replace").splitlines(), 1):
+            for match in _REL_MD_LINK.finditer(line):
+                link = match.group(1)
+                # Repo-root-prefixed links are handled by check_dead_refs.
+                if link.startswith(_REPO_ROOT_PREFIXES):
+                    continue
+                # Operator-local handoffs are gitignored; cited by name as
+                # provenance (same exemption as the dead-ref check).
+                if "handoffs/" in link:
+                    continue
+                if any(c in link for c in "*<>{}"):
+                    continue
+                target = (fpath.parent / link).resolve()
+                if not target.exists():
+                    warnings.append(f"  {rel}:{i}: broken relative link `{link}`")
+    return warnings
+
+
+# --- Check 1c: Index orphans ---
+#
+# A doc under docs/ that no other .md and no code file references by name is
+# effectively unreachable — the curated README indexes drift behind new files
+# and the doc goes undiscovered (the 2026-06 audit found ~9 such orphans).
+# Dated point-in-time records (`*-YYYY-MM-DD.md`) are exempt: they are
+# deliberately preserved in place and may legitimately be unlinked. README
+# files are index roots, not index targets.
+
+_DATED_RECORD = re.compile(r'-\d{4}-\d{2}-\d{2}\.md$')
+_ORPHAN_SKIP_NAMES = {"README.md"}
+_REF_SCAN_EXTS = {".md", ".py", ".ex", ".exs", ".sh", ".js", ".ts", ".toml", ".txt"}
+_MD_BASENAME = re.compile(r'([\w.\-/]+\.md)')
+
+
+def _collect_md_basename_refs() -> dict[str, set[str]]:
+    """Map every referenced `*.md` basename → the set of files that mention it.
+
+    Scans docs and code alike so a doc cited only from `src/` (e.g.
+    `lineage-causal-only-semantics.md` from a lifecycle handler) is not a
+    false orphan.
+    """
+    refs: dict[str, set[str]] = {}
+    for root, dirs, files in os.walk(REPO_ROOT):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        for fn in files:
+            if Path(fn).suffix not in _REF_SCAN_EXTS:
+                continue
+            fpath = Path(root) / fn
+            try:
+                text = fpath.read_text(errors="replace")
+            except OSError:
+                continue
+            rel = fpath.relative_to(REPO_ROOT).as_posix()
+            for m in _MD_BASENAME.finditer(text):
+                refs.setdefault(os.path.basename(m.group(1)), set()).add(rel)
+    return refs
+
+
+def check_index_orphans(md_files: list[Path]) -> list[str]:
+    refs = _collect_md_basename_refs()
+    warnings = []
+    for fpath in md_files:
+        rel = fpath.relative_to(REPO_ROOT)
+        if not rel.parts or rel.parts[0] != "docs":
+            continue
+        if rel.name in _ORPHAN_SKIP_NAMES or "handoffs" in rel.parts:
+            continue
+        if _DATED_RECORD.search(rel.name):
+            continue
+        # "Referenced" = mentioned by some file other than itself.
+        mentioning = refs.get(rel.name, set()) - {rel.as_posix()}
+        if not mentioning:
+            warnings.append(
+                f"  {rel}: orphan — not linked from any index/doc or referenced in code"
+            )
+    return warnings
+
+
 # --- Check 2: Ghost tools ---
 
 def _load_tool_names() -> set[str]:
@@ -318,6 +421,14 @@ def main():
     dead = check_dead_refs(md_files)
     if dead:
         all_warnings.append(("Dead file references", dead))
+
+    rel_links = check_relative_links(md_files)
+    if rel_links:
+        all_warnings.append(("Broken relative .md links", rel_links))
+
+    orphans = check_index_orphans(md_files)
+    if orphans:
+        all_warnings.append(("Index orphans (unreachable docs)", orphans))
 
     ghosts = check_ghost_tools(md_files, tool_names)
     if ghosts:
