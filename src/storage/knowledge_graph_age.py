@@ -553,27 +553,23 @@ class KnowledgeGraphAGE:
 
         # Traverse from any node d to the root (discovery_id) via RESPONDS_TO edges.
         # Include depth 0 so the root itself is present in the chain.
+        # Project a single map literal (not a bare multi-column `RETURN d, depth`):
+        # graph_query declares one `result agtype` output column, so a map keeps
+        # node + depth in one column. Ordering is done in Python below.
         cypher = f"""
             MATCH (root:Discovery {{id: ${{discovery_id}}}})
             MATCH p = (d:Discovery)-[:RESPONDS_TO*0..{max_depth}]->(root:Discovery)
-            RETURN d, length(p) AS depth
-            ORDER BY depth ASC
+            RETURN {{node: d, depth: length(p)}}
         """
         rows = await db.graph_query(cypher, {"discovery_id": discovery_id})
 
         # Deduplicate by id using smallest depth
         best: Dict[str, tuple[int, DiscoveryNode]] = {}
         for row in rows or []:
-            # Handle different result formats
-            if isinstance(row, dict):
-                node_data = self._parse_agtype_node(row.get("d", row))
-                depth = int(row.get("depth", 0))
-            elif isinstance(row, (list, tuple)) and len(row) >= 2:
-                node_data = self._parse_agtype_node(row[0])
-                depth = int(row[1]) if row[1] is not None else 0
-            else:
-                node_data = self._parse_agtype_node(row)
-                depth = 0
+            if not isinstance(row, dict):
+                continue
+            node_data = self._parse_agtype_node(row.get("node", row))
+            depth = int(row.get("depth", 0) or 0)
             d = self._node_to_discovery(node_data)
             if not d or not d.id:
                 continue
