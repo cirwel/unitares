@@ -1,0 +1,2 @@
+# generated audio (reproduce with: python3 sonify.py)
+*.wav
