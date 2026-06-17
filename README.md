@@ -26,16 +26,16 @@ docker compose up -d --wait && make demo    # full stack + 60-second self-correc
   <img src="docs/assets/dashboard.png" width="80%" alt="Unitares dashboard — fleet coherence, agent count, discoveries, and system health"/>
 </p>
 
-It runs **alongside** your evals and guardrails, not instead of them — evals check whether a model is good enough to deploy, guardrails catch bad actions as they happen, and UNITARES shows what the fleet is doing *right now*. Running continuously since November 2025 · **3.7M+ governance events** under sustained load · dogfooded — the agents building UNITARES run under it. Single-operator so far, not external adoption — and you don't have to take the numbers on faith ([regenerate the evidence yourself ↓](#what-makes-the-signal-trustworthy)).
+It runs **alongside** your evals and guardrails, not instead of them — evals check whether a model is good enough to deploy, guardrails catch bad actions as they happen, and UNITARES shows what the fleet is doing *right now*. Running continuously since November 2025 · **3.7M+ governance events** under sustained load · dogfooded — the agents building UNITARES run under it. Every number here is verifiable on a fresh clone ([regenerate the evidence yourself ↓](#what-makes-the-signal-trustworthy)).
 
 **Contents:** [What you get](#what-you-get) · [How it works](#how-it-works-in-one-read) · [Who should integrate](#who-should-integrate-this) · [Quickstart](#quickstart) · [Integrate](#integrate) · [Trustworthy signal](#what-makes-the-signal-trustworthy) · [Scope & threat model](#scope-and-threat-model) · [Production snapshot](#production-snapshot) · [Architecture](#architecture) · [Docs](#documentation)
 
 ### What you get
 
-- **Drift early-warning** — catch an agent degrading while it's still just numbers moving, before it ships visibly broken output.
-- **Outcome-calibrated confidence** — overconfident agents get caught automatically: claimed confidence is scored against verified results, not taken on trust.
+- **Drift early-warning** — each agent is graded against its *own* baseline, so slow degradation shows up as Integrity slipping and entropy rising while the output still looks fine.
+- **Outcome-calibrated confidence** — claimed confidence is scored against verified success rate across many tasks, so a persistently overconfident agent loses Integrity and trips a stricter verdict automatically.
 - **Self-correction before escalation** — the agent reads its own state and narrows scope or stops *before* an external guardrail has to fire.
-- **Cross-agent + human observability** — one agent reads another's live state over the API; you watch the whole fleet on a dashboard.
+- **Cross-agent observability** — one agent can read another's live trajectory to decide whether to trust its output or take a handoff, not just whether it's up.
 - **Peer review instead of hard stops** — when an agent's confidence and the system's assessment disagree, agents (or an LLM) reconcile before anything halts.
 
 > **Evaluating with an agent?** Don't trust the prose — regenerate the evidence. On a fresh clone the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV/prior-state features against a deliberately dumb baseline (AUC, Brier) and self-labels each slice `INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING` rather than asserting — the harness is the part you run yourself.
@@ -55,7 +55,7 @@ From each check-in, UNITARES tracks four numbers per agent — together called *
 
 These four numbers are computed from **auditable heuristic blends over observable behavior** — decision outcomes, calibration error (claimed confidence vs. verified success), drift from the agent's own baseline, tool results — then EMA-smoothed. There is no black box. The *information-theoretic* readings of E/I/S/V (entropy, mutual information, free energy) used in [Paper v6](https://github.com/cirwel/unitares-paper-v6) are **target semantics**, not what the running code computes today; the exact deployed formulas, with provenance tags, are in [How EISV is computed](docs/EISV_COMPUTATION.md).
 
-Each check-in returns a plain verdict — `proceed` / `guide` / `pause` / `reject` — so the agent can correct itself before any external safety system has to step in. Humans read the same state on a dashboard; other agents can read it over the API.
+Each check-in returns a plain verdict — `proceed` / `guide` / `pause` / `reject` — so the agent can correct itself before any external safety system has to step in.
 
 ### Why an agent can't just inflate its own confidence
 
@@ -63,11 +63,11 @@ Self-reported confidence is only one input. UNITARES also watches **real outcome
 
 After about 30 check-ins, the four numbers are graded against the agent's *own* running history rather than a one-size-fits-all threshold. Absolute safety floors still apply on top of that.
 
-Running continuously since November 2025; state in PostgreSQL + AGE. **The verdict path is the auditable behavioral model described above** — component risk plus self-relative z-scores, source in [`src/behavioral_assessment.py`](src/behavioral_assessment.py). A separate dynamical-systems model (`governance_core/`, the thermodynamic / free-energy formulation) runs **in parallel as a research cross-check and does not drive verdicts by default** ([`governance_monitor.py`](src/governance_monitor.py): *"the ODE runs in parallel but does NOT drive verdicts… primary verdicts come from behavioral assessment"*). Its derivation is in [Paper v6](https://github.com/cirwel/unitares-paper-v6) (DOI 10.5281/zenodo.19647159). Want the theory → start with the paper; want what actually fires → [How EISV is computed](docs/EISV_COMPUTATION.md).
+State lives in PostgreSQL + AGE. **The verdict path is the auditable behavioral model described above** — component risk plus self-relative z-scores, source in [`src/behavioral_assessment.py`](src/behavioral_assessment.py). A separate dynamical-systems model (`governance_core/`, the thermodynamic / free-energy formulation) runs **in parallel as a research cross-check and does not drive verdicts by default** ([`governance_monitor.py`](src/governance_monitor.py): *"the ODE runs in parallel but does NOT drive verdicts… primary verdicts come from behavioral assessment"*). Its derivation is in [Paper v6](https://github.com/cirwel/unitares-paper-v6) (DOI 10.5281/zenodo.19647159). Want the theory → start with the paper; want what actually fires → [How EISV is computed](docs/EISV_COMPUTATION.md).
 
 ### Who should integrate this
 
-UNITARES is for you if you run **multiple long-lived autonomous agents** — tool-using, multi-step, doing real work over hours or days — and you've watched an agent quietly drift without anyone noticing until something visible broke. The check-in loop surfaces that drift while it's still just numbers moving (Integrity slipping, overconfidence climbing) instead of waiting for a user to complain. It runs in parallel with your evals and guardrails as a live state layer the agent itself can read.
+UNITARES is for you if you run **multiple long-lived autonomous agents** — tool-using, multi-step, doing real work over hours or days — and you've watched an agent quietly drift without anyone noticing until something visible broke. The check-in loop surfaces that drift while it's still just numbers moving (Integrity slipping, overconfidence climbing) instead of waiting for a user to complain.
 
 **The threshold that matters is check-in count, not wall-clock time.** Self-relative grading needs roughly **30 check-ins** to establish an agent's baseline (absolute safety floors apply before that). An agent doing dozens of units of work — over an hour or a week — crosses it; one that does three and exits never does. That's the real line for "is my session long enough to benefit," not a duration.
 
@@ -208,13 +208,13 @@ Use the primary task-verb tools; the older raw names remain for compatibility an
 
 UNITARES is **adversarial-aware, not adversarial-naive**, with deliberately conservative enforcement. The signal is anchored to outcomes an agent can't fake — test pass/fail, exit codes, tool results via `record_result()`: an agent can inflate its self-reported `confidence` but not its actual success rate, and drift (S) is graded against its *own* prior trajectory, so there is no fixed threshold to pre-game. Verdicts lean toward `proceed`/`guide` over `pause`/`reject` by design — a false-positive pause on a productive agent is itself a failure mode (acutely so here, since the agents building UNITARES run under it). And "no ethics classifier" means no hand-labeled ethics model, *not* that the system is value-free: drift (S) is a salience flag, not a verdict, and Integrity (I) is anchored to ground-truth outcomes rather than to the agent's own history.
 
-**The genuine open question.** Robustness against a *motivated* attacker deliberately optimizing the EISV proxy, at scale, is unproven — the deployment is single-operator with no red-team. That is the real limitation: an absence of adversarial *testing*, not of adversarial design.
+**The genuine open question.** Robustness against a *motivated* attacker deliberately optimizing the EISV proxy, at scale, is unproven — red-teaming so far has been ad hoc rather than systematic or sustained, and the deployment is single-operator. That is the real limitation: a shortfall of *sustained adversarial testing*, not of adversarial design.
 
 ---
 
 ## Production snapshot
 
-Frozen public snapshot from June 16, 2026 (single-operator deployment — the author's own traffic, not external adoption). Headline: **3.7M+ governance events processed · ≈714K in the last 7 days**.
+Frozen public snapshot from June 16, 2026 (single-operator — the author's own traffic). Headline: **3.7M+ governance events processed · ≈714K in the last 7 days**.
 
 <details>
 <summary><strong>Full metrics table</strong></summary>
@@ -222,7 +222,7 @@ Frozen public snapshot from June 16, 2026 (single-operator deployment — the au
 | Metric | Value |
 |--------|-------|
 | Agents onboarded | 3,777 total process-instances — overwhelmingly ephemeral CLI sessions from one operator's workstation plus a handful of long-running resident agents (launchd crons) |
-| Distinct event-emitting identities (last 21 days) | 510; mostly ephemeral local CLI sessions, not external adoption (lower than earlier snapshots as identity-consolidation work cut phantom per-session identities) |
+| Distinct event-emitting identities (last 21 days) | 510; mostly ephemeral local CLI sessions (lower than earlier snapshots as identity-consolidation work cut phantom per-session identities) |
 | Unique agents active (last 7 days) | 369 distinct event emitters |
 | Governance events processed | 3,748,000+ (≈714K in the last 7 days) |
 | Knowledge graph discoveries | 1,054 |
