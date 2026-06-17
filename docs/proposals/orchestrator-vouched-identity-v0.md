@@ -18,11 +18,21 @@ Operator is the merge gate. Do NOT auto-merge.
 ## 0. The one-sentence claim
 
 An agent that the BEAM orchestrator actually **spawned and owns** can be moved
-from the "non-substrate, unverifiable" identity class into a **substrate-attested**
+from the "non-substrate, unverifiable" identity class into a **runtime-attested**
 class — by having the orchestrator (itself S19-enrolled, speaking to governance
 over the already-trusted UDS peer-cred channel) **vouch** the child's
 `(uuid, os_pid, start_tvsec)` at spawn, so the child's later calls resolve at a
 genuine `strong` tier by *proof*, not by echoing a copyable string.
+
+> **Word choice (council 2026-06-17):** the child class is **runtime-attested**,
+> *not* "substrate-attested." The child has **no dedicated substrate of its own**
+> (§6.3 — the substrate is the orchestrator's); calling the child "substrate-X"
+> would smuggle in a class membership it provably lacks (the Appendix's
+> three-condition test, which a child fails at condition 1). What is
+> substrate-anchored is the **voucher**; the child is *attested by* a
+> substrate-anchored runtime, which is exactly S19's own mechanism applied
+> dynamically. "Substrate attestation" names the voucher's S19 check; the child
+> earns **runtime-attested process-instance identity**, never substrate class.
 
 This is the **first honest `strong` cross-process credential for an ephemeral
 agent** — the gap #810 names explicitly as having no answer today.
@@ -79,10 +89,25 @@ of of a pre-seeded table row.
 > rests on reading that phrase as scoped to **self-asserting callers that lack a
 > witnessing lifecycle-owner** — not as "no runtime can ever witness an ephemeral
 > process." An orchestrated child *has* a witnessing runtime (the earner), so it
-> is not a "non-substrate agent" in the relevant sense. If the operator's intent
-> in #810 was the stronger universal reading, this RFC touches the ratified frame
-> and the reinterpretation must be confirmed before the cutover row opens. It is
-> surfaced here, not absorbed silently.
+> is not a "non-substrate agent" in the relevant sense.
+>
+> **Adversarial council 2026-06-17 settled the MERITS half of this question:** the
+> universal reading is **internally incoherent with the ratified frame**, because
+> a launchd S19 resident is *also* an ephemeral process that admits only copyable
+> strings from its own mouth — yet earns strong cross-process via a trusted
+> third-party (kernel/launchd) attestation, which #810 explicitly **preserves** as
+> the one honest strong path. A truly universal "ephemeral ⇒ no strong
+> cross-process" would delete S19. So the only frame-coherent scope of "by
+> construction" is **"no strong from the process's *own self-assertion*"** — which
+> *is* the narrow reading. The narrow reading is therefore **forced by S19's
+> survival**, not a free reinterpretation.
+>
+> **What remains genuinely operator-intent:** only whether the operator, when
+> ratifying #810, *meant* the (now-shown-incoherent) universal or the (forced)
+> narrow scope. The merits no longer hinge on it — but since #810 is operator-
+> ratified and identity is writer-locked, confirm the reading before the cutover
+> row opens. The decision has shrunk from "is the third row legitimate?" to "ack
+> the narrow scope you were already committed to by keeping S19."
 
 ## 2. Scope boundary (state plainly)
 
@@ -117,6 +142,22 @@ load-bearing constraint of the whole design. If implementation cannot put the
 orchestrator on a UDS peer-cred channel to governance, the design does not ship —
 a bearer-token vouch is explicitly rejected (it would re-introduce the S19/#802
 copyable-secret vector at the voucher).
+
+> **THE SINGLE SEAM (adversarial council 2026-06-17, both reviewers converged).**
+> The entire merits-case for this design — everything that makes the child's
+> `strong` *earned* rather than a better-dressed #807 — rests on **one
+> implementation invariant**: the `vouch_child` write MUST be gated by the same
+> `verify_substrate_at_resume` peer-cred check that proves the caller is the
+> enrolled orchestrator (§4.2 step 3). The live UDS socket is **mode 0666**, so
+> *any* local process can connect to it (a pre-existing S19 defect — see O4
+> footnote). If `vouch_child` is ever an **ungated** endpoint on that socket, any
+> local process calls `vouch_child(attacker_uuid, attacker_pid, attacker_start)`,
+> the row is written, and its `strong` is as unchecked as any bearer token — the
+> third row collapses straight back into #807. This invariant is **more important
+> than the #810 interpretation question**: the #810 reading is forced by S19's
+> survival (see §1), but *this* seam can be silently broken in code. A cutover
+> acceptance test (§8) must assert a non-orchestrator UDS caller's `vouch_child`
+> is refused.
 
 What this design **does** honestly claim:
 
@@ -363,6 +404,22 @@ orchestrator says it is, right now*, and claims nothing about continuity beyond
 the process. Cross-restart continuity for orchestrated agents remains
 unearned-by-design and is explicitly out of scope.
 
+**On "process-instance layer, consumed cross-process" (council seam, resolved).**
+The taxonomy sorts layers by *what survives a process boundary*, and
+process-instance continuity does **not** survive — so a *cross-process credential*
+cannot be a process-instance-*continuity* claim. The vouch is not one. What
+crosses the boundary is **not the child's continuity** (that stays inside the
+child process and dies with it) but an **external attestation of an instantaneous
+fact** — "this PID is the process I spawned, right now" — made by one process
+(orchestrator), read by another (governance). That is structurally identical to
+how an S19 launchd `substrate_claim` already works: launchd witnesses a resident,
+and a *different* process (governance) reads the attestation. Nobody calls S19 "a
+cross-process use of within-process continuity"; it is a trusted third party
+reporting an observation. The vouch is the same pattern on the process-instance
+layer instead of the substrate layer. So the conferred tier is **attested
+process-instance identity at an instant**, never "process-instance continuity
+that travels."
+
 ## 7. Open questions (for council)
 
 - **O1 — RESOLVED (council 2026-06-17) toward distinct `orchestrator_vouched`.**
@@ -452,7 +509,16 @@ unearned-by-design and is explicitly out of scope.
 3. **DEFERRED cutover (post-2026-06-24 gate, separate PRs).** UDS vouch client in
    Elixir; `vouch_child` handler; child-resolution gate in `resolution.py`; SDK
    UDS routing for orchestrated children; voucher enrollment. Each single-concern,
-   operator-gated, identity-writer-locked.
+   operator-gated, identity-writer-locked. **Mandatory acceptance test (the §3
+   single seam):** a UDS caller whose peer-cred does **not** verify as the enrolled
+   orchestrator (`verify_substrate_at_resume` → not accepted) must have its
+   `vouch_child` **refused** — assert an attacker-chosen `(uuid, pid, start_tvsec)`
+   never writes a `vouched_bindings` row. Plus a PID-reuse-window test (O2/O3) and
+   a child-resolution test that a `start_tvsec` mismatch resolves weak, never
+   strong. **Prerequisite (pre-existing defect to fix first):** reconcile the live
+   `governance.sock` to mode 0600 — it is currently 0666 (`_tighten_socket_mode`
+   ran per the log but something re-bound it), which widens the connect population
+   from same-UID to any local user for S19 *today*, independent of this design.
 
 ## 9. Non-goals
 
@@ -476,7 +542,24 @@ unearned-by-design and is explicitly out of scope.
   proof_origin → `substrate_attested` is net-new) and corrected in §5.
 - **O4 feasibility (HTTP-over-UDS from BEAM): CONFIRMED VIABLE.** OTP 28,
   live `governance.sock`; client is net-new code, not a blocker (§7 O4).
-- **OPEN operator call:** the #810 "by construction" reinterpretation (§1 ⚠ box) —
-  must be confirmed before the cutover row opens.
+- **Adversarial council 2026-06-17 (second pass, on the blocking decision):** two
+  reviewers tasked to *break* the narrow reading.
+  - **Merits verdict: the narrow reading SURVIVES** — forced by S19's survival
+    (universal reading deletes S19, which #810 preserves). The earned/performative
+    line is drawn at *verification*; kernel peer-cred is verification #807's
+    fingerprint-pin structurally lacks, so the third row is different in **kind**,
+    not merely strength.
+  - **Two label wounds folded:** §0 "substrate-attested" → "runtime-attested" (the
+    child has no substrate of its own); §6.3 clarified that what crosses processes
+    is an *attestation of an instantaneous fact*, not within-process continuity.
+  - **The single load-bearing seam elevated (§3 callout):** `vouch_child` MUST be
+    peer-cred-gated — this is *more* fragile than the #810 question and gets a
+    mandatory cutover acceptance test (§8).
+  - **Pre-existing live defect surfaced:** `governance.sock` is mode 0666 not 0600
+    (S19 connect population is wider than the listener claims) — flagged for a
+    fix-first prerequisite at cutover, independent of this design.
+- **OPEN operator call (now intent-only):** acknowledge the narrow #810 scope
+  (§1 ⚠ box) before the cutover row opens. The merits are settled; only the
+  intent confirmation remains.
 - **Implementation correctness: NOT GATED** — lives in the PoC tests + the
   deferred cutover's adversary suite.
