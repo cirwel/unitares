@@ -48,6 +48,10 @@ The system's versioned identity ontology, the resolution ledger, and the working
 How to run this in production. Most readers can skip these.
 
 - [`OPERATOR_RUNBOOK.md`](operations/OPERATOR_RUNBOOK.md) — primary runbook
+- [`github-workflow-conventions.md`](operations/github-workflow-conventions.md) — canonical delivery contract (branch naming, draft PRs) shared by Codex and Claude; `AGENTS.md`/`CLAUDE.md` carry the short form
+- [`merge-automation-plan.md`](operations/merge-automation-plan.md) — branch-protection + operator-armed auto-merge plan (not yet applied)
+- [`ci-issue-surfacing.md`](operations/ci-issue-surfacing.md) — experiment wiring the surfacing instinct into GitHub CI (deduped issues from new findings)
+- [`resident-roster.md`](operations/resident-roster.md) — `UNITARES_RESIDENTS` configuration; the named resident set is config, not a hardcoded fleet
 - [`ablation-negative-controls.md`](operations/ablation-negative-controls.md) — synthetic bad-outcome fixtures for red-team ablation plumbing
 - [`DEFINITIVE_PORTS.md`](operations/DEFINITIVE_PORTS.md) — port assignments across services
 - [`database_architecture.md`](operations/database_architecture.md) — single-Postgres / schema-isolation model
@@ -55,8 +59,11 @@ How to run this in production. Most readers can skip these.
 - [`branch-hygiene-runbook.md`](operations/branch-hygiene-runbook.md) — resident branch-hygiene sweep (`agents/vigil_hygiene`)
 - [`resident-validation-cohort.md`](operations/resident-validation-cohort.md) — experimental long-running resident validation tick contract
 - [`resident-validation-supervised-invocation.md`](operations/resident-validation-supervised-invocation.md) — local-only supervised canary invocation wrapper
+- [`dormant-capability-registry.md`](operations/dormant-capability-registry.md) — distinguishes built-but-unwired capability from genuine cruft, so cleanup is deliberate
+- [`test-suite-triage.md`](operations/test-suite-triage.md) — current state of the test gate and known-triaged suites
 - [`DATA_NOTES.md`](operations/DATA_NOTES.md) — operational data dictionary for the production governance database
 - [`DEPLOYMENT_DATA_CAVEAT.md`](operations/DEPLOYMENT_DATA_CAVEAT.md) — what the cited deployment numbers do and don't mean
+- Dated finding record (point-in-time, preserved by design): [`ablation-initiates-finding-2026-06-16.md`](operations/ablation-initiates-finding-2026-06-16.md)
 
 ### `dev/` — developer-internal
 

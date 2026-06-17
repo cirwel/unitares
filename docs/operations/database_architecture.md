@@ -1,6 +1,6 @@
 # Database Architecture
 
-Status: thin infrastructure reference. Use this for storage/backing-service facts only. For runtime semantics see [UNIFIED_ARCHITECTURE.md](UNIFIED_ARCHITECTURE.md); for operational procedures see [operations/OPERATOR_RUNBOOK.md](operations/OPERATOR_RUNBOOK.md).
+Status: thin infrastructure reference. Use this for storage/backing-service facts only. For runtime semantics see [UNIFIED_ARCHITECTURE.md](../UNIFIED_ARCHITECTURE.md); for operational procedures see [OPERATOR_RUNBOOK.md](OPERATOR_RUNBOOK.md).
 
 ## Canonical Rule
 

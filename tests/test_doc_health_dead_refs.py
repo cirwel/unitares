@@ -235,6 +235,32 @@ def test_get_db_call_is_internal_helper_not_ghost_tool(tmp_path, monkeypatch, do
     assert doc_health.check_ghost_tools([agents], {"onboard"}) == []
 
 
+def test_ghost_tool_skip_file_suppresses_internal_fn_names(tmp_path, monkeypatch, doc_health):
+    """The dormant-capability-registry names internal functions, not MCP tools.
+
+    It lives under operations/ (not a _GHOST_SKIP_DIRS dir), so it is skipped
+    by exact path via _GHOST_SKIP_FILES — without blinding the check across
+    all of operations/.
+    """
+    reg = tmp_path / "docs" / "operations" / "dormant-capability-registry.md"
+    reg.parent.mkdir(parents=True)
+    reg.write_text("Repoint to `get_active_table_name()`; gate on `has_exogenous_signals()`.\n")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    assert doc_health.check_ghost_tools([reg], {"onboard"}) == []
+
+
+def test_ghost_tool_still_checks_other_operations_docs(tmp_path, monkeypatch, doc_health):
+    """The per-file skip must not leak to other operations/ runbooks."""
+    runbook = tmp_path / "docs" / "operations" / "OPERATOR_RUNBOOK.md"
+    runbook.parent.mkdir(parents=True)
+    runbook.write_text("Call `not_a_real_tool()` to recover.\n")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    warnings = doc_health.check_ghost_tools([runbook], {"onboard"})
+    assert len(warnings) == 1 and "not_a_real_tool" in warnings[0]
+
+
 def test_dedup_stripped_paths(stub_repo, doc_health):
     """Multiple refs to the same file with different line numbers dedupe to one warning."""
     content = (
@@ -248,6 +274,112 @@ def test_dedup_stripped_paths(stub_repo, doc_health):
     assert len(warnings) == 1, (
         f"Expected dedupe to one warning per unique file, got {len(warnings)}: {warnings}"
     )
+
+
+# --- check_relative_links (bare/relative .md links) --------------------------
+
+
+def test_relative_link_to_existing_sibling_not_flagged(tmp_path, monkeypatch, doc_health):
+    """A relative link to a sibling doc that exists is fine."""
+    ops = tmp_path / "docs" / "operations"
+    ops.mkdir(parents=True)
+    (ops / "OPERATOR_RUNBOOK.md").write_text("runbook")
+    doc = ops / "database_architecture.md"
+    doc.write_text("See [runbook](OPERATOR_RUNBOOK.md) and [arch](../UNIFIED_ARCHITECTURE.md).\n")
+    (tmp_path / "docs" / "UNIFIED_ARCHITECTURE.md").write_text("arch")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    assert doc_health.check_relative_links([doc]) == []
+
+
+def test_broken_relative_link_flagged(tmp_path, monkeypatch, doc_health):
+    """The regression case: a relative link resolving to nothing is flagged.
+
+    `docs/operations/x.md` linking `[a](UNIFIED_ARCHITECTURE.md)` is broken —
+    the file lives one level up at `docs/UNIFIED_ARCHITECTURE.md`.
+    """
+    ops = tmp_path / "docs" / "operations"
+    ops.mkdir(parents=True)
+    (tmp_path / "docs" / "UNIFIED_ARCHITECTURE.md").write_text("arch")
+    doc = ops / "x.md"
+    doc.write_text("See [arch](UNIFIED_ARCHITECTURE.md).\n")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    warnings = doc_health.check_relative_links([doc])
+    assert len(warnings) == 1 and "UNIFIED_ARCHITECTURE.md" in warnings[0]
+
+
+def test_relative_link_check_skips_proposals(tmp_path, monkeypatch, doc_health):
+    """proposals/ reference paths that don't exist yet by design (skip dir)."""
+    prop = tmp_path / "docs" / "proposals"
+    prop.mkdir(parents=True)
+    doc = prop / "path1.md"
+    doc.write_text("Companion: [audit](./uuid-leak-audit.md).\n")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    assert doc_health.check_relative_links([doc]) == []
+
+
+def test_repo_root_prefixed_links_left_to_dead_ref_check(tmp_path, monkeypatch, doc_health):
+    """`docs/...`-prefixed links are check_dead_refs' job, not this one."""
+    d = tmp_path / "docs"
+    d.mkdir()
+    doc = d / "a.md"
+    doc.write_text("See [x](docs/nonexistent.md).\n")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    assert doc_health.check_relative_links([doc]) == []
+
+
+# --- check_index_orphans -----------------------------------------------------
+
+
+def test_unreferenced_doc_is_orphan(tmp_path, monkeypatch, doc_health):
+    """A doc no other file mentions by name is flagged as an orphan."""
+    d = tmp_path / "docs" / "operations"
+    d.mkdir(parents=True)
+    orphan = d / "lonely.md"
+    orphan.write_text("Nobody links here.\n")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    warnings = doc_health.check_index_orphans([orphan])
+    assert len(warnings) == 1 and "lonely.md" in warnings[0]
+
+
+def test_doc_referenced_from_index_not_orphan(tmp_path, monkeypatch, doc_health):
+    """A doc linked from a README index is not an orphan."""
+    d = tmp_path / "docs" / "operations"
+    d.mkdir(parents=True)
+    (d / "README.md").write_text("- [thing](thing.md)\n")
+    thing = d / "thing.md"
+    thing.write_text("content")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    assert doc_health.check_index_orphans([thing]) == []
+
+
+def test_doc_referenced_only_from_code_not_orphan(tmp_path, monkeypatch, doc_health):
+    """A doc cited from a source file (not any .md) is still reachable."""
+    (tmp_path / "docs" / "proposals").mkdir(parents=True)
+    spec = tmp_path / "docs" / "proposals" / "lineage-causal-only-semantics.md"
+    spec.write_text("design")
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "helpers.py").write_text("# see docs/proposals/lineage-causal-only-semantics.md\n")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    assert doc_health.check_index_orphans([spec]) == []
+
+
+def test_dated_record_exempt_from_orphan_check(tmp_path, monkeypatch, doc_health):
+    """Dated point-in-time records may be intentionally unlinked."""
+    d = tmp_path / "docs" / "operations"
+    d.mkdir(parents=True)
+    dated = d / "ablation-finding-2026-06-16.md"
+    dated.write_text("a finding, preserved in place")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    assert doc_health.check_index_orphans([dated]) == []
 
 
 def test_collect_md_files_skips_elixir_deps_and_build_dirs(tmp_path, monkeypatch, doc_health):
