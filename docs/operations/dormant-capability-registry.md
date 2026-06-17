@@ -39,14 +39,14 @@ false-archival bug lives here.
 
 | Capability | Location | Live evidence | Status |
 |---|---|---|---|
-| SPAWNED lineage DAG — written, never traversed | `db/age_queries.py:222` (creator); `mcp_handlers/identity/handlers.py:2642` | 294 SPAWNED edges + 594 Agent vertices; **zero** `MATCH …SPAWNED…` traversal anywhere | **WIRE** — add `descendants_of`/`live_descendant_reachable`; route the archival liveness gate through it (AGE-canonical step 2) |
+| SPAWNED lineage DAG — written, never traversed | `src/db/age_queries.py:222` (creator); `mcp_handlers/identity/handlers.py:2642` | 294 SPAWNED edges + 594 Agent vertices; **zero** `MATCH …SPAWNED…` traversal anywhere | **WIRE** — add `descendants_of`/`live_descendant_reachable`; route the archival liveness gate through it (AGE-canonical step 2) |
 | Lineage liveness reasoning hand-rolled, single-hop | `mcp_handlers/lifecycle/stuck.py:173/215/578` | Reads `parent_agent_id` as a flat attr over in-memory metadata; cannot do multi-hop reachability; ignores the SPAWNED DAG | **WIRE** to the above — the false-archival bug is the symptom |
 | `supersedes=` store param never creates the SUPERSEDES edge | `mcp_handlers/knowledge/handlers.py:879-884` | Store path sets the SQL `superseded_by` field but never calls `supersede_discovery()`; **0 SUPERSEDES edges** | **WIRE** — one line; auto-activates the inert ranking penalty below |
 | SUPERSEDES connectivity ranking penalty | `storage/knowledge_graph_age.py:1720,1740` | Coded into every search blend but always 0 (no edges exist) | auto-fixes once the edge is wired |
 | RESPONDS_TO edges + `get_response_chain` | `storage/knowledge_graph_age.py:538,558`; handler `:2107` | Read path wired behind `include_response_chain`; **0 callers set it; 0 edges ever written** | **DECIDE** — have the respond/dialectic flow set `response_to`, or cut the chain |
 | Search "graph expansion" reads a SQL field, not the graph | `retrieval.py:100`; handler `:1197` | Gated off (`UNITARES_ENABLE_GRAPH_EXPANSION` unset); even when on, reads `related_to` SQL field, not the 2186 RELATED_TO Cypher edges | **DECIDE** — repoint to a Cypher neighbor fetch, or stop calling it graph |
-| Cross-agent knowledge-flow query (collaboration DAG) | `db/age_queries.py:330` | Pure graph-native Cypher; **0 consumers**; data exists (1765 AUTHORED + 2186 RELATED_TO) | **WIRE** — the showcase "graph-native" query; runs today on live data |
-| Orphaned AGE analytics queries (entropy↔work, unresolved-questions-with-entropy, etc.) | `db/age_queries.py:309/352/359/379/406` | Zero callers outside the module (only `query_tags_with_discoveries` is wired) | **DECIDE** per query — dashboard-panel-shaped vs superseded |
+| Cross-agent knowledge-flow query (collaboration DAG) | `src/db/age_queries.py:330` | Pure graph-native Cypher; **0 consumers**; data exists (1765 AUTHORED + 2186 RELATED_TO) | **WIRE** — the showcase "graph-native" query; runs today on live data |
+| Orphaned AGE analytics queries (entropy↔work, unresolved-questions-with-entropy, etc.) | `src/db/age_queries.py:309/352/359/379/406` | Zero callers outside the module (only `query_tags_with_discoveries` is wired) | **DECIDE** per query — dashboard-panel-shaped vs superseded |
 | `link_discoveries` manual typed-edge API | `storage/knowledge_graph_age.py:2034` | 0 callers, no MCP tool exposes it | **KEEP-DORMANT** — useful if a manual-curation surface lands |
 
 ## Theme 2 — The synthesis loop is built end-to-end but nothing fires it
@@ -98,9 +98,9 @@ they are not re-flagged.
 
 | Capability | Location | Live evidence | Status |
 |---|---|---|---|
-| `create_indexes` AGE index-DDL builder | `db/age_queries.py:567` | 0 callers; AGE indexing is done by inline `CREATE INDEX` DDL in `storage/knowledge_graph_age.py` | **CUT** — dead duplicate, sibling of `query_response_chain` |
-| `create_temporally_near_edge` | `db/age_queries.py:537` | TEMPORALLY_NEAR edge writer, 0 callers | **DECIDE** — same per-query call as the orphaned analytics in Theme 1 |
-| `calibration_db.py` async wrapper layer (`get_calibration_async` / `update_calibration_async` / `calibration_health_check_async`) | `calibration_db.py:12/21/30` | 0 callers; live calibration writes go through `calibration.py` / `sequential_calibration.py` / `db/mixins/calibration.py` | **DECIDE/CUT** — NB the *store* `core.calibration` is busy (see false-dead list); these *wrappers* are the dead path, not the store |
+| `create_indexes` AGE index-DDL builder | `src/db/age_queries.py:567` | 0 callers; AGE indexing is done by inline `CREATE INDEX` DDL in `storage/knowledge_graph_age.py` | **CUT** — dead duplicate, sibling of `query_response_chain` |
+| `create_temporally_near_edge` | `src/db/age_queries.py:537` | TEMPORALLY_NEAR edge writer, 0 callers | **DECIDE** — same per-query call as the orphaned analytics in Theme 1 |
+| `calibration_db.py` async wrapper layer (`get_calibration_async` / `update_calibration_async` / `calibration_health_check_async`) | `calibration_db.py:12/21/30` | 0 callers; live calibration writes go through `calibration.py` / `sequential_calibration.py` / `src/db/mixins/calibration.py` | **DECIDE/CUT** — NB the *store* `core.calibration` is busy (see false-dead list); these *wrappers* are the dead path, not the store |
 | `_get_pg_db` private accessor | `calibration.py:110` | 0 callers | **CUT** |
 | `check_idle_agents` / `get_recent_events_for_agent` | `event_detector.py:451/495` | 0 callers | **DECIDE** |
 | `list_restartable_tasks` | `background_tasks.py:1758` | 0 callers | **DECIDE** |
@@ -116,7 +116,7 @@ they are not re-flagged.
 |---|---|---|
 | `backfill_embeddings.py` | `scripts/migration/backfill_embeddings.py` | Hardcoded to the legacy 384d `core.discovery_embeddings` table, which live search no longer reads — broken against the active bge-m3 model. **Cut or repoint to `get_active_table_name()`** |
 | Legacy `core.discovery_embeddings` table (1887 rows, 384d) | DB | Superseded by `_bge_m3` (1056, clean). **Cut after** concept-extraction confirmed reading the active table |
-| `query_response_chain` builder | `db/age_queries.py:309` | Dead duplicate; `get_response_chain` uses its own inline Cypher. **Cut** |
+| `query_response_chain` builder | `src/db/age_queries.py:309` | Dead duplicate; `get_response_chain` uses its own inline Cypher. **Cut** |
 | `log_auto_attest` typed helper | `audit_log.py:206` | 0 callers; real rows written by a different `log_event` path. **Cut** |
 | Quorum `ESCALATE` resolution branch | `dialectic_protocol.py:196`; handler `:1526` | Retired by design ("0 of 47 sessions ever escalated"). **Cut the enum/dead branch** |
 | `answer_question` handler | `mcp_handlers/knowledge/handlers.py:2342` | `register=False` AND unrouted in `consolidated.py` — unreachable. **Cut or route** |
