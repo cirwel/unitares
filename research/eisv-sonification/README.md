@@ -58,6 +58,32 @@ clean reference shape):
   cadences. This is what the failure boundary *sounds* like — idealized; the real
   episodes above are noisier and more gradual.
 
+## Lead-time validation — does the sound actually lead the dashboard?
+
+`python3 lead_time_analysis.py --plot` tests the core thesis ("you hear the pause
+coming before the verdict flips") on the real episodes instead of asserting it. It
+guards against the **circularity trap**: the pause verdict is a threshold on `risk`,
+and `risk` is computed *from* EISV — so a risk-vs-risk "lead" is just the threshold
+gap, not evidence the sound helps. The real test is whether an *audible, different-axis*
+channel (S→chromaticism, V→harmonic lean) crosses its onset before the **verdict label**
+a dashboard analyst watches (`approve → guide/pause`).
+
+**Verdict on current fuel (n=3, all Sentinel/3701, all the #686 spurious class):**
+
+- **V (the headline harmonic-lean channel) is FLAT — fires in 0/3, total range ≤0.012.**
+  The dominant/sus4 lean the synthetic episode leaned on carries ~no leading signal here.
+- **S (chromaticism) onset precedes the label in 3/3, but sustains into the pause in only
+  2/3** — the third is a transient bump that *resolves* before the pause (a misleading
+  lead; see `lead_time_id3701_2026-06-10_*.png`: S rises then falls as risk snaps up).
+- **risk snaps** (median max step ≈0.06/min) — pauses are threshold crossings, not gradual
+  approaches, so even the circular risk channel gives little lead.
+
+So: **audible lead is NOT demonstrated, and the sample is biased** toward the worst case
+(spurious z-score pauses are abrupt by construction — there is nothing real to hear coming).
+The harness is built and the verdict is honest; a *fair* test needs non-spurious, gradual
+pauses to accumulate (auto-`TIER_A` from 2026-06-08 on). This also redirects the mapping:
+on real data S, not V, is the channel doing the work — the opposite of the synthetic premise.
+
 ## Honesty notes
 
 - Real renders use genuine logged EISV but only the shallow *recent* window the

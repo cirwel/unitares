@@ -2,3 +2,5 @@
 *.wav
 # regenerable data dump (reproduce with: python3 extract_pre_pause_windows.py)
 pre_pause_windows.json
+# regenerable lead-time plots (reproduce with: python3 lead_time_analysis.py --plot)
+lead_time_*.png
