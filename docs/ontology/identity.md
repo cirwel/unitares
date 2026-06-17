@@ -215,6 +215,37 @@ properties, not surprises:
   `continuity_claim: resumed_by_recent_onboard_pin`, tier weak-medium).
   Long-running drivers should record the `client_session_id` their
   onboard returns and pass it on every call.
+- **`tier: strong` on an echoed `agent-{uuid}` is itself a
+  performative claim across a process boundary — a known, bounded
+  over-claim, named here so it is a property and not a surprise.** The
+  `agent-{uuid12}` session string is copyable and UUID-derivable, so
+  the server cannot distinguish "the process that minted this string
+  echoing its own" from "a co-resident process presenting it." The
+  `strong` / `caller_proven: true` stamp the echo earns is therefore
+  the *same* "same string = same subject" leap as the pin above, taken
+  at a higher tier: honest *within* a live process, unverifiable
+  *across* one. This is not a gap to be closed by a better bearer
+  credential. Nothing an ephemeral process-instance can carry across
+  its own boundary is more than a copyable string, so **no honest
+  `strong` cross-process credential exists for a non-substrate agent —
+  by construction, not by omission.** The echo is nonetheless retained
+  at `strong` because it is the only signal that disambiguates *which*
+  co-resident driver is calling — the fingerprint pin above cannot, it
+  collides across co-resident process-instances — and because the live
+  blast radius is near-zero (no caller cross-process binds; the
+  explicit cross-process bind path sees no real traffic). Read the
+  tier as best-available *operational binding strength*, with
+  `caller_proven` as the separate cryptographic claim that, for this
+  source, the server cannot actually verify. The honest endpoint for
+  an agent that genuinely needs strong cross-process identity is the
+  substrate-earned pattern (Appendix) — kernel-attested and
+  non-copyable — not a bearer token; a copyable cross-process token
+  would only relocate this over-claim. Until such agents migrate
+  there, UUID/lineage redaction stays load-bearing rather than
+  defense-in-depth. Whether a strict write-gate should keep accepting
+  this binding once `STRICT_IDENTITY_REQUIRED` defaults on is a
+  separate, evidence-driven question for that rollout boundary, not
+  one this document resolves.
 
 ## Open questions
 
