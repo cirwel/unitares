@@ -229,3 +229,6 @@ data/lease_plane/
 
 # superpowers plugin planning artifacts
 docs/superpowers/
+
+# ephemeral session scratch (not for commit)
+.scratch/
