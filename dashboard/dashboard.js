@@ -906,7 +906,13 @@ async function loadAgents() {
 
         // Use summary counts (accurate) not array lengths (limited by pagination)
         const total = summary.total || 0;
-        const active = (byStatus.active || 0) + (byStatus.waiting_input || 0);
+        // "active" headline = agents that have actually checked in at least once
+        // (participated). Falls back to lifecycle-active if the backend predates
+        // the participation split. Never-participated are still in `total`.
+        const neverParticipated = summary.never_participated || 0;
+        const active = (summary.participated != null)
+            ? summary.participated
+            : ((byStatus.active || 0) + (byStatus.waiting_input || 0));
         const paused = byStatus.paused || 0;
         const archived = byStatus.archived || 0;
         const deleted = byStatus.deleted || 0;
@@ -941,6 +947,7 @@ async function loadAgents() {
         const agentsChange = formatChange(total, previousStats.totalAgents);
         const breakdown = [];
         if (active > 0) breakdown.push(`${active} active`);
+        if (neverParticipated > 0) breakdown.push(`${neverParticipated} never checked in`);
         if (paused > 0) breakdown.push(`${paused} paused`);
         if (archived > 0) breakdown.push(`${archived} archived`);
         if (deleted > 0) breakdown.push(`${deleted} deleted`);
