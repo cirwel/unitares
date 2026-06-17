@@ -16,6 +16,7 @@ from unitares_sdk.errors import (
     GovernanceConnectionError,
     GovernanceTimeoutError,
     IdentityDriftError,
+    IdentityRefusedError,
 )
 from unitares_sdk.models import CheckinResult, IdentityResult, OnboardResult
 
@@ -574,6 +575,47 @@ class TestCheckinVerdict:
 
         with pytest.raises(GovernanceConnectionError, match="governance down"):
             await client.checkin("test work")
+
+    @pytest.mark.asyncio
+    async def test_strict_identity_refusal_raises_not_silent_proceed(self):
+        """#425 / Chronicler 2026-06-14: a strict-identity refusal comes back as
+        a structured SUCCESS shape (no isError, no "error" key, no decision), so
+        _raise_for_tool_failure passes it through. Undetected, the verdict would
+        default to "proceed" and the SDK would report a successful check-in
+        while the server recorded NOTHING — a resident goes silently dark. The
+        refusal must surface loud instead."""
+        session = AsyncMock()
+        session.call_tool = AsyncMock(return_value=make_mcp_result({
+            "status": "identity_required",
+            "tool": "process_agent_update",
+            "tool_class": "required",
+            "hint": "echo your client_session_id or pass continuity_token",
+            "ontology_ref": "CLAUDE.md \"STRICT_IDENTITY_REQUIRED (#425 staged rollout)\"",
+            "rollout_flag": "STRICT_IDENTITY_REQUIRED",
+        }))
+        client = make_client_with_session(session)
+
+        with pytest.raises(IdentityRefusedError) as exc_info:
+            await client.checkin("test work")
+        assert exc_info.value.tool == "process_agent_update"
+        assert exc_info.value.status == "identity_required"
+
+    @pytest.mark.asyncio
+    async def test_normal_checkin_not_mistaken_for_refusal(self):
+        """A normal check-in response (decision/metrics, no rollout_flag) must
+        NOT trip the refusal detector — it keys on the rollout_flag marker, not
+        the bare presence of a status field."""
+        session = AsyncMock()
+        session.call_tool = AsyncMock(return_value=make_mcp_result({
+            "success": True,
+            "status": "active",
+            "decision": {"action": "proceed"},
+            "metrics": {"coherence": 0.8},
+        }))
+        client = make_client_with_session(session)
+
+        result = await client.checkin("test work")
+        assert result.verdict == "proceed"
 
 
 class TestSearchKnowledgeFailure:

@@ -111,3 +111,58 @@ class IdentityBootstrapRefused(GovernanceError):
     bootstrap a new identity by running the agent once with the
     UNITARES_FIRST_RUN=1 environment variable set. Never silently swap
     identities."""
+
+
+# Single source for the #425 STRICT_IDENTITY_REQUIRED typed-refusal shape. The
+# server emits it via strict_identity_refusal_payload() wrapped in
+# success_response() — i.e. HTTP 200, NOT isError, NO "error" key — so neither
+# the transport layer nor _raise_for_tool_failure flags it. Detection therefore
+# keys on the payload's own marker field, mirroring extract_retry_after_seconds.
+STRICT_IDENTITY_ROLLOUT_FLAG = "STRICT_IDENTITY_REQUIRED"
+
+
+class IdentityRefusedError(GovernanceError):
+    """Server refused a write because identity was not caller-proven under
+    STRICT_IDENTITY_REQUIRED (#425).
+
+    The refusal is a *structured success-shape*, not an error — by design, so
+    that catch-paths don't retry-with-mint and reintroduce ghost leaks. But for
+    a resident's check-in that shape is dangerous: without this detection the
+    SDK reads the absent verdict as a default "proceed" and reports a SUCCESSFUL
+    check-in while the server recorded nothing. A resident then goes silently
+    dark — clean logs, 200 OK, zero recorded updates (Chronicler 2026-06-14:
+    three days of "successful" daily runs, no EISV trajectory written).
+
+    Raising instead makes the refusal loud: the cycle fails, the launchd log
+    shows it, and notify_on_error fires. Fix the offender per the rollout doc
+    (carry a caller-proven binding — echo the onboarded client_session_id or
+    pass continuity_token — or add parent_agent_id / substrate exemption)."""
+
+    def __init__(self, tool: str, hint: str | None = None, status: str | None = None):
+        self.tool = tool
+        self.hint = hint
+        self.status = status
+        msg = f"Governance refused {tool} under strict identity (status={status})"
+        if hint:
+            msg += f" — {hint}"
+        super().__init__(msg)
+
+
+def extract_identity_refusal(payload: object) -> "IdentityRefusedError | None":
+    """Return an IdentityRefusedError when ``payload`` is the #425 typed
+    strict-identity refusal, else ``None``.
+
+    Keys on ``rollout_flag == STRICT_IDENTITY_REQUIRED`` — the marker the
+    single-sourced server payload always sets — NOT on the bare presence of a
+    ``status`` field, so a normal check-in response (decision/metrics, no
+    rollout_flag) never trips it.
+    """
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("rollout_flag") != STRICT_IDENTITY_ROLLOUT_FLAG:
+        return None
+    return IdentityRefusedError(
+        tool=payload.get("tool") or "unknown",
+        hint=payload.get("hint"),
+        status=payload.get("status"),
+    )
