@@ -85,12 +85,15 @@ class TestSensorDivergenceTrend:
         data = json.loads(path.read_text())
         data.pop("sensor_divergence", None)
         data.pop("sensor_divergence_history", None)
+        data.pop("created_at_iso", None)  # also predates created_at persistence
         path.write_text(json.dumps(data))
 
         # Load via the persisted-state branch — must still have the attributes.
         restored = UNITARESMonitor(agent_id="div_pre780", load_state=True)
         assert hasattr(restored, "_sensor_divergence_history")
         assert hasattr(restored, "_last_sensor_divergence")
+        # Same invariant class — created_at must exist even with no fallback band-aid.
+        assert restored.created_at is not None
         # And a sensor-carrying check-in records cleanly (no AttributeError).
         restored.process_update({**BASE_STATE, "sensor_eisv": dict(SENSOR)})
         assert len(restored._sensor_divergence_history) == 1

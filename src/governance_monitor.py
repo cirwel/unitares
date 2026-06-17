@@ -133,6 +133,13 @@ class UNITARESMonitor:
         # Initialize last_update timestamp (needed for simulate_update)
         self.last_update = datetime.now()
 
+        # created_at: same invariant — set unconditionally here so the persisted-state
+        # branch never returns a monitor without it. load_persisted_state() overrides
+        # with the file's created_at_iso when present; for older files this now() stands.
+        # (Replaces the post-hoc `if not hasattr(self,'created_at')` band-aid that
+        # patched this one attribute the same way #800 patched the divergence write.)
+        self.created_at = datetime.now()
+
         # Model<->body sensor divergence ("compare, don't couple"). MUST be set
         # here, not only in _initialize_fresh_state(): the persisted-state branch
         # below (load_state=True + state file present) skips _initialize_fresh_state
@@ -237,9 +244,9 @@ class UNITARESMonitor:
                     from governance_core.adaptive_governor import GovernorState
                     self.adaptive_governor.state = GovernorState.from_dict(gov_dict)
                     logger.debug(f"Restored governor state: tau={self.adaptive_governor.state.tau:.3f}, beta={self.adaptive_governor.state.beta:.3f}")
-                # Ensure created_at is set (fallback to now if not in state)
-                if not hasattr(self, 'created_at'):
-                    self.created_at = datetime.now()
+                # created_at is initialized unconditionally in the early block above
+                # and overridden by load_persisted_state() when the file carries it,
+                # so no post-hoc fallback is needed here.
                 logger.info(f"Loaded persisted state for agent: {agent_id} ({len(self.state.V_history)} history entries)")
             else:
                 # Initialize fresh state
