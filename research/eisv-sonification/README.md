@@ -34,13 +34,29 @@ The audible contrast between the +V agent and the two −V agents is real harmon
 contrast straight from real data: energy-surplus *pulls forward*, integrity-surplus
 *sits back*.
 
-**Synthetic canonical pause episode** (ILLUSTRATIVE — hand-built, not measured;
-the read API doesn't expose deep pre-pause trajectories, see the first-cut note):
+**Real pre-pause episodes** (extracted from the governance DB — supersede the
+synthetic episode for *transition-into-pause* cases; see `extract_pre_pause_windows.py`):
+
+`python3 extract_pre_pause_windows.py --render` walks `core.agent_state` for pauses
+whose preceding check-in was a *proceed* (a real "the pause came" transition, not a
+sustained plateau), pulls the preceding ~12 check-ins at full resolution, and renders
+one WAV per episode. The v0 synthetic episode was built because the *read API* exposes
+only a shallow recent window — but the full pre-pause trajectory was already **persisted**
+all along (every check-in writes E/I/S/V + risk + verdict + action to `agent_state`).
+So pre-pause windows needed *retrieval*, not new retention.
+
+Example real episode (`id3701` / Sentinel, 2026-06-10, `risk_pause`): E and I drift
+down, risk climbs in steps (0.15 → 0.45 `guide` → 0.51 → **0.75 `risk_pause`**) — the
+audible approach to the boundary, from logged data.
+
+**Synthetic canonical pause episode** (ILLUSTRATIVE — hand-built, retained as a
+clean reference shape):
 
 - `synthetic_pause_episode.wav` (+ `synthetic_pause_score.png`) — settled-in-key →
   tension builds (V↑, I↓, S↑, coherence↓) → loss of key → pause. You hear the
   melody go chromatic and flat while the harmony leans hard dominant and never
-  cadences. This is what the failure boundary *sounds* like.
+  cadences. This is what the failure boundary *sounds* like — idealized; the real
+  episodes above are noisier and more gradual.
 
 ## Honesty notes
 
@@ -52,10 +68,28 @@ the read API doesn't expose deep pre-pause trajectories, see the first-cut note)
 - v0 mappings (register/intonation/tension curves) are choices, not claims; the
   paper's human-detection study is what would validate that these renderings make
   drift *faster to detect* than the dashboard.
+- **`coherence` is not persisted in modern `agent_state` rows** (only 227 legacy ODE
+  rows carry it). The extractor does **not** fabricate it — real episodes omit
+  coherence, so sonify falls back to its neutral 0.5; `phi` is carried in the JSON as
+  a diagnostic only, never substituted for coherence.
+- **The real 4-D fuel is thin and narrow.** Of ~143 persisted pauses (23 healthy→pause
+  transitions), only **3 render as full 4-D EISV — all one agent (Sentinel/3701), all
+  the PR #686 spurious-pause class.** `behavioral_eisv` only went 100%-always-on the
+  week of 2026-06-08, so older pauses lack I/S/V (the extractor tiers them `TIER_B`,
+  E+risk only). New pauses are auto-`TIER_A`: the study's fuel grows by **accumulation**,
+  not by adding instrumentation. n=3/1-agent is enough to build and validate the
+  pipeline, **not** enough for a publishable detection study yet.
 
 ## Next
 
 - Wire to a live trajectory stream (`get_eisv_trajectory_state` already emits
   `{dE,dI,dS,dV}` + shape labels) for real-time monitoring audio.
-- Run the detection study: can listeners flag an impending pause from audio
-  earlier than analysts reading EISV plots?
+- **Map derivatives, not levels.** `first_cut.py` found the affect lives in `dV/dt`
+  (it humps positive then resolves while S keeps climbing), but `sonify.py` renders
+  per-state *levels*. Mapping `dV/dt → forward lean / micro-accelerando` and
+  `dS/dt → rate of chromatic encroachment` likely explains why the synthetic episode
+  feels alive and near-static real windows don't — and it's the same `{dE,dI,dS,dV}`
+  the live stream already emits.
+- Run the detection study once enough diverse `TIER_A` pauses have accumulated
+  (currently 3, one agent): can listeners flag an impending pause from audio earlier
+  than analysts reading EISV plots?

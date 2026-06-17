@@ -1,2 +1,4 @@
 # generated audio (reproduce with: python3 sonify.py)
 *.wav
+# regenerable data dump (reproduce with: python3 extract_pre_pause_windows.py)
+pre_pause_windows.json
