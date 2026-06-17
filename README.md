@@ -208,7 +208,7 @@ Use the primary task-verb tools; the older raw names remain for compatibility an
 
 UNITARES is **adversarial-aware, not adversarial-naive**, with deliberately conservative enforcement. The signal is anchored to outcomes an agent can't fake — test pass/fail, exit codes, tool results via `record_result()`: an agent can inflate its self-reported `confidence` but not its actual success rate, and drift (S) is graded against its *own* prior trajectory, so there is no fixed threshold to pre-game. Verdicts lean toward `proceed`/`guide` over `pause`/`reject` by design — a false-positive pause on a productive agent is itself a failure mode (acutely so here, since the agents building UNITARES run under it). And "no ethics classifier" means no hand-labeled ethics model, *not* that the system is value-free: drift (S) is a salience flag, not a verdict, and Integrity (I) is anchored to ground-truth outcomes rather than to the agent's own history.
 
-**The genuine open question.** Robustness against a *motivated* attacker deliberately optimizing the EISV proxy, at scale, is unproven — the deployment is single-operator with no red-team. That is the real limitation: an absence of adversarial *testing*, not of adversarial design.
+**The genuine open question.** Robustness against a *motivated* attacker deliberately optimizing the EISV proxy, at scale, is unproven — red-teaming so far has been ad hoc rather than systematic or sustained, and the deployment is single-operator. That is the real limitation: a shortfall of *sustained adversarial testing*, not of adversarial design.
 
 ---
 
