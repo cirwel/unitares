@@ -66,6 +66,23 @@ class TestSensorDivergenceTrend:
         # Bound is preserved on the restored deque.
         assert restored._sensor_divergence_history.maxlen == SENSOR_DIVERGENCE_HISTORY_MAX
 
+    def test_self_heals_when_attr_missing(self):
+        """A monitor restored bypassing __init__ (a pickle/cache instance from
+        before this attribute existed, or the Pi plugin's older build) lacks
+        _sensor_divergence_history. A check-in carrying sensor_eisv must NOT
+        raise AttributeError — it self-heals and records the divergence.
+
+        Regression for the live 'UNITARESMonitor object has no attribute
+        _sensor_divergence_history' crash on process_agent_update (2026-06-16).
+        """
+        monitor = UNITARESMonitor(agent_id="div_heal", load_state=False)
+        del monitor._sensor_divergence_history
+        assert not hasattr(monitor, "_sensor_divergence_history")
+        # Must not raise — self-heals lazily at the write site.
+        monitor.process_update({**BASE_STATE, "sensor_eisv": dict(SENSOR)})
+        assert len(monitor._sensor_divergence_history) == 1
+        assert monitor._sensor_divergence_history.maxlen == SENSOR_DIVERGENCE_HISTORY_MAX
+
 
 class TestDivergenceInMetrics:
 
