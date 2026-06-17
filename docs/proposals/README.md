@@ -32,7 +32,7 @@ Several of these are **single-writer surfaces** (see the shared contract in `AGE
 | Doc | Status (as of 2026-06-14) |
 |---|---|
 | [`behavioral-running-hot-detector-v0.md`](behavioral-running-hot-detector-v0.md) | v0.1 plan, parked — pending council; unbuilt, blocked on the behavioral-EISV arm emitting signal |
-| [`operator-decision-packet-v0.md`](operator-decision-packet-v0.md) | v0 design — making load-bearing taste/authority/irreversible calls cheap to answer (decision-packet output contract for council pass + dialectic `ESCALATE`); design-first, no code |
+| [`operator-decision-packet-v0.md`](operator-decision-packet-v0.md) | v1 design — making load-bearing taste/authority/irreversible calls cheap to answer (decision-packet output contract; council pass live, dialectic `ESCALATE`/`design_review` are latent unwired scaffolds). Council-passed to v1 2026-06-17; design-first, no code |
 
 ## Shipped / resolved
 
