@@ -161,6 +161,24 @@ class TestUpdateDiscoveryStatusGraph:
         assert "resolved" in data["message"]
 
     @pytest.mark.asyncio
+    async def test_update_rejects_toolcall_markup(self, patch_common, registered_agent):
+        """KG 2026-06-13 footgun: the update path gets the same degenerate-write
+        guard as store — an edit whose content absorbed tool-call markup is
+        rejected, not silently persisted."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_update_discovery_status_graph
+
+        result = await handle_update_discovery_status_graph({
+            "agent_id": registered_agent,
+            "discovery_id": "2026-01-01T00:00:00.000000",
+            "content": 'edited <parameter name="tags">["x"]</parameter>',
+        })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "degenerate_write_rejected"
+
+    @pytest.mark.asyncio
     async def test_update_missing_discovery_id(self, patch_common, registered_agent):
         """Update fails when discovery_id is missing."""
         mock_mcp_server, mock_graph = patch_common

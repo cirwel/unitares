@@ -176,6 +176,60 @@ class TestStoreKnowledgeGraph:
         assert "summary" in data["error"].lower() or "missing" in data["error"].lower()
 
     @pytest.mark.asyncio
+    async def test_store_rejects_toolcall_markup_in_content(self, patch_common, registered_agent):
+        """KG 2026-06-13 footgun: a write whose content absorbed tool-call markup
+        (because the harness folded the `tags` arg into it and tags arrived empty)
+        must be rejected loudly, not stored as a corrupt, unsearchable row."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "summary": "A real finding",
+            "content": 'details here <parameter name="tags">["a","b"]</parameter>',
+            # tags arrived empty because they were folded into content above
+        })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "degenerate_write_rejected"
+        mock_graph.add_discovery.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_store_rejects_toolcall_markup_in_summary(self, patch_common, registered_agent):
+        """The same guard covers the summary field."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "summary": "Finding </invoke>",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "degenerate_write_rejected"
+        mock_graph.add_discovery.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_store_allows_brackets_and_angle_text_in_prose(self, patch_common, registered_agent):
+        """Low false-positive: legit prose with JSON-ish brackets or comparison
+        operators (not tool-call markup) must still store."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "summary": "Config takes a list like [\"a\", \"b\"] and x < y holds",
+            "content": "Saw payload {\"tags\": [\"x\"]} and a<b in the diff — all fine.",
+            "tags": ["config"],
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        mock_graph.add_discovery.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_store_defaults_to_note_type(self, patch_common, registered_agent):
         """Discovery type defaults to 'note' when not specified."""
         mock_mcp_server, mock_graph = patch_common
