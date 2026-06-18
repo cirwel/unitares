@@ -757,3 +757,49 @@ class TestListAgentsParticipation:
             data = json.loads(result[0].text)
             assert data["participated"] == 2
             assert data["never_participated"] == 0
+
+    @pytest.mark.asyncio
+    async def test_participated_agents_not_starved_by_ghost_onboards(self, mock_mcp_server):
+        """Regression: a flood of never-checked-in ghost onboards must not push
+        genuinely-participated agents out of the paginated `limit` window.
+
+        Never-checked-in agents carry last_update == created (onboard time), so
+        on a pure-recency sort a burst of freshly-onboarded sessions outranks
+        older real participants. With a small `limit`, that left only the
+        always-on residents visible. The full-path sort must order participated
+        agents (total_updates >= 1) ahead of ghosts so the window fills with
+        real work first.
+        """
+        now = datetime.now(timezone.utc)
+        older = (now - timedelta(hours=6)).isoformat()
+        # Two real participants that last checked in 6h ago.
+        meta = {
+            "real1": make_agent_meta(label="Real1", total_updates=12, last_update=older),
+            "real2": make_agent_meta(label="Real2", total_updates=8, last_update=older),
+        }
+        # A flood of ghosts onboarded "just now" — last_update == created == now.
+        fresh = now.isoformat()
+        for i in range(10):
+            meta[f"ghost{i}"] = make_agent_meta(
+                label=f"claude-thread-{i}", total_updates=0,
+                last_update=fresh, created_at=fresh,
+            )
+        mock_mcp_server.agent_metadata = meta
+
+        with patch_lifecycle_server(mock_mcp_server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            # Full path (include_metrics) with a limit smaller than the ghost flood.
+            result = await handle_list_agents({
+                "include_metrics": True, "grouped": True,
+                "status_filter": "all", "limit": 3,
+            })
+
+            data = json.loads(result[0].text)
+            returned = [a for bucket in data["agents"].values() for a in bucket]
+            returned_labels = {a["label"] for a in returned}
+            # Both real participants survive the limit despite the ghost flood.
+            assert "Real1" in returned_labels
+            assert "Real2" in returned_labels
+            # Counts stay truthful — ghosts are not dropped, just ordered last.
+            assert data["summary"]["participated"] == 2
+            assert data["summary"]["never_participated"] == 10

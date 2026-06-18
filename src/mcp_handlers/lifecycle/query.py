@@ -767,8 +767,25 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
             except Exception as e:
                 logger.debug(f"Batch trust tier lookup failed: {e}")
 
-        # Sort by last_update (most recent first)
-        agents_list.sort(key=lambda x: x.get("last_update", ""), reverse=True)
+        # Sort participated agents (>=1 check-in) ahead of never-checked-in
+        # ghosts, then by recency (most recent first) within each group.
+        # Never-checked-in agents carry last_update == created (onboard time),
+        # so a burst of freshly-onboarded ghost sessions — the dashboard's own
+        # read sweep, anima/connector traffic minting fresh identities — would
+        # otherwise outrank genuinely-participated agents on a pure recency sort
+        # and crowd them out of the paginated `limit` window. That left only the
+        # always-on residents (which check in continuously) visible, with every
+        # other real participant pushed below the cutoff. #826 folds the ghosts
+        # client-side, but they must not starve real participants out of the
+        # limit first. The lite path already orders participated-first (line ~427
+        # via the -updates key); this brings the full path in line.
+        agents_list.sort(
+            key=lambda x: (
+                1 if (x.get("total_updates") or 0) >= 1 else 0,
+                x.get("last_update", "") or "",
+            ),
+            reverse=True,
+        )
 
         # Calculate status counts BEFORE pagination (for accurate totals)
         total_count = len(agents_list)
