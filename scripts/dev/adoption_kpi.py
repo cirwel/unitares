@@ -85,6 +85,19 @@ def snapshot(days: int) -> dict:
             WHERE ts > now() - make_interval(days => %(days)s)
               AND tool_name = 'outcome_event'
         """,
+        "proactive_kg_surface": """
+            -- Proactive KG surfacing (adoption v0): emitted inside
+            -- mirror_signal.emit events as a kg_proactive_surface trigger.
+            -- `surfaced` is true only when the agent's response_mode was mirror,
+            -- so it actually saw the nudge — the rest are the shadow control.
+            SELECT count(*) AS fired,
+                   count(*) FILTER (WHERE (payload->>'surfaced')::boolean) AS surfaced,
+                   count(DISTINCT agent_id) AS agents
+            FROM audit.events
+            WHERE ts > now() - make_interval(days => %(days)s)
+              AND event_type = 'mirror_signal.emit'
+              AND payload->'signals' @> '[{"signal_type": "kg_proactive_surface"}]'
+        """,
     }
     out: dict = {"window_days": days}
     with connect() as conn:
@@ -122,6 +135,9 @@ def main() -> int:
           f"({oc['conversion_pct']}%)")
     print(f"  outcome_event pipe: {op['success_pct']}% success "
           f"({op['identity_errors']} identity_errors of {op['total']})")
+    pk = snap["proactive_kg_surface"]
+    print(f"  proactive KG surface: {pk['surfaced']} seen / {pk['fired']} fired "
+          f"by {pk['agents']} agents")
     return 0
 
 

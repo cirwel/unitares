@@ -19,6 +19,8 @@ from src.mcp_handlers.updates.enrichments import (
     _detect_gaming,
     _generate_mirror_reflection,
     _should_search_kg_by_checkin_text,
+    _proactive_kg_due,
+    _dedupe_surfaced_kg,
 )
 
 
@@ -313,3 +315,107 @@ class TestShouldSearchKgByCheckinText:
             },
         )
         assert _should_search_kg_by_checkin_text(ctx, signals=[], question=None) is True
+
+
+# ============================================================================
+# Proactive KG surfacing gate (adoption v0)
+# ============================================================================
+
+LONG_TEXT = "Implementing the new retrieval gate on the check-in response path."
+
+
+class TestProactiveKgDue:
+
+    def test_off_by_default(self, monkeypatch):
+        monkeypatch.delenv("UNITARES_KG_PROACTIVE_EVERY", raising=False)
+        ctx = _make_ctx(response_text=LONG_TEXT, total_updates=10)
+        assert _proactive_kg_due(ctx) is False
+
+    def test_zero_disables(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_KG_PROACTIVE_EVERY", "0")
+        ctx = _make_ctx(response_text=LONG_TEXT, total_updates=10)
+        assert _proactive_kg_due(ctx) is False
+
+    def test_fires_on_cadence_multiple(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_KG_PROACTIVE_EVERY", "5")
+        ctx = _make_ctx(response_text=LONG_TEXT, total_updates=10)
+        assert _proactive_kg_due(ctx) is True
+
+    def test_skips_off_cadence(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_KG_PROACTIVE_EVERY", "5")
+        ctx = _make_ctx(response_text=LONG_TEXT, total_updates=12)
+        assert _proactive_kg_due(ctx) is False
+
+    def test_skips_during_warmup(self, monkeypatch):
+        # total <= 3 is settling; even an on-cadence value must not fire.
+        monkeypatch.setenv("UNITARES_KG_PROACTIVE_EVERY", "3")
+        ctx = _make_ctx(response_text=LONG_TEXT, total_updates=3)
+        assert _proactive_kg_due(ctx) is False
+
+    def test_skips_terse_text(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_KG_PROACTIVE_EVERY", "5")
+        ctx = _make_ctx(response_text="done", total_updates=10)
+        assert _proactive_kg_due(ctx) is False
+
+    def test_malformed_env_is_safe(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_KG_PROACTIVE_EVERY", "not-an-int")
+        ctx = _make_ctx(response_text=LONG_TEXT, total_updates=10)
+        assert _proactive_kg_due(ctx) is False
+
+
+# ============================================================================
+# Proactive KG surfacing — session dedup (novelty gate)
+# ============================================================================
+
+def _fake_redis(sadd_returns):
+    """A redis whose sadd returns values popped from a list (1=new, 0=seen)."""
+    redis = MagicMock()
+    seq = list(sadd_returns)
+
+    async def _sadd(key, member):
+        return seq.pop(0) if seq else 0
+
+    async def _expire(key, ttl):
+        return True
+
+    redis.sadd = _sadd
+    redis.expire = _expire
+    return redis
+
+
+class TestDedupeSurfacedKg:
+
+    @pytest.mark.asyncio
+    async def test_empty_passthrough(self):
+        ctx = _make_ctx()
+        assert await _dedupe_surfaced_kg(ctx, []) == []
+
+    @pytest.mark.asyncio
+    async def test_no_redis_fails_open(self):
+        ctx = _make_ctx()
+        results = [{"discovery_id": "d1", "summary": "x"}]
+        with patch("src.cache.redis_client.get_redis", AsyncMock(return_value=None)):
+            out = await _dedupe_surfaced_kg(ctx, results)
+        assert out == results  # fail-open: keep the nudge
+
+    @pytest.mark.asyncio
+    async def test_drops_already_seen(self):
+        ctx = _make_ctx()
+        results = [
+            {"discovery_id": "d1", "summary": "new"},
+            {"discovery_id": "d2", "summary": "seen"},
+        ]
+        # d1 newly added (1), d2 already in set (0) → only d1 survives.
+        redis = _fake_redis([1, 0])
+        with patch("src.cache.redis_client.get_redis", AsyncMock(return_value=redis)):
+            out = await _dedupe_surfaced_kg(ctx, results)
+        assert [r["discovery_id"] for r in out] == ["d1"]
+
+    @pytest.mark.asyncio
+    async def test_entry_without_id_is_kept(self):
+        ctx = _make_ctx()
+        results = [{"summary": "no id here"}]
+        redis = _fake_redis([])
+        with patch("src.cache.redis_client.get_redis", AsyncMock(return_value=redis)):
+            out = await _dedupe_surfaced_kg(ctx, results)
+        assert out == results
