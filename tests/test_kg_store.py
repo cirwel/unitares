@@ -362,6 +362,68 @@ class TestStoreKnowledgeGraph:
         assert "2026-06-04T00:00:00" in related_ids
 
     @pytest.mark.asyncio
+    async def test_store_defaults_status_to_open(self, patch_common, registered_agent):
+        """Status-less writes land as "open" at the source, not null.
+
+        The unified knowledge(action="store") path arrives via
+        params_step.model_dump(), which injects status=None into arguments. A bare
+        .get("status", "open") would then yield None (key present), persisting a
+        status-less row. The handler must fold both an absent key and an explicit
+        None back to "open" so the in-memory node and the response agree with the
+        storage-layer coercion instead of surfacing a null.
+        """
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        captured = {}
+        orig_add = mock_graph.add_discovery
+
+        async def _capture(node):
+            captured["status"] = node.status
+            return await orig_add(node) if orig_add else None
+
+        mock_graph.add_discovery = AsyncMock(side_effect=_capture)
+
+        # Explicit None mirrors what model_dump() produces for an omitted status.
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "summary": "A finding with no status",
+            "discovery_type": "insight",
+            "status": None,
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert captured["status"] == "open"
+        assert data["discovery"]["status"] == "open"
+
+    @pytest.mark.asyncio
+    async def test_store_preserves_explicit_status(self, patch_common, registered_agent):
+        """An explicit, meaningful status is not clobbered by the default."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        captured = {}
+        orig_add = mock_graph.add_discovery
+
+        async def _capture(node):
+            captured["status"] = node.status
+            return await orig_add(node) if orig_add else None
+
+        mock_graph.add_discovery = AsyncMock(side_effect=_capture)
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "summary": "A finding that is already resolved",
+            "discovery_type": "insight",
+            "status": "resolved",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert captured["status"] == "resolved"
+
+    @pytest.mark.asyncio
     async def test_store_graph_exception(self, patch_common, registered_agent):
         """Exception from graph backend returns error response."""
         mock_mcp_server, mock_graph = patch_common
