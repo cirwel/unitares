@@ -13,83 +13,8 @@ from pathlib import Path
 from typing import Optional
 
 from src.logging_utils import get_logger
-from src.connection_tracker import CONNECTIONS_ACTIVE
 
 logger = get_logger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Connection heartbeat
-# ---------------------------------------------------------------------------
-
-async def connection_heartbeat_task(connection_tracker):
-    """
-    Comprehensive connection health monitoring:
-    - Clean up stale connections every 5 minutes
-    - Check health of all connections every 2 minutes
-    - Log diagnostic summary every 10 minutes
-    """
-    consecutive_failures = 0
-    max_consecutive_failures = 5
-    iteration = 0
-
-    while True:
-        try:
-            await asyncio.sleep(60)
-            iteration += 1
-
-            if iteration % 2 == 0:
-                for client_id in list(connection_tracker.connections.keys()):
-                    try:
-                        health = await connection_tracker.check_health(client_id)
-                        if not health.get("healthy"):
-                            logger.warning(
-                                f"[HEARTBEAT] Unhealthy connection: {client_id} - {health.get('issues', [])}"
-                            )
-                    except Exception as e:
-                        logger.debug(f"[HEARTBEAT] Health check failed for {client_id}: {e}")
-
-            if iteration % 5 == 0:
-                await connection_tracker.cleanup_stale_connections(max_idle_minutes=30.0)
-
-            if iteration % 10 == 0:
-                diagnostics = await connection_tracker.get_diagnostics()
-                health_summary = diagnostics.get("health_summary", {})
-                reconnect_summary = diagnostics.get("reconnection_summary", {})
-
-                logger.info(
-                    f"[HEARTBEAT] Connection summary: "
-                    f"{diagnostics['total_connections']} connected, "
-                    f"{health_summary.get('healthy', 0)} healthy, "
-                    f"{health_summary.get('degraded', 0)} degraded"
-                )
-
-                high_reconnectors = {k: v for k, v in reconnect_summary.items() if v > 5}
-                if high_reconnectors:
-                    logger.warning(
-                        f"[HEARTBEAT] High reconnection clients: {high_reconnectors}. "
-                        f"Check network stability."
-                    )
-
-                CONNECTIONS_ACTIVE.set(diagnostics['total_connections'])
-
-            consecutive_failures = 0
-
-        except asyncio.CancelledError:
-            logger.info("[HEARTBEAT] Connection heartbeat task cancelled")
-            break
-        except Exception as e:
-            consecutive_failures += 1
-            logger.warning(
-                f"[HEARTBEAT] Error (failure {consecutive_failures}/{max_consecutive_failures}): {e}",
-                exc_info=True
-            )
-            if consecutive_failures >= max_consecutive_failures:
-                logger.error(
-                    f"[HEARTBEAT] Failed {consecutive_failures} times consecutively. "
-                    f"Connection monitoring degraded. Consider restarting the server."
-                )
-                consecutive_failures = 0
 
 
 # ---------------------------------------------------------------------------
@@ -1784,17 +1709,13 @@ async def stop_all_background_tasks() -> None:
             )
 
 
-def start_all_background_tasks(connection_tracker, set_ready):
+def start_all_background_tasks(set_ready):
     """
     Start all background tasks. Call once during server initialization.
 
     Args:
-        connection_tracker: The ConnectionTracker instance
         set_ready: Callable that sets SERVER_READY = True
     """
-    _supervised_create_task(connection_heartbeat_task(connection_tracker), name="heartbeat")
-    logger.info("[HEARTBEAT] Connection health monitoring started")
-
     _supervised_create_task(startup_auto_calibration(), name="auto_calibration")
     # KG lifecycle temporarily disabled — AGE graph queries deadlock in anyio context
     # _supervised_create_task(startup_kg_lifecycle(), name="kg_lifecycle")
