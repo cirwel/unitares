@@ -142,6 +142,36 @@ defmodule AgentOrchestrator.HTTPRouterTest do
       assert conn.status == 422
       assert body_json(conn)["detail"] =~ "invalid lineage"
     end
+
+    test "client_session_id threads through to the child env (thread-anchor resume)" do
+      conn =
+        call(
+          authed(:post, "/v1/agents", %{
+            cmd: "sh",
+            args: ["-c", "echo $UNITARES_CLIENT_SESSION_ID"],
+            client_session_id: "agent:/thread-discord-7"
+          })
+        )
+
+      assert conn.status == 201
+      agent_id = body_json(conn)["agent_id"]
+
+      await = call(authed(:post, "/v1/agents/#{agent_id}/await", %{timeout_ms: 5_000}))
+      assert await.status == 200
+      assert body_json(await)["result"]["output"] == ["agent:/thread-discord-7"]
+    end
+
+    test "422 on a blank client_session_id (runner refuses the spawn)" do
+      conn = call(authed(:post, "/v1/agents", %{cmd: "echo", client_session_id: "  "}))
+      assert conn.status == 422
+      assert body_json(conn)["detail"] =~ "invalid client_session_id"
+    end
+
+    test "422 on a non-string client_session_id" do
+      conn = call(authed(:post, "/v1/agents", %{cmd: "echo", client_session_id: 123}))
+      assert conn.status == 422
+      assert body_json(conn)["detail"] =~ "client_session_id must be a string"
+    end
   end
 
   describe "GET /v1/agents" do
