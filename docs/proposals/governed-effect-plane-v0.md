@@ -133,14 +133,20 @@ The running tiers are **`strong` / `medium` / `weak`** (`phases.py:68-71`, `_TIE
 - Custody transfer reuses `/v1/lease/handoff/{offer,accept}` — but note the verified constraint: handoff is release-and-reacquire that **always** mints a `remote_heartbeat` lease for the recipient, so a receiving `EffectCustodian` must heartbeat (renew) or the transferred custody self-heals/reaps.
 - Revocation reuses `/v1/lease/force-release` + `LEASE_FORCE_RELEASE_TOKEN` (live + enforced) — no second revocation mechanism.
 
-## 10. First surfaces (council-split)
+## 10. First surfaces (operator decision 2026-06-18: **both classes**, one role each)
 
-- **First `record_only` shadow: `repo://unitares/doc_update`** — the only candidate with no existing lease coverage, lowest blast radius, and (per the stash episode) a surface where uncoordinated contention demonstrably bites. Default, operator-overridable.
-- **First `execute` surface: deferred — must be cheap-but-*contended*.** A doc-write has no contention, so it would never exercise `lease_held` / handoff / the single-winner veto that is the plane's whole reason to exist; a green shadow there proves only the happy path. Before promoting any `repo://` surface to execute, reconcile `repo://` against the underlying `file://` lease layer + the gov-plugin per-edit release discipline (the file-lease-leak history).
+The operator chose **both** effect classes — mapped onto the council's record_only/execute split so it remains one shadow + one enforced surface (the one-enforced-surface discipline holds):
+
+- **First `record_only` shadow → content class: `repo://unitares/doc_update`** (vehicle: **lease-plane effect envelope**). The only candidate with no existing lease coverage, lowest blast radius, and (per the stash episode) a surface where uncoordinated contention demonstrably bites. Proves the envelope plumbing; no contention required for a shadow.
+- **First `execute` surface → agent-spawn class** (vehicle: **de-inert `agent_orchestrator`**). This is the council's "cheap-but-*contended*" requirement satisfied on the contention axis: the orchestrator already owns `agent:/<id>` presence leases, supervision, and restart, so the `lease_held` / handoff / single-winner veto membrane actually gets exercised — which a no-contention doc-write never could.
+  - **Cost the operator is accepting (named, not cheap):** de-inerting the orchestrator stands up a localhost endpoint that **spawns OS processes** (RCE-class if the bearer leaks). Mitigations are real (localhost-only bind, fail-closed bearer → 503 when `AGENT_ORCHESTRATOR_BEARER_TOKEN` absent), but this is a heavier security surface than the doc shadow. This is the trade agent-spawn buys: contention now, at higher blast radius than a content effect.
+  - **Gated:** the orchestrator de-inerting itself (plist + bearer + first caller) waits for the 2026-06-24 Wave-3 read and a re-confirm; nothing flips on from this doc.
+
+A `repo://` surface is **not** promoted to execute by default — if it ever is, reconcile `repo://` against the underlying `file://` lease layer + the gov-plugin per-edit release discipline (the file-lease-leak history) first.
 
 ## 11. Gates remaining + still-open
 
-Closes Phase-3 gate (a). Still required before `elixir/` code: operator names the first effect class → picks the vehicle; and the 2026-06-24 Wave-3 read.
+Closes Phase-3 gate (a). Gate (b) — operator names the first effect class — **closed 2026-06-18: both classes, per §10** (content/`doc_update` shadow on the lease-plane envelope; agent-spawn execute on the de-inerted orchestrator). Still required before `elixir/` code: only the **2026-06-24 Wave-3 read** (gate c). With both vehicles chosen, Phase 3 can build two tracks in parallel once the gate opens — the lease-plane envelope (shadow) and the orchestrator de-inerting (execute).
 
 Genuinely open (smaller, deferrable to impl):
 1. The `effects.payloads` schema columns + migration slot (assigned at impl time).
