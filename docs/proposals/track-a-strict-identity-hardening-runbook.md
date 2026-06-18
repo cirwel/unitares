@@ -121,15 +121,38 @@ resumed (`resumed via UUID …`), all metrics POSTed, every cycle ended on
 `POST /mcp/ 200 OK`, and the launchd log showed no error. The server simply
 recorded nothing — `total_updates` frozen — for three days.
 
-**Root cause (by elimination).** Under `STRICT_IDENTITY_REQUIRED`,
-`process_agent_update` refuses a non-caller-proven write by returning the #425
-typed-refusal payload wrapped in `success_response()` — HTTP 200, no `isError`,
-no `error` key (`identity_bootstrap.py:strict_identity_refusal_payload` +
-`updates/phases.py:334`). Those two strict-refusal returns are the *only* paths
-in `process_agent_update` that yield a 200 success-shape without persisting:
-every other early exit is an `error_response` (which the SDK raises on), and the
-core update's `auto_save` increments `total_updates` synchronously. So a resident
-that returns 200 and doesn't record is, necessarily, being strict-refused.
+> **Correction (2026-06-17, live-traced).** The first write-up of this incident
+> (merged in #828) pinned the refusal at `updates/phases.py:334` and concluded
+> "the fix is enrollment." Both were wrong. Live tracing against the running
+> strict server showed the refusal fires *upstream* at the identity middleware
+> (`session_resolve_miss` from `PATH2_RESUME_MISS`) — the call never reaches
+> `phases.py:334` — and enrollment would make it *worse* (S19; see below). The
+> corrected root cause and the shipped fix (PR #831) follow; the superseded
+> enrollment remedy is removed.
+
+**Root cause — a continuity-token TTL cliff.** `_CONTINUITY_TTL = 3600` (1h,
+`identity/session.py:33`) is shorter than Chronicler's 24h cadence
+(`StartInterval 86400`), so the continuity token in its anchor
+(`~/.unitares/anchors/chronicler.json`) is *always* expired by the time the next
+daily run resumes. The chain (verified in the live server log):
+
+1. `identity(agent_uuid, continuity_token=<expired>, resume=true)` can't use the
+   expired token, so it resolves via the **PATH 0 `agent_uuid` passthrough**
+   (`[DISPATCH] PATH 0 passthrough … skipped resolution`). That reissues a fresh
+   in-memory token but **mints no PG session row**.
+2. The first `process_agent_update` carries no token (per #513 the happy path is
+   token-free), so identity resolution finds no session for `agent-<uuid12>` →
+   **`PATH2_RESUME_MISS`** (`identity/resolution.py:838`) → the middleware returns
+   the #425 typed-refusal (HTTP 200, no `isError`/`error`). `phases.py:334` is a
+   *second*, downstream write gate this call never reaches.
+
+This is a time-dependence cliff (correctness carried by a freshness window the
+agent can't sense) — the same class as the Watcher 24h-identity cliff (PR #595):
+`failure_onset − last_success ≈ window`. Before strict, step 2's miss fell
+through to a silent ghost-mint, masking the latent bug; strict closed the
+fall-through and turned it into a hard refusal. (The original "200-without-persist
+⇒ strict-refused" elimination still holds as a *symptom* test; it just named the
+wrong refusal site.)
 
 **Why it was invisible.** The SDK's `client.checkin()` didn't recognize the
 refusal shape — no `isError`/`error`, so it defaulted the verdict to `proceed`
@@ -141,30 +164,35 @@ cannot rely on the SDK surfacing them on a pre-#824 client — confirm the
 resident's client carries that fix, or watch the server-side
 `[PROCESS_UPDATE] STRICT refusing write` log line directly.**
 
-**Why Chronicler and not the others.** The refusal only fires when identity
-resolved `server_inferred` (transport fingerprint, not caller-proven) AND the
-agent is not substrate-exempt. Chronicler is the longest-cadence resident
-(daily), so its stored `continuity_token` is the most likely to go stale between
-runs — a stale token still UUID-resolves but isn't caller-proven. Shorter-cadence
-residents refresh before lapsing.
+**Why Chronicler and not the others.** It is purely cadence vs TTL. Chronicler's
+24h interval exceeds the 1h continuity TTL, so its anchor token is *deterministically*
+expired at every resume and the session row (24h `SESSION_TTL`) has also lapsed.
+Shorter-cadence residents (Vigil/Watcher/Sentinel) check in well inside the 1h
+window, so they keep both a live session row and a fresh token and never hit the
+miss.
 
-**The fix is enrollment, not `parent_agent_id`.** Pre-flight §2 says "add
-`parent_agent_id`," but that is the remedy for *ephemeral* callers. A
-substrate-anchored resident is exempted by `is_substrate_earned` (pure
-row-presence in `core.substrate_claims`, plus the Pi allowlist) OR by the
-`dedicated_substrate` predicate (`embodied`, or `persistent` + a server-findable
-anchor). The durable fix for a refused substrate resident is to enroll it:
+**The fix is the continuity-token rebind on check-in (PR #831), NOT enrollment.**
+The shipped fix is SDK-side and respects #513's continuity-token narrowing: on a
+refused `checkin()`, the SDK retries once presenting the fresh in-memory token
+(reissued by the resume in step 1) as an explicit ownership re-proof. The server
+honors it via the existing **PATH 2.8 token-rebind** (`identity/resolution.py:1009`),
+which mints a caller-proven session (`proof_origin=caller_asserted`), clearing
+both the resume-miss guard and the `phases.py:334` write gate. The token rides
+the wire *only* on recovery; the happy path stays token-free.
 
-```bash
-scripts/ops/enroll_resident.py \
-  --agent-id <resident-uuid> \
-  --launchd-label com.unitares.<name> \
-  --executable <interpreter the plist launches> \
-  --notes "strict-identity exemption"
-```
+> ⚠️ **Do NOT enroll an HTTP resident in `core.substrate_claims` to fix this.**
+> The first write-up recommended `enroll_resident.py`; that backfires. The S19
+> gate `SUBSTRATE_HTTP_REJECT` (`identity/resolution.py:313` and PATH 2.8 `:1025`)
+> rejects a substrate-anchored UUID resuming over **HTTP** (it must attest over
+> the UDS socket). Chronicler (and Vigil/Watcher) are HTTP MCP clients, so a
+> `substrate_claims` row converts today's `session_resolve_miss` into a hard
+> `substrate_anchored_uuid_requires_uds` refusal — strictly worse. Enrollment is
+> only correct for residents that connect over UDS (currently Sentinel/BEAM).
+> `017_substrate_claims.sql` naming Vigil/Chronicler as "expected" predates the
+> S19 HTTP gate and should not be read as an instruction to enroll them.
 
-`017_substrate_claims.sql` already names Vigil/Sentinel/Chronicler as expected to
-carry rows; a missing row is the likely state for any resident that goes dark
-here. Verify with
-`SELECT agent_id, expected_launchd_label, enrolled_at FROM core.substrate_claims ORDER BY enrolled_at;`
-and reconcile against the resident roster before flipping the flag wider.
+Diagnostic, not remedy: a missing `substrate_claims` row is expected for HTTP
+residents and is *not* the cause of a dark resident. To confirm the cliff
+instead, decode the anchor token's `exp` and compare it to the cadence
+(`failure_onset − last_success ≈ TTL`), and look for `PATH2_RESUME_MISS` for the
+resident's `agent-<uuid12>` session key in the server log.
