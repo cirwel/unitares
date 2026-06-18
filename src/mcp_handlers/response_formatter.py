@@ -19,6 +19,16 @@ logger = get_logger(__name__)
 # nearest_edge is pure vocabulary sprawl (#733).
 _ACTIONABLE_MARGINS = frozenset({"tight", "warning", "critical"})
 
+# Verdicts that genuinely represent a healthy/steady state — the only ones for
+# which the mirror's "No actionable signals — steady state" fallback is
+# truthful. Any other verdict (pause, reject, guide, caution, high-risk, …)
+# is by definition actionable and must surface a signal rather than collapse to
+# the steady-state line (dogfood 2026-06-18: a PAUSE verdict at risk 0.72 with
+# margin=critical returned mirror=["No actionable signals — steady state"] while
+# the same payload carried margin/nearest_edge/reflection — the lens hid the
+# very state it exists to reflect).
+_STEADY_VERDICTS = frozenset({"proceed", "continue", "safe"})
+
 
 def _copy_passthrough_fields(response_data: dict, result: dict, fields: tuple) -> None:
     """Copy named fields from response_data to result if present (not None).
@@ -362,6 +372,28 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
             mirror_signals.append(f"Pace: {restorative_reason}")
         elif restorative_reasons:
             mirror_signals.append(f"Pace: {'; '.join(str(r) for r in restorative_reasons[:2])}")
+
+    # 4b. Verdict edge — a non-steady verdict must never collapse to the
+    # "No actionable signals — steady state" fallback below. The mirror is
+    # "a lens on the full data, not a filter that hides it" (docstring); a
+    # payload that carries margin/nearest_edge/reflection at the result level
+    # while the signals array reads "steady state" is self-contradictory
+    # (dogfood 2026-06-18). Reflect the fact descriptively — the directive
+    # ("stop, reflect, consider dialectic") stays the verdict's voice, which
+    # already rides on result["verdict"].next_action.
+    if verdict_raw not in _STEADY_VERDICTS:
+        facts = []
+        risk = metrics.get("risk_score")
+        if isinstance(risk, (int, float)):
+            facts.append(f"risk {risk:.0%}")
+        margin_val = decision.get("margin")
+        edge = decision.get("nearest_edge")
+        if isinstance(margin_val, str) and margin_val in _ACTIONABLE_MARGINS:
+            facts.append(f"{margin_val} margin" + (f" at the {edge} edge" if edge else ""))
+        elif edge:
+            facts.append(f"nearest edge: {edge}")
+        detail = f" ({', '.join(facts)})" if facts else ""
+        mirror_signals.append(f"Verdict is {str(verdict_raw).upper()}{detail}")
 
     # 5. Surface relevant KG discoveries — from mirror enrichment AND from existing enrichments
     relevant_prior = []
