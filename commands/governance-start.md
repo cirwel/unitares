@@ -25,7 +25,11 @@ failure (strict mode) once the fleet reliably works in worktrees — the
 advisory→strict rollout mirrors the Surface Lease Plane. Rationale:
 `docs/proposals/worktree-isolation-vs-lease-default.md`.
 
-A cached `parent_agent_id` from a prior session is context, not a lineage instruction: co-location in this workspace is not lineage, and the prior session is almost always still a sibling rather than an exited predecessor. Ignore any legacy `continuity_token` field for startup; tokens are only for explicit same-live-owner PATH 0 proof rebinds.
+A cached `parent_agent_id` from a prior session is context, not a lineage
+instruction: co-location in this workspace is not lineage, and the prior session
+is almost always still a sibling rather than an exited predecessor. Ignore any
+legacy `continuity_token` field for startup; tokens are only for advanced
+same-live-owner diagnostic rebinds.
 
 Call `onboard()` against UNITARES using the strongest honest mode:
 

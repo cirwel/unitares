@@ -5,6 +5,40 @@
 
 ---
 
+## Operational contract
+
+Most callers should only need this section. The rest of this document explains
+why the contract exists and where the edge cases live.
+
+Strict identity is a write boundary, not a demand that every agent understand
+the full ontology:
+
+1. **New driver process:** call `start_session(force_new=true)` and save the
+   returned `uuid` plus `client_session_id`.
+2. **Same running process:** pass `client_session_id` on check-ins and writes.
+   Client adapters should do this automatically.
+3. **Continuing prior work in a fresh process:** call
+   `start_session(force_new=true, parent_agent_id=<prior_uuid>, spawn_reason="new_session")`
+   only when there is a real handoff from a finished predecessor.
+4. **Short dispatched subagent:** do not mint a separate identity unless it is
+   separately governed. If it does onboard, declare
+   `spawn_reason="subagent"`, set `parent_agent_id=<driver_uuid>`, and check in
+   once before exit.
+5. **Persistent/substrate agent:** use the substrate-earned identity pattern.
+   Ordinary interactive sessions should not copy it.
+
+Normal agents should not pass `continuity_token`, call bare `onboard()`, treat
+names as identity, or declare lineage just because two processes share a host or
+workspace. Those are diagnostic/advanced cases, not the day-to-day path.
+
+Vocabulary boundary:
+
+- `uuid` is the server record for this process identity.
+- `client_session_id` is the accountable write binding for this running process.
+- `parent_agent_id` is a causal inheritance pointer.
+- `lineage` means "inherits work from," not "is identical to."
+- `continuity_token` is an advanced same-live-process rebind proof.
+
 ## Opening stance
 
 This document does not commit to a single ontology of agent identity. It describes what kinds of continuity exist in the system, distinguishes the ones that are earned from the ones that are performative, and opens a research agenda for inventing what would turn the performative kinds into earned ones.

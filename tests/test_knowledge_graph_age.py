@@ -799,6 +799,20 @@ class TestQuery:
         assert result[1].id == "d2"
 
     @pytest.mark.asyncio
+    async def test_query_deduplicates_duplicate_discovery_ids(self):
+        """Should return one result when AGE emits the same discovery twice."""
+        kg, mock_db = make_kg_with_mock_db()
+        mock_db.graph_query.return_value = [
+            {"properties": {"id": "d1", "agent_id": "a1", "summary": "one"}},
+            {"properties": {"id": "d1", "agent_id": "a1", "summary": "one"}},
+            {"properties": {"id": "d2", "agent_id": "a2", "summary": "two"}},
+        ]
+
+        result = await kg.query(tags=["python", "bug"])
+
+        assert [d.id for d in result] == ["d1", "d2"]
+
+    @pytest.mark.asyncio
     async def test_query_with_agent_id_filter(self):
         """Should include agent_id in query params."""
         kg, mock_db = make_kg_with_mock_db()
@@ -859,6 +873,7 @@ class TestQuery:
         params = call_args.args[1]
         assert "TAGGED" in cypher
         assert "Tag" in cypher
+        assert "RETURN DISTINCT d" in cypher
         assert params["tags"] == ["python", "bug"]
 
     @pytest.mark.asyncio

@@ -201,6 +201,19 @@ def test_sync_state_envelope_does_not_warn_on_low_risk_proceed_mid_coherence():
     assert "recovery_hint" not in env
 
 
+def test_sync_state_envelope_near_edge_proceed_hint_does_not_say_pause():
+    payload = {
+        "success": True,
+        "verdict": {"value": "proceed"},
+        "margin": "near_edge",
+        "metrics": {"coherence": 0.51, "risk_score": 0.43},
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert "recovery_hint" in env
+    assert "pause" not in env["recovery_hint"].lower()
+    assert "only if work stalls" in env["recovery_hint"]
+
+
 def test_sync_state_envelope_surfaces_discoveries():
     payload = {
         "success": True,
@@ -233,6 +246,21 @@ def test_search_envelope_counts_and_suggests():
     }
     env = build_experience_envelope("search_shared_memory", "knowledge", payload)
     assert "1 prior discoveries matched" in env["next_action"]
+    assert env["memory_suggestions"][0]["summary"] == "prior art"
+
+
+def test_search_envelope_counts_nested_raw_governance_payload():
+    payload = {
+        "success": True,
+        "tool": "search_shared_memory",
+        "raw_governance": {
+            "success": True,
+            "count": 5,
+            "discoveries": [{"id": "d1", "summary": "prior art"}],
+        },
+    }
+    env = build_experience_envelope("search_shared_memory", "knowledge", payload)
+    assert "5 prior discoveries matched" in env["next_action"]
     assert env["memory_suggestions"][0]["summary"] == "prior art"
 
 

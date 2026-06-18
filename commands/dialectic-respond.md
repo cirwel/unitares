@@ -10,7 +10,10 @@ Use the shared helper:
 
 If the newest entry contains `parent_agent_id`, use it as expected-actor lineage context, not as proof by itself.
 
-If you need to bind to that exact cached UUID before responding, use `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)` only with a matching current in-process token. Without proof, call `/governance-start` and declare `parent_agent_id=<cached uuid>` if this process is continuing the same work.
+If you need to bind to that exact cached UUID before responding, use an advanced
+proof-owned rebind only with a matching current in-process token. Without proof,
+call `/governance-start` to mint fresh. Declare `parent_agent_id` only when this
+process is genuinely inheriting work from a finished predecessor.
 
 Do not rely on weaker fingerprint/session fallback when dialectic authorization depends on the exact actor.
 
