@@ -50,13 +50,18 @@ def test_valid_bearer_accepted(monkeypatch):
         "Bearer ",                  # scheme but empty token
         "Bearer wrong",             # wrong token
         "Basic s3cret",             # wrong scheme
-        "bearer s3cret",            # case-sensitive scheme (RFC says token68 scheme is case-insensitive,
-                                    # but we require the canonical "Bearer " prefix the clients send)
     ],
 )
 def test_invalid_bearer_rejected_when_gate_on(monkeypatch, header):
     monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "s3cret")
     assert cfg.check_mcp_bearer(header) is False
+
+
+@pytest.mark.parametrize("header", ["Bearer s3cret", "bearer s3cret", "BEARER s3cret"])
+def test_bearer_scheme_is_case_insensitive(monkeypatch, header):
+    # RFC 7235: the auth scheme is case-insensitive. Real clients send "bearer".
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "s3cret")
+    assert cfg.check_mcp_bearer(header) is True
 
 
 def test_token_rotation_accepts_any_listed(monkeypatch):

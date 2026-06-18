@@ -125,9 +125,13 @@ def check_mcp_bearer(
         allow = mcp_bearer_tokens()
     if not allow:
         return True  # gate off — default posture
-    if not authorization_header or not authorization_header.startswith("Bearer "):
+    if not authorization_header:
         return False
-    presented = authorization_header[len("Bearer "):].strip()
+    # RFC 7235: the auth scheme is case-insensitive. Accept "Bearer"/"bearer"/etc.
+    scheme, _, presented = authorization_header.partition(" ")
+    if scheme.lower() != "bearer":
+        return False
+    presented = presented.strip()
     if not presented:
         return False
     # Constant-time membership test over a small allowlist.
