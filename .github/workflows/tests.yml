@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [ master, main ]
 
+# Least-privilege default for GITHUB_TOKEN: every job here only reads the repo
+# and runs tests (checkout, pip/npm install, pytest/vitest, artifact upload) —
+# none push, comment, or release. Pins the token to read-only (CodeQL finding).
+permissions:
+  contents: read
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
