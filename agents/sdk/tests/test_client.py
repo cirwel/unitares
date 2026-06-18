@@ -336,6 +336,82 @@ class TestToolMapping:
         assert args["prompt"] == "test prompt"
 
 
+# --- Strict-identity check-in recovery (resume-binding cliff) ---
+
+
+def _strict_refusal(tool: str = "process_agent_update") -> dict:
+    """The #425 typed strict-identity refusal success-shape."""
+    return {
+        "rollout_flag": "STRICT_IDENTITY_REQUIRED",
+        "status": "identity_required",
+        "tool": tool,
+        "hint": "resolved by transport fingerprint, not caller-proven",
+    }
+
+
+def _checkin_success() -> dict:
+    return {
+        "success": True,
+        "status": "active",
+        "decision": {"action": "proceed"},
+        "metrics": {"E": 0.7, "I": 0.8, "S": 0.2, "V": 0.0, "coherence": 0.85},
+    }
+
+
+class TestCheckinIdentityRecovery:
+    @pytest.mark.asyncio
+    async def test_recovers_via_continuity_token_on_refusal(self):
+        """A long-cadence resident whose session expired gets refused on the
+        token-less check-in, then succeeds on a single retry that presents the
+        in-memory continuity token (server PATH 2.8 token-rebind)."""
+        session = AsyncMock()
+        session.call_tool = AsyncMock(side_effect=[
+            make_mcp_result(_strict_refusal()),
+            make_mcp_result(_checkin_success()),
+        ])
+        client = make_client_with_session(session)
+        client.client_session_id = "agent-deb879b6-4ff"
+        client.continuity_token = "v1.fresh-token"
+
+        result = await client.checkin("daily scrape done")
+
+        assert isinstance(result, CheckinResult)
+        assert session.call_tool.call_count == 2
+        # First attempt carries no token (happy path stays token-free, #513).
+        first_args = session.call_tool.call_args_list[0][0][1]
+        assert "continuity_token" not in first_args
+        # Recovery retry carries the in-memory token as explicit ownership proof.
+        retry_args = session.call_tool.call_args_list[1][0][1]
+        assert retry_args["continuity_token"] == "v1.fresh-token"
+
+    @pytest.mark.asyncio
+    async def test_refusal_without_token_raises(self):
+        """No continuity token to re-prove ownership → fail loud, no retry."""
+        session = AsyncMock()
+        session.call_tool = AsyncMock(return_value=make_mcp_result(_strict_refusal()))
+        client = make_client_with_session(session)
+        client.continuity_token = None
+
+        with pytest.raises(IdentityRefusedError):
+            await client.checkin("work")
+        assert session.call_tool.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_persistent_refusal_after_recovery_raises(self):
+        """If the token-rebind retry is also refused, surface the refusal."""
+        session = AsyncMock()
+        session.call_tool = AsyncMock(side_effect=[
+            make_mcp_result(_strict_refusal()),
+            make_mcp_result(_strict_refusal()),
+        ])
+        client = make_client_with_session(session)
+        client.continuity_token = "v1.expired-token"
+
+        with pytest.raises(IdentityRefusedError):
+            await client.checkin("work")
+        assert session.call_tool.call_count == 2
+
+
 # --- Kwargs passthrough ---
 
 

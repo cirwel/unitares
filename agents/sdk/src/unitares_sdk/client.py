@@ -471,7 +471,30 @@ class GovernanceClient:
         # 2026-06-14). Detect the refusal marker and fail loud instead.
         refusal = extract_identity_refusal(raw)
         if refusal is not None:
-            raise refusal
+            # Recovery for the resume-binding cliff: a long-cadence resident
+            # (e.g. Chronicler, daily) can wake with its PG session binding
+            # expired AND the anchor's continuity token stale (1h TTL << 24h
+            # cadence). The identity() resume reissues a fresh in-memory token
+            # but its agent_uuid passthrough (PATH 0) does not mint a session,
+            # so this first check-in resolves to a PATH2_RESUME_MISS and the
+            # strict gate refuses it. #513 deliberately keeps the continuity
+            # token OFF the happy path (S1-c narrowing); here we re-prove
+            # ownership EXPLICITLY by presenting the fresh in-memory token on a
+            # single recovery retry, which the server honors via PATH 2.8
+            # token-rebind (mints a fresh caller-proven session). The token
+            # rides the wire only on this recovery — frequent residents whose
+            # session row is still live never reach this branch.
+            if self.continuity_token and not args.get("continuity_token"):
+                retry_args = dict(args)
+                retry_args["continuity_token"] = self.continuity_token
+                raw = await self.call_tool("process_agent_update", retry_args)
+                self._raise_for_tool_failure("process_agent_update", raw)
+                # Capture the rebound session so later calls this run ride it
+                # without re-presenting the token.
+                self._capture_identity(raw)
+                refusal = extract_identity_refusal(raw)
+            if refusal is not None:
+                raise refusal
 
         # Extract verdict for potential error raising
         decision = raw.get("decision", {})
