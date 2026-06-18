@@ -61,6 +61,7 @@ class InventoryBucket:
     hard_exogenous: bool
     eprocess_eligible: bool
     prediction_binding: str
+    harness_lane: str = "substrate"
     n_total: int = 0
     n_bad: int = 0
     prediction_id_count: int = 0
@@ -87,6 +88,7 @@ class OutcomeInventory:
     hard_exogenous_count: int
     eprocess_eligible_count: int
     total_prediction_id_count: int
+    eprocess_eligible_by_harness_lane: dict[str, int] = field(default_factory=dict)
 
     @property
     def total_bad_rate(self) -> float | None:
@@ -188,6 +190,20 @@ def _has_prediction_id(detail: Mapping[str, Any]) -> bool:
     return prediction_id not in (None, "")
 
 
+def harness_lane_from_detail(detail: Mapping[str, Any] | str | None) -> str:
+    """Return the analysis lane for a row's harness provenance.
+
+    Rows without an explicit harness belong to the substrate lane. Runtime
+    harnesses such as the BEAM dispatch harness are useful telemetry, but they
+    must be visible as their own lane before any EISV predictive read.
+    """
+    normalized = _normalized_detail(detail)
+    harness = normalized.get("harness") or normalized.get("harness_type")
+    if not harness:
+        return "substrate"
+    return str(harness)
+
+
 def build_inventory(
     rows: Sequence[OutcomeInventoryRow],
     *,
@@ -195,7 +211,7 @@ def build_inventory(
 ) -> OutcomeInventory:
     """Aggregate outcome rows by provenance, objectivity, and lead coverage."""
     leads = tuple(float(lead) for lead in lead_minutes)
-    buckets: dict[tuple[str, str, str, bool, bool, str], InventoryBucket] = {}
+    buckets: dict[tuple[str, str, str, bool, bool, str, str], InventoryBucket] = {}
 
     total_outcomes = 0
     total_bad = 0
@@ -203,6 +219,7 @@ def build_inventory(
     strict_bad = 0
     hard_exogenous_count = 0
     eprocess_eligible_count = 0
+    eprocess_eligible_by_harness_lane: dict[str, int] = {}
     total_prediction_id_count = 0
 
     for row in rows:
@@ -211,6 +228,7 @@ def build_inventory(
         hard_exogenous = _truthy(detail.get("hard_exogenous"))
         eprocess_eligible = _truthy(detail.get("eprocess_eligible"))
         prediction_binding = _prediction_binding(detail)
+        harness_lane = harness_lane_from_detail(detail)
         key = (
             scope,
             _grouped_outcome_type(row.outcome_type),
@@ -218,6 +236,7 @@ def build_inventory(
             hard_exogenous,
             eprocess_eligible,
             prediction_binding,
+            harness_lane,
         )
         bucket = buckets.get(key)
         if bucket is None:
@@ -228,6 +247,7 @@ def build_inventory(
                 hard_exogenous=key[3],
                 eprocess_eligible=key[4],
                 prediction_binding=key[5],
+                harness_lane=key[6],
                 prior_state_counts={lead: 0 for lead in leads},
             )
             buckets[key] = bucket
@@ -245,6 +265,9 @@ def build_inventory(
             hard_exogenous_count += 1
         if eprocess_eligible:
             eprocess_eligible_count += 1
+            eprocess_eligible_by_harness_lane[harness_lane] = (
+                eprocess_eligible_by_harness_lane.get(harness_lane, 0) + 1
+            )
         if _has_prediction_id(detail):
             bucket.prediction_id_count += 1
             total_prediction_id_count += 1
@@ -262,6 +285,7 @@ def build_inventory(
                 bucket.hard_exogenous,
                 bucket.eprocess_eligible,
                 bucket.prediction_binding,
+                bucket.harness_lane,
             ),
         )
     )
@@ -275,6 +299,7 @@ def build_inventory(
         hard_exogenous_count=hard_exogenous_count,
         eprocess_eligible_count=eprocess_eligible_count,
         total_prediction_id_count=total_prediction_id_count,
+        eprocess_eligible_by_harness_lane=dict(sorted(eprocess_eligible_by_harness_lane.items())),
     )
 
 
@@ -310,6 +335,10 @@ def format_inventory_report(
         f"strict_bad: {inventory.strict_bad}",
         f"hard_exogenous: {inventory.hard_exogenous_count}",
         f"eprocess_eligible: {inventory.eprocess_eligible_count}",
+        *[
+            f"eprocess_eligible_{lane}: {count}"
+            for lane, count in sorted(inventory.eprocess_eligible_by_harness_lane.items())
+        ],
         f"prediction_id_present: {inventory.total_prediction_id_count}",
         "",
     ]
@@ -319,6 +348,7 @@ def format_inventory_report(
         "scope",
         "outcome_type",
         "verification_source",
+        "harness_lane",
         "hard_exogenous",
         "eprocess_eligible",
         "prediction_binding",
@@ -340,6 +370,7 @@ def format_inventory_report(
                     bucket.scope,
                     bucket.outcome_type,
                     bucket.verification_source,
+                    bucket.harness_lane,
                     str(bucket.hard_exogenous).lower(),
                     str(bucket.eprocess_eligible).lower(),
                     bucket.prediction_binding,

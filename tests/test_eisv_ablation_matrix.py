@@ -8,6 +8,7 @@ import sys
 from scripts.analysis.eisv_ablation_matrix import (
     AblationMatrixRow,
     build_matrix_row,
+    filter_rows_for_validation,
     format_matrix_report,
 )
 from scripts.analysis.eisv_skeptic_report import OutcomeRow
@@ -42,6 +43,17 @@ def _row(idx: int, *, bad: bool, risk: float | None, agent: str = "agent-a") -> 
         snapshot_phi=None,
         snapshot_coherence=None,
     )
+
+
+def test_filter_rows_for_validation_excludes_beam_harness_by_default():
+    substrate = _row(0, bad=False, risk=0.1)
+    beam = _row(1, bad=True, risk=None)
+    beam = OutcomeRow(**{**beam.__dict__, "detail": {"harness": "beam"}})
+
+    filtered = filter_rows_for_validation([substrate, beam])
+
+    assert filtered == [substrate]
+    assert filter_rows_for_validation([substrate, beam], exclude_harness_lanes=()) == [substrate, beam]
 
 
 def test_build_matrix_row_summarizes_baseline_and_best_candidate():
@@ -100,9 +112,10 @@ def test_format_matrix_report_contains_skeptical_ablation_table():
         )
     ]
 
-    report = format_matrix_report(rows)
+    report = format_matrix_report(rows, excluded_harness_lanes=("beam",))
 
     assert report.startswith("# EISV Ablation Matrix")
+    assert "Excluded harness lanes: `beam`" in report
     assert "| Scope | Window days | Lead min | Trusted | Bad | Prior state | Prior risk |" in report
     assert "| task | 90 | 30 | 120 | 24 | 120 | 120 |" in report
     assert "prior_risk_binned" in report
