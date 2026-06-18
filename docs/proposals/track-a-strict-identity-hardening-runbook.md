@@ -111,3 +111,60 @@ revision:
   reaches it.
 - **Track B precondition tightened:** ship the delegate inert unless both resume
   gates are `strict`, enforced by a startup assertion — not a prose prerequisite.
+
+## Incident (2026-06-17) — Chronicler silent-dark under strict
+
+A real instance of the Pre-flight §2 risk, with two lessons the runbook above
+missed. Chronicler (the daily-cadence resident) stopped recording EISV
+check-ins after 2026-06-14 while its launchd job kept running cleanly: identity
+resumed (`resumed via UUID …`), all metrics POSTed, every cycle ended on
+`POST /mcp/ 200 OK`, and the launchd log showed no error. The server simply
+recorded nothing — `total_updates` frozen — for three days.
+
+**Root cause (by elimination).** Under `STRICT_IDENTITY_REQUIRED`,
+`process_agent_update` refuses a non-caller-proven write by returning the #425
+typed-refusal payload wrapped in `success_response()` — HTTP 200, no `isError`,
+no `error` key (`identity_bootstrap.py:strict_identity_refusal_payload` +
+`updates/phases.py:334`). Those two strict-refusal returns are the *only* paths
+in `process_agent_update` that yield a 200 success-shape without persisting:
+every other early exit is an `error_response` (which the SDK raises on), and the
+core update's `auto_save` increments `total_updates` synchronously. So a resident
+that returns 200 and doesn't record is, necessarily, being strict-refused.
+
+**Why it was invisible.** The SDK's `client.checkin()` didn't recognize the
+refusal shape — no `isError`/`error`, so it defaulted the verdict to `proceed`
+and returned a fake-success `CheckinResult`. The resident believed it checked in.
+Fixed in the SDK (PR #824): `errors.extract_identity_refusal` now raises a typed
+`IdentityRefusedError`, so the cycle fails loud (launchd log + `notify_on_error`)
+instead of silently. **Execution step 2 / Done-criteria "watch for refusals"
+cannot rely on the SDK surfacing them on a pre-#824 client — confirm the
+resident's client carries that fix, or watch the server-side
+`[PROCESS_UPDATE] STRICT refusing write` log line directly.**
+
+**Why Chronicler and not the others.** The refusal only fires when identity
+resolved `server_inferred` (transport fingerprint, not caller-proven) AND the
+agent is not substrate-exempt. Chronicler is the longest-cadence resident
+(daily), so its stored `continuity_token` is the most likely to go stale between
+runs — a stale token still UUID-resolves but isn't caller-proven. Shorter-cadence
+residents refresh before lapsing.
+
+**The fix is enrollment, not `parent_agent_id`.** Pre-flight §2 says "add
+`parent_agent_id`," but that is the remedy for *ephemeral* callers. A
+substrate-anchored resident is exempted by `is_substrate_earned` (pure
+row-presence in `core.substrate_claims`, plus the Pi allowlist) OR by the
+`dedicated_substrate` predicate (`embodied`, or `persistent` + a server-findable
+anchor). The durable fix for a refused substrate resident is to enroll it:
+
+```bash
+scripts/ops/enroll_resident.py \
+  --agent-id <resident-uuid> \
+  --launchd-label com.unitares.<name> \
+  --executable <interpreter the plist launches> \
+  --notes "strict-identity exemption"
+```
+
+`017_substrate_claims.sql` already names Vigil/Sentinel/Chronicler as expected to
+carry rows; a missing row is the likely state for any resident that goes dark
+here. Verify with
+`SELECT agent_id, expected_launchd_label, enrolled_at FROM core.substrate_claims ORDER BY enrolled_at;`
+and reconcile against the resident roster before flipping the flag wider.
