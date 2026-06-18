@@ -142,10 +142,22 @@ jobs:
       with:
         node-version: '22'
 
-    - name: Install dashboard test deps
+    - name: Install dashboard deps
       working-directory: dashboard
       run: npm ci
+
+    - name: Lint
+      working-directory: dashboard
+      run: npm run lint
+
+    - name: Check formatting
+      working-directory: dashboard
+      run: npm run format:check
 
     - name: Run dashboard frontend tests
       working-directory: dashboard
       run: npm test
+
+    - name: Build (verify the bundle compiles)
+      working-directory: dashboard
+      run: npm run build

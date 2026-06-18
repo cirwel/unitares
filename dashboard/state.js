@@ -19,7 +19,7 @@
 
     DashboardState.prototype.set = function (updates) {
         for (var key in updates) {
-            if (!updates.hasOwnProperty(key)) continue;
+            if (!Object.prototype.hasOwnProperty.call(updates, key)) continue;
             var oldVal = this._state[key];
             var newVal = updates[key];
             this._state[key] = newVal;

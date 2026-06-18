@@ -15,7 +15,7 @@ function freshDom() {
 
 function agent(overrides = {}) {
     return {
-        agent_id: overrides.agent_id || ('a-' + Math.random().toString(36).slice(2, 8)),
+        agent_id: overrides.agent_id || 'a-' + Math.random().toString(36).slice(2, 8),
         label: 'Agent',
         lifecycle_status: 'active',
         status: 'active',
@@ -47,7 +47,9 @@ describe('isTestAgent / getProductionAgents', () => {
         // "itest-*", but the client isTestAgent uses \btest\b which has no word
         // boundary inside "itest". Pinned so the gap is intentional, not a
         // silent regression.
-        expect(Agents.isTestAgent(agent({ label: 'itest-plugin', lifecycle_status: 'active' }))).toBe(false);
+        expect(
+            Agents.isTestAgent(agent({ label: 'itest-plugin', lifecycle_status: 'active' }))
+        ).toBe(false);
     });
 
     it('flags agents tagged test/experimental', () => {
@@ -56,7 +58,9 @@ describe('isTestAgent / getProductionAgents', () => {
     });
 
     it('does not flag an actively-running, plainly-named agent', () => {
-        expect(Agents.isTestAgent(agent({ label: 'Sentinel', lifecycle_status: 'active' }))).toBe(false);
+        expect(Agents.isTestAgent(agent({ label: 'Sentinel', lifecycle_status: 'active' }))).toBe(
+            false
+        );
     });
 
     it('getProductionAgents strips test agents from a mixed list', () => {
@@ -66,7 +70,7 @@ describe('isTestAgent / getProductionAgents', () => {
             agent({ label: 'Watcher' }),
         ];
         const prod = Agents.getProductionAgents(list);
-        expect(prod.map(a => a.label).sort()).toEqual(['Sentinel', 'Watcher']);
+        expect(prod.map((a) => a.label).sort()).toEqual(['Sentinel', 'Watcher']);
     });
 });
 
@@ -74,7 +78,8 @@ describe('renderAgentsList — participated vs never-checked-in partition (#826/
     it('renders participated agents in the main list and folds never-checked-in into a <details> group', () => {
         const real = agent({ label: 'RealWorker', total_updates: 7 });
         const ghosts = Array.from({ length: 3 }, (_, i) =>
-            agent({ label: 'claude-thread-' + i, total_updates: 0 }));
+            agent({ label: 'claude-thread-' + i, total_updates: 0 })
+        );
         const all = [real, ...ghosts];
         window.state.set({ cachedAgents: all });
 
@@ -95,7 +100,8 @@ describe('renderAgentsList — participated vs never-checked-in partition (#826/
 
     it('shows the empty-main note when every agent is never-checked-in', () => {
         const ghosts = Array.from({ length: 2 }, (_, i) =>
-            agent({ label: 'ghost-' + i, total_updates: 0 }));
+            agent({ label: 'ghost-' + i, total_updates: 0 })
+        );
         window.state.set({ cachedAgents: ghosts });
 
         Agents.renderAgentsList(ghosts, '');
