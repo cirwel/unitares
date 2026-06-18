@@ -382,7 +382,8 @@ class ConnectionTrackingMiddleware:
     responses (like SSE) and can trigger:
       AssertionError: Unexpected message: {'type': 'http.response.start', ...}
 
-    This middleware is implemented as a pure ASGI middleware to be safe for /sse.
+    This middleware is implemented as a pure ASGI middleware to be safe for
+    streaming responses (the /mcp Streamable HTTP transport).
 
     Constructor params:
       app               - ASGI application (passed by Starlette's add_middleware)
@@ -404,35 +405,8 @@ class ConnectionTrackingMiddleware:
             return await self.app(scope, receive, send)
 
         path = scope.get("path", "")
-        is_sse = path == "/sse"
         from starlette.datastructures import Headers
         headers = Headers(scope=scope)
-
-        # === SSE Probe Safeguard ===
-        # Prevent agents from hanging by providing ?probe=true to test connectivity
-        # Returns immediately with server status instead of starting streaming connection
-        if is_sse:
-            query_string = scope.get("query_string", b"").decode("utf-8", errors="ignore")
-            if "probe=true" in query_string or "probe=1" in query_string:
-                server_ready = self.server_ready_fn()
-                response_body = json.dumps({
-                    "status": "ready" if server_ready else "warming_up",
-                    "endpoint": "/sse",
-                    "transport": "SSE",
-                    "message": "SSE endpoint is available. Remove ?probe to start streaming connection." if server_ready else "Server is warming up, please retry in 2 seconds.",
-                    "hint": "Use /health for quick health checks, /sse for MCP client connections",
-                    "server_version": self.server_version,
-                }).encode("utf-8")
-                await send({
-                    "type": "http.response.start",
-                    "status": 200 if server_ready else 503,
-                    "headers": [[b"content-type", b"application/json"]],
-                })
-                await send({
-                    "type": "http.response.body",
-                    "body": response_body,
-                })
-                return
 
         # === Server Warmup Check ===
         # Prevent "request before initialization" errors when clients reconnect
@@ -459,7 +433,7 @@ class ConnectionTrackingMiddleware:
             })
             return
 
-        # Generate base id (stable per SSE connection, unique per HTTP request)
+        # Generate base id (unique per HTTP request).
         # For /mcp/ path, SessionSignals are already set by the ASGI wrapper
         # so we just read from scope.state if available, otherwise compute here.
         from src.mcp_handlers.context import get_session_signals, SessionSignals, set_session_signals
@@ -472,7 +446,7 @@ class ConnectionTrackingMiddleware:
             if not base_id:
                 base_id = signals.x_client_id or signals.ip_ua_fingerprint or "unknown"
         else:
-            # Legacy paths (SSE, REST) — compute fingerprint and build signals
+            # Legacy / REST paths — compute fingerprint and build signals
             base_id = headers.get("x-client-id") or headers.get("x-mcp-client-id")
             ua = headers.get("user-agent", "unknown")
 
@@ -495,14 +469,13 @@ class ConnectionTrackingMiddleware:
                     client_hint=detect_client_from_user_agent(ua),
                     x_agent_name=headers.get("x-agent-name"),
                     x_agent_id=headers.get("x-agent-id"),
-                    transport="sse" if is_sse else "rest",
+                    transport="rest",
                 )
                 set_session_signals(legacy_signals)
 
-        if is_sse:
-            client_id = base_id
-        else:
-            client_id = f"{base_id}:{uuid.uuid4().hex[:8]}"
+        # Every request is now an ephemeral HTTP request (the long-lived /sse
+        # transport was removed). Unique client_id per request.
+        client_id = f"{base_id}:{uuid.uuid4().hex[:8]}"
 
         # Expose to downstream tool calls via FastMCP Context.request_context.request.state
         try:
@@ -510,14 +483,6 @@ class ConnectionTrackingMiddleware:
             state["governance_client_id"] = client_id
         except Exception:
             pass
-
-        # Track SSE connections (long-lived); HTTP requests are ephemeral.
-        if is_sse:
-            await self.connection_tracker.add_connection(client_id, {
-                "type": "sse",
-                "path": path,
-                "user_agent": headers.get("user-agent", "unknown"),
-            })
 
         # PROPAGATE IDENTITY via contextvars for tool handlers
         from src.mcp_handlers.context import set_session_context, reset_session_context
@@ -527,64 +492,12 @@ class ConnectionTrackingMiddleware:
             user_agent=headers.get("user-agent")
         )
 
-        disconnected = False
-
-        connection_tracker_ref = self.connection_tracker
-
-        async def wrapped_receive():
-            nonlocal disconnected
-            try:
-                message = await receive()
-                if message.get("type") == "http.disconnect":
-                    disconnected = True
-                    if is_sse:
-                        try:
-                            await connection_tracker_ref.remove_connection(client_id)
-                        except Exception:
-                            pass
-                return message
-            except Exception as e:
-                # Handle receive errors gracefully
-                logger.debug(f"Error in wrapped_receive for {client_id}: {e}")
-                disconnected = True
-                if is_sse:
-                    try:
-                        await connection_tracker_ref.remove_connection(client_id)
-                    except Exception:
-                        pass
-                raise
-
-        # CRITICAL FIX: Wrap send to handle streaming responses properly
-        # SSE responses are streaming, so we need to pass through all messages
-        # without interfering with the ASGI protocol
-        async def wrapped_send(message):
-            try:
-                # Pass through all ASGI messages unchanged for SSE streaming
-                await send(message)
-                # Only update activity after response starts (not on every chunk)
-                if is_sse and message.get("type") == "http.response.start":
-                    try:
-                        await connection_tracker_ref.update_activity(client_id)
-                    except Exception:
-                        pass  # Don't fail on activity update errors
-            except Exception as e:
-                # If send fails, mark as disconnected
-                logger.debug(f"Error in wrapped_send for {client_id}: {e}")
-                disconnected = True
-                if is_sse:
-                    try:
-                        await connection_tracker_ref.remove_connection(client_id)
-                    except Exception:
-                        pass
-                raise
-
+        # Pass the raw ASGI send/receive straight through — no wrapping. The
+        # wrappers only existed to track SSE connection lifecycle, which is gone;
+        # a raw pass-through is also maximally safe for /mcp streaming responses.
         try:
-            return await self.app(scope, wrapped_receive, wrapped_send)
+            return await self.app(scope, receive, send)
         finally:
             # Reset contextvars to prevent leakage
             if 'context_token' in locals():
                 reset_session_context(context_token)
-
-            # Only remove non-SSE connections (HTTP REST endpoints)
-            if not is_sse:
-                await self.connection_tracker.remove_connection(client_id)
