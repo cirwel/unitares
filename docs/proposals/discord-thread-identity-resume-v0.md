@@ -1,11 +1,14 @@
 # Discord BEAM thread identity — resume-per-thread (v0)
 
 **Created:** June 18, 2026
-**Status:** Orchestrator + reference-hook side SHIPPED in this PR; the gov-plugin
-session-hook mirror and the dispatch-worker anchor are the remaining cross-repo
-follow-ups (below). No new server behavior — the resume path already exists.
+**Status:** Orchestrator + reference-hook side merged (#834). The **fail-closed
+guard** (anchor honored only with an explicit orchestration marker) is a follow-up
+hardening on top of #834. The gov-plugin session-hook mirror and the dispatch-worker
+anchor remain cross-repo follow-ups (below). No new server behavior — the resume
+path already exists.
 **Operator decision (2026-06-18):** *one id per thread (resume)*, fix in *this
-repo (orchestrator + server)*.
+repo (orchestrator + server)*; *fail-closed, no council* (the guard re-applies the
+ratified anti-siphon principle, it is not a new ontological claim).
 **Touches:** identity/onboarding (writer-locked surface — see CLAUDE.md). Operator
 is the merge gate.
 
@@ -54,39 +57,69 @@ provisioned the anchor, and the reference onboard hook hard-coded `force_new=tru
    `server-url provisioning` block.
 
 2. **Reference onboard hook (`scripts/client/onboard_helper.py`).** When
-   `UNITARES_CLIENT_SESSION_ID` is set, the helper resumes under the anchor
-   (sends `client_session_id`, **omits** `force_new`, declares **no** lineage)
-   instead of the default fresh-mint posture. Additive and gated: when the env is
-   unset, behavior is byte-identical to before. An explicit `force_new` still wins
-   (a deliberate clean break).
+   `UNITARES_CLIENT_SESSION_ID` is set **and** the orchestration signal is present
+   (see fail-closed guard below), the helper resumes under the anchor (sends
+   `client_session_id`, **omits** `force_new`, declares **no** lineage) instead of
+   the default fresh-mint posture. Additive and gated: with no anchor (or no
+   orchestration signal), behavior is byte-identical to before. An explicit
+   `force_new` still wins (a deliberate clean break).
+
+## Fail-closed: why a bare anchor is not enough
+
+**The same onboard hook is the onboarder for *normal interactive* sessions, not
+just `claude -p` children.** So "resume whenever `UNITARES_CLIENT_SESSION_ID` is
+set" is too blunt: if that var ever leaked into a normal session's environment (a
+stray global `export`, an inherited shell), the session would silently flip into
+resume mode — and two normal sessions that happened to share the leaked value would
+resume onto **one** governance UUID. That is exactly the ghost-siphon the v2
+ontology removed name-claim resolution to prevent (multiple subjects collapsing
+onto one identity by a weak shared signal).
+
+The guard: resume is honored only with an **explicit positive orchestration
+signal** — `UNITARES_ORCHESTRATED=1`, set by the spawner *alongside* the anchor.
+The orchestrator/dispatch KNOWS its children are orchestrated headless turn-children,
+so it declares it; an interactive session never carries the marker. Absent the
+marker, the anchor is ignored and the hook mints exactly as today. So a leaked
+anchor on an interactive session is a **no-op, never a siphon** — the dangerous
+direction is structurally impossible, which is why this needs no council (it
+re-applies a ratified principle, fail-closed).
+
+- Orchestrator: `agent_runner.ex` provisions `UNITARES_ORCHESTRATED=1` *with* the
+  anchor (one unit — both or neither).
+- Reference hook: `run_onboard(orchestrated=...)`; the anchor wins only when
+  `orchestrated` is true. The CLI derives it from `--orchestrated` /
+  `UNITARES_ORCHESTRATED` (affirmatives only — `_env_truthy`).
+- Defense-in-depth for the real plugin: it should set `orchestrated=True` only for
+  **headless `-p`** children (its own structural discriminator from the hook input),
+  so interactive sessions are immune even if the marker leaked too.
 
 ## Remaining cross-repo follow-ups (not in this PR)
 
-The common contract is: **the `claude -p` child receives `UNITARES_CLIENT_SESSION_ID`
-in its env, stable per conversation** (e.g. `agent:/thread-<discord-thread-id>`).
-How the anchor *reaches* the child env depends on the spawn path:
+The common contract is: **the `claude -p` child receives BOTH
+`UNITARES_CLIENT_SESSION_ID` (the per-conversation anchor) AND
+`UNITARES_ORCHESTRATED=1` (the fail-closed marker) in its env.** How they *reach*
+the child depends on the spawn path:
 
 - **Dispatch / Discord-bridge worker** (separate repo) — two spawn paths, same
   env-var destination:
   - *HTTP-API spawners* (drive the orchestrator via `POST /v1/agents`): pass the
-    `client_session_id` field; the orchestrator provisions `UNITARES_CLIENT_SESSION_ID`
-    (this PR).
+    `client_session_id` field; the orchestrator provisions both env vars.
   - *Direct-Port spawners* (e.g. `dispatch_beam`'s `Dispatch.AgentPort`, which
-    opens a BEAM `Port` to `claude -p` and does **not** call `/v1/agents`): set the
-    env var directly on the Port spawn —
-    `env: [{"UNITARES_CLIENT_SESSION_ID", "agent:/thread-#{thread_id}"}]`. `AgentPort`
-    already threads `env:` into `port_opts` and it composes with the stdin-redirect
-    wrapper, so the child's session-start hook inherits it. Same no-forging boundary
-    as the orchestrator path: anchor only, the child still self-onboards.
+    opens a BEAM `Port` to `claude -p` and does **not** call `/v1/agents`): set both
+    on the Port spawn —
+    `env: [{"UNITARES_CLIENT_SESSION_ID", "agent:/thread-#{thread_id}"}, {"UNITARES_ORCHESTRATED", "1"}]`.
+    `AgentPort` already threads `env:` into `port_opts` and it composes with the
+    stdin-redirect wrapper, so the child's session-start hook inherits them. Same
+    no-forging boundary: anchor only, the child still self-onboards.
 - **gov-plugin session-start hook** (`unitares-governance-plugin`): mirror the
-  `onboard_helper.py` change — when `UNITARES_CLIENT_SESSION_ID` is present, onboard
-  in resume-by-anchor mode rather than `force_new`. The plugin hook is the actual
-  onboarder for `claude -p` children; `onboard_helper.py` is the in-repo reference
-  implementation of the same contract.
+  `onboard_helper.py` contract — resume under the anchor only when the orchestration
+  signal is present (and, defense-in-depth, the session is headless). The plugin
+  hook is the actual onboarder for `claude -p` children; `onboard_helper.py` is the
+  in-repo reference implementation.
 
-**Sequencing:** the env var is a no-op until the gov-plugin hook reads it, so:
-this PR merges → gov-plugin hook mirrors the helper → the worker (HTTP or
-direct-Port) injects the anchor.
+**Sequencing:** the env vars are a no-op until the gov-plugin hook reads them, so:
+gov-plugin hook mirrors the helper → the worker (HTTP or direct-Port) injects the
+anchor + marker.
 
 ## Honesty boundary
 

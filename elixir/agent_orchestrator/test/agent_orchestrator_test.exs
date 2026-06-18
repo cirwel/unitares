@@ -420,6 +420,28 @@ defmodule AgentOrchestratorTest do
                AgentOrchestrator.await(id)
     end
 
+    test "provisions UNITARES_ORCHESTRATED=1 alongside the anchor (fail-closed marker)" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", ~s(echo "$UNITARES_CLIENT_SESSION_ID|$UNITARES_ORCHESTRATED")],
+          client_session_id: "agent:/thread-1"
+        })
+
+      assert {:ok, %{output: ["agent:/thread-1|1"], exit_status: 0}} =
+               AgentOrchestrator.await(id)
+    end
+
+    test "no anchor => no orchestration marker (the marker never travels alone)" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", ~s(echo "${UNITARES_ORCHESTRATED-unset}")]
+        })
+
+      assert {:ok, %{output: ["unset"], exit_status: 0}} = AgentOrchestrator.await(id)
+    end
+
     test "an explicit env entry wins over the provisioned anchor" do
       {:ok, id, _} =
         AgentOrchestrator.run(%{

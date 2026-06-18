@@ -336,6 +336,7 @@ class TestThreadAnchorResume:
         responses: list[dict],
         *,
         client_session_id: str | None,
+        orchestrated: bool = True,
         force_new: bool = False,
         initial_cache: dict | None = None,
     ) -> tuple[dict, FakePoster]:
@@ -350,6 +351,7 @@ class TestThreadAnchorResume:
             model_type="claude-code",
             workspace=tmp_path,
             client_session_id=client_session_id,
+            orchestrated=orchestrated,
             force_new=force_new,
             post_json=poster,
         )
@@ -366,6 +368,20 @@ class TestThreadAnchorResume:
         assert "force_new" not in sent_args
         assert "parent_agent_id" not in sent_args
         assert "spawn_reason" not in sent_args
+
+    def test_anchor_without_orchestrated_flag_mints_not_siphons(self, tmp_path: Path) -> None:
+        """THE fail-closed guard: a bare anchor with NO orchestration signal
+        (e.g. a leaked global UNITARES_CLIENT_SESSION_ID on a normal session)
+        must MINT, never resume-share. This is the property that keeps the
+        shared hook from siphoning interactive sessions onto one UUID."""
+        _, poster = self._call(
+            tmp_path, [_success_response()],
+            client_session_id="agent:/leaked-global-anchor",
+            orchestrated=False,
+        )
+        sent_args = poster.calls[0][1]["arguments"]
+        assert sent_args["force_new"] is True
+        assert "client_session_id" not in sent_args
 
     def test_anchor_does_not_declare_cached_lineage(self, tmp_path: Path) -> None:
         """Even with a cached UUID, anchor mode resumes (one agent across turns),
@@ -404,7 +420,10 @@ class TestThreadAnchorResume:
 
     def test_no_anchor_is_byte_identical_to_default(self, tmp_path: Path) -> None:
         """Without the anchor, behavior is unchanged (force_new + no client id)."""
-        _, poster = self._call(tmp_path, [_success_response()], client_session_id=None)
+        _, poster = self._call(
+            tmp_path, [_success_response()],
+            client_session_id=None, orchestrated=False,
+        )
         sent_args = poster.calls[0][1]["arguments"]
         assert sent_args["force_new"] is True
         assert "client_session_id" not in sent_args
@@ -416,6 +435,17 @@ class TestThreadAnchorResume:
         )
         sent_args = poster.calls[0][1]["arguments"]
         assert "initial_state" in sent_args
+
+    def test_env_truthy_fails_closed(self) -> None:
+        """UNITARES_ORCHESTRATED parsing: only explicit affirmatives are True so
+        an empty / 0 / garbage value cannot accidentally arm resume."""
+        from scripts.client.onboard_helper import _env_truthy
+        assert _env_truthy("1") is True
+        assert _env_truthy("true") is True
+        assert _env_truthy("YES") is True
+        assert _env_truthy("on") is True
+        for falsey in (None, "", "0", "false", "no", "off", "  ", "maybe"):
+            assert _env_truthy(falsey) is False, falsey
 
 
 # --- per-process slot isolation --------------------------------------------

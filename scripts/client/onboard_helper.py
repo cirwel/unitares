@@ -37,6 +37,12 @@ CACHE_DIR = ".unitares"
 CACHE_FILE = "session.json"
 
 
+def _env_truthy(value: str | None) -> bool:
+    """Parse a boolean-ish env var. Only explicit affirmatives count as True so
+    a stray ``UNITARES_ORCHESTRATED=0`` / empty value fails closed to mint."""
+    return (value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _slot_filename(slot: str | None) -> str:
     """Return the cache filename, optionally namespaced by a slot key.
 
@@ -262,6 +268,7 @@ def run_onboard(
     slot: str | None = None,
     force_new: bool = False,
     client_session_id: str | None = None,
+    orchestrated: bool = False,
     auth_token: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     with_bootstrap: bool = True,
@@ -278,14 +285,28 @@ def run_onboard(
 
     ``client_session_id`` is the **thread-anchor resume** path
     (``UNITARES_CLIENT_SESSION_ID``, provisioned by the BEAM orchestrator for
-    conversation-turn agents like the Discord bridge). When set, the helper
-    resumes the SAME governance UUID under that stable anchor instead of the
-    default fresh-mint-per-process posture — so consecutive turns of one
-    conversation are one resumed agent, not a new id every turn. force_new is
-    omitted in this mode (the server defaults resume=True); the first turn
-    mints+binds the anchor, later turns resume it. When unset, behavior is
-    byte-identical to before (force_new + cached-lineage declaration). An
-    explicit ``force_new`` still wins — it is a deliberate clean break.
+    conversation-turn agents like the Discord bridge). When set AND
+    ``orchestrated`` is True, the helper resumes the SAME governance UUID under
+    that stable anchor instead of the default fresh-mint-per-process posture —
+    so consecutive turns of one conversation are one resumed agent, not a new id
+    every turn. force_new is omitted in this mode (the server defaults
+    resume=True); the first turn mints+binds the anchor, later turns resume it.
+
+    ``orchestrated`` is the **fail-closed guard** (the load-bearing safety
+    property). This same helper is the onboarder for *normal* interactive
+    sessions too — so honoring a bare ``client_session_id`` would be dangerous:
+    if that env var ever leaked into a normal session (a stray global export,
+    an inherited shell), the session would silently switch to resume mode, and
+    two sessions sharing the leaked value would resume onto ONE UUID — the
+    ghost-siphon the v2 ontology removed name-claim to prevent. So resume
+    requires an EXPLICIT positive signal that this is an orchestrated headless
+    turn-child (set ``orchestrated=True`` only for ``claude -p`` children the
+    orchestrator spawned; the spawner provisions ``UNITARES_ORCHESTRATED=1``
+    alongside the anchor). Absent that signal, the anchor is ignored and the
+    helper mints exactly as today — a leaked anchor on an interactive session
+    is a no-op, never a siphon. When unset, behavior is byte-identical to
+    before (force_new + cached-lineage declaration). An explicit ``force_new``
+    still wins — it is a deliberate clean break.
 
     ``with_bootstrap`` (default True) attaches an initial_state payload so
     the server writes a bootstrap check-in row at t=0 per
@@ -303,14 +324,18 @@ def run_onboard(
         "model_type": model_type,
     }
 
-    if anchor and not force_new:
-        # Thread-anchored resume: stable per-conversation session key, one
-        # resumed UUID across turns. No force_new (server default resume=True),
-        # no lineage — the turns are the same agent, not a parent/child chain.
+    if anchor and orchestrated and not force_new:
+        # Thread-anchored resume — ONLY in an explicitly-declared orchestrated
+        # context (fail-closed; see ``orchestrated`` above). Stable
+        # per-conversation session key, one resumed UUID across turns. No
+        # force_new (server default resume=True), no lineage — the turns are the
+        # same agent, not a parent/child chain.
         arguments["client_session_id"] = anchor
     else:
         # Default posture (identity.md v2): fresh process = fresh agent. Mint
-        # with force_new and declare cached lineage via parent_agent_id.
+        # with force_new and declare cached lineage via parent_agent_id. A bare
+        # anchor without the orchestration signal lands here — it mints, it does
+        # NOT resume-share.
         arguments["force_new"] = True
         if not force_new:
             parent_agent_id = (cache.get("uuid") or cache.get("agent_uuid") or "").strip()
@@ -403,8 +428,19 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("UNITARES_CLIENT_SESSION_ID", ""),
         help="Stable per-conversation session anchor (typically provisioned "
              "as UNITARES_CLIENT_SESSION_ID by the BEAM orchestrator for "
-             "turn-based agents like the Discord bridge). When set, resume the "
-             "SAME identity across turns instead of minting a new id each turn.",
+             "turn-based agents like the Discord bridge). Resumes the SAME "
+             "identity across turns instead of minting a new id each turn — but "
+             "ONLY when --orchestrated is also set (fail-closed; see below).",
+    )
+    parser.add_argument(
+        "--orchestrated",
+        action="store_true",
+        default=_env_truthy(os.environ.get("UNITARES_ORCHESTRATED")),
+        help="Declare this is an orchestrated headless turn-child (the "
+             "orchestrator provisions UNITARES_ORCHESTRATED=1 alongside the "
+             "anchor). REQUIRED for --client-session-id to trigger resume; "
+             "without it a (possibly leaked) anchor is ignored and the helper "
+             "mints — so an interactive session can never resume-share.",
     )
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     args = parser.parse_args(argv)
@@ -421,6 +457,7 @@ def main(argv: list[str] | None = None) -> int:
         slot=slot,
         force_new=args.force_new,
         client_session_id=client_session_id,
+        orchestrated=args.orchestrated,
         with_bootstrap=args.with_bootstrap,
         auth_token=auth_token,
         timeout=args.timeout,
