@@ -37,8 +37,22 @@ export default [
         },
     },
     {
+        // Browser-targeted ES modules (the Vite entry). Real ESM, so keep
+        // `no-undef` on — but with browser globals, since this code runs in the
+        // browser and touches `window`.
+        files: ['src/**/*.js'],
+        languageOptions: {
+            ecmaVersion: 2022,
+            sourceType: 'module',
+            globals: { ...globals.browser },
+        },
+        rules: {
+            'no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+        },
+    },
+    {
         // Build/test tooling — Node + ESM.
-        files: ['*.config.js', 'eslint.config.mjs', 'src/**/*.js', 'tests/**/*.js'],
+        files: ['*.config.js', 'eslint.config.mjs', 'tests/**/*.js'],
         languageOptions: {
             ecmaVersion: 2022,
             sourceType: 'module',
