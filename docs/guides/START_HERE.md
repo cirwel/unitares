@@ -7,10 +7,10 @@ Status: thin entrypoint kept for compatibility. README is the primary overview; 
 Use this unless you have a specific reason not to:
 
 1. First run or fresh process: call `start_session(force_new=true)` and save `agent_uuid` / `client_session_id` from the response
-2. Fresh process continuing prior work: call `start_session(force_new=true, parent_agent_id=<saved uuid>, spawn_reason="new_session")`
-3. Call `sync_state()` after meaningful work
-4. Call `check_working_state()` for state
-5. Use `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)` only for same-owner proof-owned rebinds
+2. Same running process: pass `client_session_id` on later check-ins and writes
+3. Fresh process continuing prior work: call `start_session(force_new=true, parent_agent_id=<saved uuid>, spawn_reason="new_session")` only for a real handoff from a finished predecessor
+4. Call `sync_state()` after meaningful work
+5. Call `check_working_state()` for state
 
 These primary workflow tools are the agent-facing surface. Raw implementation
 tools remain available for older clients and debugging:
@@ -33,15 +33,18 @@ result = start_session(force_new=True)
 save_to_file(result["agent_uuid"])
 
 # New process inheriting prior work:
+# Use only for a real handoff from a finished predecessor.
 start_session(force_new=True, parent_agent_id=saved_uuid, spawn_reason="new_session")
 
 # After work:
-sync_state(response_text="What you did", complexity=0.5)
+sync_state(response_text="What you did", complexity=0.5, client_session_id=session_id)
 ```
 
 ## Identity Rule
 
-UUID is an identity anchor, not proof that the current process owns that identity. Use `parent_agent_id` to declare lineage for a fresh process. Use `continuity_token` only as short-lived ownership proof when rebinding the same UUID.
+UUID is a server record, not proof that the current process owns that identity.
+Use `client_session_id` for writes in the same running process. Use
+`parent_agent_id` only to declare a real handoff into a fresh process.
 
 ## What To Trust
 
@@ -72,4 +75,4 @@ Important current semantics:
 
 This file used to be a larger onboarding guide from an earlier MCP/tooling phase. It is intentionally kept small now to avoid duplicated explanations drifting out of sync with the runtime.
 
-**Last Updated:** 2026-06-12 (measurement-policy-enforcement semantics aligned with runtime response layers)
+**Last Updated:** 2026-06-18 (identity contract simplified for normal agent workflows)

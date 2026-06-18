@@ -56,6 +56,12 @@ def _lift(payload: Dict[str, Any], *keys: str) -> Dict[str, Any]:
     return {k: payload[k] for k in keys if payload.get(k) is not None}
 
 
+def _harvest_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Use nested canonical payloads when a caller hands us an envelope."""
+    raw = payload.get("raw_governance")
+    return raw if isinstance(raw, dict) else payload
+
+
 def _coherence_and_risk(payload: Dict[str, Any]) -> tuple[Optional[float], Optional[float]]:
     """Pull (coherence, risk_score) from the places handlers put them."""
     for container in (payload.get("metrics"), payload.get("current_state"), payload):
@@ -97,6 +103,16 @@ def _verdict_value(payload: Dict[str, Any]) -> Optional[str]:
     return str(value).lower() if value is not None else None
 
 
+def _decision_action(payload: Dict[str, Any]) -> Optional[str]:
+    for container in (payload.get("decision"), payload.get("verdict"), payload):
+        if not isinstance(container, dict):
+            continue
+        value = container.get("action") or container.get("value") or container.get("verdict")
+        if value is not None:
+            return str(value).lower()
+    return None
+
+
 def _needs_attention(payload: Dict[str, Any]) -> bool:
     verdict = _verdict_value(payload)
     if verdict in {"guide", "pause", "reject"}:
@@ -131,12 +147,22 @@ def _recovery_hint(
     attention = _needs_attention(payload)
     if not (risky or attention):
         return None
-    severe = _verdict_value(payload) in {"pause", "reject"} or (risk is not None and risk >= 0.7)
+    action = _decision_action(payload) or _verdict_value(payload)
+    severe = action in {"pause", "reject", "block", "stop"} or (
+        risk is not None and risk >= 0.7
+    )
     drifting = coherence is not None and coherence < _RECOVERY_COHERENCE_FLOOR
-    if severe or (attention and drifting):
+    continuing = action in {"proceed", "continue", "approve", "ok", "healthy"}
+    if severe or (attention and drifting and not continuing):
         return (
             "Working state looks degraded - pause and call "
             "self_recovery_review(reflection='...') before continuing."
+        )
+    if attention and drifting and continuing:
+        return (
+            "Coherence is near an edge - keep scope tight, sync_state after "
+            "the next substantial step, and use self_recovery_review(reflection='...') "
+            "only if work stalls."
         )
     return (
         "Risk is elevated - if you feel stuck, quick_resume() applies when "
@@ -147,7 +173,12 @@ def _recovery_hint(
 
 def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Surface prior discoveries the canonical payload already carries."""
-    candidates = payload.get("relevant_discoveries") or payload.get("results")
+    payload = _harvest_payload(payload)
+    candidates = (
+        payload.get("relevant_discoveries")
+        or payload.get("results")
+        or payload.get("discoveries")
+    )
     if not isinstance(candidates, list) or not candidates:
         return None
     suggestions = []
@@ -180,7 +211,8 @@ def build_experience_envelope(
     if "agent_uuid" not in envelope and payload.get("uuid") is not None:
         envelope["agent_uuid"] = payload["uuid"]
 
-    coherence, risk = _coherence_and_risk(payload)
+    source_payload = _harvest_payload(payload)
+    coherence, risk = _coherence_and_risk(source_payload)
 
     next_action: Any = None
     state_summary: Optional[Dict[str, Any]] = None
@@ -225,7 +257,12 @@ def build_experience_envelope(
             state_summary = verdict if isinstance(verdict, dict) else {"verdict": verdict}
 
     elif canonical_name == "knowledge":
-        total = payload.get("total_count", len(payload.get("results") or []))
+        candidates = source_payload.get("results") or source_payload.get("discoveries") or []
+        total = source_payload.get("total_count")
+        if total is None:
+            total = source_payload.get("count")
+        if total is None:
+            total = len(candidates)
         next_action = (
             f"{total} prior discoveries matched - read before redoing work. "
             "Full context: knowledge(action='details', discovery_id=...). "
@@ -271,7 +308,7 @@ def build_experience_envelope(
     if suggestions:
         envelope["memory_suggestions"] = suggestions
 
-    hint = _recovery_hint(payload, coherence, risk)
+    hint = _recovery_hint(source_payload, coherence, risk)
     if hint:
         envelope["recovery_hint"] = hint
 

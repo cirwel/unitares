@@ -12,9 +12,14 @@ If the newest entry contains `parent_agent_id`, treat it as local lineage contex
 
 If current binding is unclear, call `identity()` first to inspect the active binding.
 
-If you must rebind to a cached UUID, include a matching current in-process `continuity_token`: `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)`. Do not use legacy cache files as token sources.
+If you must test a cached UUID, use an advanced proof-owned rebind only when a
+matching current in-process `continuity_token` is available. Do not use legacy
+cache files as token sources.
 
-If this is a fresh process and no ownership proof is available, use `/governance-start` to mint a fresh identity with `parent_agent_id=<cached uuid>` rather than bare UUID resume.
+If this is a fresh process and no ownership proof is available, use
+`/governance-start` to mint a fresh identity. Add `parent_agent_id` only when
+this process is genuinely inheriting work from a finished predecessor; do not
+infer lineage from the cache alone.
 
 If no local continuity state exists and the current identity is unclear, use `/governance-start` first.
 

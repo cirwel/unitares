@@ -8,11 +8,16 @@ Use the shared helper in this repo:
 
 - `scripts/client/session_cache.py list`
 
-If the newest entry contains `parent_agent_id`, treat it as a local lineage candidate.
+If the newest entry contains `parent_agent_id`, treat it as lineage context, not
+proof that this process should declare the same parent.
 
-Do not verify by bare UUID resume. If you need to test ownership of a cached UUID, call `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)` only when a matching current in-process token is available. Do not use legacy cache files as token sources.
+Do not verify by bare UUID resume. If you need to test ownership of a cached
+UUID, use an advanced proof-owned rebind only when a matching current in-process
+token is available. Do not use legacy cache files as token sources.
 
-If no proof-owned UUID rebind is available, call `identity()` to inspect current binding. Use `/governance-start` to create a fresh process identity with `parent_agent_id=<cached uuid>` if this process should inherit prior work.
+If no proof-owned UUID rebind is available, call `identity()` to inspect current
+binding. Use `/governance-start` to create a fresh process identity. Add
+`parent_agent_id` only for a real handoff from a finished predecessor.
 
 Call `identity()` first when continuity or binding is unclear.
 

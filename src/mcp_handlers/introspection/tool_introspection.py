@@ -646,8 +646,8 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         "search_shared_memory": "Search shared memory before writing duplicate discoveries",
         "record_result": "Record real task/tool/test outcome for calibration",
         "request_review": "Ask for structured review/recovery",
-        "onboard": "Register fresh process-instance with governance. Per v2 ontology, declare lineage via parent_agent_id rather than resume via token.",
-        "identity": "🪞 Check who you are or set your display name. Per v2 ontology, arg-less identity() with no proof signal mints fresh; pass continuity_token / agent_uuid + proof to resume.",
+        "onboard": "Register a fresh process identity. Prefer start_session(force_new=true); use parent_agent_id only for real handoffs.",
+        "identity": "🪞 Check current binding or set your display name. Not the normal start/resume path; use start_session first.",
         "process_agent_update": "Raw implementation for sync_state(); updates agent governance state",
         "get_governance_metrics": "📊 Get current state and metrics without updating",
         "simulate_update": "🧪 Test decisions without persisting state",
@@ -927,7 +927,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             },
             "more": "list_tools(lite=false) for all tools with full category details",
             "tip": "describe_tool(tool_name=...) for parameter details and examples",
-            "quick_start": "Start fresh with start_session(force_new=true); use parent_agent_id for lineage, not bare UUID resume",
+            "quick_start": "Start fresh with start_session(force_new=true); pass client_session_id on later writes",
             "getting_started_path": _getting_started_path(),
             "essential_toolkit": _essential_toolkit(),
         }
@@ -936,7 +936,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         if is_new_agent:
             response_data["first_time"] = {
                 "hint": "First time here? Start with start_session(force_new=true) to create your identity.",
-                "next_step": "Call start_session(force_new=true). If inheriting prior work, also pass parent_agent_id and spawn_reason='new_session'."
+                "next_step": "Call start_session(force_new=true), then pass its client_session_id on later writes."
             }
         
         # Add progressive metadata if enabled
@@ -1134,10 +1134,10 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         "quick_start": {
             "new_agent": [
                 "1. Call start_session(force_new=true) - creates a fresh process identity",
-                "2. If inheriting prior work, include parent_agent_id and spawn_reason='new_session'",
-                "3. Save uuid plus continuity diagnostics from response",
-                "4. Call sync_state() to share meaningful work",
-                "5. Use identity(name='...') to set a cosmetic label"
+                "2. Save uuid and client_session_id from the response",
+                "3. Pass client_session_id on later check-ins and writes",
+                "4. Use parent_agent_id only for a real handoff from a finished predecessor",
+                "5. Use identity(name='...') only to set a cosmetic label"
             ],
             "categories_to_explore": [
                 "🚀 Identity & Onboarding - Start here!",
@@ -1365,8 +1365,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     },
                     "identity": {
                         "check_identity": "identity()  # Shows current bound identity",
-                        "name_yourself": "identity(name=\"my_agent\")  # Set your display name",
-                        "proof_owned_rebind": "identity(agent_uuid=\"...\", continuity_token=\"...\", resume=true)  # Same-owner rebind"
+                        "name_yourself": "identity(name=\"my_agent\")  # Set your display name"
                     },
                     "list_agents": {
                         "all_agents": "list_agents()  # List all agents with metadata",
