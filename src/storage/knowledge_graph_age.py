@@ -977,7 +977,17 @@ class KnowledgeGraphAGE:
             # cold here means a list response with including_cold=False reports
             # exactly the rows it bucketed.
             total_count = max(0, total_count - cold_count)
-        by_status = dict(Counter(s for s in statuses if s))
+        # Bucket status-less rows under a None key rather than dropping them.
+        # A Discovery vertex created without a status property returns null for
+        # d.status; the old `Counter(s for s in statuses if s)` filtered those
+        # (and empty strings) out, so sum(by_status.values()) < total_discoveries
+        # by the count of status-less rows while total_discoveries still counted
+        # them — an unreconcilable gap (dogfood 2026-06-18: 1066 total vs 1003
+        # bucketed = 63 status-less discoveries). Folding them into a None key
+        # restores the invariant sum(by_status.values()) == total_discoveries
+        # (at including_cold=True) and matches the postgres backend, whose
+        # GROUP BY status yields a NULL group for the same rows.
+        by_status = dict(Counter(s if s else None for s in statuses))
         
         # Count edges
         cypher = "MATCH ()-[r]->() RETURN count(r)"
