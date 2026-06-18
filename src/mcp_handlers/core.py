@@ -151,11 +151,20 @@ async def handle_get_governance_metrics(arguments: ToolArgumentsDict) -> Sequenc
     # stale-client_session_id case this block originally covered.
     if not arguments.get("agent_id"):
         try:
-            from src.mcp_handlers.context import get_context_agent_id
+            from src.mcp_handlers.context import (
+                get_context_agent_id,
+                get_session_proof_origin,
+            )
             bound_agent_id = get_context_agent_id()
+            proof_origin = get_session_proof_origin()
         except Exception:
             bound_agent_id = None
-        if not bound_agent_id:
+            proof_origin = None
+        # A server-inferred binding (transport-injected CSID, sticky cache, or
+        # fingerprint/pin fallback) is enough to protect strict writes, but it
+        # is not caller proof for a pre-onboard read. Otherwise a fresh
+        # no-proof Hermes/MCP episode can display a resident sibling's state.
+        if not bound_agent_id or proof_origin == "server_inferred":
             return success_response(unbound_metrics_payload())
 
     agent_id, error = require_agent_id(arguments)
@@ -165,7 +174,7 @@ async def handle_get_governance_metrics(arguments: ToolArgumentsDict) -> Sequenc
     response_data = await get_governance_metrics_data(agent_id, arguments, server=mcp_server)
     return success_response(response_data)
 
-@mcp_tool("simulate_update", timeout=30.0, register=False)
+@mcp_tool("simulate_update", timeout=30.0)
 async def handle_simulate_update(arguments: ToolArgumentsDict) -> Sequence[TextContent]:
     """Handle simulate_update tool - dry-run governance cycle without persisting state.
 

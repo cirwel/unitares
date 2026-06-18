@@ -71,7 +71,7 @@ Before touching one of these, run `gh pr list -R CIRWEL/unitares --search "in:ti
 Surfaces:
 
 - **Migration slots and migration-drift fixes** — `db/postgres/migrations/`. Now CI-gated by `scripts/dev/unitares_doctor.py`; the doctor fails on slot/name drift, but session-level coordination still avoids wasted parallel work.
-- **Identity / onboarding — docs AND implementing code are one coupled surface** — docs (`docs/ontology/identity.md`, `commands/governance-start.md`, `skills/governance-lifecycle/SKILL.md`, the `AGENTS.md`/`CLAUDE.md` shared contract including the `Identity rules:` block below, the `force_new=true` / `parent_agent_id` posture) AND code (`src/mcp_handlers/identity/`, `src/mcp_handlers/middleware/identity_step.py`, `src/mcp_handlers/support/agent_auth.py`, `src/mcp_handlers/schemas/identity.py`). Treat as a single writer-locked region, not as separate doc/code workstreams. These also flow across two repos (unitares + gov-plugin); check both.
+- **Identity / onboarding — docs AND implementing code are one coupled surface** — docs (`docs/ontology/identity.md`, `commands/governance-start.md`, `skills/governance-lifecycle/SKILL.md`, the `AGENTS.md`/`CLAUDE.md` shared contract including the `Strict Identity, Simple Contract` block below, the `force_new=true` / `parent_agent_id` posture) AND code (`src/mcp_handlers/identity/`, `src/mcp_handlers/middleware/identity_step.py`, `src/mcp_handlers/support/agent_auth.py`, `src/mcp_handlers/schemas/identity.py`). Treat as a single writer-locked region, not as separate doc/code workstreams. These also flow across two repos (unitares + gov-plugin); check both.
 - **`docs/ontology/plan.md`** — chronological state ledger; two sessions appending rows in the same window collide trivially. If a session is already editing it, branch from its head rather than starting parallel.
 - **Active proposal/RFC docs in hot phase** — the Plexus / lease-plane / BEAM thread (`docs/proposals/plexus-scope.md`, `surface-lease-plane-v0.md`, `surface-lease-plane-phase-a-plan.md`, `beam-footprint-roadmap-v0.md`, `beam-coordination-kernel.md`). Restructure-during-flight is normal here; same rule as plan.md: branch from another session's head if one is in flight.
 - **Large test-layout consolidation** — `tests/` directory. If you're about to delete more than ~200 lines of tests, surface intent in a draft PR or issue first; a stale −3496 diff (`feat/agentskills-compat`) was lost to drift this way.
@@ -116,6 +116,7 @@ Codex and Claude share one delivery contract so concurrent sessions stay predict
 
 - **Branch naming — one pattern, agent-prefixed:** `<agent>/<topic>-<short-id>` where `<agent>` is `claude` or `codex` (self-identifying for parallel attribution). Both `ship.sh`'s `<agent>/auto/<timestamp>-<slug>` and the web harness's `claude/<topic>-<id>` satisfy this shape. Never push to `main`/`master`.
 - **Delivery — draft PR for everything:** every session lands its work as a draft PR, regardless of agent and regardless of whether the change is runtime code or docs/tests. The operator is the merge gate. Do NOT direct-push to a shared branch and do NOT enable auto-merge by default. `ship.sh` enforces this: its default `auto` route opens a draft PR for every change (`--direct` opts out for docs/tests-only pushes; `--auto-merge` only when the operator explicitly asks).
+- **Delivery requests authorize delivery:** when the operator asks to ship, finish, deliver, open a PR, or otherwise complete a delivery workflow, Codex may assume branch -> commit -> push -> draft PR is in scope and should not ask for a second confirmation just to push or open the draft PR.
 - **Mark-ready / merge is a deliberate action:** a draft PR means "visible, not claiming merged." Only mark ready or merge after CI is green and you've confirmed no collision with an in-flight branch (see the single-writer-surface rules above).
 
 ## Substrate Tax: anyio-asyncio Coupling
@@ -136,52 +137,56 @@ The three patterns below were the pre-ExecutorPool workarounds. They are **retir
 
 - Knowledge graph AGE tests require a live AGE connection (errors, not failures, when unavailable)
 
-## STRICT_IDENTITY_REQUIRED (#425 staged rollout)
+## Strict Identity, Simple Contract
 
-`STRICT_IDENTITY_REQUIRED=true` flips the dispatch middleware from auto-minting an ephemeral identity for non-`pre_onboard` tools to returning a typed-refusal response (`status: identity_required`). Default is `false` so existing callers (residents, dispatch workers, plugins doing bare `onboard()`) keep working. Per-tool identity requirements are declared via `requires_identity=` on the `@mcp_tool` decorator (see `src/mcp_handlers/decorators.py`).
+Strict identity is a write gate. Reads may work without a bound caller; writes
+must be accountable. Agents should not need the full identity ontology for the
+normal path.
 
-Rollout sequence:
+Operational rules:
 
-1. Local dev (your shell) → set the flag, run a session through, watch for typed refusals where you expected work. **Stage 1 run 2026-06-11**: typed refusal works as designed on the MCP transport — but **the flag does not reach the REST surface** (`/v1/tools/call` skips `identity_step`): unbound REST reads still succeed under strict, writes refuse with an off-contract generic `SESSION_ERROR`. Since the real unbound population is REST (dashboard 30s sweep, gateway-proxied connector traffic), a REST-side strict gate + a dashboard-identity decision are prerequisites before stages 2–4 achieve the rollout's goal. **REST gate shipped (inert while the flag is off):** `execute_http_tool` now mirrors the middleware's typed refusal via the single-sourced `identity_bootstrap.strict_identity_refusal_payload`, ahead of Wave-3a routing; credential-bearing and pre_onboard calls pass through. The gate keys on the RESOLVED context binding, never credential presence: the REST route transport-injects a synthetic `client_session_id` into every request, so presence-based bypasses pass all real traffic (council live finding, PR #610). **Action-level classification shipped:** both gates resolve at CALL granularity (`decorators.get_call_identity_requirement` — alias-aware, default_action-aware); the mixed tools declare `pre_onboard_actions` (knowledge: search/get/list/details/stats; agent: list/get; calibration: check; config: get; observe: agent/compare/similar/anomalies/aggregate; dialectic: get/list) so the dashboard's read sweep passes under strict while every write/operator action refuses — a drift-guard test pins that no mutating action can enter an exemption set. Remaining prerequisite: **the dashboard-identity decision (operator)** — under strict its reads now work unbound but its operator WRITE buttons (archive/resume/config-set/dialectic-request) refuse until they carry an operator credential.
-2. Lumen (Pi) → flag the Pi env, observe resident agents (vigil/sentinel/watcher/chronicler) for refusals at scheduled boundaries; fix offenders by adding `parent_agent_id` to their bootstrap.
-3. Dispatch (the Discord bridge / dispatch worker) → flag, observe per-thread agent spawns.
-4. Flip the default in code only after all three burn-ins are clean for ≥1 week.
+1. Start each driver with `start_session(force_new=true)` (`onboard` is the
+   canonical tool underneath). Save the returned `uuid` and `client_session_id`.
+2. For later check-ins and writes in the same running process, pass
+   `client_session_id`. Adapters should do this automatically.
+3. To continue prior work in a fresh process, mint fresh and declare the cause:
+   `start_session(force_new=true, parent_agent_id=<prior_uuid>, spawn_reason="new_session")`.
+   Use this only for a real handoff from a finished predecessor.
+4. Short dispatched subagents usually should not onboard. If one needs its own
+   identity, use `spawn_reason="subagent"`, set `parent_agent_id=<driver_uuid>`,
+   and land at least one real `sync_state()` before exit.
+5. Persistent/substrate agents use their dedicated substrate identity pattern.
+   Ordinary sessions should not copy that pattern.
 
-When investigating a typed-refusal, the response carries `tool`, `hint`, `ontology_ref`, and `rollout_flag` so the cause is structurally identifiable.
+Do not do these in normal agent code:
 
-## Minimal Agent Workflow
+- Bare `onboard()` or `identity()` as a way to guess identity.
+- Passing `continuity_token` on every call.
+- Treating a display name as identity.
+- Declaring `parent_agent_id` just because another session shares the workspace.
+- Writing KG notes before searching for an existing entry.
 
-Per identity.md v2 ontology, fresh process-instances mint fresh identity. Lineage is causal — declared only for a genuine spawn or handoff event, never to claim continuity with a co-located predecessor.
+Minimal glossary:
 
-Default happy path:
+- `uuid`: the server record for this process identity.
+- `client_session_id`: the proof string for this running process. Use it on
+  writes; do not treat it as cross-process selfhood.
+- `parent_agent_id`: a causal pointer to the process whose work this process is
+  inheriting.
+- `lineage`: "this process inherited work from that one," not "this process is
+  that one."
+- `continuity_token`: advanced same-live-process rebind proof. Not part of the
+  normal workflow.
 
-1. `onboard(force_new=true)` with NO `parent_agent_id` → save `agent_uuid` and `client_session_id` from response. A fresh session onboards fresh; co-location in this workspace is not lineage.
-2. `process_agent_update(response_text=..., complexity=..., client_session_id=...)` for in-process check-ins. **Check in per working turn, not once.** Governance is a trajectory, not a point: the first check-in returns `margin: "settling"` (warmup — fewer than 3 check-ins, so the server cannot judge headroom yet), and calibration (`auto_ground_truth`) only means something once it has the volume of repeated (prediction, outcome) pairs a cadence produces. A per-turn cadence is **not performative** — its value is longitudinal and invisible at the single-call altitude, so judging it by one turn's payload is an altitude error. Keep each check-in substantive (a real `confidence`, what changed, what you are now uncertain about) rather than rote; rote logging and no logging both starve the baseline.
-3. On a future process-instance, repeat step 1 — onboard fresh, do not auto-resume and do not declare the prior session as a parent.
+Friendly workflow aliases: `start_session` -> `onboard`, `sync_state` ->
+`process_agent_update`, `check_working_state` -> `get_governance_metrics`,
+`search_shared_memory` -> `knowledge(action="search")`, `record_result` ->
+`outcome_event`, and `request_review` -> `dialectic(action="request")`.
 
-Declare lineage (`parent_agent_id`) ONLY for a real causal event:
-
-- **Dispatched subagents** — `parent_agent_id=<dispatcher UUID>, spawn_reason="subagent"`. Usually set automatically by the dispatcher.
-- **A deliberate handoff from an EXITED prior session** — `spawn_reason="explicit"`. The successor inherits a predecessor that has finished, not a sibling still running.
-
-Declaring a currently-LIVE agent as `parent_agent_id` is rejected server-side (`lineage_coincidental_rejected`): a live agent is a concurrent sibling, not a predecessor. `subagent` and `compaction` are exempt — their parent is legitimately live. A genuine serial handoff to an exited predecessor is accepted and stays provisional until R1 confirms it.
-
-Friendly workflow aliases: the same happy path can be spelled with task-verb names — `start_session` → `onboard`, `sync_state` → `process_agent_update`, `check_working_state` → `get_governance_metrics`, `search_shared_memory` → `knowledge(action="search")`, `record_result` → `outcome_event`, `request_review` → `dialectic(action="request")`. Same parameters, same identity rules (the registry canonicalizes before the #425 gates judge). Calls made via these names return the normalized agent-experience envelope — `next_action` / `state_summary` / `risk_summary` / `memory_suggestions` / `recovery_hint` first, full canonical payload under `raw_governance` — while canonical names keep the raw response shape byte-identical.
-
-Shared-memory (KG) write discipline: `search` before you `store`. If a related entry exists, prefer a linked correction or `supersede` over a fresh note — the densest topics already carry several near-duplicate opens, and the store response's `consolidation_hint` flags this only *after* you have written. Store when a future agent would search for this and not already find it: a correction to a prior conclusion, a non-obvious failure mode plus its fingerprint, a closed mystery — not operational runbooks or step-lists (those live in `docs/`). Write caller-proven (echo your onboarded `client_session_id`) so the entry is not silently refused under strict identity.
-
-For an explicit handoff (rare — only when a prior session has EXITED):
-
-- **Plugin-loaded sessions** are the canonical path. The `unitares-governance-plugin` SessionStart banner surfaces the cached workspace UUID; Codex sessions get the same hint via `commands/governance-start.md` (S11-a). Treat that UUID as a handoff candidate only if that session has finished — if it is still running, it is a sibling and the server will reject it (`lineage_coincidental_rejected`). The default fresh onboard needs none of this.
-- **Server-only sessions** (working directly inside this repo without the plugin's hook chain) have no pre-onboard discovery surface. Onboarding without `parent_agent_id` mints honestly as `lineage_state: no_lineage_declared` — this is the expected default, not a degraded state. The onboard response returns `thread_context.predecessor.uuid` when a session-resolved predecessor exists; that is context, not a lineage instruction — do not declare it as a parent unless it represents a real handoff from an exited session.
-
-Identity rules:
-
-- A fresh process-instance is a fresh agent. Process-instance boundaries are honored.
-- `client_session_id` maintains identity within one process; weak across processes.
-- `continuity_token` is being narrowed (S1 in `docs/ontology/plan.md`) — present-day external clients can still resume with it, but plugin-internal flows declare lineage instead.
-- Substrate-anchored agents (Lumen, the long-lived residents) earn cross-process continuity via the substrate-earned identity pattern in `docs/ontology/identity.md` — they may use a hardcoded UUID across restarts.
-- Arg-less `onboard()` with no proof signal triggers the v2 fresh-instance gate — the server flips `force_new=true` and emits a `[FRESH_INSTANCE]` log line (S13).
-- Lineage is causal and declared at onboard time. The default fresh session declares no parent. Declare `parent_agent_id` only for a real spawn (`spawn_reason="subagent"`) or a handoff from an exited session (`spawn_reason="explicit"`); declaring a live agent as parent is rejected (`lineage_coincidental_rejected`).
+Shared-memory (KG) write discipline: search before writing. If a related entry
+exists, prefer a linked correction or `supersede` over a fresh note. Store when
+a future agent would search for this and not already find it: a correction to a
+prior conclusion, a non-obvious failure mode plus its fingerprint, or a closed
+mystery. Operational runbooks and step lists belong in `docs/`, not KG notes.
 
 <!-- END SHARED CONTRACT -->

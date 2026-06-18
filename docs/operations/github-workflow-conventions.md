@@ -58,6 +58,10 @@ Every session lands its work as a **draft PR**, regardless of agent and
 regardless of whether the change is runtime code or docs/tests. The operator
 is the merge gate.
 
+- If the operator asks an agent to ship, finish, deliver, open a PR, or
+  otherwise complete a delivery workflow, the agent may assume branch -> commit
+  -> push -> draft PR is authorized. Do not stop for a second confirmation just
+  to push the branch or open the draft PR.
 - **Do not** direct-push to a shared branch.
 - **Do not** enable auto-merge by default.
 - A draft PR means "visible, not claiming merged." Marking ready and merging
@@ -106,6 +110,7 @@ guards keep concurrent sessions from clobbering each other:
 | --- | --- |
 | Ship any change (Codex or Claude CLI) | `./scripts/dev/ship.sh "msg"` — defaults to a draft PR |
 | Ship the whole dirty worktree | `./scripts/dev/ship.sh --stage-all "msg"` |
+| Operator asks to ship/finish/deliver/open PR | Branch, commit, push, and open the draft PR without an extra confirmation |
 | Preview the route first | `./scripts/dev/ship.sh --plan "msg"` |
 | Claude on the web harness | Already parks a draft PR on its `claude/...` branch — nothing extra needed |
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |

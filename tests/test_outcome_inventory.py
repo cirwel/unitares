@@ -98,6 +98,35 @@ def test_build_inventory_groups_by_scope_type_source_and_evidence_flags():
     assert inventory.total_prediction_id_count == 2
 
 
+def test_build_inventory_splits_beam_harness_from_substrate_lane():
+    rows = [
+        OutcomeInventoryRow(
+            outcome_type="task_completed",
+            is_bad=False,
+            verification_source="external_signal",
+            detail={"hard_exogenous": True, "eprocess_eligible": True, "harness": "beam"},
+            prior_state_by_lead={0.0: False},
+        ),
+        OutcomeInventoryRow(
+            outcome_type="task_completed",
+            is_bad=False,
+            verification_source="external_signal",
+            detail={"hard_exogenous": True, "eprocess_eligible": True},
+            prior_state_by_lead={0.0: True},
+        ),
+    ]
+
+    inventory = build_inventory(rows, lead_minutes=(0.0,))
+    by_lane = {bucket.harness_lane: bucket for bucket in inventory.buckets}
+
+    assert set(by_lane) == {"beam", "substrate"}
+    assert by_lane["beam"].n_total == 1
+    assert by_lane["beam"].prior_state_counts == {0.0: 0}
+    assert by_lane["substrate"].n_total == 1
+    assert by_lane["substrate"].prior_state_counts == {0.0: 1}
+    assert inventory.eprocess_eligible_by_harness_lane == {"beam": 1, "substrate": 1}
+
+
 def test_format_inventory_report_exposes_zero_bad_strict_and_prior_coverage():
     rows = [
         OutcomeInventoryRow(

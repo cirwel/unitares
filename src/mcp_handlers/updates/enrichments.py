@@ -30,6 +30,24 @@ logger = get_logger(__name__)
 # so this floor sits well under the raw similarity gate.
 _RELATED_DISCOVERY_RELEVANCE_FLOOR = 0.1
 
+# ─── Proactive KG surfacing (adoption v0) ───────────────────────────────
+# The reactive gate (_should_search_kg_by_checkin_text) only surfaces prior
+# work when an agent is already in trouble or already asking. Proactive
+# surfacing also offers strong, relevant prior discoveries during *healthy,
+# steady-state* work — the moment a "someone already solved this" note prevents
+# wasted effort. It is OFF by default and bounded on three axes so it cannot
+# regress the steady-state latency budget (KG calls amplify ~60x in-handler,
+# see CLAUDE.md "Substrate Tax"):
+#   1. Cadence — only every UNITARES_KG_PROACTIVE_EVERY-th check-in fires a
+#      search (0 = disabled, the default), so cost is amortized to 1/N.
+#   2. Relevance — a higher floor than the reactive path: a proactive nudge
+#      must be a strong match, not a marginal one.
+#   3. Novelty — session-scoped dedup (Redis) so a given discovery is surfaced
+#      at most once per session; what reaches the agent is always new to it.
+_KG_PROACTIVE_FLOOR = 0.35
+# Session-scope TTL for the per-agent set of already-surfaced discovery_ids.
+_KG_SURFACED_TTL_SECONDS = 86400
+
 # ─── Identity Reminder ─────────────────────────────────────────────────
 
 @enrichment(order=10)
@@ -1307,11 +1325,33 @@ async def enrich_mirror_signals(ctx: UpdateContext) -> None:
         if reflection:
             ctx.response_data["_mirror_reflection"] = reflection
 
-        # 3. KG search is useful when there is a concrete signal/reflection, not on steady-state check-ins
+        # 3. Reactive KG search — useful when there is a concrete signal /
+        #    reflection / edge, not on steady-state check-ins.
         if _should_search_kg_by_checkin_text(ctx, signals, reflection):
             kg_results = await _search_kg_by_checkin_text(ctx)
             if kg_results:
                 ctx.response_data["_mirror_kg_results"] = kg_results
+        # 3b. Proactive KG surfacing — on a throttled cadence, even in healthy
+        #     steady state, offer strong & session-novel prior work. OFF by
+        #     default (UNITARES_KG_PROACTIVE_EVERY=0). Emits an attribution
+        #     record so adoption can measure surfaced-vs-acted-on.
+        elif _proactive_kg_due(ctx):
+            proactive = await _search_kg_by_checkin_text(ctx, floor=_KG_PROACTIVE_FLOOR)
+            proactive = await _dedupe_surfaced_kg(ctx, proactive)
+            if proactive:
+                ctx.response_data["_mirror_kg_results"] = proactive
+                signal_records.append({
+                    "signal_type": "kg_proactive_surface",
+                    "metric": "kg_relevance",
+                    "value": max(
+                        (r.get("relevance", 0) or 0) for r in proactive
+                    ),
+                    "threshold": _KG_PROACTIVE_FLOOR,
+                    "fired": True,
+                    "discovery_ids": [
+                        r.get("discovery_id") for r in proactive if r.get("discovery_id")
+                    ],
+                })
 
         # Complexity-divergence trigger record — same gate the surfaced line
         # uses (_get_complexity_disagreement honors the >3-update baseline and
@@ -1432,8 +1472,15 @@ def _detect_gaming(ctx: UpdateContext, records: list | None = None) -> list:
     return signals
 
 
-async def _search_kg_by_checkin_text(ctx: UpdateContext) -> list:
-    """Search knowledge graph using checkin response_text for relevant discoveries."""
+async def _search_kg_by_checkin_text(
+    ctx: UpdateContext, floor: float = _RELATED_DISCOVERY_RELEVANCE_FLOOR
+) -> list:
+    """Search knowledge graph using checkin response_text for relevant discoveries.
+
+    ``floor`` is the minimum blended relevance an entry must clear to be
+    surfaced. The reactive path uses the permissive default; the proactive path
+    passes a higher floor so an unsolicited nudge is only ever a strong match.
+    """
     try:
         response_text = ctx.response_text
         if not response_text or len(response_text) < 10:
@@ -1466,6 +1513,7 @@ async def _search_kg_by_checkin_text(ctx: UpdateContext) -> list:
             if isinstance(disc, dict):
                 relevance = score or disc.get("relevance", disc.get("score", 0))
                 entry = {
+                    "discovery_id": disc.get("id") or disc.get("discovery_id"),
                     "summary": disc.get("summary", "")[:200],
                     "agent_id": disc.get("agent_id", "unknown"),
                     "relevance": relevance,
@@ -1473,6 +1521,7 @@ async def _search_kg_by_checkin_text(ctx: UpdateContext) -> list:
             else:
                 relevance = score or getattr(disc, 'relevance', 0)
                 entry = {
+                    "discovery_id": getattr(disc, 'id', None),
                     "summary": getattr(disc, 'summary', "")[:200],
                     "agent_id": getattr(disc, 'agent_id', "unknown"),
                     "relevance": relevance,
@@ -1483,7 +1532,7 @@ async def _search_kg_by_checkin_text(ctx: UpdateContext) -> list:
             # collapse to ~0.05 — surfacing it as "build on these" is noise, not
             # signal (dogfood 2026-06-13).
             try:
-                if float(relevance) < _RELATED_DISCOVERY_RELEVANCE_FLOOR:
+                if float(relevance) < floor:
                     continue
             except (TypeError, ValueError):
                 continue
@@ -1492,6 +1541,79 @@ async def _search_kg_by_checkin_text(ctx: UpdateContext) -> list:
     except Exception as e:
         logger.debug(f"KG text search failed: {e}")
         return []
+
+
+def _proactive_kg_due(ctx: UpdateContext) -> bool:
+    """Gate the proactive (steady-state) KG surface — cadence + warmup + length.
+
+    OFF unless ``UNITARES_KG_PROACTIVE_EVERY`` is a positive integer N, in which
+    case it fires on every Nth check-in past warmup. This is the cost throttle:
+    a healthy steady-state check-in normally does no KG search, so we amortize
+    the search latency to 1/N of check-ins rather than opening the gate fully.
+    """
+    try:
+        every = int(os.getenv("UNITARES_KG_PROACTIVE_EVERY", "0") or "0")
+        if every <= 0:
+            return False
+        response_text = ctx.response_text or ""
+        # Need enough substance for a meaningful semantic query — proactive
+        # surfacing on a terse "done" is noise.
+        if len(response_text) < 20:
+            return False
+        total = getattr(ctx.meta, "total_updates", 0) if ctx.meta else 0
+        if total <= 3:  # settling — no proactive nudges during warmup
+            return False
+        return total % every == 0
+    except Exception:
+        return False
+
+
+async def _dedupe_surfaced_kg(ctx: UpdateContext, results: list) -> list:
+    """Drop discoveries already surfaced to this agent this session (novelty gate).
+
+    Backed by a per-agent Redis set with a session-scope TTL so a given prior
+    discovery is offered at most once — what reaches the agent is always new to
+    it, not the same strong match re-surfaced every cadence tick. Fail-open: if
+    Redis is unavailable or an entry carries no discovery_id, the entry is kept
+    (better to occasionally repeat than to silently swallow a relevant nudge).
+    """
+    if not results:
+        return results
+    try:
+        from src.cache.redis_client import get_redis
+
+        redis = await get_redis()
+        if not redis:
+            return results
+
+        key = f"kg_surfaced:{ctx.agent_uuid}"
+        fresh: list = []
+        for entry in results:
+            did = entry.get("discovery_id")
+            if not did:
+                fresh.append(entry)  # cannot dedup → surface
+                continue
+            try:
+                added = await asyncio.wait_for(
+                    redis.sadd(key, did), timeout=_REDIS_NOTIF_TIMEOUT
+                )
+            except (asyncio.TimeoutError, Exception):
+                fresh.append(entry)  # fail-open on this entry
+                continue
+            if added:  # sadd returns 1 when newly added → unseen this session
+                fresh.append(entry)
+        if fresh:
+            try:
+                await asyncio.wait_for(
+                    redis.expire(key, _KG_SURFACED_TTL_SECONDS),
+                    timeout=_REDIS_NOTIF_TIMEOUT,
+                )
+            except (asyncio.TimeoutError, Exception):
+                pass
+        return fresh
+    except Exception as e:
+        logger.debug(f"KG surface dedup failed (fail-open): {e}")
+        return results
 
 
 def _has_tight_margin(response_data: dict) -> bool:

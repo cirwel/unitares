@@ -7,6 +7,7 @@ preventing selection bias.
 
 import pytest
 import sys
+import importlib.util
 from pathlib import Path
 
 # Add project root to path
@@ -27,6 +28,15 @@ from src.eisv_validator import (
     validate_csv_row,
     IncompleteEISVError
 )
+
+
+def _load_check_script():
+    script = project_root / "scripts" / "diagnostics" / "check_eisv_completeness.py"
+    spec = importlib.util.spec_from_file_location("check_eisv_completeness", script)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 class TestEISVMetrics:
@@ -242,6 +252,36 @@ class TestIntegration:
         percent = trajectory.percent_changes()
         assert 'V' in percent
         assert len(percent) == 4  # E, I, S, V
+
+
+class TestCompletenessScript:
+    """Regression tests for the repository scan filter."""
+
+    def test_should_check_file_skips_generated_and_worktree_paths(self):
+        script = _load_check_script()
+        assert script.should_check_file(Path("/repo/src/state.py")) is True
+        assert script.should_check_file(Path("/repo/.venv/lib/site-packages/pkg.py")) is False
+        assert script.should_check_file(Path("/repo/.claude/worktrees/task/docs/note.md")) is False
+        assert script.should_check_file(Path("/repo/htmlcov/index.json")) is False
+
+    def test_complete_same_line_eisv_does_not_flag(self, tmp_path):
+        script = _load_check_script()
+        path = tmp_path / "state.py"
+        path.write_text(
+            'example = {"E": 0.1, "I": 0.2, "S": 0.3, "V": 0.0}\n'
+            'message = "E=0.1, I=0.2, S=0.3, V=0.0"\n'
+        )
+        assert script.check_file(path) == []
+
+    def test_incomplete_same_line_eisv_still_flags(self, tmp_path):
+        script = _load_check_script()
+        path = tmp_path / "state.py"
+        path.write_text(
+            'example = {"E": 0.1, "I": 0.2, "S": 0.3}\n'
+            'message = "E=0.1, I=0.2, S=0.3"\n'
+        )
+        issues = script.check_file(path)
+        assert len(issues) == 2
 
 
 if __name__ == '__main__':

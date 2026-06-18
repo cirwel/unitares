@@ -11,6 +11,7 @@ HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8767/health}"
 DB_POSTGRES_URL="${DB_POSTGRES_URL:-postgresql://postgres:postgres@localhost:5432/governance}"
 PID_FILE="data/.mcp_server.pid"
 EXIT_CODE=0
+HTTP_OK=0
 
 postgres_ready() {
     if command -v pg_isready >/dev/null 2>&1; then
@@ -33,6 +34,7 @@ echo "Endpoint: $HEALTH_URL"
 echo ""
 echo "=== HTTP Health ==="
 if RESPONSE="$(curl -fsS --max-time 3 "$HEALTH_URL" 2>/dev/null)"; then
+    HTTP_OK=1
     python3 - "$RESPONSE" <<'PY'
 import json
 import sys
@@ -54,13 +56,19 @@ if [ -f "$PID_FILE" ]; then
     PID="$(cat "$PID_FILE" 2>/dev/null || true)"
     if [ -n "$PID" ] && ps -p "$PID" > /dev/null 2>&1; then
         echo "✓ PID file: active process $PID"
+    elif [ "$HTTP_OK" -eq 1 ]; then
+        echo "⚠ PID file: stale or unreadable ($PID_FILE); HTTP is healthy, so this checkout may not own the service"
     else
         echo "✗ PID file: stale or unreadable ($PID_FILE)"
         EXIT_CODE=1
     fi
 else
-    echo "✗ PID file: missing ($PID_FILE)"
-    EXIT_CODE=1
+    if [ "$HTTP_OK" -eq 1 ]; then
+        echo "⚠ PID file: missing ($PID_FILE); HTTP is healthy, so this checkout may not own the service"
+    else
+        echo "✗ PID file: missing ($PID_FILE)"
+        EXIT_CODE=1
+    fi
 fi
 
 echo ""

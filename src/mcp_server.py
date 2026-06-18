@@ -181,8 +181,10 @@ SERVER_VERSION = _load_version()
 
 from src.mcp_listen_config import (
     build_transport_security_settings,
+    check_mcp_bearer,
     cors_extra_origins,
     default_listen_host,
+    mcp_bearer_tokens,
 )
 
 # --- OAuth 2.1 configuration (optional, enabled by env var) ---
@@ -823,7 +825,19 @@ async def main():
         # is unused (all clients use /mcp), but sse_app() is needed because bare
         # Starlette(routes=[]) breaks POST body reading for REST routes.
         app = mcp.sse_app()
-        
+
+        # SECURITY: sse_app() wires /sse + /messages/ to the SAME _mcp_server tool
+        # registry, and with OAuth disabled (the default) it does so WITHOUT auth.
+        # That would bypass the /mcp bearer gate below by reaching the same tools
+        # over a different transport. The SSE transport is unused anyway, so drop
+        # those two routes — keep the rest of the sse_app() base (the body-reading
+        # setup the REST routes depend on). Closes the gate-bypass surface.
+        _sse_path = mcp.settings.sse_path
+        _msg_path = mcp.settings.message_path.rstrip("/")
+        _pruned = [r for r in app.routes if getattr(r, "path", None) in (_sse_path, _msg_path)]
+        app.routes[:] = [r for r in app.routes if getattr(r, "path", None) not in (_sse_path, _msg_path)]
+        logger.info(f"Pruned {len(_pruned)} unused/ungated SSE route(s): {_sse_path}, {_msg_path}")
+
         # === Add CORS support for web-based GPT/Gemini clients ===
         # CORS: restrict to known origins (dashboard, local dev, Tailscale)
         _cors_allow_origin = os.getenv("UNITARES_HTTP_CORS_ALLOW_ORIGIN")
@@ -925,6 +939,26 @@ async def main():
                 """ASGI app for Streamable HTTP MCP at /mcp."""
                 if scope.get("type") != "http":
                     return
+
+                # Bearer gate (default-OFF; see src/mcp_listen_config). When
+                # UNITARES_MCP_BEARER_TOKENS is set, every /mcp request must
+                # present a matching `Authorization: Bearer <tok>`. No trusted-
+                # network bypass — a hosted endpoint authenticates every call.
+                # When unset, this is a no-op and localhost dev is unchanged.
+                # Fetch the allowlist once and pass it through, so "is the gate
+                # on" and "is this token valid" read the same snapshot.
+                _bearer_allow = mcp_bearer_tokens()
+                if _bearer_allow:
+                    from starlette.datastructures import Headers as _BearerHeaders
+                    _auth = _BearerHeaders(scope=scope).get("authorization")
+                    if not check_mcp_bearer(_auth, _bearer_allow):
+                        await JSONResponse(
+                            {"error": "unauthorized",
+                             "detail": "valid bearer token required for /mcp"},
+                            status_code=401,
+                            headers={"WWW-Authenticate": "Bearer"},
+                        )(scope, receive, send)
+                        return
 
                 # BUILD SESSION SIGNALS — single capture of all transport headers
                 # No priority decisions here; derive_session_key() handles that.

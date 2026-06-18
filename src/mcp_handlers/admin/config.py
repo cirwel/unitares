@@ -13,7 +13,7 @@ logger = get_logger(__name__)
 
 # Import from mcp_server_std module (using shared utility)
 
-@mcp_tool("get_thresholds", timeout=10.0, register=False)
+@mcp_tool("get_thresholds", timeout=10.0)
 async def handle_get_thresholds(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Get current governance threshold configuration"""
     from src.runtime_config import get_thresholds
@@ -28,7 +28,7 @@ async def handle_get_thresholds(arguments: Dict[str, Any]) -> Sequence[TextConte
         arguments=arguments,
     )
 
-@mcp_tool("set_thresholds", timeout=15.0, register=False)
+@mcp_tool("set_thresholds", timeout=15.0)
 async def handle_set_thresholds(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Set runtime threshold overrides - requires elevated permissions"""
     from src.runtime_config import set_thresholds, get_thresholds
@@ -139,4 +139,3 @@ async def handle_set_thresholds(arguments: Dict[str, Any]) -> Sequence[TextConte
         response_data["current_thresholds"] = current_thresholds
     
     return success_response(response_data)
-

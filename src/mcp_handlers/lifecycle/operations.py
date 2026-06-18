@@ -105,7 +105,7 @@ async def handle_resume_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
     }
     return success_response(response_payload)
 
-@mcp_tool("mark_response_complete", timeout=5.0, register=False)
+@mcp_tool("mark_response_complete", timeout=5.0)
 async def handle_mark_response_complete(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Mark agent as having completed response, waiting for input"""
     # SECURITY FIX: Require registered agent (prevents phantom agent_ids)
@@ -546,7 +546,7 @@ async def handle_ping_agent(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         logger.error(f"Error pinging agent: {e}", exc_info=True)
         return [error_response(f"Error pinging agent: {str(e)}")]
 
-@mcp_tool("archive_old_test_agents", timeout=20.0, register=False)
+@mcp_tool("archive_old_test_agents", timeout=20.0)
 async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Archive stale agents - test agents by default, or ALL stale agents with include_all=true
 

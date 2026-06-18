@@ -650,14 +650,14 @@ class KnowledgeGraphAGE:
             if where_clause:
                 cypher = f"""
                     {base_match} AND {where_clause}
-                    RETURN d
+                    RETURN DISTINCT d
                     ORDER BY d.timestamp DESC
                     LIMIT ${{limit}}
                 """
             else:
                 cypher = f"""
                     {base_match}
-                    RETURN d
+                    RETURN DISTINCT d
                     ORDER BY d.timestamp DESC
                     LIMIT ${{limit}}
                 """
@@ -678,6 +678,7 @@ class KnowledgeGraphAGE:
         logger.debug(f"AGE query returned {len(results)} results")
 
         discoveries = []
+        seen_ids = set()
         for result in results:
             # graph_query returns parsed agtype directly, not {"d": node}
             # Handle both dict with "d" key and direct node data
@@ -689,7 +690,8 @@ class KnowledgeGraphAGE:
             else:
                 node_data = self._parse_agtype_node(result)
             discovery = self._node_to_discovery(node_data)
-            if discovery:
+            if discovery and discovery.id not in seen_ids:
+                seen_ids.add(discovery.id)
                 discoveries.append(discovery)
 
         return discoveries

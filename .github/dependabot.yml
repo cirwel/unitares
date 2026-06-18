@@ -39,6 +39,21 @@ updates:
     labels:
       - "dependencies"
 
+  - package-ecosystem: "docker"
+    # Root compose/Dockerfile + the AGE+pgvector image. Pinned base tags here
+    # (apache/age, pgvector) get bump PRs instead of silently floating; the
+    # Docker Quickstart workflow validates each bump end to end before merge.
+    directories:
+      - "/"
+      - "/db/postgres"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+    labels:
+      - "dependencies"
+      - "docker"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

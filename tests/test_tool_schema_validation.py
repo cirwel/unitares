@@ -299,6 +299,23 @@ class TestCrossRegistryValidation:
             f"Only {coverage:.0%} of schema tools have handlers or are aliases"
         )
 
+    def test_all_schema_tools_are_callable_directly_or_by_alias(self):
+        """Anything advertised by get_tool_definitions must be callable."""
+        tools = get_tool_definitions()
+        registry = set(get_tool_registry())
+        aliases = list_all_aliases()
+
+        missing = []
+        for tool in tools:
+            alias = aliases.get(tool.name)
+            if tool.name not in registry and not (alias and alias.new_name in registry):
+                missing.append(tool.name)
+
+        assert not missing, (
+            "Advertised schema tools without registered handler or alias target: "
+            f"{missing}"
+        )
+
     def test_schema_tool_names_reasonable_length(self):
         """Tool names should not be excessively short or long (basic typo guard)."""
         tools = get_tool_definitions()

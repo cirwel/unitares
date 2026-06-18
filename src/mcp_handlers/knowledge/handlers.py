@@ -305,12 +305,13 @@ async def _broadcast_knowledge_read(
 
 def _resolve_reader_agent_id(arguments: Dict[str, Any]) -> Optional[str]:
     """Best-effort reader-identity extraction for read-side audit events."""
-    from ..context import get_context_agent_id
-    return (
-        arguments.get("_agent_uuid")
-        or get_context_agent_id()
-        or arguments.get("agent_id")
-    )
+    from ..context import get_context_agent_id, get_session_proof_origin
+    explicit_reader = arguments.get("_agent_uuid") or arguments.get("agent_id")
+    if explicit_reader:
+        return explicit_reader
+    if get_session_proof_origin() == "server_inferred":
+        return None
+    return get_context_agent_id()
 
 
 def _compute_staleness_warning(discovery, current_server_version: str) -> Optional[str]:
@@ -861,7 +862,14 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
             details=raw_details,
             tags=normalize_tags(arguments.get("tags", [])),
             severity=severity,
-            status=arguments.get("status", "open"),
+            # Default status-less writes to "open" at the source. The unified
+            # knowledge(action="store") path arrives via params_step.model_dump(),
+            # which injects status=None into arguments — so .get("status", "open")
+            # would yield None, not the default. `or "open"` also folds an explicit
+            # null/empty back to "open" so the in-memory node, the response, and the
+            # broadcast all agree with the storage-layer `or "open"` coercion instead
+            # of surfacing a null the DB silently rewrites.
+            status=arguments.get("status") or "open",
             response_to=response_to,
             references_files=arguments.get("related_files", []),
             provenance=provenance,

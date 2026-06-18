@@ -31,7 +31,10 @@ services:
       # is already taken on your machine (e.g., by a Homebrew Postgres).
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
-      - postgres-age-data:/var/lib/postgresql/data
+      # PG18+ official images store data in a major-version subdir and require
+      # the persistent mount at /var/lib/postgresql (not .../data, which the
+      # entrypoint rejects). See docker-library/postgres#1259.
+      - postgres-age-data:/var/lib/postgresql
       # Schema bootstrap: the official Postgres entrypoint runs this script
       # once for an empty data volume. The script owns ordering across base
       # schema files, migrations, partition setup, and AGE graph setup.
