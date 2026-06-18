@@ -29,6 +29,7 @@ DEFAULT_DB_URL = os.environ.get(
 )
 
 STRICT_OUTCOMES = frozenset({"test_passed", "test_failed", "tool_rejected"})
+STRICT_BAD_MIN_FOR_VALIDATION = 10
 TASK_OUTCOMES = frozenset(
     {
         "test_passed",
@@ -333,6 +334,8 @@ def format_inventory_report(
         f"total_bad_rate: {_format_rate(inventory.total_bad_rate)}",
         f"strict_outcomes: {inventory.strict_outcomes}",
         f"strict_bad: {inventory.strict_bad}",
+        f"strict_bad_min_for_validation: {STRICT_BAD_MIN_FOR_VALIDATION}",
+        f"strict_bad_gap_to_min: {max(0, STRICT_BAD_MIN_FOR_VALIDATION - inventory.strict_bad)}",
         f"hard_exogenous: {inventory.hard_exogenous_count}",
         f"eprocess_eligible: {inventory.eprocess_eligible_count}",
         *[

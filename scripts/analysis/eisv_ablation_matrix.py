@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import random
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -33,6 +34,8 @@ from scripts.analysis.eisv_skeptic_report import (
     TASK_OUTCOMES,
     ModelScore,
     OutcomeRow,
+    auc_score,
+    brier_score,
     build_model_scores,
     fetch_rows,
     score_deltas_vs_baseline,
@@ -41,6 +44,16 @@ from scripts.analysis.eisv_skeptic_report import (
 from scripts.analysis.outcome_inventory import harness_lane_from_detail
 
 DEFAULT_EXCLUDED_HARNESS_LANES = ("beam",)
+
+
+@dataclass(frozen=True)
+class DeltaUncertainty:
+    """Bootstrap/permutation uncertainty for one paired candidate delta."""
+
+    paired_n: int
+    auc_delta_ci: tuple[float, float] | None
+    brier_improvement_ci: tuple[float, float] | None
+    brier_permutation_p: float | None
 
 
 @dataclass(frozen=True)
@@ -59,6 +72,9 @@ class AblationMatrixRow:
     best_brier_improvement: float | None
     beats_both: bool
     conclusion: str
+    best_auc_delta_ci: tuple[float, float] | None = None
+    best_brier_improvement_ci: tuple[float, float] | None = None
+    best_brier_permutation_p: float | None = None
 
 
 def _fmt_float(value: float | None, digits: int = 3) -> str:
@@ -71,8 +87,131 @@ def _fmt_lead(value: float) -> str:
     return f"{value:g}"
 
 
+def _fmt_ci(value: tuple[float, float] | None, digits: int) -> str:
+    if value is None:
+        return "-"
+    low, high = value
+    return f"[{low:.{digits}f}, {high:.{digits}f}]"
+
+
 def _baseline(scores: Sequence[ModelScore]) -> ModelScore | None:
     return next((score for score in scores if score.name == "previous_outcome_bad"), None)
+
+
+def _paired_vectors(
+    baseline: ModelScore,
+    candidate: ModelScore,
+) -> tuple[list[int], list[float], list[float], list[float], list[float]]:
+    """Return paired y/candidate/baseline vectors over candidate-covered rows."""
+
+    baseline_by_key = {key: idx for idx, key in enumerate(baseline.scored_row_keys)}
+    y_true: list[int] = []
+    candidate_prob: list[float] = []
+    candidate_auc_score: list[float] = []
+    baseline_prob: list[float] = []
+    baseline_auc_score: list[float] = []
+    for candidate_idx, key in enumerate(candidate.scored_row_keys):
+        baseline_idx = baseline_by_key.get(key)
+        if baseline_idx is None:
+            continue
+        if baseline.y_true[baseline_idx] != candidate.y_true[candidate_idx]:
+            continue
+        y_true.append(candidate.y_true[candidate_idx])
+        candidate_prob.append(candidate.y_prob[candidate_idx])
+        candidate_auc_score.append(candidate.y_auc_score[candidate_idx])
+        baseline_prob.append(baseline.y_prob[baseline_idx])
+        baseline_auc_score.append(baseline.y_auc_score[baseline_idx])
+    return y_true, candidate_prob, candidate_auc_score, baseline_prob, baseline_auc_score
+
+
+def _percentile(values: Sequence[float], fraction: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    pos = (len(ordered) - 1) * fraction
+    lower = int(pos)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = pos - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def estimate_delta_uncertainty(
+    baseline: ModelScore,
+    candidate: ModelScore,
+    *,
+    resamples: int = 200,
+    seed: int = 0,
+    confidence: float = 0.95,
+) -> DeltaUncertainty | None:
+    """Estimate paired delta uncertainty with bootstrap CIs and permutation p.
+
+    The bootstrap resamples paired rows with replacement and reports confidence
+    intervals for AUC delta and Brier improvement. The permutation p-value is a
+    paired sign-flip test over per-row Brier improvements.
+    """
+
+    y_true, candidate_prob, candidate_auc, baseline_prob, baseline_auc = _paired_vectors(
+        baseline,
+        candidate,
+    )
+    n = len(y_true)
+    if n == 0 or resamples <= 0:
+        return None
+
+    rng = random.Random(seed)
+    auc_deltas: list[float] = []
+    brier_improvements: list[float] = []
+    for _ in range(resamples):
+        sample_indices = [rng.randrange(n) for _ in range(n)]
+        sample_true = [y_true[idx] for idx in sample_indices]
+        sample_candidate_prob = [candidate_prob[idx] for idx in sample_indices]
+        sample_candidate_auc = [candidate_auc[idx] for idx in sample_indices]
+        sample_baseline_prob = [baseline_prob[idx] for idx in sample_indices]
+        sample_baseline_auc = [baseline_auc[idx] for idx in sample_indices]
+        candidate_auc_value = auc_score(sample_true, sample_candidate_auc)
+        baseline_auc_value = auc_score(sample_true, sample_baseline_auc)
+        if candidate_auc_value is not None and baseline_auc_value is not None:
+            auc_deltas.append(candidate_auc_value - baseline_auc_value)
+        candidate_brier = brier_score(sample_true, sample_candidate_prob)
+        baseline_brier = brier_score(sample_true, sample_baseline_prob)
+        if candidate_brier is not None and baseline_brier is not None:
+            brier_improvements.append(baseline_brier - candidate_brier)
+
+    alpha = (1.0 - confidence) / 2.0
+    auc_ci = None
+    if auc_deltas:
+        low = _percentile(auc_deltas, alpha)
+        high = _percentile(auc_deltas, 1.0 - alpha)
+        auc_ci = None if low is None or high is None else (low, high)
+    brier_ci = None
+    if brier_improvements:
+        low = _percentile(brier_improvements, alpha)
+        high = _percentile(brier_improvements, 1.0 - alpha)
+        brier_ci = None if low is None or high is None else (low, high)
+
+    per_row_improvements = [
+        (base - truth) ** 2 - (cand - truth) ** 2
+        for truth, cand, base in zip(y_true, candidate_prob, baseline_prob)
+    ]
+    observed = sum(per_row_improvements) / n
+    extreme = 0
+    for _ in range(resamples):
+        null_mean = sum(
+            value if rng.choice((True, False)) else -value
+            for value in per_row_improvements
+        ) / n
+        if abs(null_mean) >= abs(observed):
+            extreme += 1
+    permutation_p = (extreme + 1) / (resamples + 1)
+
+    return DeltaUncertainty(
+        paired_n=n,
+        auc_delta_ci=auc_ci,
+        brier_improvement_ci=brier_ci,
+        brier_permutation_p=permutation_p,
+    )
 
 
 def filter_rows_for_validation(
@@ -102,6 +241,8 @@ def build_matrix_row(
     lead_minutes: float,
     train_fraction: float = 0.7,
     min_feature_rows: int = 30,
+    uncertainty_resamples: int = 0,
+    uncertainty_seed: int = 0,
 ) -> AblationMatrixRow:
     """Summarize one scope/window/lead ablation slice."""
     scores = build_model_scores(
@@ -120,6 +261,16 @@ def build_matrix_row(
         ),
         default=None,
     )
+    uncertainty = None
+    if best_delta and uncertainty_resamples > 0 and baseline:
+        candidate_score = next((score for score in scores if score.name == best_delta.name), None)
+        if candidate_score:
+            uncertainty = estimate_delta_uncertainty(
+                baseline,
+                candidate_score,
+                resamples=uncertainty_resamples,
+                seed=uncertainty_seed,
+            )
     return AblationMatrixRow(
         scope=scope,
         window_days=window_days,
@@ -135,6 +286,13 @@ def build_matrix_row(
         best_brier_improvement=(best_delta.brier_improvement if best_delta else None),
         beats_both=bool(best_delta and best_delta.beats_baseline),
         conclusion=summarize_conclusion(rows, scores),
+        best_auc_delta_ci=uncertainty.auc_delta_ci if uncertainty else None,
+        best_brier_improvement_ci=(
+            uncertainty.brier_improvement_ci if uncertainty else None
+        ),
+        best_brier_permutation_p=(
+            uncertainty.brier_permutation_p if uncertainty else None
+        ),
     )
 
 
@@ -163,8 +321,8 @@ def format_matrix_report(
     lines.extend([
         "Positive AUC delta means better ranking than `previous_outcome_bad`; positive Brier improvement means lower probability error. `Beats both?` is the conservative quick read.",
         "",
-        "| Scope | Window days | Lead min | Trusted | Bad | Prior state | Prior risk | Baseline AUC | Baseline Brier | Best EISV/prior model | AUC delta | Brier improvement | Beats both? | Conclusion |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---|",
+        "| Scope | Window days | Lead min | Trusted | Bad | Prior state | Prior risk | Baseline AUC | Baseline Brier | Best EISV/prior model | AUC delta | AUC delta 95% CI | Brier improvement | Brier improvement 95% CI | Brier perm p | Beats both? | Conclusion |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---|---|",
     ])
     if rows:
         for row in rows:
@@ -174,11 +332,14 @@ def format_matrix_report(
                 f"| {row.trusted} | {row.bad} | {row.prior_state} | {row.prior_risk} "
                 f"| {_fmt_float(row.baseline_auc, 3)} | {_fmt_float(row.baseline_brier, 4)} "
                 f"| {row.best_candidate or '-'} | {_fmt_float(row.best_auc_delta, 3)} "
+                f"| {_fmt_ci(row.best_auc_delta_ci, 3)} "
                 f"| {_fmt_float(row.best_brier_improvement, 4)} "
+                f"| {_fmt_ci(row.best_brier_improvement_ci, 4)} "
+                f"| {_fmt_float(row.best_brier_permutation_p, 3)} "
                 f"| {'yes' if row.beats_both else 'no'} | {row.conclusion} |"
             )
     else:
-        lines.append("| - | - | - | 0 | 0 | 0 | 0 | - | - | - | - | - | no | no rows |")
+        lines.append("| - | - | - | 0 | 0 | 0 | 0 | - | - | - | - | - | - | - | - | no | no rows |")
     lines.extend(
         [
             "",
@@ -217,6 +378,8 @@ async def build_matrix_from_db(
     train_fraction: float = 0.7,
     min_feature_rows: int = 30,
     exclude_harness_lanes: Sequence[str] = DEFAULT_EXCLUDED_HARNESS_LANES,
+    uncertainty_resamples: int = 0,
+    uncertainty_seed: int = 0,
 ) -> list[AblationMatrixRow]:
     matrix_rows: list[AblationMatrixRow] = []
     for scope in scopes:
@@ -240,6 +403,8 @@ async def build_matrix_from_db(
                         lead_minutes=lead_minutes,
                         train_fraction=train_fraction,
                         min_feature_rows=min_feature_rows,
+                        uncertainty_resamples=uncertainty_resamples,
+                        uncertainty_seed=uncertainty_seed,
                     )
                 )
     return matrix_rows
@@ -253,6 +418,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--leads", type=_parse_float_list, default="0,5,30")
     parser.add_argument("--train-fraction", type=float, default=0.7)
     parser.add_argument("--min-feature-rows", type=int, default=30)
+    parser.add_argument(
+        "--uncertainty-resamples",
+        type=int,
+        default=0,
+        help="Bootstrap/permutation resamples for best-candidate delta uncertainty; 0 disables.",
+    )
+    parser.add_argument(
+        "--uncertainty-seed",
+        type=int,
+        default=0,
+        help="Deterministic seed for bootstrap/permutation uncertainty estimates.",
+    )
     parser.add_argument(
         "--exclude-harness-lanes",
         type=_parse_string_list,
@@ -275,6 +452,8 @@ async def main_async(args: argparse.Namespace) -> int:
         train_fraction=args.train_fraction,
         min_feature_rows=args.min_feature_rows,
         exclude_harness_lanes=args.exclude_harness_lanes,
+        uncertainty_resamples=args.uncertainty_resamples,
+        uncertainty_seed=args.uncertainty_seed,
     )
     report = format_matrix_report(rows, excluded_harness_lanes=args.exclude_harness_lanes)
     if args.output:
