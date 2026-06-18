@@ -103,6 +103,20 @@ defmodule AgentOrchestrator.AgentRunner do
   _}}`) — a blank anchor would silently degrade back to fresh-mint-per-turn, the
   exact failure this provisioning exists to prevent.
 
+  ### Fail-closed marker (`UNITARES_ORCHESTRATED`)
+
+  The anchor is provisioned WITH a companion `UNITARES_ORCHESTRATED=1` marker.
+  The same onboard hook serves *normal interactive* sessions, so it must not
+  treat a bare `UNITARES_CLIENT_SESSION_ID` as sufficient to resume — a stray
+  global export of that var leaking into an interactive session would otherwise
+  flip it into resume mode, and two sessions sharing the leaked value would
+  resume onto ONE governance UUID (the ghost-siphon the v2 identity ontology
+  removed name-claim to prevent). So the hook fail-closes: it resumes only when
+  the marker explicitly declares an orchestrated headless turn-child. The
+  orchestrator KNOWS its children are exactly that, so it sets the marker; an
+  interactive session never carries it and therefore can never resume-share. The
+  two vars are one unit — set together or not at all.
+
   ## Presence
 
   By default an agent registers an `agent:/<id>` PRESENCE row on the lease plane
@@ -132,6 +146,12 @@ defmodule AgentOrchestrator.AgentRunner do
   # declarations — see "Lineage provisioning" in the moduledoc).
   @server_url_var "UNITARES_SERVER_URL"
   @client_session_id_var "UNITARES_CLIENT_SESSION_ID"
+  # Fail-closed companion to the session anchor: the child's onboard hook resumes
+  # under the anchor ONLY when this orchestration marker is present, so a stray
+  # UNITARES_CLIENT_SESSION_ID leaked into a normal interactive session (which the
+  # same hook serves) cannot trigger resume-sharing — it mints. See the
+  # session-anchor moduledoc section and onboard_helper.run_onboard's `orchestrated`.
+  @orchestrated_var "UNITARES_ORCHESTRATED"
   @lineage_parent_var "UNITARES_PARENT_AGENT_ID"
   @lineage_reason_var "UNITARES_SPAWN_REASON"
   @default_spawn_reason "subagent"
@@ -605,7 +625,16 @@ defmodule AgentOrchestrator.AgentRunner do
       end
 
     server = if server_url, do: [{@server_url_var, server_url}], else: []
-    session = if client_session_id, do: [{@client_session_id_var, client_session_id}], else: []
+
+    # The anchor travels WITH the orchestration marker: the child's hook
+    # fail-closes on the marker, so provisioning the anchor without it would
+    # make a genuine orchestrated child fail to resume (anchor ignored). They
+    # are one unit — set both, or neither.
+    session =
+      if client_session_id,
+        do: [{@client_session_id_var, client_session_id}, {@orchestrated_var, "1"}],
+        else: []
+
     lineage ++ server ++ session
   end
 
