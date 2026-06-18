@@ -565,6 +565,38 @@ class TestFormatMirror:
         assert "Needs attention" in result["verdict"]["meaning"]
         assert "next_action" in result["verdict"]
 
+    def test_pause_verdict_never_reads_steady_state(self):
+        """A PAUSE verdict must surface an actionable signal, not the
+        "steady state" fallback. Regression for dogfood 2026-06-18: a pause
+        at risk 0.72 / margin=critical returned mirror=["No actionable
+        signals — steady state"] while the same payload carried
+        margin/nearest_edge/reflection — the lens hid the very state it
+        exists to reflect."""
+        data = _sample_response()
+        data["_mirror_signals"] = []
+        data["relevant_discoveries"] = []  # isolate: no other signal source
+        data["decision"]["action"] = "pause"
+        data["decision"]["margin"] = "critical"
+        data["decision"]["nearest_edge"] = "risk"
+        data["metrics"]["risk_score"] = 0.72
+        result = _format_mirror(data, saved_trust_tier=None)
+        assert not any("steady state" in s.lower() for s in result["mirror"]), \
+            "PAUSE verdict must not collapse to the steady-state fallback"
+        signal = next(s for s in result["mirror"] if "PAUSE" in s)
+        assert "72%" in signal
+        assert "critical" in signal
+        assert "risk" in signal
+
+    def test_steady_verdict_keeps_steady_state_fallback(self):
+        """A healthy verdict with no other signals still gets the
+        steady-state line — the fix must not make every check-in noisy."""
+        data = _sample_response()
+        data["_mirror_signals"] = []
+        data["relevant_discoveries"] = []
+        data["decision"]["action"] = "proceed"
+        result = _format_mirror(data, saved_trust_tier=None)
+        assert result["mirror"] == ["No actionable signals — steady state"]
+
     def test_calibration_insight_inverted(self):
         data = _sample_response()
         data["learning_context"] = {
