@@ -4209,6 +4209,36 @@ main {
     }
 }
 
+/* Dense resident/health tables on phones.
+ * .sentinel-row (80px 80px 180px 1fr), .system-health-row (200px 100px 1fr),
+ * and .vigil-row-cycle (72px 72px 70px 70px 1fr) use fixed pixel columns whose
+ * sums (~340px, ~300px, ~284px) exceed a small-phone viewport. Without this,
+ * those rows pushed whole-page horizontal scroll — there is no body-level
+ * overflow-x guard. Rather than hide columns, let each row container scroll
+ * horizontally on its own (the standard responsive-table pattern): all data
+ * stays reachable and the page itself never breaks. min-width keeps the fixed
+ * columns from crushing so the scroll is meaningful. */
+@media (max-width: 600px) {
+    #sentinel-stream,
+    #system-health-grid,
+    #vigil-cycles {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .sentinel-row {
+        min-width: 360px;
+    }
+
+    .system-health-row {
+        min-width: 320px;
+    }
+
+    .vigil-row-cycle {
+        min-width: 300px;
+    }
+}
+
 /* ============================================
    EISV Legend Dot Colors
    ============================================ */

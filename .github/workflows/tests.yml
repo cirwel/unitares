@@ -106,3 +106,24 @@ jobs:
       continue-on-error: true
       run: |
         python scripts/analysis/count_tools.py --json
+
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Install dashboard test deps
+      working-directory: dashboard
+      run: npm ci
+
+    - name: Run dashboard frontend tests
+      working-directory: dashboard
+      run: npm test
