@@ -8,7 +8,7 @@
 
 The dashboard is the operator web UI for Unitares. It serves from the Python governance server and shows fleet health, agent state, EISV history, knowledge graph activity, dialectic sessions, resident status, and resident-specific panels for Watcher, Sentinel, Vigil, and Chronicler.
 
-It is intentionally buildless today: plain HTML, CSS, and JavaScript served from `dashboard/`.
+In production it is still served buildless: plain HTML, CSS, and JavaScript served directly from `dashboard/` by the Python server. A Vite + vitest + ESLint/Prettier toolchain now sits alongside that for local development and CI (see [Tooling and tests](#tooling-and-tests)); switching production serving to the bundled output is a deliberate, still-pending step documented there.
 
 ## Access
 
@@ -130,6 +130,55 @@ Useful checks:
 pytest tests/test_dashboard_static_allowlist.py
 pytest tests/test_dashboard.py
 ```
+
+## Tooling and tests
+
+The dashboard has a Node toolchain for developer experience and CI. It is
+**additive**: production still serves the raw files in `dashboard/`, so none of
+this is required to run the dashboard — it makes the code pleasant to work on and
+guards the render logic.
+
+```bash
+cd dashboard
+npm ci              # install (vite, vitest, eslint, prettier, vendored chart.js)
+
+npm run dev         # Vite dev server with HMR (see migration note below)
+npm run build       # bundle src/main.js → dist/ (vendors Chart.js off the CDN)
+npm test            # vitest: jsdom tests of the agent-list render/partition logic
+npm run lint        # eslint (flat config; errors fail CI, legacy warnings allowed)
+npm run format      # prettier --write on the maintained surface (src/tests/configs)
+npm run format:check
+```
+
+CI runs `lint`, `format:check`, `test`, and `build` in the `dashboard` job
+(`.github/workflows/tests.yml`).
+
+### How the build is wired
+
+`src/main.js` is a single ES-module entry that vendors Chart.js and then
+side-effect-imports the existing browser modules **in the same order
+`index.html` declares them**. The modules are still global-attaching IIFEs; this
+entry is the seam that lets the ESM migration happen incrementally instead of
+big-bang. `npm run build` proves the whole chain bundles (Chart.js + all modules)
+into `dist/assets/main-<hash>.js`.
+
+### Migration note (production serving — not done yet)
+
+Production still serves the raw `index.html` + `<script>` chain via
+`http_dashboard` / `http_dashboard_static` in `src/http_api.py`, gated by the
+static-file allowlist. Switching to the bundled output is intentionally a
+separate step because it is coupled to two decisions:
+
+1. **How the Pi serves the build** — commit `dist/`, build in CI and publish, or
+   build on deploy. (`dist/` is gitignored today.)
+2. **The allowlist** — fingerprinted `dist/assets/*` filenames can't be a fixed
+   allowlist, so `http_dashboard_static` needs a directory-scoped, traversal-safe
+   resolver, and `tests/test_dashboard_static_allowlist.py` updated to match.
+
+Until that lands, `npm run dev` and `npm run build` are dev/CI aids; the served
+dashboard is unchanged. A real-browser smoke test should gate the production
+switch (the bundle is verified to compile and to initialize in jsdom, but not yet
+rendered end-to-end in a browser from CI).
 
 ## Agent Visibility Checks
 

@@ -2658,8 +2658,11 @@ if (typeof EISVWebSocket !== 'undefined') {
     toggleBtn.addEventListener('click', toggleHeatmap);
     if (closeBtn) closeBtn.addEventListener('click', () => { panel.style.display = 'none'; });
 
-    // Re-render on each refresh if visible
+    // Re-render on each refresh if visible. Intentional monkeypatch: wrap the
+    // existing top-level `refresh` so the heatmap re-renders on every refresh
+    // cycle without the refresh loop needing to know about this panel.
     const origRefresh = refresh;
+    // eslint-disable-next-line no-func-assign -- deliberate wrap of the refresh fn
     refresh = async function () {
         const result = await origRefresh();
         if (panel.style.display !== 'none') renderHeatmap();

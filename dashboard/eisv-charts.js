@@ -718,7 +718,7 @@
         var decimals = options.decimals || 0;
         var prefix = options.prefix || '';
         var suffix = options.suffix || '';
-        var oldText = element.textContent.replace(/[^0-9.\-]/g, '');
+        var oldText = element.textContent.replace(/[^0-9.-]/g, '');
         var oldValue = parseFloat(oldText);
 
         if (isNaN(oldValue) || isNaN(newValue) || oldValue === newValue) {
