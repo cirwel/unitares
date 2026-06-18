@@ -321,6 +321,103 @@ class TestRunOnboard:
         assert "client_session_id" not in sent_args
 
 
+# --- thread-anchor resume (UNITARES_CLIENT_SESSION_ID) ---------------------
+
+class TestThreadAnchorResume:
+    """When the orchestrator provisions a stable per-conversation
+    client_session_id (UNITARES_CLIENT_SESSION_ID), the helper resumes the same
+    identity across turns instead of minting a new id every turn — the Discord
+    BEAM bridge case.
+    """
+
+    def _call(
+        self,
+        tmp_path: Path,
+        responses: list[dict],
+        *,
+        client_session_id: str | None,
+        force_new: bool = False,
+        initial_cache: dict | None = None,
+    ) -> tuple[dict, FakePoster]:
+        if initial_cache is not None:
+            cache_dir = tmp_path / ".unitares"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            (cache_dir / "session.json").write_text(json.dumps(initial_cache))
+        poster = FakePoster(responses)
+        result = run_onboard(
+            server_url="http://fake",
+            agent_name="acme",
+            model_type="claude-code",
+            workspace=tmp_path,
+            client_session_id=client_session_id,
+            force_new=force_new,
+            post_json=poster,
+        )
+        return result, poster
+
+    def test_anchor_resumes_instead_of_force_new(self, tmp_path: Path) -> None:
+        _, poster = self._call(
+            tmp_path, [_success_response()],
+            client_session_id="agent:/thread-discord-42",
+        )
+        sent_args = poster.calls[0][1]["arguments"]
+        # Resume posture: stable anchor sent, NO force_new, NO lineage.
+        assert sent_args["client_session_id"] == "agent:/thread-discord-42"
+        assert "force_new" not in sent_args
+        assert "parent_agent_id" not in sent_args
+        assert "spawn_reason" not in sent_args
+
+    def test_anchor_does_not_declare_cached_lineage(self, tmp_path: Path) -> None:
+        """Even with a cached UUID, anchor mode resumes (one agent across turns),
+        it does NOT declare the cache as a parent."""
+        initial = {"uuid": "prior-turn-uuid", "client_session_id": "agent:/thread-1"}
+        _, poster = self._call(
+            tmp_path, [_success_response()],
+            client_session_id="agent:/thread-1",
+            initial_cache=initial,
+        )
+        sent_args = poster.calls[0][1]["arguments"]
+        assert sent_args["client_session_id"] == "agent:/thread-1"
+        assert "parent_agent_id" not in sent_args
+        assert "force_new" not in sent_args
+
+    def test_explicit_force_new_wins_over_anchor(self, tmp_path: Path) -> None:
+        """force_new is a deliberate clean break — it overrides the anchor."""
+        _, poster = self._call(
+            tmp_path, [_success_response()],
+            client_session_id="agent:/thread-9",
+            force_new=True,
+        )
+        sent_args = poster.calls[0][1]["arguments"]
+        assert sent_args["force_new"] is True
+        assert "client_session_id" not in sent_args
+
+    def test_blank_anchor_falls_back_to_default_mint(self, tmp_path: Path) -> None:
+        """A blank/whitespace anchor is treated as absent — default fresh mint."""
+        _, poster = self._call(
+            tmp_path, [_success_response()],
+            client_session_id="   ",
+        )
+        sent_args = poster.calls[0][1]["arguments"]
+        assert sent_args["force_new"] is True
+        assert "client_session_id" not in sent_args
+
+    def test_no_anchor_is_byte_identical_to_default(self, tmp_path: Path) -> None:
+        """Without the anchor, behavior is unchanged (force_new + no client id)."""
+        _, poster = self._call(tmp_path, [_success_response()], client_session_id=None)
+        sent_args = poster.calls[0][1]["arguments"]
+        assert sent_args["force_new"] is True
+        assert "client_session_id" not in sent_args
+
+    def test_anchor_still_attaches_bootstrap_initial_state(self, tmp_path: Path) -> None:
+        _, poster = self._call(
+            tmp_path, [_success_response()],
+            client_session_id="agent:/thread-5",
+        )
+        sent_args = poster.calls[0][1]["arguments"]
+        assert "initial_state" in sent_args
+
+
 # --- per-process slot isolation --------------------------------------------
 
 class TestSlotIsolation:

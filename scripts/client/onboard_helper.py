@@ -261,6 +261,7 @@ def run_onboard(
     workspace: Path,
     slot: str | None = None,
     force_new: bool = False,
+    client_session_id: str | None = None,
     auth_token: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     with_bootstrap: bool = True,
@@ -275,6 +276,17 @@ def run_onboard(
     session_id from hook input). When omitted, falls back to the legacy
     shared session.json — preserves single-process behavior.
 
+    ``client_session_id`` is the **thread-anchor resume** path
+    (``UNITARES_CLIENT_SESSION_ID``, provisioned by the BEAM orchestrator for
+    conversation-turn agents like the Discord bridge). When set, the helper
+    resumes the SAME governance UUID under that stable anchor instead of the
+    default fresh-mint-per-process posture — so consecutive turns of one
+    conversation are one resumed agent, not a new id every turn. force_new is
+    omitted in this mode (the server defaults resume=True); the first turn
+    mints+binds the anchor, later turns resume it. When unset, behavior is
+    byte-identical to before (force_new + cached-lineage declaration). An
+    explicit ``force_new`` still wins — it is a deliberate clean break.
+
     ``with_bootstrap`` (default True) attaches an initial_state payload so
     the server writes a bootstrap check-in row at t=0 per
  §3.5. Idempotent on resume
@@ -283,18 +295,28 @@ def run_onboard(
     url = f"{server_url.rstrip('/')}/v1/tools/call"
     cache = read_cache(workspace, slot)
 
+    anchor = (client_session_id or "").strip()
     parent_agent_id = ""
-    if not force_new:
-        parent_agent_id = (cache.get("uuid") or cache.get("agent_uuid") or "").strip()
 
     arguments: dict[str, Any] = {
         "name": agent_name,
         "model_type": model_type,
-        "force_new": True,
     }
-    if parent_agent_id:
-        arguments["parent_agent_id"] = parent_agent_id
-        arguments["spawn_reason"] = "new_session"
+
+    if anchor and not force_new:
+        # Thread-anchored resume: stable per-conversation session key, one
+        # resumed UUID across turns. No force_new (server default resume=True),
+        # no lineage — the turns are the same agent, not a parent/child chain.
+        arguments["client_session_id"] = anchor
+    else:
+        # Default posture (identity.md v2): fresh process = fresh agent. Mint
+        # with force_new and declare cached lineage via parent_agent_id.
+        arguments["force_new"] = True
+        if not force_new:
+            parent_agent_id = (cache.get("uuid") or cache.get("agent_uuid") or "").strip()
+        if parent_agent_id:
+            arguments["parent_agent_id"] = parent_agent_id
+            arguments["spawn_reason"] = "new_session"
 
     if with_bootstrap:
         arguments["initial_state"] = _build_bootstrap_initial_state()
@@ -376,12 +398,21 @@ def main(argv: list[str] | None = None) -> int:
              "parallel processes in the same workspace don't collide on "
              "the same cache file.",
     )
+    parser.add_argument(
+        "--client-session-id",
+        default=os.environ.get("UNITARES_CLIENT_SESSION_ID", ""),
+        help="Stable per-conversation session anchor (typically provisioned "
+             "as UNITARES_CLIENT_SESSION_ID by the BEAM orchestrator for "
+             "turn-based agents like the Discord bridge). When set, resume the "
+             "SAME identity across turns instead of minting a new id each turn.",
+    )
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     args = parser.parse_args(argv)
 
     auth_token = os.environ.get("UNITARES_HTTP_API_TOKEN") or None
     workspace = Path(args.workspace).expanduser().resolve()
     slot = (args.slot or "").strip() or None
+    client_session_id = (args.client_session_id or "").strip() or None
     result = run_onboard(
         server_url=args.server_url,
         agent_name=args.name,
@@ -389,6 +420,7 @@ def main(argv: list[str] | None = None) -> int:
         workspace=workspace,
         slot=slot,
         force_new=args.force_new,
+        client_session_id=client_session_id,
         with_bootstrap=args.with_bootstrap,
         auth_token=auth_token,
         timeout=args.timeout,

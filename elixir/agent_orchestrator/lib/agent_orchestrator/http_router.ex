@@ -146,13 +146,15 @@ defmodule AgentOrchestrator.HTTPRouter do
          {:ok, max_lines} <- fetch_max_lines(body),
          {:ok, lease} <- fetch_lease(body),
          {:ok, lineage} <- fetch_lineage(body),
-         {:ok, server_url} <- fetch_string(body, "server_url") do
+         {:ok, server_url} <- fetch_string(body, "server_url"),
+         {:ok, client_session_id} <- fetch_string(body, "client_session_id") do
       spec =
         %{cmd: cmd, args: args, env: env}
         |> put_opt(:cd, cd)
         |> put_opt(:max_output_lines, max_lines)
         |> put_opt(:lineage, lineage)
         |> put_opt(:server_url, server_url)
+        |> put_opt(:client_session_id, client_session_id)
         |> put_lease(lease)
 
       {:ok, spec}
@@ -296,6 +298,9 @@ defmodule AgentOrchestrator.HTTPRouter do
 
   defp spawn_error(conn, {:invalid_server_url, reason}),
     do: json(conn, 422, %{ok: false, error: "schema_invalid", detail: "invalid server_url: #{inspect(reason)}"})
+
+  defp spawn_error(conn, {:invalid_client_session_id, reason}),
+    do: json(conn, 422, %{ok: false, error: "schema_invalid", detail: "invalid client_session_id: #{inspect(reason)}"})
 
   defp spawn_error(conn, {:executable_not_found, cmd}),
     do: json(conn, 422, %{ok: false, error: "schema_invalid", detail: "executable not found: #{cmd}"})

@@ -407,6 +407,93 @@ defmodule AgentOrchestratorTest do
     end
   end
 
+  describe "session-anchor provisioning (thread-stable identity)" do
+    test "provisions UNITARES_CLIENT_SESSION_ID into the child env" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", "echo $UNITARES_CLIENT_SESSION_ID"],
+          client_session_id: "agent:/thread-discord-42"
+        })
+
+      assert {:ok, %{output: ["agent:/thread-discord-42"], exit_status: 0}} =
+               AgentOrchestrator.await(id)
+    end
+
+    test "an explicit env entry wins over the provisioned anchor" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", "echo $UNITARES_CLIENT_SESSION_ID"],
+          env: [{"UNITARES_CLIENT_SESSION_ID", "agent:/caller-anchor"}],
+          client_session_id: "agent:/provisioned-anchor"
+        })
+
+      assert {:ok, %{output: ["agent:/caller-anchor"]}} = AgentOrchestrator.await(id)
+    end
+
+    test "refuses a blank anchor (no acquire, no child)" do
+      assert {:error, {:invalid_client_session_id, {:client_session_id_blank, "  "}}} =
+               AgentOrchestrator.run(%{
+                 cmd: "echo",
+                 args: ["x"],
+                 client_session_id: "  ",
+                 lease_client: StubLeaseClient
+               })
+
+      refute_receive {:lease_event, _}, 100
+    end
+
+    test "refuses a non-string anchor" do
+      assert {:error, {:invalid_client_session_id, {:client_session_id_not_string, 123}}} =
+               AgentOrchestrator.run(%{cmd: "echo", args: ["x"], client_session_id: 123})
+    end
+
+    test "without the key nothing is provisioned" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", ~s(echo "${UNITARES_CLIENT_SESSION_ID-unset}")]
+        })
+
+      assert {:ok, %{output: ["unset"], exit_status: 0}} = AgentOrchestrator.await(id)
+    end
+
+    test "env: nil with client_session_id provisions without crashing" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", "echo $UNITARES_CLIENT_SESSION_ID"],
+          env: nil,
+          client_session_id: "agent:/thread-7"
+        })
+
+      assert {:ok, %{output: ["agent:/thread-7"], exit_status: 0}} =
+               AgentOrchestrator.await(id)
+    end
+
+    test "composes with lineage and server-url provisioning" do
+      {:ok, id, _} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: [
+            "-c",
+            ~s(echo "$UNITARES_PARENT_AGENT_ID|$UNITARES_SERVER_URL|$UNITARES_CLIENT_SESSION_ID")
+          ],
+          lineage: %{parent_agent_uuid: "55555555-5555-4555-8555-555555555555"},
+          server_url: "https://gov.example:8767",
+          client_session_id: "agent:/thread-9"
+        })
+
+      assert {:ok,
+              %{
+                output: [
+                  "55555555-5555-4555-8555-555555555555|https://gov.example:8767|agent:/thread-9"
+                ]
+              }} = AgentOrchestrator.await(id)
+    end
+  end
+
   describe "presence (default-on, best-effort)" do
     # Long-lived agents + snapshot/0 (read while alive) — avoids the await race
     # where a fast command exits and unregisters before the assertion runs.

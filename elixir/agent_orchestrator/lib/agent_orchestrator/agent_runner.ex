@@ -35,7 +35,8 @@ defmodule AgentOrchestrator.AgentRunner do
                                            # false = no presence; map = override
         lease_client: module(),            # injectable, default LeasePlaneClient
         lineage: nil | lineage_cfg,        # default nil = no lineage provisioning
-        server_url: String.t() | nil       # default nil = no server-URL provisioning
+        server_url: String.t() | nil,      # default nil = no server-URL provisioning
+        client_session_id: String.t() | nil # default nil = no session-anchor provisioning
       }
 
       lease_cfg :: %{
@@ -81,6 +82,27 @@ defmodule AgentOrchestrator.AgentRunner do
   {:invalid_server_url, _}}`) — a malformed URL fails at the child as a
   confusing OFFLINE, far from its cause.
 
+  ## Session-anchor provisioning (thread-stable identity)
+
+  `client_session_id:` provisions `UNITARES_CLIENT_SESSION_ID` into the child
+  env under the same explicit-wins rule. It is the **continuity anchor** a
+  spawner passes when many short-lived children are turns of one logical
+  conversation (the canonical case: the Discord BEAM bridge, where each user
+  turn is a fresh `claude -p` process). Each fresh process otherwise opens a new
+  governance session and onboards a fresh identity — a new UUID *every turn*.
+  When the spawner passes a **stable** per-conversation anchor (e.g.
+  `"agent:/thread-<discord-thread-id>"`), every turn's child onboards under the
+  same session key and the server resolves it to the **same** governance UUID
+  across turns (resume), instead of minting a disconnected identity each time.
+
+  This is transport/continuity config, not lineage (the turns are the *same*
+  agent resumed, not a parent/child chain), hence a top-level key rather than a
+  `lineage_cfg` field. The orchestrator does NOT onboard on the child's behalf;
+  it only places the anchor where the child's onboard hook can find it. An empty
+  or non-string value refuses the spawn (`{:error, {:invalid_client_session_id,
+  _}}`) — a blank anchor would silently degrade back to fresh-mint-per-turn, the
+  exact failure this provisioning exists to prevent.
+
   ## Presence
 
   By default an agent registers an `agent:/<id>` PRESENCE row on the lease plane
@@ -109,6 +131,7 @@ defmodule AgentOrchestrator.AgentRunner do
   # Lineage-provisioning env vars surfaced to the child (candidate
   # declarations — see "Lineage provisioning" in the moduledoc).
   @server_url_var "UNITARES_SERVER_URL"
+  @client_session_id_var "UNITARES_CLIENT_SESSION_ID"
   @lineage_parent_var "UNITARES_PARENT_AGENT_ID"
   @lineage_reason_var "UNITARES_SPAWN_REASON"
   @default_spawn_reason "subagent"
@@ -246,15 +269,25 @@ defmodule AgentOrchestrator.AgentRunner do
             {:stop, {:invalid_server_url, reason}}
 
           {:ok, server_url} ->
-            state = %__MODULE__{
-              agent_id: agent_id,
-              lease_client: lease_client,
-              lease_cfg: lease_cfg,
-              lineage: if(lineage_cfg, do: :provisioned, else: :none),
-              max_output_lines: Map.get(spec, :max_output_lines, @default_max_lines)
-            }
+            case normalize_client_session_id(Map.get(spec, :client_session_id)) do
+              {:error, reason} ->
+                {:stop, {:invalid_client_session_id, reason}}
 
-            init_with_lease(state, spec, candidate_env(lineage_cfg, server_url))
+              {:ok, client_session_id} ->
+                state = %__MODULE__{
+                  agent_id: agent_id,
+                  lease_client: lease_client,
+                  lease_cfg: lease_cfg,
+                  lineage: if(lineage_cfg, do: :provisioned, else: :none),
+                  max_output_lines: Map.get(spec, :max_output_lines, @default_max_lines)
+                }
+
+                init_with_lease(
+                  state,
+                  spec,
+                  candidate_env(lineage_cfg, server_url, client_session_id)
+                )
+            end
         end
     end
   end
@@ -545,9 +578,26 @@ defmodule AgentOrchestrator.AgentRunner do
 
   defp normalize_server_url(other), do: {:error, {:server_url_not_string, other}}
 
+  # Non-empty-string check only — the server canonicalizes/sanitizes the session
+  # key itself (see resolve_session_identity). An empty/blank anchor is refused
+  # here because it would silently fall back to fresh-mint-per-turn, the exact
+  # symptom this provisioning prevents (a confusing "still minting" far from the
+  # blank-anchor cause).
+  defp normalize_client_session_id(nil), do: {:ok, nil}
+
+  defp normalize_client_session_id(v) when is_binary(v) do
+    if String.trim(v) == "" do
+      {:error, {:client_session_id_blank, v}}
+    else
+      {:ok, v}
+    end
+  end
+
+  defp normalize_client_session_id(other), do: {:error, {:client_session_id_not_string, other}}
+
   # The full provisioned-candidate list for the child env, built from the
   # already-validated configs.
-  defp candidate_env(lineage_cfg, server_url) do
+  defp candidate_env(lineage_cfg, server_url, client_session_id) do
     lineage =
       case lineage_cfg do
         nil -> []
@@ -555,7 +605,8 @@ defmodule AgentOrchestrator.AgentRunner do
       end
 
     server = if server_url, do: [{@server_url_var, server_url}], else: []
-    lineage ++ server
+    session = if client_session_id, do: [{@client_session_id_var, client_session_id}], else: []
+    lineage ++ server ++ session
   end
 
   defp provisioned_env([], _env), do: []
