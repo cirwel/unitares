@@ -2,8 +2,9 @@
 """
 Tool Count Automation - Single Source of Truth
 
-This script counts MCP tools by scanning @mcp_tool decorators.
-Use this as the authoritative tool count instead of hardcoding numbers.
+This script counts MCP tools from the runtime decorator registry. Static
+source scans drifted once handlers moved into subpackages and consolidated
+action routers, while the registry is exactly what dispatch uses.
 
 Usage:
     python3 scripts/diagnostics/count_tools.py              # Display count
@@ -11,52 +12,56 @@ Usage:
     python3 scripts/diagnostics/count_tools.py --by-module  # Breakdown by module
 """
 
-import re
 import json
+import sys
 from pathlib import Path
 from typing import Dict
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 
-def count_tools_in_file(filepath: Path) -> int:
-    """Count @mcp_tool decorators in a file."""
-    if not filepath.exists():
-        return 0
+def _registry_accessors():
+    # Importing src.mcp_handlers runs first-party handler imports, which
+    # populates decorators._TOOL_DEFINITIONS.
+    import src.mcp_handlers  # noqa: F401
+    from src.mcp_handlers.decorators import get_tool_definition, list_registered_tools
 
-    with open(filepath) as f:
-        content = f.read()
-
-    # Match @mcp_tool( decorators
-    return len(re.findall(r'@mcp_tool\(', content))
+    return get_tool_definition, list_registered_tools
 
 
-def get_tool_breakdown() -> Dict[str, int]:
+def _module_bucket(module_name: str) -> str:
+    prefix = "src.mcp_handlers."
+    if module_name.startswith(prefix):
+        module_name = module_name[len(prefix):]
+    return module_name or "(unknown)"
+
+
+def get_tool_breakdown(*, include_hidden: bool = False, include_deprecated: bool = True) -> Dict[str, int]:
     """Get tool count breakdown by module."""
-    handler_dir = PROJECT_ROOT / "src" / "mcp_handlers"
-
-    # Exclude these files (not real handlers)
-    EXCLUDE = {"__init__", "decorators", "utils", "validators"}
-
+    get_tool_definition, list_registered_tools = _registry_accessors()
     breakdown = {}
-    for filepath in handler_dir.glob("*.py"):
-        if filepath.name.startswith("__"):
+    for tool_name in list_registered_tools(
+        include_hidden=include_hidden,
+        include_deprecated=include_deprecated,
+    ):
+        td = get_tool_definition(tool_name)
+        if td is None:
             continue
-
-        module_name = filepath.stem
-        if module_name in EXCLUDE:
-            continue
-
-        count = count_tools_in_file(filepath)
-        if count > 0:
-            breakdown[module_name] = count
+        module_name = _module_bucket(getattr(td.handler, "__module__", ""))
+        breakdown[module_name] = breakdown.get(module_name, 0) + 1
 
     return breakdown
 
 
-def get_total_count() -> int:
+def get_total_count(*, include_hidden: bool = False, include_deprecated: bool = True) -> int:
     """Get total tool count."""
-    return sum(get_tool_breakdown().values())
+    return sum(
+        get_tool_breakdown(
+            include_hidden=include_hidden,
+            include_deprecated=include_deprecated,
+        ).values()
+    )
 
 
 def main():
@@ -64,15 +69,30 @@ def main():
     parser = argparse.ArgumentParser(description="Count MCP tools")
     parser.add_argument('--json', action='store_true', help='Output as JSON')
     parser.add_argument('--by-module', action='store_true', help='Show breakdown by module')
+    parser.add_argument('--include-hidden', action='store_true', help='Include hidden/internal tools')
+    parser.add_argument(
+        '--exclude-deprecated',
+        action='store_true',
+        help='Exclude deprecated-but-callable tools',
+    )
     args = parser.parse_args()
 
-    total = get_total_count()
-    breakdown = get_tool_breakdown()
+    include_deprecated = not args.exclude_deprecated
+    total = get_total_count(
+        include_hidden=args.include_hidden,
+        include_deprecated=include_deprecated,
+    )
+    breakdown = get_tool_breakdown(
+        include_hidden=args.include_hidden,
+        include_deprecated=include_deprecated,
+    )
 
     if args.json:
         output = {
             "total": total,
-            "breakdown": breakdown
+            "include_hidden": args.include_hidden,
+            "include_deprecated": include_deprecated,
+            "breakdown": breakdown,
         }
         print(json.dumps(output, indent=2))
     elif args.by_module:

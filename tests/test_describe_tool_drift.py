@@ -240,22 +240,9 @@ def test_no_new_describe_cross_refs_to_unreachable_tools():
     # the operator surface still references. Track via #429 — when an alias is
     # added or the reference is removed, drop from this set.
     known_unreachable_refs = {
-        "archive_old_test_agents",
         "check_recovery_options",
-        "cleanup_stale_locks",
-        "debug_request_context",
-        "get_connection_status",
-        "get_telemetry_metrics",
-        "get_thresholds",
-        "get_tool_usage_stats",
-        "get_workspace_health",
-        "mark_response_complete",
         "quick_resume",
-        "reset_monitor",
         "self_recovery_review",
-        "set_thresholds",
-        "simulate_update",
-        "validate_file_path",
     }
 
     # Tokens that look like tool names but aren't (markdown words, status

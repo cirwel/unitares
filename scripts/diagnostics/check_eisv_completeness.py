@@ -18,12 +18,18 @@ import sys
 from pathlib import Path
 from typing import List, Tuple
 
-# Patterns that indicate incomplete EISV reporting
+NUMBER_RE = r'[+-]?\d+(?:\.\d+)?'
+
+# Patterns that indicate incomplete EISV reporting. Keep these focused on
+# concrete emitted/reported shapes; prose references to the E/I/S manifold are
+# valid because V is derived from those axes.
 INCOMPLETE_PATTERNS = [
-    # "E, I, S" without V
-    (r'\bE[,\s]+I[,\s]+S\b(?!\s*[,\s]*V)', 'E, I, S without V'),
     # "E=... I=... S=..." without V
-    (r'E\s*=\s*[\d.]+\s*[,\s]+I\s*=\s*[\d.]+\s*[,\s]+S\s*=\s*[\d.]+(?!\s*[,\s]*V\s*=)', 'E=X I=Y S=Z without V='),
+    (
+        rf'E\s*=\s*{NUMBER_RE}\s*[,\s]+I\s*=\s*{NUMBER_RE}\s*[,\s]+'
+        rf'S\s*=\s*{NUMBER_RE}(?![\d.])(?!(?:\s*[,\s]+V\s*=))',
+        'E=X I=Y S=Z without V=',
+    ),
     # Dict/JSON with E, I, S but not V
     (r'\{[^}]*["\']E["\'][^}]*["\']I["\'][^}]*["\']S["\'][^}]*\}(?![^{]*["\']V["\'])', 'Dict with E,I,S but no V'),
 ]
@@ -46,12 +52,24 @@ SKIP_FILES = {
 # Directories to skip
 SKIP_DIRS = {
     '.git',
+    '.claude',
+    '.hypothesis',
+    '.mypy_cache',
+    '.ruff_cache',
+    '.tox',
+    '.venv',
     '__pycache__',
-    'node_modules',
+    '_build',
     '.pytest_cache',
     'archive',
+    'build',
+    'dist',
+    'htmlcov',
+    'node_modules',
     'data',  # Historical data and knowledge entries
+    'site-packages',
     'tests',  # Test files often have intentional incomplete examples
+    'venv',
 }
 
 
@@ -61,14 +79,19 @@ def should_check_file(filepath: Path) -> bool:
     if filepath.name in SKIP_FILES:
         return False
 
-    # Skip if in a skipped directory (check path string, not parts)
-    filepath_str = str(filepath)
-    for skip_dir in SKIP_DIRS:
-        if f'/{skip_dir}/' in filepath_str or filepath_str.endswith(f'/{skip_dir}'):
-            return False
+    if any(part in SKIP_DIRS for part in filepath.parts):
+        return False
 
     # Only check relevant file types
     return filepath.suffix in {'.py', '.md', '.txt', '.json'}
+
+
+def _looks_complete_on_same_line(line: str, match: re.Match[str], pattern_name: str) -> bool:
+    if 'without v' in line.lower() or 'missing v' in line.lower():
+        return False
+    if pattern_name == 'Dict with E,I,S but no V':
+        return bool(re.search(r'["\']V["\']', line))
+    return bool(re.search(r'\bV\b', line[match.end():]))
 
 
 def check_file(filepath: Path) -> List[Tuple[int, str, str]]:
@@ -84,7 +107,8 @@ def check_file(filepath: Path) -> List[Tuple[int, str, str]]:
         with open(filepath, 'r', encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
                 for pattern, pattern_name in INCOMPLETE_PATTERNS:
-                    if re.search(pattern, line, re.IGNORECASE):
+                    match = re.search(pattern, line, re.IGNORECASE)
+                    if match and not _looks_complete_on_same_line(line, match, pattern_name):
                         issues.append((line_num, pattern_name, line.strip()))
     except Exception as e:
         print(f"Warning: Could not check {filepath}: {e}", file=sys.stderr)

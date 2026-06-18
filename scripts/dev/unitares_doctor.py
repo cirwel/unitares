@@ -47,6 +47,7 @@ ANCHOR_DIR = Path.home() / ".unitares"
 SECRETS_FILE = Path.home() / ".config" / "cirwel" / "secrets.env"
 HTTP_HEALTH_URL = "http://127.0.0.1:8767/health/live"
 PID_FILE_REL = "data/.mcp_server.pid"
+GOVERNANCE_LAUNCHD_LABEL = "com.unitares.governance-mcp"
 KNOWN_SCHEMA_MIGRATION_EXCEPTIONS = {
     # 2026-04-26: applied out-of-band before the source-file repair landed.
     # Keep this as accepted history, but still fail any new unexpected rows.
@@ -571,12 +572,30 @@ def check_http_health() -> CheckResult:
                            detail=str(e))
 
 
-def check_pid_file(repo_root: Path) -> CheckResult:
+def _http_health_available(timeout: float = 1.0) -> bool:
+    try:
+        with urllib.request.urlopen(HTTP_HEALTH_URL, timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def _pid_file_context(service_active: bool) -> str:
+    if service_active:
+        return (
+            "live service detected; this checkout may not be the launchd "
+            "working directory"
+        )
+    return "server not running, or stdio mode"
+
+
+def check_pid_file(repo_root: Path, service_active: bool = False) -> CheckResult:
     name, mode = "pid_file", "operator"
     pid_file = repo_root / PID_FILE_REL
+    service_active = service_active or _http_health_available()
     if not pid_file.exists():
         return CheckResult(name, mode, Status.WARN,
-                           f"{pid_file} missing — server not running, or stdio mode")
+                           f"{pid_file} missing — {_pid_file_context(service_active)}")
     try:
         pid = int(pid_file.read_text().strip())
     except ValueError:
@@ -586,6 +605,11 @@ def check_pid_file(repo_root: Path) -> CheckResult:
         os.kill(pid, 0)
         return CheckResult(name, mode, Status.PASS, f"pid {pid} alive")
     except ProcessLookupError:
+        if service_active:
+            return CheckResult(
+                name, mode, Status.WARN,
+                f"pid {pid} not running (stale file) — {_pid_file_context(True)}",
+            )
         return CheckResult(name, mode, Status.FAIL, f"pid {pid} not running (stale file)")
     except PermissionError:
         return CheckResult(name, mode, Status.PASS, f"pid {pid} alive (not signalable)")
@@ -608,7 +632,7 @@ def _launchctl_loaded() -> set[str]:
 
 def check_launchagent(loaded: set[str]) -> CheckResult:
     name, mode = "launchagent_loaded", "operator"
-    label = "com.unitares.governance-mcp"
+    label = GOVERNANCE_LAUNCHD_LABEL
     if label in loaded:
         return CheckResult(name, mode, Status.PASS, f"{label} loaded")
     return CheckResult(name, mode, Status.WARN,
@@ -678,7 +702,8 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
         Check("secrets_file", "local", check_secrets_file),
         Check("http_listening", "operator", check_http_listening),
         Check("http_health", "operator", check_http_health),
-        Check("pid_file", "operator", lambda: check_pid_file(repo_root)),
+        Check("pid_file", "operator",
+              lambda: check_pid_file(repo_root, GOVERNANCE_LAUNCHD_LABEL in loaded())),
         Check("launchagent_loaded", "operator", lambda: check_launchagent(loaded())),
         Check("resident_agents", "operator", lambda: check_resident_agents(loaded())),
         Check("ipv6_sidecar", "operator", lambda: check_ipv6_sidecar(loaded())),

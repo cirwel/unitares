@@ -104,6 +104,34 @@ def test_redact_strips_password(doctor):
     assert "@localhost:5432/governance" in redacted
 
 
+def test_check_pid_file_warns_on_stale_pid_when_service_active(doctor, monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / ".mcp_server.pid").write_text("12345")
+    monkeypatch.setattr(doctor.os, "kill", lambda *_: (_ for _ in ()).throw(ProcessLookupError()))
+
+    result = doctor.check_pid_file(root, service_active=True)
+
+    assert result.status == doctor.Status.WARN
+    assert "stale file" in result.message
+    assert "live service detected" in result.message
+
+
+def test_check_pid_file_fails_on_stale_pid_without_live_service(doctor, monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / ".mcp_server.pid").write_text("12345")
+    monkeypatch.setattr(doctor.os, "kill", lambda *_: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(doctor, "_http_health_available", lambda: False)
+
+    result = doctor.check_pid_file(root)
+
+    assert result.status == doctor.Status.FAIL
+    assert "stale file" in result.message
+
+
 def _migration_root(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     migrations = root / "db" / "postgres" / "migrations"

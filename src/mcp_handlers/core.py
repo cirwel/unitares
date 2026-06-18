@@ -165,7 +165,7 @@ async def handle_get_governance_metrics(arguments: ToolArgumentsDict) -> Sequenc
     response_data = await get_governance_metrics_data(agent_id, arguments, server=mcp_server)
     return success_response(response_data)
 
-@mcp_tool("simulate_update", timeout=30.0, register=False)
+@mcp_tool("simulate_update", timeout=30.0)
 async def handle_simulate_update(arguments: ToolArgumentsDict) -> Sequence[TextContent]:
     """Handle simulate_update tool - dry-run governance cycle without persisting state.
 
