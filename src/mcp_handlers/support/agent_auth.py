@@ -68,11 +68,19 @@ def compute_agent_signature(
     3. Session binding lookup
     """
     try:
-        from ..context import get_context_agent_id
+        from ..context import get_context_agent_id, get_session_proof_origin
         from ..shared import get_mcp_server
         mcp_server = get_mcp_server()
 
         context_bound_id = get_context_agent_id()
+        proof_origin = get_session_proof_origin()
+        has_explicit_identity = bool(
+            agent_id
+            or (arguments or {}).get("agent_id")
+            or (arguments or {}).get("_agent_uuid")
+        )
+        if proof_origin == "server_inferred" and not has_explicit_identity:
+            return {"uuid": None}
         bound_id = agent_id or context_bound_id
 
         logger.debug(
