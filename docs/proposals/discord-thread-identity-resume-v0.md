@@ -62,15 +62,31 @@ provisioned the anchor, and the reference onboard hook hard-coded `force_new=tru
 
 ## Remaining cross-repo follow-ups (not in this PR)
 
-- **Dispatch / Discord-bridge worker** (separate repo): when spawning a turn's
-  agent via `POST /v1/agents`, pass `client_session_id: "agent:/thread-<discord-thread-id>"`
-  (one stable anchor per thread). This is the value that makes the whole chain
-  resume.
+The common contract is: **the `claude -p` child receives `UNITARES_CLIENT_SESSION_ID`
+in its env, stable per conversation** (e.g. `agent:/thread-<discord-thread-id>`).
+How the anchor *reaches* the child env depends on the spawn path:
+
+- **Dispatch / Discord-bridge worker** (separate repo) — two spawn paths, same
+  env-var destination:
+  - *HTTP-API spawners* (drive the orchestrator via `POST /v1/agents`): pass the
+    `client_session_id` field; the orchestrator provisions `UNITARES_CLIENT_SESSION_ID`
+    (this PR).
+  - *Direct-Port spawners* (e.g. `dispatch_beam`'s `Dispatch.AgentPort`, which
+    opens a BEAM `Port` to `claude -p` and does **not** call `/v1/agents`): set the
+    env var directly on the Port spawn —
+    `env: [{"UNITARES_CLIENT_SESSION_ID", "agent:/thread-#{thread_id}"}]`. `AgentPort`
+    already threads `env:` into `port_opts` and it composes with the stdin-redirect
+    wrapper, so the child's session-start hook inherits it. Same no-forging boundary
+    as the orchestrator path: anchor only, the child still self-onboards.
 - **gov-plugin session-start hook** (`unitares-governance-plugin`): mirror the
   `onboard_helper.py` change — when `UNITARES_CLIENT_SESSION_ID` is present, onboard
   in resume-by-anchor mode rather than `force_new`. The plugin hook is the actual
   onboarder for `claude -p` children; `onboard_helper.py` is the in-repo reference
   implementation of the same contract.
+
+**Sequencing:** the env var is a no-op until the gov-plugin hook reads it, so:
+this PR merges → gov-plugin hook mirrors the helper → the worker (HTTP or
+direct-Port) injects the anchor.
 
 ## Honesty boundary
 
