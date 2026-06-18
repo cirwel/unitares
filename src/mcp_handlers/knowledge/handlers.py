@@ -305,12 +305,13 @@ async def _broadcast_knowledge_read(
 
 def _resolve_reader_agent_id(arguments: Dict[str, Any]) -> Optional[str]:
     """Best-effort reader-identity extraction for read-side audit events."""
-    from ..context import get_context_agent_id
-    return (
-        arguments.get("_agent_uuid")
-        or get_context_agent_id()
-        or arguments.get("agent_id")
-    )
+    from ..context import get_context_agent_id, get_session_proof_origin
+    explicit_reader = arguments.get("_agent_uuid") or arguments.get("agent_id")
+    if explicit_reader:
+        return explicit_reader
+    if get_session_proof_origin() == "server_inferred":
+        return None
+    return get_context_agent_id()
 
 
 def _compute_staleness_warning(discovery, current_server_version: str) -> Optional[str]:
