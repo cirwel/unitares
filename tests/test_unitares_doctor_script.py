@@ -551,3 +551,47 @@ def test_grammar_lint_reports_all_drifting_schemes_sorted(doctor, monkeypatch, t
     assert result.status == doctor.Status.FAIL
     # Sorted: alpha before zeta.
     assert result.message.index("alpha") < result.message.index("zeta")
+
+
+def test_dockerfile_pinned_tags_passes_on_pinned_images(doctor, tmp_path):
+    (tmp_path / "Dockerfile").write_text("FROM python:3.12-slim\n")
+    (tmp_path / "db" / "postgres").mkdir(parents=True)
+    (tmp_path / "db" / "postgres" / "Dockerfile.age-vector").write_text(
+        "FROM apache/age:release_PG18_1.7.0\n"
+    )
+    (tmp_path / "docker-compose.yml").write_text(
+        'services:\n  redis:\n    image: "redis:7-alpine"\n'
+    )
+    result = doctor.check_dockerfile_pinned_tags(tmp_path)
+    assert result.status == doctor.Status.PASS
+
+
+def test_dockerfile_pinned_tags_flags_floating_from(doctor, tmp_path):
+    (tmp_path / "Dockerfile.age-vector").write_text("FROM apache/age:latest\n")
+    result = doctor.check_dockerfile_pinned_tags(tmp_path)
+    assert result.status == doctor.Status.FAIL
+    assert "apache/age:latest" in result.detail
+
+
+def test_dockerfile_pinned_tags_flags_tagless_image_and_compose(doctor, tmp_path):
+    # No tag at all floats to :latest implicitly.
+    (tmp_path / "Dockerfile").write_text("FROM ubuntu\n")
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n  cache:\n    image: redis:latest\n"
+    )
+    result = doctor.check_dockerfile_pinned_tags(tmp_path)
+    assert result.status == doctor.Status.FAIL
+    assert "FROM ubuntu" in result.detail
+    assert "redis:latest" in result.detail
+
+
+def test_dockerfile_pinned_tags_ignores_build_stage_refs(doctor, tmp_path):
+    # `FROM builder` references an earlier stage, not a floating external image.
+    (tmp_path / "Dockerfile").write_text(
+        "FROM python:3.12-slim AS builder\n"
+        "RUN echo build\n"
+        "FROM builder\n"
+        "RUN echo final\n"
+    )
+    result = doctor.check_dockerfile_pinned_tags(tmp_path)
+    assert result.status == doctor.Status.PASS

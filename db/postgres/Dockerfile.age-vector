@@ -7,21 +7,27 @@
 # Or via docker-compose at the repo root:
 #   docker compose up
 
-FROM apache/age:latest
+# Pinned to a versioned tag: `apache/age:latest` floated to PG18 upstream while
+# this Dockerfile still installed postgresql-server-dev-17, breaking the pgvector
+# build (postgres.h not found). AGE 1.7.0 is required by the app (see
+# src/mcp_handlers/lifecycle/lineage_reachability.py), so pin the PG18_1.7.0 tag
+# rather than the PG17 image (whose newest AGE is only 1.6.0).
+FROM apache/age:release_PG18_1.7.0
 
-# Install build dependencies for pgvector
+# Install build dependencies for pgvector. Use $PG_MAJOR (set by the upstream
+# postgres base image) so the dev headers always match the base PG version.
 USER root
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
-    postgresql-server-dev-17 \
+    postgresql-server-dev-$PG_MAJOR \
     && rm -rf /var/lib/apt/lists/*
 
 # Build and install pgvector
 # OPTFLAGS="" avoids SIMD instructions that cause "Illegal instruction" on
 # some CPUs (notably older x86_64 and ARM under emulation).
 RUN cd /tmp && \
-    git clone --branch v0.8.0 https://github.com/pgvector/pgvector.git && \
+    git clone --branch v0.8.3 https://github.com/pgvector/pgvector.git && \
     cd pgvector && \
     make OPTFLAGS="" && \
     make install && \

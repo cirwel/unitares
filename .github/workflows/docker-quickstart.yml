@@ -1,0 +1,60 @@
+name: Docker Quickstart
+
+# Exercises the documented quickstart end to end so upstream image drift can't
+# silently break it again. `apache/age:latest` floated PG17 -> PG18 and broke
+# `docker compose up && make demo` with nothing to catch it; this job builds the
+# real stack and runs the demo against it. Pure-stdlib demo (urllib), no paid
+# model API — GITHUB_TOKEN only.
+#
+# Path-filtered: only runs when the build inputs change, so the common Python-only
+# PR doesn't pay the image-build cost.
+
+on:
+  push:
+    branches: [ master, main ]
+    paths:
+      - 'db/postgres/**'
+      - 'docker-compose.yml'
+      - 'Dockerfile'
+      - 'scripts/demo/quick_demo.py'
+      - '.github/workflows/docker-quickstart.yml'
+  pull_request:
+    branches: [ master, main ]
+    paths:
+      - 'db/postgres/**'
+      - 'docker-compose.yml'
+      - 'Dockerfile'
+      - 'scripts/demo/quick_demo.py'
+      - '.github/workflows/docker-quickstart.yml'
+
+jobs:
+  quickstart:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Build and start the documented stack
+        run: docker compose up -d --wait --build
+
+      - name: Assert PG / AGE / pgvector versions
+        run: |
+          set -euo pipefail
+          versions=$(docker exec unitares-postgres-age psql -U postgres -d governance -tAc \
+            "SELECT extname||'='||extversion FROM pg_extension WHERE extname IN ('age','vector') ORDER BY extname;")
+          echo "$versions"
+          echo "$versions" | grep -qx 'age=1.7.0'   || { echo "::error::AGE not 1.7.0"; exit 1; }
+          echo "$versions" | grep -qx 'vector=0.8.3' || { echo "::error::pgvector not 0.8.3"; exit 1; }
+
+      - name: Run the quickstart demo against the stack
+        run: make demo
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
