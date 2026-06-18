@@ -117,6 +117,29 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
+  # ---------- /v1/effects (governed-effect record_only shadow) ----------
+  # Phase 3 thin slice of docs/proposals/governed-effect-plane-v0.md. An agent
+  # PROPOSES an effect; in record_only mode the plane observes (never acquires)
+  # the declared required_leases and returns a durable effect_id + the
+  # would-acquire observation. Nothing is enforced; execute mode is gated and
+  # returns 501. See UnitaresLeasePlane.GovernedEffect.
+  post "/v1/effects" do
+    case UnitaresLeasePlane.GovernedEffect.handle(conn.body_params) do
+      {:ok, body} ->
+        json(conn, 202, body)
+
+      {:error, :execute_not_implemented} ->
+        json(conn, 501, %{
+          ok: false,
+          error: "not_implemented",
+          reason: "execute mode not yet enabled; record_only only"
+        })
+
+      {:error, detail} when is_binary(detail) ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+    end
+  end
+
   # ---------- /v1/health ----------
   # Wave 2 §"Lease-integration boundary hardening" — Phase C (supervised
   # health). Liveness signal for the boundary itself: if this responds 200,
