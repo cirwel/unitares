@@ -12,7 +12,7 @@
 #     -e UNITARES_BIND_ALL_INTERFACES=1 \
 #     unitares-governance
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 

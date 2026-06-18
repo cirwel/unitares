@@ -36,6 +36,7 @@ from src.metrics_registry import (
 )
 from src.broadcaster import broadcaster_instance
 from src.services.http_tool_service import execute_http_tool
+from src.mcp_listen_config import check_mcp_bearer, mcp_bearer_required
 
 if TYPE_CHECKING:
     from starlette.applications import Starlette
@@ -177,14 +178,33 @@ def _http_unauthorized():
         {
             "success": False,
             "error": "Unauthorized",
-            "hint": "Set UNITARES_HTTP_API_TOKEN in your environment and pass it as: Authorization: Bearer <token>",
+            "hint": "Provide a valid bearer token: Authorization: Bearer <token>. Tokens come from UNITARES_MCP_BEARER_TOKENS (hosted) or UNITARES_HTTP_API_TOKEN (local).",
         },
         status_code=401,
     )
 
 
 def _check_http_auth(request, *, http_api_token: str | None) -> bool:
-    """Bearer token auth for HTTP endpoints. Trusted networks bypass auth."""
+    """Bearer token auth for HTTP endpoints.
+
+    Hosted mode — when ``UNITARES_MCP_BEARER_TOKENS`` is configured, the REST
+    surface inherits the strict ``/mcp`` posture: a valid bearer is required and
+    the trusted-network bypass does **not** apply. This closes a real gap: the
+    trusted set includes every RFC1918 range (10/8, 192.168/16, 172.16/12) plus
+    Tailscale, so a hosted server behind a cloud proxy (source IP typically
+    ``10.x``) would otherwise bypass auth on the write path. Same token, same
+    rule, both transports.
+
+    Local / self-host default — no MCP bearer configured: the legacy posture
+    stands. Trusted networks bypass, and the optional ``UNITARES_HTTP_API_TOKEN``
+    gates the rest.
+    """
+    # Hosted posture: the MCP bearer governs every transport; no IP bypass.
+    if mcp_bearer_required():
+        auth = request.headers.get("authorization") or request.headers.get("Authorization")
+        return check_mcp_bearer(auth)
+
+    # Legacy / local posture.
     if _is_trusted_network(request):
         return True
     if not http_api_token:
@@ -2783,6 +2803,9 @@ async def websocket_eisv_stream(websocket):
 
 async def http_debug_memory(request):
     """Top memory allocations via tracemalloc (if enabled)."""
+    # Debug endpoint — leaks internal paths/allocations; never serve it open.
+    if not _check_http_auth(request, http_api_token=os.getenv("UNITARES_HTTP_API_TOKEN")):
+        return _http_unauthorized()
     import tracemalloc
     if not tracemalloc.is_tracing():
         return JSONResponse({"error": "tracemalloc not enabled"}, status_code=503)
