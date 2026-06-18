@@ -862,7 +862,14 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
             details=raw_details,
             tags=normalize_tags(arguments.get("tags", [])),
             severity=severity,
-            status=arguments.get("status", "open"),
+            # Default status-less writes to "open" at the source. The unified
+            # knowledge(action="store") path arrives via params_step.model_dump(),
+            # which injects status=None into arguments — so .get("status", "open")
+            # would yield None, not the default. `or "open"` also folds an explicit
+            # null/empty back to "open" so the in-memory node, the response, and the
+            # broadcast all agree with the storage-layer `or "open"` coercion instead
+            # of surfacing a null the DB silently rewrites.
+            status=arguments.get("status") or "open",
             response_to=response_to,
             references_files=arguments.get("related_files", []),
             provenance=provenance,
