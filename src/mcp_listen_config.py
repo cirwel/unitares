@@ -10,10 +10,13 @@ See CLAUDE.md for environment variables.
 
 from __future__ import annotations
 
+import hmac
 import os
-from typing import List
+from typing import List, Optional
 
 from mcp.server.transport_security import TransportSecuritySettings
+
+_MCP_BEARER_TOKENS_ENV = "UNITARES_MCP_BEARER_TOKENS"
 
 
 def env_truthy(name: str, default: bool = False) -> bool:
@@ -77,3 +80,55 @@ def build_transport_security_settings() -> TransportSecuritySettings:
 def cors_extra_origins() -> List[str]:
     """Optional extra CORS origins from UNITARES_HTTP_CORS_EXTRA_ORIGINS (comma-separated)."""
     return split_csv_env("UNITARES_HTTP_CORS_EXTRA_ORIGINS")
+
+
+def mcp_bearer_tokens() -> List[str]:
+    """Allowlist of bearer tokens accepted on the ``/mcp`` endpoint.
+
+    Read fresh each call so an operator can rotate tokens without a restart
+    (mirrors the operator-token allowlist in identity/operator.py). Empty by
+    default: when empty the ``/mcp`` bearer gate is OFF and the endpoint
+    behaves exactly as before — this preserves the localhost / self-host
+    default where no token is configured.
+    """
+    return split_csv_env(_MCP_BEARER_TOKENS_ENV)
+
+
+def mcp_bearer_required() -> bool:
+    """True when a ``/mcp`` bearer allowlist is configured (gate is ON)."""
+    return bool(mcp_bearer_tokens())
+
+
+def check_mcp_bearer(
+    authorization_header: Optional[str],
+    allow: Optional[List[str]] = None,
+) -> bool:
+    """Authorize an inbound ``/mcp`` request against the bearer allowlist.
+
+    Returns ``True`` (allow) when the gate is OFF (no tokens configured) — the
+    default, so localhost dev and existing self-host deployments are unchanged.
+    When the gate is ON, returns ``True`` only if the request presents
+    ``Authorization: Bearer <tok>`` with ``<tok>`` in the allowlist. The token
+    comparison is constant-time.
+
+    ``allow`` may be passed by a caller that already fetched the allowlist this
+    request (the ASGI gate does, to avoid a second env read and the tiny
+    add/remove TOCTOU between "is the gate on" and "is this token valid"). When
+    omitted it is read fresh from the environment.
+
+    Deliberately, and unlike the HTTP REST gate (``http_api._is_trusted_network``),
+    there is **no trusted-network bypass** here: a hosted endpoint typically sits
+    behind a reverse proxy, so the source IP is the proxy's and an IP-based
+    bypass would defeat the gate. Every request authenticates.
+    """
+    if allow is None:
+        allow = mcp_bearer_tokens()
+    if not allow:
+        return True  # gate off — default posture
+    if not authorization_header or not authorization_header.startswith("Bearer "):
+        return False
+    presented = authorization_header[len("Bearer "):].strip()
+    if not presented:
+        return False
+    # Constant-time membership test over a small allowlist.
+    return any(hmac.compare_digest(presented, tok) for tok in allow)
