@@ -1110,6 +1110,35 @@ class TestGetStats:
         assert result["by_tag"] == {"python": 2, "bug": 1}
 
     @pytest.mark.asyncio
+    async def test_status_less_rows_reconcile_under_none_bucket(self):
+        """Discoveries with null/empty status must be bucketed (under None),
+        not dropped — so sum(by_status.values()) == total_discoveries.
+
+        Regression for dogfood 2026-06-18: collect(d.status) returns null for
+        status-less vertices; the old `Counter(s for s in statuses if s)`
+        dropped them, leaving by_status summing below total_discoveries
+        (observed live: 1066 total vs 1003 bucketed = 63 status-less rows).
+        """
+        kg, mock_db = make_kg_with_mock_db()
+
+        mock_db.graph_query.side_effect = [
+            [5],                                          # total discoveries
+            [["a1", "a1", "a2", "a3", "a4"]],             # collect(agent_ids)
+            [["insight", "bug", "note", "note", "note"]], # collect(types)
+            [["open", "resolved", None, "", "open"]],     # collect(statuses): 2 status-less
+            [3],                                          # count edges
+            [10],                                         # count tags
+            [["python"]],                                 # collect(tag names)
+        ]
+
+        result = await kg.get_stats(including_cold=True)
+
+        # Both the None and the "" status fold into the None bucket.
+        assert result["by_status"] == {"open": 2, "resolved": 1, None: 2}
+        # The invariant the live gap violated: buckets reconcile with the total.
+        assert sum(result["by_status"].values()) == result["total_discoveries"]
+
+    @pytest.mark.asyncio
     async def test_handles_empty_graph(self):
         """Should handle empty graph gracefully."""
         kg, mock_db = make_kg_with_mock_db()
