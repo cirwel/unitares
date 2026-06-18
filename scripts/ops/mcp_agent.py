@@ -12,7 +12,9 @@ Usage:
     python3 scripts/mcp_agent.py process_agent_update response_text="My work" complexity=0.6
 
 Features:
-    - Auto-detects Streamable HTTP (/mcp) vs SSE (/sse) based on URL
+    - Uses Streamable HTTP (/mcp), the UNITARES transport (auto-detected from
+      the URL). SSE remains only as a fallback for non-/mcp URLs — UNITARES no
+      longer serves /sse.
     - Handles session continuity (saves/loads .mcp_session)
     - Zero boilerplate
     - Clean JSON output
