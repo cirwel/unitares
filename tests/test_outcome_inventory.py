@@ -152,6 +152,8 @@ def test_format_inventory_report_exposes_zero_bad_strict_and_prior_coverage():
     assert "total_outcomes: 2" in report
     assert "strict_outcomes: 1" in report
     assert "strict_bad: 0" in report
+    assert "strict_bad_min_for_validation: 10" in report
+    assert "strict_bad_gap_to_min: 10" in report
     assert "task_failed" in report
     assert "prior_state_5m" in report
     assert "agent_reported_tool_result" in report
