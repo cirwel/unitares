@@ -16,7 +16,6 @@ Requires live Postgres + embeddings backend.
 import argparse
 import asyncio
 import json
-import math
 import os
 import statistics
 import sys
@@ -26,36 +25,8 @@ from typing import Any, Dict, List
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from scripts.eval.metrics import dcg, mrr, ndcg_at_k, recall_at_k  # noqa: F401  (dcg re-exported for callers)
 from src.knowledge_graph import get_knowledge_graph
-
-
-def dcg(relevances: List[int], k: int) -> float:
-    """Discounted cumulative gain at k. Binary relevance."""
-    return sum(rel / math.log2(i + 2) for i, rel in enumerate(relevances[:k]))
-
-
-def ndcg_at_k(ranked_ids: List[str], relevant_set: set, k: int) -> float:
-    """nDCG@k with binary relevance."""
-    rels = [1 if rid in relevant_set else 0 for rid in ranked_ids[:k]]
-    ideal_rels = sorted(rels, reverse=True)
-    ideal = dcg([1] * min(len(relevant_set), k), k)
-    if ideal == 0:
-        return 0.0
-    return dcg(rels, k) / ideal
-
-
-def recall_at_k(ranked_ids: List[str], relevant_set: set, k: int) -> float:
-    if not relevant_set:
-        return 0.0
-    hits = sum(1 for rid in ranked_ids[:k] if rid in relevant_set)
-    return hits / len(relevant_set)
-
-
-def mrr(ranked_ids: List[str], relevant_set: set) -> float:
-    for i, rid in enumerate(ranked_ids):
-        if rid in relevant_set:
-            return 1.0 / (i + 1)
-    return 0.0
 
 
 async def run_query(
