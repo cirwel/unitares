@@ -31,6 +31,9 @@ Report:
 If work should be delivered instead of left local, stage the intentional files
 and use the ship helper:
 
+- When the operator asks to ship, finish, deliver, open a PR, or otherwise
+  complete a delivery workflow, treat the default draft-PR route as authorized;
+  do not ask for a second confirmation just to push or open the draft PR.
 - `./scripts/dev/ship.sh --plan "commit message"` previews the delivery route
 - `./scripts/dev/ship.sh "commit message"` is the default route: a **draft PR for
   every change**, per `docs/operations/github-workflow-conventions.md` (the

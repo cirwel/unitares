@@ -137,6 +137,7 @@ Codex and Claude share one delivery contract so concurrent sessions stay predict
 
 - **Branch naming — one pattern, agent-prefixed:** `<agent>/<topic>-<short-id>` where `<agent>` is `claude` or `codex` (self-identifying for parallel attribution). Both `ship.sh`'s `<agent>/auto/<timestamp>-<slug>` and the web harness's `claude/<topic>-<id>` satisfy this shape. Never push to `main`/`master`.
 - **Delivery — draft PR for everything:** every session lands its work as a draft PR, regardless of agent and regardless of whether the change is runtime code or docs/tests. The operator is the merge gate. Do NOT direct-push to a shared branch and do NOT enable auto-merge by default. `ship.sh` enforces this: its default `auto` route opens a draft PR for every change (`--direct` opts out for docs/tests-only pushes; `--auto-merge` only when the operator explicitly asks).
+- **Delivery requests authorize delivery:** when the operator asks to ship, finish, deliver, open a PR, or otherwise complete a delivery workflow, Codex may assume branch -> commit -> push -> draft PR is in scope and should not ask for a second confirmation just to push or open the draft PR.
 - **Mark-ready / merge is a deliberate action:** a draft PR means "visible, not claiming merged." Only mark ready or merge after CI is green and you've confirmed no collision with an in-flight branch (see the single-writer-surface rules above).
 
 ## Substrate Tax: anyio-asyncio Coupling
