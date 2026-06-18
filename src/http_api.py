@@ -699,7 +699,10 @@ async def http_health(request):
         else:
             db_health = {"status": "no_pool"}
     except Exception as e:
-        db_health = {"status": "error", "error": str(e)}
+        # /health is public (no auth) — log the detail server-side, don't leak
+        # the raw exception text (DSN, host, internal paths) in the response.
+        logger.warning("/health DB pool check failed: %s", e, exc_info=True)
+        db_health = {"status": "error"}
 
     return JSONResponse({
         "status": "ok" if server_ready else "warming_up",
