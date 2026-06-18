@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import os
 import socket
+import stat
 import sys
 import tempfile
 from typing import Any
@@ -266,3 +267,57 @@ async def test_uds_listener_end_to_end_injects_peer_pid_into_scope() -> None:
     assert first.get("unitares_peer_pid") == os.getpid(), (
         f"expected unitares_peer_pid={os.getpid()}, got {first.get('unitares_peer_pid')!r}"
     )
+
+
+# =============================================================================
+# Socket permissions — 0600, race-free (regression: governance.sock 0666)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_uds_socket_created_mode_0600() -> None:
+    """The listener's socket must be owner-only (0600), not world-writable.
+
+    Regression for the live incident where uvicorn's own uds bind chmod'd the
+    socket to 0666, defeating the same-UID peer-cred threat boundary. We now
+    pre-bind under a tight umask and pass the socket to uvicorn, so 0666 is
+    never applied.
+    """
+    if sys.platform != "darwin":
+        pytest.skip("macOS-specific test")
+
+    async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] == "http":
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+    with tempfile.TemporaryDirectory() as tmp:
+        sock_path = os.path.join(tmp, "perms.sock")
+        listener_task = await uds_listener.start_uds_listener(
+            app, sock_path, log_level="error"
+        )
+        try:
+            assert os.path.exists(sock_path), "socket not created"
+            mode = stat.S_IMODE(os.stat(sock_path).st_mode)
+            assert mode == 0o600, f"expected 0600, got {oct(mode)} (world-writable risk)"
+            # And it must actually serve over that socket (perms didn't break it).
+            reader, writer = await asyncio.open_unix_connection(sock_path)
+            try:
+                writer.write(
+                    b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+                )
+                await writer.drain()
+                resp = await reader.read()
+                assert resp.startswith(b"HTTP/1.1 200"), resp[:40]
+            finally:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+        finally:
+            listener_task.cancel()
+            try:
+                await listener_task
+            except (asyncio.CancelledError, Exception):
+                pass
