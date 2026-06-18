@@ -38,6 +38,9 @@ from scripts.analysis.eisv_skeptic_report import (
     score_deltas_vs_baseline,
     summarize_conclusion,
 )
+from scripts.analysis.outcome_inventory import harness_lane_from_detail
+
+DEFAULT_EXCLUDED_HARNESS_LANES = ("beam",)
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,25 @@ def _fmt_lead(value: float) -> str:
 
 def _baseline(scores: Sequence[ModelScore]) -> ModelScore | None:
     return next((score for score in scores if score.name == "previous_outcome_bad"), None)
+
+
+def filter_rows_for_validation(
+    rows: Sequence[OutcomeRow],
+    *,
+    exclude_harness_lanes: Sequence[str] = DEFAULT_EXCLUDED_HARNESS_LANES,
+) -> list[OutcomeRow]:
+    """Exclude runtime-harness telemetry from EISV predictive slices.
+
+    Harness rows remain visible in the outcome inventory, but the ablation matrix
+    is about prior-state/EISV predictive lift. A runtime harness such as BEAM can
+    emit many externally verified task outcomes without a matching agent-state
+    trajectory; keeping it in the same slice can look like an EISV signal or a
+    coverage collapse when it is really instrumentation.
+    """
+    excluded = {str(lane) for lane in exclude_harness_lanes if str(lane)}
+    if not excluded:
+        return list(rows)
+    return [row for row in rows if harness_lane_from_detail(row.detail) not in excluded]
 
 
 def build_matrix_row(
@@ -120,6 +142,7 @@ def format_matrix_report(
     rows: Sequence[AblationMatrixRow],
     *,
     generated_at: datetime | None = None,
+    excluded_harness_lanes: Sequence[str] = (),
 ) -> str:
     """Render a compact markdown table for skeptical multi-slice reporting."""
     generated_at = generated_at or datetime.now(timezone.utc)
@@ -128,11 +151,21 @@ def format_matrix_report(
         "",
         f"Generated: {generated_at.strftime('%Y-%m-%d %H:%M:%S %Z')}",
         "",
+    ]
+    excluded = tuple(str(lane) for lane in excluded_harness_lanes if str(lane))
+    if excluded:
+        lines.extend(
+            [
+                "Excluded harness lanes: " + ", ".join(f"`{lane}`" for lane in excluded),
+                "",
+            ]
+        )
+    lines.extend([
         "Positive AUC delta means better ranking than `previous_outcome_bad`; positive Brier improvement means lower probability error. `Beats both?` is the conservative quick read.",
         "",
         "| Scope | Window days | Lead min | Trusted | Bad | Prior state | Prior risk | Baseline AUC | Baseline Brier | Best EISV/prior model | AUC delta | Brier improvement | Beats both? | Conclusion |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---|",
-    ]
+    ])
     if rows:
         for row in rows:
             lines.append(
@@ -163,6 +196,10 @@ def _parse_float_list(raw: str) -> list[float]:
     return [float(part.strip()) for part in raw.split(",") if part.strip()]
 
 
+def _parse_string_list(raw: str) -> tuple[str, ...]:
+    return tuple(part.strip() for part in raw.split(",") if part.strip())
+
+
 def _parse_scope_list(raw: str) -> list[str]:
     scopes = [part.strip() for part in raw.split(",") if part.strip()]
     invalid = [scope for scope in scopes if scope not in {"strict", "task"}]
@@ -179,17 +216,21 @@ async def build_matrix_from_db(
     leads: Sequence[float],
     train_fraction: float = 0.7,
     min_feature_rows: int = 30,
+    exclude_harness_lanes: Sequence[str] = DEFAULT_EXCLUDED_HARNESS_LANES,
 ) -> list[AblationMatrixRow]:
     matrix_rows: list[AblationMatrixRow] = []
     for scope in scopes:
         outcome_types = STRICT_OUTCOMES if scope == "strict" else TASK_OUTCOMES
         for window_days in windows:
             for lead_minutes in leads:
-                outcome_rows = await fetch_rows(
-                    db_url,
-                    window_days=window_days,
-                    lead_minutes=lead_minutes,
-                    outcome_types=outcome_types,
+                outcome_rows = filter_rows_for_validation(
+                    await fetch_rows(
+                        db_url,
+                        window_days=window_days,
+                        lead_minutes=lead_minutes,
+                        outcome_types=outcome_types,
+                    ),
+                    exclude_harness_lanes=exclude_harness_lanes,
                 )
                 matrix_rows.append(
                     build_matrix_row(
@@ -212,6 +253,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--leads", type=_parse_float_list, default="0,5,30")
     parser.add_argument("--train-fraction", type=float, default=0.7)
     parser.add_argument("--min-feature-rows", type=int, default=30)
+    parser.add_argument(
+        "--exclude-harness-lanes",
+        type=_parse_string_list,
+        default=DEFAULT_EXCLUDED_HARNESS_LANES,
+        help="Comma-separated runtime harness lanes excluded from predictive slices; empty string includes all.",
+    )
     parser.add_argument("--output", help="Optional markdown output path")
     return parser.parse_args(argv)
 
@@ -227,8 +274,9 @@ async def main_async(args: argparse.Namespace) -> int:
         leads=args.leads,
         train_fraction=args.train_fraction,
         min_feature_rows=args.min_feature_rows,
+        exclude_harness_lanes=args.exclude_harness_lanes,
     )
-    report = format_matrix_report(rows)
+    report = format_matrix_report(rows, excluded_harness_lanes=args.exclude_harness_lanes)
     if args.output:
         path = Path(args.output)
         path.parent.mkdir(parents=True, exist_ok=True)
