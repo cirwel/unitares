@@ -45,6 +45,22 @@ jobs:
         pip install "ruff>=0.15"
         ruff check .
 
+    - name: Lint Dockerfiles for floating image tags
+      # Fails the build if any Dockerfile/compose base image floats (`:latest`
+      # or untagged). DB-free doctor check, so it runs without a live Postgres.
+      run: |
+        python - <<'PY'
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, "scripts/dev")
+        import unitares_doctor as d
+        r = d.check_dockerfile_pinned_tags(Path("."))
+        print(f"[{r.status.value.upper()}] {r.message}")
+        if r.detail:
+            print(r.detail)
+        sys.exit(1 if r.status == d.Status.FAIL else 0)
+        PY
+
     - name: Run smoke tests
       run: |
         make test-smoke

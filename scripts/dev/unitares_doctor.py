@@ -679,6 +679,85 @@ def _redact(db_url: str) -> str:
     return db_url
 
 
+def check_dockerfile_pinned_tags(repo_root: Path) -> CheckResult:
+    """FAIL if any Dockerfile base image or compose `image:` uses a floating
+    tag (`:latest`, or no tag at all).
+
+    Why this is a gate: `apache/age:latest` silently floated PG17 -> PG18
+    upstream and broke the documented `docker compose up && make demo`
+    quickstart (pgvector compiled against the wrong PG headers, the PG18
+    entrypoint rejected the old volume mount). Nothing caught it because the
+    base image was unpinned and the quickstart was never built in CI. A pinned
+    digest/tag turns "upstream moved under us" into an explicit, reviewable
+    version bump (which Dependabot's docker ecosystem then proposes).
+
+    A `:latest` literal or a tagless `FROM image` / `image: name` is a FAIL.
+    Pinned tags (`:release_PG18_1.7.0`), digests (`@sha256:...`), and build
+    references to other stages (`FROM builder`) are fine. Local build stage
+    names declared earlier in the same file are not flagged.
+    """
+    name, mode = "dockerfile_pinned_tags", "local"
+
+    # Dockerfiles anywhere + root compose files. Skip vendored/build trees.
+    skip_parts = {"node_modules", "deps", "_build", ".git", ".venv", "venv"}
+    targets: list[Path] = []
+    for pat in ("**/Dockerfile", "**/Dockerfile.*"):
+        targets += repo_root.glob(pat)
+    for pat in ("docker-compose.yml", "docker-compose.yaml",
+                "docker-compose.*.yml", "docker-compose.*.yaml"):
+        targets += repo_root.glob(pat)
+    targets = [p for p in sorted(set(targets))
+               if not (skip_parts & set(p.parts))]
+
+    def _is_floating(ref: str) -> bool:
+        ref = ref.strip()
+        if "@sha256:" in ref:           # digest-pinned
+            return False
+        # Strip a registry-host:port prefix so its colon isn't read as a tag.
+        last = ref.rsplit("/", 1)[-1]
+        if ":" not in last:             # no tag at all -> floats to :latest
+            return True
+        return last.rsplit(":", 1)[1] == "latest"
+
+    offenders: list[str] = []
+    for f in targets:
+        try:
+            lines = f.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        stage_names: set[str] = set()
+        for i, raw in enumerate(lines, 1):
+            line = raw.strip()
+            if line.startswith("FROM "):
+                parts = line[5:].split()
+                if not parts:
+                    continue
+                image = parts[0]
+                # `FROM x AS name` registers a local stage; later `FROM name`
+                # referencing it is not an external image.
+                if image in stage_names:
+                    pass
+                elif _is_floating(image):
+                    offenders.append(f"{f.relative_to(repo_root)}:{i} FROM {image}")
+                if len(parts) >= 3 and parts[1].upper() == "AS":
+                    stage_names.add(parts[2])
+            elif line.startswith("image:"):
+                ref = line.split(":", 1)[1].strip().strip('"').strip("'")
+                if ref and _is_floating(ref):
+                    offenders.append(f"{f.relative_to(repo_root)}:{i} image: {ref}")
+
+    if not targets:
+        return CheckResult(name, mode, Status.SKIP, "no Dockerfiles or compose files found")
+    if offenders:
+        return CheckResult(
+            name, mode, Status.FAIL,
+            f"{len(offenders)} floating base image tag(s) — pin to a version or digest",
+            detail="\n".join(offenders),
+        )
+    return CheckResult(name, mode, Status.PASS,
+                       f"all base images pinned ({len(targets)} file(s) scanned)")
+
+
 def build_checks(repo_root: Path, db_url: str) -> list[Check]:
     loaded_cache: dict[str, set[str]] = {}
 
@@ -698,6 +777,8 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
               lambda: check_elixir_deprecated_scheme_lint(db_url, repo_root)),
         Check("elixir_scheme_grammar_lint", "local",
               lambda: check_elixir_scheme_grammar_lint(db_url, repo_root)),
+        Check("dockerfile_pinned_tags", "local",
+              lambda: check_dockerfile_pinned_tags(repo_root)),
         Check("anchor_directory", "local", check_anchor_dir),
         Check("secrets_file", "local", check_secrets_file),
         Check("http_listening", "operator", check_http_listening),
