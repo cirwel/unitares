@@ -1,0 +1,2 @@
+# Node test toolchain (vitest + jsdom) — dev-only, not shipped with the static dashboard
+node_modules/
