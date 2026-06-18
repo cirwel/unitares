@@ -116,6 +116,53 @@ def _normalize_discovery_type(discovery_type: Any) -> Any:
     return discovery_type
 
 
+# Tool-call serialization markers that must never appear in a stored discovery.
+# Their presence means the harness folded a later argument (commonly `tags`)
+# into a text field as raw markup while the structured arg arrived empty —
+# storing it yields a corrupt, unsearchable row (tags=[] + literal markup in
+# details) with no warning. Legit prose effectively never contains these, so a
+# hard reject is low-false-positive. (KG 2026-06-13 footgun: "knowledge
+# store/update silently accepts degenerate writes".)
+_TOOLCALL_MARKUP_MARKERS = (
+    "<parameter name=",
+    "</parameter>",
+    "<invoke name=",
+    "</invoke>",
+    "<function_calls>",
+    "</function_calls>",
+    "antml:parameter",
+    "antml:invoke",
+)
+
+
+def _detect_toolcall_markup_leak(*texts: Any) -> "str | None":
+    """Return the first tool-call markup marker found in any text arg, else None."""
+    for text in texts:
+        if not isinstance(text, str):
+            continue
+        for marker in _TOOLCALL_MARKUP_MARKERS:
+            if marker in text:
+                return marker
+    return None
+
+
+def _degenerate_write_response(leaked_marker: str, field: str):
+    """Loud, actionable reject for a text field that absorbed tool-call markup."""
+    return error_response(
+        f"Refusing to store: `{field}` contains tool-call markup "
+        f"({leaked_marker!r}). This usually means a later argument (commonly "
+        f"`tags`) was folded into the text and the structured argument arrived "
+        f"empty — storing it would persist a corrupt, unsearchable row. Re-send "
+        f"with each argument as a separate parameter.",
+        error_code="degenerate_write_rejected",
+        error_category="validation_error",
+        recovery={
+            "action": "Resend the call with summary, content/details, and tags "
+            "as distinct arguments; do not embed tags or markup inside content."
+        },
+    )
+
+
 def _invalid_enum_response(field: str, value: Any, valid_values: set[str], *, tip: str | None = None):
     normalized = str(value).strip().lower()
     suggestion = None
@@ -631,6 +678,19 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
         raw_summary = summary
         # Accept both 'details' and 'content' as parameter names
         raw_details = arguments.get("details") or arguments.get("content") or ""
+
+        # Foolproofing (KG 2026-06-13 footgun): reject a write whose text fields
+        # absorbed tool-call markup — the harness folded a later argument
+        # (commonly `tags`) into summary/content and the structured arg arrived
+        # empty. Silently storing it persists a corrupt, unsearchable row.
+        leaked_marker = _detect_toolcall_markup_leak(raw_summary, raw_details)
+        if leaked_marker:
+            field = (
+                "summary"
+                if isinstance(raw_summary, str) and leaked_marker in raw_summary
+                else "content"
+            )
+            return [_degenerate_write_response(leaked_marker, field)]
 
         # Track truncation for visibility (v2.5.0+)
         truncation_info = {}
@@ -1912,6 +1972,18 @@ async def handle_update_discovery_status_graph(arguments: Dict[str, Any]) -> Seq
     severity = arguments.get("severity")
     discovery_type = arguments.get("discovery_type")
     tags = arguments.get("tags")
+
+    # Foolproofing (KG 2026-06-13 footgun): same guard as the store path —
+    # reject an edit whose text fields absorbed tool-call markup rather than
+    # silently persisting a corrupt update.
+    leaked_marker = _detect_toolcall_markup_leak(summary, raw_details, resolution_note_text)
+    if leaked_marker:
+        field = (
+            "summary"
+            if isinstance(summary, str) and leaked_marker in summary
+            else "content"
+        )
+        return [_degenerate_write_response(leaked_marker, field)]
 
     if not any(value is not None for value in (status, raw_details, resolution_note_text, summary, severity, discovery_type, tags)):
         return [error_response(
