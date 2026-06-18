@@ -34,7 +34,6 @@ from src.metrics_registry import (
     SERVER_INFO,
     SERVER_UPTIME,
 )
-from src.connection_tracker import CONNECTIONS_ACTIVE
 from src.broadcaster import broadcaster_instance
 from src.services.http_tool_service import execute_http_tool
 
@@ -42,7 +41,6 @@ if TYPE_CHECKING:
     from starlette.applications import Starlette
     from starlette.requests import Request
     from starlette.websockets import WebSocket
-    from src.connection_tracker import ConnectionTracker
 
 logger = get_logger(__name__)
 
@@ -669,7 +667,6 @@ async def http_health(request):
     server_ready = request.state._http_api_server_ready_fn()
     server_start_time = request.state._http_api_server_start_time
     server_version = request.state._http_api_server_version
-    conn_tracker: ConnectionTracker = request.state._http_api_connection_tracker
     has_streamable_http = request.state._http_api_has_streamable_http
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
 
@@ -711,10 +708,6 @@ async def http_health(request):
             "seconds": int(uptime_seconds),
             "formatted": uptime_str,
             "started_at": datetime.fromtimestamp(server_start_time).isoformat() if server_start_time else None
-        },
-        "connections": {
-            "active": conn_tracker.count,
-            "healthy": sum(1 for c in conn_tracker.connections.values() if c.get("health_status") == "healthy")
         },
         "database": db_health,
         "transports": {
@@ -800,7 +793,6 @@ async def http_metrics(request):
     # These are injected by register_http_routes via request.state
     server_start_time = request.state._http_api_server_start_time
     server_version = request.state._http_api_server_version
-    conn_tracker: ConnectionTracker = request.state._http_api_connection_tracker
 
     try:
         # Update gauges with current values before generating output
@@ -810,9 +802,6 @@ async def http_metrics(request):
         # Server uptime
         uptime_seconds = time.time() - server_start_time
         SERVER_UPTIME.set(uptime_seconds)
-
-        # Connection metrics
-        CONNECTIONS_ACTIVE.set(conn_tracker.count)
 
         # Agent metrics (from cached metadata — no DB call in handler path)
         try:
@@ -2837,7 +2826,6 @@ async def http_debug_memory(request):
 def register_http_routes(
     app: Starlette,
     *,
-    connection_tracker: ConnectionTracker,
     server_ready_fn,
     server_start_time: float,
     server_version: str,
@@ -2856,7 +2844,7 @@ def register_http_routes(
     from starlette.types import ASGIApp, Receive, Scope, Send
 
     # Tiny middleware that injects server context into request.state
-    # so endpoint handlers can access connection_tracker, server_version, etc.
+    # so endpoint handlers can access server_ready_fn, server_version, etc.
     class _InjectContextMiddleware:
         def __init__(self, app: ASGIApp):
             self.app = app
@@ -2864,7 +2852,6 @@ def register_http_routes(
         async def __call__(self, scope: Scope, receive: Receive, send: Send):
             if scope["type"] in ("http", "websocket"):
                 state = scope.setdefault("state", {})
-                state["_http_api_connection_tracker"] = connection_tracker
                 state["_http_api_server_ready_fn"] = server_ready_fn
                 state["_http_api_server_start_time"] = server_start_time
                 state["_http_api_server_version"] = server_version

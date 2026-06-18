@@ -76,9 +76,7 @@ SERVER_START_TIME = time.time()  # Track server start time for uptime metric
 from src.metrics_registry import (
     TOOL_CALLS_TOTAL, TOOL_CALL_DURATION,
 )
-from src.connection_tracker import (
-    ConnectionTracker, ConnectionTrackingMiddleware,
-)
+from src.connection_tracker import ConnectionTrackingMiddleware
 
 # Try to import MCP SDK
 try:
@@ -104,13 +102,6 @@ from src.wave3a_beam_proxy import proxy_to_beam as _wave3a_proxy_to_beam
 
 # Tool schemas are now in src/tool_schemas.py (shared module)
 
-# ============================================================================
-# Connection Tracking for Multi-Agent Awareness
-# (ConnectionTracker and ConnectionTrackingMiddleware live in src/connection_tracker.py)
-# ============================================================================
-
-# Global connection tracker
-connection_tracker = ConnectionTracker()
 
 def _session_id_from_ctx(ctx: Context | None) -> str | None:
     """
@@ -860,7 +851,6 @@ async def main():
         # Class lives in src/connection_tracker.py — see ConnectionTrackingMiddleware
         app.add_middleware(
             ConnectionTrackingMiddleware,
-            connection_tracker=connection_tracker,
             server_ready_fn=lambda: SERVER_READY,
             server_version=SERVER_VERSION,
         )
@@ -880,10 +870,7 @@ async def main():
             SERVER_READY = True
             SERVER_STARTUP_TIME = datetime.now()
 
-        start_all_background_tasks(
-            connection_tracker=connection_tracker,
-            set_ready=_set_server_ready,
-        )
+        start_all_background_tasks(set_ready=_set_server_ready)
 
         # === HTTP REST endpoints for non-MCP clients (Llama, Mistral, etc.) ===
         HTTP_CORS_ALLOW_ORIGIN = os.getenv("UNITARES_HTTP_CORS_ALLOW_ORIGIN")  # e.g. "*" or "http://localhost:3000"
@@ -891,7 +878,6 @@ async def main():
         from src.http_api import register_http_routes
         register_http_routes(
             app,
-            connection_tracker=connection_tracker,
             server_ready_fn=lambda: SERVER_READY,
             server_start_time=SERVER_START_TIME,
             server_version=SERVER_VERSION,
