@@ -1,0 +1,127 @@
+/*
+ * UNITARES Dashboard — Design Tokens (redesign reference)
+ * --------------------------------------------------------
+ * The discipline, in one file. Everything visual derives from these
+ * variables: one calm base, ONE accent, and a small set of semantic
+ * data-hues that are deliberately desaturated — they carry meaning in
+ * charts and metrics, never decoration. Swap [data-theme] to reskin the
+ * whole app; no component knows which theme is active.
+ *
+ * This replaces the role that 5,877 lines of accreted styles.css plays
+ * today. Components reference tokens, not raw hex.
+ */
+
+:root {
+  /* ---- Type scale (1.20 minor-third), tabular figures for data ---- */
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Menlo", monospace;
+
+  --text-xs:   0.75rem;
+  --text-sm:   0.8125rem;
+  --text-base: 0.9375rem;
+  --text-md:   1.0625rem;
+  --text-lg:   1.375rem;
+  --text-xl:   1.875rem;
+  --text-2xl:  2.75rem;   /* hero metric numbers */
+  --text-3xl:  3.5rem;
+
+  --tracking-label: 0.08em;  /* small-caps section labels */
+  --leading-tight: 1.15;
+  --leading-body: 1.55;
+
+  /* ---- Spacing (8px base, generous) ---- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  --hairline: 1px;
+  --maxw: 1180px;
+
+  /* motion — restrained */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --dur: 180ms;
+}
+
+/* =================  THEME: PAPER (light)  ================= */
+:root,
+[data-theme="paper"] {
+  --bg:        #f6f2ea;  /* warm paper */
+  --bg-sunken: #efe9dd;
+  --surface:   #fffdf8;  /* cards float a shade above the page */
+  --surface-2: #faf6ee;
+
+  --ink:       #211e1a;  /* near-black, warm */
+  --ink-2:     #4a443c;  /* secondary text */
+  --muted:     #8a8278;  /* labels, captions */
+  --faint:     #b7afa2;
+
+  --line:      #e6dfd2;  /* hairlines */
+  --line-2:    #d8cfbd;
+
+  --accent:        #b8502e;  /* clay — the ONE accent */
+  --accent-soft:   #f1e3da;
+  --accent-ink:    #ffffff;
+
+  /* semantic state (desaturated — data only) */
+  --ok:     #4f7d5e;
+  --warn:   #b07d2b;
+  --hot:    #b8502e;
+  --danger: #a8412f;
+  --info:   #4a6f93;
+
+  /* EISV data-hues — calm, distinguishable, never neon */
+  --eisv-e: #6e5aa8;  /* energy   — violet  */
+  --eisv-i: #3f8a6e;  /* integrity— green   */
+  --eisv-s: #b07d2b;  /* entropy  — amber   */
+  --eisv-v: #a8412f;  /* valence  — red     */
+  --eisv-c: #3f7d93;  /* coherence— teal    */
+
+  --shadow: 0 1px 2px rgba(40, 30, 16, 0.04), 0 6px 20px rgba(40, 30, 16, 0.05);
+  --shadow-soft: 0 1px 0 rgba(40, 30, 16, 0.03);
+}
+
+/* =================  THEME: INK (dark)  ================= */
+[data-theme="ink"] {
+  --bg:        #19181a;
+  --bg-sunken: #141315;
+  --surface:   #211f22;
+  --surface-2: #262428;
+
+  --ink:       #ece8e2;
+  --ink-2:     #c2bcb2;
+  --muted:     #8d867c;
+  --faint:     #5e5852;
+
+  --line:      #322f33;
+  --line-2:    #3d3a3e;
+
+  --accent:        #d97757;  /* clay, lifted for dark */
+  --accent-soft:   #33241f;
+  --accent-ink:    #1a120e;
+
+  --ok:     #6fae84;
+  --warn:   #d4a24c;
+  --hot:    #d97757;
+  --danger: #d4705e;
+  --info:   #6f9bc4;
+
+  --eisv-e: #a18fd6;
+  --eisv-i: #5fb992;
+  --eisv-s: #d4a24c;
+  --eisv-v: #d4705e;
+  --eisv-c: #5fa6c4;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 28px rgba(0, 0, 0, 0.35);
+  --shadow-soft: 0 1px 0 rgba(0, 0, 0, 0.2);
+}

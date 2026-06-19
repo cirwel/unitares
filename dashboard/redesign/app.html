@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en" data-theme="ink">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UNITARES · Governance</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="./tokens.css" />
+<link rel="stylesheet" href="./kit.css" />
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="topbar">
+    <span class="brand">UNITARES<span class="dot">.</span></span>
+    <span class="brand-sub">Governance</span>
+    <span class="spring"></span>
+    <span class="server-stat" id="serverStat">—</span>
+    <button class="theme-toggle" id="themeBtn">◑ paper</button>
+  </header>
+
+  <nav class="nav" id="nav">
+    <a href="#overview" class="active" data-section="overview">Overview</a>
+    <a href="#agents" data-section="agents">Agents</a>
+    <a href="#discoveries" data-section="discoveries">Discoveries</a>
+    <a href="#dialectic" data-section="dialectic">Dialectic</a>
+    <a href="#activity" data-section="activity">Activity</a>
+    <a href="#eisv" data-section="eisv">EISV</a>
+    <a href="#residents" data-section="residents">Residents</a>
+  </nav>
+
+  <main id="main">
+    <!-- Overview (increment 1) -->
+    <section class="section" data-pane="overview">
+      <div class="eyebrow">Resident Fleet <span class="src-badge" id="resSrc"></span></div>
+      <div class="residents" id="residents"></div>
+      <div class="attn-band" id="attn" hidden></div>
+      <div class="grid" id="stats" style="margin-bottom:var(--space-7)"></div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Pulse</h2><span class="who" id="pulseWho">—</span>
+          <span class="spring"></span>
+          <span class="verdict" id="pulseVerdict"><span class="pip"></span><span>—</span></span>
+          <span class="fresh" id="pulseFresh"></span>
+        </div>
+        <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:var(--space-7);align-items:center" id="pulseMain">
+          <div>
+            <div class="risk-label"><span class="k">Risk</span><span class="v" id="riskVal">—</span></div>
+            <div class="track"><div class="fill" id="riskFill" style="width:0%"></div></div>
+            <div class="ticks">
+              <span style="left:35%">approve</span><span style="left:60%">proceed</span><span style="left:70%">pause</span>
+            </div>
+          </div>
+          <div class="eisv" id="eisv"></div>
+        </div>
+      </section>
+    </section>
+
+    <!-- Agents (increment 2) -->
+    <section class="section" data-pane="agents" hidden>
+      <h2 class="section-title">Agents</h2>
+      <div id="ag-mount"><p class="empty">loading…</p></div>
+    </section>
+
+    <!-- Discoveries (increment 3) -->
+    <section class="section" data-pane="discoveries" hidden>
+      <h2 class="section-title">Discoveries</h2>
+      <div id="dsc-mount"><p class="empty">loading…</p></div>
+    </section>
+
+    <!-- Dialectic (increment 4) -->
+    <section class="section" data-pane="dialectic" hidden>
+      <h2 class="section-title">Dialectic</h2>
+      <div id="dlc-mount"><p class="empty">loading…</p></div>
+    </section>
+
+    <!-- Activity (increment 5) -->
+    <section class="section" data-pane="activity" hidden>
+      <h2 class="section-title">Activity</h2>
+      <div id="act-mount"><p class="empty">loading…</p></div>
+    </section>
+
+    <!-- Sections built in later increments -->
+    <section class="section" data-pane="eisv" hidden>
+      <h2 class="section-title">EISV</h2>
+      <div id="eisv-mount"><p class="empty">loading…</p></div>
+    </section>
+    <section class="section" data-pane="residents" hidden>
+      <h2 class="section-title">Residents</h2>
+      <div id="res-mount"><p class="empty">loading…</p></div>
+    </section>
+  </main>
+
+  <p class="footnote" id="foot"></p>
+</div>
+
+<script src="./snapshot.js"></script>
+<script src="./data.js"></script>
+<script src="./sections/landing.js"></script>
+<script src="./sections/agents.js"></script>
+<script src="./sections/discoveries.js"></script>
+<script src="./sections/dialectic.js"></script>
+<script src="./sections/activity.js"></script>
+<script src="./sections/eisv.js"></script>
+<script src="./sections/residents.js"></script>
+<script>
+// theme toggle
+const themeBtn = document.getElementById("themeBtn");
+const qp = new URLSearchParams(location.search).get("theme");
+if (qp === "ink" || qp === "paper") document.documentElement.setAttribute("data-theme", qp);
+function syncThemeLabel() {
+  themeBtn.textContent = document.documentElement.getAttribute("data-theme") === "ink" ? "◑ paper" : "◐ ink";
+}
+syncThemeLabel();
+themeBtn.onclick = () => {
+  const ink = document.documentElement.getAttribute("data-theme") === "ink";
+  document.documentElement.setAttribute("data-theme", ink ? "paper" : "ink");
+  syncThemeLabel();
+  if (window.EISV && window.EISV.retheme) window.EISV.retheme();
+};
+
+// section switch
+const nav = document.getElementById("nav");
+nav.addEventListener("click", (e) => {
+  const a = e.target.closest("a[data-section]");
+  if (!a) return;
+  e.preventDefault();
+  const id = a.dataset.section;
+  nav.querySelectorAll("a").forEach((x) => x.classList.toggle("active", x === a));
+  document.querySelectorAll("[data-pane]").forEach((p) => { p.hidden = p.dataset.pane !== id; });
+  lazyLoad(id);
+});
+
+const loaded = {};
+function lazyLoad(id) {
+  if (loaded[id]) return;
+  if (id === "agents" && window.Agents) { loaded[id] = true; window.Agents.load(); }
+  if (id === "discoveries" && window.Discoveries) { loaded[id] = true; window.Discoveries.load(); }
+  if (id === "dialectic" && window.Dialectic) { loaded[id] = true; window.Dialectic.load(); }
+  if (id === "activity" && window.Activity) { loaded[id] = true; window.Activity.load(); }
+  if (id === "eisv" && window.EISV) { loaded[id] = true; window.EISV.load(); }
+  if (id === "residents" && window.Residents) { loaded[id] = true; window.Residents.load(); }
+}
+
+// boot
+window.Landing.render();
+(function openFromHash() {
+  const id = (location.hash || "").replace("#", "");
+  const link = id && nav.querySelector(`a[data-section="${id}"]`);
+  if (link) link.click();
+})();
+</script>
+</body>
+</html>

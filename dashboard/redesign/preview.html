@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UNITARES · redesign reference</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="./tokens.css" />
+<style>
+/* ============================================================
+   COMPONENT LAYER (reference)
+   In the real migration these become small files behind the
+   existing nav. Here they live inline so the page is portable
+   and renders with no server. Every value derives from tokens.
+   ============================================================ */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { background: var(--bg); }
+body {
+  font-family: var(--font-sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: var(--leading-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  padding-bottom: var(--space-8);
+}
+.wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--space-5); }
+
+/* ---- top bar ---- */
+.topbar {
+  display: flex; align-items: baseline; gap: var(--space-4);
+  padding: var(--space-5) 0 var(--space-4);
+  border-bottom: var(--hairline) solid var(--line);
+  margin-bottom: var(--space-6);
+}
+.brand { font-family: var(--font-display); font-weight: 600; font-size: var(--text-lg);
+  letter-spacing: -0.01em; color: var(--ink); }
+.brand .dot { color: var(--accent); }
+.brand-sub { font-size: var(--text-sm); color: var(--muted); letter-spacing: var(--tracking-label);
+  text-transform: uppercase; }
+.topbar .spring { flex: 1; }
+.server-stat { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted); }
+.server-stat b { color: var(--ink-2); font-weight: 500; }
+.theme-toggle {
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-2);
+  background: var(--surface); border: var(--hairline) solid var(--line-2);
+  border-radius: var(--radius-pill); padding: var(--space-1) var(--space-3);
+  cursor: pointer; transition: all var(--dur) var(--ease);
+}
+.theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ---- section label ---- */
+.eyebrow {
+  font-size: var(--text-xs); letter-spacing: var(--tracking-label);
+  text-transform: uppercase; color: var(--muted); font-weight: 600;
+  margin-bottom: var(--space-3);
+}
+
+/* ---- residents strip ---- */
+.residents { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-4); }
+.res {
+  display: flex; align-items: center; gap: var(--space-3);
+  background: var(--surface); border: var(--hairline) solid var(--line);
+  border-radius: var(--radius-pill); padding: var(--space-2) var(--space-4) var(--space-2) var(--space-3);
+  box-shadow: var(--shadow-soft);
+}
+.res .pip { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; }
+.res.attention { border-color: var(--warn); }
+.res.attention .pip { background: var(--warn); }
+.res.dark .pip { background: var(--faint); }
+.res .name { font-weight: 500; font-size: var(--text-sm); }
+.res .meta { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted); }
+
+/* ---- attention banner ---- */
+.attn-band {
+  display: flex; align-items: center; gap: var(--space-3);
+  background: var(--accent-soft); border: var(--hairline) solid var(--line-2);
+  border-left: 2px solid var(--warn);
+  border-radius: var(--radius-md); padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-6); font-size: var(--text-sm); color: var(--ink-2);
+}
+.attn-band b { color: var(--ink); font-weight: 600; }
+.attn-band .glyph { color: var(--warn); font-weight: 600; }
+
+/* ---- stats grid ---- */
+.grid {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4); margin-bottom: var(--space-7);
+}
+.card {
+  background: var(--surface); border: var(--hairline) solid var(--line);
+  border-radius: var(--radius-lg); padding: var(--space-5);
+  box-shadow: var(--shadow); display: flex; flex-direction: column; gap: var(--space-2);
+  transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.card:hover { border-color: var(--line-2); }
+.card h3 {
+  font-size: var(--text-xs); letter-spacing: var(--tracking-label);
+  text-transform: uppercase; color: var(--muted); font-weight: 600;
+}
+.card .num {
+  font-family: var(--font-mono); font-size: var(--text-2xl); font-weight: 500;
+  line-height: 1; letter-spacing: -0.02em; color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.card .num .of { font-size: var(--text-lg); color: var(--faint); }
+.card .sub { font-size: var(--text-xs); color: var(--muted); }
+.card .sub.up { color: var(--ok); } .card .sub.down { color: var(--danger); }
+.card.wide { grid-column: span 2; }
+.card.accent-rule { border-top: 2px solid var(--accent); }
+
+/* trust-tier mini bars */
+.tiers { display: flex; gap: 3px; align-items: flex-end; height: 34px; margin-top: var(--space-1); }
+.tiers .t { flex: 1; border-radius: 3px 3px 0 0; background: var(--eisv-c); opacity: 0.85; }
+.tiers .t.strong { background: var(--eisv-i); }
+.tiers .t.medium { background: var(--eisv-s); }
+.tiers .t.weak { background: var(--faint); }
+.legend { display: flex; gap: var(--space-3); font-size: var(--text-xs); color: var(--muted); }
+.legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 4px; }
+
+/* ---- pulse panel ---- */
+.panel {
+  background: var(--surface); border: var(--hairline) solid var(--line);
+  border-radius: var(--radius-lg); padding: var(--space-6); box-shadow: var(--shadow);
+}
+.panel-head { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-5); }
+.panel-head h2 { font-family: var(--font-display); font-weight: 500; font-size: var(--text-lg); }
+.panel-head .who { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--accent); }
+.panel-head .spring { flex: 1; }
+.verdict {
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  font-size: var(--text-sm); font-weight: 500; color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill);
+}
+.verdict .pip { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.fresh { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted); }
+
+.pulse-main { display: grid; grid-template-columns: 1.4fr 1fr; gap: var(--space-7); align-items: center; }
+.risk-label { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: var(--space-2); }
+.risk-label .k { font-size: var(--text-xs); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.risk-label .v { font-family: var(--font-mono); font-size: var(--text-xl); color: var(--ink); font-variant-numeric: tabular-nums; }
+.track { height: 8px; background: var(--bg-sunken); border-radius: var(--radius-pill); position: relative; overflow: hidden; }
+.track .fill { height: 100%; border-radius: var(--radius-pill); background: var(--ok); transition: width var(--dur) var(--ease); }
+.ticks { position: relative; height: 18px; margin-top: var(--space-2); }
+.ticks span { position: absolute; transform: translateX(-50%); font-size: 0.68rem; color: var(--faint); font-family: var(--font-mono); }
+.ticks span::before { content: ""; position: absolute; top: -6px; left: 50%; width: 1px; height: 4px; background: var(--line-2); }
+
+/* eisv readout */
+.eisv { display: flex; flex-direction: column; gap: var(--space-3); }
+.eisv-row { display: grid; grid-template-columns: 16px 1fr 44px; align-items: center; gap: var(--space-3); }
+.eisv-row .k { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--ink-2); font-weight: 500; }
+.eisv-row .bar { height: 6px; background: var(--bg-sunken); border-radius: var(--radius-pill); overflow: hidden; position: relative; }
+.eisv-row .bar i { position: absolute; left: 0; top: 0; height: 100%; border-radius: var(--radius-pill); }
+.eisv-row .bar.signed { background: var(--bg-sunken); }
+.eisv-row .bar.signed::before { content:""; position:absolute; left:50%; top:0; width:1px; height:100%; background: var(--line-2); }
+.eisv-row .val { font-family: var(--font-mono); font-size: var(--text-sm); text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+.e i.e { background: var(--eisv-e); } .e i.i { background: var(--eisv-i); }
+.e i.s { background: var(--eisv-s); } .e i.v { background: var(--eisv-v); }
+
+.footnote { color: var(--muted); font-size: var(--text-xs); margin-top: var(--space-6); text-align: center; line-height: var(--leading-body); }
+.footnote code { font-family: var(--font-mono); color: var(--ink-2); }
+
+@media (max-width: 860px) {
+  .grid { grid-template-columns: repeat(2, 1fr); }
+  .card.wide { grid-column: span 2; }
+  .pulse-main { grid-template-columns: 1fr; gap: var(--space-5); }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="topbar">
+    <span class="brand">UNITARES<span class="dot">.</span></span>
+    <span class="brand-sub">Governance</span>
+    <span class="spring"></span>
+    <span class="server-stat">v<b>2.13.0</b> · up <b>21h 15m</b> · db <b>connected</b></span>
+    <button class="theme-toggle" id="themeBtn">◐ ink</button>
+  </header>
+
+  <div class="eyebrow">Resident Fleet</div>
+  <div class="residents" id="residents"></div>
+  <div class="attn-band" id="attn"></div>
+
+  <div class="grid" id="stats"></div>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Pulse</h2><span class="who" id="pulseWho">—</span>
+      <span class="spring"></span>
+      <span class="verdict" id="pulseVerdict"><span class="pip"></span><span>proceed</span></span>
+      <span class="fresh" id="pulseFresh"></span>
+    </div>
+    <div class="pulse-main">
+      <div>
+        <div class="risk-label"><span class="k">Risk</span><span class="v" id="riskVal">0.00</span></div>
+        <div class="track"><div class="fill" id="riskFill" style="width:2%"></div></div>
+        <div class="ticks">
+          <span style="left:35%">approve</span>
+          <span style="left:60%">proceed</span>
+          <span style="left:70%">pause</span>
+        </div>
+      </div>
+      <div class="eisv e" id="eisv"></div>
+    </div>
+  </section>
+
+  <p class="footnote" id="foot"></p>
+</div>
+
+<script>
+/* Real snapshot pulled live from /v1/residents + /health on 2026-06-19.
+   This is what the new primitives render — same data the live dashboard
+   reads, just inlined so the reference is portable. Retargeting to the
+   live endpoints is the migration step, not a rewrite. */
+const FLEET = [
+  { name:"Watcher",    status:"healthy",  coh:0.50, eisv:{E:0.77,I:0.66,S:0.24,V:+0.10}, sil:25 },
+  { name:"Vigil",      status:"healthy",  coh:0.49, eisv:{E:0.75,I:0.77,S:0.16,V:-0.02}, sil:101 },
+  { name:"Lumen",      status:"careful",  coh:0.50, eisv:{E:0.31,I:0.83,S:0.15,V:-0.52}, sil:56 },
+  { name:"Sentinel",   status:"healthy",  coh:0.50, eisv:{E:0.77,I:0.68,S:0.26,V:+0.09}, sil:273 },
+  { name:"Steward",    status:"dark",     coh:null, eisv:null,                            sil:32 },
+  { name:"Chronicler", status:"silent",   coh:0.50, eisv:{E:0.81,I:0.68,S:0.22,V:+0.11}, sil:67156 },
+];
+
+const fmtSil = s => s==null ? "—" : s<90 ? s+"s" : s<5400 ? Math.round(s/60)+"m" : (s/3600).toFixed(1)+"h";
+
+// residents strip
+document.getElementById("residents").innerHTML = FLEET.map(r => {
+  const cls = r.status==="silent" ? "attention" : r.status==="dark" ? "dark" : "";
+  const meta = r.coh==null ? "no EISV" : "coh "+r.coh.toFixed(2);
+  return `<span class="res ${cls}"><span class="pip"></span><span class="name">${r.name}</span>`
+       + `<span class="meta">${meta} · ${fmtSil(r.sil)}</span></span>`;
+}).join("");
+
+// attention band — surfaces the real Chronicler silence cliff
+document.getElementById("attn").innerHTML =
+  `<span class="glyph">⚠</span><span><b>Chronicler</b> silent 18.6h `
+  + `— daily resident past its 1h check-in threshold. `
+  + `<b>Steward</b> reporting no EISV vector.</span>`;
+
+// stats grid — live where available (coherence, fleet size), representative elsewhere
+const liveCoh = FLEET.filter(r=>r.coh!=null);
+const fleetCoh = (liveCoh.reduce((a,r)=>a+r.coh,0)/liveCoh.length).toFixed(2);
+const STATS = [
+  { h:"Fleet Coherence", num:fleetCoh, sub:"5 of 6 residents reporting", cls:"up", rule:true },
+  { h:"Agents", num:"6", of:"/ 658", sub:"active / total" },
+  { h:"Stuck", num:"0", sub:"none flagged", cls:"up" },
+  { h:"Discoveries", num:"1,204", sub:"+12 today" },
+  { h:"Dialectic", num:"0", sub:"no open sessions" },
+  { h:"System Health", num:"OK", sub:"db · ws · reaper" },
+  { h:"Calibration", num:"0.71", sub:"trajectory health", cls:"up" },
+  { h:"Anomalies", num:"1", sub:"Chronicler silence", cls:"down" },
+];
+document.getElementById("stats").innerHTML = STATS.map(s =>
+  `<div class="card ${s.rule?'accent-rule':''}"><h3>${s.h}</h3>`
+  + `<div class="num">${s.num}${s.of?`<span class="of"> ${s.of}</span>`:''}</div>`
+  + `<div class="sub ${s.cls||''}">${s.sub}</div></div>`
+).join("") +
+  `<div class="card wide"><h3>Trust Tiers</h3>
+     <div class="tiers">
+       <div class="t strong" style="height:78%"></div><div class="t strong" style="height:64%"></div>
+       <div class="t strong" style="height:90%"></div><div class="t medium" style="height:44%"></div>
+       <div class="t medium" style="height:52%"></div><div class="t weak" style="height:30%"></div>
+       <div class="t weak" style="height:22%"></div>
+     </div>
+     <div class="legend" style="margin-top:.5rem">
+       <span><i style="background:var(--eisv-i)"></i>strong</span>
+       <span><i style="background:var(--eisv-s)"></i>medium</span>
+       <span><i style="background:var(--faint)"></i>weak</span>
+     </div></div>`;
+
+// pulse — last check-in (Watcher, 25s ago)
+const last = FLEET[0];
+document.getElementById("pulseWho").textContent = last.name;
+document.getElementById("pulseFresh").textContent = "checked in "+fmtSil(last.sil)+" ago";
+const E = last.eisv;
+const rows = [
+  ["E", E.E, "e", false], ["I", E.I, "i", false],
+  ["S", E.S, "s", false], ["V", E.V, "v", true],
+];
+document.getElementById("eisv").innerHTML = rows.map(([k,v,c,signed]) => {
+  const w = signed ? Math.abs(v)*50 : v*100;
+  const left = signed ? (v<0 ? 50-Math.abs(v)*50 : 50) : 0;
+  return `<div class="eisv-row"><span class="k">${k}</span>`
+    + `<span class="bar ${signed?'signed':''}"><i class="${c}" style="left:${left}%;width:${w}%"></i></span>`
+    + `<span class="val">${v>=0&&!signed?'':''}${v.toFixed(2)}</span></div>`;
+}).join("");
+
+document.getElementById("foot").innerHTML =
+  "Reference reskin · 2 files (<code>tokens.css</code> + this page) vs the live "
+  + "<code>5,877-line styles.css</code> · same fleet data, rendered through the design system. "
+  + "Toggle theme to see one token swap reskin everything.";
+
+// honor ?theme= for static capture
+const qp = new URLSearchParams(location.search).get("theme");
+if (qp === "ink" || qp === "paper") {
+  document.documentElement.setAttribute("data-theme", qp);
+}
+// theme toggle
+const btn = document.getElementById("themeBtn");
+btn.onclick = () => {
+  const ink = document.documentElement.getAttribute("data-theme") === "ink";
+  document.documentElement.setAttribute("data-theme", ink ? "paper" : "ink");
+  btn.textContent = ink ? "◐ ink" : "◑ paper";
+};
+</script>
+</body>
+</html>
