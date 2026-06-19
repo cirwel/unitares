@@ -42,6 +42,17 @@ BOOTSTRAP_UPDATES = 10
 # 30 gives stable mean/std estimates.
 BASELINE_WARMUP_UPDATES = 30
 
+# Behavioral-V formula version. Bumped when the V (Valence) computation changes
+# in a way that invalidates a previously-converged _baseline_V, so loads from an
+# older version trigger a one-time baseline re-seed (see _reseed_v_baseline).
+#   v1: double-smoothed — raw_v = self.E - self.I (gap of the already-EMA'd E,I)
+#   v2: single-EMA of raw imbalance — raw_v = E_obs - I_obs (one fewer smoothing
+#       stage; less lag). Gated on validate_valence_formula.py against real
+#       check-in traces (2026-06-19: 0 verdict flips / 0 healthy regressions on
+#       18 real agents incl. all 5 residents; resident Watcher would spike 3.12σ
+#       > 3.0σ budget against its stale baseline WITHOUT the reset below).
+V_FORMULA_VERSION = 2
+
 # Minimum meaningful standard deviation for EISV self-relative scoring.
 #
 # This is an EMPIRICAL constant calibrated against the 2026-06-13 Sentinel
@@ -134,15 +145,19 @@ class BehavioralEISV:
     def _raw_valence(self, E_obs: float, I_obs: float) -> float:
         """Pre-EMA valence (E-I imbalance) input fed into V's own EMA.
 
-        DEPLOYED default: the gap of the already-smoothed E and I — i.e. V ends
-        up double-smoothed (EMA of EMA(E)-EMA(I)). This is a known lag wart; a
-        single-EMA-of-raw-imbalance variant (return E_obs - I_obs) is under
-        trace-replay validation via scripts/dev/validate_valence_formula.py
-        before it may change the live verdict path. Kept as an override seam so
-        the candidate formula can be A/B'd through the real update + assessment
-        without forking this module.
+        V_FORMULA_VERSION 2: the gap of the RAW observations (E_obs - I_obs),
+        smoothed once by V's own EMA — so V is single-smoothed and tracks the
+        imbalance with less lag. The previous v1 default took the gap of the
+        already-EMA'd E,I (double-smoothing). The flip was gated on a trace
+        replay against real check-in traces via
+        scripts/dev/validate_valence_formula.py (2026-06-19): verdict-neutral
+        (0 flips, 0 healthy regressions on 18 real agents incl. all 5
+        residents); the one-time migration discontinuity it creates for already-
+        converged agents is absorbed by _reseed_v_baseline on load. Kept as an
+        override seam so the harness can still A/B v1 (return self.E - self.I)
+        against v2 through the real update + assessment without forking.
         """
-        return self.E - self.I
+        return E_obs - I_obs
 
     def update(
         self,
@@ -187,10 +202,10 @@ class BehavioralEISV:
         self.S = (1.0 - alpha_S) * self.S + alpha_S * S_obs
 
         # V: EMA-smoothed E-I imbalance — a derived, sign-actionable readout,
-        # not a true integral. (A known lag wart: this takes the gap of the
-        # already-smoothed E,I and smooths it again; a single-EMA-of-raw-
-        # imbalance fix is held pending trace-replay validation. See KG
-        # 2026-06-19 V-flat note + scripts/dev/validate_valence_formula.py.)
+        # not a true integral. As of V_FORMULA_VERSION 2 this is the gap of the
+        # RAW observations smoothed once (single-EMA, less lag), replacing the
+        # earlier double-smoothing. The formula lives behind _raw_valence; see
+        # scripts/dev/validate_valence_formula.py for the trace-replay gate.
         raw_v = self._raw_valence(E_obs, I_obs)
         self.V = (1.0 - alpha_V) * self.V + alpha_V * raw_v
 
@@ -221,6 +236,46 @@ class BehavioralEISV:
 
         self.update_count += 1
         self.last_update_time = time.monotonic()
+
+    def _reseed_v_baseline(self) -> None:
+        """One-time re-seed of _baseline_V after a V-formula migration.
+
+        A baseline converged under an older V formula (v1 double-smoothing) is
+        stale once _raw_valence changes: the new V gets z-scored against the old
+        mean/std and spikes (real resident Watcher: 3.12σ > the 3.0σ migration
+        budget — validate_valence_formula.py 2026-06-19). Re-seed so the first
+        post-migration z is ~0:
+          * obs_history present -> replay it under the CURRENT formula and
+            rebuild _baseline_V from the reconstructed V trajectory (accurate
+            mean AND std), and align the live V with that trajectory.
+          * obs_history absent (the lean DB-row restore drops history) -> seed a
+            single sample at the current V so mean==V (z~0); std rebuilds as
+            updates arrive. The deviation() min-std floor bounds it meanwhile.
+        """
+        fresh = WelfordStats()
+        if self.obs_history:
+            v = BOOTSTRAP_V
+            replayed: List[float] = []
+            for idx, row in enumerate(self.obs_history):
+                e_obs = max(0.0, min(1.0, float(row[0])))
+                i_obs = max(0.0, min(1.0, float(row[1])))
+                if idx < BOOTSTRAP_UPDATES:
+                    alpha_v = self.alphas["V"] + 0.5 * (1.0 - idx / BOOTSTRAP_UPDATES)
+                else:
+                    alpha_v = self.alphas["V"]
+                raw_v = e_obs - i_obs  # v2 formula (reseed only runs post-flip)
+                v = max(-1.0, min(1.0, (1.0 - alpha_v) * v + alpha_v * raw_v))
+                replayed.append(v)
+            # Drop the cold-start bootstrap transient from the baseline when the
+            # history is long enough to spare it; the live V still warms through
+            # those steps. Keep all samples for short histories.
+            seed = replayed[BOOTSTRAP_UPDATES:] if len(replayed) > BOOTSTRAP_UPDATES + 5 else replayed
+            for x in seed:
+                fresh.update(x)
+            self.V = replayed[-1]
+        else:
+            fresh.update(self.V)
+        self._baseline_V = fresh
 
     @property
     def confidence(self) -> float:
@@ -334,6 +389,7 @@ class BehavioralEISV:
         """
         d = self.to_dict()
         d["alphas"] = dict(self.alphas)
+        d["v_formula_version"] = V_FORMULA_VERSION
         d["baseline_stats"] = {
             "E": self._baseline_E.to_dict(),
             "I": self._baseline_I.to_dict(),
@@ -351,6 +407,7 @@ class BehavioralEISV:
         d["V_history"] = [round(v, 4) for v in self.V_history[-MAX_HISTORY:]]
         d["obs_history"] = [[round(v, 4) for v in row] for row in self.obs_history[-MAX_HISTORY:]]
         d["alphas"] = dict(self.alphas)
+        d["v_formula_version"] = V_FORMULA_VERSION
         # Persist baseline statistics for cross-restart continuity
         d["baseline_stats"] = {
             "E": self._baseline_E.to_dict(),
@@ -387,4 +444,12 @@ class BehavioralEISV:
             state._baseline_S = WelfordStats.from_dict(baseline_data["S"])
         if "V" in baseline_data:
             state._baseline_V = WelfordStats.from_dict(baseline_data["V"])
+        # One-time V-baseline migration: a state persisted under an older V
+        # formula carries a _baseline_V that no longer matches how V is now
+        # computed. Re-seed it once so the new-formula V is not judged against a
+        # stale baseline (would spike — see _reseed_v_baseline). Only when the
+        # baseline is already mature; an immature one rebuilds correctly anyway.
+        persisted_version = int(data.get("v_formula_version", 1))
+        if persisted_version < V_FORMULA_VERSION and state.is_baselined:
+            state._reseed_v_baseline()
         return state
