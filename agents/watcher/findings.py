@@ -443,6 +443,93 @@ def sweep_stale_findings() -> int:
     return 0
 
 
+def _current_source_line(path: str, line: int) -> str | None:
+    """Return the current text of ``line`` (1-based) in ``path``, or None if
+    the file is missing, unreadable, or the line is out of range.
+
+    Used to re-validate a finding's flagged construct against current disk
+    content after detection — line numbers drift as files are later edited.
+    """
+    if not path or line < 1:
+        return None
+    p = Path(path)
+    if not p.exists():
+        return None
+    try:
+        with p.open("r", encoding="utf-8", errors="replace") as fh:
+            for i, text in enumerate(fh, start=1):
+                if i == line:
+                    return text.rstrip("\n")
+    except OSError:
+        return None
+    return None  # line beyond EOF
+
+
+def _sweep_token_drift_quiet() -> int:
+    """Age out open/surfaced findings whose flagged line no longer carries the
+    pattern's required token.
+
+    Closes the line-drift staleness gap (patterns.md P016 note, 2026-05-04): a
+    finding is validated by the required-token verifier at DETECTION time, but
+    its stored line number drifts as the file is later edited, so the same
+    finding can surface pointing at a line that no longer holds the construct
+    (a return statement, a comment, a blank line). The detection gate
+    (``_PATTERN_REQUIRED_TOKENS`` in agent.py) is replayed here against CURRENT
+    disk content; when the required token is gone, the finding is stale and is
+    aged out rather than re-shown.
+
+    Conservative by construction:
+      * only token-gated patterns are touched (others have no token to replay);
+      * a line that STILL holds its required token is never aged out, so a real
+        match is never silently dropped;
+      * unreadable/out-of-range lines are left alone — the file-existence sweep
+        (``_sweep_stale_quiet``) and a future scan cover those.
+
+    Aged out (not deleted) so the audit trail and precision math keep the
+    record; ``--compact`` reclaims it after the TTL. Quiet variant — logs when
+    non-zero, never prints — safe to call from the chime path where stdout
+    becomes agent context. Returns the count aged out.
+    """
+    # Lazy import: the token map lives in agent.py, which imports this module
+    # at top level. A top-level import here would be circular (same reason as
+    # the _post_resolution_event lazy import in update_finding_status).
+    from agents.watcher.agent import _PATTERN_REQUIRED_TOKENS
+
+    findings = _iter_findings_raw()
+    if not findings:
+        return 0
+
+    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    aged = 0
+    out: list[dict[str, Any]] = []
+    for f in findings:
+        if f.get("status", "open") in ("open", "surfaced"):
+            tokens = _PATTERN_REQUIRED_TOKENS.get(f.get("pattern", ""))
+            if tokens:
+                src_line = _current_source_line(
+                    f.get("file", ""), int(f.get("line", 0) or 0)
+                )
+                if src_line is not None and not any(tok in src_line for tok in tokens):
+                    f = {
+                        **f,
+                        "status": "aged_out",
+                        "aged_out_at": now_iso,
+                        "resolution_reason": "line_drift_token_absent",
+                    }
+                    aged += 1
+        out.append(f)
+
+    if aged == 0:
+        return 0
+
+    _write_findings_atomic(out)
+    log(
+        f"sweep_token_drift (auto): aged out {aged} finding(s) whose flagged "
+        f"line no longer carries the pattern's required token"
+    )
+    return aged
+
+
 # ---------------------------------------------------------------------------
 # Surfacing — how findings reach the main Claude session
 #
