@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Liveness watchdog for the UNITARES Discord bridge.
+
+    Runs bridge_liveness_watchdog.sh every 2 min: if the bridge's log has gone
+    stale beyond the threshold for CONSEC consecutive checks, the async event
+    loop is wedged (process alive but not polling) — it restarts the bridge and
+    alerts. This is the watcher for the watcher: launchd KeepAlive only catches a
+    dead process, not a hung one (see the 2026-06-19 incident, where the bridge's
+    loop silently wedged for ~5h and #alerts delivery was dead while the service
+    "looked up").
+
+    Before installing, substitute the placeholder:
+      __UNITARES_ROOT__ → absolute path to the deploy checkout
+                          (e.g. $HOME/projects/unitares-deploy)
+
+    Example:
+      mkdir -p "$HOME/projects/unitares-deploy/data/logs"
+      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
+          scripts/ops/com.unitares.bridge-liveness-watchdog.plist.template \
+          > ~/Library/LaunchAgents/com.unitares.bridge-liveness-watchdog.plist
+      launchctl load ~/Library/LaunchAgents/com.unitares.bridge-liveness-watchdog.plist
+
+    The watchdog reads UNITARES_HTTP_API_TOKEN from ~/.config/cirwel/secrets.env
+    itself, so no secret is placed in this plist.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unitares.bridge-liveness-watchdog</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__UNITARES_ROOT__/scripts/ops/bridge_liveness_watchdog.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__UNITARES_ROOT__</string>
+
+    <key>StartInterval</key>
+    <integer>120</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__UNITARES_ROOT__/data/logs/bridge_liveness_watchdog.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__UNITARES_ROOT__/data/logs/bridge_liveness_watchdog.log</string>
+</dict>
+</plist>
