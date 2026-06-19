@@ -14,7 +14,7 @@ A three-member council (dialectic + code-review + live-verifier) reviewed this d
 
 1. **The "new plane" already exists as built/live BEAM code — reframe as a lease-plane *effect-envelope extension*, not a new OTP app.** Verified against the running system:
    - **Leases + single-winner conflicts:** live. `surface_registry.ex:54-76` returns `{:error, :held_by_other}` to the loser; lease plane is the running `beam.smp` on `:8788`.
-   - **Revocation:** live **and enforced** — `POST /v1/lease/force-release` (`http_router.ex:205-227`) gated by a separate `LEASE_FORCE_RELEASE_TOKEN`; the regular bearer is barred. Evidence §1 below mis-frames revocation as a gap; it is already solved. *(Strike that framing.)*
+   - **Revocation:** live **and enforced** — `POST /v1/lease/force-release` (`http_router.ex:234-249`, token gate `:516-523`) gated by a separate `LEASE_FORCE_RELEASE_TOKEN`; the regular bearer is barred. Evidence §1 below mis-frames revocation as a gap; it is already solved. *(Strike that framing.)*
    - **Supervision / DynamicSupervisor / lease client:** already built in `elixir/agent_orchestrator/` (`agent_supervisor.ex`, `agent_runner.ex`, `lease_plane_client.ex`) — but **inert** (`:8789` not listening, no plist, nothing spawns through it). The "new governed-effect plane" is this app needing a plist + a caller, not a greenfield build. Do **not** create `elixir/governed_effect_plane/`.
 
 2. **Operator resolution of the execute/record fork: BEAM can do both, but the modes must be explicit.** This is no longer a binary choice. The protocol must carry a per-effect `custody_mode`:
