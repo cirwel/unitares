@@ -1,6 +1,6 @@
 # UNITARES Documentation
 
-This is the documentation tree for the [UNITARES governance MCP server](../README.md). If you're new to the project, **start with the [repo README](../README.md)** — it has the architecture summary, the `make demo` walkthrough, and the production snapshot. This page is the map for everything under `docs/`.
+This is the documentation tree for the [UNITARES governance MCP server](../README.md). If you're new to the project, **start with the [repo README](../README.md)** — it has the core idea, the `make demo` walkthrough, and the integration loop. The deeper [scope & threat model](SCOPE_AND_THREAT_MODEL.md) and [production snapshot](PRODUCTION_SNAPSHOT.md) now live here under `docs/`. This page is the map for everything under `docs/`.
 
 ## Reader's path
 
@@ -17,6 +17,8 @@ This is the documentation tree for the [UNITARES governance MCP server](../READM
 
 - **[`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)** — the canonical architecture doc. End-to-end picture of the server, state model, transports, and storage.
 - **[`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md)** — guided tour for reviewers evaluating the project.
+- **[`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md)** — who this is for, why an agent can't game the signal, and what robustness is still unproven.
+- **[`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md)** — frozen live metrics and dashboard views.
 - **[`trust-contract.md`](trust-contract.md)** — what the system guarantees, what it does not, and what honest failure looks like.
 - **[`tonality-metaphor.md`](tonality-metaphor.md)** — a teaching lens: how key signatures and chromaticism map onto EISV, coherence, and drift. Intuition for [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md), not a spec.
 - **[`CHANGELOG.md`](CHANGELOG.md)** — release history.

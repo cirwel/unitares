@@ -1,0 +1,84 @@
+# Scope, threat model, and why the signal is trustworthy
+
+This is the deeper justification that used to live in the repo README. It answers
+three questions a careful evaluator asks: *who is this for*, *why can't an agent
+just game it*, and *what is it honestly not robust against yet*.
+
+For how the numbers are actually computed, see [How EISV is computed](EISV_COMPUTATION.md);
+for the cold-evaluator path and the falsifiability harness, see the
+[Reviewer Guide](REVIEWER_GUIDE.md).
+
+## Who should integrate this
+
+UNITARES is for you if you run **multiple long-lived autonomous agents** —
+tool-using, multi-step, doing real work over hours or days — and you've watched
+an agent quietly drift without anyone noticing until something visible broke. The
+check-in loop surfaces that drift while it's still just numbers moving (Integrity
+slipping, overconfidence climbing) instead of waiting for a user to complain.
+
+**The threshold that matters is check-in count, not wall-clock time.**
+Self-relative grading needs roughly **30 check-ins** to establish an agent's
+baseline (absolute safety floors apply before that). An agent doing dozens of
+units of work — over an hour or a week — crosses it; one that does three and
+exits never does. That's the real line for "is my session long enough to
+benefit," not a duration.
+
+**Probably not worth it yet for** short-lived chatbot turns, where per-turn
+overhead outweighs the benefit, or for teams that can't instrument their agent
+loop.
+
+## Why an agent can't just inflate its own confidence
+
+Self-reported confidence is only one input. UNITARES also watches **real outcomes
+it can verify** — test pass/fail, exit codes, tool results — sent back via
+`record_result()`. Over many tasks it compares the agent's *claimed* confidence
+against its *actual* success rate. An agent that reports `confidence=0.9` while
+only succeeding 50% of the time builds up a track record of being overconfident;
+its Integrity (I) drops, and the verdict shifts to `guide` or `pause`. The signal
+is anchored to what actually happened, not to what the agent said about itself.
+
+After about 30 check-ins, the four numbers are graded against the agent's *own*
+running history rather than a one-size-fits-all threshold. Absolute safety floors
+still apply on top of that.
+
+State lives in PostgreSQL + AGE. **The verdict path is the auditable behavioral
+model** — component risk plus self-relative z-scores, source in
+[`src/behavioral_assessment.py`](../src/behavioral_assessment.py). A separate
+dynamical-systems model (`governance_core/`, the thermodynamic / free-energy
+formulation) runs **in parallel as a research cross-check and does not drive
+verdicts by default** ([`governance_monitor.py`](../src/governance_monitor.py):
+*"the ODE runs in parallel but does NOT drive verdicts… primary verdicts come
+from behavioral assessment"*). Its derivation is in
+[Paper v6](https://github.com/cirwel/unitares-paper-v6) (DOI 10.5281/zenodo.19647159).
+
+## What makes the signal trustworthy
+
+**Trajectory as identity.** An agent's EISV pattern over time answers continuity
+questions ("is this still the same agent across restarts?") and surfaces slow
+drift that no single check-in could catch.
+
+**Peer review when it matters.** When an agent's confidence and the system's
+assessment disagree, UNITARES runs a short back-and-forth review with other
+agents — or with an LLM when no peers are around — before anything halts. (In the
+codebase and papers this is called *dialectic*.) See
+[dialectic-dataset](https://github.com/cirwel/dialectic-dataset).
+
+## Scope and threat model
+
+UNITARES is **adversarial-aware, not adversarial-naive**, with deliberately
+conservative enforcement. The signal is anchored to outcomes an agent can't fake
+— test pass/fail, exit codes, tool results via `record_result()`: an agent can
+inflate its self-reported `confidence` but not its actual success rate, and drift
+(S) is graded against its *own* prior trajectory, so there is no fixed threshold
+to pre-game. Verdicts lean toward `proceed`/`guide` over `pause`/`reject` by
+design — a false-positive pause on a productive agent is itself a failure mode
+(acutely so here, since the agents building UNITARES run under it). And "no ethics
+classifier" means no hand-labeled ethics model, *not* that the system is
+value-free: drift (S) is a salience flag, not a verdict, and Integrity (I) is
+anchored to ground-truth outcomes rather than to the agent's own history.
+
+**The genuine open question.** Robustness against a *motivated* attacker
+deliberately optimizing the EISV proxy, at scale, is unproven — red-teaming so far
+has been ad hoc rather than systematic or sustained, and the deployment is
+single-operator. That is the real limitation: a shortfall of *sustained
+adversarial testing*, not of adversarial design.
