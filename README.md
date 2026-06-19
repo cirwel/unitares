@@ -87,7 +87,7 @@ After each unit of work, an agent checks in with `sync_state()` — passing its 
 | **E** · Energy | is the work advancing? | thrashing, retries, no progress |
 | **I** · Integrity | do claims match results? | high confidence, low actual success |
 | **S** · Entropy | drifting from its own normal? | erratic, divergent behavior |
-| **V** · Valence | the E−I gap, derived | motion without coherence (or vice-versa) |
+| **V** · Valence | derived: energy vs integrity | motion without coherence (or vice-versa) |
 
 Each check-in returns a plain verdict — **`proceed` / `guide` / `pause` / `reject`** — so the agent can correct itself *before* an external safety system has to step in. After ~30 check-ins, each agent is graded against its *own* baseline, so slow degradation surfaces even while output still looks fine.
 
@@ -112,19 +112,13 @@ elif eisv.get("E", 1) < 0.2:
     agent.stop_and_summarize()  # avoid thrashing
 ```
 
-The agent reads its own state and adjusts before external controls fire. UNITARES isn't an output validator or a sandbox — it's a state layer the agent itself can read. For long-running or scheduled agents, the [SDK](agents/sdk/README.md) handles connection, identity, check-ins, and heartbeats.
-
-<div align="center">
-
-[Getting started](docs/guides/START_HERE.md) · [MCP client config](docs/integration/MCP_CLIENTS.md) · [Tool names & raw API](docs/guides/START_HERE.md)
-
-</div>
+The agent reads its own state and adjusts before external controls fire. UNITARES isn't an output validator or a sandbox — it's a state layer the agent itself can read. For long-running or scheduled agents, the [SDK](agents/sdk/README.md) handles connection, identity, check-ins, and heartbeats. ([Getting started](docs/guides/START_HERE.md) · [MCP client config](docs/integration/MCP_CLIENTS.md))
 
 ## Don't trust this README — verify it
 
 **Evaluating with an agent?** Don't take the prose. On a fresh clone, the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV against a deliberately dumb baseline (AUC, Brier) and self-labels each slice `INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING` rather than asserting. The harness is the part you run yourself.
 
-**Honest about what fires.** The verdict path is the auditable *behavioral* model — component risk plus self-relative z-scores ([`src/behavioral_assessment.py`](src/behavioral_assessment.py)). The information-theoretic / free-energy formulation in `governance_core/` and [Paper v6](https://github.com/cirwel/unitares-paper-v6) is **target semantics**: it runs in parallel as a research cross-check and **does not drive verdicts by default** ([`governance_monitor.py`](src/governance_monitor.py): *"the ODE runs in parallel but does NOT drive verdicts… primary verdicts come from behavioral assessment"*). Want the theory → the paper; want what actually fires → [How EISV is computed](docs/EISV_COMPUTATION.md).
+**Honest about what fires.** Verdicts come from an auditable *behavioral* model — component risk plus self-relative z-scores ([`behavioral_assessment.py`](src/behavioral_assessment.py)). The information-theoretic / free-energy math in `governance_core/` and [Paper v6](https://github.com/cirwel/unitares-paper-v6) is the **target**, not the live verdict path — it runs in parallel as a research cross-check ([`governance_monitor.py`](src/governance_monitor.py)). Theory → the paper. What actually fires → [How EISV is computed](docs/EISV_COMPUTATION.md).
 
 Human evaluators start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md).
 
