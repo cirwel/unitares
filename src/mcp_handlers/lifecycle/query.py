@@ -287,6 +287,81 @@ def _is_operator_request() -> bool:
         return False
 
 
+def _principal_rollup(agents_list: Sequence[dict], meta_lookup=None) -> dict:
+    """Roll the listed identities up into PRINCIPALS (logical workers) — the
+    octopus to the per-process-instance tentacle.
+
+    A principal is a connected component over only agent-DECLARED edges:
+    shared ``thread_id`` and declared lineage (``parent_agent_id``). Spoofable
+    or coarse keys (IP:UA fingerprint, the ``<harness>_<date>`` label) are
+    excluded by construction — the ontology names both performative. This is the
+    first-class form of identity.md research-agenda #3 ("identity as integral,
+    not point-value"); see docs/proposals/principal-rollup-v0.md.
+
+    Reads the REAL ``thread_id``/``parent_agent_id`` from agent metadata (the
+    output dicts may carry a redacted parent/id), over exactly the population in
+    ``agents_list``. Returns counts only — additive to the existing summary,
+    never a behavioral change.
+    """
+    if meta_lookup is None:
+        meta_lookup = mcp_server.agent_metadata.get
+
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        parent.setdefault(x, x)
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:  # path compression
+            parent[x], x = root, parent[x]
+        return root
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    uuids: set[str] = set()
+    by_thread: dict[str, list[str]] = {}
+    parents: dict[str, str] = {}
+    participated: set[str] = set()
+    for a in agents_list:
+        uid = a.get("_agent_uuid") or a.get("id")
+        if not uid:
+            continue
+        uuids.add(uid)
+        find(uid)
+        meta = meta_lookup(uid)
+        thread = getattr(meta, "thread_id", None) if meta else None
+        par = getattr(meta, "parent_agent_id", None) if meta else None
+        if thread:
+            by_thread.setdefault(thread, []).append(uid)
+        if par:
+            parents[uid] = par
+        if (a.get("total_updates") or 0) >= 1:
+            participated.add(uid)
+
+    for members in by_thread.values():
+        for m in members[1:]:
+            union(members[0], m)
+    for uid, par in parents.items():
+        if par in uuids:  # only chain to a parent in this population
+            union(uid, par)
+
+    comps: dict[str, list[str]] = {}
+    for uid in uuids:
+        comps.setdefault(find(uid), []).append(uid)
+
+    return {
+        "principals": len(comps),
+        "participated_principals": sum(
+            1 for ms in comps.values() if any(m in participated for m in ms)
+        ),
+        "multi_instance_principals": sum(1 for ms in comps.values() if len(ms) > 1),
+    }
+
+
 @mcp_tool("list_agents", timeout=15.0, register=False)
 async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextContent]:
     """List all agents currently being monitored with lifecycle metadata and health status
@@ -803,6 +878,10 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
         # Surfaced so count consumers can show working agents, not raw row count.
         participated = sum(1 for a in agents_list if (a.get("total_updates") or 0) >= 1)
         never_participated = total_count - participated
+        # Principal (octopus) rollup over the same pre-pagination population:
+        # how many LOGICAL workers these process-instances represent. Additive —
+        # `total`/`participated` are unchanged. See _principal_rollup.
+        principal_counts = _principal_rollup(agents_list)
 
         # Apply pagination (optimization)
         if limit is not None:
@@ -833,7 +912,10 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                     "limit": limit,
                     "by_status": status_counts,  # Use counts from BEFORE pagination
                     "participated": participated,  # checked in >=1 time
-                    "never_participated": never_participated  # onboarded but never checked in
+                    "never_participated": never_participated,  # onboarded but never checked in
+                    "principals": principal_counts["principals"],  # distinct logical workers (octopi)
+                    "participated_principals": principal_counts["participated_principals"],  # principals with >=1 checked-in instance
+                    "multi_instance_principals": principal_counts["multi_instance_principals"],  # principals spanning >1 process-instance
                 }
             }
 
@@ -857,7 +939,10 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                     "limit": limit,
                     "by_status": status_counts,  # Use counts from BEFORE pagination
                     "participated": participated,  # checked in >=1 time
-                    "never_participated": never_participated  # onboarded but never checked in
+                    "never_participated": never_participated,  # onboarded but never checked in
+                    "principals": principal_counts["principals"],  # distinct logical workers (octopi)
+                    "participated_principals": principal_counts["participated_principals"],  # principals with >=1 checked-in instance
+                    "multi_instance_principals": principal_counts["multi_instance_principals"],  # principals spanning >1 process-instance
                 }
             }
 
