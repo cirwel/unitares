@@ -157,10 +157,14 @@
 
     async discoveries(query) {
       return withFallback(async () => {
-        const r = await callTool("knowledge", query
-          ? { action: "search", query, include_details: true, limit: 30 }
-          : { action: "search", query: "governance identity calibration", include_details: true, limit: 30 });
-        const items = r.discoveries || r.results || (Array.isArray(r) ? r : null);
+        // Entry list + KG aggregates (for the lifecycle bar + type legend) in parallel.
+        const [r, statsR] = await Promise.all([
+          callTool("knowledge", query
+            ? { action: "search", query, include_details: true, limit: 30 }
+            : { action: "search", query: "governance identity calibration", include_details: true, limit: 30 }),
+          callTool("knowledge", { action: "stats" }).catch(() => null),
+        ]);
+        const items = r && (r.discoveries || r.results || (Array.isArray(r) ? r : null));
         if (!items) return null;
         const list = items.map((d) => ({
           id: d.id || d.created_at || d.timestamp, type: d.type || d.discovery_type || "note",
@@ -168,7 +172,13 @@
           summary: d.summary || "Untitled", details: d.details || d.content || d.discovery || "",
           stale: !!d.staleness_warning,
         }));
-        return { list, total: r.total, byType: null, byStatus: null };
+        const st = statsR ? (statsR.stats || statsR) : null;
+        return {
+          list,
+          total: st && typeof st.total_discoveries === "number" ? st.total_discoveries : r.total,
+          byType: st ? st.by_type : null,
+          byStatus: st ? st.by_status : null,
+        };
       }, () => {
         const d = S().discoveries;
         return { list: d.list, total: d.total, byType: d.byType, byStatus: d.byStatus };
