@@ -46,11 +46,11 @@
       { h: "Fleet Coherence", num: num(fleetCoh), sub: `${live.length} of ${residents.length} residents reporting`, cls: "up", rule: true },
       { h: "Agents", num: stats.agentsActive, of: "/ " + stats.agentsTotal, sub: "active / total" },
       { h: "Stuck", num: stats.stuck, sub: stats.stuck ? "needs attention" : "none flagged", cls: stats.stuck ? "down" : "up" },
-      { h: "Discoveries", num: stats.discoveries.toLocaleString(), sub: "+" + stats.discoveriesToday + " today" },
+      { h: "Discoveries", num: (stats.discoveries || 0).toLocaleString(), sub: typeof stats.discoveriesToday === "number" ? "+" + stats.discoveriesToday + " today" : "knowledge graph" },
       { h: "Dialectic", num: stats.dialectic, sub: stats.dialectic ? "open sessions" : "no open sessions" },
       { h: "System Health", num: stats.systemHealth, sub: "db · ws · reaper" },
-      { h: "Calibration", num: num(stats.calibration), sub: "trajectory health", cls: "up" },
-      { h: "Anomalies", num: stats.anomalies, sub: stats.anomalies ? "1 active" : "clear", cls: stats.anomalies ? "down" : "up" },
+      { h: "Calibration", num: num(stats.calibration), sub: "trajectory health", cls: stats.calibration >= 0.8 ? "up" : "" },
+      { h: "Anomalies", num: stats.anomalies, sub: stats.anomalies ? stats.anomalies + " active" : "clear", cls: stats.anomalies ? "down" : "up" },
     ];
     const tiers = stats.trustTiers || [];
     const max = Math.max(1, ...tiers.map((t) => t.n));
