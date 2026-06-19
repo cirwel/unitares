@@ -56,7 +56,6 @@ The bulk of operational scripts live in `scripts/ops/`.
 | Script | Description |
 |--------|-------------|
 | `mcp_agent.py` | Autonomous MCP agent |
-| `operator_agent.py` | Operator-level agent with elevated permissions |
 | `enroll_resident.py` | Enroll resident identity anchors |
 
 ### Server Lifecycle
@@ -135,16 +134,13 @@ checks:
 | `agent_fragmentation.py` | Read-only report for identities with zero or sparse real check-ins, grouped by model/session/thread so fresh-UUID fragmentation is visible. |
 
 ### `migration/`
-Database maintenance scripts (embeddings backfill, ghost agent cleanup, knowledge graph maintenance).
+Database maintenance scripts (corpus re-embedding, ghost agent cleanup, knowledge graph maintenance).
 
 ### `git-hooks/`
 Git hook scripts.
 
 - `pre-commit-combined` is the current default pre-commit hook installed by `scripts/ops/install_git_hooks.sh`
 - `pre-commit` is the older script-proliferation-only hook retained for reference
-
-### `safeguards/`
-Safety-related scripts and checks.
 
 ### `archive/`
 Archived scripts organized by type — completed migrations, deprecated CLI tools, one-off session scripts.

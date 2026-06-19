@@ -9,7 +9,7 @@ Checks:
 - Minimal/Lite contain required discovery tools (list_tools, describe_tool)
 
 Run:
-  python3 scripts/validate_tool_modes.py
+  python3 scripts/diagnostics/validate_tool_modes.py
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from pathlib import Path
 
 
 def main() -> int:
-    repo_root = Path(__file__).resolve().parent.parent
+    repo_root = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(repo_root))
 
     from src.tool_schemas import get_tool_definitions
