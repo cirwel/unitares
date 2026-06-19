@@ -722,13 +722,20 @@ def _seed_findings(watcher_module, entries: list[dict]) -> None:
 def _make_raw_entry(
     fingerprint: str,
     *,
-    pattern: str = "P001",
+    # Default to a NON-token-gated pattern (P011 has no entry in
+    # _PATTERN_REQUIRED_TOKENS). These raw entries exercise queue/status logic,
+    # not pattern detection, and point at an arbitrary line (:10) of this test
+    # file that holds no pattern construct — a token-gated default (e.g. P001)
+    # would be aged out by surface_pending's chime-time token-drift sweep before
+    # the queue assertions run. A real detection always carries its token; these
+    # synthetic fixtures don't, so they use a token-free pattern by default.
+    pattern: str = "P011",
     file: str = str(Path(__file__).resolve()),
     line: int = 10,
     status: str = "open",
     detected_at: str = "2026-04-11T00:00:00Z",
     severity: str = "high",
-    hint: str = "fire-and-forget task",
+    hint: str = "mutation before persistence",
 ) -> dict:
     return {
         "pattern": pattern,
@@ -3474,3 +3481,127 @@ class TestWatcherLifecycleIntegration:
         # Verify local status also updated
         findings = watcher_module._iter_findings_raw()
         assert findings[0]["status"] == "confirmed"
+
+
+# ---------------------------------------------------------------------------
+# Chime-time token-drift re-validation (_sweep_token_drift_quiet)
+# ---------------------------------------------------------------------------
+
+
+class TestTokenDriftRevalidation:
+    """``_sweep_token_drift_quiet`` ages out open/surfaced findings whose
+    flagged line no longer carries the pattern's required token — closing the
+    line-drift staleness gap where a finding validated at detection later
+    surfaces against a line that has since drifted off the construct.
+
+    Regression for the recurring P003/P001 line-drift dismissal sweeps: the
+    required-token gate only ran at detection, never replayed at surface time.
+    """
+
+    def _seed(self, finding: dict) -> None:
+        from agents.watcher import findings as wf
+
+        base = {
+            "hint": "x",
+            "severity": "high",
+            "detected_at": "2026-06-01T00:00:00Z",
+            "model_used": "test",
+            "status": "open",
+        }
+        wf._write_findings_atomic([{**base, **finding}])
+
+    def _records(self):
+        from agents.watcher import findings as wf
+
+        return {r["fingerprint"]: r for r in wf._iter_findings_raw()}
+
+    def test_ages_out_when_required_token_gone(self, tmp_path):
+        from agents.watcher import findings as wf
+
+        src = tmp_path / "mod.py"
+        # Line 2 is a return statement — NO `UNITARESMonitor(` token, the exact
+        # divergence-surface shape (constructor drifted away, return remains).
+        src.write_text("def get_primary_eisv(self):\n    return self.state.E\n")
+        self._seed({"pattern": "P003", "file": str(src), "line": 2, "fingerprint": "aaaa1111"})
+
+        aged = wf._sweep_token_drift_quiet()
+
+        assert aged == 1
+        rec = self._records()["aaaa1111"]
+        assert rec["status"] == "aged_out"
+        assert rec["resolution_reason"] == "line_drift_token_absent"
+        assert rec.get("aged_out_at")
+
+    def test_keeps_when_required_token_present(self, tmp_path):
+        from agents.watcher import findings as wf
+
+        src = tmp_path / "mod.py"
+        src.write_text("x = 1\nmonitor = UNITARESMonitor(agent_id)\n")  # line 2 holds the token
+        self._seed({"pattern": "P003", "file": str(src), "line": 2, "fingerprint": "bbbb2222"})
+
+        aged = wf._sweep_token_drift_quiet()
+
+        assert aged == 0
+        assert self._records()["bbbb2222"]["status"] == "open"
+
+    def test_p001_ages_out_without_create_task(self, tmp_path):
+        from agents.watcher import findings as wf
+
+        src = tmp_path / "uds.py"
+        # The uds_listener shape: flagged line is a bare `try:` in cleanup, no
+        # `create_task(` anywhere on it.
+        src.write_text("if os.path.exists(p):\n    try:\n        os.unlink(p)\n")
+        self._seed({"pattern": "P001", "file": str(src), "line": 2, "fingerprint": "cccc3333"})
+
+        assert wf._sweep_token_drift_quiet() == 1
+        assert self._records()["cccc3333"]["status"] == "aged_out"
+
+    def test_skips_pattern_without_required_token(self, tmp_path):
+        """P011 has no entry in _PATTERN_REQUIRED_TOKENS, so this sweep must
+        never touch it (its FPs are a verifier-quality issue, not staleness)."""
+        from agents.watcher import findings as wf
+
+        src = tmp_path / "r1.py"
+        src.write_text("for c in cs:\n    counts['evaluated'] += 1\n")
+        self._seed({"pattern": "P011", "file": str(src), "line": 2, "fingerprint": "dddd4444"})
+
+        assert wf._sweep_token_drift_quiet() == 0
+        assert self._records()["dddd4444"]["status"] == "open"
+
+    def test_does_not_touch_terminal_findings(self, tmp_path):
+        """A dismissed finding whose token is gone stays dismissed — the sweep
+        only acts on the active (open/surfaced) queue."""
+        from agents.watcher import findings as wf
+
+        src = tmp_path / "mod.py"
+        src.write_text("x = 1\n    return None\n")
+        self._seed(
+            {"pattern": "P003", "file": str(src), "line": 2, "fingerprint": "eeee5555", "status": "dismissed"}
+        )
+
+        assert wf._sweep_token_drift_quiet() == 0
+        assert self._records()["eeee5555"]["status"] == "dismissed"
+
+    def test_out_of_range_line_left_alone(self, tmp_path):
+        """File present but stored line is beyond EOF → conservative skip (no
+        false age-out; the file-existence sweep and future scans cover it)."""
+        from agents.watcher import findings as wf
+
+        src = tmp_path / "mod.py"
+        src.write_text("x = 1\ny = 2\n")  # only 2 lines
+        self._seed({"pattern": "P003", "file": str(src), "line": 50, "fingerprint": "ffff6666"})
+
+        assert wf._sweep_token_drift_quiet() == 0
+        assert self._records()["ffff6666"]["status"] == "open"
+
+    def test_missing_file_left_for_existence_sweep(self, tmp_path):
+        """A finding whose file no longer exists is not aged out here — that's
+        the separate _sweep_stale_quiet's job; this sweep must not crash on it."""
+        from agents.watcher import findings as wf
+
+        self._seed(
+            {"pattern": "P003", "file": str(tmp_path / "gone.py"), "line": 1, "fingerprint": "9999aaaa"}
+        )
+
+        assert wf._sweep_token_drift_quiet() == 0
+        assert self._records()["9999aaaa"]["status"] == "open"

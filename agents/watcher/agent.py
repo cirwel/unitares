@@ -99,6 +99,7 @@ from agents.watcher.findings import (
     _partition_findings_by_scope,
     _resolve_session_scope_root,
     _sweep_stale_quiet,
+    _sweep_token_drift_quiet,
     _write_findings_atomic,
     compact_findings,
     escalate,
@@ -1265,9 +1266,14 @@ def surface_pending() -> int:
     exists before computing the chime. Closes the failure mode observed
     on 2026-05-07 dogfood — 36% of open findings (48/132) were dangling
     against deleted worktree paths, inflating chime severity rankings.
-    Quiet so it doesn't pollute the chime block stdout.
+    A second quiet sweep ages out findings whose flagged line has drifted
+    off the pattern's required token (file still present, but the stored
+    line no longer holds the construct — the line-drift FP class behind
+    repeated P003/P001/P016 dismissal sweeps). Both are quiet so they
+    don't pollute the chime block stdout.
     """
     _sweep_stale_quiet()
+    _sweep_token_drift_quiet()
     all_findings = _iter_findings_raw()
     open_findings = [f for f in all_findings if f.get("status", "open") == "open"]
 
