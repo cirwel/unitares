@@ -1,21 +1,57 @@
+<div align="center">
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero.svg">
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/hero.svg">
   <img alt="UNITARES — Self-regulating AI agents" src="docs/assets/hero.svg" width="100%">
 </picture>
 
+### Catch an AI agent going off the rails — before anything breaks.
+
+**Runtime telemetry & self-governance for fleets of autonomous AI agents.**<br/>
+UNITARES watches each agent while it works and tells you — and the agent itself — the moment one starts to drift, while it's still just numbers moving and not yet broken output.
+
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
 
-# Catch an AI agent going off the rails — before anything breaks.
+*Status: live. First public commit 2025-12-04 · 3.7M+ governance events in production · dogfooded.*
 
-**UNITARES watches your fleet of AI agents while they work and tells you — and each agent — the moment one starts to drift, while it's still just numbers moving and not broken output.**
+[![▶ Quickstart](https://img.shields.io/badge/▶_Quickstart-2ea44f?style=for-the-badge)](#try-it-in-60-seconds)
+[![Read the docs](https://img.shields.io/badge/Docs-1f6feb?style=for-the-badge)](docs/README.md)
+[![Paper](https://img.shields.io/badge/Paper_v6-8957e5?style=for-the-badge)](https://github.com/cirwel/unitares-paper-v6)
+[![Reviewer Guide](https://img.shields.io/badge/Verify_it_yourself-da7633?style=for-the-badge)](docs/REVIEWER_GUIDE.md)
 
-- 🩺 **See drift early.** Spot an agent degrading before its output looks wrong.
-- 🔒 **Confidence you can't fake.** Claims are scored against real results — tests, exit codes, tool output — not the agent's word.
-- 🛰️ **The whole fleet, live.** One dashboard for you; agents read each other and self-correct over the API.
+</div>
+
+---
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+### 🩺 See drift early
+
+Each agent is graded against its *own* baseline. Slow degradation shows up as Integrity slipping and entropy rising — while the output still looks fine.
+
+</td>
+<td width="33%" valign="top">
+
+### 🔒 Confidence you can't fake
+
+Claims are scored against **real results** — tests, exit codes, tool output — not the agent's word. An agent can inflate `confidence`; it can't inflate its success rate.
+
+</td>
+<td width="33%" valign="top">
+
+### 🛰️ The whole fleet, live
+
+One dashboard for humans. Over the API, agents read **each other's** live state to decide whether to trust a handoff — and self-correct before a guardrail has to fire.
+
+</td>
+</tr>
+</table>
 
 ## Try it in 60 seconds
 
@@ -26,15 +62,21 @@ docker compose up -d --wait && make demo
 
 `make demo` drives a synthetic agent through seven check-ins — clean work, then confidence drifting from results, then confusion — and prints the verdict at each step. Then point any MCP client at `http://localhost:8767/mcp/`.
 
-<p align="center">
-  <img src="docs/assets/dashboard.png" width="80%" alt="Unitares dashboard — fleet coherence, agent count, discoveries, and system health"/>
-</p>
+<div align="center">
+  <img src="docs/assets/dashboard.png" width="85%" alt="Unitares dashboard — fleet coherence, agent count, discoveries, and system health"/>
+</div>
 
-> Running continuously since November 2025 · **3.7M+ governance events** under sustained load · dogfooded — the agents building UNITARES run under it. ([Production snapshot →](docs/PRODUCTION_SNAPSHOT.md))
+> **Running continuously since November 2025 · 3.7M+ governance events under sustained load · dogfooded** — the agents building UNITARES run under it. Every number is verifiable on a fresh clone. ([Production snapshot →](docs/PRODUCTION_SNAPSHOT.md))
 
-It runs **alongside** your evals and guardrails, not instead of them: evals check whether a model is good enough to deploy, guardrails catch bad actions as they happen, and UNITARES shows what the fleet is doing *right now*.
+## Where it fits
 
----
+UNITARES runs **alongside** your evals and guardrails — it doesn't replace either. They answer different questions at different times:
+
+| | Question it answers | When it acts |
+|---|---|---|
+| **Evals** | Is this model good enough to ship? | before deploy |
+| **Guardrails** | Is this *action* allowed right now? | per action |
+| **UNITARES** | Is this agent *still healthy* as it works? | continuously, mid-run |
 
 ## The core idea in 30 seconds
 
@@ -42,14 +84,18 @@ After each unit of work, an agent checks in with `sync_state()` — passing its 
 
 | | | Goes wrong when… |
 |---|---|---|
-| **E** | Energy — is the work advancing? | thrashing, retries, no progress |
-| **I** | Integrity — do claims match results? | high confidence, low actual success |
-| **S** | Entropy — drifting from its own normal? | erratic, divergent behavior |
-| **V** | Valence — the E−I gap, derived | motion without coherence (or vice-versa) |
+| **E** · Energy | is the work advancing? | thrashing, retries, no progress |
+| **I** · Integrity | do claims match results? | high confidence, low actual success |
+| **S** · Entropy | drifting from its own normal? | erratic, divergent behavior |
+| **V** · Valence | the E−I gap, derived | motion without coherence (or vice-versa) |
 
 Each check-in returns a plain verdict — **`proceed` / `guide` / `pause` / `reject`** — so the agent can correct itself *before* an external safety system has to step in. After ~30 check-ins, each agent is graded against its *own* baseline, so slow degradation surfaces even while output still looks fine.
 
-→ [How EISV is actually computed](docs/EISV_COMPUTATION.md) · [Architecture](docs/UNIFIED_ARCHITECTURE.md) · [Who this is for & the threat model](docs/SCOPE_AND_THREAT_MODEL.md)
+<div align="center">
+
+[How EISV is computed](docs/EISV_COMPUTATION.md) · [Architecture](docs/UNIFIED_ARCHITECTURE.md) · [Who it's for & threat model](docs/SCOPE_AND_THREAT_MODEL.md)
+
+</div>
 
 ## Integrate in two calls
 
@@ -68,7 +114,11 @@ elif eisv.get("E", 1) < 0.2:
 
 The agent reads its own state and adjusts before external controls fire. UNITARES isn't an output validator or a sandbox — it's a state layer the agent itself can read. For long-running or scheduled agents, the [SDK](agents/sdk/README.md) handles connection, identity, check-ins, and heartbeats.
 
-→ [Getting started](docs/guides/START_HERE.md) · [MCP client config](docs/integration/MCP_CLIENTS.md) · [Tool names & raw API](docs/guides/START_HERE.md)
+<div align="center">
+
+[Getting started](docs/guides/START_HERE.md) · [MCP client config](docs/integration/MCP_CLIENTS.md) · [Tool names & raw API](docs/guides/START_HERE.md)
+
+</div>
 
 ## Don't trust this README — verify it
 
@@ -150,4 +200,9 @@ Kenny Wang ([ORCID 0009-0006-7544-2374](https://orcid.org/0009-0006-7544-2374)),
 
 ---
 
-**Apache License 2.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Covers server, dashboard, tooling, and the math dynamics engine in `governance_core/`. Attribution requested per the NOTICE file. Built by [@cirwel](https://github.com/cirwel).
+<div align="center">
+
+**Apache License 2.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE).<br/>
+Built by [@cirwel](https://github.com/cirwel) · CIRWEL Systems
+
+</div>
