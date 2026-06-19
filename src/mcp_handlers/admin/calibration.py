@@ -11,6 +11,53 @@ from ..decorators import mcp_tool
 from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
+# Class-scope overconfidence advisory. Magnitude matches the global gate's
+# _OVERCONFIDENCE_GATE; kept local so this descriptive surface stays decoupled
+# from the gating module. A class needs at least this many eligible samples
+# before its gap is trustworthy enough to surface.
+_CLASS_OVERCONFIDENCE_GATE = 0.2
+_CLASS_OVERCONFIDENCE_MIN_SAMPLES = 30
+
+
+def _derive_class_overconfidence_advisories(
+    by_class_envelope: Optional[Dict[str, Any]],
+    *,
+    gate: float = _CLASS_OVERCONFIDENCE_GATE,
+    min_samples: int = _CLASS_OVERCONFIDENCE_MIN_SAMPLES,
+) -> List[Dict[str, Any]]:
+    """Surface agent classes whose self-reported confidence materially exceeds
+    their real success rate.
+
+    The global calibration gate is class-unscoped by design (see
+    `check_calibration`): it bins by confidence across the whole fleet, so a
+    single overconfident cohort can hide behind well-calibrated peers in the
+    aggregated bins. This makes that masking legible. Descriptive only — it does
+    not gate anything.
+
+    `calibration_gap = empirical_accuracy - mean_confidence`, so a negative gap
+    is overconfidence; the magnitude flagged is `-gap`.
+    """
+    advisories: List[Dict[str, Any]] = []
+    by_class = (by_class_envelope or {}).get("by_class", {}) or {}
+    for class_tag, m in by_class.items():
+        if not isinstance(m, dict):
+            continue
+        samples = m.get("eligible_samples", 0) or 0
+        gap = m.get("calibration_gap")
+        if gap is None or samples < min_samples:
+            continue
+        overconfidence = -gap  # positive == declared above achieved
+        if overconfidence > gate:
+            advisories.append({
+                "class_tag": class_tag,
+                "declared_confidence": m.get("mean_confidence"),
+                "achieved_accuracy": m.get("empirical_accuracy"),
+                "overconfidence": round(overconfidence, 4),
+                "eligible_samples": samples,
+            })
+    advisories.sort(key=lambda a: a["overconfidence"], reverse=True)
+    return advisories
+
 
 def _build_calibration_guidance(
     *,
@@ -212,7 +259,23 @@ async def handle_check_calibration(arguments: Dict[str, Any]) -> Sequence[TextCo
     # scope and only appear on the tactical_evidence (global) envelope above).
     try:
         from src.sequential_calibration import get_sequential_calibration_tracker
-        response["by_class"] = get_sequential_calibration_tracker().compute_metrics_by_class()
+        by_class_env = get_sequential_calibration_tracker().compute_metrics_by_class()
+        response["by_class"] = by_class_env
+        # Make class-scoped overconfidence visible. The global gate is
+        # class-unscoped, so an overconfident cohort (e.g. ephemeral sessions
+        # declaring ~1.0 and achieving far less) can hide behind well-calibrated
+        # peers in the aggregated confidence bins. Descriptive only — does not gate.
+        class_advisories = _derive_class_overconfidence_advisories(by_class_env)
+        if class_advisories:
+            response["class_overconfidence_advisories"] = {
+                "note": (
+                    "The global calibration gate is class-unscoped: these classes "
+                    "are overconfident in aggregate but can hide behind well-"
+                    "calibrated peers in the global confidence bins. Descriptive "
+                    "only — does not gate."
+                ),
+                "classes": class_advisories,
+            }
     except Exception as e_bc:
         logger.debug(f"S10 by_class breakdown skipped: {e_bc}")
 
