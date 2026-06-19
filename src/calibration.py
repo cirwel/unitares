@@ -44,6 +44,12 @@ class ComplexityCalibrationBin:
 # direction without loosening the magnitude.
 _OVERCONFIDENCE_GATE = 0.2
 
+# Minimum margin before a confidence/outcome curve counts as "inverted". A
+# near-ceiling jitter on a saturated channel (e.g. trajectory_health 0.969 at low
+# confidence vs 0.933 at high) is noise, not evidence that confident verdicts are
+# untrustworthy — the alarming "inverted curve" warning should not fire on it.
+_CURVE_INVERSION_MARGIN = 0.05
+
 
 class CalibrationChecker:
     """
@@ -1130,22 +1136,40 @@ class CalibrationChecker:
             "tactical": self._characterize_dimension(tactical, min_samples),
         }
 
-        is_inverted = result["strategic"].get("curve_inverted", False)
-        worst = result["strategic"].get("worst_bin")
+        # The verdict-quality warning prefers the TACTICAL channel — real
+        # exogenous outcomes (tests, commands, lint). The STRATEGIC channel's
+        # truth signal (trajectory_health) is a saturated proxy: near-constant
+        # across confidence levels, so its "inversion" is jitter, not evidence
+        # that confident verdicts are untrustworthy. Drive the warning off real
+        # outcomes; fall back to a clearly-labeled proxy note only when there is
+        # no tactical data.
+        source = None
+        proxy = False
+        if result["tactical"].get("status") == "analyzed":
+            source = result["tactical"]
+        elif result["strategic"].get("status") == "analyzed":
+            source = result["strategic"]
+            proxy = True
 
-        if is_inverted:
-            result["verdict_quality_warning"] = (
-                "INVERTED calibration curve: agents with HIGH confidence have WORSE outcomes. "
-                "High-confidence 'proceed' verdicts may be the LEAST trustworthy."
-            )
-        elif worst and worst.get("calibration_error", 0) > 0.3:
-            result["verdict_quality_warning"] = (
-                f"Severe miscalibration in bin {worst.get('bin')}: "
-                f"calibration error {worst['calibration_error']:.2f}. "
-                "Verdicts in this confidence range should be treated with caution."
-            )
-        else:
-            result["verdict_quality_warning"] = None
+        warning = None
+        if source is not None:
+            label = (" (strategic trajectory_health proxy — a saturated channel, "
+                     "not a real-outcome signal)") if proxy else ""
+            worst = source.get("worst_bin")
+            if source.get("curve_inverted"):
+                warning = (
+                    "INVERTED calibration curve: agents with HIGH confidence have "
+                    "WORSE outcomes. High-confidence 'proceed' verdicts may be the "
+                    f"LEAST trustworthy.{label}"
+                )
+            elif worst and worst.get("calibration_error", 0) > 0.3:
+                warning = (
+                    f"Severe miscalibration in bin {worst.get('bin')}: "
+                    f"calibration error {worst['calibration_error']:.2f}. "
+                    f"Verdicts in this confidence range should be treated with caution.{label}"
+                )
+
+        result["verdict_quality_warning"] = warning
 
         return result
 
@@ -1168,7 +1192,9 @@ class CalibrationChecker:
         if len(sorted_bins) >= 2:
             low_conf_acc = sorted_bins[0][1].accuracy
             high_conf_acc = sorted_bins[-1][1].accuracy
-            curve_inverted = high_conf_acc < low_conf_acc
+            # Require a material margin — a near-ceiling jitter on a saturated
+            # channel is noise, not a real inversion.
+            curve_inverted = (low_conf_acc - high_conf_acc) > _CURVE_INVERSION_MARGIN
 
         worst = max(valid.items(), key=lambda x: x[1].calibration_error)
 
