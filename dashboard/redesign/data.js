@@ -72,9 +72,56 @@
       }, () => S().residents);
     },
 
-    // Stats are several tool calls in the real dashboard; snapshot until each is wired.
+    // Headline telemetry aggregator. One coordinated parallel batch; each card
+    // is derived from its authoritative source and degrades to the snapshot
+    // value if that one source is unreachable. Fleet Coherence is NOT here — it
+    // is derived from the live residents in the landing view.
+    //   agents/tiers  ← agent(list)            stuck       ← detect_stuck_agents
+    //   discoveries   ← knowledge(stats)        calibration ← calibration(check)
+    //   dialectic     ← dialectic(list)         anomalies   ← detect_anomalies
+    //   systemHealth  ← /health/deep
     async stats() {
-      return withFallback(async () => null, () => S().stats);
+      const snap = S().stats;
+      const tc = (n, a) => callTool(n, a).catch(() => null);
+      const rest = (p) => authFetch(p).catch(() => null);
+      return withFallback(async () => {
+        const [agentsR, kgR, dlcR, stuckR, calR, anomR, healthR] = await Promise.all([
+          tc("agent", { action: "list", include_metrics: false, recent_days: 30, limit: 400, status_filter: "all" }),
+          tc("knowledge", { action: "stats" }),
+          tc("dialectic", { action: "list", limit: 50 }),
+          tc("detect_stuck_agents", {}),
+          tc("calibration", { action: "check" }),
+          tc("detect_anomalies", {}),
+          rest("/health/deep"),
+        ]);
+        if (![agentsR, kgR, dlcR, stuckR, calR, anomR, healthR].some(Boolean)) return null;
+
+        // Agents count + trust-tier histogram (verified/established → strong,
+        // emerging → medium, unknown → weak).
+        let agentsActive = snap.agentsActive, agentsTotal = snap.agentsTotal, trustTiers = snap.trustTiers;
+        if (agentsR && agentsR.summary) {
+          agentsTotal = agentsR.summary.total;
+          agentsActive = (agentsR.summary.by_status || {}).active;
+          const TIER = { verified: "strong", established: "strong", emerging: "medium", unknown: "weak" };
+          const b = { strong: 0, medium: 0, weak: 0 };
+          Object.values(agentsR.agents || {}).forEach((arr) => (arr || []).forEach((a) => { b[TIER[a.trust_tier] || "weak"]++; }));
+          trustTiers = [{ tier: "strong", n: b.strong }, { tier: "medium", n: b.medium }, { tier: "weak", n: b.weak }];
+        }
+
+        const kg = kgR ? (kgR.stats || kgR) : null;
+        const dlcSessions = dlcR && Array.isArray(dlcR.sessions) ? dlcR.sessions : null;
+
+        return {
+          agentsActive, agentsTotal, trustTiers,
+          discoveries: kg && typeof kg.total_discoveries === "number" ? kg.total_discoveries : snap.discoveries,
+          discoveriesToday: null, // no honest live "today" delta; show neutral subtitle
+          dialectic: dlcSessions ? dlcSessions.filter((s) => !["resolved", "failed"].includes(s.phase || s.status)).length : snap.dialectic,
+          stuck: stuckR ? (stuckR.stuck_agents || []).length : snap.stuck,
+          calibration: calR && typeof calR.trajectory_health === "number" ? calR.trajectory_health : snap.calibration,
+          anomalies: anomR && anomR.summary ? anomR.summary.total_anomalies : snap.anomalies,
+          systemHealth: healthR ? (healthR.status === "healthy" ? "OK" : healthR.status) : snap.systemHealth,
+        };
+      }, () => snap);
     },
 
     async agents() {
