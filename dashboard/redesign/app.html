@@ -10,6 +10,14 @@
 <link rel="stylesheet" href="./tokens.css" />
 <link rel="stylesheet" href="./kit.css" />
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  .live-pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
+    font-size: var(--text-xs); color: var(--muted); }
+  .live-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok);
+    animation: live-pulse 2s var(--ease) infinite; }
+  .live-pill.paused .dot { background: var(--faint); animation: none; }
+  @keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+</style>
 </head>
 <body>
 <div class="wrap">
@@ -19,6 +27,7 @@
     <span class="brand-sub">Governance</span>
     <span class="spring"></span>
     <span class="server-stat" id="serverStat">—</span>
+    <span class="live-pill" id="livePill" title="Auto-refreshing monitor views"><span class="dot"></span><span id="liveText">live</span></span>
     <button class="theme-toggle" id="themeBtn">◑ paper</button>
   </header>
 
@@ -132,7 +141,9 @@ nav.addEventListener("click", (e) => {
   const id = a.dataset.section;
   nav.querySelectorAll("a").forEach((x) => x.classList.toggle("active", x === a));
   document.querySelectorAll("[data-pane]").forEach((p) => { p.hidden = p.dataset.pane !== id; });
+  activeSection = id;
   lazyLoad(id);
+  updateLivePill();
 });
 
 const loaded = {};
@@ -146,8 +157,48 @@ function lazyLoad(id) {
   if (id === "residents" && window.Residents) { loaded[id] = true; window.Residents.load(); }
 }
 
+// ── auto-refresh: keep the monitor views live ──────────────────────────────
+// Explore views (agents/discoveries/dialectic) have filters/inputs and stay
+// manual; the monitor views refresh on a tick. Refresh pauses while the tab is
+// hidden or an input is focused, and fires immediately on tab re-focus.
+let activeSection = "overview";
+const REFRESH_MS = 10000;       // light monitor refresh
+const STATS_REFRESH_MS = 30000; // heavy headline batch (7 tools) — gentler cadence
+const RELOAD = {
+  overview: () => window.Landing && window.Landing.refresh(),
+  activity: () => window.Activity && window.Activity.load(),
+  residents: () => window.Residents && window.Residents.load(),
+  eisv: () => window.EISV && window.EISV.load(),
+};
+const livePill = document.getElementById("livePill");
+const liveText = document.getElementById("liveText");
+function isAutoSection(id) { return Object.prototype.hasOwnProperty.call(RELOAD, id); }
+function isTyping() {
+  const el = document.activeElement;
+  return el && ["INPUT", "SELECT", "TEXTAREA"].includes(el.tagName);
+}
+function updateLivePill() {
+  const auto = isAutoSection(activeSection);
+  livePill.classList.toggle("paused", !auto);
+  liveText.textContent = auto ? "live" : "manual";
+  livePill.title = auto ? "Auto-refreshing every 10s" : "This view is manual — switch to a monitor view for live updates";
+}
+function refreshTick() {
+  if (document.hidden || isTyping() || !isAutoSection(activeSection)) return;
+  const fn = RELOAD[activeSection];
+  if (fn) fn();
+}
+setInterval(refreshTick, REFRESH_MS);
+// Heavier headline batch on a gentler cadence, only while watching the Overview.
+setInterval(() => {
+  if (document.hidden || isTyping() || activeSection !== "overview") return;
+  if (window.Landing && window.Landing.refreshStats) window.Landing.refreshStats();
+}, STATS_REFRESH_MS);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshTick(); });
+
 // boot
 window.Landing.render();
+updateLivePill();
 (function openFromHash() {
   const id = (location.hash || "").replace("#", "");
   const link = id && nav.querySelector(`a[data-section="${id}"]`);
