@@ -2022,8 +2022,8 @@ class TestListAgentsFullModeEdgeCases:
             assert agent["metrics"] is None
 
     @pytest.mark.asyncio
-    async def test_full_mode_metrics_from_not_in_memory_monitor(self, server):
-        """Lines 304-359: monitor not in memory - loads via get_or_create_monitor."""
+    async def test_full_mode_metrics_not_in_memory_uses_cached_health(self, server):
+        """Non-resident monitors are not hydrated from list_agents."""
         server.agent_metadata = {
             "agent-load": make_agent_meta(status="active", total_updates=5, notes="", health_status=None),
         }
@@ -2038,9 +2038,9 @@ class TestListAgentsFullModeEdgeCases:
             })
             data = _parse(result)
             agent = data["agents"][0]
-            assert agent["health_status"] == "healthy"
-            assert agent["metrics"] is not None
-            assert agent["metrics"]["E"] == 0.7
+            assert agent["health_status"] == "unknown"
+            assert agent["metrics"] is None
+            server.get_or_create_monitor.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_full_mode_cached_health_status_used(self, server):
@@ -2080,8 +2080,8 @@ class TestListAgentsFullModeEdgeCases:
             assert agent["metrics"] is None
 
     @pytest.mark.asyncio
-    async def test_full_mode_no_metrics_calculates_health(self, server):
-        """Lines 384-386: when no cached health, calculates from monitor."""
+    async def test_full_mode_no_metrics_without_cached_health_stays_unknown(self, server):
+        """No-metrics list_agents uses cached health only and never hydrates."""
         meta = make_agent_meta(status="active", total_updates=5, notes="", health_status=None)
         server.agent_metadata = {"agent-calc": meta}
         server.monitors = {}
@@ -2094,9 +2094,9 @@ class TestListAgentsFullModeEdgeCases:
             })
             data = _parse(result)
             agent = data["agents"][0]
-            assert agent["health_status"] == "healthy"
-            # Should have cached the health status
-            assert meta.health_status == "healthy"
+            assert agent["health_status"] == "unknown"
+            assert meta.health_status is None
+            server.get_or_create_monitor.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_full_mode_no_metrics_calculation_error(self, server):
