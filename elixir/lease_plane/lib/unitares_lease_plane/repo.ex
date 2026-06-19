@@ -256,7 +256,11 @@ defmodule UnitaresLeasePlane.Repo do
       # (race against the reaper). Fall through to acquire_step_nil so the
       # caller still gets a fresh acquire instead of a confusing :not_found.
       {:ok, %{rows: []}} ->
-        acquire_step_nil(conn, p_from_existing(existing, substrate_state, substrate_observed_at), 0)
+        acquire_step_nil(
+          conn,
+          p_from_existing(existing, substrate_state, substrate_observed_at),
+          0
+        )
 
       {:error, e} ->
         {:error, e}

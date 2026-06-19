@@ -158,6 +158,7 @@ defmodule UnitaresLeasePlaneTest do
       assert before.substrate_state_observed_at == nil
 
       observed_at = DateTime.utc_now()
+
       assert :ok =
                UnitaresLeasePlane.renew(
                  before.lease_id,
@@ -206,41 +207,49 @@ defmodule UnitaresLeasePlaneTest do
       # subsequent cycles ran. Fix: idempotent acquire COALESCE-updates
       # substrate columns when caller provided them.
 
-      surface = "resident:/test_elixir_idempotent_substrate_#{:erlang.unique_integer([:positive])}"
+      surface =
+        "resident:/test_elixir_idempotent_substrate_#{:erlang.unique_integer([:positive])}"
+
       on_exit(fn -> cleanup_surface(surface) end)
 
       params = local_beam_params(surface, ttl_s: 60)
-      params_with_substrate_v1 = Map.merge(params, %{
-        substrate_state: %{
-          "E" => 0.5,
-          "I" => 0.5,
-          "S" => 0.0,
-          "V" => 0.05,
-          "sensor" => %{"status" => "healthy"}
-        },
-        substrate_state_observed_at: DateTime.utc_now()
-      })
+
+      params_with_substrate_v1 =
+        Map.merge(params, %{
+          substrate_state: %{
+            "E" => 0.5,
+            "I" => 0.5,
+            "S" => 0.0,
+            "V" => 0.05,
+            "sensor" => %{"status" => "healthy"}
+          },
+          substrate_state_observed_at: DateTime.utc_now()
+        })
 
       assert {:ok, lease, :new} =
                UnitaresLeasePlane.acquire_local_beam(params_with_substrate_v1)
+
       first_observed_at = lease.substrate_state_observed_at
       assert lease.substrate_state["V"] == 0.05
 
       # Cycle 2: same holder, same surface, NEW substrate values.
       observed_at_2 = DateTime.add(DateTime.utc_now(), 1, :second)
-      params_with_substrate_v2 = Map.merge(params, %{
-        substrate_state: %{
-          "E" => 0.7,
-          "I" => 0.3,
-          "S" => 0.2,
-          "V" => 0.15,
-          "sensor" => %{"status" => "degraded"}
-        },
-        substrate_state_observed_at: observed_at_2
-      })
+
+      params_with_substrate_v2 =
+        Map.merge(params, %{
+          substrate_state: %{
+            "E" => 0.7,
+            "I" => 0.3,
+            "S" => 0.2,
+            "V" => 0.15,
+            "sensor" => %{"status" => "degraded"}
+          },
+          substrate_state_observed_at: observed_at_2
+        })
 
       assert {:ok, refreshed, :idempotent} =
                UnitaresLeasePlane.acquire_local_beam(params_with_substrate_v2)
+
       # New substrate values overwrote the old (THE BUG WAS: refreshed.substrate_state["V"] == 0.05)
       assert refreshed.substrate_state["V"] == 0.15
       assert refreshed.substrate_state["sensor"]["status"] == "degraded"
@@ -253,7 +262,9 @@ defmodule UnitaresLeasePlaneTest do
     end
 
     test "idempotent re-acquire WITHOUT substrate is unchanged (legacy callers preserved)" do
-      surface = "resident:/test_elixir_idempotent_no_substrate_#{:erlang.unique_integer([:positive])}"
+      surface =
+        "resident:/test_elixir_idempotent_no_substrate_#{:erlang.unique_integer([:positive])}"
+
       on_exit(fn -> cleanup_surface(surface) end)
 
       params = local_beam_params(surface, ttl_s: 60)
@@ -351,7 +362,8 @@ defmodule UnitaresLeasePlaneTest do
       assert %DateTime{} = forwarded_at
     end
 
-    test "§7.2.8 contract — top-level keys present, surface_id un-encoded, §6.1 LIKE works", ctx do
+    test "§7.2.8 contract — top-level keys present, surface_id un-encoded, §6.1 LIKE works",
+         ctx do
       params = local_beam_params(ctx.surface)
       assert {:ok, _lease, :new} = UnitaresLeasePlane.acquire_local_beam(params)
       event_id = acquire_event_id(ctx.surface)
