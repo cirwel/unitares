@@ -7,7 +7,7 @@
     --border-highlight: rgba(255, 255, 255, 0.15);
     --text-primary: #f0f0f5;
     --text-secondary: #9aa0af;
-    --text-muted: #6e7681;
+    --text-muted: #8b929c; /* lifted from #6e7681 → ≥4.5:1 on --bg-color (WCAG 1.4.3) */
 
     /* Transitions & Dynamics */
     --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
@@ -78,6 +78,9 @@
     --border-color: rgba(0, 0, 0, 0.08);
     --text-primary: #121214;
     --text-secondary: #5e6472;
+    /* --text-muted is shared from :root; the dark value is too light for the
+       light background, so pin a known ≥4.5:1 value here (WCAG 1.4.3). */
+    --text-muted: #5e6472;
     --item-bg: rgba(255, 255, 255, 0.6);
     --toolbar-bg: rgba(255, 255, 255, 0.85);
     --input-bg: rgba(0, 0, 0, 0.03);

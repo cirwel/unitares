@@ -824,6 +824,9 @@ function showToast(message, durationMs) {
     durationMs = durationMs || 3000;
     var toast = document.createElement('div');
     toast.className = 'toast';
+    // role="status" makes the toast a polite live region so screen readers
+    // announce it (WCAG 4.1.3 Status Messages).
+    toast.setAttribute('role', 'status');
     toast.textContent = message;
     document.body.appendChild(toast);
     // Trigger reflow then add visible class for animation

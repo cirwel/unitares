@@ -251,7 +251,7 @@ document.querySelector('.panel-modal-close')?.addEventListener('click', closeMod
     overlay.className = 'shortcuts-overlay';
     overlay.innerHTML =
         '<div class="shortcuts-panel">' +
-        '<div class="shortcuts-header"><h3>Keyboard Shortcuts</h3><button class="shortcuts-close" type="button">&times;</button></div>' +
+        '<div class="shortcuts-header"><h3>Keyboard Shortcuts</h3><button class="shortcuts-close" type="button" aria-label="Close">&times;</button></div>' +
         '<div class="shortcuts-grid">' +
         '<div class="shortcut-row"><kbd>r</kbd><span>Refresh data</span></div>' +
         '<div class="shortcut-row"><kbd>t</kbd><span>Toggle theme</span></div>' +
@@ -2072,6 +2072,23 @@ if (agentsContainer) {
         if (!agentUuid) return;
         const agent = cachedAgents.find(a => (a.agent_id || '') === agentUuid);
         if (agent) showAgentDetail(agent);
+    });
+
+    // Keyboard: agent cards are role="button" tabindex="0" — Enter/Space opens
+    // detail, matching the click path above so the primary interaction is not
+    // mouse-only (WCAG 2.1.1). Only act when the card itself is focused, so
+    // Enter/Space inside nested controls (copy/pin/metrics toggle) is untouched.
+    agentsContainer.addEventListener('keydown', event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        const agentItem = event.target.closest('.agent-item');
+        if (!agentItem || event.target !== agentItem) return;
+        const agentUuid = agentItem.getAttribute('data-agent-uuid');
+        if (!agentUuid) return;
+        const agent = cachedAgents.find(a => (a.agent_id || '') === agentUuid);
+        if (agent) {
+            event.preventDefault(); // stop Space from scrolling the page
+            showAgentDetail(agent);
+        }
     });
 }
 

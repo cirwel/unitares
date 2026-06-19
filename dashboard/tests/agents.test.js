@@ -133,3 +133,17 @@ describe('renderAgentsList — participated vs never-checked-in partition (#826/
         expect(html).toContain('No agents match the current filters');
     });
 });
+
+describe('agent cards are keyboard-operable (WCAG 2.1.1 / 4.1.2)', () => {
+    it('renders each card as a focusable button with an accessible name', () => {
+        const all = [agent({ label: 'RealWorker', total_updates: 7 })];
+        window.state.set({ cachedAgents: all });
+        Agents.renderAgentsList(all, '');
+
+        const card = document.querySelector('#agents-container .agent-item');
+        expect(card).not.toBeNull();
+        expect(card.getAttribute('role')).toBe('button');
+        expect(card.getAttribute('tabindex')).toBe('0');
+        expect(card.getAttribute('aria-label')).toContain('RealWorker');
+    });
+});
