@@ -818,6 +818,17 @@ body::after {
     font-family: var(--font-mono);
 }
 
+/* Tabular (monospaced-width) figures so columns of metric values line up and
+   don't shift width as digits change on refresh. */
+.stat-card .value,
+.metric .val,
+.pulse-metric-value,
+.watcher-stat-value,
+.sentinel-stat-value,
+.vigil-stat-value {
+    font-variant-numeric: tabular-nums;
+}
+
 .stat-card .change {
     font-size: 0.8em;
     margin-top: 5px;
@@ -1302,23 +1313,8 @@ main {
     position: relative;
 }
 
-/* Add a subtle shine reading across the bar */
-.metric-bar-fill::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 50%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
-    animation: shine 3s infinite linear;
-}
-
-@keyframes shine {
-    to {
-        left: 200%;
-    }
-}
+/* Decorative always-on shimmer removed: constant motion on every metric bar
+   competed with the meaningful warning/critical pulses (signal-vs-noise). */
 
 .metric.e .metric-bar-fill {
     background: var(--accent-purple);
@@ -1578,7 +1574,7 @@ main {
     flex-shrink: 0;
 }
 .tl-verdict.tl-good { background: rgba(46, 204, 113, 0.15); color: var(--green, #2ecc71); }
-.tl-verdict.tl-caution { background: rgba(241, 196, 15, 0.15); color: var(--accent-orange, #f1c40f); }
+.tl-verdict.tl-caution { background: rgba(241, 196, 15, 0.15); color: var(--color-warning); }
 .tl-verdict.tl-bad { background: rgba(231, 76, 60, 0.15); color: var(--red, #e74c3c); }
 .tl-message {
     color: var(--text-secondary);
@@ -1702,11 +1698,11 @@ main {
     letter-spacing: 0.03em;
 }
 .health-badge-mini.healthy { background: rgba(46, 204, 113, 0.15); color: var(--green, #2ecc71); }
-.health-badge-mini.moderate { background: rgba(241, 196, 15, 0.15); color: var(--accent-orange, #f1c40f); }
+.health-badge-mini.moderate { background: rgba(241, 196, 15, 0.15); color: var(--color-warning); }
 .health-badge-mini.critical { background: rgba(231, 76, 60, 0.15); color: var(--red, #e74c3c); }
 .verdict-badge-mini { border: 1px solid transparent; }
 .verdict-badge-mini.verdict-good { color: var(--green, #2ecc71); border-color: rgba(46, 204, 113, 0.3); }
-.verdict-badge-mini.verdict-caution { color: var(--accent-orange, #f1c40f); border-color: rgba(241, 196, 15, 0.3); }
+.verdict-badge-mini.verdict-caution { color: var(--color-warning); border-color: rgba(241, 196, 15, 0.3); }
 .verdict-badge-mini.verdict-bad { color: var(--red, #e74c3c); border-color: rgba(231, 76, 60, 0.3); }
 
 /* ============================================
@@ -2937,27 +2933,8 @@ main {
     box-shadow: 0 0 10px currentColor;
 }
 
-/* Animated gradient on vital bar */
-.vital-bar::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.2) 50%, transparent 100%);
-    animation: bar-shine 2s ease-in-out infinite;
-}
-
-@keyframes bar-shine {
-    0% {
-        transform: translateX(-100%);
-    }
-
-    100% {
-        transform: translateX(100%);
-    }
-}
+/* Decorative always-on shimmer removed (see metric-bar note above): the vital
+   bar's constant gradient sweep added motion noise with no status meaning. */
 
 /* Live pulse indicator */
 @keyframes live-pulse {
