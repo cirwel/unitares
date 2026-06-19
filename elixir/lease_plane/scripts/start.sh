@@ -32,6 +32,20 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 cd "$LEASE_PLANE_DIR"
 
+# --- Self-heal dependencies before boot ---
+# A long-lived VM masks an incomplete deps/ tree: the running node holds its
+# modules in memory, but a fresh `mix run` fails the dependency check and
+# crash-loops under launchd KeepAlive. 2026-06-19: plug/postgrex/plug_crypto
+# were absent from this deploy checkout's deps/ — invisible while the 4-day-old
+# VM ran (and while file-lease acquires silently failed open), and only surfaced
+# as a full outage on the next restart. Fetch deps here so a restart self-repairs
+# instead of crash-looping. Non-fatal on a transient fetch failure when deps are
+# already present; `mix run` below still fails loudly if they genuinely can't
+# load, so this never hides a real problem — it only closes the
+# missing-deps-on-restart trap.
+echo "[lease-plane] ensuring dependencies (mix deps.get)…" >&2
+mix deps.get >&2 || echo "[lease-plane] WARN: mix deps.get failed (offline?) — continuing with on-disk deps" >&2
+
 # --- Distributed node for BEAM hot-code-reload ---
 # When LEASE_PLANE_NODE_COOKIE is set (in secrets.env) we start the node
 # *named* + *cookied* so an operator can attach a remote shell or drive an
