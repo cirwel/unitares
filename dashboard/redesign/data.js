@@ -96,23 +96,31 @@
         ]);
         if (![agentsR, kgR, dlcR, stuckR, calR, anomR, healthR].some(Boolean)) return null;
 
-        // Agents count + trust-tier histogram (verified/established → strong,
-        // emerging → medium, unknown → weak).
-        let agentsActive = snap.agentsActive, agentsTotal = snap.agentsTotal, trustTiers = snap.trustTiers;
+        // Agents count + trust-tier histogram. trust_tier is computed per agent
+        // (not a stored column), so a true all-2550 distribution is expensive and
+        // ~90% inactive-unknown; we count the live/recent fleet across the 5 real
+        // tiers and report how many agents that covers.
+        let agentsActive = snap.agentsActive, agentsTotal = snap.agentsTotal;
+        let trustTiers = snap.trustTiers, trustCounted = null;
         if (agentsR && agentsR.summary) {
           agentsTotal = agentsR.summary.total;
           agentsActive = (agentsR.summary.by_status || {}).active;
-          const TIER = { verified: "strong", established: "strong", emerging: "medium", unknown: "weak" };
-          const b = { strong: 0, medium: 0, weak: 0 };
-          Object.values(agentsR.agents || {}).forEach((arr) => (arr || []).forEach((a) => { b[TIER[a.trust_tier] || "weak"]++; }));
-          trustTiers = [{ tier: "strong", n: b.strong }, { tier: "medium", n: b.medium }, { tier: "weak", n: b.weak }];
+          const TIERS = ["verified", "established", "emerging", "provisional", "unknown"];
+          const b = {}; TIERS.forEach((t) => (b[t] = 0));
+          let counted = 0;
+          Object.values(agentsR.agents || {}).forEach((arr) => (arr || []).forEach((a) => {
+            if (a && typeof a === "object") { b[a.trust_tier in b ? a.trust_tier : "unknown"]++; counted++; }
+          }));
+          trustTiers = TIERS.map((t) => ({ tier: t, n: b[t] }));
+          trustCounted = counted;
         }
 
         const kg = kgR ? (kgR.stats || kgR) : null;
         const dlcSessions = dlcR && Array.isArray(dlcR.sessions) ? dlcR.sessions : null;
+        const hb = healthR && healthR.status_breakdown ? healthR.status_breakdown : null;
 
         return {
-          agentsActive, agentsTotal, trustTiers,
+          agentsActive, agentsTotal, trustTiers, trustCounted,
           discoveries: kg && typeof kg.total_discoveries === "number" ? kg.total_discoveries : snap.discoveries,
           discoveriesToday: null, // no honest live "today" delta; show neutral subtitle
           dialectic: dlcSessions ? dlcSessions.filter((s) => !["resolved", "failed"].includes(s.phase || s.status)).length : snap.dialectic,
@@ -120,6 +128,7 @@
           calibration: calR && typeof calR.trajectory_health === "number" ? calR.trajectory_health : snap.calibration,
           anomalies: anomR && anomR.summary ? anomR.summary.total_anomalies : snap.anomalies,
           systemHealth: healthR ? (healthR.status === "healthy" ? "OK" : healthR.status) : snap.systemHealth,
+          systemHealthDetail: hb ? `${hb.healthy || 0} ok · ${hb.warning || 0} warn${hb.error ? " · " + hb.error + " err" : ""}` : null,
         };
       }, () => snap);
     },
@@ -161,7 +170,7 @@
         const [r, statsR] = await Promise.all([
           callTool("knowledge", query
             ? { action: "search", query, include_details: true, limit: 30 }
-            : { action: "search", query: "governance identity calibration", include_details: true, limit: 30 }),
+            : { action: "search", include_details: true, limit: 30 }), // no query → recent-first
           callTool("knowledge", { action: "stats" }).catch(() => null),
         ]);
         const items = r && (r.discoveries || r.results || (Array.isArray(r) ? r : null));

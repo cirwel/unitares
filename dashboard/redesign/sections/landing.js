@@ -48,24 +48,28 @@
       { h: "Stuck", num: stats.stuck, sub: stats.stuck ? "needs attention" : "none flagged", cls: stats.stuck ? "down" : "up" },
       { h: "Discoveries", num: (stats.discoveries || 0).toLocaleString(), sub: typeof stats.discoveriesToday === "number" ? "+" + stats.discoveriesToday + " today" : "knowledge graph" },
       { h: "Dialectic", num: stats.dialectic, sub: stats.dialectic ? "open sessions" : "no open sessions" },
-      { h: "System Health", num: stats.systemHealth, sub: "db · ws · reaper" },
+      { h: "System Health", num: stats.systemHealth, sub: stats.systemHealthDetail || "db · ws · reaper", cls: stats.systemHealth === "OK" ? "up" : "down" },
       { h: "Calibration", num: num(stats.calibration), sub: "trajectory health", cls: stats.calibration >= 0.8 ? "up" : "" },
       { h: "Anomalies", num: stats.anomalies, sub: stats.anomalies ? stats.anomalies + " active" : "clear", cls: stats.anomalies ? "down" : "up" },
     ];
+    // 5 real trust tiers (earned → forming → unearned), each its own colour.
+    const TIER_COLOR = { verified: "var(--ok)", established: "var(--eisv-c)", emerging: "var(--eisv-s)", provisional: "var(--warn)", unknown: "var(--faint)" };
     const tiers = stats.trustTiers || [];
     const max = Math.max(1, ...tiers.map((t) => t.n));
-    const tierBars = tiers.map((t) => `<div class="t ${t.tier}" style="height:${Math.round((t.n / max) * 100)}%"></div>`).join("");
+    const tierBars = tiers.map((t) =>
+      `<div title="${t.tier}: ${t.n}" style="flex:1;border-radius:3px 3px 0 0;background:${TIER_COLOR[t.tier] || "var(--faint)"};height:${Math.round((t.n / max) * 100)}%"></div>`).join("");
+    const tierLegend = tiers.map((t) =>
+      `<span><i style="background:${TIER_COLOR[t.tier] || "var(--faint)"}"></i>${t.tier} ${t.n}</span>`).join("");
+    const tierScope = typeof stats.trustCounted === "number" ? `over ${stats.trustCounted} active agents` : "";
 
     $("stats").innerHTML = cards.map((s) =>
       `<div class="card ${s.rule ? "accent-rule" : ""}"><h3>${s.h}</h3>`
       + `<div class="num">${s.num}${s.of ? `<span class="of"> ${s.of}</span>` : ""}</div>`
       + `<div class="sub ${s.cls || ""}">${s.sub}</div></div>`
     ).join("")
-      + `<div class="card wide"><h3>Trust Tiers</h3><div class="tiers">${tierBars}</div>`
-      + `<div class="legend" style="margin-top:.5rem">`
-      + `<span><i style="background:var(--eisv-i)"></i>strong</span>`
-      + `<span><i style="background:var(--eisv-s)"></i>medium</span>`
-      + `<span><i style="background:var(--faint)"></i>weak</span></div></div>`;
+      + `<div class="card wide"><h3>Trust Tiers ${tierScope ? `<span style="text-transform:none;letter-spacing:0;color:var(--faint);font-weight:400">· ${tierScope}</span>` : ""}</h3>`
+      + `<div class="tiers">${tierBars}</div>`
+      + `<div class="legend" style="margin-top:.5rem;flex-wrap:wrap">${tierLegend}</div></div>`;
   }
 
   function renderPulse(residents) {
