@@ -85,34 +85,34 @@
       const tc = (n, a) => callTool(n, a).catch(() => null);
       const rest = (p) => authFetch(p).catch(() => null);
       return withFallback(async () => {
-        const [agentsR, kgR, dlcR, stuckR, calR, anomR, healthR] = await Promise.all([
-          tc("agent", { action: "list", include_metrics: false, recent_days: 30, limit: 400, status_filter: "all" }),
+        const [agentsR, kgR, dlcR, stuckR, calR, anomR, healthR, tierR] = await Promise.all([
+          tc("agent", { action: "list", include_metrics: false, recent_days: 30, limit: 1, status_filter: "all" }), // summary only
           tc("knowledge", { action: "stats" }),
           tc("dialectic", { action: "list", limit: 50 }),
           tc("detect_stuck_agents", {}),
           tc("calibration", { action: "check" }),
           tc("detect_anomalies", {}),
           rest("/health/deep"),
+          rest("/v1/agents/tier_distribution"),
         ]);
-        if (![agentsR, kgR, dlcR, stuckR, calR, anomR, healthR].some(Boolean)) return null;
+        if (![agentsR, kgR, dlcR, stuckR, calR, anomR, healthR, tierR].some(Boolean)) return null;
 
-        // Agents count + trust-tier histogram. trust_tier is computed per agent
-        // (not a stored column), so a true all-2550 distribution is expensive and
-        // ~90% inactive-unknown; we count the live/recent fleet across the 5 real
-        // tiers and report how many agents that covers.
+        // Agent counts from the (light) summary; trust-tier distribution from the
+        // full-fleet aggregate endpoint (cached tier across all identities). The
+        // bars show the EARNED tiers — unknown dwarfs them ~18× at fleet scale, so
+        // it's reported as context, not a bar.
         let agentsActive = snap.agentsActive, agentsTotal = snap.agentsTotal;
-        let trustTiers = snap.trustTiers, trustCounted = null;
         if (agentsR && agentsR.summary) {
           agentsTotal = agentsR.summary.total;
           agentsActive = (agentsR.summary.by_status || {}).active;
-          const TIERS = ["verified", "established", "emerging", "provisional", "unknown"];
-          const b = {}; TIERS.forEach((t) => (b[t] = 0));
-          let counted = 0;
-          Object.values(agentsR.agents || {}).forEach((arr) => (arr || []).forEach((a) => {
-            if (a && typeof a === "object") { b[a.trust_tier in b ? a.trust_tier : "unknown"]++; counted++; }
-          }));
-          trustTiers = TIERS.map((t) => ({ tier: t, n: b[t] }));
-          trustCounted = counted;
+        }
+        let trustTiers = snap.trustTiers, trustEarned = null, trustFleet = null, trustUnknown = null;
+        if (tierR && tierR.tiers) {
+          const t = tierR.tiers;
+          trustTiers = ["verified", "established", "emerging", "provisional"].map((k) => ({ tier: k, n: t[k] || 0 }));
+          trustEarned = tierR.earned;
+          trustFleet = tierR.total;
+          trustUnknown = t.unknown || 0;
         }
 
         const kg = kgR ? (kgR.stats || kgR) : null;
@@ -120,7 +120,7 @@
         const hb = healthR && healthR.status_breakdown ? healthR.status_breakdown : null;
 
         return {
-          agentsActive, agentsTotal, trustTiers, trustCounted,
+          agentsActive, agentsTotal, trustTiers, trustEarned, trustFleet, trustUnknown,
           discoveries: kg && typeof kg.total_discoveries === "number" ? kg.total_discoveries : snap.discoveries,
           discoveriesToday: null, // no honest live "today" delta; show neutral subtitle
           dialectic: dlcSessions ? dlcSessions.filter((s) => !["resolved", "failed"].includes(s.phase || s.status)).length : snap.dialectic,

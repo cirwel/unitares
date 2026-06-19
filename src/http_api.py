@@ -1007,6 +1007,45 @@ async def http_dashboard_redesign(request):
     return Response(content=content, media_type=media, headers={"Cache-Control": "no-cache"})
 
 
+async def http_tier_distribution(request):
+    """GET /v1/agents/tier_distribution — full-fleet trust-tier counts.
+
+    trust_tier is computed per agent (resolve_trust_tier), but the last-computed
+    value is cached in core.identities.metadata->'trust_tier'. One GROUP BY gives
+    the true distribution across all identities cheaply, without recomputing
+    per agent. Identities with no cached tier (never earned one) fold to unknown.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return _http_unauthorized()
+    try:
+        from src.db import get_db
+        db = get_db()
+        async with db.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT COALESCE(NULLIF(metadata->'trust_tier'->>'name', ''), 'unknown') AS tier,
+                       count(*) AS n
+                FROM core.identities
+                GROUP BY 1
+                """
+            )
+        order = ["verified", "established", "emerging", "provisional", "unknown"]
+        tiers = {t: 0 for t in order}
+        for r in rows:
+            t = r["tier"] if r["tier"] in tiers else "unknown"
+            tiers[t] += int(r["n"])
+        total = sum(tiers.values())
+        return JSONResponse({
+            "success": True,
+            "tiers": tiers,
+            "total": total,
+            "earned": total - tiers["unknown"],
+        })
+    except Exception as exc:  # noqa: BLE001 — read-only panel endpoint, degrade gracefully
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
 # HTTP polling fallback for EISV (when WebSocket is blocked by proxy auth)
 async def http_eisv_latest(request):
     """Return the latest EISV update as JSON (polling fallback for WebSocket)."""
@@ -2968,6 +3007,7 @@ def register_http_routes(
     app.routes.append(Route("/v1/bootstrap/silent", http_bootstrap_silent, methods=["GET"]))
     app.routes.append(Route("/v1/sentinel/summary", http_sentinel_summary, methods=["GET"]))
     app.routes.append(Route("/v1/vigil/summary", http_vigil_summary, methods=["GET"]))
+    app.routes.append(Route("/v1/agents/tier_distribution", http_tier_distribution, methods=["GET"]))
     app.routes.append(Route("/api/activity", http_activity, methods=["GET"]))
     app.routes.append(Route("/api/incidents", http_incidents, methods=["GET"]))
     app.routes.append(Route("/v1/residents", http_residents, methods=["GET"]))

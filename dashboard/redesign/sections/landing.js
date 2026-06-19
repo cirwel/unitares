@@ -72,7 +72,9 @@
       `<div title="${t.tier}: ${t.n}" style="flex:1;border-radius:3px 3px 0 0;background:${TIER_COLOR[t.tier] || "var(--faint)"};height:${Math.round((t.n / max) * 100)}%"></div>`).join("");
     const tierLegend = tiers.map((t) =>
       `<span><i style="background:${TIER_COLOR[t.tier] || "var(--faint)"}"></i>${t.tier} ${t.n}</span>`).join("");
-    const tierScope = typeof stats.trustCounted === "number" ? `over ${stats.trustCounted} active agents` : "";
+    const tierScope = typeof stats.trustEarned === "number"
+      ? `${stats.trustEarned.toLocaleString()} earned of ${stats.trustFleet.toLocaleString()} · ${(stats.trustUnknown || 0).toLocaleString()} unknown`
+      : "";
 
     $("stats").innerHTML = cards.map((s) =>
       `<div class="card ${s.rule ? "accent-rule" : ""}"><h3>${s.h}</h3>`
