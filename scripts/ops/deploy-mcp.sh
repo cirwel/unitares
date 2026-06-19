@@ -39,6 +39,30 @@ PORT="${UNITARES_MCP_PORT:-8767}"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
+# ── Serialize deploys (shared worktree) ──────────────────────────────────────
+# deploy-mcp.sh and deploy-lease-plane.sh both fast-forward the SAME deploy
+# worktree, and this script's failure path runs `git reset --hard $PREV`. Two
+# deploys at once race the git index and — worse — the rollback can revert a
+# parallel deploy to a stale commit (silent regression + a false "OK"). macOS
+# has no flock(1), so guard with an atomic mkdir lock keyed to the worktree,
+# reclaiming it only if the holder process is dead. Override via
+# UNITARES_DEPLOY_LOCK; the lock is shared with deploy-lease-plane.sh because the
+# name derives from the (shared) DEPLOY path.
+LOCK_DIR="${UNITARES_DEPLOY_LOCK:-${TMPDIR:-/tmp}/unitares-deploy$(printf '%s' "$DEPLOY" | tr -c 'A-Za-z0-9' '_').lock}"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo '?')"
+  if [[ "$holder" != '?' ]] && ! kill -0 "$holder" 2>/dev/null; then
+    echo "[deploy-mcp] reclaiming stale deploy lock (holder PID $holder is dead): $LOCK_DIR" >&2
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR" 2>/dev/null || { echo "[deploy-mcp] lost a lock race — another deploy just started; refusing" >&2; exit 1; }
+  else
+    echo "[deploy-mcp] another deploy is in progress (lock: $LOCK_DIR, holder PID $holder) — refusing to run concurrently" >&2
+    exit 1
+  fi
+fi
+printf '%s' "$$" > "$LOCK_DIR/pid"
+trap 'rm -rf "$LOCK_DIR"' EXIT
+
 if [[ ! -f "$PLIST" ]]; then
   echo "[deploy-mcp] $PLIST not installed — install the LaunchAgent first (see CLAUDE.md setup)" >&2
   exit 1

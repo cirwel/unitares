@@ -25,6 +25,28 @@ UID_NUM="$(id -u)"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
+# ── Serialize deploys (shared worktree) ──────────────────────────────────────
+# This script and deploy-mcp.sh both fast-forward the SAME deploy worktree, so
+# concurrent runs race the git index (and deploy-mcp's rollback can revert this
+# deploy). macOS has no flock(1), so guard with an atomic mkdir lock keyed to the
+# worktree, reclaiming it only if the holder process is dead. The lock is shared
+# with deploy-mcp.sh because the name derives from the (shared) DEPLOY path.
+# Override via UNITARES_DEPLOY_LOCK.
+LOCK_DIR="${UNITARES_DEPLOY_LOCK:-${TMPDIR:-/tmp}/unitares-deploy$(printf '%s' "$DEPLOY" | tr -c 'A-Za-z0-9' '_').lock}"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo '?')"
+  if [[ "$holder" != '?' ]] && ! kill -0 "$holder" 2>/dev/null; then
+    echo "[deploy] reclaiming stale deploy lock (holder PID $holder is dead): $LOCK_DIR" >&2
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR" 2>/dev/null || { echo "[deploy] lost a lock race — another deploy just started; refusing" >&2; exit 1; }
+  else
+    echo "[deploy] another deploy is in progress (lock: $LOCK_DIR, holder PID $holder) — refusing to run concurrently" >&2
+    exit 1
+  fi
+fi
+printf '%s' "$$" > "$LOCK_DIR/pid"
+trap 'rm -rf "$LOCK_DIR"' EXIT
+
 echo "[deploy] fetching origin/master"
 git -C "$REPO" fetch origin master --quiet
 
