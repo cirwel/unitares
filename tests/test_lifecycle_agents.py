@@ -2022,15 +2022,18 @@ class TestListAgentsFullModeEdgeCases:
             assert agent["metrics"] is None
 
     @pytest.mark.asyncio
-    async def test_full_mode_metrics_from_not_in_memory_monitor(self, server):
-        """Lines 304-359: monitor not in memory - loads via get_or_create_monitor."""
+    async def test_full_mode_metrics_from_resident_monitor(self, server):
+        """Resident monitor: recalculates health and populates metrics from state.
+
+        Non-resident agents are intentionally not hydrated in the list path (see
+        query.py's anti-DB-thrash else branch); the recalc + metrics path only
+        runs for monitors already in memory.
+        """
         server.agent_metadata = {
             "agent-load": make_agent_meta(status="active", total_updates=5, notes="", health_status=None),
         }
-        # No monitor in memory
-        server.monitors = {}
         mock_monitor = self._make_monitor()
-        server.get_or_create_monitor.return_value = mock_monitor
+        server.monitors = {"agent-load": mock_monitor}
         with patch_lifecycle_server(server):
             from src.mcp_handlers.lifecycle.handlers import handle_list_agents
             result = await handle_list_agents({
@@ -2080,13 +2083,16 @@ class TestListAgentsFullModeEdgeCases:
             assert agent["metrics"] is None
 
     @pytest.mark.asyncio
-    async def test_full_mode_no_metrics_calculates_health(self, server):
-        """Lines 384-386: when no cached health, calculates from monitor."""
+    async def test_full_mode_no_metrics_no_cached_health_is_unknown(self, server):
+        """include_metrics=False with no cached health: reports 'unknown'.
+
+        The list path never hydrates a monitor when metrics are not requested
+        (query.py), so with no persisted health_status it reports 'unknown'
+        rather than recalculating.
+        """
         meta = make_agent_meta(status="active", total_updates=5, notes="", health_status=None)
         server.agent_metadata = {"agent-calc": meta}
         server.monitors = {}
-        mock_monitor = self._make_monitor()
-        server.get_or_create_monitor.return_value = mock_monitor
         with patch_lifecycle_server(server):
             from src.mcp_handlers.lifecycle.handlers import handle_list_agents
             result = await handle_list_agents({
@@ -2094,9 +2100,8 @@ class TestListAgentsFullModeEdgeCases:
             })
             data = _parse(result)
             agent = data["agents"][0]
-            assert agent["health_status"] == "healthy"
-            # Should have cached the health status
-            assert meta.health_status == "healthy"
+            assert agent["health_status"] == "unknown"
+            assert agent["metrics"] is None
 
     @pytest.mark.asyncio
     async def test_full_mode_no_metrics_calculation_error(self, server):

@@ -1233,13 +1233,11 @@ class TestListAgentsFullModeMonitorEdgeCases:
             assert agent["metrics"] is None
 
     @pytest.mark.asyncio
-    async def test_not_in_memory_safe_float_none_handling(self, server):
-        """Lines 334, 337-338: safe_float handles None and unconvertable values
-        when monitor is not in memory but gets loaded."""
+    async def test_resident_safe_float_none_handling(self, server):
+        """Resident monitor: safe_float coerces None / unconvertable state to 0.0."""
         server.agent_metadata = {
             "agent-sf": make_agent_meta(status="active", total_updates=5, notes="", health_status=None),
         }
-        server.monitors = {}
         mock_monitor = MagicMock()
         mock_monitor.state = SimpleNamespace(
             E=None, I="not-a-number", S=0.5, V=0.0, coherence=0.8,
@@ -1249,7 +1247,7 @@ class TestListAgentsFullModeMonitorEdgeCases:
             "risk_score": None, "current_risk": None,
             "phi": None, "verdict": None, "mean_risk": None,
         }
-        server.get_or_create_monitor.return_value = mock_monitor
+        server.monitors = {"agent-sf": mock_monitor}
         with patch_lifecycle_server(server):
             from src.mcp_handlers.lifecycle.handlers import handle_list_agents
             result = await handle_list_agents({
@@ -1262,12 +1260,12 @@ class TestListAgentsFullModeMonitorEdgeCases:
             assert agent["metrics"]["I"] == 0.0
 
     @pytest.mark.asyncio
-    async def test_not_in_memory_unknown_health_recalculated(self, server):
-        """Lines 313-327: health_status='unknown' triggers recalculation."""
+    async def test_resident_health_recalculated_over_persisted(self, server):
+        """Resident monitor: health is recalculated from the monitor, overriding a
+        stale persisted 'unknown'."""
         server.agent_metadata = {
             "agent-unk": make_agent_meta(status="active", total_updates=5, notes="", health_status="unknown"),
         }
-        server.monitors = {}
         mock_monitor = MagicMock()
         mock_monitor.state = SimpleNamespace(
             E=0.7, I=0.3, S=0.5, V=0.0, coherence=0.8,
@@ -1277,7 +1275,7 @@ class TestListAgentsFullModeMonitorEdgeCases:
             "risk_score": 0.3, "current_risk": 0.3,
             "phi": 0.5, "verdict": "safe", "mean_risk": 0.3,
         }
-        server.get_or_create_monitor.return_value = mock_monitor
+        server.monitors = {"agent-unk": mock_monitor}
         with patch_lifecycle_server(server):
             from src.mcp_handlers.lifecycle.handlers import handle_list_agents
             result = await handle_list_agents({
