@@ -181,11 +181,19 @@
             return;
         }
         var nowMs = Date.now();
+        var silent = [];
         var pills = orderedLabels.map(function (label) {
             var r = residentsByLabel[label];
-            return r ? renderCard(r, nowMs) : '';
+            if (!r) return '';
+            // A non-event-driven resident past its silence threshold is an
+            // exception the fleet-severity hero rollup should reflect.
+            if (!isEventDriven(r) && statusForCard(r, nowMs) === 'silent') {
+                silent.push(label);
+            }
+            return renderCard(r, nowMs);
         });
         container.innerHTML = pills.join('');
+        if (typeof state !== 'undefined') state.set({ silentResidents: silent });
     }
 
     // ---------------------------------------------------------------------

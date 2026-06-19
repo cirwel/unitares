@@ -111,6 +111,9 @@
         setMetric('system-health-count-warning', breakdown.warning || 0);
         setMetric('system-health-count-unavailable', breakdown.unavailable || 0);
         setMetric('system-health-count-error', breakdown.error || 0);
+        // Publish overall status for the fleet-severity hero rollup — this is the
+        // signal that makes a DB-down state reach the top-of-page hero.
+        if (typeof state !== 'undefined') state.set({ systemHealthOverall: status });
     }
 
     function renderChecks(snapshot) {
@@ -189,6 +192,8 @@
         var snapshot = await fetchDeepHealth();
         if (!snapshot) {
             renderErrorState();
+            // The health endpoint itself is down — surface that to the hero.
+            if (typeof state !== 'undefined') state.set({ systemHealthOverall: 'error' });
             return;
         }
         if (snapshot._not_yet_populated) {

@@ -3602,6 +3602,58 @@ main {
 }
 
 /* ============================================
+   Needs-attention band (fleet-severity rollup)
+   ============================================ */
+.needs-attention {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 16px;
+    padding: 8px 12px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md, 8px);
+}
+
+.needs-attention-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+    margin-right: 4px;
+}
+
+.needs-attention-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    text-decoration: none;
+    border: 1px solid transparent;
+    white-space: nowrap;
+}
+
+.needs-attention-chip.sev-critical {
+    color: var(--color-error, #ef4444);
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
+.needs-attention-chip.sev-caution {
+    color: var(--color-warning, #f59e0b);
+    background: rgba(245, 158, 11, 0.12);
+    border-color: rgba(245, 158, 11, 0.3);
+}
+
+a.needs-attention-chip:hover {
+    filter: brightness(1.12);
+}
+
+/* ============================================
    Agent Metrics — Collapsible Override
    ============================================ */
 .agent-item .agent-metrics {

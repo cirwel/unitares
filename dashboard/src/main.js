@@ -20,6 +20,7 @@ import '../utils.js';
 import '../state.js';
 import '../colors.js';
 import '../components.js';
+import '../fleet-severity.js';
 import '../visualizations.js';
 import '../agents.js';
 import '../discoveries.js';

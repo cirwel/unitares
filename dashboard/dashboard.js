@@ -1338,6 +1338,35 @@ async function loadServerInfo() {
  * Update the Quick Status hero section.
  * Shows fleet health at a glance: green/yellow/red dot + summary.
  */
+/**
+ * Render the "Needs attention" band under the hero from the fleet-severity
+ * reasons. Each reason becomes a deep-link chip to its panel. The band is hidden
+ * when there are no active exceptions (no empty-state noise).
+ * @param {Array<{label:string, anchor:string, severity:string}>} reasons
+ */
+function renderNeedsAttention(reasons) {
+    const band = document.getElementById('needs-attention');
+    if (!band) return;
+    reasons = reasons || [];
+    if (reasons.length === 0) {
+        band.innerHTML = '';
+        band.hidden = true;
+        return;
+    }
+    const esc = (typeof DataProcessor !== 'undefined' && DataProcessor.escapeHtml)
+        ? DataProcessor.escapeHtml
+        : (s => String(s));
+    const chips = reasons.map(r => {
+        const cls = 'needs-attention-chip sev-' + (r.severity === 'critical' ? 'critical' : 'caution');
+        const label = esc(r.label) + ' →';
+        return r.anchor
+            ? '<a class="' + cls + '" href="' + esc(r.anchor) + '">' + label + '</a>'
+            : '<span class="' + cls + '">' + label + '</span>';
+    }).join('');
+    band.innerHTML = '<span class="needs-attention-label">Needs attention</span>' + chips;
+    band.hidden = false;
+}
+
 function updateQuickStatus(agents, stuckAgents) {
     const dot = document.getElementById('qs-dot');
     const label = document.getElementById('qs-label');
@@ -1358,21 +1387,45 @@ function updateQuickStatus(agents, stuckAgents) {
         ? agentsWithMetrics.reduce((s, a) => s + Number(a.metrics.coherence), 0) / agentsWithMetrics.length
         : null;
 
+    // Aggregate ALL severity sources (not just agents) so the hero can't read
+    // "healthy" while the DB is down or Watcher has criticals. The panels publish
+    // their summaries to state; computeFleetSeverity (fleet-severity.js) takes the
+    // worst. Falls back to the legacy agent-only computation if the module is
+    // absent. See docs/proposals/dashboard-hero-severity-rollup.md.
     let status = 'healthy';
     let statusText = 'All systems healthy';
-    if (stuckAgents.length > 2 || criticalAgents > 0) {
-        status = 'critical';
-        statusText = criticalAgents + ' critical' + (stuckAgents.length > 0 ? ', ' + stuckAgents.length + ' stuck' : '');
-    } else if (stuckAgents.length > 0 || (avgCoherence !== null && avgCoherence < 0.4)) {
-        status = 'warning';
-        const parts = [];
-        if (stuckAgents.length > 0) parts.push(stuckAgents.length + ' stuck');
-        if (avgCoherence !== null && avgCoherence < 0.4) parts.push('coherence ' + (avgCoherence * 100).toFixed(0) + '%');
-        statusText = parts.join(', ');
+    let attentionReasons = [];
+    if (typeof computeFleetSeverity === 'function') {
+        const severity = computeFleetSeverity({
+            criticalAgents: criticalAgents,
+            stuckCount: stuckAgents.length,
+            avgCoherence: avgCoherence,
+            systemHealth: state.get('systemHealthOverall'),
+            watcher: state.get('watcherSummary'),
+            sentinel: state.get('sentinelSummary'),
+            silentResidents: state.get('silentResidents'),
+        });
+        // Map severity level → existing hero CSS class (caution → warning).
+        status = severity.level === 'critical' ? 'critical'
+            : severity.level === 'caution' ? 'warning' : 'healthy';
+        statusText = severity.text;
+        attentionReasons = severity.reasons;
+    } else {
+        if (stuckAgents.length > 2 || criticalAgents > 0) {
+            status = 'critical';
+            statusText = criticalAgents + ' critical' + (stuckAgents.length > 0 ? ', ' + stuckAgents.length + ' stuck' : '');
+        } else if (stuckAgents.length > 0 || (avgCoherence !== null && avgCoherence < 0.4)) {
+            status = 'warning';
+            const parts = [];
+            if (stuckAgents.length > 0) parts.push(stuckAgents.length + ' stuck');
+            if (avgCoherence !== null && avgCoherence < 0.4) parts.push('coherence ' + (avgCoherence * 100).toFixed(0) + '%');
+            statusText = parts.join(', ');
+        }
     }
 
     dot.className = 'quick-status-dot ' + status;
     label.textContent = statusText;
+    renderNeedsAttention(attentionReasons);
 
     // Detail: agent count
     if (detail) {

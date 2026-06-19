@@ -215,12 +215,20 @@
             setMetric('watcher-count-dismissed', '—');
             setMetric('watcher-count-critical', '—');
             setMetric('watcher-count-high', '—');
+            // Publish a feed-error marker for the fleet-severity hero rollup so a
+            // dead endpoint surfaces as "unavailable", not a silent "0 findings".
+            if (typeof state !== 'undefined') state.set({ watcherSummary: { error: true } });
             return;
         }
         renderCounts(summary);
         renderPatterns(summary);
         renderChart(summary);
         setFooter(summary);
+        // Publish severity counts for the fleet-severity hero rollup.
+        var sev = summary.by_severity_open || {};
+        if (typeof state !== 'undefined') {
+            state.set({ watcherSummary: { critical: sev.critical || 0, high: sev.high || 0 } });
+        }
     }
 
     function wire() {
