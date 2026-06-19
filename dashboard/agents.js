@@ -423,7 +423,7 @@
                 ? '<span class="agent-metrics-toggle" data-agent-uuid="' + escapeHtml(agentId) + '"><span class="toggle-arrow">\u25B8</span> Metrics</span>'
                 : '';
 
-            return '<div class="agent-item ' + statusClass + '" data-agent-uuid="' + escapeHtml(agentId) + '" title="Click to view details">' +
+            return '<div class="agent-item ' + statusClass + '" data-agent-uuid="' + escapeHtml(agentId) + '" role="button" tabindex="0" aria-label="View details for ' + escapeHtml(displayName) + '" title="View details">' +
                 '<div class="agent-meta">' +
                     '<div class="agent-title">' +
                         statusIndicator +

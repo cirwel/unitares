@@ -44,7 +44,7 @@
         <span class="subtitle">Multi-Agent Coordination</span>
     </div>
 
-    <div id="connection-banner" class="banner hidden"></div>
+    <div id="connection-banner" class="banner hidden" role="alert"></div>
 
     <div class="toolbar">
         <div class="toolbar-group">
@@ -71,7 +71,7 @@
         </div>
     </div>
 
-    <div id="error-container"></div>
+    <div id="error-container" role="alert" aria-live="assertive"></div>
 
     <nav class="section-nav" id="section-nav" aria-label="Dashboard sections">
         <a href="#stats-section" class="section-nav-item active" data-section="stats-section">Stats</a>
@@ -104,7 +104,7 @@
         </section>
 
         <!-- Quick Status Hero -->
-        <div class="quick-status" id="quick-status">
+        <div class="quick-status" id="quick-status" role="status" aria-live="polite">
             <span class="quick-status-dot healthy" id="qs-dot"></span>
             <span class="quick-status-label" id="qs-label">Loading...</span>
             <span class="quick-status-separator"></span>
@@ -377,7 +377,7 @@
                 </div>
                 <div id="agents-filter-info" class="filter-info"></div>
                 <div id="agents-status-legend" class="filter-info"></div>
-                <div id="agents-container" class="agent-list">
+                <div id="agents-container" class="agent-list" tabindex="-1">
                     <div class="skeleton-initial" id="agents-skeleton"></div>
                 </div>
             </div>
@@ -689,7 +689,7 @@
         <div class="panel-modal">
             <div class="panel-modal-header">
                 <h2 id="modal-title">Panel</h2>
-                <button class="panel-modal-close">&times;</button>
+                <button class="panel-modal-close" type="button" aria-label="Close">&times;</button>
             </div>
             <div class="panel-modal-body" id="modal-body">
                 <!-- Content injected by JS -->
