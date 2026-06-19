@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Synthetic end-to-end ACQUIRE health check for the Surface Lease Plane.
+
+    Runs lease_plane_acquire_healthcheck.sh every 5 minutes: a REAL
+    acquire+release round-trip against the running plane, alerting (→
+    /tmp/unitares_alerts.log) after MAX_FAILURES consecutive failures. This
+    catches the silent fail-open acquire-outage class that a liveness /health
+    ping cannot — see the 2026-06-19 incident, where acquires returned HTTP 000
+    for ~4 days while "process up" stayed green and the file-lease hook failed
+    open with no alert.
+
+    Before installing, substitute the placeholder:
+      __UNITARES_ROOT__ → absolute path to the deploy checkout
+                          (the same root the lease-plane plist runs from,
+                          e.g. $HOME/projects/unitares-deploy)
+
+    Example:
+      mkdir -p "$HOME/projects/unitares-deploy/data/logs"
+      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
+          elixir/lease_plane/scripts/ops/com.unitares.lease-plane-acquire-healthcheck.plist.template \
+          > ~/Library/LaunchAgents/com.unitares.lease-plane-acquire-healthcheck.plist
+      launchctl load ~/Library/LaunchAgents/com.unitares.lease-plane-acquire-healthcheck.plist
+
+    The check reads LEASE_PLANE_BEARER_TOKEN from ~/.config/cirwel/secrets.env
+    itself, so no secret is placed in this plist.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unitares.lease-plane-acquire-healthcheck</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__UNITARES_ROOT__/elixir/lease_plane/scripts/ops/lease_plane_acquire_healthcheck.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__UNITARES_ROOT__</string>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__UNITARES_ROOT__/data/logs/lease_plane_acquire_healthcheck.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__UNITARES_ROOT__/data/logs/lease_plane_acquire_healthcheck.log</string>
+</dict>
+</plist>
