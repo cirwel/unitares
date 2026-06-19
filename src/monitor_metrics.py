@@ -258,7 +258,7 @@ def get_eisv_labels() -> Dict:
     - E: Energy or presence
     - I: Information integrity
     - S: Entropy
-    - V: Void integral
+    - V: Void (signed E-I balance)
     """
     return {
         'E': {
@@ -280,9 +280,9 @@ def get_eisv_labels() -> Dict:
             'range': '[0.0, 1.0]'
         },
         'V': {
-            'label': 'Void Integral',
-            'description': 'Void integral (E-I imbalance accumulation)',
-            'user_friendly': 'Accumulated strain from energy-integrity mismatch',
+            'label': 'Void',
+            'description': 'Void (E-I imbalance readout); sign is actionable',
+            'user_friendly': 'How far energy and integrity are out of balance — positive = running hot, negative = running careful',
             'range': '[-1.0, 1.0]'
         }
     }

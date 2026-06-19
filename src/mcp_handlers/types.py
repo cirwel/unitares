@@ -30,7 +30,7 @@ class GovernanceMetricsDict(TypedDict, total=False):
     E: float  # Energy
     I: float  # Information Integrity
     S: float  # Entropy
-    V: float  # Void Integral
+    V: float  # Void (signed E-I imbalance readout)
     coherence: float
     risk_score: float
     attention_score: float
