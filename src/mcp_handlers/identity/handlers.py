@@ -1623,14 +1623,46 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # IP:UA pin path was the performative fill-in this gate retires for the
     # arg-less case. Plugin-side complement of this gate landed as
     # unitares-governance-plugin#17 (S11) on 2026-04-21.
+    try:
+        from ..context import get_csid_transport_injected
+        _client_session_id_caller_asserted = (
+            bool(arguments.get("client_session_id"))
+            and not get_csid_transport_injected()
+        )
+    except Exception:
+        # Backward-compatible fallback: if the context side channel is
+        # unavailable, preserve the legacy caller-supplied interpretation.
+        _client_session_id_caller_asserted = bool(arguments.get("client_session_id"))
+
     _has_proof_signal = bool(
         arguments.get("continuity_token")
-        or arguments.get("client_session_id")
+        or _client_session_id_caller_asserted
         or arguments.get("agent_uuid")
         or arguments.get("agent_id")
         or arguments.get("name")
     )
-    if not _has_proof_signal and not arguments.get("force_new"):
+    _force_new_requested = coerce_bool(arguments.get("force_new"), default=False)
+    if not _has_proof_signal and not _force_new_requested:
+        from src.mcp_handlers.identity_bootstrap import (
+            is_strict_identity_required,
+            strict_identity_refusal_payload,
+        )
+        if is_strict_identity_required():
+            logger.info(
+                "[FRESH_INSTANCE] STRICT_IDENTITY_REQUIRED=true and "
+                "arg-less onboard() has no caller-proof signal — refusing "
+                "instead of defaulting to force_new=true"
+            )
+            return success_response(strict_identity_refusal_payload(
+                "onboard",
+                status="lineage_declaration_required",
+                hint=(
+                    "Bare onboard() is ambiguous — pass "
+                    "parent_agent_id=<prior UUID> to continue prior work, "
+                    "OR force_new=true to confirm a fresh process-instance "
+                    "with no lineage."
+                ),
+            ))
         arguments["force_new"] = True
         logger.info(
             "[FRESH_INSTANCE] arg-less onboard() with no proof signal — "
