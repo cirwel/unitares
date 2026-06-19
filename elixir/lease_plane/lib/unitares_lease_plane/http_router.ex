@@ -47,9 +47,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   # error is logged server-side; the wire body never carries inspect output.
   @impl Plug.ErrorHandler
   def handle_errors(conn, %{kind: kind, reason: reason, stack: _stack}) do
-    Logger.error(
-      "lease plane HTTP error: kind=#{kind} reason=#{Exception.format_banner(kind, reason)}"
-    )
+    Logger.error("lease plane HTTP error: kind=#{kind} reason=#{safe_reason(reason)}")
 
     json(conn, 503, %{
       ok: false,
@@ -77,9 +75,12 @@ defmodule UnitaresLeasePlane.HTTPRouter do
             # missing fields caused production 409s to fail Pydantic validation
             # → degraded to AcquireSchemaInvalid → acquire_with_retry never retried).
             now = DateTime.utc_now()
+
             remaining_ms =
               max(0, DateTime.diff(info.expires_at, now, :millisecond))
+
             retry_after_hint_ms = min(remaining_ms, 5_000)
+
             json(conn, 409, %{
               ok: false,
               error: "held_by_other",
@@ -99,7 +100,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
             json(conn, 422, %{ok: false, error: "schema_invalid", detail: name})
 
           {:error, reason} ->
-            Logger.error("lease plane acquire failed: #{inspect(reason)}")
+            Logger.error("lease plane acquire failed: #{safe_reason(reason)}")
             json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
         end
 
@@ -185,8 +186,13 @@ defmodule UnitaresLeasePlane.HTTPRouter do
                 json(conn, 200, %{ok: true, lease: present_lease(lease)})
 
               {:error, reason} ->
-                Logger.error("lease plane status failed: #{inspect(reason)}")
-                json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+                Logger.error("lease plane status failed: #{safe_reason(reason)}")
+
+                json(conn, 503, %{
+                  ok: false,
+                  error: "service_unavailable",
+                  reason: "internal error"
+                })
             end
         end
     end
@@ -210,7 +216,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
             json(conn, 404, %{ok: false, error: "not_found"})
 
           {:error, reason_atom} ->
-            Logger.error("lease plane release failed: #{inspect(reason_atom)}")
+            Logger.error("lease plane release failed: #{safe_reason(reason_atom)}")
             json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
         end
 
@@ -240,7 +246,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
             json(conn, 404, %{ok: false, error: "not_found"})
 
           {:error, reason_atom} ->
-            Logger.error("lease plane force-release failed: #{inspect(reason_atom)}")
+            Logger.error("lease plane force-release failed: #{safe_reason(reason_atom)}")
             json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
         end
 
@@ -260,7 +266,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
             json(conn, 404, %{ok: false, error: "not_found"})
 
           {:error, reason} ->
-            Logger.error("lease plane handoff offer failed: #{inspect(reason)}")
+            Logger.error("lease plane handoff offer failed: #{safe_reason(reason)}")
             json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
         end
 
@@ -283,7 +289,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
             json(conn, 409, %{ok: false, error: "expired"})
 
           {:error, reason} ->
-            Logger.error("lease plane handoff accept failed: #{inspect(reason)}")
+            Logger.error("lease plane handoff accept failed: #{safe_reason(reason)}")
             json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
         end
 
@@ -345,14 +351,20 @@ defmodule UnitaresLeasePlane.HTTPRouter do
               {:error, :not_found} ->
                 json(conn, 404, %{ok: false, error: "not_found"})
 
-              {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint_name: name}}} ->
+              {:error,
+               %Postgrex.Error{postgres: %{code: :check_violation, constraint_name: name}}} ->
                 # RFC §7.13.5 typed-error contract for renew CHECK violations.
                 # MUST precede the generic 503 arm.
                 json(conn, 422, %{ok: false, error: "schema_invalid", detail: name})
 
               {:error, reason} ->
-                Logger.error("lease plane renew failed: #{inspect(reason)}")
-                json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+                Logger.error("lease plane renew failed: #{safe_reason(reason)}")
+
+                json(conn, 503, %{
+                  ok: false,
+                  error: "service_unavailable",
+                  reason: "internal error"
+                })
             end
         end
 
@@ -521,7 +533,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         {:ok, lease_id, reason}
 
       true ->
-        {:error, "invalid release_reason: #{inspect(reason)}"}
+        {:error, "invalid release_reason"}
     end
   end
 
@@ -625,8 +637,27 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
   defp json(conn, status, body) do
     versioned_body = Map.put(body, :protocol_version, @protocol_version)
+
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
     |> Plug.Conn.send_resp(status, Jason.encode!(versioned_body))
+  end
+
+  defp safe_reason(%module{}), do: inspect(module)
+  defp safe_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp safe_reason(reason) when is_binary(reason), do: redact_sensitive(reason)
+
+  defp safe_reason(reason) do
+    reason
+    |> inspect(limit: 5, printable_limit: 120)
+    |> redact_sensitive()
+  end
+
+  defp redact_sensitive(text) do
+    Regex.replace(
+      ~r/(password|token|secret|authorization|bearer)(\s*[=:]\s*)[^\s,}\]]+/i,
+      text,
+      "\\1\\2[REDACTED]"
+    )
   end
 end

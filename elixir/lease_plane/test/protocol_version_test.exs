@@ -97,13 +97,16 @@ defmodule UnitaresLeasePlane.HTTPRouter.ProtocolVersionTest do
     # `refute`d the field's presence and documented the gap.
     resp =
       :post
-      |> conn("/v1/lease/acquire", Jason.encode!(%{
-           surface_id: ctx.surface,
-           holder_agent_uuid: random_uuid(),
-           holder_kind: "local_beam",
-           holder_class: "process_instance",
-           ttl_s: 30
-         }))
+      |> conn(
+        "/v1/lease/acquire",
+        Jason.encode!(%{
+          surface_id: ctx.surface,
+          holder_agent_uuid: random_uuid(),
+          holder_kind: "local_beam",
+          holder_class: "process_instance",
+          ttl_s: 30
+        })
+      )
       |> put_req_header("content-type", "application/json")
       |> put_req_header("authorization", "Bearer wrong-token")
       |> HTTPRouter.call(@opts)
@@ -120,13 +123,16 @@ defmodule UnitaresLeasePlane.HTTPRouter.ProtocolVersionTest do
     # carry protocol_version post-Phase-A.5.
     resp =
       :post
-      |> conn("/v1/lease/acquire", Jason.encode!(%{
-           surface_id: ctx.surface,
-           holder_agent_uuid: random_uuid(),
-           holder_kind: "local_beam",
-           holder_class: "process_instance",
-           ttl_s: 30
-         }))
+      |> conn(
+        "/v1/lease/acquire",
+        Jason.encode!(%{
+          surface_id: ctx.surface,
+          holder_agent_uuid: random_uuid(),
+          holder_kind: "local_beam",
+          holder_class: "process_instance",
+          ttl_s: 30
+        })
+      )
       |> put_req_header("content-type", "application/json")
       |> HTTPRouter.call(@opts)
 
@@ -142,13 +148,16 @@ defmodule UnitaresLeasePlane.HTTPRouter.ProtocolVersionTest do
 
     resp =
       :post
-      |> conn("/v1/lease/acquire", Jason.encode!(%{
-           surface_id: ctx.surface,
-           holder_agent_uuid: random_uuid(),
-           holder_kind: "local_beam",
-           holder_class: "process_instance",
-           ttl_s: 30
-         }))
+      |> conn(
+        "/v1/lease/acquire",
+        Jason.encode!(%{
+          surface_id: ctx.surface,
+          holder_agent_uuid: random_uuid(),
+          holder_kind: "local_beam",
+          holder_class: "process_instance",
+          ttl_s: 30
+        })
+      )
       |> put_req_header("content-type", "application/json")
       |> put_req_header("authorization", "Bearer anything")
       |> HTTPRouter.call(@opts)

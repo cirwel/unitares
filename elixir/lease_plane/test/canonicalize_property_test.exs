@@ -161,6 +161,7 @@ defmodule UnitaresLeasePlane.CanonicalizeProperty do
     property "canonicalize/1 always returns {:ok,_} or {:error,_} for any binary, never raises" do
       check all(input <- StreamData.binary(min_length: 0, max_length: 256)) do
         result = Canonicalize.canonicalize(input)
+
         assert match?({:ok, _}, result) or match?({:error, _}, result),
                "expected tagged tuple, got #{inspect(result)}"
       end
@@ -193,6 +194,7 @@ defmodule UnitaresLeasePlane.CanonicalizeProperty do
         case Canonicalize.canonicalize(input) do
           {:ok, "capture:/" <> path} ->
             members = String.split(path, ",", trim: true)
+
             assert members == Enum.sort(members),
                    "expected sorted members, got #{inspect(members)}"
 
@@ -222,7 +224,15 @@ defmodule UnitaresLeasePlane.CanonicalizeProperty do
   describe "top-level ? rejection (PR 7 council BLOCK B1 — RFC §7.12.4 OPERATOR_NOTE 3)" do
     property "any input containing ? produces {:error, :reserved_query_string}" do
       check all(
-              prefix <- StreamData.member_of(["dialectic:/", "resident:/", "capture:/", "td:/", "file:///", ""]),
+              prefix <-
+                StreamData.member_of([
+                  "dialectic:/",
+                  "resident:/",
+                  "capture:/",
+                  "td:/",
+                  "file:///",
+                  ""
+                ]),
               before <- StreamData.string(:alphanumeric, max_length: 16),
               after_q <- StreamData.string(:alphanumeric, max_length: 16)
             ) do

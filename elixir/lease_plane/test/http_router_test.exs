@@ -2,6 +2,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
   use ExUnit.Case, async: false
   import Plug.Test
   import Plug.Conn
+  import ExUnit.CaptureLog
 
   import LeaseTestHelpers
 
@@ -116,7 +117,8 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert is_binary(lease["expires_at"])
     end
 
-    test "agent:/ surface routes to the remote_heartbeat self-healing path (migration 042)", _ctx do
+    test "agent:/ surface routes to the remote_heartbeat self-healing path (migration 042)",
+         _ctx do
       agent_surface = "agent:/ag-" <> binary_part(random_uuid(), 0, 8)
       on_exit(fn -> cleanup_surface(agent_surface) end)
 
@@ -299,6 +301,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
     test "file:// surface routes to remote_heartbeat (self-healing, no holder)", ctx do
       path = Path.join(ctx.tmp_dir, "edit-target.txt")
       File.write!(path, "x")
+
       resp =
         post_json(
           "/v1/lease/acquire",
@@ -314,6 +317,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
     test "resident:/ surface stays local_beam even when remote_heartbeat requested", _ctx do
       surface = "resident:/lease-routing-test-#{random_uuid()}"
+
       resp =
         post_json(
           "/v1/lease/acquire",
@@ -591,13 +595,21 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       # pre-handler conn). Direct test of handle_errors/2 is the same coverage —
       # what matters is the response shape, not which integration triggered it.
       conn = conn(:post, "/v1/lease/renew")
+      parent = self()
 
-      result =
-        HTTPRouter.handle_errors(conn, %{
-          kind: :error,
-          reason: %RuntimeError{message: "postgresql password=hunter2 leaked"},
-          stack: []
-        })
+      log =
+        capture_log(fn ->
+          result =
+            HTTPRouter.handle_errors(conn, %{
+              kind: :error,
+              reason: %RuntimeError{message: "postgresql password=hunter2 leaked"},
+              stack: []
+            })
+
+          send(parent, {:handle_errors_result, result})
+        end)
+
+      assert_receive {:handle_errors_result, result}
 
       assert result.status == 503
       body = Jason.decode!(result.resp_body)
@@ -607,10 +619,13 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
                "error" => "service_unavailable",
                "reason" => "internal error"
              }
+
       assert body["protocol_version"] == "v1.0"
 
-      # Verify the leaky inspect string never made it to the wire.
+      # Verify the leaky inspect string never made it to the wire or logs.
       refute result.resp_body =~ "hunter2"
+      refute log =~ "hunter2"
+      refute log =~ "password=hunter2"
     end
   end
 
@@ -684,6 +699,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
     test "force-release token unconfigured → 503 fail-closed", _ctx do
       Application.put_env(:lease_plane, :force_release_token, nil)
+
       on_exit(fn ->
         Application.put_env(:lease_plane, :force_release_token, @force_release_token)
       end)
