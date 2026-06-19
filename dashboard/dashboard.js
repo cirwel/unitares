@@ -981,7 +981,12 @@ async function loadAgents() {
                     return rs !== undefined && rs !== null && Number(rs) > 0.6;
                 }).length;
                 const parts = [];
-                if (criticalCount > 0) parts.push(`${criticalCount} critical`);
+                // Make "N critical" a clickable filter so the agent(s) behind the
+                // count are always reachable — no more phantom number with no row.
+                if (criticalCount > 0) {
+                    const activeHealth = state.get('agentHealthFilter') === 'critical';
+                    parts.push(`<span class="fleet-critical-link${activeHealth ? ' active' : ''}" role="button" tabindex="0" data-health="critical" title="Show critical agents">${criticalCount} critical</span>`);
+                }
                 if (highRiskCount > 0) parts.push(`${highRiskCount} high-risk`);
                 // Fleet coherence change indicator
                 if (previousStats.fleetCoherence !== undefined && previousStats.fleetCoherence !== null) {
@@ -2591,6 +2596,33 @@ if (anomaliesCard) {
             if (isNaN(tierNum)) return;
             e.preventDefault();
             toggleTier(tierNum);
+        });
+    }
+
+    // Fleet Health card — click the "N critical" count to filter the Agents list
+    // to critical agents (so the count is never a dead, unclickable number).
+    // Click again (or Reset) to clear.
+    const fleetCard = document.getElementById('fleet-coherence-card');
+    if (fleetCard) {
+        const toggleHealth = (health) => {
+            const current = state.get('agentHealthFilter');
+            const next = current === health ? null : health;
+            state.set({ agentHealthFilter: next });
+            if (typeof applyAgentFilters === 'function') applyAgentFilters();
+            scrollToSection('agents-section');
+        };
+        fleetCard.addEventListener('click', (e) => {
+            const link = e.target.closest('.fleet-critical-link');
+            if (!link) return;
+            e.stopPropagation();
+            toggleHealth(link.dataset.health || 'critical');
+        });
+        fleetCard.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            const link = e.target.closest('.fleet-critical-link');
+            if (!link) return;
+            e.preventDefault();
+            toggleHealth(link.dataset.health || 'critical');
         });
     }
 })();

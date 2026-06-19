@@ -147,3 +147,36 @@ describe('agent cards are keyboard-operable (WCAG 2.1.1 / 4.1.2)', () => {
         expect(card.getAttribute('aria-label')).toContain('RealWorker');
     });
 });
+
+describe('health filter — clickable critical count (#fix-1)', () => {
+    function critAndWell() {
+        return [
+            agent({ label: 'CritAgent', total_updates: 5, health_status: 'critical' }),
+            agent({ label: 'WellAgent', total_updates: 5, health_status: 'healthy' }),
+        ];
+    }
+
+    it('applyAgentFilters shows only agents matching agentHealthFilter', () => {
+        const all = critAndWell();
+        window.state.set({ cachedAgents: all, agentHealthFilter: 'critical' });
+        Agents.applyAgentFilters();
+        const html = document.getElementById('agents-container').innerHTML;
+        expect(html).toContain('CritAgent');
+        expect(html).not.toContain('WellAgent');
+    });
+
+    it('shows all agents when no health filter is set', () => {
+        const all = critAndWell();
+        window.state.set({ cachedAgents: all, agentHealthFilter: null });
+        Agents.applyAgentFilters();
+        const html = document.getElementById('agents-container').innerHTML;
+        expect(html).toContain('CritAgent');
+        expect(html).toContain('WellAgent');
+    });
+
+    it('clearAgentFilters drops the health filter', () => {
+        window.state.set({ cachedAgents: critAndWell(), agentHealthFilter: 'critical' });
+        Agents.clearAgentFilters();
+        expect(window.state.get('agentHealthFilter')).toBeNull();
+    });
+});

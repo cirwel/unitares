@@ -217,7 +217,14 @@
             info.textContent = 'No agents match filters (' + total + ' loaded)';
             return;
         }
-        // Info text is now driven by pagination footer, keep this minimal
+        // Surface an active health filter (set by clicking the Fleet Health count)
+        // so the user knows the list is scoped and how to clear it.
+        var healthFilter = state.get('agentHealthFilter');
+        if (healthFilter) {
+            info.textContent = 'Showing ' + healthFilter + ' agents only — click the count again or Reset to clear';
+            return;
+        }
+        // Info text is otherwise driven by pagination footer, keep this minimal
         info.textContent = '';
     }
 
@@ -564,6 +571,7 @@
 
         var cachedAgents = state.get('cachedAgents');
         var tierFilter = state.get('agentTierFilter');
+        var healthFilter = state.get('agentHealthFilter');
         var tierNameToNum = { unknown: 0, emerging: 1, established: 2, verified: 3 };
         var filteredAgents = cachedAgents.filter(function (agent) {
             // Production filter
@@ -579,6 +587,13 @@
                     ? (typeof raw === 'number' ? raw : (tierNameToNum[String(raw).toLowerCase()] || 0))
                     : 0;
                 if (tierNum !== tierFilter) return false;
+            }
+
+            // Health filter — set by clicking the Fleet Health "N critical" count
+            // so a critical agent is always reachable from its count (no more
+            // phantom number with no row).
+            if (healthFilter && (agent.health_status || 'unknown') !== healthFilter) {
+                return false;
             }
 
             if (searchTerm) {
@@ -630,7 +645,7 @@
         if (statusFilterInput) statusFilterInput.value = 'all';
         if (metricsOnlyInput) metricsOnlyInput.checked = false;
         if (sortInput) sortInput.value = 'recent';
-        state.set({ agentTierFilter: null });
+        state.set({ agentTierFilter: null, agentHealthFilter: null });
         applyAgentFilters();
     }
 

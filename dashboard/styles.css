@@ -836,6 +836,26 @@ body::after {
     color: var(--text-secondary);
 }
 
+/* Clickable "N critical" in the Fleet Health card → filters the Agents list. */
+.fleet-critical-link {
+    color: var(--color-error, #ef4444);
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+}
+
+.fleet-critical-link:hover,
+.fleet-critical-link.active {
+    text-decoration-style: solid;
+    filter: brightness(1.1);
+}
+
+.fleet-critical-link:focus-visible {
+    outline: 2px solid var(--accent-cyan);
+    outline-offset: 2px;
+    border-radius: 3px;
+}
+
 .stat-card .stat-label {
     font-size: 0.65em;
     color: var(--text-muted);
