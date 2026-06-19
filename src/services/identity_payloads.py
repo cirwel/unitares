@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from src.services.principal_rollup import lookup as _principal_lookup
+
 
 S22_IDENTITY_RESPONSE_SCHEMA = "s22.identity_response.v1"
 
@@ -76,6 +78,12 @@ def build_identity_response_data(
             "display_name": display_name,
         },
     }
+    # Derived principal (octopus) — "you are one instance of logical worker P".
+    # Advisory/display-only, fail-open (absent for singletons or pre-reconcile);
+    # NEVER a credential. See src/services/principal_rollup.py.
+    _principal = _principal_lookup(agent_uuid)
+    if _principal:
+        response_data["principal"] = _principal
     if identity_resolution_outcome:
         response_data["identity_resolution_outcome"] = identity_resolution_outcome
     # R2 PR 3: surface persisted lineage flag at top level so callers
@@ -176,6 +184,12 @@ def build_identity_diag_payload(
             "display_name": display_name,
         },
     }
+    # Derived principal (octopus) — "you are one instance of logical worker P".
+    # Advisory/display-only, fail-open (absent for singletons or pre-reconcile);
+    # NEVER a credential. See src/services/principal_rollup.py.
+    _principal = _principal_lookup(agent_uuid)
+    if _principal:
+        response_data["principal"] = _principal
     if identity_resolution_outcome:
         payload["identity_resolution_outcome"] = identity_resolution_outcome
     # R2 PR 3: persisted-lineage flag (see build_identity_response_data).
@@ -339,6 +353,11 @@ def build_onboard_response_data(
         trajectory_block = _build_trajectory_block(trajectory_result)
         if trajectory_block is not None:
             minimal["trajectory"] = trajectory_block
+        # Derived principal (octopus) — advisory/display-only, fail-open, never
+        # a credential. Absent for singletons / pre-reconcile.
+        _principal = _principal_lookup(agent_uuid)
+        if _principal:
+            minimal["principal"] = _principal
         return minimal
 
     result = {

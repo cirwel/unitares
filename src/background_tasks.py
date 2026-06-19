@@ -264,6 +264,39 @@ async def lineage_eval_sweeper_task(interval_minutes: float = 30.0):
 
 
 # ---------------------------------------------------------------------------
+# Principal (octopus) rollup — derived, off the hot path
+# ---------------------------------------------------------------------------
+
+async def principal_rollup_sweeper_task(interval_seconds: float = 60.0):
+    """Recompute the DERIVED principal (octopus) rollup from the in-memory
+    agent-metadata cache, so identity/onboard responses can surface "you are
+    instance K of principal P" (see ``src/services/principal_rollup.py`` and
+    docs/proposals/principal-rollup-v0.md).
+
+    Council 2026-06-18 (unanimous): the principal is NEVER resolved at mint — it
+    is recomputed here from the accumulated declared edges. Pure CPU over the
+    in-memory cache: no DB/Redis await, so it cannot hit the anyio-asyncio
+    coupling class. Startup delay 60s to let the cache warm. A recompute failure
+    leaves the prior map intact (fail-stale, never fail-error).
+    """
+    await asyncio.sleep(60.0)
+    while True:
+        try:
+            from src.services import principal_rollup
+            from src.agent_metadata_model import agent_metadata
+            mapped = principal_rollup.recompute(agent_metadata)
+            logger.debug(f"[PRINCIPAL_ROLLUP] recompute complete: {mapped} principal(s)")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"[PRINCIPAL_ROLLUP] recompute failed (keeping prior map): {e}")
+        try:
+            await asyncio.sleep(interval_seconds)
+        except asyncio.CancelledError:
+            break
+
+
+# ---------------------------------------------------------------------------
 # Materialized view refresh (moved from per-insert to periodic)
 # ---------------------------------------------------------------------------
 
@@ -1723,6 +1756,8 @@ def start_all_background_tasks(set_ready):
     _supervised_create_task(concept_extraction_background_task(), name="concept_extraction")
     _supervised_create_task(class_promotion_sweeper_task(), name="class_promotion_sweeper")
     logger.info("[CLASS_PROMOTION] Started ephemeral → engaged_ephemeral sweep (every 30m)")
+    _supervised_create_task(principal_rollup_sweeper_task(), name="principal_rollup_sweeper")
+    logger.info("[PRINCIPAL_ROLLUP] Started derived octopus rollup recompute (every 60s)")
     _supervised_create_task(
         lineage_eval_sweeper_task(),
         name="r2_lineage_eval_sweeper",
