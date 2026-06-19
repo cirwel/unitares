@@ -25,6 +25,7 @@ DEFAULT_MEASUREMENT_TYPE = "measurement.lease_plane.request"
 DEFAULT_MIN_DAYS = 14.0
 DEFAULT_MIN_DAYS_WITH_ROWS = 14
 DEFAULT_MAX_LAST_ROW_AGE_HOURS = 24.0
+DEFAULT_MAX_SAMPLES_DROPPED_TOTAL = 0
 
 EXIT_PASS = 0
 EXIT_FAIL = 1
@@ -44,6 +45,7 @@ class GateSummary:
     p95_ms: int | None
     p99_ms: int | None
     max_samples_dropped_total: int
+    invalid_samples_dropped_rows: int
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,7 @@ def evaluate_gate(
     min_days: float,
     min_days_with_rows: int,
     max_last_row_age_hours: float,
+    max_samples_dropped_total: int,
 ) -> GateDecision:
     """Classify the data window without touching the DB.
 
@@ -82,6 +85,19 @@ def evaluate_gate(
         hard_failures.append(
             "last row is stale: "
             f"{summary.last_row_age_hours:.2f}h > {max_last_row_age_hours:.2f}h"
+        )
+
+    if summary.invalid_samples_dropped_rows > 0:
+        hard_failures.append(
+            "invalid samples_dropped_total metadata rows: "
+            f"{summary.invalid_samples_dropped_rows}"
+        )
+
+    if summary.max_samples_dropped_total > max_samples_dropped_total:
+        hard_failures.append(
+            "samples dropped total "
+            f"{summary.max_samples_dropped_total} > allowed "
+            f"{max_samples_dropped_total}"
         )
 
     if summary.elapsed_days < min_days:
@@ -112,6 +128,10 @@ def evaluate_gate(
             "last row age "
             f"{summary.last_row_age_hours:.2f}h <= {max_last_row_age_hours:.2f}h"
         ),
+        (
+            "samples dropped total "
+            f"{summary.max_samples_dropped_total} <= {max_samples_dropped_total}"
+        ),
     )
     return GateDecision(status="PASS", exit_code=EXIT_PASS, reasons=passed_reasons)
 
@@ -137,6 +157,33 @@ async def collect_evidence(
                     FROM audit.coordination_measurements
                     WHERE measurement_type = $1
                       AND ($2::timestamptz IS NULL OR recorded_at >= $2::timestamptz)
+                ),
+                normalized AS (
+                    SELECT
+                        *,
+                        meta->>'samples_dropped_total' AS samples_dropped_text,
+                        coalesce(meta ? 'samples_dropped_total', false)
+                            AS has_samples_dropped_total
+                    FROM base
+                ),
+                typed AS (
+                    SELECT
+                        *,
+                        CASE
+                            WHEN samples_dropped_text ~ '^[0-9]+$'
+                                THEN samples_dropped_text::bigint
+                            ELSE 0
+                        END AS samples_dropped_total_value,
+                        CASE
+                            WHEN has_samples_dropped_total
+                                AND NOT coalesce(
+                                    samples_dropped_text ~ '^[0-9]+$',
+                                    false
+                                )
+                                THEN 1
+                            ELSE 0
+                        END AS invalid_samples_dropped_total
+                    FROM normalized
                 )
                 SELECT
                     count(*)::bigint AS row_count,
@@ -154,11 +201,11 @@ async def collect_evidence(
                     round(percentile_cont(0.50) WITHIN GROUP (ORDER BY elapsed_ms))::int AS p50_ms,
                     round(percentile_cont(0.95) WITHIN GROUP (ORDER BY elapsed_ms))::int AS p95_ms,
                     round(percentile_cont(0.99) WITHIN GROUP (ORDER BY elapsed_ms))::int AS p99_ms,
-                    coalesce(
-                        max(NULLIF(meta->>'samples_dropped_total', '')::bigint),
-                        0
-                    )::bigint AS max_samples_dropped_total
-                FROM base
+                    coalesce(max(samples_dropped_total_value), 0)::bigint
+                        AS max_samples_dropped_total,
+                    coalesce(sum(invalid_samples_dropped_total), 0)::bigint
+                        AS invalid_samples_dropped_rows
+                FROM typed
                 """,
                 measurement_type,
                 since,
@@ -182,6 +229,9 @@ async def collect_evidence(
                 p95_ms=summary_row["p95_ms"],
                 p99_ms=summary_row["p99_ms"],
                 max_samples_dropped_total=int(summary_row["max_samples_dropped_total"]),
+                invalid_samples_dropped_rows=int(
+                    summary_row["invalid_samples_dropped_rows"]
+                ),
             )
 
             endpoint_rows = await _fetch_all(
@@ -220,18 +270,45 @@ async def collect_evidence(
             daily_rows = await _fetch_all(
                 conn,
                 """
+                WITH normalized AS (
+                    SELECT
+                        *,
+                        meta->>'samples_dropped_total' AS samples_dropped_text,
+                        coalesce(meta ? 'samples_dropped_total', false)
+                            AS has_samples_dropped_total
+                    FROM audit.coordination_measurements
+                    WHERE measurement_type = $1
+                      AND ($2::timestamptz IS NULL OR recorded_at >= $2::timestamptz)
+                ),
+                typed AS (
+                    SELECT
+                        *,
+                        CASE
+                            WHEN samples_dropped_text ~ '^[0-9]+$'
+                                THEN samples_dropped_text::bigint
+                            ELSE 0
+                        END AS samples_dropped_total_value,
+                        CASE
+                            WHEN has_samples_dropped_total
+                                AND NOT coalesce(
+                                    samples_dropped_text ~ '^[0-9]+$',
+                                    false
+                                )
+                                THEN 1
+                            ELSE 0
+                        END AS invalid_samples_dropped_total
+                    FROM normalized
+                )
                 SELECT
                     date_trunc('day', recorded_at)::date::text AS day,
                     count(*)::bigint AS rows,
                     round(percentile_cont(0.50) WITHIN GROUP (ORDER BY elapsed_ms))::int AS p50_ms,
                     round(percentile_cont(0.99) WITHIN GROUP (ORDER BY elapsed_ms))::int AS p99_ms,
-                    coalesce(
-                        max(NULLIF(meta->>'samples_dropped_total', '')::bigint),
-                        0
-                    )::bigint AS max_samples_dropped_total
-                FROM audit.coordination_measurements
-                WHERE measurement_type = $1
-                  AND ($2::timestamptz IS NULL OR recorded_at >= $2::timestamptz)
+                    coalesce(max(samples_dropped_total_value), 0)::bigint
+                        AS max_samples_dropped_total,
+                    coalesce(sum(invalid_samples_dropped_total), 0)::bigint
+                        AS invalid_samples_dropped_rows
+                FROM typed
                 GROUP BY 1
                 ORDER BY 1
                 """,
@@ -288,12 +365,14 @@ def print_text_report(
     min_days: float,
     min_days_with_rows: int,
     max_last_row_age_hours: float,
+    max_samples_dropped_total: int,
 ) -> None:
     print("=== Wave 3 §14 data-window preflight ===")
     print(f"measurement_type: {summary.measurement_type}")
     print(f"required_window_days: {min_days:g}")
     print(f"required_days_with_rows: {min_days_with_rows}")
     print(f"max_last_row_age_hours: {max_last_row_age_hours:g}")
+    print(f"max_samples_dropped_total: {max_samples_dropped_total}")
     print()
     print(
         "summary: "
@@ -307,7 +386,8 @@ def print_text_report(
         f"p50_ms={summary.p50_ms if summary.p50_ms is not None else '-'} "
         f"p95_ms={summary.p95_ms if summary.p95_ms is not None else '-'} "
         f"p99_ms={summary.p99_ms if summary.p99_ms is not None else '-'} "
-        f"max_samples_dropped_total={summary.max_samples_dropped_total}"
+        f"max_samples_dropped_total={summary.max_samples_dropped_total} "
+        f"invalid_samples_dropped_rows={summary.invalid_samples_dropped_rows}"
     )
     print(f"gate: {decision.status}")
     for reason in decision.reasons:
@@ -322,7 +402,14 @@ def print_text_report(
     _print_table(
         "daily continuity",
         daily_rows,
-        ("day", "rows", "p50_ms", "p99_ms", "max_samples_dropped_total"),
+        (
+            "day",
+            "rows",
+            "p50_ms",
+            "p99_ms",
+            "max_samples_dropped_total",
+            "invalid_samples_dropped_rows",
+        ),
     )
     _print_table(
         "related boundary measurements",
@@ -366,6 +453,15 @@ async def async_main(argv: Iterable[str] | None = None) -> int:
         default=DEFAULT_MAX_LAST_ROW_AGE_HOURS,
     )
     parser.add_argument(
+        "--max-samples-dropped-total",
+        type=int,
+        default=DEFAULT_MAX_SAMPLES_DROPPED_TOTAL,
+        help=(
+            "Maximum acceptable samples_dropped_total value in the evidence "
+            "window (default: 0)"
+        ),
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Emit machine-readable JSON instead of the text report",
@@ -387,6 +483,7 @@ async def async_main(argv: Iterable[str] | None = None) -> int:
         min_days=args.min_days,
         min_days_with_rows=args.min_days_with_rows,
         max_last_row_age_hours=args.max_last_row_age_hours,
+        max_samples_dropped_total=args.max_samples_dropped_total,
     )
 
     if args.json:
@@ -395,6 +492,12 @@ async def async_main(argv: Iterable[str] | None = None) -> int:
                 {
                     "summary": asdict(summary),
                     "decision": asdict(decision),
+                    "requirements": {
+                        "min_days": args.min_days,
+                        "min_days_with_rows": args.min_days_with_rows,
+                        "max_last_row_age_hours": args.max_last_row_age_hours,
+                        "max_samples_dropped_total": args.max_samples_dropped_total,
+                    },
                     "endpoint_rows": endpoint_rows,
                     "status_rows": status_rows,
                     "daily_rows": daily_rows,
@@ -416,6 +519,7 @@ async def async_main(argv: Iterable[str] | None = None) -> int:
             min_days=args.min_days,
             min_days_with_rows=args.min_days_with_rows,
             max_last_row_age_hours=args.max_last_row_age_hours,
+            max_samples_dropped_total=args.max_samples_dropped_total,
         )
 
     return decision.exit_code

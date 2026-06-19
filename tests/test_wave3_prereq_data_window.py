@@ -20,6 +20,7 @@ def _summary(**overrides):
         "p95_ms": 10,
         "p99_ms": 40,
         "max_samples_dropped_total": 0,
+        "invalid_samples_dropped_rows": 0,
     }
     values.update(overrides)
     return GateSummary(**values)
@@ -31,6 +32,7 @@ def test_gate_passes_when_window_is_mature_and_fresh():
         min_days=14.0,
         min_days_with_rows=14,
         max_last_row_age_hours=24.0,
+        max_samples_dropped_total=0,
     )
 
     assert decision.status == "PASS"
@@ -43,6 +45,7 @@ def test_gate_waits_while_window_is_still_running():
         min_days=14.0,
         min_days_with_rows=14,
         max_last_row_age_hours=24.0,
+        max_samples_dropped_total=0,
     )
 
     assert decision.status == "WAIT"
@@ -57,6 +60,7 @@ def test_gate_fails_when_channel_has_no_rows():
         min_days=14.0,
         min_days_with_rows=14,
         max_last_row_age_hours=24.0,
+        max_samples_dropped_total=0,
     )
 
     assert decision.status == "FAIL"
@@ -70,8 +74,50 @@ def test_gate_fails_when_last_row_is_stale_even_if_window_is_old():
         min_days=14.0,
         min_days_with_rows=14,
         max_last_row_age_hours=24.0,
+        max_samples_dropped_total=0,
     )
 
     assert decision.status == "FAIL"
     assert decision.exit_code == EXIT_FAIL
     assert any("stale" in reason for reason in decision.reasons)
+
+
+def test_gate_fails_when_samples_were_dropped():
+    decision = evaluate_gate(
+        _summary(max_samples_dropped_total=1),
+        min_days=14.0,
+        min_days_with_rows=14,
+        max_last_row_age_hours=24.0,
+        max_samples_dropped_total=0,
+    )
+
+    assert decision.status == "FAIL"
+    assert decision.exit_code == EXIT_FAIL
+    assert any("samples dropped" in reason for reason in decision.reasons)
+
+
+def test_gate_allows_explicit_samples_dropped_override():
+    decision = evaluate_gate(
+        _summary(max_samples_dropped_total=1),
+        min_days=14.0,
+        min_days_with_rows=14,
+        max_last_row_age_hours=24.0,
+        max_samples_dropped_total=1,
+    )
+
+    assert decision.status == "PASS"
+    assert decision.exit_code == EXIT_PASS
+
+
+def test_gate_fails_when_samples_dropped_metadata_is_invalid():
+    decision = evaluate_gate(
+        _summary(invalid_samples_dropped_rows=2),
+        min_days=14.0,
+        min_days_with_rows=14,
+        max_last_row_age_hours=24.0,
+        max_samples_dropped_total=0,
+    )
+
+    assert decision.status == "FAIL"
+    assert decision.exit_code == EXIT_FAIL
+    assert any("invalid samples_dropped_total" in reason for reason in decision.reasons)
