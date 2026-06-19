@@ -36,6 +36,15 @@ class ComplexityCalibrationBin:
     high_discrepancy_rate: float  # Percentage with discrepancy > 0.3
 
 
+# Calibration gating philosophy (2026-06-19, council-reviewed):
+# only the safety-relevant error direction gates the `calibrated` flag.
+# OVERCONFIDENCE — declared confidence materially exceeding the real success
+# rate — is the failure that matters (acting on false certainty). The gap that
+# counts as "material" matches the legacy blanket threshold so we narrow the
+# direction without loosening the magnitude.
+_OVERCONFIDENCE_GATE = 0.2
+
+
 class CalibrationChecker:
     """
     Checks calibration of confidence estimates.
@@ -536,46 +545,80 @@ class CalibrationChecker:
         if not strategic_metrics and not tactical_metrics:
             return False, {"error": "No calibration data"}
         
-        # Check strategic calibration
+        # Check strategic calibration.
+        #
+        # The strategic truth signal is trajectory_health — a SATURATED proxy.
+        # It sits near ~0.97-0.99 across every confidence bin because the basin
+        # self-heals nearly everyone regardless of declared confidence. A
+        # near-constant outcome carries no calibration information: low-confidence
+        # bins look "underconfident" against it by construction, not because an
+        # agent is miscalibrated in a way that matters. So the blanket
+        # calibration_error > 0.2 check is DEMOTED to advisory here; the only
+        # strategic condition that still gates is the genuine danger direction
+        # (high confidence paired with low trajectory health).
         issues = []
         strategic_issues = []
+        strategic_advisories = []
         for bin_key, bin_metrics in strategic_metrics.items():
             if bin_metrics.count < min_samples_per_bin:
                 continue
-            
-            # High confidence bins should have high trajectory health
-            if bin_metrics.bin_range[0] >= 0.8:
-                if bin_metrics.accuracy < 0.7:
-                    strategic_issues.append(
-                        f"Bin {bin_key}: high confidence ({bin_metrics.expected_accuracy:.2f}) "
-                        f"but low trajectory health ({bin_metrics.accuracy:.2f})"
-                    )
-            
-            # Large calibration error indicates miscalibration
-            if bin_metrics.calibration_error > 0.2:
+
+            # Danger direction: high confidence but low trajectory health — gates.
+            if bin_metrics.bin_range[0] >= 0.8 and bin_metrics.accuracy < 0.7:
                 strategic_issues.append(
-                    f"Bin {bin_key}: large calibration error ({bin_metrics.calibration_error:.2f})"
+                    f"Bin {bin_key}: high confidence ({bin_metrics.expected_accuracy:.2f}) "
+                    f"but low trajectory health ({bin_metrics.accuracy:.2f})"
                 )
-        
-        # Check tactical calibration (if we have data)
+
+            # Large error against the saturated proxy — advisory only, does not gate.
+            if bin_metrics.calibration_error > 0.2:
+                strategic_advisories.append(
+                    f"Bin {bin_key}: large strategic calibration error "
+                    f"({bin_metrics.calibration_error:.2f}) — advisory, trajectory_health proxy"
+                )
+
+        # Check tactical calibration (if we have data).
+        #
+        # The TACTICAL channel is grounded in hard exogenous outcomes (tests,
+        # commands, lint), so its errors are real. Both directions are reported,
+        # but only OVERCONFIDENCE gates: declaring more confidence than outcomes
+        # justify is the safety-relevant failure. Underconfidence is advisory.
         tactical_issues = []
+        tactical_advisories = []
         for bin_key, bin_metrics in tactical_metrics.items():
             if bin_metrics.count < min_samples_per_bin:
                 continue
-            
-            # For tactical: high confidence should mean high per-decision accuracy
-            if bin_metrics.bin_range[0] >= 0.8:
-                if bin_metrics.accuracy < 0.7:
-                    tactical_issues.append(
-                        f"Bin {bin_key}: high confidence ({bin_metrics.expected_accuracy:.2f}) "
-                        f"but low decision accuracy ({bin_metrics.accuracy:.2f})"
-                    )
-        
+
+            overconfidence_gap = bin_metrics.expected_accuracy - bin_metrics.accuracy
+
+            if bin_metrics.bin_range[0] >= 0.8 and bin_metrics.accuracy < 0.7:
+                # Danger direction: high confidence but low decision accuracy.
+                tactical_issues.append(
+                    f"Bin {bin_key}: high confidence ({bin_metrics.expected_accuracy:.2f}) "
+                    f"but low decision accuracy ({bin_metrics.accuracy:.2f})"
+                )
+            elif overconfidence_gap > _OVERCONFIDENCE_GATE:
+                # Overconfidence in any populated bin: declared confidence
+                # materially exceeds the real success rate.
+                tactical_issues.append(
+                    f"Bin {bin_key}: overconfident — declared {bin_metrics.expected_accuracy:.2f} "
+                    f"but only {bin_metrics.accuracy:.2f} of decisions succeeded "
+                    f"(gap {overconfidence_gap:.2f})"
+                )
+            elif -overconfidence_gap > _OVERCONFIDENCE_GATE:
+                # Underconfidence — real, but not safety-relevant. Advisory only.
+                tactical_advisories.append(
+                    f"Bin {bin_key}: underconfident — declared {bin_metrics.expected_accuracy:.2f} "
+                    f"but {bin_metrics.accuracy:.2f} succeeded — advisory"
+                )
+
         is_calibrated = len(strategic_issues) == 0 and len(tactical_issues) == 0
         
         result = {
             "is_calibrated": is_calibrated,
             "issues": strategic_issues + tactical_issues,
+            # Non-gating observations (underconfidence, saturated-proxy error).
+            "advisories": strategic_advisories + tactical_advisories,
             # STRATEGIC calibration (trajectory health) - formerly just "bins"
             "strategic_calibration": {
                 "description": "Trajectory health by confidence level (retroactive marking)",
@@ -645,7 +688,11 @@ class CalibrationChecker:
                     is_calibrated = False
         
         result["is_calibrated"] = is_calibrated
-        result["issues"] = strategic_issues + tactical_issues
+        # `issues` is the gating set. Include complexity issues (which set
+        # is_calibrated=False above) so a False verdict is never returned with an
+        # empty issues list — that previously made complexity failures invisible.
+        result["issues"] = strategic_issues + tactical_issues + issues
+        result["advisories"] = strategic_advisories + tactical_advisories
 
         # Per-channel breakdown (additive — aggregate fields above are unchanged).
         # Allows callers to ask "miscalibrated where?" instead of just "miscalibrated".
@@ -655,13 +702,23 @@ class CalibrationChecker:
             for channel, bin_metrics in per_channel_metrics.items():
                 channel_samples = sum(b.count for b in bin_metrics.values())
                 channel_issues = []
+                channel_advisories = []
                 max_gap = 0.0
                 for bin_key, b in bin_metrics.items():
                     if b.count < min_samples_per_bin:
                         continue
-                    if b.calibration_error > 0.2:
+                    # Mirror the top-level gate: overconfidence gates the
+                    # per-channel `calibrated` flag; other large errors are advisory
+                    # so per-channel and aggregate verdicts tell one consistent story.
+                    overconfidence_gap = b.expected_accuracy - b.accuracy
+                    if overconfidence_gap > _OVERCONFIDENCE_GATE:
                         channel_issues.append(
-                            f"Bin {bin_key}: large calibration error ({b.calibration_error:.2f})"
+                            f"Bin {bin_key}: overconfident (declared {b.expected_accuracy:.2f}, "
+                            f"succeeded {b.accuracy:.2f}, gap {overconfidence_gap:.2f})"
+                        )
+                    elif b.calibration_error > 0.2:
+                        channel_advisories.append(
+                            f"Bin {bin_key}: large calibration error ({b.calibration_error:.2f}) — advisory"
                         )
                     if b.calibration_error > max_gap:
                         max_gap = b.calibration_error
@@ -670,6 +727,7 @@ class CalibrationChecker:
                     "samples": channel_samples,
                     "calibration_gap": max_gap,
                     "issues": channel_issues,
+                    "advisories": channel_advisories,
                 }
             result["per_channel_calibration"] = per_channel_response
 
