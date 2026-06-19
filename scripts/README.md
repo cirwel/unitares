@@ -14,6 +14,7 @@
 |--------|-------------|
 | `autopilot_closeout.py` | Policy-bounded workflow wrapper for Watcher diagnostics, optional test-cache, closeout, branch hygiene, and explicit ship.sh plan/delivery |
 | `bump_epoch.py` | Bump governance epoch |
+| `check-wave3-prereq-data-window.sh` | Wave 3 §14 data-window gate over `audit.coordination_measurements` |
 | `check_ci_python_version_sync.py` | Verify CI Python version matches project |
 | `doc_audit.sh` | Check all three Unitares repos for stale docs |
 | `file_lease.py` | Claim BEAM lease-plane `file://` surfaces before code edits; `guard --changed` wraps commands, `hold --changed` refreshes and heartbeats during agent work |
