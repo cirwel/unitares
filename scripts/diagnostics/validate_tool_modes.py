@@ -24,16 +24,30 @@ def main() -> int:
 
     from src.tool_schemas import get_tool_definitions
     from src import tool_modes
+    from src.mcp_handlers.tool_stability import (
+        AGENT_WORKFLOW_ALIASES,
+        resolve_tool_alias,
+    )
 
     schema_tools = sorted({t.name for t in get_tool_definitions()})
     schema_set = set(schema_tools)
+
+    # Friendly workflow aliases (start_session, sync_state, ...) are registered as
+    # live tool names by mcp_server._register_common_aliases and so legitimately
+    # appear in TOOL_CATEGORIES, but get_tool_definitions() only returns the
+    # canonical targets they resolve to. Treat an alias as valid iff it resolves
+    # to a real schema tool; an alias pointing at nothing IS real drift.
+    alias_names = set(AGENT_WORKFLOW_ALIASES)
+    valid_aliases = {a for a in alias_names if resolve_tool_alias(a)[0] in schema_set}
+    dangling_aliases = sorted(alias_names - valid_aliases)
 
     categories_union = set()
     for _, tools in tool_modes.TOOL_CATEGORIES.items():
         categories_union |= set(tools)
 
-    # Category drift: names in categories but not in schema
-    extra_in_categories = sorted(categories_union - schema_set)
+    # Category drift: names in categories that are neither a schema tool nor a
+    # valid alias of one.
+    extra_in_categories = sorted(categories_union - schema_set - valid_aliases)
 
     # Uncategorized tools (should be 0 for ergonomics, but correctness is via full mode)
     uncategorized = sorted(schema_set - categories_union)
@@ -54,15 +68,23 @@ def main() -> int:
 
     if extra_in_categories:
         ok = False
-        print("FAIL: TOOL_CATEGORIES contains tools not present in schema:")
+        print("FAIL: TOOL_CATEGORIES contains tools that are neither a schema tool nor a valid alias:")
         for n in extra_in_categories:
             print(f"  - {n}")
 
-    if uncategorized:
-        # Not fatal for correctness, but a UX problem.
-        print("WARN: schema tools not present in any TOOL_CATEGORIES (categorization gap):")
-        for n in uncategorized:
+    if dangling_aliases:
+        ok = False
+        print("FAIL: AGENT_WORKFLOW_ALIASES entries that do not resolve to a schema tool:")
+        for n in dangling_aliases:
             print(f"  - {n}")
+
+    if uncategorized:
+        # Not fatal: uncategorized tools are still reachable via full mode (the
+        # default); they only fall out of minimal/lite, which is often deliberate.
+        print(
+            f"WARN: {len(uncategorized)} schema tool(s) not in any TOOL_CATEGORIES "
+            f"(absent from minimal/lite only): {', '.join(uncategorized)}"
+        )
 
     if full_missing or full_extra:
         ok = False
