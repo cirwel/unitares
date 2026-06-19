@@ -26,6 +26,10 @@ set -uo pipefail
 
 BRIDGE_LABEL="${BRIDGE_LABEL:-com.unitares.discord-bridge}"
 BRIDGE_LOG="${BRIDGE_LOG:-$HOME/Library/Logs/unitares-discord-bridge.log}"
+# Preferred liveness signal: a heartbeat the bridge's poll loop rewrites every
+# iteration (verbosity-independent). Falls back to the bridge log's mtime when
+# the heartbeat file is absent (bridge not yet upgraded to write it).
+BRIDGE_HEARTBEAT_FILE="${BRIDGE_HEARTBEAT_PATH:-$HOME/.unitares/discord-bridge.heartbeat}"
 STALE_THRESHOLD_S="${BRIDGE_STALE_THRESHOLD_S:-180}"   # 18x the 10s poll interval
 CONSEC="${BRIDGE_WATCHDOG_CONSEC:-2}"
 STATE_FILE="${BRIDGE_WATCHDOG_STATE:-$HOME/.unitares/bridge-watchdog.state}"
@@ -65,38 +69,42 @@ print(json.dumps({
     -X POST "$GOV_API_URL/api/findings" -d "$payload" 2>/dev/null || true
 }
 
-# log age in seconds; a missing log is treated as maximally stale.
-log_age_s() {
-  local mt
-  mt="$(stat -f %m "$BRIDGE_LOG" 2>/dev/null || echo 0)"
-  [ "$mt" = "0" ] && { printf '%s' "$STALE_THRESHOLD_S"; return; }   # unknown -> not stale-by-default
+# Seconds since the bridge last proved liveness. Prefer the poll-loop heartbeat
+# (verbosity-independent); fall back to the log mtime when the heartbeat file is
+# absent (bridge not yet upgraded). An unreadable source yields a non-stale
+# value so a stat hiccup can't trigger a spurious restart.
+liveness_age_s() {
+  local src mt
+  if [ -f "$BRIDGE_HEARTBEAT_FILE" ]; then src="$BRIDGE_HEARTBEAT_FILE"; else src="$BRIDGE_LOG"; fi
+  mt="$(stat -f %m "$src" 2>/dev/null || echo 0)"
+  [ "$mt" = "0" ] && { printf '%s' "0"; return; }   # unknown -> treat as fresh, not stale
   printf '%s' "$(( $(now) - mt ))"
 }
 
-age=$(log_age_s)
+age=$(liveness_age_s)
 
 if [ "$age" -le "$STALE_THRESHOLD_S" ]; then
   prev=$(read_count)
   write_count 0
   if [ "$prev" -ge "$CONSEC" ]; then
-    rec="RECOVERED: Discord bridge is logging again (age ${age}s) after a wedge — #alerts delivery restored"
+    rec="RECOVERED: Discord bridge is alive again (liveness age ${age}s) after a wedge — #alerts delivery restored"
     alert "$rec"
     post_finding "info" "bridge-liveness-recovery" "$rec"
   fi
-  echo "[$(ts)] bridge liveness OK (log age ${age}s)"
+  echo "[$(ts)] bridge liveness OK (age ${age}s)"
   exit 0
 fi
 
 # stale
 n=$(( $(read_count) + 1 ))
 write_count "$n"
-echo "[$(ts)] bridge log STALE ${age}s (>${STALE_THRESHOLD_S}s) — strike $n/$CONSEC" >&2
+echo "[$(ts)] bridge liveness STALE ${age}s (>${STALE_THRESHOLD_S}s) — strike $n/$CONSEC" >&2
 if [ "$n" -lt "$CONSEC" ]; then
   exit 1   # not yet confirmed; let the next run decide (debounce)
 fi
 
 # confirmed wedge: restart FIRST so the alert can be delivered, then alert.
-echo "[$(ts)] bridge appears wedged (log stale ${age}s, ${n}x) — restarting $BRIDGE_LABEL" >&2
+echo "[$(ts)] bridge appears wedged (liveness stale ${age}s, ${n}x) — restarting $BRIDGE_LABEL" >&2
 eval "$RESTART_CMD" >/dev/null 2>&1 || true
 msg="Discord bridge wedged — process alive but event loop silent for ${age}s (no governance polling, #alerts delivery dead). Restarted $BRIDGE_LABEL. KeepAlive can't catch a hang; this watchdog did."
 alert "$msg"
