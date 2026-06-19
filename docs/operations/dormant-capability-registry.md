@@ -115,7 +115,7 @@ they are not re-flagged.
 
 | Item | Location | Note |
 |---|---|---|
-| ~~`backfill_embeddings.py`~~ | ~~`scripts/migration/backfill_embeddings.py`~~ | Hardcoded to the legacy 384d `core.discovery_embeddings` table, which live search no longer reads — broken against the active bge-m3 model. **CUT** (script-cleanup sweep): removed; recoverable from git history if the legacy table is ever backfilled |
+| ~~backfill embeddings script~~ | Removed legacy migration script | Hardcoded to the legacy 384d `core.discovery_embeddings` table, which live search no longer reads — broken against the active bge-m3 model. **CUT** (script-cleanup sweep): removed; recoverable from git history if the legacy table is ever backfilled |
 | Legacy `core.discovery_embeddings` table (1887 rows, 384d) | DB | Superseded by `_bge_m3` (1056, clean). **Cut after** concept-extraction confirmed reading the active table |
 | `query_response_chain` builder | `src/db/age_queries.py:309` | Dead duplicate; `get_response_chain` uses its own inline Cypher. **Cut** |
 | `log_auto_attest` typed helper | `audit_log.py:206` | 0 callers; real rows written by a different `log_event` path. **Cut** |
