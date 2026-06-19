@@ -803,3 +803,68 @@ class TestListAgentsParticipation:
             # Counts stay truthful — ghosts are not dropped, just ordered last.
             assert data["summary"]["participated"] == 2
             assert data["summary"]["never_participated"] == 10
+
+
+# ============================================================================
+# list_agents — no per-agent DB hydration (timeout fix)
+# ============================================================================
+
+class TestListAgentsNoHydration:
+    """The full list path must not hydrate a monitor per agent.
+
+    Hydrating every un-loaded monitor turned the include_metrics list into N
+    synchronous DB round-trips (anyio/asyncpg amplification), blowing the 15s
+    timeout on a large fleet — which froze the dashboard's cached health counts
+    (a phantom "N critical" with no live row). Non-resident agents must instead
+    use the health_status cached on agent_metadata.
+    """
+
+    @pytest.fixture
+    def mock_mcp_server(self):
+        return make_mock_server()
+
+    @pytest.mark.asyncio
+    async def test_uses_cached_health_without_loading_monitors(self, mock_mcp_server):
+        # An agent that is NOT resident (monitors is empty) but has cached health.
+        mock_mcp_server.monitors = {}
+        mock_mcp_server.agent_metadata = {
+            "crit-1": make_agent_meta(label="Critical1", total_updates=5, health_status="critical"),
+            "well-1": make_agent_meta(label="Healthy1", total_updates=5, health_status="healthy"),
+        }
+
+        with patch_lifecycle_server(mock_mcp_server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({
+                "include_metrics": True, "grouped": True, "status_filter": "all",
+            })
+
+            data = json.loads(result[0].text)
+            by_label = {
+                a["label"]: a
+                for bucket in data["agents"].values() for a in bucket
+            }
+            # Cached health is surfaced verbatim, metrics are None (not hydrated).
+            assert by_label["Critical1"]["health_status"] == "critical"
+            assert by_label["Critical1"]["metrics"] is None
+            assert by_label["Healthy1"]["health_status"] == "healthy"
+            # by_health rollup still reflects the cached criticals.
+            assert data["summary"]["by_health"]["critical"] == 1
+            # The hot path: NO monitor was created/hydrated for any agent.
+            mock_mcp_server.get_or_create_monitor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_cached_health_falls_back_to_unknown(self, mock_mcp_server):
+        mock_mcp_server.monitors = {}
+        meta = make_agent_meta(label="NoHealth", total_updates=1)
+        meta.health_status = None  # nothing cached yet
+        mock_mcp_server.agent_metadata = {"a-1": meta}
+
+        with patch_lifecycle_server(mock_mcp_server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({
+                "include_metrics": True, "grouped": True, "status_filter": "all",
+            })
+            data = json.loads(result[0].text)
+            agent = [a for bucket in data["agents"].values() for a in bucket][0]
+            assert agent["health_status"] == "unknown"
+            mock_mcp_server.get_or_create_monitor.assert_not_called()
