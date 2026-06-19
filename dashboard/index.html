@@ -21,6 +21,7 @@
     <script src="/dashboard/state.js"></script>
     <script src="/dashboard/colors.js"></script>
     <script src="/dashboard/components.js"></script>
+    <script src="/dashboard/fleet-severity.js"></script>
     <!-- Layer 1: Visualizations (depends on Chart.js, utils, colors) -->
     <script src="/dashboard/visualizations.js"></script>
     <!-- Layer 2: Domain modules (depend on state, colors, utils) -->
@@ -111,6 +112,10 @@
             <span class="quick-status-lumen" id="qs-detail"></span>
             <span class="quick-status-lumen" id="qs-lumen"></span>
         </div>
+
+        <!-- Needs-attention band: deep-link chips for active exceptions, surfaced
+             from the fleet-severity rollup. Hidden when the fleet is healthy. -->
+        <div id="needs-attention" class="needs-attention" role="region" aria-label="Needs attention" hidden></div>
 
         <div class="stats-grid" id="stats-section">
             <div class="stat-card" data-accent="coherence" id="fleet-coherence-card">

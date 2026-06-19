@@ -930,6 +930,7 @@ async def http_dashboard_static(request):
     # Only allow specific files for security
     allowed_files = [
         "utils.js", "state.js", "colors.js", "components.js",
+        "fleet-severity.js",
         "visualizations.js", "agents.js", "discoveries.js",
         "dialectic.js", "eisv-charts.js", "timeline.js",
         "residents.js", "fleet-metrics.js", "watcher.js", "sentinel.js",

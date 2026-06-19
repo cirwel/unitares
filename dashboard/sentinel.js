@@ -195,11 +195,18 @@
         if (summary) {
             renderCounts(summary);
             renderClassBreakdown(summary);
+            // Publish severity counts for the fleet-severity hero rollup.
+            var sev = summary.by_severity || {};
+            if (typeof state !== 'undefined') {
+                state.set({ sentinelSummary: { critical: sev.critical || 0, high: sev.high || 0 } });
+            }
         } else {
             setMetric('sentinel-count-total', '—');
             setMetric('sentinel-count-critical', '—');
             setMetric('sentinel-count-high', '—');
             setMetric('sentinel-count-medium', '—');
+            // Feed-error marker so a dead endpoint isn't read as "0 findings".
+            if (typeof state !== 'undefined') state.set({ sentinelSummary: { error: true } });
         }
         await refreshStream();
     }
