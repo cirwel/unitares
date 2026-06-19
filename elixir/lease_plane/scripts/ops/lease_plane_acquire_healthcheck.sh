@@ -32,6 +32,11 @@ TIMEOUT_S="${HEALTHCHECK_TIMEOUT_S:-5}"
 SURFACE="${HEALTHCHECK_SURFACE:-file:///tmp/lease-plane-acquire-healthcheck}"
 # Any valid UUID; fixed so repeated probes are idempotent on the same holder.
 HOLDER_UUID="${HEALTHCHECK_HOLDER_UUID:-11111111-1111-1111-1111-111111111111}"
+# Governance HTTP API — POST /api/findings emits into the event ring buffer the
+# Discord bridge polls; a `*_finding` at severity=critical pages the bridge's
+# #alerts channel. Best-effort surfacing on top of the always-written log; the
+# log stays the floor in case governance itself is down.
+GOV_API_URL="${UNITARES_GOVERNANCE_HTTP_URL:-http://127.0.0.1:8767}"
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
@@ -45,18 +50,47 @@ write_failcount() { mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null || true; pri
 
 alert() { echo "[$(ts)] ALERT: $1" | tee -a "$ALERT_LOG" >&2; }
 
+# Surface to Discord via the governance event ring buffer (the bridge polls it).
+# Best-effort: a failure here never affects the check's exit status — the log
+# line above already recorded the alert. fingerprint dedupes, so a persistent
+# outage pages #alerts once, not every interval. $HTTP_API_TOKEN may be empty
+# (the API is open on localhost when no token is configured).
+post_finding() {
+  local severity="$1" fingerprint="$2" message="$3"
+  local payload
+  payload=$(python3 -c '
+import json,sys
+print(json.dumps({
+  "type": "lease_plane_health_finding",
+  "severity": sys.argv[1],
+  "message": sys.argv[2],
+  "agent_id": "lease-plane-healthcheck",
+  "agent_name": "lease-plane-healthcheck",
+  "fingerprint": sys.argv[3],
+}))' "$severity" "$message" "$fingerprint" 2>/dev/null) || return 0
+  curl -s --max-time "$TIMEOUT_S" -o /dev/null \
+    ${HTTP_API_TOKEN:+-H "Authorization: Bearer $HTTP_API_TOKEN"} \
+    -H "Content-Type: application/json" \
+    -X POST "$GOV_API_URL/api/findings" -d "$payload" 2>/dev/null || true
+}
+
 fail() {
   local n; n=$(( $(read_failcount) + 1 ))
   write_failcount "$n"
   echo "[$(ts)] lease-plane acquire probe FAILED ($n/$MAX_FAILURES): $1" >&2
   if [ "$n" -ge "$MAX_FAILURES" ]; then
-    alert "lease plane synthetic acquire failing ${n}x consecutively ($BASE_URL): $1 — file-lease coordination is degraded and failing OPEN. Check deps in unitares-deploy/elixir/lease_plane and ~/Library/Logs/unitares-lease-plane.log"
+    local msg="lease plane synthetic acquire failing ${n}x consecutively ($BASE_URL): $1 — file-lease coordination is degraded and failing OPEN. Check deps in unitares-deploy/elixir/lease_plane and ~/Library/Logs/unitares-lease-plane.log"
+    alert "$msg"
+    post_finding "critical" "lease-plane-acquire-outage" "$msg"
   fi
   exit 1
 }
 
-# Pull only the bearer token from secrets (subshell so nothing else leaks).
+# Pull the bearer tokens from secrets (subshell so nothing else leaks). The
+# lease bearer authenticates the probe; the HTTP API token (optional — the API
+# is open on localhost without one) authenticates the Discord-surfacing finding.
 TOKEN="$( ( [ -f "$SECRETS_FILE" ] && set -a && . "$SECRETS_FILE" >/dev/null 2>&1; printf '%s' "${LEASE_PLANE_BEARER_TOKEN:-}" ) || true )"
+HTTP_API_TOKEN="$( ( [ -f "$SECRETS_FILE" ] && set -a && . "$SECRETS_FILE" >/dev/null 2>&1; printf '%s' "${UNITARES_HTTP_API_TOKEN:-}" ) || true )"
 [ -z "$TOKEN" ] && fail "no LEASE_PLANE_BEARER_TOKEN in $SECRETS_FILE"
 
 # --- end-to-end probe: acquire -> assert ok -> release ---
@@ -84,7 +118,11 @@ lease_id=$(printf '%s' "$json" | python3 -c "import sys,json; print(json.load(sy
 prev=$(read_failcount)
 write_failcount 0
 if [ "$prev" -ge "$MAX_FAILURES" ]; then
-  alert "RECOVERED: lease plane synthetic acquire succeeding again after $prev consecutive failures"
+  rec="RECOVERED: lease plane synthetic acquire succeeding again after $prev consecutive failures"
+  alert "$rec"
+  # severity=info: shows in the bridge's event feed to close the loop, without
+  # re-paging #alerts (only critical / *_finding-high page).
+  post_finding "info" "lease-plane-acquire-recovery" "$rec"
 fi
 echo "[$(ts)] lease-plane acquire probe OK (lease_id=${lease_id:-?})"
 exit 0
