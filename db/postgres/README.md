@@ -97,8 +97,8 @@ Current maintenance utilities are targeted scripts under `scripts/migration/` an
 Example:
 
 ```bash
-# Backfill missing pgvector embeddings
-python scripts/migration/backfill_embeddings.py --dry-run
+# Re-embed the discovery corpus into the active pgvector table
+python scripts/migration/reembed_corpus.py --dry-run
 ```
 
 ## Schema Overview

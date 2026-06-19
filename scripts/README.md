@@ -56,7 +56,6 @@ The bulk of operational scripts live in `scripts/ops/`.
 | Script | Description |
 |--------|-------------|
 | `mcp_agent.py` | Autonomous MCP agent |
-| `operator_agent.py` | Operator-level agent with elevated permissions |
 | `enroll_resident.py` | Enroll resident identity anchors |
 
 ### Server Lifecycle

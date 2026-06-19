@@ -80,6 +80,8 @@ data/agents_archived/
 data/archives/
 data/backups/
 data/analysis/
+# Generated analysis plots (regenerable via scripts/analysis/plot_eisv_trajectories.py)
+scripts/analysis/*.png
 tests/fixtures/*
 # Wave 3a §2.6 golden parity fixtures are committed (load-bearing contract).
 # Use the directory-contents pattern: ignore the parent's contents broadly,
