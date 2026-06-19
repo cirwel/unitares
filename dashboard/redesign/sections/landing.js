@@ -102,22 +102,48 @@
     }).join("");
   }
 
-  async function render() {
-    const [health, residents, stats] = await Promise.all([DATA.health(), DATA.residents(), DATA.stats()]);
+  let lastResidents = null;
+
+  function applyHealth(health) {
     if (health.data) {
       const h = health.data;
       $("serverStat").innerHTML = `v<b>${h.version}</b> · up <b>${h.uptime}</b> · db <b>${h.db}</b>`;
     }
-    renderResidents(residents.data, residents.source);
-    renderStats(stats.data, residents.data, stats.source);
-    renderPulse(residents.data);
-
-    const anyLive = [residents, stats, health].some((r) => r.source === "live");
+  }
+  function footnote(anyLive) {
     $("foot").innerHTML = anyLive
       ? "Redesign · served live · design system in <code>tokens.css</code> + <code>kit.css</code>."
       : "Redesign reference · rendering bundled snapshot (open served same-origin for live data) · "
         + "design system in <code>tokens.css</code> + <code>kit.css</code>. Toggle theme to reskin via one token swap.";
   }
 
-  window.Landing = { render };
+  // Full first render — light (residents/pulse/health) + heavy (stats) together.
+  async function render() {
+    const [health, residents, stats] = await Promise.all([DATA.health(), DATA.residents(), DATA.stats()]);
+    lastResidents = residents;
+    applyHealth(health);
+    renderResidents(residents.data, residents.source);
+    renderStats(stats.data, residents.data, stats.source);
+    renderPulse(residents.data);
+    footnote([residents, stats, health].some((r) => r.source === "live"));
+  }
+
+  // Light refresh (fast cadence) — the "is the fleet alive" glance only.
+  async function refresh() {
+    const [health, residents] = await Promise.all([DATA.health(), DATA.residents()]);
+    lastResidents = residents;
+    applyHealth(health);
+    renderResidents(residents.data, residents.source);
+    renderPulse(residents.data);
+  }
+
+  // Heavy refresh (slow cadence) — the 7-tool headline batch; reuse last residents
+  // for fleet coherence rather than refetching them.
+  async function refreshStats() {
+    const stats = await DATA.stats();
+    const residents = lastResidents || (lastResidents = await DATA.residents());
+    renderStats(stats.data, residents.data, stats.source);
+  }
+
+  window.Landing = { render, refresh, refreshStats };
 })();

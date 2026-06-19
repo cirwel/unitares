@@ -103,12 +103,29 @@
     else $("#eisv-mount").insertAdjacentHTML("beforeend", `<p class="empty">Chart.js not loaded.</p>`);
   }
 
+  // Update the existing charts' data in place (smooth, no rebuild flicker).
+  function updateInPlace() {
+    const s = MODEL.series, labels = s.map((p) => p.t);
+    upper.data.labels = labels;
+    upper.data.datasets[0].data = s.map((p) => p.E);
+    upper.data.datasets[1].data = s.map((p) => p.I);
+    upper.data.datasets[2].data = s.map((p) => p.C);
+    lower.data.labels = labels;
+    lower.data.datasets[0].data = s.map((p) => p.S);
+    lower.data.datasets[1].data = s.map((p) => p.V);
+    upper.update(); lower.update();
+    const badge = document.querySelector("#eisv-mount .src-badge");
+    if (badge) { badge.className = "src-badge " + MODEL.source; badge.textContent = MODEL.source; }
+  }
+
   async function load() {
     const r = await DATA.eisv();
     MODEL = { series: r.data.series || [], coherenceEq: r.data.coherenceEq || 0.5, source: r.source };
-    render();
+    // Refresh in place if the charts are already mounted; full render on first load.
+    if (upper && lower && document.getElementById("eisv-upper") && window.Chart) updateInPlace();
+    else render();
   }
-  // re-theme without refetch (called on theme toggle)
+  // re-theme without refetch (called on theme toggle) — full rebuild reads new tokens
   function retheme() { if (MODEL.series.length && window.Chart) build(); }
 
   window.EISV = { load, retheme };
