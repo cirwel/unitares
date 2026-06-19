@@ -96,7 +96,9 @@ class BehavioralEISV:
     """EMA-smoothed behavioral EISV state.
 
     No ODE. No attractor. Just observations smoothed over time.
-    V is EMA-smoothed E-I imbalance, accumulated over time.
+    V is the EMA-smoothed E-I imbalance — a derived, sign-actionable readout
+    (positive = running hot, negative = running careful), NOT a true integral
+    (that is governance_core's separate ODE void integral).
 
     After BASELINE_WARMUP_UPDATES, behavioral baselines (Welford mean/std per
     dimension) enable self-relative assessment — deviation from YOUR pattern,
@@ -171,7 +173,11 @@ class BehavioralEISV:
         self.I = (1.0 - alpha_I) * self.I + alpha_I * I_obs
         self.S = (1.0 - alpha_S) * self.S + alpha_S * S_obs
 
-        # V: EMA-smoothed E-I imbalance (accumulated, not instantaneous)
+        # V: EMA-smoothed E-I imbalance — a derived, sign-actionable readout,
+        # not a true integral. (A known lag wart: this takes the gap of the
+        # already-smoothed E,I and smooths it again; a single-EMA-of-raw-
+        # imbalance fix is held pending trace-replay validation. See KG
+        # 2026-06-19 V-flat note.)
         raw_v = self.E - self.I
         self.V = (1.0 - alpha_V) * self.V + alpha_V * raw_v
 

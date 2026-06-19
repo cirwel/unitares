@@ -612,7 +612,7 @@ async def enrich_convergence_guidance(ctx: UpdateContext) -> None:
 
             if abs(V) > 0.2:
                 guidance_items.append({
-                    "metric": "V (Void Integral)",
+                    "metric": "V (Void)",
                     "current": f"{V:.3f}",
                     "guidance": "Energy-integrity imbalance. Balance exploration (E) with consistency (I).",
                     "priority": "medium" if abs(V) > 0.3 else "low"
