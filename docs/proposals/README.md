@@ -41,6 +41,7 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`track-b-implementation-blueprint.md`](track-b-implementation-blueprint.md) | Ready to apply once Track A is enforced — implementation blueprint for the `operator_delegate` scope |
 | [`lineage-causal-only-semantics.md`](lineage-causal-only-semantics.md) | DRAFT (operator-decided 2026-06-14) — parent-liveness discriminator; cited from `src/mcp_handlers/lifecycle/helpers.py` |
 | [`uuid-keyed-identity-migration-v0.md`](uuid-keyed-identity-migration-v0.md) | v0 proposal / design-only (2026-06-14) — make the UUID the sole identity key, reconciling schema with the ontology |
+| [`principal-rollup-v0.md`](principal-rollup-v0.md) | v0 proposal (2026-06-18) — count the **principal** (logical worker) not the process-instance; first-class form of identity.md research #3 ("identity as integral, not point-value"). Measurement shipped (`scripts/dev/octopus_rollup.py`); count/mint changes operator-gated. Sits atop `uuid-keyed-identity-migration` |
 
 ### Other active
 
