@@ -28,6 +28,7 @@ Several of these are **single-writer surfaces** (see the shared contract in `AGE
 | [`beam-governed-effects-dossier-2026-06-18.md`](beam-governed-effects-dossier-2026-06-18.md) | Draft dossier + phased plan — narrows current evidence to BEAM as dual-mode record/execute governed-effect runtime custody, not whole-governance rewrite |
 | [`governed-effect-plane-v0.md`](governed-effect-plane-v0.md) | Draft v0.1 — Phase 2 protocol contract for the dossier (dual `custody_mode`, effect envelope, typed errors, idempotency/custody-TTL/payload holes closed); council-revised, first effect class = both (record_only shadow built in PR #866) |
 | [`wave-3-section-5-2-boundary-audit-summary.md`](wave-3-section-5-2-boundary-audit-summary.md) | CI-checkable §5.2 boundary-cost audit summary (2026-06-10), required before `elixir/handler_dispatch/` commits |
+| [`beam-proprioception-case-v0.md`](beam-proprioception-case-v0.md) | Draft v0 — conceptual companion behind A′; names the dossier's Decision Boundary as the seam between interoceptive self-knowledge (stays Python) and runtime proprioception (moves to BEAM). Orthogonal to latency; non-relitigating; moves no boundary |
 
 ### Operator-vision delegation / identity hardening
 
