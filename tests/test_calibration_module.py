@@ -612,15 +612,40 @@ class TestCheckCalibration:
         assert len(issues) == 0
         assert is_cal is True
 
-    def test_large_calibration_error_flagged(self, checker):
-        """Calibration error > 0.2 should be flagged."""
-        # Confidence ~0.6 but all wrong -> accuracy=0, expected=0.6, error=0.6
+    def test_strategic_large_error_is_advisory_not_gating(self, checker):
+        """A large STRATEGIC error outside the danger direction is advisory, not gating.
+
+        trajectory_health is a saturated proxy: low-confidence bins look
+        'underconfident' against it by construction. Confidence ~0.6 in the
+        0.5-0.7 bin (below the 0.8 danger threshold) must NOT flip the flag,
+        but the error stays visible in advisories.
+        """
         for _ in range(20):
-            checker.update_ground_truth(0.6, True, False)
+            checker.update_ground_truth(0.6, True, False)  # error 0.6, but bin < 0.8
+        is_cal, metrics = checker.check_calibration(min_samples_per_bin=5)
+        assert is_cal is True
+        assert metrics.get("issues", []) == []
+        advisories = metrics.get("advisories", [])
+        assert any("calibration error" in a.lower() for a in advisories)
+
+    def test_tactical_overconfidence_gates(self, checker):
+        """Declared confidence materially exceeding real success rate gates the flag."""
+        # Tactical 0.6-0.7 bin: declared ~0.6, actual 0 -> overconfidence gap 0.6 > 0.2
+        for _ in range(20):
+            checker.record_tactical_decision(0.6, "proceed", False)
         is_cal, metrics = checker.check_calibration(min_samples_per_bin=5)
         assert is_cal is False
-        issues = metrics.get("issues", [])
-        assert any("calibration error" in i.lower() for i in issues)
+        assert any("overconfident" in i.lower() for i in metrics.get("issues", []))
+
+    def test_tactical_underconfidence_is_advisory_not_gating(self, checker):
+        """Underconfidence (declared << real success) is real but not safety-relevant."""
+        # Tactical 0.3-0.4 bin: declared ~0.3, actual 1.0 -> underconfident, advisory only
+        for _ in range(20):
+            checker.record_tactical_decision(0.3, "proceed", True)
+        is_cal, metrics = checker.check_calibration(min_samples_per_bin=5)
+        assert is_cal is True
+        assert metrics.get("issues", []) == []
+        assert any("underconfident" in a.lower() for a in metrics.get("advisories", []))
 
     def test_backward_compat_bins_key(self, checker):
         for _ in range(10):

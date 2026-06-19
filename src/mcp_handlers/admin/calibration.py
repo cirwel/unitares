@@ -183,6 +183,7 @@ async def handle_check_calibration(arguments: Dict[str, Any]) -> Sequence[TextCo
         "calibration_status": calibration_status,
         "tactical_staleness_days": tactical_staleness_days,
         "issues": metrics.get('issues', []),
+        "advisories": metrics.get('advisories', []),
         "accuracy": accuracy_value,
         "trajectory_health": overall_trajectory_health,
         "truth_channel": truth_channel,
