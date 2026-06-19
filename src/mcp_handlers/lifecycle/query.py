@@ -24,7 +24,6 @@ from ..decorators import mcp_tool
 from ..support.coerce import safe_float
 from ..support.naming_helpers import disambiguate_public_handle
 from src.logging_utils import get_logger
-from src.agent_monitor_state import ensure_hydrated
 
 from .helpers import _is_test_agent
 
@@ -723,82 +722,24 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                         agent_info["metrics"] = None
                         logger.warning(f"Error getting metrics for {agent_id}: {e}")
                 else:
-                    # Monitor not in memory - load it to get metrics
-                    cached_health = getattr(meta, 'health_status', None)
-                    try:
-                        monitor = mcp_server.get_or_create_monitor(agent_id)
-                        await ensure_hydrated(monitor, agent_id)
-                        metrics_dict = monitor.get_metrics()
-
-                        # Get health status
-                        if cached_health and cached_health != "unknown":
-                            agent_info["health_status"] = cached_health
-                        else:
-                            risk_score = metrics_dict.get('risk_score', None)
-                            coherence = float(monitor.state.coherence) if monitor.state else metrics_dict.get('coherence', None)
-                            void_active = bool(monitor.state.void_active) if monitor.state else metrics_dict.get('void_active', False)
-
-                            health_status_obj, _ = mcp_server.health_checker.get_health_status(
-                                risk_score=risk_score,
-                                coherence=coherence,
-                                void_active=void_active
-                            )
-                            agent_info["health_status"] = health_status_obj.value
-
-                            # Cache for future use
-                            if meta:
-                                meta.health_status = health_status_obj.value
-
-                        # Populate metrics from monitor state
-                        if monitor.state:
-                            agent_info["metrics"] = {
-                                "E": safe_float(monitor.state.E),
-                                "I": safe_float(monitor.state.I),
-                                "S": safe_float(monitor.state.S),
-                                "V": safe_float(monitor.state.V),
-                                "coherence": safe_float(monitor.state.coherence),
-                                "current_risk": metrics_dict.get("current_risk"),
-                                "risk_score": safe_float(metrics_dict.get("risk_score") or metrics_dict.get("current_risk") or metrics_dict.get("mean_risk", 0.5)),
-                                "phi": metrics_dict.get("phi"),
-                                "verdict": metrics_dict.get("verdict"),
-                                "mean_risk": safe_float(metrics_dict.get("mean_risk", 0.5)),
-                                "lambda1": safe_float(monitor.state.lambda1),
-                                "void_active": bool(monitor.state.void_active) if monitor.state.void_active is not None else False
-                            }
-                        else:
-                            agent_info["metrics"] = None
-                    except Exception as e:
-                        logger.debug(f"Could not load metrics for agent '{agent_id}': {e}")
-                        agent_info["health_status"] = cached_health or "unknown"
-                        agent_info["metrics"] = None
+                    # Monitor not resident — do NOT hydrate it from the DB here.
+                    # Loading every un-loaded monitor turned this list into N
+                    # synchronous DB round-trips (the anyio/asyncpg amplification
+                    # in CLAUDE.md's Substrate Tax), blowing the 15s budget on a
+                    # large fleet. The dashboard's include_metrics=true call then
+                    # timed out and froze its cached counts — surfacing as a
+                    # phantom "N critical" with no live, clickable row. Use the
+                    # health_status that process_agent_update persists on
+                    # agent_metadata on every check-in (phases.py); metrics are
+                    # None for non-resident agents (the dashboard renders null
+                    # metrics as "-").
+                    agent_info["health_status"] = getattr(meta, 'health_status', None) or "unknown"
+                    agent_info["metrics"] = None
             else:
-                # No metrics requested - try cached health_status first, calculate if missing
-                cached_health = getattr(meta, 'health_status', None)
-                if cached_health and cached_health != "unknown":
-                    agent_info["health_status"] = cached_health
-                else:
-                    # No cached health status or it's "unknown" - calculate it
-                    try:
-                        monitor = mcp_server.get_or_create_monitor(agent_id)
-                        await ensure_hydrated(monitor, agent_id)
-                        metrics_dict = monitor.get_metrics()
-                        attention_score = metrics_dict.get('attention_score') or metrics_dict.get('risk_score', None)
-                        coherence = metrics_dict.get('coherence', None)
-                        void_active = metrics_dict.get('void_active', False)
-
-                        health_status_obj, _ = mcp_server.health_checker.get_health_status(
-                            risk_score=attention_score,
-                            coherence=coherence,
-                            void_active=void_active
-                        )
-                        agent_info["health_status"] = health_status_obj.value
-
-                        # Cache for future use
-                        if meta:
-                            meta.health_status = health_status_obj.value
-                    except Exception as e:
-                        logger.debug(f"Could not calculate health status for agent '{agent_id}': {e}")
-                        agent_info["health_status"] = "unknown"
+                # No metrics requested — use the cached health_status only; never
+                # hydrate a monitor from the DB in the list path (same reason as
+                # the include_metrics branch above).
+                agent_info["health_status"] = getattr(meta, 'health_status', None) or "unknown"
                 agent_info["metrics"] = None
 
             # Add standardized fields if requested
