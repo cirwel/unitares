@@ -109,6 +109,7 @@
 
 <script src="./snapshot.js"></script>
 <script src="./data.js"></script>
+<script src="./ws.js"></script>
 <script src="./sections/landing.js"></script>
 <script src="./sections/agents.js"></script>
 <script src="./sections/discoveries.js"></script>
@@ -177,24 +178,38 @@ function isTyping() {
   const el = document.activeElement;
   return el && ["INPUT", "SELECT", "TEXTAREA"].includes(el.tagName);
 }
+let wsStatus = "closed";
 function updateLivePill() {
   const auto = isAutoSection(activeSection);
   livePill.classList.toggle("paused", !auto);
-  liveText.textContent = auto ? "live" : "manual";
-  livePill.title = auto ? "Auto-refreshing every 10s" : "This view is manual — switch to a monitor view for live updates";
+  if (!auto) { liveText.textContent = "manual"; livePill.title = "This view is manual — switch to a monitor view for live updates"; return; }
+  if (wsStatus === "open") { liveText.textContent = "streaming"; livePill.title = "Live event stream (/ws/eisv)"; }
+  else { liveText.textContent = "live"; livePill.title = "Auto-refreshing every 10s (stream reconnecting)"; }
 }
-function refreshTick() {
+function refreshActive() {
   if (document.hidden || isTyping() || !isAutoSection(activeSection)) return;
   const fn = RELOAD[activeSection];
   if (fn) fn();
 }
+// Polling fallback — only fires when the stream is NOT connected.
+function refreshTick() { if (wsStatus !== "open") refreshActive(); }
 setInterval(refreshTick, REFRESH_MS);
 // Heavier headline batch on a gentler cadence, only while watching the Overview.
 setInterval(() => {
   if (document.hidden || isTyping() || activeSection !== "overview") return;
   if (window.Landing && window.Landing.refreshStats) window.Landing.refreshStats();
 }, STATS_REFRESH_MS);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshTick(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshActive(); });
+
+// Live event stream — pushed events trigger a debounced refresh of the active
+// monitor view (sub-second), so polling is just the fallback.
+let wsDebounce = null;
+function onWsEvent() {
+  if (document.hidden || isTyping() || !isAutoSection(activeSection) || wsDebounce) return;
+  wsDebounce = setTimeout(() => { wsDebounce = null; refreshActive(); }, 1500);
+}
+function onWsStatus(s) { wsStatus = s; updateLivePill(); }
+if (window.GovSocket) window.GovSocket.make(onWsEvent, onWsStatus);
 
 // boot
 window.Landing.render();
