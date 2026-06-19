@@ -1233,9 +1233,8 @@ class TestListAgentsFullModeMonitorEdgeCases:
             assert agent["metrics"] is None
 
     @pytest.mark.asyncio
-    async def test_not_in_memory_safe_float_none_handling(self, server):
-        """Lines 334, 337-338: safe_float handles None and unconvertable values
-        when monitor is not in memory but gets loaded."""
+    async def test_not_in_memory_metrics_not_hydrated_for_safe_float_values(self, server):
+        """Non-resident monitors return null metrics instead of hydrating."""
         server.agent_metadata = {
             "agent-sf": make_agent_meta(status="active", total_updates=5, notes="", health_status=None),
         }
@@ -1257,13 +1256,13 @@ class TestListAgentsFullModeMonitorEdgeCases:
             })
             data = _parse(result)
             agent = data["agents"][0]
-            # safe_float(None) -> 0.0, safe_float("not-a-number") -> 0.0
-            assert agent["metrics"]["E"] == 0.0
-            assert agent["metrics"]["I"] == 0.0
+            assert agent["health_status"] == "unknown"
+            assert agent["metrics"] is None
+            server.get_or_create_monitor.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_not_in_memory_unknown_health_recalculated(self, server):
-        """Lines 313-327: health_status='unknown' triggers recalculation."""
+    async def test_not_in_memory_unknown_health_stays_unknown(self, server):
+        """Cached unknown health does not trigger monitor hydration."""
         server.agent_metadata = {
             "agent-unk": make_agent_meta(status="active", total_updates=5, notes="", health_status="unknown"),
         }
@@ -1285,7 +1284,9 @@ class TestListAgentsFullModeMonitorEdgeCases:
             })
             data = _parse(result)
             agent = data["agents"][0]
-            assert agent["health_status"] == "healthy"
+            assert agent["health_status"] == "unknown"
+            assert agent["metrics"] is None
+            server.get_or_create_monitor.assert_not_called()
 
 
 class TestGetAgentMetadataAdditional:
