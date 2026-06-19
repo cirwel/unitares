@@ -65,7 +65,7 @@
 
     const cmp = {
       recent: (a, b) => Date.parse(b.last || 0) - Date.parse(a.last || 0),
-      name: (a, b) => (a.label || a.agent_id).localeCompare(b.label || b.agent_id),
+      name: (a, b) => (a.label || a.agent_id || "").localeCompare(b.label || b.agent_id || ""),
       coherence: (a, b) => (b.metrics.coherence ?? -1) - (a.metrics.coherence ?? -1),
       risk: (a, b) => (b.metrics.risk ?? -1) - (a.metrics.risk ?? -1),
       updates: (a, b) => (b.updates || 0) - (a.updates || 0),
@@ -78,7 +78,7 @@
 
     const tr = (a) => {
       const st = staleness(a.last, MODEL.nowMs);
-      const name = a.label || `<span style="color:var(--muted)">anon · ${a.agent_id.slice(0, 8)}</span>`;
+      const name = a.label || `<span style="color:var(--muted)">anon · ${(a.agent_id || "—").slice(0, 8)}</span>`;
       const pip = a.status === "paused" ? "var(--warn)" : a.status === "archived" ? "var(--faint)"
         : st.level === "dead" ? "var(--faint)" : "var(--ok)";
       return `<tr>
