@@ -18,7 +18,7 @@
     try {
       const u = new URLSearchParams(location.search).get("token");
       return u || localStorage.getItem("unitares_api_token") || null;
-    } catch (_) { return null; }
+    } catch { return null; }
   }
 
   async function authFetch(path, opts) {
@@ -45,7 +45,7 @@
       const v = await liveFn();
       if (v == null) throw new Error("empty");
       return { source: "live", data: v };
-    } catch (_) {
+    } catch {
       return { source: "snapshot", data: snapFn() };
     }
   }

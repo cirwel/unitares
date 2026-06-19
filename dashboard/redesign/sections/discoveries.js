@@ -32,7 +32,7 @@
     text = esc(text);
     if (!q) return text;
     try { return text.replace(new RegExp("(" + q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "ig"), "<mark>$1</mark>"); }
-    catch (_) { return text; }
+    catch { return text; }
   }
 
   let MODEL = { list: [], byType: {}, byStatus: {}, total: 0, source: "snapshot" };
