@@ -99,6 +99,18 @@ body {
 }
 .attn-band b { color: var(--ink); font-weight: 600; }
 .attn-band .glyph { color: var(--warn); font-weight: 600; }
+/* calm variant — informational (reconnect window, not an alarm) */
+.attn-band.calm { background: var(--surface-2); border-color: var(--line); border-left-color: var(--info); }
+.attn-band.calm .glyph { color: var(--info); }
+
+/* skeleton loader — replaces bare "loading…" */
+.skeleton { position: relative; overflow: hidden; background: var(--surface-2); border-radius: var(--radius-sm); }
+.skeleton::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--ink) 6%, transparent), transparent);
+  animation: skeleton-shimmer 1.4s var(--ease) infinite; }
+@keyframes skeleton-shimmer { 100% { transform: translateX(100%); } }
+.loading-skeleton { padding: var(--space-4) 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.loading-skeleton .skeleton { height: 14px; }
 
 /* ---------------- stat cards ---------------- */
 .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-4); }
