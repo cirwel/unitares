@@ -132,6 +132,7 @@ checks:
 | Script | Description |
 |--------|-------------|
 | `agent_fragmentation.py` | Read-only report for identities with zero or sparse real check-ins, grouped by model/session/thread so fresh-UUID fragmentation is visible. |
+| `validate_tool_modes.py` | Asserts `TOOL_CATEGORIES` matches the tool schema (alias-aware) and that minimal/lite keep their discovery tools. DB-free; wired into the CI `smoke` gate. |
 
 ### `migration/`
 Database maintenance scripts (corpus re-embedding, ghost agent cleanup, knowledge graph maintenance).

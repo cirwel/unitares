@@ -43,10 +43,24 @@ class StateLockManager:
             project_root = Path(__file__).parent.parent
             lock_dir = project_root / "data" / "locks"
         self.lock_dir = lock_dir
-        self.lock_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_lock_dir()
         self.auto_cleanup_stale = auto_cleanup_stale
         self.stale_threshold = stale_threshold  # Seconds before considering lock stale
-        
+
+    def _ensure_lock_dir(self) -> None:
+        """Ensure the lock directory exists.
+
+        Called at construction AND at the start of every acquisition. The lock
+        directory is gitignored and can be removed out from under a long-running
+        process (deploy cleanup, ``git clean -fdx``, manual ``rm``). When that
+        happens, a manager that only created the directory in ``__init__`` keeps
+        a stale path and every subsequent ``os.open(lock_file, O_CREAT)`` raises
+        ENOENT — which surfaced as fleet-wide check-in failures until the server
+        was restarted. Re-creating here makes acquisition self-healing without a
+        restart; ``exist_ok=True`` keeps it a cheap stat in the common case.
+        """
+        self.lock_dir.mkdir(parents=True, exist_ok=True)
+
     def _check_and_clean_stale_lock(self, lock_file: Path) -> bool:
         """
         Check if lock file is stale and clean it if so.
@@ -160,9 +174,11 @@ class StateLockManager:
             timeout: Timeout per retry attempt in seconds
             max_retries: Maximum number of retry attempts with cleanup
         """
+        # Re-create the lock dir if it was removed since construction.
+        self._ensure_lock_dir()
         lock_file = self.lock_dir / f"{agent_id}.lock"
         lock_fd = None
-        
+
         # Automatic stale lock cleanup before attempting acquisition
         if self.auto_cleanup_stale:
             try:
@@ -294,9 +310,11 @@ class StateLockManager:
             timeout: Timeout per retry attempt in seconds
             max_retries: Maximum number of retry attempts with cleanup
         """
+        # Re-create the lock dir if it was removed since construction.
+        self._ensure_lock_dir()
         lock_file = self.lock_dir / f"{agent_id}.lock"
         lock_fd = None
-        
+
         # Automatic stale lock cleanup before attempting acquisition
         # Run in executor to avoid blocking event loop (file I/O operations)
         if self.auto_cleanup_stale:

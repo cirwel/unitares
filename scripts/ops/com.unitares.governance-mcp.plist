@@ -62,10 +62,27 @@
         <string>/PATH/TO/UNITARES/config/resident_progress.example.json</string>
         <key>UNITARES_BIND_ALL_INTERFACES</key>
         <string>1</string>
+        <!-- Host/Origin allowlist (DNS-rebinding protection, on by default).
+             A request whose Host header is not listed here is rejected with
+             HTTP 403 BEFORE any auth runs. localhost-only is correct for a
+             purely local install. To reach the server from a remote MCP
+             connector (Claude.ai, Perplexity, etc.) through a reverse proxy
+             or Cloudflare tunnel, add the PUBLIC hostname the client connects
+             to — e.g. for https://your-tunnel-host.example.org/mcp/ add both
+             the bare host and the :* form:
+               your-tunnel-host.example.org,your-tunnel-host.example.org:*
+             and the matching https origin below. -->
         <key>UNITARES_MCP_ALLOWED_HOSTS</key>
         <string>localhost:*</string>
         <key>UNITARES_MCP_ALLOWED_ORIGINS</key>
         <string>http://localhost:*</string>
+        <!-- Static bearer-token gate for /mcp (API-key auth). Empty/unset =
+             gate OFF (localhost dev). For a publicly reachable connector set
+             this to a long random secret (python3 -c "import secrets;
+             print(secrets.token_hex(32))") and paste the SAME value into the
+             client's "API key" field. Comma-separated allows rotation. -->
+        <key>UNITARES_MCP_BEARER_TOKENS</key>
+        <string></string>
         <key>PYTHONPATH</key>
         <string>/PATH/TO/UNITARES</string>
         <key>DB_BACKEND</key>
