@@ -2934,12 +2934,17 @@ def register_http_routes(
     # static allowlist (which would 403 it). Additive and reversible.
     app.routes.append(Route("/dashboard/redesign", http_dashboard_redesign, methods=["GET"]))
     app.routes.append(Route("/dashboard/redesign/{file:path}", http_dashboard_redesign, methods=["GET"]))
+    # CUTOVER (2026-06-19): /dashboard (and /) now serve the redesign; the prior
+    # dashboard stays reachable at /dashboard/classic (registered before the
+    # static {file} route so the flat allowlist doesn't swallow it). The old
+    # dashboard uses absolute asset paths, so it serves unchanged from /classic.
+    app.routes.append(Route("/dashboard/classic", http_dashboard, methods=["GET"]))
     # IMPORTANT: Static file route must come BEFORE dashboard route
     # to match /dashboard/utils.js, etc.
     app.routes.append(Route("/dashboard/{file}", http_dashboard_static, methods=["GET"]))
-    app.routes.append(Route("/dashboard", http_dashboard, methods=["GET"]))
+    app.routes.append(Route("/dashboard", http_dashboard_redesign, methods=["GET"]))
     app.routes.append(Route("/phase", http_phase, methods=["GET"]))
-    app.routes.append(Route("/", http_dashboard, methods=["GET"]))  # Root also serves dashboard
+    app.routes.append(Route("/", http_dashboard_redesign, methods=["GET"]))  # Root also serves the redesign
     app.routes.append(Route("/v1/tools", http_list_tools, methods=["GET"]))
     app.routes.append(Route("/v1/tools/call", http_call_tool, methods=["POST"]))
     app.routes.append(Route("/health", http_health, methods=["GET"]))
