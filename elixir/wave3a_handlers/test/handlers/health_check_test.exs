@@ -108,11 +108,13 @@ defmodule Wave3aHandlers.Handlers.HealthCheckTest do
       assert body["status"] == "healthy"
       assert body["version"] == "0.42.0"
       assert body["redis_present"] == true
+
       assert body["status_breakdown"] == %{
                "healthy" => 7,
                "degraded" => 0,
                "failed" => 0
              }
+
       assert body["_note"] == "Use lite=false for full diagnostic detail"
       assert is_map(body["_cache"]), "_cache must surface through from the probe payload"
 
@@ -121,8 +123,10 @@ defmodule Wave3aHandlers.Handlers.HealthCheckTest do
       postgres = body["checks"]["postgres"]
       assert postgres["status"] == "healthy"
       assert postgres["mode"] == "executor_pool"
+
       refute Map.has_key?(postgres, "extra_diagnostic_field"),
              "lite filter MUST drop diagnostic fields not on the passthrough list"
+
       refute Map.has_key?(postgres, "details"),
              "lite filter MUST drop `details` (not on the passthrough list)"
 
@@ -141,6 +145,7 @@ defmodule Wave3aHandlers.Handlers.HealthCheckTest do
       # Verbatim passthrough — diagnostic fields are present.
       assert body["checks"]["postgres"]["extra_diagnostic_field"] ==
                "this is dropped by lite filter"
+
       assert body["checks"]["postgres"]["details"] == "connections=10"
       assert body["_cache"]["age_seconds"] == 15.2
     end
@@ -224,6 +229,7 @@ defmodule Wave3aHandlers.Handlers.HealthCheckTest do
       # 600ms upstream), the handler returns a typed envelope rather than
       # raising or hanging.
       stub_probe_ok(@probe_envelope)
+
       :meck.expect(Wave3aHandlers.ProbeClient, :health_snapshot, fn ->
         :timer.sleep(600)
         {:error, :timeout}
@@ -298,13 +304,15 @@ defmodule Wave3aHandlers.Handlers.HealthCheckTest do
       assert body["error"] == "probe_unavailable"
     end
 
-    test "other tool names still return the 501 envelope (only health_check is wired)" do
-      # Sanity that the dispatch table only wires `health_check` — every
-      # other tool name still goes through the 501 fallback. Subsequent
-      # PRs (#6, #7, #8) add their own clauses.
+    test "unwired tool names still return the 501 envelope" do
+      # Sanity that names absent from the dispatch table go through the 501
+      # fallback. Use a deliberately fake tool name so this test does not
+      # drift when future Wave 3a cutovers wire real handlers.
+      unwired_tool_name = "__unwired_tool_for_501_test__"
+
       resp =
         :post
-        |> conn("/v1/handlers/get_server_info", Jason.encode!(%{}))
+        |> conn("/v1/handlers/#{unwired_tool_name}", Jason.encode!(%{}))
         |> put_req_header("content-type", "application/json")
         |> authed()
         |> HTTPRouter.call(@opts)
@@ -312,7 +320,7 @@ defmodule Wave3aHandlers.Handlers.HealthCheckTest do
       assert resp.status == 501
       body = parsed(resp)
       assert body["error"] == "not_implemented"
-      assert body["tool_name"] == "get_server_info"
+      assert body["tool_name"] == unwired_tool_name
     end
   end
 end

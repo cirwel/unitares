@@ -68,16 +68,16 @@ defmodule Wave3aHandlers.TimeoutDisciplineTest do
   end
 
   test "POST /v1/handlers/:tool_name 501 path is also well under 500ms" do
-    # The 501 path is the closest analog to PR #5's eventual happy-path
-    # dispatch — it goes through the full auth → parse → route → encode
-    # pipeline minus the probe call. PR #5 wired `health_check`, so this
-    # test uses `get_server_info` (next PR's target) as a stable unwired
-    # tool name. Steady-state should be in the single-digit ms range.
+    # The 501 path is the closest analog to a routed dispatch miss — it goes
+    # through the full auth → parse → route → encode pipeline minus any probe
+    # call. Use a deliberately fake tool name so the test remains stable as
+    # real Wave 3a handlers are wired.
+    unwired_tool_name = "__unwired_tool_for_latency_test__"
     body = Jason.encode!(%{})
 
     _ =
       :post
-      |> conn("/v1/handlers/get_server_info", body)
+      |> conn("/v1/handlers/#{unwired_tool_name}", body)
       |> put_req_header("content-type", "application/json")
       |> authed()
       |> HTTPRouter.call(@opts)
@@ -85,7 +85,7 @@ defmodule Wave3aHandlers.TimeoutDisciplineTest do
     {elapsed_us, resp} =
       :timer.tc(fn ->
         :post
-        |> conn("/v1/handlers/get_server_info", body)
+        |> conn("/v1/handlers/#{unwired_tool_name}", body)
         |> put_req_header("content-type", "application/json")
         |> authed()
         |> HTTPRouter.call(@opts)
