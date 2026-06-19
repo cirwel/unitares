@@ -189,7 +189,7 @@ def build_identity_diag_payload(
     # NEVER a credential. See src/services/principal_rollup.py.
     _principal = _principal_lookup(agent_uuid)
     if _principal:
-        response_data["principal"] = _principal
+        payload["principal"] = _principal
     if identity_resolution_outcome:
         payload["identity_resolution_outcome"] = identity_resolution_outcome
     # R2 PR 3: persisted-lineage flag (see build_identity_response_data).

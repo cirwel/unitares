@@ -77,6 +77,28 @@ def test_build_identity_diag_payload_keeps_fast_path_shape_consistent():
     assert payload["identity_context"]["label"]["is_identity_key"] is False
 
 
+def test_build_identity_diag_payload_includes_principal_when_present(monkeypatch):
+    """Regression: the diag fast-path folded in a derived principal but
+    assigned it to `response_data` (a name from the sibling builder) instead
+    of `payload`, raising NameError for any agent with a principal. Patch the
+    lookup to return one and assert the payload carries it without raising."""
+    monkeypatch.setattr(
+        "src.services.identity_payloads._principal_lookup",
+        lambda uuid: {"principal_id": "P-1", "role": "advisory"},
+    )
+    payload = build_identity_diag_payload(
+        agent_uuid="uuid-123",
+        agent_id="agent-123",
+        display_name="Tester",
+        client_session_id="sess-123",
+        continuity_source="client_session_id",
+        continuity_support={"enabled": True},
+        continuity_token="token-abc",
+        identity_status="resumed",
+    )
+    assert payload["principal"] == {"principal_id": "P-1", "role": "advisory"}
+
+
 def test_build_onboard_response_data_includes_thread_and_workflow_when_verbose():
     payload = build_onboard_response_data(
         agent_uuid="uuid-123",
