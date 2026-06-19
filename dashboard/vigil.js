@@ -189,6 +189,13 @@
         var btn = document.getElementById('vigil-refresh');
         if (btn) btn.addEventListener('click', refresh);
         refresh();
+        // Auto-refresh on the dashboard's 30s cadence, honoring the global
+        // "Pause auto-refresh" toggle. Without this the panel loaded once at
+        // init and then showed indefinitely-stale cycles with no cue.
+        setInterval(function () {
+            if (typeof state !== 'undefined' && state.get('autoRefreshPaused')) return;
+            refresh();
+        }, 30000);
     }
 
     if (document.readyState === 'loading') {

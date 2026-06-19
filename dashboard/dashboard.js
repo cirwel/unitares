@@ -1719,10 +1719,10 @@ async function refresh(options = {}) {
     // Always do full refresh on force or when search is empty.
 
     clearError();
+    // NOTE: do not stamp "last updated" here — that runs before any data loads
+    // and unconditionally, so the clock advanced even when every request failed,
+    // showing a fresh time over stale data. It is set only on success below.
     const lastUpdateEl = document.getElementById('last-update');
-    if (lastUpdateEl) {
-        lastUpdateEl.textContent = new Date().toLocaleTimeString();
-    }
 
     try {
         console.log('Starting parallel load...');
@@ -1761,6 +1761,23 @@ async function refresh(options = {}) {
             updateConnectionBanner(false);
         }
 
+        // Stamp "last updated" only on a successful refresh, so the clock can't
+        // advance over stale data. On failure, mark the existing time stale
+        // instead of refreshing it.
+        if (lastUpdateEl) {
+            if (criticalFailures < 2) {
+                lastUpdateEl.textContent = new Date().toLocaleTimeString();
+                lastUpdateEl.classList.remove('stale');
+                lastUpdateEl.removeAttribute('title');
+            } else {
+                lastUpdateEl.classList.add('stale');
+                lastUpdateEl.title = 'Last refresh failed — showing the last successful update time';
+                if (!lastUpdateEl.textContent || lastUpdateEl.textContent === '-') {
+                    lastUpdateEl.textContent = 'unavailable';
+                }
+            }
+        }
+
         // Log any individual failures
         results.forEach((result, index) => {
             if (result.status === 'rejected') {
@@ -1773,6 +1790,10 @@ async function refresh(options = {}) {
     } catch (error) {
         // This should rarely happen since we're using Promise.allSettled
         updateConnectionBanner(true);
+        if (lastUpdateEl) {
+            lastUpdateEl.classList.add('stale');
+            lastUpdateEl.title = 'Last refresh failed';
+        }
         console.error('Refresh error:', error);
         showError(`Refresh failed: ${error.message}`);
     }
