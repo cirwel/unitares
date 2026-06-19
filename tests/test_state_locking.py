@@ -105,6 +105,55 @@ class TestStateLockManagerInit:
 
 
 # ============================================================================
+# Lock-dir self-heal (regression for the 2026-06-19 fleet-wide check-in outage)
+#
+# The lock dir is gitignored and was physically removed out from under the
+# long-running server (a `git worktree remove`/`add` rebuild of the deploy
+# worktree). Because StateLockManager only mkdir'd the dir in __init__, every
+# subsequent acquire raised ENOENT on os.open until the server restarted.
+# Acquisition must now re-create the dir on demand.
+# ============================================================================
+
+class TestLockDirSelfHeal:
+
+    def test_acquire_recreates_removed_lock_dir(self, tmp_path):
+        """Sync acquire must succeed even if the lock dir was deleted post-init."""
+        lock_dir = tmp_path / "locks"
+        mgr = StateLockManager(lock_dir=lock_dir)
+        assert lock_dir.exists()
+
+        # Simulate the worktree-rebuild / git-clean / rm that removed the dir.
+        import shutil
+        shutil.rmtree(lock_dir)
+        assert not lock_dir.exists()
+
+        # Acquisition should re-create the dir instead of raising ENOENT.
+        with mgr.acquire_agent_lock("healed_agent", timeout=2.0, max_retries=1):
+            assert lock_dir.exists()
+            assert (lock_dir / "healed_agent.lock").exists()
+
+    @pytest.mark.asyncio
+    async def test_async_acquire_recreates_removed_lock_dir(self, tmp_path):
+        """Async acquire must also self-heal a removed lock dir."""
+        import shutil
+        lock_dir = tmp_path / "locks"
+        mgr = StateLockManager(lock_dir=lock_dir)
+        shutil.rmtree(lock_dir)
+        assert not lock_dir.exists()
+
+        async with mgr.acquire_agent_lock_async("healed_async", timeout=2.0, max_retries=1):
+            assert lock_dir.exists()
+            assert (lock_dir / "healed_async.lock").exists()
+
+    def test_ensure_lock_dir_idempotent(self, tmp_path):
+        """_ensure_lock_dir is safe to call repeatedly (exist_ok)."""
+        mgr = StateLockManager(lock_dir=tmp_path / "locks")
+        mgr._ensure_lock_dir()
+        mgr._ensure_lock_dir()
+        assert mgr.lock_dir.exists()
+
+
+# ============================================================================
 # _check_and_clean_stale_lock
 # ============================================================================
 
