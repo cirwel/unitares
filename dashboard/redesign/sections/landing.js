@@ -25,17 +25,29 @@
         + `<span class="meta">${meta} · ${fmtSil(r.silence)}</span></span>`;
     }).join("");
 
-    // attention band — derive from real state, don't hardcode
-    const flags = [];
+    // Attention band — distinguish a real alarm (silent past threshold) from a
+    // calm fleet-wide reconnect window (no EISV after a restart is steady-state,
+    // not a problem; residents report on their own cadence).
+    const silent = [], noEisv = [];
     residents.forEach((r) => {
       const thr = r.silenceThreshold || 3600;
-      if (r.silence != null && r.silence > thr) flags.push(`<b>${r.name}</b> silent ${fmtSil(r.silence)}`);
-      else if (r.status === "dark" || (r.coherence == null && r.status !== "silent")) flags.push(`<b>${r.name}</b> reporting no EISV`);
+      if (r.silence != null && r.silence > thr) silent.push(r.name);
+      else if (r.coherence == null && r.status !== "silent") noEisv.push(r.name);
     });
     const attn = $("attn");
-    if (flags.length) {
-      attn.hidden = false;
-      attn.innerHTML = `<span class="glyph">⚠</span><span>${flags.join(" · ")} — past check-in threshold.</span>`;
+    const names = (a) => a.map((n) => `<b>${n}</b>`).join(" · ");
+    const fleetWide = noEisv.length >= Math.ceil(residents.length / 2);
+    if (silent.length) {
+      attn.hidden = false; attn.className = "attn-band";
+      let msg = `${names(silent)} past check-in threshold`;
+      if (noEisv.length && !fleetWide) msg += ` · ${noEisv.length} awaiting first check-in`;
+      attn.innerHTML = `<span class="glyph">⚠</span><span>${msg}.</span>`;
+    } else if (fleetWide) {
+      attn.hidden = false; attn.className = "attn-band calm";
+      attn.innerHTML = `<span class="glyph">↻</span><span><b>${noEisv.length} of ${residents.length}</b> residents awaiting first check-in — they report on their own cadence.</span>`;
+    } else if (noEisv.length) {
+      attn.hidden = false; attn.className = "attn-band calm";
+      attn.innerHTML = `<span class="glyph">·</span><span>${names(noEisv)} reporting no EISV yet.</span>`;
     } else { attn.hidden = true; }
   }
 
