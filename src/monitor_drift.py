@@ -1,6 +1,6 @@
 """Ethical drift vector computation for governance monitor."""
 
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 from governance_core import (
     coherence, compute_ethical_drift, get_agent_baseline,
@@ -11,6 +11,38 @@ from src.calibration import calibration_checker
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
+
+# Minimum tactical samples before the calibration signal is trusted for drift.
+_MIN_TACTICAL_SAMPLES = 10
+
+
+def compute_calibration_error(checker) -> Optional[float]:
+    """Current confidence-outcome mismatch from the TACTICAL calibration channel.
+
+    Returns the worst populated tactical bin's overconfidence — declared
+    confidence minus real success rate — clamped to [0, 1]. The worst bin, not a
+    sample-weighted mean, because over- and under-confident bins otherwise
+    cancel: a system miscalibrated in both directions would read ~0 and hide the
+    problem (the same masking the gate avoids by scoring per bin). Underconfidence
+    contributes zero drift; overconfidence is the safety-relevant direction
+    (consistent with `src/calibration.py::check_calibration`).
+
+    Returns None when no bin has enough evidence yet, so the drift engine falls
+    back to its baseline estimate rather than asserting a false zero.
+
+    This replaces a long-dead call to a non-existent `calibration_checker.check()`
+    (its AttributeError was swallowed, so the drift vector never carried a real
+    calibration signal) and the mis-scaled `trajectory_health / 100.0` fallback
+    that treated a 0-1 value as a percentage. The strategic `trajectory_health`
+    proxy is deliberately not used here — it is saturated (near-constant across
+    confidence levels) and was demoted to advisory in the gate.
+    """
+    tactical = checker.compute_tactical_metrics()
+    populated = [b for b in tactical.values() if b.count >= _MIN_TACTICAL_SAMPLES]
+    if not populated:
+        return None
+    worst_overconfidence = max(b.expected_accuracy - b.accuracy for b in populated)
+    return max(0.0, min(1.0, worst_overconfidence))
 
 
 def compute_drift_vector(
@@ -32,16 +64,16 @@ def compute_drift_vector(
     """
     agent_baseline = get_agent_baseline(monitor.agent_id)
 
-    # Get calibration error from calibration system if available
+    # Get calibration error (tactical confidence-outcome mismatch) if available.
     calibration_error = None
     try:
-        cal_status = calibration_checker.check()
-        if cal_status.get('calibrated') and cal_status.get('total_samples', 0) > 10:
-            trajectory_health = cal_status.get('trajectory_health', 0.5)
-            if trajectory_health is not None:
-                calibration_error = abs((trajectory_health / 100.0) - 0.5) * 2
-    except Exception:
-        pass
+        calibration_error = compute_calibration_error(calibration_checker)
+    except Exception as exc:
+        # Degrade gracefully — compute_ethical_drift falls back to a baseline
+        # estimate when this is None — but log rather than silently swallow, so a
+        # real future break is visible (the prior bare `except: pass` is exactly
+        # how the dead `.check()` call stayed invisible).
+        logger.warning(f"calibration_error unavailable for drift vector: {exc}")
 
     # Get current coherence for deviation calculation
     active_params = get_active_params()
