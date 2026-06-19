@@ -988,8 +988,16 @@ async def http_dashboard_redesign(request):
         ".js": "application/javascript", ".md": "text/markdown",
     }[target.suffix]
     content = target.read_text()
-    # Inject the API token into the entry page so data.js authenticates live calls.
     if target.suffix == ".html":
+        # The entry page uses relative asset paths (./tokens.css, ./sections/*.js)
+        # so it stays portable when opened as a file. Served at /dashboard/redesign
+        # (no trailing slash), the browser would resolve those against /dashboard/.
+        # Pin the base so relative paths resolve to the redesign subtree regardless
+        # of trailing slash; absolute API calls (/v1/…, /api/…) are unaffected.
+        content = content.replace(
+            "<head>", '<head>\n<base href="/dashboard/redesign/">', 1
+        )
+        # Inject the API token so data.js authenticates live calls.
         http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
         if http_api_token:
             token_script = (
