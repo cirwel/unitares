@@ -13,8 +13,9 @@ export default [
     },
     js.configs.recommended,
     {
-        // Browser source modules.
-        files: ['*.js'],
+        // Browser source modules — top-level dashboard scripts plus the
+        // buildless redesign reference (same global-IIFE style, not the Vite app).
+        files: ['*.js', 'redesign/**/*.js'],
         ignores: ['*.config.js', 'src/**'],
         languageOptions: {
             ecmaVersion: 2022,
