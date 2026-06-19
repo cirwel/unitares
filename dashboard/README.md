@@ -155,7 +155,7 @@ CI runs `lint`, `format:check`, `test`, and `build` in the `dashboard` job
 
 ### How the build is wired
 
-`src/main.js` is a single ES-module entry that vendors Chart.js and then
+`dashboard/src/main.js` is a single ES-module entry that vendors Chart.js and then
 side-effect-imports the existing browser modules **in the same order
 `index.html` declares them**. The modules are still global-attaching IIFEs; this
 entry is the seam that lets the ESM migration happen incrementally instead of

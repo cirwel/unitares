@@ -41,6 +41,7 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`track-b-implementation-blueprint.md`](track-b-implementation-blueprint.md) | Ready to apply once Track A is enforced — implementation blueprint for the `operator_delegate` scope |
 | [`lineage-causal-only-semantics.md`](lineage-causal-only-semantics.md) | DRAFT (operator-decided 2026-06-14) — parent-liveness discriminator; cited from `src/mcp_handlers/lifecycle/helpers.py` |
 | [`uuid-keyed-identity-migration-v0.md`](uuid-keyed-identity-migration-v0.md) | v0 proposal / design-only (2026-06-14) — make the UUID the sole identity key, reconciling schema with the ontology |
+| [`discord-thread-identity-resume-v0.md`](discord-thread-identity-resume-v0.md) | Reference decision record — Discord BEAM thread resume-per-thread plumbing; orchestrator + reference-hook side merged (#834), fail-closed/cross-repo follow-ups tracked separately |
 | [`principal-rollup-v0.md`](principal-rollup-v0.md) | v0 proposal (2026-06-18) — count the **principal** (logical worker) not the process-instance; first-class form of identity.md research #3 ("identity as integral, not point-value"). Measurement shipped (`scripts/dev/octopus_rollup.py`); count/mint changes operator-gated. Sits atop `uuid-keyed-identity-migration` |
 
 ### Other active
@@ -50,6 +51,7 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`behavioral-running-hot-detector-v0.md`](behavioral-running-hot-detector-v0.md) | v0.1 plan, parked — pending council; unbuilt, blocked on the behavioral-EISV arm emitting signal |
 | [`operator-decision-packet-v0.md`](operator-decision-packet-v0.md) | v1 design — making load-bearing taste/authority/irreversible calls cheap to answer (decision-packet output contract; council pass live, dialectic `ESCALATE`/`design_review` are latent unwired scaffolds). Council-passed to v1 2026-06-17; design-first, no code |
 | [`mirror-effectiveness-measurement-v0.md`](mirror-effectiveness-measurement-v0.md) | Phases 0–1 landed (Phase 2 proposed) — deterministic, operator-funded-free measurement of whether a surfaced mirror signal changes agent behavior |
+| [`hosted-multi-tenant-endpoint-v0.md`](hosted-multi-tenant-endpoint-v0.md) | Scoping / not committed — hosted governance endpoint decision doc; recommends isolated-per-adopter hosting first and defers true multi-tenant SaaS |
 
 ## Shipped / resolved
 
