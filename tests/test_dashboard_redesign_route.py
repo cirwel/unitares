@@ -25,6 +25,8 @@ async def test_serves_entry_page_by_default():
     assert resp.status_code == 200
     assert resp.media_type == "text/html"
     assert b"UNITARES" in resp.body
+    # Base must be pinned so relative assets resolve regardless of trailing slash.
+    assert b'<base href="/dashboard/redesign/">' in resp.body
 
 
 @pytest.mark.asyncio
