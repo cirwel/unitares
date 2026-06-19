@@ -966,6 +966,39 @@ async def http_dashboard_static(request):
     }, status_code=404)
 
 
+# Redesign reference — additive preview path. Serves dashboard/redesign/** on
+# the live origin so the redesign renders on real governance data. This is a
+# NON-destructive preview: the production /dashboard route and index.html are
+# untouched, and the route is fully reversible (remove it and nothing changes).
+async def http_dashboard_redesign(request):
+    """Serve the buildless dashboard redesign reference at /dashboard/redesign/."""
+    rel = request.path_params.get("file", "") or "app.html"
+    if ".." in rel or rel.startswith("/"):
+        return JSONResponse({"error": "Invalid file path"}, status_code=400)
+    if not rel.endswith((".html", ".css", ".js", ".md")):
+        return JSONResponse({"error": "File type not allowed", "requested": rel}, status_code=403)
+
+    base = (Path(__file__).parent.parent / "dashboard" / "redesign").resolve()
+    target = (base / rel).resolve()
+    if not str(target).startswith(str(base) + os.sep) or not target.is_file():
+        return JSONResponse({"error": "File not found", "requested": rel}, status_code=404)
+
+    media = {
+        ".html": "text/html", ".css": "text/css",
+        ".js": "application/javascript", ".md": "text/markdown",
+    }[target.suffix]
+    content = target.read_text()
+    # Inject the API token into the entry page so data.js authenticates live calls.
+    if target.suffix == ".html":
+        http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+        if http_api_token:
+            token_script = (
+                f'<script>localStorage.setItem("unitares_api_token","{http_api_token}")</script>'
+            )
+            content = content.replace("</head>", f"{token_script}</head>", 1)
+    return Response(content=content, media_type=media, headers={"Cache-Control": "no-cache"})
+
+
 # HTTP polling fallback for EISV (when WebSocket is blocked by proxy auth)
 async def http_eisv_latest(request):
     """Return the latest EISV update as JSON (polling fallback for WebSocket)."""
@@ -2888,6 +2921,11 @@ def register_http_routes(
 
     app.add_middleware(_InjectContextMiddleware)
 
+    # Redesign preview routes — must come BEFORE /dashboard/{file} so that
+    # /dashboard/redesign resolves to the redesign handler, not the flat
+    # static allowlist (which would 403 it). Additive and reversible.
+    app.routes.append(Route("/dashboard/redesign", http_dashboard_redesign, methods=["GET"]))
+    app.routes.append(Route("/dashboard/redesign/{file:path}", http_dashboard_redesign, methods=["GET"]))
     # IMPORTANT: Static file route must come BEFORE dashboard route
     # to match /dashboard/utils.js, etc.
     app.routes.append(Route("/dashboard/{file}", http_dashboard_static, methods=["GET"]))
