@@ -58,11 +58,24 @@ class DistributedLock:
             project_root = Path(__file__).parent.parent.parent
             lock_dir = project_root / "data" / "locks"
         self.lock_dir = lock_dir
-        self.lock_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_lock_dir()
         self.lock_timeout = lock_timeout
 
         # Track active file locks (for fallback cleanup)
         self._file_locks: Dict[str, int] = {}  # resource_id -> fd
+
+    def _ensure_lock_dir(self) -> None:
+        """Ensure the file-fallback lock directory exists.
+
+        Called at construction AND before each file-fallback acquisition. The
+        lock directory is gitignored and can be removed out from under a
+        long-running process (e.g. a ``git worktree remove``/``add`` rebuild of
+        a deploy worktree, ``git clean -fdx``, or a manual ``rm``), after which
+        ``os.open(lock_file, O_CREAT)`` would raise ENOENT forever. Re-creating
+        here makes the fallback self-healing; ``exist_ok=True`` is a cheap stat
+        when the directory is already present.
+        """
+        self.lock_dir.mkdir(parents=True, exist_ok=True)
 
     @asynccontextmanager
     async def acquire(
@@ -178,6 +191,8 @@ class DistributedLock:
         """Fallback to file-based locking (fcntl)."""
         import fcntl
 
+        # Re-create the lock dir if it was removed since construction.
+        self._ensure_lock_dir()
         lock_file = self.lock_dir / f"{resource_id}.lock"
         fd = None
         start_time = time.monotonic()
