@@ -131,6 +131,19 @@ class BehavioralEISV:
     _baseline_S: WelfordStats = field(default_factory=WelfordStats)
     _baseline_V: WelfordStats = field(default_factory=WelfordStats)
 
+    def _raw_valence(self, E_obs: float, I_obs: float) -> float:
+        """Pre-EMA valence (E-I imbalance) input fed into V's own EMA.
+
+        DEPLOYED default: the gap of the already-smoothed E and I — i.e. V ends
+        up double-smoothed (EMA of EMA(E)-EMA(I)). This is a known lag wart; a
+        single-EMA-of-raw-imbalance variant (return E_obs - I_obs) is under
+        trace-replay validation via scripts/dev/validate_valence_formula.py
+        before it may change the live verdict path. Kept as an override seam so
+        the candidate formula can be A/B'd through the real update + assessment
+        without forking this module.
+        """
+        return self.E - self.I
+
     def update(
         self,
         E_obs: float,
@@ -177,8 +190,8 @@ class BehavioralEISV:
         # not a true integral. (A known lag wart: this takes the gap of the
         # already-smoothed E,I and smooths it again; a single-EMA-of-raw-
         # imbalance fix is held pending trace-replay validation. See KG
-        # 2026-06-19 V-flat note.)
-        raw_v = self.E - self.I
+        # 2026-06-19 V-flat note + scripts/dev/validate_valence_formula.py.)
+        raw_v = self._raw_valence(E_obs, I_obs)
         self.V = (1.0 - alpha_V) * self.V + alpha_V * raw_v
 
         # Clamp to valid ranges
