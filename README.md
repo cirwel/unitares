@@ -9,6 +9,8 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
 
+*Status: live. First public commit 2025-12-04.*
+
 # Catch an AI agent going off the rails — before anything breaks.
 
 **UNITARES watches your fleet of AI agents while they work and tells you — and each agent — the moment one starts to drift, while it's still just numbers moving and not broken output.**
