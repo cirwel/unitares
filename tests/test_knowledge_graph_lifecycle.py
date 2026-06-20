@@ -200,6 +200,26 @@ class TestRunCleanup:
         assert result["discoveries_to_cold"] == 1
 
     @pytest.mark.asyncio
+    async def test_cleanup_skips_permanent_archived_from_cold(self):
+        """Permanent discoveries must not be swept to cold even if archived+old.
+
+        Symmetry with the resolved→archived permanent-skip: 'never auto-archive'
+        extends to the deeper cold tier, so a permanent entry that ended up in
+        'archived' stays in default search scope instead of being buried.
+        """
+        old_time = (datetime.now() - timedelta(days=120)).isoformat()
+        d = MockDiscovery(id="perm_arch1", type="root_cause_analysis", tags=[],
+                          status="archived", updated_at=old_time)
+
+        graph = make_mock_graph(archived_items=[d])
+        lifecycle = KnowledgeGraphLifecycle(graph=graph)
+
+        result = await lifecycle.run_cleanup(dry_run=False)
+
+        assert result["discoveries_to_cold"] == 0
+        graph.update_discovery.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_cleanup_never_deletes(self):
         """Cleanup should NEVER delete anything - core philosophy."""
         old_time = (datetime.now() - timedelta(days=365)).isoformat()
