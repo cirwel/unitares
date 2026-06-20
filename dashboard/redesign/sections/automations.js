@@ -40,6 +40,32 @@
     const color = k === "ok" ? "var(--ok)" : k === "danger" ? "var(--danger)" : "var(--warn)";
     return `<span class="tag" style="color:${color};border-color:color-mix(in srgb, ${color} 35%, var(--line-2))">${esc(s || "—")}</span>`;
   }
+
+  // Verifier-centric scorecard: how is each automation grounded in truth?
+  const GATE_META = {
+    machine: { color: "var(--ok)", label: "machine-gated" },
+    human: { color: "var(--warn)", label: "human-gated" },
+    ungated: { color: "var(--danger)", label: "ungated" },
+    external: { color: "var(--faint)", label: "external" },
+    unclassified: { color: "var(--faint)", label: "unclassified" },
+  };
+  function gateClass(it) {
+    const tag = (it.notes || []).find((n) => typeof n === "string" && n.indexOf("gate:") === 0);
+    return tag ? tag.slice(5) : "unclassified";
+  }
+  function gateBadge(cls) {
+    const m = GATE_META[cls] || GATE_META.unclassified;
+    return `<span class="tag" style="color:${m.color};border-color:color-mix(in srgb, ${m.color} 40%, var(--line-2))">${m.label}</span>`;
+  }
+  function gateCell(it) {
+    const cls = gateClass(it);
+    const verifier = it.escalates_to
+      ? `<div style="font-size:var(--text-xs);color:${cls === "ungated" ? "var(--danger)" : "var(--muted)"};margin-top:3px;max-width:240px;white-space:normal" title="${esc(it.escalates_to)}">${esc(it.escalates_to)}</div>`
+      : "";
+    // owner is the constant principal; only worth showing when it isn't you.
+    const owner = it.owner && it.owner !== "Kenny" ? `<div style="font-size:var(--text-xs);color:var(--faint);margin-top:2px">${esc(it.owner)}</div>` : "";
+    return `<div>${gateBadge(cls)}</div>${verifier}${owner}`;
+  }
   function pathCell(it) {
     const where = it.workdir || it.repo || "", cfg = it.config_path || "";
     const tilde = (p) => p ? p.replace(/^\/Users\/[^/]+/, "~") : "";
@@ -54,12 +80,6 @@
     const shown = list.slice(0, 3).map((v) => `<span class="tag" title="${esc(v)}">${esc(v)}</span>`).join("");
     const more = list.length > 3 ? `<span style="font-size:var(--text-xs);color:var(--faint)">+${list.length - 3}</span>` : "";
     return `<div style="display:flex;gap:4px;flex-wrap:wrap;max-width:260px">${shown}${more}</div>`;
-  }
-  function ownerCell(it) {
-    if (!it.owner && !it.escalates_to && !it.description) return "—";
-    return `<div style="font-size:var(--text-sm);color:var(--ink-2)">${esc(it.owner || "—")}</div>`
-      + (it.escalates_to ? `<div style="font-size:var(--text-xs);color:var(--muted)">escalate: ${esc(it.escalates_to)}</div>` : "")
-      + (it.description ? `<div style="font-size:var(--text-xs);color:var(--faint);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(it.description)}">${esc(it.description)}</div>` : "");
   }
   function contractCell(it) {
     return `<div style="display:grid;gap:4px">`
@@ -108,12 +128,22 @@
     const sum = MODEL.summary || {};
     const rows = visible();
     const sel = (id, cur, opts) => `<select id="${id}" class="theme-toggle">${opts.map((o) => `<option value="${o}" ${o === cur ? "selected" : ""}>${o}</option>`).join("")}</select>`;
+    // Role-reversal scorecard over the whole fleet: where is verification already
+    // machine-grounded, where are you still the gate, what's unverified.
+    const gc = { machine: 0, human: 0, ungated: 0, external: 0, unclassified: 0 };
+    MODEL.items.forEach((it) => { const c = gateClass(it); gc[c] = (gc[c] || 0) + 1; });
+    const chip = (n, color, label) => `<span style="color:${color}"><b>${n}</b> ${label}</span>`;
+    const sep = `<span style="color:var(--faint)">·</span>`;
     $("auto-mount").innerHTML =
       warnStrip()
-      + `<div style="display:flex;align-items:center;gap:var(--space-4);flex-wrap:wrap;margin-bottom:var(--space-3);font-size:var(--text-xs);color:var(--muted)">
+      + `<div style="display:flex;align-items:center;gap:var(--space-4);flex-wrap:wrap;margin-bottom:var(--space-2);font-size:var(--text-xs);color:var(--muted)">
            <span><b style="color:var(--ink)">${sum.total != null ? sum.total : MODEL.items.length}</b> automations</span>
            <span>snapshot ${fmtAge(MODEL.ageS)}</span>
            <span class="src-badge ${MODEL.source}">${MODEL.source}</span>
+         </div>`
+      + `<div style="display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-4);font-size:var(--text-xs)">
+           <span style="color:var(--muted)">grounded in truth:</span>
+           ${chip(gc.machine, "var(--ok)", "machine-gated")} ${sep} ${chip(gc.human, "var(--warn)", "human-gated")} ${sep} ${chip(gc.ungated, "var(--danger)", "ungated")} ${sep} <span style="color:var(--faint)">${gc.unclassified} unclassified</span>
          </div>`
       + `<div style="display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-4)">
            <input id="auto-q" placeholder="search name · path · runner" value="${q.replace(/"/g, "&quot;")}"
@@ -123,11 +153,12 @@
            <label style="font-size:var(--text-xs);color:var(--muted);display:flex;gap:6px;align-items:center"><input type="checkbox" id="auto-all" ${scope === "all" ? "checked" : ""}/> show all sources</label>
          </div>`
       + (rows.length ? `<table class="tbl"><thead><tr>
-            <th>Automation</th><th>Owner</th><th>Source</th><th>Status</th><th>Cadence</th><th>Last run</th><th>Contract</th><th>Where</th></tr></thead><tbody>`
+            <th>Automation</th><th>Gate · verifier</th><th>Source</th><th>Status</th><th>Cadence</th><th>Last run</th><th>Contract</th><th>Where</th></tr></thead><tbody>`
         + rows.map((it) => `<tr>
               <td><div style="font-weight:500;color:var(--ink)">${esc(it.name)}</div>
-                  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px"><span class="tag">${esc(it.kind)}</span>${MODEL.attn.has(it.id) ? `<span class="tag warn">attention</span>` : ""}${(it.notes || []).length ? `<span style="font-size:var(--text-xs);color:var(--faint)">${esc(it.notes.join(" · "))}</span>` : ""}</div></td>
-              <td>${ownerCell(it)}</td>
+                  ${it.description ? `<div style="font-size:var(--text-xs);color:var(--muted);margin-top:2px;max-width:280px">${esc(it.description)}</div>` : ""}
+                  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px"><span class="tag">${esc(it.kind)}</span>${MODEL.attn.has(it.id) ? `<span class="tag warn">attention</span>` : ""}${(() => { const ns = (it.notes || []).filter((n) => !(typeof n === "string" && n.indexOf("gate:") === 0)); return ns.length ? `<span style="font-size:var(--text-xs);color:var(--faint)">${esc(ns.join(" · "))}</span>` : ""; })()}</div></td>
+              <td>${gateCell(it)}</td>
               <td><span class="tag">${esc(it.source)}</span><div style="font-size:var(--text-xs);color:var(--muted);margin-top:2px">${esc(it.runner || "")}</div></td>
               <td>${statusTag(it.status)}</td>
               <td style="font-size:var(--text-sm);color:var(--ink-2)">${esc(it.cadence || "—")}${it.next_run ? `<div style="font-size:var(--text-xs);color:var(--muted)">next ${relTime(it.next_run)}</div>` : ""}</td>
