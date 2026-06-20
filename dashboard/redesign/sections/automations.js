@@ -51,7 +51,12 @@
   };
   function gateClass(it) {
     const tag = (it.notes || []).find((n) => typeof n === "string" && n.indexOf("gate:") === 0);
-    return tag ? tag.slice(5) : "unclassified";
+    if (tag) return tag.slice(5);
+    // GitHub Actions ARE CI — machine verification by construction (a workflow
+    // is gated by its own tests / the same CI system). Default the class so the
+    // scorecard reflects that, while still letting an explicit gate: note win.
+    if (it.source === "github-actions") return "machine";
+    return "unclassified";
   }
   function gateBadge(cls) {
     const m = GATE_META[cls] || GATE_META.unclassified;
