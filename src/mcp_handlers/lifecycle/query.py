@@ -703,17 +703,31 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                             void_active=void_active
                         )
                         agent_info["health_status"] = health_status_obj.value
+                        _m_E = safe_float(monitor.state.E)
+                        _m_I = safe_float(monitor.state.I)
+                        _m_S = safe_float(monitor.state.S)
+                        _m_V = safe_float(monitor.state.V)
+                        _m_coh = safe_float(monitor.state.coherence)
+                        _m_risk = safe_float(metrics.get("risk_score") or metrics.get("current_risk") or metrics.get("mean_risk", 0.5))
+                        # Authoritative basin: run the engine's classify_basin on the same
+                        # state we surface (monitor.get_metrics() does not carry basin).
+                        try:
+                            from config.governance_config import classify_basin
+                            _m_basin = classify_basin(E=_m_E, I=_m_I, S=_m_S, V=_m_V,
+                                                      coherence=_m_coh, risk_score=_m_risk)
+                        except Exception:
+                            _m_basin = None
                         agent_info["metrics"] = {
-                            "E": safe_float(monitor.state.E),
-                            "I": safe_float(monitor.state.I),
-                            "S": safe_float(monitor.state.S),
-                            "V": safe_float(monitor.state.V),
-                            "coherence": safe_float(monitor.state.coherence),
+                            "E": _m_E,
+                            "I": _m_I,
+                            "S": _m_S,
+                            "V": _m_V,
+                            "coherence": _m_coh,
                             "current_risk": metrics.get("current_risk"),  # Recent trend (last 10) - USED FOR HEALTH STATUS
-                            "risk_score": safe_float(metrics.get("risk_score") or metrics.get("current_risk") or metrics.get("mean_risk", 0.5)),  # Governance/operational risk
+                            "risk_score": _m_risk,  # Governance/operational risk
                             "phi": metrics.get("phi"),  # Primary physics signal: Phi objective function
                             "verdict": metrics.get("verdict"),  # Primary governance signal: safe/caution/high-risk
-                            "basin": metrics.get("basin"),  # Authoritative classify_basin label (high/boundary/low) — used by /phase
+                            "basin": _m_basin,  # Authoritative classify_basin label (high/boundary/low) — used by /phase ring
                             "mean_risk": safe_float(metrics.get("mean_risk", 0.5)),  # Overall mean (all-time average) - for historical context
                             "lambda1": safe_float(monitor.state.lambda1),
                             "void_active": bool(monitor.state.void_active) if monitor.state.void_active is not None else False
