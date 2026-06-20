@@ -215,6 +215,53 @@ class TestSearchKnowledgeGraph:
         assert data["count"] == 0
 
     @pytest.mark.asyncio
+    async def test_hybrid_no_lexical_match_flags_low_confidence(self, patch_common):
+        """Hybrid hits with zero FTS (lexical) anchor are flagged low_confidence.
+
+        Anisotropic cosine lets a query get semantic-only hits with no keyword
+        match (the 'confident noise' case the 2026-06-20 probes exposed). When
+        the FTS lane returns nothing, the surfaced results are semantic-only, so
+        the handler marks the response low_confidence instead of presenting it
+        as a trustworthy match.
+        """
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        disc = make_discovery(id="sem-only", summary="tangential semantic neighbor")
+        mock_graph.semantic_search = AsyncMock(return_value=[(disc, 0.36)])
+        mock_graph.full_text_search = AsyncMock(return_value=[])  # no keyword match
+
+        result = await handle_search_knowledge_graph({
+            "query": "how to bake sourdough bread",
+            "search_mode": "hybrid",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data.get("low_confidence") is True
+        assert "confidence_note" in data
+
+    @pytest.mark.asyncio
+    async def test_hybrid_with_lexical_match_not_low_confidence(self, patch_common):
+        """A keyword-anchored hybrid result is NOT flagged low_confidence."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        disc = make_discovery(id="anchored", summary="exact keyword match here")
+        mock_graph.semantic_search = AsyncMock(return_value=[(disc, 0.36)])
+        mock_graph.full_text_search = AsyncMock(return_value=[disc])  # FTS anchored it
+
+        result = await handle_search_knowledge_graph({
+            "query": "keyword",
+            "search_mode": "hybrid",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data.get("low_confidence") is not True
+        assert "confidence_note" not in data
+
+    @pytest.mark.asyncio
     async def test_search_with_include_details(self, patch_common):
         """Search with include_details=True returns full content."""
         mock_mcp_server, mock_graph = patch_common
