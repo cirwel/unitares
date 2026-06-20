@@ -91,3 +91,34 @@ def test_empty_db_makes_all_source_pending(mod):
     assert pending == [1, 2]
     assert mismatches == []
     assert unexpected == []
+
+
+# ── --check preflight gate ───────────────────────────────────────────────────
+# --check must exit non-zero on ANYTHING the DB-is-not-ready-for-this-code: a
+# pending migration (which the default dry-run treats as exit 0), a name
+# mismatch, or a DB version with no source file. It exits 0 only when fully in
+# sync. We drive main() with stubbed registry I/O so no live DB is needed.
+
+
+def _run_check(mod, monkeypatch, expected, actual):
+    monkeypatch.setattr(mod, "_source_schema_migrations", lambda _root: expected)
+    monkeypatch.setattr(mod, "query_applied", lambda _url: actual)
+    monkeypatch.setattr(mod, "KNOWN_SCHEMA_MIGRATION_EXCEPTIONS", {})
+    return mod.main(["--check", "--db-url", "postgresql://x/y"])
+
+
+def test_check_passes_when_in_sync(mod, monkeypatch):
+    assert _run_check(mod, monkeypatch, {1: "a", 2: "b"}, {1: "a", 2: "b"}) == 0
+
+
+def test_check_fails_on_pending(mod, monkeypatch):
+    # The default dry-run returns 0 here; --check must block instead.
+    assert _run_check(mod, monkeypatch, {1: "a", 2: "b"}, {1: "a"}) == 1
+
+
+def test_check_fails_on_name_mismatch(mod, monkeypatch):
+    assert _run_check(mod, monkeypatch, {1: "a", 2: "renamed"}, {1: "a", 2: "old"}) == 1
+
+
+def test_check_fails_on_unexpected_db_version(mod, monkeypatch):
+    assert _run_check(mod, monkeypatch, {1: "a"}, {1: "a", 99: "mystery"}) == 1

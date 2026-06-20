@@ -124,6 +124,14 @@ def main(argv: list[str] | None = None) -> int:
         help="actually apply pending migrations (default: report only)",
     )
     parser.add_argument(
+        "--check", action="store_true",
+        help="preflight gate: exit non-zero if the DB is not fully in sync with "
+             "the source manifest (any pending migration or drift). Unlike the "
+             "default dry-run — which exits 0 when migrations are merely pending "
+             "— this is meant to gate a deploy from restarting code that expects "
+             "an unapplied schema.",
+    )
+    parser.add_argument(
         "--db-url", default=DEFAULT_DB_URL,
         help=f"Postgres DSN (default: {_redact(DEFAULT_DB_URL)})",
     )
@@ -153,6 +161,32 @@ def main(argv: list[str] | None = None) -> int:
         )
         for v in unexpected:
             print(f"  {v}: {actual[v]!r}", file=sys.stderr)
+
+    if args.check:
+        # Preflight gate: the DB is "ready for this code" only when there is
+        # nothing left to do. Any pending migration, name mismatch, or DB
+        # version with no source file blocks — a deploy must not restart code
+        # that expects an unapplied (or divergent) schema.
+        blockers: list[str] = []
+        if pending:
+            blockers.append(f"{len(pending)} pending migration(s): {pending}")
+        if mismatches:
+            blockers.append(f"{len(mismatches)} name mismatch(es): {mismatches}")
+        if unexpected:
+            blockers.append(
+                f"{len(unexpected)} DB version(s) with no source file "
+                f"(checkout behind the deployed DB): {unexpected}"
+            )
+        if blockers:
+            print("\nMigration check FAILED — DB not in sync with the source manifest:",
+                  file=sys.stderr)
+            for b in blockers:
+                print(f"  - {b}", file=sys.stderr)
+            print("\nApply with: python3 scripts/dev/apply_migrations.py --apply",
+                  file=sys.stderr)
+            return 1
+        print("\nMigration check OK — DB in sync with the source manifest.")
+        return 0
 
     if not pending:
         if mismatches or unexpected:
