@@ -4,7 +4,7 @@
 - **Last Updated:** 2026-06-20
 - **Status:** Design note — DEFERRED to the 2026-06-24 Wave-3 gate read; no runtime code
 - **Scope:** How BEAM residents/supervisors would populate the harness-event-safety envelope. Design only.
-- **Parent policy:** `harness-event-safety-policy-v0.md` (PR #957, cross-harness contract; not yet on master)
+- **Parent policy:** [`harness-event-safety-policy-v0.md`](harness-event-safety-policy-v0.md) (cross-harness contract; merged via PR #957)
 
 ---
 
@@ -14,8 +14,8 @@
 > substrate-identity work is additionally governed by **Wave 3, deferred to the
 > 2026-06-24 gate read**. Nothing here should be built into the lease plane or the
 > resident check-in path before that read. The purpose of writing it now is to
-> pressure-test the parent envelope's BEAM-facing fields while #957 is still draft,
-> so any needed contract change is found before external review closes.
+> pressure-test the parent envelope's BEAM-facing fields now that #957 has merged,
+> so any needed contract change is raised as a revision to it.
 
 ## 0. What problem the BEAM adapter solves
 
