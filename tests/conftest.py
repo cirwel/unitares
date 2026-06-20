@@ -354,6 +354,21 @@ def _isolate_tool_usage_tracker(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_recall_telemetry(monkeypatch, tmp_path):
+    """Keep recall-miss telemetry out of the real data/telemetry file."""
+    try:
+        import src.recall_telemetry as recall_telemetry
+
+        monkeypatch.setattr(
+            recall_telemetry,
+            "_telemetry_file",
+            lambda: tmp_path / "recall_misses.jsonl",
+        )
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _neutralize_metadata_loading(monkeypatch):
     """
     Prevent ensure_metadata_loaded() from trying to connect to PostgreSQL.

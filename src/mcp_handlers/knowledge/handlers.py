@@ -72,6 +72,7 @@ from src.mcp_handlers.knowledge.limits import MAX_SUMMARY_LEN, MAX_DETAILS_LEN
 from config.governance_config import config
 from src.logging_utils import get_logger
 from src.perf_monitor import record_ms
+from src.recall_telemetry import LOW_CONFIDENCE, ZERO_RESULT, record_recall_event
 from ..support.llm_delegation import synthesize_results
 from ..support.tool_hints import (
     KNOWLEDGE_SEARCH_TOOL,
@@ -1693,6 +1694,20 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
         
         # UX FIX: Add contextual helpful hints for empty results
         if len(results) == 0:
+            # Instrument-first (2026-06-20): record the miss so query-expansion
+            # demand becomes measurable before we build it. Fail-open. Only
+            # text searches count; a filter-only query is not a recall miss.
+            if query_text:
+                record_recall_event(
+                    ZERO_RESULT,
+                    query_text,
+                    query_terms=query_term_count,
+                    search_mode=search_mode,
+                    detail={
+                        "hybrid_skipped": bool(hybrid_skipped_reason),
+                        "fts_or_fallback_skipped": bool(fts_fallback_skipped_reason),
+                    },
+                )
             hints = []
             # Count words properly (split on spaces, also handle underscores as word separators)
             if query_text:
@@ -1803,6 +1818,14 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
             lexical_hits = sum(1 for d in results if d.id in fts_anchor_ids)
             if lexical_hits == 0:
                 response_data["low_confidence"] = True
+                # A semantic-only hit with no lexical anchor is exactly the
+                # vocab-gap class query expansion would target.
+                record_recall_event(
+                    LOW_CONFIDENCE,
+                    query_text,
+                    query_terms=query_term_count,
+                    search_mode=search_mode,
+                )
                 response_data["confidence_note"] = (
                     "No result matched your query terms lexically — these are "
                     "semantic-only matches and may be tangential (semantic "
