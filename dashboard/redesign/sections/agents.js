@@ -60,7 +60,7 @@
         <span class="spring"></span>
         <button class="theme-toggle" id="ag-detail-close">✕ close</button>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-6)">
+      <div class="split-2" style="gap:var(--space-6)">
         <div id="ag-state">${stateBlock(m, "")}</div>
         <div>
           <div class="eyebrow" style="margin-bottom:var(--space-3)">Identity</div>
