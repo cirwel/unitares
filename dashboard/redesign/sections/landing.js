@@ -64,13 +64,21 @@
     } else { attn.hidden = true; }
   }
 
-  function renderStats(stats, residents, source) {
+  function renderStats(stats, residents, source, auto) {
     const live = residents.filter((r) => r.coherence != null);
     const fleetCoh = live.length ? (live.reduce((a, r) => a + r.coherence, 0) / live.length) : null;
+    // Automation Health — awareness only ("do I need to care?"); the map lives in /automations.
+    const asum = (auto && auto.summary) || {};
+    const aKind = asum.by_kind || {};
+    const aAtt = (asum.needs_attention || []).length;
+    const aStale = !!(auto && auto.stale);
+    const aWarn = aAtt > 0 || aStale;
+    const autoSub = `${aAtt} attention · ${aKind.dogfood || 0} dogfood · ${aKind.ablation || 0} ablation · ${aKind.qa || 0} QA${aStale ? " · stale" : ""}`;
     const cards = [
       { h: "Fleet Coherence", num: num(fleetCoh), sub: `${live.length} of ${residents.length} residents reporting`, cls: "up", rule: true },
       { h: "Agents", num: stats.agentsActive, of: "/ " + stats.agentsTotal, sub: "active / total" },
       { h: "Stuck", num: stats.stuck, sub: stats.stuck ? "needs attention" : "none flagged", cls: stats.stuck ? "down" : "up" },
+      { h: "Automations", num: asum.total || 0, sub: autoSub, cls: aWarn ? "down" : "up", href: "#automations" },
       { h: "Discoveries", num: (stats.discoveries || 0).toLocaleString(), sub: typeof stats.discoveriesToday === "number" ? "+" + stats.discoveriesToday + " today" : "knowledge graph" },
       { h: "Dialectic", num: stats.dialectic, sub: stats.dialectic ? "open sessions" : "no open sessions" },
       { h: "System Health", num: stats.systemHealth, sub: stats.systemHealthDetail || "db · ws · reaper", cls: stats.systemHealth === "OK" ? "up" : "down" },
@@ -89,11 +97,12 @@
       ? `${stats.trustEarned.toLocaleString()} earned of ${stats.trustFleet.toLocaleString()} · ${(stats.trustUnknown || 0).toLocaleString()} unknown`
       : "";
 
-    $("stats").innerHTML = cards.map((s) =>
-      `<div class="card ${s.rule ? "accent-rule" : ""}"><h3>${s.h}</h3>`
-      + `<div class="num">${s.num}${s.of ? `<span class="of"> ${s.of}</span>` : ""}</div>`
-      + `<div class="sub ${s.cls || ""}">${s.sub}</div></div>`
-    ).join("")
+    $("stats").innerHTML = cards.map((s) => {
+      const tag = s.href ? "a" : "div"; const attr = s.href ? ` href="${s.href}" style="text-decoration:none;color:inherit"` : "";
+      return `<${tag} class="card ${s.rule ? "accent-rule" : ""}"${attr}><h3>${s.h}</h3>`
+        + `<div class="num">${s.num}${s.of ? `<span class="of"> ${s.of}</span>` : ""}</div>`
+        + `<div class="sub ${s.cls || ""}">${s.sub}</div></${tag}>`;
+    }).join("")
       + `<div class="card wide"><h3>Trust Tiers ${tierScope ? `<span style="text-transform:none;letter-spacing:0;color:var(--faint);font-weight:400">· ${tierScope}</span>` : ""}</h3>`
       + `<div class="tiers">${tierBars}</div>`
       + `<div class="legend" style="margin-top:.5rem;flex-wrap:wrap">${tierLegend}</div></div>`;
@@ -146,11 +155,11 @@
 
   // Full first render — light (residents/pulse/health) + heavy (stats) together.
   async function render() {
-    const [health, residents, stats] = await Promise.all([DATA.health(), DATA.residents(), DATA.stats()]);
+    const [health, residents, stats, auto] = await Promise.all([DATA.health(), DATA.residents(), DATA.stats(), DATA.automations()]);
     lastResidents = residents;
     applyHealth(health);
     renderResidents(residents.data, residents.source);
-    renderStats(stats.data, residents.data, stats.source);
+    renderStats(stats.data, residents.data, stats.source, auto.data);
     renderPulse(residents.data);
     footnote([residents, stats, health].some((r) => r.source === "live"));
   }
@@ -167,9 +176,9 @@
   // Heavy refresh (slow cadence) — the 7-tool headline batch; reuse last residents
   // for fleet coherence rather than refetching them.
   async function refreshStats() {
-    const stats = await DATA.stats();
+    const [stats, auto] = await Promise.all([DATA.stats(), DATA.automations()]);
     const residents = lastResidents || (lastResidents = await DATA.residents());
-    renderStats(stats.data, residents.data, stats.source);
+    renderStats(stats.data, residents.data, stats.source, auto.data);
   }
 
   window.Landing = { render, refresh, refreshStats };

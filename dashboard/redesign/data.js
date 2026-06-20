@@ -247,6 +247,14 @@
       }, () => S().eisv);
     },
 
+    async automations() {
+      // Automation census snapshot (launchd/hermes/codex/claude/github-actions).
+      return withFallback(
+        async () => authFetch("/api/automations"),
+        () => ({ schema: "unitares.automation_census.v1", summary: { total: 0, by_source: {}, by_kind: {}, needs_attention: [], warnings: [] }, automations: [], stale: true })
+      );
+    },
+
     async agentHistory(id, opts) {
       // EISV check-in trajectory for one agent (no snapshot fallback — empty if offline).
       // opts: { limit, mode: "recent"|"all" }. Returns { points, total, mode }.

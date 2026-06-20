@@ -39,6 +39,7 @@
     <a href="#activity" data-section="activity">Activity</a>
     <a href="#eisv" data-section="eisv">EISV</a>
     <a href="#residents" data-section="residents">Residents</a>
+    <a href="#automations" data-section="automations">Automations</a>
   </nav>
 
   <main id="main">
@@ -102,6 +103,11 @@
       <h2 class="section-title">Residents</h2>
       <div id="res-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
     </section>
+
+    <section class="section" data-pane="automations" hidden>
+      <h2 class="section-title">Automations</h2>
+      <div id="auto-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
+    </section>
   </main>
 
   <p class="footnote" id="foot"></p>
@@ -117,6 +123,7 @@
 <script src="./sections/activity.js"></script>
 <script src="./sections/eisv.js"></script>
 <script src="./sections/residents.js"></script>
+<script src="./sections/automations.js"></script>
 <script>
 // theme toggle
 const themeBtn = document.getElementById("themeBtn");
@@ -156,6 +163,7 @@ function lazyLoad(id) {
   if (id === "activity" && window.Activity) { loaded[id] = true; window.Activity.load(); }
   if (id === "eisv" && window.EISV) { loaded[id] = true; window.EISV.load(); }
   if (id === "residents" && window.Residents) { loaded[id] = true; window.Residents.load(); }
+  if (id === "automations" && window.Automations) { loaded[id] = true; window.Automations.load(); }
 }
 
 // ── auto-refresh: keep the monitor views live ──────────────────────────────

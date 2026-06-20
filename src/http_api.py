@@ -1097,6 +1097,43 @@ async def http_agent_history(request):
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
+async def http_automations(request):
+    """GET /api/automations — automation census snapshot for the dashboard.
+
+    Reads the snapshot written by `unitares-automations census --write` (path
+    overridable via UNITARES_AUTOMATION_CENSUS_PATH). Read-only and does NOT
+    shell out — freshness comes from the snapshot's mtime, surfaced as
+    snapshot_age_seconds / stale so the panel can flag a stale census.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return _http_unauthorized()
+    import json as _json
+    import time as _time
+    default_path = os.path.expanduser("~/.local/state/unitares-automations/last.json")
+    snapshot_path = os.getenv("UNITARES_AUTOMATION_CENSUS_PATH", default_path)
+    if not os.path.exists(snapshot_path):
+        return JSONResponse({
+            "schema": "unitares.automation_census.v1",
+            "summary": {"total": 0, "by_source": {}, "by_kind": {}, "needs_attention": [], "warnings": []},
+            "automations": [],
+            "snapshot_path": snapshot_path,
+            "snapshot_age_seconds": None,
+            "stale": True,
+            "warnings": ["census snapshot missing — run `unitares-automations census --write`"],
+        })
+    try:
+        with open(snapshot_path) as fh:
+            data = _json.load(fh)
+        age = int(_time.time() - os.path.getmtime(snapshot_path))
+        data["snapshot_path"] = snapshot_path
+        data["snapshot_age_seconds"] = age
+        data["stale"] = age > 86400  # older than 24h
+        return JSONResponse(data)
+    except Exception as exc:  # noqa: BLE001 — read-only panel endpoint, degrade gracefully
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
 async def http_tier_distribution(request):
     """GET /v1/agents/tier_distribution — full-fleet trust-tier counts.
 
@@ -3099,6 +3136,7 @@ def register_http_routes(
     app.routes.append(Route("/v1/vigil/summary", http_vigil_summary, methods=["GET"]))
     app.routes.append(Route("/v1/agents/tier_distribution", http_tier_distribution, methods=["GET"]))
     app.routes.append(Route("/v1/agents/{agent_id}/history", http_agent_history, methods=["GET"]))
+    app.routes.append(Route("/api/automations", http_automations, methods=["GET"]))
     app.routes.append(Route("/api/activity", http_activity, methods=["GET"]))
     app.routes.append(Route("/api/incidents", http_incidents, methods=["GET"]))
     app.routes.append(Route("/v1/residents", http_residents, methods=["GET"]))
