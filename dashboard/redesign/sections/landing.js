@@ -15,14 +15,27 @@
     el.textContent = source === "live" ? "live" : "snapshot";
   }
 
+  // Cadence-aware timing: a scheduled/sparse resident within its check-in
+  // threshold should read "ran Xh ago" (calm), not "silent Xh" (alarming).
+  // Only past-threshold is genuinely overdue.
+  function resTiming(r) {
+    if (r.event_driven) return { txt: "event-driven", overdue: false };
+    if (r.silence == null) return { txt: "—", overdue: false };
+    const thr = r.silenceThreshold || 3600;
+    if (r.silence > thr) return { txt: "overdue " + fmtSil(r.silence - thr), overdue: true };
+    const daily = thr >= 82800; // ~23h+ threshold ⇒ a daily resident
+    return { txt: (daily ? "daily · ran " : "ran ") + fmtSil(r.silence) + " ago", overdue: false };
+  }
+
   function renderResidents(residents, source) {
     badge($("resSrc"), source);
     $("residents").innerHTML = residents.map((r) => {
-      const cls = r.status === "silent" ? "attention" : r.status === "dark" ? "dark" : "";
+      const t = resTiming(r);
+      const cls = t.overdue ? "attention" : r.status === "dark" ? "dark" : "";
       const meta = r.coherence == null ? "no EISV" : "coh " + num(r.coherence);
       return `<span class="res ${cls}"><span class="pip"></span>`
         + `<span class="name">${r.name}</span>`
-        + `<span class="meta">${meta} · ${fmtSil(r.silence)}</span></span>`;
+        + `<span class="meta">${meta} · ${t.txt}</span></span>`;
     }).join("");
 
     // Attention band — distinguish a real alarm (silent past threshold) from a
