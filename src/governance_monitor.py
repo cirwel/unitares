@@ -450,6 +450,51 @@ class UNITARESMonitor:
         """Detect current operational regime based on state and history."""
         return _detect_regime(self.state, behavioral=self._behavioral_state)
     
+    def _record_sensor_divergence(self, sensor_eisv) -> None:
+        """Record model<->body EISV divergence as an observability signal.
+
+        FAIL-OPEN by contract. This is optional telemetry on the *mandatory*
+        check-in path: update_dynamics() has already evolved the state and the
+        governance verdict does not depend on anything written here. So any
+        error must degrade to "no divergence recorded this cycle" and never
+        propagate — an exception here would reject the whole check-in.
+
+        Incident 2026-06-16 (#800/#803): an unguarded write on this exact path
+        (`self._sensor_divergence_history.append(...)` plus a missing-attr load
+        invariant) rejected check-ins fleet-wide. The init invariant is fixed
+        in __init__; this guard closes the broader class — a *future* fault in
+        eisv_divergence() or the record shape must not take check-ins down.
+        Mirrors the calibration-penalty fail-safe in update_dynamics().
+        """
+        self._last_sensor_divergence = None
+        if sensor_eisv is None:
+            return
+        try:
+            div = eisv_divergence(sensor_eisv, self.state.unitaires_state)
+            # Stamp + retain for trend reads (bounded by SENSOR_DIVERGENCE_HISTORY_MAX).
+            div["at"] = datetime.now().isoformat()
+            # Self-heal: a monitor restored bypassing __init__ — a pickle/cache
+            # instance from before this attribute existed, or the Pi plugin's
+            # older build — can lack the deque. Initialize it lazily (the reads
+            # at runtime_queries already guard with getattr; this is the write).
+            if not hasattr(self, "_sensor_divergence_history"):
+                self._sensor_divergence_history = deque(maxlen=SENSOR_DIVERGENCE_HISTORY_MAX)
+            self._sensor_divergence_history.append(div)
+            self._last_sensor_divergence = div
+            logger.debug(
+                "sensor_divergence agent=%s magnitude=%.4f "
+                "dE=%+.3f dI=%+.3f dS=%+.3f dV=%+.3f",
+                self.agent_id,
+                div["magnitude"], div["dE"], div["dI"], div["dS"], div["dV"],
+            )
+        except Exception:
+            # Telemetry only — log and move on; the check-in must still succeed.
+            logger.warning(
+                "sensor_divergence recording failed for agent=%s; skipping this "
+                "cycle (check-in unaffected)", self.agent_id, exc_info=True,
+            )
+            self._last_sensor_divergence = None
+
     def update_dynamics(self,
                        agent_state: Dict,
                        dt: float = None) -> None:
@@ -564,32 +609,10 @@ class UNITARESMonitor:
         # The ODE above evolved as an independent predictor; the sensor EISV is
         # the measured body. Their disagreement (cf. allostatic load) is recorded
         # for observability rather than sprung away. Coupling is opt-in and
-        # flag-gated inside step_state (see sensor_coupling_enabled()).
-        self._last_sensor_divergence = None
-        if sensor_eisv is not None:
-            self._last_sensor_divergence = eisv_divergence(
-                sensor_eisv, self.state.unitaires_state
-            )
-            # Stamp + retain for trend reads (bounded by SENSOR_DIVERGENCE_HISTORY_MAX).
-            self._last_sensor_divergence["at"] = datetime.now().isoformat()
-            # Self-heal: a monitor restored bypassing __init__ — a pickle/cache
-            # instance from before this attribute existed, or the Pi plugin's
-            # older build — can lack the deque. Initialize it lazily so a check-in
-            # never raises AttributeError here (the reads at :355 and
-            # runtime_queries already guard with getattr; this is the one write).
-            if not hasattr(self, "_sensor_divergence_history"):
-                self._sensor_divergence_history = deque(maxlen=SENSOR_DIVERGENCE_HISTORY_MAX)
-            self._sensor_divergence_history.append(self._last_sensor_divergence)
-            logger.debug(
-                "sensor_divergence agent=%s magnitude=%.4f "
-                "dE=%+.3f dI=%+.3f dS=%+.3f dV=%+.3f",
-                self.agent_id,
-                self._last_sensor_divergence["magnitude"],
-                self._last_sensor_divergence["dE"],
-                self._last_sensor_divergence["dI"],
-                self._last_sensor_divergence["dS"],
-                self._last_sensor_divergence["dV"],
-            )
+        # flag-gated inside step_state (see sensor_coupling_enabled()). This is
+        # OPTIONAL telemetry on the mandatory check-in path, so it is fail-open
+        # (see _record_sensor_divergence) — the verdict is already decided above.
+        self._record_sensor_divergence(sensor_eisv)
 
         # Epistemic humility safeguard: Enforce entropy floor (S >= 0.001) always
         # Perfect equilibrium (S=0.0) is dangerous and brittle - maintain epistemic humility at all times
