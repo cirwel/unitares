@@ -233,14 +233,9 @@ if (window.GovSocket) window.GovSocket.make(onWsEvent, onWsStatus);
 // boot
 window.Landing.render();
 updateLivePill();
-// Drive section switches from the hash too, so in-page links (e.g. the Overview
-// Automations card's href="#automations") and back/forward navigate — not just
-// nav clicks. Reuses the nav-click path by clicking the matching link.
-window.addEventListener("hashchange", () => {
-  const id = (location.hash || "").replace("#", "");
-  const link = id && nav.querySelector(`a[data-section="${id}"]`);
-  if (link && id !== activeSection) link.click();
-});
+// (hashchange routing is handled by the activateSection listener above, which
+// supersedes the earlier nav-click-reuse approach — in-page links like the
+// Overview Automations card and back/forward both route through it.)
 
 (function openFromHash() {
   const id = (location.hash || "").replace("#", "");
