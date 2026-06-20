@@ -30,6 +30,18 @@
 #   # rollback: cp "$PLIST.bak" "$PLIST"; launchctl unload "$PLIST"; launchctl load "$PLIST"
 set -euo pipefail
 
+# ── Flags ────────────────────────────────────────────────────────────────────
+# --apply-migrations: apply any pending DB migrations as part of the deploy
+# (opt-in, since DDL is a deliberate/approved action). Also settable via
+# UNITARES_DEPLOY_APPLY_MIGRATIONS=1. Default is detect-and-refuse on a gap.
+APPLY_MIGRATIONS="${UNITARES_DEPLOY_APPLY_MIGRATIONS:-0}"
+for arg in "$@"; do
+  case "$arg" in
+    --apply-migrations) APPLY_MIGRATIONS=1 ;;
+    *) echo "[deploy-mcp] unknown argument: $arg" >&2; exit 2 ;;
+  esac
+done
+
 REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
 DEPLOY="${UNITARES_MCP_DEPLOY:-$HOME/projects/unitares-deploy}"
 LABEL="com.unitares.governance-mcp"
@@ -94,6 +106,49 @@ PREV="$(git -C "$DEPLOY" rev-parse HEAD)"
 echo "[deploy-mcp] fast-forwarding $DEPLOY to origin/master (ff-only; was ${PREV:0:8})"
 git -C "$DEPLOY" merge --ff-only origin/master
 mkdir -p "$DEPLOY/data/logs"
+
+# ── Migration preflight (gate, not silent) ───────────────────────────────────
+# This script historically restarted the MCP without touching DB migrations,
+# and migrations are applied by hand — twice the code went live expecting a
+# schema that wasn't there (the Phase-A half-deploy; migration 042). This gate
+# runs the just-fast-forwarded worktree's own migration checker against the
+# live DB and REFUSES to restart on a gap, rather than silently bringing up
+# code that expects an unapplied schema. DDL stays a deliberate, opt-in action:
+#   - default: detect a gap and refuse (with the apply recipe), rolling the
+#     worktree back to $PREV so on-disk code never gets left ahead of the
+#     still-running process (that mismatch is its own reboot-time foot-gun).
+#   - --apply-migrations: apply pending migrations FIRST (schema before code),
+#     re-verify, then proceed to the restart.
+# Note: a later health-failure rollback resets the worktree but NOT the DB —
+# migrations are forward-only and additive (IF NOT EXISTS), so new-schema +
+# old-code is the safe direction (the inverse is the failure mode above).
+MIGRATE="$DEPLOY/scripts/dev/apply_migrations.py"
+MIGRATE_DBURL=()
+[[ -n "${UNITARES_DEPLOY_DB_URL:-}" ]] && MIGRATE_DBURL=(--db-url "$UNITARES_DEPLOY_DB_URL")
+if [[ -f "$MIGRATE" ]]; then
+  echo "[deploy-mcp] migration preflight: is the live DB in sync with the deploy-worktree manifest?"
+  if ! python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]}"; then
+    if [[ "$APPLY_MIGRATIONS" == 1 ]]; then
+      echo "[deploy-mcp] applying pending migrations (operator opt-in) BEFORE restart"
+      if ! python3 "$MIGRATE" --apply "${MIGRATE_DBURL[@]}" \
+         || ! python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]}"; then
+        echo "[deploy-mcp] FAILED — migrations did not reach sync; rolling worktree back to ${PREV:0:8} and NOT restarting." >&2
+        git -C "$DEPLOY" reset --hard "$PREV"
+        exit 1
+      fi
+    else
+      echo "[deploy-mcp] REFUSING: live DB is not in sync with the migration manifest in the code about to deploy." >&2
+      echo "[deploy-mcp] Restarting now would bring up code expecting an unapplied schema (the Phase-A / #042 half-deploy failure mode)." >&2
+      echo "[deploy-mcp] Rolling the worktree back to ${PREV:0:8} (so disk does not sit ahead of the running process)." >&2
+      git -C "$DEPLOY" reset --hard "$PREV"
+      echo "[deploy-mcp] Then either apply the gap and re-deploy:" >&2
+      echo "[deploy-mcp]     python3 $MIGRATE --apply" >&2
+      echo "[deploy-mcp]   or re-run this deploy with migrations applied automatically:" >&2
+      echo "[deploy-mcp]     $0 --apply-migrations" >&2
+      exit 1
+    fi
+  fi
+fi
 
 echo "[deploy-mcp] restarting $LABEL (plist is static + already points at the worktree, so kickstart suffices)"
 launchctl kickstart -k "gui/$UID_NUM/$LABEL"
