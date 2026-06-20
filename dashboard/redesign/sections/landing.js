@@ -72,8 +72,10 @@
     const aKind = asum.by_kind || {};
     const aAtt = (asum.needs_attention || []).length;
     const aStale = !!(auto && auto.stale);
-    const aWarn = aAtt > 0 || aStale;
-    const autoSub = `${aAtt} attention · ${aKind.dogfood || 0} dogfood · ${aKind.ablation || 0} ablation · ${aKind.qa || 0} QA${aStale ? " · stale" : ""}`;
+    // Ungated = nothing verifies it (the role-reversal risk) — surface it here.
+    const aUngated = ((auto && auto.automations) || []).filter((it) => (it.notes || []).some((n) => n === "gate:ungated")).length;
+    const aWarn = aAtt > 0 || aStale || aUngated > 0;
+    const autoSub = `${aAtt} attention · ${aUngated} ungated · ${aKind.dogfood || 0} dogfood · ${aKind.ablation || 0} ablation${aStale ? " · stale" : ""}`;
     // A null metric = its live source didn't answer this cycle. Show "—"
     // (unavailable), never a stale snapshot value passed off as current.
     const un = (v) => v == null;
