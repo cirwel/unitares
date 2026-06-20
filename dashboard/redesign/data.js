@@ -247,12 +247,17 @@
       }, () => S().eisv);
     },
 
-    async agentHistory(id, limit) {
+    async agentHistory(id, opts) {
       // EISV check-in trajectory for one agent (no snapshot fallback — empty if offline).
+      // opts: { limit, mode: "recent"|"all" }. Returns { points, total, mode }.
+      opts = opts || {};
       return withFallback(async () => {
-        const r = await authFetch("/v1/agents/" + encodeURIComponent(id) + "/history?limit=" + (limit || 80));
-        return r && Array.isArray(r.points) ? r.points : null;
-      }, () => []);
+        const q = "?limit=" + (opts.limit || 200) + (opts.mode === "all" ? "&mode=all" : "");
+        const r = await authFetch("/v1/agents/" + encodeURIComponent(id) + "/history" + q);
+        return r && Array.isArray(r.points)
+          ? { points: r.points, total: r.total || r.points.length, mode: r.mode || "recent" }
+          : null;
+      }, () => ({ points: [], total: 0, mode: "recent" }));
     },
 
     async residentPanels() {
