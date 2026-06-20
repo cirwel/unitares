@@ -1,21 +1,26 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import subprocess
 import sys
 
+import scripts.analysis.eisv_ablation_matrix as matrix_module
 from scripts.analysis.eisv_ablation_matrix import (
     AblationMatrixRow,
     build_matrix_row,
     estimate_delta_uncertainty,
     filter_rows_for_validation,
     format_matrix_report,
+    split_rows_by_harness_lane,
 )
 from scripts.analysis.eisv_skeptic_report import ModelScore, OutcomeRow
 
 
-def _row(idx: int, *, bad: bool, risk: float | None, agent: str = "agent-a") -> OutcomeRow:
+def _row(
+    idx: int, *, bad: bool, risk: float | None, agent: str = "agent-a"
+) -> OutcomeRow:
     ts = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=idx)
     return OutcomeRow(
         ts=ts,
@@ -54,7 +59,83 @@ def test_filter_rows_for_validation_excludes_beam_harness_by_default():
     filtered = filter_rows_for_validation([substrate, beam])
 
     assert filtered == [substrate]
-    assert filter_rows_for_validation([substrate, beam], exclude_harness_lanes=()) == [substrate, beam]
+    assert filter_rows_for_validation([substrate, beam], exclude_harness_lanes=()) == [
+        substrate,
+        beam,
+    ]
+
+
+def test_split_rows_by_harness_lane_keeps_beam_visible():
+    substrate = _row(0, bad=False, risk=0.1)
+    beam = _row(1, bad=True, risk=None)
+    beam = OutcomeRow(**{**beam.__dict__, "detail": {"harness": "beam"}})
+
+    by_lane = split_rows_by_harness_lane([substrate, beam])
+
+    assert by_lane == {"beam": [beam], "substrate": [substrate]}
+
+
+def test_build_matrix_from_db_groups_lanes_and_respects_explicit_exclusions(
+    monkeypatch,
+):
+    substrate = _row(0, bad=False, risk=0.1)
+    beam = _row(1, bad=True, risk=None)
+    beam = OutcomeRow(**{**beam.__dict__, "detail": {"harness": "beam"}})
+
+    async def fake_fetch_rows(*_args, **_kwargs):
+        return [substrate, beam]
+
+    monkeypatch.setattr(matrix_module, "fetch_rows", fake_fetch_rows)
+
+    default_rows = asyncio.run(
+        matrix_module.build_matrix_from_db(
+            "postgresql://unit-test",
+            scopes=["task"],
+            windows=[90],
+            leads=[0],
+        )
+    )
+    assert [(row.harness_lane, row.trusted, row.bad) for row in default_rows] == [
+        (None, 1, 0)
+    ]
+
+    grouped_rows = asyncio.run(
+        matrix_module.build_matrix_from_db(
+            "postgresql://unit-test",
+            scopes=["task"],
+            windows=[90],
+            leads=[0],
+            group_by_harness_lane=True,
+            exclude_harness_lanes=(),
+        )
+    )
+    assert [(row.harness_lane, row.trusted, row.bad) for row in grouped_rows] == [
+        ("beam", 1, 1),
+        ("substrate", 1, 0),
+    ]
+
+    grouped_excluding_beam = asyncio.run(
+        matrix_module.build_matrix_from_db(
+            "postgresql://unit-test",
+            scopes=["task"],
+            windows=[90],
+            leads=[0],
+            group_by_harness_lane=True,
+            exclude_harness_lanes=("beam",),
+        )
+    )
+    assert [row.harness_lane for row in grouped_excluding_beam] == ["substrate"]
+
+
+def test_parse_args_distinguishes_default_from_explicit_harness_exclusion():
+    default_args = matrix_module.parse_args([])
+    explicit_args = matrix_module.parse_args(
+        ["--group-by-harness-lane", "--exclude-harness-lanes", "beam"]
+    )
+
+    assert default_args.exclude_harness_lanes is None
+    assert explicit_args.group_by_harness_lane is True
+    assert explicit_args.exclude_harness_lanes == ("beam",)
 
 
 def test_build_matrix_row_summarizes_baseline_and_best_candidate():
@@ -98,7 +179,9 @@ def test_build_matrix_row_summarizes_baseline_and_best_candidate():
     assert isinstance(row.beats_both, bool)
 
 
-def _score(name: str, probs: tuple[float, ...], auc_scores: tuple[float, ...]) -> ModelScore:
+def _score(
+    name: str, probs: tuple[float, ...], auc_scores: tuple[float, ...]
+) -> ModelScore:
     y_true = (0, 0, 0, 1, 1, 1)
     keys = tuple(f"row-{idx}" for idx in range(len(y_true)))
     return ModelScore(
@@ -141,6 +224,7 @@ def test_estimate_delta_uncertainty_reports_bootstrap_ci_and_permutation_p():
     assert uncertainty.brier_improvement_ci[0] > 0
     assert 0.0 <= uncertainty.brier_permutation_p <= 1.0
 
+
 def test_format_matrix_report_contains_skeptical_ablation_table():
     rows = [
         AblationMatrixRow(
@@ -168,7 +252,10 @@ def test_format_matrix_report_contains_skeptical_ablation_table():
 
     assert report.startswith("# EISV Ablation Matrix")
     assert "Excluded harness lanes: `beam`" in report
-    assert "| Scope | Window days | Lead min | Trusted | Bad | Prior state | Prior risk |" in report
+    assert (
+        "| Scope | Window days | Lead min | Trusted | Bad | Prior state | Prior risk |"
+        in report
+    )
     assert "AUC delta 95% CI" in report
     assert "Brier improvement 95% CI" in report
     assert "Brier perm p" in report
@@ -178,6 +265,52 @@ def test_format_matrix_report_contains_skeptical_ablation_table():
     assert "0.040" in report
     assert "prior_risk_binned" in report
     assert "KEEP TESTING" in report
+
+
+def test_format_matrix_report_labels_grouped_harness_lane_rows():
+    rows = [
+        AblationMatrixRow(
+            scope="task",
+            window_days=90,
+            lead_minutes=0,
+            trusted=2,
+            bad=1,
+            prior_state=0,
+            prior_risk=0,
+            baseline_auc=None,
+            baseline_brier=0.25,
+            best_candidate=None,
+            best_auc_delta=None,
+            best_brier_improvement=None,
+            beats_both=False,
+            conclusion="BEAM lane needs runtime features",
+            harness_lane="beam",
+        ),
+        AblationMatrixRow(
+            scope="task",
+            window_days=90,
+            lead_minutes=0,
+            trusted=2,
+            bad=0,
+            prior_state=2,
+            prior_risk=2,
+            baseline_auc=None,
+            baseline_brier=0.0,
+            best_candidate=None,
+            best_auc_delta=None,
+            best_brier_improvement=None,
+            beats_both=False,
+            conclusion="substrate lane separate",
+            harness_lane="substrate",
+        ),
+    ]
+
+    report = format_matrix_report(rows)
+
+    assert "Harness lane mode: grouped" in report
+    assert "| Lane | Scope | Window days | Lead min |" in report
+    assert "| beam | task | 90 | 0 | 2 | 1 | 0 | 0 |" in report
+    assert "| substrate | task | 90 | 0 | 2 | 0 | 2 | 2 |" in report
 
 
 def test_cli_help_runs_when_invoked_as_a_file():
@@ -192,3 +325,4 @@ def test_cli_help_runs_when_invoked_as_a_file():
 
     assert result.returncode == 0, result.stderr
     assert "Run a compact EISV ablation matrix" in result.stdout
+    assert "--group-by-harness-lane" in result.stdout
