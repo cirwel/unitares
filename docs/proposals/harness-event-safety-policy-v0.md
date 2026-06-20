@@ -94,14 +94,15 @@ policy, and enforcement.
 | Policy | Rule evaluation: allow, warn, dedupe, pause, quarantine, reject, require review | Raw signal collection |
 | Enforcement | Circuit breaker, session quarantine, lease release, blocked write, operator escalation | The underlying measurement truth |
 
-EISV and other telemetry may inform the policy, but the pause authority lives in
-the policy/enforcement layer. A thermometer does not pause the agent; a governed
+For **new harness-event guards**, EISV and other telemetry may inform the policy,
+but the pause authority should live in the policy/enforcement layer. In target
+architecture, a thermometer does not pause the agent by itself; a governed
 circuit breaker can.
 
-**Known exception — this is target architecture, not a description of the
-current runtime.** The deployed governance monitor already emits `void_pause`,
-`coherence_pause`, `basin_pause`, and `cirs_block` directly from EISV /
-coherence / behavioral z-scores on the check-in path (see
+**Known deployed exception.** This is target architecture, not a description of
+the whole current runtime. The deployed governance monitor already emits
+`void_pause`, `coherence_pause`, `basin_pause`, and `cirs_block` directly from
+EISV / coherence / behavioral z-scores on the check-in path (see
 `src/governance_monitor.py` and [`docs/dev/CIRCUIT_BREAKER_DIALECTIC.md`](../dev/CIRCUIT_BREAKER_DIALECTIC.md)).
 Those existing EISV-driven pauses pre-date this policy and are *grandfathered*:
 they are not yet routed through the layer separation or the Section 10 bounds.
@@ -121,8 +122,8 @@ these sources:
 - platform signatures, delivery IDs, message IDs, author IDs, and timestamps;
 - harness-local session state, retry counters, restart counters, and leases;
 - durable idempotency/dedupe state;
-- UNITARES identity verification, continuity-token validation, or verified
-  orchestrator vouching;
+- UNITARES identity verification and continuity-token validation; future
+  verified orchestrator vouching only after that Wave-3 path is wired;
 - trusted dispatcher/tool registry effect classifications;
 - server-stamped timestamps and audit state.
 
@@ -222,6 +223,9 @@ optional before routing; requiredness is defined by effect class in Section 6.
   events, or Lumen body loops. Absence must be explicit via
   `event_id_source=none`; side effects then require a deterministic dedupe key
   or an explicitly reviewed harness policy.
+- `dedupe_ttl_seconds` is only the duplicate-suppression window for a seen
+  idempotency key. It is not a replay-freshness bound; replay protection is
+  handled separately in Section 8 through timestamp/signature/causal freshness.
 - `identity.identity_assurance` is server-computed. Adapters may report what
   they saw, but they do not grant themselves `strong` authority. The tier and
   proof-origin enums above match the live UNITARES identity write path:
@@ -477,6 +481,10 @@ invariant:
 
 Adapters and policy evaluators should expose the decision in a shape that keeps
 measurement, policy, and enforcement separate.
+
+The example below uses base decision/enforcement values that are defined by the
+closed enum list immediately after it; harness-local display labels must map back
+to those base values before audit or alert routing consumes the result.
 
     {
       "schema": "unitares.harness_event_policy_result.v0",
