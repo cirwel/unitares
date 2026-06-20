@@ -127,9 +127,10 @@ these sources:
 - server-stamped timestamps and audit state.
 
 The following fields must not be trusted merely because an adapter supplied
-them: `synthetic`, `replay`, `duplicate`, `identity_assurance`, `proof_origin`,
-`source_trust`, `requested_effect`, `max_effect_class`, `resume_attempt`, and
-`restart_count_window`.
+them: `synthetic_control_event`, `diagnostic_probe`, `auto_resume`, `replay`,
+`duplicate`, `identity_assurance`, `proof_origin`, `source_trust`,
+`requested_effect`, `max_effect_class`, and the `attempts.*` counters
+(`resume_attempt`, `delivery_attempt`, `restart_count_window`).
 
 Caller-supplied lower-risk labels never reduce the decision. Missing,
 contradictory, or unverified safety-relevant fields make the event invalid or
@@ -293,7 +294,7 @@ effect requires its own policy check with causal linkage to the original event.
 | `identity_assurance.tier != strong` and target operation requires strong governance write | `reject_identity_required` | No silent weak durable writes |
 | `proof_origin=server_inferred` used as mint/resume proof | `reject_or_require_lineage` | Do not launder server-inferred context into caller proof |
 | Unrecognized value in a safety-relevant field | `reject_or_require_review` | Unknown enums fail closed (Section 1), never fall through to `allow` |
-| Valid event, all safety-relevant fields verified, no row above applies | authorize at the requested effect class per Section 6 | The terminal/default case: a clean valid event is authorized only up to its Section 6 effect-class evidence, not unconditionally |
+| Valid event, all safety-relevant fields verified, no row above applies | `allow` | The terminal/default case: a clean valid event is authorized only up to its Section 6 effect-class evidence, not unconditionally |
 
 Lumen/Anima body-loop protection (interrupting a protected drawing phase) is
 **harness-local enforcement policy, not part of this normative table** — it keys
@@ -515,10 +516,11 @@ So heterogeneous adapters produce a routable, auditable record, the following
 fields are closed base sets (adapters may add harness-local values only if they
 also map to one of these base values; consumers route on the base value):
 
-- `policy_evaluation.decision`: the six precedence tiers of Section 1
+- `policy_evaluation.decision`: one of the closed base decisions
   (`reject`, `block`, `quarantine_session`, `pause_harness`, `dedupe`, `warn`,
   `allow_read_only`, `allow`) — the Section 7 compound decisions are normalized
-  into these per Section 1, with their nuance carried in `reason_code`.
+  into these per the Section 1 precedence ladder, with their nuance carried in
+  `reason_code`.
 - `enforcement.mode`: `circuit_breaker | session_quarantine | blocked_write |
   lease_release | operator_escalation | no_op`.
 - `reason_code` is a **closed, machine-routable** set keyed to the Section 7
