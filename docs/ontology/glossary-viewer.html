@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UNITARES Glossary — live view (prototype)</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2a313c;
+    --ink:#e6edf3; --dim:#8b949e; --acc:#58a6ff;
+    --earned:#3fb950; --lens:#d29922; --cand:#6e7681; --false:#f85149;
+    --reg-phil:#bc8cff; --reg-fep:#58a6ff; --reg-ops:#3fb950; --reg-man:#f0883e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+  header{position:sticky;top:0;background:linear-gradient(180deg,#0e1116,#0e1116ee);backdrop-filter:blur(6px);border-bottom:1px solid var(--line);padding:16px 22px;z-index:10}
+  h1{margin:0 0 2px;font-size:17px;letter-spacing:.2px}
+  .sub{color:var(--dim);font-size:12px}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center}
+  input[type=search]{flex:1;min-width:200px;background:var(--panel2);border:1px solid var(--line);color:var(--ink);padding:8px 12px;border-radius:8px;font-size:13px}
+  .chip{cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--dim);padding:5px 11px;border-radius:999px;font-size:12px;user-select:none}
+  .chip.on{color:var(--ink);border-color:var(--acc);background:#1f2a3a}
+  main{max-width:1100px;margin:0 auto;padding:20px 22px 80px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card h3{margin:0 0 2px;font-size:15px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .typebadge{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim);border:1px solid var(--line);border-radius:5px;padding:1px 6px;margin-left:8px;vertical-align:middle}
+  .sense{border-top:1px dashed var(--line);padding-top:9px;margin-top:9px}
+  .sense:first-of-type{border-top:0;margin-top:6px}
+  .sname{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--acc)}
+  .q{color:var(--ink);margin:2px 0}
+  .src{color:var(--dim);font-size:11.5px}
+  .tags{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .reg{font-size:10.5px;padding:1px 7px;border-radius:5px;border:1px solid var(--line)}
+  .reg.phil{color:var(--reg-phil)} .reg.fep{color:var(--reg-fep)} .reg.ops{color:var(--reg-ops)} .reg.man{color:var(--reg-man)}
+  .status{font-size:10.5px;padding:1px 7px;border-radius:5px;font-weight:600}
+  .status.earned{color:#06240f;background:var(--earned)} .status.lens{color:#241a00;background:var(--lens)}
+  .status.cand{color:#0c0f14;background:var(--cand)} .status.false{color:#2b0707;background:var(--false)}
+  .sectitle{grid-column:1/-1;margin:22px 0 2px;font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--dim)}
+  table.rosetta{grid-column:1/-1;width:100%;border-collapse:collapse;font-size:12.5px;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  table.rosetta th,table.rosetta td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  table.rosetta th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  table.rosetta tr:last-child td{border-bottom:0}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--dim)}
+  .legend span b{font-weight:600}
+  .note{grid-column:1/-1;color:var(--dim);font-size:12px;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--acc);padding:10px 13px;border-radius:8px}
+  .hidden{display:none}
+  footer{max-width:1100px;margin:0 auto;padding:0 22px 40px;color:var(--dim);font-size:11.5px}
+</style>
+</head>
+<body>
+<header>
+  <h1>UNITARES Glossary <span class="typebadge">live view · prototype</span></h1>
+  <div class="sub">Generated mirror of <code>docs/ontology/glossary.md</code> — keyed by the question each term answers. Markdown stays canonical; this is a view.</div>
+  <div class="controls">
+    <input id="q" type="search" placeholder="Search term, question, or source…" autocomplete="off">
+    <span class="chip on" data-f="all">All</span>
+    <span class="chip" data-f="homonym">Homonyms</span>
+    <span class="chip" data-f="single">Single-sense</span>
+    <span class="chip" data-f="rosetta">Rosetta</span>
+    <span class="chip" data-f="gap">Open gaps</span>
+  </div>
+  <div class="legend">
+    <span><b>register:</b></span>
+    <span class="reg phil">philosophical</span><span class="reg ops">ops</span><span class="reg fep">fep</span><span class="reg man">manifesto</span>
+    <span style="margin-left:10px"><b>status:</b></span>
+    <span class="status earned">✓ earned</span><span class="status lens">◐ research-lens</span><span class="status cand">~ candidate</span><span class="status false">✗ false friend</span>
+  </div>
+</header>
+<main>
+  <div class="grid" id="grid"></div>
+</main>
+<footer>
+  Prototype · static snapshot. "Live" (auto-reflecting md + code symbols, drift-flagged) means generating this JSON from <code>glossary.md</code> at build and cross-checking code symbols — see chat. Not committed; not a source of truth.
+</footer>
+<script>
+const REG={phil:"philosophical",ops:"ops",fep:"fep",man:"manifesto"};
+// --- data faithfully derived from docs/ontology/glossary.md ---
+const TERMS=[
+ {term:"substrate",type:"homonym",senses:[
+   {name:"substrate (inference)",q:"What inference engine generates this behavior?",src:"harness-substrate-plurality.md",reg:"fep"},
+   {name:"substrate (deployment)",q:"What persistent hardware/disk/DB survives a restart and can earn continuity?",src:"identity.md",reg:"phil"},
+   {name:"substrate (runtime)",q:"What execution model runs the work — per-process vs shared asyncio loop?",src:"CLAUDE.md / AGENTS.md (Substrate Tax)",reg:"ops"}]},
+ {term:"fingerprint",type:"homonym",senses:[
+   {name:"fingerprint (transport)",q:"Which driver is this, by ip:ua, for the weak sticky-resume pin?",src:"identity.md",reg:"ops"},
+   {name:"fingerprint (behavioral)",q:"Does this process's EISV match the lineage it claims?",src:"identity.md / R1",reg:"phil"},
+   {name:"fingerprint (finding-dedup)",q:"Is this CI/Watcher finding one we already saw? (sha256)",src:"CLAUDE.md / ci-issue-surfacing.md",reg:"ops"}]},
+ {term:"surface",type:"homonym",senses:[
+   {name:"surface (lease)",q:"What shared mutation target is claimed under single-writer coordination?",src:"beam-coordination-kernel.md",reg:"ops"},
+   {name:"surface (tool)",q:"What actions are available to the agent right now?",src:"harness-substrate-plurality.md",reg:"ops"}]},
+ {term:"basin",type:"homonym",code:true,senses:[
+   {name:"basin (attractor)",q:"Which equilibrium will the system's own EISV dynamics flow to?",src:"governance_core/dynamics.py::check_basin (research lens)",reg:"fep",status:"lens"},
+   {name:"basin (health band)",q:"Is each EISV axis inside its configured healthy box, so deviation should count as risk?",src:"behavioral_assessment.py::_basin_health_gate / BASIN_HIGH (drives verdicts)",reg:"ops",status:"earned"}]},
+ {term:"free energy",type:"homonym",code:true,senses:[
+   {name:"free energy (ODE V)",q:"What is the running E−I imbalance accumulator?",src:"governance_core/dynamics.py (V, Helmholtz-like)",reg:"fep",status:"lens"},
+   {name:"free energy (variational −F)",q:"What is E as negative variational free energy under a generative model?",src:"grounding/free_energy.py — Tier-1 stubbed",reg:"fep",status:"cand"}]},
+ {term:"harness",type:"homonym",senses:[
+   {name:"harness (agent body)",q:"What body/interface mediates this agent's action? (preferred term: body)",src:"harness-substrate-plurality.md",reg:"phil"},
+   {name:"harness (lifecycle wrapper)",q:"What plugin/hook chain wraps the session?",src:"CLAUDE.md",reg:"ops"},
+   {name:"harness (test rig)",q:"What scaffold drives a bounded eval?",src:"calibration_harness/, deep-research skill",reg:"ops"}]},
+ {term:"fork",type:"homonym",senses:[
+   {name:"fork (sibling locus)",q:"Fresh process-instance under the same registry UUID, no child minted?",src:"r6-episode-fork-response-shape.md",reg:"phil"},
+   {name:"fork (identity lineage)",q:"A distinct child UUID with declared parent_agent_id + spawn_reason?",src:"r6-episode-fork-response-shape.md",reg:"phil"}]},
+ {term:"continuity",type:"homonym",senses:[
+   {name:"continuity (concept)",q:"At which layers does this identity claim actually hold?",src:"identity.md (five-layer taxonomy)",reg:"phil"},
+   {name:"continuity_token (mechanism)",q:"Can this same live process re-bind by signed proof?",src:"identity.md (largely retired)",reg:"ops"}]},
+ {term:"lineage",type:"homonym",senses:[
+   {name:"lineage (causal ancestry)",q:"Which finished predecessor's work does this process inherit?",src:"identity.md",reg:"phil"},
+   {name:"thread lineage (conversation)",q:"Which logical conversation/history thread is this? (thread_id)",src:"harness-substrate-plurality.md",reg:"ops"}]},
+ // single-sense
+ {term:"process-instance",type:"single",senses:[{name:"process-instance",q:"Which live subject is speaking right now?",src:"identity.md",reg:"phil"}]},
+ {term:"registry",type:"single",senses:[{name:"registry (identity layer)",q:"Which governance record is this claim bound to? (the UUID)",src:"harness-substrate-plurality.md",reg:"phil"}]},
+ {term:"transport",type:"single",senses:[{name:"transport",q:"Through what channel does the process act? (CLI, MCP-http, Discord, cron)",src:"harness-substrate-plurality.md",reg:"ops"}]},
+ {term:"lease",type:"single",senses:[{name:"lease",q:"What time-bounded claim to a surface is live, with what proof and expiry?",src:"beam-coordination-kernel.md",reg:"ops"}]},
+ {term:"handoff",type:"single",senses:[{name:"handoff",q:"How is custody transferred without TTL expiry or ghost claims?",src:"beam-coordination-kernel.md",reg:"ops"}]},
+ {term:"locus",type:"single",senses:[{name:"locus",q:"What situated coordinate is this? (guild_id, channel_id, tab_id, profile)",src:"harness-substrate-plurality.md",reg:"ops"}]},
+ {term:"episode",type:"single",senses:[{name:"episode",q:"What bounded local interaction span is this?",src:"harness-substrate-plurality.md",reg:"ops"}]},
+ {term:"affordance_state",type:"single",senses:[{name:"affordance_state",q:"What reach/permissions/capability does the agent have at event time?",src:"harness-substrate-plurality.md",reg:"ops"}]},
+ {term:"assurance",type:"single",senses:[{name:"assurance (identity_assurance)",q:"How strongly is this identity claim grounded? (tier + source)",src:"identity.md",reg:"phil"}]},
+ {term:"governance_mode",type:"single",senses:[{name:"governance_mode",q:"Under what authority context was this write made?",src:"harness-substrate-plurality.md",reg:"ops"}]},
+ {term:"typed absence",type:"single",senses:[{name:"typed absence",q:"What kind of absence is this? — never a bare null",src:"beam-coordination-kernel.md",reg:"ops"}]},
+ {term:"proof of life",type:"single",senses:[{name:"proof of life / heartbeat",q:"How does a remote holder prove it is still alive on its lease?",src:"beam-coordination-kernel.md",reg:"ops"}]},
+ // open gaps
+ {term:"BEAM-resident harness value",type:"gap",senses:[{name:"open gap",q:"No harness-enum value for an agent whose body IS a BEAM/OTP process (Sentinel Wave 1/3).",src:"glossary.md · Open gaps",reg:"phil"}]},
+ {term:"affordance_state shape",type:"gap",senses:[{name:"open gap",q:"Term exists, type does not — boolean reach? capability list? permission diff?",src:"glossary.md · Open gaps",reg:"ops"}]},
+ {term:"episode nesting",type:"gap",senses:[{name:"open gap",q:"Question answered, granularity not — does a long shell session nest episodes?",src:"glossary.md · Open gaps",reg:"ops"}]},
+];
+const ROSETTA=[
+ ["Agent identity","layered continuity bundle","uuid + client_session_id","—","",  "must be earned, not performative"],
+ ["Internal state","behavioral trajectory","EISV state vector","ODE state; target E=−F tiered+stubbed","lens",""],
+ ["Healthy operating region","\"stable self\"","basin (+ health gating)","attractor — real in check_basin; verdict path uses BASIN_HIGH box","lens",""],
+ ["Deviation signal","—","running hot, basin-edge","running hot (V-sign) ships; surprise as −logP does not","lens",""],
+ ["Agent↔world boundary","process-instance boundary","lease surface, affordance_state","Markov blanket","false",""],
+ ["Custody transfer","lineage / inheritance","handoff","—","",""],
+ ["Proof of life","process-instance liveness","heartbeat","non-equilibrium steady state","cand","\"build nothing more alive than it is\""],
+ ["Belief revision","dialectic resolution","dialectic","active inference / policy selection","cand",""],
+ ["Confidence grounding","earned vs performative","identity_assurance, calibration","precision-weighting","cand",""],
+];
+const grid=document.getElementById("grid"), qbox=document.getElementById("q");
+let filter="all", query="";
+function statusClass(s){return s||"";}
+function statusLabel(s){return {earned:"✓ earned",lens:"◐ research-lens",cand:"~ candidate",false:"✗ false friend"}[s]||"";}
+function card(t){
+  const senses=t.senses.map(s=>`
+    <div class="sense">
+      <div class="sname">${s.name}${t.code?' <span class="typebadge">code</span>':''}</div>
+      <div class="q">${s.q}</div>
+      <div class="src">${s.src}</div>
+      <div class="tags">
+        <span class="reg ${s.reg}">${REG[s.reg]}</span>
+        ${s.status?`<span class="status ${statusClass(s.status)}">${statusLabel(s.status)}</span>`:''}
+      </div>
+    </div>`).join("");
+  return `<div class="card" data-type="${t.type}" data-blob="${(t.term+' '+t.senses.map(s=>s.name+' '+s.q+' '+s.src).join(' ')).toLowerCase().replace(/"/g,'')}">
+    <h3>${t.term}<span class="typebadge">${t.type}</span></h3>${senses}</div>`;
+}
+function rosetta(){
+  const rows=ROSETTA.map(r=>`<tr>
+    <td><b>${r[0]}</b></td><td>${r[1]}</td><td>${r[2]}</td>
+    <td>${r[4]?`<span class="status ${r[4]}">${statusLabel(r[4])}</span> `:''}${r[3]}</td>
+    <td>${r[5]||'—'}</td></tr>`).join("");
+  return `<div class="sectitle" data-section="rosetta">Cross-register map (Rosetta)</div>
+  <div class="note" data-section="rosetta">Physics is <b>built but not wired</b>: ◐ rows are real math in the parallel ODE / grounding tiers that does <b>not</b> drive verdicts. Promoting ◐→✓ = wiring ODE onto the verdict path. Highest-leverage move: make EISV distributional (mean + precision).</div>
+  <table class="rosetta" data-section="rosetta">
+    <tr><th>Referent</th><th>philosophical</th><th>ops</th><th>fep</th><th>manifesto</th></tr>${rows}</table>`;
+}
+function render(){
+  const showRos=(filter==="all"||filter==="rosetta");
+  const cards=TERMS.filter(t=>filter==="all"||t.type===filter)
+    .map(card).join("");
+  grid.innerHTML=cards+(showRos?rosetta():"");
+  // apply text query
+  document.querySelectorAll(".card").forEach(c=>{
+    c.classList.toggle("hidden", query && !c.dataset.blob.includes(query));
+  });
+  if(query){document.querySelectorAll('[data-section="rosetta"]').forEach(e=>e.classList.add("hidden"));}
+}
+document.querySelectorAll(".chip").forEach(ch=>ch.onclick=()=>{
+  document.querySelectorAll(".chip").forEach(c=>c.classList.remove("on"));
+  ch.classList.add("on"); filter=ch.dataset.f; render();
+});
+qbox.oninput=()=>{query=qbox.value.trim().toLowerCase();render();};
+render();
+</script>
+</body>
+</html>
