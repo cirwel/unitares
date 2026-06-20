@@ -143,6 +143,7 @@
         const flat = [];
         Object.keys(groups).forEach((status) => {
           (groups[status] || []).forEach((a) => {
+            if (!a || typeof a !== "object") return; // skip the "... (N more items)" truncation marker
             const m = a.metrics || {};
             flat.push({
               agent_id: a.agent_id, label: a.label, status: a.lifecycle_status || a.status || status,
