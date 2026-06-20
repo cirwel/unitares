@@ -77,12 +77,13 @@
       if (sourceF !== "all") { if (it.source !== sourceF) return false; }
       else if (scope === "local" && !(LOCAL.includes(it.source) || MODEL.attn.has(it.id))) return false;
       if (kindF !== "all" && it.kind !== kindF) return false;
-      if (q) {
+      const needle = q.trim().toLowerCase(); // q holds the raw typed text; match case-insensitively
+      if (needle) {
         const hay = (it.name + " " + it.source + " " + it.kind + " " + (it.runner || "") + " "
           + (it.owner || "") + " " + (it.escalates_to || "") + " " + (it.description || "") + " "
           + (it.workdir || "") + " " + (it.repo || "") + " " + (it.config_path || "") + " "
           + (it.expected_outputs || []).join(" ") + " " + (it.surface_claims || []).join(" ")).toLowerCase();
-        if (!hay.includes(q)) return false;
+        if (!hay.includes(needle)) return false;
       }
       return true;
     }).sort((a, b) => {
@@ -140,7 +141,7 @@
   }
 
   function wire() {
-    const s = $("auto-q"); if (s) { s.oninput = () => { q = s.value.trim().toLowerCase(); render(); const e = $("auto-q"); if (e) { e.focus(); e.setSelectionRange(e.value.length, e.value.length); } }; }
+    const s = $("auto-q"); if (s) { s.oninput = () => { const pos = s.selectionStart; q = s.value; render(); const e = $("auto-q"); if (e) { e.focus(); if (pos != null) e.setSelectionRange(pos, pos); } }; }
     const src = $("auto-source"); if (src) src.onchange = () => { sourceF = src.value; render(); };
     const k = $("auto-kind"); if (k) k.onchange = () => { kindF = k.value; render(); };
     const all = $("auto-all"); if (all) all.onchange = () => { scope = all.checked ? "all" : "local"; render(); };
