@@ -1091,6 +1091,10 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
         semantic_scores_dict = {}
         rerank_scores_dict = {}
         rrf_scores_dict = {}
+        # IDs the lexical (FTS) lane returned. None when no lexical lane ran
+        # (pure-semantic / substring scan), so the abstention signal below can
+        # tell "no keyword match" apart from "lexical judgement unavailable".
+        fts_anchor_ids = None
         search_degraded_warning = None
         hybrid_skipped_reason = None
         fts_fallback_skipped_reason = None
@@ -1249,6 +1253,7 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
 
                 sem_ids = [d.id for d, _ in sem_res]
                 fts_ids = [d.id for d in fts_res]
+                fts_anchor_ids = set(fts_ids)
                 fused = rrf_fuse([sem_ids, fts_ids], k=60)
 
                 pool: Dict[str, Any] = {d.id: d for d, _ in sem_res}
@@ -1365,6 +1370,8 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
                             f"query (limit {complex_query_term_limit}); pass operator='OR' "
                             "to request broad recall"
                         )
+                # All FTS candidates are lexical matches by construction.
+                fts_anchor_ids = {d.id for d in candidates}
                 search_mode = "fts"
             elif not hybrid_path and not use_semantic:
                 # JSON backend fallback: bounded scan of most recent entries.
@@ -1766,6 +1773,28 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
             if rrf_scores:
                 response_data["rrf_scores"] = rrf_scores
 
+        # Low-confidence / abstention signal — an honest "no strong match".
+        # Absolute cosine is unreliable on this corpus: embeddings are
+        # anisotropic, so a nonsense query can post a HIGHER top cosine than a
+        # genuine conceptual one (measured 2026-06-20: an off-domain query
+        # topped ~0.355 vs a real conceptual query's 0.311). So confidence keys
+        # on LEXICAL corroboration, not a cosine threshold: in a mode where an
+        # FTS lane ran, if NONE of the returned results actually matched the
+        # query terms, the hits are semantic-only and — given the weak score
+        # calibration — likely tangential. Surface that instead of presenting
+        # noise as confident signal. Pure-semantic / substring modes leave
+        # fts_anchor_ids None and are not flagged (no lexical lane to judge).
+        if query_text and results and fts_anchor_ids is not None:
+            lexical_hits = sum(1 for d in results if d.id in fts_anchor_ids)
+            if lexical_hits == 0:
+                response_data["low_confidence"] = True
+                response_data["confidence_note"] = (
+                    "No result matched your query terms lexically — these are "
+                    "semantic-only matches and may be tangential (semantic "
+                    "relevance is weakly calibrated on this corpus). Rephrase "
+                    "with distinctive key terms, or treat these as exploratory "
+                    "rather than authoritative."
+                )
 
         # UX FIX (Dec 2025): Add helpful hint when substring scan returns no results
         if search_mode == "substring_scan" and len(results) == 0 and query_text:
