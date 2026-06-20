@@ -86,18 +86,23 @@
     if (!canvas || !window.Chart) return;
     let pts = histCache[id];
     if (!pts) { // fetch once per agent; re-renders (search/filter) reuse the cache
-      const r = await DATA.agentHistory(id, 80);
+      const r = await DATA.agentHistory(id, 200);
       if (selectedId !== id || !document.getElementById("ag-hist")) return; // selection changed mid-fetch
       pts = (r.data || []).filter(Boolean);
       histCache[id] = pts;
     }
     if (!pts.length) { if (meta) meta.textContent = "· no recorded history yet"; return; }
-    if (meta) meta.textContent = "· last " + pts.length + " check-ins";
+    if (meta) meta.textContent = "· " + pts.length + " check-ins (each point = one)";
     const cv = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
     const labels = pts.map((p) => (p.t || "").slice(11, 16));
+    // Event-based: each check-in is a discrete, hover-trackable point; straight
+    // segments (no tension) so the line reflects actual check-ins, not a smoothed
+    // interpolation. Markers shrink as the series gets denser.
+    const pr = pts.length > 140 ? 1.3 : pts.length > 70 ? 1.8 : 2.6;
     const ds = (label, key, color, dash) => ({
-      label, data: pts.map((p) => p[key]), borderColor: color, backgroundColor: "transparent",
-      borderWidth: 1.6, borderDash: dash || [], pointRadius: 0, tension: 0.3,
+      label, data: pts.map((p) => p[key]), borderColor: color, backgroundColor: color,
+      pointBackgroundColor: color, pointBorderColor: color,
+      borderWidth: 1.3, borderDash: dash || [], pointRadius: pr, pointHoverRadius: 5, tension: 0,
     });
     const grid = cv("--line"), tick = cv("--muted");
     histChart = new window.Chart(canvas, {
@@ -111,7 +116,8 @@
         responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
         interaction: { mode: "index", intersect: false },
         plugins: { legend: { display: true, position: "bottom", labels: { color: tick, font: { family: "Inter", size: 10 }, boxWidth: 9, boxHeight: 9, usePointStyle: true } },
-          tooltip: { backgroundColor: cv("--surface"), borderColor: cv("--line-2"), borderWidth: 1, titleColor: cv("--ink"), bodyColor: tick, titleFont: { family: "Geist Mono" }, bodyFont: { family: "Geist Mono", size: 10 } } },
+          tooltip: { backgroundColor: cv("--surface"), borderColor: cv("--line-2"), borderWidth: 1, titleColor: cv("--ink"), bodyColor: tick, titleFont: { family: "Geist Mono" }, bodyFont: { family: "Geist Mono", size: 10 },
+            callbacks: { title: (its) => { const p = pts[its[0] && its[0].dataIndex]; return p && p.t ? new Date(p.t).toLocaleString() : ""; } } } },
         scales: {
           x: { grid: { color: grid, drawTicks: false }, ticks: { color: tick, font: { family: "Geist Mono", size: 9 }, maxRotation: 0, autoSkipPadding: 24 } },
           y: { min: -0.6, max: 1, grid: { color: grid }, ticks: { color: tick, font: { family: "Geist Mono", size: 9 }, callback: (v) => v.toFixed(1) } },
