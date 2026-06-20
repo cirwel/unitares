@@ -103,11 +103,14 @@ def mock_graph():
 @pytest.fixture
 def patch_common(mock_mcp_server, mock_graph):
     """Patch all common dependencies for knowledge graph handlers."""
+    recall_event_recorder = MagicMock()
     with patch("src.mcp_handlers.context.get_context_agent_id", return_value=None), \
          patch("src.mcp_handlers.shared.get_mcp_server", return_value=mock_mcp_server), \
          patch("src.mcp_handlers.knowledge.handlers.mcp_server", mock_mcp_server), \
          patch("src.mcp_handlers.knowledge.handlers.get_knowledge_graph", new_callable=AsyncMock, return_value=mock_graph), \
+         patch("src.mcp_handlers.knowledge.handlers.record_recall_event", recall_event_recorder), \
          patch("src.mcp_handlers.knowledge.handlers.record_ms"):
+        mock_mcp_server.recall_event_recorder = recall_event_recorder
         yield mock_mcp_server, mock_graph
 
 
@@ -213,6 +216,15 @@ class TestSearchKnowledgeGraph:
         data = parse_result(result)
         assert data["success"] is True
         assert data["count"] == 0
+        mock_mcp_server.recall_event_recorder.assert_called_once()
+        args, kwargs = mock_mcp_server.recall_event_recorder.call_args
+        assert args[:2] == ("zero_result", "nonexistent stuff")
+        assert kwargs["query_terms"] == 2
+        assert kwargs["search_mode"] == "fts"
+        assert kwargs["detail"] == {
+            "hybrid_skipped": False,
+            "fts_or_fallback_skipped": False,
+        }
 
     @pytest.mark.asyncio
     async def test_hybrid_no_lexical_match_flags_low_confidence(self, patch_common):
@@ -240,6 +252,12 @@ class TestSearchKnowledgeGraph:
         assert data["success"] is True
         assert data.get("low_confidence") is True
         assert "confidence_note" in data
+        mock_mcp_server.recall_event_recorder.assert_called_once_with(
+            "low_confidence",
+            "how to bake sourdough bread",
+            query_terms=5,
+            search_mode="hybrid_rrf",
+        )
 
     @pytest.mark.asyncio
     async def test_hybrid_with_lexical_match_not_low_confidence(self, patch_common):
@@ -2136,5 +2154,3 @@ class TestIssue165Provenance:
         mock_graph.add_discovery.assert_awaited()
         node = mock_graph.add_discovery.await_args.args[0]
         assert node.provenance["source"] == "self_recovery_quick_resume"
-
-
