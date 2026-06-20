@@ -48,6 +48,29 @@
       + (cfg ? `<div title="${esc(cfg)}" style="color:var(--faint)">${esc(tilde(cfg))}</div>` : "")
       + (!where && !cfg ? "—" : "") + `</div>`;
   }
+  function listCell(values) {
+    const list = (values || []).filter(Boolean);
+    if (!list.length) return "—";
+    const shown = list.slice(0, 3).map((v) => `<span class="tag" title="${esc(v)}">${esc(v)}</span>`).join("");
+    const more = list.length > 3 ? `<span style="font-size:var(--text-xs);color:var(--faint)">+${list.length - 3}</span>` : "";
+    return `<div style="display:flex;gap:4px;flex-wrap:wrap;max-width:260px">${shown}${more}</div>`;
+  }
+  function ownerCell(it) {
+    if (!it.owner && !it.escalates_to && !it.description) return "—";
+    return `<div style="font-size:var(--text-sm);color:var(--ink-2)">${esc(it.owner || "—")}</div>`
+      + (it.escalates_to ? `<div style="font-size:var(--text-xs);color:var(--muted)">escalate: ${esc(it.escalates_to)}</div>` : "")
+      + (it.description ? `<div style="font-size:var(--text-xs);color:var(--faint);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(it.description)}">${esc(it.description)}</div>` : "");
+  }
+  function contractCell(it) {
+    return `<div style="display:grid;gap:4px">`
+      + `<div><span style="font-size:var(--text-xs);color:var(--faint)">outputs</span> ${listCell(it.expected_outputs)}</div>`
+      + `<div><span style="font-size:var(--text-xs);color:var(--faint)">surfaces</span> ${listCell(it.surface_claims)}</div>`
+      + `</div>`;
+  }
+  function priority(it) {
+    const p = Number(it.dashboard_priority);
+    return Number.isFinite(p) ? p : 999;
+  }
 
   function visible() {
     return MODEL.items.filter((it) => {
@@ -56,10 +79,18 @@
       if (kindF !== "all" && it.kind !== kindF) return false;
       if (q) {
         const hay = (it.name + " " + it.source + " " + it.kind + " " + (it.runner || "") + " "
-          + (it.workdir || "") + " " + (it.repo || "") + " " + (it.config_path || "")).toLowerCase();
+          + (it.owner || "") + " " + (it.escalates_to || "") + " " + (it.description || "") + " "
+          + (it.workdir || "") + " " + (it.repo || "") + " " + (it.config_path || "") + " "
+          + (it.expected_outputs || []).join(" ") + " " + (it.surface_claims || []).join(" ")).toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
+    }).sort((a, b) => {
+      const aa = MODEL.attn.has(a.id) ? 0 : 1, bb = MODEL.attn.has(b.id) ? 0 : 1;
+      if (aa !== bb) return aa - bb;
+      const pa = priority(a), pb = priority(b);
+      if (pa !== pb) return pa - pb;
+      return (a.source + a.name + a.id).localeCompare(b.source + b.name + b.id);
     });
   }
 
@@ -91,15 +122,16 @@
            <label style="font-size:var(--text-xs);color:var(--muted);display:flex;gap:6px;align-items:center"><input type="checkbox" id="auto-all" ${scope === "all" ? "checked" : ""}/> show all sources</label>
          </div>`
       + (rows.length ? `<table class="tbl"><thead><tr>
-            <th>Automation</th><th>Source</th><th>Status</th><th>Cadence</th><th>Last run</th><th>Next run</th><th>Where</th></tr></thead><tbody>`
+            <th>Automation</th><th>Owner</th><th>Source</th><th>Status</th><th>Cadence</th><th>Last run</th><th>Contract</th><th>Where</th></tr></thead><tbody>`
         + rows.map((it) => `<tr>
               <td><div style="font-weight:500;color:var(--ink)">${esc(it.name)}</div>
                   <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px"><span class="tag">${esc(it.kind)}</span>${MODEL.attn.has(it.id) ? `<span class="tag warn">attention</span>` : ""}${(it.notes || []).length ? `<span style="font-size:var(--text-xs);color:var(--faint)">${esc(it.notes.join(" · "))}</span>` : ""}</div></td>
+              <td>${ownerCell(it)}</td>
               <td><span class="tag">${esc(it.source)}</span><div style="font-size:var(--text-xs);color:var(--muted);margin-top:2px">${esc(it.runner || "")}</div></td>
               <td>${statusTag(it.status)}</td>
-              <td style="font-size:var(--text-sm);color:var(--ink-2)">${esc(it.cadence || "—")}</td>
+              <td style="font-size:var(--text-sm);color:var(--ink-2)">${esc(it.cadence || "—")}${it.next_run ? `<div style="font-size:var(--text-xs);color:var(--muted)">next ${relTime(it.next_run)}</div>` : ""}</td>
               <td style="font-size:var(--text-sm);color:var(--muted)">${relTime(it.last_run)}${it.last_status ? " " + statusTag(it.last_status) : ""}</td>
-              <td style="font-size:var(--text-sm);color:var(--muted)">${it.next_run ? relTime(it.next_run) : "—"}</td>
+              <td>${contractCell(it)}</td>
               <td>${pathCell(it)}</td></tr>`).join("")
         + `</tbody></table>`
         : `<p class="empty">No automations match — ${scope === "local" && sourceF === "all" ? "try “show all sources”." : "adjust the filters."}</p>`)

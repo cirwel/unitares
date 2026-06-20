@@ -19,6 +19,22 @@ const dashboardDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
  * @param {string[]} files - script filenames relative to dashboard/, in load order.
  */
 export function loadDashboardScripts(files) {
+    if (!window.localStorage || typeof window.localStorage.getItem !== 'function') {
+        const store = new Map();
+        const storage = {
+            getItem: (key) => (store.has(String(key)) ? store.get(String(key)) : null),
+            setItem: (key, value) => {
+                store.set(String(key), String(value));
+            },
+            removeItem: (key) => {
+                store.delete(String(key));
+            },
+            clear: () => {
+                store.clear();
+            },
+        };
+        Object.defineProperty(window, 'localStorage', { value: storage, configurable: true });
+    }
     for (const file of files) {
         const src = fs.readFileSync(path.join(dashboardDir, file), 'utf8');
         // Indirect eval via window → runs in global scope, not this function's.
