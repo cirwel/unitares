@@ -51,6 +51,12 @@ _MIDDLEWARE_IDENTITY_ARG_KEYS = (
     "_core_agent_row_status",
 )
 
+# Identity-lifecycle tools are `pre_onboard` but are NOT pure reads — they
+# establish/inspect identity and own their own resolution downstream. The
+# pre_onboard read short-circuit (#945 §1) must skip these so onboard/identity
+# still receive the dispatch-threaded resolution they rely on.
+_IDENTITY_LIFECYCLE_TOOLS = frozenset({"identity", "onboard", "bind_session"})
+
 
 def _clear_middleware_identity(arguments: Optional[Dict[str, Any]]) -> None:
     """Remove caller-provided internal identity handoff fields."""
@@ -630,6 +636,59 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     _token_agent_uuid = extract_token_agent_uuid_safe(
         arguments.get("continuity_token") if arguments else None
     )
+
+    # #945 §1: short-circuit identity resolution for pre_onboard READ calls
+    # that present no proof. The old shape resolved-then-guarded — EVERY tool
+    # ran resolve_session_identity(resume=True) and pre_onboard tools were only
+    # spared the force_new auto-mint *retry* below. But the resume itself can
+    # fingerprint-bind to an existing identity, which then gets written into the
+    # sticky transport cache at the tail of this function, so a pure read by an
+    # unbound caller still PRODUCED a cacheable identity as a side effect.
+    # Guarding-first instead: when the call resolves to pre_onboard, is not an
+    # identity-lifecycle tool, and the caller supplied no proof (continuity
+    # token / client_session_id / agent_uuid / UUID X-Agent-Id), skip resolution
+    # entirely and leave the request unbound. Reads that DO carry proof still
+    # resume-resolve — reading an existing identity is legitimate, not
+    # "producing" one — preserving the test_read_only_*_session_miss contract.
+    _has_identity_proof = bool(
+        _token_agent_uuid
+        or (arguments and arguments.get("client_session_id"))
+        or (arguments and arguments.get("agent_uuid"))
+        or (
+            x_agent_id_header
+            and len(x_agent_id_header) == 36
+            and x_agent_id_header.count("-") == 4
+        )
+    )
+    if not _has_identity_proof and canonical_name not in _IDENTITY_LIFECYCLE_TOOLS:
+        from src.mcp_handlers.decorators import get_call_identity_requirement
+        if get_call_identity_requirement(canonical_name, arguments) == "pre_onboard":
+            logger.info(
+                "[DISPATCH] pre_onboard read %s with no proof — short-circuiting "
+                "identity resolution (no resolve, no mint, no sticky cache)",
+                name,
+            )
+            from ..context import set_session_context
+            client_hint = arguments.get("client_hint") if arguments else None
+            context_token = set_session_context(
+                session_key=session_key,
+                client_session_id=client_session_id,
+                agent_id=None,
+                client_hint=client_hint,
+                identity_result=None,
+            )
+            ctx.session_key = session_key
+            ctx.client_session_id = client_session_id
+            ctx.bound_agent_id = None
+            ctx.context_token = context_token
+            ctx.client_hint = client_hint
+            ctx.identity_result = None
+            _attach_middleware_identity(
+                arguments,
+                session_key=session_key,
+                identity_result=None,
+            )
+            return name, arguments, ctx
 
     bound_agent_id = None
     identity_result = None
