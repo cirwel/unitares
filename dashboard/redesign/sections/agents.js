@@ -32,6 +32,19 @@
       + `<span class="val">${num(val)}</span></div>`;
   }
 
+  // E/I/S/V bars + coh/risk/φ. `note` (optional) flags fallback data ("last check-in").
+  function stateBlock(m, note) {
+    m = m || {};
+    return `<div class="eyebrow" style="margin-bottom:var(--space-3)">State${note ? ` <span style="text-transform:none;letter-spacing:0;color:var(--faint);font-weight:400">${note}</span>` : ""}</div>
+      <div class="eisv" style="margin-bottom:var(--space-4)">
+        ${eisvRow("E", m.E, "e", false)}${eisvRow("I", m.I, "i", false)}
+        ${eisvRow("S", m.S, "s", false)}${eisvRow("V", m.V, "v", true)}
+      </div>
+      <div style="display:flex;gap:var(--space-5);font-family:var(--font-mono);font-size:var(--text-sm);color:var(--ink-2)">
+        <span>coh ${num(m.coherence)}</span><span>risk ${num(m.risk)}</span>${typeof m.phi === "number" ? `<span>φ ${num(m.phi)}</span>` : ""}
+      </div>`;
+  }
+
   function detailPanel(a) {
     const m = a.metrics || {};
     const st = staleness(a.last, MODEL.nowMs);
@@ -48,16 +61,7 @@
         <button class="theme-toggle" id="ag-detail-close">✕ close</button>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-6)">
-        <div>
-          <div class="eyebrow" style="margin-bottom:var(--space-3)">State</div>
-          <div class="eisv" style="margin-bottom:var(--space-4)">
-            ${eisvRow("E", m.E, "e", false)}${eisvRow("I", m.I, "i", false)}
-            ${eisvRow("S", m.S, "s", false)}${eisvRow("V", m.V, "v", true)}
-          </div>
-          <div style="display:flex;gap:var(--space-5);font-family:var(--font-mono);font-size:var(--text-sm);color:var(--ink-2)">
-            <span>coh ${num(m.coherence)}</span><span>risk ${num(m.risk)}</span>${typeof m.phi === "number" ? `<span>φ ${num(m.phi)}</span>` : ""}
-          </div>
-        </div>
+        <div id="ag-state">${stateBlock(m, "")}</div>
         <div>
           <div class="eyebrow" style="margin-bottom:var(--space-3)">Identity</div>
           ${idField("id", a.agent_id || "—")}
@@ -110,6 +114,16 @@
       meta.innerHTML = "· " + pts.length + (histMode === "all" ? " sampled" : "") + " check-ins" + ofTotal + span
         + (deep ? ` &nbsp; ${seg("recent", "recent")}${seg("all", "full lifespan")}` : "");
       meta.querySelectorAll(".hmode").forEach((b) => { b.onclick = () => { if (b.dataset.hmode !== histMode) { histMode = b.dataset.hmode; renderHistory(selectedId); } }; });
+    }
+    // Fall back the State bars to the agent's most recent recorded check-in when
+    // the live list-metrics are null — clearly labelled, so it never reads as
+    // current. pts is oldest→newest, so the last point is the latest check-in.
+    const liveAgent = MODEL.list.find((x) => x.agent_id === id);
+    if (!liveAgent || !liveAgent.metrics || typeof liveAgent.metrics.E !== "number") {
+      const lp = pts[pts.length - 1], sb = document.getElementById("ag-state");
+      if (lp && sb) sb.innerHTML = stateBlock(
+        { E: lp.E, I: lp.I, S: lp.S, V: lp.V, coherence: lp.coherence, risk: lp.risk },
+        "· last check-in " + staleness(lp.t, MODEL.nowMs).label);
     }
     const cv = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
     const labels = pts.map((p) => wideSpan ? (p.t || "").slice(5, 10) : (p.t || "").slice(11, 16));
