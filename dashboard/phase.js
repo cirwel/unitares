@@ -141,6 +141,17 @@
         return a.label || a.display_name || a.name || (a.agent_id || '?').slice(0, 12);
     }
 
+    // Authoritative per-agent basin (server-computed classify_basin over the full
+    // 6-input classifier). This is the TRUE classification, drawn as the particle
+    // ring — so a dot's basin no longer has to be inferred from its I-axis band
+    // (which is only a 1-D projection and can disagree). No ring when basin absent.
+    function basinStroke(basin) {
+        if (basin === 'high') return 'rgba(52,211,153,0.9)';
+        if (basin === 'boundary') return 'rgba(251,191,36,0.9)';
+        if (basin === 'low') return 'rgba(96,165,250,0.95)';
+        return 'rgba(255,255,255,0.15)';
+    }
+
     // ========================================================================
     // SVG setup
     // ========================================================================
@@ -222,11 +233,13 @@
                 .attr('stroke-width', 0.8);
         });
 
-        // Basin labels (right-aligned, very subtle)
+        // I-axis bands — a 1-D projection of the classifier (integrity breakpoints
+        // only). The authoritative per-agent basin is the particle RING, not the
+        // band a dot sits in; labels say "low/high I" to avoid over-claiming.
         var labels = [
-            { text: 'LOW BASIN', y: 0.25, color: '96,165,250' },
-            { text: 'BOUNDARY', y: 0.6, color: '251,191,36' },
-            { text: 'HIGH BASIN', y: 0.85, color: '52,211,153' }
+            { text: 'low I', y: 0.25, color: '96,165,250' },
+            { text: 'mid I', y: 0.6, color: '251,191,36' },
+            { text: 'high I', y: 0.85, color: '52,211,153' }
         ];
         labels.forEach(function (l) {
             basins.append('text')
@@ -387,11 +400,13 @@
             .attr('fill', function (d) { return voidColorAlpha((d.metrics || {}).V, 0.08); })
             .attr('filter', 'url(#glow-outer)');
 
-        // Core circle
+        // Core circle. Fill = V (valence), size = S (entropy), ring = authoritative basin.
         enter.append('circle')
             .attr('class', 'agent-core')
             .attr('r', function (d) { return dotRadius((d.metrics || {}).S); })
             .attr('fill', function (d) { return voidColor((d.metrics || {}).V); })
+            .attr('stroke', function (d) { return basinStroke((d.metrics || {}).basin); })
+            .attr('stroke-width', 2.5)
             .attr('filter', 'url(#glow)')
             .style('cursor', 'pointer');
 
@@ -432,7 +447,8 @@
         merged.select('.agent-core')
             .transition().duration(CFG.transition)
             .attr('r', function (d) { return dotRadius((d.metrics || {}).S); })
-            .attr('fill', function (d) { return voidColor((d.metrics || {}).V); });
+            .attr('fill', function (d) { return voidColor((d.metrics || {}).V); })
+            .attr('stroke', function (d) { return basinStroke((d.metrics || {}).basin); });
 
         merged.select('.agent-label')
             .transition().duration(CFG.transition)
