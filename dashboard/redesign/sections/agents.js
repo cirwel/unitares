@@ -190,13 +190,43 @@
   }
 
   function render() {
-    const list = MODEL.list.slice();
-    const q = ($("#ag-search") && $("#ag-search").value || "").toLowerCase().trim();
+    // Controls keep the user's RAW search text (case preserved); filtering reads
+    // it lowercased in renderResults(). The results live in their own container,
+    // so typing/filtering re-renders only the rows — the search box keeps focus,
+    // cursor and text, and an open detail's chart isn't torn down per keystroke.
+    const q = (($("#ag-search") && $("#ag-search").value) || "");
     const statusF = $("#ag-status") ? $("#ag-status").value : "all";
     const sortF = $("#ag-sort") ? $("#ag-sort").value : "recent";
     const prodOnly = $("#ag-prod") ? $("#ag-prod").checked : false;
 
-    let rows = list.filter((a) => {
+    const selected = selectedId && MODEL.list.find((a) => a.agent_id === selectedId);
+    $("#ag-mount").innerHTML =
+      (selected ? detailPanel(selected) : "")
+      + `<div style="display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-4)">
+         <input id="ag-search" placeholder="search name · id · purpose · tag" value="${q.replace(/"/g, "&quot;")}"
+           style="flex:1;min-width:200px;padding:var(--space-2) var(--space-3);font-family:var(--font-sans);font-size:var(--text-sm);background:var(--surface);color:var(--ink);border:var(--hairline) solid var(--line-2);border-radius:var(--radius-sm)" />
+         <select id="ag-status" class="theme-toggle">${["all", "active", "paused", "archived"].map((s) => `<option ${s === statusF ? "selected" : ""}>${s}</option>`).join("")}</select>
+         <select id="ag-sort" class="theme-toggle">${[["recent", "newest"], ["name", "name"], ["coherence", "coherence"], ["risk", "risk"], ["updates", "updates"]].map(([v, t]) => `<option value="${v}" ${v === sortF ? "selected" : ""}>${t}</option>`).join("")}</select>
+         <label style="font-size:var(--text-xs);color:var(--muted);display:flex;gap:6px;align-items:center"><input type="checkbox" id="ag-prod" ${prodOnly ? "checked" : ""}/> prod only</label>
+       </div>
+       <div id="ag-results"></div>`;
+
+    wire();
+    renderResults();
+    if (selected) renderHistory(selectedId);
+    else if (histChart) { histChart.destroy(); histChart = null; }
+  }
+
+  // Rows + summary only — re-rendered on each keystroke/filter without touching
+  // the controls (search keeps focus/cursor) or the open detail panel/chart.
+  function renderResults() {
+    const mount = $("#ag-results"); if (!mount) return;
+    const q = (($("#ag-search") && $("#ag-search").value) || "").toLowerCase().trim();
+    const statusF = $("#ag-status") ? $("#ag-status").value : "all";
+    const sortF = $("#ag-sort") ? $("#ag-sort").value : "recent";
+    const prodOnly = $("#ag-prod") ? $("#ag-prod").checked : false;
+
+    let rows = MODEL.list.slice().filter((a) => {
       if (statusF !== "all" && a.status !== statusF) return false;
       if (prodOnly && (a.tags || []).some((t) => /test|experimental|ephemeral/.test(t))) return false;
       if (q) {
@@ -205,7 +235,6 @@
       }
       return true;
     });
-
     const cmp = {
       recent: (a, b) => Date.parse(b.last || 0) - Date.parse(a.last || 0),
       name: (a, b) => (a.label || a.agent_id || "").localeCompare(b.label || b.agent_id || ""),
@@ -237,11 +266,9 @@
         <td class="mono" style="color:var(--muted)">${st.label}</td>
       </tr>`;
     };
-
     const head = `<thead><tr>
       <th></th><th>Agent</th><th>Verdict</th><th>Coh</th><th>Risk</th><th>Updates</th><th>Last seen</th>
     </tr></thead>`;
-
     const sm = MODEL.summary || {};
     const moreBtn = participated.length > pageSize
       ? `<div style="text-align:center;margin-top:var(--space-4)"><button class="theme-toggle" id="ag-more">Show ${Math.min(20, participated.length - pageSize)} more (${shown.length} of ${participated.length})</button></div>` : "";
@@ -251,17 +278,8 @@
          ${never.length ? `<table class="tbl" style="margin-top:var(--space-3)">${head}<tbody>${never.slice(0, 30).map(tr).join("")}</tbody></table>`
             : `<p class="empty">Not in this snapshot subset — ${sm.neverParticipated} fleet-wide.</p>`}</details>` : "";
 
-    const selected = selectedId && MODEL.list.find((a) => a.agent_id === selectedId);
-    $("#ag-mount").innerHTML =
-      (selected ? detailPanel(selected) : "")
-      + `<div style="display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-4)">
-         <input id="ag-search" placeholder="search name · id · purpose · tag" value="${q.replace(/"/g, "&quot;")}"
-           style="flex:1;min-width:200px;padding:var(--space-2) var(--space-3);font-family:var(--font-sans);font-size:var(--text-sm);background:var(--surface);color:var(--ink);border:var(--hairline) solid var(--line-2);border-radius:var(--radius-sm)" />
-         <select id="ag-status" class="theme-toggle">${["all", "active", "paused", "archived"].map((s) => `<option ${s === statusF ? "selected" : ""}>${s}</option>`).join("")}</select>
-         <select id="ag-sort" class="theme-toggle">${[["recent", "newest"], ["name", "name"], ["coherence", "coherence"], ["risk", "risk"], ["updates", "updates"]].map(([v, t]) => `<option value="${v}" ${v === sortF ? "selected" : ""}>${t}</option>`).join("")}</select>
-         <label style="font-size:var(--text-xs);color:var(--muted);display:flex;gap:6px;align-items:center"><input type="checkbox" id="ag-prod" ${prodOnly ? "checked" : ""}/> prod only</label>
-       </div>
-       <div style="display:flex;gap:var(--space-5);margin-bottom:var(--space-3);font-size:var(--text-xs);color:var(--muted)">
+    mount.innerHTML =
+      `<div style="display:flex;gap:var(--space-5);margin-bottom:var(--space-3);font-size:var(--text-xs);color:var(--muted)">
          <span><b style="color:var(--ink)">${sm.total ?? rows.length}</b> total</span>
          <span><b style="color:var(--ink)">${sm.active ?? "—"}</b> active</span>
          <span><b style="color:var(--ink)">${sm.participated ?? participated.length}</b> participated</span>
@@ -270,22 +288,18 @@
        </div>
        ${shown.length ? `<table class="tbl">${head}<tbody>${shown.map(tr).join("")}</tbody></table>` : `<p class="empty">No agents match the current filters.</p>`}
        ${moreBtn}${neverGroup}`;
-
-    wire();
-    // (Re)build the trajectory chart when a detail is open; the canvas is fresh
-    // after every innerHTML write, so this runs on each render (cache avoids refetch).
-    if (selected) renderHistory(selectedId);
-    else if (histChart) { histChart.destroy(); histChart = null; }
+    wireResults();
   }
   function cmp_recent(a, b) { return Date.parse(b.last || 0) - Date.parse(a.last || 0); }
 
+  function wireResults() {
+    const more = $("#ag-more"); if (more) more.onclick = () => { pageSize += 20; renderResults(); };
+    document.querySelectorAll("#ag-results .ag-row").forEach((row) => { row.onclick = () => select(row.dataset.id); });
+  }
+
   function wire() {
-    const s = $("#ag-search"); if (s) s.oninput = () => { pageSize = 20; render(); };
-    ["#ag-status", "#ag-sort", "#ag-prod"].forEach((id) => { const el = $(id); if (el) el.onchange = () => { pageSize = 20; render(); }; });
-    const more = $("#ag-more"); if (more) more.onclick = () => { pageSize += 20; render(); };
-    document.querySelectorAll("#ag-mount .ag-row").forEach((row) => {
-      row.onclick = () => select(row.dataset.id);
-    });
+    const s = $("#ag-search"); if (s) s.oninput = () => { pageSize = 20; renderResults(); };
+    ["#ag-status", "#ag-sort", "#ag-prod"].forEach((id) => { const el = $(id); if (el) el.onchange = () => { pageSize = 20; renderResults(); }; });
     const close = $("#ag-detail-close"); if (close) close.onclick = () => { selectedId = null; render(); };
   }
 
