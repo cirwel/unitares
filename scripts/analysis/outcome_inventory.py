@@ -300,7 +300,9 @@ def build_inventory(
         hard_exogenous_count=hard_exogenous_count,
         eprocess_eligible_count=eprocess_eligible_count,
         total_prediction_id_count=total_prediction_id_count,
-        eprocess_eligible_by_harness_lane=dict(sorted(eprocess_eligible_by_harness_lane.items())),
+        eprocess_eligible_by_harness_lane=dict(
+            sorted(eprocess_eligible_by_harness_lane.items())
+        ),
     )
 
 
@@ -314,6 +316,64 @@ def _format_rate(rate: float | None) -> str:
 def _format_lead(lead: float) -> str:
     """Format a lead-minute value for stable column names."""
     return str(int(lead)) if float(lead).is_integer() else str(lead).replace(".", "p")
+
+
+def _harness_lane_summary_rows(
+    inventory: OutcomeInventory,
+    *,
+    lead_minutes: Sequence[float],
+) -> list[list[str]]:
+    """Summarize outcome, task-scope, and prior-state coverage by harness lane."""
+    leads = tuple(float(lead) for lead in lead_minutes)
+    summaries: dict[str, dict[str, Any]] = {}
+    for bucket in inventory.buckets:
+        lane_summary = summaries.setdefault(
+            bucket.harness_lane,
+            {
+                "outcomes": 0,
+                "bad": 0,
+                "strict_outcomes": 0,
+                "strict_bad": 0,
+                "task_scope_outcomes": 0,
+                "task_scope_bad": 0,
+                "eprocess_eligible": 0,
+                "prediction_id": 0,
+                "prior_state": {lead: 0 for lead in leads},
+            },
+        )
+        lane_summary["outcomes"] += bucket.n_total
+        lane_summary["bad"] += bucket.n_bad
+        if bucket.scope == "strict":
+            lane_summary["strict_outcomes"] += bucket.n_total
+            lane_summary["strict_bad"] += bucket.n_bad
+        if bucket.scope in {"strict", "task"}:
+            lane_summary["task_scope_outcomes"] += bucket.n_total
+            lane_summary["task_scope_bad"] += bucket.n_bad
+        if bucket.eprocess_eligible:
+            lane_summary["eprocess_eligible"] += bucket.n_total
+        lane_summary["prediction_id"] += bucket.prediction_id_count
+        for lead in leads:
+            lane_summary["prior_state"][lead] += bucket.prior_state_counts.get(lead, 0)
+
+    rows: list[list[str]] = []
+    for lane, summary in sorted(summaries.items()):
+        outcomes = int(summary["outcomes"])
+        prior_state = summary["prior_state"]
+        rows.append(
+            [
+                lane,
+                str(outcomes),
+                str(summary["bad"]),
+                str(summary["strict_outcomes"]),
+                str(summary["strict_bad"]),
+                str(summary["task_scope_outcomes"]),
+                str(summary["task_scope_bad"]),
+                str(summary["eprocess_eligible"]),
+                str(summary["prediction_id"]),
+                *[f"{prior_state[lead]}/{outcomes}" for lead in leads],
+            ]
+        )
+    return rows
 
 
 def format_inventory_report(
@@ -340,11 +400,33 @@ def format_inventory_report(
         f"eprocess_eligible: {inventory.eprocess_eligible_count}",
         *[
             f"eprocess_eligible_{lane}: {count}"
-            for lane, count in sorted(inventory.eprocess_eligible_by_harness_lane.items())
+            for lane, count in sorted(
+                inventory.eprocess_eligible_by_harness_lane.items()
+            )
         ],
         f"prediction_id_present: {inventory.total_prediction_id_count}",
         "",
+        "## Harness Lane Summary",
+        "",
     ]
+
+    summary_headers = [
+        "Lane",
+        "Outcomes",
+        "Bad",
+        "Strict outcomes",
+        "Strict bad",
+        "Task-scope outcomes",
+        "Task-scope bad",
+        "E-process eligible",
+        "Prediction IDs",
+        *[f"Prior state {_format_lead(lead)}m" for lead in leads],
+    ]
+    lines.append("| " + " | ".join(summary_headers) + " |")
+    lines.append("|" + "|".join("---" for _ in summary_headers) + "|")
+    for row in _harness_lane_summary_rows(inventory, lead_minutes=leads):
+        lines.append("| " + " | ".join(row) + " |")
+    lines.append("")
 
     lead_headers = [f"prior_state_{_format_lead(lead)}m" for lead in leads]
     headers = [
@@ -406,8 +488,7 @@ def _build_fetch_query(lead_minutes: Sequence[float]) -> str:
     lead_selects = []
     for index, _lead in enumerate(lead_minutes):
         placeholder = index + 2
-        lead_selects.append(
-            f"""
+        lead_selects.append(f"""
                 EXISTS (
                     SELECT 1
                     FROM core.identities ident
@@ -418,8 +499,7 @@ def _build_fetch_query(lead_minutes: Sequence[float]) -> str:
                       AND state.recorded_at <= o.ts - (${placeholder}::double precision * INTERVAL '1 minute')
                     LIMIT 1
                 ) AS {_lead_alias(index)}
-            """
-        )
+            """)
     return f"""
         SELECT
             o.outcome_type,
@@ -433,7 +513,9 @@ def _build_fetch_query(lead_minutes: Sequence[float]) -> str:
     """
 
 
-def _row_from_record(record: Mapping[str, Any], lead_minutes: Sequence[float]) -> OutcomeInventoryRow:
+def _row_from_record(
+    record: Mapping[str, Any], lead_minutes: Sequence[float]
+) -> OutcomeInventoryRow:
     """Convert an asyncpg record to an inventory row."""
     data = dict(record)
     prior_state_by_lead = {
@@ -459,7 +541,10 @@ async def fetch_rows(
     try:
         asyncpg = importlib.import_module("asyncpg")
     except ImportError:
-        print("error: asyncpg not installed. Install with `pip install asyncpg`.", file=sys.stderr)
+        print(
+            "error: asyncpg not installed. Install with `pip install asyncpg`.",
+            file=sys.stderr,
+        )
         raise SystemExit(1) from None
 
     leads = tuple(float(lead) for lead in lead_minutes)

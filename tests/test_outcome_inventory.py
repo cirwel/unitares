@@ -65,33 +65,39 @@ def test_build_inventory_groups_by_scope_type_source_and_evidence_flags():
         for bucket in inventory.buckets
     }
 
-    strict_tests = by_key[(
-        "strict",
-        "test_passed/test_failed",
-        "server_observation",
-        True,
-        True,
-        "registry",
-    )]
+    strict_tests = by_key[
+        (
+            "strict",
+            "test_passed/test_failed",
+            "server_observation",
+            True,
+            True,
+            "registry",
+        )
+    ]
     assert strict_tests.n_total == 2
     assert strict_tests.n_bad == 1
     assert strict_tests.bad_rate == 0.5
     assert strict_tests.prior_state_counts == {0.0: 2, 5.0: 1, 30.0: 0}
     assert strict_tests.prediction_id_count == 2
 
-    task_failed = by_key[(
-        "task",
-        "task_failed",
-        "agent_reported_tool_result",
-        False,
-        False,
-        "prev_confidence_fallback",
-    )]
+    task_failed = by_key[
+        (
+            "task",
+            "task_failed",
+            "agent_reported_tool_result",
+            False,
+            False,
+            "prev_confidence_fallback",
+        )
+    ]
     assert task_failed.n_total == 1
     assert task_failed.n_bad == 1
     assert task_failed.prior_state_counts == {0.0: 1, 5.0: 1, 30.0: 1}
 
-    other = by_key[("other", "drawing_completed", "external_signal", False, False, "none")]
+    other = by_key[
+        ("other", "drawing_completed", "external_signal", False, False, "none")
+    ]
     assert other.n_total == 1
     assert inventory.total_outcomes == 4
     assert inventory.total_bad == 2
@@ -104,7 +110,11 @@ def test_build_inventory_splits_beam_harness_from_substrate_lane():
             outcome_type="task_completed",
             is_bad=False,
             verification_source="external_signal",
-            detail={"hard_exogenous": True, "eprocess_eligible": True, "harness": "beam"},
+            detail={
+                "hard_exogenous": True,
+                "eprocess_eligible": True,
+                "harness": "beam",
+            },
             prior_state_by_lead={0.0: False},
         ),
         OutcomeInventoryRow(
@@ -125,6 +135,62 @@ def test_build_inventory_splits_beam_harness_from_substrate_lane():
     assert by_lane["substrate"].n_total == 1
     assert by_lane["substrate"].prior_state_counts == {0.0: 1}
     assert inventory.eprocess_eligible_by_harness_lane == {"beam": 1, "substrate": 1}
+
+
+def test_format_inventory_report_includes_harness_lane_summary():
+    rows = [
+        OutcomeInventoryRow(
+            outcome_type="task_completed",
+            is_bad=False,
+            verification_source="external_signal",
+            detail={
+                "hard_exogenous": True,
+                "eprocess_eligible": True,
+                "harness": "beam",
+            },
+            prior_state_by_lead={0.0: False},
+        ),
+        OutcomeInventoryRow(
+            outcome_type="task_failed",
+            is_bad=True,
+            verification_source="external_signal",
+            detail={
+                "hard_exogenous": True,
+                "eprocess_eligible": True,
+                "harness": "beam",
+            },
+            prior_state_by_lead={0.0: False},
+        ),
+        OutcomeInventoryRow(
+            outcome_type="test_passed",
+            is_bad=False,
+            verification_source="server_observation",
+            detail={
+                "hard_exogenous": True,
+                "eprocess_eligible": True,
+                "prediction_id": "pred-1",
+            },
+            prior_state_by_lead={0.0: True},
+        ),
+        OutcomeInventoryRow(
+            outcome_type="task_failed",
+            is_bad=True,
+            verification_source="agent_reported_tool_result",
+            detail={"hard_exogenous": False, "eprocess_eligible": False},
+            prior_state_by_lead={0.0: True},
+        ),
+    ]
+
+    inventory = build_inventory(rows, lead_minutes=(0.0,))
+    report = format_inventory_report(inventory, window_days=90, lead_minutes=(0.0,))
+
+    assert "## Harness Lane Summary" in report
+    assert (
+        "| Lane | Outcomes | Bad | Strict outcomes | Strict bad | Task-scope outcomes | Task-scope bad | E-process eligible | Prediction IDs | Prior state 0m |"
+        in report
+    )
+    assert "| beam | 2 | 1 | 0 | 0 | 2 | 1 | 2 | 0 | 0/2 |" in report
+    assert "| substrate | 2 | 1 | 1 | 0 | 2 | 1 | 1 | 1 | 2/2 |" in report
 
 
 def test_format_inventory_report_exposes_zero_bad_strict_and_prior_coverage():
@@ -163,6 +229,8 @@ def test_controlled_validation_fixture_detection_covers_legacy_and_new_markers()
     assert is_controlled_validation_fixture({"test_name": "overconfidence_probe"})
     assert is_controlled_validation_fixture({"synthetic_calibration_fixture": True})
     assert is_controlled_validation_fixture({"do_not_use_for_live_validation": True})
-    assert is_controlled_validation_fixture({"prediction_binding": "synthetic_negative_control"})
+    assert is_controlled_validation_fixture(
+        {"prediction_binding": "synthetic_negative_control"}
+    )
     assert is_controlled_validation_fixture({"calibration_excluded": True})
     assert not is_controlled_validation_fixture({"test_name": "real_pytest_suite"})
