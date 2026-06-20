@@ -1038,7 +1038,11 @@ async def http_agent_history(request):
         limit = int(request.query_params.get("limit", "80"))
     except (TypeError, ValueError):
         limit = 80
-    limit = max(2, min(limit, 300))
+    limit = max(2, min(limit, 400))
+    # Context-aware: 'recent' = the last `limit` raw check-ins (event-by-event);
+    # 'all' = ~`limit` real check-ins sampled evenly across the agent's whole
+    # lifespan (decimation, not averaging — every point is a real check-in).
+    mode = "all" if request.query_params.get("mode") == "all" else "recent"
     try:
         from src.db import get_db
         db = get_db()
@@ -1046,7 +1050,8 @@ async def http_agent_history(request):
             # Identity resolution: check-in history is keyed by the agent's UUID
             # identity, but the agent list may show the structured id (mcp_DATE_<8hex>)
             # whose suffix is that UUID's prefix. Match exact id OR the UUID identity
-            # whose prefix == the structured id's trailing 8 hex.
+            # whose prefix == the structured id's trailing 8 hex. The numbered CTE
+            # carries the total so the panel can tell how much history exists.
             rows = await conn.fetch(
                 """
                 WITH ids AS (
@@ -1056,27 +1061,38 @@ async def http_agent_history(request):
                      WHERE substring($1 from '([0-9a-f]{8})$') IS NOT NULL
                        AND agent_id ~ '^[0-9a-f]{8}-'
                        AND agent_id LIKE substring($1 from '([0-9a-f]{8})$') || '%'
+                ),
+                numbered AS (
+                    SELECT s.recorded_at,
+                           (s.state_json->>'E')::real AS e,
+                           s.integrity AS i, s.entropy AS s_entropy, s.volatility AS v,
+                           s.coherence, s.risk_score,
+                           row_number() OVER (ORDER BY s.recorded_at) AS rn,
+                           count(*) OVER () AS total
+                    FROM core.agent_state s
+                    WHERE s.identity_id IN (SELECT identity_id FROM ids) AND s.synthetic = false
                 )
-                SELECT s.recorded_at,
-                       (s.state_json->>'E')::real AS e,
-                       s.integrity AS i, s.entropy AS s_entropy, s.volatility AS v,
-                       s.coherence, s.risk_score
-                FROM core.agent_state s
-                WHERE s.identity_id IN (SELECT identity_id FROM ids) AND s.synthetic = false
-                ORDER BY s.recorded_at DESC
-                LIMIT $2
+                SELECT recorded_at, e, i, s_entropy, v, coherence, risk_score, total
+                FROM numbered
+                WHERE CASE WHEN $3 = 'all'
+                           THEN (rn % GREATEST(1, (total / $2)::int) = 0 OR rn = 1 OR rn = total)
+                           ELSE rn > total - $2
+                      END
+                ORDER BY recorded_at
                 """,
-                agent_id, limit,
+                agent_id, limit, mode,
             )
+        total = rows[0]["total"] if rows else 0
         points = [
             {
                 "t": r["recorded_at"].isoformat(),
                 "E": r["e"], "I": r["i"], "S": r["s_entropy"], "V": r["v"],
                 "coherence": r["coherence"], "risk": r["risk_score"],
             }
-            for r in reversed(rows)
+            for r in rows
         ]
-        return JSONResponse({"success": True, "agent_id": agent_id, "count": len(points), "points": points})
+        return JSONResponse({"success": True, "agent_id": agent_id, "mode": mode,
+                             "count": len(points), "total": total, "points": points})
     except Exception as exc:  # noqa: BLE001 — read-only panel endpoint, degrade gracefully
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 

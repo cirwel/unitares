@@ -16,6 +16,7 @@
   let pageSize = 20;
   let selectedId = null;
   let histChart = null;
+  let histMode = "recent"; // "recent" (raw events) | "all" (full lifespan, sampled)
   const histCache = {};
 
   const BASIN_COLOR = { high: "var(--ok)", boundary: "var(--warn)", low: "var(--danger)" };
@@ -84,17 +85,34 @@
     const canvas = document.getElementById("ag-hist");
     const meta = document.getElementById("ag-hist-meta");
     if (!canvas || !window.Chart) return;
-    let pts = histCache[id];
-    if (!pts) { // fetch once per agent; re-renders (search/filter) reuse the cache
-      const r = await DATA.agentHistory(id, 200);
+    const ck = id + ":" + histMode;
+    let entry = histCache[ck];
+    if (!entry) { // fetch once per (agent, mode); re-renders (search/filter) reuse the cache
+      const r = await DATA.agentHistory(id, { limit: 200, mode: histMode });
       if (selectedId !== id || !document.getElementById("ag-hist")) return; // selection changed mid-fetch
-      pts = (r.data || []).filter(Boolean);
-      histCache[id] = pts;
+      const d = r.data || {};
+      entry = { pts: (d.points || []).filter(Boolean), total: d.total || 0 };
+      histCache[ck] = entry;
     }
+    const pts = entry.pts, total = entry.total;
     if (!pts.length) { if (meta) meta.textContent = "· no recorded history yet"; return; }
-    if (meta) meta.textContent = "· " + pts.length + " check-ins (each point = one)";
+    // Context-aware framing: how much of the agent's life is shown, and over what
+    // span. The recent⇄full toggle only appears when there's more history than the
+    // recent window holds — a sparse ephemeral session just shows its whole life.
+    const spanMs = pts.length > 1 ? (Date.parse(pts[pts.length - 1].t) - Date.parse(pts[0].t)) : 0;
+    const wideSpan = spanMs > 1.5 * 864e5; // > ~1.5 days ⇒ label by date, not clock
+    const fmtSpan = (ms) => { const h = ms / 3.6e6; return h < 1 ? Math.round(ms / 6e4) + "m" : h < 48 ? h.toFixed(0) + "h" : (h / 24).toFixed(0) + "d"; };
+    if (meta) {
+      const span = spanMs ? " · spans " + fmtSpan(spanMs) : "";
+      const ofTotal = total > pts.length ? " of " + total.toLocaleString() : "";
+      const deep = total > pts.length || histMode === "all"; // more history than recent holds
+      const seg = (m, label) => `<button data-hmode="${m}" class="hmode${histMode === m ? " on" : ""}" style="font:inherit;cursor:pointer;background:none;border:none;padding:0 4px;color:${histMode === m ? "var(--ink-2)" : "var(--faint)"};text-decoration:${histMode === m ? "underline" : "none"}">${label}</button>`;
+      meta.innerHTML = "· " + pts.length + (histMode === "all" ? " sampled" : "") + " check-ins" + ofTotal + span
+        + (deep ? ` &nbsp; ${seg("recent", "recent")}${seg("all", "full lifespan")}` : "");
+      meta.querySelectorAll(".hmode").forEach((b) => { b.onclick = () => { if (b.dataset.hmode !== histMode) { histMode = b.dataset.hmode; renderHistory(selectedId); } }; });
+    }
     const cv = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-    const labels = pts.map((p) => (p.t || "").slice(11, 16));
+    const labels = pts.map((p) => wideSpan ? (p.t || "").slice(5, 10) : (p.t || "").slice(11, 16));
     // Event-based: each check-in is a discrete, hover-trackable point; straight
     // segments (no tension) so the line reflects actual check-ins, not a smoothed
     // interpolation. Markers shrink as the series gets denser.
@@ -259,6 +277,7 @@
 
   // Open an agent's detail (also callable for deep-link/verification).
   function select(id) {
+    if (id && id !== selectedId) histMode = "recent"; // new agent → default to recent events
     selectedId = (id && id === selectedId) ? null : id; // click again to close
     render();
     const d = document.getElementById("ag-detail");
