@@ -23,9 +23,15 @@ export function loadDashboardScripts(files) {
         const store = new Map();
         const storage = {
             getItem: (key) => (store.has(String(key)) ? store.get(String(key)) : null),
-            setItem: (key, value) => { store.set(String(key), String(value)); },
-            removeItem: (key) => { store.delete(String(key)); },
-            clear: () => { store.clear(); },
+            setItem: (key, value) => {
+                store.set(String(key), String(value));
+            },
+            removeItem: (key) => {
+                store.delete(String(key));
+            },
+            clear: () => {
+                store.clear();
+            },
         };
         Object.defineProperty(window, 'localStorage', { value: storage, configurable: true });
     }
