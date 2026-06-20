@@ -1014,7 +1014,12 @@ async def http_dashboard_redesign(request):
                 f'<script>localStorage.setItem("unitares_api_token","{http_api_token}")</script>'
             )
             content = content.replace("</head>", f"{token_script}</head>", 1)
-    return Response(content=content, media_type=media, headers={"Cache-Control": "no-cache"})
+    # The entry HTML must NEVER be cached: it carries the ?v=<mtime> asset refs,
+    # so a stale app.html would point at stale JS/CSS even though those are
+    # version-busted. no-store guarantees a fresh entry on every load; the
+    # versioned assets keep no-cache (their URL changes per deploy).
+    cache = "no-store" if target.suffix == ".html" else "no-cache"
+    return Response(content=content, media_type=media, headers={"Cache-Control": cache})
 
 
 async def http_agent_history(request):
