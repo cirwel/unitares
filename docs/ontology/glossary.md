@@ -186,6 +186,65 @@ explicit, not silently papered over by reusing a near-term.
 
 ---
 
+## Registers (the second axis)
+
+The vocabulary feels unbounded because it spans several **registers** — parallel
+ways of describing the *same* underlying referents, each existing for a different
+reason. The term count is not really growing without bound; a roughly fixed set
+of referents is being named in four registers. Tagging a term's register is the
+orthogonal second axis to "question answered."
+
+| Register | What it is *for* | Source of truth |
+|---|---|---|
+| **philosophical** (grounding) | What counts as real / earned vs. performative | `identity.md` — three stances, layered taxonomy |
+| **fep** (modeling) | Why the math is justified — borrowed from the Free Energy Principle / active inference | external (Friston); adopt only when *earned* |
+| **ops** (mechanism) | How it's implemented | handlers, lease plane, EISV code |
+| **manifesto** (norm) | What must *not* be built | Synthetic Life Axioms (`identity.md` cites them) |
+
+**Guardrail — "name nothing more rigorous than it is."** This is the sibling of
+the manifesto axiom *"build nothing that appears more alive than it is."* A `fep`
+term (`free energy`, `Markov blanket`, `active inference`) is seductive because
+it *sounds* earned — it makes the system sound like it is doing variational math
+it may not be doing. A physics term enters the `ops` or `philosophical` registers
+only when the mapping is **earned** (the math actually holds), not as decoration.
+This is the same earned-vs-performative gate `identity.md` applies to identity,
+applied here to borrowed rigor.
+
+## Cross-register map (Rosetta — skeleton)
+
+One row per **referent**; columns are its name in each register. This bounds the
+"unbounded nomenclature" into a finite table that grows by *rows* (new referents),
+not by uncontrolled vocabulary. Status marks the `fep` column specifically:
+
+- **✓ earned** — mapping holds in code/math today.
+- **~ candidate** — plausible conceptual fit, *not yet* earned; decorative if shipped as fact.
+- **✗ false friend** — looks like a synonym across registers but is a different referent; do not conflate.
+
+| Referent | philosophical | ops | fep | manifesto |
+|---|---|---|---|---|
+| Agent identity | layered continuity bundle | `uuid` + `client_session_id` | — | must be earned, not performative |
+| Internal state | behavioral trajectory | `EISV` state vector | ~ belief / hidden states of a generative model | — |
+| Healthy operating region | "stable self" | `basin` (+ health gating) | ~ attractor / characteristic-state set (**strongest candidate**) | — |
+| Deviation signal | — | `running hot`, basin-edge crossing | ~ surprise / prediction error / precision spike | — |
+| Agent↔world boundary | process-instance boundary | `lease surface`, `affordance_state` | ✗ Markov blanket (**false friend** — statistical conditional-independence boundary, *not* a coordination claim) | — |
+| Custody transfer | lineage / inheritance | `handoff` | — | — |
+| Proof of life | process-instance liveness | `heartbeat` | ~ non-equilibrium steady state / self-maintenance | "build nothing more alive than it is" |
+| Belief revision | dialectic resolution | `dialectic` | ~ active inference / belief updating | — |
+| Confidence grounding | earned vs. performative | `identity_assurance` tier, calibration | ~ precision-weighting | — |
+
+**What the skeleton already reveals:** the `fep` column is almost entirely `~`
+(candidate) — one false friend, zero `✓` earned. So as of this writing the
+**physics register is aspirational, not load-bearing**: it's the register most at
+risk of decorative borrowing, which is exactly what the "name nothing more
+rigorous than it is" guardrail exists to police. Promote a `fep` cell to `✓` only
+when there is real variational machinery behind it, not when the metaphor merely
+reads well. The four-register model holds for these nine rows; if a referent
+won't fit a column, that absence is a finding (e.g. most rows have no genuine
+`manifesto` name — the norm register governs a few load-bearing referents, not
+all of them), not a gap to backfill.
+
+---
+
 ## Maintenance
 
 When a sweep finds a new collision, add it to the high-risk table here and log
