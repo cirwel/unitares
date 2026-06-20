@@ -356,15 +356,21 @@ class KnowledgeGraphLifecycle:
         try:
             from src.db import get_db
             from src.embeddings import get_active_table_name
-            db = await get_db()
+            db = get_db()  # SYNC accessor — `await get_db()` raised TypeError
             table = get_active_table_name()
-            total = await db._pool.fetchval(
-                "SELECT COUNT(*) FROM knowledge.discoveries"
-            ) or 0
-            with_embeddings = await db._pool.fetchval(
-                f"SELECT COUNT(*) FROM knowledge.discoveries d "
-                f"WHERE d.id IN (SELECT discovery_id FROM {table})"
-            ) or 0
+            # Use the ExecutorPool-wrapped acquire() path (canonical post-PR
+            # #218). The old body did `db = await get_db()` (get_db is sync, so
+            # this raised "object can't be awaited") then `db._pool.fetchval`;
+            # both threw and the except-return-None swallowed it, so coverage
+            # surfaced as null on the live backend (fixed 2026-06-20).
+            async with db.acquire() as conn:
+                total = await conn.fetchval(
+                    "SELECT COUNT(*) FROM knowledge.discoveries"
+                ) or 0
+                with_embeddings = await conn.fetchval(
+                    f"SELECT COUNT(*) FROM knowledge.discoveries d "
+                    f"WHERE d.id IN (SELECT discovery_id FROM {table})"
+                ) or 0
             without = max(0, total - with_embeddings)
             ratio = round(with_embeddings / total, 4) if total else 0.0
             return {

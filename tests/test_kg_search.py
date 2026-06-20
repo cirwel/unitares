@@ -262,6 +262,40 @@ class TestSearchKnowledgeGraph:
         assert "confidence_note" not in data
 
     @pytest.mark.asyncio
+    async def test_long_query_gets_or_recall_fallback(self, patch_common):
+        """Recall floor (2026-06-20): a long natural-language query whose
+        AND-FTS misses must still get the OR-recall fallback.
+
+        Reproduces the live zero-result floor: semantic returns nothing, the
+        semantic→FTS fallback runs AND (which a 14-term query rarely satisfies),
+        and the OR retry — the one that would hit — was gated off by the old
+        complex_query_term_limit=4. With the cap raised, OR recall fires and the
+        answer is returned instead of a bare 0.
+        """
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        hit = make_discovery(id="or-hit", summary="agent adoption governance answer")
+
+        async def fts(query, limit, operator):
+            # AND matches nothing (not all 14 terms co-occur); OR recovers it.
+            return [hit] if operator == "OR" else []
+
+        mock_graph.semantic_search = AsyncMock(return_value=[])
+        mock_graph.full_text_search = AsyncMock(side_effect=fts)
+
+        result = await handle_search_knowledge_graph({
+            "query": "what should I work on next to make agents actually want to use governance",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["count"] == 1
+        # OR recall fired rather than being skipped for being "too long".
+        assert "fts_fallback_skipped_reason" not in data
+        assert data.get("fts_fallback_used") is True
+
+    @pytest.mark.asyncio
     async def test_search_with_include_details(self, patch_common):
         """Search with include_details=True returns full content."""
         mock_mcp_server, mock_graph = patch_common
@@ -1966,15 +2000,23 @@ class TestKgSearchComplexityCeiling:
         assert mock_graph.full_text_search.await_args.kwargs["operator"] == "AND"
 
     @pytest.mark.asyncio
-    async def test_long_fts_query_skips_automatic_or_fallback(self, patch_common):
+    async def test_term_dump_still_skips_automatic_or_fallback(self, patch_common):
+        """The OR-recall cap still bounds a pathological term-dump.
+
+        Cap raised 4→24 (2026-06-20) so ordinary natural-language questions get
+        OR recall, but a 25-term dump still skips the automatic OR fallback so a
+        pasted paragraph can't OR against the whole corpus. Pass operator='OR'
+        explicitly to override.
+        """
         mock_mcp_server, mock_graph = patch_common
         from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
 
         del mock_graph.semantic_search
         mock_graph.full_text_search = AsyncMock(return_value=[])
 
+        # 25 terms — above the new OR-recall cap of 24.
         result = await handle_search_knowledge_graph({
-            "query": "one two three four five six",
+            "query": " ".join(f"term{i}" for i in range(25)),
         })
         data = parse_result(result)
 

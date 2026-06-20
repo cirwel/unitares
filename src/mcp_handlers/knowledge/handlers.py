@@ -1106,9 +1106,16 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
         # Two DIFFERENT cost concerns, two limits (dogfood 2026-06-13 P2.8):
         #
         # - complex_query_term_limit gates the automatic AND→OR *recall*
-        #   fallback. OR across many terms explodes the FTS candidate set, so a
-        #   tight limit keeps a broad agent query from spending the whole tool
-        #   budget. Genuinely per-term expensive — stays low.
+        #   fallback. OR across many terms widens the FTS candidate set, but the
+        #   SQL `LIMIT` already bounds returned rows and the GIN index keeps the
+        #   scan cheap at this corpus size (~1k discoveries). The cap exists only
+        #   to stop a pathological term-dump (a pasted paragraph) from OR-ing
+        #   against everything. The old value of 4 was far too tight: it skipped
+        #   OR recall on ordinary 10-20 word natural-language questions, which is
+        #   exactly when the AND pass returns nothing and OR is the last resort
+        #   before a bare 0 result (dogfood 2026-06-20: a 14-term question whose
+        #   answer existed returned 0 because OR was skipped here). Raised to 24
+        #   to cover real questions while still bounding term-dumps.
         #
         # - complex_hybrid_term_limit gates auto RRF fusion. Hybrid runs
         #   semantic_search + an AND FTS query in parallel and fuses; the AND
@@ -1118,7 +1125,7 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
         #   when normal multi-term conceptual queries (10 terms is normal for
         #   agents) would benefit most. A generous cap restores fusion while
         #   still bounding pathological term dumps.
-        complex_query_term_limit = 4
+        complex_query_term_limit = 24
         complex_hybrid_term_limit = 12
 
         # Phase 3: cross-encoder reranker. When enabled, first-stage retrieval
