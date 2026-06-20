@@ -25,31 +25,9 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 
 ---
 
-<table>
-<tr>
-<td width="33%" valign="top">
-
-### 🩺 See drift early
-
-Each agent is graded against its *own* baseline. Slow degradation shows up as Integrity slipping and entropy rising — while the output still looks fine.
-
-</td>
-<td width="33%" valign="top">
-
-### 🔒 Confidence you can't fake
-
-Claims are scored against **real results** — tests, exit codes, tool output — not the agent's word. An agent can inflate `confidence`; it can't inflate its success rate.
-
-</td>
-<td width="33%" valign="top">
-
-### 🛰️ The whole fleet, live
-
-One dashboard for humans. Over the API, agents read **each other's** live state to decide whether to trust a handoff — and self-correct before a guardrail has to fire.
-
-</td>
-</tr>
-</table>
+- **Drift surfaces while the output still looks fine.** Each agent is graded against its *own* baseline, so slow degradation shows up as integrity slipping and entropy rising before the work visibly breaks.
+- **Confidence is checked against results.** Self-reported `confidence` is scored against real evidence — tests, exit codes, tool output. An agent can inflate the number; it can't inflate its success rate.
+- **The whole fleet stays legible, live.** One dashboard for humans; over the API, agents read each other's state to decide whether to trust a handoff — and self-correct before a guardrail has to fire.
 
 ## Try it in 60 seconds
 
