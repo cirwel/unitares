@@ -2,10 +2,12 @@
 
 **Created:** June 18, 2026
 **Status:** Orchestrator + reference-hook side merged (#834). The **fail-closed
-guard** (anchor honored only with an explicit orchestration marker) is a follow-up
-hardening on top of #834. The gov-plugin session-hook mirror and the dispatch-worker
-anchor remain cross-repo follow-ups (below). No new server behavior — the resume
-path already exists.
+guard** (anchor honored only with an explicit orchestration marker) was mirrored
+into the gov-plugin hook, and dispatch_beam now provisions the marker alongside
+the anchor. Strict-mode rollout added one narrow server-side first-bind carve-out:
+`orchestrated=true` plus an `agent:/thread-*` anchor may mint and persist the
+anchor binding after a resume miss, while a bare anchor still refuses under
+`STRICT_IDENTITY_REQUIRED`.
 **Operator decision (2026-06-18):** *one id per thread (resume)*, fix in *this
 repo (orchestrator + server)*; *fail-closed, no council* (the guard re-applies the
 ratified anti-siphon principle, it is not a new ontological claim).
@@ -31,19 +33,22 @@ give those turns a **stable session anchor** so they resume one identity, rather
 than mint per turn. This is *resume*, not lineage — the turns are the same agent,
 not a parent/child chain.
 
-## The mechanism (already supported server-side)
+## The mechanism
 
 `handle_onboard_v2` defaults `resume=True` (`handlers.py:1670`). A stable
 `client_session_id` resolves to the **same** governance UUID across processes:
 
-1. **Turn 1** — onboard under anchor `agent:/thread-<id>`, `resume=True`, no
-   binding yet → PATH 2 fail-closed `session_resolve_miss` → falls through to the
-   create-finisher → mints + **binds** the session under the anchor key.
+1. **Turn 1** — onboard under anchor `agent:/thread-<id>`, `resume=True`,
+   `orchestrated=true`, no binding yet → PATH 2 fail-closed
+   `session_resolve_miss` → strict Path B recognizes the orchestrated thread
+   anchor declaration → falls through to the create-finisher → mints +
+   **binds** the session under the normalized anchor key (`agent:_thread-...`).
 2. **Turn 2..N** — same anchor, `resume=True` → PATH 1/2 hit → returns the turn-1
    UUID. One id for the whole thread.
 
-So no server change was needed. The two gaps were purely *plumbing*: nothing
-provisioned the anchor, and the reference onboard hook hard-coded `force_new=true`.
+The strict-mode server carve-out is intentionally narrow: without
+`orchestrated=true`, the same resume miss still returns
+`lineage_declaration_required` instead of minting.
 
 ## What shipped here
 

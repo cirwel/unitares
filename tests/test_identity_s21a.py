@@ -18,8 +18,10 @@ import json
 import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
+from types import SimpleNamespace
 
 import pytest
+from tests.helpers import parse_result
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -405,6 +407,123 @@ class TestS21AFollowupSpawnReason:
             f"every session_resolve_miss-driven onboard mint persists with NULL "
             f"spawn_reason and the no-lineage ghost-fork rate doesn't move."
         )
+
+    @pytest.mark.asyncio
+    async def test_strict_bare_onboard_session_resolve_miss_refuses(self, monkeypatch):
+        """#425 Path B still refuses ambiguous bare onboard() under strict.
+
+        A plain client_session_id without force_new/parent/orchestrated marker
+        must not mint after a resume miss.
+        """
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        db = _make_db_no_session()
+        mock_redis = AsyncMock()
+        mock_redis.get = AsyncMock(return_value=None)
+        mock_redis.bind = AsyncMock()
+
+        async def _get_raw():
+            r = AsyncMock()
+            r.get = AsyncMock(return_value=None)
+            r.setex = AsyncMock()
+            r.expire = AsyncMock()
+            return r
+
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
+        with patch("src.mcp_handlers.identity.persistence._redis_cache", None), \
+             patch("src.cache.get_session_cache", return_value=mock_redis), \
+             patch("src.mcp_handlers.identity.handlers.get_db", return_value=db), \
+             patch("src.mcp_handlers.identity.resolution.get_db", return_value=db), \
+             patch("src.mcp_handlers.identity.persistence.get_db", return_value=db), \
+             patch("src.cache.redis_client.get_redis", new=_get_raw), \
+             patch("src.mcp_handlers.context.get_mcp_session_id", return_value=None), \
+             patch("src.mcp_handlers.context.get_context_session_key", return_value=None), \
+             patch("src.mcp_handlers.context.get_context_agent_id", return_value=None), \
+             patch("src.mcp_handlers.context.update_context_agent_id"):
+            result = await handle_onboard_v2({"client_session_id": "agent-no-prior"})
+
+        data = parse_result(result)
+        assert data["status"] == "lineage_declaration_required"
+        assert db.upsert_agent.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_strict_orchestrated_thread_anchor_mints_and_persists_anchor(self, monkeypatch):
+        """Orchestrated thread anchors are an explicit first-bind declaration.
+
+        Under STRICT_IDENTITY_REQUIRED, the first turn of a Discord thread has no
+        PG session row yet. The orchestrated marker + agent:/thread-* anchor may
+        create and persist that binding so later turns, including after restart,
+        resolve through PATH 2 instead of hitting lineage_declaration_required.
+        """
+        from src.mcp_handlers.identity.handlers import handle_onboard_v2
+
+        db = AsyncMock()
+        db.init = AsyncMock()
+        db.get_session = AsyncMock(return_value=None)
+        db.find_agent_by_label = AsyncMock(return_value=None)
+        db.get_agent_label = AsyncMock(return_value=None)
+        db.update_session_activity = AsyncMock()
+        db.create_session = AsyncMock()
+        db.upsert_agent = AsyncMock()
+        db.upsert_identity = AsyncMock()
+        db.update_agent_fields = AsyncMock(return_value=True)
+        db.get_agent_thread_info = AsyncMock(return_value=None)
+        db.get_thread_nodes = AsyncMock(return_value=[])
+        db.create_or_get_thread = AsyncMock()
+        db.claim_thread_position = AsyncMock(return_value=1)
+        db.get_agent = AsyncMock(return_value=None)
+
+        identity_row = SimpleNamespace(identity_id=42, metadata={})
+        seen_identity = False
+
+        async def get_identity(_agent_uuid):
+            nonlocal seen_identity
+            if not seen_identity:
+                seen_identity = True
+                return None
+            return identity_row
+
+        db.get_identity = AsyncMock(side_effect=get_identity)
+
+        mock_redis = AsyncMock()
+        mock_redis.get = AsyncMock(return_value=None)
+        mock_redis.bind = AsyncMock()
+
+        async def _get_raw():
+            r = AsyncMock()
+            r.get = AsyncMock(return_value=None)
+            r.setex = AsyncMock()
+            r.expire = AsyncMock()
+            return r
+
+        mock_server = MagicMock()
+        mock_server.agent_metadata = {}
+
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
+        anchor = "agent:/thread-discord-42"
+        with patch("src.mcp_handlers.identity.persistence._redis_cache", None), \
+             patch("src.cache.get_session_cache", return_value=mock_redis), \
+             patch("src.mcp_handlers.identity.handlers.get_db", return_value=db), \
+             patch("src.mcp_handlers.identity.resolution.get_db", return_value=db), \
+             patch("src.mcp_handlers.identity.persistence.get_db", return_value=db), \
+             patch("src.cache.redis_client.get_redis", new=_get_raw), \
+             patch("src.mcp_handlers.context.get_mcp_session_id", return_value=None), \
+             patch("src.mcp_handlers.context.get_context_session_key", return_value=None), \
+             patch("src.mcp_handlers.context.get_context_agent_id", return_value=None), \
+             patch("src.mcp_handlers.context.update_context_agent_id"), \
+             patch("src.mcp_handlers.shared.get_mcp_server", return_value=mock_server):
+            result = await handle_onboard_v2({
+                "client_session_id": anchor,
+                "orchestrated": True,
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["is_new"] is True
+        assert data["identity_resolution_outcome"] == "minted_after_resume_miss"
+        assert db.upsert_agent.call_args.kwargs["spawn_reason"] == "orchestrated_thread_anchor"
+        session_ids = [call.kwargs.get("session_id") for call in db.create_session.await_args_list]
+        assert "agent:_thread-discord-42" in session_ids
 
 
 class TestS21BSpawnReasonPlumbing:

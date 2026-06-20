@@ -53,6 +53,15 @@ class OnboardParams(AgentIdentityMixin):
         default=None,
         description="Client hint string"
     )
+    orchestrated: Union[bool, str, None] = Field(
+        default=False,
+        description=(
+            "Declare that a client_session_id is a thread-stable anchor "
+            "provisioned by an orchestrator for a headless turn-child. Used "
+            "only to allow first-bind creation under STRICT_IDENTITY_REQUIRED; "
+            "ordinary interactive callers should leave this false."
+        )
+    )
     resume: Union[bool, str, None] = Field(
         default=True,
         description=(
@@ -133,6 +142,8 @@ class OnboardParams(AgentIdentityMixin):
             self.resume = self.resume.lower() in ('true', '1', 'yes')
         if isinstance(self.force_new, str):
             self.force_new = self.force_new.lower() in ('true', '1', 'yes')
+        if isinstance(self.orchestrated, str):
+            self.orchestrated = self.orchestrated.lower() in ('true', '1', 'yes', 'on')
         return self
 
 class LinkIdentityTrajectoryParams(AgentIdentityMixin):
@@ -184,4 +195,3 @@ class BindSessionParams(AgentIdentityMixin):
         if isinstance(self.strict, str):
             self.strict = self.strict.lower() in ('true', '1', 'yes')
         return self
-
