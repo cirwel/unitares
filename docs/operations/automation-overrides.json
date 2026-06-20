@@ -1,0 +1,220 @@
+{
+  "schema": "unitares.automation_overrides.v1",
+  "notes": [
+    "Verifier-centric model (operator decision 2026-06-20). owner = accountable principal (Kenny), NOT the verifier. escalates_to = the machine verifier/gate that grounds the row in truth. notes carry a gate-class the dashboard renders as a role-reversal scorecard: gate:machine (a machine check verifies it), gate:human (you are the gate — fragile), gate:ungated (nothing verifies it — faith-based risk), gate:external (third-party). dashboard_priority floats the un-inverted (ungated, then human) to the top. Discovery fields (description/surface_claims/expected_outputs) preserved from the prior hand-authored pass."
+  ],
+  "automations": {
+    "launchd:com.unitares.governance-backup": {
+      "owner": "Kenny",
+      "escalates_to": "none — backup is written but never restore-tested",
+      "description": "Nightly governance Postgres dump.",
+      "dashboard_priority": 1,
+      "surface_claims": ["unitares:/governance-backup", "repo:/Users/cirwel/projects/unitares"],
+      "expected_outputs": ["backup_artifact", "status_or_stdout"],
+      "notes": ["gate:ungated"]
+    },
+    "launchd:com.unitares.lumen-backup": {
+      "owner": "Kenny",
+      "escalates_to": "none — written, never restore-tested (logs show rsync broken-pipe / vanished-file)",
+      "description": "Scheduled backup for Lumen/anima state.",
+      "dashboard_priority": 2,
+      "kind": "backup",
+      "repo": "/Users/cirwel/projects/anima-mcp",
+      "workdir": "/Users/cirwel",
+      "surface_claims": ["lumen:/backup", "repo:/Users/cirwel/projects/anima-mcp"],
+      "expected_outputs": ["backup_artifact", "automation_run_event", "backup_log"],
+      "notes": ["gate:ungated", "Historical logs show rsync broken-pipe and vanished-file messages; tighten backup script exit policy before trusting ok status as full backup health."]
+    },
+
+    "codex:answer-lumen-questions": {
+      "owner": "Kenny",
+      "escalates_to": "you — no automated check on answer quality",
+      "description": "Codex slot for answering queued Lumen questions against the anima-mcp worktree.",
+      "dashboard_priority": 10,
+      "surface_claims": ["lumen:/qa", "repo:/Users/cirwel/.codex/worktrees/c07d/anima-mcp"],
+      "expected_outputs": ["qa_answer", "status_or_stdout"],
+      "notes": ["gate:human"]
+    },
+    "codex:weekly-release-notes": {
+      "owner": "Kenny",
+      "escalates_to": "you — no automated check",
+      "description": "Weekly release-note generation for UNITARES.",
+      "dashboard_priority": 11,
+      "surface_claims": ["repo:/Users/cirwel/projects/unitares", "docs:/release-notes"],
+      "expected_outputs": ["release_notes", "draft_pr_or_pr_status"],
+      "notes": ["gate:human"]
+    },
+
+    "launchd:com.unitares.governance-mcp": {
+      "owner": "Kenny",
+      "escalates_to": "CI (test/smoke) + deploy migration-preflight + health-watchdog",
+      "description": "Primary local UNITARES governance MCP service.",
+      "dashboard_priority": 40,
+      "kind": "service",
+      "surface_claims": ["unitares:/governance-mcp", "repo:/Users/cirwel/projects/unitares-deploy"],
+      "expected_outputs": ["mcp_service", "status_or_stdout"],
+      "notes": ["gate:machine"]
+    },
+    "launchd:com.unitares.lease-plane": {
+      "owner": "Kenny",
+      "escalates_to": "CI + hot-reload md5 verify + health probe",
+      "description": "Local lease plane service used by UNITARES deployment coordination.",
+      "dashboard_priority": 41,
+      "kind": "deploy",
+      "surface_claims": ["unitares:/lease-plane", "repo:/Users/cirwel/projects/unitares-deploy"],
+      "expected_outputs": ["lease_service", "status_or_stdout"],
+      "notes": ["gate:machine"]
+    },
+    "hermes:ea2e3655cee4": {
+      "owner": "Kenny",
+      "escalates_to": "governance gates (it dogfoods them)",
+      "description": "UNITARES dogfood pulse that looks for friction and system issues.",
+      "dashboard_priority": 42,
+      "surface_claims": ["unitares:/dogfood", "repo:/Users/cirwel/projects/wt/unitares-cron-master"],
+      "expected_outputs": ["dogfood_friction_finding", "kg_or_finding", "status_or_stdout"],
+      "notes": ["gate:machine"]
+    },
+    "hermes:f8bc3522154e": {
+      "owner": "Kenny",
+      "escalates_to": "governance comparison (dogfood vs ablation)",
+      "description": "Guard loop for dogfood and ablation health.",
+      "dashboard_priority": 43,
+      "surface_claims": ["unitares:/dogfood", "unitares:/ablation", "repo:/Users/cirwel/projects/wt/unitares-cron-master"],
+      "expected_outputs": ["dogfood_ablation_guard_alert", "status_or_stdout"],
+      "notes": ["gate:machine"]
+    },
+    "hermes:5139fb8f9079": {
+      "owner": "Kenny",
+      "escalates_to": "ablation comparison",
+      "description": "UNITARES ablation watchdog for scheduled experimental checks.",
+      "dashboard_priority": 44,
+      "surface_claims": ["unitares:/ablation", "repo:/Users/cirwel/projects/wt/unitares-cron-master"],
+      "expected_outputs": ["ablation_report", "status_or_stdout"],
+      "notes": ["gate:machine"]
+    },
+    "launchd:com.cirwel.dispatch-beam": {
+      "owner": "Kenny",
+      "escalates_to": "governance onboard/check-in (strict #425)",
+      "description": "Local dispatch beam service for autonomous work routing.",
+      "dashboard_priority": 45,
+      "kind": "dispatch",
+      "surface_claims": ["unitares:/dispatch", "repo:/Users/cirwel/projects/dispatch_beam"],
+      "expected_outputs": ["dispatch_event", "status_or_stdout"],
+      "notes": ["gate:machine"]
+    },
+    "launchd:com.unitares.sentinel-beam": {
+      "owner": "Kenny",
+      "escalates_to": "governance verdicts + anomaly detection (self + fleet EISV)",
+      "description": "Sentinel resident — continuous fleet EISV monitor & anomaly/incident detection.",
+      "dashboard_priority": 50,
+      "surface_claims": ["unitares:/sentinel", "repo:/Users/cirwel/projects/unitares"],
+      "expected_outputs": ["sentinel_event", "status_or_stdout"],
+      "notes": ["gate:machine"]
+    },
+    "launchd:com.unitares.vigil": {
+      "owner": "Kenny",
+      "escalates_to": "CI + governance health",
+      "description": "Vigil resident — 30min sweep: health checks, KG groundskeeping, stale-agent cleanup.",
+      "dashboard_priority": 51,
+      "surface_claims": ["unitares:/vigil", "repo:/Users/cirwel/projects/unitares"],
+      "expected_outputs": ["hygiene_report", "status_or_stdout"],
+      "notes": ["gate:machine"]
+    },
+    "launchd:com.unitares.chronicler": {
+      "owner": "Kenny",
+      "escalates_to": "deterministic idempotent scrape + governance check-in",
+      "description": "Chronicler resident — daily longitudinal metrics scrape into the EISV series.",
+      "dashboard_priority": 52,
+      "surface_claims": ["unitares:/chronicler", "metrics.series", "repo:/Users/cirwel/projects/unitares"],
+      "expected_outputs": ["continuity_note", "status_or_stdout"],
+      "notes": ["gate:machine"]
+    },
+    "launchd:com.unitares.health-watchdog": {
+      "owner": "Kenny",
+      "escalates_to": "deep health probe (self-verifying)",
+      "description": "Local health watchdog for UNITARES services.",
+      "dashboard_priority": 53,
+      "surface_claims": ["unitares:/health", "/health/deep"],
+      "expected_outputs": ["health_report", "status_or_stdout"],
+      "notes": ["gate:machine"]
+    },
+    "launchd:com.lumen.alert-check": {
+      "owner": "Kenny",
+      "escalates_to": "alert thresholds on real telemetry",
+      "description": "Frequent Lumen alert checker for anima-mcp state.",
+      "dashboard_priority": 54,
+      "kind": "watchdog",
+      "repo": "/Users/cirwel/projects/anima-mcp",
+      "workdir": "/Users/cirwel/projects/anima-mcp",
+      "surface_claims": ["lumen:/alerts", "repo:/Users/cirwel/projects/anima-mcp"],
+      "expected_outputs": ["alert_state", "status_or_stdout"],
+      "notes": ["gate:machine"]
+    },
+    "launchd:com.unitares.lumen-qa": {
+      "owner": "Kenny",
+      "escalates_to": "QA assertions",
+      "description": "Lumen QA slot on the local anima-mcp checkout.",
+      "dashboard_priority": 55,
+      "surface_claims": ["lumen:/qa", "repo:/Users/cirwel/projects/anima-mcp"],
+      "expected_outputs": ["qa_result", "log"],
+      "notes": ["gate:machine"]
+    },
+    "launchd:org.cirwel.dangling-work-audit": {
+      "owner": "Kenny",
+      "escalates_to": "git ground-truth audit",
+      "description": "Dangling work audit for branches, worktrees, draft PRs, and unfinished local changes.",
+      "dashboard_priority": 56,
+      "surface_claims": ["git:/dangling-work", "repo:/Users/cirwel/projects"],
+      "expected_outputs": ["draft_pr_or_pr_status", "audit_report"],
+      "notes": ["gate:machine"]
+    },
+    "launchd:com.unitares.automation-census": {
+      "owner": "Kenny",
+      "escalates_to": "reads real system state (observability layer)",
+      "description": "Refreshes the local automation registry snapshot every 30 minutes — this registry's own source.",
+      "dashboard_priority": 57,
+      "surface_claims": ["automation-registry:/snapshot"],
+      "expected_outputs": ["automation_census_snapshot", "automation_run_event"],
+      "notes": ["gate:machine"]
+    },
+    "launchd:com.unitares.lease-plane-acquire-healthcheck": {
+      "owner": "Kenny",
+      "escalates_to": "acquire/release round-trip probe",
+      "description": "Lease-plane acquire path healthcheck.",
+      "dashboard_priority": 58,
+      "kind": "deploy",
+      "surface_claims": ["unitares:/lease-plane", "unitares:/health", "repo:/Users/cirwel/projects/unitares-deploy"],
+      "expected_outputs": ["health_report", "status_or_stdout"],
+      "notes": ["gate:machine"]
+    },
+    "launchd:com.unitares.gateway-mcp": {
+      "owner": "Kenny",
+      "escalates_to": "CI + health",
+      "description": "Local UNITARES gateway MCP service.",
+      "dashboard_priority": 59,
+      "kind": "service",
+      "surface_claims": ["unitares:/gateway-mcp", "repo:/Users/cirwel/projects/unitares"],
+      "expected_outputs": ["mcp_service", "status_or_stdout"],
+      "notes": ["gate:machine"]
+    },
+    "launchd:com.unitares.discord-bridge": {
+      "owner": "Kenny",
+      "escalates_to": "governance onboard at startup (sidecar lineage)",
+      "description": "Discord bridge for governance events, agent presence, and operator-facing signals.",
+      "dashboard_priority": 60,
+      "surface_claims": ["unitares:/discord-bridge", "repo:/Users/cirwel/projects/unitares-discord-bridge"],
+      "expected_outputs": ["discord_event", "status_or_stdout"],
+      "notes": ["gate:machine"]
+    },
+    "launchd:com.lumen.message-server": {
+      "owner": "Kenny",
+      "escalates_to": "service liveness",
+      "description": "Keepalive Lumen message server for local anima-mcp interactions.",
+      "dashboard_priority": 61,
+      "kind": "service",
+      "surface_claims": ["lumen:/message-server", "repo:/Users/cirwel/projects/anima-mcp"],
+      "expected_outputs": ["message_api", "status_or_stdout"],
+      "notes": ["gate:machine"]
+    }
+  }
+}
