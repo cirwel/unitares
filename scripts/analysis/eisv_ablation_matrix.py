@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import random
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -75,6 +77,7 @@ class AblationMatrixRow:
     best_auc_delta_ci: tuple[float, float] | None = None
     best_brier_improvement_ci: tuple[float, float] | None = None
     best_brier_permutation_p: float | None = None
+    harness_lane: str | None = None
 
 
 def _fmt_float(value: float | None, digits: int = 3) -> str:
@@ -94,8 +97,24 @@ def _fmt_ci(value: tuple[float, float] | None, digits: int) -> str:
     return f"[{low:.{digits}f}, {high:.{digits}f}]"
 
 
+def _redact_sensitive_report_text(text: str) -> str:
+    """Redact credential-shaped substrings before report storage/stdout."""
+    redacted = re.sub(
+        r"(?i)\b([a-z][a-z0-9+.-]*://[^\s:/@]+):([^\s/@]+)@",
+        r"\1:[REDACTED]@",
+        text,
+    )
+    return re.sub(
+        r"(?i)\b(api[_-]?key|passwd|password|secret|token)\s*([:=])\s*[^\s,;|]+",
+        r"\1\2[REDACTED]",
+        redacted,
+    )
+
+
 def _baseline(scores: Sequence[ModelScore]) -> ModelScore | None:
-    return next((score for score in scores if score.name == "previous_outcome_bad"), None)
+    return next(
+        (score for score in scores if score.name == "previous_outcome_bad"), None
+    )
 
 
 def _paired_vectors(
@@ -121,7 +140,13 @@ def _paired_vectors(
         candidate_auc_score.append(candidate.y_auc_score[candidate_idx])
         baseline_prob.append(baseline.y_prob[baseline_idx])
         baseline_auc_score.append(baseline.y_auc_score[baseline_idx])
-    return y_true, candidate_prob, candidate_auc_score, baseline_prob, baseline_auc_score
+    return (
+        y_true,
+        candidate_prob,
+        candidate_auc_score,
+        baseline_prob,
+        baseline_auc_score,
+    )
 
 
 def _percentile(values: Sequence[float], fraction: float) -> float | None:
@@ -152,9 +177,11 @@ def estimate_delta_uncertainty(
     paired sign-flip test over per-row Brier improvements.
     """
 
-    y_true, candidate_prob, candidate_auc, baseline_prob, baseline_auc = _paired_vectors(
-        baseline,
-        candidate,
+    y_true, candidate_prob, candidate_auc, baseline_prob, baseline_auc = (
+        _paired_vectors(
+            baseline,
+            candidate,
+        )
     )
     n = len(y_true)
     if n == 0 or resamples <= 0:
@@ -198,10 +225,13 @@ def estimate_delta_uncertainty(
     observed = sum(per_row_improvements) / n
     extreme = 0
     for _ in range(resamples):
-        null_mean = sum(
-            value if rng.choice((True, False)) else -value
-            for value in per_row_improvements
-        ) / n
+        null_mean = (
+            sum(
+                value if rng.choice((True, False)) else -value
+                for value in per_row_improvements
+            )
+            / n
+        )
         if abs(null_mean) >= abs(observed):
             extreme += 1
     permutation_p = (extreme + 1) / (resamples + 1)
@@ -233,6 +263,16 @@ def filter_rows_for_validation(
     return [row for row in rows if harness_lane_from_detail(row.detail) not in excluded]
 
 
+def split_rows_by_harness_lane(
+    rows: Sequence[OutcomeRow],
+) -> dict[str, list[OutcomeRow]]:
+    """Group rows by explicit runtime harness lane, defaulting to substrate."""
+    grouped: dict[str, list[OutcomeRow]] = {}
+    for row in rows:
+        grouped.setdefault(harness_lane_from_detail(row.detail), []).append(row)
+    return dict(sorted(grouped.items()))
+
+
 def build_matrix_row(
     rows: Sequence[OutcomeRow],
     *,
@@ -243,6 +283,7 @@ def build_matrix_row(
     min_feature_rows: int = 30,
     uncertainty_resamples: int = 0,
     uncertainty_seed: int = 0,
+    harness_lane: str | None = None,
 ) -> AblationMatrixRow:
     """Summarize one scope/window/lead ablation slice."""
     scores = build_model_scores(
@@ -263,7 +304,9 @@ def build_matrix_row(
     )
     uncertainty = None
     if best_delta and uncertainty_resamples > 0 and baseline:
-        candidate_score = next((score for score in scores if score.name == best_delta.name), None)
+        candidate_score = next(
+            (score for score in scores if score.name == best_delta.name), None
+        )
         if candidate_score:
             uncertainty = estimate_delta_uncertainty(
                 baseline,
@@ -293,6 +336,7 @@ def build_matrix_row(
         best_brier_permutation_p=(
             uncertainty.brier_permutation_p if uncertainty else None
         ),
+        harness_lane=harness_lane,
     )
 
 
@@ -314,32 +358,87 @@ def format_matrix_report(
     if excluded:
         lines.extend(
             [
-                "Excluded harness lanes: " + ", ".join(f"`{lane}`" for lane in excluded),
+                "Excluded harness lanes: "
+                + ", ".join(f"`{lane}`" for lane in excluded),
                 "",
             ]
         )
-    lines.extend([
-        "Positive AUC delta means better ranking than `previous_outcome_bad`; positive Brier improvement means lower probability error. `Beats both?` is the conservative quick read.",
-        "",
-        "| Scope | Window days | Lead min | Trusted | Bad | Prior state | Prior risk | Baseline AUC | Baseline Brier | Best EISV/prior model | AUC delta | AUC delta 95% CI | Brier improvement | Brier improvement 95% CI | Brier perm p | Beats both? | Conclusion |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---|---|",
-    ])
+    grouped_by_harness_lane = any(row.harness_lane is not None for row in rows)
+    if grouped_by_harness_lane:
+        lines.extend(["Harness lane mode: grouped", ""])
+    columns = [
+        *(["Lane"] if grouped_by_harness_lane else []),
+        "Scope",
+        "Window days",
+        "Lead min",
+        "Trusted",
+        "Bad",
+        "Prior state",
+        "Prior risk",
+        "Baseline AUC",
+        "Baseline Brier",
+        "Best EISV/prior model",
+        "AUC delta",
+        "AUC delta 95% CI",
+        "Brier improvement",
+        "Brier improvement 95% CI",
+        "Brier perm p",
+        "Beats both?",
+        "Conclusion",
+    ]
+    lines.extend(
+        [
+            "Positive AUC delta means better ranking than `previous_outcome_bad`; positive Brier improvement means lower probability error. `Beats both?` is the conservative quick read.",
+            "",
+            "| " + " | ".join(columns) + " |",
+            "|" + "|".join("---" for _ in columns) + "|",
+        ]
+    )
     if rows:
         for row in rows:
-            lines.append(
-                "| "
-                f"{row.scope} | {row.window_days} | {_fmt_lead(row.lead_minutes)} "
-                f"| {row.trusted} | {row.bad} | {row.prior_state} | {row.prior_risk} "
-                f"| {_fmt_float(row.baseline_auc, 3)} | {_fmt_float(row.baseline_brier, 4)} "
-                f"| {row.best_candidate or '-'} | {_fmt_float(row.best_auc_delta, 3)} "
-                f"| {_fmt_ci(row.best_auc_delta_ci, 3)} "
-                f"| {_fmt_float(row.best_brier_improvement, 4)} "
-                f"| {_fmt_ci(row.best_brier_improvement_ci, 4)} "
-                f"| {_fmt_float(row.best_brier_permutation_p, 3)} "
-                f"| {'yes' if row.beats_both else 'no'} | {row.conclusion} |"
-            )
+            cells = [
+                *([row.harness_lane or "substrate"] if grouped_by_harness_lane else []),
+                row.scope,
+                str(row.window_days),
+                _fmt_lead(row.lead_minutes),
+                str(row.trusted),
+                str(row.bad),
+                str(row.prior_state),
+                str(row.prior_risk),
+                _fmt_float(row.baseline_auc, 3),
+                _fmt_float(row.baseline_brier, 4),
+                row.best_candidate or "-",
+                _fmt_float(row.best_auc_delta, 3),
+                _fmt_ci(row.best_auc_delta_ci, 3),
+                _fmt_float(row.best_brier_improvement, 4),
+                _fmt_ci(row.best_brier_improvement_ci, 4),
+                _fmt_float(row.best_brier_permutation_p, 3),
+                "yes" if row.beats_both else "no",
+                row.conclusion,
+            ]
+            lines.append("| " + " | ".join(cells) + " |")
     else:
-        lines.append("| - | - | - | 0 | 0 | 0 | 0 | - | - | - | - | - | - | - | - | no | no rows |")
+        empty_cells = [
+            *(["-"] if grouped_by_harness_lane else []),
+            "-",
+            "-",
+            "-",
+            "0",
+            "0",
+            "0",
+            "0",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "no",
+            "no rows",
+        ]
+        lines.append("| " + " | ".join(empty_cells) + " |")
     lines.extend(
         [
             "",
@@ -378,35 +477,51 @@ async def build_matrix_from_db(
     train_fraction: float = 0.7,
     min_feature_rows: int = 30,
     exclude_harness_lanes: Sequence[str] = DEFAULT_EXCLUDED_HARNESS_LANES,
+    group_by_harness_lane: bool = False,
     uncertainty_resamples: int = 0,
     uncertainty_seed: int = 0,
 ) -> list[AblationMatrixRow]:
     matrix_rows: list[AblationMatrixRow] = []
+    excluded = {str(lane) for lane in exclude_harness_lanes if str(lane)}
     for scope in scopes:
         outcome_types = STRICT_OUTCOMES if scope == "strict" else TASK_OUTCOMES
         for window_days in windows:
             for lead_minutes in leads:
-                outcome_rows = filter_rows_for_validation(
-                    await fetch_rows(
-                        db_url,
-                        window_days=window_days,
-                        lead_minutes=lead_minutes,
-                        outcome_types=outcome_types,
-                    ),
-                    exclude_harness_lanes=exclude_harness_lanes,
+                fetched_rows = await fetch_rows(
+                    db_url,
+                    window_days=window_days,
+                    lead_minutes=lead_minutes,
+                    outcome_types=outcome_types,
                 )
-                matrix_rows.append(
-                    build_matrix_row(
-                        outcome_rows,
-                        scope=scope,
-                        window_days=window_days,
-                        lead_minutes=lead_minutes,
-                        train_fraction=train_fraction,
-                        min_feature_rows=min_feature_rows,
-                        uncertainty_resamples=uncertainty_resamples,
-                        uncertainty_seed=uncertainty_seed,
+                if group_by_harness_lane:
+                    lane_groups = {
+                        lane: lane_rows
+                        for lane, lane_rows in split_rows_by_harness_lane(
+                            fetched_rows
+                        ).items()
+                        if lane not in excluded
+                    }
+                else:
+                    lane_groups = {
+                        None: filter_rows_for_validation(
+                            fetched_rows,
+                            exclude_harness_lanes=exclude_harness_lanes,
+                        )
+                    }
+                for harness_lane, outcome_rows in lane_groups.items():
+                    matrix_rows.append(
+                        build_matrix_row(
+                            outcome_rows,
+                            scope=scope,
+                            window_days=window_days,
+                            lead_minutes=lead_minutes,
+                            train_fraction=train_fraction,
+                            min_feature_rows=min_feature_rows,
+                            uncertainty_resamples=uncertainty_resamples,
+                            uncertainty_seed=uncertainty_seed,
+                            harness_lane=harness_lane,
+                        )
                     )
-                )
     return matrix_rows
 
 
@@ -433,8 +548,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--exclude-harness-lanes",
         type=_parse_string_list,
-        default=DEFAULT_EXCLUDED_HARNESS_LANES,
+        default=None,
         help="Comma-separated runtime harness lanes excluded from predictive slices; empty string includes all.",
+    )
+    parser.add_argument(
+        "--group-by-harness-lane",
+        action="store_true",
+        help="Run separate substrate/BEAM/runtime-harness slices instead of mixing lanes.",
     )
     parser.add_argument("--output", help="Optional markdown output path")
     return parser.parse_args(argv)
@@ -444,6 +564,12 @@ async def main_async(args: argparse.Namespace) -> int:
     if not (0.1 <= args.train_fraction <= 0.9):
         print("error: --train-fraction must be between 0.1 and 0.9")
         return 2
+    if args.exclude_harness_lanes is None:
+        exclude_harness_lanes = (
+            () if args.group_by_harness_lane else DEFAULT_EXCLUDED_HARNESS_LANES
+        )
+    else:
+        exclude_harness_lanes = args.exclude_harness_lanes
     rows = await build_matrix_from_db(
         args.db_url,
         scopes=args.scopes,
@@ -451,18 +577,28 @@ async def main_async(args: argparse.Namespace) -> int:
         leads=args.leads,
         train_fraction=args.train_fraction,
         min_feature_rows=args.min_feature_rows,
-        exclude_harness_lanes=args.exclude_harness_lanes,
+        exclude_harness_lanes=exclude_harness_lanes,
+        group_by_harness_lane=args.group_by_harness_lane,
         uncertainty_resamples=args.uncertainty_resamples,
         uncertainty_seed=args.uncertainty_seed,
     )
-    report = format_matrix_report(rows, excluded_harness_lanes=args.exclude_harness_lanes)
+    report = _redact_sensitive_report_text(
+        format_matrix_report(rows, excluded_harness_lanes=exclude_harness_lanes)
+    )
+    payload = (report + "\n").encode("utf-8")
     if args.output:
         path = Path(args.output)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(report + "\n", encoding="utf-8")
+        # Store only redacted aggregate report bytes, not raw DB rows or DSNs.
+        fd = os.open(os.fspath(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
         print(f"Wrote {path}")
     else:
-        print(report)
+        # Emit only redacted aggregate report bytes, not raw DB rows or DSNs.
+        sys.stdout.buffer.write(payload)
     return 0
 
 
