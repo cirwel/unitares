@@ -102,10 +102,16 @@ def tests_unitares_count(repo_root: Path) -> float:
 
 
 def agents_active_7d(_repo_root: Path) -> float:
-    """Distinct agents with any tool call in the last 7 days — fleet liveness."""
+    """Distinct governed agents that checked in (wrote state) in the last 7 days.
+
+    Counts participating identities in ``core.agent_state`` — NOT distinct
+    ``audit.tool_usage.agent_id``, which is inflated ~130x by per-lease
+    presence ids that onboard-and-vanish ephemerals mint (lease.acquire/
+    lease.release pairs that never reach a real check-in).
+    """
     return _fetchval(
-        "SELECT count(DISTINCT agent_id) FROM audit.tool_usage "
-        "WHERE ts > now() - interval '7 days' AND agent_id IS NOT NULL"
+        "SELECT count(DISTINCT identity_id) FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days'"
     )
 
 

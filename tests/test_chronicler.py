@@ -47,7 +47,7 @@ class TestDbScrapers:
     with the right SQL shape — the actual DB round-trip is integration-tested
     elsewhere."""
 
-    def test_agents_active_7d_queries_distinct_tool_usage(self, tmp_path: Path):
+    def test_agents_active_7d_queries_distinct_governed_agents(self, tmp_path: Path):
         from agents.chronicler import scrapers
 
         with patch.object(scrapers, "_fetchval", return_value=42.0) as m:
@@ -55,8 +55,8 @@ class TestDbScrapers:
 
         assert value == 42.0
         sql = m.call_args.args[0]
-        assert "count(DISTINCT agent_id)" in sql
-        assert "audit.tool_usage" in sql
+        assert "count(DISTINCT identity_id)" in sql
+        assert "core.agent_state" in sql
         assert "7 days" in sql
 
     def test_kg_entries_count_queries_discoveries(self, tmp_path: Path):
