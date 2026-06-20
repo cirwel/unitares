@@ -142,16 +142,26 @@ themeBtn.onclick = () => {
 
 // section switch
 const nav = document.getElementById("nav");
-nav.addEventListener("click", (e) => {
-  const a = e.target.closest("a[data-section]");
-  if (!a) return;
-  e.preventDefault();
-  const id = a.dataset.section;
-  nav.querySelectorAll("a").forEach((x) => x.classList.toggle("active", x === a));
+function activateSection(id, updateHash = false) {
+  const link = nav.querySelector(`a[data-section="${id}"]`);
+  if (!link) return false;
+  nav.querySelectorAll("a").forEach((x) => x.classList.toggle("active", x === link));
   document.querySelectorAll("[data-pane]").forEach((p) => { p.hidden = p.dataset.pane !== id; });
   activeSection = id;
   lazyLoad(id);
   updateLivePill();
+  if (updateHash && location.hash !== "#" + id) history.pushState(null, "", "#" + id);
+  return true;
+}
+nav.addEventListener("click", (e) => {
+  const a = e.target.closest("a[data-section]");
+  if (!a) return;
+  e.preventDefault();
+  activateSection(a.dataset.section, true);
+});
+window.addEventListener("hashchange", () => {
+  const id = (location.hash || "").replace("#", "");
+  if (id) activateSection(id, false);
 });
 
 const loaded = {};
@@ -178,6 +188,7 @@ const RELOAD = {
   activity: () => window.Activity && window.Activity.load(),
   residents: () => window.Residents && window.Residents.load(),
   eisv: () => window.EISV && window.EISV.load(),
+  automations: () => window.Automations && window.Automations.load(),
 };
 const livePill = document.getElementById("livePill");
 const liveText = document.getElementById("liveText");
@@ -233,8 +244,7 @@ window.addEventListener("hashchange", () => {
 
 (function openFromHash() {
   const id = (location.hash || "").replace("#", "");
-  const link = id && nav.querySelector(`a[data-section="${id}"]`);
-  if (link) link.click();
+  if (id) activateSection(id, false);
 })();
 </script>
 </body>
