@@ -74,17 +74,23 @@
     const aStale = !!(auto && auto.stale);
     const aWarn = aAtt > 0 || aStale;
     const autoSub = `${aAtt} attention · ${aKind.dogfood || 0} dogfood · ${aKind.ablation || 0} ablation · ${aKind.qa || 0} QA${aStale ? " · stale" : ""}`;
+    // A null metric = its live source didn't answer this cycle. Show "—"
+    // (unavailable), never a stale snapshot value passed off as current.
+    const un = (v) => v == null;
     const cards = [
       { h: "Fleet Coherence", num: num(fleetCoh), sub: `${live.length} of ${residents.length} residents reporting`, cls: "up", rule: true },
-      { h: "Agents", num: stats.agentsActive, of: "/ " + stats.agentsTotal, sub: "active / total" },
-      { h: "Stuck", num: stats.stuck, sub: stats.stuck ? "needs attention" : "none flagged", cls: stats.stuck ? "down" : "up" },
+      { h: "Agents", num: un(stats.agentsActive) ? "—" : stats.agentsActive, of: un(stats.agentsTotal) ? "" : "/ " + stats.agentsTotal, sub: un(stats.agentsActive) ? "unavailable" : "active / total" },
+      { h: "Stuck", num: un(stats.stuck) ? "—" : stats.stuck, sub: un(stats.stuck) ? "unavailable" : (stats.stuck ? "needs attention" : "none flagged"), cls: un(stats.stuck) ? "" : (stats.stuck ? "down" : "up") },
       { h: "Automations", num: asum.total || 0, sub: autoSub, cls: aWarn ? "down" : "up", href: "#automations" },
-      { h: "Discoveries", num: (stats.discoveries || 0).toLocaleString(), sub: typeof stats.discoveriesToday === "number" ? "+" + stats.discoveriesToday + " today" : "knowledge graph" },
-      { h: "Dialectic", num: stats.dialectic, sub: stats.dialectic ? "open sessions" : "no open sessions" },
-      { h: "System Health", num: stats.systemHealth, sub: stats.systemHealthDetail || "db · ws · reaper", cls: stats.systemHealth === "OK" ? "up" : "down" },
-      { h: "Calibration", num: num(stats.calibration), sub: "trajectory health", cls: stats.calibration >= 0.8 ? "up" : "" },
-      { h: "Anomalies", num: stats.anomalies, sub: stats.anomalies ? stats.anomalies + " active" : "clear", cls: stats.anomalies ? "down" : "up" },
+      { h: "Discoveries", num: un(stats.discoveries) ? "—" : stats.discoveries.toLocaleString(), sub: un(stats.discoveries) ? "unavailable" : (typeof stats.discoveriesToday === "number" ? "+" + stats.discoveriesToday + " today" : "knowledge graph") },
+      { h: "Dialectic", num: un(stats.dialectic) ? "—" : stats.dialectic, sub: un(stats.dialectic) ? "unavailable" : (stats.dialectic ? "open sessions" : "no open sessions") },
+      { h: "System Health", num: un(stats.systemHealth) ? "—" : stats.systemHealth, sub: un(stats.systemHealth) ? "unavailable" : (stats.systemHealthDetail || "db · ws · reaper"), cls: un(stats.systemHealth) ? "" : (stats.systemHealth === "OK" ? "up" : "down") },
+      { h: "Calibration", num: num(stats.calibration), sub: un(stats.calibration) ? "unavailable" : "trajectory health", cls: stats.calibration >= 0.8 ? "up" : "" },
+      { h: "Anomalies", num: un(stats.anomalies) ? "—" : stats.anomalies, sub: un(stats.anomalies) ? "unavailable" : (stats.anomalies ? stats.anomalies + " active" : "clear"), cls: un(stats.anomalies) ? "" : (stats.anomalies ? "down" : "up") },
     ];
+    const degradeBanner = stats.degraded > 0
+      ? `<div style="grid-column:1/-1;font-size:var(--text-xs);color:var(--warn);display:flex;gap:6px;align-items:center;margin-bottom:calc(-1 * var(--space-2))"><span>⚠</span><span>${stats.degraded} metric${stats.degraded > 1 ? "s" : ""} couldn't refresh just now — showing "—" instead of stale values.</span></div>`
+      : "";
     // 5 real trust tiers (earned → forming → unearned), each its own colour.
     const TIER_COLOR = { verified: "var(--ok)", established: "var(--eisv-c)", emerging: "var(--eisv-s)", provisional: "var(--warn)", unknown: "var(--faint)" };
     const tiers = stats.trustTiers || [];
@@ -97,15 +103,16 @@
       ? `${stats.trustEarned.toLocaleString()} earned of ${stats.trustFleet.toLocaleString()} · ${(stats.trustUnknown || 0).toLocaleString()} unknown`
       : "";
 
-    $("stats").innerHTML = cards.map((s) => {
+    const trustBody = stats.trustTiers
+      ? `<div class="tiers">${tierBars}</div><div class="legend" style="margin-top:.5rem;flex-wrap:wrap">${tierLegend}</div>`
+      : `<div class="sub" style="color:var(--muted)">unavailable</div>`;
+    $("stats").innerHTML = degradeBanner + cards.map((s) => {
       const tag = s.href ? "a" : "div"; const attr = s.href ? ` href="${s.href}" style="text-decoration:none;color:inherit"` : "";
       return `<${tag} class="card ${s.rule ? "accent-rule" : ""}"${attr}><h3>${s.h}</h3>`
         + `<div class="num">${s.num}${s.of ? `<span class="of"> ${s.of}</span>` : ""}</div>`
         + `<div class="sub ${s.cls || ""}">${s.sub}</div></${tag}>`;
     }).join("")
-      + `<div class="card wide"><h3>Trust Tiers ${tierScope ? `<span style="text-transform:none;letter-spacing:0;color:var(--faint);font-weight:400">· ${tierScope}</span>` : ""}</h3>`
-      + `<div class="tiers">${tierBars}</div>`
-      + `<div class="legend" style="margin-top:.5rem;flex-wrap:wrap">${tierLegend}</div></div>`;
+      + `<div class="card wide"><h3>Trust Tiers ${tierScope ? `<span style="text-transform:none;letter-spacing:0;color:var(--faint);font-weight:400">· ${tierScope}</span>` : ""}</h3>${trustBody}</div>`;
   }
 
   function renderPulse(residents) {
