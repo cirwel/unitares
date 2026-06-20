@@ -1,6 +1,8 @@
+import dataclasses
 from datetime import datetime, timedelta, timezone
 
 from scripts.analysis.eisv_skeptic_report import (
+    MIN_DISPERSION_SNAPSHOTS,
     ModelScore,
     OutcomeRow,
     auc_score,
@@ -156,6 +158,36 @@ def test_summarize_conclusion_prefers_candidates_that_beat_both_metrics():
 
     assert "prior_risk_binned" in conclusion
     assert "do not beat" not in conclusion
+
+
+def _with_dispersion(row: OutcomeRow, disp: float | None, n: int) -> OutcomeRow:
+    return dataclasses.replace(row, prior_s_disp=disp, n_prior_snapshots=n)
+
+
+def test_build_model_scores_includes_dispersion_when_covered():
+    rows = []
+    for idx in range(100):
+        bad = idx >= 80
+        # high dispersion separates bad outcomes; low dispersion for trusted ones
+        disp = 0.9 if bad else 0.1
+        row = _row(idx, bad=bad, risk=0.5, agent=f"agent-{idx % 5}")
+        rows.append(_with_dispersion(row, disp, n=MIN_DISPERSION_SNAPSHOTS + 2))
+    scores = build_model_scores(rows, train_fraction=0.7, min_feature_rows=10)
+    names = {score.name for score in scores}
+    assert "prior_eisv_dispersion_binned" in names
+    assert "previous_bad_plus_dispersion" in names
+
+
+def test_dispersion_models_absent_without_coverage():
+    # prior_s_disp left None (default) -> no dispersion models built
+    rows = [
+        _row(idx, bad=idx >= 80, risk=0.5, agent=f"agent-{idx % 5}")
+        for idx in range(100)
+    ]
+    scores = build_model_scores(rows, train_fraction=0.7, min_feature_rows=10)
+    names = {score.name for score in scores}
+    assert "prior_eisv_dispersion_binned" not in names
+    assert "previous_bad_plus_dispersion" not in names
 
 
 def test_build_report_includes_ablation_delta_section():

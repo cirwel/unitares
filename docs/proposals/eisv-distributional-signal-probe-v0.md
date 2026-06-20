@@ -1,8 +1,18 @@
 # EISV Distributional Signal Probe — v0
 
 **Created:** 2026-06-20
-**Status:** Sketch for review. Cheap, falsifiable probe that must greenlight (or kill) the larger "make EISV distributional" work **before** any dynamics change.
+**Status:** **Probe A implemented** in `scripts/analysis/eisv_skeptic_report.py` (tested; awaiting a run against a deployment DB). Probe B still a sketch. Cheap, falsifiable probe that must greenlight (or kill) the larger "make EISV distributional" work **before** any dynamics change.
 **Companion to:** `docs/REVIEWER_GUIDE.md` (§ Falsifiability), `scripts/analysis/eisv_skeptic_report.py`, `docs/EISV_COMPUTATION.md`, `docs/ontology/glossary.md` (FEP roadmap).
+
+> **Implementation note (2026-06-20).** Probe A landed in the harness: the
+> dispersion-window `LATERAL` join, the `prior_*_disp` fields on `OutcomeRow`, the
+> `prior_eisv_dispersion_binned` + `previous_bad_plus_dispersion` models, the
+> `--dispersion-window-minutes` flag, and a "By recent-state dispersion quartile"
+> bad-rate table. Tunables are module constants: `DISPERSION_WINDOW_MINUTES=90`,
+> `MIN_DISPERSION_SNAPSHOTS=5`, `DISPERSION_FEATURE="prior_s_disp"` (one-line swap
+> to another axis). Unit-tested; the A1–A5 sections below are the design of record,
+> now realized. **Next action is a single run against real outcomes** — there is no
+> deployment DB in this environment, so the greenlight/kill decision is pending data.
 
 ---
 
