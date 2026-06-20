@@ -713,6 +713,7 @@ async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextConte
                             "risk_score": safe_float(metrics.get("risk_score") or metrics.get("current_risk") or metrics.get("mean_risk", 0.5)),  # Governance/operational risk
                             "phi": metrics.get("phi"),  # Primary physics signal: Phi objective function
                             "verdict": metrics.get("verdict"),  # Primary governance signal: safe/caution/high-risk
+                            "basin": metrics.get("basin"),  # Authoritative classify_basin label (high/boundary/low) — used by /phase
                             "mean_risk": safe_float(metrics.get("mean_risk", 0.5)),  # Overall mean (all-time average) - for historical context
                             "lambda1": safe_float(monitor.state.lambda1),
                             "void_active": bool(monitor.state.void_active) if monitor.state.void_active is not None else False
