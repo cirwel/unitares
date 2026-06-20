@@ -606,8 +606,21 @@ class KnowledgeGraphAGE:
         # Check if graph is available
         graph_ok = await db.graph_available()
         if not graph_ok:
-            logger.warning("AGE graph not available for query")
-            return []
+            # AGE unavailable — read the SQL source-of-truth instead of
+            # returning an empty list. knowledge.discoveries is canonical; the
+            # AGE graph is a derived index over it. get_discovery() and
+            # full_text_search() already fall back this way.
+            logger.warning("AGE graph not available for query; using SQL source-of-truth")
+            return await self._query_sql_fallback(
+                db,
+                agent_id=agent_id,
+                type=type,
+                status=status,
+                severity=severity,
+                tags=tags,
+                limit=limit,
+                exclude_archived=exclude_archived,
+            )
 
         # Build query
         conditions = []
@@ -716,6 +729,68 @@ class KnowledgeGraphAGE:
             discoveries.sort(key=lambda disc: tag_sort_keys.get(disc.id, ""), reverse=True)
             discoveries = discoveries[:limit]
 
+        if discoveries:
+            return discoveries
+
+        # AGE returned nothing. Before reporting an empty result, consult the
+        # SQL source-of-truth: knowledge.discoveries may hold rows with no AGE
+        # vertex — orphans written while the backend was 'postgres', or whose
+        # AGE node creation silently no-opped. Without this, list/search look
+        # write-only even though get_discovery() retrieves the same rows fine.
+        return await self._query_sql_fallback(
+            db,
+            agent_id=agent_id,
+            type=type,
+            status=status,
+            severity=severity,
+            tags=tags,
+            limit=limit,
+            exclude_archived=exclude_archived,
+        )
+
+    async def _query_sql_fallback(
+        self,
+        db,
+        *,
+        agent_id: Optional[str] = None,
+        type: Optional[str] = None,
+        status: Optional[str] = None,
+        severity: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        limit: int = 100,
+        exclude_archived: bool = False,
+    ) -> List[DiscoveryNode]:
+        """Read discoveries straight from knowledge.discoveries (source of truth).
+
+        The AGE graph is a derived index over the relational table. When it is
+        unavailable, or holds no vertex for rows that exist in SQL, the cypher
+        read returns nothing while the data is plainly present (get_discovery()
+        still finds it). This mirrors the SQL fallback those read paths already
+        use so query()/search stop looking write-only.
+        """
+        try:
+            rows = await db.kg_query(
+                agent_id=agent_id,
+                tags=tags,
+                type=type,
+                severity=severity,
+                status=status,
+                limit=limit,
+            )
+        except Exception as exc:
+            logger.warning(f"SQL fallback query failed: {exc}")
+            return []
+
+        discoveries: List[DiscoveryNode] = []
+        for row in rows:
+            # exclude_archived is not expressible in kg_query's equality filter
+            # (it means "any status except archived"); apply it post-hoc, the
+            # same way the postgres storage backend does.
+            if exclude_archived and not status and row.get("status") == "archived":
+                continue
+            disc = self._dict_to_discovery(row)
+            if disc:
+                discoveries.append(disc)
         return discoveries
 
     async def get_agent_discoveries(
@@ -975,7 +1050,33 @@ class KnowledgeGraphAGE:
         cypher = "MATCH (d:Discovery) RETURN count(d)"
         total = await db.graph_query(cypher, {})
         total_count = int(total[0]) if total and isinstance(total[0], (int, float)) else 0
-        
+
+        if total_count == 0:
+            # AGE holds no Discovery vertices. Before reporting an empty graph,
+            # consult the SQL source-of-truth: knowledge.discoveries may hold
+            # rows whose AGE node was never created (postgres-era orphans, or a
+            # silently no-opped node write). get_discovery()/full_text_search()
+            # already read SQL for this reason; without the same fallback here,
+            # list/stats report 0 while the rows are plainly retrievable.
+            sql_stats = await self._stats_sql_fallback(db, including_cold=including_cold)
+            if (
+                isinstance(sql_stats, dict)
+                and isinstance(sql_stats.get("total_discoveries"), int)
+                and sql_stats["total_discoveries"] > 0
+            ):
+                sql_stats["scope"] = {
+                    "kind": "raw_status_aggregate",
+                    "epoch_scope": effective_epoch_scope,  # AGE: always "all"
+                    "including_cold": including_cold,
+                    "note": (
+                        "AGE graph held no Discovery vertices; counts read from "
+                        "the SQL source-of-truth (knowledge.discoveries). These "
+                        "rows exist but have no AGE node — run a graph backfill "
+                        "to restore cypher traversal over them."
+                    ),
+                }
+                return sql_stats
+
         # Collect agent_ids (single column - AGE handles this fine)
         cypher = "MATCH (d:Discovery) RETURN collect(d.agent_id)"
         result = await db.graph_query(cypher, {})
@@ -1064,6 +1165,23 @@ class KnowledgeGraphAGE:
                 ),
             },
         }
+
+    async def _stats_sql_fallback(
+        self, db, *, including_cold: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """Discovery-level aggregates straight from knowledge.discoveries.
+
+        Used by get_stats() when the AGE graph holds no Discovery vertices but
+        the relational source-of-truth does. Routed through the kg_stats mixin
+        method so it runs on the same connection path as the get_discovery()
+        fallback. Returns None when the counts cannot be read; the caller then
+        falls through to the (empty) AGE-derived response.
+        """
+        try:
+            return await db.kg_stats(including_cold=including_cold)
+        except Exception as exc:
+            logger.warning(f"SQL stats fallback failed: {exc}")
+            return None
 
     async def health_check(self) -> Dict[str, Any]:
         """
