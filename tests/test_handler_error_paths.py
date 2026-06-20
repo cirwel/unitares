@@ -188,40 +188,44 @@ async def test_authentication_failures():
 async def test_nonexistent_resources():
     """Test handlers handle non-existent resources gracefully (identity_v2)
 
-    Note: With identity_v2, session binding controls which agents you can access:
-    - First call auto-creates and binds an identity
-    - get_governance_metrics without agent_id uses the bound agent
-    - Trying to access a non-existent agent_id returns "Session mismatch" error
+    #945 §1: pre_onboard READ tools (get_governance_metrics) no longer resolve,
+    mint, or bind an identity as a side effect. An unbound read of a
+    non-existent agent is served gracefully as the uninitialized shape — it does
+    NOT auto-create a ghost identity, and it does NOT raise a session mismatch
+    (cross-agent READS are not blocked; the impersonation guard only fires for a
+    BOUND writer — see test_authentication_failures).
     """
     print("\n=== Testing Non-Existent Resources ===")
 
-    # First call establishes session binding
+    # A bare read serves the unbound/uninitialized shape without minting identity.
     result = await dispatch_tool("get_governance_metrics", {})
     assert result is not None, "Should return result"
     response_data = json.loads(result[0].text)
-    # With identity_v2, this succeeds using auto-bound agent
-    assert response_data.get("success") == True, "Should succeed with auto-binding"
-    bound_agent = response_data.get("agent_id")
-    print(f"✅ Bound agent metrics retrieved: {bound_agent[:8] if bound_agent else 'N/A'}...")
+    assert response_data.get("success") == True, "Unbound read should succeed gracefully"
+    # The §1 contract: a pure read produces no cacheable/bound identity.
+    assert response_data.get("agent_signature", {}).get("uuid") is None, \
+        "A pure read must not mint/bind an identity"
+    print("✅ Unbound read served without minting identity")
 
-    # Test get_agent_metadata for bound agent
+    # get_agent_metadata for an unbound caller returns gracefully (no crash).
     result = await dispatch_tool("get_agent_metadata", {})
     assert result is not None, "Should return response"
     response_data = json.loads(result[0].text)
-    # Metadata for bound agent should work (may fail if not persisted yet)
     print(f"✅ Agent metadata retrieval: success={response_data.get('success')}")
 
-    # Test trying to access different agent - should fail with session mismatch
+    # Reading a non-existent agent_id from an UNBOUND caller is served as the
+    # uninitialized shape — cross-agent reads are not blocked, and no ghost is
+    # minted (the foreign agent_id is a target selector, not caller proof).
     result = await dispatch_tool("get_governance_metrics", {
         "agent_id": "nonexistent_agent_12345"
     })
     assert result is not None, "Should return result"
     response_data = json.loads(result[0].text)
-    # With identity_v2, this fails with session mismatch (not "not found")
-    assert response_data.get("success") == False, "Should fail with session mismatch"
-    error_msg = response_data.get("error", "").lower()
-    assert "mismatch" in error_msg or "bound" in error_msg, f"Should mention session mismatch (got: {error_msg})"
-    print("✅ Session binding prevents accessing non-existent agents")
+    assert response_data.get("success") == True, \
+        "Unbound read of a non-existent agent should be served gracefully"
+    assert response_data.get("agent_signature", {}).get("uuid") is None, \
+        "Reading a foreign agent_id must not mint/bind an identity"
+    print("✅ Non-existent agent read handled gracefully without minting identity")
 
 
 @pytest.mark.asyncio
@@ -268,18 +272,34 @@ async def test_validation_errors():
 
 @pytest.mark.asyncio
 async def test_error_response_format():
-    """Test that error responses have consistent format"""
+    """Test that error responses have consistent format
+
+    Uses the session-mismatch (impersonation) guard as the error source: a
+    BOUND writer that then requests a DIFFERENT agent_id is refused with a
+    structured error. #945 §1 note: a pre_onboard READ no longer auto-binds, so
+    it can't trip the guard on its own — the binding here is established by a
+    `required` write tool (process_agent_update), which still resolves/binds.
+    """
     print("\n=== Testing Error Response Format ===")
 
-    # Test that errors include error_code when available
-    # With identity_v2, trying to access different agent triggers session mismatch
-    result = await dispatch_tool("get_governance_metrics", {
-        "agent_id": "nonexistent_agent"
+    # Establish a real session binding via a write tool.
+    result = await dispatch_tool("process_agent_update", {
+        "response_text": "bind for error-format test",
+        "complexity": 0.5,
+        "confidence": 0.9,
+    })
+    assert result is not None, "Should bind via write tool"
+    assert json.loads(result[0].text).get("success") == True, "Bind should succeed"
+
+    # Bound writer requesting a DIFFERENT agent_id → structured session mismatch.
+    result = await dispatch_tool("process_agent_update", {
+        "agent_id": "nonexistent_agent",
+        "complexity": 0.5,
+        "confidence": 0.9,
     })
     assert result is not None, "Should return error response"
     response_data = json.loads(result[0].text)
-    # With identity_v2, this triggers session mismatch (error)
-    assert response_data.get("success") == False, "Should be error"
+    assert response_data.get("success") == False, "Should be error (session mismatch)"
     assert "error" in response_data, "Should have error message"
     # Should have recovery guidance for identity_v2 errors
     if "recovery" in response_data:

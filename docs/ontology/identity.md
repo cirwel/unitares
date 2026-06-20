@@ -39,6 +39,66 @@ Vocabulary boundary:
 - `lineage` means "inherits work from," not "is identical to."
 - `continuity_token` is an advanced same-live-process rebind proof.
 
+## Identifier reference: which one do I pass, when?
+
+A single agent surfaces many identifiers (`uuid`, `agent_id`,
+`structured_agent_id`, `display_name`, `client_session_id`,
+`continuity_token`, `thread_id`). They are not interchangeable, and most of
+them you should **not** pass on the normal path. This table is the
+authoritative "which one when" so callers don't have to reverse-engineer the
+resolvers (`src/mcp_handlers/support/agent_auth.py`).
+
+| Identifier | What it is | Pass it when | Never use it as |
+|---|---|---|---|
+| `client_session_id` | Accountable **write binding** for the running process; returned by `start_session`/`onboard`. | The normal path: every check-in and write from the same live process (adapters do this automatically). | — (this *is* the day-to-day proof) |
+| `uuid` (`agent_uuid`) | Immutable server record key; internal storage key. | Resume-by-proof (`identity(agent_uuid=…, continuity_token=…)`) or an operator/admin targeting a specific agent. | A bearer credential on its own — a bare `agent_uuid` resume is refused without a matching token (see "strict" mode). |
+| `agent_id` (argument) | **Overloaded** target selector: accepts a UUID, `display_name`/`label`, `structured_agent_id`, or `public_agent_id`; resolvers canonicalize it to the UUID. | You are targeting a **different** agent (cross-agent/admin op). For *self*, leave it unset — the session binding resolves it. | Self-identification when you're already session-bound (passing your own label round-trips through alias resolution for nothing). |
+| `agent_id` (return field) | The **display** value (chosen `display_name`, else an auto id). | — (read-only output) | An input proof — it is cosmetic on the way out. |
+| `structured_agent_id` / `public_agent_id` | Auto-derived model+date style label. | Rarely; only as a human-readable cross-agent reference. | Proof of anything; it is server-generated and cosmetic. |
+| `display_name` / `label` | User-chosen cosmetic name. | Display only. | Identity. "Name is cosmetic" (identity-invariant #4). |
+| `continuity_token` | Advanced **same-live-process** rebind proof (signed, carries the `aid` claim). | Resume-by-proof together with `agent_uuid`, in a still-live process. Not the day-to-day path. | A cross-process or cross-channel identity credential (performative — see "Three stances"). |
+| `thread_id` | Conversation/thread anchor. Short opaque `t-<16hex>` form (`generate_thread_id`, `src/thread_identity.py`) **and** a full-UUID form are both accepted. | Claiming thread membership/position when the caller already knows it. | A substitute for `client_session_id` — a thread groups forks; it is not the per-process write binding. |
+
+### Canonical resolution order
+
+When the server needs to answer "who is this caller?" the **canonical order
+is**:
+
+1. **Explicit `agent_id` argument** (UUID, or an alias the resolver
+   canonicalizes to a UUID) — used to *target*, and for cross-agent ops it is
+   honored verbatim so ownership checks can run downstream.
+2. **Session-bound context identity** — the UUID the dispatch middleware bound
+   for this request (from `client_session_id` / sticky transport binding /
+   `continuity_token`).
+3. **Refuse / unbound** — under `STRICT_IDENTITY_REQUIRED` an unresolved write
+   returns a typed identity-required refusal; it does **not** auto-mint.
+   (Pre-`pre_onboard` *reads* with no proof short-circuit to unbound without
+   resolving at all — they never produce a cacheable identity. See
+   `src/mcp_handlers/middleware/identity_step.py` and the REST parity guard in
+   `src/http_api.py::_resolve_http_bound_agent`.)
+
+The three resolvers in `src/mcp_handlers/support/agent_auth.py` are
+**specializations of this one order**, not independent priority schemes —
+read them against the canonical order above:
+
+- **`compute_agent_signature`** (read/signature path) — steps 1→2, then
+  returns `{"uuid": None}` instead of auto-generating. It also refuses to
+  resolve when the binding was `server_inferred` (sticky/fingerprint) and the
+  caller gave no explicit identity, so a low-assurance read does not get
+  stamped with a borrowed UUID.
+- **`require_agent_id`** (write gate) — steps 1→2, with alias→UUID
+  canonicalization for self-references and verbatim pass-through for
+  cross-agent references; step 3 is auto-generation in legacy mode and a
+  typed refusal under strict mode.
+- **`require_registered_agent`** (write + existence verify) — runs
+  `require_agent_id` first (so the same 1→2→3 order), then adds an existence
+  resolution layer: direct UUID lookup → alias scan over registered metadata
+  → context-bound fallback → trusted middleware `identity_result`.
+
+If you are writing new code that needs the caller's identity, prefer the
+session-bound context (`get_context_agent_id()`) and let these helpers apply
+the canonical order — do not invent a fourth resolution scheme.
+
 ## Opening stance
 
 This document does not commit to a single ontology of agent identity. It describes what kinds of continuity exist in the system, distinguishes the ones that are earned from the ones that are performative, and opens a research agenda for inventing what would turn the performative kinds into earned ones.

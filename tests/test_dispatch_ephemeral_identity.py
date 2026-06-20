@@ -66,7 +66,9 @@ class TestEphemeralIdentityMarking:
             p.start()
         try:
             ctx = DispatchContext()
-            result = await resolve_identity("status", {}, ctx)
+            # `required` tool so resolution runs (a no-proof pre_onboard read
+            # now short-circuits before the ephemeral/TTL marking under test).
+            result = await resolve_identity("process_agent_update", {}, ctx)
         finally:
             for p in reversed(patches):
                 p.stop()
@@ -92,7 +94,9 @@ class TestEphemeralIdentityMarking:
             p.start()
         try:
             ctx = DispatchContext()
-            result = await resolve_identity("status", {}, ctx)
+            # `required` tool so resolution runs (a no-proof pre_onboard read
+            # now short-circuits before the ephemeral/TTL marking under test).
+            result = await resolve_identity("process_agent_update", {}, ctx)
         finally:
             for p in reversed(patches):
                 p.stop()
@@ -115,7 +119,9 @@ class TestEphemeralIdentityMarking:
             p.start()
         try:
             ctx = DispatchContext()
-            result = await resolve_identity("status", {}, ctx)
+            # `required` tool so resolution runs (a no-proof pre_onboard read
+            # now short-circuits before the ephemeral/TTL marking under test).
+            result = await resolve_identity("process_agent_update", {}, ctx)
         finally:
             for p in reversed(patches):
                 p.stop()
@@ -139,7 +145,9 @@ class TestEphemeralIdentityMarking:
             p.start()
         try:
             ctx = DispatchContext()
-            result = await resolve_identity("status", {}, ctx)
+            # `required` tool so resolution runs (a no-proof pre_onboard read
+            # now short-circuits before the ephemeral/TTL marking under test).
+            result = await resolve_identity("process_agent_update", {}, ctx)
         finally:
             for p in reversed(patches):
                 p.stop()
@@ -213,6 +221,95 @@ class TestEphemeralIdentityMarking:
         assert ctx.bound_agent_id is None
         assert ctx.identity_result is identity_result
         mock_db.update_session_activity.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_pre_onboard_read_no_proof_short_circuits_resolution(self, mock_db):
+        """#945 §1: a pre_onboard read with no proof must skip resolution entirely.
+
+        The old shape resolved-then-guarded (resolve_session_identity ran for
+        EVERY tool); a fingerprint hit could bind + sticky-cache an identity for
+        a pure read. Guarding-first: no proof + pre_onboard read => no resolve,
+        no mint, no sticky cache, request left unbound.
+        """
+        resolve_mock = AsyncMock(return_value={"agent_uuid": "should-not-be-used"})
+        patches = [
+            patch("src.mcp_handlers.context.get_session_signals", return_value=None),
+            patch("src.mcp_handlers.identity.handlers.derive_session_key", new_callable=AsyncMock, return_value="fp-session"),
+            patch("src.mcp_handlers.identity.handlers.resolve_session_identity", resolve_mock),
+            patch("src.mcp_handlers.context.set_session_context", return_value=MagicMock()),
+            patch("src.db.get_db", return_value=mock_db),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            ctx = DispatchContext()
+            await resolve_identity("get_governance_metrics", {}, ctx)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        # The whole point: resolution was never invoked.
+        assert resolve_mock.await_count == 0
+        assert ctx.bound_agent_id is None
+        assert ctx.identity_result is None
+        mock_db.update_session_activity.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_pre_onboard_read_with_proof_still_resolves(self, mock_db):
+        """Proof-carrying reads must NOT be short-circuited — reading an existing
+        identity is legitimate. With client_session_id present, the resume path
+        still runs (await_count == 1)."""
+        resolve_mock = AsyncMock(return_value={
+            "resume_failed": True,
+            "error": "session_resolve_miss",
+            "session_key": "fp-session",
+        })
+        patches = [
+            patch("src.mcp_handlers.context.get_session_signals", return_value=None),
+            patch("src.mcp_handlers.identity.handlers.derive_session_key", new_callable=AsyncMock, return_value="fp-session"),
+            patch("src.mcp_handlers.identity.handlers.resolve_session_identity", resolve_mock),
+            patch("src.mcp_handlers.context.set_session_context", return_value=MagicMock()),
+            patch("src.db.get_db", return_value=mock_db),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            ctx = DispatchContext()
+            await resolve_identity("get_governance_metrics", {"client_session_id": "fp-session"}, ctx)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        assert resolve_mock.await_count == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", ["onboard", "identity", "bind_session"])
+    async def test_identity_lifecycle_no_proof_not_short_circuited(self, tool_name, mock_db):
+        """Lifecycle tools are pre_onboard but must still resolve so the handler
+        receives the dispatch-threaded resolution. They are excluded from the
+        #945 §1 read short-circuit even with no proof."""
+        resolve_mock = AsyncMock(return_value={
+            "resume_failed": True,
+            "error": "session_resolve_miss",
+            "session_key": "fp-session",
+        })
+        patches = [
+            patch("src.mcp_handlers.context.get_session_signals", return_value=None),
+            patch("src.mcp_handlers.identity.handlers.derive_session_key", new_callable=AsyncMock, return_value="fp-session"),
+            patch("src.mcp_handlers.identity.handlers.resolve_session_identity", resolve_mock),
+            patch("src.mcp_handlers.context.set_session_context", return_value=MagicMock()),
+            patch("src.db.get_db", return_value=mock_db),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            ctx = DispatchContext()
+            await resolve_identity(tool_name, {}, ctx)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        assert resolve_mock.await_count == 1
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("tool_name", ["identity", "onboard"])

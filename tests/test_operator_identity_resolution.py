@@ -386,6 +386,37 @@ class TestRestPrebindIntegration:
             result = await _resolve_http_bound_agent("archive_agent", {}, signals)
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_pre_onboard_read_no_proof_skips_resolution(self):
+        """#945 §1 (REST parity): a pre_onboard read with no proof must not
+        fingerprint-resolve — that would lazily bind + sticky-cache an identity
+        for a pure read. get_governance_metrics is the case the stale skip_tools
+        set missed; the get_call_identity_requirement check now covers it."""
+        from src.http_api import _resolve_http_bound_agent
+        from src.mcp_handlers.middleware.identity_step import (
+            _transport_identity_cache,
+        )
+
+        _transport_identity_cache.clear()
+        resolve_mock = AsyncMock(return_value=_resumed("uuid-should-not-bind"))
+        signals = FakeSignals(ip_ua_fingerprint="9.9.9.9:uaRO")
+        with patch(
+            "src.mcp_handlers.identity.handlers.derive_session_key",
+            new_callable=AsyncMock,
+            return_value="sk-readonly",
+        ), patch(
+            "src.mcp_handlers.identity.handlers.resolve_session_identity",
+            resolve_mock,
+        ):
+            result = await _resolve_http_bound_agent(
+                "get_governance_metrics", {}, signals
+            )
+
+        assert result is None
+        assert resolve_mock.await_count == 0
+        # Nothing cached from a pure read.
+        assert not _transport_identity_cache
+
 
 class TestStrictGateEndToEnd:
     """Under STRICT_IDENTITY_REQUIRED: operator-resolved binding passes the

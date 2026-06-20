@@ -367,6 +367,20 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
     # returns whichever agent the cache holds (issue #110).
     _token_agent_uuid = extract_token_agent_uuid_safe(arguments.get("continuity_token"))
 
+    # #945 §1 (REST parity): a pre_onboard READ with no remaining proof must not
+    # fingerprint-resolve. By this point the proof-carrying paths have already
+    # returned (explicit UUID, operator token, sticky-cache hit); the only proof
+    # left to honor is a continuity_token. Without one, resolving here would
+    # lazily bind an identity AND write it back into the sticky cache below — the
+    # exact read-tool side effect #945 targets. The stale `skip_tools` set above
+    # missed get_governance_metrics and the action-level reads (knowledge.search
+    # etc.); judging the canonical CALL via get_call_identity_requirement covers
+    # them without another hardcoded list.
+    if not _token_agent_uuid:
+        from src.mcp_handlers.decorators import get_call_identity_requirement
+        if get_call_identity_requirement(tool_name, arguments) == "pre_onboard":
+            return None
+
     resolved = await resolve_session_identity(
         session_key,
         persist=False,
