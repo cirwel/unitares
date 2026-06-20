@@ -51,7 +51,7 @@ defmodule UnitaresLeasePlane.GovernedEffectIntegrationTest do
     assert resp.status == 202
     body = parsed(resp)
     assert body["custody_mode"] == "record_only"
-    assert body["status"] == "committed"
+    assert body["status"] == "recorded"
     assert [obs] = body["observations"]
     assert obs["would_acquire"] == "ok"
     assert obs["surface"] == ctx.surface

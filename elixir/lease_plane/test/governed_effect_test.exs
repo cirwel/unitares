@@ -69,10 +69,10 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
   end
 
   describe "record_only result" do
-    test "no leases → committed, uuid effect_id, empty observations, no pending custody" do
+    test "no leases → recorded, uuid effect_id, empty observations, no pending custody" do
       assert {:ok, body} = GovernedEffect.handle(base())
       assert body.custody_mode == "record_only"
-      assert body.status == "committed"
+      assert body.status == "recorded"
       assert body.effect_lane == "governed_effect"
       assert body.observations == []
       assert is_nil(body.custody_expires_at)
