@@ -243,6 +243,35 @@ won't fit a column, that absence is a finding (e.g. most rows have no genuine
 `manifesto` name — the norm register governs a few load-bearing referents, not
 all of them), not a gap to backfill.
 
+### FEP promotion conditions (roadmap)
+
+Each `~ candidate` from the table above, with the **falsifiable condition** it
+must meet before its `fep` cell is promoted to `✓ earned`. The discipline: if you
+can't state a test that would *fail*, the mapping is decoration, not rigor. Listed
+most-reachable first.
+
+| Candidate mapping | Earned when (falsifiable test) | Reachability |
+|---|---|---|
+| assurance/calibration → **precision-weighting** | An observation's effect on state/calibration is scaled by its assurance as an explicit inverse-variance **precision** term — low-assurance writes are down-weighted *proportionally*, not by category. Test: the update weight is a continuous function of assurance, derivable as precision, not an `if tier == weak` branch. (`identity.md` already gestures at this: "a gated pre-check should not weight calibration the same way an explicit check-in does.") | **High** — closest to earnable; the weighting intent already exists, it just needs to be Bayesian rather than categorical. |
+| basin → **attractor / characteristic-state set** | The basin is the *attracting set of the system's own EISV dynamics* — perturb EISV and return-to-basin is an emergent property of the update flow, with the "edge" a real separatrix. Test: the basin boundary is derived from the dynamics, not a configured threshold box; a clamp disqualifies it. | **High** — basin-health gating already behaves attractor-ish; earned only if the edge is dynamics, not a set point. |
+| EISV → **generative-model belief state** | EISV carries explicit **uncertainty** (a distribution, not a point), and its update rule is (an approximation of) gradient descent on a variational free-energy functional — not EWMA-style smoothing. Test: the EISV update equals/approximates free-energy minimization under a stated generative model. | **Medium** — requires EISV to become distributional (mean + precision) first. |
+| running-hot / basin-edge → **surprise / prediction error** | The hot signal is computed as (an approximation of) `−log P(behavior \| model)` under an explicit generative model — how *unexpected* current behavior is, not variance-from-norm. Test: high surprise provably drives belief updates (couples to the EISV and dialectic rows). | **Medium** — depends on EISV-as-belief-state landing first. |
+| dialectic → **active inference / policy selection** | Resolution is formalized as selecting the position/action that minimizes **expected** free energy (future surprise), with an explicit EFE objective. Test: a dialectic verdict is reconstructable from an EFE computation, not an LLM judgment or scoring heuristic. | **Medium-low** — the largest formalization lift. |
+| heartbeat → **non-equilibrium steady state / self-maintenance** | Proof-of-life is contingent on the agent *actively maintaining its own boundary/characteristic states* (resisting dissipation), not emitting a TTL ping. Test: liveness fails when self-maintenance work stops, even if the timer fires. | **Decorative — recommend demote.** A TTL heartbeat is an ops timer; "NESS" is almost certainly borrowed rigor here. Drop the `fep` name unless heartbeat is re-grounded in real self-maintenance. |
+
+**On the false friend.** `Markov blanket` stays `✗` for the lease-surface
+referent — they are not the same boundary. *If* the system ever wants a genuine
+Markov-blanket referent, it is the conditional-independence boundary separating an
+agent's internal states from external ones (sensory + active states mediating) —
+closer to `affordance_state` than to a coordination claim — and it is earned only
+when that statistical independence structure is actually modeled, not asserted.
+
+**Roadmap reading:** two mappings (precision-weighting, basin-as-attractor) are
+genuinely reachable and worth pursuing; three are gated behind making EISV
+distributional first; one (heartbeat→NESS) should be dropped rather than chased.
+That ordering is the actual deliverable — it says which physics claims to earn
+next and which to stop borrowing.
+
 ---
 
 ## Maintenance
