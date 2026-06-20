@@ -125,13 +125,16 @@ mkdir -p "$DEPLOY/data/logs"
 MIGRATE="$DEPLOY/scripts/dev/apply_migrations.py"
 MIGRATE_DBURL=()
 [[ -n "${UNITARES_DEPLOY_DB_URL:-}" ]] && MIGRATE_DBURL=(--db-url "$UNITARES_DEPLOY_DB_URL")
+# Expand with the ${arr[@]+"${arr[@]}"} guard everywhere below: on macOS bash 3.2
+# (the default /bin/bash) "${empty_array[@]}" trips `set -u` ("unbound variable")
+# and aborts the deploy when no UNITARES_DEPLOY_DB_URL is set (the common case).
 if [[ -f "$MIGRATE" ]]; then
   echo "[deploy-mcp] migration preflight: is the live DB in sync with the deploy-worktree manifest?"
-  if ! python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]}"; then
+  if ! python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}"; then
     if [[ "$APPLY_MIGRATIONS" == 1 ]]; then
       echo "[deploy-mcp] applying pending migrations (operator opt-in) BEFORE restart"
-      if ! python3 "$MIGRATE" --apply "${MIGRATE_DBURL[@]}" \
-         || ! python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]}"; then
+      if ! python3 "$MIGRATE" --apply "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}" \
+         || ! python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}"; then
         echo "[deploy-mcp] FAILED — migrations did not reach sync; rolling worktree back to ${PREV:0:8} and NOT restarting." >&2
         git -C "$DEPLOY" reset --hard "$PREV"
         exit 1
