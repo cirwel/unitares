@@ -1,10 +1,10 @@
 # Harness Event Safety Policy — v0
 
-**Created:** 2026-06-20  
-**Last Updated:** 2026-06-20  
-**Status:** Draft for multi-model review  
-**Scope:** Cross-harness policy contract; no runtime enforcement changes in this PR  
-**Companions:** [`docs/ontology/harness-substrate-plurality.md`](../ontology/harness-substrate-plurality.md), [`discord-thread-identity-resume-v0.md`](discord-thread-identity-resume-v0.md), [`behavioral-running-hot-detector-v0.md`](behavioral-running-hot-detector-v0.md), [`docs/dev/CIRCUIT_BREAKER_DIALECTIC.md`](../dev/CIRCUIT_BREAKER_DIALECTIC.md)
+- **Created:** 2026-06-20
+- **Last Updated:** 2026-06-20
+- **Status:** Draft for multi-model review
+- **Scope:** Cross-harness policy contract; no runtime enforcement changes in this PR
+- **Companions:** [`docs/ontology/harness-substrate-plurality.md`](../ontology/harness-substrate-plurality.md), [`discord-thread-identity-resume-v0.md`](discord-thread-identity-resume-v0.md), [`behavioral-running-hot-detector-v0.md`](behavioral-running-hot-detector-v0.md), [`docs/dev/CIRCUIT_BREAKER_DIALECTIC.md`](../dev/CIRCUIT_BREAKER_DIALECTIC.md)
 
 ---
 
@@ -43,15 +43,34 @@ Short form:
 
 When more than one row applies, the stricter decision wins:
 
-1. `reject` / `block`
-2. `quarantine_session` / `pause_harness`
+1. `reject` / `block` / `reject_or_require_review` / `reject_identity_required` /
+   `reject_or_require_lineage`
+2. `quarantine_session` / `pause_harness` / `pause_or_defer`
 3. `dedupe`
 4. `warn`
 5. `allow_read_only`
 6. `allow`
 
+The compound decisions in the Section 7 table are normalized into this ladder at
+the tier shown above: every `reject_*` variant ranks at tier 1 and carries its
+nuance in the `reason_code` of the Section 13 result, and `pause_or_defer` ranks
+at tier 2. There are no decision values outside this ladder; an evaluator that
+cannot map a row's decision into one of these six tiers must treat it as tier 1
+(`reject`).
+
 An `allow` decision must never override a contradictory invalidity, replay,
 identity, or effect-authority failure.
+
+### Unknown values fail closed
+
+An unrecognized value in any safety-relevant field (`event_origin`,
+`requested_effect`, `max_effect_class`, `proof_origin`,
+`identity_assurance.tier`, or any `classification.*` flag an evaluator does not
+understand) is treated as invalid, not ignored: it falls to
+`reject_or_require_review` for model turns and side effects rather than falling
+through to `allow`. Producers must preserve unknown envelope fields rather than
+strip them, so a newer evaluator can still see them. A `v0` evaluator must not
+silently allow a `v1` field it cannot interpret on a safety-relevant path.
 
 ## 2. Normative versus example content
 
@@ -78,6 +97,17 @@ policy, and enforcement.
 EISV and other telemetry may inform the policy, but the pause authority lives in
 the policy/enforcement layer. A thermometer does not pause the agent; a governed
 circuit breaker can.
+
+**Known exception — this is target architecture, not a description of the
+current runtime.** The deployed governance monitor already emits `void_pause`,
+`coherence_pause`, `basin_pause`, and `cirs_block` directly from EISV /
+coherence / behavioral z-scores on the check-in path (see
+`src/governance_monitor.py` and [`docs/dev/CIRCUIT_BREAKER_DIALECTIC.md`](../dev/CIRCUIT_BREAKER_DIALECTIC.md)).
+Those existing EISV-driven pauses pre-date this policy and are *grandfathered*:
+they are not yet routed through the layer separation or the Section 10 bounds.
+This policy governs **harness-event-driven** pause/quarantine decisions; folding
+the legacy EISV pauses into the same layer discipline is later work, not a claim
+this PR makes about today's monitor.
 
 ## 4. Trust boundary and derived fields
 
@@ -151,9 +181,9 @@ optional before routing; requiredness is defined by effect class in Section 6.
         "client_session_id": null,
         "session_resolution_source": null,
         "identity_assurance": {
-          "tier": "none | weak | medium | strong",
+          "tier": "weak | medium | strong",
           "caller_proven": false,
-          "proof_origin": "caller_asserted | server_inferred | continuity_token | orchestrator_vouched | unknown"
+          "proof_origin": "caller_asserted | server_inferred | unknown"
         }
       },
       "authority": {
@@ -188,13 +218,29 @@ optional before routing; requiredness is defined by effect class in Section 6.
   `event_id_source=none`; side effects then require a deterministic dedupe key
   or an explicitly reviewed harness policy.
 - `identity.identity_assurance` is server-computed. Adapters may report what
-  they saw, but they do not grant themselves `strong` authority.
+  they saw, but they do not grant themselves `strong` authority. The tier and
+  proof-origin enums above match the live UNITARES identity write path:
+  `tier ∈ {weak, medium, strong}` (no `none` — an unresolved caller resolves to
+  `weak`, and "no identity" is `agent_uuid: null`), and
+  `proof_origin ∈ {caller_asserted, server_inferred, unknown}`. `continuity_token`
+  is **not** a `proof_origin`; it is a `session_resolution_source` value that
+  resolves to `proof_origin=caller_asserted`. `orchestrator_vouched` is a
+  defined-but-inert future proof origin (Wave-3, not yet emitted by the live
+  server); adapters must not produce it until that path is wired.
 - `authority.requested_effect` is the caller/harness request.
   `authority.max_effect_class` is computed by the trusted dispatcher/tool
   registry and rechecked before each escalation.
-- `classification.duplicate` and `classification.replay` are measurement
-  outputs, not trusted adapter inputs. The adapter provides idempotency material;
-  the evaluator computes duplicate/replay status.
+- `classification.duplicate`, `classification.replay`,
+  `classification.synthetic_control_event`, `classification.diagnostic_probe`,
+  and the `attempts.*` counters (`resume_attempt`, `restart_count_window`) are
+  **measurement outputs computed by the evaluator/trusted substrate, not trusted
+  adapter inputs.** The adapter provides raw idempotency material and may report
+  what it observed, but the evaluator computes the authoritative values. In
+  particular, `event_origin=auto_resume` forces `synthetic_control_event=true`
+  regardless of what the adapter claimed — an adapter cannot launder a resume
+  into a user turn by setting the flag to `false`. Where the trusted source for
+  a counter does not yet exist (see `restart_count_window` in Sections 7 and 10),
+  the decisions that read it are non-normative until that source is named.
 
 ## 6. Minimum required fields by effect class
 
@@ -205,7 +251,7 @@ optional before routing; requiredness is defined by effect class in Section 6.
 | `model_turn` | `read_only` fields plus fresh intent evidence, non-replayed/deduped idempotency, actor/conversation scope, and valid content or structured interaction |
 | `tool_call` | `model_turn` parent event plus `parent_event_id`, computed effect class, and tool-specific authority gate |
 | `file_write` / `shell` / `network` / `publish` | fresh non-synthetic/non-replayed parent event, computed effect class, explicit authorization, and post-action verification requirement |
-| `governance_write` | valid event plus UNITARES identity assurance required by the target operation; strong-required writes reject weak/server-inferred proof |
+| `governance_write` | fresh non-replayed parent event with `parent_event_id` causal linkage, plus UNITARES identity assurance required by the target operation. Identity assurance answers *who*; the fresh-parent requirement answers *was this a current intent* — both are required, so a stale-but-valid event cannot be replayed into a durable write. Note: the live strict gate refuses `proof_origin=server_inferred` writes under strict mode; it does not, by itself, refuse a `weak`-tier `caller_asserted` write — operations needing strong assurance must assert that requirement explicitly (the `reject_identity_required` row in Section 7) |
 | authorized cron/orchestrator automation | explicit `automation_policy_id`, deterministic tick/run id, retry budget, and maximum effect class for that automation |
 
 A valid inbound user event can authorize a model turn without authorizing later
@@ -220,15 +266,21 @@ effect requires its own policy check with causal linkage to the original event.
 | Safety-relevant field is unverified or contradictory | `reject_or_require_review` | Caller claims cannot lower risk |
 | `synthetic_control_event=true` and no explicit automation policy | `block` | Auto-resume/control events are not user intent |
 | `authorized_scheduled_event=true` without `automation_policy_id` | `block` | Scheduled automation must be named and budgeted |
-| `diagnostic_probe=true` | `allow_read_only`, exclude from live validation | Probe traffic may be measured but not counted as agent behavior |
+| `diagnostic_probe=true` (evaluator-derived, not claimed) | `allow_read_only`, exclude from live validation | A self-asserted `diagnostic_probe` flag must be ignored. The probe admission must be derived from a verified probe credential or the sandboxed diagnostic policy of Section 9; otherwise an attacker claims probe to bypass the `sensitive_read` auth ladder or to launder risky traffic out of EISV/calibration |
 | Duplicate or replayed event requests `model_turn` or stronger effect | `dedupe` or `block` | Do not call model/tool again |
 | Duplicate prior result requested from a different authz/actor/conversation scope | `block` | Avoid leaking prior result across users/tenants |
-| `auto_resume=true` and `resume_attempt > 1` | `quarantine_session` | Avoid restart/resume loops |
-| `restart_count_window >= policy.thresholds.restart_storm` | `pause_harness` | Requires trusted substrate telemetry; scope narrowly |
+| `auto_resume=true` and `resume_attempt > 1` | `quarantine_session` | Avoid restart/resume loops. The quarantine *target* (`conversation_id`/`client_session_id`) must come from the enforcement layer's own connection→session map, never from the envelope, or a forged event quarantines a victim session (see Section 10) |
+| `restart_count_window >= policy.thresholds.restart_storm` | `pause_harness` | **Non-normative until a trusted source is named.** No `restart_count_window` substrate exists yet; this counter must be derived from the supervisor's own restart-intensity (Section 10), not the adapter-supplied field, before this row can be enforced |
 | Webhook/event lacks idempotency key and requests `model_turn` or side effect | `reject` | Retry semantics require dedupe |
 | `identity_assurance.tier != strong` and target operation requires strong governance write | `reject_identity_required` | No silent weak durable writes |
 | `proof_origin=server_inferred` used as mint/resume proof | `reject_or_require_lineage` | Do not launder server-inferred context into caller proof |
-| Lumen/Anima body loop in protected drawing phase | `pause_or_defer` | Body-state protection is harness-local enforcement policy |
+| Unrecognized value in a safety-relevant field | `reject_or_require_review` | Unknown enums fail closed (Section 1), never fall through to `allow` |
+| Valid event, all safety-relevant fields verified, no row above applies | authorize at the requested effect class per Section 6 | The terminal/default case: a clean valid event is authorized only up to its Section 6 effect-class evidence, not unconditionally |
+
+Lumen/Anima body-loop protection (interrupting a protected drawing phase) is
+**harness-local enforcement policy, not part of this normative table** — it keys
+on a `harness_local_phase` the core envelope does not carry. See the
+non-normative example in Section 11.
 
 The default table is conservative. Deployments may relax read-only
 observability, but should not relax synthetic/replayed side effects without an
@@ -238,11 +290,37 @@ explicit policy record.
 
 `dedupe_key` is not enough by itself. Dedupe must include:
 
-- `dedupe_scope`: the boundary in which the key is unique;
+- `dedupe_scope`: the boundary in which the key is unique. The enum in Section 5
+  is a base set; adapters may extend it with harness-local scopes, but the scope
+  defines the namespace in which `dedupe_key` must be unique. A `conversation`-
+  scoped dedupe is **not** satisfied by a `harness_instance`-scoped prior record;
+  a narrower scope must never be treated as covered by a broader one.
 - `dedupe_ttl_seconds`: how long a duplicate is recognized;
 - actor/conversation/authorization context;
 - canonical payload hash when the platform event id is absent or reused;
 - in-flight versus completed versus failed prior event state.
+
+**Dedupe is not replay protection.** A `dedupe_ttl_seconds` window (e.g. the
+example `86400`) only suppresses *duplicates seen within the window*. A
+replay of an old-but-otherwise-valid event delayed past the TTL is a distinct
+threat and must be caught by freshness — server-stamped `received_at` versus
+`emitted_at` skew bounds, platform signature/nonce validation, and a
+`parent_event_id` causal-freshness check for side effects — independent of and
+not bounded by the dedupe TTL. Treat "duplicate within TTL" (dedupe-key match)
+and "replay of a stale valid event" (freshness failure) as separate decisions.
+
+**Payload-hash canonicalization.** Because `payload_hash` is the fallback dedupe
+key when the platform event id is absent or reused, two adapters that hash
+different things will silently fail to deduplicate against each other. A
+conformant `payload_hash` is therefore defined as: SHA-256 over a UTF-8,
+key-sorted, minimal-whitespace JSON serialization of the canonical payload —
+the actor/content/conversation-identifying fields (`actor.id`,
+`conversation_id`, message/body content) — **excluding** all server-stamped
+timestamps (`received_at`, `emitted_at`), `delivery_attempt`, and the
+`classification.*`/`attempts.*` measurement fields. An adapter that cannot
+produce this hash must set `dedupe_key_source=none` / `event_id_source=none` and
+follow the no-idempotency path (Section 7) rather than emitting a hash over an
+ad-hoc field set.
 
 Duplicate delivery should produce exactly one model/tool/governance execution.
 Returning a prior result is permitted only when the prior result belongs to the
@@ -273,10 +351,35 @@ By default they must not:
 Diagnostic probe observations should be labeled so dogfood/ablation reports can
 exclude probe-induced noise from live validation claims.
 
+The probe classification itself must be **evaluator-derived, never caller-
+asserted**. A self-set `diagnostic_probe=true` is exactly the two attacks this
+section must prevent: (1) a read-escalation path — claiming probe to reach
+`allow_read_only` while sidestepping the `sensitive_read` auth ladder; and
+(2) measurement laundering — a real agent self-labeling probe to keep its
+behavior out of EISV/calibration/outcome rows. Admit the probe path only when
+the connection carries a verified probe credential or originates from the
+sandboxed diagnostic policy above; the exclusion-from-live-validation effect in
+particular must be gated on a trusted probe origin.
+
 ## 10. Quarantine, pause, and denial-of-service bounds
 
 Pause/quarantine decisions may be triggered only by trusted substrate telemetry
-or verified policy state, not by untrusted event fields alone.
+or verified policy state, not by untrusted event fields alone. Each
+pause-triggering counter must name its trusted source: restart storms from the
+supervisor's own restart-intensity (e.g. OTP supervisor stats), duplicate rate
+from the dedupe store's own write-conflict count — never from the envelope's
+`attempts.*` fields. A counter with no named trusted source (today,
+`restart_count_window`) cannot drive enforcement and its Section 7 row stays
+non-normative until the source exists.
+
+Fail-closed must not become a self-denial-of-service primitive. Because
+`conversation_id` and `client_session_id` are adapter-supplied claims (Section
+4), a quarantine/pause that scopes itself from envelope fields lets a forged
+event quarantine any victim session it can name. So the **target identity** of
+any session/conversation-scoped enforcement must be resolved by the enforcement
+layer's own connection→session state, not read from the event. Distinguish two
+decisions explicitly: `reject_this_event` (always safe on forged input) versus
+`quarantine_the_session`/`pause_harness` (requires a substrate-attested target).
 
 Enforcement must be:
 
@@ -285,7 +388,9 @@ Enforcement must be:
 - TTL-bounded or operator-visible when indefinite;
 - rate-limited in alerting;
 - auditable with measurement, diagnosis, policy, and enforcement separated;
-- resilient to invalid-event floods becoming a global pause primitive.
+- resilient to invalid-event floods becoming a global pause primitive — which
+  holds only if the pause-triggering counters are substrate-derived per the
+  paragraph above, not adapter-populated.
 
 ## 11. Non-normative harness examples
 
@@ -300,6 +405,22 @@ Enforcement must be:
 | Claude/Codex/OpenCode adapters | Hook spam, ACP/sidecar mismatch, leaked session anchors | hook phase, headless/interactive discriminator, session proof source | Fail closed on weak/leaked anchors; one lifecycle check-in per turn |
 | BEAM residents/supervisors | Supervisor restart storm, per-turn identity minting | supervisor child id, restart intensity, logical conversation anchor | Supervisor cooldown; distinguish process restart from principal identity |
 | Lumen/Anima | Interrupting live drawings/body loops, over-dashboarding creature state | body phase, display/drawing state, visitor/request origin, disruption level | Defer/reject disruptive actions during protected embodied phases |
+
+### v0 envelope expressiveness gaps
+
+Some of the guards above need state the v0 envelope cannot yet carry. They are
+listed here so reviewers do not infer completeness from silence — closing them is
+follow-up envelope work, not something this PR claims to express:
+
+- **Kanban "no re-dispatch without state change"** needs a prior-state version
+  (e.g. `board_revision`) to distinguish a legitimate re-dispatch after a real
+  state change from a duplicate. The v0 `idempotency` block has no such field.
+- **BEAM "distinguish process restart from principal identity"** needs separate
+  `process_instance_id` and `logical_principal_id`; v0 collapses both into
+  `harness_id`.
+- **Lumen "protected drawing phase"** needs a generic `harness_local_phase`
+  opaque-to-core field that Sections 6–7 could reference; it does not exist in
+  v0, which is why that guard is harness-local rather than normative.
 
 ## 12. Model neutrality and model-aware budgets
 
@@ -363,6 +484,25 @@ measurement, policy, and enforcement separate.
       }
     }
 
+### Closed enums in the result shape
+
+So heterogeneous adapters produce a routable, auditable record, the following
+fields are closed base sets (adapters may add harness-local values only if they
+also map to one of these base values; consumers route on the base value):
+
+- `policy_evaluation.decision`: the six precedence tiers of Section 1
+  (`reject`, `block`, `quarantine_session`, `pause_harness`, `dedupe`, `warn`,
+  `allow_read_only`, `allow`) — the Section 7 compound decisions are normalized
+  into these per Section 1, with their nuance carried in `reason_code`.
+- `enforcement.mode`: `circuit_breaker | session_quarantine | blocked_write |
+  lease_release | operator_escalation | no_op`.
+- `reason_code` is a **closed, machine-routable** set keyed to the Section 7
+  rows (e.g. `auto_resume_attempt_budget_exceeded`, `identity_tier_insufficient`,
+  `synthetic_no_automation_policy`, `missing_idempotency_key`,
+  `unverified_safety_field`, `unknown_enum_value`); `reason` is the free-text
+  human-readable companion and is not routed on. `diagnosis` carries measurement
+  labels and is distinct from `reason_code`.
+
 ## 14. Non-normative incident mapping: Hermes Discord auto-resume loop
 
 The incident that motivated this policy maps to the envelope as:
@@ -385,7 +525,9 @@ The incident that motivated this policy maps to the envelope as:
       }
     }
 
-Default result:
+Default result — this is the ordered enforcement *pipeline* for the matched
+event, not the Section 1 precedence ladder (precedence selects the single
+strictest decision; this is what enforcement then does, in order):
 
     block model turn -> quarantine session -> alert operator once -> recover transcript read-only from a fresh locus
 
