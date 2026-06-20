@@ -179,6 +179,33 @@ they are engineering facts. Summary:
 | Can `process_instance_id` stay telemetry-only (no minted identity)? | Yes — it *already is*. The orchestrator separates `agent_id` (run handle) from `holder_agent_uuid` (governance UUID), and identity is minted by the child's own onboard, not the BEAM incarnation. See §2. | **Resolved — descriptive of current system** |
 | Is the presence-lease liveness mapping sufficient? | Yes — `agent:/<uuid>` is a canonical presence surface routed to `remote_heartbeat` (a self-reaping DB row, HTTP-heartbeated before `expires_at`); residents are remote_heartbeat holders. The lease survives a single BEAM incarnation, so a dead `process_instance_id` under a live lease reads as restart-in-progress, exactly as intended. (`canonicalize.ex:376-384`, `lease_plane.ex:29-49`) | **Resolved — mechanism already exists** |
 
+### Live evidence (governance DB + BEAM logs, 2026-06-20)
+
+Rather than wait on a calendar gate, the failure modes were checked against
+running telemetry. Result: the demand the adapter addresses has **not** fired in
+a way an envelope would have caught.
+
+- **Identity churn was real and recent — but source-fixed, not envelope-fixed.**
+  `dispatch_beam_harness` minted 155 identities on 2026-06-18 (150 instantly
+  archived), 163 over 7 days, then dropped to 0 within 24h. The cohort is 162/163
+  `spawn_reason=dispatch_beam_harness`, and the cutoff coincides with the
+  dispatch-beam restart that deployed the `#17` test-leak fix (an env guard in
+  `runtime.exs`). A narrow harness bugfix closed it — exactly the "narrow gateway
+  bugfix, not a policy import" pattern the parent policy predicts.
+- **Restart-storm is not evidenced on residents.** `sentinel-beam` has run as a
+  single process since 2026-06-15 (5+ days, zero VM restarts; 4 lifetime
+  terminations, all DB-pool shutdowns). The `restart_count_window` signal this
+  adapter would source has no incident to act on.
+- **Unrelated real bug found:** the lease-plane HTTP error path crashed 97× with
+  `Plug.Exception.status/1` `UndefinedFunctionError` (the error handler errors).
+  Dormant in the live instance but unconfirmed-fixed — a Plug/router fix, out of
+  scope for this adapter, noted so it is not lost.
+
+Net: the identity-churn demand fired once and a **source fix** met it; the
+restart-storm demand has not fired. That is the evidence basis for the
+demand-trigger below, and a live example of why building the envelope adapter
+now would solve an already-closed problem with a heavier mechanism.
+
 **Implementation is demand-triggered, not approval-gated.** The mapping above is
 the design-of-record; what it is NOT is a reason to build now. The BEAM adapter
 (the net-new restart counters of §1, the envelope emission) should be built only
