@@ -55,6 +55,7 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`mirror-effectiveness-measurement-v0.md`](mirror-effectiveness-measurement-v0.md) | Phases 0–1 landed (Phase 2 proposed) — deterministic, operator-funded-free measurement of whether a surfaced mirror signal changes agent behavior |
 | [`hosted-multi-tenant-endpoint-v0.md`](hosted-multi-tenant-endpoint-v0.md) | Scoping / not committed — hosted governance endpoint decision doc; recommends isolated-per-adopter hosting first and defers true multi-tenant SaaS |
 | [`dashboard-hero-severity-rollup.md`](dashboard-hero-severity-rollup.md) | Draft (2026-06-19) — fleet-severity rollup into the dashboard hero; `dashboard/` only, awaiting operator sign-off before implementation |
+| [`harness-event-safety-policy-v0.md`](harness-event-safety-policy-v0.md) | Draft (2026-06-20) — cross-harness event envelope and fail-closed policy for synthetic/replayed/duplicate events before harness-specific implementation PRs |
 
 ## Shipped / resolved
 
