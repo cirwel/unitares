@@ -41,7 +41,7 @@ _Curated backfill of notable changes merged since 2.13.0 (2026-05-04). Versioned
 - **§129:** un-blind the substrate-tax gate (nesting) + stop counting shutdown noise (#576)
 - **identity:** strict gate keys on caller-proven binding, not binding-presence (#674, #675); single-flight + PG adopt-winner for operator-token first-use mint race (#646); stop laundering server-injected fingerprint CSID into the strong assurance tier (#682); anonymous auto-mint must not use the reserved `mcp_` prefix (#598); subagent onboards must not displace the driver's fingerprint pin (#604); lineage successor suppresses parent stuck-flag (#677)
 - **kg:** close write-path bugs — id collisions, naive ts, batch parity (#673); decouple auto-hybrid term cap from OR-recall cap (#672)
-- **kg:** stop cold-storage rows leaking into default search un-down-ranked — search now excludes `cold` unless `include_cold=true` (mirrors archived), and `cold` ranks below `archived` in the blend's status multipliers (#PLACEHOLDER)
+- **kg:** stop cold-storage rows leaking into default search un-down-ranked — search now excludes `cold` unless `include_cold=true` (mirrors archived), and `cold` ranks below `archived` in the blend's status multipliers (#950)
 - **calibration:** correct severe lower-bin underconfidence, not just cap it (#668)
 - **responses:** honest verdict provenance + reconcile position/thread_size (#670); reconcile six API-response honesty inconsistencies (#665)
 - **dashboard:** inner deadline degrades slow fleet read instead of a 15s hang (#666)
