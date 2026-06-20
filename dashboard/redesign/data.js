@@ -257,13 +257,14 @@
 
     async residentPanels() {
       return withFallback(async () => {
-        const [w, sn, vg, h] = await Promise.all([
+        const [w, sn, vg, h, res] = await Promise.all([
           authFetch("/v1/watcher/summary").catch(() => null),
           authFetch("/v1/sentinel/summary").catch(() => null),
           authFetch("/v1/vigil/summary").catch(() => null),
           authFetch("/health/deep").catch(() => null),
+          authFetch("/v1/residents").catch(() => null),
         ]);
-        if (!w && !sn && !vg && !h) return null;
+        if (!w && !sn && !vg && !h && !res) return null;
         const out = {};
         if (w) out.watcher = { total: w.total, byStatus: w.by_status || {}, openSev: w.by_severity_open || {},
           patterns: (w.patterns || []).map((p) => ({ p: p.pattern, confirmed: p.confirmed, dismissed: p.dismissed, surfaced: p.surfaced, ratio: p.dismiss_ratio })) };
@@ -276,7 +277,13 @@
         if (h) out.health = { status: h.status, version: h.version, checks: h.status_breakdown || {},
           breakers: { governance: (h.circuit_breakers && h.circuit_breakers.governance || {}).trips_24h || 0, redis: (h.circuit_breakers && h.circuit_breakers.redis || {}).trips_24h || 0 },
           calibration: (h.checks && h.checks.calibration || {}).status, redis: h.redis_present, continuity: h.identity_continuity_mode };
-        out.chronicler = S().residentPanels.chronicler; // not a REST summary; carry snapshot note
+        // Chronicler has no dedicated summary endpoint — pull its live state from
+        // /v1/residents (daily resident; cadence-aware rendering happens in the view).
+        const c = res && res.residents && res.residents.find((r) => r.label === "Chronicler");
+        out.chronicler = c
+          ? { status: c.status, silence: c.silence_seconds, silenceThreshold: c.silence_threshold_seconds,
+              lastCheckin: c.last_checkin_at, eisv: c.eisv, coherence: c.coherence }
+          : S().residentPanels.chronicler;
         return out;
       }, () => S().residentPanels);
     },
