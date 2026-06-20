@@ -99,7 +99,7 @@
     document.querySelector("#res-mount").innerHTML =
       `<div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-4)">
          <span class="eyebrow" style="margin:0">Always-on fleet</span><span class="spring"></span><span class="src-badge ${r.source}">${r.source}</span></div>
-       <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)">
+       <div class="split-2" style="gap:var(--space-4)">
          ${watcher(d.watcher)}${sentinel(d.sentinel)}${vigil(d.vigil)}${health(d.health)}
        </div>
        <div style="margin-top:var(--space-4)">${chronicler(d.chronicler)}</div>`;

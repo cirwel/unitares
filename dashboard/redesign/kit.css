@@ -223,6 +223,11 @@ body {
 .src-badge.live { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
 .src-badge.snapshot { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 
+/* Two-up layouts (agent detail state|identity, resident panels, Pulse risk|eisv)
+   that collapse to a single stacked column on phones — see the 640px block. */
+.split-2 { display: grid; grid-template-columns: 1fr 1fr; }
+.split-wide { display: grid; grid-template-columns: 1.4fr 1fr; }
+
 @media (max-width: 860px) {
   .grid { grid-template-columns: repeat(2, 1fr); }
   .topbar { flex-wrap: wrap; }
@@ -235,4 +240,6 @@ body {
    swipe right for cadence/last/next/where). Verified at 390px. */
 @media (max-width: 640px) {
   .tbl { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  /* Stack the two-up layouts so neither column gets crushed on a phone. */
+  .split-2, .split-wide { grid-template-columns: 1fr; }
 }
