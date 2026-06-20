@@ -1956,11 +1956,11 @@ async def handle_update_discovery_status_graph(arguments: Dict[str, Any]) -> Seq
     SECURITY: Requires authentication for high-severity discoveries.
     Low/medium severity discoveries can be updated by any registered agent (collaborative).
     """
-    # SECURITY FIX: Require registered agent_id (prevents phantom agent_ids)
-    agent_id, error = require_registered_agent(arguments)
-    if error:
-        return [error]
-    
+    # Identity is resolved below, after we fetch the discovery and know its
+    # severity — see the severity-keyed gate in the try block (Credential Loop
+    # Asymmetry fix). Resolving here unconditionally with require_registered_agent
+    # is what blocked a low-friction writer from editing the very row it was
+    # allowed to create.
     discovery_id, error = require_argument(arguments, "discovery_id",
                                          "discovery_id is required")
     if error:
@@ -2005,7 +2005,23 @@ async def handle_update_discovery_status_graph(arguments: Dict[str, Any]) -> Seq
         discovery = await graph.get_discovery(discovery_id)
         if not discovery:
             return [await _discovery_not_found(discovery_id, graph)]
-        
+
+        # Identity gate, keyed on the EXISTING discovery's severity so update
+        # mirrors store (Credential Loop Asymmetry fix). store() lets low/medium
+        # rows be written by a low-friction writer — including the stable
+        # anonymous writer (anonkg_*) derived for fingerprint-pinned callers —
+        # but update() previously demanded a registered agent unconditionally,
+        # so a caller could create a row yet not edit it without re-running
+        # onboard() (which mints a sibling identity). Match the store gate:
+        # high/critical still require a registered, session-bound agent; the
+        # high-severity ownership checks below are unchanged.
+        if discovery.severity in ["high", "critical"]:
+            agent_id, error = require_registered_agent(arguments)
+        else:
+            agent_id, error, _ = _resolve_low_friction_writer(arguments)
+        if error:
+            return [error]
+
         # SECURITY: Require session ownership for high-severity discoveries (UUID-based auth, Dec 2025)
         if discovery.severity in ["high", "critical"]:
             from ..utils import verify_agent_ownership

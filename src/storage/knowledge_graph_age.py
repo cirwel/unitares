@@ -645,21 +645,27 @@ class KnowledgeGraphAGE:
             # Normalize search tags to match stored normalized form
             from src.knowledge_graph import normalize_tags
             params["tags"] = normalize_tags(tags)
-            # Combined MATCH: Discovery with tag relationship
+            # Combined MATCH: Discovery with tag relationship.
+            #
+            # AGE cannot emit `RETURN DISTINCT d ORDER BY d.timestamp` — it
+            # translates to `SELECT DISTINCT ... ORDER BY <prop>` where the
+            # ORDER BY expression is not in the DISTINCT select list, so
+            # Postgres rejects it: "for SELECT DISTINCT, ORDER BY expressions
+            # must appear in select list". Mirror find_similar_by_tags: dedupe
+            # with `WITH DISTINCT d`, drop the Cypher-level ORDER BY/LIMIT, and
+            # apply "most recent first" ordering + the limit in Python below.
             base_match = "MATCH (d:Discovery)-[:TAGGED]->(t:Tag) WHERE t.name IN ${tags}"
             if where_clause:
                 cypher = f"""
                     {base_match} AND {where_clause}
-                    RETURN DISTINCT d
-                    ORDER BY d.timestamp DESC
-                    LIMIT ${{limit}}
+                    WITH DISTINCT d
+                    RETURN d
                 """
             else:
                 cypher = f"""
                     {base_match}
-                    RETURN DISTINCT d
-                    ORDER BY d.timestamp DESC
-                    LIMIT ${{limit}}
+                    WITH DISTINCT d
+                    RETURN d
                 """
         else:
             # No tag filter
@@ -679,6 +685,7 @@ class KnowledgeGraphAGE:
 
         discoveries = []
         seen_ids = set()
+        tag_sort_keys: Dict[str, str] = {}
         for result in results:
             # graph_query returns parsed agtype directly, not {"d": node}
             # Handle both dict with "d" key and direct node data
@@ -693,6 +700,21 @@ class KnowledgeGraphAGE:
             if discovery and discovery.id not in seen_ids:
                 seen_ids.add(discovery.id)
                 discoveries.append(discovery)
+                if tags:
+                    # Capture the RAW stored timestamp for sorting. _node_to_discovery
+                    # defaults a missing timestamp to now(), which would make ordering
+                    # nondeterministic; the raw value (empty when absent) keeps ties
+                    # in insertion order under the stable sort below.
+                    raw_ts = node_data.get("timestamp") or node_data.get("created_at") or ""
+                    tag_sort_keys[discovery.id] = str(raw_ts)
+
+        if tags:
+            # Tag queries skip the Cypher ORDER BY/LIMIT (AGE DISTINCT
+            # limitation above), so reproduce "most recent first" + LIMIT here.
+            # ISO-8601 timestamps sort lexicographically; rows without a stored
+            # timestamp keep their original order (stable sort, empty key).
+            discoveries.sort(key=lambda disc: tag_sort_keys.get(disc.id, ""), reverse=True)
+            discoveries = discoveries[:limit]
 
         return discoveries
 

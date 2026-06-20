@@ -178,8 +178,17 @@ async def inject_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                         },
                         recovery={
                             "action": "Remove agent_id parameter (session binding handles identity)",
-                            "note": "Each session is bound to one agent. Identity auto-binds on first tool call.",
-                            "related_tools": ["identity"]
+                            "note": (
+                                "Each session is bound to one agent, and this guard only blocks "
+                                "ACTING AS another agent (writes/mutations) — it does NOT block "
+                                "READING another agent's work. To discover another agent's "
+                                f"knowledge, search is unrestricted: "
+                                f"knowledge(action='search', agent_id='{provided_id}') filters to "
+                                "that agent's entries without binding to it. Identity auto-binds "
+                                "on first tool call."
+                            ),
+                            "read_path": f"knowledge(action='search', agent_id='{provided_id}')",
+                            "related_tools": ["identity", "knowledge"]
                         }
                     )]
         elif provided_id:

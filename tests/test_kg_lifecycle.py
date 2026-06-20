@@ -229,14 +229,41 @@ class TestUpdateDiscoveryStatusGraph:
         assert "not found" in data["error"].lower()
 
     @pytest.mark.asyncio
-    async def test_update_unregistered_agent(self, patch_common):
-        """Update fails for unregistered agent."""
+    async def test_update_low_severity_unregistered_allowed(self, patch_common):
+        """Low/medium updates accept an unregistered writer (mirrors store).
+
+        Credential Loop Asymmetry fix: store() lets unregistered / low-friction
+        callers create low+medium rows, so update() must let them edit those
+        rows too — otherwise a caller can create a row it cannot maintain
+        without re-running onboard() (which mints a sibling identity).
+        """
         mock_mcp_server, mock_graph = patch_common
+        mock_graph.get_discovery = AsyncMock(return_value=make_discovery(severity="low"))
         from src.mcp_handlers.knowledge.handlers import handle_update_discovery_status_graph
 
         result = await handle_update_discovery_status_graph({
             "agent_id": "unregistered",
-            "discovery_id": "2026-01-01T00:00:00.000000",
+            "discovery_id": "disc-1",
+            "status": "resolved",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_high_severity_unregistered_rejected(self, patch_common):
+        """High/critical updates still require a registered agent (unchanged).
+
+        The Credential Loop Asymmetry fix only relaxes the low/medium gate; the
+        security boundary on high+critical rows is preserved.
+        """
+        mock_mcp_server, mock_graph = patch_common
+        mock_graph.get_discovery = AsyncMock(return_value=make_discovery(severity="critical"))
+        from src.mcp_handlers.knowledge.handlers import handle_update_discovery_status_graph
+
+        result = await handle_update_discovery_status_graph({
+            "agent_id": "unregistered",
+            "discovery_id": "disc-1",
             "status": "resolved",
         })
 
