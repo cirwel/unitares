@@ -136,6 +136,31 @@ you write "continuity," mean the layered concept unless you write the full
 Both appear in the provenance envelope; keep `thread_id` out of any sentence
 about causal ancestry.
 
+### basin — attractor vs. health band (**confirmed at code level, 2026-06-20**)
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `basin (attractor)` | Which equilibrium will the system's own EISV *dynamics* flow to? | `governance_core/dynamics.py::check_basin` — bistable `I>0.5` high/low/boundary; the parallel ODE (research lens) |
+| `basin (health band)` | Is each EISV axis inside its *configured* healthy box, so self-relative deviation should count as risk? | `src/behavioral_assessment.py::_basin_health_gate` (#689), `config.governance_config.BASIN_HIGH` — the **verdict-driving** gate |
+
+This is the dangerous kind: only the second sense drives verdicts, and it is a
+*static configured box* (`BASIN_E_HEALTHY=0.60`, …), **not** an attractor derived
+from dynamics — even though it borrows the attractor word. The real attractor
+basin exists in the ODE but does not gate verdicts. A runtime glossary
+(`src/governance_glossary.py::explain_basin`, #428) resolves the health-band sense
+for users; keep it consistent with this entry.
+
+### free energy — ODE accumulator vs. variational −F (code level)
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `free energy (ODE V)` | What is the running E−I imbalance accumulator? | `governance_core/dynamics.py` — `V` is "like Helmholtz free energy", a signed integrator |
+| `free energy (variational −F)` | What is `E` as negative variational free energy under a generative model? | `src/grounding/free_energy.py` — Tier-1 FEP, **explicitly stubbed** (`NotImplementedError`, "Phase 2") |
+
+The first ships and drives nothing on its own; the second is the *target* `E`
+semantics and is honestly not-yet-implemented. Don't let "free energy" stand
+unqualified across the two.
+
 ---
 
 ## Single-sense load-bearing terms
@@ -150,7 +175,6 @@ against a baseline.
 | `transport` | Through what channel does the process act? (CLI, MCP-http, Discord, cron) | `harness-substrate-plurality.md` |
 | `lease` | What time-bounded claim to a surface is live, with what proof obligation and expiry? | `beam-coordination-kernel.md` |
 | `handoff` | How is custody of a lease (or of work) transferred without TTL expiry or ghost claims? | `beam-coordination-kernel.md`, `identity.md` |
-| `basin` | Is the agent's EISV inside its healthy operating region? | `eisv-basin-health-gating-v0.md` |
 | `locus` | What situated coordinate is this? (guild_id, channel_id, tab_id, profile) | `harness-substrate-plurality.md` |
 | `episode` | What bounded local interaction span is this? (one thread, one CLI conversation) | `harness-substrate-plurality.md` |
 | `affordance_state` | What reach/permissions/capability does the agent actually have at event time? | `harness-substrate-plurality.md` |
@@ -216,32 +240,54 @@ One row per **referent**; columns are its name in each register. This bounds the
 "unbounded nomenclature" into a finite table that grows by *rows* (new referents),
 not by uncontrolled vocabulary. Status marks the `fep` column specifically:
 
-- **✓ earned** — mapping holds in code/math today.
-- **~ candidate** — plausible conceptual fit, *not yet* earned; decorative if shipped as fact.
+- **✓ earned** — mapping holds and *drives behavior* (verdict path) today.
+- **◐ research-lens** — implemented as real math in the **parallel ODE / grounding tiers**, but **not wired to the verdict path**; honest, not decorative, but not yet load-bearing. (Added 2026-06-20 after reading the code; see correction below.)
+- **~ candidate** — plausible conceptual fit, *not yet* implemented anywhere; decorative if shipped as fact.
 - **✗ false friend** — looks like a synonym across registers but is a different referent; do not conflate.
 
 | Referent | philosophical | ops | fep | manifesto |
 |---|---|---|---|---|
 | Agent identity | layered continuity bundle | `uuid` + `client_session_id` | — | must be earned, not performative |
-| Internal state | behavioral trajectory | `EISV` state vector | ~ belief / hidden states of a generative model | — |
-| Healthy operating region | "stable self" | `basin` (+ health gating) | ~ attractor / characteristic-state set (**strongest candidate**) | — |
-| Deviation signal | — | `running hot`, basin-edge crossing | ~ surprise / prediction error / precision spike | — |
+| Internal state | behavioral trajectory | `EISV` state vector | ◐ ODE state (`governance_core/dynamics.py`); target `E=−F` tiered+stubbed in `grounding/free_energy.py` | — |
+| Healthy operating region | "stable self" | `basin` (+ health gating) | ◐ attractor — **real** in `check_basin` (bistable ODE), but verdict path uses a configured `BASIN_HIGH` box, not the attractor | — |
+| Deviation signal | — | `running hot`, basin-edge crossing | ◐ `running hot` (V-sign) ships; `surprise`/prediction-error as `−log P` does not | — |
 | Agent↔world boundary | process-instance boundary | `lease surface`, `affordance_state` | ✗ Markov blanket (**false friend** — statistical conditional-independence boundary, *not* a coordination claim) | — |
 | Custody transfer | lineage / inheritance | `handoff` | — | — |
 | Proof of life | process-instance liveness | `heartbeat` | ~ non-equilibrium steady state / self-maintenance | "build nothing more alive than it is" |
 | Belief revision | dialectic resolution | `dialectic` | ~ active inference / belief updating | — |
 | Confidence grounding | earned vs. performative | `identity_assurance` tier, calibration | ~ precision-weighting | — |
 
-**What the skeleton already reveals:** the `fep` column is almost entirely `~`
-(candidate) — one false friend, zero `✓` earned. So as of this writing the
-**physics register is aspirational, not load-bearing**: it's the register most at
-risk of decorative borrowing, which is exactly what the "name nothing more
-rigorous than it is" guardrail exists to police. Promote a `fep` cell to `✓` only
-when there is real variational machinery behind it, not when the metaphor merely
-reads well. The four-register model holds for these nine rows; if a referent
-won't fit a column, that absence is a finding (e.g. most rows have no genuine
-`manifesto` name — the norm register governs a few load-bearing referents, not
-all of them), not a gap to backfill.
+**Correction (code-grounded, 2026-06-20).** The skeleton's first claim — "physics
+register is aspirational, all `~`, zero earned" — **was wrong, and reading the
+code corrected it.** Three rows are `◐ research-lens`, not `~`:
+
+- `governance_core/dynamics.py` is a **real thermodynamic ODE** (full `dE/dt…dV/dt`,
+  RK4, coherence feedback, soft barriers, `compute_equilibrium`, contraction-theory
+  convergence, and `check_basin` — a genuine bistable basin of attraction).
+- `src/grounding/free_energy.py` already implements the **"name nothing more
+  rigorous than it is" guardrail in code**: a 3-tier estimator where Tier-1 FEP is
+  explicitly `raise NotImplementedError("…Phase 2 scope")`, Tier-2 resource ships,
+  and every value carries a `source=` provenance tag so a heuristic is never
+  laundered as a measurement. The guardrail predates this glossary and runs at
+  runtime.
+- `docs/EISV_COMPUTATION.md` already states the deployed-vs-target split this table
+  was re-deriving: deployed EISV = "auditable heuristic blends, EMA-smoothed";
+  target = `E`as`−F`, `I`as mutual information, `S`as entropy. **The ODE "runs in
+  parallel and does NOT drive verdicts."**
+
+So the accurate finding is sharper than "aspirational": **the physics is built but
+not wired.** Your system is two loops — a heuristic verdict path (EMA + z-score +
+`BASIN_HIGH` health gate) that drives decisions, and a parallel thermodynamic ODE
+that's a research lens. Promoting a `◐` to `✓` does not mean *building* the math;
+it means **wiring the existing ODE/grounding forms onto the verdict path** — a real
+control-loop change to trajectory/telemetry, gated tier-by-tier with the provenance
+honesty already in place. That is the single most important thing this whole
+glossary exercise surfaced.
+
+The four-register model still holds for these nine rows; if a referent won't fit a
+column, that absence is a finding (e.g. most rows have no genuine `manifesto` name
+— the norm register governs a few load-bearing referents, not all of them), not a
+gap to backfill.
 
 ### FEP promotion conditions (roadmap)
 
@@ -253,8 +299,8 @@ most-reachable first.
 | Candidate mapping | Earned when (falsifiable test) | Reachability |
 |---|---|---|
 | assurance/calibration → **precision-weighting** | An observation's effect on state/calibration is scaled by its assurance as an explicit inverse-variance **precision** term — low-assurance writes are down-weighted *proportionally*, not by category. Test: the update weight is a continuous function of assurance, derivable as precision, not an `if tier == weak` branch. (`identity.md` already gestures at this: "a gated pre-check should not weight calibration the same way an explicit check-in does.") | **High** — closest to earnable; the weighting intent already exists, it just needs to be Bayesian rather than categorical. |
-| basin → **attractor / characteristic-state set** | The basin is the *attracting set of the system's own EISV dynamics* — perturb EISV and return-to-basin is an emergent property of the update flow, with the "edge" a real separatrix. Test: the basin boundary is derived from the dynamics, not a configured threshold box; a clamp disqualifies it. | **High** — basin-health gating already behaves attractor-ish; earned only if the edge is dynamics, not a set point. |
-| EISV → **generative-model belief state** | EISV carries explicit **uncertainty** (a distribution, not a point), and its update rule is (an approximation of) gradient descent on a variational free-energy functional — not EWMA-style smoothing. Test: the EISV update equals/approximates free-energy minimization under a stated generative model. | **Medium** — requires EISV to become distributional (mean + precision) first. |
+| basin → **attractor / characteristic-state set** | *Already built (`◐`)* — the attractor exists in `check_basin` (bistable ODE). Earned (`✓`) when the **verdict path's** basin gate is the ODE attractor, not the static `BASIN_HIGH` box in `behavioral_assessment.py`. Test: the gate edge moves with the dynamics; replacing the config box with the ODE separatrix changes no test that depends on a *real* edge. | **High** — not "build the math" but "wire ODE→verdict path"; the math is done. |
+| EISV → **generative-model belief state** | *Partly built (`◐`)* — the ODE evolves EISV; what's missing is **uncertainty**: EISV is a point estimate. Earned when EISV carries explicit precision (a distribution) and updates approximate free-energy minimization, not EMA smoothing. Test: the EISV update equals/approximates FE-minimization under a stated generative model. | **Medium** — the prerequisite that unlocks three rows; needs EISV distributional (mean + precision). |
 | running-hot / basin-edge → **surprise / prediction error** | The hot signal is computed as (an approximation of) `−log P(behavior \| model)` under an explicit generative model — how *unexpected* current behavior is, not variance-from-norm. Test: high surprise provably drives belief updates (couples to the EISV and dialectic rows). | **Medium** — depends on EISV-as-belief-state landing first. |
 | dialectic → **active inference / policy selection** | Resolution is formalized as selecting the position/action that minimizes **expected** free energy (future surprise), with an explicit EFE objective. Test: a dialectic verdict is reconstructable from an EFE computation, not an LLM judgment or scoring heuristic. | **Medium-low** — the largest formalization lift. |
 | heartbeat → **non-equilibrium steady state / self-maintenance** | Proof-of-life is contingent on the agent *actively maintaining its own boundary/characteristic states* (resisting dissipation), not emitting a TTL ping. Test: liveness fails when self-maintenance work stops, even if the timer fires. | **Decorative — recommend demote.** A TTL heartbeat is an ops timer; "NESS" is almost certainly borrowed rigor here. Drop the `fep` name unless heartbeat is re-grounded in real self-maintenance. |
@@ -266,10 +312,15 @@ agent's internal states from external ones (sensory + active states mediating) �
 closer to `affordance_state` than to a coordination claim — and it is earned only
 when that statistical independence structure is actually modeled, not asserted.
 
-**Roadmap reading:** two mappings (precision-weighting, basin-as-attractor) are
-genuinely reachable and worth pursuing; three are gated behind making EISV
-distributional first; one (heartbeat→NESS) should be dropped rather than chased.
-That ordering is the actual deliverable — it says which physics claims to earn
+**Roadmap reading (code-corrected):** the work is mostly *wiring, not building*.
+`basin-as-attractor` is a wire-up (ODE exists); `precision-weighting` is the
+closest greenfield-ish step (the basin-health gate is already a 0→1 ramp, which is
+precision-shaped); the EISV-distributional change is the prerequisite that unlocks
+surprise + active-inference; `heartbeat→NESS` should be dropped. The single
+highest-leverage move is **making EISV distributional** (mean + precision), because
+it both unlocks three FEP rows *and* is the precondition for letting the ODE drive
+verdicts honestly. That ordering is the actual deliverable — it says which physics
+claims to earn
 next and which to stop borrowing.
 
 ---
