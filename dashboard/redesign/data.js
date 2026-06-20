@@ -67,7 +67,7 @@
         return j.residents.map((r) => ({
           name: r.label, status: r.status, coherence: r.coherence, risk: r.risk_score,
           verdict: r.verdict, eisv: r.eisv, silence: r.silence_seconds,
-          silenceThreshold: r.silence_threshold_seconds,
+          silenceThreshold: r.silence_threshold_seconds, event_driven: r.event_driven === true,
         }));
       }, () => S().residents);
     },

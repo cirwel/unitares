@@ -9,12 +9,12 @@ window.SNAPSHOT = {
   capturedAt: "2026-06-19T19:30:00Z",
   health: { version: "2.13.0", uptime: "21h 15m", db: "connected" },
   residents: [
-    { name:"Watcher",    status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.77,I:0.66,S:0.24,V:+0.10}, silence:25 },
-    { name:"Vigil",      status:"healthy", coherence:0.49, risk:0.00, verdict:"proceed", eisv:{E:0.75,I:0.77,S:0.16,V:-0.02}, silence:101 },
-    { name:"Lumen",      status:"careful", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.31,I:0.83,S:0.15,V:-0.52}, silence:56 },
-    { name:"Sentinel",   status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.77,I:0.68,S:0.26,V:+0.09}, silence:273 },
-    { name:"Steward",    status:"dark",    coherence:null, risk:null, verdict:null,      eisv:null,                          silence:32 },
-    { name:"Chronicler", status:"silent",  coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.81,I:0.68,S:0.22,V:+0.11}, silence:67156 },
+    { name:"Watcher",    status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.77,I:0.66,S:0.24,V:+0.10}, silence:25,    silenceThreshold:3600,   event_driven:true },
+    { name:"Vigil",      status:"healthy", coherence:0.49, risk:0.00, verdict:"proceed", eisv:{E:0.75,I:0.77,S:0.16,V:-0.02}, silence:101,   silenceThreshold:3600 },
+    { name:"Lumen",      status:"careful", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.31,I:0.83,S:0.15,V:-0.52}, silence:56,    silenceThreshold:3600 },
+    { name:"Sentinel",   status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.77,I:0.68,S:0.26,V:+0.09}, silence:273,   silenceThreshold:3600 },
+    { name:"Steward",    status:"dark",    coherence:null, risk:null, verdict:null,      eisv:null,                          silence:32,    silenceThreshold:3600 },
+    { name:"Chronicler", status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.81,I:0.68,S:0.22,V:+0.11}, silence:67156, silenceThreshold:172800 },
   ],
   // representative until wired to live tool calls (agent/detect_stuck/knowledge/calibration)
   stats: {
