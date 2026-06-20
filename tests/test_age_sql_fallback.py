@@ -560,3 +560,166 @@ class TestLastReferencedRemoved:
         assert ok is True
         db.graph_query.assert_not_awaited()
         db._pool.fetchval.assert_not_awaited()
+
+
+# ===========================================================================
+# query — SQL fallback
+# ===========================================================================
+#
+# Same bug class as get_discovery above, one read path over: query() did a
+# Cypher-only MATCH and returned [] for SQL-only orphan rows. That made the
+# knowledge(action="search") no-text path and the list/stats surface look
+# write-only (store + get worked, list + search returned nothing).
+
+@pytest.mark.asyncio
+class TestQuerySQLFallback:
+
+    async def test_returns_sql_rows_when_graph_unavailable(self):
+        """graph_available() False → read straight from knowledge.discoveries."""
+        db = _make_db(graph_available=False)
+        db.kg_query = AsyncMock(return_value=[_sql_row(), _sql_row(discovery_id="disc-sql-002")])
+        kg = await _make_kg(db)
+
+        results = await kg.query(limit=50)
+
+        db.kg_query.assert_awaited_once()
+        db.graph_query.assert_not_awaited()
+        assert [d.id for d in results] == ["disc-sql-001", "disc-sql-002"]
+
+    async def test_returns_sql_rows_when_age_empty(self):
+        """Graph available but holds no vertex for the row → SQL fallback."""
+        db = _make_db(graph_available=True, graph_query_returns=[])
+        db.kg_query = AsyncMock(return_value=[_sql_row()])
+        kg = await _make_kg(db)
+
+        results = await kg.query(limit=50)
+
+        db.graph_query.assert_awaited()  # AGE attempted first
+        db.kg_query.assert_awaited_once()
+        assert len(results) == 1
+        assert results[0].id == "disc-sql-001"
+
+    async def test_age_results_used_without_sql_fallback(self):
+        """When AGE returns nodes, the SQL table is not consulted."""
+        age_node = {
+            "d": {
+                "properties": {
+                    "id": "disc-age-001",
+                    "agent_id": "agent-b",
+                    "summary": "AGE discovery",
+                    "type": "insight",
+                }
+            }
+        }
+        db = _make_db(graph_available=True, graph_query_returns=[age_node])
+        db.kg_query = AsyncMock(return_value=[_sql_row()])
+        kg = await _make_kg(db)
+
+        results = await kg.query(limit=50)
+
+        db.kg_query.assert_not_awaited()
+        assert [d.id for d in results] == ["disc-age-001"]
+
+    async def test_fallback_excludes_archived(self):
+        """exclude_archived drops archived SQL rows (kg_query can't express it)."""
+        db = _make_db(graph_available=False)
+        db.kg_query = AsyncMock(return_value=[
+            _sql_row(discovery_id="open-1", status="open"),
+            _sql_row(discovery_id="arch-1", status="archived"),
+        ])
+        kg = await _make_kg(db)
+
+        results = await kg.query(limit=50, exclude_archived=True)
+
+        assert [d.id for d in results] == ["open-1"]
+
+    async def test_fallback_forwards_filters(self):
+        """Filters reach kg_query so the SQL scan stays selective."""
+        db = _make_db(graph_available=False)
+        db.kg_query = AsyncMock(return_value=[])
+        kg = await _make_kg(db)
+
+        await kg.query(agent_id="agent-a", type="bug", status="open", limit=10)
+
+        kwargs = db.kg_query.call_args.kwargs
+        assert kwargs["agent_id"] == "agent-a"
+        assert kwargs["type"] == "bug"
+        assert kwargs["status"] == "open"
+        assert kwargs["limit"] == 10
+
+
+# ===========================================================================
+# get_stats — SQL fallback
+# ===========================================================================
+
+def _stats_graph_query(total_discoveries: int):
+    """Build a graph_query side_effect that reports `total_discoveries` vertices."""
+    async def fake(cypher, params=None, conn=None):
+        if "count(d)" in cypher:
+            return [total_discoveries]
+        if "collect(d.agent_id)" in cypher:
+            return [["agent-a"] * total_discoveries]
+        if "collect(d.type)" in cypher:
+            return [["bug"] * total_discoveries]
+        if "collect(d.status)" in cypher:
+            return [["open"] * total_discoveries]
+        if "count(r)" in cypher:
+            return [0]
+        if "(t:Tag) RETURN count" in cypher:
+            return [0]
+        if "collect(t.name)" in cypher:
+            return [[]]
+        return []
+    return fake
+
+
+@pytest.mark.asyncio
+class TestGetStatsSQLFallback:
+
+    async def test_falls_back_to_sql_when_age_empty(self):
+        """AGE holds 0 Discovery vertices but SQL has rows → report SQL counts."""
+        db = _make_db(graph_available=True)
+        db.graph_query = AsyncMock(side_effect=_stats_graph_query(0))
+        db.kg_stats = AsyncMock(return_value={
+            "total_discoveries": 7,
+            "by_agent": {"agent-a": 5, "agent-b": 2},
+            "by_type": {"bug": 7},
+            "by_status": {"open": 7},
+            "by_tag": {},
+            "total_edges": 0,
+            "total_tags": 0,
+            "total_agents": 2,
+        })
+        kg = await _make_kg(db)
+
+        stats = await kg.get_stats()
+
+        db.kg_stats.assert_awaited_once()
+        assert stats["total_discoveries"] == 7
+        assert stats["total_agents"] == 2
+        assert stats["scope"]["note"].startswith("AGE graph held no Discovery vertices")
+
+    async def test_uses_age_counts_when_present(self):
+        """AGE has vertices → SQL stats fallback is not consulted."""
+        db = _make_db(graph_available=True)
+        db.graph_query = AsyncMock(side_effect=_stats_graph_query(3))
+        db.kg_stats = AsyncMock(return_value={"total_discoveries": 999})
+        kg = await _make_kg(db)
+
+        stats = await kg.get_stats()
+
+        db.kg_stats.assert_not_awaited()
+        assert stats["total_discoveries"] == 3
+
+    async def test_age_empty_and_sql_empty_returns_age_response(self):
+        """Both empty → graceful AGE-derived zero response (no crash)."""
+        db = _make_db(graph_available=True)
+        db.graph_query = AsyncMock(side_effect=_stats_graph_query(0))
+        db.kg_stats = AsyncMock(return_value={"total_discoveries": 0, "by_agent": {}})
+        kg = await _make_kg(db)
+
+        stats = await kg.get_stats()
+
+        assert stats["total_discoveries"] == 0
+        # Falls through to the AGE response shape, which carries the AGE note.
+        assert "AGE backend has no epoch property" in stats["scope"]["note"]

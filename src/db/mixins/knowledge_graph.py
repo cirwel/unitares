@@ -296,6 +296,44 @@ class KnowledgeGraphMixin:
 
             return d
 
+    async def kg_stats(self, including_cold: bool = False) -> Dict[str, Any]:
+        """Discovery-level aggregates straight from knowledge.discoveries.
+
+        Source-of-truth counts used by the AGE backend as a fallback when its
+        graph holds no Discovery vertices for rows that exist in SQL. No epoch
+        filter — mirrors the AGE backend's "all epochs" stats semantics.
+        ``including_cold=False`` excludes deep-archive ('cold') rows so the
+        totals match the AGE-derived response they substitute for.
+        """
+        cold_clause = "" if including_cold else " WHERE status != 'cold'"
+        async with self.acquire() as conn:
+            total = await conn.fetchval(
+                f"SELECT COUNT(*) FROM knowledge.discoveries{cold_clause}"
+            ) or 0
+            by_agent_rows = await conn.fetch(
+                f"SELECT agent_id, COUNT(*) AS count "
+                f"FROM knowledge.discoveries{cold_clause} GROUP BY agent_id"
+            )
+            by_type_rows = await conn.fetch(
+                f"SELECT type, COUNT(*) AS count "
+                f"FROM knowledge.discoveries{cold_clause} GROUP BY type"
+            )
+            by_status_rows = await conn.fetch(
+                f"SELECT status, COUNT(*) AS count "
+                f"FROM knowledge.discoveries{cold_clause} GROUP BY status"
+            )
+        by_agent = {r["agent_id"]: r["count"] for r in by_agent_rows}
+        return {
+            "total_discoveries": int(total),
+            "by_agent": by_agent,
+            "by_type": {r["type"]: r["count"] for r in by_type_rows},
+            "by_status": {r["status"]: r["count"] for r in by_status_rows},
+            "by_tag": {},
+            "total_edges": 0,
+            "total_tags": 0,
+            "total_agents": len(by_agent),
+        }
+
     async def kg_update_status(
         self,
         discovery_id: str,
