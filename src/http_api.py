@@ -989,6 +989,16 @@ async def http_dashboard_redesign(request):
     }[target.suffix]
     content = target.read_text()
     if target.suffix == ".html":
+        # Cache-bust the relative asset refs with ?v=<max mtime of the redesign
+        # tree>. no-cache without a validator lets browsers serve stale JS/CSS
+        # (e.g. a months-old agents.js that crashes the table); a version query
+        # forces a fresh fetch after every deploy. Absolute CDN refs are untouched.
+        import re as _re
+        try:
+            _v = str(int(max((f.stat().st_mtime for f in base.rglob("*") if f.is_file()), default=0)))
+            content = _re.sub(r'(src|href)="(\./[^"?]+)"', rf'\1="\2?v={_v}"', content)
+        except Exception:
+            pass
         # The entry page uses relative asset paths (./tokens.css, ./sections/*.js)
         # so it stays portable when opened as a file. Served at /dashboard/redesign
         # (no trailing slash), the browser would resolve those against /dashboard/.
