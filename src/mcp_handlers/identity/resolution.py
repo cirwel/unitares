@@ -31,7 +31,11 @@ logger = get_logger(__name__)
 
 def _created_identity_outcome(*, force_new: bool, spawn_reason: Optional[str]) -> str:
     """Classify a successful PATH 3 mint separately from the input lane."""
-    if spawn_reason in {"dispatch_auto_mint", "auto_onboard_no_session"}:
+    if spawn_reason in {
+        "dispatch_auto_mint",
+        "auto_onboard_no_session",
+        "orchestrated_thread_anchor",
+    }:
         return "minted_after_resume_miss"
     if force_new:
         return "minted_force_new"

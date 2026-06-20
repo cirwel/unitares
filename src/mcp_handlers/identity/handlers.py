@@ -1685,10 +1685,26 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         from ..context import get_context_client_hint
         client_hint = get_context_client_hint() or "unknown"
 
+    orchestrated = coerce_bool(arguments.get("orchestrated"), default=False)
+    raw_client_session_id_arg = arguments.get("client_session_id")
+
     # Derive base session key (unified — pin lookup integrated in derive_session_key)
     from ..context import get_session_signals
     signals = get_session_signals()
     base_session_key = await derive_session_key(signals, arguments)
+    raw_client_session_id = arguments.get("client_session_id")
+    anchor_candidates = [raw_client_session_id_arg, raw_client_session_id]
+    orchestrated_thread_anchor = (
+        orchestrated
+        and any(
+            isinstance(candidate, str)
+            and (
+                candidate.startswith("agent:/thread-")
+                or candidate.startswith("agent:_thread-")
+            )
+            for candidate in anchor_candidates
+        )
+    )
     # Initialize session_key eagerly so no downstream branch can hit
     # UnboundLocalError if the control flow misses its assignment (the
     # 2026-04-19 crash was exactly this — schema/handler resume-default
@@ -1774,7 +1790,11 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 # canary refuted by 0 dispatch_auto_mint rows in
                 # core.agents). Caller-provided values are preserved.
                 if not _spawn_reason:
-                    _spawn_reason = "auto_onboard_no_session"
+                    _spawn_reason = (
+                        "orchestrated_thread_anchor"
+                        if orchestrated_thread_anchor
+                        else "auto_onboard_no_session"
+                    )
 
                 # #425 Path B: when STRICT_IDENTITY_REQUIRED is on, refuse
                 # bare onboard() (no parent_agent_id and no force_new=True)
@@ -1786,7 +1806,8 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 from src.mcp_handlers.identity_bootstrap import is_strict_identity_required
                 if (is_strict_identity_required()
                         and not _parent_agent_id
-                        and not force_new):
+                        and not force_new
+                        and not orchestrated_thread_anchor):
                     logger.info(
                         "[ONBOARD] STRICT_IDENTITY_REQUIRED=true and bare "
                         "onboard() (no parent_agent_id, no force_new=true) "
@@ -2364,7 +2385,11 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         else None
     )
     if not identity_resolution_outcome:
-        if is_new and _spawn_reason in {"dispatch_auto_mint", "auto_onboard_no_session"}:
+        if is_new and _spawn_reason in {
+            "dispatch_auto_mint",
+            "auto_onboard_no_session",
+            "orchestrated_thread_anchor",
+        }:
             identity_resolution_outcome = "minted_after_resume_miss"
         elif is_new and force_new:
             identity_resolution_outcome = "minted_force_new"
