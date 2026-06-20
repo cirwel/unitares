@@ -27,8 +27,9 @@ named-but-unsourced fields in the envelope:
    crash-loops produces a burst of restarts. The policy's `restart_count_window`
    → `pause_harness` row (§7) is explicitly **non-normative until a trusted source
    is named** — and no `restart_count_window` substrate exists anywhere in the
-   codebase. BEAM is the natural trusted source: the OTP supervisor already counts
-   restarts.
+   codebase. BEAM is the natural trusted source — though, as §1 shows after
+   checking the source, the OTP supervisor does *not* already expose a restart
+   count, so this is net-new (but cheap) instrumentation.
 2. **Process restart is mistaken for identity churn.** A supervisor restart mints
    a new OS/BEAM process for the *same* logical agent. Without separating the two,
    restart bursts look like per-turn identity minting (the exact failure noted in
@@ -44,27 +45,50 @@ sourced from BEAM's own trusted state, plus which §7 rows apply to residents.
 ## 1. The trusted source for restart intensity
 
 The parent §10 requires every pause-triggering counter to name its trusted
-source. For BEAM, that source is the **OTP supervisor's own restart accounting**
-(`max_restarts` / `max_seconds` intensity window), not any adapter-supplied field
-and not the resident's self-report.
+source. For BEAM, that source is BEAM-internal supervision state, not any
+adapter-supplied field and not the resident's self-report.
 
-Design intent:
+> **Verified against `unitares-deploy/elixir` source, 2026-06-20.** Findings that
+> reshape the design:
+>
+> - **OTP restart-intensity is not queryable.** All supervisors are
+>   `:one_for_one` with default, un-overridden intensity
+>   (`agent_supervisor.ex`, `lease_supervisor.ex`, the app supervisors). OTP's
+>   `max_restarts`/`max_seconds` is internal — it *shuts down the supervisor* when
+>   exceeded but exposes no count. `DynamicSupervisor.count_children/1` returns
+>   `.active` (live children), **not** a restart count. **No restart counter
+>   exists in the code today**, and `:telemetry` is a dep but is **unwired** (no
+>   `:telemetry.execute/attach` in app code). So this counter is net-new
+>   instrumentation, however cheap.
+> - **Ephemeral orchestrated agents are `restart: :temporary`** — the supervisor
+>   never resurrects them (`agent_supervisor.ex:34`, `agent_runner.ex:20`:
+>   "the supervisor does not resurrect it"). There is therefore **no OTP restart
+>   storm for orchestrated agents at all.** This corrects the framing: the
+>   restart-storm signal is two distinct things, neither of which is OTP intensity
+>   over ephemeral agents.
 
-- The supervisor (or a thin observer above it) is the *only* writer of
-  `attempts.restart_count_window` for a resident's events. It reports the count
-  of child restarts for that child within the configured intensity window.
-- The resident process itself MUST NOT populate this field — a crash-looping
-  child cannot be trusted to count its own crashes. This keeps the field on the
-  trusted side of the parent §4 boundary.
-- `restart_count_window >= restart_storm` then maps to `pause_harness` scoped to
-  **that supervised child / resident**, never the global fleet (parent §10
-  minimal-scope rule). A supervisor cooldown is the enforcement actuator.
+`restart_count_window` should be split into two BEAM-internal sub-signals, each
+with its own trusted writer:
 
-> **To verify at impl:** the exact OTP surface (e.g. `supervisor:count_children`,
-> a `:supervisor`-level restart-intensity hook, or a custom counting supervisor)
-> and whether the lease plane already exposes a restart counter. The lease plane
-> is Elixir/OTP; this counter likely belongs beside the existing supervision tree,
-> emitted onto the event envelope rather than computed in Python.
+1. **Resident/permanent-child crash-loop** — Sentinel's supervised GenServers and
+   the lease plane's `:permanent` `periodic_worker` *are* restarted by their
+   supervisors. The trusted source is a **supervisor-side restart counter** keyed
+   by child id (an ETS/registry counter incremented on the child's `init`, or a
+   `:telemetry` handler on restart), since OTP intensity itself is opaque. The
+   crash-looping child MUST NOT write its own count (parent §4 trust boundary).
+2. **Orchestrator re-spawn loop** — the orchestrator repeatedly `start_child`-ing
+   the same logical task. This is an **orchestrator-level counter**, not OTP
+   restart intensity, and belongs in the orchestrator, keyed by logical task.
+
+`restart_count_window >= restart_storm` maps to `pause_harness` scoped to that
+supervised child / resident / logical task, never the global fleet (parent §10
+minimal-scope). A supervisor cooldown is the enforcement actuator.
+
+> **Net for the parent contract:** `restart_count_window` is best documented in
+> #957 as the max of these two sub-signals (or two named fields). Either way the
+> source is BEAM-internal, satisfying the parent §10 "name the trusted source"
+> requirement — and being net-new is exactly why this stays gate-deferred, not
+> a thing to wire pre-gate.
 
 ## 2. process_instance_id vs logical_principal_id
 
@@ -72,8 +96,18 @@ The envelope carries both (parent §5). The mapping for BEAM:
 
 | Field | BEAM source | Lifetime |
 |---|---|---|
-| `process_instance_id` | The concrete BEAM process / restart incarnation (e.g. the pid-epoch or a supervisor-stamped incarnation id) | Per process; changes on every supervisor restart |
-| `logical_principal_id` | The stable resident principal — the agent UUID the resident checks in under | Survives restarts; the thing governance attributes work to |
+| `process_instance_id` | The concrete BEAM run handle — the orchestrator's `agent_id` (`AgentRunner.generate_agent_id`) for orchestrated agents, or a pid-epoch for residents | Per process/run; changes on every restart/re-spawn |
+| `logical_principal_id` | The stable principal — `holder_agent_uuid`, the governance UUID the agent checks in under | Survives restarts; the thing governance attributes work to |
+
+> **Verified, 2026-06-20.** This mapping is *already the architecture*, not a new
+> idea: the orchestrator separates `agent_id` (BEAM-side run handle) from
+> `holder_agent_uuid` (governance UUID) in `agent_runner.ex`/`agent_supervisor.ex`,
+> and **the orchestrator never onboards on the child's behalf** — the child mints
+> its own governance identity via a lineage-provisioned onboard
+> (`agent_orchestrator.ex:15-24`). So the governance UUID is the principal, minted
+> by the child, entirely decoupled from the BEAM incarnation. `process_instance_id`
+> being telemetry-only that mints no identity is therefore *descriptive of the
+> current system*, which puts low Wave-3 risk on this recommendation.
 
 Consequences:
 
@@ -133,15 +167,28 @@ re-deriving identity per process.
 - Any change to the parent envelope. If this exercise shows a missing field,
   that is a revision to PR #957, raised there — not a fork of the contract here.
 
-## 6. Inputs to the 2026-06-24 gate read
+## 6. Findings and recommendation (was: open questions)
 
-1. Confirm the OTP supervisor can emit restart-intensity onto the envelope as the
-   trusted source for `restart_count_window` (closes the parent §10 gap for the
-   first real harness).
-2. Confirm `process_instance_id` can stay telemetry-only (no minted identity),
-   consistent with the no-per-turn-minting invariant.
-3. Decide whether the presence-lease liveness mapping (`logical_principal_id` ←
-   `agent:/<uuid>` lease) is sufficient, or whether restart-in-progress needs its
-   own signal.
+The three questions this note opened with were resolved against the
+`unitares-deploy/elixir` source on 2026-06-20. None requires an operator answer;
+they are engineering facts. Summary:
 
-Until those are answered at the gate, the BEAM adapter remains design-only.
+| Question | Finding | Status |
+|---|---|---|
+| Can the supervisor be the trusted source for `restart_count_window`? | Yes, but **net-new instrumentation** — OTP restart-intensity is opaque, no counter exists, `:telemetry` is unwired. And ephemeral agents are `:temporary` (never restarted), so the signal splits into resident-crash-loop (supervisor-side counter) + orchestrator-respawn (orchestrator-side counter). See §1. | **Resolved — feasible, deferred to impl** |
+| Can `process_instance_id` stay telemetry-only (no minted identity)? | Yes — it *already is*. The orchestrator separates `agent_id` (run handle) from `holder_agent_uuid` (governance UUID), and identity is minted by the child's own onboard, not the BEAM incarnation. See §2. | **Resolved — descriptive of current system** |
+| Is the presence-lease liveness mapping sufficient? | Yes — `agent:/<uuid>` is a canonical presence surface routed to `remote_heartbeat` (a self-reaping DB row, HTTP-heartbeated before `expires_at`); residents are remote_heartbeat holders. The lease survives a single BEAM incarnation, so a dead `process_instance_id` under a live lease reads as restart-in-progress, exactly as intended. (`canonicalize.ex:376-384`, `lease_plane.ex:29-49`) | **Resolved — mechanism already exists** |
+
+**The only thing left for the 2026-06-24 gate is not an engineering question.** It
+is the standing Wave-3 directional read (the (β)/(γ) substrate-identity shape)
+that this note's recommendations sit under. Concretely, the gate read becomes a
+**yes/no on this recommendation**:
+
+> Adopt this BEAM mapping as the basis for the eventual adapter PR —
+> `process_instance_id`/`logical_principal_id` per §2 (no new identity semantics),
+> presence-lease liveness per §3, and a split BEAM-internal `restart_count_window`
+> per §1 — with implementation (the net-new restart counters) landing only after
+> the policy (#957) settles.
+
+If that direction is endorsed, the follow-up impl PR is unblocked; nothing here
+needs to be built before then.
