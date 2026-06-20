@@ -68,8 +68,22 @@
 
   function chronicler(c) {
     if (!c) return "";
-    return `<div class="panel" style="border-left:2px solid var(--warn)">${head("Chronicler", "silent", "daily resident")}
-      <div style="color:var(--ink-2);font-size:var(--text-sm)"><span class="tag warn">silent ${c.silenceH}h</span> ${esc(c.note || "")}</div></div>`;
+    // Daily resident: silence within its (48h) threshold is steady-state, not an
+    // alarm. Only genuinely past-threshold is "overdue".
+    let timing, overdue;
+    if (typeof c.silence === "number") {
+      const thr = c.silenceThreshold || 86400;
+      overdue = c.silence > thr;
+      timing = overdue ? "overdue " + ago(c.silence - thr) : "ran " + ago(c.silence) + " ago";
+    } else {
+      overdue = false;
+      timing = "ran " + (c.silenceH != null ? c.silenceH + "h" : "—") + " ago";
+    }
+    const e = c.eisv || {};
+    const badge = overdue ? `<span class="tag warn">${timing}</span>` : `<span class="tag">daily · ${timing}</span>`;
+    return `<div class="panel" style="${overdue ? "border-left:2px solid var(--warn)" : ""}">${head("Chronicler", overdue ? "silent" : "healthy", "longitudinal · daily")}
+      <div style="color:var(--ink-2);font-size:var(--text-sm)">${badge}${overdue && c.note ? " " + esc(c.note) : ""}</div>
+      ${e.E != null ? `<div style="margin-top:var(--space-3);display:flex;gap:var(--space-5);font-family:var(--font-mono);font-size:var(--text-sm);color:var(--ink-2)"><span>E ${e.E.toFixed(2)}</span><span>I ${e.I.toFixed(2)}</span><span>S ${e.S.toFixed(2)}</span><span>V ${e.V.toFixed(2)}</span></div>` : ""}</div>`;
   }
 
   function health(h) {
