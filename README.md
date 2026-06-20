@@ -3,12 +3,14 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero.svg">
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/hero.svg">
-  <img alt="UNITARES — Self-regulating AI agents" src="docs/assets/hero.svg" width="100%">
+  <img alt="UNITARES — runtime governance for AI-agent fleets" src="docs/assets/hero.svg" width="100%">
 </picture>
+
+# UNITARES
 
 ### Catch an AI agent going off the rails — before anything breaks.
 
-**Runtime telemetry & self-governance for fleets of autonomous AI agents.**<br/>
+**Runtime governance & self-telemetry for fleets of autonomous AI agents.**<br/>
 UNITARES watches each agent while it works and tells you — and the agent itself — the moment one starts to drift, while it's still just numbers moving and not yet broken output.
 
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
@@ -22,6 +24,8 @@ UNITARES watches each agent while it works and tells you — and the agent itsel
 [![Read the docs](https://img.shields.io/badge/Docs-1f6feb?style=for-the-badge)](docs/README.md)
 [![Paper](https://img.shields.io/badge/Paper_v6-8957e5?style=for-the-badge)](https://github.com/cirwel/unitares-paper-v6)
 [![Reviewer Guide](https://img.shields.io/badge/Verify_it_yourself-da7633?style=for-the-badge)](docs/REVIEWER_GUIDE.md)
+
+One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety infrastructure for autonomous agents, *after* deployment. UNITARES is the governed fleet; [Anima](https://github.com/cirwel/anima-mcp) is its self-sensing edge counterpart. [Full index ↗](https://cirwel.github.io)
 
 </div>
 
@@ -202,13 +206,19 @@ python src/mcp_server.py --port 8767
 
 > Three files at the repo root — [`CLAUDE.md`](CLAUDE.md), [`AGENTS.md`](AGENTS.md), [`CODEX_START.md`](CODEX_START.md) — orient AI CLIs (Claude Code, Codex). Human readers can skip them.
 
-## Related projects
+## The CIRWEL stack
 
-- [**anima-mcp**](https://github.com/cirwel/anima-mcp) — reference UNITARES deployment cited as longitudinal validation data in the papers
-- [**unitares-governance-plugin**](https://github.com/cirwel/unitares-governance-plugin) — installable client adapters for Codex and Claude
-- [**unitares-discord-bridge**](https://github.com/cirwel/unitares-discord-bridge) — Discord presence and governance events
-- [**eisv-lumen**](https://github.com/cirwel/eisv-lumen) — governance benchmark dataset (21K agent-state trajectories on HuggingFace)
-- [**unitares-paper-v6**](https://github.com/cirwel/unitares-paper-v6) — companion paper *Information-Theoretic Governance of Heterogeneous Agent Fleets* (Wang, 2026); concept DOI [10.5281/zenodo.19647159](https://doi.org/10.5281/zenodo.19647159)
+UNITARES is the governance runtime at the center of a larger body of work. The full index — papers, systems, datasets, and decks — lives at **[cirwel.github.io](https://cirwel.github.io)**.
+
+| | What it is |
+|---|---|
+| [**unitares-governance-plugin**](https://github.com/cirwel/unitares-governance-plugin) | Mount any agent into governance — Claude Code / Codex plugin that wires check-ins, dialectic review, and verdicts into the loop via hooks |
+| [**unitares-host-adapter**](https://github.com/cirwel/unitares-host-adapter) | Thin client bindings — Hermes, Claude Code, Goose, and arbitrary OpenAI-compatible clients |
+| [**anima-mcp**](https://github.com/cirwel/anima-mcp) | The self-sensing edge counterpart — the same EISV model on physical hardware; the longitudinal source cited in the papers |
+| [**fermata**](https://github.com/cirwel/fermata) | Governed-effect runtime seed — agents *propose* effects; only governed effects *commit* |
+| [**unitares-discord-bridge**](https://github.com/cirwel/unitares-discord-bridge) | Governance events, agent presence, and system health as a live Discord server |
+| [**eisv-lumen**](https://github.com/cirwel/eisv-lumen) | Governance benchmark dataset — [32,181 labeled EISV trajectories](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories) (20,655 real) |
+| [**unitares-paper-v6**](https://github.com/cirwel/unitares-paper-v6) | Companion paper — *Information-Theoretic Governance of Heterogeneous Agent Fleets* (Wang, 2026); concept DOI [10.5281/zenodo.19647159](https://doi.org/10.5281/zenodo.19647159) |
 
 ## Citation
 
@@ -230,6 +240,6 @@ Kenny Wang ([ORCID 0009-0006-7544-2374](https://orcid.org/0009-0006-7544-2374)),
 <div align="center">
 
 **Apache License 2.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE).<br/>
-Built by [@cirwel](https://github.com/cirwel) · CIRWEL Systems
+Built by [@cirwel](https://github.com/cirwel) · [CIRWEL Systems](https://cirwel.github.io)
 
 </div>
