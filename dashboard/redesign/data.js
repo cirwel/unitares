@@ -247,6 +247,14 @@
       }, () => S().eisv);
     },
 
+    async agentHistory(id, limit) {
+      // EISV check-in trajectory for one agent (no snapshot fallback — empty if offline).
+      return withFallback(async () => {
+        const r = await authFetch("/v1/agents/" + encodeURIComponent(id) + "/history?limit=" + (limit || 80));
+        return r && Array.isArray(r.points) ? r.points : null;
+      }, () => []);
+    },
+
     async residentPanels() {
       return withFallback(async () => {
         const [w, sn, vg, h] = await Promise.all([

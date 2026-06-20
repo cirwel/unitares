@@ -1017,6 +1017,65 @@ async def http_dashboard_redesign(request):
     return Response(content=content, media_type=media, headers={"Cache-Control": "no-cache"})
 
 
+async def http_agent_history(request):
+    """GET /v1/agents/{agent_id}/history — an agent's EISV check-in trajectory.
+
+    Reads core.agent_state (append-only per-check-in history, indexed by
+    identity_id/recorded_at). E lives in state_json, the rest are columns.
+    Returns oldest→newest points so the chart reads left-to-right. Synthetic
+    bootstrap rows are excluded.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return _http_unauthorized()
+    agent_id = request.path_params.get("agent_id", "")
+    try:
+        limit = int(request.query_params.get("limit", "80"))
+    except (TypeError, ValueError):
+        limit = 80
+    limit = max(2, min(limit, 300))
+    try:
+        from src.db import get_db
+        db = get_db()
+        async with db.acquire() as conn:
+            # Identity resolution: check-in history is keyed by the agent's UUID
+            # identity, but the agent list may show the structured id (mcp_DATE_<8hex>)
+            # whose suffix is that UUID's prefix. Match exact id OR the UUID identity
+            # whose prefix == the structured id's trailing 8 hex.
+            rows = await conn.fetch(
+                """
+                WITH ids AS (
+                    SELECT identity_id FROM core.identities WHERE agent_id = $1
+                    UNION
+                    SELECT identity_id FROM core.identities
+                     WHERE substring($1 from '([0-9a-f]{8})$') IS NOT NULL
+                       AND agent_id ~ '^[0-9a-f]{8}-'
+                       AND agent_id LIKE substring($1 from '([0-9a-f]{8})$') || '%'
+                )
+                SELECT s.recorded_at,
+                       (s.state_json->>'E')::real AS e,
+                       s.integrity AS i, s.entropy AS s_entropy, s.volatility AS v,
+                       s.coherence, s.risk_score
+                FROM core.agent_state s
+                WHERE s.identity_id IN (SELECT identity_id FROM ids) AND s.synthetic = false
+                ORDER BY s.recorded_at DESC
+                LIMIT $2
+                """,
+                agent_id, limit,
+            )
+        points = [
+            {
+                "t": r["recorded_at"].isoformat(),
+                "E": r["e"], "I": r["i"], "S": r["s_entropy"], "V": r["v"],
+                "coherence": r["coherence"], "risk": r["risk_score"],
+            }
+            for r in reversed(rows)
+        ]
+        return JSONResponse({"success": True, "agent_id": agent_id, "count": len(points), "points": points})
+    except Exception as exc:  # noqa: BLE001 — read-only panel endpoint, degrade gracefully
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
 async def http_tier_distribution(request):
     """GET /v1/agents/tier_distribution — full-fleet trust-tier counts.
 
@@ -3018,6 +3077,7 @@ def register_http_routes(
     app.routes.append(Route("/v1/sentinel/summary", http_sentinel_summary, methods=["GET"]))
     app.routes.append(Route("/v1/vigil/summary", http_vigil_summary, methods=["GET"]))
     app.routes.append(Route("/v1/agents/tier_distribution", http_tier_distribution, methods=["GET"]))
+    app.routes.append(Route("/v1/agents/{agent_id}/history", http_agent_history, methods=["GET"]))
     app.routes.append(Route("/api/activity", http_activity, methods=["GET"]))
     app.routes.append(Route("/api/incidents", http_incidents, methods=["GET"]))
     app.routes.append(Route("/v1/residents", http_residents, methods=["GET"]))
