@@ -97,16 +97,18 @@
         ]);
         if (![agentsR, kgR, dlcR, stuckR, calR, anomR, healthR, tierR].some(Boolean)) return null;
 
-        // Agent counts from the (light) summary; trust-tier distribution from the
-        // full-fleet aggregate endpoint (cached tier across all identities). The
-        // bars show the EARNED tiers — unknown dwarfs them ~18× at fleet scale, so
-        // it's reported as context, not a bar.
-        let agentsActive = snap.agentsActive, agentsTotal = snap.agentsTotal;
+        // Live path: a sub-tool that fails is NULL, not a stale snapshot value.
+        // Showing the bundled snapshot under a "live" badge would read as a current
+        // metric — the card renders "—" (unavailable) instead, and `degraded`
+        // flags how many sources didn't answer. The whole-accessor snapshot
+        // fallback (() => snap, honestly badged "snapshot") only fires when EVERY
+        // source failed.
+        let agentsActive = null, agentsTotal = null;
         if (agentsR && agentsR.summary) {
           agentsTotal = agentsR.summary.total;
           agentsActive = (agentsR.summary.by_status || {}).active;
         }
-        let trustTiers = snap.trustTiers, trustEarned = null, trustFleet = null, trustUnknown = null;
+        let trustTiers = null, trustEarned = null, trustFleet = null, trustUnknown = null;
         if (tierR && tierR.tiers) {
           const t = tierR.tiers;
           trustTiers = ["verified", "established", "emerging", "provisional"].map((k) => ({ tier: k, n: t[k] || 0 }));
@@ -121,14 +123,15 @@
 
         return {
           agentsActive, agentsTotal, trustTiers, trustEarned, trustFleet, trustUnknown,
-          discoveries: kg && typeof kg.total_discoveries === "number" ? kg.total_discoveries : snap.discoveries,
+          discoveries: kg && typeof kg.total_discoveries === "number" ? kg.total_discoveries : null,
           discoveriesToday: null, // no honest live "today" delta; show neutral subtitle
-          dialectic: dlcSessions ? dlcSessions.filter((s) => !["resolved", "failed"].includes(s.phase || s.status)).length : snap.dialectic,
-          stuck: stuckR ? (stuckR.stuck_agents || []).length : snap.stuck,
-          calibration: calR && typeof calR.trajectory_health === "number" ? calR.trajectory_health : snap.calibration,
-          anomalies: anomR && anomR.summary ? anomR.summary.total_anomalies : snap.anomalies,
-          systemHealth: healthR ? (healthR.status === "healthy" ? "OK" : healthR.status) : snap.systemHealth,
+          dialectic: dlcSessions ? dlcSessions.filter((s) => !["resolved", "failed"].includes(s.phase || s.status)).length : null,
+          stuck: stuckR ? (stuckR.stuck_agents || []).length : null,
+          calibration: calR && typeof calR.trajectory_health === "number" ? calR.trajectory_health : null,
+          anomalies: anomR && anomR.summary ? anomR.summary.total_anomalies : null,
+          systemHealth: healthR ? (healthR.status === "healthy" ? "OK" : healthR.status) : null,
           systemHealthDetail: hb ? `${hb.healthy || 0} ok · ${hb.warning || 0} warn${hb.error ? " · " + hb.error + " err" : ""}` : null,
+          degraded: [agentsR, kgR, dlcR, stuckR, calR, anomR, healthR, tierR].filter((x) => !x).length,
         };
       }, () => snap);
     },
