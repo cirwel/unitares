@@ -11,6 +11,34 @@ which sense is meant.
 question-keyed glossary). This file is the point-in-time evidence and the
 recommended-fix list. Re-run and re-date when the vocabulary moves.
 
+**Addendum (2026-06-20b — code-grounded pass).** The first sweep read only docs.
+A follow-up read of the *code* (`governance_core/dynamics.py`,
+`src/grounding/free_energy.py`, `src/behavioral_assessment.py`,
+`docs/EISV_COMPUTATION.md`) found two collisions the docs-only sweep missed and
+one wrong claim to retract:
+
+- **NEW `basin` (DRIFT, confirmed in code):** `governance_core/dynamics.py::check_basin`
+  (bistable **attractor** basin, research-lens ODE) vs.
+  `src/behavioral_assessment.py::_basin_health_gate` / `config.governance_config.BASIN_HIGH`
+  (a static **health band** — the verdict-driving gate). Only the second drives
+  decisions, and it is a configured box, not an attractor. Previously listed as
+  single-sense; **promoted to high-risk homonym.** A runtime glossary
+  (`src/governance_glossary.py::explain_basin`, #428) resolves the health-band
+  sense — keep it consistent with the doc glossary.
+- **NEW `free energy` (DRIFT, code):** ODE `V` ("like Helmholtz free energy", a
+  signed integrator) vs. `src/grounding/free_energy.py` target `E=−F` (variational,
+  Tier-1 explicitly stubbed).
+- **RETRACTED claim:** the Rosetta skeleton's "physics register is aspirational,
+  all candidate, zero earned" was **wrong**. Three rows are `◐ research-lens`
+  (implemented in the parallel ODE / grounding tiers, honestly provenance-tagged,
+  but not wired to the verdict path). The real gap is *wiring built physics onto
+  the verdict path*, not building it. Notably `grounding/free_energy.py` already
+  enforces this audit's own "name nothing more rigorous than it is" guardrail at
+  runtime (tiered estimator, `source=` tags, FEP stubbed).
+
+Lesson for future sweeps: **read the code, not only the proposal docs.** Drift
+between a term's doc sense and its code symbol is invisible to a docs-only pass.
+
 **Headline:** Three words carry the most collision risk — `substrate` (3 senses),
 `fingerprint` (3 senses), `surface` (2 senses) — because in each case more than
 one sense is genuinely load-bearing and at least two senses live close together
