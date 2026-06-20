@@ -873,7 +873,11 @@ class TestQuery:
         params = call_args.args[1]
         assert "TAGGED" in cypher
         assert "Tag" in cypher
-        assert "RETURN DISTINCT d" in cypher
+        # AGE cannot emit `RETURN DISTINCT d ORDER BY d.timestamp` — Postgres
+        # rejects it ("for SELECT DISTINCT, ORDER BY expressions must appear in
+        # select list"). Dedupe with `WITH DISTINCT d` and order in Python.
+        assert "WITH DISTINCT d" in cypher
+        assert "ORDER BY" not in cypher
         assert params["tags"] == ["python", "bug"]
 
     @pytest.mark.asyncio
@@ -890,6 +894,31 @@ class TestQuery:
         assert "TAGGED" in cypher
         assert params["agent_id"] == "agent-1"
         assert params["tags"] == ["python"]
+
+    @pytest.mark.asyncio
+    async def test_query_with_tags_sorts_recent_first_and_limits_in_python(self):
+        """Tag queries order by timestamp DESC and apply the limit in Python.
+
+        Regression for the Tag Search SQL crash: AGE cannot run
+        `RETURN DISTINCT d ORDER BY d.timestamp` (Postgres rejects "for SELECT
+        DISTINCT, ORDER BY expressions must appear in select list"), so the
+        Cypher drops ORDER BY/LIMIT and ordering + cap happen in Python.
+        """
+        kg, mock_db = make_kg_with_mock_db()
+        # Deliberately out of chronological order to prove Python sorts them.
+        mock_db.graph_query.return_value = [
+            {"properties": {"id": "old", "agent_id": "a1", "summary": "old",
+                            "timestamp": "2026-01-01T00:00:00+00:00"}},
+            {"properties": {"id": "new", "agent_id": "a1", "summary": "new",
+                            "timestamp": "2026-06-01T00:00:00+00:00"}},
+            {"properties": {"id": "mid", "agent_id": "a1", "summary": "mid",
+                            "timestamp": "2026-03-01T00:00:00+00:00"}},
+        ]
+
+        result = await kg.query(tags=["python"], limit=2)
+
+        # Most-recent-first, capped at the limit.
+        assert [d.id for d in result] == ["new", "mid"]
 
     @pytest.mark.asyncio
     async def test_query_with_limit(self):
