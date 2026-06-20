@@ -15,6 +15,8 @@
   let MODEL = { list: [], summary: {}, source: "snapshot", nowMs: 0 };
   let pageSize = 20;
   let selectedId = null;
+  let histChart = null;
+  const histCache = {};
 
   const BASIN_COLOR = { high: "var(--ok)", boundary: "var(--warn)", low: "var(--danger)" };
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -67,9 +69,55 @@
           ${a.event_driven ? idField("liveness", "event-driven") : ""}
         </div>
       </div>
+      <div style="margin-top:var(--space-5)">
+        <div class="eyebrow" style="margin-bottom:var(--space-3)">EISV trajectory <span id="ag-hist-meta" style="text-transform:none;letter-spacing:0;color:var(--faint);font-weight:400"></span></div>
+        <div style="height:170px"><canvas id="ag-hist"></canvas></div>
+      </div>
       ${a.purpose ? `<div style="margin-top:var(--space-4);font-size:var(--text-sm);color:var(--ink-2)">${esc(a.purpose)}</div>` : ""}
       ${tags ? `<div style="margin-top:var(--space-3);display:flex;gap:6px;flex-wrap:wrap">${tags}</div>` : ""}
     </div>`;
+  }
+
+  // EISV trajectory chart for the open agent (Chart.js, theme-aware token colours).
+  async function renderHistory(id) {
+    if (histChart) { histChart.destroy(); histChart = null; }
+    const canvas = document.getElementById("ag-hist");
+    const meta = document.getElementById("ag-hist-meta");
+    if (!canvas || !window.Chart) return;
+    let pts = histCache[id];
+    if (!pts) { // fetch once per agent; re-renders (search/filter) reuse the cache
+      const r = await DATA.agentHistory(id, 80);
+      if (selectedId !== id || !document.getElementById("ag-hist")) return; // selection changed mid-fetch
+      pts = (r.data || []).filter(Boolean);
+      histCache[id] = pts;
+    }
+    if (!pts.length) { if (meta) meta.textContent = "· no recorded history yet"; return; }
+    if (meta) meta.textContent = "· last " + pts.length + " check-ins";
+    const cv = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+    const labels = pts.map((p) => (p.t || "").slice(11, 16));
+    const ds = (label, key, color, dash) => ({
+      label, data: pts.map((p) => p[key]), borderColor: color, backgroundColor: "transparent",
+      borderWidth: 1.6, borderDash: dash || [], pointRadius: 0, tension: 0.3,
+    });
+    const grid = cv("--line"), tick = cv("--muted");
+    histChart = new window.Chart(canvas, {
+      type: "line",
+      data: { labels, datasets: [
+        ds("E", "E", cv("--eisv-e")), ds("I", "I", cv("--eisv-i")),
+        ds("S", "S", cv("--eisv-s")), ds("V", "V", cv("--eisv-v")),
+        ds("coherence", "coherence", cv("--eisv-c"), [4, 3]),
+      ] },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { display: true, position: "bottom", labels: { color: tick, font: { family: "Inter", size: 10 }, boxWidth: 9, boxHeight: 9, usePointStyle: true } },
+          tooltip: { backgroundColor: cv("--surface"), borderColor: cv("--line-2"), borderWidth: 1, titleColor: cv("--ink"), bodyColor: tick, titleFont: { family: "Geist Mono" }, bodyFont: { family: "Geist Mono", size: 10 } } },
+        scales: {
+          x: { grid: { color: grid, drawTicks: false }, ticks: { color: tick, font: { family: "Geist Mono", size: 9 }, maxRotation: 0, autoSkipPadding: 24 } },
+          y: { min: -0.6, max: 1, grid: { color: grid }, ticks: { color: tick, font: { family: "Geist Mono", size: 9 }, callback: (v) => v.toFixed(1) } },
+        },
+      },
+    });
   }
 
   function staleness(lastIso, nowMs) {
@@ -186,6 +234,10 @@
        ${moreBtn}${neverGroup}`;
 
     wire();
+    // (Re)build the trajectory chart when a detail is open; the canvas is fresh
+    // after every innerHTML write, so this runs on each render (cache avoids refetch).
+    if (selected) renderHistory(selectedId);
+    else if (histChart) { histChart.destroy(); histChart = null; }
   }
   function cmp_recent(a, b) { return Date.parse(b.last || 0) - Date.parse(a.last || 0); }
 
