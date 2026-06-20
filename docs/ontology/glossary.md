@@ -95,6 +95,15 @@ colloquial and rarely collide in practice, but flag them when prose mixes
 registers. **The real issue is not a homonym — it's that the answer set for
 `harness (agent body)` is incomplete.** See the open gap below.
 
+**Preferred term:** `body` is the precise synonym for the agent-body sense and is
+already in use (`harness-substrate-plurality.md`: "powerful fixed bodies",
+"variable body"). The field's "harness" descends from *test harness* — a scaffold
+that drives code from outside — so it natively leans toward the scaffold/wrapper
+sense (rows 2–3), which pulls against the *inhabited body* sense (row 1). Prefer
+`body` when you mean what mediates an agent's action; reserve `harness` for the
+scaffold/lifecycle-wrapper sense. This assigns the two words we already use to
+the two questions they each answer best, rather than coining anything new.
+
 ### fork — two questions the bare word conflates
 
 | Sense | Question it answers | Canonical source |
