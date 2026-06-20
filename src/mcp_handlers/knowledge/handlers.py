@@ -1086,6 +1086,9 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
             status = "open"
         # Default: exclude archived entries unless explicitly requested
         include_archived = arguments.get("include_archived", False)
+        # Cold storage is long-term memory, queryable only with include_cold=true
+        # (mirrors the lifecycle contract). Default search excludes it.
+        include_cold = arguments.get("include_cold", False)
 
         # Track semantic scores if semantic search is used
         semantic_scores_dict = {}
@@ -1401,6 +1404,9 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
                 # Exclude archived entries by default (unless status filter or include_archived)
                 if not status and not include_archived and d.status == "archived":
                     continue
+                # Exclude cold-storage entries by default (unless status filter or include_cold)
+                if not status and not include_cold and d.status == "cold":
+                    continue
                 if tags and not search_mode.startswith("hybrid_rrf"):
                     # In hybrid mode, tags are a score boost in RRF space (handled
                     # upstream via apply_tag_boost). Everywhere else, they remain a
@@ -1451,6 +1457,7 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
             # Without this, LIMIT grabs N most recent (mostly archived junk), then
             # post-hoc filtering removes them, returning far fewer than N results.
             should_exclude_archived = not status and not include_archived
+            should_exclude_cold = not status and not include_cold
             results = await graph.query(
                 agent_id=agent_id,
                 tags=tags,
@@ -1459,6 +1466,7 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
                 status=status,
                 limit=limit,
                 exclude_archived=should_exclude_archived,
+                exclude_cold=should_exclude_cold,
             )
             search_mode = "indexed_filters"
             operator_used = "N/A"  # No text search, just filters

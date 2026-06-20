@@ -1537,6 +1537,113 @@ class TestSearchArchivedFiltering:
         assert "d-archived" not in result_ids
 
 
+class TestSearchColdFiltering:
+    """Cold storage is opt-in (include_cold), mirroring archived exclusion."""
+
+    @pytest.mark.asyncio
+    async def test_search_excludes_cold_by_default(self, patch_common):
+        """Cold-storage entries should be excluded from search results by default."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        discoveries = [
+            make_discovery(id="d-open", status="open"),
+            make_discovery(id="d-cold", status="cold"),
+            make_discovery(id="d-resolved", status="resolved"),
+        ]
+
+        # Mock query to respect exclude_cold parameter (like real backend)
+        async def query_with_filtering(**kwargs):
+            rows = discoveries
+            if kwargs.get("exclude_cold", False):
+                rows = [d for d in rows if d.status != "cold"]
+            return rows
+
+        mock_graph.query = AsyncMock(side_effect=query_with_filtering)
+
+        result = await handle_search_knowledge_graph({})
+        data = parse_result(result)
+
+        assert data["success"] is True
+        result_ids = [d["id"] for d in data["discoveries"]]
+        assert "d-open" in result_ids
+        assert "d-resolved" in result_ids
+        assert "d-cold" not in result_ids
+
+    @pytest.mark.asyncio
+    async def test_search_includes_cold_when_requested(self, patch_common):
+        """Cold entries should be included when include_cold=True."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        discoveries = [
+            make_discovery(id="d-open", status="open"),
+            make_discovery(id="d-cold", status="cold"),
+        ]
+        mock_graph.query = AsyncMock(return_value=discoveries)
+
+        result = await handle_search_knowledge_graph({"include_cold": True})
+        data = parse_result(result)
+
+        assert data["success"] is True
+        result_ids = [d["id"] for d in data["discoveries"]]
+        assert "d-open" in result_ids
+        assert "d-cold" in result_ids
+
+    @pytest.mark.asyncio
+    async def test_search_includes_cold_when_status_filter_set(self, patch_common):
+        """When status='cold' is explicitly set, don't apply cold exclusion."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        discoveries = [
+            make_discovery(id="d-cold", status="cold"),
+        ]
+        mock_graph.query = AsyncMock(return_value=discoveries)
+
+        result = await handle_search_knowledge_graph({"status": "cold"})
+        data = parse_result(result)
+
+        assert data["success"] is True
+        result_ids = [d["id"] for d in data["discoveries"]]
+        assert "d-cold" in result_ids
+
+    @pytest.mark.asyncio
+    async def test_search_fts_excludes_cold_by_default(self, patch_common):
+        """FTS/post-filter path should also exclude cold entries by default."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        discoveries = [
+            make_discovery(id="d-open", summary="matching text", status="open"),
+            make_discovery(id="d-cold", summary="matching text", status="cold"),
+        ]
+        mock_graph.full_text_search = AsyncMock(return_value=discoveries)
+        if hasattr(mock_graph, 'semantic_search'):
+            del mock_graph.semantic_search
+
+        result = await handle_search_knowledge_graph({"query": "matching"})
+        data = parse_result(result)
+
+        assert data["success"] is True
+        result_ids = [d["id"] for d in data["discoveries"]]
+        assert "d-open" in result_ids
+        assert "d-cold" not in result_ids
+
+
+class TestStatusMultipliersCold:
+    """Cold ranks below archived in the AGE blend's status multipliers."""
+
+    def test_cold_multiplier_present_and_below_archived(self):
+        from src.storage.knowledge_graph_age import KnowledgeGraphAGE
+
+        mults = KnowledgeGraphAGE.STATUS_MULTIPLIERS
+        assert "cold" in mults, "cold must have an explicit ranking multiplier"
+        assert mults["cold"] < mults["archived"], (
+            "cold storage should rank below archived when surfaced"
+        )
+
+
 # ============================================================================
 # _or_default_query helper
 # ============================================================================

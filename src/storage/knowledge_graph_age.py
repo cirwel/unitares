@@ -589,6 +589,7 @@ class KnowledgeGraphAGE:
         tags: Optional[List[str]] = None,
         limit: int = 100,
         exclude_archived: bool = False,
+        exclude_cold: bool = False,
     ) -> List[DiscoveryNode]:
         """
         Query discoveries with filters.
@@ -600,6 +601,8 @@ class KnowledgeGraphAGE:
             severity: Filter by severity
             tags: Filter by tags (any match)
             limit: Maximum results
+            exclude_archived: Drop archived rows when no explicit status filter
+            exclude_cold: Drop cold-storage rows when no explicit status filter
         """
         db = await self._get_db()
 
@@ -636,6 +639,10 @@ class KnowledgeGraphAGE:
             # Use IS NULL OR to include entries with missing status (AGE NULL semantics:
             # NULL <> 'archived' evaluates to NULL, not TRUE, so those rows get filtered out)
             conditions.append("(d.status IS NULL OR d.status <> 'archived')")
+
+        # Cold storage is opt-in (include_cold). Same NULL-safe pattern as archived.
+        if exclude_cold and not status:
+            conditions.append("(d.status IS NULL OR d.status <> 'cold')")
 
         where_clause = " AND ".join(conditions) if conditions else ""
         
@@ -1786,11 +1793,14 @@ class KnowledgeGraphAGE:
             logger.debug(f"Failed to get batch connectivity scores: {e}")
             return {d: 0.0 for d in discovery_ids}
 
-    # Status multipliers for search ranking - resolved/archived entries rank lower
+    # Status multipliers for search ranking - resolved/archived/cold entries rank lower.
+    # cold is long-term storage (queryable only with include_cold) and ranks below
+    # archived so that, when explicitly surfaced, it never outranks live tiers.
     STATUS_MULTIPLIERS = {
         "open": 1.0,
         "resolved": 0.6,
         "archived": 0.3,
+        "cold": 0.2,
         "disputed": 0.5,
     }
 

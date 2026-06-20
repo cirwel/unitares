@@ -67,6 +67,7 @@ class KnowledgeGraphPostgres:
         status: Optional[str] = None,
         limit: int = 50,
         exclude_archived: bool = False,
+        exclude_cold: bool = False,
     ) -> List[DiscoveryNode]:
         """Query discoveries with filters."""
         db = await self._get_db()
@@ -82,9 +83,13 @@ class KnowledgeGraphPostgres:
             status=effective_status if effective_status != "!archived" else status,
             limit=limit,
         )
-        # Post-hoc filter as fallback since kg_query may not support negated status
-        if exclude_archived and not status:
-            rows = [r for r in rows if r.get("status") != "archived"]
+        # Post-hoc filter as fallback since kg_query may not support negated status.
+        # Cold storage is opt-in (include_cold), mirroring archived exclusion.
+        if not status:
+            if exclude_archived:
+                rows = [r for r in rows if r.get("status") != "archived"]
+            if exclude_cold:
+                rows = [r for r in rows if r.get("status") != "cold"]
         return [self._dict_to_discovery(r) for r in rows]
 
     async def full_text_search(
