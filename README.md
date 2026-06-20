@@ -1,12 +1,6 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero.svg">
-  <source media="(prefers-color-scheme: light)" srcset="docs/assets/hero.svg">
-  <img alt="UNITARES — runtime governance for AI-agent fleets" src="docs/assets/hero.svg" width="100%">
-</picture>
-
-# UNITARES
+<img alt="UNITARES — runtime governance for AI-agent fleets" src="docs/assets/hero-v2.png" width="100%">
 
 ### Catch an AI agent going off the rails — before anything breaks.
 
@@ -14,16 +8,16 @@
 UNITARES watches each agent while it works and tells you — and the agent itself — the moment one starts to drift, while it's still just numbers moving and not yet broken output.
 
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.12+-2f7d72?style=flat-square&labelColor=0f171f)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-Apache_2.0-2f7d72?style=flat-square&labelColor=0f171f)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
 
 *Status: live. First public commit 2025-12-04 · 3.7M+ governance events in production · dogfooded.*
 
-[![▶ Quickstart](https://img.shields.io/badge/▶_Quickstart-2ea44f?style=for-the-badge)](#try-it-in-60-seconds)
-[![Read the docs](https://img.shields.io/badge/Docs-1f6feb?style=for-the-badge)](docs/README.md)
-[![Paper](https://img.shields.io/badge/Paper_v6-8957e5?style=for-the-badge)](https://github.com/cirwel/unitares-paper-v6)
-[![Reviewer Guide](https://img.shields.io/badge/Verify_it_yourself-da7633?style=for-the-badge)](docs/REVIEWER_GUIDE.md)
+[![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#try-it-in-60-seconds)
+[![Docs](https://img.shields.io/badge/docs-read-7d8f97?style=for-the-badge&labelColor=0f171f)](docs/README.md)
+[![Paper v6](https://img.shields.io/badge/paper-v6-8957e5?style=for-the-badge&labelColor=0f171f)](https://github.com/cirwel/unitares-paper-v6)
+[![Verify it yourself](https://img.shields.io/badge/verify-it_yourself-f5a623?style=for-the-badge&labelColor=0f171f)](docs/REVIEWER_GUIDE.md)
 
 One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety infrastructure for autonomous agents, *after* deployment. UNITARES is the governed fleet; [Anima](https://github.com/cirwel/anima-mcp) is its self-sensing edge counterpart. [Full index ↗](https://cirwel.github.io)
 
@@ -83,6 +77,10 @@ UNITARES runs **alongside** your evals and guardrails — it doesn't replace eit
 | **UNITARES** | Is this agent *still healthy* as it works? | continuously, mid-run |
 
 ## How it works
+
+<div align="center">
+  <img src="docs/assets/flow.png" width="100%" alt="agent acts → checks in (sync_state) → graded vs its own baseline → state + verdict → self-regulates → durable audit trail"/>
+</div>
 
 After each unit of work, the agent checks in with `sync_state()` — passing its self-reported confidence plus verifiable evidence (test results, exit codes, tool output). It gets back one plain verdict:
 
