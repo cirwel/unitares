@@ -145,6 +145,8 @@ optional before routing; requiredness is defined by effect class in Section 6.
       "schema": "unitares.harness_event.v0",
       "harness_type": "hermes_gateway",
       "harness_id": "profile-or-runtime-instance",
+      "process_instance_id": "optional: this concrete process/restart incarnation",
+      "logical_principal_id": "optional: stable principal across process restarts",
       "transport": "discord",
       "event_origin": "platform_user_message",
       "received_at": "server-stamped RFC3339 timestamp",
@@ -166,7 +168,8 @@ optional before routing; requiredness is defined by effect class in Section 6.
         "dedupe_key_source": "platform | constructed | content_hash | none",
         "dedupe_scope": "conversation | webhook_provider | card | lease | harness_instance",
         "dedupe_ttl_seconds": 86400,
-        "payload_hash": "optional canonical hash"
+        "payload_hash": "optional canonical hash",
+        "prior_state_version": "optional: monotonic state token (e.g. board/card revision, lease epoch)"
       },
       "ingress_verification": {
         "auth_status": "none | present | verified | failed",
@@ -204,6 +207,7 @@ optional before routing; requiredness is defined by effect class in Section 6.
         "delivery_attempt": 1,
         "restart_count_window": 0
       },
+      "harness_local_phase": "optional opaque-to-core phase token (e.g. lumen body/drawing phase)",
       "adapter_context": {}
     }
 
@@ -241,6 +245,20 @@ optional before routing; requiredness is defined by effect class in Section 6.
   into a user turn by setting the flag to `false`. Where the trusted source for
   a counter does not yet exist (see `restart_count_window` in Sections 7 and 10),
   the decisions that read it are non-normative until that source is named.
+- `process_instance_id` versus `logical_principal_id` keep a process restart
+  distinct from the principal whose work survives it: a supervisor restart mints
+  a new `process_instance_id` under the same `logical_principal_id`, so restart
+  storms do not read as identity churn. `harness_id` remains a convenience label;
+  these two are the load-bearing distinction for BEAM/supervisor harnesses.
+- `prior_state_version` is a monotonic state token (board/card revision, lease
+  epoch). It lets a re-dispatch after a real state change be distinguished from a
+  duplicate: the same `dedupe_key` with an *advanced* `prior_state_version` is a
+  legitimate new event, not a replay.
+- `harness_local_phase` is an opaque-to-core token a harness sets for its own
+  protected phases (e.g. a Lumen body/drawing phase). The normative core does not
+  interpret its value; harness-local policy decides defer/reject. It exists at a
+  known path so harness-local rules can reference it without overloading
+  `adapter_context`.
 
 ## 6. Minimum required fields by effect class
 
@@ -279,8 +297,8 @@ effect requires its own policy check with causal linkage to the original event.
 
 Lumen/Anima body-loop protection (interrupting a protected drawing phase) is
 **harness-local enforcement policy, not part of this normative table** — it keys
-on a `harness_local_phase` the core envelope does not carry. See the
-non-normative example in Section 11.
+on `harness_local_phase`, which the envelope carries but the normative core does
+not interpret. See the non-normative example in Section 11.
 
 The default table is conservative. Deployments may relax read-only
 observability, but should not relax synthetic/replayed side effects without an
@@ -406,21 +424,28 @@ Enforcement must be:
 | BEAM residents/supervisors | Supervisor restart storm, per-turn identity minting | supervisor child id, restart intensity, logical conversation anchor | Supervisor cooldown; distinguish process restart from principal identity |
 | Lumen/Anima | Interrupting live drawings/body loops, over-dashboarding creature state | body phase, display/drawing state, visitor/request origin, disruption level | Defer/reject disruptive actions during protected embodied phases |
 
-### v0 envelope expressiveness gaps
+### Fields backing the harder guards
 
-Some of the guards above need state the v0 envelope cannot yet carry. They are
-listed here so reviewers do not infer completeness from silence — closing them is
-follow-up envelope work, not something this PR claims to express:
+Several guards above need state beyond the basic envelope; v0 carries generic,
+optional fields for them (defined in Section 5) rather than harness-specific
+ones, so each maps to a contract field instead of `adapter_context` improvisation:
 
-- **Kanban "no re-dispatch without state change"** needs a prior-state version
-  (e.g. `board_revision`) to distinguish a legitimate re-dispatch after a real
-  state change from a duplicate. The v0 `idempotency` block has no such field.
-- **BEAM "distinguish process restart from principal identity"** needs separate
-  `process_instance_id` and `logical_principal_id`; v0 collapses both into
-  `harness_id`.
-- **Lumen "protected drawing phase"** needs a generic `harness_local_phase`
-  opaque-to-core field that Sections 6–7 could reference; it does not exist in
-  v0, which is why that guard is harness-local rather than normative.
+- **Kanban "no re-dispatch without state change"** → `idempotency.prior_state_version`
+  (board/card revision, lease epoch): same `dedupe_key` with an advanced version
+  is a legitimate re-dispatch, not a duplicate.
+- **BEAM "distinguish process restart from principal identity"** →
+  `process_instance_id` (this incarnation) versus `logical_principal_id` (the
+  surviving principal), so a supervisor restart does not read as identity churn.
+- **Lumen "protected drawing phase"** → `harness_local_phase`, an opaque-to-core
+  token the harness-local policy interprets; the normative core does not read its
+  value, which is why that guard stays harness-local rather than in the Section 7
+  table.
+
+These fields are optional and uninterpreted-by-core except where a harness's own
+policy reads them; they bind no adapter that does not need them. What v0 still
+does **not** specify (left to per-harness implementation PRs) is the concrete
+semantics each harness attaches — e.g. how a BEAM adapter sources restart
+intensity, or the exact Lumen phase vocabulary.
 
 ## 12. Model neutrality and model-aware budgets
 
