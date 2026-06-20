@@ -188,7 +188,9 @@ const RELOAD = {
   activity: () => window.Activity && window.Activity.load(),
   residents: () => window.Residents && window.Residents.load(),
   eisv: () => window.EISV && window.EISV.load(),
-  automations: () => window.Automations && window.Automations.load(),
+  // Automations is NOT auto-refreshed: it's a filter/search registry (like
+  // Agents/Discoveries) and the census snapshot changes rarely, so a 10s
+  // re-render would just churn scroll/focus for no fresh data. Loads on nav.
 };
 const livePill = document.getElementById("livePill");
 const liveText = document.getElementById("liveText");
