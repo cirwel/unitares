@@ -152,7 +152,7 @@
               event_driven: a.event_driven === true, health: a.health_status,
               redacted: a.agent_id_redacted === true, parent: a.parent_agent_id,
               superseded: a.superseded === true, lifecycleReason: a.last_lifecycle_reason,
-              metrics: { coherence: m.coherence, risk: m.risk_score, verdict: m.verdict, E: m.E, I: m.I, S: m.S, V: m.V },
+              metrics: { coherence: m.coherence, risk: m.risk_score, verdict: m.verdict, E: m.E, I: m.I, S: m.S, V: m.V, basin: m.basin, phi: m.phi },
             });
           });
         });

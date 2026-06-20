@@ -14,6 +14,63 @@
 
   let MODEL = { list: [], summary: {}, source: "snapshot", nowMs: 0 };
   let pageSize = 20;
+  let selectedId = null;
+
+  const BASIN_COLOR = { high: "var(--ok)", boundary: "var(--warn)", low: "var(--danger)" };
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  // One EISV bar row. E/I/S in [0,1]; V signed [-1,1] (centre-anchored).
+  function eisvRow(k, val, cls, signed) {
+    if (typeof val !== "number") return `<div class="eisv-row"><span class="k">${k}</span><span class="bar"></span><span class="val">—</span></div>`;
+    const w = signed ? Math.abs(val) * 50 : Math.max(0, Math.min(1, val)) * 100;
+    const left = signed ? (val < 0 ? 50 - Math.abs(val) * 50 : 50) : 0;
+    return `<div class="eisv-row"><span class="k">${k}</span>`
+      + `<span class="bar ${signed ? "signed" : ""}"><i class="${cls}" style="left:${left}%;width:${w}%"></i></span>`
+      + `<span class="val">${num(val)}</span></div>`;
+  }
+
+  function detailPanel(a) {
+    const m = a.metrics || {};
+    const st = staleness(a.last, MODEL.nowMs);
+    const basin = m.basin ? `<span class="tag" style="color:${BASIN_COLOR[m.basin] || "var(--muted)"};border-color:color-mix(in srgb, ${BASIN_COLOR[m.basin] || "var(--line-2)"} 40%, var(--line-2))">${m.basin} basin</span>` : "";
+    const tags = (a.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join(" ");
+    const idField = (label, val) => `<div style="display:flex;justify-content:space-between;gap:var(--space-4);padding:4px 0;border-bottom:var(--hairline) solid var(--line);font-size:var(--text-sm)"><span style="color:var(--muted)">${label}</span><span class="mono" style="color:var(--ink-2);text-align:right;word-break:break-all">${esc(val)}</span></div>`;
+    return `<div class="panel" id="ag-detail" style="margin-bottom:var(--space-4);border-color:var(--line-2)">
+      <div class="panel-head" style="margin-bottom:var(--space-4)">
+        <span class="dot-pip" style="background:${a.status === "paused" ? "var(--warn)" : st.level === "dead" ? "var(--faint)" : "var(--ok)"}"></span>
+        <h2 style="font-family:var(--font-display)">${a.label ? esc(a.label) : "anon"}</h2>
+        ${tierBadge(a.tier)} ${basin}
+        <span class="verdict ${verdictClass(m.verdict) === "ok" ? "" : verdictClass(m.verdict) === "warn" ? "warn" : "danger"}"><span class="pip"></span><span>${esc(m.verdict || "—")}</span></span>
+        <span class="spring"></span>
+        <button class="theme-toggle" id="ag-detail-close">✕ close</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-6)">
+        <div>
+          <div class="eyebrow" style="margin-bottom:var(--space-3)">State</div>
+          <div class="eisv" style="margin-bottom:var(--space-4)">
+            ${eisvRow("E", m.E, "e", false)}${eisvRow("I", m.I, "i", false)}
+            ${eisvRow("S", m.S, "s", false)}${eisvRow("V", m.V, "v", true)}
+          </div>
+          <div style="display:flex;gap:var(--space-5);font-family:var(--font-mono);font-size:var(--text-sm);color:var(--ink-2)">
+            <span>coh ${num(m.coherence)}</span><span>risk ${num(m.risk)}</span>${typeof m.phi === "number" ? `<span>φ ${num(m.phi)}</span>` : ""}
+          </div>
+        </div>
+        <div>
+          <div class="eyebrow" style="margin-bottom:var(--space-3)">Identity</div>
+          ${idField("id", a.agent_id || "—")}
+          ${idField("status", a.status || "—")}
+          ${idField("tier", a.tier || "—")}
+          ${idField("updates", (a.updates || 0).toLocaleString())}
+          ${idField("last seen", st.label)}
+          ${a.parent ? idField("lineage parent", a.parent) : ""}
+          ${a.superseded ? idField("superseded", a.lifecycleReason || "yes") : ""}
+          ${a.event_driven ? idField("liveness", "event-driven") : ""}
+        </div>
+      </div>
+      ${a.purpose ? `<div style="margin-top:var(--space-4);font-size:var(--text-sm);color:var(--ink-2)">${esc(a.purpose)}</div>` : ""}
+      ${tags ? `<div style="margin-top:var(--space-3);display:flex;gap:6px;flex-wrap:wrap">${tags}</div>` : ""}
+    </div>`;
+  }
 
   function staleness(lastIso, nowMs) {
     if (!lastIso) return { level: "unknown", label: "—" };
@@ -81,7 +138,8 @@
       const name = a.label || `<span style="color:var(--muted)">anon · ${(a.agent_id || "—").slice(0, 8)}</span>`;
       const pip = a.status === "paused" ? "var(--warn)" : a.status === "archived" ? "var(--faint)"
         : st.level === "dead" ? "var(--faint)" : "var(--ok)";
-      return `<tr>
+      const sel = a.agent_id === selectedId ? ' style="background:var(--surface-2);cursor:pointer" ' : ' style="cursor:pointer" ';
+      return `<tr class="ag-row" data-id="${a.agent_id || ""}"${sel}>
         <td><span class="dot-pip" style="background:${pip}"></span></td>
         <td><div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
             <span style="font-weight:500;color:var(--ink)">${name}</span> ${tierBadge(a.tier)} ${rowBadges(a, st)}
@@ -107,8 +165,10 @@
          ${never.length ? `<table class="tbl" style="margin-top:var(--space-3)">${head}<tbody>${never.slice(0, 30).map(tr).join("")}</tbody></table>`
             : `<p class="empty">Not in this snapshot subset — ${sm.neverParticipated} fleet-wide.</p>`}</details>` : "";
 
+    const selected = selectedId && MODEL.list.find((a) => a.agent_id === selectedId);
     $("#ag-mount").innerHTML =
-      `<div style="display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-4)">
+      (selected ? detailPanel(selected) : "")
+      + `<div style="display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-4)">
          <input id="ag-search" placeholder="search name · id · purpose · tag" value="${q.replace(/"/g, "&quot;")}"
            style="flex:1;min-width:200px;padding:var(--space-2) var(--space-3);font-family:var(--font-sans);font-size:var(--text-sm);background:var(--surface);color:var(--ink);border:var(--hairline) solid var(--line-2);border-radius:var(--radius-sm)" />
          <select id="ag-status" class="theme-toggle">${["all", "active", "paused", "archived"].map((s) => `<option ${s === statusF ? "selected" : ""}>${s}</option>`).join("")}</select>
@@ -133,6 +193,18 @@
     const s = $("#ag-search"); if (s) s.oninput = () => { pageSize = 20; render(); };
     ["#ag-status", "#ag-sort", "#ag-prod"].forEach((id) => { const el = $(id); if (el) el.onchange = () => { pageSize = 20; render(); }; });
     const more = $("#ag-more"); if (more) more.onclick = () => { pageSize += 20; render(); };
+    document.querySelectorAll("#ag-mount .ag-row").forEach((row) => {
+      row.onclick = () => select(row.dataset.id);
+    });
+    const close = $("#ag-detail-close"); if (close) close.onclick = () => { selectedId = null; render(); };
+  }
+
+  // Open an agent's detail (also callable for deep-link/verification).
+  function select(id) {
+    selectedId = (id && id === selectedId) ? null : id; // click again to close
+    render();
+    const d = document.getElementById("ag-detail");
+    if (d && d.scrollIntoView) d.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   async function load() {
@@ -144,5 +216,5 @@
     render();
   }
 
-  window.Agents = { load };
+  window.Agents = { load, select };
 })();
