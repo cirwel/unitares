@@ -334,6 +334,21 @@ class KnowledgeGraphMixin:
             "total_agents": len(by_agent),
         }
 
+    async def kg_all_discovery_ids(self, limit: Optional[int] = None) -> List[str]:
+        """Return discovery ids from knowledge.discoveries, most recent first.
+
+        Used by the AGE backend's graph backfill to diff the SQL source-of-truth
+        against the AGE Discovery vertices and find rows missing a graph node.
+        """
+        query = "SELECT id FROM knowledge.discoveries ORDER BY created_at DESC"
+        params: list = []
+        if limit is not None:
+            params.append(limit)
+            query += f" LIMIT ${len(params)}"
+        async with self.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+        return [r["id"] for r in rows]
+
     async def kg_update_status(
         self,
         discovery_id: str,

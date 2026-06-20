@@ -723,3 +723,126 @@ class TestGetStatsSQLFallback:
         assert stats["total_discoveries"] == 0
         # Falls through to the AGE response shape, which carries the AGE note.
         assert "AGE backend has no epoch property" in stats["scope"]["note"]
+
+
+# ===========================================================================
+# backfill_missing_age_nodes — rebuild graph nodes for SQL-only rows
+# ===========================================================================
+#
+# The SQL fallback above makes orphan rows retrievable; the backfill restores
+# the AGE graph nodes/edges so traversal (response chains, related expansion,
+# tag rollups) sees them too.
+
+def _backfill_graph_query(age_ids):
+    """graph_query side_effect: report `age_ids` as existing Discovery vertices.
+
+    The collect(d.id) probe returns the known AGE ids; all other Cypher calls
+    (node/edge MERGEs issued during creation) are no-op stubs returning [].
+    """
+    async def fake(cypher, params=None, conn=None):
+        if "collect(d.id)" in cypher:
+            return [list(age_ids)]
+        return []
+    return fake
+
+
+@pytest.mark.asyncio
+class TestBackfillMissingAgeNodes:
+
+    async def test_raises_when_graph_unavailable(self):
+        db = _make_db(graph_available=False)
+        kg = await _make_kg(db)
+
+        with pytest.raises(RuntimeError):
+            await kg.backfill_missing_age_nodes()
+
+    async def test_dry_run_reports_missing_without_writing(self):
+        db = _make_db(graph_available=True)
+        db.graph_query = AsyncMock(side_effect=_backfill_graph_query({"disc-age-001"}))
+        db.kg_all_discovery_ids = AsyncMock(return_value=["disc-age-001", "disc-sql-001", "disc-sql-002"])
+        db.kg_get_discovery = AsyncMock(return_value=_sql_row())
+        kg = await _make_kg(db)
+
+        summary = await kg.backfill_missing_age_nodes(dry_run=True)
+
+        assert summary["scanned"] == 3
+        assert summary["age_present"] == 1
+        assert summary["missing"] == 2
+        assert summary["created"] == 0
+        assert summary["dry_run"] is True
+        # Dry run must not load rows or create nodes.
+        db.kg_get_discovery.assert_not_awaited()
+
+    async def test_apply_creates_missing_nodes(self):
+        db = _make_db(graph_available=True)
+        db.graph_query = AsyncMock(side_effect=_backfill_graph_query({"disc-age-001"}))
+        db.kg_all_discovery_ids = AsyncMock(return_value=["disc-age-001", "disc-sql-001"])
+        db.kg_get_discovery = AsyncMock(side_effect=lambda did: _sql_row(discovery_id=did))
+        kg = await _make_kg(db)
+
+        created_for: list = []
+
+        async def fake_create(db_, discovery):
+            created_for.append(discovery.id)
+
+        kg._create_age_graph_for_discovery = fake_create  # type: ignore[assignment]
+
+        summary = await kg.backfill_missing_age_nodes(dry_run=False)
+
+        assert summary["missing"] == 1
+        assert summary["created"] == 1
+        assert summary["failed"] == 0
+        assert created_for == ["disc-sql-001"]
+        # The already-present AGE id is never reloaded or recreated.
+        db.kg_get_discovery.assert_awaited_once_with("disc-sql-001")
+
+    async def test_noop_when_graph_in_sync(self):
+        db = _make_db(graph_available=True)
+        db.graph_query = AsyncMock(side_effect=_backfill_graph_query({"disc-1", "disc-2"}))
+        db.kg_all_discovery_ids = AsyncMock(return_value=["disc-1", "disc-2"])
+        kg = await _make_kg(db)
+
+        summary = await kg.backfill_missing_age_nodes(dry_run=False)
+
+        assert summary["missing"] == 0
+        assert summary["created"] == 0
+
+    async def test_counts_failures_and_continues(self):
+        db = _make_db(graph_available=True)
+        db.graph_query = AsyncMock(side_effect=_backfill_graph_query(set()))
+        db.kg_all_discovery_ids = AsyncMock(return_value=["disc-a", "disc-b"])
+        db.kg_get_discovery = AsyncMock(side_effect=lambda did: _sql_row(discovery_id=did))
+        kg = await _make_kg(db)
+
+        async def flaky_create(db_, discovery):
+            if discovery.id == "disc-a":
+                raise RuntimeError("boom")
+
+        kg._create_age_graph_for_discovery = flaky_create  # type: ignore[assignment]
+
+        summary = await kg.backfill_missing_age_nodes(dry_run=False)
+
+        assert summary["missing"] == 2
+        assert summary["created"] == 1
+        assert summary["failed"] == 1
+
+    async def test_create_age_graph_issues_node_and_edges(self):
+        """_create_age_graph_for_discovery MERGEs the node + AUTHORED + TAGGED."""
+        db = _make_db(graph_available=True)
+        issued: list = []
+
+        async def record(cypher, params=None, conn=None):
+            issued.append(cypher)
+            return []
+
+        db.graph_query = AsyncMock(side_effect=record)
+        kg = await _make_kg(db)
+
+        discovery = kg._dict_to_discovery(_sql_row(tags=["k8s"]))
+        await kg._create_age_graph_for_discovery(db, discovery)
+
+        joined = "\n".join(issued)
+        assert "MERGE (d:Discovery" in joined
+        assert "MERGE (a:Agent" in joined
+        assert ":AUTHORED" in joined
+        assert ":TAGGED" in joined

@@ -509,6 +509,160 @@ class KnowledgeGraphAGE:
 
         logger.debug(f"Added discovery {discovery.id} to AGE graph")
 
+    async def _create_age_graph_for_discovery(self, db, discovery: DiscoveryNode) -> None:
+        """Create the AGE Discovery vertex and its edges for one discovery.
+
+        Mirrors the graph half of add_discovery() — node, agent, AUTHORED,
+        RESPONDS_TO, RELATED_TO and TAGGED — but skips the rate-limit check,
+        the SQL row persist, and embedding storage. Used by the backfill to
+        rebuild graph nodes for rows that already exist in knowledge.discoveries
+        (the source of truth). Every builder uses MERGE, so this is idempotent.
+        """
+        from src.knowledge_graph import normalize_tags
+
+        tags = normalize_tags(discovery.tags) if discovery.tags else []
+
+        eisv_e = eisv_i = eisv_s = eisv_v = regime = coherence = None
+        if discovery.type == "self_observation" and discovery.provenance:
+            prov = discovery.provenance
+            eisv_e = prov.get("E") or prov.get("eisv_e")
+            eisv_i = prov.get("I") or prov.get("eisv_i")
+            eisv_s = prov.get("S") or prov.get("eisv_s")
+            eisv_v = prov.get("V") or prov.get("eisv_v")
+            regime = prov.get("regime")
+            coherence = prov.get("coherence")
+
+        timestamp = self._parse_optional_datetime(discovery.timestamp) or datetime.now()
+        resolved_at = self._parse_optional_datetime(discovery.resolved_at)
+        metadata = self._build_discovery_metadata(discovery)
+
+        node_cypher, node_params = create_discovery_node(
+            discovery_id=discovery.id,
+            agent_id=discovery.agent_id,
+            discovery_type=discovery.type,
+            summary=discovery.summary,
+            details=discovery.details,
+            severity=discovery.severity,
+            status=discovery.status,
+            timestamp=timestamp,
+            resolved_at=resolved_at,
+            eisv_e=eisv_e,
+            eisv_i=eisv_i,
+            eisv_s=eisv_s,
+            eisv_v=eisv_v,
+            regime=regime,
+            coherence=coherence,
+            tags=tags,
+            metadata=metadata,
+        )
+
+        async with db.transaction() as conn:
+            await db.graph_query(node_cypher, node_params, conn=conn)
+
+            agent_cypher, agent_params = create_agent_node(
+                agent_id=discovery.agent_id,
+                created_at=timestamp,
+                updated_at=timestamp,
+            )
+            await db.graph_query(agent_cypher, agent_params, conn=conn)
+
+            authored_cypher, authored_params = create_authored_edge(
+                agent_id=discovery.agent_id,
+                discovery_id=discovery.id,
+                at=timestamp,
+            )
+            await db.graph_query(authored_cypher, authored_params, conn=conn)
+
+            if discovery.response_to:
+                responds_cypher, responds_params = create_responds_to_edge(
+                    from_discovery_id=discovery.id,
+                    to_discovery_id=discovery.response_to.discovery_id,
+                )
+                await db.graph_query(responds_cypher, responds_params, conn=conn)
+
+            for related_id in discovery.related_to or []:
+                related_cypher, related_params = create_related_to_edge(
+                    from_discovery_id=discovery.id,
+                    to_discovery_id=related_id,
+                )
+                await db.graph_query(related_cypher, related_params, conn=conn)
+
+            for tag in tags:
+                tagged_cypher, tagged_params = create_tagged_edge(
+                    discovery_id=discovery.id,
+                    tag_name=tag,
+                )
+                await db.graph_query(tagged_cypher, tagged_params, conn=conn)
+
+    async def backfill_missing_age_nodes(
+        self, *, dry_run: bool = False, limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Rebuild AGE graph nodes for discoveries that exist only in SQL.
+
+        knowledge.discoveries is the source of truth; the AGE graph is a derived
+        index over it. Rows written while UNITARES_KNOWLEDGE_BACKEND was
+        'postgres' (or whose node write silently no-opped) have no Discovery
+        vertex, so graph traversal — response chains, related-edge expansion,
+        tag rollups, hybrid graph search — can't see them. The #949 SQL fallback
+        makes those rows retrievable via query()/get()/search(), but only a
+        backfill restores graph traversal over them.
+
+        Every builder uses MERGE, so this is idempotent and safe to re-run.
+
+        Args:
+            dry_run: When True, only count what would be created; no writes.
+            limit: Cap how many SQL rows to scan (most recent first). None scans
+                the whole table.
+
+        Returns:
+            {scanned, age_present, missing, created, failed, dry_run,
+             sample_missing}.
+        """
+        db = await self._get_db()
+        if not await db.graph_available():
+            raise RuntimeError(
+                "AGE graph not available; cannot backfill. Check the PostgreSQL "
+                "AGE extension and UNITARES_KNOWLEDGE_BACKEND=age."
+            )
+
+        age_rows = await db.graph_query("MATCH (d:Discovery) RETURN collect(d.id)", {})
+        age_ids = set(age_rows[0]) if age_rows and isinstance(age_rows[0], list) else set()
+
+        sql_ids = await db.kg_all_discovery_ids(limit=limit)
+        missing = [sid for sid in sql_ids if sid not in age_ids]
+
+        summary: Dict[str, Any] = {
+            "scanned": len(sql_ids),
+            "age_present": len(age_ids),
+            "missing": len(missing),
+            "created": 0,
+            "failed": 0,
+            "dry_run": dry_run,
+            "sample_missing": missing[:10],
+        }
+        if dry_run or not missing:
+            return summary
+
+        for disc_id in missing:
+            try:
+                row = await db.kg_get_discovery(disc_id)
+                discovery = self._dict_to_discovery(row)
+                if discovery is None:
+                    logger.warning(f"backfill: SQL row vanished for {disc_id}, skipping")
+                    summary["failed"] += 1
+                    continue
+                await self._create_age_graph_for_discovery(db, discovery)
+                summary["created"] += 1
+            except Exception as exc:
+                logger.warning(f"backfill: failed to create AGE node for {disc_id}: {exc}")
+                summary["failed"] += 1
+
+        logger.info(
+            "AGE node backfill complete: created=%d failed=%d (of %d missing)",
+            summary["created"], summary["failed"], summary["missing"],
+        )
+        return summary
+
     async def get_discovery(self, discovery_id: str) -> Optional[DiscoveryNode]:
         """Get a discovery by ID."""
         db = await self._get_db()
