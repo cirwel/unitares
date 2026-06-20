@@ -313,7 +313,16 @@ class KnowledgeGraphLifecycle:
         return to_archive, skipped
 
     async def _move_to_cold(self, now: datetime, dry_run: bool) -> List[str]:
-        """Move very old archived discoveries to cold storage tier."""
+        """Move very old archived discoveries to cold storage tier.
+
+        Respects permanent policy for symmetry with ``_archive_old_resolved``:
+        the stated philosophy is "permanent → never auto-archive", and moving a
+        row to cold takes it out of default search scope (the deeper archival
+        step), so a permanent entry that ever lands in ``archived`` — e.g. a
+        manual archive, a re-type after archival, or a row stored before the
+        resolved→archived permanent-skip existed — must not be buried by the
+        cold sweep.
+        """
         graph = await self._get_graph()
         cutoff = now - timedelta(days=self.ARCHIVED_TO_COLD_DAYS)
         cutoff_iso = cutoff.isoformat()
@@ -323,6 +332,9 @@ class KnowledgeGraphLifecycle:
 
         to_cold = []
         for discovery in archived:
+            # Permanent entries are never auto-tiered, even out of archived.
+            if self.get_lifecycle_policy(discovery) == "permanent":
+                continue
             # Check if updated_at (when it was archived) is old enough
             if discovery.updated_at and discovery.updated_at < cutoff_iso:
                 to_cold.append(discovery.id)
@@ -400,6 +412,7 @@ class KnowledgeGraphLifecycle:
         old_archived = sum(
             1 for d in archived_discoveries
             if d.updated_at and d.updated_at < cutoff_archived
+            and self.get_lifecycle_policy(d) != "permanent"
         )
 
         # Count ephemeral ready to archive
