@@ -88,8 +88,11 @@
       + `</div>`;
   }
   function priority(it) {
-    const p = Number(it.dashboard_priority);
-    return Number.isFinite(p) ? p : 999;
+    // dashboard_priority is null for un-prioritised rows — Number(null) is 0
+    // (not NaN), which would float them above priority-1 rows. Treat any
+    // non-number as the bottom (999) so explicit priorities win.
+    const p = it.dashboard_priority;
+    return typeof p === "number" && Number.isFinite(p) ? p : 999;
   }
 
   function visible() {
