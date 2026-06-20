@@ -179,16 +179,24 @@ they are engineering facts. Summary:
 | Can `process_instance_id` stay telemetry-only (no minted identity)? | Yes — it *already is*. The orchestrator separates `agent_id` (run handle) from `holder_agent_uuid` (governance UUID), and identity is minted by the child's own onboard, not the BEAM incarnation. See §2. | **Resolved — descriptive of current system** |
 | Is the presence-lease liveness mapping sufficient? | Yes — `agent:/<uuid>` is a canonical presence surface routed to `remote_heartbeat` (a self-reaping DB row, HTTP-heartbeated before `expires_at`); residents are remote_heartbeat holders. The lease survives a single BEAM incarnation, so a dead `process_instance_id` under a live lease reads as restart-in-progress, exactly as intended. (`canonicalize.ex:376-384`, `lease_plane.ex:29-49`) | **Resolved — mechanism already exists** |
 
-**The only thing left for the 2026-06-24 gate is not an engineering question.** It
-is the standing Wave-3 directional read (the (β)/(γ) substrate-identity shape)
-that this note's recommendations sit under. Concretely, the gate read becomes a
-**yes/no on this recommendation**:
+**Implementation is demand-triggered, not approval-gated.** The mapping above is
+the design-of-record; what it is NOT is a reason to build now. The BEAM adapter
+(the net-new restart counters of §1, the envelope emission) should be built only
+when **telemetry actually shows a BEAM restart-storm or identity-churn event** —
+a measured incident, not a calendar gate and not an operator/author sign-off.
+Rationale, stated against my own grain: on BEAM the failure modes this adapter
+addresses are mostly *unobserved* (ephemeral agents are `:temporary` so cannot
+restart-storm; residents are n≈1 Sentinel; the counter is instrumentation for an
+event nobody has logged). Building it pre-incident would be inventory ahead of
+demand — and "it can ship inert" is precisely the tell for that.
 
-> Adopt this BEAM mapping as the basis for the eventual adapter PR —
-> `process_instance_id`/`logical_principal_id` per §2 (no new identity semantics),
-> presence-lease liveness per §3, and a split BEAM-internal `restart_count_window`
-> per §1 — with implementation (the net-new restart counters) landing only after
-> the policy (#957) settles.
+So the trigger is concrete and evidence-based:
 
-If that direction is endorsed, the follow-up impl PR is unblocked; nothing here
-needs to be built before then.
+> Build the BEAM adapter when a real BEAM restart-storm (a `:permanent`/resident
+> child exceeding a restart threshold) or identity-churn event (per-incarnation
+> minting, principal/process confusion) appears in telemetry — and only after the
+> policy (#957) has settled its envelope. Until then this note stays design-only.
+
+The 2026-06-24 Wave-3 read does not need to approve a build; it only needs to not
+*contradict* this mapping's identity stance (`process_instance_id` telemetry-only,
+no new identity semantics), which §2 shows is already the deployed architecture.
