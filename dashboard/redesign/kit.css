@@ -227,3 +227,12 @@ body {
   .grid { grid-template-columns: repeat(2, 1fr); }
   .topbar { flex-wrap: wrap; }
 }
+
+/* Phone: wide tables (agents, automations) can't fit ~390px without clipping
+   columns. Let the table scroll horizontally inside its own block instead —
+   pure CSS, no per-section wrapper. Cells keep wrapping (so the name column
+   stays compact and the key columns — name/source/status — show by default;
+   swipe right for cadence/last/next/where). Verified at 390px. */
+@media (max-width: 640px) {
+  .tbl { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}
