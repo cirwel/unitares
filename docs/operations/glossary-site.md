@@ -23,17 +23,27 @@ python3 scripts/dev/build_glossary_site.py --out build/glossary-site
 # open build/glossary-site/index.html
 ```
 
-## Enablement
+## How publishing works (branch-source, token-only)
 
-The workflow **auto-enables Pages on its first run** via
-`actions/configure-pages@v5` with `enablement: true` (it holds `pages: write`), so
-no manual toggle is normally needed — push to `master` (or run the workflow
-manually) and the site publishes at **https://cirwel.github.io/unitares/**.
+The workflow builds the site and **pushes it to the `gh-pages` branch** with
+`contents: write`. It deliberately does *not* use the Pages API or the
+Actions-source deploy: the workflow `GITHUB_TOKEN` cannot create a Pages site
+(`Resource not accessible by integration` — tried in #986), so an API/Actions path
+needs a human to enable Pages first. Pushing a branch needs no such permission, so
+**the workflow always succeeds** and the published HTML lands on `gh-pages`.
 
-Fallback (if an org/account policy blocks API enablement and the deploy job 404s
-with "Ensure GitHub Pages has been enabled"): set it by hand once —
-repo **Settings → Pages → Build and deployment → Source = "GitHub Actions"** — then
-re-run the workflow.
+Going live then depends on GitHub's branch-source behavior:
+
+- If Pages auto-serves `gh-pages`, the site is live at
+  **https://cirwel.github.io/unitares/** with no manual step.
+- If it does not, enable it **once** (no re-run needed):
+  **Settings → Pages → Build and deployment → Source = "Deploy from a branch" →
+  Branch = `gh-pages` / `/ (root)`**.
+
+History note: the Actions-source + `configure-pages enablement: true` paths were
+tried first (#985, #986) and both hit the token's inability to create the Pages
+site. Branch-source is the token-only route (#987) and at worst reduces the manual
+step to a one-click branch selection.
 
 ## Custom domain (optional, branded URL)
 

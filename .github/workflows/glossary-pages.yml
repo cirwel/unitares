@@ -1,11 +1,11 @@
 name: glossary-pages
 
-# Publishes the public glossary site (generated from docs/ontology/glossary.md)
-# to GitHub Pages. Free: public repo + GITHUB_TOKEN only, no model API.
-#
-# One-time setup before this can deploy: repo Settings -> Pages -> Source =
-# "GitHub Actions". To serve from a custom domain, pass --cname below and add the
-# matching DNS record (see docs/operations/glossary-site.md).
+# Publishes the glossary site (generated from docs/ontology/glossary.md) by
+# building it and pushing to the `gh-pages` branch. Token-only by design: this
+# uses `contents: write` to push a branch — it does NOT call the Pages API (the
+# workflow GITHUB_TOKEN cannot create a Pages site, which is why the Actions-source
+# path required a manual enable). Branch-source Pages can auto-serve; if it does
+# not, enabling is a one-click "Deploy from a branch -> gh-pages" with no re-run.
 
 on:
   push:
@@ -18,25 +18,17 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
-# Never cancel an in-flight deploy; let the latest queue.
 concurrency:
   group: glossary-pages
   cancel-in-progress: false
 
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Auto-enable Pages (Actions source) on first run so a fresh repo doesn't
-      # need the manual Settings -> Pages toggle and the deploy job stops 404ing.
-      - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -44,16 +36,16 @@ jobs:
       - name: Build glossary site
         # To brand the URL, append: --cname glossary.cirwel.org
         run: python3 scripts/dev/build_glossary_site.py --out build/glossary-site
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: build/glossary-site
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Publish to gh-pages branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd build/glossary-site
+          touch .nojekyll                 # serve our prebuilt HTML as-is
+          git init -q
+          git checkout -q -b gh-pages
+          git add -A
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -q -m "Publish glossary site (${GITHUB_SHA})"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages

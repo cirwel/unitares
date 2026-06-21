@@ -175,6 +175,7 @@ python src/mcp_server.py --port 8767
 | [Reviewer Guide](docs/REVIEWER_GUIDE.md) | Cold-evaluator path + falsifiability harness |
 | [Scope & threat model](docs/SCOPE_AND_THREAT_MODEL.md) | Who it's for, why agents can't game it, what's unproven |
 | [Architecture](docs/UNIFIED_ARCHITECTURE.md) | Pipeline, verdicts, recovery, storage |
+| [Glossary](docs/ontology/glossary.md) | Terms keyed by the question they answer — published at [cirwel.github.io/unitares](https://cirwel.github.io/unitares/) |
 | [Production snapshot](docs/PRODUCTION_SNAPSHOT.md) | Live metrics + dashboard views |
 | [MCP Clients](docs/integration/MCP_CLIENTS.md) | Cursor / Claude Code / Claude Desktop config |
 | [Troubleshooting](docs/guides/TROUBLESHOOTING.md) | Common issues |
