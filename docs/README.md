@@ -23,6 +23,12 @@ This is the documentation tree for the [UNITARES governance MCP server](../READM
 - **[`tonality-metaphor.md`](tonality-metaphor.md)** — a teaching lens: how key signatures and chromaticism map onto EISV, coherence, and drift. Intuition for [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md), not a spec.
 - **[`CHANGELOG.md`](CHANGELOG.md)** — release history.
 
+### Subsystem guides
+
+Operating guidance for individual subsystems lives next to the code as Skills, not in `docs/` (this keeps the guide in sync with its `source_files:` and carries its own freshness budget). The map to those lives here:
+
+- **Knowledge graph (KG)** — agent-facing operating manual: search-before-write discipline, the `knowledge()` actions, discovery types/statuses, tagging, and closing the loop → [`skills/knowledge-graph/SKILL.md`](../skills/knowledge-graph/SKILL.md)
+
 ### `guides/` — getting started
 
 User- and integrator-facing how-tos. Thin by design — most architecture lives in `UNIFIED_ARCHITECTURE.md` and the repo README.
