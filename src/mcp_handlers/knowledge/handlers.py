@@ -3054,6 +3054,16 @@ async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[Text
 
         result = await graph.supersede_discovery(new_id=new_id, old_id=old_id)
         if result.get("success"):
+            # Also flip the old entry to superseded so it's flagged stale in
+            # search — keep all three supersede paths consistent (store/update
+            # both set status + edge; the edge alone doesn't change status).
+            try:
+                await graph.update_discovery(old_id, {
+                    "status": "superseded",
+                    "updated_at": _utc_now_iso(),
+                })
+            except Exception as exc:  # noqa: BLE001 — edge is the primary effect
+                logger.warning(f"[KG] supersede status flip for {old_id[:8]} failed: {exc}")
             return success_response(result, arguments=arguments)
         else:
             return [error_response(result.get("error", "Failed to create SUPERSEDES edge"))]

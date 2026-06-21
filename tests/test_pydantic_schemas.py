@@ -166,6 +166,29 @@ class TestPydanticSchemas:
         dumped = model.model_dump()
         assert dumped["tags"] is None
 
+    def test_knowledge_exposes_supersession_link_params(self):
+        """Unified knowledge() must pass the supersession LINK params through.
+
+        Regression (2026-06-21): superseded_by / supersedes / supersedes_id were
+        NOT declared on KnowledgeParams, so the validator silently stripped them
+        before they reached the handlers. Result: agents could set
+        status='superseded' but the SUPERSEDES edge was never created (18
+        superseded rows, 0 edges). These fields must survive validation so the
+        directed link is recorded.
+        """
+        from src.mcp_handlers.schemas.knowledge import KnowledgeParams
+
+        upd = KnowledgeParams(action="update", discovery_id="old-1",
+                              status="superseded", superseded_by="new-1")
+        assert upd.superseded_by == "new-1"
+        assert upd.model_dump()["superseded_by"] == "new-1"
+
+        store = KnowledgeParams(action="store", summary="replaces old", supersedes="old-1")
+        assert store.supersedes == "old-1"
+
+        sup = KnowledgeParams(action="supersede", discovery_id="new-1", supersedes_id="old-1")
+        assert sup.supersedes_id == "old-1"
+
     def test_knowledge_cleanup_accepts_string_dry_run_false(self):
         """Unified knowledge(cleanup) must expose and coerce dry_run.
 
