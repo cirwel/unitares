@@ -52,12 +52,26 @@ TASK_OUTCOMES = (
 
 SMOOTHING_ALPHA = 1.0
 
+# Probe A — dispersion-as-feature (docs/proposals/eisv-distributional-signal-probe-v0.md).
+# A point-estimate EISV hides its own uncertainty; the dispersion of recent state
+# snapshots is a stored proxy for it. We aggregate stddev over the snapshots in a
+# window strictly before the lead cutoff (leak-safe), and require a minimum count
+# because a stddev over 1-2 points is noise, not a signal.
+DISPERSION_WINDOW_MINUTES = 90.0
+MIN_DISPERSION_SNAPSHOTS = 5
+# Headline dispersion axis: S is the entropy/uncertainty axis, so its volatility is
+# the most on-thesis proxy. One-line swap to prior_risk_disp / another axis if a
+# bad-rate table below shows a cleaner monotonic separation.
+DISPERSION_FEATURE = "prior_s_disp"
+
 EISV_PRIOR_STATE_MODELS = (
     "previous_bad_plus_prior_risk",
     "prior_risk_binned",
     "prior_phi_binned",
     "prior_s_binned",
     "prior_verdict",
+    "prior_eisv_dispersion_binned",
+    "previous_bad_plus_dispersion",
 )
 
 
@@ -90,6 +104,15 @@ class OutcomeRow:
     snapshot_coherence: float | None
     row_key: str | None = None
     previous_bad: bool | None = None
+    # Probe A — dispersion over recent prior snapshots (None unless
+    # n_prior_snapshots >= MIN_DISPERSION_SNAPSHOTS so sparse agents do not
+    # pollute the quantile bins).
+    n_prior_snapshots: int | None = None
+    prior_s_disp: float | None = None
+    prior_e_disp: float | None = None
+    prior_i_disp: float | None = None
+    prior_v_disp: float | None = None
+    prior_risk_disp: float | None = None
 
 
 @dataclass(frozen=True)
@@ -496,6 +519,59 @@ def build_model_scores(
             )
         )
 
+    # --- Probe A: dispersion-as-feature -------------------------------------
+    # Mirrors prior_risk_binned / previous_bad_plus_prior_risk exactly, on the
+    # dispersion of recent state instead of the prior risk level.
+    def _disp(row: OutcomeRow) -> float | None:
+        return getattr(row, DISPERSION_FEATURE)
+
+    disp_train = [r for r in train_rows if _disp(r) is not None]
+    disp_test = [r for r in test_rows if _disp(r) is not None]
+    disp_cuts = quantile_cuts([
+        float(_disp(r)) for r in disp_train if _disp(r) is not None
+    ])
+    if len(disp_train) >= min_feature_rows and disp_cuts:
+        disp_rates = _fit_group_rates(
+            disp_train,
+            lambda row: bucket_index(_disp(row), disp_cuts),
+            global_probability,
+        )
+        scores.append(
+            _score_predictions(
+                "prior_eisv_dispersion_binned",
+                disp_train,
+                disp_test,
+                lambda row: disp_rates.get(
+                    bucket_index(_disp(row), disp_cuts),
+                    disp_rates["__default__"],
+                ),
+                raw_score_fn=_disp,
+                note=(
+                    f"{DISPERSION_FEATURE} quartile cuts="
+                    f"{', '.join(f'{cut:.3f}' for cut in disp_cuts)}"
+                ),
+            )
+        )
+
+        disp_combined_rates = _fit_group_rates(
+            disp_train,
+            lambda row: (row.previous_bad, bucket_index(_disp(row), disp_cuts)),
+            global_probability,
+        )
+        scores.append(
+            _score_predictions(
+                "previous_bad_plus_dispersion",
+                disp_train,
+                disp_test,
+                lambda row: disp_combined_rates.get(
+                    (row.previous_bad, bucket_index(_disp(row), disp_cuts)),
+                    disp_rates.get(bucket_index(_disp(row), disp_cuts), global_probability),
+                ),
+                raw_score_fn=_disp,
+                note="smoothed rate grouped by previous_bad and dispersion quartile",
+            )
+        )
+
     phi_train = [r for r in train_rows if r.prior_phi is not None]
     phi_test = [r for r in test_rows if r.prior_phi is not None]
     phi_cuts = quantile_cuts([
@@ -681,6 +757,7 @@ def _coverage(rows: Sequence[OutcomeRow]) -> dict[str, Any]:
     prior_risk = [r for r in rows if r.prior_risk is not None]
     confidence = [r for r in rows if r.reported_confidence is not None]
     complexity = [r for r in rows if r.reported_complexity is not None]
+    dispersion = [r for r in rows if getattr(r, DISPERSION_FEATURE) is not None]
     ages = [r.prior_state_age_seconds for r in prior_state if r.prior_state_age_seconds is not None]
     return {
         "total": total,
@@ -688,6 +765,7 @@ def _coverage(rows: Sequence[OutcomeRow]) -> dict[str, Any]:
         "prior_risk": len(prior_risk),
         "confidence": len(confidence),
         "complexity": len(complexity),
+        "dispersion": len(dispersion),
         "median_prior_age_seconds": statistics.median(ages) if ages else None,
         "max_prior_age_seconds": max(ages) if ages else None,
     }
@@ -796,6 +874,11 @@ def build_report(
         f"| Rows with reported complexity | {coverage['complexity']} "
         f"| {_fmt_pct(coverage['complexity'] / total if total else None)} |"
     )
+    a(
+        f"| Rows with state dispersion (>= {MIN_DISPERSION_SNAPSHOTS} snapshots) "
+        f"| {coverage['dispersion']} "
+        f"| {_fmt_pct(coverage['dispersion'] / total if total else None)} |"
+    )
     a("")
     if coverage["median_prior_age_seconds"] is not None:
         a(
@@ -891,6 +974,28 @@ def build_report(
         a("| (insufficient prior S coverage) | 0 | 0 | - |")
     a("")
 
+    disp_cuts, disp_bucket_rows = metric_bucket_rates(
+        rows,
+        metric_name=DISPERSION_FEATURE,
+        metric_fn=lambda row: getattr(row, DISPERSION_FEATURE),
+        reverse_labels=False,
+    )
+    a(f"By recent-state dispersion quartile (`{DISPERSION_FEATURE}`):")
+    a("")
+    a("Probe A: a rising bad-rate across dispersion quartiles is the uncertainty-as-signal read.")
+    a("")
+    if disp_cuts:
+        a(f"Dispersion cuts: {', '.join(f'{cut:.4f}' for cut in disp_cuts)}")
+        a("")
+    a("| Dispersion bucket | N | Bad | Bad rate |")
+    a("|---|---:|---:|---:|")
+    if disp_bucket_rows:
+        for key, total, bad_count, rate in disp_bucket_rows:
+            a(f"| `{key}` | {total} | {bad_count} | {_fmt_pct(rate)} |")
+    else:
+        a("| (insufficient dispersion coverage) | 0 | 0 | - |")
+    a("")
+
     a("## Model Comparison")
     a("")
     a("Lower Brier is better. AUC above 0.5 means ranking is better than chance.")
@@ -951,6 +1056,15 @@ def _parse_detail(raw: Any) -> dict[str, Any]:
 
 def _row_from_record(record: Any) -> OutcomeRow:
     detail = _parse_detail(record.get("detail"))
+    n_prior = record.get("n_prior_snapshots")
+    n_prior = int(n_prior) if n_prior is not None else None
+    # Gate dispersion on a minimum snapshot count: a stddev over 1-2 points is
+    # noise. Below the floor, leave all dispersion fields None.
+    sufficient = n_prior is not None and n_prior >= MIN_DISPERSION_SNAPSHOTS
+
+    def _disp_field(key: str) -> float | None:
+        return _to_float(record.get(key)) if sufficient else None
+
     return OutcomeRow(
         ts=record["ts"],
         row_key=str(record["outcome_id"]) if record.get("outcome_id") is not None else None,
@@ -978,6 +1092,12 @@ def _row_from_record(record: Any) -> OutcomeRow:
         snapshot_v=_to_float(record.get("eisv_v")),
         snapshot_phi=_to_float(record.get("eisv_phi")),
         snapshot_coherence=_to_float(record.get("eisv_coherence")),
+        n_prior_snapshots=n_prior,
+        prior_s_disp=_disp_field("prior_s_disp"),
+        prior_e_disp=_disp_field("prior_e_disp"),
+        prior_i_disp=_disp_field("prior_i_disp"),
+        prior_v_disp=_disp_field("prior_v_disp"),
+        prior_risk_disp=_disp_field("prior_risk_disp"),
     )
 
 
@@ -987,6 +1107,7 @@ async def fetch_rows(
     window_days: int,
     lead_minutes: float,
     outcome_types: Sequence[str],
+    dispersion_window_minutes: float = DISPERSION_WINDOW_MINUTES,
 ) -> list[OutcomeRow]:
     try:
         import asyncpg
@@ -1038,7 +1159,13 @@ async def fetch_rows(
                     ps.state_json->'primary_eisv'->>'V',
                     ps.state_json->'ode_eisv'->>'V',
                     ps.volatility::text
-                ) AS prior_v
+                ) AS prior_v,
+                disp.n_prior_snapshots,
+                disp.prior_s_disp,
+                disp.prior_e_disp,
+                disp.prior_i_disp,
+                disp.prior_v_disp,
+                disp.prior_risk_disp
             FROM audit.outcome_events o
             LEFT JOIN LATERAL (
                 SELECT
@@ -1057,6 +1184,40 @@ async def fetch_rows(
                 ORDER BY s.recorded_at DESC
                 LIMIT 1
             ) ps ON TRUE
+            LEFT JOIN LATERAL (
+                -- Probe A dispersion window: stddev of recent state over the
+                -- snapshots strictly before the lead cutoff (same leak-safe
+                -- upper bound as ps) and within DISPERSION_WINDOW_MINUTES.
+                SELECT
+                    count(*) AS n_prior_snapshots,
+                    stddev_samp(COALESCE(
+                        (s.state_json->'primary_eisv'->>'S')::float,
+                        (s.state_json->'ode_eisv'->>'S')::float,
+                        s.entropy
+                    )) AS prior_s_disp,
+                    stddev_samp(COALESCE(
+                        (s.state_json->'primary_eisv'->>'E')::float,
+                        (s.state_json->'ode_eisv'->>'E')::float,
+                        NULL
+                    )) AS prior_e_disp,
+                    stddev_samp(COALESCE(
+                        (s.state_json->'primary_eisv'->>'I')::float,
+                        (s.state_json->'ode_eisv'->>'I')::float,
+                        s.integrity
+                    )) AS prior_i_disp,
+                    stddev_samp(COALESCE(
+                        (s.state_json->'primary_eisv'->>'V')::float,
+                        (s.state_json->'ode_eisv'->>'V')::float,
+                        s.volatility
+                    )) AS prior_v_disp,
+                    stddev_samp(s.risk_score) AS prior_risk_disp
+                FROM core.identities i
+                JOIN core.agent_state s ON s.identity_id = i.identity_id
+                WHERE i.agent_id = o.agent_id
+                  AND s.synthetic IS NOT TRUE
+                  AND s.recorded_at <= o.ts - ($2::double precision * INTERVAL '1 minute')
+                  AND s.recorded_at >  o.ts - (($2 + $4)::double precision * INTERVAL '1 minute')
+            ) disp ON TRUE
             WHERE o.ts >= now() - ($1::int * INTERVAL '1 day')
               AND o.outcome_type = ANY($3::text[])
             ORDER BY o.ts ASC
@@ -1064,6 +1225,7 @@ async def fetch_rows(
             window_days,
             lead_minutes,
             list(outcome_types),
+            dispersion_window_minutes,
         )
     finally:
         await conn.close()
@@ -1080,6 +1242,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--window-days", type=int, default=365)
     parser.add_argument("--lead-minutes", type=float, default=0.0)
+    parser.add_argument(
+        "--dispersion-window-minutes",
+        type=float,
+        default=DISPERSION_WINDOW_MINUTES,
+        help="Window before the lead cutoff over which recent-state dispersion is measured (Probe A).",
+    )
     parser.add_argument("--train-fraction", type=float, default=0.7)
     parser.add_argument("--db-url", default=DEFAULT_DB_URL)
     parser.add_argument(
@@ -1105,6 +1273,7 @@ async def main_async(args: argparse.Namespace) -> int:
         window_days=args.window_days,
         lead_minutes=args.lead_minutes,
         outcome_types=outcome_types,
+        dispersion_window_minutes=args.dispersion_window_minutes,
     )
     report = build_report(
         rows,
