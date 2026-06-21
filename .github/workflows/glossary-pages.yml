@@ -32,11 +32,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Auto-enable Pages (Actions source) on first run so a fresh repo doesn't
-      # need the manual Settings -> Pages toggle and the deploy job stops 404ing.
-      - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

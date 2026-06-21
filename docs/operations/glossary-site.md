@@ -23,17 +23,20 @@ python3 scripts/dev/build_glossary_site.py --out build/glossary-site
 # open build/glossary-site/index.html
 ```
 
-## Enablement
+## One-time enablement (required, admin)
 
-The workflow **auto-enables Pages on its first run** via
-`actions/configure-pages@v5` with `enablement: true` (it holds `pages: write`), so
-no manual toggle is normally needed — push to `master` (or run the workflow
-manually) and the site publishes at **https://cirwel.github.io/unitares/**.
+Pages must be enabled **by hand once** — the workflow `GITHUB_TOKEN` cannot create
+the Pages site itself (the `actions/configure-pages` `enablement: true` path was
+tried and fails with `Resource not accessible by integration`; see PRs #986/#987).
+So:
 
-Fallback (if an org/account policy blocks API enablement and the deploy job 404s
-with "Ensure GitHub Pages has been enabled"): set it by hand once —
-repo **Settings → Pages → Build and deployment → Source = "GitHub Actions"** — then
-re-run the workflow.
+1. Repo **Settings → Pages → Build and deployment → Source = "GitHub Actions"**.
+2. Re-run **Actions → glossary-pages** (or push a glossary change). The site then
+   publishes at **https://cirwel.github.io/unitares/** and re-deploys automatically
+   on every future glossary change.
+
+Until step 1 is done, the `deploy` job 404s with "Ensure GitHub Pages has been
+enabled" — that is expected, not a code bug.
 
 ## Custom domain (optional, branded URL)
 
