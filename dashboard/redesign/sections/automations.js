@@ -52,10 +52,11 @@
   function gateClass(it) {
     const tag = (it.notes || []).find((n) => typeof n === "string" && n.indexOf("gate:") === 0);
     if (tag) return tag.slice(5);
-    // GitHub Actions ARE CI — machine verification by construction (a workflow
-    // is gated by its own tests / the same CI system). Default the class so the
-    // scorecard reflects that, while still letting an explicit gate: note win.
-    if (it.source === "github-actions") return "machine";
+    // Class by source for the categories that are machine-gated by construction,
+    // rather than per-(ephemeral-)id: GitHub Actions ARE CI, and claude task-queue
+    // items are governed agent work (the executing agent checks in). Explicit
+    // gate: notes still win.
+    if (it.source === "github-actions" || it.source === "claude") return "machine";
     return "unclassified";
   }
   function gateBadge(cls) {

@@ -9,9 +9,17 @@
       "escalates_to": "none — backup is written but never restore-tested",
       "description": "Nightly governance Postgres dump.",
       "dashboard_priority": 1,
-      "surface_claims": ["unitares:/governance-backup", "repo:/Users/cirwel/projects/unitares"],
-      "expected_outputs": ["backup_artifact", "status_or_stdout"],
-      "notes": ["gate:ungated"]
+      "surface_claims": [
+        "unitares:/governance-backup",
+        "repo:/Users/cirwel/projects/unitares"
+      ],
+      "expected_outputs": [
+        "backup_artifact",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:ungated"
+      ]
     },
     "launchd:com.unitares.lumen-backup": {
       "owner": "Kenny",
@@ -21,39 +29,71 @@
       "kind": "backup",
       "repo": "/Users/cirwel/projects/anima-mcp",
       "workdir": "/Users/cirwel",
-      "surface_claims": ["lumen:/backup", "repo:/Users/cirwel/projects/anima-mcp"],
-      "expected_outputs": ["backup_artifact", "automation_run_event", "backup_log"],
-      "notes": ["gate:ungated", "Historical logs show rsync broken-pipe and vanished-file messages; tighten backup script exit policy before trusting ok status as full backup health."]
+      "surface_claims": [
+        "lumen:/backup",
+        "repo:/Users/cirwel/projects/anima-mcp"
+      ],
+      "expected_outputs": [
+        "backup_artifact",
+        "automation_run_event",
+        "backup_log"
+      ],
+      "notes": [
+        "gate:ungated",
+        "Historical logs show rsync broken-pipe and vanished-file messages; tighten backup script exit policy before trusting ok status as full backup health."
+      ]
     },
-
     "codex:answer-lumen-questions": {
       "owner": "Kenny",
       "escalates_to": "you — no automated check on answer quality",
       "description": "Codex slot for answering queued Lumen questions against the anima-mcp worktree.",
       "dashboard_priority": 10,
-      "surface_claims": ["lumen:/qa", "repo:/Users/cirwel/.codex/worktrees/c07d/anima-mcp"],
-      "expected_outputs": ["qa_answer", "status_or_stdout"],
-      "notes": ["gate:human"]
+      "surface_claims": [
+        "lumen:/qa",
+        "repo:/Users/cirwel/.codex/worktrees/c07d/anima-mcp"
+      ],
+      "expected_outputs": [
+        "qa_answer",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:human"
+      ]
     },
     "codex:weekly-release-notes": {
       "owner": "Kenny",
       "escalates_to": "you — no automated check",
       "description": "Weekly release-note generation for UNITARES.",
       "dashboard_priority": 11,
-      "surface_claims": ["repo:/Users/cirwel/projects/unitares", "docs:/release-notes"],
-      "expected_outputs": ["release_notes", "draft_pr_or_pr_status"],
-      "notes": ["gate:human"]
+      "surface_claims": [
+        "repo:/Users/cirwel/projects/unitares",
+        "docs:/release-notes"
+      ],
+      "expected_outputs": [
+        "release_notes",
+        "draft_pr_or_pr_status"
+      ],
+      "notes": [
+        "gate:human"
+      ]
     },
-
     "launchd:com.unitares.governance-mcp": {
       "owner": "Kenny",
       "escalates_to": "CI (test/smoke) + deploy migration-preflight + health-watchdog",
       "description": "Primary local UNITARES governance MCP service.",
       "dashboard_priority": 40,
       "kind": "service",
-      "surface_claims": ["unitares:/governance-mcp", "repo:/Users/cirwel/projects/unitares-deploy"],
-      "expected_outputs": ["mcp_service", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "unitares:/governance-mcp",
+        "repo:/Users/cirwel/projects/unitares-deploy"
+      ],
+      "expected_outputs": [
+        "mcp_service",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "launchd:com.unitares.lease-plane": {
       "owner": "Kenny",
@@ -61,36 +101,70 @@
       "description": "Local lease plane service used by UNITARES deployment coordination.",
       "dashboard_priority": 41,
       "kind": "deploy",
-      "surface_claims": ["unitares:/lease-plane", "repo:/Users/cirwel/projects/unitares-deploy"],
-      "expected_outputs": ["lease_service", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "unitares:/lease-plane",
+        "repo:/Users/cirwel/projects/unitares-deploy"
+      ],
+      "expected_outputs": [
+        "lease_service",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "hermes:ea2e3655cee4": {
       "owner": "Kenny",
       "escalates_to": "governance gates (it dogfoods them)",
       "description": "UNITARES dogfood pulse that looks for friction and system issues.",
       "dashboard_priority": 42,
-      "surface_claims": ["unitares:/dogfood", "repo:/Users/cirwel/projects/wt/unitares-cron-master"],
-      "expected_outputs": ["dogfood_friction_finding", "kg_or_finding", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "unitares:/dogfood",
+        "repo:/Users/cirwel/projects/wt/unitares-cron-master"
+      ],
+      "expected_outputs": [
+        "dogfood_friction_finding",
+        "kg_or_finding",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "hermes:f8bc3522154e": {
       "owner": "Kenny",
       "escalates_to": "governance comparison (dogfood vs ablation)",
       "description": "Guard loop for dogfood and ablation health.",
       "dashboard_priority": 43,
-      "surface_claims": ["unitares:/dogfood", "unitares:/ablation", "repo:/Users/cirwel/projects/wt/unitares-cron-master"],
-      "expected_outputs": ["dogfood_ablation_guard_alert", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "unitares:/dogfood",
+        "unitares:/ablation",
+        "repo:/Users/cirwel/projects/wt/unitares-cron-master"
+      ],
+      "expected_outputs": [
+        "dogfood_ablation_guard_alert",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "hermes:5139fb8f9079": {
       "owner": "Kenny",
       "escalates_to": "ablation comparison",
       "description": "UNITARES ablation watchdog for scheduled experimental checks.",
       "dashboard_priority": 44,
-      "surface_claims": ["unitares:/ablation", "repo:/Users/cirwel/projects/wt/unitares-cron-master"],
-      "expected_outputs": ["ablation_report", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "unitares:/ablation",
+        "repo:/Users/cirwel/projects/wt/unitares-cron-master"
+      ],
+      "expected_outputs": [
+        "ablation_report",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "launchd:com.cirwel.dispatch-beam": {
       "owner": "Kenny",
@@ -98,45 +172,86 @@
       "description": "Local dispatch beam service for autonomous work routing.",
       "dashboard_priority": 45,
       "kind": "dispatch",
-      "surface_claims": ["unitares:/dispatch", "repo:/Users/cirwel/projects/dispatch_beam"],
-      "expected_outputs": ["dispatch_event", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "unitares:/dispatch",
+        "repo:/Users/cirwel/projects/dispatch_beam"
+      ],
+      "expected_outputs": [
+        "dispatch_event",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "launchd:com.unitares.sentinel-beam": {
       "owner": "Kenny",
       "escalates_to": "governance verdicts + anomaly detection (self + fleet EISV)",
       "description": "Sentinel resident — continuous fleet EISV monitor & anomaly/incident detection.",
       "dashboard_priority": 50,
-      "surface_claims": ["unitares:/sentinel", "repo:/Users/cirwel/projects/unitares"],
-      "expected_outputs": ["sentinel_event", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "unitares:/sentinel",
+        "repo:/Users/cirwel/projects/unitares"
+      ],
+      "expected_outputs": [
+        "sentinel_event",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "launchd:com.unitares.vigil": {
       "owner": "Kenny",
       "escalates_to": "CI + governance health",
       "description": "Vigil resident — 30min sweep: health checks, KG groundskeeping, stale-agent cleanup.",
       "dashboard_priority": 51,
-      "surface_claims": ["unitares:/vigil", "repo:/Users/cirwel/projects/unitares"],
-      "expected_outputs": ["hygiene_report", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "unitares:/vigil",
+        "repo:/Users/cirwel/projects/unitares"
+      ],
+      "expected_outputs": [
+        "hygiene_report",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "launchd:com.unitares.chronicler": {
       "owner": "Kenny",
       "escalates_to": "deterministic idempotent scrape + governance check-in",
       "description": "Chronicler resident — daily longitudinal metrics scrape into the EISV series.",
       "dashboard_priority": 52,
-      "surface_claims": ["unitares:/chronicler", "metrics.series", "repo:/Users/cirwel/projects/unitares"],
-      "expected_outputs": ["continuity_note", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "unitares:/chronicler",
+        "metrics.series",
+        "repo:/Users/cirwel/projects/unitares"
+      ],
+      "expected_outputs": [
+        "continuity_note",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "launchd:com.unitares.health-watchdog": {
       "owner": "Kenny",
       "escalates_to": "deep health probe (self-verifying)",
       "description": "Local health watchdog for UNITARES services.",
       "dashboard_priority": 53,
-      "surface_claims": ["unitares:/health", "/health/deep"],
-      "expected_outputs": ["health_report", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "unitares:/health",
+        "/health/deep"
+      ],
+      "expected_outputs": [
+        "health_report",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "launchd:com.lumen.alert-check": {
       "owner": "Kenny",
@@ -146,36 +261,67 @@
       "kind": "watchdog",
       "repo": "/Users/cirwel/projects/anima-mcp",
       "workdir": "/Users/cirwel/projects/anima-mcp",
-      "surface_claims": ["lumen:/alerts", "repo:/Users/cirwel/projects/anima-mcp"],
-      "expected_outputs": ["alert_state", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "lumen:/alerts",
+        "repo:/Users/cirwel/projects/anima-mcp"
+      ],
+      "expected_outputs": [
+        "alert_state",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "launchd:com.unitares.lumen-qa": {
       "owner": "Kenny",
       "escalates_to": "QA assertions",
       "description": "Lumen QA slot on the local anima-mcp checkout.",
       "dashboard_priority": 55,
-      "surface_claims": ["lumen:/qa", "repo:/Users/cirwel/projects/anima-mcp"],
-      "expected_outputs": ["qa_result", "log"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "lumen:/qa",
+        "repo:/Users/cirwel/projects/anima-mcp"
+      ],
+      "expected_outputs": [
+        "qa_result",
+        "log"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "launchd:org.cirwel.dangling-work-audit": {
       "owner": "Kenny",
       "escalates_to": "git ground-truth audit",
       "description": "Dangling work audit for branches, worktrees, draft PRs, and unfinished local changes.",
       "dashboard_priority": 56,
-      "surface_claims": ["git:/dangling-work", "repo:/Users/cirwel/projects"],
-      "expected_outputs": ["draft_pr_or_pr_status", "audit_report"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "git:/dangling-work",
+        "repo:/Users/cirwel/projects"
+      ],
+      "expected_outputs": [
+        "draft_pr_or_pr_status",
+        "audit_report"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "launchd:com.unitares.automation-census": {
       "owner": "Kenny",
       "escalates_to": "reads real system state (observability layer)",
       "description": "Refreshes the local automation registry snapshot every 30 minutes — this registry's own source.",
       "dashboard_priority": 57,
-      "surface_claims": ["automation-registry:/snapshot"],
-      "expected_outputs": ["automation_census_snapshot", "automation_run_event"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "automation-registry:/snapshot"
+      ],
+      "expected_outputs": [
+        "automation_census_snapshot",
+        "automation_run_event"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "launchd:com.unitares.lease-plane-acquire-healthcheck": {
       "owner": "Kenny",
@@ -183,9 +329,18 @@
       "description": "Lease-plane acquire path healthcheck.",
       "dashboard_priority": 58,
       "kind": "deploy",
-      "surface_claims": ["unitares:/lease-plane", "unitares:/health", "repo:/Users/cirwel/projects/unitares-deploy"],
-      "expected_outputs": ["health_report", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "unitares:/lease-plane",
+        "unitares:/health",
+        "repo:/Users/cirwel/projects/unitares-deploy"
+      ],
+      "expected_outputs": [
+        "health_report",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "launchd:com.unitares.gateway-mcp": {
       "owner": "Kenny",
@@ -193,18 +348,34 @@
       "description": "Local UNITARES gateway MCP service.",
       "dashboard_priority": 59,
       "kind": "service",
-      "surface_claims": ["unitares:/gateway-mcp", "repo:/Users/cirwel/projects/unitares"],
-      "expected_outputs": ["mcp_service", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "unitares:/gateway-mcp",
+        "repo:/Users/cirwel/projects/unitares"
+      ],
+      "expected_outputs": [
+        "mcp_service",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "launchd:com.unitares.discord-bridge": {
       "owner": "Kenny",
       "escalates_to": "governance onboard at startup (sidecar lineage)",
       "description": "Discord bridge for governance events, agent presence, and operator-facing signals.",
       "dashboard_priority": 60,
-      "surface_claims": ["unitares:/discord-bridge", "repo:/Users/cirwel/projects/unitares-discord-bridge"],
-      "expected_outputs": ["discord_event", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "unitares:/discord-bridge",
+        "repo:/Users/cirwel/projects/unitares-discord-bridge"
+      ],
+      "expected_outputs": [
+        "discord_event",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     },
     "launchd:com.lumen.message-server": {
       "owner": "Kenny",
@@ -212,9 +383,227 @@
       "description": "Keepalive Lumen message server for local anima-mcp interactions.",
       "dashboard_priority": 61,
       "kind": "service",
-      "surface_claims": ["lumen:/message-server", "repo:/Users/cirwel/projects/anima-mcp"],
-      "expected_outputs": ["message_api", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "surface_claims": [
+        "lumen:/message-server",
+        "repo:/Users/cirwel/projects/anima-mcp"
+      ],
+      "expected_outputs": [
+        "message_api",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.cirwel.codex-auto-update": {
+      "owner": "Kenny",
+      "escalates_to": "CI green (only fast-forwards merged master)",
+      "description": "Auto-pulls merged master to the deploy worktree.",
+      "dashboard_priority": 62,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.cirwel.discord-dispatch": {
+      "owner": "Kenny",
+      "escalates_to": "governance onboard/check-in (strict #425)",
+      "description": "Discord agent dispatcher.",
+      "dashboard_priority": 66,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.cirwel.discord-dispatch-codex": {
+      "owner": "Kenny",
+      "escalates_to": "governance onboard/check-in (strict #425)",
+      "description": "Discord agent dispatcher (Codex).",
+      "dashboard_priority": 66,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.cirwel.site-refresh-stats": {
+      "owner": "Kenny",
+      "escalates_to": "real telemetry snapshot (publish-only — not re-verified)",
+      "description": "Refreshes public site stats from live telemetry.",
+      "dashboard_priority": 70,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.unitares.adoption-kpi-checkpoint": {
+      "owner": "Kenny",
+      "escalates_to": "adoption_kpi.py (measured against real calls)",
+      "description": "Records the agent-adoption KPI.",
+      "dashboard_priority": 58,
+      "notes": [
+        "gate:machine"
+      ],
+      "surface_claims": [
+        "adoption metrics"
+      ]
+    },
+    "launchd:com.unitares.bridge-liveness-watchdog": {
+      "owner": "Kenny",
+      "escalates_to": "liveness probe",
+      "description": "Watches the Discord bridge liveness.",
+      "dashboard_priority": 54,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.unitares.checkin-phase-analysis": {
+      "owner": "Kenny",
+      "escalates_to": "grounded in real check-in data",
+      "description": "Analyzes check-in phase distribution.",
+      "dashboard_priority": 59,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.unitares.dep-sweep": {
+      "owner": "Kenny",
+      "escalates_to": "CI test suite gates dep updates",
+      "description": "Dependency sweep / update.",
+      "dashboard_priority": 69,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.unitares.eisv-validation-oneshot": {
+      "owner": "Kenny",
+      "escalates_to": "EISV validation assertions",
+      "description": "One-shot EISV consistency validation.",
+      "dashboard_priority": 57,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.unitares.wave-1-section-129-reeval": {
+      "owner": "Kenny",
+      "escalates_to": "§129 re-eval measurement (≥500 writes/day gate)",
+      "description": "Periodic Section-129 re-evaluation.",
+      "dashboard_priority": 65,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.unitares.wave3a-handlers": {
+      "owner": "Kenny",
+      "escalates_to": "CI + rollback script",
+      "description": "BEAM wave-3a tool handlers.",
+      "dashboard_priority": 64,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.unitares.anima-proxy": {
+      "owner": "Kenny",
+      "escalates_to": "connectivity liveness",
+      "description": "Anima (Lumen) proxy.",
+      "dashboard_priority": 80,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.unitares.anima-noauth-proxy": {
+      "owner": "Kenny",
+      "escalates_to": "connectivity liveness",
+      "description": "Anima no-auth proxy.",
+      "dashboard_priority": 81,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.unitares.ipv6-loopback-proxy": {
+      "owner": "Kenny",
+      "escalates_to": "connectivity liveness",
+      "description": "IPv6 loopback proxy.",
+      "dashboard_priority": 82,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.unitares.openai-governance-proxy": {
+      "owner": "Kenny",
+      "escalates_to": "connectivity liveness",
+      "description": "OpenAI → governance proxy.",
+      "dashboard_priority": 83,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.cloudflare.tunnel.governance": {
+      "owner": "Kenny",
+      "escalates_to": "tunnel liveness",
+      "description": "Cloudflare tunnel to governance.",
+      "dashboard_priority": 84,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:homebrew.mxcl.postgresql-17": {
+      "owner": "Kenny",
+      "escalates_to": "health-watchdog (DB connectivity probe)",
+      "description": "Core datastore (Postgres 17 + AGE).",
+      "dashboard_priority": 46,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:homebrew.mxcl.redis": {
+      "owner": "Kenny",
+      "escalates_to": "health-watchdog (Redis connectivity probe)",
+      "description": "Session cache (Redis).",
+      "dashboard_priority": 47,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:ai.hermes.gateway": {
+      "owner": "Kenny",
+      "escalates_to": "gateway liveness",
+      "description": "Hermes gateway (agent dispatch infrastructure).",
+      "dashboard_priority": 72,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "hermes:a26608eb1feb": {
+      "owner": "Kenny",
+      "escalates_to": "heartbeat/pulse",
+      "description": "Ground Crew quiet pulse.",
+      "dashboard_priority": 71,
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.google.GoogleUpdater.wake": {
+      "owner": "Google (macOS)",
+      "escalates_to": "n/a — third party",
+      "description": "Google software updater.",
+      "dashboard_priority": 900,
+      "notes": [
+        "gate:external"
+      ]
+    },
+    "launchd:com.google.keystone.agent": {
+      "owner": "Google (macOS)",
+      "escalates_to": "n/a — third party",
+      "description": "Google Keystone updater.",
+      "dashboard_priority": 901,
+      "notes": [
+        "gate:external"
+      ]
+    },
+    "launchd:com.google.keystone.xpcservice": {
+      "owner": "Google (macOS)",
+      "escalates_to": "n/a — third party",
+      "description": "Google Keystone XPC.",
+      "dashboard_priority": 902,
+      "notes": [
+        "gate:external"
+      ]
     }
   }
 }
