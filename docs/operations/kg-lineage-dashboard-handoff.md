@@ -19,17 +19,29 @@ the read API just doesn't return them.
 
 ## Scope reality (verified 2026-06-21, live DB — read this first)
 
+> **Prerequisite (2026-06-21 update): the lineage data did not exist when this
+> handoff was first written, and barely exists now.** A live check found 18 rows
+> with `status='superseded'` but **0 SUPERSEDES edges** and 0 `response_to_id` —
+> the directed "what replaced what" link was recorded *nowhere* (the supersede
+> write path dropped `superseded_by`). **PR #991 fixes the write path** so
+> superseding now creates the AGE `SUPERSEDES` edge. Until #991 is merged +
+> deployed and new supersessions accumulate, this dashboard has **nothing to
+> render** beyond a "superseded" badge + the related (similarity) list. **This
+> dashboard is deferred until edges accumulate.**
+
 | Signal | Where it lives | Rows (of 1091) |
 |---|---|---|
-| **Supersession** (`A SUPERSEDES B`) | **AGE graph edge** `(:Discovery)-[:SUPERSEDES]->(:Discovery)` + the old row's `status='superseded'` | **18 edges** (~1.6%) |
+| **Supersession** (`A SUPERSEDES B`) | **AGE graph edge** `(:Discovery)-[:SUPERSEDES]->(:Discovery)` + the old row's `status='superseded'` | **0 edges today** (18 status-only rows; edges accumulate after #991) |
 | `response_to_id` (typed-response parent) | relational column | **0** — never written |
 | `response_type` (edge label enum) | relational column | **0** — never written |
 | **related** (similarity neighbours) | `related_to text[]` (auto-computed at store time) | **643** (~59%) |
 
 Implications for whoever picks this up:
-- The headline "what does this supersede / correct" view is driven by **18
-  edges across 1091 notes**. Most cards will have no supersession lineage. That
-  may still be worth a small expander — but size the effort to the payoff.
+- The headline "what does this supersede / correct" view is driven by
+  **SUPERSEDES edges — of which there are 0 today** (18 notes are *marked*
+  superseded but carry no link). It only becomes worth building once #991 is
+  live and real supersessions have accumulated edges. Size the effort to the
+  (currently near-zero, growing) payoff.
 - **`related_to` is NOT lineage.** It is auto-computed semantic-similarity
   neighbours written by the store path, not an authored "this corrects that"
   edge. Surface it as a **separate, clearly-labelled "related" list** — do not
@@ -76,7 +88,8 @@ dual-store architecture note). So do **not** write `[:SUPERSEDES*1..N]` and trus
 it. Two honest options:
 
 1. **v1 (recommended, matches current scale): bounded 1–2 hop read.** Supersession
-   chains are realistically ≤2–3 deep and there are only 18 edges total. A single
+   chains are realistically ≤2–3 deep and edge counts are small (0 before #991,
+   accumulating after). A single
    1-hop query each direction (optionally iterated a fixed 2–3 times in Python)
    covers it without variable-length Cypher. Simple, correct, cheap.
 2. **If chains grow or you want relational-authoritative cleanliness:** backfill a
@@ -155,7 +168,9 @@ expander hides after a probe (worse UX).
 - `cd dashboard && npm test && npm run lint && npm run format:check`
   (the `format:check` gate bit a prior dashboard PR — prettier the JS).
 - Verify in a **real browser** on a discovery with a known supersedes chain
-  (there are 18 — query `status='superseded'` for one).
+  (post-#991, once a real supersession has created an edge — query for a
+  discovery that is the target of a `SUPERSEDES` edge, not merely
+  `status='superseded'`).
 
 ## Caveats (don't paper over these)
 
