@@ -2487,6 +2487,44 @@ class KnowledgeGraphAGE:
         except Exception as e:
             return {"success": False, "error": f"Failed to create SUPERSEDES edge: {e}"}
 
+    async def get_superseded_by(
+        self,
+        discovery_ids: List[str],
+    ) -> Dict[str, List[str]]:
+        """Map each id to the discoveries that SUPERSEDE it (its replacements).
+
+        Reads the AGE ``(newer)-[:SUPERSEDES]->(old)`` edge — the only place the
+        directed supersession link lives (the relational response columns are
+        unused). 1-hop only: AGE 1.7 cannot reliably filter variable-length
+        paths, and supersession chains are short. Used to flag stale rows in
+        search results so an agent does not cite a superseded note. Fail-soft:
+        returns ``{}`` on missing graph or any read error.
+        """
+        if not discovery_ids:
+            return {}
+        db = await self._get_db()
+        if not await db.graph_available():
+            return {}
+        cypher = """
+            UNWIND ${ids} as disc_id
+            MATCH (newer:Discovery)-[s:SUPERSEDES]->(d:Discovery {id: disc_id})
+            RETURN {id: disc_id, newer: newer.id}
+        """
+        try:
+            results = await db.graph_query(cypher, {"ids": discovery_ids})
+        except Exception as e:
+            logger.debug(f"get_superseded_by graph read failed (non-fatal): {e}")
+            return {}
+        out: Dict[str, List[str]] = {}
+        for r in results or []:
+            if not isinstance(r, dict) or "error" in r:
+                continue
+            old = str(r.get("id", "")).strip('"')
+            newer = str(r.get("newer", "")).strip('"')
+            if old and newer:
+                out.setdefault(old, []).append(newer)
+        return out
+
     # =========================================================================
     # LIFECYCLE MANAGEMENT
     # =========================================================================

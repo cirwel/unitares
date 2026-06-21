@@ -1764,6 +1764,7 @@ class TestSupersedes:
             tags=["routine"],
         )
         mock_graph.get_discovery = AsyncMock(return_value=predecessor)
+        mock_graph.supersede_discovery = AsyncMock(return_value={"success": True})
 
         result = await handle_store_knowledge_graph({
             "agent_id": registered_agent,
@@ -1782,6 +1783,12 @@ class TestSupersedes:
         updates = call_args[0][1]
         assert updates["status"] == "superseded"
         assert updates["superseded_by"] == new_id
+
+        # Write-path fix (2026-06-21): the directed SUPERSEDES edge is recorded,
+        # not just the status — new supersedes old.
+        mock_graph.supersede_discovery.assert_awaited_once_with(
+            new_id=new_id, old_id="old-disc-1"
+        )
 
         # Response surfaces the supersession
         assert data.get("superseded") == "old-disc-1"

@@ -315,6 +315,66 @@ def _resolve_reader_agent_id(arguments: Dict[str, Any]) -> Optional[str]:
     return get_context_agent_id()
 
 
+async def _annotate_supersession(discovery_list: list, graph) -> None:
+    """Flag superseded rows in a result list so agents don't cite stale notes.
+
+    Agent-facing trust signal (2026-06-21). Default search excludes archived/cold
+    but NOT superseded, so a superseded discovery surfaces in results (only
+    down-ranked). This marks those rows `superseded: True` from the already-loaded
+    `status` (free) and best-effort attaches the replacement id(s) from the AGE
+    SUPERSEDES edge. Mutates `discovery_list` in place; fail-soft (a graph error
+    still leaves the free status-based flag).
+    """
+    superseded_ids = [
+        d["id"] for d in discovery_list
+        if d.get("status") == "superseded" and d.get("id")
+    ]
+    if not superseded_ids:
+        return
+    successors: Dict[str, list] = {}
+    if hasattr(graph, "get_superseded_by"):
+        try:
+            successors = await graph.get_superseded_by(superseded_ids)
+        except Exception as exc:  # noqa: BLE001 — advisory flag, never break search
+            logger.debug(f"[KG_SEARCH] supersession lookup failed (non-fatal): {exc}")
+    for d in discovery_list:
+        if d.get("status") != "superseded":
+            continue
+        d["superseded"] = True
+        newer = successors.get(d.get("id")) or []
+        if newer:
+            d["superseded_by"] = newer
+        d["superseded_warning"] = (
+            "Superseded — a newer discovery replaced this. "
+            + (f"Current version: {newer[0]}. " if newer else "")
+            + "Prefer the newer entry over this one."
+        )
+
+
+async def _record_supersession_edge(graph, *, new_id: str, old_id: str) -> Optional[str]:
+    """Durably record that ``new_id`` supersedes ``old_id`` (AGE SUPERSEDES edge).
+
+    The relational row has no ``superseded_by`` column, so both write paths used
+    to pass ``superseded_by`` into ``update_discovery``, which silently dropped
+    it — the 2026-06-21 finding: 18 ``status='superseded'`` rows but 0 SUPERSEDES
+    edges, i.e. the successor link was lost everywhere. Creating the edge here is
+    what lets a reader/dashboard resolve what replaced a note. Returns an error
+    string on failure (the caller surfaces it), or ``None`` on success.
+    """
+    if not new_id or not old_id or new_id == old_id:
+        return None
+    if not hasattr(graph, "supersede_discovery"):
+        return "supersession link not recorded: requires the AGE graph backend"
+    try:
+        res = await graph.supersede_discovery(new_id=new_id, old_id=old_id)
+    except Exception as exc:  # noqa: BLE001 — link is best-effort, never crash the write
+        logger.warning(f"[KG] supersession edge {new_id[:8]}->{old_id[:8]} failed: {exc}")
+        return f"supersession link not recorded: {exc}"
+    if not (isinstance(res, dict) and res.get("success")):
+        return f"supersession link not recorded: {(res or {}).get('error', 'unknown')}"
+    return None
+
+
 def _compute_staleness_warning(discovery, current_server_version: str) -> Optional[str]:
     """Flag open entries that are likely stale (>60 days old or 2+ minor versions behind)."""
     warning_parts = []
@@ -951,6 +1011,10 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
                 "superseded_by": discovery_id,
                 "updated_at": _utc_now_iso(),
             })
+            # update_discovery can't persist the successor pointer (no relational
+            # column); record the directed link as a SUPERSEDES edge so it isn't
+            # lost (this new discovery supersedes the predecessor).
+            await _record_supersession_edge(graph, new_id=discovery_id, old_id=supersedes_id)
 
         # v2.5.3: Resolve UUID to display name for human-readable output
         agent_display = arguments.get("_agent_display") or _resolve_agent_display(agent_id)
@@ -1656,7 +1720,11 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
                 if d.provenance_chain:
                     d_dict["provenance_chain"] = d.provenance_chain
             discovery_list.append(d_dict)
-        
+
+        # Agent-facing trust flag: mark superseded results so they aren't cited
+        # as current (superseded rows are down-ranked but still returned).
+        await _annotate_supersession(discovery_list, graph)
+
         # Include similarity scores for semantic search
         response_data = {
             "search_mode_used": search_mode,
@@ -1930,6 +1998,9 @@ async def handle_get_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Text
             d_dict["_agent_id"] = d.agent_id
             discovery_list.append(d_dict)
 
+        # Agent-facing trust flag (same as search): mark superseded rows.
+        await _annotate_supersession(discovery_list, graph)
+
         response_data = {
             "agent": agent_display,
             "discoveries": discovery_list,
@@ -2047,6 +2118,9 @@ async def handle_update_discovery_status_graph(arguments: Dict[str, Any]) -> Seq
     severity = arguments.get("severity")
     discovery_type = arguments.get("discovery_type")
     tags = arguments.get("tags")
+    # The discovery that supersedes this one (records the directed link, not just
+    # the status). Previously read nowhere, so it was silently dropped.
+    superseded_by = arguments.get("superseded_by")
 
     # Foolproofing (KG 2026-06-13 footgun): same guard as the store path —
     # reject an edit whose text fields absorbed tool-call markup rather than
@@ -2060,9 +2134,9 @@ async def handle_update_discovery_status_graph(arguments: Dict[str, Any]) -> Seq
         )
         return [_degenerate_write_response(leaked_marker, field)]
 
-    if not any(value is not None for value in (status, raw_details, resolution_note_text, summary, severity, discovery_type, tags)):
+    if not any(value is not None for value in (status, raw_details, resolution_note_text, summary, severity, discovery_type, tags, superseded_by)):
         return [error_response(
-            "At least one updatable field is required. Provide status, details/content, resolution_notes, summary, severity, discovery_type, or tags."
+            "At least one updatable field is required. Provide status, details/content, resolution_notes, summary, severity, discovery_type, tags, or superseded_by."
         )]
     
     try:
@@ -2187,17 +2261,31 @@ async def handle_update_discovery_status_graph(arguments: Dict[str, Any]) -> Seq
         
         if not success:
             return [error_response(f"Discovery '{discovery_id}' not found")]
-        
+
+        # Record the supersession LINK, not just the status. Without this the
+        # successor pointer is lost (no relational column); the AGE SUPERSEDES
+        # edge is what a reader/dashboard resolves. superseded_by SUPERSEDES this.
+        supersession_warning = None
+        if superseded_by:
+            supersession_warning = await _record_supersession_edge(
+                graph, new_id=str(superseded_by), old_id=discovery_id
+            )
+
         discovery = await graph.get_discovery(discovery_id)
-        
+
         message = f"Discovery '{discovery_id}' updated"
         if status is not None:
             message = f"Discovery '{discovery_id}' status updated to '{status}'"
 
-        return success_response({
+        payload = {
             "message": message,
             "discovery": discovery.to_dict(include_details=False) if discovery else None
-        }, arguments=arguments)
+        }
+        if superseded_by:
+            payload["superseded_by"] = str(superseded_by)
+            if supersession_warning:
+                payload["supersession_warning"] = supersession_warning
+        return success_response(payload, arguments=arguments)
         
     except Exception as e:
         return [error_response(f"Failed to update discovery: {str(e)}")]
