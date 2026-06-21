@@ -79,14 +79,17 @@
     // A null metric = its live source didn't answer this cycle. Show "—"
     // (unavailable), never a stale snapshot value passed off as current.
     const un = (v) => v == null;
+    // Cards that map to a section are links (href); the rest (Calibration,
+    // Anomalies — pure stats with no detail view) stay plain, so the clickable
+    // affordance is honest rather than implied on everything.
     const cards = [
-      { h: "Fleet Coherence", num: num(fleetCoh), sub: `${live.length} of ${residents.length} residents reporting`, cls: "up", rule: true },
-      { h: "Agents", num: un(stats.agentsActive) ? "—" : stats.agentsActive, of: un(stats.agentsTotal) ? "" : "/ " + stats.agentsTotal, sub: un(stats.agentsActive) ? "unavailable" : "active / total" },
-      { h: "Stuck", num: un(stats.stuck) ? "—" : stats.stuck, sub: un(stats.stuck) ? "unavailable" : (stats.stuck ? "needs attention" : "none flagged"), cls: un(stats.stuck) ? "" : (stats.stuck ? "down" : "up") },
+      { h: "Fleet Coherence", num: num(fleetCoh), sub: `${live.length} of ${residents.length} residents reporting`, cls: "up", rule: true, href: "#residents" },
+      { h: "Agents", num: un(stats.agentsActive) ? "—" : stats.agentsActive, of: un(stats.agentsTotal) ? "" : "/ " + stats.agentsTotal, sub: un(stats.agentsActive) ? "unavailable" : "active / total", href: "#agents" },
+      { h: "Stuck", num: un(stats.stuck) ? "—" : stats.stuck, sub: un(stats.stuck) ? "unavailable" : (stats.stuck ? "needs attention" : "none flagged"), cls: un(stats.stuck) ? "" : (stats.stuck ? "down" : "up"), href: "#agents" },
       { h: "Automations", num: asum.total || 0, sub: autoSub, cls: aWarn ? "down" : "up", href: "#automations" },
-      { h: "Discoveries", num: un(stats.discoveries) ? "—" : stats.discoveries.toLocaleString(), sub: un(stats.discoveries) ? "unavailable" : (typeof stats.discoveriesToday === "number" ? "+" + stats.discoveriesToday + " today" : "knowledge graph") },
-      { h: "Dialectic", num: un(stats.dialectic) ? "—" : stats.dialectic, sub: un(stats.dialectic) ? "unavailable" : (stats.dialectic ? "open sessions" : "no open sessions") },
-      { h: "System Health", num: un(stats.systemHealth) ? "—" : stats.systemHealth, sub: un(stats.systemHealth) ? "unavailable" : (stats.systemHealthDetail || "db · ws · reaper"), cls: un(stats.systemHealth) ? "" : (stats.systemHealth === "OK" ? "up" : "down") },
+      { h: "Discoveries", num: un(stats.discoveries) ? "—" : stats.discoveries.toLocaleString(), sub: un(stats.discoveries) ? "unavailable" : (typeof stats.discoveriesToday === "number" ? "+" + stats.discoveriesToday + " today" : "knowledge graph"), href: "#discoveries" },
+      { h: "Dialectic", num: un(stats.dialectic) ? "—" : stats.dialectic, sub: un(stats.dialectic) ? "unavailable" : (stats.dialectic ? "open sessions" : "no open sessions"), href: "#dialectic" },
+      { h: "System Health", num: un(stats.systemHealth) ? "—" : stats.systemHealth, sub: un(stats.systemHealth) ? "unavailable" : (stats.systemHealthDetail || "db · ws · reaper"), cls: un(stats.systemHealth) ? "" : (stats.systemHealth === "OK" ? "up" : "down"), href: "#residents" },
       { h: "Calibration", num: num(stats.calibration), sub: un(stats.calibration) ? "unavailable" : "trajectory health", cls: stats.calibration >= 0.8 ? "up" : "" },
       { h: "Anomalies", num: un(stats.anomalies) ? "—" : stats.anomalies, sub: un(stats.anomalies) ? "unavailable" : (stats.anomalies ? stats.anomalies + " active" : "clear"), cls: un(stats.anomalies) ? "" : (stats.anomalies ? "down" : "up") },
     ];

@@ -121,6 +121,10 @@ body {
   transition: border-color var(--dur) var(--ease);
 }
 .card:hover { border-color: var(--line-2); }
+/* Cards that are links (map to a section) get a clearer clickable cue than the
+   plain stat cards, so the affordance is honest. */
+a.card { cursor: pointer; }
+a.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)); }
 .card h3 { font-size: var(--text-xs); letter-spacing: var(--tracking-label);
   text-transform: uppercase; color: var(--muted); font-weight: 600; }
 .card .num { font-family: var(--font-mono); font-size: var(--text-2xl); font-weight: 500;

@@ -52,8 +52,14 @@
       </div>
       <div style="color:var(--ink);font-size:var(--text-base);line-height:var(--leading-body);margin-bottom:${details || tags ? "var(--space-3)" : "0"}">${highlight(d.summary, q)}</div>
       ${tags ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:${details ? "var(--space-3)" : "0"}">${tags}</div>` : ""}
-      ${details ? `<details><summary style="cursor:pointer;color:var(--muted);font-size:var(--text-sm)">details</summary>
-        <div style="margin-top:var(--space-2);color:var(--ink-2);font-size:var(--text-sm);white-space:pre-wrap">${esc(details)}</div></details>` : ""}
+      ${details || d.session || d.version || d.agentId ? `<details><summary style="cursor:pointer;color:var(--muted);font-size:var(--text-sm)">${details ? "details" : "provenance"}</summary>
+        ${details ? `<div style="margin-top:var(--space-2);color:var(--ink-2);font-size:var(--text-sm);white-space:pre-wrap">${esc(details)}</div>` : ""}
+        <div style="margin-top:var(--space-3);display:flex;gap:var(--space-4);flex-wrap:wrap;font-size:var(--text-xs);color:var(--faint)">
+          ${d.agentId ? `<span title="${esc(d.agentId)}">agent ${esc((d.agentId || "").slice(0, 8))}</span>` : ""}
+          ${d.session ? `<span title="${esc(d.session)}">session ${esc((d.session || "").slice(0, 8))}</span>` : ""}
+          ${d.version ? `<span>v${esc(d.version)}</span>` : ""}
+          ${d.created ? `<span title="${esc(d.created)}">created ${esc((d.created || "").slice(0, 10))}</span>` : ""}
+        </div></details>` : ""}
     </div>`;
   }
 
