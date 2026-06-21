@@ -185,8 +185,8 @@ monitoring, governs).
 
 ## Build-triggers (do not pre-build)
 
-Honest state: there is really **one** trigger, currently blocked, plus a parked
-maybe.
+After investigation (2026-06-21) there is really **one** trigger, currently blocked.
+The candidate second trigger was chased to ground and **withdrawn** — see below.
 
 - **(A) — the real trigger: the orchestrator de-inerts** and becomes the live spawn
   path → ship monitor-delegation *with* it. Work spans both sides: the Elixir
@@ -194,12 +194,27 @@ maybe.
   applies the demote rule (the lease *release* plumbing in `agent_runner.ex` already
   exists; the marking and demotion do not). **Currently blocked:** de-inerting
   collides with the **Wave-3 deferral to 2026-06-24** — not a clean "now" move.
-- **(B) — parked maybe: retarget to the one live monitor.** Make `resident:/`
-  `local_beam` lease release `Process.monitor`-sourced (instant on resident death)
-  instead of TTL-bounded. Its only named consumer — Sentinel false-archival latency
-  — is **already mitigated** (#685/#686/#687), so this is not really a live trigger
-  unless a *second* `resident:/` consumer (e.g. dispatch threads) has an unmitigated
-  false-archival cost (see Open Questions). Treat as dubious until that is shown.
+- **(B) — WITHDRAWN (investigated 2026-06-21, no live justification).** The idea was
+  to monitor-source `resident:/` `local_beam` lease release. Three findings kill it:
+  1. **The archival gate never reads `resident:/`.** `has_live_agent_lease` queries
+     only `agent:/<uuid>`; there is no `resident:` reference anywhere in
+     `lifecycle/` or `process_binding.py`. So `resident:/` liveness quality is
+     irrelevant to false-archival.
+  2. **Residents are archival-exempt by tag.** `stuck.py:326–328` and `:680` skip
+     `{autonomous, embodied, anima}`. The live residents (chronicler, steward, vigil)
+     hold **no** `agent:/` lease at all (`has_agent_lease=f`) — their false-archival
+     protection is the tag, not any lease.
+  3. **The mechanism already exists.** `lease_holder.ex` runs `trap_exit` +
+     `terminate/2`, writing `release_reason='down_local'` on the holder's process
+     death, with `original_ttl_s` only as the hard-VM-crash backstop. That *is*
+     "monitor-sourced release with TTL fallback" — already built for in-VM
+     `local_beam` holders (and dispatch_beam's `Dispatch.Lease` adds an explicit
+     `Process.monitor`/`:DOWN` release on top).
+
+  **Corollary that sharpens the thesis:** monitor-delegation is not novel — the
+  `resident:/` half of the lease world *already* does it correctly. The gap this RFC
+  is about is **only** the `agent:/` self-report path, and that path's monitor
+  (the orchestrator) is inert. So there is exactly one place to wire, gated by (A).
 
 ## Open questions
 
@@ -225,9 +240,10 @@ maybe.
   dead branch — arguably the more important one for an archival decision — stays
   provenance-blind. Carrying confidence there (a tombstone release-reason? a
   released-by-monitor marker on the released row?) is unresolved.
-- **Whether (B) is worth doing at all** given Sentinel is already mitigated — i.e.
-  is there a *second* `resident:/` consumer (dispatch threads) whose false-archival
-  is not yet mitigated? If not, (B) has no live justification.
+- ~~**Whether (B) is worth doing at all**~~ — **RESOLVED 2026-06-21: No.** The
+  archival gate never reads `resident:/`, residents are tag-exempt from archival,
+  and the `LeaseHolder` already releases on holder-process death (`trap_exit` →
+  `down_local`, TTL backstop). (B) withdrawn. See Build-triggers.
 
 ## References
 
