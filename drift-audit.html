@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UNITARES Glossary — Drift Audit</title>
+<style>
+  :root{--bg:#0e1116;--panel:#161b22;--line:#2a313c;--ink:#e6edf3;--dim:#8b949e;--acc:#58a6ff}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur(6px);border-bottom:1px solid var(--line);padding:14px 22px;display:flex;gap:18px;align-items:baseline;flex-wrap:wrap}
+  header .brand{font-weight:600}
+  header nav a{color:var(--dim);text-decoration:none;margin-right:14px;font-size:14px}
+  header nav a.active,header nav a:hover{color:var(--ink)}
+  main{max-width:880px;margin:0 auto;padding:30px 22px 90px}
+  h1,h2,h3{line-height:1.25} h1{font-size:26px;margin-top:0} h2{margin-top:34px;border-bottom:1px solid var(--line);padding-bottom:6px} h3{margin-top:26px}
+  a{color:var(--acc)}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em;background:#1c232c;border:1px solid var(--line);border-radius:5px;padding:.08em .4em}
+  pre{background:#1c232c;border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow:auto} pre code{border:0;padding:0;background:none}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14.5px;display:block;overflow-x:auto}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:#1c232c;color:var(--dim);font-size:12.5px;text-transform:uppercase;letter-spacing:.4px}
+  blockquote{border-left:3px solid var(--acc);background:#1c232c;margin:16px 0;padding:10px 16px;border-radius:0 8px 8px 0;color:var(--dim)}
+  .admonition{border:1px solid var(--line);border-left:3px solid var(--acc);background:#161b22;border-radius:0 8px 8px 0;padding:12px 16px;margin:18px 0}
+  .admonition-title{font-weight:600;color:var(--ink);margin:0 0 6px}
+  hr{border:0;border-top:1px solid var(--line);margin:28px 0}
+  footer{max-width:880px;margin:0 auto;padding:0 22px 50px;color:var(--dim);font-size:12.5px;border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">UNITARES · glossary</span>
+  <nav>
+    <a href="index.html">Glossary</a>
+    <a href="drift-audit.html" class="active">Drift audit</a>
+    <a href="https://github.com/cirwel/unitares">Repo ↗</a>
+  </nav>
+</header>
+<main>
+<h1 id="glossary-drift-audit-2026-06-20">Glossary Drift Audit — 2026-06-20</h1>
+<p><strong>Method:</strong> Swept <code>docs/ontology/</code>, <code>docs/proposals/</code>, <code>docs/operations/</code>,
+<code>CLAUDE.md</code>, and <code>AGENTS.md</code> for a fixed list of load-bearing terms. For each
+term, recorded every distinct <em>sense</em> (the question it answers) and which file
+pins that sense. A term is flagged <strong>DRIFT</strong> when the same word answers a
+different question in different places <em>without</em> a marker telling the reader
+which sense is meant.</p>
+<p><strong>Outcome:</strong> This audit seeded <code>docs/ontology/glossary.md</code> (the durable,
+question-keyed glossary). This file is the point-in-time evidence and the
+recommended-fix list. Re-run and re-date when the vocabulary moves.</p>
+<p><strong>Addendum (2026-06-20b — code-grounded pass).</strong> The first sweep read only docs.
+A follow-up read of the <em>code</em> (<code>governance_core/dynamics.py</code>,
+<code>src/grounding/free_energy.py</code>, <code>src/behavioral_assessment.py</code>,
+<code>docs/EISV_COMPUTATION.md</code>) found two collisions the docs-only sweep missed and
+one wrong claim to retract:</p>
+<ul>
+<li><strong>NEW <code>basin</code> (DRIFT, confirmed in code):</strong> <code>governance_core/dynamics.py::check_basin</code>
+  (bistable <strong>attractor</strong> basin, research-lens ODE) vs.
+  <code>src/behavioral_assessment.py::_basin_health_gate</code> / <code>config.governance_config.BASIN_HIGH</code>
+  (a static <strong>health band</strong> — the verdict-driving gate). Only the second drives
+  decisions, and it is a configured box, not an attractor. Previously listed as
+  single-sense; <strong>promoted to high-risk homonym.</strong> A runtime glossary
+  (<code>src/governance_glossary.py::explain_basin</code>, #428) resolves the health-band
+  sense — keep it consistent with the doc glossary.</li>
+<li><strong>NEW <code>free energy</code> (DRIFT, code):</strong> ODE <code>V</code> ("like Helmholtz free energy", a
+  signed integrator) vs. <code>src/grounding/free_energy.py</code> target <code>E=−F</code> (variational,
+  Tier-1 explicitly stubbed).</li>
+<li><strong>RETRACTED claim:</strong> the Rosetta skeleton's "physics register is aspirational,
+  all candidate, zero earned" was <strong>wrong</strong>. Three rows are <code>◐ research-lens</code>
+  (implemented in the parallel ODE / grounding tiers, honestly provenance-tagged,
+  but not wired to the verdict path). The real gap is <em>wiring built physics onto
+  the verdict path</em>, not building it. Notably <code>grounding/free_energy.py</code> already
+  enforces this audit's own "name nothing more rigorous than it is" guardrail at
+  runtime (tiered estimator, <code>source=</code> tags, FEP stubbed).</li>
+</ul>
+<p>Lesson for future sweeps: <strong>read the code, not only the proposal docs.</strong> Drift
+between a term's doc sense and its code symbol is invisible to a docs-only pass.</p>
+<p><strong>Headline:</strong> Three words carry the most collision risk — <code>substrate</code> (3 senses),
+<code>fingerprint</code> (3 senses), <code>surface</code> (2 senses) — because in each case more than
+one sense is genuinely load-bearing and at least two senses live close together
+(sometimes in the same document). These are not errors to "fix" by renaming;
+they are <em>unmarked</em> homonyms to make legible.</p>
+<hr>
+<h2 id="collision-summary-highest-risk-first">Collision summary (highest risk first)</h2>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Senses</th>
+<th>Co-located?</th>
+<th>Verdict</th>
+<th>Recommended fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>substrate</code></td>
+<td>inference / deployment-identity / runtime-scheduler</td>
+<td>Across 3 docs</td>
+<td><strong>DRIFT</strong></td>
+<td>Qualify in cross-doc prose: <code>substrate (inference\|deployment\|runtime)</code>. Glossary high-risk entry added.</td>
+</tr>
+<tr>
+<td><code>fingerprint</code></td>
+<td>transport ip:ua / behavioral-lineage / finding-dedup</td>
+<td>First two in <strong>same doc</strong> (<code>identity.md</code>)</td>
+<td><strong>DRIFT</strong></td>
+<td>Always qualify in <code>identity.md</code>; the weak-proof vs strongest-earned-layer split is dangerous unmarked.</td>
+</tr>
+<tr>
+<td><code>surface</code></td>
+<td>lease target / tool set</td>
+<td>Across 2 docs (+ a CLAUDE.md single-writer usage that is the lease sense)</td>
+<td><strong>DRIFT</strong></td>
+<td>Use <code>surface (lease)</code> vs <code>surface (tool)</code>; note the CLAUDE.md "single-writer surface" is the lease sense pre-plane.</td>
+</tr>
+<tr>
+<td><code>fork</code></td>
+<td>sibling-locus / identity-lineage</td>
+<td>Same doc (<code>r6-…</code>) — already disambiguated by enum</td>
+<td><strong>DRIFT (managed)</strong></td>
+<td>Keep the <code>episode_fork_kind</code> enum discipline; never ship bare <code>is_fork</code>. Already R6's stated position.</td>
+</tr>
+<tr>
+<td><code>harness</code></td>
+<td>agent-body / lifecycle-wrapper / test-rig</td>
+<td>Across docs; registers rarely collide</td>
+<td><strong>SOFT</strong></td>
+<td>Agent-body is canonical; flag the informal senses only when prose mixes them. <em>Real</em> issue is an incomplete answer set (see gaps).</td>
+</tr>
+<tr>
+<td><code>continuity</code></td>
+<td>layered concept / <code>continuity_token</code> mechanism</td>
+<td>Same doc</td>
+<td><strong>SOFT</strong></td>
+<td>Write the full <code>continuity_token</code> for the mechanism; bare "continuity" = the concept.</td>
+</tr>
+<tr>
+<td><code>lineage</code></td>
+<td>causal ancestry / conversation-thread</td>
+<td>Same doc, already distinct</td>
+<td><strong>SOFT</strong></td>
+<td>Keep <code>thread_id</code> out of ancestry sentences.</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="per-term-sweep">Per-term sweep</h2>
+<h3 id="substrate-drift-3-senses">substrate — DRIFT (3 senses)</h3>
+<ul>
+<li><strong>inference</strong> — "What inference substrate generates behavior?" —
+  <code>harness-substrate-plurality.md</code>, layer table ("Model / substrate").</li>
+<li><strong>deployment / identity layer</strong> — "What persistent hardware/disk/DB/config
+  survives restart and can earn continuity?" — <code>identity.md</code> five-layer table
+  ("Substrate | persistent hardware, disk, DB, configuration") and the
+  Substrate-Earned Identity appendix (Lumen's Pi).</li>
+<li><strong>runtime / scheduler</strong> — "What execution model runs the work?" — <code>CLAUDE.md</code>
+  / <code>AGENTS.md</code> Substrate-Tax section ("substrates with per-process scheduling
+  and protocol-level connection checkout (e.g., BEAM / db_connection)").</li>
+</ul>
+<p>Three orthogonal axes; an agent can vary one while holding the others. This is
+the worst offender because all three are load-bearing and none is wrong.</p>
+<h3 id="fingerprint-drift-3-senses">fingerprint — DRIFT (3 senses)</h3>
+<ul>
+<li><strong>transport (ip:ua)</strong> — weak sticky-resume pin — <code>identity.md</code>
+  (<code>recent_onboard:&lt;ip:ua&gt;</code>).</li>
+<li><strong>behavioral / lineage</strong> — EISV match against claimed lineage — <code>identity.md</code>
+  ("behavior diverges from lineage fingerprint"); R1.</li>
+<li><strong>finding-dedup (sha256)</strong> — Watcher/CI dedup — <code>CLAUDE.md</code> Watcher section
+  (<code>--resolve &lt;fingerprint&gt;</code>); <code>docs/operations/ci-issue-surfacing.md</code>.</li>
+</ul>
+<p>The first two co-locate in <code>identity.md</code> and sit at opposite ends of the
+assurance scale (weakest heuristic vs strongest earned layer). Highest in-doc
+hazard.</p>
+<h3 id="surface-drift-2-senses-1-aligned-usage">surface — DRIFT (2 senses + 1 aligned usage)</h3>
+<ul>
+<li><strong>lease</strong> — shared mutation target — <code>beam-coordination-kernel.md</code>.</li>
+<li><strong>tool</strong> — available actions — <code>harness-substrate-plurality.md</code>.</li>
+<li><em>aligned:</em> "single-writer surface" in <code>CLAUDE.md</code>/<code>AGENTS.md</code> is the lease
+  sense applied to source control before the plane mediates it — intentional
+  continuity, not drift.</li>
+</ul>
+<h3 id="fork-drift-but-managed">fork — DRIFT, but managed</h3>
+<ul>
+<li><strong>sibling locus</strong> — same registry UUID, fresh process-instance, no child —
+  <code>r6-episode-fork-response-shape.md</code> (<code>episode_fork_kind = sibling_locus</code>).</li>
+<li><strong>identity lineage</strong> — distinct child UUID + <code>parent_agent_id</code>/<code>spawn_reason</code>
+  — same doc (<code>identity_lineage_fork</code>).</li>
+</ul>
+<p>R6 already treats a bare <code>is_fork</code> as "too compressed" and splits it. The audit
+endorses keeping that discipline; the risk is regression to an unqualified
+"fork" in new prose/fields.</p>
+<h3 id="harness-soft">harness — SOFT</h3>
+<ul>
+<li><strong>agent body</strong> (canonical) — "What body/interface mediates action?" —
+  <code>harness-substrate-plurality.md</code>.</li>
+<li><strong>lifecycle wrapper</strong> (informal) — "Claude Code runs through a plugin-style
+  harness" — <code>CLAUDE.md</code>.</li>
+<li><strong>test rig</strong> (informal) — <code>scripts/dev/calibration_harness/</code>, <code>deep-research</code>
+  skill.</li>
+</ul>
+<p>Registers rarely collide. The substantive finding is not the homonym but the
+<strong>incomplete answer set</strong> for the agent-body sense (no value for a
+BEAM-resident agent) — recorded as an open gap in the glossary.</p>
+<h3 id="continuity-soft">continuity — SOFT</h3>
+<ul>
+<li><strong>layered concept</strong> — <code>identity.md</code> five layers.</li>
+<li><strong><code>continuity_token</code> mechanism</strong> — advanced same-live-process rebind, largely
+  retired for cross-process use — <code>identity.md</code>.</li>
+</ul>
+<p>Mechanism borrowed the concept's name. Write the full token name for the
+mechanism.</p>
+<h3 id="lineage-soft">lineage — SOFT</h3>
+<ul>
+<li><strong>causal ancestry</strong> — <code>parent_agent_id</code>; "inherits work from, not is identical
+  to" — <code>identity.md</code>.</li>
+<li><strong>conversation-thread</strong> — <code>thread_id</code> "names logical conversation/history
+  lineage" — <code>harness-substrate-plurality.md</code>.</li>
+</ul>
+<p>Both feed the provenance envelope; already distinct, keep them apart.</p>
+<h3 id="single-sense-no-drift-at-audit-time">Single-sense (no drift at audit time)</h3>
+<p><code>process-instance</code>, <code>registry</code> (identity layer), <code>transport</code>, <code>lease</code>,
+<code>handoff</code>, <code>basin</code>, <code>locus</code>, <code>episode</code>, <code>affordance_state</code>, <code>assurance</code>,
+<code>governance_mode</code>, <code>typed absence</code>, <code>proof of life</code>/<code>heartbeat</code>,
+<code>provenance envelope</code>. Each currently answers one question. <code>episode</code> and
+<code>locus</code> reappear as qualifiers inside the <code>fork</code> classification but do not
+change sense there. Listed in the glossary so a future split is visible against
+this baseline.</p>
+<hr>
+<h2 id="recommendations">Recommendations</h2>
+<ol>
+<li><strong>Adopt the question-keyed glossary</strong> (<code>glossary.md</code>) as the pointer of
+   record; stop re-defining these terms inline in new docs — link instead.</li>
+<li><strong>Qualify the three high-risk homonyms in cross-doc prose.</strong> Especially
+   <code>fingerprint</code> inside <code>identity.md</code>, where the weak/strong senses are one
+   paragraph apart.</li>
+<li><strong>Do not rename to resolve drift.</strong> Qualify. Renaming a live term invents
+   vocabulary nobody adopts; qualifying makes the existing collision legible —
+   the rule <code>harness-substrate-plurality.md</code> already half-follows.</li>
+<li><strong>Coin a <code>harness (agent body)</code> value for BEAM-resident agents</strong> before
+   Wave 3 handler-dispatch lands, so the taxonomy doesn't backfill the gap by
+   overloading <code>dispatch</code> or <code>lumen</code>.</li>
+<li><strong>Re-run this sweep</strong> when a new proposal cluster matures (next likely
+   sources of new terms: Plexus scope, lease-plane Phase B, the principal/
+   operator-delegate track). Date the next audit and append it beside this one.</li>
+</ol>
+</main>
+<footer>
+  Generated from <code>docs/ontology/</code> — the markdown is the source of truth.
+  Edit there, not here. <a href="https://github.com/cirwel/unitares/blob/master/docs/ontology/glossary-drift-audit-2026-06-20.md">View source</a>.
+</footer>
+</body>
+</html>

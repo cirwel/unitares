@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UNITARES Glossary</title>
+<style>
+  :root{--bg:#0e1116;--panel:#161b22;--line:#2a313c;--ink:#e6edf3;--dim:#8b949e;--acc:#58a6ff}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur(6px);border-bottom:1px solid var(--line);padding:14px 22px;display:flex;gap:18px;align-items:baseline;flex-wrap:wrap}
+  header .brand{font-weight:600}
+  header nav a{color:var(--dim);text-decoration:none;margin-right:14px;font-size:14px}
+  header nav a.active,header nav a:hover{color:var(--ink)}
+  main{max-width:880px;margin:0 auto;padding:30px 22px 90px}
+  h1,h2,h3{line-height:1.25} h1{font-size:26px;margin-top:0} h2{margin-top:34px;border-bottom:1px solid var(--line);padding-bottom:6px} h3{margin-top:26px}
+  a{color:var(--acc)}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em;background:#1c232c;border:1px solid var(--line);border-radius:5px;padding:.08em .4em}
+  pre{background:#1c232c;border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow:auto} pre code{border:0;padding:0;background:none}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14.5px;display:block;overflow-x:auto}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:#1c232c;color:var(--dim);font-size:12.5px;text-transform:uppercase;letter-spacing:.4px}
+  blockquote{border-left:3px solid var(--acc);background:#1c232c;margin:16px 0;padding:10px 16px;border-radius:0 8px 8px 0;color:var(--dim)}
+  .admonition{border:1px solid var(--line);border-left:3px solid var(--acc);background:#161b22;border-radius:0 8px 8px 0;padding:12px 16px;margin:18px 0}
+  .admonition-title{font-weight:600;color:var(--ink);margin:0 0 6px}
+  hr{border:0;border-top:1px solid var(--line);margin:28px 0}
+  footer{max-width:880px;margin:0 auto;padding:0 22px 50px;color:var(--dim);font-size:12.5px;border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">UNITARES · glossary</span>
+  <nav>
+    <a href="index.html" class="active">Glossary</a>
+    <a href="drift-audit.html">Drift audit</a>
+    <a href="https://github.com/cirwel/unitares">Repo ↗</a>
+  </nav>
+</header>
+<main>
+<div class="admonition note">
+<p class="admonition-title">What this is</p>
+<p>A living glossary for <a href="https://github.com/cirwel/unitares">UNITARES</a> — runtime state telemetry for
+long-lived AI agents. Every term is defined by <strong>the question it answers</strong>,
+not by a list of examples, because a term pinned to its discriminating
+question survives redefinition while one pinned to examples rots. The page
+shows its own drift corrections on purpose: a system that hands you its own
+falsification harness should also show where its vocabulary was wrong and got
+fixed. Source of truth is <a href="https://github.com/cirwel/unitares/blob/master/docs/ontology/glossary.md"><code>docs/ontology/glossary.md</code></a>; this page is
+generated from it.</p>
+</div>
+<h1 id="unitares-glossary-terms-keyed-by-the-question-they-answer">UNITARES Glossary — Terms Keyed by the Question They Answer</h1>
+<p><strong>Created:</strong> June 20, 2026
+<strong>Status:</strong> Living document. Expect churn; the field is inventing terms and so are we.
+<strong>Companion to:</strong> <code>docs/ontology/identity.md</code>, <code>docs/ontology/harness-substrate-plurality.md</code>, <code>docs/ontology/beam-coordination-kernel.md</code>
+<strong>Audit trail:</strong> <code>docs/ontology/glossary-drift-audit-2026-06-20.md</code> (point-in-time sweep that seeded this file)</p>
+<hr>
+<h2 id="how-to-read-this-glossary">How to read this glossary</h2>
+<p>A term here is defined by <strong>the question it answers</strong>, not by a list of examples.
+This is deliberate. A term defined by its discriminating question survives
+redefinition; a term defined by examples rots the moment a new example straddles
+the boundary. (The canonical example: "harness" defined as "Hermes / Claude Code
+/ Codex" breaks the instant BEAM starts hosting an agent loop — see the open gap
+below. The question — <em>"what body mediates this agent's action?"</em> — does not
+break; it just gets a new answer.)</p>
+<p>The layer table in <code>harness-substrate-plurality.md</code> already works this way
+("Harness | what body/interface mediates action?"). This file generalizes that
+discipline across the whole vocabulary.</p>
+<h2 id="how-to-add-or-change-a-term">How to add or change a term</h2>
+<ol>
+<li><strong>State the question it answers</strong>, in one line, before any examples.</li>
+<li><strong>When a term splits, do not rename — disambiguate.</strong> If the same word starts
+   answering two different questions, give each sense a parenthetical qualifier
+   (<code>substrate (inference)</code> vs <code>substrate (deployment)</code>) and let both coexist
+   explicitly. Renaming invents a word nobody adopts; qualifying makes the
+   existing collision legible. This is the rule <code>harness-substrate-plurality.md</code>
+   half-follows already.</li>
+<li><strong>Point at the canonical doc</strong>, don't re-define inline. Inline re-definitions
+   are how drift starts.</li>
+<li><strong>A homonym is not a bug to fix.</strong> Three legitimate senses of "substrate"
+   are fine. The bug is an <em>unmarked</em> homonym — a reader binding the wrong sense
+   because nothing told them which question was being asked.</li>
+</ol>
+<hr>
+<h2 id="high-risk-homonyms-same-word-different-questions">High-risk homonyms (same word, different questions)</h2>
+<p>These are the words where a reader can silently bind the wrong sense. Each is
+load-bearing in more than one sense; none of the senses is wrong.</p>
+<h3 id="substrate-three-distinct-questions">substrate — <strong>three</strong> distinct questions</h3>
+<table>
+<thead>
+<tr>
+<th>Sense</th>
+<th>Question it answers</th>
+<th>Canonical source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>substrate (inference)</code></td>
+<td>What inference engine generates this behavior? (GPT-5.5, Opus, Qwen, Ollama)</td>
+<td><code>harness-substrate-plurality.md</code> — "Model / substrate | What inference substrate generates behavior?"</td>
+</tr>
+<tr>
+<td><code>substrate (deployment / identity layer)</code></td>
+<td>What persistent hardware/disk/DB/config survives a process restart and can <em>earn</em> continuity? (Lumen's Pi)</td>
+<td><code>identity.md</code> five-layer table — "Substrate | persistent hardware, disk, DB, configuration"; Appendix "Substrate-Earned Identity"</td>
+</tr>
+<tr>
+<td><code>substrate (runtime / scheduler)</code></td>
+<td>What execution model runs the work — per-process scheduling + protocol-level checkout vs. a shared asyncio loop?</td>
+<td><code>CLAUDE.md</code> / <code>AGENTS.md</code> "Substrate Tax" — "does not exist on substrates with per-process scheduling and protocol-level connection checkout (e.g., BEAM / db_connection)"</td>
+</tr>
+</tbody>
+</table>
+<p>These three are orthogonal axes. An agent can switch <code>substrate (inference)</code>
+(swap model) while holding <code>substrate (deployment)</code> constant (same Pi), running
+on a <code>substrate (runtime)</code> that has no anyio coupling (BEAM). Always qualify
+which axis you mean in cross-doc prose.</p>
+<h3 id="fingerprint-three-distinct-questions">fingerprint — <strong>three</strong> distinct questions</h3>
+<table>
+<thead>
+<tr>
+<th>Sense</th>
+<th>Question it answers</th>
+<th>Canonical source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fingerprint (transport)</code></td>
+<td>Which interactive driver is this, by ip:ua, for the weak sticky-resume pin?</td>
+<td><code>identity.md</code> — "a short-TTL Redis pin keyed on the transport fingerprint (<code>recent_onboard:&lt;ip:ua&gt;</code>)"</td>
+</tr>
+<tr>
+<td><code>fingerprint (behavioral / lineage)</code></td>
+<td>Does this process-instance's EISV behavior match the lineage it claims?</td>
+<td><code>identity.md</code> — "behavior diverges from lineage fingerprint"; R1 verify-lineage-claim</td>
+</tr>
+<tr>
+<td><code>fingerprint (finding-dedup)</code></td>
+<td>Is this CI/Watcher finding the same issue we already saw? (sha256 hash)</td>
+<td><code>CLAUDE.md</code> Watcher section — <code>--resolve &lt;fingerprint&gt;</code>; <code>docs/operations/ci-issue-surfacing.md</code></td>
+</tr>
+</tbody>
+</table>
+<p>The first two are identity machinery and live in the same document; the third is
+operational tooling. The transport vs. behavioral split is the dangerous one
+because both appear in <code>identity.md</code>: one is a <em>weak</em> heuristic proof, the other
+is the <em>strongest earned</em> layer. Never let "fingerprint" stand unqualified there.</p>
+<h3 id="surface-two-distinct-questions">surface — two distinct questions</h3>
+<table>
+<thead>
+<tr>
+<th>Sense</th>
+<th>Question it answers</th>
+<th>Canonical source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>surface (lease)</code></td>
+<td>What shared mutation target is being claimed under single-writer coordination? (<code>repo_path</code>, <code>td_network</code>, a branch, a Discord locus)</td>
+<td><code>beam-coordination-kernel.md</code> — "A surface is any shared mutation target"</td>
+</tr>
+<tr>
+<td><code>surface (tool)</code></td>
+<td>What actions are available to the agent right now?</td>
+<td><code>harness-substrate-plurality.md</code> — "Tool surface | What actions are available?"</td>
+</tr>
+</tbody>
+</table>
+<p>Note the <strong>near-collision with a third usage</strong>: "single-writer surface" in
+<code>CLAUDE.md</code>/<code>AGENTS.md</code> ("Before Starting Work on a Single-Writer Surface") is
+<code>surface (lease)</code> applied to source control — the same sense, just not yet
+mediated by the lease plane. That continuity is intentional; it's why the lease
+plane's first surface class is <code>repo_path</code>.</p>
+<h3 id="harness-one-question-an-under-enumerated-answer-set">harness — one question, an under-enumerated answer set</h3>
+<table>
+<thead>
+<tr>
+<th>Sense</th>
+<th>Question it answers</th>
+<th>Canonical source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>harness (agent body)</code></td>
+<td>What body/interface mediates this agent's action?</td>
+<td><code>harness-substrate-plurality.md</code> — "Harness | What body/interface mediates action?"</td>
+</tr>
+<tr>
+<td><code>harness (lifecycle wrapper)</code> — <em>informal</em></td>
+<td>What plugin/hook chain wraps the Claude/Codex session?</td>
+<td><code>CLAUDE.md</code> — "Claude Code runs through a plugin-style harness"</td>
+</tr>
+<tr>
+<td><code>harness (test rig)</code> — <em>informal</em></td>
+<td>What scaffold drives a bounded eval?</td>
+<td><code>scripts/dev/calibration_harness/</code>, the <code>deep-research</code> skill</td>
+</tr>
+</tbody>
+</table>
+<p>The agent-body sense is the load-bearing ontology term. The other two are
+colloquial and rarely collide in practice, but flag them when prose mixes
+registers. <strong>The real issue is not a homonym — it's that the answer set for
+<code>harness (agent body)</code> is incomplete.</strong> See the open gap below.</p>
+<p><strong>Preferred term:</strong> <code>body</code> is the precise synonym for the agent-body sense and is
+already in use (<code>harness-substrate-plurality.md</code>: "powerful fixed bodies",
+"variable body"). The field's "harness" descends from <em>test harness</em> — a scaffold
+that drives code from outside — so it natively leans toward the scaffold/wrapper
+sense (rows 2–3), which pulls against the <em>inhabited body</em> sense (row 1). Prefer
+<code>body</code> when you mean what mediates an agent's action; reserve <code>harness</code> for the
+scaffold/lifecycle-wrapper sense. This assigns the two words we already use to
+the two questions they each answer best, rather than coining anything new.</p>
+<h3 id="fork-two-questions-the-bare-word-conflates">fork — two questions the bare word conflates</h3>
+<table>
+<thead>
+<tr>
+<th>Sense</th>
+<th>Question it answers</th>
+<th>Canonical source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fork (sibling locus)</code></td>
+<td>Is this a fresh process-instance under the <em>same</em> registry UUID, no child minted?</td>
+<td><code>r6-episode-fork-response-shape.md</code> — <code>episode_fork_kind = sibling_locus</code></td>
+</tr>
+<tr>
+<td><code>fork (identity lineage)</code></td>
+<td>Is this a <em>distinct child UUID</em> with declared <code>parent_agent_id</code> + <code>spawn_reason</code>?</td>
+<td><code>r6-episode-fork-response-shape.md</code> — <code>identity_lineage_fork</code> boolean</td>
+</tr>
+</tbody>
+</table>
+<p>R6 already disambiguates via the <code>episode_fork_kind</code> enum and the
+<code>identity_lineage_fork</code> boolean precisely because a bare <code>is_fork</code> is "too
+compressed." Never ship a field or sentence with unqualified "fork."</p>
+<h3 id="continuity-concept-vs-mechanism">continuity — concept vs. mechanism</h3>
+<table>
+<thead>
+<tr>
+<th>Sense</th>
+<th>Question it answers</th>
+<th>Canonical source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>continuity (layered concept)</code></td>
+<td>At which layers does this identity claim actually hold?</td>
+<td><code>identity.md</code> — the five-layer taxonomy</td>
+</tr>
+<tr>
+<td><code>continuity_token (mechanism)</code></td>
+<td><em>Advanced:</em> can this same live process re-bind by signed proof?</td>
+<td><code>identity.md</code> — "an advanced same-live-process rebind proof"; largely retired for cross-process use</td>
+</tr>
+</tbody>
+</table>
+<p>The token is a deprecated implementation that borrowed the concept's name. When
+you write "continuity," mean the layered concept unless you write the full
+<code>continuity_token</code>.</p>
+<h3 id="lineage-ancestry-vs-conversation-thread-same-doc-both-senses">lineage — ancestry vs. conversation thread (same doc, both senses)</h3>
+<table>
+<thead>
+<tr>
+<th>Sense</th>
+<th>Question it answers</th>
+<th>Canonical source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>lineage (causal ancestry)</code></td>
+<td>Which finished predecessor's work does this process inherit? (<code>parent_agent_id</code>)</td>
+<td><code>identity.md</code> — "inherits work from, not is identical to"</td>
+</tr>
+<tr>
+<td><code>thread lineage (conversation history)</code></td>
+<td>Which logical conversation/history thread is this? (<code>thread_id</code>)</td>
+<td><code>harness-substrate-plurality.md</code> — "<code>thread_id</code> names logical conversation/history lineage"</td>
+</tr>
+</tbody>
+</table>
+<p>Both appear in the provenance envelope; keep <code>thread_id</code> out of any sentence
+about causal ancestry.</p>
+<h3 id="basin-attractor-vs-health-band-confirmed-at-code-level-2026-06-20">basin — attractor vs. health band (<strong>confirmed at code level, 2026-06-20</strong>)</h3>
+<table>
+<thead>
+<tr>
+<th>Sense</th>
+<th>Question it answers</th>
+<th>Canonical source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>basin (attractor)</code></td>
+<td>Which equilibrium will the system's own EISV <em>dynamics</em> flow to?</td>
+<td><code>governance_core/dynamics.py::check_basin</code> — bistable <code>I&gt;0.5</code> high/low/boundary; the parallel ODE (research lens)</td>
+</tr>
+<tr>
+<td><code>basin (health band)</code></td>
+<td>Is each EISV axis inside its <em>configured</em> healthy box, so self-relative deviation should count as risk?</td>
+<td><code>src/behavioral_assessment.py::_basin_health_gate</code> (#689), <code>config.governance_config.BASIN_HIGH</code> — the <strong>verdict-driving</strong> gate</td>
+</tr>
+</tbody>
+</table>
+<p>This is the dangerous kind: only the second sense drives verdicts, and it is a
+<em>static configured box</em> (<code>BASIN_E_HEALTHY=0.60</code>, …), <strong>not</strong> an attractor derived
+from dynamics — even though it borrows the attractor word. The real attractor
+basin exists in the ODE but does not gate verdicts. A runtime glossary
+(<code>src/governance_glossary.py::explain_basin</code>, #428) resolves the health-band sense
+for users; keep it consistent with this entry.</p>
+<h3 id="free-energy-ode-accumulator-vs-variational-f-code-level">free energy — ODE accumulator vs. variational −F (code level)</h3>
+<table>
+<thead>
+<tr>
+<th>Sense</th>
+<th>Question it answers</th>
+<th>Canonical source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>free energy (ODE V)</code></td>
+<td>What is the running E−I imbalance accumulator?</td>
+<td><code>governance_core/dynamics.py</code> — <code>V</code> is "like Helmholtz free energy", a signed integrator</td>
+</tr>
+<tr>
+<td><code>free energy (variational −F)</code></td>
+<td>What is <code>E</code> as negative variational free energy under a generative model?</td>
+<td><code>src/grounding/free_energy.py</code> — Tier-1 FEP, <strong>explicitly stubbed</strong> (<code>NotImplementedError</code>, "Phase 2")</td>
+</tr>
+</tbody>
+</table>
+<p>The first ships and drives nothing on its own; the second is the <em>target</em> <code>E</code>
+semantics and is honestly not-yet-implemented. Don't let "free energy" stand
+unqualified across the two.</p>
+<hr>
+<h2 id="single-sense-load-bearing-terms">Single-sense load-bearing terms</h2>
+<p>These currently answer one question each. Listed so a future split is visible
+against a baseline.</p>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Question it answers</th>
+<th>Canonical source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>process-instance</code></td>
+<td>Which live subject is speaking right now?</td>
+<td><code>identity.md</code>, <code>harness-substrate-plurality.md</code></td>
+</tr>
+<tr>
+<td><code>registry</code> (identity layer)</td>
+<td>Which governance record is this claim bound to? (the UUID)</td>
+<td><code>harness-substrate-plurality.md</code></td>
+</tr>
+<tr>
+<td><code>transport</code></td>
+<td>Through what channel does the process act? (CLI, MCP-http, Discord, cron)</td>
+<td><code>harness-substrate-plurality.md</code></td>
+</tr>
+<tr>
+<td><code>lease</code></td>
+<td>What time-bounded claim to a surface is live, with what proof obligation and expiry?</td>
+<td><code>beam-coordination-kernel.md</code></td>
+</tr>
+<tr>
+<td><code>handoff</code></td>
+<td>How is custody of a lease (or of work) transferred without TTL expiry or ghost claims?</td>
+<td><code>beam-coordination-kernel.md</code>, <code>identity.md</code></td>
+</tr>
+<tr>
+<td><code>locus</code></td>
+<td>What situated coordinate is this? (guild_id, channel_id, tab_id, profile)</td>
+<td><code>harness-substrate-plurality.md</code></td>
+</tr>
+<tr>
+<td><code>episode</code></td>
+<td>What bounded local interaction span is this? (one thread, one CLI conversation)</td>
+<td><code>harness-substrate-plurality.md</code></td>
+</tr>
+<tr>
+<td><code>affordance_state</code></td>
+<td>What reach/permissions/capability does the agent actually have at event time?</td>
+<td><code>harness-substrate-plurality.md</code></td>
+</tr>
+<tr>
+<td><code>assurance</code> (<code>identity_assurance</code>)</td>
+<td>How strongly is this identity claim grounded? (tier + source)</td>
+<td><code>harness-substrate-plurality.md</code>, <code>identity.md</code></td>
+</tr>
+<tr>
+<td><code>governance_mode</code></td>
+<td>Under what authority context was this write made? (explicit / ambient / gated / lifecycle / posthoc)</td>
+<td><code>harness-substrate-plurality.md</code></td>
+</tr>
+<tr>
+<td><code>typed absence</code></td>
+<td><em>What kind</em> of absence is this? (<code>not_found</code> / <code>pending</code> / <code>expired</code> / <code>stale</code> / …) — never a bare null</td>
+<td><code>beam-coordination-kernel.md</code></td>
+</tr>
+<tr>
+<td><code>proof of life</code> / <code>heartbeat</code></td>
+<td>How does a remote holder prove it is still alive on its lease?</td>
+<td><code>beam-coordination-kernel.md</code></td>
+</tr>
+<tr>
+<td><code>provenance envelope</code></td>
+<td>What situated facts surrounded this single governance write?</td>
+<td><code>harness-substrate-plurality.md</code> (s22 write_context)</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="open-gaps-terms-were-already-pointing-at-but-havent-coined">Open gaps (terms we're already pointing at but haven't coined)</h2>
+<p>These are places where the vocabulary lags the thing. Tracked here so the gap is
+explicit, not silently papered over by reusing a near-term.</p>
+<ul>
+<li><strong>BEAM-resident agent has no <code>harness (agent body)</code> value.</strong> The lease enum
+  is <code>hermes / claude_code / codex / dispatch / lumen</code> — there is no value for
+  an agent whose body <em>is</em> a BEAM/OTP process (Sentinel Wave 1, Wave 3 handler
+  dispatch). The BEAM coordination kernel itself is <strong>not</strong> a harness — it is a
+  coordination substrate, a peer of UNITARES governance (it explicitly
+  disclaims the role: "Do not replace Hermes as the agent harness"). But an
+  agent <em>resident on</em> BEAM needs a harness value the taxonomy hasn't minted.
+  This is the distinction that prompted this glossary. See
+  <code>harness-substrate-plurality.md</code> layer table and <code>beam-coordination-kernel.md</code>
+  non-goals.</li>
+<li><strong><code>affordance_state</code> shape is uncoined.</strong> Boolean reach? Capability list?
+  Permission diff? Named as the most new-territory field in the provenance
+  envelope; the <em>term</em> exists but the <em>type</em> does not.</li>
+<li><strong><code>episode</code> nesting is undecided.</strong> Clean for Discord threads (one thread =
+  one episode); ambiguous for a long shell session with many invocations. The
+  question is answered; the granularity is not.</li>
+</ul>
+<hr>
+<h2 id="registers-the-second-axis">Registers (the second axis)</h2>
+<p>The vocabulary feels unbounded because it spans several <strong>registers</strong> — parallel
+ways of describing the <em>same</em> underlying referents, each existing for a different
+reason. The term count is not really growing without bound; a roughly fixed set
+of referents is being named in four registers. Tagging a term's register is the
+orthogonal second axis to "question answered."</p>
+<table>
+<thead>
+<tr>
+<th>Register</th>
+<th>What it is <em>for</em></th>
+<th>Source of truth</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>philosophical</strong> (grounding)</td>
+<td>What counts as real / earned vs. performative</td>
+<td><code>identity.md</code> — three stances, layered taxonomy</td>
+</tr>
+<tr>
+<td><strong>fep</strong> (modeling)</td>
+<td>Why the math is justified — borrowed from the Free Energy Principle / active inference</td>
+<td>external (Friston); adopt only when <em>earned</em></td>
+</tr>
+<tr>
+<td><strong>ops</strong> (mechanism)</td>
+<td>How it's implemented</td>
+<td>handlers, lease plane, EISV code</td>
+</tr>
+<tr>
+<td><strong>manifesto</strong> (norm)</td>
+<td>What must <em>not</em> be built</td>
+<td>Synthetic Life Axioms (<code>identity.md</code> cites them)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Guardrail — "name nothing more rigorous than it is."</strong> This is the sibling of
+the manifesto axiom <em>"build nothing that appears more alive than it is."</em> A <code>fep</code>
+term (<code>free energy</code>, <code>Markov blanket</code>, <code>active inference</code>) is seductive because
+it <em>sounds</em> earned — it makes the system sound like it is doing variational math
+it may not be doing. A physics term enters the <code>ops</code> or <code>philosophical</code> registers
+only when the mapping is <strong>earned</strong> (the math actually holds), not as decoration.
+This is the same earned-vs-performative gate <code>identity.md</code> applies to identity,
+applied here to borrowed rigor.</p>
+<h2 id="cross-register-map-rosetta-skeleton">Cross-register map (Rosetta — skeleton)</h2>
+<p>One row per <strong>referent</strong>; columns are its name in each register. This bounds the
+"unbounded nomenclature" into a finite table that grows by <em>rows</em> (new referents),
+not by uncontrolled vocabulary. Status marks the <code>fep</code> column specifically:</p>
+<ul>
+<li><strong>✓ earned</strong> — mapping holds and <em>drives behavior</em> (verdict path) today.</li>
+<li><strong>◐ research-lens</strong> — implemented as real math in the <strong>parallel ODE / grounding tiers</strong>, but <strong>not wired to the verdict path</strong>; honest, not decorative, but not yet load-bearing. (Added 2026-06-20 after reading the code; see correction below.)</li>
+<li><strong>~ candidate</strong> — plausible conceptual fit, <em>not yet</em> implemented anywhere; decorative if shipped as fact.</li>
+<li><strong>✗ false friend</strong> — looks like a synonym across registers but is a different referent; do not conflate.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Referent</th>
+<th>philosophical</th>
+<th>ops</th>
+<th>fep</th>
+<th>manifesto</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Agent identity</td>
+<td>layered continuity bundle</td>
+<td><code>uuid</code> + <code>client_session_id</code></td>
+<td>—</td>
+<td>must be earned, not performative</td>
+</tr>
+<tr>
+<td>Internal state</td>
+<td>behavioral trajectory</td>
+<td><code>EISV</code> state vector</td>
+<td>◐ ODE state (<code>governance_core/dynamics.py</code>); target <code>E=−F</code> tiered+stubbed in <code>grounding/free_energy.py</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>Healthy operating region</td>
+<td>"stable self"</td>
+<td><code>basin</code> (+ health gating)</td>
+<td>◐ attractor — <strong>real</strong> in <code>check_basin</code> (bistable ODE), but verdict path uses a configured <code>BASIN_HIGH</code> box, not the attractor</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Deviation signal</td>
+<td>—</td>
+<td><code>running hot</code>, basin-edge crossing</td>
+<td>◐ <code>running hot</code> (V-sign) ships; <code>surprise</code>/prediction-error as <code>−log P</code> does not</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Agent↔world boundary</td>
+<td>process-instance boundary</td>
+<td><code>lease surface</code>, <code>affordance_state</code></td>
+<td>✗ Markov blanket (<strong>false friend</strong> — statistical conditional-independence boundary, <em>not</em> a coordination claim)</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Custody transfer</td>
+<td>lineage / inheritance</td>
+<td><code>handoff</code></td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Proof of life</td>
+<td>process-instance liveness</td>
+<td><code>heartbeat</code></td>
+<td>~ non-equilibrium steady state / self-maintenance</td>
+<td>"build nothing more alive than it is"</td>
+</tr>
+<tr>
+<td>Belief revision</td>
+<td>dialectic resolution</td>
+<td><code>dialectic</code></td>
+<td>~ active inference / belief updating</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Confidence grounding</td>
+<td>earned vs. performative</td>
+<td><code>identity_assurance</code> tier, calibration</td>
+<td>~ precision-weighting</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Correction (code-grounded, 2026-06-20).</strong> The skeleton's first claim — "physics
+register is aspirational, all <code>~</code>, zero earned" — <strong>was wrong, and reading the
+code corrected it.</strong> Three rows are <code>◐ research-lens</code>, not <code>~</code>:</p>
+<ul>
+<li><code>governance_core/dynamics.py</code> is a <strong>real thermodynamic ODE</strong> (full <code>dE/dt…dV/dt</code>,
+  RK4, coherence feedback, soft barriers, <code>compute_equilibrium</code>, contraction-theory
+  convergence, and <code>check_basin</code> — a genuine bistable basin of attraction).</li>
+<li><code>src/grounding/free_energy.py</code> already implements the <strong>"name nothing more
+  rigorous than it is" guardrail in code</strong>: a 3-tier estimator where Tier-1 FEP is
+  explicitly <code>raise NotImplementedError("…Phase 2 scope")</code>, Tier-2 resource ships,
+  and every value carries a <code>source=</code> provenance tag so a heuristic is never
+  laundered as a measurement. The guardrail predates this glossary and runs at
+  runtime.</li>
+<li><code>docs/EISV_COMPUTATION.md</code> already states the deployed-vs-target split this table
+  was re-deriving: deployed EISV = "auditable heuristic blends, EMA-smoothed";
+  target = <code>E</code>as<code>−F</code>, <code>I</code>as mutual information, <code>S</code>as entropy. <strong>The ODE "runs in
+  parallel and does NOT drive verdicts."</strong></li>
+</ul>
+<p>So the accurate finding is sharper than "aspirational": <strong>the physics is built but
+not wired.</strong> Your system is two loops — a heuristic verdict path (EMA + z-score +
+<code>BASIN_HIGH</code> health gate) that drives decisions, and a parallel thermodynamic ODE
+that's a research lens. Promoting a <code>◐</code> to <code>✓</code> does not mean <em>building</em> the math;
+it means <strong>wiring the existing ODE/grounding forms onto the verdict path</strong> — a real
+control-loop change to trajectory/telemetry, gated tier-by-tier with the provenance
+honesty already in place. That is the single most important thing this whole
+glossary exercise surfaced.</p>
+<p>The four-register model still holds for these nine rows; if a referent won't fit a
+column, that absence is a finding (e.g. most rows have no genuine <code>manifesto</code> name
+— the norm register governs a few load-bearing referents, not all of them), not a
+gap to backfill.</p>
+<h3 id="fep-promotion-conditions-roadmap">FEP promotion conditions (roadmap)</h3>
+<p>Each <code>~ candidate</code> from the table above, with the <strong>falsifiable condition</strong> it
+must meet before its <code>fep</code> cell is promoted to <code>✓ earned</code>. The discipline: if you
+can't state a test that would <em>fail</em>, the mapping is decoration, not rigor. Listed
+most-reachable first.</p>
+<table>
+<thead>
+<tr>
+<th>Candidate mapping</th>
+<th>Earned when (falsifiable test)</th>
+<th>Reachability</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>assurance/calibration → <strong>precision-weighting</strong></td>
+<td>An observation's effect on state/calibration is scaled by its assurance as an explicit inverse-variance <strong>precision</strong> term — low-assurance writes are down-weighted <em>proportionally</em>, not by category. Test: the update weight is a continuous function of assurance, derivable as precision, not an <code>if tier == weak</code> branch. (<code>identity.md</code> already gestures at this: "a gated pre-check should not weight calibration the same way an explicit check-in does.")</td>
+<td><strong>High</strong> — closest to earnable; the weighting intent already exists, it just needs to be Bayesian rather than categorical.</td>
+</tr>
+<tr>
+<td>basin → <strong>attractor / characteristic-state set</strong></td>
+<td><em>Already built (<code>◐</code>)</em> — the attractor exists in <code>check_basin</code> (bistable ODE). Earned (<code>✓</code>) when the <strong>verdict path's</strong> basin gate is the ODE attractor, not the static <code>BASIN_HIGH</code> box in <code>behavioral_assessment.py</code>. Test: the gate edge moves with the dynamics; replacing the config box with the ODE separatrix changes no test that depends on a <em>real</em> edge.</td>
+<td><strong>High</strong> — not "build the math" but "wire ODE→verdict path"; the math is done.</td>
+</tr>
+<tr>
+<td>EISV → <strong>generative-model belief state</strong></td>
+<td><em>Partly built (<code>◐</code>)</em> — the ODE evolves EISV; what's missing is <strong>uncertainty</strong>: EISV is a point estimate. Earned when EISV carries explicit precision (a distribution) and updates approximate free-energy minimization, not EMA smoothing. Test: the EISV update equals/approximates FE-minimization under a stated generative model.</td>
+<td><strong>Medium</strong> — the prerequisite that unlocks three rows; needs EISV distributional (mean + precision).</td>
+</tr>
+<tr>
+<td>running-hot / basin-edge → <strong>surprise / prediction error</strong></td>
+<td>The hot signal is computed as (an approximation of) <code>−log P(behavior \| model)</code> under an explicit generative model — how <em>unexpected</em> current behavior is, not variance-from-norm. Test: high surprise provably drives belief updates (couples to the EISV and dialectic rows).</td>
+<td><strong>Medium</strong> — depends on EISV-as-belief-state landing first.</td>
+</tr>
+<tr>
+<td>dialectic → <strong>active inference / policy selection</strong></td>
+<td>Resolution is formalized as selecting the position/action that minimizes <strong>expected</strong> free energy (future surprise), with an explicit EFE objective. Test: a dialectic verdict is reconstructable from an EFE computation, not an LLM judgment or scoring heuristic.</td>
+<td><strong>Medium-low</strong> — the largest formalization lift.</td>
+</tr>
+<tr>
+<td>heartbeat → <strong>non-equilibrium steady state / self-maintenance</strong></td>
+<td>Proof-of-life is contingent on the agent <em>actively maintaining its own boundary/characteristic states</em> (resisting dissipation), not emitting a TTL ping. Test: liveness fails when self-maintenance work stops, even if the timer fires.</td>
+<td><strong>Decorative — recommend demote.</strong> A TTL heartbeat is an ops timer; "NESS" is almost certainly borrowed rigor here. Drop the <code>fep</code> name unless heartbeat is re-grounded in real self-maintenance.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>On the false friend.</strong> <code>Markov blanket</code> stays <code>✗</code> for the lease-surface
+referent — they are not the same boundary. <em>If</em> the system ever wants a genuine
+Markov-blanket referent, it is the conditional-independence boundary separating an
+agent's internal states from external ones (sensory + active states mediating) —
+closer to <code>affordance_state</code> than to a coordination claim — and it is earned only
+when that statistical independence structure is actually modeled, not asserted.</p>
+<p><strong>Roadmap reading (code-corrected):</strong> the work is mostly <em>wiring, not building</em>.
+<code>basin-as-attractor</code> is a wire-up (ODE exists); <code>precision-weighting</code> is the
+closest greenfield-ish step (the basin-health gate is already a 0→1 ramp, which is
+precision-shaped); the EISV-distributional change is the prerequisite that unlocks
+surprise + active-inference; <code>heartbeat→NESS</code> should be dropped. The single
+highest-leverage move is <strong>making EISV distributional</strong> (mean + precision), because
+it both unlocks three FEP rows <em>and</em> is the precondition for letting the ODE drive
+verdicts honestly. That ordering is the actual deliverable — it says which physics
+claims to earn
+next and which to stop borrowing.</p>
+<hr>
+<h2 id="maintenance">Maintenance</h2>
+<p>When a sweep finds a new collision, add it to the high-risk table here and log
+the sweep as a dated audit alongside <code>glossary-drift-audit-2026-06-20.md</code>. Keep
+this file keyed by <em>question answered</em>; if you find yourself writing a definition
+that leads with examples, you are seeding the next drift.</p>
+</main>
+<footer>
+  Generated from <code>docs/ontology/</code> — the markdown is the source of truth.
+  Edit there, not here. <a href="https://github.com/cirwel/unitares/blob/master/docs/ontology/glossary.md">View source</a>.
+</footer>
+</body>
+</html>
