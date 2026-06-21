@@ -23,13 +23,17 @@ python3 scripts/dev/build_glossary_site.py --out build/glossary-site
 # open build/glossary-site/index.html
 ```
 
-## One-time enablement (operator, admin)
+## Enablement
 
-Pages is not enabled yet (`has_pages: false`). Once:
+The workflow **auto-enables Pages on its first run** via
+`actions/configure-pages@v5` with `enablement: true` (it holds `pages: write`), so
+no manual toggle is normally needed — push to `master` (or run the workflow
+manually) and the site publishes at **https://cirwel.github.io/unitares/**.
 
-1. Repo **Settings → Pages → Build and deployment → Source = "GitHub Actions"**.
-2. Push to `master` (or run the workflow manually). The site publishes at
-   **https://cirwel.github.io/unitares/**.
+Fallback (if an org/account policy blocks API enablement and the deploy job 404s
+with "Ensure GitHub Pages has been enabled"): set it by hand once —
+repo **Settings → Pages → Build and deployment → Source = "GitHub Actions"** — then
+re-run the workflow.
 
 ## Custom domain (optional, branded URL)
 
