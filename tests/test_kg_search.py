@@ -161,6 +161,89 @@ class TestSearchKnowledgeGraph:
         assert data["search_mode_used"] == "indexed_filters"
 
     @pytest.mark.asyncio
+    async def test_superseded_result_is_flagged(self, patch_common):
+        """Agent-facing trust flag (2026-06-21): a superseded result is marked
+        superseded + carries the replacement id, so an agent doesn't cite stale
+        knowledge. Default search returns superseded rows (only down-ranked)."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        old = make_discovery(id="old-1", summary="stale finding", status="superseded")
+        mock_graph.full_text_search = AsyncMock(return_value=[old])
+        if hasattr(mock_graph, "semantic_search"):
+            del mock_graph.semantic_search  # force FTS path
+        mock_graph.get_superseded_by = AsyncMock(return_value={"old-1": ["new-1"]})
+
+        result = await handle_search_knowledge_graph({"query": "stale"})
+        data = parse_result(result)
+        disc = next(d for d in data["discoveries"] if d["id"] == "old-1")
+        assert disc["superseded"] is True
+        assert disc["superseded_by"] == ["new-1"]
+        assert "superseded_warning" in disc
+        assert "new-1" in disc["superseded_warning"]
+
+    @pytest.mark.asyncio
+    async def test_superseded_flag_failsoft_without_successor(self, patch_common):
+        """If the AGE successor lookup fails, the row is still flagged superseded
+        from status (free) — just without superseded_by. Never breaks search."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        old = make_discovery(id="old-2", summary="stale", status="superseded")
+        mock_graph.full_text_search = AsyncMock(return_value=[old])
+        if hasattr(mock_graph, "semantic_search"):
+            del mock_graph.semantic_search
+        mock_graph.get_superseded_by = AsyncMock(side_effect=RuntimeError("AGE down"))
+
+        result = await handle_search_knowledge_graph({"query": "stale"})
+        data = parse_result(result)
+        disc = next(d for d in data["discoveries"] if d["id"] == "old-2")
+        assert disc["superseded"] is True
+        assert "superseded_by" not in disc
+        assert "superseded_warning" in disc
+
+    @pytest.mark.asyncio
+    async def test_non_superseded_result_not_flagged(self, patch_common):
+        """An open result carries no supersession fields and triggers no lookup."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        fresh = make_discovery(id="ok-1", summary="current", status="open")
+        mock_graph.full_text_search = AsyncMock(return_value=[fresh])
+        if hasattr(mock_graph, "semantic_search"):
+            del mock_graph.semantic_search
+        mock_graph.get_superseded_by = AsyncMock(return_value={})
+
+        result = await handle_search_knowledge_graph({"query": "current"})
+        data = parse_result(result)
+        disc = next(d for d in data["discoveries"] if d["id"] == "ok-1")
+        assert "superseded" not in disc
+        mock_graph.get_superseded_by.assert_not_awaited()  # no superseded ids -> no AGE read
+
+    @pytest.mark.asyncio
+    async def test_update_superseded_by_records_edge(self, patch_common, registered_agent):
+        """Write-path fix (2026-06-21): update with superseded_by creates the
+        SUPERSEDES edge, not just status. Previously superseded_by was read
+        nowhere, so the successor link was silently dropped (18 rows, 0 edges)."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_update_discovery_status_graph
+
+        mock_graph.get_discovery = AsyncMock(return_value=make_discovery(id="old-1", severity="low"))
+        mock_graph.update_discovery = AsyncMock(return_value=True)
+        mock_graph.supersede_discovery = AsyncMock(return_value={"success": True})
+
+        result = await handle_update_discovery_status_graph({
+            "agent_id": registered_agent,
+            "discovery_id": "old-1",
+            "status": "superseded",
+            "superseded_by": "new-1",
+        })
+        data = parse_result(result)
+        assert data["success"] is True
+        mock_graph.supersede_discovery.assert_awaited_once_with(new_id="new-1", old_id="old-1")
+        assert data["superseded_by"] == "new-1"
+
+    @pytest.mark.asyncio
     async def test_search_with_query_text_fts(self, patch_common):
         """Search with query text uses FTS when available."""
         mock_mcp_server, mock_graph = patch_common
