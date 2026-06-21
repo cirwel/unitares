@@ -11,7 +11,7 @@
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   // Local schedulers the operator runs directly; github-actions (the bulk) is
   // folded away by default so the map opens on what's actually theirs to mind.
-  const LOCAL = ["launchd", "hermes", "codex", "claude"];
+  const LOCAL = ["launchd", "hermes", "codex", "claude", "claude-ai"];
 
   let MODEL = { items: [], summary: {}, stale: false, ageS: null, warnings: [], attn: new Set(), source: "snapshot" };
   let scope = "local"; // "local" (+attention) | "all"
