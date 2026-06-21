@@ -163,6 +163,17 @@ unqualified across the two.
 
 ---
 
+### proof of life — self-attested vs. externally-observed
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `proof of life (self-attested)` | How does a holder prove *itself* still alive? (it renews a heartbeat/check-in; liveness = `expires_at > now()`) | `beam-coordination-kernel.md` — lease heartbeat |
+| `proof of life (externally-observed)` | How does a *supervising* process attest the subject died, without the subject's cooperation? (the owner watches the process and reports its end) | `beam-coordination-kernel.md` — OTP monitors/supervision; live today in `dispatch_beam` holder leases (`Process.monitor` → `:DOWN` release) |
+
+The first is a *claim the subject makes*; the second is a *fact something watching it reports* — different questions, so binding the wrong one is the bug. The recurring false-archival incidents are self-attested-only liveness read as death (absence of a heartbeat is not observed death), and it is weakest exactly at silent-hang, where a heartbeat can outlive the work. Where an owning monitor exists (a BEAM orchestrator holding the agent's OS process), the observed sense is authoritative and the self-attested one is the fallback for agents with no supervisor. Sourcing the *archival gate* from the observed sense is proposed, not yet canonical (KG `2026-06-21T16:20:42`, "liveness should be monitor-delegated, not self-reported").
+
+---
+
 ## Single-sense load-bearing terms
 
 These currently answer one question each. Listed so a future split is visible
@@ -181,7 +192,6 @@ against a baseline.
 | `assurance` (`identity_assurance`) | How strongly is this identity claim grounded? (tier + source) | `harness-substrate-plurality.md`, `identity.md` |
 | `governance_mode` | Under what authority context was this write made? (explicit / ambient / gated / lifecycle / posthoc) | `harness-substrate-plurality.md` |
 | `typed absence` | *What kind* of absence is this? (`not_found` / `pending` / `expired` / `stale` / …) — never a bare null | `beam-coordination-kernel.md` |
-| `proof of life` / `heartbeat` | How does a remote holder prove it is still alive on its lease? | `beam-coordination-kernel.md` |
 | `provenance envelope` | What situated facts surrounded this single governance write? | `harness-substrate-plurality.md` (s22 write_context) |
 
 ---
@@ -201,6 +211,16 @@ explicit, not silently papered over by reusing a near-term.
   This is the distinction that prompted this glossary. See
   `harness-substrate-plurality.md` layer table and `beam-coordination-kernel.md`
   non-goals.
+  - *Sub-distinction (orchestrated agents).* When a BEAM process *spawns* a
+    non-BEAM agent (`dispatch_beam` → a `claude`/`codex` OS process) there are
+    **two** bodies: the **holder body** — the supervised BEAM process that owns
+    the agent's OS process and observes its `:DOWN` — and the **agent body** —
+    the spawned CLI the agent reasons in. The `harness (agent body)` value names
+    only the latter; the holder body has no term. They must not be conflated:
+    the load-bearing rule is *the PID models the holder, not the agent's
+    governance self* — the orchestrator gives the holder honest lifecycle but
+    must not forge the agent's identity (`dispatch_beam` PLAN, "ontology
+    payoff" + identity-honesty caveat).
 - **`affordance_state` shape is uncoined.** Boolean reach? Capability list?
   Permission diff? Named as the most new-territory field in the provenance
   envelope; the *term* exists but the *type* does not.
@@ -253,7 +273,7 @@ not by uncontrolled vocabulary. Status marks the `fep` column specifically:
 | Deviation signal | — | `running hot`, basin-edge crossing | ◐ `running hot` (V-sign) ships; `surprise`/prediction-error as `−log P` does not | — |
 | Agent↔world boundary | process-instance boundary | `lease surface`, `affordance_state` | ✗ Markov blanket (**false friend** — statistical conditional-independence boundary, *not* a coordination claim) | — |
 | Custody transfer | lineage / inheritance | `handoff` | — | — |
-| Proof of life | process-instance liveness | `heartbeat` | ~ non-equilibrium steady state / self-maintenance | "build nothing more alive than it is" |
+| Proof of life | process-instance liveness (self-attested vs. observed) | `heartbeat` (self-attested) · monitor `:DOWN` (externally-observed) | ~ non-equilibrium steady state / self-maintenance | "build nothing more alive than it is" |
 | Belief revision | dialectic resolution | `dialectic` | ~ active inference / belief updating | — |
 | Confidence grounding | earned vs. performative | `identity_assurance` tier, calibration | ~ precision-weighting | — |
 
