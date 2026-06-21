@@ -196,7 +196,7 @@ For Lumen's internal architecture (sensors, neural bands, DrawingEISV, LED pipel
 The system is in active development. Larger conceptual shifts and shipping RFCs live in:
 
 - **[`ontology/`](ontology/)** — the versioned identity ontology and the research/system RFCs that evolve it. Start at [`ontology/README.md`](ontology/README.md).
-- **[`proposals/`](proposals/)** — RFCs that don't (yet) belong in `ontology/`. The Plexus / lease-plane / BEAM-coordination work is here ([`plexus-scope.md`](proposals/plexus-scope.md), [`surface-lease-plane-v0.md`](proposals/surface-lease-plane-v0.md), [`beam-footprint-roadmap-v0.md`](proposals/beam-footprint-roadmap-v0.md), and the `wave-*` series).
+- **[`proposals/`](proposals/)** — RFCs that don't (yet) belong in `ontology/`. The Plexus / lease-plane / BEAM-coordination work is here ([`plexus-scope.md`](proposals/plexus-scope.md), [`surface-lease-plane-v0.md`](proposals/surface-lease-plane-v0.md), [`beam-footprint-roadmap-v0.md`](proposals/beam-footprint-roadmap-v0.md), [`monitor-delegated-liveness-v0.md`](proposals/monitor-delegated-liveness-v0.md), and the `wave-*` series).
 - **The paper** — [`unitares-paper-v6`](https://github.com/cirwel/unitares-paper-v6) (DOI [10.5281/zenodo.19647159](https://doi.org/10.5281/zenodo.19647159)). v7 is in scoping; see [`ontology/paper-positioning.md`](ontology/paper-positioning.md).
 
 If runtime code and this doc disagree, runtime wins. Disputes resolve against [`dev/CANONICAL_SOURCES.md`](dev/CANONICAL_SOURCES.md).
