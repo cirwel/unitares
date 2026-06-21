@@ -23,27 +23,28 @@ python3 scripts/dev/build_glossary_site.py --out build/glossary-site
 # open build/glossary-site/index.html
 ```
 
-## How publishing works (branch-source, token-only)
+## How publishing works (Actions source)
 
-The workflow builds the site and **pushes it to the `gh-pages` branch** with
-`contents: write`. It deliberately does *not* use the Pages API or the
-Actions-source deploy: the workflow `GITHUB_TOKEN` cannot create a Pages site
-(`Resource not accessible by integration` — tried in #986), so an API/Actions path
-needs a human to enable Pages first. Pushing a branch needs no such permission, so
-**the workflow always succeeds** and the published HTML lands on `gh-pages`.
+The workflow builds the site and deploys it to GitHub Pages via
+`actions/upload-pages-artifact` + `actions/deploy-pages` (Pages **Source =
+"GitHub Actions"**). On every push to `master` touching the glossary, audit, build
+script, or workflow, the site re-publishes to **https://cirwel.github.io/unitares/**.
 
-Going live then depends on GitHub's branch-source behavior:
+### Enablement history (why it took a few tries)
 
-- If Pages auto-serves `gh-pages`, the site is live at
-  **https://cirwel.github.io/unitares/** with no manual step.
-- If it does not, enable it **once** (no re-run needed):
-  **Settings → Pages → Build and deployment → Source = "Deploy from a branch" →
-  Branch = `gh-pages` / `/ (root)`**.
+The workflow `GITHUB_TOKEN` cannot *create* a Pages site — only deploy to one that
+exists. So enabling Pages was a one-time human step:
 
-History note: the Actions-source + `configure-pages enablement: true` paths were
-tried first (#985, #986) and both hit the token's inability to create the Pages
-site. Branch-source is the token-only route (#987) and at worst reduces the manual
-step to a one-click branch selection.
+- #985 (Actions deploy) and #986 (`configure-pages enablement: true`) both failed
+  with `Resource not accessible by integration` / a deploy 404, because Pages was
+  not yet enabled and the token may not enable it.
+- #987 published to a `gh-pages` branch as a token-only fallback (that branch now
+  exists but is unused under Actions source — safe to delete).
+- Once Pages was enabled by hand (**Settings → Pages → Source = "GitHub
+  Actions"**), this Actions-deploy path works and is the maintained one.
+
+If you ever see the deploy job 404 again, confirm **Settings → Pages → Source**
+is still "GitHub Actions".
 
 ## Custom domain (optional, branded URL)
 
