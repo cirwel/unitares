@@ -23,20 +23,27 @@ python3 scripts/dev/build_glossary_site.py --out build/glossary-site
 # open build/glossary-site/index.html
 ```
 
-## One-time enablement (required, admin)
+## How publishing works (branch-source, token-only)
 
-Pages must be enabled **by hand once** — the workflow `GITHUB_TOKEN` cannot create
-the Pages site itself (the `actions/configure-pages` `enablement: true` path was
-tried and fails with `Resource not accessible by integration`; see PRs #986/#987).
-So:
+The workflow builds the site and **pushes it to the `gh-pages` branch** with
+`contents: write`. It deliberately does *not* use the Pages API or the
+Actions-source deploy: the workflow `GITHUB_TOKEN` cannot create a Pages site
+(`Resource not accessible by integration` — tried in #986), so an API/Actions path
+needs a human to enable Pages first. Pushing a branch needs no such permission, so
+**the workflow always succeeds** and the published HTML lands on `gh-pages`.
 
-1. Repo **Settings → Pages → Build and deployment → Source = "GitHub Actions"**.
-2. Re-run **Actions → glossary-pages** (or push a glossary change). The site then
-   publishes at **https://cirwel.github.io/unitares/** and re-deploys automatically
-   on every future glossary change.
+Going live then depends on GitHub's branch-source behavior:
 
-Until step 1 is done, the `deploy` job 404s with "Ensure GitHub Pages has been
-enabled" — that is expected, not a code bug.
+- If Pages auto-serves `gh-pages`, the site is live at
+  **https://cirwel.github.io/unitares/** with no manual step.
+- If it does not, enable it **once** (no re-run needed):
+  **Settings → Pages → Build and deployment → Source = "Deploy from a branch" →
+  Branch = `gh-pages` / `/ (root)`**.
+
+History note: the Actions-source + `configure-pages enablement: true` paths were
+tried first (#985, #986) and both hit the token's inability to create the Pages
+site. Branch-source is the token-only route (#987) and at worst reduces the manual
+step to a one-click branch selection.
 
 ## Custom domain (optional, branded URL)
 
