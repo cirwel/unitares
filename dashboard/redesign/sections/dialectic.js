@@ -60,7 +60,26 @@
           ${res.reasoning ? `<div style="margin-bottom:var(--space-2)">${esc(res.reasoning)}</div>` : ""}
           ${res.rootCause ? `<div style="color:var(--muted)"><b style="color:var(--ink-2)">root cause:</b> ${esc(res.rootCause)}</div>` : ""}
         </div></details>` : ""}
+      ${s.msgs ? `<details class="dlc-transcript" data-sid="${esc(s.id)}" style="margin-top:var(--space-2)"><summary style="cursor:pointer;color:var(--muted);font-size:var(--text-sm)">transcript · ${s.msgs} message${s.msgs === 1 ? "" : "s"}</summary>
+        <div class="dlc-tbody" style="margin-top:var(--space-3)"><span class="fresh">loading…</span></div></details>` : ""}
     </div>`;
+  }
+
+  // Render a session's transcript: the thesis → antithesis → synthesis exchange,
+  // each turn coloured by phase, with reasoning + content + root cause.
+  function renderTranscript(msgs) {
+    if (!msgs || !msgs.length) return `<span class="fresh">no transcript recorded</span>`;
+    return msgs.map((m) => {
+      const ph = PHASE[m.phase || m.role] || { color: "var(--muted)", label: m.role || m.phase || "—" };
+      return `<div style="border-left:2px solid ${ph.color};padding-left:var(--space-3);margin-bottom:var(--space-3)">
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:2px">
+          <span class="tag" style="color:${ph.color};border-color:color-mix(in srgb, ${ph.color} 40%, var(--line-2))">${ph.label}</span>
+          <span class="fresh">${esc((m.agent_id || "").slice(0, 8))}${m.timestamp ? " · " + relTime(m.timestamp) : ""}</span></div>
+        ${m.content ? `<div style="color:var(--ink-2);font-size:var(--text-sm);line-height:var(--leading-body);white-space:pre-wrap">${esc(m.content)}</div>` : ""}
+        ${m.reasoning && m.reasoning !== m.content ? `<div style="color:var(--muted);font-size:var(--text-sm);margin-top:2px">${esc(m.reasoning)}</div>` : ""}
+        ${m.root_cause ? `<div style="color:var(--muted);font-size:var(--text-xs);margin-top:2px"><b style="color:var(--ink-2)">root cause:</b> ${esc(m.root_cause)}</div>` : ""}
+      </div>`;
+    }).join("");
   }
 
   function render() {
@@ -79,6 +98,16 @@
        ${rows.length ? `<div style="display:flex;flex-direction:column;gap:var(--space-3)">${rows.map(card).join("")}</div>`
          : `<div class="empty">🔄 No dialectic sessions in this view. Sessions open when an agent's circuit-breaker trips or review is requested.</div>`}`;
     document.querySelectorAll(".dlc-f").forEach((b) => b.onclick = () => { phaseFilter = b.dataset.f; render(); });
+    // Lazy-load each transcript on first expand (the list doesn't carry messages).
+    document.querySelectorAll(".dlc-transcript").forEach((d) => {
+      d.addEventListener("toggle", async () => {
+        if (!d.open || d.dataset.loaded) return;
+        d.dataset.loaded = "1";
+        const body = d.querySelector(".dlc-tbody");
+        const r = await DATA.dialecticSession(d.dataset.sid);
+        body.innerHTML = renderTranscript(r.data && r.data.transcript);
+      });
+    });
   }
 
   async function load() {

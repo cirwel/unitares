@@ -184,6 +184,8 @@
           status: d.status || "open", by: d.by || d.agent_id || d._agent_id, tags: d.tags || [],
           summary: d.summary || "Untitled", details: d.details || d.content || d.discovery || "",
           stale: !!d.staleness_warning,
+          // provenance the card now exposes
+          agentId: d._agent_id, session: d.session_id_at_write, version: d.system_version, created: d.created_at,
         }));
         const st = statsR ? (statsR.stats || statsR) : null;
         return {
@@ -212,6 +214,16 @@
         sessions.forEach((s) => { if (["resolved"].includes(s.phase)) c.resolved++; else if (["failed", "escalated"].includes(s.phase)) c.failed++; else c.active++; });
         return { sessions, counts: c };
       }, () => ({ sessions: S().dialectic.sessions, counts: S().dialectic.counts }));
+    },
+
+    async dialecticSession(id) {
+      // Full transcript (thesis → antithesis → synthesis) + resolution for one
+      // session — the history the list view hides behind message_count.
+      return withFallback(async () => {
+        const r = await callTool("dialectic", { action: "get", session_id: id });
+        if (!r || !Array.isArray(r.transcript)) return null;
+        return { transcript: r.transcript, resolution: r.resolution, reason: r.reason, recommended: r.recommended_action };
+      }, () => null);
     },
 
     async activity() {
