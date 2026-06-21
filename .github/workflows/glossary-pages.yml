@@ -1,0 +1,54 @@
+name: glossary-pages
+
+# Publishes the public glossary site (generated from docs/ontology/glossary.md)
+# to GitHub Pages. Free: public repo + GITHUB_TOKEN only, no model API.
+#
+# One-time setup before this can deploy: repo Settings -> Pages -> Source =
+# "GitHub Actions". To serve from a custom domain, pass --cname below and add the
+# matching DNS record (see docs/operations/glossary-site.md).
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "docs/ontology/glossary.md"
+      - "docs/ontology/glossary-drift-audit-*.md"
+      - "scripts/dev/build_glossary_site.py"
+      - ".github/workflows/glossary-pages.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never cancel an in-flight deploy; let the latest queue.
+concurrency:
+  group: glossary-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet markdown
+      - name: Build glossary site
+        # To brand the URL, append: --cname glossary.cirwel.org
+        run: python3 scripts/dev/build_glossary_site.py --out build/glossary-site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/glossary-site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
