@@ -106,10 +106,15 @@ def compute_agent_signature(
             structured_id = getattr(meta, 'structured_id', None)
 
         signature = {"uuid": agent_uuid}
-        # display_name (user-chosen) takes precedence over agent_id (auto-generated)
+        # P1.3 contract: `agent_id` is a STRUCTURED-identifier slot. It must
+        # never carry a bare display label when a structured handle exists —
+        # the cosmetic label belongs in `display_name`. Emitting the label in
+        # a field literally named `agent_id` leaked multiple handles for one
+        # agent (KG 2026-06-13 dogfood P1.3). Prefer the structured handle;
+        # fall back to the label only when no handle is available at all.
         auto_id = public_agent_id or structured_id
         if display_label:
-            signature["agent_id"] = display_label
+            signature["agent_id"] = auto_id or display_label
             if auto_id:
                 signature["structured_agent_id"] = auto_id
             signature["display_name"] = display_label
