@@ -577,37 +577,59 @@ def _check_display_name_required(agent_id: str, arguments: Dict[str, Any]) -> tu
         logger.debug(f"Could not check display_name: {e}")
         return None, None  # Don't block on check failures
 
-def _resolve_agent_display(agent_id: str) -> Dict[str, str]:
+def _resolve_agent_display(agent_id: str) -> Dict[str, Any]:
     """
     Resolve agent_id to display info (v2.5.4).
 
-    Returns dict with agent_id, display_name for human-readable output.
-    UUID is never exposed - kept internal for session binding only.
+    Returns S22-shaped display info for human-readable output: UUID is the
+    registry key, ``agent_id`` is the public structured handle, and
+    ``display_name`` is cosmetic.
 
     Args:
         agent_id: Either model+date format (new) or UUID (legacy lookups)
     """
+    def _payload(uuid_key: str, meta, fallback_handle: str) -> Dict[str, Any]:
+        from src.services.identity_payloads import build_identity_signature_payload
+
+        def _meta_text(name: str) -> Optional[str]:
+            value = getattr(meta, name, None)
+            if not isinstance(value, str):
+                return None
+            value = value.strip()
+            return value or None
+
+        public_handle = (
+            _meta_text('public_agent_id')
+            or _meta_text('structured_id')
+            or fallback_handle
+        )
+        display_name = (
+            _meta_text('display_name')
+            or _meta_text('label')
+            or public_handle
+        )
+        payload = build_identity_signature_payload(
+            agent_uuid=uuid_key,
+            agent_id=public_handle,
+            display_name=display_name,
+        )
+        return payload
+
     try:
         # Try direct lookup (if agent_id is actually a UUID in legacy data)
         if agent_id in mcp_server.agent_metadata:
             meta = mcp_server.agent_metadata[agent_id]
-            structured_id = getattr(meta, 'structured_id', None) or agent_id
-            display_name = (
-                getattr(meta, 'display_name', None) or
-                getattr(meta, 'label', None) or
-                structured_id
-            )
-            return {"agent_id": structured_id, "display_name": display_name}
+            return _payload(agent_id, meta, agent_id)
 
         # Search by structured_id or label
         for uuid_key, meta in mcp_server.agent_metadata.items():
-            if getattr(meta, 'structured_id', None) == agent_id or getattr(meta, 'label', None) == agent_id:
-                display_name = (
-                    getattr(meta, 'display_name', None) or
-                    getattr(meta, 'label', None) or
-                    agent_id
-                )
-                return {"agent_id": agent_id, "display_name": display_name}
+            if (
+                getattr(meta, 'public_agent_id', None) == agent_id
+                or getattr(meta, 'structured_id', None) == agent_id
+                or getattr(meta, 'label', None) == agent_id
+                or getattr(meta, 'display_name', None) == agent_id
+            ):
+                return _payload(uuid_key, meta, agent_id)
     except Exception:
         pass
     # Fallback: use agent_id as-is

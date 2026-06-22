@@ -175,6 +175,9 @@ class TestComputeAgentSignature:
         assert sig["agent_id"] == "S1"
         assert sig["structured_agent_id"] == "S1"
         assert sig["display_name"] == "Ctx"
+        assert sig["identity_context"]["schema"] == "s22.identity_response.v1"
+        assert sig["identity_context"]["public_handle"]["agent_id"] == "S1"
+        assert sig["identity_context"]["label"]["display_name"] == "Ctx"
 
     @patch("src.mcp_handlers.context.get_context_agent_id")
     @patch("src.mcp_handlers.shared.get_mcp_server")
@@ -221,6 +224,8 @@ class TestComputeAgentSignature:
         assert sig["agent_id"] == "Claude_Code_20260417"
         assert sig["display_name"] == "hikewa"
         assert sig["label_source"] == "claimed"
+        assert sig["identity_context"]["public_handle"]["agent_id"] == "Claude_Code_20260417"
+        assert sig["identity_context"]["label"]["display_name"] == "hikewa"
 
     @patch("src.mcp_handlers.context.get_context_agent_id")
     @patch("src.mcp_handlers.shared.get_mcp_server")
@@ -238,6 +243,9 @@ class TestComputeAgentSignature:
         assert sig["agent_id"] != "claude-opus48-dogfood"
         assert sig["display_name"] == "claude-opus48-dogfood"
         assert sig["structured_agent_id"] == "Claude_Opus_4_8_20260613"
+        assert sig["identity_context"]["schema"] == "s22.identity_response.v1"
+        assert sig["identity_context"]["agent_id_is"] == "public_structured_handle"
+        assert sig["identity_context"]["label"]["display_name"] == "claude-opus48-dogfood"
 
     @patch("src.mcp_handlers.context.get_context_agent_id")
     @patch("src.mcp_handlers.shared.get_mcp_server")
