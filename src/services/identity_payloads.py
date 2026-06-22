@@ -204,6 +204,63 @@ def build_identity_diag_payload(
     return payload
 
 
+def build_identity_signature_payload(
+    *,
+    agent_uuid: Optional[str],
+    agent_id: Optional[str],
+    display_name: Optional[str],
+    label_source: Optional[str] = None,
+    session_resolution_source: Optional[str] = None,
+    identity_status: Optional[str] = None,
+    identity_resolution_outcome: Optional[str] = None,
+    client_hint: Optional[str] = None,
+    model_type: Optional[str] = None,
+    proof_origin: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build the shared caller ``agent_signature`` identity envelope.
+
+    This is the compact form of ``s22.identity_response.v1`` used by generic
+    success responses. The invariant is the same as identity()/onboard():
+    ``uuid`` is the registry key, ``agent_id`` is the public structured handle,
+    and ``display_name`` is cosmetic. A claimed label must never be placed in a
+    field named ``agent_id``.
+    """
+    if not agent_uuid:
+        return {"uuid": None}
+
+    public_handle = _normalize_optional_text(agent_id)
+    label = _normalize_optional_text(display_name)
+
+    payload: Dict[str, Any] = {"uuid": agent_uuid}
+    if public_handle:
+        payload["agent_id"] = public_handle
+        # Compatibility alias for older clients that learned the pre-S22
+        # ``structured_agent_id`` field from agent_signature. It must mirror
+        # ``agent_id`` exactly so there is only one public handle value.
+        payload["structured_agent_id"] = public_handle
+    if label:
+        payload["display_name"] = label
+    if label_source:
+        payload["label_source"] = label_source
+
+    if public_handle:
+        identity_context = build_identity_response_context(
+            agent_uuid=agent_uuid,
+            agent_id=public_handle,
+            display_name=label,
+            session_resolution_source=session_resolution_source,
+            identity_status=identity_status,
+            identity_resolution_outcome=identity_resolution_outcome,
+            client_hint=client_hint,
+            model_type=model_type,
+            proof_origin=proof_origin,
+        )
+        payload["identity_context"] = identity_context
+        payload["identity_assurance"] = identity_context["identity_assurance"]
+
+    return payload
+
+
 def build_onboard_response_data(
     *,
     agent_uuid: str,

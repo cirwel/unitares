@@ -1,6 +1,7 @@
 from src.services.identity_payloads import (
     build_identity_response_context,
     build_identity_diag_payload,
+    build_identity_signature_payload,
     build_identity_response_data,
     build_onboard_response_data,
 )
@@ -164,6 +165,28 @@ def test_identity_response_context_distinguishes_uuid_label_harness_and_assuranc
     assert context["harness_context"]["is_identity_proof"] is False
     assert context["identity_assurance"]["tier"] == "medium"
     assert context["continuity_claim"] == "resumed_by_recent_onboard_pin"
+
+
+def test_identity_signature_payload_uses_s22_contract():
+    payload = build_identity_signature_payload(
+        agent_uuid="uuid-sig",
+        agent_id="Codex_20260622",
+        display_name="codex-dispatch",
+        label_source="claimed",
+        session_resolution_source="explicit_client_session_id",
+        proof_origin="caller_asserted",
+    )
+
+    assert payload["uuid"] == "uuid-sig"
+    assert payload["agent_id"] == "Codex_20260622"
+    assert payload["structured_agent_id"] == "Codex_20260622"
+    assert payload["display_name"] == "codex-dispatch"
+    assert payload["label_source"] == "claimed"
+    assert payload["identity_context"]["schema"] == "s22.identity_response.v1"
+    assert payload["identity_context"]["registry"]["uuid"] == "uuid-sig"
+    assert payload["identity_context"]["public_handle"]["agent_id"] == "Codex_20260622"
+    assert payload["identity_context"]["label"]["display_name"] == "codex-dispatch"
+    assert payload["identity_assurance"]["tier"] == "strong"
 
 
 # ── #679: server-injected fingerprint must not be laundered into strong ──

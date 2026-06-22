@@ -68,8 +68,14 @@ def compute_agent_signature(
     3. Session binding lookup
     """
     try:
-        from ..context import get_context_agent_id, get_session_proof_origin
+        from ..context import (
+            get_context_agent_id,
+            get_context_client_hint,
+            get_session_proof_origin,
+            get_session_resolution_source,
+        )
         from ..shared import get_mcp_server
+        from src.services.identity_payloads import build_identity_signature_payload
         mcp_server = get_mcp_server()
 
         context_bound_id = get_context_agent_id()
@@ -99,27 +105,25 @@ def compute_agent_signature(
         display_label = None
         public_agent_id = None
         structured_id = None
+        model_type = None
         if bound_id in mcp_server.agent_metadata:
             meta = mcp_server.agent_metadata[bound_id]
-            display_label = getattr(meta, 'label', None)
-            public_agent_id = getattr(meta, 'public_agent_id', None)
-            structured_id = getattr(meta, 'structured_id', None)
+            def _meta_text(name: str) -> Optional[str]:
+                value = getattr(meta, name, None)
+                if not isinstance(value, str):
+                    return None
+                value = value.strip()
+                return value or None
 
-        signature = {"uuid": agent_uuid}
-        # P1.3 contract: `agent_id` is a STRUCTURED-identifier slot. It must
-        # never carry a bare display label when a structured handle exists —
-        # the cosmetic label belongs in `display_name`. Emitting the label in
-        # a field literally named `agent_id` leaked multiple handles for one
-        # agent (KG 2026-06-13 dogfood P1.3). Prefer the structured handle;
-        # fall back to the label only when no handle is available at all.
+            display_label = _meta_text('display_name') or _meta_text('label')
+            public_agent_id = _meta_text('public_agent_id')
+            structured_id = _meta_text('structured_id')
+            model_type = _meta_text('model_type')
+
+        # P1.3/S22 contract: `agent_id` is a public structured-handle slot.
+        # Claimed labels belong only in `display_name`; if no public handle is
+        # known, omit `agent_id` rather than filling it with a label.
         auto_id = public_agent_id or structured_id
-        if display_label:
-            signature["agent_id"] = auto_id or display_label
-            if auto_id:
-                signature["structured_agent_id"] = auto_id
-            signature["display_name"] = display_label
-        elif auto_id:
-            signature["agent_id"] = auto_id
 
         # Dual-label visibility (identity-invariants #4: "Name is cosmetic").
         # label_source surfaces whether the displayed label reflects an
@@ -133,12 +137,22 @@ def compute_agent_signature(
         # replace this with an explicit label_claimed_at timestamp on the
         # agent metadata row.
         if display_label and display_label not in (public_agent_id, structured_id):
-            signature["label_source"] = "claimed"
+            label_source = "claimed"
         elif display_label or auto_id:
-            signature["label_source"] = "auto"
+            label_source = "auto"
         else:
-            signature["label_source"] = "uuid"
-        return signature
+            label_source = "uuid"
+
+        return build_identity_signature_payload(
+            agent_uuid=agent_uuid,
+            agent_id=auto_id,
+            display_name=display_label,
+            label_source=label_source,
+            session_resolution_source=get_session_resolution_source(),
+            client_hint=get_context_client_hint(),
+            model_type=model_type,
+            proof_origin=proof_origin,
+        )
 
     except Exception as e:
         logger.debug("compute_agent_signature error: %s", type(e).__name__)
