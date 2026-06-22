@@ -133,6 +133,12 @@ The running tiers are **`strong` / `medium` / `weak`** (`phases.py:68-71`, `_TIE
 - Custody transfer reuses `/v1/lease/handoff/{offer,accept}` — but note the verified constraint: handoff is release-and-reacquire that **always** mints a `remote_heartbeat` lease for the recipient, so a receiving `EffectCustodian` must heartbeat (renew) or the transferred custody self-heals/reaps.
 - Revocation reuses `/v1/lease/force-release` + `LEASE_FORCE_RELEASE_TOKEN` (live + enforced) — no second revocation mechanism.
 
+## 9a. Relationship to fermata
+
+`fermata` (separate repo — the "governed-effect runtime seed") and this Governed-Effect Plane both explore the same primitive — *agents propose effects; only governed effects commit* — but as of **2026-06-22** they are **independent tracks**, not one implementation under two names. This plane is the in-repo realization: it reuses the lease plane (`/v1/lease/acquire`, §9) and a new `EffectCustodian` GenServer (§5a), and does **not** depend on, vendor, or supersede fermata. fermata remains its own seed.
+
+This is a deliberate *"independent for now"* call, not a supersession. Convergence is allowed later — fermata adopting this contract, or this plane extracting toward it — but requires an explicit decision amending this note. Until then: **cross-reference, do not couple**, and neither track should treat the other as its implementation.
+
 ## 10. First surfaces (operator decision 2026-06-18: **both classes**, one role each)
 
 The operator chose **both** effect classes — mapped onto the council's record_only/execute split so it remains one shadow + one enforced surface (the one-enforced-surface discipline holds):
