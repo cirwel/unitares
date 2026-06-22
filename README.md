@@ -27,7 +27,16 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 
 - **Drift surfaces while the output still looks fine.** Each agent is graded against its *own* baseline, so slow degradation shows up as integrity slipping and entropy rising before the work visibly breaks.
 - **Confidence is checked against results.** Self-reported `confidence` is scored against real evidence — tests, exit codes, tool output. An agent can inflate the number; it can't inflate its success rate.
-- **The whole fleet stays legible, live.** One dashboard for humans; over the API, agents read each other's state to decide whether to trust a handoff — and self-correct before a guardrail has to fire.
+- **Agents get a state signal they can act on.** Each check-in returns one plain verdict — `proceed`, `guide`, `pause`, or `reject` — plus EISV state for finer policies. Humans can watch the same fleet through the optional dashboard.
+
+## Use UNITARES if
+
+- you run autonomous or semi-autonomous coding, research, operations, or resident agents;
+- you want mid-run health signals, not only pre-deploy evals or post-hoc logs;
+- you need agents to check their own state before continuing; and
+- you want an audit trail of confidence, evidence, drift, and recovery.
+
+UNITARES is **not** an output validator, sandbox, or hosted agent platform. It is the runtime state layer between evals and guardrails.
 
 ## Try it in 60 seconds
 
@@ -38,9 +47,7 @@ docker compose up -d --wait && make demo
 
 `make demo` drives a synthetic agent through seven check-ins — clean work, then confidence drifting from results, then confusion — and prints the verdict at each step. Then point any MCP client at `http://localhost:8767/mcp/`.
 
-<div align="center">
-  <img src="docs/assets/dashboard.png" width="85%" alt="Unitares dashboard — fleet coherence, agent count, discoveries, and system health"/>
-</div>
+For a human operator view, open the optional dashboard at `http://localhost:8767/dashboard`. Dashboard implementation details live in [`dashboard/README.md`](dashboard/README.md); public deployment screenshots live in [`docs/PRODUCTION_SNAPSHOT.md`](docs/PRODUCTION_SNAPSHOT.md).
 
 > **Running continuously since November 2025 · 3.7M+ governance events under sustained load · dogfooded** — the agents building UNITARES run under it. Every number is verifiable on a fresh clone. ([Production snapshot →](docs/PRODUCTION_SNAPSHOT.md))
 
