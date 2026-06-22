@@ -2,6 +2,8 @@
 
 This is the documentation tree for the [UNITARES governance MCP server](../README.md). If you're new to the project, **start with the [repo README](../README.md)** — it has the core idea, the `make demo` walkthrough, and the integration loop. The deeper [scope & threat model](SCOPE_AND_THREAT_MODEL.md) and [production snapshot](PRODUCTION_SNAPSHOT.md) now live here under `docs/`. This page is the map for everything under `docs/`.
 
+For a single, task-ordered walkthrough that stitches the docs below into one guide — install → run → integrate → read the signals → operate → troubleshoot — see the **[User Manual](manual/README.md)**.
+
 ## Reader's path
 
 | You are… | Read in this order |
@@ -12,6 +14,12 @@ This is the documentation tree for the [UNITARES governance MCP server](../READM
 | **Working on the identity layer** | [`../AGENTS.md`](../AGENTS.md) → [`ontology/README.md`](ontology/README.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/plan.md`](ontology/plan.md) |
 
 ## Layout
+
+### `manual/` — the user manual
+
+A cohesive, multi-chapter front door for operators and integrators. Thin chapters that stitch the canonical docs below into one walkthrough; the deep references stay canonical.
+
+→ Start at **[`manual/README.md`](manual/README.md)** (overview · install · running · integrating · reading the signals · operating · troubleshooting).
 
 ### Canonical reference
 
