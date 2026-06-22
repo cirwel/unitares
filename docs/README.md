@@ -60,15 +60,18 @@ How to run this in production. Most readers can skip these.
 - [`github-workflow-conventions.md`](operations/github-workflow-conventions.md) — canonical delivery contract (branch naming, draft PRs) shared by Codex and Claude; `AGENTS.md`/`CLAUDE.md` carry the short form
 - [`merge-automation-plan.md`](operations/merge-automation-plan.md) — branch-protection + operator-armed auto-merge plan (not yet applied)
 - [`ci-issue-surfacing.md`](operations/ci-issue-surfacing.md) — experiment wiring the surfacing instinct into GitHub CI (deduped issues from new findings)
+- [`automation-overrides.md`](operations/automation-overrides.md) — operator-authored metadata layered onto the automation census for accountability/gate classification
 - [`resident-roster.md`](operations/resident-roster.md) — `UNITARES_RESIDENTS` configuration; the named resident set is config, not a hardcoded fleet
 - [`ablation-negative-controls.md`](operations/ablation-negative-controls.md) — synthetic bad-outcome fixtures for red-team ablation plumbing
 - [`DEFINITIVE_PORTS.md`](operations/DEFINITIVE_PORTS.md) — port assignments across services
 - [`database_architecture.md`](operations/database_architecture.md) — single-Postgres / schema-isolation model
+- [`glossary-site.md`](operations/glossary-site.md) — GitHub Pages publishing path for the ontology glossary site
 - [`lease-plane-operator-runbook.md`](operations/lease-plane-operator-runbook.md) — Elixir lease-plane operations
 - [`branch-hygiene-runbook.md`](operations/branch-hygiene-runbook.md) — resident branch-hygiene sweep (`agents/vigil_hygiene`)
 - [`resident-validation-cohort.md`](operations/resident-validation-cohort.md) — experimental long-running resident validation tick contract
 - [`resident-validation-supervised-invocation.md`](operations/resident-validation-supervised-invocation.md) — local-only supervised canary invocation wrapper
 - [`dormant-capability-registry.md`](operations/dormant-capability-registry.md) — distinguishes built-but-unwired capability from genuine cruft, so cleanup is deliberate
+- [`kg-lineage-dashboard-handoff.md`](operations/kg-lineage-dashboard-handoff.md) — deferred implementation handoff for KG supersession/related-lineage dashboard exposure
 - [`test-suite-triage.md`](operations/test-suite-triage.md) — current state of the test gate and known-triaged suites
 - [`DATA_NOTES.md`](operations/DATA_NOTES.md) — operational data dictionary for the production governance database
 - [`DEPLOYMENT_DATA_CAVEAT.md`](operations/DEPLOYMENT_DATA_CAVEAT.md) — what the cited deployment numbers do and don't mean
