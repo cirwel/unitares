@@ -111,6 +111,22 @@ def snapshot(days: int) -> dict:
     oc["conversion_pct"] = round(100 * oc["converted"] / oc["minted"], 1) if oc["minted"] else None
     op = out["outcome_pipe_health"]
     op["success_pct"] = round(100 * op["ok"] / op["total"], 1) if op["total"] else None
+
+    # Recall-miss telemetry (#972): a zero-result / low-confidence search is a
+    # no-value interaction — an adoption signal, so it belongs in this snapshot.
+    # File-based, written by the live search path; summarize() reads it relative
+    # to whatever checkout runs (the daily cron runs from the deploy worktree →
+    # the live telemetry file). Fail-open: telemetry must never break the KPI.
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _root = str(_Path(__file__).resolve().parent.parent.parent)
+        if _root not in _sys.path:
+            _sys.path.insert(0, _root)
+        from src.recall_telemetry import summarize as _recall_summarize
+        out["recall_misses"] = _recall_summarize()
+    except Exception as exc:  # noqa: BLE001
+        out["recall_misses"] = {"error": str(exc)}
     return out
 
 
@@ -138,6 +154,9 @@ def main() -> int:
     pk = snap["proactive_kg_surface"]
     print(f"  proactive KG surface: {pk['surfaced']} seen / {pk['fired']} fired "
           f"by {pk['agents']} agents")
+    rm = snap.get("recall_misses") or {}
+    print(f"  recall misses (search no-value, #972): {rm.get('total', 0)} total "
+          f"{rm.get('by_class', {})}")
     return 0
 
 
