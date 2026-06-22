@@ -46,6 +46,13 @@ jobs:
       run: |
         python scripts/diagnostics/check_doc_drift.py
 
+    - name: Validate skills manifest (canonical fingerprint)
+      # Fails if skills/ changed without regenerating SKILLS_MANIFEST.sha256.
+      # Keeps the canonical fingerprint honest so the plugin mirror can verify
+      # against it; the always-on CI guard the ship.sh-only S15-d gate lacked.
+      run: |
+        python scripts/dev/skills_manifest.py --check
+
     - name: Validate tool-mode / schema config
       # DB-free: confirms TOOL_CATEGORIES matches the tool schema (alias-aware)
       # and minimal/lite keep their discovery tools, so TOOL_MODE filtering stays
