@@ -65,12 +65,15 @@ INTERNAL_KEYS = {
 # not to grow it. Adding a NEW entry must be a deliberate, reviewed act.
 KNOWN_UNEXPOSED = {
     "auto_link_related", "confidence", "epoch_scope", "exclude_agent_labels",
-    "include_archived", "include_cold", "include_provenance",
+    "include_provenance",
     "include_response_chain", "including_cold", "length", "max_chain_depth",
     "min_similarity", "offset", "operator", "related_files", "resolve_question",
     "response_to", "scope", "search_mode", "semantic", "synthesize", "top_n",
     "use_model",
 }
+# include_archived / include_cold were exposed on KnowledgeParams (2026-06-22) as
+# recall-recovery levers — removed from the backlog above. Shrinking this set is
+# the goal; growing it is the smell.
 
 
 def _classify_undeclared() -> set[str]:
@@ -96,6 +99,20 @@ def test_no_new_unexposed_handler_param():
         f"(silent-strip class): {sorted(offenders)}. Declare them on "
         "KnowledgeParams or classify them — see this file's docstring."
     )
+
+
+def test_known_unexposed_has_no_declared_params():
+    """Hygiene: a param that's been declared on the schema must not linger in the
+    KNOWN_UNEXPOSED backlog — otherwise the backlog overstates what's missing."""
+    declared = set(KnowledgeParams.model_fields.keys())
+    stale = declared & KNOWN_UNEXPOSED
+    assert not stale, f"declared params still listed as unexposed: {sorted(stale)}"
+
+
+def test_archived_cold_recall_levers_exposed():
+    """include_archived / include_cold must be agent-sendable (recall recovery)."""
+    declared = set(KnowledgeParams.model_fields.keys())
+    assert {"include_archived", "include_cold"} <= declared
 
 
 def test_supersession_link_params_stay_declared():

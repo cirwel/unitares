@@ -330,6 +330,12 @@ class KnowledgeParams(AgentIdentityMixin):
     agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get, search)")
     limit: Optional[int] = Field(None, description="Max results")
     include_details: Optional[bool] = Field(None, description="Include full details inline (for action=search/get)")
+    # Recall-recovery levers for action=search. Default search excludes archived
+    # and cold-storage notes; pass these to reach them when an active-tier search
+    # comes up empty. The handler already honors both — they were just never
+    # exposed on the unified tool (see test_knowledge_param_coverage backlog).
+    include_archived: Optional[bool] = Field(None, description="Include archived discoveries in search results (default: excluded)")
+    include_cold: Optional[bool] = Field(None, description="Include cold-storage (long-term) discoveries in search results (default: excluded)")
     dry_run: Union[bool, str, None] = Field(None, description="Dry run mode (for action=cleanup, synthesize)")
     # Synthesis (action=synthesize): roll discoveries up into topic summaries.
     topic: Optional[str] = Field(None, description="Synthesize just this one tag/topic (for action=synthesize). Omit to sweep the densest topics.")
