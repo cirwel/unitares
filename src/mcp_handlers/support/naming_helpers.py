@@ -139,28 +139,46 @@ def generate_name_suggestions(
     
     return suggestions[:4]  # Return top 4 suggestions
 
-def _safe_interface_hint(client_hint: Optional[str]) -> Optional[str]:
-    """Vet a caller-supplied client_hint for use as the leading interface token.
+_MAX_HINT_LEN = 40
 
-    Returns the lowercased hint when it is safe to seed a structured id, or
-    ``None`` when it is empty, the literal ``"unknown"``, or would collide with
-    the reserved/privileged namespace. The leading token is followed by ``_``
-    in the structured id, so a hint equal to a reserved-prefix root (``mcp``,
-    ``admin``, ``root``, ``system``, ``governance``, ``auth``) or any reserved
-    name must be rejected — otherwise the mint produces a reserved-prefix
-    agent_id that downstream validation refuses. Caller falls back to the
-    detected interface when this returns ``None``.
+
+def _safe_interface_hint(client_hint: Optional[str]) -> Optional[str]:
+    """Vet & sanitize a caller-supplied client_hint for use as the leading
+    interface token of a structured id.
+
+    client_hint is free text from the caller. Two failure modes must be
+    contained before it can seed an id (KG dogfood 2026-05-09 "client_hint
+    leaks into agent_id namespace"; follow-up 2026-06-10):
+
+    1. Shape — a descriptor like ``"Anthropic Claude, mobile app, dogfooding"``
+       must not become an identifier full of spaces and commas. Strip to
+       ``[a-zA-Z0-9_-]`` (mirrors validators.sanitize_agent_name), collapse
+       separators, and length-cap.
+    2. Namespace — the leading token is immediately followed by ``_`` in the
+       id, so a hint equal to a reserved-prefix root (``mcp``, ``admin``,
+       ``root``, ``system``, ``governance``, ``auth``) or any reserved name
+       would mint a reserved-prefix agent_id that downstream validation
+       refuses.
+
+    Returns a sanitized, identifier-shaped token, or ``None`` when the hint is
+    empty/``"unknown"``, sanitizes to nothing, or collides with the reserved
+    namespace. The caller falls back to the detected interface on ``None``.
     """
     if not client_hint or client_hint == "unknown":
         return None
     from ..validators import RESERVED_NAMES, RESERVED_PREFIXES
 
-    hint_lower = client_hint.lower()
-    reserved_roots = {prefix.rstrip("_") for prefix in RESERVED_PREFIXES}
-    leading_token = hint_lower.replace("-", "_").split("_", 1)[0]
-    if hint_lower in RESERVED_NAMES or leading_token in reserved_roots:
+    cleaned = re.sub(r'[^a-zA-Z0-9_-]', '_', client_hint)
+    cleaned = re.sub(r'_+', '_', cleaned).strip('_-')[:_MAX_HINT_LEN].strip('_-')
+    if not cleaned:
         return None
-    return client_hint
+
+    reserved_roots = {prefix.rstrip("_") for prefix in RESERVED_PREFIXES}
+    cleaned_lower = cleaned.lower()
+    leading_token = cleaned_lower.replace("-", "_").split("_", 1)[0]
+    if cleaned_lower in RESERVED_NAMES or leading_token in reserved_roots:
+        return None
+    return cleaned
 
 
 def generate_structured_id(
