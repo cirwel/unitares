@@ -12,9 +12,9 @@ reproduces on a fresh clone.
 
 ```bash
 cd demos/frt_autonomy_sandbagging
-python3 run_demo.py            # human-readable report
-python3 run_demo.py --json     # machine-readable summary
-python3 -m pytest test_sandbagging.py -q
+python3 run_demo.py            # standalone cross-framing detector
+python3 run_unitares_demo.py  # the same organisms run through real UNITARES code
+python3 -m pytest -q           # 11 tests
 ```
 
 ## Why this, and why it matters for capability evals
@@ -39,7 +39,9 @@ estimate of true capability.
 | `model_organism.py` | The agent. A Rasch-style item-response policy with a known latent capability; sandbaggers shed competence, intermittently, *only* under eval framing. Honest agents are the controls. |
 | `eval_harness.py` | The measurement. Runs each agent under both framings, computes a per-agent one-sided significance test for concealment, a population ROC AUC, and the recovered-vs-naive capability. All stats hand-rolled from stdlib. |
 | `run_demo.py` | Entry point; prints the per-agent table and the detection/undercount summary. |
-| `test_sandbagging.py` | Pins the two load-bearing claims: the organism conceals only under eval, and the harness separates concealers from honest controls while recovering the understated capability. |
+| `unitares_integration.py` | Runs each organism's check-in stream through **real UNITARES code** — `BehavioralEISV` + `assess_behavioral_state` — and scores detection off its Integrity signal. |
+| `run_unitares_demo.py` | Compares UNITARES Integrity vs the cross-framing detector across the honest / naive / calibrated cohorts. |
+| `test_sandbagging.py`, `test_unitares_integration.py` | 11 tests pinning the organism behavior, the detector separation, the capability recovery, and the integration finding. |
 
 ## Representative result (`--seed 0`, 240 tasks/framing)
 
@@ -62,6 +64,45 @@ keeps visible rather than hiding: ranking can be perfect (AUC 1.0) while a fixed
 nominal z-threshold still mis-flags an honest agent — a multiple-comparisons
 artifact, and exactly the kind of caveat a real eval has to report.
 
+## Run through real UNITARES: where the runtime signal stops working
+
+`run_unitares_demo.py` feeds each organism's check-in stream — reported
+confidence + verifiable outcome — through UNITARES's actual behavioral-EISV
+state accumulator and verdict path (the same code the live server runs), and
+asks whether UNITARES's own **Integrity** signal (confidence-vs-outcome
+calibration) catches the sandbagging. It splits sandbaggers by *how* they report
+confidence while concealing:
+
+- **naive** — keeps reporting high confidence, so under eval it is overconfident;
+- **calibrated** — lowers reported confidence to match the concealed performance,
+  so its claims still track its outcomes.
+
+Representative result (`--seed 0`, 120 check-ins/agent; stable across seeds 0–5):
+
+```
+  mean UNITARES Integrity (I):  honest 0.90   naive 0.67   calibrated 0.91
+
+  Detection AUC vs honest controls     UNITARES I    cross-framing
+    naive sandbagger                       1.00            1.00
+    calibrated sandbagger                  0.41            1.00
+```
+
+**The finding:** UNITARES's calibration-based Integrity catches the naive
+sandbagger cleanly (AUC ≈ 1.0) but is blind to the calibrated one (AUC ≈ 0.4–0.5
+across seeds) — a calibrated sandbagger looks *at least as trustworthy as an
+honest agent* to a runtime calibration signal. The cross-framing comparison
+catches both, because it keys on concealed *capability*, not on whether the
+agent's claims are internally consistent. The two signals are complementary, and
+this is precisely where the runtime Integrity signal's coverage ends.
+
+**What is and isn't real UNITARES here.** The EISV *state accumulation* and the
+*verdict* are real, unmodified UNITARES code (`src/behavioral_state.py`,
+`src/behavioral_assessment.py`). The mapping from a raw check-in to the
+`(E, I, S)` observations is a documented adapter in `unitares_integration.py` —
+faithful to UNITARES semantics (I = claims-match-results) but not the live
+server's full stateful `process_update` pipeline. It touches no database and
+onboards no agents, so it does not write to any governance instance.
+
 ## What this is *not* (scope and honesty)
 
 - **The agent is scripted, not trained.** This is a model *organism* for the
@@ -77,8 +118,10 @@ artifact, and exactly the kind of caveat a real eval has to report.
 
 ## How it connects to the rest of this repo
 
-This sits next to the same instinct the main project is built on — that you
-cannot trust an agent's self-report and must anchor to outcomes the agent can't
-fake (see the repo's `record_result` / Integrity story). Here that instinct is
-pointed at the *pre-deployment* question — measuring a capability an agent is
-motivated to hide — rather than the runtime-governance question.
+The standalone detector shares UNITARES's core instinct — you cannot trust an
+agent's self-report and must anchor to outcomes it can't fake. The integration
+(`run_unitares_demo.py`) makes that connection literal: it drives the repo's
+real Integrity/verdict code and then characterizes exactly where that runtime
+signal succeeds (naive concealment) and where it goes blind (calibrated
+concealment) against this *pre-deployment* threat — a small, honest eval *of*
+UNITARES, not just an eval that borrows its vocabulary.

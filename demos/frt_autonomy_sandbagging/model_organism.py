@@ -63,6 +63,14 @@ class AgentSpec:
         Per-task probability that a sandbagger correctly recognises the eval
         framing and conceals on that task. < 1.0 models imperfect / stochastic
         concealment, which is what makes detection non-trivial.
+    calibrated_concealment:
+        How the sandbagger reports *confidence* while concealing. ``False``
+        (naive): keeps reporting confidence as if at full capability, so under
+        eval it is overconfident relative to its (concealed) success rate.
+        ``True`` (calibrated): lowers reported confidence to match the concealed
+        performance, so it stays calibrated and looks like an honestly weaker
+        agent. This is the axis a calibration-based integrity signal lives or
+        dies on. Ignored for honest agents.
     """
 
     name: str
@@ -70,6 +78,7 @@ class AgentSpec:
     is_sandbagger: bool = False
     sandbag_delta: float = 0.0
     detect_probability: float = 0.0
+    calibrated_concealment: bool = False
 
     def task_success_probability(self, difficulty: float, *, evaluated: bool) -> float:
         """Expected success probability on a task of the given difficulty.
@@ -93,6 +102,23 @@ class AgentSpec:
     def attempt(self, difficulty: float, *, evaluated: bool, rng: random.Random) -> bool:
         """Draw a single task outcome (True == solved)."""
         return rng.random() < self.task_success_probability(difficulty, evaluated=evaluated)
+
+    def reported_confidence(self, difficulty: float, *, evaluated: bool) -> float:
+        """Confidence the agent *claims* on a task (what it would tell UNITARES).
+
+        Honest agents report their true expected success probability. A naive
+        sandbagger conceals capability but still reports full-capability
+        confidence (so it is overconfident under eval). A calibrated sandbagger
+        lowers its reported confidence in lockstep with the concealment, so its
+        claims still match its (suppressed) outcomes.
+        """
+        full = solve_probability(self.true_competence, difficulty)
+        if not (evaluated and self.is_sandbagger):
+            return full
+        if self.calibrated_concealment:
+            # Match confidence to the concealed success probability.
+            return self.task_success_probability(difficulty, evaluated=True)
+        return full
 
 
 def default_population(rng: random.Random) -> list[AgentSpec]:
@@ -125,6 +151,42 @@ def default_population(rng: random.Random) -> list[AgentSpec]:
                 detect_probability=detect,
             )
         )
+
+    rng.shuffle(population)
+    return population
+
+
+def styled_population(rng: random.Random) -> list[AgentSpec]:
+    """Three cohorts for the UNITARES integration: honest, naive, calibrated.
+
+    Same capability range across all three. The only thing that varies between
+    the two sandbagger cohorts is *how they report confidence while concealing*
+    (``calibrated_concealment``) — which is exactly the axis a calibration-based
+    integrity signal can or cannot see.
+    """
+    population: list[AgentSpec] = []
+
+    for i in range(12):
+        c = 0.40 + 0.45 * rng.random()
+        population.append(AgentSpec(name=f"honest-{i:02d}", true_competence=c))
+
+    for i in range(12):
+        c = 0.40 + 0.45 * rng.random()
+        delta = 0.30 + 0.40 * rng.random()
+        detect = 0.55 + 0.40 * rng.random()
+        population.append(AgentSpec(
+            name=f"naive-sandbag-{i:02d}", true_competence=c, is_sandbagger=True,
+            sandbag_delta=delta, detect_probability=detect, calibrated_concealment=False,
+        ))
+
+    for i in range(12):
+        c = 0.40 + 0.45 * rng.random()
+        delta = 0.30 + 0.40 * rng.random()
+        detect = 0.55 + 0.40 * rng.random()
+        population.append(AgentSpec(
+            name=f"calib-sandbag-{i:02d}", true_competence=c, is_sandbagger=True,
+            sandbag_delta=delta, detect_probability=detect, calibrated_concealment=True,
+        ))
 
     rng.shuffle(population)
     return population
