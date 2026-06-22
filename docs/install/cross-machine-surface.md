@@ -1,5 +1,7 @@
 # Cross-Machine Install Surface
 
+> **Point-in-time record, preserved by design.** This is a dated audit (2026-04-24), not a live install guide — branch names, PR states, and line numbers below reflect the repo *as audited* and are intentionally not kept current. For the actual install path use [`PLAYBOOK.md`](PLAYBOOK.md); read this for background on *which* values vary across machines and why. The regression guard for these values lives in `tests/test_install_surface.py`.
+
 A grep-derived inventory of every value in this repo that varies between machines, plus an explicit list of values that **intentionally** vary and must not be unified.
 
 **Audit date:** 2026-04-24 against `chore/install-audit` branch.
