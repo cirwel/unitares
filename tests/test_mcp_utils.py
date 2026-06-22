@@ -170,8 +170,9 @@ class TestComputeAgentSignature:
         mock_srv.return_value = _mock_server({"ctx-456": _meta(label="Ctx", structured_id="S1")})
         sig = compute_agent_signature()
         assert sig["uuid"] == "ctx-456"
-        # display_name (label) takes precedence over structured_id
-        assert sig["agent_id"] == "Ctx"
+        # P1.3: agent_id carries the STRUCTURED handle, not the display label;
+        # the label lives in display_name.
+        assert sig["agent_id"] == "S1"
         assert sig["structured_agent_id"] == "S1"
         assert sig["display_name"] == "Ctx"
 
@@ -215,8 +216,28 @@ class TestComputeAgentSignature:
             "uuid-1": _meta(label="hikewa", public_agent_id="Claude_Code_20260417", structured_id="mcp_20260417"),
         })
         sig = compute_agent_signature()
-        assert sig["agent_id"] == "hikewa"
+        # P1.3: the structured handle is surfaced in agent_id; the claimed
+        # label is reported via display_name + label_source, not agent_id.
+        assert sig["agent_id"] == "Claude_Code_20260417"
+        assert sig["display_name"] == "hikewa"
         assert sig["label_source"] == "claimed"
+
+    @patch("src.mcp_handlers.context.get_context_agent_id")
+    @patch("src.mcp_handlers.shared.get_mcp_server")
+    def test_agent_id_carries_structured_handle_not_label(self, mock_srv, mock_ctx):
+        """P1.3 regression: when both a display label and a structured handle
+        exist, agent_id must be the structured handle (never the bare label),
+        and the label must be reachable only via display_name."""
+        mock_ctx.return_value = "uuid-p13"
+        mock_srv.return_value = _mock_server({
+            "uuid-p13": _meta(label="claude-opus48-dogfood",
+                              public_agent_id="Claude_Opus_4_8_20260613"),
+        })
+        sig = compute_agent_signature()
+        assert sig["agent_id"] == "Claude_Opus_4_8_20260613"
+        assert sig["agent_id"] != "claude-opus48-dogfood"
+        assert sig["display_name"] == "claude-opus48-dogfood"
+        assert sig["structured_agent_id"] == "Claude_Opus_4_8_20260613"
 
     @patch("src.mcp_handlers.context.get_context_agent_id")
     @patch("src.mcp_handlers.shared.get_mcp_server")

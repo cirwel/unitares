@@ -139,6 +139,48 @@ def generate_name_suggestions(
     
     return suggestions[:4]  # Return top 4 suggestions
 
+_MAX_HINT_LEN = 40
+
+
+def _safe_interface_hint(client_hint: Optional[str]) -> Optional[str]:
+    """Vet & sanitize a caller-supplied client_hint for use as the leading
+    interface token of a structured id.
+
+    client_hint is free text from the caller. Two failure modes must be
+    contained before it can seed an id (KG dogfood 2026-05-09 "client_hint
+    leaks into agent_id namespace"; follow-up 2026-06-10):
+
+    1. Shape — a descriptor like ``"Anthropic Claude, mobile app, dogfooding"``
+       must not become an identifier full of spaces and commas. Strip to
+       ``[a-zA-Z0-9_-]`` (mirrors validators.sanitize_agent_name), collapse
+       separators, and length-cap.
+    2. Namespace — the leading token is immediately followed by ``_`` in the
+       id, so a hint equal to a reserved-prefix root (``mcp``, ``admin``,
+       ``root``, ``system``, ``governance``, ``auth``) or any reserved name
+       would mint a reserved-prefix agent_id that downstream validation
+       refuses.
+
+    Returns a sanitized, identifier-shaped token, or ``None`` when the hint is
+    empty/``"unknown"``, sanitizes to nothing, or collides with the reserved
+    namespace. The caller falls back to the detected interface on ``None``.
+    """
+    if not client_hint or client_hint == "unknown":
+        return None
+    from ..validators import RESERVED_NAMES, RESERVED_PREFIXES
+
+    cleaned = re.sub(r'[^a-zA-Z0-9_-]', '_', client_hint)
+    cleaned = re.sub(r'_+', '_', cleaned).strip('_-')[:_MAX_HINT_LEN].strip('_-')
+    if not cleaned:
+        return None
+
+    reserved_roots = {prefix.rstrip("_") for prefix in RESERVED_PREFIXES}
+    cleaned_lower = cleaned.lower()
+    leading_token = cleaned_lower.replace("-", "_").split("_", 1)[0]
+    if cleaned_lower in RESERVED_NAMES or leading_token in reserved_roots:
+        return None
+    return cleaned
+
+
 def generate_structured_id(
     context: Optional[Dict[str, str]] = None,
     existing_ids: Optional[List[str]] = None,
@@ -192,9 +234,17 @@ def generate_structured_id(
     timestamp = datetime.now().strftime("%Y%m%d")
 
     # Use client_hint if provided (takes precedence over auto-detection)
-    # This allows ChatGPT and other HTTP clients to get meaningful names
-    if client_hint and client_hint != "unknown":
-        interface = client_hint
+    # This allows ChatGPT and other HTTP clients to get meaningful names.
+    # client_hint is free text from the caller, so it must NOT be allowed to
+    # seed the leading token of the structured id with a reserved/privileged
+    # word (e.g. "admin", "mcp", "root"): that produces a reserved-prefix
+    # agent_id which is later rejected by validate_agent_id_reserved_names,
+    # leaking free text into the privileged identifier namespace (KG dogfood
+    # 2026-05-09 "client_hint leaks into agent_id namespace"). When the hint
+    # would collide, fall back to the detected interface instead.
+    safe_hint = _safe_interface_hint(client_hint)
+    if safe_hint:
+        interface = safe_hint
     else:
         interface = context.get("interface", "mcp")
 

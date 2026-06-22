@@ -176,6 +176,47 @@ class TestGenerateStructuredId:
         result = generate_structured_id(context=ctx, client_hint="chatgpt")
         assert "chatgpt" in result
 
+    def test_reserved_client_hint_does_not_leak_reserved_prefix(self):
+        """A free-text client_hint that collides with a reserved prefix root
+        (e.g. "admin") must NOT seed the structured id — otherwise the mint is a
+        reserved-prefix agent_id that downstream validation rejects (KG dogfood
+        2026-05-09 'client_hint leaks into agent_id namespace'). The id falls
+        back to the detected interface instead."""
+        from src.mcp_handlers.validators import validate_agent_id_reserved_names
+        ctx = {"interface": "cursor", "model_hint": None, "environment": None}
+        for reserved in ("admin", "mcp", "root", "system", "governance", "auth", "admin-tools"):
+            result = generate_structured_id(context=ctx, client_hint=reserved)
+            assert result.startswith("cursor_"), f"{reserved!r} leaked: {result}"
+            # The generated id must pass the reserved-name guard.
+            _, err = validate_agent_id_reserved_names(result)
+            assert err is None, f"{reserved!r} produced reserved id: {result}"
+
+    def test_non_reserved_client_hint_still_used(self):
+        """Ordinary client hints are unaffected — they still seed the id."""
+        ctx = {"interface": "cursor", "model_hint": None, "environment": None}
+        assert generate_structured_id(context=ctx, client_hint="claude_code").startswith("claude_code_")
+        assert "vscode" in generate_structured_id(context=ctx, client_hint="vscode")
+
+    def test_freetext_client_hint_is_sanitized_to_identifier(self):
+        """A descriptor-style client_hint with spaces and commas must not become
+        an identifier full of spaces/commas (KG dogfood 2026-05-09: client_hint
+        "Anthropic Claude, mobile app, dogfooding UX review" leaked verbatim
+        into agent_id). It must sanitize to identifier-shaped chars only."""
+        ctx = {"interface": "cursor", "model_hint": None, "environment": None}
+        result = generate_structured_id(
+            context=ctx, client_hint="Anthropic Claude, mobile app, dogfooding UX review"
+        )
+        assert " " not in result and "," not in result
+        # Only identifier-safe characters survive.
+        assert all(c.isalnum() or c == "_" for c in result), result
+        assert result.startswith("Anthropic_Claude")
+
+    def test_empty_after_sanitization_falls_back(self):
+        """A hint that is all punctuation sanitizes to nothing → fall back."""
+        ctx = {"interface": "cursor", "model_hint": None, "environment": None}
+        result = generate_structured_id(context=ctx, client_hint="!!! ,,, ###")
+        assert result.startswith("cursor_")
+
     def test_collision_avoidance_single(self):
         ctx = {"interface": "cursor", "model_hint": None, "environment": None}
         first = generate_structured_id(context=ctx)
