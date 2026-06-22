@@ -138,7 +138,7 @@ read and N+1 for summaries — the dedicated endpoint is cleaner.)
 ## Frontend
 
 Reuse the **dialectic-transcript lazy-load** pattern (PR #981) — the model to copy:
-- `dashboard/redesign/sections/dialectic.js` → `renderTranscript()` + the
+- `dashboard/redesign/sections/dialectic.js` → the `renderTranscript` helper + the
   `<details class="dlc-transcript">` toggle that lazy-fetches on first expand.
 - `dashboard/redesign/data.js` → `dialecticSession(id)` accessor.
 
@@ -152,7 +152,7 @@ Do the same here:
   than the related list.
 
 To decide whether to show the expander without a probe, thread a lightweight
-flag through the `discoveries()` accessor (currently dropped): `related_to`
+flag through the `discoveries` accessor (currently dropped): `related_to`
 non-empty is already known relationally; for supersession, expose a boolean
 `has_supersession` (cheap: `status='superseded'` OR the id appears as a
 SUPERSEDES endpoint). Otherwise the endpoint can return `{empty:true}` and the
