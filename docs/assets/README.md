@@ -53,7 +53,7 @@ Type: system sans (`system-ui` in SVG; Liberation Sans when rasterizing).
 |---|---|---|
 | `hero.svg` | Banner wordmark + EISV diamond | README hero |
 | `social-preview.png` | 1280×640 share card | repo social-preview setting |
-| `dashboard.png` | Main dashboard | README quickstart |
+| `dashboard.png` | Main dashboard | Retained as a general screenshot; root README links to dashboard docs instead |
 | `dashboard-pulse.png` | Live event feed + EISV charts | Production snapshot |
 | `dashboard-agents.png` | Agents + discoveries panels | Production snapshot |
 | `dashboard-dialectic.png` | Peer-review sessions | Production snapshot |
