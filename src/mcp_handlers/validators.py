@@ -133,6 +133,13 @@ def sanitize_agent_name(agent_id: str) -> str:
         sanitized = sanitized + '_agent'
     return sanitized
 
+# Reserved/privileged identifiers, promoted to module scope so the structured-id
+# generator (support/naming_helpers.py) can reuse the exact same set rather than
+# duplicating it — keeps the namespace guard single-sourced.
+RESERVED_NAMES = frozenset({'system', 'admin', 'root', 'superuser', 'administrator', 'sudo', 'null', 'undefined', 'none', 'anonymous', 'guest', 'default', 'mcp', 'server', 'client', 'handler', 'transport', 'governance', 'monitor', 'arbiter', 'validator', 'auditor', 'security', 'auth', 'identity', 'certificate'})
+RESERVED_PREFIXES = ('system_', 'admin_', 'root_', 'mcp_', 'governance_', 'auth_')
+
+
 def validate_agent_id_format(agent_id: str) -> Tuple[Optional[str], Optional[TextContent]]:
     """
     Validate and sanitize agent_id format for safety (filesystem, URLs, etc).
@@ -164,8 +171,6 @@ def validate_agent_id_reserved_names(agent_id: str) -> Tuple[Optional[str], Opti
     if agent_id is None:
         return (None, None)
     agent_id_lower = agent_id.lower()
-    RESERVED_NAMES = {'system', 'admin', 'root', 'superuser', 'administrator', 'sudo', 'null', 'undefined', 'none', 'anonymous', 'guest', 'default', 'mcp', 'server', 'client', 'handler', 'transport', 'governance', 'monitor', 'arbiter', 'validator', 'auditor', 'security', 'auth', 'identity', 'certificate'}
-    RESERVED_PREFIXES = ('system_', 'admin_', 'root_', 'mcp_', 'governance_', 'auth_')
     if agent_id_lower in RESERVED_NAMES:
         return (None, error_response(f"SECURITY: agent_id '{agent_id}' is reserved for system use", details={'error_type': 'reserved_agent_id', 'reason': 'Reserved name blocked to prevent privilege confusion'}, recovery={'action': 'Choose a different agent_id that describes your work', 'example': 'my_agent_work_20251209', 'note': 'Reserved names include: system, admin, root, null, etc.'}))
     if agent_id_lower.startswith(RESERVED_PREFIXES):

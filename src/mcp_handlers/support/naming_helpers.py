@@ -139,6 +139,30 @@ def generate_name_suggestions(
     
     return suggestions[:4]  # Return top 4 suggestions
 
+def _safe_interface_hint(client_hint: Optional[str]) -> Optional[str]:
+    """Vet a caller-supplied client_hint for use as the leading interface token.
+
+    Returns the lowercased hint when it is safe to seed a structured id, or
+    ``None`` when it is empty, the literal ``"unknown"``, or would collide with
+    the reserved/privileged namespace. The leading token is followed by ``_``
+    in the structured id, so a hint equal to a reserved-prefix root (``mcp``,
+    ``admin``, ``root``, ``system``, ``governance``, ``auth``) or any reserved
+    name must be rejected — otherwise the mint produces a reserved-prefix
+    agent_id that downstream validation refuses. Caller falls back to the
+    detected interface when this returns ``None``.
+    """
+    if not client_hint or client_hint == "unknown":
+        return None
+    from ..validators import RESERVED_NAMES, RESERVED_PREFIXES
+
+    hint_lower = client_hint.lower()
+    reserved_roots = {prefix.rstrip("_") for prefix in RESERVED_PREFIXES}
+    leading_token = hint_lower.replace("-", "_").split("_", 1)[0]
+    if hint_lower in RESERVED_NAMES or leading_token in reserved_roots:
+        return None
+    return client_hint
+
+
 def generate_structured_id(
     context: Optional[Dict[str, str]] = None,
     existing_ids: Optional[List[str]] = None,
@@ -192,9 +216,17 @@ def generate_structured_id(
     timestamp = datetime.now().strftime("%Y%m%d")
 
     # Use client_hint if provided (takes precedence over auto-detection)
-    # This allows ChatGPT and other HTTP clients to get meaningful names
-    if client_hint and client_hint != "unknown":
-        interface = client_hint
+    # This allows ChatGPT and other HTTP clients to get meaningful names.
+    # client_hint is free text from the caller, so it must NOT be allowed to
+    # seed the leading token of the structured id with a reserved/privileged
+    # word (e.g. "admin", "mcp", "root"): that produces a reserved-prefix
+    # agent_id which is later rejected by validate_agent_id_reserved_names,
+    # leaking free text into the privileged identifier namespace (KG dogfood
+    # 2026-05-09 "client_hint leaks into agent_id namespace"). When the hint
+    # would collide, fall back to the detected interface instead.
+    safe_hint = _safe_interface_hint(client_hint)
+    if safe_hint:
+        interface = safe_hint
     else:
         interface = context.get("interface", "mcp")
 

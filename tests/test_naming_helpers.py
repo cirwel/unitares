@@ -176,6 +176,27 @@ class TestGenerateStructuredId:
         result = generate_structured_id(context=ctx, client_hint="chatgpt")
         assert "chatgpt" in result
 
+    def test_reserved_client_hint_does_not_leak_reserved_prefix(self):
+        """A free-text client_hint that collides with a reserved prefix root
+        (e.g. "admin") must NOT seed the structured id — otherwise the mint is a
+        reserved-prefix agent_id that downstream validation rejects (KG dogfood
+        2026-05-09 'client_hint leaks into agent_id namespace'). The id falls
+        back to the detected interface instead."""
+        from src.mcp_handlers.validators import validate_agent_id_reserved_names
+        ctx = {"interface": "cursor", "model_hint": None, "environment": None}
+        for reserved in ("admin", "mcp", "root", "system", "governance", "auth", "admin-tools"):
+            result = generate_structured_id(context=ctx, client_hint=reserved)
+            assert result.startswith("cursor_"), f"{reserved!r} leaked: {result}"
+            # The generated id must pass the reserved-name guard.
+            _, err = validate_agent_id_reserved_names(result)
+            assert err is None, f"{reserved!r} produced reserved id: {result}"
+
+    def test_non_reserved_client_hint_still_used(self):
+        """Ordinary client hints are unaffected — they still seed the id."""
+        ctx = {"interface": "cursor", "model_hint": None, "environment": None}
+        assert generate_structured_id(context=ctx, client_hint="claude_code").startswith("claude_code_")
+        assert "vscode" in generate_structured_id(context=ctx, client_hint="vscode")
+
     def test_collision_avoidance_single(self):
         ctx = {"interface": "cursor", "model_hint": None, "environment": None}
         first = generate_structured_id(context=ctx)
