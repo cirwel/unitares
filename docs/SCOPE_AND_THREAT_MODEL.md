@@ -82,3 +82,24 @@ deliberately optimizing the EISV proxy, at scale, is unproven — red-teaming so
 has been ad hoc rather than systematic or sustained, and the deployment is
 single-operator. That is the real limitation: a shortfall of *sustained
 adversarial testing*, not of adversarial design.
+
+**A named, demonstrated blind spot: calibrated capability concealment.** The
+Integrity (I) signal anchors confidence to outcomes, so it catches an agent that
+*over*-claims — including a sandbagger that suppresses its performance under
+evaluation while still reporting high confidence. It does **not** catch an agent
+that suppresses performance *and* lowers its reported confidence to match: such an
+agent stays calibrated and is indistinguishable from an honestly less-capable one.
+This is structural, not a tuning gap — every EISV dimension is computed in-band,
+from what the agent does and claims inside the monitored session, so concealment
+that leaves the agent's claims internally consistent leaves no in-band trace. The
+instrument that catches it is out-of-band — comparing performance across a
+monitored vs. an unmonitored framing — which is a capability-elicitation probe, a
+different tool than this runtime drift signal. A reproducible model-organism
+demonstration of both the catch (naive sandbagging, detection AUC ≈ 1.0) and the
+blind spot (calibrated sandbagging, AUC ≈ 0.5 against the real `BehavioralEISV` +
+`assess_behavioral_state` path) is in [`demos/frt_autonomy_sandbagging/`](../demos/frt_autonomy_sandbagging/).
+Scope note: that demonstration exercises the behavioral-EISV core and verdict, not
+the full server pipeline (sensors, continuity, dialectic peer review); the
+structural argument is expected to carry to those paths but has not been measured
+there.
+
