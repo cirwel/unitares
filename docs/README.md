@@ -9,8 +9,8 @@ For a single, task-ordered walkthrough that stitches the docs below into one gui
 | You are… | Read in this order |
 |---|---|
 | **A reviewer / first-time visitor** | [repo README](../README.md) → [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/paper-positioning.md`](ontology/paper-positioning.md) |
-| **Integrating an MCP client** | [`integration/MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) → [`guides/START_HERE.md`](guides/START_HERE.md) → [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) |
-| **Installing / deploying** | [`install/PLAYBOOK.md`](install/PLAYBOOK.md) → [`install/cross-machine-surface.md`](install/cross-machine-surface.md) → [`operations/OPERATOR_RUNBOOK.md`](operations/OPERATOR_RUNBOOK.md) |
+| **Integrating an MCP client** | [`manual/04-integrating-agents.md`](manual/04-integrating-agents.md) → [`integration/MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) → [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) |
+| **Installing / deploying** | [`manual/02-install.md`](manual/02-install.md) → [`install/PLAYBOOK.md`](install/PLAYBOOK.md) → [`operations/OPERATOR_RUNBOOK.md`](operations/OPERATOR_RUNBOOK.md) |
 | **Working on the identity layer** | [`../AGENTS.md`](../AGENTS.md) → [`ontology/README.md`](ontology/README.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/plan.md`](ontology/plan.md) |
 
 ## Layout
@@ -47,8 +47,8 @@ User- and integrator-facing how-tos. Thin by design — most architecture lives 
 
 ### `install/` — installation
 
-- [`PLAYBOOK.md`](install/PLAYBOOK.md) — bare-metal install playbook (Homebrew Postgres, native Python). Docker path is in the repo README.
-- [`cross-machine-surface.md`](install/cross-machine-surface.md) — multi-machine surface setup
+- [`PLAYBOOK.md`](install/PLAYBOOK.md) — bare-metal install playbook (Homebrew Postgres, native Python). Docker path is in the repo README. **Live reference** — keep this current.
+- [`cross-machine-surface.md`](install/cross-machine-surface.md) — *point-in-time install-surface audit (2026-04-24), preserved as a record.* Inventory of machine-varying values; useful background for a cross-machine setup, but the install path itself is `PLAYBOOK.md`, not this.
 
 ### `integration/` — MCP and client wiring
 
