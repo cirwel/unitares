@@ -1,217 +1,38 @@
 # Unitares Governance Dashboard
 
-**Created:** December 30, 2025
 **Last updated:** June 2026
-**Status:** Documents the **classic** dashboard, now served at `/dashboard/classic`. The live default at `/` and `/dashboard` is the **redesign** (`dashboard/redesign/`, cut over 2026-06-19) — see [`redesign/PLAN.md`](redesign/PLAN.md). Classic stays reachable as the fallback/oracle pending retirement once the redesign is confirmed at full parity. This is a buildless reskin, **not** a Phoenix/LiveView rewrite (that remains separately deferred — see [Redesign vs Phoenix](#redesign-vs-phoenix--two-different-things) below).
 
-## Overview
+The operator dashboard is **`dashboard/redesign/`**, served buildless at `/` and
+`/dashboard`. See [`redesign/PLAN.md`](redesign/PLAN.md) for its design system,
+sections, and data layer.
 
-> **Heads-up:** the operator-facing dashboard is now the redesign. The sections below describe the **classic** dashboard (served at `/dashboard/classic`), which is still load-bearing as the parity oracle but slated for retirement. For the live UI, read `redesign/PLAN.md` and `dashboard/redesign/`.
+## Layout
 
-The classic dashboard is the legacy operator web UI for Unitares. It serves from the Python governance server and shows fleet health, agent state, EISV history, knowledge graph activity, dialectic sessions, resident status, and resident-specific panels for Watcher, Sentinel, Vigil, and Chronicler.
+- `redesign/` — the live dashboard (buildless: tokens + small JS primitives, no
+  framework). Served by `http_dashboard_redesign` in `src/http_api.py`.
+- `phase.html` / `phase.js` — the standalone phase-space view (D3), served at
+  `/phase`. Independent of the rest of the dashboard.
+- `package.json` / `eslint.config.mjs` — ESLint over the redesign + `phase.js`
+  (the dashboard CI job). The dashboard is buildless; there is no bundle step.
 
-It is served buildless: plain HTML, CSS, and JavaScript served directly from `dashboard/` by the Python server. A Vite + vitest + ESLint/Prettier toolchain sits alongside that for local development and CI (see [Tooling and tests](#tooling-and-tests)). The redesign is also buildless (raw HTML/CSS/JS from `dashboard/redesign/`); the long-discussed switch of *classic* to bundled output was overtaken by the redesign cutover.
+## The classic dashboard was retired
 
-## Access
+The original dashboard — a ~17k-line static `index.html` + `dashboard.js` +
+per-panel modules + `styles.css` — was the operator UI until the redesign cut
+over on **2026-06-19**. It was removed once the redesign reached parity
+(resident panels consolidated into the **Residents** section; Chronicler's
+time-series became the **Metrics** section).
 
-Start the governance server, then open:
-
-- `http://127.0.0.1:8767/` and `http://127.0.0.1:8767/dashboard` — the **redesign** (live default)
-- `http://127.0.0.1:8767/dashboard/classic` — the **classic** dashboard documented here
-- `http://127.0.0.1:8767/phase` (phase-space view — still served by classic; not yet ported to the redesign)
-- `https://<your-domain>/dashboard` if the server is exposed through a tunnel
-
-If `UNITARES_HTTP_API_TOKEN` is configured, provide the token either as:
-
-- `?token=<token>` in the dashboard URL
-- `localStorage.unitares_api_token`
-
-The `authFetch` helper and `DashboardAPI` attach the bearer token for dashboard REST and tool calls.
-
-### Operator token (write actions under STRICT_IDENTITY_REQUIRED)
-
-The operator write buttons (archive/resume, config-set, dialectic-request) additionally need an operator credential once `STRICT_IDENTITY_REQUIRED` is on (#425): the server resolves a valid `X-Unitares-Operator` token to a stable operator identity, and that resolved binding is what passes the strict gate — reads keep working without it. Provide the token either as:
-
-- `?operator_token=<token>` in the dashboard URL
-- `localStorage.unitares_operator_token`
-
-The token must be present in the server's `UNITARES_OPERATOR_TOKENS` allowlist (CSV env var; see `src/mcp_handlers/identity/operator.py` for storage and rotation guidance). With the flag off, the header is optional and changes nothing.
-
-## Current Surfaces
-
-- **Stats:** fleet coherence, active/total agents, stuck agents, discoveries, dialectic sessions, system health, calibration, anomalies, and trust-tier distribution.
-- **Pulse:** latest governance decision, risk/confidence/complexity vitals, event sparkline, and pinned-agent support.
-- **EISV:** fleet and per-agent time-series charts backed by Chart.js.
-- **Agents:** searchable/filterable agent table with pagination, status, metrics, trust tiers, lineage/supersession badges, lifecycle reason display, and operator actions.
-- **Discoveries:** recent knowledge graph entries with filters and status actions.
-- **Dialectic:** peer-review/recovery sessions, phase/status counts, and transcript views.
-- **Activity:** timeline of check-ins, verdicts, discoveries, dialectic events, lifecycle events, and resident events.
-- **Residents:** always-on fleet strip with silence detection and recent writes.
-- **Chronicler:** fleet metrics panel.
-- **Watcher:** findings pipeline and pattern status panel.
-- **Sentinel:** findings stream and severity/class breakdown.
-- **Vigil:** janitor resident cycles and write stream.
-- **Phase Space:** separate `/phase` view with E/I particles, basin contours, flow field, and live updates.
-
-## Architecture
-
-- **Frontend:** static `index.html`, `styles.css`, and JS modules in `dashboard/`.
-- **Charts:** Chart.js for dashboard charts; the `/phase` page uses D3.
-- **Tool calls:** `DashboardAPI.callTool()` posts to `/v1/tools/call`.
-- **REST calls:** direct dashboard endpoints use the `authFetch` helper.
-- **Live updates:** `/ws/eisv` streams EISV and broadcaster events. The UI falls back to polling where needed.
-- **Refresh cadence:** full dashboard refresh every 30 seconds; API client cache defaults to 25 seconds.
-- **Static-file guard:** `tests/test_dashboard_static_allowlist.py` ensures every `/dashboard/*.js` reference in `index.html` is allowlisted by `src/http_api.py`.
-
-## Important Files
-
-- `index.html` - main dashboard shell and section layout.
-- `dashboard.js` - application orchestration, refresh loop, stats, modals, operator actions.
-- `utils.js` - API client, authenticated fetch, cache/retry logic, formatting helpers, WebSocket client.
-- `state.js` - shared dashboard state container.
-- `agents.js` - agent table, filters, lineage display, live agent updates.
-- `discoveries.js` - knowledge graph discovery panel.
-- `dialectic.js` - dialectic session panel and transcript rendering.
-- `eisv-charts.js` - EISV charts and WebSocket integration.
-- `timeline.js` - activity timeline and event classification.
-- `residents.js` - resident fleet strip.
-- `fleet-metrics.js` - Chronicler/fleet metrics panel.
-- `watcher.js` - Watcher findings panel.
-- `sentinel.js` - Sentinel findings panel.
-- `vigil.js` - Vigil panel.
-- `phase.html` / `phase.js` - phase-space visualization.
-
-## Backend Endpoints Used
-
-Tool calls through `/v1/tools/call` include unified tools plus a few legacy dashboard/operator entry points:
-
-- `agent(action="list" | "resume")`
-- `knowledge(action="stats")`
-- `search_knowledge_graph`
-- `dialectic(action="list")`
-- `archive_agent`
-- `operator_resume_agent`
-- `request_dialectic_review`
-- `update_discovery_status_graph`
-- `compare_agents`
-- `detect_stuck_agents`
-- `detect_anomalies`
-- `check_calibration`
-- `config(action="get" | "set")`
-
-Dedicated HTTP endpoints include:
-
-- `/health`
-- `/api/events`
-- `/api/activity`
-- `/api/incidents`
-- `/v1/residents`
-- `/v1/residents/tag_audit`
-- `/v1/watcher/summary`
-- `/v1/sentinel/summary`
-- `/v1/vigil/summary`
-- `/ws/eisv`
-
-Agent rows come from `agent(action="list", include_metrics=true, status_filter="all")`. The dashboard consumes compact list fields only: `parent_agent_id`, `spawn_reason`, `last_lifecycle_event`, `last_lifecycle_reason`, `last_lifecycle_at`, `superseded`, and `superseded_reason`. Full `identity_view` belongs to `get_agent_metadata` detail responses and is not required for the agent grid.
-
-## Development
-
-1. Start the server:
-
-   ```bash
-   python src/mcp_server.py --port 8767
-   ```
-
-2. Open `http://127.0.0.1:8767/dashboard`.
-3. Edit files in `dashboard/` and refresh the browser.
-4. If you add a JS or CSS file referenced by `index.html`, update the static allowlist in `src/http_api.py` and run the allowlist test.
-
-Useful checks:
+**Recovering a classic file.** It lives in git history. The last commit that
+contains the classic dashboard is `7c6037b` (master, pre-retirement):
 
 ```bash
-pytest tests/test_dashboard_static_allowlist.py
-pytest tests/test_dashboard.py
+git show 7c6037b:dashboard/dashboard.js        # view a file
+git checkout 7c6037b -- dashboard/agents.js    # restore one into the worktree
 ```
 
-## Tooling and tests
-
-The dashboard has a Node toolchain for developer experience and CI. It is
-**additive**: production still serves the raw files in `dashboard/`, so none of
-this is required to run the dashboard — it makes the code pleasant to work on and
-guards the render logic.
-
-```bash
-cd dashboard
-npm ci              # install (vite, vitest, eslint, prettier, vendored chart.js)
-
-npm run dev         # Vite dev server with HMR (see migration note below)
-npm run build       # bundle src/main.js → dist/ (vendors Chart.js off the CDN)
-npm test            # vitest: jsdom tests of the agent-list render/partition logic
-npm run lint        # eslint (flat config; errors fail CI, legacy warnings allowed)
-npm run format      # prettier --write on the maintained surface (src/tests/configs)
-npm run format:check
-```
-
-CI runs `lint`, `format:check`, `test`, and `build` in the `dashboard` job
-(`.github/workflows/tests.yml`).
-
-### How the build is wired
-
-`dashboard/src/main.js` is a single ES-module entry that vendors Chart.js and then
-side-effect-imports the existing browser modules **in the same order
-`index.html` declares them**. The modules are still global-attaching IIFEs; this
-entry is the seam that lets the ESM migration happen incrementally instead of
-big-bang. `npm run build` proves the whole chain bundles (Chart.js + all modules)
-into `dist/assets/main-<hash>.js`.
-
-### Migration note (production serving — not done yet)
-
-Production still serves the raw `index.html` + `<script>` chain via
-`http_dashboard` / `http_dashboard_static` in `src/http_api.py`, gated by the
-static-file allowlist. Switching to the bundled output is intentionally a
-separate step because it is coupled to two decisions:
-
-1. **How the Pi serves the build** — commit `dist/`, build in CI and publish, or
-   build on deploy. (`dist/` is gitignored today.)
-2. **The allowlist** — fingerprinted `dist/assets/*` filenames can't be a fixed
-   allowlist, so `http_dashboard_static` needs a directory-scoped, traversal-safe
-   resolver, and `tests/test_dashboard_static_allowlist.py` updated to match.
-
-Until that lands, `npm run dev` and `npm run build` are dev/CI aids; the served
-dashboard is unchanged. A real-browser smoke test should gate the production
-switch (the bundle is verified to compile and to initialize in jsdom, but not yet
-rendered end-to-end in a browser from CI).
-
-## Agent Visibility Checks
-
-If an agent checked in but does not appear in the browser:
-
-1. Clear the agent search box.
-2. Set status to `All`.
-3. Disable metrics-only and production-only filters.
-4. Clear trust-tier filters by reloading the page.
-5. Search by UUID prefix or exact label.
-6. Hard refresh the browser if the API result is correct but the view is stale.
-
-The dashboard API call is the browser list source of truth:
-
-```bash
-curl -s -X POST http://127.0.0.1:8767/v1/tools/call \
-  -H "Authorization: Bearer $UNITARES_HTTP_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  --data '{"name":"agent","arguments":{"action":"list","include_metrics":true,"recent_days":30,"limit":200,"min_updates":0,"status_filter":"all"}}'
-```
-
-If the agent appears in that response, ingestion and persistence are working. The remaining issue is usually a client-side filter, pagination state, cache, WebSocket lag, or stale browser state.
-
-## Redesign vs Phoenix — two different things
-
-Don't conflate these:
-
-- **The redesign (shipped, live).** A buildless, design-system-first *strangler* reskin in `dashboard/redesign/` — plain tokens + small JS primitives, no framework. It cut over to be the live default at `/` and `/dashboard` on 2026-06-19 and is the operator UI today. The classic panels documented here were consolidated into its **Residents** section (Watcher/Sentinel/Vigil/Chronicler/System Health); Chronicler's fleet-metrics time-series is its own **Metrics** section. See `redesign/PLAN.md`.
-
-- **Phoenix / LiveView (deferred, not refused).** A genuinely different direction — rewriting the real-time layer on the BEAM. `docs/proposals/surface-lease-plane-v0.md` lists as deferred follow-up scope:
-  - Phoenix LiveView migration of the dashboard.
-  - Phoenix PubSub migration of the broadcaster, Discord bridge, and dashboard WebSocket plumbing.
-
-The repo has active Elixir/OTP work under `elixir/` (lease plane, sentinel, agent orchestrator, wave-3a handlers), but that is the BEAM coordination kernel, **not** a Phoenix dashboard app — there is no checked-in Phoenix app. LiveView + PubSub remains a good long-term home for the live read surface, but it is correctly parked behind a PubSub migration and is not the current implementation path. The redesign is.
+**Known non-parity (intentional, see PLAN.md).** The redesign is read-only —
+the classic operator write actions (archive/resume agent, request dialectic
+review, update discovery status) were **not** ported; do those via the MCP
+tools / CLI. The classic Resident-Progress panel and the richer EISV views
+(heatmap, ODE overlay, per-agent mode) were also not carried over.

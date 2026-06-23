@@ -160,18 +160,9 @@ jobs:
       working-directory: dashboard
       run: npm ci
 
+    # The dashboard is buildless (redesign serves raw HTML/CSS/JS; /phase is a
+    # standalone D3 page). The classic dashboard and its vite/vitest build+test
+    # harness were retired, so lint over the redesign + phase.js is the gate.
     - name: Lint
       working-directory: dashboard
       run: npm run lint
-
-    - name: Check formatting
-      working-directory: dashboard
-      run: npm run format:check
-
-    - name: Run dashboard frontend tests
-      working-directory: dashboard
-      run: npm test
-
-    - name: Build (verify the bundle compiles)
-      working-directory: dashboard
-      run: npm run build

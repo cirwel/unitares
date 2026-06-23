@@ -882,42 +882,6 @@ async def http_metrics(request):
 
 
 # Dashboard endpoint
-async def http_dashboard(request):
-    """Serve the web dashboard"""
-    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
-    dashboard_path = Path(__file__).parent.parent / "dashboard" / "index.html"
-    if dashboard_path.exists():
-        html = dashboard_path.read_text()
-        # Cache-bust: append ?v=<max_mtime> so edits are picked up without restart
-        import re as _re
-        _dash_dir = dashboard_path.parent
-        _v = str(int(max(
-            (f.stat().st_mtime for f in _dash_dir.iterdir() if f.is_file()),
-            default=_startup_ts,
-        )))
-        html = _re.sub(
-            r'(src|href)="/dashboard/([^"]+)"',
-            rf'\1="/dashboard/\2?v={_v}"',
-            html,
-        )
-        # Inject API token so dashboard JS can authenticate.
-        # Always overwrite — token may have rotated since last visit.
-        if http_api_token:
-            token_script = (
-                f'<script>localStorage.setItem("unitares_api_token","{http_api_token}")</script>'
-            )
-            html = html.replace("</head>", f"{token_script}</head>", 1)
-        return Response(
-            content=html,
-            media_type="text/html",
-            headers={"Cache-Control": "no-cache"},
-        )
-    return JSONResponse({
-        "error": "Dashboard not found",
-        "path": str(dashboard_path)
-    }, status_code=404)
-
-
 async def http_phase(request):
     """Serve the phase-space visualization"""
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
@@ -934,7 +898,10 @@ async def http_phase(request):
     return JSONResponse({"error": "Phase view not found", "path": str(phase_path)}, status_code=404)
 
 
-# Dashboard static files (utils.js, components.js)
+# Dashboard static files. The classic dashboard was retired (see
+# dashboard/README.md); the only top-level asset still served from
+# /dashboard/<file> is phase.js, loaded by the standalone /phase view. The
+# redesign serves its own assets via http_dashboard_redesign.
 async def http_dashboard_static(request):
     """Serve dashboard static files"""
     file_path = request.path_params.get("file", "")
@@ -943,14 +910,6 @@ async def http_dashboard_static(request):
 
     # Only allow specific files for security
     allowed_files = [
-        "utils.js", "state.js", "colors.js", "components.js",
-        "fleet-severity.js",
-        "visualizations.js", "agents.js", "discoveries.js",
-        "dialectic.js", "eisv-charts.js", "timeline.js",
-        "residents.js", "fleet-metrics.js", "watcher.js", "sentinel.js",
-        "vigil.js", "resident-progress.js",
-        "system-health.js",
-        "styles.css", "dashboard.js",
         "phase.js",
     ]
     if file_path not in allowed_files:
@@ -1498,7 +1457,7 @@ async def http_get_metrics_catalog(request):
     from src.fleet_metrics.storage import latest_ts_for_names
     metrics = sorted(_catalog.values(), key=lambda x: x.name)
     # last_point_ts lets the dashboard suppress empty `.error` twins
-    # without firing a per-name probe — see dashboard/fleet-metrics.js.
+    # without firing a per-name probe — see dashboard/redesign/sections/metrics.js.
     try:
         last_ts = await latest_ts_for_names([m.name for m in metrics])
     except Exception as e:
@@ -3114,13 +3073,10 @@ def register_http_routes(
     # static allowlist (which would 403 it). Additive and reversible.
     app.routes.append(Route("/dashboard/redesign", http_dashboard_redesign, methods=["GET"]))
     app.routes.append(Route("/dashboard/redesign/{file:path}", http_dashboard_redesign, methods=["GET"]))
-    # CUTOVER (2026-06-19): /dashboard (and /) now serve the redesign; the prior
-    # dashboard stays reachable at /dashboard/classic (registered before the
-    # static {file} route so the flat allowlist doesn't swallow it). The old
-    # dashboard uses absolute asset paths, so it serves unchanged from /classic.
-    app.routes.append(Route("/dashboard/classic", http_dashboard, methods=["GET"]))
-    # IMPORTANT: Static file route must come BEFORE dashboard route
-    # to match /dashboard/utils.js, etc.
+    # CUTOVER (2026-06-19): /dashboard (and /) serve the redesign. The classic
+    # dashboard was retired (see dashboard/README.md; recover from git history).
+    # The static {file} route remains only to serve phase.js for the /phase view;
+    # it stays BEFORE the /dashboard redesign route so /dashboard/phase.js resolves.
     app.routes.append(Route("/dashboard/{file}", http_dashboard_static, methods=["GET"]))
     app.routes.append(Route("/dashboard", http_dashboard_redesign, methods=["GET"]))
     app.routes.append(Route("/phase", http_phase, methods=["GET"]))
