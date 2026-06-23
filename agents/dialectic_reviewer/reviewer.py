@@ -212,7 +212,8 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
             },
         )
         # A real check-in before exit (subagent-onboarding discipline).
-        await client.sync_state(
+        # SDK checkin() maps to the server's process_agent_update.
+        await client.checkin(
             response_text=f"dialectic review complete: agrees={verdict.agrees}"
             + (" (degraded fallback)" if verdict.degraded else ""),
             complexity=0.4,
@@ -220,7 +221,7 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
         )
         return verdict
     finally:
-        await client.close()
+        await client.disconnect()
 
 
 def main() -> int:

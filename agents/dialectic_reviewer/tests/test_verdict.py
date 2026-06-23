@@ -100,6 +100,17 @@ def test_thesis_from_env_tolerates_newline_conditions():
     assert Thesis.from_env(env).proposed_conditions == ["one", "two"]
 
 
+# --------------------------- SDK interface conformance --------------------------- #
+def test_runner_only_calls_real_governance_client_methods():
+    """Guard against the mock lying: every GovernanceClient method run() invokes
+    must actually exist on the real SDK class. (This catches close-vs-disconnect /
+    sync_state-vs-checkin drift that mocked wiring tests cannot.)"""
+    client_mod = pytest.importorskip("unitares_sdk.client")
+    gc = client_mod.GovernanceClient
+    for method in ("connect", "onboard", "call_tool", "checkin", "disconnect"):
+        assert hasattr(gc, method), f"GovernanceClient is missing {method!r} — runner would crash live"
+
+
 # --------------------------- run() wiring (mocked) --------------------------- #
 @pytest.mark.asyncio
 async def test_run_submits_disagreement_through_protocol(monkeypatch):
@@ -128,11 +139,13 @@ async def test_run_submits_disagreement_through_protocol(monkeypatch):
             calls.append((name, args))
             return {"ok": True}
 
-        async def sync_state(self, **kw):
-            calls.append(("sync_state", kw))
+        # Method names MUST mirror the real GovernanceClient — a mock that
+        # invents names hides runtime AttributeErrors (it did, once).
+        async def checkin(self, response_text, complexity=0.3, confidence=0.7, **kw):
+            calls.append(("checkin", {"response_text": response_text, **kw}))
             return None
 
-        async def close(self):
+        async def disconnect(self):
             return None
 
     # Inject the fake SDK client module so `from unitares_sdk.client import GovernanceClient` resolves.
