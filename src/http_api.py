@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Dict, Optional
 
 _startup_ts = time.time()
 
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route, WebSocketRoute
 
 from prometheus_client import REGISTRY, generate_latest, CONTENT_TYPE_LATEST
@@ -3026,6 +3026,12 @@ async def http_debug_memory(request):
     return JSONResponse(result)
 
 
+async def http_dashboard_classic_redirect(request):
+    """Classic was retired (PR #1012). Old /dashboard/classic links land on the
+    live dashboard instead of a confusing 403 from the static allowlist."""
+    return RedirectResponse("/dashboard", status_code=302)
+
+
 # ---------------------------------------------------------------------------
 # Route registration
 # ---------------------------------------------------------------------------
@@ -3077,6 +3083,9 @@ def register_http_routes(
     # dashboard was retired (see dashboard/README.md; recover from git history).
     # The static {file} route remains only to serve phase.js for the /phase view;
     # it stays BEFORE the /dashboard redesign route so /dashboard/phase.js resolves.
+    # Retired classic → redirect home (must precede the /dashboard/{file} static
+    # route, which would otherwise 403 the unknown "classic" path).
+    app.routes.append(Route("/dashboard/classic", http_dashboard_classic_redirect, methods=["GET"]))
     app.routes.append(Route("/dashboard/{file}", http_dashboard_static, methods=["GET"]))
     app.routes.append(Route("/dashboard", http_dashboard_redesign, methods=["GET"]))
     app.routes.append(Route("/phase", http_phase, methods=["GET"]))
