@@ -123,3 +123,23 @@ The gate read should **state both axes accurately**: the p50 floor is closed, th
 - **Decision B: genuinely open — operator's call on tail-vs-volume.** I won't push it either way; my substrate-migration biases cut in both directions and the evidence is mixed (real tail, low volume). My only ask is that it be decided on the *measured* tradeoff, not on the dead-floor framing my first draft mistakenly supplied.
 
 Proposals **outside** this cluster are healthy and proceed independently of the read (Track A strict-identity flip, dashboard-hero rollup, the eisv-probe KILL already recorded, the reversible identity micro-steps). This note is only about the BEAM-forward cluster.
+
+## Council review (2026-06-22) — the binary collapses; the decision is cheaper
+
+A 3-lens council (architect + code-reviewer + live-verifier, adversarial) materially reframed Call B. **Supersede the "tail-vs-volume" framing above with this.**
+
+**Corrected numbers (live-verifier):** volume is **~1,009 `core.agent_state` writes/day** (not 927) and **2 dialectic sessions/last-30d** (not ~1). Direction works against porting (slightly higher), doesn't flip anything. p99 4738ms / math 1.3% confirmed (one 3973ms math outlier aside). Orchestrator demand verified **empty** across audit.events, KG, git, port checks, dispatch_beam source → **Call A "freeze" confirmed.** Track A flip healthy: post-flip `identity_required` failures are tokenless callers rejected at the gate (agent_id=NULL, latency 0) — expected, residents not dark.
+
+**The killer finding (code-reviewer, code-verified):** the p99/15s-max tail is the **`fcntl` file-lock spin-wait** in `src/state_locking.py::acquire_agent_lock` (`LOCK_EX|LOCK_NB` polled with `time.sleep(0.1)`, `timeout=5.0 × max_retries=3` = ~15s ceiling, a dead-on match for the observed 15s max). It is **not** PG coordination and **not** math. There is a **cheap one-file Python fix**: replace the file lock with `pg_try_advisory_lock(hashtext(agent_uuid))` (asyncpg already ExecutorPool-wrapped; crash-safe; deletes the stale-lock-cleanup code). This is the RFC's own **(A.2) disconfirmer**: **if it drops p99 < 2.0s, the Wave-3 port question is moot** — the tail was the file lock, not the substrate.
+
+**The structural finding (architect, DB-verified):** the full port's *own* go/no-go evidence does not exist. Disconfirmer (B) needs `measurement.beam_python_boundary.request` boundary-cost rows; the live count is **zero** (that emitter is Wave-3 impl, paused under (α)). The lease-plane *baseline* has its 14 days (p50 4ms/p99 15ms, n=17,121) but the comparison side is empty by construction. So **"port the full handler-dispatch on measured boundary cost" was never an available option for 06-24.** The dominating middle options are the roadmap's own **(γ) ETS / (β) dialectic-only scoped ports** — the only way to *generate* the (B) evidence at minimal blast radius — which the binary wrongly parked with the frozen cluster. Also: identity-middleware (in Call B's port) and vouched-identity (in Call A's freeze) are the **same single-writer surface** — don't split them across the two calls.
+
+**Blast-radius caveat:** the full identity-middleware port is the hottest surface in the codebase and Track A strict just went live today; a BEAM divergence in the `server_inferred`/`sticky_cache` proof_origin gate would silently pass or block writes. Argues against a big port now regardless.
+
+### Reframed decision (council-synthesized)
+Call B is **not** "port vs don't-port." The honest, cheap sequence:
+1. **Ship the one-file `fcntl`→`pg_advisory_lock` fix** (the A.2 falsifier). Reversible, one deploy, no BEAM.
+2. **Measure p99 ~7 days.** If **< 2.0s** → tail solved Python-side, **don't port**, freeze the whole BEAM-forward tree. If **still high** → the architectural-ceiling case strengthens *with evidence*, and the next step is a scoped **(γ)/(β)** probe (to populate disconfirmer B), **not** the full handler-dispatch port.
+3. **Call A: freeze** the orchestrator cluster regardless (empty demand).
+
+So the operator's actual 06-24 call shrinks to: **approve the one-file falsifier + freeze Call A.** The 9-week (mid-August) full port is not the live next step.
