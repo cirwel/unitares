@@ -115,6 +115,14 @@ def unbound_metrics_payload() -> dict:
     peer next_action carries the same hint with a tool + example, and the
     wrapped verdict carries the canonical glossary entry so the two
     surfaces can't drift.
+
+    The example must point at an explicit, proof-bearing identity path.
+    Leading with bare ``identity()`` here conflicted with the strict-identity
+    contract: an arg-less, no-proof ``identity()``/``onboard()`` can mint an
+    orphan in-memory identity instead of establishing accountable selfhood.
+    For an unbound caller the safe canonical path is ``onboard(force_new=true)``
+    for a fresh process identity, or a continuity-declaring mint when this
+    process is inheriting a finished predecessor's work.
     """
     from src.governance_glossary import explain_verdict
     return {
@@ -122,14 +130,20 @@ def unbound_metrics_payload() -> dict:
         "verdict": explain_verdict("unbound"),
         "guidance": "Establish identity before reading agent metrics.",
         "next_action": {
-            "tool": "identity",
-            "example": "identity() or onboard(force_new=true, spawn_reason='new_session')",
+            "tool": "onboard",
+            "example": "onboard(force_new=true)",
             "note": (
                 "get_governance_metrics is read-only; it creates no "
-                "identity and no state for unbound callers."
+                "identity and no state for unbound callers. Mint a fresh "
+                "process identity with onboard(force_new=true); to continue "
+                "a finished predecessor's work add "
+                "parent_agent_id=<prior_uuid>, spawn_reason='new_session'. "
+                "Avoid bare identity()/onboard() — without force_new or a "
+                "proof (client_session_id / continuity_token) they can mint "
+                "an orphan identity."
             ),
         },
-        "related_tools": ["identity", "onboard", "process_agent_update"],
+        "related_tools": ["onboard", "process_agent_update", "identity"],
     }
 
 
