@@ -1062,6 +1062,28 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
 SYNTHETIC_REVIEWER_ID = "llm-synthetic-reviewer"
 
 
+def _synthetic_review_approves(synthesis: Dict[str, Any]) -> bool:
+    """Map the synthetic reviewer's model verdict to a BINDING agree/disagree.
+
+    The model (generate_synthesis) already emits a recommendation of RESUME /
+    COOLDOWN / ESCALATE. Only RESUME is genuine approval. COOLDOWN and ESCALATE
+    are non-approval and must register as `agrees=False` so the session does NOT
+    auto-resolve into a resume.
+
+    Previously both synthesis submissions hardcoded `agrees=True`, which discarded
+    the model's verdict — a disputed or even transparently-unsafe thesis still
+    resolved RESUME (demonstrated live 2026-06-23: a "disable the risk check and
+    resume with no conditions" thesis was correctly disputed by the reviewer yet
+    still resolved RESUME). This makes the reviewer's verdict actually bind.
+
+    A missing/unparseable recommendation defaults to non-approval (don't approve
+    without a real verdict). The fully-degraded case (generate_synthesis returns
+    None) is handled upstream — the session stays open rather than fabricating one.
+    """
+    rec = str((synthesis or {}).get("recommendation", "")).upper().strip()
+    return rec == "RESUME"
+
+
 def _synthetic_reviewer_enabled() -> bool:
     """Whether submit_thesis auto-completes a no-live-reviewer session via the
     local synthetic reviewer instead of leaving it to hang at awaiting_facilitation.
@@ -1196,6 +1218,9 @@ async def _run_synthetic_review(
     synth_conditions = synthesis.get("merged_conditions") or []
     if isinstance(synth_conditions, str):
         synth_conditions = [synth_conditions] if synth_conditions else []
+    # Bind the reviewer's verdict: only a RESUME recommendation agrees (resolves);
+    # COOLDOWN/ESCALATE register as disagreement so the session does not auto-resume.
+    synth_agrees = _synthetic_review_approves(synthesis)
     synth_msg = DialecticMessage(
         phase="synthesis",
         agent_id=SYNTHETIC_REVIEWER_ID,
@@ -1203,7 +1228,7 @@ async def _run_synthetic_review(
         root_cause=synthesis.get("agreed_root_cause", ""),
         proposed_conditions=synth_conditions,
         reasoning=synthesis.get("reasoning", ""),
-        agrees=True,
+        agrees=synth_agrees,
     )
     session.submit_synthesis(synth_msg)
     await pg_add_message(
@@ -1213,7 +1238,7 @@ async def _run_synthetic_review(
         root_cause=synthesis.get("agreed_root_cause", ""),
         proposed_conditions=synth_conditions or None,
         reasoning=synthesis.get("reasoning", ""),
-        agrees=True,
+        agrees=synth_agrees,
     )
 
     resolved = False
@@ -2099,6 +2124,8 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         synth_conditions = synthesis.get("merged_conditions") or []
         if isinstance(synth_conditions, str):
             synth_conditions = [synth_conditions] if synth_conditions else []
+        # Bind the verdict (see _synthetic_review_approves): only RESUME agrees.
+        synth_agrees = _synthetic_review_approves(synthesis)
         synth_msg = DMsg(
             phase="synthesis",
             agent_id="llm-synthetic-reviewer",
@@ -2106,7 +2133,7 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
             root_cause=synthesis.get("agreed_root_cause", ""),
             proposed_conditions=synth_conditions,
             reasoning=synthesis.get("reasoning", ""),
-            agrees=True,
+            agrees=synth_agrees,
         )
         session.submit_synthesis(synth_msg)
         await pg_add_message(
@@ -2116,7 +2143,7 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
             root_cause=synthesis.get("agreed_root_cause", ""),
             proposed_conditions=synth_conditions or None,
             reasoning=synthesis.get("reasoning", ""),
-            agrees=True,
+            agrees=synth_agrees,
         )
 
         # 4. Finalize resolution through protocol (canonical schema).
@@ -2125,24 +2152,32 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         # not-verifiable-bilaterally (verify_signatures() will return False).
         # The agent's own api_key (or a fallback derived from agent_uuid)
         # produces a real signature_a; signature_b is empty by design.
-        paused_meta = mcp_server.agent_metadata.get(agent_uuid)
-        api_key_a = (
-            paused_meta.api_key
-            if paused_meta and getattr(paused_meta, "api_key", None)
-            else f"llm-{agent_uuid[:8]}"
-        )
-        resolution_obj = session.finalize_resolution(api_key_a, "")
-        session.resolution = resolution_obj
-        await pg_resolve_session(
-            session_id=session_id,
-            resolution=resolution_obj.to_dict(),
-            status="resolved",
-        )
-
-        # Store in ACTIVE_SESSIONS
+        # Only finalize when the reviewer actually agreed (phase reaches RESOLVED).
+        # On COOLDOWN/ESCALATE the synthesis registered agrees=False, so the session
+        # stays unresolved and is left for facilitation rather than force-resumed.
+        if synth_agrees and session.phase == DialecticPhase.RESOLVED:
+            paused_meta = mcp_server.agent_metadata.get(agent_uuid)
+            api_key_a = (
+                paused_meta.api_key
+                if paused_meta and getattr(paused_meta, "api_key", None)
+                else f"llm-{agent_uuid[:8]}"
+            )
+            resolution_obj = session.finalize_resolution(api_key_a, "")
+            session.resolution = resolution_obj
+            await pg_resolve_session(
+                session_id=session_id,
+                resolution=resolution_obj.to_dict(),
+                status="resolved",
+            )
+            logger.info(f"LLM dialectic session {session_id} resolved via protocol")
+        else:
+            session.awaiting_facilitation = True
+            logger.info(
+                f"LLM dialectic session {session_id}: reviewer did not approve "
+                f"(recommendation={recommendation}); left unresolved for facilitation"
+            )
+        # Store in ACTIVE_SESSIONS regardless so the verdict is recorded.
         ACTIVE_SESSIONS[session_id] = session
-
-        logger.info(f"LLM dialectic session {session_id} persisted via protocol")
     except Exception as e:
         logger.warning(f"Could not persist LLM dialectic session: {e}")
 
