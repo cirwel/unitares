@@ -20,6 +20,7 @@ Several of these are **single-writer surfaces** (see the shared contract in `AGE
 
 | Doc | Status (as of 2026-06-11) |
 |---|---|
+| [`2026-06-24-wave-3-gate-framing.md`](2026-06-24-wave-3-gate-framing.md) | **Read first for the gate.** Framing note (2026-06-22) for the 2026-06-24 read — frames the one yes/no (real consumer for the inert orchestrator?) that resolves most of this cluster; records that the latency case is conceded dead |
 | [`beam-footprint-roadmap-v0.md`](beam-footprint-roadmap-v0.md) | v0.3 — destination A′ committed (operator decision 2026-05-05). Read the V0.3 RESOLUTION block first |
 | [`beam-wave-1-sentinel.md`](beam-wave-1-sentinel.md) | v0.1.3 — Wave 1 Surface 1 cycle worker shipped (PR #376). Read the v0.1.3 amendment first |
 | [`beam-wave-3-handler-dispatch.md`](beam-wave-3-handler-dispatch.md) | v0.3.2 — active redraft; supersedes v0.2/v0.1.x |
@@ -57,6 +58,8 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`dashboard-hero-severity-rollup.md`](dashboard-hero-severity-rollup.md) | Draft (2026-06-19) — fleet-severity rollup into the dashboard hero; `dashboard/` only, awaiting operator sign-off before implementation |
 | [`harness-event-safety-policy-v0.md`](harness-event-safety-policy-v0.md) | Draft (2026-06-20) — cross-harness event envelope and fail-closed policy for synthetic/replayed/duplicate events before harness-specific implementation PRs |
 | [`beam-event-adapter-design-v0.md`](beam-event-adapter-design-v0.md) | Design note (2026-06-20) — how BEAM residents/supervisors would populate the harness-event-safety envelope (PR #957); design-only, deferred to the 2026-06-24 Wave-3 gate read |
+| [`monitor-delegated-liveness-v0.md`](monitor-delegated-liveness-v0.md) | v0 (2026-06-21) — design-only, **DO NOT BUILD YET.** Delegate process-liveness to the owning runtime monitor (OTP supervisor / `:DOWN`) instead of self-report heartbeat. Build-trigger = the agent-orchestrator de-inerting to become the live spawn path; zero live consumers today (`feasible ≠ needed`) |
+| [`eisv-distributional-signal-probe-v0.md`](eisv-distributional-signal-probe-v0.md) | **Probe A run — KILL (2026-06-22).** Cheap falsifiable gate on the "make EISV distributional" work; dispersion shows no lift over the previous-outcome baseline (negative AUC delta), so the larger dynamics change is not greenlit. See the Run result block |
 
 ## Shipped / resolved
 
