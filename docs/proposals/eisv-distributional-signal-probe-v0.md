@@ -1,7 +1,26 @@
 # EISV Distributional Signal Probe — v0
 
 **Created:** 2026-06-20
-**Status:** **Probe A implemented** in `scripts/analysis/eisv_skeptic_report.py` (tested; awaiting a run against a deployment DB). Probe B still a sketch. Cheap, falsifiable probe that must greenlight (or kill) the larger "make EISV distributional" work **before** any dynamics change.
+**Status:** **Probe A run — KILL (2026-06-22).** Dispersion carries no predictive lift over the boring `previous_outcome_bad` baseline; the larger "make EISV distributional" work is **not** greenlit. Probe B not run (Probe A did not greenlight, and is not inconclusive-suggestive). Cheap, falsifiable probe that must greenlight (or kill) distributional work **before** any dynamics change — it killed it.
+
+> **Run result (2026-06-22, against the live governance DB).** Ran Probe A at the
+> module-default 90-min dispersion window, `--window-days 365`, both lead bands.
+> - `strict` scope: **0 bad outcomes** in 2737 trusted outcomes → INCONCLUSIVE by
+>   construction (no failure signal to predict). The objective scope cannot exercise
+>   the probe; this is itself a finding about where verified-bad signal lives.
+> - `task` scope (581 bad / 9222, weaker objectivity): the dispersion model
+>   `previous_bad_plus_dispersion` scores **AUC delta −0.117 (lead 0) / −0.265 (lead 5)**
+>   vs the previous-outcome baseline — negative, the *wrong sign* for the greenlight
+>   rule (needs ≥ +0.03). Every EISV/prior-state feature (phi, S, verdict, dispersion)
+>   loses to "what happened last time for this agent." Conclusion line: `SKEPTICAL`.
+> - Robust: same wrong-signed result at a 30-min window too. Honest limits: `task`
+>   scope includes self-reported outcomes; dispersion paired-N is smaller (555–654)
+>   from the ≥5-snapshot requirement. Reports archived under `data/analysis/eisv_skeptic_report_2026-06-22_*` (gitignored; reproducible via the command in this doc).
+>
+> **Decision:** do not build distributional EISV (`governance_core/dynamics.py` /
+> observation blend) on this evidence. Revisit only if a future data slice shows
+> verified-bad signal in `strict` scope where the dispersion feature could actually
+> be tested against objective outcomes.
 **Companion to:** `docs/REVIEWER_GUIDE.md` (§ Falsifiability), `scripts/analysis/eisv_skeptic_report.py`, `docs/EISV_COMPUTATION.md`, `docs/ontology/glossary.md` (FEP roadmap).
 
 > **Implementation note (2026-06-20).** Probe A landed in the harness: the

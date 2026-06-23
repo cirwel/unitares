@@ -20,6 +20,7 @@ Several of these are **single-writer surfaces** (see the shared contract in `AGE
 
 | Doc | Status (as of 2026-06-11) |
 |---|---|
+| [`2026-06-24-wave-3-gate-framing.md`](2026-06-24-wave-3-gate-framing.md) | **Read first for the gate.** Framing note (2026-06-22) — two separate decisions: (A) freeze the orchestrator cluster (demand empty) vs (B) Wave-3 dispatch on its own merits. Measured 2026-06-22: p50 floor closed, but p99 coordination tail LIVE (`process_agent_update` p99 4740ms, math ~1.3%) |
 | [`beam-footprint-roadmap-v0.md`](beam-footprint-roadmap-v0.md) | v0.3 — destination A′ committed (operator decision 2026-05-05). Read the V0.3 RESOLUTION block first |
 | [`beam-wave-1-sentinel.md`](beam-wave-1-sentinel.md) | v0.1.3 — Wave 1 Surface 1 cycle worker shipped (PR #376). Read the v0.1.3 amendment first |
 | [`beam-wave-3-handler-dispatch.md`](beam-wave-3-handler-dispatch.md) | v0.3.2 — active redraft; supersedes v0.2/v0.1.x |
@@ -54,9 +55,10 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`operator-decision-packet-v0.md`](operator-decision-packet-v0.md) | v1 design — making load-bearing taste/authority/irreversible calls cheap to answer (decision-packet output contract; council pass live, dialectic `ESCALATE`/`design_review` are latent unwired scaffolds). Council-passed to v1 2026-06-17; design-first, no code |
 | [`mirror-effectiveness-measurement-v0.md`](mirror-effectiveness-measurement-v0.md) | Phases 0–1 landed (Phase 2 proposed) — deterministic, operator-funded-free measurement of whether a surfaced mirror signal changes agent behavior |
 | [`hosted-multi-tenant-endpoint-v0.md`](hosted-multi-tenant-endpoint-v0.md) | Scoping / not committed — hosted governance endpoint decision doc; recommends isolated-per-adopter hosting first and defers true multi-tenant SaaS |
-| [`dashboard-hero-severity-rollup.md`](dashboard-hero-severity-rollup.md) | Draft (2026-06-19) — fleet-severity rollup into the dashboard hero; `dashboard/` only, awaiting operator sign-off before implementation |
 | [`harness-event-safety-policy-v0.md`](harness-event-safety-policy-v0.md) | Draft (2026-06-20) — cross-harness event envelope and fail-closed policy for synthetic/replayed/duplicate events before harness-specific implementation PRs |
 | [`beam-event-adapter-design-v0.md`](beam-event-adapter-design-v0.md) | Design note (2026-06-20) — how BEAM residents/supervisors would populate the harness-event-safety envelope (PR #957); design-only, deferred to the 2026-06-24 Wave-3 gate read |
+| [`monitor-delegated-liveness-v0.md`](monitor-delegated-liveness-v0.md) | v0 (2026-06-21) — design-only, **DO NOT BUILD YET.** Delegate process-liveness to the owning runtime monitor (OTP supervisor / `:DOWN`) instead of self-report heartbeat. Build-trigger = the agent-orchestrator de-inerting to become the live spawn path; zero live consumers today (`feasible ≠ needed`) |
+| [`eisv-distributional-signal-probe-v0.md`](eisv-distributional-signal-probe-v0.md) | **Probe A run — KILL (2026-06-22).** Cheap falsifiable gate on the "make EISV distributional" work; dispersion shows no lift over the previous-outcome baseline (negative AUC delta), so the larger dynamics change is not greenlit. See the Run result block |
 
 ## Shipped / resolved
 
@@ -69,6 +71,7 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`s19-attestation-mechanism.md`](s19-attestation-mechanism.md) | Mechanism selection council-passed 2026-04-25; implementation correctness gated separately |
 | [`section-129-measurement-fix-2026-06-03.md`](section-129-measurement-fix-2026-06-03.md) | Council-passed fix restoring the Wave 1 condition-1 measurement gate |
 | [`eisv-basin-health-gating-v0.md`](eisv-basin-health-gating-v0.md) | SHIPPED — PR #696 (issue #689), 2026-06-14; absolute-basin-health gating for self-relative risk, refined by #699 |
+| [`dashboard-hero-severity-rollup.md`](dashboard-hero-severity-rollup.md) | SHIPPED (Phase 1) — PR #875; hero reflects all severity sources + "needs attention" band; `computeFleetSeverity` + 12 tests; verified live 2026-06-22 |
 
 ## Dated evaluation / measurement records
 
