@@ -1,8 +1,8 @@
 # Proposal: Fleet-Severity Rollup into the Dashboard Hero
 
-**Status:** Draft — awaiting operator sign-off before implementation
+**Status:** **SHIPPED (Phase 1) — PR #875, live.** `dashboard/fleet-severity.js` (`computeFleetSeverity` pure fn) + 12 passing unit tests; `updateQuickStatus` consumes it; the four panels (system-health, watcher, sentinel, residents) publish their slice to `state` on both success and error paths; the `#needs-attention` band renders via `renderNeedsAttention`. Verified 2026-06-22: tests green, live server serves the module 200, allowlist + script tag present. Phase 2 (`/v1/fleet/status` server rollup) remains out of scope.
 **Author:** Claude Code session (dashboard UX track)
-**Date:** 2026-06-19
+**Date:** 2026-06-19 (shipped); verified 2026-06-22
 **Scope:** `dashboard/` only (operator console). No server/API changes required for Phase 1.
 
 ## Problem
@@ -118,21 +118,20 @@ The pure function is the heart of it and is unit-testable, so the risky part
   behavior as one input; this is additive.
 - **Severity precedence is a judgment call** — see open questions.
 
-## Open questions for sign-off
+## Open questions — resolved at ship (#875, operator-chosen 2026-06-19)
 
-1. **Severity mapping:** is the ladder above right? Specifically — should
-   *Sentinel high* (not critical) escalate the hero to amber, or only critical?
-   Should a single silent resident be amber or just a band chip without
-   changing the hero?
-2. **DB-down semantics:** System Health `unavailable` → hero `critical`. Agreed?
-3. **Resident silence thresholds:** per-resident (Vigil 30m, Sentinel 5m, …) or
-   one global? (`residents.js` already has per-resident silence logic to reuse.)
-4. **Band placement:** directly under the hero (recommended) vs. as a dismissible
-   toast vs. pinned to the toolbar.
-5. **Scope:** Phase 1 = client-side aggregation of already-fetched data
-   (recommended, no server work). A later phase could add a single
-   `/v1/fleet/status` server rollup so non-dashboard clients get the same signal
-   — out of scope for now.
+1. **Severity mapping:** critical → red, everything else → amber ("caution");
+   *every* exception appears in the band regardless of level. Sentinel **high**
+   and a single silent resident are amber (band chip + hero amber). See the
+   policy header in `fleet-severity.js`.
+2. **DB-down semantics:** System Health `unavailable` / `error` / `critical` →
+   hero `critical`. Adopted.
+3. **Resident silence:** per-resident, reusing `residents.js`'s existing
+   client-side silence logic; it publishes `silentResidents` to `state`.
+4. **Band placement:** directly under the hero (`#needs-attention` below
+   `#quick-status`); hidden when the fleet is healthy.
+5. **Scope:** Phase 1 client-side aggregation shipped. Phase 2 (`/v1/fleet/status`
+   server rollup) remains out of scope.
 
 ## Effort
 
