@@ -322,7 +322,11 @@ class TestGetGovernanceMetrics:
             # #428: verdict is wrapped with meaning + next_action at the
             # response surface. The bare value lives at .value.
             assert data["verdict"]["value"] == "unbound"
-            assert data["next_action"]["tool"] == "identity"
+            # The unbound next_action must steer to an explicit, proof-bearing
+            # identity path. Bare identity() can mint an orphan, so the safe
+            # canonical hint is onboard(force_new=true).
+            assert data["next_action"]["tool"] == "onboard"
+            assert "force_new=true" in data["next_action"]["example"]
             mock_mcp_server.get_or_create_monitor.assert_not_called()
 
     @pytest.mark.asyncio

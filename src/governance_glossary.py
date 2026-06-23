@@ -59,7 +59,7 @@ VERDICTS: Dict[str, Dict[str, str]] = {
     },
     "unbound": {
         "meaning": "No identity bound to this session.",
-        "next_action": "Call onboard() to mint an identity.",
+        "next_action": "Call onboard(force_new=true) to mint a fresh identity.",
     },
     "continue": {
         "meaning": "Synonym of proceed; legacy label still used in some payloads.",
