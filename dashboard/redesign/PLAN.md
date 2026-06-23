@@ -1,7 +1,7 @@
 # Dashboard Redesign — Plan & Decisions
 
-**Status:** **LIVE.** Cut over to the default at `/` and `/dashboard` on 2026-06-19; the classic dashboard is parked at `/dashboard/classic` as the parity oracle/fallback. All increments below have landed. The strangler is essentially complete — what remains is retiring classic (one parity item: `/phase`, see below) and the docs cleanup.
-**Approach:** design-system-first *strangler* reskin — NOT a rewrite. Classic stayed live throughout and served as the oracle; it now stays parked until confirmed at full parity, then retires.
+**Status:** **LIVE — strangler complete.** Cut over to the default at `/` and `/dashboard` on 2026-06-19; the classic dashboard was **retired** (removed from the tree) once parity was reached. All increments below have landed. `/phase` (D3) remains a standalone view, unchanged.
+**Approach:** design-system-first *strangler* reskin — NOT a rewrite. Classic stayed live as the oracle throughout, then was deleted; recover any file from git history (last pre-retirement commit `7c6037b`). See `../README.md`.
 
 ## Why not a rewrite
 
@@ -53,10 +53,12 @@ Card/Stat · Panel · EISVMeter · ResidentChip · VerdictBadge · AttentionBand
 8. ✅ **Metrics** — Chronicler fleet/project/infra time-series, its own **Metrics** section (`sections/metrics.js`). Ported from the classic `fleet-metrics.js` oracle; the last classic *panel* to reach parity.
 9. ➕ **Automations** — automation census/scorecard (a redesign-native section with no classic predecessor).
 
-**Remaining before classic can be deleted:**
+**Retirement (done) and accepted non-parity:**
 
-- `/phase` (D3 E/I particle plane) is **not** ported — it's a standalone classic route (`dashboard/phase.html` / `phase.js`), independent of the classic shell, so retiring classic's `/dashboard/classic` shell doesn't require it. Decide whether to leave `/phase` as a standalone specialist view or port it as an EISV alt-view.
-- Retire `/dashboard/classic` (and its ~17k JS lines) once the above is settled and parity is confirmed on real data.
+- Classic was removed from the tree (~17k lines). Recover from git history (`7c6037b`).
+- **Read-only:** the classic operator write actions (archive/resume agent, request dialectic review, update discovery status) were **not** ported — do them via the MCP tools / CLI. Revisit if the redesign should grow an operator-write surface (`X-Unitares-Operator` token, PLAN convention above).
+- **Not carried over:** the Resident-Progress panel (`/v1/progress_flat`) and the richer EISV views (heatmap, ODE overlay, per-agent mode). Distilled EISV is two fleet line charts by design.
+- `/phase` (D3 E/I particle plane) remains a standalone view at `/phase`; left as-is.
 
 ## Conventions to honor (from the unitares-dashboard skill)
 

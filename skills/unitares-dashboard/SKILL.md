@@ -1,212 +1,145 @@
 ---
 name: unitares-dashboard
 description: >
-  Use when adding, editing, or reviewing panels on the unitares dashboard
-  (dashboard/index.html and peer dashboard/*.js modules). Captures the
-  conventions that broke a recent Fleet Metrics panel four times before
-  they were visible: file allowlist, Chart.js dark-theme defaults, the
-  authFetch helper, the script-load chain, and the .panel layout
-  contract. A repo-specific reference — not general dashboard advice.
-last_verified: "2026-06-11"
+  Use when adding, editing, or reviewing sections on the unitares dashboard
+  (dashboard/redesign/). Captures the redesign's conventions: the section-module
+  pattern (window.X = { load }), the live-or-snapshot data seam, theme-aware
+  charts via design tokens, and the app.html wiring (nav / pane / lazyLoad /
+  RELOAD / retheme). A repo-specific reference — not general dashboard advice.
+last_verified: "2026-06-23"
 freshness_days: 30
 source_files:
-  - unitares/dashboard/index.html
-  - unitares/dashboard/eisv-charts.js
-  - unitares/dashboard/utils.js
-  - unitares/dashboard/colors.js
-  - unitares/dashboard/styles.css
+  - unitares/dashboard/redesign/app.html
+  - unitares/dashboard/redesign/data.js
+  - unitares/dashboard/redesign/snapshot.js
+  - unitares/dashboard/redesign/sections/eisv.js
+  - unitares/dashboard/redesign/sections/metrics.js
   - unitares/src/http_api.py
 ---
 
-# Adding a Panel to the UNITARES Dashboard
+# Adding a Section to the UNITARES Dashboard (redesign)
 
-## Why This Skill Exists
+## Orientation
 
-The unitares dashboard has five invisible conventions a new panel must follow. Missing any one of them produces a panel that "looks bad" in ways the operator cannot articulate precisely — invisible axis labels, 404 JavaScript, foreign fonts, drifted colors. A recent Fleet Metrics panel shipped, then required **four** follow-up PRs to get right because I treated each symptom in isolation. This skill captures all five conventions so the next panel ships correct on the first try.
+The live dashboard is **`dashboard/redesign/`** — buildless (raw HTML/CSS/JS,
+no framework, no bundle), served by `http_dashboard_redesign` in
+`src/http_api.py` at `/` and `/dashboard`. The classic dashboard and its
+allowlist / script-load-chain / `vite` build were **retired** — ignore any
+older guidance about `index.html`, `allowed_files`, `MetricColors`, or
+`Chart.defaults`. There is **no allowlist** (a directory resolver serves
+`redesign/**`) and **no restart** needed (files are read per request).
 
-**Core principle:** On this dashboard, "the chart renders" and "the chart is readable" are two different problems. Chart.js's defaults actively fight the dark theme.
+A "section" is one nav tab. Each is a self-contained module that renders into
+its own mount and is wired in `app.html`.
 
-## Quick Reference — Panel Integration Checklist
+## The section-module pattern
 
-When adding a new panel, every item below must be done:
+A section is an IIFE that attaches `window.<Name> = { load }` (add `retheme`
+if it draws charts). `load()` renders into its mount on first call and updates
+**in place** on subsequent calls (so the 10s auto-refresh doesn't flicker or
+reset form state). Worked references: `sections/eisv.js` (charts, retheme) and
+`sections/metrics.js` (charts + a picker that survives auto-refresh).
 
-| # | Do | File | Why |
-|---|----|----|-----|
-| 1 | Add filename to `allowed_files` list | `src/http_api.py::http_dashboard_static()` | Static handler rejects (403) anything not on the allowlist — the browser silently fails to load |
-| 2 | Add `<script src="/dashboard/NAME.js"></script>` **without** `defer` | `dashboard/index.html` (Layer 2 block) | All peer modules load non-deferred and the IIFE has its own `DOMContentLoaded` guard |
-| 3 | Use `authFetch(url)` from `utils.js` | module JS | Shared helper reads the canonical `unitares_api_token` localStorage key; don't re-invent |
-| 4 | Set `Chart.defaults.color`, `.font.family`, `.borderColor` from body CSS vars | before `new Chart()` | Chart.js defaults to dark-grey ticks on your dark-grey background — invisible axis labels |
-| 5 | Copy option structure from `eisv-charts.js::makeChartOptions` | module JS | Themed tooltip (`rgba(13,13,18,0.9)`), mono body font, white-alpha grid, `interaction.mode: 'index'` at **top level** not under `tooltip` (Chart.js v4 change) |
-| 6 | Use `MetricColors.HEX.chart*` for line colors | `colors.js` | Eight curated series colors; don't hand-pick hex |
-| 7 | Panel container `<div class="panel" id="SECTION">` with `.panel-header` | `dashboard/index.html` | `.panel` provides `padding: 25px`, flex column, `max-height: 800px`, and the `::after` accent bar |
-| 8 | Chart wrapper needs `position: relative; height: Npx; contain: strict` | `styles.css` | Chart.js's ResizeObserver will thrash parent layout without `contain: strict` |
-| 9 | Canvas: `width: 100% !important; height: 100% !important` | `styles.css` | Required when Chart.js `maintainAspectRatio: false` lives inside a fixed-height parent |
-| 10 | Add nav link `<a href="#SECTION" class="section-nav-item" data-section="SECTION">…</a>` | `dashboard/index.html` top nav | Scroll-spy wires automatically by matching `id` |
+## Integration checklist (all in `dashboard/redesign/`)
 
-## The Chart.js Dark-Theme Trap (Item 4) — Biggest Pitfall
+| # | Do | File |
+|---|----|----|
+| 1 | Create the module `sections/NAME.js` → `window.NAME = { load[, retheme] }` | `sections/NAME.js` |
+| 2 | Add a data accessor returning `{source, data}` via `withFallback(liveFn, snapFn)` | `data.js` |
+| 3 | Add a snapshot mock so the section renders offline/portably | `snapshot.js` |
+| 4 | Nav link `<a href="#NAME" data-section="NAME">Name</a>` | `app.html` (nav) |
+| 5 | Pane `<section class="section" data-pane="NAME" hidden>` with `<div id="NAME-mount">` | `app.html` (main) |
+| 6 | `<script src="./sections/NAME.js"></script>` (order-independent — modules self-init via `load`) | `app.html` |
+| 7 | `lazyLoad` entry: `if (id === "NAME" && window.NAME) { loaded[id]=true; window.NAME.load(); }` | `app.html` |
+| 8 | If it's a live monitor view, add to `RELOAD` (10s tick) | `app.html` |
+| 9 | If it draws charts, call `window.NAME.retheme()` in the theme-toggle handler | `app.html` |
 
-Chart.js 4's defaults:
-- `Chart.defaults.color` = near-black
-- `Chart.defaults.font.family` = Helvetica
-- `scales.*.ticks.color` and `.grid.color` inherit the same
+## Data seam — live-or-snapshot (Item 2)
 
-On a dark panel, all of this renders **invisible**. The line draws in your chosen color, so you see "a colored squiggle in a void" — no axis labels, no tooltip text (default tooltip is white-on-white against dark bg).
-
-**Fix once at panel init:**
+Views never call `fetch` directly. They `await DATA.x()`, which returns
+`{ source: "live" | "snapshot", data }`. The accessor tries the live endpoint
+(`authFetch` for REST, `callTool` for `/v1/tools/call`) and falls back to the
+bundled `SNAPSHOT` on any failure, so the dashboard renders portably (opened as
+a file, cross-origin, or server down). Badge freshness in the view with
+`<span class="src-badge ${source}">${source}</span>`.
 
 ```js
-function applyChartDefaults() {
-    if (typeof Chart === 'undefined' || !Chart.defaults) return;
-    var bodyStyle = getComputedStyle(document.body);
-    var textSecondary = (bodyStyle.getPropertyValue('--text-secondary') || '').trim() || '#a0a0b0';
-    var fontFamily = (bodyStyle.getPropertyValue('--font-family') || '').trim() || "'Outfit', sans-serif";
-    Chart.defaults.color = textSecondary;
-    if (Chart.defaults.font) Chart.defaults.font.family = fontFamily;
-    Chart.defaults.borderColor = 'rgba(255,255,255,0.08)';
+async metricsCatalog() {
+  return withFallback(
+    async () => { const j = await authFetch("/v1/metrics/catalog");
+                  return j && Array.isArray(j.metrics) ? j.metrics : null; },
+    () => S().metrics.catalog,   // snapshot fallback
+  );
 }
 ```
 
-And in every chart's `options`, explicitly set tooltip theme + tick colors — don't rely on inheritance alone:
+Returning `null`/empty from `liveFn` triggers the snapshot fallback. For
+headline cards where a stale snapshot under a "live" badge would mislead, prefer
+returning `null` per-field and rendering "—" (see `data.js::stats`).
+
+## Theme-aware charts (Item 9) — the real chart trap here
+
+Chart.js still fights the theme, but the redesign fix is **design tokens**, not
+hardcoded hex. Read colours from CSS custom properties so the chart re-renders
+correctly in both `ink` (dark) and `paper` (light):
 
 ```js
-options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    animation: { duration: 300 },
-    interaction: { mode: 'index', intersect: false },     // v4: top level, NOT under tooltip
-    plugins: {
-        legend: { display: false },
-        tooltip: {
-            backgroundColor: 'rgba(13,13,18,0.9)',
-            titleFont: { family: "'Inter', sans-serif" },
-            bodyFont: { family: "'JetBrains Mono', monospace", size: 12 },
-            padding: 10,
-            borderColor: '#333',
-            borderWidth: 1,
-        },
-    },
-    scales: {
-        x: {
-            type: 'time',
-            grid: { color: 'rgba(255,255,255,0.05)' },
-            ticks: { color: '#a0a0b0', font: { size: 11 }, maxRotation: 0 },
-        },
-        y: {
-            grid: { color: 'rgba(255,255,255,0.05)' },
-            ticks: {
-                color: '#a0a0b0',
-                font: { family: "'JetBrains Mono', monospace", size: 11 },
-            },
-        },
-    },
-}
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const tick = cssVar("--muted"), grid = rgba(cssVar("--ink"), 0.06), line = cssVar("--accent");
 ```
 
-The reference implementation is `dashboard/eisv-charts.js::makeChartOptions`. Copy that function's shape; vary only the specifics.
+Then expose `retheme()` that rebuilds the chart from cached data (token values
+change on toggle), and call it from the theme handler in `app.html`. Copy the
+option shape from `sections/eisv.js::baseOptions`.
 
-## The Allowlist Trap (Item 1)
+**No date adapter.** `app.html` loads `chart.umd` from CDN **without**
+`chartjs-adapter-date-fns`, so `type: "time"` scales will not work. Use a
+**category** x-axis with pre-formatted labels (e.g. `MM-DD`) — see
+`sections/metrics.js::fmtLabel`.
 
-`src/http_api.py::http_dashboard_static()` has a hardcoded `allowed_files` list. A file not on it returns a **403** with JSON body `{"error": "File not allowed"}` — not a 404. The browser still fails to load the script and `Console` shows the failed request. Easy to miss.
+## Auto-refresh discipline (Item 8)
 
-Verify by `curl`:
-```bash
-curl -sI http://127.0.0.1:8767/dashboard/NAME.js | head -1
-# Must be: HTTP/1.1 200 OK
-curl -s http://127.0.0.1:8767/dashboard/NAME.js | head -1
-# Must be JavaScript, not `{"error":…}`
-```
+`RELOAD[id]` fires every ~10s while the section is active, the tab is visible,
+and no input is focused. So `load()` must: update charts/data **in place**
+(don't `new Chart()` every tick), and not rebuild a `<select>`/`<input>` the
+operator is using. The global tick already skips while an input is focused, so
+repopulating a closed dropdown on refresh is safe — but preserve the current
+selection. `sections/metrics.js` shows the first-render-then-update pattern.
 
-The allowlist is Python code loaded at process start — adding a name requires a governance-mcp **restart**, not just a `git pull`. Restart:
-```bash
-launchctl unload ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
-launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
-```
+## Read-only today
 
-A regression guard for this lives in `tests/test_dashboard_static_allowlist.py` — it parses index.html for every `/dashboard/<file>` href and asserts each is on the list.
+The redesign sends only the read bearer token. Operator **write** actions
+(archive/resume agent, request review, discovery status) are **not** wired —
+they need the `X-Unitares-Operator` header under `STRICT_IDENTITY` (`PLAN.md`).
+Don't assume a section can mutate state; if you add a write surface, that's a
+deliberate new capability, not a copy-paste.
 
-## Module Skeleton (Copy This)
+## Verify before claiming done
 
-```js
-(function () {
-    'use strict';
+The dashboard is buildless, so the gate is lint plus a cheap logic check:
 
-    var chart = null;
-    var currentFoo = null;
+1. `cd dashboard && npm run lint` — must be 0 errors (warnings allowed).
+2. Headless logic drive (optional, fast): load `snapshot.js` + `data.js` +
+   `sections/NAME.js` in a jsdom stub with `window.Chart` stubbed and call
+   `NAME.load()`; assert the mount populated and (for charts) the paint path
+   ran. See the Metrics-port verification for the harness shape.
+3. Same-origin smoke: open `/#NAME` against a running server; confirm the
+   `src-badge` reads `live` and the section renders on real data.
+4. Toggle ink/paper — charts must re-theme (proves `retheme` is wired).
 
-    function applyChartDefaults() { /* see above */ }
+## Anti-patterns (redesign-specific)
 
-    async function fetchData() {
-        try {
-            var resp = await authFetch('/api/whatever');        // shared helper
-            if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            return await resp.json();
-        } catch (e) {
-            console.warn('[NAME] fetch failed:', e);
-            return null;
-        }
-    }
+| Anti-pattern | Why it's wrong |
+|---|---|
+| `type: "time"` Chart.js axis | No date adapter loaded — silently blank axis. Use category labels. |
+| Hardcoded hex / `MetricColors` | Classic-era; breaks the paper theme. Read tokens via `getComputedStyle`. |
+| `new Chart()` on every refresh tick | Flicker + leaks. Update datasets in place; rebuild only on theme change. |
+| Full `innerHTML` rebuild of a section with a live `<select>` | Clobbers operator's selection. First-render once, update in place. |
+| Calling `fetch` in a view | Bypasses the live-or-snapshot seam; the section stops rendering offline. |
+| Looking for an allowlist / restarting the server | Neither exists for the redesign — files are served directly from `redesign/`. |
 
-    function renderChart(ctx, data) {
-        if (chart) chart.destroy();                             // always destroy before re-create
-        var lineColor = MetricColors.HEX.chartCoherence;        // palette, not hand-picked
-        chart = new Chart(ctx, { type: 'line', data: {...}, options: chartOptionsFor(...) });
-    }
+## When NOT to use this skill
 
-    function wire() {
-        applyChartDefaults();
-        // attach event listeners, initial fetch
-    }
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', wire);
-    } else {
-        wire();
-    }
-
-    window.NAMEPanel = { refresh: /* … */ };
-})();
-```
-
-## Verification Before Claiming Done
-
-Before declaring a dashboard change ready:
-
-1. **`curl` the JS file** — must be 200 with JavaScript body, not `{"error":"File not allowed"}`
-2. **Hard-refresh the browser** (⌘⇧R) — script cache-busting doesn't override localStorage / service worker caches
-3. **Open DevTools → Network** — confirm JS loads 200, no 403/404 on any `/dashboard/*` asset
-4. **DevTools → Console** — no errors, especially not `Chart is not defined` or `authFetch is not defined`
-5. **DevTools → Elements** — hover a tick label; `computed color` must NOT be `rgb(102,102,102)` or similar dark grey
-6. **Screenshot from the operator** if you are reasoning blind — you cannot verify "looks bad" without seeing pixels
-
-## Red Flags — You're About to Thrash
-
-If any of these are true, **stop and run subagent research** before writing another PR:
-
-- You've shipped ≥2 iterations for the same panel and the operator still reports "looks bad"
-- You're guessing at what "looks bad" means (height? color? layout?)
-- You're changing dimensions without evidence from DevTools
-- The operator can't articulate the issue precisely
-
-The correct move at this point is to dispatch agents to:
-- Survey the full dashboard conventions (Explore agent, thoroughness "very thorough")
-- Audit the new panel vs. working peers (code-reviewer)
-- Give a skeptical "what's the most-likely remaining issue" take (superpowers:code-reviewer)
-
-One hour of three parallel agents beats four iterations of single-guess PRs.
-
-## Anti-Patterns That Burned Hours
-
-| Anti-pattern | What it felt like | What it actually was |
-|---|---|---|
-| Shrink chart height to "fix looks bad" | "Panel is too tall" | Panel was fine; tick labels invisible |
-| Add `defer` to new script tag | "Seems safer, load after DOM" | Breaks initialization order vs. peers |
-| Invent a hex color like `#4a9eff` | "Looks close to the theme" | Not in `MetricColors.HEX`; drifts |
-| Write private `getAuthToken()` helper | "Self-contained is cleaner" | Duplicates `utils.js::authFetch`, wrong key order |
-| Inline `style="height:320px"` on chart container | "One less CSS class" | Doesn't match theme conventions; no `contain: strict` |
-
-## When NOT to Use This Skill
-
-- Editing the `phase.html` view — different layout, different rules
-- Pure server-side changes that don't render anything
-- Work in `agents/*/` resident agents — they don't have panels
-- Any dashboard beyond `/dashboard` path
+- The standalone `phase.html` / `/phase` D3 view — different page, different rules.
+- Pure server-side changes that don't render anything.
+- Work in `agents/*/` resident agents — they don't have panels.

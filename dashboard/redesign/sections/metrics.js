@@ -14,7 +14,6 @@
 (function () {
   "use strict";
   const $ = (s) => document.querySelector(s);
-  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   function rgba(hex, a) {
     const h = (hex || "").replace("#", "");

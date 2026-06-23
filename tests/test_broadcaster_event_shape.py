@@ -1,10 +1,10 @@
 """Pin the WS-receive payload shape for governance events.
 
 The dashboard's categorical panels (Agents grid, Timeline, Residents)
-dispatch on `data.type` and `data.agent_id` at the top level — see
-`dashboard/agents.js::onGovernanceEvent`. If a refactor ever shoved
-those fields under a nested `payload` key, the dashboard would silently
-stop reflecting lifecycle changes between 30s polling ticks.
+dispatch on `data.type` and `data.agent_id` at the top level — see the
+WS client `dashboard/redesign/ws.js` and the section reloads it triggers.
+If a refactor ever shoved those fields under a nested `payload` key, the
+dashboard would silently stop reflecting lifecycle changes between polls.
 
 These tests lock in the contract.
 """

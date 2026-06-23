@@ -31,7 +31,7 @@ Mechanical pass for every site in `src/` that aggregates calibration data by `ag
 
 ### Dashboard consumer
 
-- `dashboard/dashboard.js:1198` → MCP `check_calibration` → renders calibration card.
+- `dashboard/redesign/data.js::stats` → MCP `check_calibration` → renders calibration card (landing). (Classic `dashboard.js` retired; see `dashboard/README.md`.)
 - Reads: `calibration_status`, `tactical_staleness_days`, `per_channel_calibration`. No per-class field today.
 
 ### Class taxonomy
@@ -115,7 +115,7 @@ Three PRs, smallest-first:
 |---|---|---|
 | **S10.1** | Tracker plumbing | `src/sequential_calibration.py` — add `class_states`, accept `class_tag` on `record_exogenous_tactical_outcome`, add `compute_metrics_by_class()`. Add rebucket primitive. Persistence schema bump (additive). Tests. |
 | **S10.2** | MCP response reshape | `src/mcp_handlers/admin/calibration.py` — surface `by_class`. Wire `class_tag` at call site in `src/mcp_handlers/observability/outcome_events.py:332`. Hook rebucket into `class_promotion_sweeper_task`. Tests + contract test that `by_class` appears. |
-| **S10.3** | Dashboard pivot | `dashboard/dashboard.js` calibration card — render class strip as primary, global as summary. |
+| **S10.3** | Dashboard pivot | redesign calibration card (`dashboard/redesign/` landing) — render class strip as primary, global as summary. |
 
 Each PR independently shippable. S10.1 leaves the by-class data available but unused; S10.2 surfaces it; S10.3 makes it the operator's primary view.
 
