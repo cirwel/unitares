@@ -1457,7 +1457,7 @@ async def http_get_metrics_catalog(request):
     from src.fleet_metrics.storage import latest_ts_for_names
     metrics = sorted(_catalog.values(), key=lambda x: x.name)
     # last_point_ts lets the dashboard suppress empty `.error` twins
-    # without firing a per-name probe — see dashboard/fleet-metrics.js.
+    # without firing a per-name probe — see dashboard/redesign/sections/metrics.js.
     try:
         last_ts = await latest_ts_for_names([m.name for m in metrics])
     except Exception as e:
