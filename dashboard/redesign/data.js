@@ -270,6 +270,25 @@
       );
     },
 
+    async metricsCatalog() {
+      // Chronicler's registered metric series (fleet/project/infra). Each entry:
+      // { name, description, unit, last_point_ts } — last_point_ts lets the view
+      // suppress empty `.error` twins in one round-trip (no per-name probe).
+      return withFallback(async () => {
+        const j = await authFetch("/v1/metrics/catalog");
+        return j && Array.isArray(j.metrics) ? j.metrics : null;
+      }, () => S().metrics.catalog);
+    },
+
+    async metricsSeries(name, sinceDays) {
+      // Points for one series over the trailing window. Returns [{ ts, value }].
+      return withFallback(async () => {
+        const since = new Date(Date.now() - (sinceDays || 14) * 86400 * 1000).toISOString();
+        const j = await authFetch("/v1/metrics/series?name=" + encodeURIComponent(name) + "&since=" + encodeURIComponent(since));
+        return j && Array.isArray(j.points) ? j.points : null;
+      }, () => (S().metrics.series[name] || []));
+    },
+
     async agentHistory(id, opts) {
       // EISV check-in trajectory for one agent (no snapshot fallback — empty if offline).
       // opts: { limit, mode: "recent"|"all" }. Returns { points, total, mode }.

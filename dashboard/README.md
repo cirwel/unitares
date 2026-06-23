@@ -1,22 +1,24 @@
 # Unitares Governance Dashboard
 
 **Created:** December 30, 2025
-**Last updated:** May 2026
-**Status:** Active static dashboard. Phoenix/LiveView migration is deferred, not currently the implementation path.
+**Last updated:** June 2026
+**Status:** Documents the **classic** dashboard, now served at `/dashboard/classic`. The live default at `/` and `/dashboard` is the **redesign** (`dashboard/redesign/`, cut over 2026-06-19) — see [`redesign/PLAN.md`](redesign/PLAN.md). Classic stays reachable as the fallback/oracle pending retirement once the redesign is confirmed at full parity. This is a buildless reskin, **not** a Phoenix/LiveView rewrite (that remains separately deferred — see [Redesign vs Phoenix](#redesign-vs-phoenix--two-different-things) below).
 
 ## Overview
 
-The dashboard is the operator web UI for Unitares. It serves from the Python governance server and shows fleet health, agent state, EISV history, knowledge graph activity, dialectic sessions, resident status, and resident-specific panels for Watcher, Sentinel, Vigil, and Chronicler.
+> **Heads-up:** the operator-facing dashboard is now the redesign. The sections below describe the **classic** dashboard (served at `/dashboard/classic`), which is still load-bearing as the parity oracle but slated for retirement. For the live UI, read `redesign/PLAN.md` and `dashboard/redesign/`.
 
-In production it is still served buildless: plain HTML, CSS, and JavaScript served directly from `dashboard/` by the Python server. A Vite + vitest + ESLint/Prettier toolchain now sits alongside that for local development and CI (see [Tooling and tests](#tooling-and-tests)); switching production serving to the bundled output is a deliberate, still-pending step documented there.
+The classic dashboard is the legacy operator web UI for Unitares. It serves from the Python governance server and shows fleet health, agent state, EISV history, knowledge graph activity, dialectic sessions, resident status, and resident-specific panels for Watcher, Sentinel, Vigil, and Chronicler.
+
+It is served buildless: plain HTML, CSS, and JavaScript served directly from `dashboard/` by the Python server. A Vite + vitest + ESLint/Prettier toolchain sits alongside that for local development and CI (see [Tooling and tests](#tooling-and-tests)). The redesign is also buildless (raw HTML/CSS/JS from `dashboard/redesign/`); the long-discussed switch of *classic* to bundled output was overtaken by the redesign cutover.
 
 ## Access
 
 Start the governance server, then open:
 
-- `http://127.0.0.1:8767/dashboard`
-- `http://127.0.0.1:8767/` (same dashboard)
-- `http://127.0.0.1:8767/phase` (phase-space view)
+- `http://127.0.0.1:8767/` and `http://127.0.0.1:8767/dashboard` — the **redesign** (live default)
+- `http://127.0.0.1:8767/dashboard/classic` — the **classic** dashboard documented here
+- `http://127.0.0.1:8767/phase` (phase-space view — still served by classic; not yet ported to the redesign)
 - `https://<your-domain>/dashboard` if the server is exposed through a tunnel
 
 If `UNITARES_HTTP_API_TOKEN` is configured, provide the token either as:
@@ -202,13 +204,14 @@ curl -s -X POST http://127.0.0.1:8767/v1/tools/call \
 
 If the agent appears in that response, ingestion and persistence are working. The remaining issue is usually a client-side filter, pagination state, cache, WebSocket lag, or stale browser state.
 
-## Phoenix / LiveView Status
+## Redesign vs Phoenix — two different things
 
-The repo has active Elixir/OTP work under `elixir/lease_plane/`, but that is the BEAM coordination kernel/lease plane, not a Phoenix dashboard rewrite.
+Don't conflate these:
 
-`` explicitly lists these as deferred follow-up scope:
+- **The redesign (shipped, live).** A buildless, design-system-first *strangler* reskin in `dashboard/redesign/` — plain tokens + small JS primitives, no framework. It cut over to be the live default at `/` and `/dashboard` on 2026-06-19 and is the operator UI today. The classic panels documented here were consolidated into its **Residents** section (Watcher/Sentinel/Vigil/Chronicler/System Health); Chronicler's fleet-metrics time-series is its own **Metrics** section. See `redesign/PLAN.md`.
 
-- Phoenix LiveView migration of the existing dashboard.
-- Phoenix PubSub migration of the existing broadcaster, Discord bridge, and dashboard WebSocket plumbing.
+- **Phoenix / LiveView (deferred, not refused).** A genuinely different direction — rewriting the real-time layer on the BEAM. `docs/proposals/surface-lease-plane-v0.md` lists as deferred follow-up scope:
+  - Phoenix LiveView migration of the dashboard.
+  - Phoenix PubSub migration of the broadcaster, Discord bridge, and dashboard WebSocket plumbing.
 
-So the dashboard README should stay current for the static dashboard. A Phoenix migration may still be a good direction later, especially for LiveView + PubSub, but there is no checked-in Phoenix app and no active dashboard migration branch in this repo.
+The repo has active Elixir/OTP work under `elixir/` (lease plane, sentinel, agent orchestrator, wave-3a handlers), but that is the BEAM coordination kernel, **not** a Phoenix dashboard app — there is no checked-in Phoenix app. LiveView + PubSub remains a good long-term home for the live read surface, but it is correctly parked behind a PubSub migration and is not the current implementation path. The redesign is.
