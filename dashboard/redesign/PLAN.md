@@ -1,8 +1,7 @@
 # Dashboard Redesign — Plan & Decisions
 
-**Branch:** `claude/dashboard-redesign-reference`
-**Status:** reference built (landing surface), kit not yet extracted. On the side; live dashboard untouched.
-**Approach:** design-system-first *strangler* reskin — NOT a rewrite. Old dashboard stays live and serves as the oracle.
+**Status:** **LIVE.** Cut over to the default at `/` and `/dashboard` on 2026-06-19; the classic dashboard is parked at `/dashboard/classic` as the parity oracle/fallback. All increments below have landed. The strangler is essentially complete — what remains is retiring classic (one parity item: `/phase`, see below) and the docs cleanup.
+**Approach:** design-system-first *strangler* reskin — NOT a rewrite. Classic stayed live throughout and served as the oracle; it now stays parked until confirmed at full parity, then retires.
 
 ## Why not a rewrite
 
@@ -42,15 +41,22 @@ The old code's special-cases are the regression suite; robustness is inherited, 
 
 Card/Stat · Panel · EISVMeter · ResidentChip · VerdictBadge · AttentionBand · Track/Bar · eyebrow label.
 
-## Increment order (risk-ascending)
+## Increment order (risk-ascending) — all shipped
 
-1. **Landing** — Stats grid + Pulse + residents strip (reference done; extract kit, wire to live data).
-2. **Agents** — table, filters, pagination, trust tiers, lineage/lifecycle badges.
-3. **Discoveries** — KG list + filters + status actions.
-4. **Dialectic** — sessions, phase/status counts, transcripts.
-5. **Activity** — unified timeline.
-6. **EISV charts** — Chart.js dark-theme tokens (the fragile part; on a proven kit).
-7. **Resident panels** — Watcher / Sentinel / Vigil / Chronicler / System Health + `/phase` (D3).
+1. ✅ **Landing / Overview** — Stats grid + Pulse + residents strip.
+2. ✅ **Agents** — table, filters, pagination, trust tiers, lineage/lifecycle badges.
+3. ✅ **Discoveries** — KG list + filters + status actions.
+4. ✅ **Dialectic** — sessions, phase/status counts, transcripts.
+5. ✅ **Activity** — unified timeline.
+6. ✅ **EISV charts** — Chart.js, theme-aware via tokens.
+7. ✅ **Resident panels** — Watcher / Sentinel / Vigil / Chronicler / System Health, consolidated into the **Residents** section (`sections/residents.js`).
+8. ✅ **Metrics** — Chronicler fleet/project/infra time-series, its own **Metrics** section (`sections/metrics.js`). Ported from the classic `fleet-metrics.js` oracle; the last classic *panel* to reach parity.
+9. ➕ **Automations** — automation census/scorecard (a redesign-native section with no classic predecessor).
+
+**Remaining before classic can be deleted:**
+
+- `/phase` (D3 E/I particle plane) is **not** ported — it's a standalone classic route (`dashboard/phase.html` / `phase.js`), independent of the classic shell, so retiring classic's `/dashboard/classic` shell doesn't require it. Decide whether to leave `/phase` as a standalone specialist view or port it as an EISV alt-view.
+- Retire `/dashboard/classic` (and its ~17k JS lines) once the above is settled and parity is confirmed on real data.
 
 ## Conventions to honor (from the unitares-dashboard skill)
 
