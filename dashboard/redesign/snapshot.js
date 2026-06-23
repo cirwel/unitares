@@ -131,4 +131,39 @@ window.SNAPSHOT = {
     health: { status:"healthy", version:"2.13.0", checks:{ healthy:12, warning:0, error:0 },
       breakers:{ governance:0, redis:0 }, calibration:"healthy", dbPool:{ size:8, idle:4, max:25 }, redis:true, continuity:"redis" },
   },
+  // Fleet metrics (Chronicler) — /v1/metrics/catalog + /v1/metrics/series.
+  metrics: {
+    catalog: [
+      { name:"agents.active", description:"Active agents in the fleet", unit:"agents", last_point_ts:"2026-06-19T08:00:00Z" },
+      { name:"checkins.daily", description:"Governance check-ins per day", unit:"events", last_point_ts:"2026-06-19T08:00:00Z" },
+      { name:"kg.discoveries", description:"Knowledge-graph discoveries (cumulative)", unit:"entries", last_point_ts:"2026-06-19T08:00:00Z" },
+      { name:"github.stars", description:"Repository stars", unit:"stars", last_point_ts:"2026-06-19T08:00:00Z" },
+      { name:"tests.count", description:"Test count in the suite", unit:"tests", last_point_ts:"2026-06-19T08:00:00Z" },
+      { name:"lease_plane.p95_ms", description:"Lease-plane request p95 latency", unit:"ms", last_point_ts:"2026-06-19T08:00:00Z" },
+    ],
+    series: {
+      "agents.active": [
+        {ts:"2026-06-13T08:00:00Z",value:561},{ts:"2026-06-14T08:00:00Z",value:567},{ts:"2026-06-15T08:00:00Z",value:572},
+        {ts:"2026-06-16T08:00:00Z",value:575},{ts:"2026-06-17T08:00:00Z",value:579},{ts:"2026-06-18T08:00:00Z",value:582},{ts:"2026-06-19T08:00:00Z",value:584},
+      ],
+      "checkins.daily": [
+        {ts:"2026-06-13T08:00:00Z",value:1204},{ts:"2026-06-14T08:00:00Z",value:1331},{ts:"2026-06-15T08:00:00Z",value:1190},
+        {ts:"2026-06-16T08:00:00Z",value:1422},{ts:"2026-06-17T08:00:00Z",value:1388},{ts:"2026-06-18T08:00:00Z",value:1471},{ts:"2026-06-19T08:00:00Z",value:1356},
+      ],
+      "kg.discoveries": [
+        {ts:"2026-06-13T08:00:00Z",value:3812},{ts:"2026-06-14T08:00:00Z",value:3847},{ts:"2026-06-15T08:00:00Z",value:3871},
+        {ts:"2026-06-16T08:00:00Z",value:3902},{ts:"2026-06-17T08:00:00Z",value:3940},{ts:"2026-06-18T08:00:00Z",value:3977},{ts:"2026-06-19T08:00:00Z",value:4011},
+      ],
+      "github.stars": [
+        {ts:"2026-06-13T08:00:00Z",value:128},{ts:"2026-06-15T08:00:00Z",value:131},{ts:"2026-06-17T08:00:00Z",value:134},{ts:"2026-06-19T08:00:00Z",value:137},
+      ],
+      "tests.count": [
+        {ts:"2026-06-13T08:00:00Z",value:1442},{ts:"2026-06-15T08:00:00Z",value:1455},{ts:"2026-06-17T08:00:00Z",value:1468},{ts:"2026-06-19T08:00:00Z",value:1481},
+      ],
+      "lease_plane.p95_ms": [
+        {ts:"2026-06-13T08:00:00Z",value:41},{ts:"2026-06-14T08:00:00Z",value:38},{ts:"2026-06-15T08:00:00Z",value:44},
+        {ts:"2026-06-16T08:00:00Z",value:37},{ts:"2026-06-17T08:00:00Z",value:39},{ts:"2026-06-18T08:00:00Z",value:36},{ts:"2026-06-19T08:00:00Z",value:40},
+      ],
+    },
+  },
 };
