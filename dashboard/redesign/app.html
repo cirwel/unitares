@@ -196,10 +196,11 @@ const RELOAD = {
   activity: () => window.Activity && window.Activity.load(),
   residents: () => window.Residents && window.Residents.load(),
   eisv: () => window.EISV && window.EISV.load(),
-  metrics: () => window.Metrics && window.Metrics.load(),
-  // Automations is NOT auto-refreshed: it's a filter/search registry (like
-  // Agents/Discoveries) and the census snapshot changes rarely, so a 10s
-  // re-render would just churn scroll/focus for no fresh data. Loads on nav.
+  // Automations and Metrics are NOT auto-refreshed: Automations is a filter/
+  // search registry whose census snapshot changes rarely, and Metrics is
+  // Chronicler's DAILY scrape — a 10s tick is pointless and would rebuild the
+  // picker (closing an open dropdown) for no fresh data. Both load on nav and
+  // have a manual refresh.
 };
 const livePill = document.getElementById("livePill");
 const liveText = document.getElementById("liveText");
