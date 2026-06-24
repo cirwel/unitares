@@ -443,7 +443,9 @@ def test_onboard_minimal_mode_drops_nested_ontology_and_verbose_extras():
     assert payload["client_session_id"] == "sess-min"
     assert payload["identity_assurance"]["tier"] == "strong"
     assert payload["identity_resolution_outcome"] == "minted_fresh"
-    assert payload["next_step"]
+    # next_step is self-sufficient: it names the continuity_token credential so
+    # an agent reading only this hint still presents proof (#604 follow-up).
+    assert "continuity_token" in payload["next_step"]
     # Functional fields retained.
     assert payload["continuity_token"] == "token-min"
 
@@ -454,6 +456,20 @@ def test_onboard_minimal_mode_drops_nested_ontology_and_verbose_extras():
     assert "workflow" not in payload
     assert "tool_mode" not in payload
     assert "system_activity" not in payload
+
+
+def test_next_step_names_continuity_token_when_issued():
+    """#604 follow-up: next_step must be self-sufficient. With a token it names
+    continuity_token; without one it falls back to client_session_id — never a
+    bare 'call process_agent_update' that leaves a stateless agent unproven."""
+    full = build_onboard_response_data(**_onboard_kwargs())
+    assert "continuity_token" in full["next_step"]
+    minimal = build_onboard_response_data(**_onboard_kwargs(response_mode="minimal"))
+    assert "continuity_token" in minimal["next_step"]
+    # No token issued → fall back to client_session_id guidance, not silence.
+    no_token = build_onboard_response_data(**_onboard_kwargs(continuity_token=None))
+    assert "client_session_id" in no_token["next_step"]
+    assert "continuity_token" not in no_token["next_step"]
 
 
 def test_onboard_full_mode_is_unchanged_default():
