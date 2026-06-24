@@ -1383,6 +1383,7 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                 from .orchestrator_dispatch import (
                     orchestrated_review_enabled,
                     dispatch_orchestrated_review,
+                    reviewer_crashed_fast,
                 )
                 if orchestrated_review_enabled():
                     dispatched = await dispatch_orchestrated_review(
@@ -1397,17 +1398,24 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                         session.paused_agent_id,
                     )
                     if dispatched:
-                        result["orchestrated_review"] = True
-                        result["reviewer_dispatch"] = {
-                            "agent_id": dispatched.get("agent_id") or dispatched.get("id"),
-                            "via": "agent-orchestrator",
-                        }
-                        result["note"] = (
-                            "Independent reviewer spawned via the agent-orchestrator; "
-                            "it will claim the reviewer slot and submit its verdict. "
-                            "Poll dialectic action='get' for the antithesis/synthesis."
-                        )
-                        return success_response(result)
+                        agent_id_spawned = dispatched.get("agent_id") or dispatched.get("id")
+                        # Catch a FAST reviewer crash (bad import/url/etc, exits in
+                        # <12s) and fall back to in-process inline so the session
+                        # resolves now instead of stranding at antithesis. A success
+                        # or still-running reviewer owns the slot → async path.
+                        if not await reviewer_crashed_fast(agent_id_spawned):
+                            result["orchestrated_review"] = True
+                            result["reviewer_dispatch"] = {
+                                "agent_id": agent_id_spawned,
+                                "via": "agent-orchestrator",
+                            }
+                            result["note"] = (
+                                "Independent reviewer spawned via the agent-orchestrator; "
+                                "it will claim the reviewer slot and submit its verdict. "
+                                "Poll dialectic action='get' for the antithesis/synthesis."
+                            )
+                            return success_response(result)
+                        # reviewer crashed fast → fall through to in-process
                     # dispatch failed → fall through to in-process synthetic reviewer
 
             # End-to-end completion: when no independent live reviewer has claimed

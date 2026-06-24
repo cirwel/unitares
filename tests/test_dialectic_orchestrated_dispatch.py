@@ -145,3 +145,39 @@ async def test_dispatch_exception_returns_none(monkeypatch):
     _patch_httpx(monkeypatch, _FakeClient(None, raise_exc=RuntimeError("conn refused")))
     out = await od.dispatch_orchestrated_review("s", {"root_cause": "x"}, None)
     assert out is None
+
+
+# --------------------------- reviewer_crashed_fast --------------------------- #
+
+@pytest.mark.asyncio
+async def test_crashed_fast_true_on_nonzero_exit(monkeypatch):
+    """Reviewer exited non-zero within the window → crashed → caller falls back."""
+    monkeypatch.setenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", "tok")
+    _patch_httpx(monkeypatch, _FakeClient(_FakeResp(200, {"ok": True, "result": {"exit_status": 1}})))
+    assert await od.reviewer_crashed_fast("ag-1", await_seconds=0.01) is True
+
+
+@pytest.mark.asyncio
+async def test_crashed_fast_false_on_clean_exit(monkeypatch):
+    """Reviewer exited 0 (submitted its verdict) → not a crash → async path owns it."""
+    monkeypatch.setenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", "tok")
+    _patch_httpx(monkeypatch, _FakeClient(_FakeResp(200, {"ok": True, "result": {"exit_status": 0}})))
+    assert await od.reviewer_crashed_fast("ag-2", await_seconds=0.01) is False
+
+
+@pytest.mark.asyncio
+async def test_crashed_fast_false_on_await_timeout(monkeypatch):
+    """504 await_timeout = still running (gemma4 working) → leave on async path."""
+    monkeypatch.setenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", "tok")
+    _patch_httpx(monkeypatch, _FakeClient(_FakeResp(504, {"ok": False, "error": "await_timeout"})))
+    assert await od.reviewer_crashed_fast("ag-3", await_seconds=0.01) is False
+
+
+@pytest.mark.asyncio
+async def test_crashed_fast_false_on_error_or_no_bearer(monkeypatch):
+    """Can't tell (exception / no bearer) ⇒ don't double-run; leave it to the reviewer."""
+    monkeypatch.setenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", "tok")
+    _patch_httpx(monkeypatch, _FakeClient(None, raise_exc=RuntimeError("boom")))
+    assert await od.reviewer_crashed_fast("ag-4", await_seconds=0.01) is False
+    monkeypatch.delenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", raising=False)
+    assert await od.reviewer_crashed_fast("ag-5", await_seconds=0.01) is False
