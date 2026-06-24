@@ -29,7 +29,7 @@ CREATE SCHEMA IF NOT EXISTS core;
 CREATE TABLE IF NOT EXISTS core.agents (
     id                  TEXT PRIMARY KEY,
     api_key             TEXT NOT NULL,
-    label               TEXT,                               -- Display name (for name-claim identity recovery)
+    label               TEXT,                               -- Display name; cosmetic only (name-claim identity recovery removed 2026-04-17, identity-invariant #4)
     status              TEXT DEFAULT 'active'
                         CHECK (status IN ('active', 'paused', 'archived')),
     purpose             TEXT,

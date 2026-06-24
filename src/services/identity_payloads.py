@@ -267,7 +267,7 @@ def build_identity_signature_payload(
 def build_onboard_response_data(
     *,
     agent_uuid: str,
-    structured_agent_id: str,
+    response_agent_id: str,
     agent_label: Optional[str],
     stable_session_id: str,
     is_new: bool,
@@ -306,7 +306,7 @@ def build_onboard_response_data(
     identity_status = "created" if is_new else ("reactivated" if was_archived else "resumed")
     identity_context = build_identity_response_context(
         agent_uuid=agent_uuid,
-        agent_id=structured_agent_id,
+        agent_id=response_agent_id,
         display_name=agent_label,
         session_resolution_source=continuity_source,
         identity_status=identity_status,
@@ -386,7 +386,7 @@ def build_onboard_response_data(
         "unknown": "For best session continuity, include client_session_id in all tool calls.",
     }
 
-    friendly_name = agent_label or structured_agent_id
+    friendly_name = agent_label or response_agent_id
     if thread_context:
         if thread_context["is_root"]:
             welcome = (
@@ -437,7 +437,7 @@ def build_onboard_response_data(
             "success": True,
             "welcome": welcome,
             "uuid": agent_uuid,
-            "agent_id": structured_agent_id,
+            "agent_id": response_agent_id,
             "display_name": agent_label,
             "is_new": is_new,
             "client_session_id": stable_session_id,
@@ -471,7 +471,7 @@ def build_onboard_response_data(
         "success": True,
         "welcome": welcome,
         "uuid": agent_uuid,
-        "agent_id": structured_agent_id,
+        "agent_id": response_agent_id,
         "display_name": agent_label,
         "is_new": is_new,
         "client_session_id": stable_session_id,
@@ -689,6 +689,14 @@ def _how_to_strengthen(
     so it is the safe default. Session-maintaining clients (Claude Code's
     hook chain, Claude Desktop) bind client_session_id automatically and so
     do not need the agent to thread either field by hand.
+
+    Ontology note (council 2026-06-24): this "echo continuity_token to reach
+    strong" guidance is SAME-LIVE-PROCESS binding strength — the kept role in
+    docs/ontology/identity.md ("`continuity_token` is an advanced same-live-
+    process rebind proof"). It is NOT the cross-process resume-credential use
+    that the ontology marks Performative / "retire or repurpose": echoing the
+    token in the running process strengthens the current binding; it does not
+    resume identity across process boundaries.
     """
     if tier == "strong":
         return None

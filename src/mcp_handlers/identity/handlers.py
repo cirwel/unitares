@@ -2447,7 +2447,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
     result = build_onboard_response_data(
         agent_uuid=agent_uuid,
-        structured_agent_id=response_agent_id,
+        response_agent_id=response_agent_id,
         agent_label=agent_label,
         stable_session_id=stable_session_id,
         is_new=is_new,

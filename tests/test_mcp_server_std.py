@@ -13,7 +13,7 @@ Covers:
 - _detect_ci_status (CI environment detection)
 - generate_api_key (key generation)
 - verify_agent_ownership (auth verification)
-- require_agent_id (argument validation)
+- require_explicit_agent_id (argument validation)
 - require_agent_auth (auth flow)
 - get_agent_or_error (monitor lookup)
 - build_standardized_agent_info (output structure building)
@@ -652,43 +652,43 @@ class TestVerifyAgentOwnership:
 
 
 # ============================================================================
-# Test: require_agent_id
+# Test: require_explicit_agent_id
 # ============================================================================
 
 class TestRequireAgentId:
     """Tests for agent_id argument extraction and validation."""
 
     def test_missing_agent_id(self):
-        from src.agent_state import require_agent_id
-        agent_id, error = require_agent_id({})
+        from src.agent_state import require_explicit_agent_id
+        agent_id, error = require_explicit_agent_id({})
         assert agent_id is None
         assert error is not None
         parsed = json.loads(error.text)
         assert parsed["success"] is False
 
     def test_empty_agent_id(self):
-        from src.agent_state import require_agent_id
-        agent_id, error = require_agent_id({"agent_id": ""})
+        from src.agent_state import require_explicit_agent_id
+        agent_id, error = require_explicit_agent_id({"agent_id": ""})
         assert agent_id is None
         assert error is not None
 
     def test_valid_agent_id_new(self):
-        from src.agent_state import require_agent_id, agent_metadata
+        from src.agent_state import require_explicit_agent_id, agent_metadata
         test_id = "cursor_session_20260207_test"
         agent_metadata.pop(test_id, None)
-        agent_id, error = require_agent_id({"agent_id": test_id})
+        agent_id, error = require_explicit_agent_id({"agent_id": test_id})
         assert agent_id == test_id
         assert error is None
 
     def test_reject_existing_true_blocks_existing(self):
-        from src.agent_state import require_agent_id, agent_metadata, AgentMetadata
+        from src.agent_state import require_explicit_agent_id, agent_metadata, AgentMetadata
         now = datetime.now().isoformat()
         test_id = "require_existing_test"
         agent_metadata[test_id] = AgentMetadata(
             agent_id=test_id, status="active", created_at=now, last_update=now
         )
         try:
-            agent_id, error = require_agent_id({"agent_id": test_id}, reject_existing=True)
+            agent_id, error = require_explicit_agent_id({"agent_id": test_id}, reject_existing=True)
             assert agent_id is None
             assert error is not None
             parsed = json.loads(error.text)
@@ -697,14 +697,14 @@ class TestRequireAgentId:
             del agent_metadata[test_id]
 
     def test_reject_existing_false_allows_existing(self):
-        from src.agent_state import require_agent_id, agent_metadata, AgentMetadata
+        from src.agent_state import require_explicit_agent_id, agent_metadata, AgentMetadata
         now = datetime.now().isoformat()
         test_id = "require_allow_existing_test"
         agent_metadata[test_id] = AgentMetadata(
             agent_id=test_id, status="active", created_at=now, last_update=now
         )
         try:
-            agent_id, error = require_agent_id({"agent_id": test_id}, reject_existing=False)
+            agent_id, error = require_explicit_agent_id({"agent_id": test_id}, reject_existing=False)
             assert agent_id == test_id
             assert error is None
         finally:
