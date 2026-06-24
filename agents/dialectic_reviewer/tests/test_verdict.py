@@ -167,6 +167,9 @@ async def test_run_submits_disagreement_through_protocol(monkeypatch):
     assert verdict.agrees is False
     # onboarded with lineage + the dedicated spawn_reason
     onboard_kw = next(c[1] for c in calls if c[0] == "onboard")
+    # `name` is the REQUIRED first arg of GovernanceClient.onboard — without it the
+    # runner TypeErrors on every spawn (the blocker that made the runner inert).
+    assert onboard_kw["name"] == r.REVIEWER_NAME
     assert onboard_kw["force_new"] is True
     assert onboard_kw["spawn_reason"] == r.SPAWN_REASON
     assert onboard_kw["parent_agent_id"] == "parent-uuid"
