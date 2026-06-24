@@ -605,6 +605,18 @@ class UNITARESMonitor:
         except Exception:
             pass  # Fail-safe: no penalty if calibration unavailable
 
+        # Stage A (EISV S-attractor calibration): per-class S rest target so the
+        # ODE equilibrium lands on measured-healthy S instead of ~0.09. Off by
+        # default (UNITARES_S_SETPOINT) — when off, s_setpoint stays 0.0 and the
+        # dynamics are unchanged. Kept zero-cost on the off path (no class
+        # resolution unless the flag is enabled).
+        from config.governance_config import get_s_setpoint, s_setpoint_enabled
+        s_setpoint = 0.0
+        if s_setpoint_enabled():
+            if not hasattr(self, "_resolved_agent_class"):
+                self._resolved_agent_class = self._resolve_agent_class()
+            s_setpoint = get_s_setpoint(self._resolved_agent_class)
+
         self.state.unitaires_state = step_state(
             state=self.state.unitaires_state,
             theta=self.state.unitaires_theta,
@@ -614,6 +626,7 @@ class UNITARESMonitor:
             params=active_params,
             complexity=complexity,  # Complexity now affects S dynamics
             sensor_eisv=coupling_sensor,  # per-source gated; None => no spring (still compared below)
+            s_setpoint=s_setpoint,  # 0.0 unless UNITARES_S_SETPOINT enabled
         )
 
         # Compare, don't couple: record model<->body divergence as a signal.
