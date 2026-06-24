@@ -243,7 +243,15 @@ orthogonal second axis to "question answered."
 | **philosophical** (grounding) | What counts as real / earned vs. performative | `identity.md` — three stances, layered taxonomy |
 | **fep** (modeling) | Why the math is justified — borrowed from the Free Energy Principle / active inference | external (Friston); adopt only when *earned* |
 | **ops** (mechanism) | How it's implemented | handlers, lease plane, EISV code |
+| **standard** (public) | How an outside AI/ML engineer would name the referent — the register for public copy, dashboards, pitch, onboarding intros | external observability / MLOps conventions (drift, telemetry, health signals, guardrails). Pulled from `ops`, **never** from `fep` |
 | **manifesto** (norm) | What must *not* be built | Synthetic Life Axioms (`identity.md` cites them) |
+
+**Public-copy rule.** Any public-facing surface (pitch, dashboard labels,
+README first paragraph, onboarding intros) names a referent from the `standard`
+column. It must not borrow from `fep` — a physics term on a public surface
+claims rigor the deployed system does not drive behavior with (see the
+code-grounded correction below). `ops` symbols (`EISV`, `basin`) stay the
+internal and paper vocabulary; `standard` is their translation, not a rename.
 
 **Guardrail — "name nothing more rigorous than it is."** This is the sibling of
 the manifesto axiom *"build nothing that appears more alive than it is."* A `fep`
@@ -265,17 +273,26 @@ not by uncontrolled vocabulary. Status marks the `fep` column specifically:
 - **~ candidate** — plausible conceptual fit, *not yet* implemented anywhere; decorative if shipped as fact.
 - **✗ false friend** — looks like a synonym across registers but is a different referent; do not conflate.
 
-| Referent | philosophical | ops | fep | manifesto |
-|---|---|---|---|---|
-| Agent identity | layered continuity bundle | `uuid` + `client_session_id` | — | must be earned, not performative |
-| Internal state | behavioral trajectory | `EISV` state vector | ◐ ODE state (`governance_core/dynamics.py`); target `E=−F` tiered+stubbed in `grounding/free_energy.py` | — |
-| Healthy operating region | "stable self" | `basin` (+ health gating) | ◐ attractor — **real** in `check_basin` (bistable ODE), but verdict path uses a configured `BASIN_HIGH` box, not the attractor | — |
-| Deviation signal | — | `running hot`, basin-edge crossing | ◐ `running hot` (V-sign) ships; `surprise`/prediction-error as `−log P` does not | — |
-| Agent↔world boundary | process-instance boundary | `lease surface`, `affordance_state` | ✗ Markov blanket (**false friend** — statistical conditional-independence boundary, *not* a coordination claim) | — |
-| Custody transfer | lineage / inheritance | `handoff` | — | — |
-| Proof of life | process-instance liveness (self-attested vs. observed) | `heartbeat` (self-attested) · monitor `:DOWN` (externally-observed) | ~ non-equilibrium steady state / self-maintenance | "build nothing more alive than it is" |
-| Belief revision | dialectic resolution | `dialectic` | ~ active inference / belief updating | — |
-| Confidence grounding | earned vs. performative | `identity_assurance` tier, calibration | ~ precision-weighting | — |
+| Referent | philosophical | ops | standard (AI/ML) | fep | manifesto |
+|---|---|---|---|---|---|
+| Agent identity | layered continuity bundle | `uuid` + `client_session_id` | session / agent ID, trace ID | — | must be earned, not performative |
+| Internal state | behavioral trajectory | `EISV` state vector | **agent health signals** / state telemetry | ◐ ODE state (`governance_core/dynamics.py`); target `E=−F` tiered+stubbed in `grounding/free_energy.py` | — |
+| Healthy operating region | "stable self" | `basin` (+ health gating) | **operating regime** (healthy / degraded) / health band | ◐ attractor — **real** in `check_basin` (bistable ODE), but verdict path uses a configured `BASIN_HIGH` box, not the attractor | — |
+| Deviation signal | — | `running hot`, basin-edge crossing | **drift** / anomaly signal | ◐ `running hot` (V-sign) ships; `surprise`/prediction-error as `−log P` does not | — |
+| Agent↔world boundary | process-instance boundary | `lease surface`, `affordance_state` | resource scope / permissions boundary | ✗ Markov blanket (**false friend** — statistical conditional-independence boundary, *not* a coordination claim) | — |
+| Custody transfer | lineage / inheritance | `handoff` | handoff / ownership transfer *(already standard)* | — | — |
+| Proof of life | process-instance liveness (self-attested vs. observed) | `heartbeat` (self-attested) · monitor `:DOWN` (externally-observed) | heartbeat / liveness check *(already standard)* | ~ non-equilibrium steady state / self-maintenance | "build nothing more alive than it is" |
+| Belief revision | dialectic resolution | `dialectic` | **escalation / peer review** | ~ active inference / belief updating | — |
+| Confidence grounding | earned vs. performative | `identity_assurance` tier, calibration | calibration / confidence score *(already standard)* | ~ precision-weighting | — |
+
+**Reading the `standard` column.** Four of the nine referents already *are* the
+standard term (`drift`, `heartbeat`, `handoff`, `calibration`) — the
+exotic-sounding load concentrates in three: `EISV`, `basin`, and `dialectic`
+(plus `valence`/`running hot`). Translating just those three on public surfaces
+removes most of the "too much jargon" friction without touching the internal or
+paper vocabulary. The `standard` column carries no `fep`-style status markers
+(✓/◐/~/✗) — those grade the physics mapping's rigor; the `standard` column is a
+naming convenience, not a rigor claim.
 
 **Correction (code-grounded, 2026-06-20).** The skeleton's first claim — "physics
 register is aspirational, all `~`, zero earned" — **was wrong, and reading the
@@ -304,7 +321,8 @@ control-loop change to trajectory/telemetry, gated tier-by-tier with the provena
 honesty already in place. That is the single most important thing this whole
 glossary exercise surfaced.
 
-The four-register model still holds for these nine rows; if a referent won't fit a
+The register model still holds for these nine rows (four grading registers plus
+the `standard` public-naming column); if a referent won't fit a
 column, that absence is a finding (e.g. most rows have no genuine `manifesto` name
 — the norm register governs a few load-bearing referents, not all of them), not a
 gap to backfill.
