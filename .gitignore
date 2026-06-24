@@ -40,7 +40,12 @@ data/processes/
 data/watcher/
 
 # Claude Code / Cursor local state (machine-specific, never commit)
-.claude/
+# Ignore everything under .claude/ EXCEPT the committed settings.json, which
+# carries shared, repo-level config (e.g. attribution) that cloud/web sessions
+# read from the fresh clone. The machine-local overlay (.claude/CLAUDE.md) and
+# .claude/settings.local.json stay ignored.
+.claude/*
+!.claude/settings.json
 .hypothesis/
 data/gov-data-preserve/
 *.log
