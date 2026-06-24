@@ -425,17 +425,18 @@ async def _maybe_recover_via_x_agent_id(
         if await _substrate_http_reject(
             x_agent_id_header, source="path2_75_x_agent_id_recovery"
         ) is not None:
+            # Do not log the header-derived UUID (CodeQL: clear-text logging of
+            # header data). The refused substrate UUID is already recorded by
+            # _substrate_http_reject's own [SUBSTRATE_HTTP_REJECT] warning.
             logger.warning(
-                "[DISPATCH] X-Agent-Id recovery refused for substrate-anchored "
-                "UUID %s... over HTTP; keeping freshly-created identity "
-                "(resident must connect via UNITARES_UDS_SOCKET).",
-                x_agent_id_header[:8],
+                "[DISPATCH] X-Agent-Id recovery refused: a substrate-anchored "
+                "UUID may not be recovered over HTTP; keeping the freshly-created "
+                "identity (resident must connect via UNITARES_UDS_SOCKET)."
             )
             return bound_agent_id
         logger.info(
-            "[DISPATCH] X-Agent-Id recovery: rebinding session to existing agent "
-            "%s... (was about to create %s...)",
-            x_agent_id_header[:8], (bound_agent_id or "?")[:8],
+            "[DISPATCH] X-Agent-Id recovery: rebinding the freshly-created "
+            "session to the existing agent named in the X-Agent-Id header."
         )
         identity_result["agent_uuid"] = x_agent_id_header
         identity_result["created"] = False
