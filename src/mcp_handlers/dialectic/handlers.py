@@ -1372,6 +1372,44 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
             except Exception as e:
                 logger.warning(f"Could not save session after thesis: {e}")
 
+            # Escalation tier (design b): when orchestrated review is enabled and
+            # no live reviewer has claimed the slot, spawn an INDEPENDENT reviewer
+            # process through the agent-orchestrator. That process onboards with its
+            # own identity, claims the still-open slot via the multi-agent path, and
+            # submits its verdict — so on success we must NOT also run the in-process
+            # reviewer. ANY dispatch failure falls through to the in-process path
+            # below (the orchestrator being down never breaks dialectic).
+            if session.reviewer_agent_id is None:
+                from .orchestrator_dispatch import (
+                    orchestrated_review_enabled,
+                    dispatch_orchestrated_review,
+                )
+                if orchestrated_review_enabled():
+                    dispatched = await dispatch_orchestrated_review(
+                        session_id,
+                        {
+                            "root_cause": arguments.get('root_cause'),
+                            "proposed_conditions": proposed_conditions,
+                            "reasoning": arguments.get('reasoning') or "",
+                            # why the agent paused — the reviewer's situation context
+                            "situation": getattr(session, "reason", "") or "",
+                        },
+                        session.paused_agent_id,
+                    )
+                    if dispatched:
+                        result["orchestrated_review"] = True
+                        result["reviewer_dispatch"] = {
+                            "agent_id": dispatched.get("agent_id") or dispatched.get("id"),
+                            "via": "agent-orchestrator",
+                        }
+                        result["note"] = (
+                            "Independent reviewer spawned via the agent-orchestrator; "
+                            "it will claim the reviewer slot and submit its verdict. "
+                            "Poll dialectic action='get' for the antithesis/synthesis."
+                        )
+                        return success_response(result)
+                    # dispatch failed → fall through to in-process synthetic reviewer
+
             # End-to-end completion: when no independent live reviewer has claimed
             # the slot, drive the dialectic to a resolved synthesis with the local
             # synthetic reviewer instead of stranding it at awaiting_facilitation.

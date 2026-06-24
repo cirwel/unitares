@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd manifest for the Agent Orchestrator (Elixir/OTP, port 8789).
+
+  Supervises ephemeral agents (Claude SDK / `claude -p` / tool workers) as
+  OTP-managed Ports. KeepAlive relaunches the BEAM node if it dies; OTP restarts
+  crashed agents inside the VM. The only consumer is the local governance MCP,
+  and POST /v1/agents spawns OS processes, so the surface is 127.0.0.1-bound +
+  bearer-auth fail-closed (HTTPAuth → 503 if AGENT_ORCHESTRATOR_BEARER_TOKEN is
+  unset). No cloud host needed — see elixir/agent_orchestrator/scripts/start.sh.
+
+  Do NOT load this until a real consumer dispatches through it (the orchestrated
+  dialectic-reviewer wiring) — an idle supervisor with no caller is its own
+  inventory (2026-06-24 Wave-3 gate framing-note caveat).
+
+  Install (render __VARS__ then load):
+    sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
+        -e "s|__HOME__|$HOME|g" \
+        scripts/ops/com.unitares.agent-orchestrator.plist.template \
+        > ~/Library/LaunchAgents/com.unitares.agent-orchestrator.plist
+    launchctl load ~/Library/LaunchAgents/com.unitares.agent-orchestrator.plist
+
+  Verify (with $AGENT_ORCHESTRATOR_BEARER_TOKEN sourced from ~/.config/cirwel/secrets.env):
+    launchctl list | grep com.unitares.agent-orchestrator
+    tail -f ~/Library/Logs/unitares-agent-orchestrator.log
+    curl -s -H "Authorization: Bearer $AGENT_ORCHESTRATOR_BEARER_TOKEN" \
+         "http://127.0.0.1:8789/v1/agents"
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unitares.agent-orchestrator</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__UNITARES_ROOT__/elixir/agent_orchestrator/scripts/start.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__UNITARES_ROOT__/elixir/agent_orchestrator</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/unitares-agent-orchestrator.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/unitares-agent-orchestrator.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
+    </dict>
+</dict>
+</plist>
