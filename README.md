@@ -14,7 +14,7 @@ UNITARES watches each agent while it works and tells you — and the agent itsel
 
 *Status: live. First public commit 2025-12-04 · 3.7M+ governance events in production · dogfooded.*
 
-[![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#try-it-in-60-seconds)
+[![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#try-the-demo-locally)
 [![Docs](https://img.shields.io/badge/docs-read-7d8f97?style=for-the-badge&labelColor=0f171f)](docs/README.md)
 [![Paper v6](https://img.shields.io/badge/paper-v6-8957e5?style=for-the-badge&labelColor=0f171f)](https://github.com/cirwel/unitares-paper-v6)
 [![Verify it yourself](https://img.shields.io/badge/verify-it_yourself-f5a623?style=for-the-badge&labelColor=0f171f)](docs/REVIEWER_GUIDE.md)
@@ -38,14 +38,14 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 
 UNITARES is **not** an output validator, sandbox, or hosted agent platform. It is the runtime state layer between evals and guardrails.
 
-## Try it in 60 seconds
+## Try the demo locally
 
 ```bash
 git clone https://github.com/cirwel/unitares.git && cd unitares
 docker compose up -d --wait && make demo
 ```
 
-`make demo` drives a synthetic agent through seven check-ins — clean work, then confidence drifting from results, then confusion — and prints the verdict at each step. Then point any MCP client at `http://localhost:8767/mcp/`.
+`make demo` drives a synthetic agent through seven check-ins — clean work, then confidence drifting from results, then confusion — and prints the verdict at each step. First run can spend a few minutes building Docker images; later runs are the fast path. Then point any MCP client at `http://localhost:8767/mcp/`.
 
 For a human operator view, open the optional dashboard at `http://localhost:8767/dashboard`. Dashboard implementation details live in [`dashboard/README.md`](dashboard/README.md); public deployment screenshots live in [`docs/PRODUCTION_SNAPSHOT.md`](docs/PRODUCTION_SNAPSHOT.md).
 
@@ -102,15 +102,28 @@ Want to act on *why*, not just the verdict? Each check-in also returns four scor
 ## Integrate in two calls
 
 ```python
-# Inside the agent's loop
-result = sync_state(response_text=output, complexity=0.6, confidence=0.8)
-verdict = result.get("verdict", {}).get("value")   # proceed / guide / pause / reject
+# 1. Start a governance session for this process.
+session = start_session(force_new=True)
+client_session_id = session["client_session_id"]
 
-if verdict in ("pause", "reject"):
-    agent.require_human_review(result["verdict"]["next_action"])
+# 2. Check in after meaningful work.
+result = sync_state(
+    response_text=output,
+    complexity=0.6,
+    confidence=0.8,
+    client_session_id=client_session_id,
+)
+
+action = result.get("state_summary", {}).get("action")
+if action is None:
+    raw = result.get("raw_governance", result)
+    action = raw.get("decision", {}).get("action", raw.get("action", "proceed"))
+
+if action in ("pause", "reject"):
+    agent.require_human_review(result.get("next_action", "Governance requested review"))
 ```
 
-The agent reads the verdict and acts — that's the whole loop. UNITARES isn't an output validator or a sandbox; it's a state layer the agent itself can read, *before* external controls fire.
+The agent reads the action and acts — that's the whole loop. Self-reported `confidence` is strongest when paired with real outcomes, so include tool results or call `record_result(...)` when your client has evidence such as test status, exit codes, or deployment checks. UNITARES isn't an output validator or a sandbox; it's a state layer the agent itself can read, *before* external controls fire.
 
 <details>
 <summary><strong>Finer control: branch on the EISV components</strong></summary>
@@ -120,7 +133,8 @@ The agent reads the verdict and acts — that's the whole loop. UNITARES isn't a
 For per-dimension policies, read the four scores instead of the single verdict:
 
 ```python
-eisv = result.get("raw_governance", result).get("primary_eisv", {})
+raw = result.get("raw_governance", result)
+eisv = raw.get("primary_eisv") or raw.get("metrics", {})
 
 if eisv.get("I", 1) < 0.4:
     agent.require_human_review("integrity low — pausing autonomous actions")
