@@ -81,14 +81,16 @@ def _coerce_bool_flag(value: Any) -> bool:
 
 
 # Lite eisv_snapshot keys returned by default on outcome acks (#604 dogfood
-# 2026-06-24). The actual state numbers and the active source are kept; the
-# heavy self-description (state_semantics role table, source-meta blocks, the
-# sensor-divergence history list) is dropped unless include_semantics=true.
+# 2026-06-24). The actual state numbers and the active source are kept (the
+# small primary/behavioral/ode views); the heavy self-description (state_semantics
+# role table, source-meta blocks, the sensor-divergence history list) is dropped
+# unless include_semantics=true.
 _LITE_SNAPSHOT_KEYS = (
     "primary_eisv",
     "primary_eisv_source",
-    "ode_diagnostics",
     "behavioral_eisv",
+    "ode_eisv",
+    "ode_diagnostics",
 )
 
 
