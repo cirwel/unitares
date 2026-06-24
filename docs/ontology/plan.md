@@ -709,3 +709,32 @@ Codex's argument was that the trust-tier cost of B-relaxed is not theoretical �
 **Scope boundary.** This is the **server→world attestation** direction. It does **not** close the **agent→server resume-proof** gap (S19 B-strict's enrollment / process pre-registration — a separate, larger build), and it is not wired into identity resolution, the strict write gate, or onboard/identity responses. Promotion to a live path (issuance behind an opt-in, `/.well-known` JWKS, signed revocation list, HSM-held non-exportable key, identity.md + shared-contract doctrine updates) is a separate, operator-gated, single-writer change across unitares + gov-plugin.
 
 **Operator decision pending.** Is the demand server→world attestation (this), agent→server resume proof (S19 B-strict enrollment), or both? And is there a concrete external verifier today that justifies wiring issuance into the hot path?
+
+---
+
+### S21 — Identity-UX + ID/verbosity simplification arc (session 2026-06-24)
+
+**Driver.** A claude.ai (stateless transport) dogfood (#604, KG `2026-06-24T04:21:44`) found the new-agent onboarding path *actively misdirects*. That opened a wider pass over the agent-facing identity + verbosity surface. All landed as small draft PRs; the operator was the merge gate throughout. 18/24 components a read-only simplification council reviewed were classed *essential* and left untouched.
+
+**Merged this session:**
+
+- **#1022** — stateless-safe credential copy. On a stateless transport an echoed `client_session_id` resolves to a fresh per-call identity, so `how_to_strengthen` / welcome / `next_calls` / (later) `next_step` now lead with `continuity_token` (resolves on both transports). Also: P1 fresh-mint reframed as `baseline=fresh_identity` (not a scold); P2 `record_result` lite-default (gates `state_semantics` behind `include_semantics`); P3 `name=` doc (cosmetic display_name, not the handle).
+- **#1027** — AIC prototype (S20 above).
+- **#1034** — council safe-now ID-layer cleanup: param `structured_agent_id`→`response_agent_id` in `build_onboard_response_data`; legacy `require_agent_id`→`require_explicit_agent_id` (name-collision footgun vs the load-bearing resolver); `continuity_token` "echo to reach strong" reconciliation (same-live-process binding strength = the KEPT role, not the retired cross-process resume); stale `schema.sql` label comment.
+- **#1036** — security: PATH 2.75 (`X-Agent-Id` UUID recovery) was the one sibling resume path missing the `_substrate_http_reject` gate that PATH 1/2 enforce — a copyable header could rebind to a substrate UUID over HTTP. Gated additively (UDS + non-substrate pass through, so Lumen reconnection unaffected); extracted to testable `_maybe_recover_via_x_agent_id`.
+- **#1038** — onboard `next_step` now names the ownership credential (was terse; a stateless agent reading only it sent no proof).
+- **#1041** — `lite=true` (bool) was silently ignored (only the string form coerced); fixed to honor the documented `=minimal` alias. `response_mode` description made self-describing.
+- **#1042** — S1-d telemetry: the deprecation surface's True case was already audited (`continuity_token_deprecated_accept`); the False case was silent, so "observed False" could only be *inferred*. Added a once-per-process `[S1-d]` reached-marker so the window is positively confirmable.
+- **#1044** — `scripts/dev/check_s1d_deprecation_window.py`: agent-runnable verdict (CLEAN/UNCONFIRMED/DIRTY/NO_AUDIT_LOG) over the audit JSONL + `[S1-d]` marker. The telemetry-window check is a *resident/cron/doctor* job (on-deployment, where `data/audit_log.jsonl` lives), NOT a stateless-API-session job.
+
+**Live-verified.** Re-ran the #604 repro on the redeployed production server: P0/P1/P2/P4 all confirmed; the bug no longer misdirects. KG note closed deploy-verified.
+
+**Doctrine clarified (not changed).** `continuity_token` is NOT retired. Its *cross-process resume* use is retired and actively reject-gated (S1-c); its *same-live-process ownership-proof* use is kept and is the path the stateless-transport copy now steers toward. The AIC (S20) is the "repurpose" half for cross-boundary identity.
+
+**Remaining held items — precise unblock conditions (each migration-gated, NOT safe-now):**
+
+1. **S1-d residue removal** (`build_token_deprecation_block` + `_emit_continuity_token_deprecation` body + 5 pinning tests). Unblock: run `check_s1d_deprecation_window.py` on the deployment; on a CLEAN verdict over a window + a cross-repo `gh pr list` (unitares + gov-plugin), delete in one commit. Now an **agent-runnable** decision, not human-eyeballs-logs.
+2. **`structured_agent_id` wire-field deprecation.** The deprecation is *read-side* (does any external/gov-plugin client READ the field) — **not server-observable**, so the checker pattern does not apply; this needs a versioned-removal + the `runtime_queries.py` (sets `= public_agent_id`) vs `identity_payloads.py:243` (`= agent_id`) emission-contract reconciliation first. Output-changing → operator sign-off + gov-plugin coordination.
+3. **Verbosity-mode consolidation** (collapse near-duplicate `minimal`/`compact`; unify cross-tool `lite`). Wire/test-pinned (`response_mode='lite'→compact` is asserted; `lite` differs across tools). Correction to an earlier session claim: `mirror_signal.emit` only fires on *signal-bearing* check-ins, so it is a **biased** sample — a clean minimal-vs-compact census needs new per-call mode telemetry first. Low ROI; defer unless the surface is being reworked anyway.
+
+**Inflection note.** Safe-now code work on this surface is effectively exhausted; the three above are deliberate operator decisions (run-a-checker / accept-risk / low-ROI), not more inline edits.
