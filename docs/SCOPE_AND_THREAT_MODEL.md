@@ -98,6 +98,13 @@ different tool than this runtime drift signal. A reproducible model-organism
 demonstration of both the catch (naive sandbagging, detection AUC ≈ 1.0) and the
 blind spot (calibrated sandbagging, AUC ≈ 0.5 against the real `BehavioralEISV` +
 `assess_behavioral_state` path) is in [`demos/frt_autonomy_sandbagging/`](../demos/frt_autonomy_sandbagging/).
+A real-LLM extension (`real_llm_probe.py`) sharpens the picture against a *noisy*
+honest baseline — real models are themselves overconfident on hard tasks, so the
+naive catch degrades to AUC ≈ 0.75 and the calibrated blind spot **inverts** to
+≈ 0.19 (Integrity rates a calibrated concealer as *healthier* than honest agents),
+while the out-of-band cross-framing probe still catches it (≈ 0.97). In short: the
+Integrity signal is a calibration-consistency detector for naive overconfidence and
+drift, **not** a deliberate-concealment detector — for that, use cross-framing.
 Scope note: that demonstration exercises the behavioral-EISV core and verdict, not
 the full server pipeline (sensors, continuity, dialectic peer review); the
 structural argument is expected to carry to those paths but has not been measured

@@ -2,7 +2,7 @@
 
 <img alt="UNITARES — runtime governance for AI-agent fleets" src="docs/assets/hero-v2.png" width="100%">
 
-### Catch an AI agent going off the rails — before anything breaks.
+### Catch an AI agent drifting — while it's still just numbers, not broken output.
 
 **Runtime governance & self-telemetry for fleets of autonomous AI agents.**<br/>
 UNITARES watches each agent while it works and tells you — and the agent itself — the moment one starts to drift, while it's still just numbers moving and not yet broken output.
