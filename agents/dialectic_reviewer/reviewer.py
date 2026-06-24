@@ -197,15 +197,18 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
             parent_agent_id=parent_agent_id,
             spawn_reason=SPAWN_REASON,
         )
-        # Claim the open reviewer slot as first-responder (handlers.py:677/691).
+        # Claim the open reviewer slot as first-responder. The bare submit_*
+        # handlers are register=False; the public MCP surface is the `dialectic`
+        # umbrella tool (action='antithesis'/'synthesis'). (live-found 2026-06-23)
         await client.call_tool(
-            "submit_antithesis",
-            {"session_id": thesis.session_id, "reasoning": verdict.reasoning},
+            "dialectic",
+            {"action": "antithesis", "session_id": thesis.session_id, "reasoning": verdict.reasoning},
         )
         # Submit the model-derived verdict — agrees may be False (the whole point).
         await client.call_tool(
-            "submit_synthesis",
+            "dialectic",
             {
+                "action": "synthesis",
                 "session_id": thesis.session_id,
                 "agrees": verdict.agrees,
                 "proposed_conditions": verdict.proposed_conditions,

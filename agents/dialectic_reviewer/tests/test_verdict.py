@@ -173,7 +173,12 @@ async def test_run_submits_disagreement_through_protocol(monkeypatch):
     assert onboard_kw["force_new"] is True
     assert onboard_kw["spawn_reason"] == r.SPAWN_REASON
     assert onboard_kw["parent_agent_id"] == "parent-uuid"
-    # submit_synthesis carried agrees=False — the reviewer actually blocked
-    synth = [a for n, a in calls if n == "submit_synthesis"]
+    # The reviewer submits via the `dialectic` umbrella tool (action=...), not the
+    # bare submit_* names (which are register=False on the MCP surface).
+    dialectic_calls = [a for n, a in calls if n == "dialectic"]
+    anti = [a for a in dialectic_calls if a.get("action") == "antithesis"]
+    synth = [a for a in dialectic_calls if a.get("action") == "synthesis"]
+    assert anti and anti[0]["session_id"] == "sess-9"
+    # synthesis carried agrees=False — the reviewer actually blocked
     assert synth and synth[0]["agrees"] is False
     assert synth[0]["session_id"] == "sess-9"
