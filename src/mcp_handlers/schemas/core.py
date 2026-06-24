@@ -379,6 +379,18 @@ class OutcomeEventParams(AgentIdentityMixin):
             "dialectic verdicts, state transitions). external_signal for CI webhooks etc."
         ),
     )
+    include_semantics: Union[bool, str, None] = Field(
+        default=False,
+        description=(
+            "If true, the response's eisv_snapshot carries the full EISV ontology "
+            "(state_semantics role table + hierarchy). Default false returns a lite "
+            "confirmation-sized snapshot. Alias: response_mode='full'."
+        ),
+    )
+    response_mode: Optional[Literal["lite", "full"]] = Field(
+        default=None,
+        description="'full' is an alias for include_semantics=true; 'lite' (default) returns the small snapshot.",
+    )
 
 
 class CirsProtocolParams(AgentIdentityMixin):

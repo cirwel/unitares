@@ -306,8 +306,9 @@ def test_strong_assurance_has_no_strengthen_breadcrumb():
 
 
 def test_weak_server_inferred_assurance_explains_how_to_reach_strong():
-    """The canonical #732 case: weak because server-inferred. The breadcrumb
-    tells the agent to pass client_session_id explicitly."""
+    """The canonical #732 case: weak because server-inferred. Post-#604 the
+    breadcrumb LEADS with continuity_token (works on stateless transports) and
+    still mentions client_session_id for session-maintaining clients."""
     context = build_identity_response_context(
         agent_uuid="uuid-w",
         agent_id="agent-w",
@@ -320,7 +321,9 @@ def test_weak_server_inferred_assurance_explains_how_to_reach_strong():
     assert assurance["tier"] == "weak"
     hint = assurance["how_to_strengthen"]
     assert "server-inferred" in hint
-    assert "client_session_id" in hint
+    # #604: continuity_token is the primary proof (works on both transports).
+    assert "continuity_token" in hint
+    assert hint.index("continuity_token") < hint.index("client_session_id")
 
 
 def test_medium_assurance_breadcrumb_points_at_explicit_session():
@@ -333,7 +336,73 @@ def test_medium_assurance_breadcrumb_points_at_explicit_session():
     )
     assurance = context["identity_assurance"]
     assert assurance["tier"] == "medium"
-    assert "client_session_id" in assurance["how_to_strengthen"]
+    hint = assurance["how_to_strengthen"]
+    # #604: continuity_token leads; client_session_id remains as the
+    # session-maintaining-client alternative.
+    assert "continuity_token" in hint
+    assert "client_session_id" in hint
+    assert hint.index("continuity_token") < hint.index("client_session_id")
+
+
+def test_how_to_strengthen_read_and_write_paths_stay_in_parity():
+    """The read-path (identity_payloads) and write-path (updates.phases)
+    breadcrumbs are mirrored by contract — guard against drift."""
+    from src.services.identity_payloads import _how_to_strengthen as read_path
+    from src.mcp_handlers.updates.phases import _how_to_strengthen as write_path
+
+    cases = [
+        ("strong", "continuity_token", None),
+        ("medium", "pinned_onboard_session", None),
+        ("weak", "ip_ua_fingerprint", "server_inferred"),
+        ("weak", "unknown", None),
+    ]
+    for tier, source_key, proof_origin in cases:
+        assert read_path(tier, source_key, proof_origin) == write_path(
+            tier, source_key, proof_origin
+        )
+
+
+# ── #604 (dogfood 2026-06-24): credential copy is stateless-transport-safe ──
+
+
+def test_onboard_session_continuity_instruction_leads_with_continuity_token():
+    """An agent that follows the onboard session_continuity instruction must be
+    told to echo continuity_token (the proof that resolves on stateless
+    transports), not client_session_id (which resolves to a fresh per-call
+    identity there)."""
+    payload = build_onboard_response_data(**_onboard_kwargs())
+    instruction = payload["session_continuity"]["instruction"]
+    assert "continuity_token" in instruction
+    assert payload["session_continuity"]["continuity_token"] == "token-min"
+
+
+def test_onboard_next_calls_thread_continuity_token_as_ownership_proof():
+    """The verbose next_calls templates hand back continuity_token as the
+    ownership proof so an agent copying args_full reaches strong on its 2nd
+    call (P0 acceptance)."""
+    payload = build_onboard_response_data(**_onboard_kwargs())
+    for call in payload["next_calls"]:
+        args_full = call["args_full"]
+        assert args_full.get("continuity_token") == "token-min"
+        assert "client_session_id" not in args_full
+
+
+def test_fresh_mint_weak_binding_is_framed_as_baseline_not_deficiency():
+    """P1: a just-minted identity that resolves weakly is relabeled as expected
+    baseline with an actionable path (echo continuity_token), not a scold."""
+    payload = build_onboard_response_data(
+        **_onboard_kwargs(
+            is_new=True,
+            force_new=True,
+            continuity_source="unknown",  # fresh mint has no prior proof → weak
+            response_mode="minimal",
+        )
+    )
+    assurance = payload["identity_assurance"]
+    assert assurance["tier"] != "strong"
+    assert assurance["baseline"] == "fresh_identity"
+    assert "not a deficiency" in assurance["baseline_note"]
+    assert "continuity_token" in assurance["how_to_strengthen"]
 
 
 # ── #734: onboard response_mode="minimal" lean envelope ──

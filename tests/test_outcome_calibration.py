@@ -288,6 +288,9 @@ class TestExplicitOutcomeEventCalibration:
             from src.mcp_handlers.observability.outcome_events import handle_outcome_event
             result = await handle_outcome_event({
                 'outcome_type': 'task_completed',
+                # state_semantics is gated behind include_semantics (#604 P2);
+                # this test asserts the full split semantics attach.
+                'include_semantics': True,
             })
 
         parsed = parse_result(result)

@@ -90,22 +90,36 @@ def _how_to_strengthen(
     Returns ``None`` for `strong` (no action needed). Mirrors
     `services.identity_payloads._how_to_strengthen` so the write-path
     assurance block agrees with the identity()/onboard read-path block.
+
+    Leads with `continuity_token` (#604 dogfood 2026-06-24): on stateless
+    transports an echoed `client_session_id` resolves to a fresh per-call
+    identity, so the continuity_token is the proof that works on both
+    stateless and session-maintaining transports. Kept word-identical with
+    `services.identity_payloads._how_to_strengthen`.
     """
     if tier == "strong":
         return None
     if proof_origin == "server_inferred":
         return (
-            "binding was server-inferred (not caller-proven); pass the "
-            "client_session_id from your onboard response explicitly in each "
-            "call to reach strong"
+            "binding was server-inferred (not caller-proven); echo the "
+            "continuity_token from your onboard response on each call to reach "
+            "strong (it resolves on stateless and session-maintaining "
+            "transports alike). A session-maintaining client may instead pass "
+            "an explicit client_session_id"
         )
     if tier == "medium":
-        return "pass an explicit client_session_id in each call to reach strong"
+        return (
+            "echo the continuity_token from your onboard response on each call "
+            "to reach strong; a session-maintaining client may instead pass an "
+            "explicit client_session_id"
+        )
     # weak
     return (
-        "pass the client_session_id from your onboard response in each call to "
-        "reach strong; cross-process resumes need continuity_token + agent_uuid "
-        "(PATH 0)"
+        "echo the continuity_token from your onboard response on each call to "
+        "reach strong — it works on stateless transports (e.g. claude.ai) "
+        "where an echoed client_session_id resolves to a fresh per-call "
+        "identity. A session-maintaining client may instead pass an explicit "
+        "client_session_id"
     )
 
 
