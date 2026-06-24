@@ -27,7 +27,7 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 
 - **Drift surfaces while the output still looks fine.** Each agent is graded against its *own* baseline, so slow degradation shows up as integrity slipping and entropy rising before the work visibly breaks.
 - **Confidence is checked against results.** Self-reported `confidence` is scored against real evidence — tests, exit codes, tool output. An agent can inflate the number; it can't inflate its success rate.
-- **Agents get a state signal they can act on.** Each check-in returns one plain verdict — `proceed`, `guide`, `pause`, or `reject` — plus EISV state for finer policies. Humans can watch the same fleet through the optional dashboard.
+- **Agents get a state signal they can act on.** Each check-in returns one plain verdict — `proceed`, `guide`, `pause`, or `reject` — plus the agent's full health signals (the `EISV` state vector) for finer policies. Humans can watch the same fleet through the optional dashboard.
 
 ## Use UNITARES if
 
