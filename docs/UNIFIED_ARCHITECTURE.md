@@ -175,19 +175,19 @@ UNITARES has run continuously in production since November 2025 on a **single-op
 
 Multi-tenant or public-facing deployment will benefit from a harder auth posture than the current defaults. Vulnerability reports: [`SECURITY.md`](../SECURITY.md).
 
-## Case Study: Lumen (Embodied Agent)
+## Case Study: Lumen (Physical Sensor Agent)
 
-One of the registered agents is [Lumen](https://github.com/cirwel/anima-mcp) — an embodied creature on a Raspberry Pi 4 that checks in to Unitares every ~180 seconds (configurable via `ANIMA_GOVERNANCE_INTERVAL_SECONDS`).
+One of the registered agents is [Lumen](https://github.com/cirwel/anima-mcp) — a Raspberry Pi 4 sensor-backed agent that checks in to Unitares every ~180 seconds (configurable via `ANIMA_GOVERNANCE_INTERVAL_SECONDS`).
 
 What makes Lumen distinctive as an agent:
 
-- **Physical sensors** (temperature, humidity, pressure, light) feed into "anima" dimensions (warmth, clarity, stability, presence), which are mapped to EISV for governance check-ins
+- **Physical sensors** (temperature, humidity, pressure, light) feed into labeled Anima dimensions (warmth, clarity, stability, presence), which are mapped to EISV for governance check-ins
 - **Autonomous drawing** driven by a local EISV instance (DrawingEISV) that shares the same math but runs independently — coherence modulates how long Lumen draws and how picky it is about saving
 - **Proprioceptive loop** — the light sensor reads Lumen's own LEDs, making clarity partly self-referential
 
 Lumen demonstrates that Unitares can govern agents with very different architectures — from ephemeral CLI agents that check in once to persistent embodied systems with continuous sensor streams. The same EISV dynamics, the same verdicts, the same knowledge graph.
 
-For Lumen's internal architecture (sensors, neural bands, DrawingEISV, LED pipeline), see [anima-mcp](https://github.com/cirwel/anima-mcp).
+For Lumen's internal architecture (sensors, neural bands, DrawingEISV, LED pipeline, and creature-facing interface), see [anima-mcp](https://github.com/cirwel/anima-mcp).
 
 ---
 

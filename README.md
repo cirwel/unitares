@@ -19,7 +19,7 @@ UNITARES watches each agent while it works and tells you — and the agent itsel
 [![Paper v6](https://img.shields.io/badge/paper-v6-8957e5?style=for-the-badge&labelColor=0f171f)](https://github.com/cirwel/unitares-paper-v6)
 [![Verify it yourself](https://img.shields.io/badge/verify-it_yourself-f5a623?style=for-the-badge&labelColor=0f171f)](docs/REVIEWER_GUIDE.md)
 
-One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety infrastructure for autonomous agents, *after* deployment. UNITARES is the governed fleet; [Anima](https://github.com/cirwel/anima-mcp) is its self-sensing edge counterpart. [Full index ↗](https://cirwel.github.io)
+One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety infrastructure for autonomous agents, *after* deployment. UNITARES is the governed fleet; [Anima](https://github.com/cirwel/anima-mcp) is its physical edge testbed. [Full index ↗](https://cirwel.github.io)
 
 </div>
 
@@ -212,7 +212,7 @@ UNITARES is the governance runtime at the center of a larger body of work. The f
 |---|---|
 | [**unitares-governance-plugin**](https://github.com/cirwel/unitares-governance-plugin) | Mount any agent into governance — Claude Code / Codex plugin that wires check-ins, dialectic review, and verdicts into the loop via hooks |
 | [**unitares-host-adapter**](https://github.com/cirwel/unitares-host-adapter) | Thin client bindings — Hermes, Claude Code, Goose, and arbitrary OpenAI-compatible clients |
-| [**anima-mcp**](https://github.com/cirwel/anima-mcp) | The self-sensing edge counterpart — the same EISV model on physical hardware; the longitudinal source cited in the papers |
+| [**anima-mcp**](https://github.com/cirwel/anima-mcp) | Physical longitudinal testbed — the same EISV model mapped from Raspberry Pi sensor/system telemetry; the source cited in the papers |
 | [**fermata**](https://github.com/cirwel/fermata) | Governed-effect runtime seed — agents *propose* effects; only governed effects *commit* |
 | [**unitares-discord-bridge**](https://github.com/cirwel/unitares-discord-bridge) | Governance events, agent presence, and system health as a live Discord server |
 | [**eisv-lumen**](https://github.com/cirwel/eisv-lumen) | Governance benchmark dataset — [32,181 labeled EISV trajectories](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories) (20,655 real) |
