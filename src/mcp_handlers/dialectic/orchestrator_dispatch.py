@@ -45,11 +45,20 @@ def _orchestrator_url() -> str:
 
 
 def _governance_url() -> str:
-    return (
+    # The reviewer passes this straight to GovernanceClient(mcp_url=...), whose
+    # streamable-http transport needs the /mcp/ path — a bare base URL makes
+    # session.initialize() hang then cancel (live-found 2026-06-23). Normalize a
+    # pathless URL so either form (base or full mcp_url) works.
+    raw = (
         os.environ.get("UNITARES_GOVERNANCE_URL")
         or os.environ.get("GOVERNANCE_URL")
-        or "http://127.0.0.1:8767"
+        or "http://127.0.0.1:8767/mcp/"
     )
+    from urllib.parse import urlparse
+
+    if urlparse(raw).path in ("", "/"):
+        raw = raw.rstrip("/") + "/mcp/"
+    return raw
 
 
 def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Optional[str]) -> Dict[str, Any]:

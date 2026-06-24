@@ -54,6 +54,23 @@ def test_build_spec_omits_parent_when_absent():
     assert json.loads(spec["env"]["DIALECTIC_THESIS_CONDITIONS"]) == []
 
 
+@pytest.mark.parametrize("env_val,expected", [
+    (None, "http://127.0.0.1:8767/mcp/"),                       # default has the path
+    ("http://127.0.0.1:8767", "http://127.0.0.1:8767/mcp/"),    # bare base → append
+    ("http://127.0.0.1:8767/", "http://127.0.0.1:8767/mcp/"),   # trailing slash only
+    ("http://host:9000/mcp/", "http://host:9000/mcp/"),         # full mcp_url untouched
+])
+def test_governance_url_normalizes_to_mcp_path(env_val, expected, monkeypatch):
+    """The reviewer passes this to GovernanceClient(mcp_url=...) which needs /mcp/.
+    A bare base URL made session.initialize() hang (live-found 2026-06-23)."""
+    monkeypatch.delenv("GOVERNANCE_URL", raising=False)
+    if env_val is None:
+        monkeypatch.delenv("UNITARES_GOVERNANCE_URL", raising=False)
+    else:
+        monkeypatch.setenv("UNITARES_GOVERNANCE_URL", env_val)
+    assert od._governance_url() == expected
+
+
 # --------------------------- dispatch (mocked HTTP) --------------------------- #
 
 class _FakeResp:
