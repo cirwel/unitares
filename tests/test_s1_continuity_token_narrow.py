@@ -744,6 +744,42 @@ def test_emit_helper_noop_when_not_resume(monkeypatch):
     assert response == {"existing": "value"}
 
 
+def test_emit_helper_logs_s1d_false_observation_once(monkeypatch, caplog):
+    """S1-d telemetry: the False (non-deprecating) path now positively records
+    that the deprecation surface was reached with used_token_for_resume=False,
+    once per process — so 'observed False' can be confirmed rather than only
+    inferred from the absence of accept audits. The audit/mutation behavior is
+    unchanged (still a no-op)."""
+    import logging
+    from src.mcp_handlers.identity import handlers as H
+
+    # Reset the per-process latch so the assertion is deterministic.
+    monkeypatch.setattr(H, "_s1d_false_reached_logged", False)
+
+    response: dict = {"existing": "value"}
+    with caplog.at_level(logging.INFO):
+        H._emit_continuity_token_deprecation(
+            response_dict=response,
+            used_token_for_resume=False,
+            token_str="v1.aaa.bbb",
+            agent_uuid="x",
+            response_agent_id="y",
+        )
+        # Second call in the same process must NOT log again (bounded noise).
+        H._emit_continuity_token_deprecation(
+            response_dict=response,
+            used_token_for_resume=False,
+            token_str="v1.aaa.bbb",
+            agent_uuid="x",
+            response_agent_id="y",
+        )
+
+    s1d_lines = [r for r in caplog.records if "[S1-d]" in r.getMessage()]
+    assert len(s1d_lines) == 1, "telemetry must log exactly once per process"
+    assert "used_token_for_resume=False" in s1d_lines[0].getMessage()
+    # No mutation on the False path — behavior unchanged.
+    assert response == {"existing": "value"}
+
 def test_emit_helper_swallows_audit_failure(tmp_path, monkeypatch, caplog):
     """Audit emission failures must not propagate to the request path."""
     from src.mcp_handlers.identity.handlers import _emit_continuity_token_deprecation
