@@ -1,0 +1,5 @@
+# Repo scope guard allowlist — one path glob per line, '#' for comments.
+# Add a path here only when the scope guard flags it but it genuinely belongs
+# in the agnostic repo (rare). Prefer moving the file out over allowlisting.
+# Example:
+#   docs/integration/career-mode-adapter.md
