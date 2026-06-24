@@ -103,6 +103,24 @@ run_pg_dump() {
     "$PG_BIN/pg_dump" -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" "$DATABASE" | gzip >"$BACKUP_FILE"
 }
 
+# A clean pg_dump exit isn't proof the artifact is restorable: a disk-full or
+# interrupted gzip can leave a valid-prefix-but-truncated file. Verify the gzip
+# is intact AND the dump carries pg_dump's completion marker (cheap restore-level
+# check short of a full pg_restore drill; mirrors lumen-backup's integrity_check).
+verify_backup_artifact() {
+    if ! gzip -t "$BACKUP_FILE" 2>/dev/null; then
+        log "ERROR: backup gzip failed integrity test (gzip -t)"
+        return 1
+    fi
+    local tail_out
+    tail_out=$(gunzip -c "$BACKUP_FILE" 2>/dev/null | tail -15) || true
+    if ! printf '%s\n' "$tail_out" | grep -q "PostgreSQL database dump complete"; then
+        log "ERROR: backup missing pg_dump completion marker — likely truncated"
+        return 1
+    fi
+    return 0
+}
+
 # --- main ---
 
 if ! ensure_postgres_running; then
@@ -117,9 +135,9 @@ log "Starting backup to $BACKUP_FILE"
 
 attempt=1
 while [ "$attempt" -le "$DUMP_RETRIES" ]; do
-    if run_pg_dump; then
+    if run_pg_dump && verify_backup_artifact; then
         SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
-        log "Backup complete: $BACKUP_FILE ($SIZE)"
+        log "Backup complete + verified: $BACKUP_FILE ($SIZE)"
         ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
         echo "$ts" >"$LAST_SUCCESS_FILE"
         write_status_ok "$BACKUP_FILE"

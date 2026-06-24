@@ -6,9 +6,8 @@
   "automations": {
     "launchd:com.unitares.governance-backup": {
       "owner": "Kenny",
-      "escalates_to": "none — backup is written but never restore-tested",
+      "escalates_to": "gzip -t + pg_dump completion-marker check on each artifact (truncated → retry/fail) + pg_isready wait/retry + status JSON + honest exit. Artifact-verified each run; no full pg_restore drill yet.",
       "description": "Nightly governance Postgres dump.",
-      "dashboard_priority": 1,
       "surface_claims": [
         "unitares:/governance-backup",
         "repo:/Users/cirwel/projects/unitares"
@@ -18,14 +17,13 @@
         "status_or_stdout"
       ],
       "notes": [
-        "gate:ungated"
+        "gate:machine"
       ]
     },
     "launchd:com.unitares.lumen-backup": {
       "owner": "Kenny",
-      "escalates_to": "none — written, never restore-tested (logs show rsync broken-pipe / vanished-file)",
+      "escalates_to": "PRAGMA integrity_check on each captured DB snapshot (corrupt → discarded) + honest exit (rsync 255/broken-pipe → FAILED → census) + off-site 3-2-1 to HF dataset. Artifact-verified each run; no full restore-to-Pi drill yet.",
       "description": "Scheduled backup for Lumen/anima state.",
-      "dashboard_priority": 2,
       "kind": "backup",
       "repo": "/Users/cirwel/projects/anima-mcp",
       "workdir": "/Users/cirwel",
@@ -39,8 +37,7 @@
         "backup_log"
       ],
       "notes": [
-        "gate:ungated",
-        "Historical logs show rsync broken-pipe and vanished-file messages; tighten backup script exit policy before trusting ok status as full backup health."
+        "gate:machine"
       ]
     },
     "codex:answer-lumen-questions": {
