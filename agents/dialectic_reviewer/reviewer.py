@@ -36,6 +36,7 @@ _JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
 DEFAULT_MODEL = os.getenv("UNITARES_LLM_MODEL", "gemma4:latest")
 OLLAMA_BASE_URL = os.getenv("UNITARES_OLLAMA_BASE_URL", "http://localhost:11434/v1")
 SPAWN_REASON = "dialectic_reviewer"
+REVIEWER_NAME = "DialecticReviewer"
 
 
 @dataclass
@@ -191,6 +192,7 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
     await client.connect()
     try:
         await client.onboard(
+            name=REVIEWER_NAME,  # required first arg of GovernanceClient.onboard
             force_new=True,
             parent_agent_id=parent_agent_id,
             spawn_reason=SPAWN_REASON,
