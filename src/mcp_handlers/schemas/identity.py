@@ -13,7 +13,12 @@ class IdentityParams(AgentIdentityMixin):
     )
     name: Optional[str] = Field(
         default=None,
-        description="Optional display name to set"
+        description=(
+            "Optional COSMETIC display name. Sets `display_name` only — it does "
+            "NOT change your public structured handle (`agent_id`) or the registry "
+            "key (`uuid`). For cross-tool threading, key on `uuid` (the identity "
+            "key), not on this name."
+        )
     )
     model_type: Optional[str] = Field(
         default=None,
@@ -43,7 +48,13 @@ class OnboardParams(AgentIdentityMixin):
     """
     name: Optional[str] = Field(
         default=None,
-        description="Optional display name to set"
+        description=(
+            "Optional COSMETIC display name. Sets `display_name` only — it does "
+            "NOT set your public structured handle (`agent_id`); the cosmetic name "
+            "and the public handle deliberately diverge. The canonical identifier "
+            "for cross-tool reference is `uuid` (is_identity_key:true in the "
+            "response). Thread that, not the display name."
+        )
     )
     model_type: Optional[str] = Field(
         default=None,

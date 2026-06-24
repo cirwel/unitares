@@ -69,6 +69,45 @@ _HARD_EXOGENOUS_TYPE_TO_CHANNEL = {
 }
 
 
+def _coerce_bool_flag(value: Any) -> bool:
+    """Interpret a JSON-ish truthy flag (bool/int/str) conservatively."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return False
+
+
+# Lite eisv_snapshot keys returned by default on outcome acks (#604 dogfood
+# 2026-06-24). The actual state numbers and the active source are kept; the
+# heavy self-description (state_semantics role table, source-meta blocks, the
+# sensor-divergence history list) is dropped unless include_semantics=true.
+_LITE_SNAPSHOT_KEYS = (
+    "primary_eisv",
+    "primary_eisv_source",
+    "ode_diagnostics",
+    "behavioral_eisv",
+)
+
+
+def _lite_eisv_snapshot(snapshot: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return a small confirmation-sized view of the EISV snapshot.
+
+    Drops `state_semantics` (7 role descriptions + hierarchy), the
+    `*_source_meta` glossary blocks, and `sensor_divergence_recent` (a list of
+    up to 20 records). Returns ``None`` unchanged so a missing snapshot still
+    reads as missing. Gated behind include_semantics / response_mode="full".
+    """
+    if not snapshot:
+        return snapshot
+    lite = {k: snapshot[k] for k in _LITE_SNAPSHOT_KEYS if k in snapshot}
+    lite["semantics_omitted"] = True
+    lite["hint"] = "Pass include_semantics=true for the full EISV ontology."
+    return lite
+
+
 def _classify_hard_exogenous_signal(outcome_type: str, detail: Dict[str, Any]) -> str | None:
     """Return the hard exogenous signal source when this outcome is e-process eligible."""
     channel = _HARD_EXOGENOUS_TYPE_TO_CHANNEL.get(outcome_type)
@@ -419,12 +458,25 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
             except Exception as e_seq:
                 logger.debug(f"Sequential calibration tracking skipped: {e_seq}")
 
+    # P2 (#604 dogfood 2026-06-24): record_result/outcome_event returned the full
+    # EISV ontology (`eisv_snapshot.state_semantics`: 7 role descriptions +
+    # hierarchy, plus source-meta and the sensor-divergence history list) on
+    # every ack — a large context tax for what is usually a confirmation. Default
+    # to a lite snapshot mirroring the read tools; the full ontology is opt-in via
+    # include_semantics=true (alias: response_mode="full"). The persisted `detail`
+    # row is unaffected — only the response payload is trimmed.
+    include_semantics = _coerce_bool_flag(arguments.get("include_semantics"))
+    if not include_semantics:
+        response_mode = str(arguments.get("response_mode") or "").strip().lower()
+        include_semantics = response_mode == "full"
+    response_snapshot = snapshot if include_semantics else _lite_eisv_snapshot(snapshot)
+
     return {
         "outcome_id": outcome_id,
         "outcome_type": outcome_type,
         "is_bad": is_bad,
         "outcome_score": outcome_score,
-        "eisv_snapshot": snapshot,
+        "eisv_snapshot": response_snapshot,
         "prediction_binding": prediction_binding,
         "corroboration_grade": detail.get("corroboration_grade"),
         "evidence_weight": detail.get("evidence_weight"),
