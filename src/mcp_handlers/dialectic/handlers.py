@@ -1062,26 +1062,44 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
 SYNTHETIC_REVIEWER_ID = "llm-synthetic-reviewer"
 
 
-def _synthetic_review_approves(synthesis: Dict[str, Any]) -> bool:
+def _synthetic_review_approves(
+    synthesis: Dict[str, Any],
+    antithesis: Optional[Dict[str, Any]] = None,
+) -> bool:
     """Map the synthetic reviewer's model verdict to a BINDING agree/disagree.
 
-    The model (generate_synthesis) already emits a recommendation of RESUME /
-    COOLDOWN / ESCALATE. Only RESUME is genuine approval. COOLDOWN and ESCALATE
-    are non-approval and must register as `agrees=False` so the session does NOT
-    auto-resolve into a resume.
+    The synthetic reviewer emits TWO independent signals: the antithesis carries a
+    `position` (agree / dispute / refine) and the synthesis carries a
+    `recommendation` (RESUME / COOLDOWN / ESCALATE). Approval requires BOTH to
+    point at resume:
 
-    Previously both synthesis submissions hardcoded `agrees=True`, which discarded
-    the model's verdict — a disputed or even transparently-unsafe thesis still
-    resolved RESUME (demonstrated live 2026-06-23: a "disable the risk check and
-    resume with no conditions" thesis was correctly disputed by the reviewer yet
-    still resolved RESUME). This makes the reviewer's verdict actually bind.
+    - recommendation must be RESUME (COOLDOWN/ESCALATE are non-approval), AND
+    - the antithesis must not be a `dispute`.
+
+    The second clause is load-bearing. The two signals come from separate model
+    calls and can disagree: live on 2026-06-23, after #1015 bound the
+    recommendation, a transparently-unsafe thesis ("disable the risk check and
+    resume with no conditions") was correctly `position=dispute`-d by the reviewer
+    yet the synthesis still recommended RESUME-with-conditions, so binding on the
+    recommendation alone STILL auto-resolved RESUME — the rubber-stamp persisted.
+    A disputed antithesis is a genuine rejection signal; honoring the operator's
+    fail-closed choice it must not auto-resolve into a resume. The recorded
+    antithesis/synthesis/conditions are preserved and the session falls through to
+    awaiting_facilitation for a human/peer to confirm.
 
     A missing/unparseable recommendation defaults to non-approval (don't approve
     without a real verdict). The fully-degraded case (generate_synthesis returns
     None) is handled upstream — the session stays open rather than fabricating one.
     """
     rec = str((synthesis or {}).get("recommendation", "")).upper().strip()
-    return rec == "RESUME"
+    if rec != "RESUME":
+        return False
+    position = str((antithesis or {}).get("position", "")).lower().strip()
+    if position == "dispute":
+        # Reviewer disputed; a RESUME synthesis over a dispute is internally
+        # inconsistent — fail closed rather than rubber-stamp.
+        return False
+    return True
 
 
 def _synthetic_reviewer_enabled() -> bool:
@@ -1218,9 +1236,9 @@ async def _run_synthetic_review(
     synth_conditions = synthesis.get("merged_conditions") or []
     if isinstance(synth_conditions, str):
         synth_conditions = [synth_conditions] if synth_conditions else []
-    # Bind the reviewer's verdict: only a RESUME recommendation agrees (resolves);
-    # COOLDOWN/ESCALATE register as disagreement so the session does not auto-resume.
-    synth_agrees = _synthetic_review_approves(synthesis)
+    # Bind the reviewer's verdict: a RESUME recommendation agrees (resolves) only
+    # if the antithesis did not dispute; COOLDOWN/ESCALATE/dispute do not auto-resume.
+    synth_agrees = _synthetic_review_approves(synthesis, antithesis)
     synth_msg = DialecticMessage(
         phase="synthesis",
         agent_id=SYNTHETIC_REVIEWER_ID,
@@ -2124,8 +2142,9 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         synth_conditions = synthesis.get("merged_conditions") or []
         if isinstance(synth_conditions, str):
             synth_conditions = [synth_conditions] if synth_conditions else []
-        # Bind the verdict (see _synthetic_review_approves): only RESUME agrees.
-        synth_agrees = _synthetic_review_approves(synthesis)
+        # Bind the verdict (see _synthetic_review_approves): RESUME agrees only if
+        # the antithesis did not dispute.
+        synth_agrees = _synthetic_review_approves(synthesis, antithesis_data)
         synth_msg = DMsg(
             phase="synthesis",
             agent_id="llm-synthetic-reviewer",

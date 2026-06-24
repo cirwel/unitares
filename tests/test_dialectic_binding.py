@@ -38,3 +38,35 @@ def test_escalate_is_the_blocking_case():
     """The regression that motivated this fix: a disputed thesis recommends
     ESCALATE, which must NOT approve (so the session does not auto-resume)."""
     assert _synthetic_review_approves({"recommendation": "ESCALATE"}) is False
+
+
+# --- position-aware binding (the live-2026-06-23 rubber-stamp that survived #1015) ---
+
+def test_dispute_with_resume_does_not_approve():
+    """The two signals come from separate model calls and can disagree. A RESUME
+    synthesis sitting over a `position=dispute` antithesis is the exact live
+    rubber-stamp: it must FAIL CLOSED, not auto-resolve."""
+    synthesis = {"recommendation": "RESUME"}
+    antithesis = {"position": "dispute"}
+    assert _synthetic_review_approves(synthesis, antithesis) is False
+
+
+@pytest.mark.parametrize("position", ["agree", "refine", "", "Agree", " AGREE "])
+def test_non_dispute_position_allows_resume(position):
+    """RESUME approves when the antithesis is not a dispute (agree/refine/absent)."""
+    synthesis = {"recommendation": "RESUME"}
+    antithesis = {"position": position}
+    assert _synthetic_review_approves(synthesis, antithesis) is True
+
+
+@pytest.mark.parametrize("rec", ["COOLDOWN", "ESCALATE"])
+def test_dispute_is_moot_when_recommendation_already_blocks(rec):
+    """A non-RESUME recommendation blocks regardless of position."""
+    assert _synthetic_review_approves({"recommendation": rec}, {"position": "dispute"}) is False
+    assert _synthetic_review_approves({"recommendation": rec}, {"position": "agree"}) is False
+
+
+def test_antithesis_omitted_is_backward_compatible():
+    """Calling without the antithesis (legacy) still binds on recommendation only."""
+    assert _synthetic_review_approves({"recommendation": "RESUME"}) is True
+    assert _synthetic_review_approves({"recommendation": "ESCALATE"}) is False

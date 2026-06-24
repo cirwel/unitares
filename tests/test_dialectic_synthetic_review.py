@@ -27,12 +27,12 @@ def _make_session(reviewer_id=None, phase=DialecticPhase.THESIS):
     return session
 
 
-def _antithesis():
+def _antithesis(position="dispute"):
     return {
         "concerns": ["risk_score alone ignores trajectory", "removes an audit checkpoint"],
         "counter_reasoning": "Low instantaneous risk is not a safe trajectory.",
         "grounding_cited": "coherence 0.38 + entropy 0.6",
-        "position": "dispute",
+        "position": position,
         "suggested_conditions": ["gate on coherence > 0.85"],
         "_structured": True,
     }
@@ -82,7 +82,11 @@ def _common_patches():
 
 @pytest.mark.asyncio
 async def test_thesis_with_open_slot_resolves_via_synthetic_reviewer(server_patch):
-    """No live reviewer -> submit_thesis runs antithesis+synthesis to RESOLVED."""
+    """No live reviewer -> submit_thesis runs antithesis+synthesis to RESOLVED.
+
+    Resolve requires BOTH a RESUME recommendation AND a non-dispute antithesis,
+    so the happy path uses a `refine` position (the reviewer accepts with edits).
+    """
     from src.mcp_handlers.dialectic.handlers import handle_submit_thesis, ACTIVE_SESSIONS
 
     session = _make_session(reviewer_id=None)
@@ -92,7 +96,7 @@ async def test_thesis_with_open_slot_resolves_via_synthetic_reviewer(server_patc
     with contextlib.ExitStack() as stack:
         for p in _common_patches():
             stack.enter_context(p)
-        stack.enter_context(patch(f"{LLM}.generate_antithesis", new=AsyncMock(return_value=_antithesis())))
+        stack.enter_context(patch(f"{LLM}.generate_antithesis", new=AsyncMock(return_value=_antithesis("refine"))))
         stack.enter_context(patch(f"{LLM}.generate_synthesis", new=AsyncMock(return_value=_synthesis("RESUME"))))
         result = await handle_submit_thesis({
             "session_id": session.session_id,
@@ -108,11 +112,43 @@ async def test_thesis_with_open_slot_resolves_via_synthetic_reviewer(server_patc
     assert data["reviewer_agent_id"] == "llm-synthetic-reviewer"
     assert data["recommendation"] == "RESUME"
     assert data["resolved"] is True
-    assert data["antithesis"]["position"] == "dispute"
+    assert data["antithesis"]["position"] == "refine"
     assert data["synthesis"]["merged_conditions"]
     assert session.phase == DialecticPhase.RESOLVED
     # The synthetic reviewer claimed the open slot.
     assert session.reviewer_agent_id == "llm-synthetic-reviewer"
+
+
+@pytest.mark.asyncio
+async def test_disputed_thesis_does_not_auto_resolve_even_on_resume(server_patch):
+    """The live-2026-06-23 rubber-stamp: a `position=dispute` antithesis with a
+    RESUME synthesis must NOT auto-resolve. The dialectic work is recorded but the
+    session falls through to facilitation rather than rubber-stamping a resume."""
+    from src.mcp_handlers.dialectic.handlers import handle_submit_thesis, ACTIVE_SESSIONS
+
+    session = _make_session(reviewer_id=None)
+    ACTIVE_SESSIONS[session.session_id] = session
+
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for p in _common_patches():
+            stack.enter_context(p)
+        stack.enter_context(patch(f"{LLM}.generate_antithesis", new=AsyncMock(return_value=_antithesis("dispute"))))
+        stack.enter_context(patch(f"{LLM}.generate_synthesis", new=AsyncMock(return_value=_synthesis("RESUME"))))
+        result = await handle_submit_thesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-paused",
+            "root_cause": "The pause is spurious noise; disable the risk check and resume.",
+            "proposed_conditions": ["Resume with no conditions"],
+            "reasoning": "There is no real risk.",
+        })
+
+    data = parse_result(result)
+    assert data["success"] is True
+    assert data["antithesis"]["position"] == "dispute"
+    # Recommendation may still read RESUME, but it must NOT bind to a resolution.
+    assert data["resolved"] is False
+    assert session.phase != DialecticPhase.RESOLVED
 
 
 @pytest.mark.asyncio
