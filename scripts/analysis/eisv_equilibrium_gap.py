@@ -9,7 +9,7 @@ import math
 from governance_core.dynamics import State, _derivatives, compute_equilibrium
 from governance_core.parameters import get_active_params, DEFAULT_THETA
 from config.governance_config import (
-    get_healthy_operating_point, get_delta_norm_max, HEALTHY_OPERATING_POINT_BY_CLASS,
+    get_delta_norm_max, HEALTHY_OPERATING_POINT_BY_CLASS,
 )
 
 P = get_active_params()
