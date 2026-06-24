@@ -9,6 +9,16 @@ cd "$PROJECT_ROOT"
 
 echo "🔍 Pre-commit checks..."
 
+# Repo scope guard — block personal/career/vendor-config leakage (docs/REPO_SCOPE.md).
+if [ -x scripts/dev/check-repo-scope.sh ]; then
+    scripts/dev/check-repo-scope.sh --staged || {
+        echo ""
+        echo "   Fix the path/content, allowlist in scripts/dev/repo-scope-allow.txt,"
+        echo "   or bypass with: git commit --no-verify (not recommended)."
+        exit 1
+    }
+fi
+
 # HARD LIMIT: Total tracked markdown files.
 # Uses git ls-files so worktrees, caches, and gitignored dirs are
 # automatically excluded — no brittle find-exclusion list needed.

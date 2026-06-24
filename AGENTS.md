@@ -129,7 +129,6 @@ This section is operator-protective, not session-protective. The deeper fix is o
 - Do not force-push
 - Do not run destructive git commands without explicit user approval
 - Do not run DROP/TRUNCATE/DELETE on the governance database without explicit user approval
-- Do not include Co-Authored-By lines in commit messages
 
 ## GitHub Workflow Conventions
 
