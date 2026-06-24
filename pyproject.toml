@@ -32,6 +32,10 @@ full = [
     "sentence-transformers>=2.2.0,<6.0.0",
     "requests>=2.31.0,<3.0.0",
     "python-dotenv>=1.0.0,<2.0.0",
+    # Ed25519 signing/verification for the Agent Identity Credential (AIC)
+    # attestation primitive (src/identity/agent_identity_credential.py). The
+    # module guards the import, so the core install does not require it.
+    "cryptography>=41.0.0,<46.0.0",
 ]
 dev = [
     "pytest>=7.4.0,<10.0.0",
