@@ -283,11 +283,19 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
     )
     response_mode: Literal["minimal", "compact", "standard", "full", "mirror", "auto"] = Field(
         default="auto",
-        description="Response verbosity mode. 'mirror' returns actionable self-awareness signals instead of raw EISV. 'compact' or 'minimal' returns a smaller payload."
+        description=(
+            "Response verbosity. 'auto' (default) adapts to health — mirror when "
+            "healthy/disembodied, else minimal/standard/compact. 'mirror' returns "
+            "actionable self-awareness signals instead of raw EISV. 'standard' is a "
+            "human-readable interpretation. 'minimal' and 'compact' are both small "
+            "payloads (minimal = action + EISV snapshot + margin; compact = brief "
+            "metrics + decision). 'full' returns the complete payload unfiltered. "
+            "The 'lite' boolean below is an alias for 'minimal'."
+        )
     )
     lite: Union[bool, str, None] = Field(
         default=None,
-        description="If true, returns minimal response. Alias for response_mode='minimal'."
+        description="Boolean alias for response_mode='minimal'. Applies only when response_mode is left at 'auto' (an explicit response_mode always wins)."
     )
     auto_export_on_significance: bool = Field(
         default=False,
@@ -347,9 +355,15 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
 
     @model_validator(mode='after')
     def coerce_types(self):
-        if isinstance(self.lite, str):
-            val = str(self.lite).lower() in ('true', '1', 'yes')
-            if val and self.response_mode == "auto":
+        # `lite` is a boolean alias for response_mode='minimal'. Accept a real
+        # bool OR a truthy string — previously only the string form was honored,
+        # so an actual JSON `lite: true` was silently ignored. Only applies when
+        # response_mode is still 'auto', so an explicit response_mode always wins.
+        if self.lite is not None:
+            lite_on = self.lite if isinstance(self.lite, bool) else (
+                str(self.lite).lower() in ('true', '1', 'yes')
+            )
+            if lite_on and self.response_mode == "auto":
                 self.response_mode = "minimal"
         if isinstance(self.require_strong_identity, str):
             self.require_strong_identity = self.require_strong_identity.lower() in ('true', '1', 'yes')
