@@ -49,6 +49,12 @@ os.environ.setdefault(
     str(Path(__file__).resolve().parent.parent / "config" / "resident_progress.example.json"),
 )
 
+# Agent-state lock backend. Production defaults to the PostgreSQL advisory lock
+# (src/state_locking.py), but most tests exercise the lock with a mocked/absent
+# DB and assert file-lock semantics — so the suite defaults to the fcntl backend.
+# Tests covering the advisory path opt in explicitly via monkeypatch.setenv.
+os.environ.setdefault("UNITARES_AGENT_LOCK_BACKEND", "fcntl")
+
 # Filter ResourceWarnings globally before any imports
 warnings.filterwarnings("ignore", category=ResourceWarning)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import Sequence
@@ -65,6 +66,10 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
 
         try:
             async with ctx.mcp_server.lock_manager.acquire_agent_lock_async(ctx.agent_id, timeout=5.0, max_retries=3):
+                # Separate the lock-acquisition wait from the locked-update work so
+                # the (A.2) falsifier can attribute any p99 change to the lock itself
+                # rather than confounding it with the work under the lock.
+                _tick("lock_acquire")
                 early_exit = await execute_locked_update(ctx)
                 _tick("locked_update")
                 if early_exit:
@@ -75,22 +80,31 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
         except TimeoutError:
             _tick("lock_timeout")
             cleaned = False
-            try:
-                from src.lock_cleanup import cleanup_stale_state_locks
-                project_root = Path(__file__).resolve().parent.parent
-                cleanup_result = await ctx.loop.run_in_executor(
-                    None, cleanup_stale_state_locks, project_root, 60.0, False
-                )
-                if cleanup_result["cleaned"] > 0:
-                    logger.info(f"Auto-recovery: Cleaned {cleanup_result['cleaned']} stale lock(s) after timeout")
-                    cleaned = True
-            except Exception as cleanup_error:
-                logger.warning(f"Could not perform emergency lock cleanup: {cleanup_error}")
-
-            cleanup_msg = (
-                "The system has automatically cleaned stale locks. " if cleaned
-                else "Automatic lock cleanup was attempted but did not resolve the issue. "
+            # Stale *file* locks only exist on the fcntl backend; under the advisory
+            # backend a timeout means a live PostgreSQL session holds the lock, so the
+            # file-oriented cleanup would no-op and emit a misleading message. Skip it.
+            advisory_backend = (
+                os.environ.get("UNITARES_AGENT_LOCK_BACKEND", "advisory").strip().lower() == "advisory"
             )
+            if not advisory_backend:
+                try:
+                    from src.lock_cleanup import cleanup_stale_state_locks
+                    project_root = Path(__file__).resolve().parent.parent
+                    cleanup_result = await ctx.loop.run_in_executor(
+                        None, cleanup_stale_state_locks, project_root, 60.0, False
+                    )
+                    if cleanup_result["cleaned"] > 0:
+                        logger.info(f"Auto-recovery: Cleaned {cleanup_result['cleaned']} stale lock(s) after timeout")
+                        cleaned = True
+                except Exception as cleanup_error:
+                    logger.warning(f"Could not perform emergency lock cleanup: {cleanup_error}")
+
+            if advisory_backend:
+                cleanup_msg = "Another live session currently holds the lock. "
+            elif cleaned:
+                cleanup_msg = "The system has automatically cleaned stale locks. "
+            else:
+                cleanup_msg = "Automatic lock cleanup was attempted but did not resolve the issue. "
             return [error_response(
                 f"Failed to acquire lock for agent '{ctx.agent_id}' after automatic retries and cleanup. "
                 f"This usually means another active process is updating this agent. "

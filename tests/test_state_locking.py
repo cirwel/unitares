@@ -133,9 +133,10 @@ class TestLockDirSelfHeal:
             assert (lock_dir / "healed_agent.lock").exists()
 
     @pytest.mark.asyncio
-    async def test_async_acquire_recreates_removed_lock_dir(self, tmp_path):
-        """Async acquire must also self-heal a removed lock dir."""
+    async def test_async_acquire_recreates_removed_lock_dir(self, tmp_path, monkeypatch):
+        """Async acquire must also self-heal a removed lock dir (fcntl backend)."""
         import shutil
+        monkeypatch.setenv("UNITARES_AGENT_LOCK_BACKEND", "fcntl")
         lock_dir = tmp_path / "locks"
         mgr = StateLockManager(lock_dir=lock_dir)
         shutil.rmtree(lock_dir)
@@ -448,6 +449,15 @@ class TestAcquireAgentLock:
 # ============================================================================
 
 class TestAcquireAgentLockAsync:
+    """File-lock (fcntl) backend behavior of the async lock.
+
+    These assert on-disk ``.lock`` semantics, so they pin the fcntl backend;
+    the advisory backend (now the default) is covered separately below.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _pin_fcntl_backend(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_AGENT_LOCK_BACKEND", "fcntl")
 
     @pytest.mark.asyncio
     async def test_async_acquire_and_release(self, tmp_path):
@@ -558,3 +568,114 @@ class TestAcquireAgentLockAsync:
             await other_task()
 
         assert other_task_ran
+
+
+# ============================================================================
+# acquire_agent_lock_async — advisory (PostgreSQL) backend (default)
+# ============================================================================
+
+class _FakeConn:
+    """Records pg_try_advisory_lock / pg_advisory_unlock calls; scriptable acquire result."""
+
+    def __init__(self, acquire_results):
+        # acquire_results: list of truthy/falsy values returned by successive
+        # pg_try_advisory_lock calls (last value repeats once exhausted).
+        self._acquire_results = list(acquire_results)
+        self.calls = []
+
+    async def fetchval(self, sql, *args):
+        self.calls.append((sql, args))
+        if "pg_try_advisory_lock" in sql:
+            if len(self._acquire_results) > 1:
+                return self._acquire_results.pop(0)
+            return self._acquire_results[0] if self._acquire_results else True
+        if "pg_advisory_unlock" in sql:
+            return True
+        return None
+
+
+class _FakeDB:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def acquire(self):
+        conn = self._conn
+
+        class _Ctx:
+            async def __aenter__(self_inner):
+                return conn
+
+            async def __aexit__(self_inner, *exc):
+                return False
+
+        return _Ctx()
+
+
+class TestAcquireAgentLockAsyncAdvisory:
+    """Advisory (PostgreSQL) backend — the default. get_db() is mocked so these
+    run without a live database."""
+
+    @pytest.mark.asyncio
+    async def test_advisory_is_default_backend(self, tmp_path, monkeypatch):
+        """With no env override, the advisory path runs (no .lock file written)."""
+        monkeypatch.delenv("UNITARES_AGENT_LOCK_BACKEND", raising=False)
+        conn = _FakeConn([True])
+        monkeypatch.setattr("src.db.get_db", lambda: _FakeDB(conn))
+
+        mgr = StateLockManager(lock_dir=tmp_path)
+        async with mgr.acquire_agent_lock_async("adv_agent", timeout=2.0, max_retries=1):
+            # No file lock is created on the advisory path.
+            assert not (tmp_path / "adv_agent.lock").exists()
+
+        sqls = " ".join(c[0] for c in conn.calls)
+        assert "pg_try_advisory_lock" in sqls
+        assert "pg_advisory_unlock" in sqls
+
+    @pytest.mark.asyncio
+    async def test_advisory_acquire_and_unlock_same_key(self, tmp_path, monkeypatch):
+        """Lock and unlock are issued for the same agent id (hashtext key)."""
+        monkeypatch.setenv("UNITARES_AGENT_LOCK_BACKEND", "advisory")
+        conn = _FakeConn([True])
+        monkeypatch.setattr("src.db.get_db", lambda: _FakeDB(conn))
+
+        mgr = StateLockManager(lock_dir=tmp_path)
+        async with mgr.acquire_agent_lock_async("same_key", timeout=2.0, max_retries=1):
+            pass
+
+        lock_calls = [c for c in conn.calls if "pg_try_advisory_lock" in c[0]]
+        unlock_calls = [c for c in conn.calls if "pg_advisory_unlock" in c[0]]
+        assert lock_calls and unlock_calls
+        assert lock_calls[0][1] == ("same_key",)
+        assert unlock_calls[0][1] == ("same_key",)
+
+    @pytest.mark.asyncio
+    async def test_advisory_unlock_runs_on_exception(self, tmp_path, monkeypatch):
+        """The advisory lock is released even when the body raises."""
+        monkeypatch.setenv("UNITARES_AGENT_LOCK_BACKEND", "advisory")
+        conn = _FakeConn([True])
+        monkeypatch.setattr("src.db.get_db", lambda: _FakeDB(conn))
+
+        mgr = StateLockManager(lock_dir=tmp_path)
+        with pytest.raises(ValueError):
+            async with mgr.acquire_agent_lock_async("adv_exc", timeout=2.0, max_retries=1):
+                raise ValueError("boom")
+
+        assert any("pg_advisory_unlock" in c[0] for c in conn.calls)
+
+    @pytest.mark.asyncio
+    async def test_advisory_timeout_raises_timeouterror(self, tmp_path, monkeypatch):
+        """When pg_try_advisory_lock never succeeds, TimeoutError is raised and
+        no unlock is issued (we never held the lock)."""
+        monkeypatch.setenv("UNITARES_AGENT_LOCK_BACKEND", "advisory")
+        conn = _FakeConn([False])  # never acquires
+        monkeypatch.setattr("src.db.get_db", lambda: _FakeDB(conn))
+
+        mgr = StateLockManager(lock_dir=tmp_path)
+        with pytest.raises(TimeoutError):
+            async with mgr.acquire_agent_lock_async("adv_to", timeout=0.1, max_retries=1):
+                pass
+
+        # The poll loop must actually have run (more than one try) before giving up...
+        assert len([c for c in conn.calls if "pg_try_advisory_lock" in c[0]]) > 1
+        # ...and no unlock is issued, because the lock was never held.
+        assert not any("pg_advisory_unlock" in c[0] for c in conn.calls)

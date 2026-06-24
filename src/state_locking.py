@@ -20,6 +20,14 @@ from contextlib import contextmanager, asynccontextmanager
 from typing import Optional
 
 
+# Fixed namespace for agent-state advisory locks. Using the TWO-argument
+# advisory-lock form (key1=namespace, key2=hashtext(agent_id)) keeps these locks
+# in a Postgres lock space that is disjoint from the SINGLE-argument form used by
+# scripts/dev/lease_plane_deprecate.py — two-arg and one-arg advisory locks never
+# collide even on equal key values. Value is a positive int4 ('AGNT').
+_AGENT_LOCK_NAMESPACE = 0x41474E54
+
+
 def is_process_alive(pid: int) -> bool:
     """Check if a process with given PID is still running"""
     try:
@@ -300,11 +308,106 @@ class StateLockManager:
     @asynccontextmanager
     async def acquire_agent_lock_async(self, agent_id: str, timeout: float = 5.0, max_retries: int = 3):
         """
-        Async version of acquire_agent_lock - uses asyncio.sleep() instead of time.sleep()
+        Async exclusive lock for agent state updates.
+
+        Backend is selectable via ``UNITARES_AGENT_LOCK_BACKEND`` so the deploy is
+        instantly reversible without a code change:
+
+        - ``advisory`` (default): a PostgreSQL session-scoped advisory lock
+          (``pg_try_advisory_lock(hashtext(agent_id))``). No file-lock spin-wait,
+          so the ~15s ``fcntl`` ``LOCK_NB`` + ``sleep(0.1)`` ceiling that dominated
+          the ``process_agent_update`` p99 tail disappears. Different agents never
+          contend (distinct keys); the connection is held only across the critical
+          section and the lock auto-releases if the connection drops. This path is
+          the RFC (A.2) disconfirmer: if it collapses p99 < 2.0s, the tail was the
+          file lock, not the substrate.
+        - ``fcntl``: the legacy file-based lock, preserved verbatim as a fallback.
+
+        Args:
+            agent_id: Agent identifier
+            timeout: Timeout per retry attempt in seconds
+            max_retries: Maximum number of retry attempts with cleanup
+        """
+        backend = os.environ.get("UNITARES_AGENT_LOCK_BACKEND", "advisory").strip().lower()
+        if backend == "advisory":
+            async with self._acquire_agent_lock_async_advisory(
+                agent_id, timeout=timeout, max_retries=max_retries
+            ):
+                yield
+        else:
+            async with self._acquire_agent_lock_async_fcntl(
+                agent_id, timeout=timeout, max_retries=max_retries
+            ):
+                yield
+
+    @asynccontextmanager
+    async def _acquire_agent_lock_async_advisory(
+        self, agent_id: str, timeout: float = 5.0, max_retries: int = 3
+    ):
+        """PostgreSQL advisory-lock implementation of the async agent lock.
+
+        The advisory lock is session-scoped, so it MUST be released on the same
+        connection that acquired it — hence the connection is held open across the
+        ``yield``. Per-agent contention is rare (each agent hashes to a distinct
+        key), so in the common path ``pg_try_advisory_lock`` succeeds on the first
+        poll and the connection is held only for the duration of the critical
+        section, the same window the file lock covered.
+        """
+        import asyncio
+        from src.db import get_db
+
+        # Mirror the fcntl ceiling (timeout per attempt × attempts) as a single
+        # total budget so the worst-case wait is unchanged, minus the spin tax.
+        total_budget = float(timeout) * max(1, int(max_retries))
+        poll_interval = 0.05
+
+        # Two-argument advisory form (namespace, hashtext(agent_id)) — disjoint
+        # lock space from the single-arg form used elsewhere (lease_plane_deprecate).
+        acquire_sql = f"SELECT pg_try_advisory_lock({_AGENT_LOCK_NAMESPACE}, hashtext($1))"
+        release_sql = f"SELECT pg_advisory_unlock({_AGENT_LOCK_NAMESPACE}, hashtext($1))"
+
+        db = get_db()
+        async with db.acquire() as conn:
+            acquired = False
+            deadline = time.monotonic() + total_budget
+            while True:
+                acquired = bool(await conn.fetchval(acquire_sql, agent_id))
+                if acquired or time.monotonic() >= deadline:
+                    break
+                await asyncio.sleep(poll_interval)
+
+            if not acquired:
+                # Same exception type the call site already handles (TimeoutError);
+                # the advisory backend has no stale lock files to clean, so the
+                # caller's file-oriented cleanup is skipped (see update_workflow_service).
+                raise TimeoutError(
+                    f"Lock timeout for agent '{agent_id}' after {total_budget:.1f}s (advisory backend). "
+                    f"Another process may be updating this agent."
+                )
+
+            try:
+                yield
+            finally:
+                # Shield the unlock from anyio cancellation: if the handler is
+                # cancelled (e.g. client disconnect) at exactly this await, an
+                # unshielded unlock could be interrupted before the SQL is sent,
+                # returning a still-locked connection to the pool for the next
+                # borrower to inherit. shield() lets the release complete. A truly
+                # dropped connection releases its session locks automatically.
+                try:
+                    await asyncio.shield(conn.fetchval(release_sql, agent_id))
+                except Exception:
+                    # Never let an unlock failure mask the real in-context error.
+                    pass
+
+    @asynccontextmanager
+    async def _acquire_agent_lock_async_fcntl(self, agent_id: str, timeout: float = 5.0, max_retries: int = 3):
+        """
+        Legacy file-based async lock - uses asyncio.sleep() instead of time.sleep()
         to avoid blocking the event loop.
-        
+
         Use this in async handlers (like MCP handlers) to prevent blocking.
-        
+
         Args:
             agent_id: Agent identifier
             timeout: Timeout per retry attempt in seconds
