@@ -587,6 +587,42 @@ class TestFormatMirror:
         assert "critical" in signal
         assert "risk" in signal
 
+    def test_policy_caution_guided_proceed_never_reads_steady_state(self):
+        """A cautionary policy verdict is actionable even when action=proceed."""
+        data = _sample_response()
+        data["_mirror_signals"] = []
+        data["relevant_discoveries"] = []
+        data["decision"].update({
+            "action": "proceed",
+            "sub_action": "guide",
+            "margin": "tight",
+            "nearest_edge": "risk",
+        })
+        data["metrics"]["risk_score"] = 0.69
+        data["metrics"]["verdict"] = "caution"
+        data["policy_evaluation"] = {
+            "action": "proceed",
+            "sub_action": "guide",
+            "guidance": "Operating near basin boundary. Avoid increasing complexity.",
+            "inputs": {
+                "basin": "boundary",
+                "risk_score": 0.69,
+                "verdict": "caution",
+                "margin": "tight",
+                "nearest_edge": "risk",
+            },
+        }
+
+        result = _format_mirror(data, saved_trust_tier=None)
+
+        assert result["verdict"]["value"] == "caution"
+        assert "State is healthy" not in result["verdict"]["meaning"]
+        assert not any("steady state" in s.lower() for s in result["mirror"])
+        signal = next(s for s in result["mirror"] if "CAUTION" in s)
+        assert "69%" in signal
+        assert "boundary" in signal
+        assert "tight" in signal
+
     def test_steady_verdict_keeps_steady_state_fallback(self):
         """A healthy verdict with no other signals still gets the
         steady-state line — the fix must not make every check-in noisy."""
