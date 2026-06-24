@@ -350,8 +350,22 @@ def build_onboard_response_data(
     # transports. Falls back to client_session_id when no token is available.
     if continuity_token:
         ownership_proof = {"continuity_token": continuity_token}
+        # next_step must be self-sufficient: an agent that reads only this hint
+        # (and not the welcome / how_to_strengthen / next_calls) still needs to
+        # know which credential to present, otherwise on a stateless transport
+        # it sends no proof and hits identity_required (#604 dogfood follow-up).
+        next_step = (
+            "Call process_agent_update with response_text describing your work — "
+            "echo the continuity_token from this response as your ownership proof "
+            "to reach 'strong' (it resolves on stateless and session-maintaining "
+            "transports alike)."
+        )
     else:
         ownership_proof = {"client_session_id": stable_session_id}
+        next_step = (
+            "Call process_agent_update with response_text describing your work; "
+            "pass your client_session_id for attribution."
+        )
     next_calls = [
         {
             "tool": "process_agent_update",
@@ -442,7 +456,7 @@ def build_onboard_response_data(
             "is_new": is_new,
             "client_session_id": stable_session_id,
             "identity_assurance": identity_context["identity_assurance"],
-            "next_step": "Call process_agent_update with response_text describing your work",
+            "next_step": next_step,
             "provisional_lineage": bool(provisional_lineage),
             "response_mode": "minimal",
         }
@@ -480,7 +494,7 @@ def build_onboard_response_data(
         "identity_context": identity_context,
         "identity_assurance": identity_context["identity_assurance"],
         "date_context": {"date": datetime.now().strftime("%Y-%m-%d"), "source": "mcp-server"},
-        "next_step": "Call process_agent_update with response_text describing your work",
+        "next_step": next_step,
     }
     if identity_resolution_outcome:
         result["identity_resolution_outcome"] = identity_resolution_outcome
