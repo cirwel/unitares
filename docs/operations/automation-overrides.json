@@ -604,6 +604,41 @@
       "notes": [
         "gate:external"
       ]
+    },
+    "launchd:com.unitares.agent-orchestrator": {
+      "owner": "Kenny",
+      "escalates_to": "dialectic fail-closed (#1015: dispute→facilitation) consumes its reviews + launchd KeepAlive restart; reviewer QUALITY still an open question",
+      "description": "Agent Orchestrator service (BEAM, :8789) — serves orchestrated dialectic reviews; gov-mcp gate UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1.",
+      "dashboard_priority": 42,
+      "kind": "service",
+      "surface_claims": [
+        "unitares:/agent-orchestrator",
+        "repo:/Users/cirwel/projects/unitares-deploy"
+      ],
+      "expected_outputs": [
+        "mcp_service",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
+    },
+    "launchd:com.cirwel.dispatch-beam-codex": {
+      "owner": "Kenny",
+      "escalates_to": "dispatched Codex agents onboard under strict identity (#425) and check in to governance — the executing agent self-governs",
+      "description": "dispatch_beam harness — dispatches Codex agents onto the BEAM lease plane under governance.",
+      "dashboard_priority": 43,
+      "kind": "dispatch",
+      "surface_claims": [
+        "repo:/Users/cirwel/projects/discord-dispatch"
+      ],
+      "expected_outputs": [
+        "dispatch",
+        "status_or_stdout"
+      ],
+      "notes": [
+        "gate:machine"
+      ]
     }
   }
 }
