@@ -1,8 +1,40 @@
 # 2026-06-24 Wave-3 Gate — Framing Note
 
 **Created:** 2026-06-22
-**Status:** Draft framing for the operator's 2026-06-24 read. Not a decision; a decision structure. Author recommendation included and labelled as such.
+**Status:** **RESOLVED 2026-06-24.** Both gate decisions are made (see RESOLUTION below). Body preserved as the framing that led here.
 **Scope:** Frames the single decision that resolves the largest cluster of open proposals at once. Does not relitigate destination A′ (operator-committed 2026-05-05); it asks whether the *Wave-3 forward build* still has a basis.
+
+---
+
+## RESOLUTION (2026-06-24, operator-decided)
+
+**Decision B — Wave-3 BEAM handler-dispatch port: NO-GO. Falsifier disconfirmed it; do not build it; do not re-litigate without a NEW latency premise.**
+
+The (A.2) falsifier (PR #1017, advisory-lock backend replacing the `fcntl`
+spin-wait) was deployed 2026-06-23 and answered the gate's one question: the p99
+coordination tail was the **file lock**, not the substrate.
+
+- **Evidence.** 14-day pre-fix baseline: p50 154ms / p99 4729ms / **max 15118ms**.
+  Post-deploy: the 15s ceiling is gone (nothing >3.9s in 30h, and the daytime
+  churn-free hours sit at p99 ~270ms — well under the 2.0s gate). The 15118ms max
+  was structurally the `fcntl` `timeout=5.0 × max_retries=3` retry-exhaustion;
+  the advisory path has no such loop (`pg_try_advisory_lock` grabs or short-polls,
+  releases on holder exit; live `lock_acquire` tick = 2ms). The mechanism is
+  **removed, not merely unobserved** — so this is decided on the mechanism + early
+  read, not pending a multi-day burn-in.
+- **Consequence.** The only live argument for the handler-dispatch port was the
+  p99 tail, and it's closed in Python for ~one file. A ~9-week BEAM migration buys
+  nothing on latency. Freeze the handler-dispatch fork.
+- **Scope guard.** This kills ONLY the Wave-3 handler-dispatch port. It does NOT
+  touch the rest of the BEAM surface, which stands on its own rationales: the
+  lease plane (live), the **agent-orchestrator** (Decision A), governed-effects.
+
+**Decision A — agent-orchestrator: GO, and DONE.** Named first consumer = the
+orchestrated independent dialectic reviewer; de-inerted and serving live reviews
+2026-06-23 (#1020/#1021/#1024/#1025/#1029; live-verified own-identity reviewer
+submitting `agrees=false`). See [[project_agent-orchestrator-beam]].
+
+Everything below is the original framing note, preserved.
 
 ---
 
