@@ -8,31 +8,48 @@
 
 ## RESOLUTION (2026-06-24, operator-decided)
 
-**Decision B — Wave-3 BEAM handler-dispatch port: NO-GO. Falsifier disconfirmed it; do not build it; do not re-litigate without a NEW latency premise.**
+> **Correction (2026-06-24, supersedes this section's first draft).** The first
+> draft recorded Decision B as "NO-GO — latency disconfirmed." That was the wrong
+> axis. The operator's stated basis: **latency is negligible and was never the
+> point**; the driver is *coordination + "aliveness" + better signal for all
+> stakeholders, and not continuing to paper over / work around the substrate* — a
+> direction already proven on the BEAM surfaces in production (the BEAM Discord
+> bridge, the lease plane, the orchestrator). Latency is struck from the ledger
+> entirely.
 
-The (A.2) falsifier (PR #1017, advisory-lock backend replacing the `fcntl`
-spin-wait) was deployed 2026-06-23 and answered the gate's one question: the p99
-coordination tail was the **file lock**, not the substrate.
+**Decision B — Wave-3 handler-dispatch: the BEAM destination STANDS; the only open
+question is SEQUENCING by blast radius, not whether.**
 
-- **Evidence.** 14-day pre-fix baseline: p50 154ms / p99 4729ms / **max 15118ms**.
-  Post-deploy: the 15s ceiling is gone (nothing >3.9s in 30h, and the daytime
-  churn-free hours sit at p99 ~270ms — well under the 2.0s gate). The 15118ms max
-  was structurally the `fcntl` `timeout=5.0 × max_retries=3` retry-exhaustion;
-  the advisory path has no such loop (`pg_try_advisory_lock` grabs or short-polls,
-  releases on holder exit; live `lock_acquire` tick = 2ms). The mechanism is
-  **removed, not merely unobserved** — so this is decided on the mechanism + early
-  read, not pending a multi-day burn-in.
-- **Consequence.** The only live argument for the handler-dispatch port was the
-  p99 tail, and it's closed in Python for ~one file. A ~9-week BEAM migration buys
-  nothing on latency. Freeze the handler-dispatch fork.
-- **Scope guard.** This kills ONLY the Wave-3 handler-dispatch port. It does NOT
-  touch the rest of the BEAM surface, which stands on its own rationales: the
-  lease plane (live), the **agent-orchestrator** (Decision A), governed-effects.
+- **Latency was the wrong axis — negligible, irrelevant.** `process_agent_update`
+  is a background accounting call running alongside the agent's real work (LLM
+  calls in seconds-to-minutes); p50 ~150ms, and even the old rare multi-second
+  tail at ~1,000 calls/day touched nothing an agent or operator feels. The (A.2)
+  falsifier (#1017) measured a quantity that was never going to decide this. It
+  still earns its keep tactically — it killed the 15s `fcntl` hangs — but it is
+  *itself* a Python workaround, i.e. more of the papering the operator wants to
+  stop, not the direction.
+- **The real axis = stop papering; move stateful-coordinating surfaces to BEAM for
+  coordination / "aliveness" / stakeholder signal.** This is the A′ destination
+  (operator-committed 2026-05-05), validated by lived experience — NOT a per-port
+  demand-trigger. Demanding a fresh measured justification for each port is
+  substrate-status-quo bias (see [[feedback_substrate-migration-status-quo-bias]],
+  [[feedback_sqlite-migration-bias]]); the destination is not re-litigated.
+- **Therefore: not NO-GO.** The only honest open question is *sequencing by blast
+  radius.* The identity-bearing handler dispatch is the **worst first port**
+  (hottest surface, `proof_origin` gate, immediately after the 2026-06-22 strict
+  flip — a BEAM divergence there could silently pass or block writes). So it is
+  **not first** — but the direction holds.
+- **Honest next BEAM increments** (coordination/aliveness-flavored, acceptable
+  blast radius, no new Python workarounds): governed-effects (#862/#863, in
+  flight); dialectic sessions as BEAM GenServers (RFC §5 — presence + liveness of
+  the now-working orchestrated dialectic; convergence can stay Python); presence /
+  liveness as a first-class fleet signal on the lease plane's `agent:` scheme.
 
 **Decision A — agent-orchestrator: GO, and DONE.** Named first consumer = the
 orchestrated independent dialectic reviewer; de-inerted and serving live reviews
 2026-06-23 (#1020/#1021/#1024/#1025/#1029; live-verified own-identity reviewer
-submitting `agrees=false`). See [[project_agent-orchestrator-beam]].
+submitting `agrees=false`). This is the coordination/aliveness direction already
+landing. See [[project_agent-orchestrator-beam]].
 
 Everything below is the original framing note, preserved.
 
