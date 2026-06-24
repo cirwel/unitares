@@ -77,6 +77,41 @@ def _broadcaster():
         return None
 
 
+_s1d_false_reached_logged = False
+
+
+def _log_s1d_false_observation_once() -> None:
+    """S1-d telemetry (council 2026-06-24; docs/ontology/plan.md S20 follow-up).
+
+    The cross-process ``continuity_token`` resume path is believed dead: the
+    S1-c reject gate (``_continuity_token_resume_rejected``) provably precedes
+    both ``_emit_continuity_token_deprecation`` call sites, so
+    ``used_token_for_resume`` is expected to always be False at runtime. But that
+    cannot be proven from this repo against an untested cross-repo (gov-plugin /
+    HTTP shim) dispatch path.
+
+    The True case is already audited (``log_continuity_token_deprecated_accept``).
+    The False case was *silent*, so "observed False" could only be inferred from
+    the absence of accept events — which is weaker, since absence could equally
+    mean the surface is never reached at all. This log-once (one line per
+    process) positively records that the deprecation surface WAS reached with
+    ``used_token_for_resume=False``. A clean telemetry window is therefore: this
+    line present AND zero ``continuity_token.deprecated_accept`` audits =>
+    the deprecation residue is safe to retire (S1-d). Bounded to one emission per
+    process so the common path adds no per-onboard log noise.
+    """
+    global _s1d_false_reached_logged
+    if _s1d_false_reached_logged:
+        return
+    _s1d_false_reached_logged = True
+    logger.info(
+        "[S1-d] continuity_token deprecation surface reached with "
+        "used_token_for_resume=False (expected — confirms the S1-c reject gate "
+        "holds). Zero continuity_token.deprecated_accept audits over a telemetry "
+        "window => the deprecation residue is safe to retire."
+    )
+
+
 def _emit_continuity_token_deprecation(
     *,
     response_dict: Dict[str, Any],
@@ -101,6 +136,7 @@ def _emit_continuity_token_deprecation(
  ``used_token_for_resume``. .
     """
     if not used_token_for_resume:
+        _log_s1d_false_observation_once()
         return
     issued_at = extract_token_iat(str(token_str)) if token_str else None
     dep_block = build_token_deprecation_block(
