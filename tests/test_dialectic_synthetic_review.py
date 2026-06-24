@@ -178,6 +178,8 @@ async def test_orchestrated_dispatch_skips_in_process(server_patch):
         stack.enter_context(patch(f"{OD}.orchestrated_review_enabled", return_value=True))
         stack.enter_context(patch(f"{OD}.dispatch_orchestrated_review",
                                   new=AsyncMock(return_value={"ok": True, "agent_id": "agent-rev-1"})))
+        # reviewer is running/healthy (not a fast crash) → async path owns it
+        stack.enter_context(patch(f"{OD}.reviewer_crashed_fast", new=AsyncMock(return_value=False)))
         result = await handle_submit_thesis({
             "session_id": session.session_id,
             "agent_id": "agent-paused",
@@ -190,6 +192,39 @@ async def test_orchestrated_dispatch_skips_in_process(server_patch):
     # The in-process reviewer must NOT have run — the orchestrator owns this review.
     gen_anti.assert_not_called()
     assert "resolved" not in data  # slot left open for the spawned reviewer
+
+
+@pytest.mark.asyncio
+async def test_orchestrated_reviewer_fast_crash_falls_back_to_in_process(server_patch):
+    """Dispatch succeeds but the spawned reviewer crashes fast (exits non-zero
+    before claiming the slot) → fall back to in-process inline so the session
+    resolves now instead of stranding at antithesis for the 4h reap."""
+    from src.mcp_handlers.dialectic.handlers import handle_submit_thesis, ACTIVE_SESSIONS
+
+    session = _make_session(reviewer_id=None)
+    ACTIVE_SESSIONS[session.session_id] = session
+
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for p in _common_patches():
+            stack.enter_context(p)
+        stack.enter_context(patch(f"{LLM}.generate_antithesis", new=AsyncMock(return_value=_antithesis("refine"))))
+        stack.enter_context(patch(f"{LLM}.generate_synthesis", new=AsyncMock(return_value=_synthesis("RESUME"))))
+        stack.enter_context(patch(f"{OD}.orchestrated_review_enabled", return_value=True))
+        stack.enter_context(patch(f"{OD}.dispatch_orchestrated_review",
+                                  new=AsyncMock(return_value={"ok": True, "agent_id": "ag-crash"})))
+        stack.enter_context(patch(f"{OD}.reviewer_crashed_fast", new=AsyncMock(return_value=True)))
+        result = await handle_submit_thesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-paused",
+            "root_cause": "rc", "proposed_conditions": ["c"], "reasoning": "r",
+        })
+
+    data = parse_result(result)
+    assert "orchestrated_review" not in data
+    # fell back inline: synthetic review ran and resolved (refine + RESUME)
+    assert data["synthetic_review"] is True
+    assert data["resolved"] is True
 
 
 @pytest.mark.asyncio

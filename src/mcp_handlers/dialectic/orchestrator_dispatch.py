@@ -144,3 +144,58 @@ async def dispatch_orchestrated_review(
             "[DIALECTIC] orchestrated dispatch failed (%r); falling back to in-process", exc
         )
         return None
+
+
+async def reviewer_crashed_fast(
+    agent_id: str,
+    *,
+    await_seconds: float = 15.0,
+) -> bool:
+    """Briefly await the spawned reviewer to catch a FAST crash.
+
+    The common reviewer failure modes (bad URL, import error, wrong tool name)
+    exit within ~12s — well before gemma4 (~40-70s) could finish. We block on the
+    orchestrator's await endpoint for a short window:
+
+    - exited with non-zero status  → True  (crashed without claiming the slot;
+      the caller should fall back to the in-process synthetic reviewer inline so
+      the session resolves now instead of stranding at antithesis for the 4h reap)
+    - exited 0 / still running (504) / any error → False (the reviewer owns the
+      review; leave it on the async path — DO NOT also run in-process)
+
+    The short window keeps the whole submit_thesis call inside the dialectic
+    router's 90s budget even when a fast crash triggers the in-process fallback.
+    A reviewer that crashes AFTER this window (mid-model, rare) still relies on
+    the slower reap — acceptable; this closes the common case.
+    """
+    if not agent_id:
+        return False
+    bearer = os.environ.get("AGENT_ORCHESTRATOR_BEARER_TOKEN")
+    if not bearer:
+        return False
+    url = f"{_orchestrator_url()}/v1/agents/{agent_id}/await"
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=await_seconds + 5.0) as client:
+            resp = await client.post(
+                url,
+                json={"timeout_ms": int(await_seconds * 1000)},
+                headers={"Authorization": f"Bearer {bearer}"},
+            )
+        if resp.status_code == 504:
+            return False  # await_timeout — still running, reviewer owns it
+        if resp.status_code != 200:
+            return False  # not_found / unexpected — don't double-run
+        result = (resp.json() or {}).get("result") or {}
+        exit_status = result.get("exit_status")
+        crashed = exit_status not in (0, None)
+        if crashed:
+            logger.warning(
+                "[DIALECTIC] orchestrated reviewer %s exited %s without resolving; "
+                "falling back to in-process", agent_id, exit_status,
+            )
+        return bool(crashed)
+    except Exception as exc:  # noqa: BLE001 — can't tell ⇒ leave it to the reviewer
+        logger.warning("[DIALECTIC] reviewer await check failed (%r); leaving async", exc)
+        return False
