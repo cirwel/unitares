@@ -1,0 +1,886 @@
+#!/usr/bin/env python3
+"""Census local automation surfaces into one normalized inventory.
+
+This is intentionally an observability layer, not a scheduler. It reads the
+places where automation already lives and emits a single shape UNITARES can
+ingest later.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import plistlib
+import re
+import subprocess
+import sys
+import tomllib
+from dataclasses import asdict, dataclass, field, fields
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+TOOL_NAME = "unitares-automations"
+TOOL_VERSION = "0.1.0"
+
+HOME = Path.home()
+DEFAULT_PROJECTS_ROOT = HOME / "projects"
+STATE_DIR = Path(os.getenv("UNITARES_AUTOMATION_STATE_DIR", HOME / ".local/state/unitares-automations"))
+LAST_JSON = STATE_DIR / "last.json"
+LATEST_RUN_DIR = STATE_DIR / "latest"
+RUNNING_RUN_DIR = STATE_DIR / "running"
+SHARE_DIR = Path(os.getenv("UNITARES_AUTOMATION_SHARE_DIR", HOME / ".local/share/unitares"))
+OVERRIDES_JSON = Path(os.getenv("UNITARES_AUTOMATION_OVERRIDES", SHARE_DIR / "automation-overrides.json"))
+EXTERNAL_JSON = Path(os.getenv("UNITARES_AUTOMATION_EXTERNAL", SHARE_DIR / "automation-external.json"))
+
+
+@dataclass
+class Automation:
+    id: str
+    name: str
+    source: str
+    kind: str
+    scheduler: str
+    runner: str
+    status: str = "unknown"
+    cadence: str | None = None
+    next_run: str | None = None
+    last_run: str | None = None
+    last_status: str | None = None
+    repo: str | None = None
+    workdir: str | None = None
+    command: list[str] = field(default_factory=list)
+    expected_outputs: list[str] = field(default_factory=list)
+    surface_claims: list[str] = field(default_factory=list)
+    config_path: str | None = None
+    notes: list[str] = field(default_factory=list)
+    last_message: str | None = None
+    last_exit_code: int | None = None
+    last_duration_seconds: float | None = None
+    run_id: str | None = None
+    owner: str | None = None
+    escalates_to: str | None = None
+    description: str | None = None
+    dashboard_priority: int | None = None
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def short_path(path: str | Path | None) -> str | None:
+    if path is None:
+        return None
+    text = str(path)
+    home = str(HOME)
+    if text == home:
+        return "~"
+    if text.startswith(home + "/"):
+        return "~/" + text[len(home) + 1 :]
+    return text
+
+
+def stable_id(source: str, path_or_id: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.:-]+", "-", path_or_id).strip("-")
+    safe = safe.replace(str(HOME), "~")
+    if len(safe) > 96:
+        safe = safe[-96:]
+    return f"{source}:{safe}"
+
+
+def command_text(command: list[str]) -> str:
+    return " ".join(command)
+
+
+def infer_runner(text: str, default: str = "unknown") -> str:
+    lower = text.lower()
+    if "codex" in lower:
+        return "codex"
+    if "claude" in lower:
+        return "claude"
+    if "hermes" in lower:
+        return "hermes"
+    if "lumen" in lower:
+        return "lumen"
+    if "github" in lower or "actions/" in lower:
+        return "github-actions"
+    if "python" in lower or lower.endswith(".py"):
+        return "python"
+    if "bash" in lower or lower.endswith(".sh"):
+        return "shell"
+    return default
+
+
+def infer_kind(text: str, default: str = "automation") -> str:
+    lower = text.lower()
+    if "dogfood" in lower:
+        return "dogfood"
+    if "ablation" in lower:
+        return "ablation"
+    if "qa" in lower:
+        return "qa"
+    if "backup" in lower:
+        return "backup"
+    if "deploy" in lower:
+        return "deploy"
+    if "test" in lower or "pytest" in lower:
+        return "test"
+    if "watchdog" in lower or "health" in lower:
+        return "watchdog"
+    if "release" in lower:
+        return "release"
+    return default
+
+
+def infer_expected_outputs(text: str) -> list[str]:
+    lower = text.lower()
+    outputs: list[str] = []
+    if re.search(r"\bpr\b", lower) or "pull request" in lower or "draft pr" in lower:
+        outputs.append("draft_pr_or_pr_status")
+    if "kg" in lower or "knowledge" in lower or "finding" in lower:
+        outputs.append("kg_or_finding")
+    if "issue" in lower:
+        outputs.append("github_issue")
+    if "log" in lower:
+        outputs.append("log")
+    if "backup" in lower:
+        outputs.append("backup_artifact")
+    if not outputs:
+        outputs.append("status_or_stdout")
+    return sorted(set(outputs))
+
+
+def repo_for_workdir(workdir: str | None) -> str | None:
+    if not workdir:
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "-C", workdir, "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode == 0 and out.stdout.strip():
+        return out.stdout.strip()
+    return None
+
+
+def calendar_interval_to_text(value: Any) -> str | None:
+    def one(item: dict[str, Any]) -> str:
+        parts = []
+        if "Weekday" in item:
+            parts.append(f"weekday={item['Weekday']}")
+        if "Day" in item:
+            parts.append(f"day={item['Day']}")
+        hour = item.get("Hour")
+        minute = item.get("Minute", 0)
+        if hour is not None:
+            parts.append(f"{int(hour):02d}:{int(minute):02d}")
+        return " ".join(parts) if parts else str(item)
+
+    if isinstance(value, list):
+        return ", ".join(one(v) for v in value if isinstance(v, dict))
+    if isinstance(value, dict):
+        return one(value)
+    return None
+
+
+def collect_launchd(warnings: list[str]) -> list[Automation]:
+    results: list[Automation] = []
+    launch_dir = HOME / "Library/LaunchAgents"
+    if not launch_dir.exists():
+        return results
+
+    for path in sorted(launch_dir.glob("*.plist")):
+        try:
+            with path.open("rb") as handle:
+                plist = plistlib.load(handle)
+        except Exception as exc:  # noqa: BLE001 - census should continue
+            warnings.append(f"launchd: failed to parse {short_path(path)}: {exc}")
+            continue
+
+        label = str(plist.get("Label") or path.stem)
+        args = [str(v) for v in plist.get("ProgramArguments") or []]
+        workdir = plist.get("WorkingDirectory")
+        text = " ".join([label, command_text(args), str(workdir or "")])
+        cadence = calendar_interval_to_text(plist.get("StartCalendarInterval"))
+        start_interval = plist.get("StartInterval")
+        if start_interval is not None:
+            try:
+                seconds = int(start_interval)
+                if seconds % 3600 == 0:
+                    interval_text = f"every {seconds // 3600}h"
+                elif seconds % 60 == 0:
+                    interval_text = f"every {seconds // 60}m"
+                else:
+                    interval_text = f"every {seconds}s"
+                cadence = interval_text if cadence is None else f"{cadence}; {interval_text}"
+            except (TypeError, ValueError):
+                cadence = str(start_interval) if cadence is None else f"{cadence}; {start_interval}"
+        if plist.get("KeepAlive"):
+            cadence = "keepalive" if cadence is None else f"{cadence}; keepalive"
+        if plist.get("RunAtLoad"):
+            cadence = "run_at_load" if cadence is None else f"{cadence}; run_at_load"
+
+        status = "active" if plist.get("Disabled") is not True else "disabled"
+        results.append(
+            Automation(
+                id=stable_id("launchd", label),
+                name=label,
+                source="launchd",
+                kind=infer_kind(text),
+                scheduler="launchd",
+                runner=infer_runner(text, "launchd"),
+                status=status,
+                cadence=cadence,
+                repo=repo_for_workdir(str(workdir)) if workdir else None,
+                workdir=str(workdir) if workdir else None,
+                command=args,
+                expected_outputs=infer_expected_outputs(text),
+                config_path=str(path),
+            )
+        )
+    return results
+
+
+def parse_crontab_line(line: str, index: int) -> Automation | None:
+    raw = line.strip()
+    if not raw or raw.startswith("#"):
+        return None
+    fields = raw.split(maxsplit=5)
+    if len(fields) < 6:
+        return None
+    schedule = " ".join(fields[:5])
+    command = fields[5]
+    text = f"{schedule} {command}"
+    return Automation(
+        id=stable_id("crontab", f"{index}:{command}"),
+        name=f"crontab:{index}",
+        source="crontab",
+        kind=infer_kind(text),
+        scheduler="cron",
+        runner=infer_runner(command, "shell"),
+        status="active",
+        cadence=schedule,
+        command=["/bin/sh", "-lc", command],
+        expected_outputs=infer_expected_outputs(command),
+        notes=["from user crontab"],
+    )
+
+
+def collect_crontab(warnings: list[str]) -> list[Automation]:
+    try:
+        out = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        warnings.append(f"crontab: unavailable: {exc}")
+        return []
+    if out.returncode != 0:
+        message = (out.stderr or out.stdout).strip()
+        if message:
+            warnings.append(f"crontab: {message}")
+        return []
+    results = []
+    for idx, line in enumerate(out.stdout.splitlines(), start=1):
+        item = parse_crontab_line(line, idx)
+        if item:
+            results.append(item)
+    return results
+
+
+def _systemd_ts(value: Any) -> str | None:
+    """systemd json emits timestamps as microseconds-since-epoch (int) on most
+    versions; tolerate string forms and absent/zero values too."""
+    if value in (None, 0, "0", ""):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(value / 1_000_000, tz=timezone.utc).isoformat()
+        except (ValueError, OSError, OverflowError):
+            return None
+    return str(value) or None
+
+
+def collect_systemd(warnings: list[str]) -> list[Automation]:
+    """Linux systemd timers — the dominant non-cron scheduler on Linux hosts.
+
+    Uses `systemctl list-timers --output=json` (systemd 246+) for a robust
+    parse, covering both --user and system timers. Degrades gracefully on a
+    non-systemd host (e.g. macOS): one warning, zero items, exactly like
+    collect_crontab. NOTE: the JSON discovery path is structurally complete but
+    has not been smoke-tested against a live systemd host — verify on Linux.
+    """
+    results: list[Automation] = []
+    for scope in (["--user"], []):
+        scope_label = "user" if scope else "system"
+        try:
+            out = subprocess.run(
+                ["systemctl", *scope, "list-timers", "--all", "--output=json"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except FileNotFoundError:
+            warnings.append("systemd: systemctl not found (not a systemd host)")
+            return results
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            warnings.append(f"systemd ({scope_label}): unavailable: {exc}")
+            continue
+        if out.returncode != 0:
+            message = (out.stderr or out.stdout).strip()
+            if message:
+                warnings.append(f"systemd ({scope_label}): {message}")
+            continue
+        try:
+            timers = json.loads(out.stdout or "[]")
+        except (ValueError, TypeError) as exc:
+            warnings.append(f"systemd ({scope_label}): could not parse list-timers json: {exc}")
+            continue
+        if not isinstance(timers, list):
+            continue
+        for timer in timers:
+            if not isinstance(timer, dict):
+                continue
+            unit = timer.get("unit") or timer.get("activates") or ""
+            if not unit:
+                continue
+            activates = timer.get("activates")
+            start_cmd = f"systemctl {'--user ' if scope else ''}start {activates or unit}".strip()
+            results.append(
+                Automation(
+                    id=stable_id("systemd", f"{scope_label}:{unit}"),
+                    name=unit,
+                    source="systemd",
+                    kind="cron",
+                    scheduler=f"systemd ({scope_label})",
+                    runner="systemd",
+                    status="active",
+                    next_run=_systemd_ts(timer.get("next")),
+                    last_run=_systemd_ts(timer.get("last")),
+                    command=[start_cmd],
+                    expected_outputs=["status_or_stdout"],
+                    notes=[f"systemd {scope_label} timer" + (f" → {activates}" if activates else "")],
+                )
+            )
+    return results
+
+
+def collect_codex(warnings: list[str]) -> list[Automation]:
+    results: list[Automation] = []
+    root = HOME / ".codex/automations"
+    if not root.exists():
+        return results
+    for path in sorted(root.glob("*/automation.toml")):
+        try:
+            data = tomllib.loads(path.read_text())
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"codex: failed to parse {short_path(path)}: {exc}")
+            continue
+        auto_id = str(data.get("id") or path.parent.name)
+        name = str(data.get("name") or auto_id)
+        cwds = data.get("cwds") or []
+        workdir = str(cwds[0]) if cwds else None
+        prompt = str(data.get("prompt") or "")
+        text = " ".join([auto_id, name, prompt, str(data.get("model") or ""), str(workdir or "")])
+        status = str(data.get("status") or "unknown").lower()
+        results.append(
+            Automation(
+                id=stable_id("codex", auto_id),
+                name=name,
+                source="codex",
+                kind=str(data.get("kind") or infer_kind(text)),
+                scheduler="codex-automation",
+                runner="codex",
+                status=status,
+                cadence=str(data.get("rrule") or ""),
+                repo=repo_for_workdir(workdir),
+                workdir=workdir,
+                command=["codex", "automation", auto_id],
+                expected_outputs=infer_expected_outputs(text),
+                config_path=str(path),
+                notes=[f"model={data.get('model')}", f"environment={data.get('execution_environment')}"],
+            )
+        )
+    return results
+
+
+def collect_hermes(warnings: list[str]) -> list[Automation]:
+    results: list[Automation] = []
+    path = HOME / ".hermes/cron/jobs.json"
+    if not path.exists():
+        return results
+    try:
+        data = json.loads(path.read_text())
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"hermes: failed to parse {short_path(path)}: {exc}")
+        return results
+
+    for job in data.get("jobs", []):
+        if not isinstance(job, dict):
+            continue
+        job_id = str(job.get("id") or job.get("name") or "unknown")
+        name = str(job.get("name") or job_id)
+        prompt = str(job.get("prompt") or "")
+        script = job.get("script")
+        workdir = job.get("workdir")
+        schedule = job.get("schedule") or {}
+        schedule_display = job.get("schedule_display") or schedule.get("display")
+        text = " ".join([job_id, name, prompt, str(script or ""), str(workdir or "")])
+        command = ["hermes", "cron", "run", job_id]
+        if script:
+            command = [str(script)]
+        notes = []
+        if job.get("no_agent"):
+            notes.append("script_only")
+        if job.get("deliver"):
+            notes.append(f"deliver={job.get('deliver')}")
+        if job.get("origin"):
+            notes.append(f"origin={job.get('origin')}")
+        results.append(
+            Automation(
+                id=stable_id("hermes", job_id),
+                name=name,
+                source="hermes",
+                kind=infer_kind(text),
+                scheduler="hermes-cron",
+                runner="python" if script else "hermes",
+                status="active" if job.get("enabled") else "disabled",
+                cadence=str(schedule_display or ""),
+                next_run=job.get("next_run_at"),
+                last_run=job.get("last_run_at"),
+                last_status=job.get("last_status"),
+                repo=repo_for_workdir(str(workdir)) if workdir else None,
+                workdir=str(workdir) if workdir else None,
+                command=command,
+                expected_outputs=infer_expected_outputs(text),
+                surface_claims=[str(job["fire_claim"])] if job.get("fire_claim") else [],
+                config_path=str(path),
+                notes=notes,
+            )
+        )
+    return results
+
+
+def collect_claude_tasks(warnings: list[str]) -> list[Automation]:
+    results: list[Automation] = []
+    root = HOME / ".claude/tasks"
+    if not root.exists():
+        return results
+    for task_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        json_files = sorted(task_dir.glob("*.json"))
+        if not json_files:
+            continue
+        sample: dict[str, Any] = {}
+        try:
+            sample = json.loads(json_files[0].read_text())
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"claude: failed to parse {short_path(json_files[0])}: {exc}")
+        text = " ".join([task_dir.name, json.dumps(sample, sort_keys=True)[:500]])
+        results.append(
+            Automation(
+                id=stable_id("claude-task", task_dir.name),
+                name=str(sample.get("subject") or sample.get("name") or task_dir.name),
+                source="claude",
+                kind="task_queue",
+                scheduler="claude-tasks",
+                runner="claude",
+                status=str(sample.get("status") or "unknown"),
+                command=[],
+                expected_outputs=["task_state"],
+                config_path=str(task_dir),
+                notes=[f"json_items={len(json_files)}"],
+            )
+        )
+    return results
+
+
+def workflow_trigger_summary(text: str) -> str:
+    triggers: list[str] = []
+    for key in ("schedule", "workflow_dispatch", "pull_request", "push", "issues", "issue_comment"):
+        if re.search(rf"(?m)^\s*{re.escape(key)}\s*:", text):
+            triggers.append(key)
+    # Compact cron values without trying to be a full YAML parser.
+    cron_values = re.findall(r"cron:\s*['\"]([^'\"]+)['\"]", text)
+    if cron_values:
+        triggers.extend(f"cron:{v}" for v in cron_values)
+    return ", ".join(dict.fromkeys(triggers)) if triggers else "unknown"
+
+
+def workflow_name(text: str, path: Path) -> str:
+    match = re.search(r"(?m)^name:\s*(.+?)\s*$", text)
+    if not match:
+        return path.stem
+    return match.group(1).strip().strip("'\"")
+
+
+def collect_github_actions(projects_root: Path, warnings: list[str]) -> list[Automation]:
+    results: list[Automation] = []
+    if not projects_root.exists():
+        return results
+    excluded_parts = {"node_modules", ".venv", "venv", "_archive", ".trash"}
+    workflow_files: list[Path] = []
+    for path in projects_root.rglob(".github/workflows/*"):
+        if not path.is_file() or path.suffix not in {".yml", ".yaml"}:
+            continue
+        lowered = {p.lower() for p in path.parts}
+        if lowered & excluded_parts:
+            continue
+        workflow_files.append(path)
+
+    for path in sorted(workflow_files):
+        try:
+            text = path.read_text(errors="replace")
+        except OSError as exc:
+            warnings.append(f"github-actions: failed to read {short_path(path)}: {exc}")
+            continue
+        repo = None
+        for parent in path.parents:
+            if (parent / ".git").exists():
+                repo = str(parent)
+                break
+        name = workflow_name(text, path)
+        triggers = workflow_trigger_summary(text)
+        runner = "github-actions"
+        kind = infer_kind(" ".join([name, path.name, text[:1000]]), "ci")
+        results.append(
+            Automation(
+                id=stable_id("github-actions", str(path)),
+                name=name,
+                source="github-actions",
+                kind=kind,
+                scheduler="github-actions",
+                runner=runner,
+                status="active",
+                cadence=triggers,
+                repo=repo,
+                workdir=repo,
+                command=["gh", "workflow", "run", path.name],
+                expected_outputs=infer_expected_outputs(text[:3000]),
+                config_path=str(path),
+            )
+        )
+    return results
+
+
+LIST_OVERRIDE_FIELDS = {"expected_outputs", "surface_claims", "notes"}
+SCALAR_OVERRIDE_FIELDS = {
+    "owner",
+    "escalates_to",
+    "description",
+    "dashboard_priority",
+    "kind",
+    "runner",
+    "status",
+    "cadence",
+    "repo",
+    "workdir",
+}
+
+
+def unique_strings(values: list[Any]) -> list[str]:
+    seen = set()
+    output = []
+    for value in values:
+        if value is None:
+            continue
+        text = str(value)
+        if text in seen:
+            continue
+        seen.add(text)
+        output.append(text)
+    return output
+
+
+def load_overrides(warnings: list[str]) -> dict[str, dict[str, Any]]:
+    if not OVERRIDES_JSON.exists():
+        return {}
+    try:
+        data = json.loads(OVERRIDES_JSON.read_text())
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"overrides: failed to parse {short_path(OVERRIDES_JSON)}: {exc}")
+        return {}
+
+    raw = data.get("automations") if isinstance(data, dict) else None
+    if isinstance(raw, dict):
+        items = raw.items()
+    elif isinstance(raw, list):
+        items = ((item.get("id"), item) for item in raw if isinstance(item, dict))
+    else:
+        warnings.append(f"overrides: missing automations object/list in {short_path(OVERRIDES_JSON)}")
+        return {}
+
+    overrides: dict[str, dict[str, Any]] = {}
+    for automation_id, override in items:
+        if not isinstance(automation_id, str) or not isinstance(override, dict):
+            continue
+        overrides[automation_id] = override
+    return overrides
+
+
+def apply_overrides(items: list[Automation], warnings: list[str]) -> None:
+    overrides = load_overrides(warnings)
+    if not overrides:
+        return
+
+    by_id = {item.id: item for item in items}
+    for automation_id, override in sorted(overrides.items()):
+        item = by_id.get(automation_id)
+        if item is None:
+            warnings.append(f"overrides: no automation matched {automation_id}")
+            continue
+
+        for field_name in LIST_OVERRIDE_FIELDS:
+            value = override.get(field_name)
+            if value is None:
+                continue
+            if not isinstance(value, list):
+                warnings.append(f"overrides: {automation_id}.{field_name} must be a list")
+                continue
+            current = getattr(item, field_name)
+            setattr(item, field_name, unique_strings([*current, *value]))
+
+        for field_name in SCALAR_OVERRIDE_FIELDS:
+            if field_name not in override:
+                continue
+            value = override[field_name]
+            if value is None:
+                continue
+            setattr(item, field_name, value)
+
+
+def collect_external(warnings: list[str]) -> list[Automation]:
+    """Off-box automations the census cannot discover locally (e.g. claude.ai
+    cloud routines, behind an auth wall). This collector does NOT reach out to
+    any API — it only reads a local manifest file. The manifest is populated by
+    a process that CAN reach those systems (a Claude session via the routines
+    API), so the census stays a no-auth, file-reading observability layer.
+    Entries are snapshots and may carry a snapshot timestamp in `notes`."""
+    results: list[Automation] = []
+    if not EXTERNAL_JSON.exists():
+        return results
+    try:
+        data = json.loads(EXTERNAL_JSON.read_text())
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"external: failed to parse {short_path(EXTERNAL_JSON)}: {exc}")
+        return results
+    raw = data.get("automations") if isinstance(data, dict) else data
+    if not isinstance(raw, list):
+        warnings.append(f"external: missing 'automations' list in {short_path(EXTERNAL_JSON)}")
+        return results
+    allowed = {f.name for f in fields(Automation)}
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "external-automation")
+        kwargs = {k: v for k, v in entry.items() if k in allowed and v is not None}
+        kwargs["name"] = name
+        kwargs["id"] = str(entry.get("id") or stable_id("external", name))
+        kwargs["source"] = str(entry.get("source") or "external")
+        kwargs["kind"] = str(entry.get("kind") or "automation")
+        kwargs["scheduler"] = str(entry.get("scheduler") or "external")
+        kwargs["runner"] = str(entry.get("runner") or "external")
+        try:
+            results.append(Automation(**kwargs))
+        except TypeError as exc:  # noqa: BLE001
+            warnings.append(f"external: bad entry {name!r}: {exc}")
+    return results
+
+
+def collect_all(projects_root: Path) -> dict[str, Any]:
+    warnings: list[str] = []
+    items: list[Automation] = []
+    collectors = [
+        collect_launchd,
+        collect_crontab,
+        collect_systemd,
+        collect_codex,
+        collect_hermes,
+        collect_claude_tasks,
+        collect_external,
+    ]
+    for collector in collectors:
+        items.extend(collector(warnings))
+    items.extend(collect_github_actions(projects_root, warnings))
+
+    latest_runs = load_latest_runs()
+    for item in items:
+        run = latest_runs.get(item.id)
+        if not run:
+            continue
+        item.last_status = run.get("status") or item.last_status
+        item.last_run = run.get("timestamp") or item.last_run
+        item.last_message = run.get("message")
+        item.last_exit_code = run.get("exit_code")
+        item.last_duration_seconds = run.get("duration_seconds")
+        item.run_id = run.get("run_id")
+
+    apply_overrides(items, warnings)
+
+    by_source: dict[str, int] = {}
+    by_kind: dict[str, int] = {}
+    needs_attention = []
+    for item in items:
+        by_source[item.source] = by_source.get(item.source, 0) + 1
+        by_kind[item.kind] = by_kind.get(item.kind, 0) + 1
+        status = (item.status or "").lower()
+        last_status = (item.last_status or "").lower()
+        if (
+            status in {"disabled", "paused", "failing", "failed"}
+            or last_status in {"failed", "error"}
+            or (item.source == "claude" and status == "pending")
+        ):
+            needs_attention.append(item.id)
+
+    return {
+        "schema": "unitares.automation_census.v1",
+        "tool_name": TOOL_NAME,
+        "tool_version": TOOL_VERSION,
+        "tool_path": str(Path(__file__).resolve()),
+        "generated_at": now_iso(),
+        "host": os.uname().nodename,
+        "projects_root": str(projects_root),
+        "overrides_path": str(OVERRIDES_JSON) if OVERRIDES_JSON.exists() else None,
+        "summary": {
+            "total": len(items),
+            "by_source": dict(sorted(by_source.items())),
+            "by_kind": dict(sorted(by_kind.items())),
+            "needs_attention": needs_attention,
+            "warnings": warnings,
+        },
+        "automations": [asdict(item) for item in sorted(items, key=lambda a: (a.source, a.name, a.id))],
+    }
+
+
+def load_latest_runs() -> dict[str, dict[str, Any]]:
+    runs: dict[str, dict[str, Any]] = {}
+    for root in (LATEST_RUN_DIR, RUNNING_RUN_DIR):
+        if not root.exists():
+            continue
+        for path in sorted(root.glob("*.json")):
+            try:
+                event = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            automation_id = event.get("automation_id")
+            if isinstance(automation_id, str):
+                runs[automation_id] = event
+    return runs
+
+
+def filtered_report(report: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    items = report["automations"]
+    if args.source:
+        allowed = set(args.source)
+        items = [item for item in items if item["source"] in allowed]
+    if args.kind:
+        allowed = set(args.kind)
+        items = [item for item in items if item["kind"] in allowed]
+    if args.grep:
+        needle = args.grep.lower()
+        items = [
+            item for item in items
+            if needle in json.dumps(item, sort_keys=True).lower()
+        ]
+    if args.attention:
+        attention = set(report["summary"].get("needs_attention") or [])
+        items = [item for item in items if item["id"] in attention]
+
+    if len(items) == len(report["automations"]):
+        return report
+
+    by_source: dict[str, int] = {}
+    by_kind: dict[str, int] = {}
+    for item in items:
+        by_source[item["source"]] = by_source.get(item["source"], 0) + 1
+        by_kind[item["kind"]] = by_kind.get(item["kind"], 0) + 1
+    filtered = dict(report)
+    filtered["summary"] = {
+        **report["summary"],
+        "total": len(items),
+        "by_source": dict(sorted(by_source.items())),
+        "by_kind": dict(sorted(by_kind.items())),
+        "filtered_from_total": len(report["automations"]),
+    }
+    filtered["automations"] = items
+    return filtered
+
+
+def print_table(report: dict[str, Any], include_all: bool) -> None:
+    summary = report["summary"]
+    print(f"automation census: {summary['total']} items")
+    print(f"tool: {report.get('tool_name', TOOL_NAME)} {report.get('tool_version', 'unknown')}")
+    print(f"generated: {report['generated_at']}")
+    print()
+    print("by source:")
+    for source, count in summary["by_source"].items():
+        print(f"  {source}: {count}")
+    print()
+    print("by kind:")
+    for kind, count in summary["by_kind"].items():
+        print(f"  {kind}: {count}")
+    if summary["warnings"]:
+        print()
+        print("warnings:")
+        for warning in summary["warnings"]:
+            print(f"  {warning}")
+
+    print()
+    print("scheduled/local highlights:")
+    rows = report["automations"] if include_all else [
+        item for item in report["automations"]
+        if item["source"] in {"launchd", "codex", "hermes", "crontab"}
+    ]
+    for item in rows:
+        cadence = item.get("cadence") or "-"
+        status = item.get("status") or "unknown"
+        last = item.get("last_status") or "-"
+        workdir = short_path(item.get("workdir")) or "-"
+        print(f"  [{item['source']}] {item['name']} ({item['kind']}, {status}, last={last})")
+        print(f"    cadence: {cadence}")
+        print(f"    workdir: {workdir}")
+        if item.get("next_run"):
+            print(f"    next: {item['next_run']}")
+    if not include_all:
+        omitted = summary["total"] - len(rows)
+        if omitted > 0:
+            print()
+            print(f"{omitted} repo workflow/task items omitted from default view; rerun with --all or --json.")
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Inventory local automation surfaces.")
+    parser.add_argument("--version", action="version", version=f"{TOOL_NAME} {TOOL_VERSION}")
+    parser.add_argument("command", nargs="?", default="census", choices=["census"])
+    parser.add_argument("--projects-root", default=str(DEFAULT_PROJECTS_ROOT))
+    parser.add_argument("--json", action="store_true", help="emit full JSON")
+    parser.add_argument("--all", action="store_true", help="show all items in human output")
+    parser.add_argument("--write", action="store_true", help=f"write snapshot to {short_path(LAST_JSON)}")
+    parser.add_argument("--quiet", action="store_true", help="suppress stdout; useful with --write in schedulers")
+    parser.add_argument("--source", action="append", help="filter by source, e.g. launchd, hermes, codex")
+    parser.add_argument("--kind", action="append", help="filter by kind, e.g. dogfood, qa, ablation")
+    parser.add_argument("--grep", help="case-insensitive search across normalized rows")
+    parser.add_argument("--attention", action="store_true", help="show rows flagged as needing attention")
+    args = parser.parse_args(argv)
+
+    report = collect_all(Path(args.projects_root).expanduser())
+    if args.write:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        LAST_JSON.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    display_report = filtered_report(report, args)
+    if args.quiet:
+        return 0
+    if args.json:
+        print(json.dumps(display_report, indent=2, sort_keys=True))
+    else:
+        print_table(display_report, include_all=args.all)
+        if args.write:
+            print()
+            print(f"wrote: {short_path(LAST_JSON)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
