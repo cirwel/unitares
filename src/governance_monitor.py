@@ -27,6 +27,17 @@ from config.governance_config import config
 from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
+_VERDICT_SEVERITY = {"safe": 0, "caution": 1, "high-risk": 2}
+
+
+def _more_severe_verdict(left: Optional[str], right: Optional[str]) -> Optional[str]:
+    """Return the higher-severity governance verdict without downgrading unknowns."""
+    if left not in _VERDICT_SEVERITY:
+        return right if right in _VERDICT_SEVERITY else left
+    if right not in _VERDICT_SEVERITY:
+        return left
+    return right if _VERDICT_SEVERITY[right] > _VERDICT_SEVERITY[left] else left
+
 # Import audit logging and calibration for accountability and self-awareness
 from src.audit_log import audit_logger
 from src.calibration import calibration_checker
@@ -1208,13 +1219,16 @@ class UNITARESMonitor:
         )
 
         # ── Behavioral Verdict Override ──
-        # Behavioral assessment is the PRIMARY verdict source. ODE verdict
-        # is computed above but overwritten here.
+        # Behavioral assessment can add independent evidence, but it must not
+        # erase a worse self-attested phi/drift signal. Otherwise a maturing
+        # behavioral EMA can invert risk during monotonically worsening
+        # complexity/confidence/drift check-ins.
         from config.governance_config import GovernanceConfig as GovConfig
         if GovConfig.BEHAVIORAL_VERDICT_ENABLED and self._behavioral_state.confidence >= 0.3:
             beh_verdict_map = {"safe": "safe", "caution": "caution", "high-risk": "high-risk"}
-            unitares_verdict = beh_verdict_map.get(behavioral_assessment.verdict, unitares_verdict)
-            risk_score = behavioral_assessment.risk
+            behavioral_verdict = beh_verdict_map.get(behavioral_assessment.verdict)
+            unitares_verdict = _more_severe_verdict(unitares_verdict, behavioral_verdict)
+            risk_score = max(float(risk_score), float(behavioral_assessment.risk))
 
         oscillation_state, response_tier, cirs_result, damping_result = self._run_cirs(
             risk_score=risk_score,

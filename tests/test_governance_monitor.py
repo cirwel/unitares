@@ -1081,6 +1081,35 @@ class TestEstimateRisk:
         risk = monitor.estimate_risk({'response_text': 'Test'}, score_result=score_result)
         assert 0.0 <= risk <= 1.0
 
+    def test_worsening_declared_inputs_do_not_lower_risk_after_behavioral_override(self):
+        """Behavioral risk may add signal, but must not erase worse self-attested risk."""
+        monitor = UNITARESMonitor("test-risk-monotonic", load_state=False)
+        sequence = [
+            (0.40, 0.70, []),
+            (0.95, 0.15, [0.6, 0.5, 0.7]),
+            (1.00, 0.05, [0.9, 0.8, 0.9]),
+        ]
+
+        risks = []
+        verdicts = []
+        for complexity, confidence, drift in sequence:
+            result = monitor.process_update(
+                {
+                    "response_text": "risk monotonicity regression",
+                    "complexity": complexity,
+                    "ethical_drift": drift,
+                },
+                confidence=confidence,
+            )
+            risks.append(result["metrics"]["risk_score"])
+            verdicts.append(result["metrics"]["verdict"])
+
+        assert all(
+            later >= earlier - 1e-9
+            for earlier, later in zip(risks, risks[1:])
+        ), f"risk must not invert for worsening inputs: {risks}"
+        assert verdicts[-1] == "high-risk"
+
 
 # ============================================================================
 # make_decision

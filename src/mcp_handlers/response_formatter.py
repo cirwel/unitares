@@ -28,6 +28,51 @@ _ACTIONABLE_MARGINS = frozenset({"tight", "warning", "critical"})
 # the same payload carried margin/nearest_edge/reflection — the lens hid the
 # very state it exists to reflect).
 _STEADY_VERDICTS = frozenset({"proceed", "continue", "safe"})
+_ACTION_VERDICTS = frozenset({"pause", "reject"})
+_ACTIONABLE_POLICY_VERDICTS = frozenset({"caution", "high-risk"})
+_KNOWN_POLICY_VERDICTS = _STEADY_VERDICTS | _ACTIONABLE_POLICY_VERDICTS
+
+
+def _policy_evaluation(response_data: dict) -> dict:
+    policy = response_data.get("policy_evaluation")
+    return policy if isinstance(policy, dict) else {}
+
+
+def _policy_inputs(response_data: dict) -> dict:
+    inputs = _policy_evaluation(response_data).get("inputs")
+    return inputs if isinstance(inputs, dict) else {}
+
+
+def _agent_facing_verdict_raw(response_data: dict, decision: dict, metrics: dict) -> str:
+    """Choose the verdict vocabulary for agent-facing summary surfaces.
+
+    `decision.action` answers "may the agent continue?" while
+    `policy_evaluation.inputs.verdict` answers "what valence did the policy
+    consume?". A guided proceed is still cautionary, so mirror/top-level
+    verdicts must not collapse it to a healthy "proceed".
+    """
+    action = decision.get("action")
+    if action in _ACTION_VERDICTS:
+        return str(action)
+
+    policy = _policy_evaluation(response_data)
+    inputs = _policy_inputs(response_data)
+    policy_verdict = inputs.get("verdict")
+    if policy_verdict in _ACTIONABLE_POLICY_VERDICTS:
+        return str(policy_verdict)
+
+    metrics_verdict = metrics.get("verdict")
+    if metrics_verdict in _ACTIONABLE_POLICY_VERDICTS:
+        return str(metrics_verdict)
+
+    if policy.get("sub_action") == "guide" or decision.get("sub_action") == "guide":
+        return "guide"
+
+    if policy_verdict in _KNOWN_POLICY_VERDICTS:
+        return str(policy_verdict)
+    if metrics_verdict in _KNOWN_POLICY_VERDICTS:
+        return str(metrics_verdict)
+    return str(action or "continue")
 
 
 def _copy_passthrough_fields(response_data: dict, result: dict, fields: tuple) -> None:
@@ -258,7 +303,7 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     # surface. Internal consumers read decision["action"] / metrics["verdict"]
     # as bare strings; only the agent-facing payload key is wrapped.
     from src.governance_glossary import explain_verdict
-    verdict_raw = decision.get("action", "continue")
+    verdict_raw = _agent_facing_verdict_raw(response_data, decision, metrics)
     verdict = explain_verdict(verdict_raw)
 
     # Collect mirror signals from enrichment-produced data
@@ -383,11 +428,15 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     # already rides on result["verdict"].next_action.
     if verdict_raw not in _STEADY_VERDICTS:
         facts = []
-        risk = metrics.get("risk_score")
+        policy_inputs = _policy_inputs(response_data)
+        risk = policy_inputs.get("risk_score", metrics.get("risk_score"))
         if isinstance(risk, (int, float)):
             facts.append(f"risk {risk:.0%}")
-        margin_val = decision.get("margin")
-        edge = decision.get("nearest_edge")
+        basin = policy_inputs.get("basin")
+        if isinstance(basin, str) and basin != "high":
+            facts.append(f"{basin} basin")
+        margin_val = policy_inputs.get("margin", decision.get("margin"))
+        edge = policy_inputs.get("nearest_edge", decision.get("nearest_edge"))
         if isinstance(margin_val, str) and margin_val in _ACTIONABLE_MARGINS:
             facts.append(f"{margin_val} margin" + (f" at the {edge} edge" if edge else ""))
         elif edge:
