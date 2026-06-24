@@ -440,7 +440,7 @@ def test_onboard_response_surfaces_ownership_proof_version_top_level():
 
     result = build_onboard_response_data(
         agent_uuid="11111111-2222-3333-4444-555555555555",
-        structured_agent_id="agent_11111111",
+        response_agent_id="agent_11111111",
         agent_label=None,
         stable_session_id="agent-111",
         is_new=True,
@@ -492,7 +492,7 @@ def test_response_omits_ownership_proof_version_when_disabled():
     support_disabled = {"enabled": False, "secret_source": None}
     result = build_onboard_response_data(
         agent_uuid="11111111-2222-3333-4444-555555555555",
-        structured_agent_id="agent_11111111",
+        response_agent_id="agent_11111111",
         agent_label=None,
         stable_session_id="agent-111",
         is_new=True,

@@ -24,7 +24,7 @@ from src.agent_identity_auth import (
     check_agent_status,
     check_agent_id_default,
     validate_agent_id_format,
-    require_agent_id,
+    require_explicit_agent_id,
     generate_api_key,
     verify_agent_ownership,
     require_agent_auth,
@@ -149,23 +149,23 @@ class TestValidateAgentIdFormat:
 
 
 # --------------------------------------------------------------------------- #
-# require_agent_id
+# require_explicit_agent_id
 # --------------------------------------------------------------------------- #
 
 class TestRequireAgentId:
     def test_missing_agent_id_errors(self, clean_metadata):
-        agent_id, err = require_agent_id({})
+        agent_id, err = require_explicit_agent_id({})
         assert agent_id is None
         assert err is not None
         assert "agent_id is required" in err.text
 
     def test_valid_new_agent_id_passes(self, clean_metadata):
-        agent_id, err = require_agent_id({"agent_id": "fresh_session_001"})
+        agent_id, err = require_explicit_agent_id({"agent_id": "fresh_session_001"})
         assert err is None
         assert agent_id == "fresh_session_001"
 
     def test_invalid_format_new_agent_rejected(self, clean_metadata):
-        agent_id, err = require_agent_id({"agent_id": "monitor"})
+        agent_id, err = require_explicit_agent_id({"agent_id": "monitor"})
         assert agent_id is None
         assert err is not None
 
@@ -173,19 +173,19 @@ class TestRequireAgentId:
         # 'monitor' is normally rejected by format, but an already-registered
         # agent_id must still be usable — format gate only applies to new IDs.
         clean_metadata["monitor"] = _make_agent("monitor")
-        agent_id, err = require_agent_id({"agent_id": "monitor"})
+        agent_id, err = require_explicit_agent_id({"agent_id": "monitor"})
         assert err is None
         assert agent_id == "monitor"
 
     def test_reject_existing_blocks_collision(self, clean_metadata):
         clean_metadata["taken"] = _make_agent("taken")
-        agent_id, err = require_agent_id({"agent_id": "taken"}, reject_existing=True)
+        agent_id, err = require_explicit_agent_id({"agent_id": "taken"}, reject_existing=True)
         assert agent_id is None
         assert err is not None
         assert "collision" in err.text.lower()
 
     def test_reject_existing_allows_fresh_id(self, clean_metadata):
-        agent_id, err = require_agent_id({"agent_id": "brand_new_id"}, reject_existing=True)
+        agent_id, err = require_explicit_agent_id({"agent_id": "brand_new_id"}, reject_existing=True)
         assert err is None
         assert agent_id == "brand_new_id"
 

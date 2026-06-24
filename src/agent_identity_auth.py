@@ -121,9 +121,17 @@ def validate_agent_id_format(agent_id: str) -> tuple[bool, str, str]:
     return True, "", ""
 
 
-def require_agent_id(arguments: dict, reject_existing: bool = False) -> tuple[str | None, TextContent | None]:
+def require_explicit_agent_id(arguments: dict, reject_existing: bool = False) -> tuple[str | None, TextContent | None]:
     """
     Require explicit agent_id, validate format, return error if missing or invalid.
+
+    NOTE (council 2026-06-24): this is the legacy explicit-only validator (no
+    session-binding, no alias canonicalization, no strict-mode FALLBACK). It was
+    renamed from ``require_agent_id`` to remove a name collision with the
+    load-bearing write-gate resolver ``mcp_handlers.support.agent_auth.require_agent_id``
+    (the canonical 1→2→3 resolution-order resolver). For session-bound caller
+    identity, prefer that one; this validator only checks a literally-supplied
+    ``agent_id`` string.
 
     Args:
         arguments: Tool arguments dict containing 'agent_id'

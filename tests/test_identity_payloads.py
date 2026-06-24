@@ -103,7 +103,7 @@ def test_build_identity_diag_payload_includes_principal_when_present(monkeypatch
 def test_build_onboard_response_data_includes_thread_and_workflow_when_verbose():
     payload = build_onboard_response_data(
         agent_uuid="uuid-123",
-        structured_agent_id="agent-123",
+        response_agent_id="agent-123",
         agent_label="Tester",
         stable_session_id="sess-123",
         is_new=True,
@@ -265,7 +265,7 @@ def test_onboard_response_threads_server_inferred_downgrade():
     weak in the onboard() response identity_assurance."""
     payload = build_onboard_response_data(
         agent_uuid="uuid-5",
-        structured_agent_id="agent-5",
+        response_agent_id="agent-5",
         agent_label=None,
         stable_session_id="sess-5",
         is_new=False,
@@ -411,7 +411,7 @@ def test_fresh_mint_weak_binding_is_framed_as_baseline_not_deficiency():
 def _onboard_kwargs(**overrides):
     base = dict(
         agent_uuid="uuid-min",
-        structured_agent_id="agent-min",
+        response_agent_id="agent-min",
         agent_label="Tester",
         stable_session_id="sess-min",
         is_new=True,
