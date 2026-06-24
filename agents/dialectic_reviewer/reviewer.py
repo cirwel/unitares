@@ -168,17 +168,20 @@ def _coerce_bool(value: Any) -> bool:
 async def call_reviewer_model(prompt: str, model: str = DEFAULT_MODEL) -> str:
     """Run the local heterogeneous model in THIS process (not via the server's
     call_model tool, whose 30s timeout is shorter than gemma4's 43–70s budget).
-    Localhost Ollama, OpenAI-compat — no paid API."""
-    from openai import OpenAI  # local import: only the runner process needs it
+    Localhost Ollama, OpenAI-compat — no paid API.
 
-    client = OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
+    Uses the ASYNC client + ``await`` so the ~40-70s model call does not block the
+    event loop (this is an ``async def`` driven by ``asyncio.run``)."""
+    from openai import AsyncOpenAI  # local import: only the runner process needs it
+
+    client = AsyncOpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": int(os.getenv("UNITARES_DIALECTIC_REVIEW_MAX_TOKENS", "1024")),
         "temperature": 0.2,
     }
-    resp = client.chat.completions.create(**kwargs)
+    resp = await client.chat.completions.create(**kwargs)
     return resp.choices[0].message.content or ""
 
 
