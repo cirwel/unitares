@@ -387,6 +387,68 @@ def _evict_stale_entries() -> None:
             del _transport_identity_cache[k]
 
 
+async def _maybe_recover_via_x_agent_id(
+    identity_result: Dict[str, Any],
+    x_agent_id_header: Optional[str],
+    session_key: str,
+) -> Optional[str]:
+    """PATH 2.75: rebind a freshly-created session to an existing UUID supplied
+    via the ``X-Agent-Id`` header (reconnection when the session key changed,
+    e.g. a Pi restart), UNLESS that UUID is substrate-anchored arriving over
+    HTTP.
+
+    #802 parity (council 2026-06-24): PATH 2.75 was the one sibling resume path
+    missing the ``_substrate_http_reject`` gate that PATH 1 (cache/prefix) and
+    PATH 2 (PG session) already enforce. A copyable ``X-Agent-Id`` header bearing
+    a substrate resident's UUID must not rebind the session to it over HTTP —
+    only a UDS peer (kernel-attested, ``peer_pid`` present) may recover a
+    substrate UUID. The gate is self-scoping: non-substrate UUIDs and UDS callers
+    pass through untouched, so legitimate Pi/Lumen reconnection over UDS is
+    unaffected; only the same-host copyable-header exfiltration path is denied.
+
+    Mutates ``identity_result`` in place on a successful rebind and returns the
+    (possibly rebound) bound agent UUID. On refusal or any error it leaves the
+    freshly-created identity in place — the safe denial — and never raises.
+    """
+    bound_agent_id = identity_result.get("agent_uuid")
+    if not (identity_result.get("created") and x_agent_id_header):
+        return bound_agent_id
+    is_uuid = len(x_agent_id_header) == 36 and x_agent_id_header.count("-") == 4
+    if not is_uuid:
+        return bound_agent_id
+    try:
+        from ..identity.handlers import _agent_exists_in_postgres, _cache_session
+        if not await _agent_exists_in_postgres(x_agent_id_header):
+            return bound_agent_id
+        # Substrate-over-HTTP gate — same one PATH 1/2 apply.
+        from ..identity.resolution import _substrate_http_reject
+        if await _substrate_http_reject(
+            x_agent_id_header, source="path2_75_x_agent_id_recovery"
+        ) is not None:
+            logger.warning(
+                "[DISPATCH] X-Agent-Id recovery refused for substrate-anchored "
+                "UUID %s... over HTTP; keeping freshly-created identity "
+                "(resident must connect via UNITARES_UDS_SOCKET).",
+                x_agent_id_header[:8],
+            )
+            return bound_agent_id
+        logger.info(
+            "[DISPATCH] X-Agent-Id recovery: rebinding session to existing agent "
+            "%s... (was about to create %s...)",
+            x_agent_id_header[:8], (bound_agent_id or "?")[:8],
+        )
+        identity_result["agent_uuid"] = x_agent_id_header
+        identity_result["created"] = False
+        identity_result["persisted"] = True
+        identity_result["source"] = "x_agent_id_recovery"
+        # Cache this session → UUID binding for future requests
+        await _cache_session(session_key, x_agent_id_header)
+        return x_agent_id_header
+    except Exception as e:
+        logger.debug(f"[DISPATCH] X-Agent-Id recovery failed: {e}")
+        return bound_agent_id
+
+
 async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     """Extract session identity, resolve onboard pin, bind agent."""
     _clear_middleware_identity(arguments)
@@ -775,31 +837,10 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                     token_agent_uuid=_token_agent_uuid,
                     spawn_reason="dispatch_auto_mint",
                 )
-        bound_agent_id = identity_result.get("agent_uuid")
-
-        # PATH 2.75: X-Agent-Id UUID recovery
-        # If session resolution created a NEW identity but X-Agent-Id header contains
-        # a known UUID, rebind to the existing agent instead of creating a duplicate.
-        # This handles reconnection when session key changes (e.g., Pi restart).
-        if identity_result.get("created") and x_agent_id_header:
-            is_uuid = len(x_agent_id_header) == 36 and x_agent_id_header.count("-") == 4
-            if is_uuid:
-                try:
-                    from ..identity.handlers import _agent_exists_in_postgres, _cache_session
-                    if await _agent_exists_in_postgres(x_agent_id_header):
-                        logger.info(
-                            f"[DISPATCH] X-Agent-Id recovery: rebinding session to existing "
-                            f"agent {x_agent_id_header[:8]}... (was about to create {bound_agent_id[:8]}...)"
-                        )
-                        bound_agent_id = x_agent_id_header
-                        identity_result["agent_uuid"] = x_agent_id_header
-                        identity_result["created"] = False
-                        identity_result["persisted"] = True
-                        identity_result["source"] = "x_agent_id_recovery"
-                        # Cache this session → UUID binding for future requests
-                        await _cache_session(session_key, x_agent_id_header)
-                except Exception as e:
-                    logger.debug(f"[DISPATCH] X-Agent-Id recovery failed: {e}")
+        # PATH 2.75: X-Agent-Id UUID recovery (substrate-over-HTTP gated, #802).
+        bound_agent_id = await _maybe_recover_via_x_agent_id(
+            identity_result, x_agent_id_header, session_key
+        )
 
         # Mark dispatch-created identities as ephemeral
         if identity_result.get("created") and not identity_result.get("persisted"):
