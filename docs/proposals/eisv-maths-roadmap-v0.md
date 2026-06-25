@@ -227,14 +227,36 @@ First task: inventory which of these the runtime already emits (`outcome_event`,
 
 ---
 
-## 8. Open knobs — [L3], the operator's, held open
+## 8. L3 decisions — RESOLVED by operator (2026-06-25)
 
-1. **Humility floor (§4a):** does high-confidence individuality go all the way
-   (`w→0`) or keep a permanent humility term toward the class? Its *meaning* is
-   now fixed (how much external check before granting individuality, per the
-   priority ordering); only its *amount* is a value call.
-2. **Hysteresis amount (§4c):** dwell-time before a residual becomes a verdict —
-   the damping's old job, relocated to the policy. How generous is "generous".
+The ontology knobs are now decided. Recorded as direction; each lands as its own
+flagged change.
+
+0. **Φ → telemetry, not a verdict floor.** Φ stops gating decisions; the
+   per-agent residual / behavioral path becomes authoritative and Φ is kept only
+   as a telemetry field. Cleanest expression of axiom 2 (Φ is the RLHF/
+   punish-toward-ideal shape), and now *evidenced safe*: the Stage-B safety-floor
+   probe (`scripts/analysis/eisv_stage_b_safety_floor.py`, 2026-06-25) shows
+   currently-safe agents at residual p99≈6.8 vs caution ≈10 — clean separation,
+   ~1% regression floor — so demoting Φ doesn't strand healthy agents. (NB:
+   supersedes the *purpose* of the A.2 coupling — once Φ is telemetry, keeping
+   its verdict invariant is moot; A.2 stays correct as the interim while Φ still
+   gates, i.e. until this lands.)
+
+1. **Resident ground truth = "whatever we can."** No canonical per-resident
+   source required; take every exogenous signal and tier it (§7): Watcher
+   resolve/dismiss (shipped, #1061), CI/test outcomes, dialectic outcomes,
+   operator corrections. Breadth over purity-of-source; wire opportunistically,
+   weighted by trust tier.
+
+2. **Hysteresis ≈ 0.5–0.6** (§4c) — explicitly an *arbitrary starting guess*, to
+   be tuned against outcomes once the bridge accrues labels. Initial dwell/
+   smoothing constant; not derived.
+
+3. **Humility = structural, not a tuned scalar** (§4a). Per the operator: "an
+   unquantifiable thing." Stays a *stance* (nice/provocable/forgiving reciprocity,
+   §4c) expressed via anchor-coverage modulation — no humility *number* to set,
+   no floor to pick.
 
 ---
 
