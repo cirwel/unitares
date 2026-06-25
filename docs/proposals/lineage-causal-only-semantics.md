@@ -1,8 +1,26 @@
 # Causal-only lineage declaration
 
-Status: DRAFT (operator-decided 2026-06-14; pending council)
+Status: IMPLEMENTED (declaration-time liveness gate shipped; see "As-built" below)
 Author: agent ec46292a (lineage to 1b4172bb)
 Related: PR #720 (archival liveness gate — the safety net under this change)
+
+> **As-built (2026-06-25).** The declaration-time liveness guard described
+> here is live, not pending. It is the **liveness gate only** — the broader
+> "blanket new_session ban" framing in the older "Proposed implementation"
+> section below was superseded by the REFINED decision (gate on liveness, keep
+> new_session edges flowing as provisional). What shipped:
+>
+> | Piece | Location |
+> |---|---|
+> | Declaration-time liveness gate | `src/mcp_handlers/identity/handlers.py` — `_r2_pre_check_and_declare` (runs before the cross-role check) |
+> | `subagent` / `compaction` exemption | same function — `if spawn_reason not in ("subagent", "compaction")` |
+> | Reject mechanism (clear + `lineage_coincidental_rejected` audit) | mirrors the `lineage_cross_role_rejected` path; fail-open on DB error (`get_live_bindings` → `[]` → allow), symmetric with #720 |
+> | Tests | `tests/test_lineage_liveness_guard.py` (live→reject, dead→provisional, exempt→skip) |
+> | Agent-facing nudge (stop steering to new_session lineage) | `src/tool_descriptions.py` |
+> | Ontology | `docs/ontology/identity.md` §"Lineage is causal, not coincidental" |
+>
+> The open questions below were resolved by what shipped — answers inline in
+> that section.
 
 ## Decision (REFINED post-council, operator-confirmed 2026-06-14)
 
@@ -76,15 +94,29 @@ not confirmed data.
    contract (Minimal Agent Workflow + Identity rules), `docs/ontology/identity.md`,
    `commands/governance-start.md`, `skills/governance-lifecycle/SKILL.md`.
 
-## Open questions for council
+## Open questions for council — RESOLVED by what shipped
 
-- Does dropping new_session edges break R2 evaluation or trajectory-genesis
-  seeding for the *legitimate* serial-handoff case — and is that case now
-  required to use `spawn_reason="explicit"`? Confirm the explicit path seeds
-  genesis identically.
-- Write-time hard-drop vs. record-then-immediately-demote via the existing
-  state machine: which is truer to the framework and keeps audit trail?
-- Liveness guard exemption for `subagent` — confirm the dispatcher-alive case
-  is the only legitimate live-parent and nothing else relies on live-parent
-  edges.
-- Is there an existing "PR 3 consumer gating" effort this overlaps/collides with?
+- **Does dropping new_session edges break R2 / trajectory-genesis seeding for
+  the legitimate serial-handoff case?** Moot — we did **not** drop new_session
+  edges. The refined decision gates on liveness only: a `new_session` (or
+  `explicit`) declaration against a **dead** parent stays on the normal
+  provisional → R1 path, so genesis seeding and R2 evaluation are unchanged for
+  genuine serial handoffs. Only the **live-parent** (concurrent-sibling) case is
+  rejected.
+- **Write-time hard-drop vs. record-then-demote?** Resolved to **mirror the
+  cross-role path**: `_r2_pre_check_and_declare` calls
+  `clear_lineage_declaration(agent_uuid)` and emits a
+  `lineage_coincidental_rejected` audit event. The durable audit trail survives
+  in the event stream (same posture council accepted for
+  `lineage_cross_role_rejected`); the row's `parent_agent_id`/`spawn_reason`
+  columns are cleared in sync so the downstream FSM never reads back a rejected
+  edge.
+- **Liveness guard exemption for `subagent` (and `compaction`)?** Confirmed and
+  shipped: both are exempt because their parent is legitimately still running
+  (dispatcher alive / same live session past a context boundary). All other
+  spawn reasons — `explicit`, `new_session`, and unset/unknown — are
+  liveness-checked (conservative default).
+- **Overlap with PR 3 consumer gating?** No collision observed; the guard sits
+  at the declaration site (`_r2_pre_check_and_declare`) ahead of the existing
+  cross-role pre-check, and the two rejection paths are independent
+  (`rejected_coincidental` short-circuits before `rejected_cross_role`).
