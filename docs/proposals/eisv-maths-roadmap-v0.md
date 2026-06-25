@@ -249,9 +249,27 @@ flagged change.
    operator corrections. Breadth over purity-of-source; wire opportunistically,
    weighted by trust tier.
 
-2. **Hysteresis ≈ 0.5–0.6** (§4c) — explicitly an *arbitrary starting guess*, to
-   be tuned against outcomes once the bridge accrues labels. Initial dwell/
-   smoothing constant; not derived.
+2. **Hysteresis — measured small, and mostly already pre-paid** (§4c). The
+   operator's `0.5–0.6` was flagged as an arbitrary guess; measuring the residual
+   (`scripts/analysis/eisv_residual_autocorr.py`, 2026-06-25) replaces it:
+   - lag-1 residual autocorrelation **ρ = 0.994** (16 agents, 6357 step-pairs);
+     **90%** of >p90 excursions persist beyond one check-in — the residual barely
+     flickers, so it needs *little* added hysteresis (≪ 0.5–0.6).
+   - **The smoothing already exists in the wrong place.** That ρ is high *because*
+     the behavioral EISV the residual is built on is itself EMA-smoothed (alphas
+     ~0.08–0.15). The hysteresis is **pre-paid by the estimator.** Stacking a
+     0.5–0.6 policy dwell on top would be **double-damping — re-importing the
+     `delta=0.4` over-damping disease one layer up** (an arbitrary constant *and*
+     a compounded smoothing). DO NOT re-introduce 0.5–0.6 as a fresh magic number.
+   - So the real question is *placement*, not value: to get the roadmap's
+     "responsive sensor, calm policy," **reduce the behavioral alpha and move a
+     small deliberate dwell into the policy** — keep the *total* near today's, do
+     not add to it.
+   - Seams: can't cleanly separate true persistence from the existing EMA without
+     unsmoothing the behavioral path; can't validate that small hysteresis catches
+     real drift (vs misses it) until the anchor bridge has outcome labels. This is
+     a data-grounded *estimate* ("small, mostly already spent"), not yet a
+     *validated* value.
 
 3. **Humility = structural, not a tuned scalar** (§4a). Per the operator: "an
    unquantifiable thing." Stays a *stance* (nice/provocable/forgiving reciprocity,
