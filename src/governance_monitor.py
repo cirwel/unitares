@@ -38,6 +38,35 @@ def _more_severe_verdict(left: Optional[str], right: Optional[str]) -> Optional[
         return left
     return right if _VERDICT_SEVERITY[right] > _VERDICT_SEVERITY[left] else left
 
+
+def resolve_verdict_risk(
+    phi_verdict: Optional[str],
+    phi_risk: float,
+    behavioral_verdict: Optional[str],
+    behavioral_risk: float,
+    *,
+    phi_telemetry: bool,
+) -> tuple:
+    """Combine the Φ-derived and behavioral verdict/risk into the final pair.
+
+    Default (``phi_telemetry=False``): Φ floors the result — the verdict is the
+    *more severe* of the two and risk is the max, so behavioral cannot erase a
+    worse self-attested Φ/drift signal (historical behavior).
+
+    Φ→telemetry (``phi_telemetry=True``): when the behavioral assessment is usable
+    it is authoritative — Φ no longer floors verdict or risk. This can only
+    *de-escalate* relative to the floor (behavioral ≤ more_severe(Φ, behavioral)),
+    so it never introduces a pause; it removes Φ's over-flagging of hard work.
+    A missing behavioral verdict falls through to the Φ-floor path (cold-start
+    prior). See config.phi_telemetry_only / eisv roadmap §8.0.
+    """
+    if phi_telemetry and behavioral_verdict is not None:
+        return behavioral_verdict, float(behavioral_risk)
+    return (
+        _more_severe_verdict(phi_verdict, behavioral_verdict),
+        max(float(phi_risk), float(behavioral_risk)),
+    )
+
 # Import audit logging and calibration for accountability and self-awareness
 from src.audit_log import audit_logger
 from src.calibration import calibration_checker
@@ -1236,12 +1265,19 @@ class UNITARESMonitor:
         # erase a worse self-attested phi/drift signal. Otherwise a maturing
         # behavioral EMA can invert risk during monotonically worsening
         # complexity/confidence/drift check-ins.
-        from config.governance_config import GovernanceConfig as GovConfig
+        from config.governance_config import GovernanceConfig as GovConfig, phi_telemetry_only
         if GovConfig.BEHAVIORAL_VERDICT_ENABLED and self._behavioral_state.confidence >= 0.3:
             beh_verdict_map = {"safe": "safe", "caution": "caution", "high-risk": "high-risk"}
             behavioral_verdict = beh_verdict_map.get(behavioral_assessment.verdict)
-            unitares_verdict = _more_severe_verdict(unitares_verdict, behavioral_verdict)
-            risk_score = max(float(risk_score), float(behavioral_assessment.risk))
+            # Φ floors verdict/risk by default; UNITARES_PHI_TELEMETRY_ONLY makes
+            # the behavioral/residual assessment authoritative instead (Φ → telemetry).
+            unitares_verdict, risk_score = resolve_verdict_risk(
+                unitares_verdict,
+                risk_score,
+                behavioral_verdict,
+                behavioral_assessment.risk,
+                phi_telemetry=phi_telemetry_only(),
+            )
 
         oscillation_state, response_tier, cirs_result, damping_result = self._run_cirs(
             risk_score=risk_score,
