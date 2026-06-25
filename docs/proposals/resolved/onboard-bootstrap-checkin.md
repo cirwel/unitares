@@ -239,7 +239,7 @@ Callers that explicitly want synthetic rows opt in via a query parameter (`inclu
 
 ### 4.1 Filter audit deliverable (dialectic caveat 2)
 
-**The implementation PR MUST include `docs/proposals/onboard-bootstrap-checkin.filter-audit.md`** — a checklist artifact listing every read path identified, the decision (exclude / include / opt-in), and the test that enforces the decision. The "if >10 read paths, escalate" threshold becomes meaningful only when read paths are counted.
+**The implementation PR MUST include `docs/proposals/resolved/onboard-bootstrap-checkin.filter-audit.md`** — a checklist artifact listing every read path identified, the decision (exclude / include / opt-in), and the test that enforces the decision. The "if >10 read paths, escalate" threshold becomes meaningful only when read paths are counted.
 
 The code review's grep already enumerated 7 confirmed read paths; the audit deliverable starts from that list and is exhaustive (the implementer adds anything the code review missed). Confirmed starting set:
 
@@ -327,7 +327,7 @@ Existing tests that touch onboard or filter state rows MUST be reviewed for regr
    - `DROP MATERIALIZED VIEW core.mv_latest_agent_states; CREATE MATERIALIZED VIEW ...` (recreate with `synthetic` projected). The matview's existing fallback path (`src/db/mixins/state.py:103` try/except) covers the brief recreate window.
    - **No identity-table backfill required** — the substrate-earned check uses the existing `core.substrate_claims` registry (S19 PR1) plus a small Pi-resident allowlist resolved in Phase 2. Phase 1 is pure `agent_state` schema work.
 2. **Schema + handler change** for `onboard.initial_state` — `BootstrapStateParams` model in `src/mcp_handlers/schemas/core.py`, INSERT in `handle_onboard_v2` wrapped with `asyncio.wait_for(..., timeout=0.5)`, substrate-earned defensive check.
-3. **Filter audit + filter changes.** Produce `docs/proposals/onboard-bootstrap-checkin.filter-audit.md` (the deliverable from §4.1). Add `synthetic = false` filter to every read site enumerated in the audit, with one test per site. **This is the danger step.** If the audit surfaces >10 call sites, escalate to council.
+3. **Filter audit + filter changes.** Produce `docs/proposals/resolved/onboard-bootstrap-checkin.filter-audit.md` (the deliverable from §4.1). Add `synthetic = false` filter to every read site enumerated in the audit, with one test per site. **This is the danger step.** If the audit surfaces >10 call sites, escalate to council.
 4. **Hook update** — Claude Code `hooks/session-start`, Codex `plugins/codex/...`, dispatch bots if applicable. Substrate-earned bypass at hook level.
 5. **Population observability** — query path (§6.1) and dashboard panel (§6.2). Sentinel signal (§6.3) is post-merge.
 

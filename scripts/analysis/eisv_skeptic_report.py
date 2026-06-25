@@ -52,7 +52,7 @@ TASK_OUTCOMES = (
 
 SMOOTHING_ALPHA = 1.0
 
-# Probe A — dispersion-as-feature (docs/proposals/eisv-distributional-signal-probe-v0.md).
+# Probe A — dispersion-as-feature (docs/proposals/resolved/eisv-distributional-signal-probe-v0.md).
 # A point-estimate EISV hides its own uncertainty; the dispersion of recent state
 # snapshots is a stored proxy for it. We aggregate stddev over the snapshots in a
 # window strictly before the lead cutoff (leak-safe), and require a minimum count

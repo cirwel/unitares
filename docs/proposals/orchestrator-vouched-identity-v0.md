@@ -8,7 +8,7 @@ cutover. Wave 3 deferred to the 2026-06-24 gate read. This doc is the gate artif
 an inert/flag-gated PoC seam may open after this review.
 **Author identity:** `04d9ae79-fb64-4cba-b5f3-6b88feb5121a` (fresh process-instance, no lineage).
 **Companion to:** `docs/ontology/identity.md` (§"Transport-level continuity",
-Appendix "Substrate-Earned Identity"); `docs/proposals/s19-attestation-mechanism.md`;
+Appendix "Substrate-Earned Identity"); `docs/proposals/resolved/s19-attestation-mechanism.md`;
 `docs/proposals/agent-orchestrator-beam-v0.md`; issues #807, #810, #805 (S19 substrate-gate).
 **Writer-locked surface:** identity (docs + `src/mcp_handlers/identity/` + gov-plugin).
 Operator is the merge gate. Do NOT auto-merge.

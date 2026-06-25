@@ -178,7 +178,7 @@ sandbox) can run.
 
 ## Cross-references
 
-- Wave 1 status roll-up: `docs/proposals/wave-1-completion-status-2026-06-14.md`
+- Wave 1 status roll-up: `docs/proposals/resolved/wave-1-completion-status-2026-06-14.md`
 - RFC parity bindings: `docs/proposals/beam-wave-1-sentinel.md` §B2 (v0.1.1),
   §B3 (v0.1.3), §C3 (v0.1.1 + v0.1.3)
 - Python: `agents/sentinel/agent.py`, `agents/sentinel/forced_release_alarm.py`
