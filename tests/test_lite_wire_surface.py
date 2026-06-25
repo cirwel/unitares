@@ -32,9 +32,17 @@ sys.path.insert(0, str(project_root))
 # the registry. Must happen before reading get_tool_registry().
 import src.mcp_handlers  # noqa: F401
 
+import pytest
+
 from src.mcp_handlers.decorators import get_tool_registry
 from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES, resolve_tool_alias
-from src.tool_modes import LITE_MODE_TOOLS, get_tools_for_mode
+from src.tool_modes import (
+    LITE_MODE_TOOLS,
+    MINIMAL_MODE_TOOLS,
+    OPERATOR_READONLY_MODE_TOOLS,
+    OPERATOR_RECOVERY_MODE_TOOLS,
+    get_tools_for_mode,
+)
 
 
 def _lite_wire_surface() -> set[str]:
@@ -90,6 +98,36 @@ def test_every_lite_tool_is_backed_by_handler_or_alias():
     assert not unbacked, (
         "LITE_MODE_TOOLS entries with no register=True handler and no alias "
         f"— these would silently never appear on the wire: {unbacked}"
+    )
+
+
+@pytest.mark.parametrize(
+    "mode_name, mode_tools",
+    [
+        ("minimal", MINIMAL_MODE_TOOLS),
+        ("lite", LITE_MODE_TOOLS),
+        ("operator_readonly", OPERATOR_READONLY_MODE_TOOLS),
+        ("operator_recovery", OPERATOR_RECOVERY_MODE_TOOLS),
+    ],
+)
+def test_every_mode_tool_is_backed_by_handler_or_alias(mode_name, mode_tools):
+    """Every tool listed in ANY deployable mode set must be a real wire tool.
+
+    A name is a wire tool only if it is a register=True handler or a workflow
+    alias. A register=False handler (reachable solely via a consolidated
+    action-router, e.g. the old `store_knowledge_graph` / `check_recovery_options`
+    entries) is NOT standalone-advertisable, so listing it in a mode set silently
+    promises a tool the server never exposes. This guards that drift across every
+    mode, not just lite.
+    """
+    registry = set(get_tool_registry().keys())
+    aliases = {a for a in AGENT_WORKFLOW_ALIASES if resolve_tool_alias(a)[1] is not None}
+    backed = registry | aliases
+
+    unbacked = sorted(mode_tools - backed)
+    assert not unbacked, (
+        f"{mode_name} mode lists tools with no register=True handler and no alias "
+        f"— these would never appear on the wire: {unbacked}"
     )
 
 
