@@ -79,7 +79,7 @@ The server exposes ~50 tools; most are consolidated behind an `action` parameter
 - **`bind_session`** — bind a session to an existing identity (cross-process anti-hijack gate).
 
 ### Check-in & metrics
-- **`process_agent_update`** / `sync_state` — the main check-in. Key params: `response_text`, `complexity` [0–1], `confidence` [0–1], `ethical_drift` ([float,float,float]), `recent_tool_results` (array of `{tool, summary, is_bad}`), `response_mode` (`minimal`/`compact`/`standard`/`full`/`mirror`/`auto`). Returns the verdict + EISV state, risk, coherence, margin.
+- **`process_agent_update`** / `sync_state` — the main check-in. Key params: `response_text`, `complexity` [0–1], `confidence` [0–1], `ethical_drift` ([float,float,float]), `recent_tool_results` (array of `{tool, summary, is_bad}`), `response_mode` (`auto`/`compact`/`mirror`/`full`; aliases: `lite`→`compact`, `verbose`→`full`; legacy: `minimal`, `standard`). Returns the verdict + EISV state, risk, coherence, margin.
 - **`get_governance_metrics`** / `check_working_state` — read-only snapshot, no state update. Fleet-scoped read when unbound.
 
 ### Knowledge graph

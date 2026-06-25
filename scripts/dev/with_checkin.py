@@ -218,7 +218,7 @@ def build_checkin_payload(result: CommandResult, context: CheckinContext) -> dic
         if context.confidence is not None
         else default_confidence(result.exit_code),
         "task_type": context.task_type or infer_task_type(workflow),
-        "response_mode": "minimal",
+        "response_mode": "compact",
         "recent_tool_results": [
             {
                 "kind": infer_evidence_kind(workflow, result.argv),

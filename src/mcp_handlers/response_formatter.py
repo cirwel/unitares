@@ -1,5 +1,5 @@
 """
-Response Formatter — Filters process_agent_update response by verbosity mode.
+Response Formatter — filters process_agent_update responses by agent-facing mode.
 
 Extracted from core.py to reduce its size and make response modes independently testable.
 """
@@ -31,6 +31,13 @@ _STEADY_VERDICTS = frozenset({"proceed", "continue", "safe"})
 _ACTION_VERDICTS = frozenset({"pause", "reject"})
 _ACTIONABLE_POLICY_VERDICTS = frozenset({"caution", "high-risk"})
 _KNOWN_POLICY_VERDICTS = _STEADY_VERDICTS | _ACTIONABLE_POLICY_VERDICTS
+_SUPPORTED_RESPONSE_MODES = frozenset({"compact", "full", "mirror", "minimal", "standard"})
+_RESPONSE_MODE_ALIASES = {
+    "lite": "compact",
+    "verbose": "full",
+    "interpreted": "standard",
+}
+_ACTIONABLE_HEALTH_STATUSES = frozenset({"at_risk", "critical"})
 
 
 def _policy_evaluation(response_data: dict) -> dict:
@@ -86,6 +93,60 @@ def _copy_passthrough_fields(response_data: dict, result: dict, fields: tuple) -
         if value is not None:
             result[field] = value
 
+
+def _coerce_response_mode(value: Any) -> str:
+    """Return the canonical spelling for one response mode value."""
+    mode = str(value or "auto").strip().lower()
+    if not mode:
+        mode = "auto"
+    return _RESPONSE_MODE_ALIASES.get(mode, mode)
+
+
+def _auto_response_mode(response_data: dict) -> str:
+    """Pick the default shape for process_agent_update.
+
+    Routine check-ins get one stable compact shape. Mirror is reserved for
+    payloads that are already actionable: pause/reject, guide/caution/high-risk,
+    or an explicitly at-risk/critical health status.
+    """
+    metrics = response_data.get("metrics", {}) if isinstance(response_data.get("metrics"), dict) else {}
+    decision = response_data.get("decision", {}) if isinstance(response_data.get("decision"), dict) else {}
+    health_status = (
+        response_data.get("health_status")
+        or metrics.get("health_status")
+        or response_data.get("status")
+        or "healthy"
+    )
+
+    action = decision.get("action")
+    policy = _policy_evaluation(response_data)
+    policy_inputs = _policy_inputs(response_data)
+    policy_verdict = policy_inputs.get("verdict")
+    metrics_verdict = metrics.get("verdict")
+
+    if (
+        health_status in _ACTIONABLE_HEALTH_STATUSES
+        or action in _ACTION_VERDICTS
+        or policy_verdict in _ACTIONABLE_POLICY_VERDICTS
+        or metrics_verdict in _ACTIONABLE_POLICY_VERDICTS
+        or policy.get("sub_action") == "guide"
+        or decision.get("sub_action") == "guide"
+    ):
+        return "mirror"
+    return "compact"
+
+
+def _resolve_response_mode(raw_mode: Any, response_data: dict) -> str:
+    """Normalize aliases and resolve auto into the actual response shape."""
+    mode = _coerce_response_mode(raw_mode)
+    if mode == "auto":
+        return _auto_response_mode(response_data)
+    if mode in _SUPPORTED_RESPONSE_MODES:
+        return mode
+    logger.debug("Unknown process_agent_update response_mode=%r; using compact", raw_mode)
+    return "compact"
+
+
 def _emit_mirror_signal_records(response_data: dict, response_mode: str, meta: Any) -> None:
     """Phase 0 mirror-effectiveness instrumentation (mirror-effectiveness-measurement-v0).
 
@@ -128,12 +189,17 @@ def format_response(
 
     Priority: per-call response_mode > agent preferences > env var > auto
 
-    Modes:
-    - "auto": Select mode based on health_status
-    - "standard"/"interpreted": Human-readable interpretation via GovernanceState
-    - "minimal": Action + EISV snapshot + margin
-    - "compact"/"lite": Brief metrics + decision summary
-    - "full": No filtering (return as-is)
+    Preferred modes:
+    - "auto": compact for routine check-ins, mirror for actionable states
+    - "compact": brief metrics + decision summary
+    - "mirror": actionable self-awareness signals
+    - "full": no filtering (return as-is)
+
+    Compatibility modes:
+    - "lite": alias for compact
+    - "verbose": alias for full
+    - "standard"/"interpreted": human-readable interpretation via GovernanceState
+    - "minimal": legacy bare action + EISV snapshot + margin
 
     Args:
         response_data: The complete response dict built by process_agent_update
@@ -166,33 +232,14 @@ def format_response(
         pass
 
     # Priority: per-call > agent pref > env var > auto
-    response_mode = (
+    raw_response_mode = (
         arguments.get("response_mode") or
         agent_verbosity_pref or
         os.getenv("UNITARES_PROCESS_UPDATE_RESPONSE_MODE", "auto")
-    ).strip().lower()
+    )
+    response_mode = _resolve_response_mode(raw_response_mode, response_data)
 
     using_default_mode = not arguments.get("response_mode") and not agent_verbosity_pref
-
-    # AUTO MODE: Adaptive verbosity based on health status
-    if response_mode == "auto":
-        metrics = response_data.get("metrics", {}) if isinstance(response_data.get("metrics"), dict) else {}
-        health_status = (
-            response_data.get("health_status") or
-            metrics.get("health_status") or
-            response_data.get("status") or
-            "healthy"
-        )
-        # Auto-select mirror for disembodied agents (no sensor_data)
-        has_sensor_data = response_data.get("_has_sensor_data", False)
-        if health_status == "healthy" and not has_sensor_data:
-            response_mode = "mirror"
-        elif health_status == "healthy":
-            response_mode = "minimal"
-        elif health_status in ("at_risk", "critical"):
-            response_mode = "standard"
-        else:
-            response_mode = "compact"
 
     # Phase 0 mirror-effectiveness instrumentation: emit structured signal
     # records (every resolved mode) with surfaced = (mode == "mirror"), so the
@@ -209,7 +256,7 @@ def format_response(
         response_data = _format_mirror(response_data, saved_trust_tier, meta=meta)
 
     # STANDARD MODE: Human-readable interpretation
-    elif response_mode in ("standard", "interpreted"):
+    elif response_mode == "standard":
         response_data = _format_standard(response_data, task_type, saved_trust_tier)
 
     # MINIMAL MODE: Bare essentials
@@ -217,7 +264,7 @@ def format_response(
         response_data = _format_minimal(response_data, using_default_mode, saved_trust_tier)
 
     # COMPACT MODE: Brief metrics + decision
-    elif response_mode in ("compact", "lite"):
+    elif response_mode == "compact":
         response_data = _format_compact(response_data, using_default_mode, saved_trust_tier)
 
     # Strip optional context for minimal/compact/mirror (reduce noise for established agents)
@@ -566,7 +613,7 @@ def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_t
     if nearest_edge:
         result["nearest_edge"] = nearest_edge
     if using_default_mode:
-        result["_tip"] = "Set verbosity: update_agent_metadata(preferences={'verbosity':'minimal'})"
+        result["_tip"] = "Legacy minimal mode is bare; prefer response_mode='compact' for routine check-ins."
     if saved_trust_tier:
         # Minimal mode is intentionally terse — emit the name string only.
         # Agents wanting tier-scale + meaning should use mirror/compact.
@@ -646,7 +693,7 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         from src.governance_glossary import explain_trust_tier
         result["trust_tier"] = explain_trust_tier(saved_trust_tier)
     if using_default_mode:
-        result["_tip"] = "Verbosity options: response_mode='minimal'|'compact'|'full', or set permanently via update_agent_metadata(preferences={'verbosity':'minimal'})"
+        result["_tip"] = "Routine mode is compact. Use response_mode='mirror' for diagnostics or 'full' for raw payload."
     if "thread_context" in response_data:
         result["thread_context"] = response_data["thread_context"]
     if "identity_assurance" in response_data:

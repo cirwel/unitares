@@ -37,10 +37,10 @@ def enrichment(order: int, *, lite_safe: bool = False):
     """Register a function in the enrichment pipeline at *order*.
 
     lite_safe=True marks the enrichment as response-shaping only — safe to
-    skip when the caller requested response_mode='minimal' (the lite path
-    used by embedded brokers like anima-broker that read action+margin and
-    discard the rest). Default False keeps existing behavior for callers
-    that use non-lite modes.
+    skip when the caller explicitly requested response_mode='minimal' (the
+    legacy skinny path used by embedded brokers that read action+margin and
+    discard the rest). Default False keeps existing behavior for callers that
+    use richer modes.
     """
     def decorator(fn: Callable) -> Callable:
         _ENRICHMENTS.append(_EnrichmentEntry(
@@ -63,11 +63,11 @@ async def run_enrichment_pipeline(ctx) -> None:
     runs serially today; this instrumentation is the prerequisite for
     deciding which enrichments are safe to parallelize.
     """
-    is_lite = (getattr(ctx, "arguments", None) or {}).get("response_mode") == "minimal"
+    is_minimal = (getattr(ctx, "arguments", None) or {}).get("response_mode") == "minimal"
     timings: List[tuple[str, int]] = []
     for entry in _ENRICHMENTS:
-        if is_lite and entry.lite_safe:
-            timings.append((entry.name, -1))  # -1 sentinel = skipped (lite)
+        if is_minimal and entry.lite_safe:
+            timings.append((entry.name, -1))  # -1 sentinel = skipped (minimal)
             continue
         start = time.perf_counter()
         try:

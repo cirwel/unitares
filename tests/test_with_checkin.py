@@ -53,7 +53,7 @@ def test_build_checkin_payload_records_successful_s22_evidence():
     from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
 
     ProcessAgentUpdateParams.model_validate(payload)
-    assert payload["response_mode"] == "minimal"
+    assert payload["response_mode"] == "compact"
     assert payload["client_session_id"] == "sid-123"
     assert "continuity_token" not in payload
     assert payload["task_type"] == "testing"

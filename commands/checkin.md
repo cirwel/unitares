@@ -31,7 +31,7 @@ Inputs:
 - `complexity`: estimate `0.0-1.0`
 - `confidence`: honest estimate `0.0-1.0`
 - use the active session binding or `client_session_id`; do not auto-inject `continuity_token` into `process_agent_update`
-- use `response_mode="mirror"` by default for Codex
+- use `response_mode="compact"` by default for Codex; reserve `response_mode="mirror"` for drift, guide/pause verdicts, or diagnostic review
 
 Guidelines:
 
@@ -48,6 +48,6 @@ After the call:
 - report identity-assurance or continuity warnings when they are surfaced
 - report margin or edge warnings when present
 - report any guidance briefly
-- report the mirror question when present
+- report mirror signals or reflection prompts when present
 - if verdict is `pause` or `reject`, recommend `request_dialectic_review`
 - if verdict is `guide`, summarize the guidance and adjust behavior

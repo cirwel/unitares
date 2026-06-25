@@ -420,31 +420,30 @@ class TestFormatResponse:
         result = format_response(data, {"response_mode": "lite"})
         assert result["_mode"] == "compact"
 
-    def test_auto_mode_healthy_becomes_mirror_for_disembodied(self):
+    def test_verbose_alias_for_full(self):
+        data = _sample_response()
+        original_keys = set(data.keys())
+        result = format_response(data, {"response_mode": "verbose"})
+        assert set(result.keys()) == original_keys
+
+    def test_auto_mode_healthy_becomes_compact_for_disembodied(self):
         data = _sample_response()
         data["health_status"] = "healthy"
         result = format_response(data, {"response_mode": "auto"})
-        assert result["_mode"] == "mirror"  # Disembodied (no sensor_data) -> mirror
+        assert result["_mode"] == "compact"
 
-    def test_auto_mode_healthy_becomes_minimal_for_embodied(self):
+    def test_auto_mode_healthy_becomes_compact_for_embodied(self):
         data = _sample_response()
         data["health_status"] = "healthy"
         data["_has_sensor_data"] = True
         result = format_response(data, {"response_mode": "auto"})
-        assert result["_mode"] == "minimal"  # Embodied (has sensor_data) -> minimal
+        assert result["_mode"] == "compact"
 
-    def test_auto_mode_at_risk_becomes_standard(self):
-        """auto mode with at_risk health should become standard (needs GovernanceState)."""
+    def test_auto_mode_at_risk_becomes_mirror(self):
         data = _sample_response()
         data["health_status"] = "at_risk"
-        # Standard mode needs GovernanceState imports — mock them
-        mock_state = MagicMock()
-        mock_state.interpret_state.return_value = {"summary": "At risk"}
-        with patch("src.mcp_handlers.response_formatter.GovernanceState", return_value=mock_state, create=True):
-            with patch("src.mcp_handlers.response_formatter._format_standard") as mock_std:
-                mock_std.return_value = {"_mode": "standard", "state": "at risk"}
-                result = format_response(data, {"response_mode": "auto"})
-                mock_std.assert_called_once()
+        result = format_response(data, {"response_mode": "auto"})
+        assert result["_mode"] == "mirror"
 
     def test_auto_mode_unknown_becomes_compact(self):
         data = _sample_response()
@@ -475,9 +474,7 @@ class TestFormatResponse:
         # Same end-to-end check for mirror mode.
         data = _sample_response()
         data["trajectory_identity"]["trust_tier"] = {"tier": 3, "name": "verified"}
-        # Force mirror via no sensor_data + healthy.
-        data["health_status"] = "healthy"
-        result = format_response(data, {"response_mode": "auto"})
+        result = format_response(data, {"response_mode": "mirror"})
         assert result["_mode"] == "mirror"
         tt = result["trust_tier"]
         assert tt["name"] == "verified"
@@ -1030,19 +1027,19 @@ class TestFormatResponseMirror:
         result = format_response(data, {"response_mode": "mirror"})
         assert result["_mode"] == "mirror"
 
-    def test_auto_selects_mirror_for_disembodied(self):
+    def test_auto_selects_compact_for_steady_disembodied(self):
         data = _sample_response()
         data["health_status"] = "healthy"
         data["_has_sensor_data"] = False
         result = format_response(data, {"response_mode": "auto"})
-        assert result["_mode"] == "mirror"
+        assert result["_mode"] == "compact"
 
-    def test_auto_selects_minimal_for_embodied(self):
+    def test_auto_selects_compact_for_steady_embodied(self):
         data = _sample_response()
         data["health_status"] = "healthy"
         data["_has_sensor_data"] = True
         result = format_response(data, {"response_mode": "auto"})
-        assert result["_mode"] == "minimal"
+        assert result["_mode"] == "compact"
 
     def test_strip_context_applied_for_mirror(self):
         data = _sample_response()

@@ -80,7 +80,8 @@ _DESCRIPTION_APPENDICES = {
     ),
     "process_agent_update": (
         "\n\nCURRENT HIGH-VALUE PARAMETERS:\n"
-        "- response_mode: minimal | compact | standard | full | mirror | auto\n"
+        "- response_mode: auto | compact | mirror | full "
+        "(aliases: lite->compact, verbose->full; legacy: minimal, standard)\n"
         "- require_strong_identity: reject updates unless identity assurance is strong\n"
         "- recent_tool_results: list of ToolResultEvidence items, shaped as "
         "{tool, summary, is_bad}; kind is inferred when omitted\n"

@@ -617,8 +617,8 @@ class TestProcessAgentUpdate:
             assert "error" in data or "unexpected" in json.dumps(data).lower()
 
     @pytest.mark.asyncio
-    async def test_lite_alias_sets_minimal_response_mode(self, mock_server, mock_monitor):
-        """lite=true sets response_mode to minimal."""
+    async def test_lite_alias_sets_compact_response_mode(self, mock_server, mock_monitor):
+        """lite=true sets response_mode to compact."""
         agent_uuid = "test-uuid-lite"
         meta = _make_metadata(status="active", total_updates=5)
         mock_server.agent_metadata = {agent_uuid: meta}
