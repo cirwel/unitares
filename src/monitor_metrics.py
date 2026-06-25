@@ -97,9 +97,13 @@ def get_monitor_metrics(monitor: Any, include_state: bool = True) -> Dict:
     )
     status = health_status_obj.value
 
-    # Compute Phi and verdict from current state
+    # Compute Phi and verdict from current state. Stage A coupling: detrend S by
+    # the per-class setpoint σ when UNITARES_S_SETPOINT is on, so the displayed/
+    # read-path Φ matches the verdict-path Φ (monitor_phi) under the attractor
+    # move. Off → no-op (state.unitaires_state unchanged).
+    from src.monitor_setpoint import phi_eval_state
     phi = phi_objective(
-        state=state.unitaires_state,
+        state=phi_eval_state(monitor, state.unitaires_state),
         delta_eta=[0.0, 0.0, 0.0],
         weights=DEFAULT_WEIGHTS
     )
