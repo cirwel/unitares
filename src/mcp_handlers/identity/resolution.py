@@ -80,18 +80,42 @@ def _audit_session_resolve_miss(
 _CLIENT_HINT_SHAPE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 
 
+def _has_reserved_leading_token(value: str) -> bool:
+    """True when a generated identifier component would enter reserved space."""
+    from ..validators import RESERVED_NAMES, RESERVED_PREFIXES
+
+    normalized = value.lower().replace("-", "_")
+    leading_token = normalized.split("_", 1)[0]
+    reserved_roots = {prefix.rstrip("_") for prefix in RESERVED_PREFIXES}
+    return normalized in RESERVED_NAMES or leading_token in reserved_roots
+
+
+def _format_agent_id_component(value: str, *, reserved_prefix: str) -> str:
+    """Format a caller-derived component and neutralize reserved leading tokens."""
+    component = value.strip()
+    component = component.replace("-", " ").replace(".", " ").replace("_", " ")
+    component = "_".join(word.capitalize() for word in component.split())
+    if component and _has_reserved_leading_token(component):
+        return f"{reserved_prefix}_{component}"
+    return component
+
+
 def _is_valid_client_hint(client_hint: Optional[str]) -> bool:
     """Validate client_hint is a short identifier, not free text.
 
     `client_hint` is meant to identify the client *type* (cursor, vscode,
     claude_desktop). Free-form descriptions ("Anthropic Claude, mobile app,
     dogfooding UX review") must not become identifier fragments — descriptors
-    are not handles.
+    are not handles. Privileged namespace roots are also rejected here; the
+    caller falls back to an anonymous/detected identity instead of minting an id
+    that validate_agent_id_reserved_names later refuses.
     """
     if not client_hint:
         return False
     stripped = client_hint.strip()
     if stripped.lower() in ("unknown", "mcp", ""):
+        return False
+    if _has_reserved_leading_token(stripped):
         return False
     return bool(_CLIENT_HINT_SHAPE.match(stripped))
 
@@ -154,15 +178,11 @@ def _generate_agent_id(model_type: Optional[str] = None, client_hint: Optional[s
 
     if model_type:
         # Normalize and format model name
-        model = model_type.strip()
-        # Capitalize first letter of each word, replace separators with underscore
-        model = model.replace("-", " ").replace(".", " ").replace("_", " ")
-        model = "_".join(word.capitalize() for word in model.split())
+        model = _format_agent_id_component(model_type, reserved_prefix="Model")
 
         # Third-party clients get prefixed to prevent identity confusion
         if valid_hint and _client_differs_from_model(client_hint, model_type):
-            client = client_hint.strip().replace("_", " ").replace("-", " ")
-            client = "_".join(word.capitalize() for word in client.split())
+            client = _format_agent_id_component(client_hint, reserved_prefix="Client")
             return f"{client}_{model}_{timestamp}"
 
         return f"{model}_{timestamp}"

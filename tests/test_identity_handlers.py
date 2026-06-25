@@ -1902,6 +1902,31 @@ class TestHandleOnboardV2:
         assert "what_this_does" not in data
 
     @pytest.mark.asyncio
+    async def test_onboard_schedules_presence_lease(
+        self, patch_onboard_deps, mock_db, mock_redis
+    ):
+        """Successful onboard acquires agent:/ presence before first check-in."""
+        from src.mcp_handlers.identity import handlers as h
+
+        mock_redis.get.return_value = None
+        mock_db.get_session.return_value = None
+        mock_db.find_agent_by_label.return_value = None
+        mock_db.get_identity.side_effect = [
+            None,
+            None,
+            SimpleNamespace(identity_id="new-ident", metadata={}),
+        ]
+
+        with patch(
+            "src.mcp_handlers.identity.agent_presence_lease.schedule_agent_presence_heartbeat"
+        ) as schedule_mock:
+            result = await h.handle_onboard_v2({"client_session_id": "onboard-lease"})
+
+        data = parse_result(result)
+        assert data["success"] is True
+        schedule_mock.assert_called_once_with(data["uuid"], data["client_session_id"])
+
+    @pytest.mark.asyncio
     async def test_onboard_full_mode_restores_descriptive_envelope(
         self, patch_onboard_deps, mock_db, mock_redis
     ):

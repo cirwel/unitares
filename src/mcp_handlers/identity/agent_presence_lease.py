@@ -1,16 +1,17 @@
 """Producer side of the ephemeral-agent liveness lease.
 
-On the check-in path, keep a fresh ``agent:/<uuid>`` remote_heartbeat presence
-lease in the lease plane so the archival gate (``has_live_agent_lease``, the
+On the onboard and check-in paths, keep a fresh ``agent:/<uuid>``
+remote_heartbeat presence lease in the lease plane so the archival gate
+(``has_live_agent_lease``, the
 consumer in ``process_binding``) can tell a live ephemeral agent from an exited
 one. This is what makes the #720 false-archival protection real for ephemeral
 agents — which today write no process binding, so binding-liveness is blind to
 them.
 
-Why the check-in path (``process_agent_update``), not onboard: substrate-agnostic
-liveness invariants belong on the check-in path. BEAM residents and raw-MCP
-agents bypass onboard, but everything that is alive checks in. First check-in
-acquires the lease; later check-ins heartbeat it.
+Why both paths: substrate-agnostic liveness invariants belong on the check-in
+path, because BEAM residents and raw-MCP agents bypass onboard. But a live MCP
+agent can do accountable work between successful onboard and first check-in, so
+onboard must acquire the initial lease too. Later check-ins heartbeat it.
 
 Safety / non-interference:
   * Fire-and-forget and best-effort — a lease failure must NEVER affect the
@@ -125,3 +126,20 @@ async def _refresh_presence(client, agent_uuid: str, client_session_id: Optional
     new_id = getattr(result, "lease_id", None)
     if new_id:
         _lease_ids[agent_uuid] = str(new_id)
+
+
+def schedule_agent_presence_heartbeat(
+    agent_uuid: Optional[str], client_session_id: Optional[str] = None
+) -> None:
+    """Schedule a best-effort presence heartbeat without affecting caller flow."""
+    try:
+        if not agent_uuid:
+            return
+        from src.background_tasks import create_tracked_task
+
+        create_tracked_task(
+            heartbeat_agent_presence(agent_uuid, client_session_id),
+            name="agent_presence_lease",
+        )
+    except Exception as e:  # pragma: no cover - scheduling must never affect callers
+        logger.debug(f"[AGENT_PRESENCE] scheduling skipped: {e}")

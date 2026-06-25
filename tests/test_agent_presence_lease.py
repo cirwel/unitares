@@ -1,10 +1,10 @@
 """Producer side of ephemeral-agent liveness lease (agent_presence_lease).
 
-Pins the check-in-path lease lifecycle: no-op without uuid/client, acquire-then-
-cache, heartbeat-when-cached, re-acquire-on-heartbeat-failure, and never-raises
-(fire-and-forget must never affect the check-in). The SDK request models are
-guarded-imported (None in this isolated env), so tests monkeypatch them + the
-client factory with fakes.
+Pins the lease lifecycle used by onboard and check-in: no-op without uuid/client,
+acquire-then-cache, heartbeat-when-cached, re-acquire-on-heartbeat-failure, and
+never-raises (fire-and-forget must never affect the caller). The SDK request
+models are guarded-imported (None in this isolated env), so tests monkeypatch
+them + the client factory with fakes.
 """
 
 from types import SimpleNamespace
