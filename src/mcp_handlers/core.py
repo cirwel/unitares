@@ -341,19 +341,17 @@ def _schedule_agent_presence_heartbeat(ctx) -> None:
     Best-effort side-effect on the check-in path. Never raises into the caller,
     and deliberately NOT routed through the activity tracker / governance-tool
     path, so the lease heartbeat cannot feed loop-detection (the auto-heartbeat
-    false-positive class). See agent_presence_lease for why this lives on the
-    check-in path rather than onboard.
+    false-positive class). See agent_presence_lease for why check-in remains a
+    liveness trigger even though onboard now acquires the initial lease.
     """
     try:
-        agent_uuid = getattr(ctx, "agent_uuid", "") or ""
-        if not agent_uuid:
-            return
-        from src.background_tasks import create_tracked_task
-        from src.mcp_handlers.identity.agent_presence_lease import heartbeat_agent_presence
+        from src.mcp_handlers.identity.agent_presence_lease import (
+            schedule_agent_presence_heartbeat,
+        )
 
-        create_tracked_task(
-            heartbeat_agent_presence(agent_uuid, getattr(ctx, "client_session_id", None)),
-            name="agent_presence_lease",
+        schedule_agent_presence_heartbeat(
+            getattr(ctx, "agent_uuid", "") or "",
+            getattr(ctx, "client_session_id", None),
         )
     except Exception as e:  # pragma: no cover - scheduling must never affect the check-in
         logger.debug(f"agent presence lease scheduling skipped: {e}")

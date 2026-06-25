@@ -193,7 +193,11 @@ class TestGenerateAgentId:
             {"client_hint": "my editor"},    # invalid hint → fallback
             {"client_hint": ""},             # empty hint → fallback
             {"client_hint": "unknown"},      # filtered hint → fallback
+            {"client_hint": "governance_ui"},  # reserved hint → fallback
             {"model_type": "claude-opus-4-5", "client_hint": "claude_desktop"},
+            {"model_type": "governance-core"},
+            {"model_type": "auth-proxy"},
+            {"model_type": "governance-core", "client_hint": "admin_cli"},
             {"client_hint": "cursor"},
         ):
             minted = self.generate(**kwargs)
@@ -203,22 +207,6 @@ class TestGenerateAgentId:
                 f"gate rejects — server would refuse its own identity"
             )
             assert ok == minted
-
-        # KNOWN GAP, pinned deliberately (council 2026-06-10): a model_type
-        # or client_hint that BEGINS with a reserved family word still mints
-        # a name the gate rejects — e.g. model_type="governance-core" →
-        # "Governance_Core_<date>" → reserved prefix 'governance_' (the gate
-        # lowercases before matching). Same incident class as the anonymous
-        # fallback, for NAMED callers; rare today (no real model/client name
-        # starts with a reserved word) and the mint-side remedy is an
-        # identity-surface design call — tracked as a follow-up. Pinned here
-        # so the gap stays visible instead of silent:
-        named_collision = self.generate(model_type="governance-core")
-        _, err = validate_agent_id_reserved_names(named_collision)
-        assert err is not None, (
-            "named reserved-word collision unexpectedly resolved — update "
-            "this pin, the coupling-test scope, and close the follow-up"
-        )
 
     def test_whitespace_model_type(self):
         result = self.generate(model_type="  claude-haiku  ")
@@ -910,4 +898,3 @@ class TestSetAgentLabelStructuredIdMigration:
 # ============================================================================
 # Additional coverage: handle_identity_adapter structured_id regeneration (lines 1323-1345)
 # ============================================================================
-

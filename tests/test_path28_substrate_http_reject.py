@@ -270,7 +270,9 @@ async def test_force_new_bypasses_path28_and_gate() -> None:
                 # That's already statically true from the edit's
                 # location — assert by reading the source.
                 import inspect
-                src = inspect.getsource(resolution_mod.resolve_session_identity)
+                module_src = inspect.getsource(resolution_mod)
+                start = module_src.index("async def resolve_session_identity(")
+                src = module_src[start:]
                 # The gate's marker comment should appear inside the
                 # `if token_agent_uuid and not force_new:` block.
                 assert "[SUBSTRATE_HTTP_REJECT]" in src

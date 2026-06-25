@@ -2612,6 +2612,20 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # sweep in src/background_tasks.py is sufficient. Users who want an
     # immediate sweep can still call the archive_orphan_agents tool.
 
+    # Presence lease: successful onboard is enough proof that this process is
+    # live, even before its first check-in. Acquire/heartbeat best-effort so the
+    # archival liveness gate does not treat onboard+tool-use agents as dead.
+    try:
+        from src.mcp_handlers.identity.agent_presence_lease import (
+            schedule_agent_presence_heartbeat,
+        )
+
+        schedule_agent_presence_heartbeat(agent_uuid, stable_session_id)
+    except Exception as _presence_err:  # pragma: no cover - defensive fail-open
+        logger.debug(
+            f"[AGENT_PRESENCE] onboard scheduling failed (non-fatal): {_presence_err}"
+        )
+
     # Use lite_response to skip redundant signature
     arguments["lite_response"] = True
     return success_response(result, agent_id=agent_uuid, arguments=arguments)

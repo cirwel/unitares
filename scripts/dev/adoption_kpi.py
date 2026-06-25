@@ -12,10 +12,14 @@ numbers that baseline it:
      NAMED agents, excluding operator credentials (the dashboard).
      Baseline: 3 per 14d, and both callers were burn-in probes — real
      agent-initiated retrieval was zero.
-  3. Onboard→first-checkin conversion — distinct onboard rows whose minted
-     UUID later checks in. Requires the response-side attribution fix
-     (resolve_minted_agent_id); rows before that deploy have agent_id=NULL
-     and fall back to the core.agents join. Baseline: 60/189 = 32%.
+  3. Onboard engagement (three honest cuts). The legacy "conversion" (did a
+     ceremonial process_agent_update) is artifact-prone: ~22% of onboards are
+     infra (dispatch_beam_harness / operator / probes) that never check in by
+     design, and most real agents do value work WITHOUT the discouraged
+     ceremonial check-in. Reports: legacy `converted`; adopter-cohort
+     `cohort_engaged` (any value action — check-in / KG / outcome); and
+     `did_nothing` (onboarded, made no UUID-attributed call = true bounce).
+     The legacy ~19% is mostly measurement artifact; true bounce is far lower.
   4. Ground-truth pipe health — outcome_event success rate.
      Baseline: 17% (290/416 identity_error); fixed client-side 2026-06-12.
 
@@ -67,15 +71,43 @@ def snapshot(days: int) -> dict:
               AND u.agent_id IS NOT NULL
               AND coalesce(a.label, '') NOT LIKE 'operator\\_%%'
         """,
+        # Onboard engagement. The legacy `converted` (did a process_agent_update)
+        # under-counts badly: ~22% of onboards are infra (dispatch_beam_harness,
+        # operator, probes) that never check in by design, and most real agents
+        # do value work (KG, outcomes) without the ceremonial check-in — which the
+        # session-start hook explicitly discourages. So we report three honest cuts:
+        #   converted        — legacy (process_agent_update only); kept for continuity
+        #   cohort_engaged    — real-agent cohort that did ANY value action
+        #   did_nothing       — onboarded and made no UUID-attributed call (true bounce)
+        # NOTE: BEAM-dispatch agents check in off-path → counted as non-converting
+        # (issue tracked); excluded from the adopter cohort so they don't distort it.
         "onboard_conversion": """
+            WITH a AS (
+                SELECT a.id,
+                       (a.spawn_reason IS NULL OR a.spawn_reason NOT IN (
+                           'dispatch_beam_harness','dispatch_beam_harness_wiring_test',
+                           'operator_credential','dialectic_reviewer','burnin_probe',
+                           'perf_profile_load','scheduled_kg_audit','orchestrated_thread_anchor',
+                           'auto_onboard_no_session','compaction','rename_from_anon')
+                       ) AS is_adopter
+                FROM core.agents a
+                WHERE a.created_at > now() - make_interval(days => %(days)s)
+            ),
+            f AS (
+                SELECT a.id, a.is_adopter,
+                    EXISTS (SELECT 1 FROM audit.tool_usage t WHERE t.agent_id = a.id::text
+                            AND t.success AND t.tool_name = 'process_agent_update') AS checked_in,
+                    EXISTS (SELECT 1 FROM audit.tool_usage t WHERE t.agent_id = a.id::text AND t.success
+                            AND t.tool_name IN ('process_agent_update','knowledge','search_knowledge_graph','outcome_event')) AS engaged_value,
+                    EXISTS (SELECT 1 FROM audit.tool_usage t WHERE t.agent_id = a.id::text) AS did_anything
+                FROM a
+            )
             SELECT count(*) AS minted,
-                   count(*) FILTER (WHERE EXISTS (
-                       SELECT 1 FROM audit.tool_usage t
-                       WHERE t.tool_name = 'process_agent_update' AND t.success
-                         AND t.agent_id = a.id::text
-                   )) AS converted
-            FROM core.agents a
-            WHERE a.created_at > now() - make_interval(days => %(days)s)
+                   count(*) FILTER (WHERE checked_in) AS converted,
+                   count(*) FILTER (WHERE is_adopter) AS cohort_minted,
+                   count(*) FILTER (WHERE is_adopter AND engaged_value) AS cohort_engaged,
+                   count(*) FILTER (WHERE NOT did_anything) AS did_nothing
+            FROM f
         """,
         "outcome_pipe_health": """
             SELECT count(*) AS total,
@@ -109,6 +141,8 @@ def snapshot(days: int) -> dict:
     cc["top2_share_pct"] = round(100 * cc["top2"] / cc["total"], 1) if cc["total"] else None
     oc = out["onboard_conversion"]
     oc["conversion_pct"] = round(100 * oc["converted"] / oc["minted"], 1) if oc["minted"] else None
+    oc["cohort_engaged_pct"] = round(100 * oc["cohort_engaged"] / oc["cohort_minted"], 1) if oc["cohort_minted"] else None
+    oc["did_nothing_pct"] = round(100 * oc["did_nothing"] / oc["minted"], 1) if oc["minted"] else None
     op = out["outcome_pipe_health"]
     op["success_pct"] = round(100 * op["ok"] / op["total"], 1) if op["total"] else None
 
@@ -147,8 +181,12 @@ def main() -> int:
     print(f"  check-ins: {cc['total']} total, top-2 callers {cc['top2_share_pct']}%")
     print(f"  voluntary KG retrieval (named agents): {kg['named_searches']} calls "
           f"by {kg['distinct_agents']} agents")
-    print(f"  onboard→checkin conversion: {oc['converted']}/{oc['minted']} "
-          f"({oc['conversion_pct']}%)")
+    print(f"  onboard→checkin (legacy, ceremonial): {oc['converted']}/{oc['minted']} "
+          f"({oc['conversion_pct']}%) — counts infra + check-in only; under-reports")
+    print(f"  adopter value-engagement: {oc['cohort_engaged']}/{oc['cohort_minted']} "
+          f"({oc['cohort_engaged_pct']}%) — real-agent cohort, ANY value action (check-in/KG/outcome)")
+    print(f"  true bounce (onboarded, did nothing): {oc['did_nothing']}/{oc['minted']} "
+          f"({oc['did_nothing_pct']}%)")
     print(f"  outcome_event pipe: {op['success_pct']}% success "
           f"({op['identity_errors']} identity_errors of {op['total']})")
     pk = snap["proactive_kg_surface"]
