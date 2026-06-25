@@ -300,3 +300,43 @@ test — is essentially not being captured. CI/test-failure wiring into
 3. accept the ~498-bad-label ceiling as the current limit and let it grow;
    gold/strong separation within `external_signal` (operator-correction vs CI)
    is a later refinement (may live in `detail` jsonb).
+
+---
+
+## Appendix B — Stage B viability: anchor and EISV populations are disjoint (2026-06-25)
+
+Going to compute B's falsifiability gate (§6.3 — does the per-agent residual
+predict bad outcomes better than Φ), it turns out to be **not computable today
+for a reason deeper than thin labels: the labelled population and the EISV
+population do not intersect.**
+
+| measure | value |
+|---|---|
+| anchored (`external_signal`) outcomes | 1,632 |
+| …carrying EISV (`eisv_phi` not null) | **2** |
+| distinct agents with anchored outcomes | 137 |
+| …with *any* EISV state row | **1** |
+| …that are *baselined* (→ residual computable) | **0** |
+| anchored outcomes joinable to a prior baselined state | **0** |
+
+By contrast, EISV-at-outcome *is* recorded for the self-referential
+`server_observation` stream (100%) — exactly the rows Invariant 4 forbids as
+anchors. So the agents we can **ground** (external outcomes) have no residual,
+and the agents with rich **residuals** (residents) receive only self-referential
+outcomes. B's §6.3 gate is **structurally uncomputable** — the validation-gap
+pathology, by construction, not by label scarcity.
+
+**Revised prerequisite (supersedes "just wire test_failed"):** the EISV pipeline
+and the exogenous-anchor pipeline must be made to *overlap*. Concretely:
+(a) **snapshot the agent's EISV onto `external_signal` outcome rows** (today
+`eisv_*` is null for them), and (b) ensure resident/EISV agents actually
+**receive** external task/test/outcome labels attributed to them. Until (a)+(b),
+B's *justification* (§6.3) cannot be claimed; B's *safety-floor* (§6.1–6.2,
+non-regression) remains computable now without it.
+
+Probe / regression guard: `scripts/analysis/stage_b_viability.py` — reports the
+overlap and starts emitting the residual-vs-Φ AUC the moment it becomes non-zero.
+
+**Sequencing consequence:** Stage 0 is now two prerequisites, not one — the
+*tier filter* (shipped, `outcome_anchors.py`) **and** the *population bridge*
+(a+b above). B follows the bridge, not the filter alone.
