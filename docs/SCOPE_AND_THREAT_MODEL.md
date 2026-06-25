@@ -97,8 +97,10 @@ monitored vs. an unmonitored framing — which is a capability-elicitation probe
 different tool than this runtime drift signal. A reproducible model-organism
 demonstration of both the catch (naive sandbagging, detection AUC ≈ 1.0) and the
 blind spot (calibrated sandbagging, AUC ≈ 0.5 against the real `BehavioralEISV` +
-`assess_behavioral_state` path) is in [`demos/frt_autonomy_sandbagging/`](../demos/frt_autonomy_sandbagging/).
-A real-LLM extension (`real_llm_probe.py`) sharpens the picture against a *noisy*
+`assess_behavioral_state` path) was built as the `frt_autonomy_sandbagging`
+model-organism demo, since removed from the repo as out-of-scope (see
+[`REPO_SCOPE.md`](REPO_SCOPE.md)); its findings are recorded here.
+A real-LLM extension (`real_llm_probe.py`) sharpened the picture against a *noisy*
 honest baseline — real models are themselves overconfident on hard tasks, so the
 naive catch degrades to AUC ≈ 0.75 and the calibrated blind spot **inverts** to
 ≈ 0.19 (Integrity rates a calibrated concealer as *healthier* than honest agents),

@@ -22,7 +22,9 @@ Don't rebuild discrimination analysis — these exist and are current:
   slices with bootstrap CIs, permutation p-values, BEAM-lane exclusion.
 
 The honest current state of "does EISV discriminate / predict / prevent" lives in memory
-`project_eisv-validation-gap.md` and `demos/frt_autonomy_sandbagging/REAL_LLM_FINDINGS.md`.
+`project_eisv-validation-gap.md` (the `frt_autonomy_sandbagging` demo and its
+`REAL_LLM_FINDINGS.md` write-up were removed from the repo as out-of-scope — see
+[`REPO_SCOPE.md`](REPO_SCOPE.md); the headline below preserves the finding).
 Headline (2026-06-23): **organic-fleet validation is structurally impossible** (tool-failure
 population and EISV-bearing population are disjoint); the **`~/.unitares/analysis/eisv-validation-*`
 scheduled oneshot is a broken join — do not trust**; EISV Integrity catches naive overconfidence
@@ -39,8 +41,8 @@ calibrated concealment (~0.19)**, where **cross-framing dominates (~0.97)**.
 | `scripts/analysis/prospective_prediction_cohort.py` ✓ | Counts registry-bound holdout predictions (plumbing only, no claim) | Markdown cohort summary | current |
 | `scripts/analysis/validate_basin_gate.py` ✓ | Validates #689 basin-health gate never raises risk; healthy wobbles stay safe | Console PASS/FAIL + exit; hardcoded 06-13 Sentinel false-pause fixture | current |
 | `scripts/analysis/validate_theoretical_foundations.py` ✓ | Greps `governance_core` source for ODE/coherence terms vs theory doc | Pass/fail console | **⚠ won't run by default** — needs `governance_core/` source symlink; brittle exact-string greps |
-| `demos/frt_autonomy_sandbagging/` (`run_unitares_demo.py`) ✓ | Model-organism sandbagging through real `BehavioralEISV` | Integrity AUC naive=1.0, calibrated≈0.35 | active, 11 tests |
-| `demos/frt_autonomy_sandbagging/real_llm_probe.py` ✓ | Real-LLM (Ollama) extension; competence boundary + cross-framing | See `REAL_LLM_FINDINGS.md` | added 2026-06-23 (PR #1026) |
+| ~~`demos/frt_autonomy_sandbagging/`~~ (removed) | Model-organism sandbagging through real `BehavioralEISV` | Integrity AUC naive=1.0, calibrated≈0.35 | **removed** from repo as out-of-scope (#1043, see `REPO_SCOPE.md`); finding preserved in `SCOPE_AND_THREAT_MODEL.md` |
+| ~~`demos/frt_autonomy_sandbagging/real_llm_probe.py`~~ (removed) | Real-LLM (Ollama) extension; competence boundary + cross-framing | naive≈0.75, calibrated inverts≈0.19, cross-framing≈0.97 | **removed** with the demo (#1043); finding preserved in `SCOPE_AND_THREAT_MODEL.md` |
 | `~/.unitares/analysis/eisv-validation-2026-06-13_0900.md` ✓ | Scheduled oneshot cohort comparison | **BROKEN JOIN — null, do not trust** | retire/repoint |
 | (scratchpad) `eisv_validation/leadtime_probe.py` ✓ | Lead-time / warning-vs-reaction on real data | No advance-warning for task-failure (AUC 0.545) | not yet in repo; overlaps `eisv_skeptic_report` |
 
