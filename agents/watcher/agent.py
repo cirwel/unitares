@@ -340,6 +340,59 @@ def _make_identity_client():
     return SyncGovernanceClient(rest_url=GOV_REST_URL, transport="rest", timeout=30)
 
 
+def build_resolution_outcome_args(
+    status: str, fingerprint: str, agent_uuid: str, reason: str | None = None
+) -> dict:
+    """Map a Watcher finding resolution to an external-truth ``outcome_event``.
+
+    A *confirmed* finding means Watcher's analytical judgment was RIGHT (a good
+    outcome); a *dismissed* finding is a false positive — Watcher was WRONG (a
+    bad outcome). The adjudication is operator/agent review, i.e. ground truth
+    from *outside* the governance loop, so ``verification_source='external_signal'``.
+
+    This is the first exogenous ground-truth channel for an EISV-bearing resident:
+    today every baselined agent's outcomes are self-referential (server_observation)
+    or self-attested, so the EISV signal is structurally unfalsifiable for them
+    (docs/proposals/eisv-maths-roadmap-v0.md Appendix B). The outcome_event handler
+    auto-snapshots the agent's EISV by ``agent_id``, so we attribute to Watcher's
+    governance UUID — creating the first row where a per-agent residual and an
+    external label coexist.
+    """
+    confirmed = status == "confirmed"
+    return {
+        "agent_id": agent_uuid,
+        "outcome_type": "watcher_finding_confirmed" if confirmed else "watcher_finding_dismissed",
+        "is_bad": not confirmed,
+        "verification_source": "external_signal",
+        "detail": {
+            "fingerprint": fingerprint,
+            "resolution": status,
+            "reason": reason or "",
+        },
+    }
+
+
+def _emit_resolution_outcome(
+    client, status: str, fingerprint: str, reason: str | None = None
+) -> None:
+    """Best-effort: record a finding resolution as an external-truth outcome_event.
+
+    Failure here must never affect the resolve/dismiss itself — the mutation has
+    already succeeded by the time this runs; this only enriches the ground-truth
+    stream.
+    """
+    try:
+        uuid = (_watcher_identity or {}).get("agent_uuid")
+        if not uuid or client is None:
+            log("resolution outcome skipped: no resolved Watcher identity", "warning")
+            return
+        args = build_resolution_outcome_args(status, fingerprint, uuid, reason)
+        client.call_tool("outcome_event", args, timeout=15)
+        log(f"recorded external-truth outcome ({status}) for finding {fingerprint}")
+    except Exception as e:  # noqa: BLE001 — best-effort, never break resolution
+        log(f"resolution outcome emit skipped: {e}", "warning")
+
+
 # ---------------------------------------------------------------------------
 # Lease-plane guard for Watcher findings mutations
 # ---------------------------------------------------------------------------
@@ -2318,6 +2371,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     # --- Identity resolution (best-effort) ---
+    client = None
     try:
         client = _make_identity_client()
         resolve_identity(client)
@@ -2329,7 +2383,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.list_findings:
         return list_findings(only_open=args.only_open)
     if args.resolve:
-        return _run_with_watcher_findings_lease(
+        rc = _run_with_watcher_findings_lease(
             f"resolve {args.resolve}",
             lambda: update_finding_status(
                 args.resolve,
@@ -2339,8 +2393,11 @@ def main(argv: list[str] | None = None) -> int:
             ),
             holder_agent_id=args.agent_id,
         )
+        if rc == 0:
+            _emit_resolution_outcome(client, "confirmed", args.resolve, args.reason)
+        return rc
     if args.dismiss:
-        return _run_with_watcher_findings_lease(
+        rc = _run_with_watcher_findings_lease(
             f"dismiss {args.dismiss}",
             lambda: update_finding_status(
                 args.dismiss,
@@ -2350,6 +2407,9 @@ def main(argv: list[str] | None = None) -> int:
             ),
             holder_agent_id=args.agent_id,
         )
+        if rc == 0:
+            _emit_resolution_outcome(client, "dismissed", args.dismiss, args.reason)
+        return rc
     if args.sweep_stale:
         return _run_with_watcher_findings_lease(
             "sweep stale findings",
