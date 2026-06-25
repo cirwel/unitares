@@ -1,5 +1,7 @@
 defmodule UnitaresLeasePlane.GovernedEffectTest do
-  use ExUnit.Case, async: true
+  # async: false — record_only now durably writes to the live audit.events
+  # stream (contract §8). Each persisting test registers cleanup by key.
+  use ExUnit.Case, async: false
 
   alias UnitaresLeasePlane.GovernedEffect
 
@@ -14,6 +16,18 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       },
       overrides
     )
+  end
+
+  # A unique idempotency_key whose durable audit.events row is cleaned up when
+  # the test exits. Use for any record_only proposal that is expected to persist.
+  defp tracked_key do
+    key = "ge-test-#{System.unique_integer([:positive])}"
+    on_exit(fn -> LeaseTestHelpers.cleanup_governed_effect(key) end)
+    key
+  end
+
+  defp tracked_base(overrides \\ %{}) do
+    base(Map.merge(%{"idempotency_key" => tracked_key()}, overrides))
   end
 
   describe "validation" do
@@ -56,7 +70,7 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
     test "a clean payload is accepted" do
       assert {:ok, _} =
                GovernedEffect.handle(
-                 base(%{"payload" => %{"sha256" => "abc", "summary" => "edit"}})
+                 tracked_base(%{"payload" => %{"sha256" => "abc", "summary" => "edit"}})
                )
     end
   end
@@ -70,20 +84,111 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
 
   describe "record_only result" do
     test "no leases → recorded, uuid effect_id, empty observations, no pending custody" do
-      assert {:ok, body} = GovernedEffect.handle(base())
+      assert {:ok, body} = GovernedEffect.handle(tracked_base())
       assert body.custody_mode == "record_only"
       assert body.status == "recorded"
       assert body.effect_lane == "governed_effect"
       assert body.observations == []
       assert is_nil(body.custody_expires_at)
+      refute body.idempotent
       assert body.effect_id =~ ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
     end
 
     test "effect_id is unique per proposal" do
-      {:ok, a} = GovernedEffect.handle(base())
-      {:ok, b} = GovernedEffect.handle(base())
+      {:ok, a} = GovernedEffect.handle(tracked_base())
+      {:ok, b} = GovernedEffect.handle(tracked_base())
       refute a.effect_id == b.effect_id
     end
+  end
+
+  describe "durable recording (contract §8)" do
+    test "a record_only proposal persists one audit.events row tagged effect_lane" do
+      key = tracked_key()
+      assert {:ok, body} = GovernedEffect.handle(base(%{"idempotency_key" => key}))
+
+      assert [row] = governed_effect_rows(key)
+      assert row["effect_lane"] == "governed_effect"
+      assert row["effect_id"] == body.effect_id
+      assert row["custody_mode"] == "record_only"
+      assert row["idempotency_digest"] == body.idempotency_digest
+    end
+
+    test "proposer.agent_uuid is stored as attribution; client_session_id is never stored" do
+      key = tracked_key()
+      agent = "11111111-2222-3333-4444-555555555555"
+
+      assert {:ok, _} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => key,
+                   "proposer" => %{
+                     "agent_uuid" => agent,
+                     "client_session_id" => "SECRET-cs-token"
+                   },
+                   "provenance" => %{"session_id" => "prov-sess-7"}
+                 })
+               )
+
+      assert {agent_id, session_id, payload_text} = governed_effect_attribution(key)
+      assert agent_id == agent
+      assert session_id == "prov-sess-7"
+      # Invariant 7: the credential must appear nowhere in the durable record.
+      refute payload_text =~ "SECRET-cs-token"
+      refute payload_text =~ "client_session_id"
+    end
+  end
+
+  describe "idempotency (contract §4)" do
+    test "same key + same digest → idempotent replay of the same effect_id" do
+      key = tracked_key()
+      body = base(%{"idempotency_key" => key, "payload" => %{"summary" => "x"}})
+
+      assert {:ok, first} = GovernedEffect.handle(body)
+      refute first.idempotent
+
+      assert {:ok, second} = GovernedEffect.handle(body)
+      assert second.idempotent
+      assert second.effect_id == first.effect_id
+
+      # replay does not append a second row
+      assert [_one] = governed_effect_rows(key)
+    end
+
+    test "same key + different digest → idempotency_conflict" do
+      key = tracked_key()
+
+      assert {:ok, _} =
+               GovernedEffect.handle(base(%{"idempotency_key" => key, "surface" => "repo://a"}))
+
+      assert {:error, :idempotency_conflict} =
+               GovernedEffect.handle(base(%{"idempotency_key" => key, "surface" => "repo://b"}))
+    end
+  end
+
+  # --- audit.events probes (the durable governed-effect sink) ---
+
+  defp governed_effect_rows(key) do
+    %{rows: rows} =
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "SELECT payload::text FROM audit.events " <>
+          "WHERE event_type = 'governed_effect.record_only' AND payload->>'idempotency_key' = $1",
+        [key]
+      )
+
+    Enum.map(rows, fn [payload_text] -> Jason.decode!(payload_text) end)
+  end
+
+  defp governed_effect_attribution(key) do
+    %{rows: [[agent_id, session_id, payload_text]]} =
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "SELECT agent_id, session_id, payload::text FROM audit.events " <>
+          "WHERE event_type = 'governed_effect.record_only' AND payload->>'idempotency_key' = $1",
+        [key]
+      )
+
+    {agent_id, session_id, payload_text}
   end
 
   describe "idempotency_digest" do
