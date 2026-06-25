@@ -128,3 +128,43 @@ high-value multi-agent use here is narrow and adversarial:
 - **Red-team the recalibration before it ships:** moving `S*` 0.09 → 0.24 —
   what crosses the basin threshold, shifts a verdict band, or moves risk? That
   is verification with a determinate answer and is worth independent eyes.
+
+## Addendum (v0.1) — Stage sequencing correction
+
+The Stage-1 red-team (`scripts/analysis/eisv_critical_branch_audit.py`) found
+the recommendation ordering above is **wrong**: recommendation 2 (fix the
+attractor) is a *prerequisite* for recommendation 1 (make the manifold the
+control signal), not the reverse.
+
+Two measured facts, driving the real ODE through healthy / degrading / severe
+runs (synthetic states, not the production corpus):
+
+1. **The legacy coherence-critical branch is dead.** `state.coherence` never
+   drops below **0.493** in any scenario — including maximum drift + complexity
+   — so `state.coherence < COHERENCE_CRITICAL_THRESHOLD` (=0.40) fires **0 of
+   1200 steps every time**. Today "critical" status can only come from
+   `void_active` or `risk ≥ 0.60`; the coherence path is vestigial. This branch
+   feeds not just `status` (`governance_monitor.py:1338`) but `is_critical`
+   (`monitor_decision.py:195`) and CIRS (`monitor_cirs.py`).
+
+2. **Swapping that branch to the manifold form, *today*, flags every healthy
+   agent critical.** In the healthy run the manifold reads ≈0.168 (< 0.40) for
+   **1200/1200** steps, because the agent rests at the ODE attractor (S≈0.09)
+   while the manifold measures distance from *measured* health (S≈0.24). The
+   attractor offset makes the manifold **unthresholdable** as a control signal.
+
+**Corrected sequencing:**
+
+- **Stage A — fix the attractor first** (former rec 2): add a per-class `S`
+  setpoint so the ODE rest state matches measured healthy and manifold-at-rest
+  → ~1.0. Prerequisite for everything else. Red-team: verdict / basin / risk on
+  healthy agents.
+- **Stage B — then move the control signals** (former rec 1): once
+  manifold-at-rest is ~1.0, repoint `status` / `is_critical` / CIRS from legacy
+  `C(V)` to the manifold form and re-tune the threshold to the manifold scale.
+  Safe only after Stage A.
+- **Stage C — invert the substrate** (former rec 4): measure `E/I/S`, demote the
+  ODE to a predictor, signal = residual.
+
+The manifold form remains valid for *relative* display today; only its *absolute
+threshold* is blocked on Stage A.
