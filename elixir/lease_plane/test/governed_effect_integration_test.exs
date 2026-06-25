@@ -19,7 +19,14 @@ defmodule UnitaresLeasePlane.GovernedEffectIntegrationTest do
   setup do
     Application.put_env(:lease_plane, :bearer_token, @bearer)
     surface = unique_surface_id("effect")
-    on_exit(fn -> cleanup_surface(surface) end)
+
+    on_exit(fn ->
+      cleanup_surface(surface)
+      # record_only proposals now durably persist to audit.events (contract §8);
+      # remove this test's rows, keyed off the per-test surface (see itest_key/1).
+      cleanup_governed_effect_prefix(itest_key_prefix(surface))
+    end)
+
     {:ok, surface: surface}
   end
 
@@ -36,7 +43,7 @@ defmodule UnitaresLeasePlane.GovernedEffectIntegrationTest do
   defp effect_body(surface, overrides \\ %{}) do
     Map.merge(
       %{
-        idempotency_key: "idem-#{System.unique_integer([:positive])}",
+        idempotency_key: "#{itest_key_prefix(surface)}#{System.unique_integer([:positive])}",
         custody_mode: "record_only",
         effect_type: "file_write",
         surface: "repo://unitares/doc_update",
@@ -44,6 +51,13 @@ defmodule UnitaresLeasePlane.GovernedEffectIntegrationTest do
       },
       overrides
     )
+  end
+
+  # Per-test idempotency_key prefix derived from the (unique) lease surface, so
+  # setup's on_exit can prefix-delete every key this test minted from audit.events.
+  defp itest_key_prefix(surface) do
+    hash = :crypto.hash(:md5, surface) |> Base.encode16(case: :lower)
+    "ge-itest-#{hash}-"
   end
 
   test "free surface → would_acquire ok", ctx do
@@ -55,6 +69,17 @@ defmodule UnitaresLeasePlane.GovernedEffectIntegrationTest do
     assert [obs] = body["observations"]
     assert obs["would_acquire"] == "ok"
     assert obs["surface"] == ctx.surface
+
+    # contract §8: the proposal is durably recorded to audit.events end-to-end.
+    %{rows: [[effect_lane]]} =
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "SELECT payload->>'effect_lane' FROM audit.events " <>
+          "WHERE event_type = 'governed_effect.record_only' AND payload->>'effect_id' = $1",
+        [body["effect_id"]]
+      )
+
+    assert effect_lane == "governed_effect"
   end
 
   test "held surface → would_block names the holder, without acquiring", ctx do

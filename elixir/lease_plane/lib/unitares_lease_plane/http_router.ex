@@ -136,6 +136,20 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           reason: "execute mode not yet enabled; record_only only"
         })
 
+      {:error, :idempotency_conflict} ->
+        json(conn, 409, %{
+          ok: false,
+          error: "idempotency_conflict",
+          reason: "idempotency_key already used for a materially different effect"
+        })
+
+      {:error, :persist_failed} ->
+        json(conn, 503, %{
+          ok: false,
+          error: "persist_failed",
+          reason: "could not durably record the proposal; nothing was recorded"
+        })
+
       {:error, detail} when is_binary(detail) ->
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
     end

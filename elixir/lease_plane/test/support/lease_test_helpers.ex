@@ -47,6 +47,39 @@ defmodule LeaseTestHelpers do
     :ok
   end
 
+  @doc """
+  Cleanup hook — DELETEs governed-effect shadow rows from `audit.events` for a
+  given `idempotency_key`. The durable governed-effect record lives in the live
+  `audit.events` stream (contract §8), so tests that propose a `record_only`
+  effect must remove their rows just like `cleanup_surface/1` does for leases.
+  """
+  def cleanup_governed_effect(idempotency_key) when is_binary(idempotency_key) do
+    Postgrex.query!(
+      DB,
+      "DELETE FROM audit.events WHERE event_type = 'governed_effect.record_only' " <>
+        "AND payload->>'idempotency_key' = $1",
+      [idempotency_key]
+    )
+
+    :ok
+  end
+
+  @doc """
+  Cleanup hook — DELETEs governed-effect shadow rows whose `idempotency_key`
+  starts with `prefix`. For tests that mint several keys under one per-test
+  prefix (e.g. the HTTP integration test).
+  """
+  def cleanup_governed_effect_prefix(prefix) when is_binary(prefix) do
+    Postgrex.query!(
+      DB,
+      "DELETE FROM audit.events WHERE event_type = 'governed_effect.record_only' " <>
+        "AND payload->>'idempotency_key' LIKE $1",
+      [prefix <> "%"]
+    )
+
+    :ok
+  end
+
   @doc "Stable random UUID-as-string for holder_agent_uuid in fixtures."
   def random_uuid do
     <<a::32, b::16, c::16, d::16, e::48>> = :crypto.strong_rand_bytes(16)

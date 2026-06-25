@@ -650,6 +650,71 @@ defmodule UnitaresLeasePlane.Repo do
     )
   end
 
+  # ---------- governed-effect durable recording (contract §8) ----------
+
+  @doc """
+  Durably record a `record_only` governed-effect proposal to `audit.events`
+  with its `effect_lane` discriminator in the payload. `audit.events` is the
+  forensic sink outside the EISV predictive slice (Invariant 5); the dedicated
+  `governed_effect_events` table is deferred to the Phase 4 execute-promotion
+  migration. `agent_id`/`session_id` are non-secret attribution and may be nil.
+  """
+  @spec insert_governed_effect_event(map()) :: :ok | {:error, term()}
+  def insert_governed_effect_event(%{event_type: event_type, payload: payload} = rec)
+      when is_binary(event_type) and is_map(payload) do
+    # audit.events is range-partitioned by `ts` (no column default); supply
+    # now() explicitly or the row finds no partition (Partition key (ts) = null).
+    sql = """
+    INSERT INTO audit.events (ts, event_type, agent_id, session_id, payload)
+    VALUES (now(), $1, $2, $3, ($4::text)::jsonb)
+    """
+
+    args = [
+      event_type,
+      Map.get(rec, :agent_id),
+      Map.get(rec, :session_id),
+      Jason.encode!(payload)
+    ]
+
+    case Postgrex.query(DB, sql, args) do
+      {:ok, _} -> :ok
+      {:error, e} -> {:error, e}
+    end
+  end
+
+  @doc """
+  Look up the most recent governed-effect record for an `idempotency_key`.
+  Returns `{:ok, %{idempotency_digest, payload}}` (string-keyed payload),
+  `{:ok, nil}` when none exists, or `{:error, reason}`.
+
+  The key is unindexed in `audit.events` — acceptable at shadow volume; a
+  constraint-backed unique key arrives with the Phase 4 table.
+  """
+  @spec governed_effect_by_idempotency_key(String.t()) ::
+          {:ok, %{idempotency_digest: String.t() | nil, payload: map()}}
+          | {:ok, nil}
+          | {:error, term()}
+  def governed_effect_by_idempotency_key(idempotency_key) when is_binary(idempotency_key) do
+    sql = """
+    SELECT payload->>'idempotency_digest' AS idempotency_digest, payload::text AS payload
+    FROM audit.events
+    WHERE event_type = $1 AND payload->>'idempotency_key' = $2
+    ORDER BY ts DESC
+    LIMIT 1
+    """
+
+    case Postgrex.query(DB, sql, ["governed_effect.record_only", idempotency_key]) do
+      {:ok, %{rows: []}} ->
+        {:ok, nil}
+
+      {:ok, %{rows: [[digest, payload_text]]}} ->
+        {:ok, %{idempotency_digest: digest, payload: decode_payload(payload_text)}}
+
+      {:error, e} ->
+        {:error, e}
+    end
+  end
+
   # ---------- helpers ----------
 
   defp log_event(conn, event_type, lease, payload \\ nil) do
