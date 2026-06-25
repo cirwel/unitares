@@ -52,6 +52,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   require Logger
 
+  alias UnitaresLeasePlane.GovernanceVetoClient
   alias UnitaresLeasePlane.OrchestratorClient
   alias UnitaresLeasePlane.Repo
 
@@ -71,6 +72,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     * `{:ok, body_map}` — a 202 body (record_only recorded, or execute committed);
     * `{:error, :execute_not_implemented}` — execute mode disabled / unsupported type;
     * `{:error, :idempotency_conflict}` — same key, different digest;
+    * `{:error, :governance_blocked}` — governance vetoed (or could not clear) the effect;
     * `{:error, :persist_failed}` / `{:error, :spawn_failed}`;
     * `{:error, detail}` — `schema_invalid` detail string.
   """
@@ -78,6 +80,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
           {:ok, map()}
           | {:error, :execute_not_implemented}
           | {:error, :idempotency_conflict}
+          | {:error, :governance_blocked}
           | {:error, :persist_failed}
           | {:error, :spawn_failed}
           | {:error, String.t()}
@@ -353,6 +356,46 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   defp spawn_and_record(env, digest) do
     effect_id = gen_effect_id()
 
+    # §6 governance veto — BEFORE the spawn commits. The effect is committed only
+    # if governance affirmatively clears it (`:allow`). A block, a missing
+    # proposer, or an unreachable/erroring governance MCP all fail CLOSED: we do
+    # not spawn, and persist a `governance_blocked` record.
+    case GovernanceVetoClient.check(env) do
+      :allow ->
+        spawn_after_veto(env, digest, effect_id)
+
+      {:blocked, reason} ->
+        Logger.info(
+          "governed_effect execute agent_spawn VETOED effect_id=#{effect_id} " <>
+            "surface=#{env.surface} reason=#{reason}"
+        )
+
+        payload =
+          execute_audit_payload(effect_id, env, digest, "governance_blocked", %{
+            "veto_reason" => reason
+          })
+
+        _ = persist_execute(env, payload)
+        {:error, :governance_blocked}
+
+      {:error, reason} ->
+        # Fail closed: could not confirm governance clearance → do not spawn.
+        Logger.warning(
+          "governed_effect execute agent_spawn veto-unavailable effect_id=#{effect_id} " <>
+            "surface=#{env.surface}: #{inspect(reason)} — failing closed"
+        )
+
+        payload =
+          execute_audit_payload(effect_id, env, digest, "governance_blocked", %{
+            "veto_reason" => "veto_unavailable:#{inspect(reason)}"
+          })
+
+        _ = persist_execute(env, payload)
+        {:error, :governance_blocked}
+    end
+  end
+
+  defp spawn_after_veto(env, digest, effect_id) do
     case OrchestratorClient.spawn_agent(orchestrator_spec(env)) do
       {:ok, agent_id} ->
         Logger.info(
