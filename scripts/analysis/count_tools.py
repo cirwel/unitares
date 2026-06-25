@@ -68,10 +68,15 @@ def main():
     args = parser.parse_args()
 
     include_deprecated = not args.exclude_deprecated
-    by_module, total = count_tools(
-        include_hidden=args.include_hidden,
-        include_deprecated=include_deprecated,
-    )
+    try:
+        by_module, total = count_tools(
+            include_hidden=args.include_hidden,
+            include_deprecated=include_deprecated,
+        )
+    except ModuleNotFoundError as exc:
+        print(f"WARNING: Tool count unavailable ({exc})", file=sys.stderr)
+        by_module = {}
+        total = 0
 
     if args.json:
         output = {

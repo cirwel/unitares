@@ -18,7 +18,7 @@ def load_tool_count() -> int:
     try:
         _, total = count_tools()
     except ModuleNotFoundError as exc:
-        print(f"WARNING: Tool count unavailable ({exc})")
+        print(f"WARNING: Tool count unavailable ({exc})", file=sys.stderr)
         return 0
 
     return total

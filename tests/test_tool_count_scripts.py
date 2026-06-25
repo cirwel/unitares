@@ -1,10 +1,10 @@
-from scripts.analysis.count_tools import count_tools
+from scripts.analysis import count_tools as analysis_count_tools
 from scripts.diagnostics.count_tools import get_total_count
 from scripts.dev import update_docs_tool_count
 
 
 def test_analysis_counter_matches_runtime_diagnostics_counter():
-    by_module, total = count_tools()
+    by_module, total = analysis_count_tools.count_tools()
 
     assert total == get_total_count()
     assert total >= 40
@@ -19,4 +19,18 @@ def test_dev_doc_count_checker_skips_when_runtime_deps_are_missing(monkeypatch, 
     monkeypatch.setattr("scripts.analysis.count_tools.count_tools", missing_dependency_counter)
 
     assert update_docs_tool_count.load_tool_count() == 0
-    assert "Tool count unavailable" in capsys.readouterr().out
+    assert "Tool count unavailable" in capsys.readouterr().err
+
+
+def test_analysis_counter_cli_skips_when_runtime_deps_are_missing(monkeypatch, capsys):
+    def missing_dependency_counter(**_kwargs):
+        raise ModuleNotFoundError("No module named 'mcp'")
+
+    monkeypatch.setattr(analysis_count_tools, "count_tools", missing_dependency_counter)
+    monkeypatch.setattr("sys.argv", ["count_tools.py", "--by-module"])
+
+    analysis_count_tools.main()
+
+    captured = capsys.readouterr()
+    assert "Tool count unavailable" in captured.err
+    assert "Total: 0 tools" in captured.out
