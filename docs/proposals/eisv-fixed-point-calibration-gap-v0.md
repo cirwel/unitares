@@ -168,3 +168,76 @@ runs (synthetic states, not the production corpus):
 
 The manifold form remains valid for *relative* display today; only its *absolute
 threshold* is blocked on Stage A.
+
+## Addendum (v0.2) — Stage A is not self-contained: Φ couples to the attractor
+
+The Stage-A red-team (`scripts/analysis/eisv_stage_a_redteam.py`, run against the
+live corpus 2026-06-25) found that enabling `UNITARES_S_SETPOINT` **as shipped in
+#1048 (setpoint-only) degrades healthy agents on the verdict/risk path** — so the
+flag must not be enabled in that form.
+
+### What breaks
+
+The setpoint achieves its stated goal: manifold-at-rest clears the 0.40 critical
+line for **8/8 classes** (up from 1/8). But the same ODE state feeds
+`phi_objective` (`governance_core/scoring.py`), and Φ penalizes entropy linearly
+against **zero** (`-wS·S`, wS=0.5), calibrated to the *old* attractor (S*≈0.091).
+Raising the rest-S by σ therefore lowers Φ by `wS·σ` for every agent. Measured at
+the per-class rest points:
+
+| class | σ | Φ off | Φ on | verdict off → on |
+|---|---|---|---|---|
+| Lumen | 0.077 | 0.262 | 0.158 | safe → safe |
+| Sentinel | 0.102 | 0.262 | 0.125 | safe → safe |
+| default / Steward / Chronicler | 0.145 | 0.262 | 0.069 | safe → **caution** |
+| Vigil | 0.149 | 0.262 | 0.064 | safe → **caution** |
+| Watcher | 0.157 | 0.262 | 0.055 | safe → **caution** |
+| engaged_ephemeral | 0.216 | 0.262 | −0.020 | safe → **high-risk** (risk 0.74, status critical) |
+
+This is **not** deferrable to Stage B. The addendum v0.1 framed Φ-driven
+verdict/risk as something Stage B repoints later; in fact Φ is *already* a live
+control signal read off the ODE state. Confirmed empirically: production Φ
+clusters in [0.15, 0.31] (median ≈0.22), matching the S≈0.091 attractor — not the
+behavioral EISV (whose S≈0.39 would give Φ≈−0.43). The break lands the instant
+the flag flips.
+
+### Root cause
+
+Φ and the manifold read the **same ODE-S with opposite polarity**: the manifold
+treats healthy-S as ≈0.20 (distance from it), while Φ treats healthy-S as 0 (any S
+is penalty). They cannot disagree about where healthy entropy lives. Moving the
+attractor for the manifold's benefit requires recalibrating Φ in the *same*
+change.
+
+### Fix (validated, shipped flagged-off)
+
+Recenter Φ's entropy term on the **same** per-class σ the dynamics use: penalize
+entropy *above* the healthy setpoint, not above zero (`-wS·(S−σ)`). At the new
+attractor `Φ(S=σ_rest) == Φ(S=0.091)` historically — verdict/risk are invariant
+under the move while the manifold gets its range. The red-team's remedy column
+confirms all 8 classes stay safe + healthy-risk (engaged_ephemeral Φ recovers
+−0.020 → 0.088).
+
+Implemented in `src/monitor_setpoint.py` (`phi_eval_state`), wired into the
+verdict path (`monitor_phi.py`) and the read/display path (`monitor_metrics.py`),
+**sharing the `UNITARES_S_SETPOINT` flag** so the attractor move and the Φ
+recenter are one atomic, reversible change and can never be enabled
+independently. Guarded by `tests/test_eisv_s_setpoint_phi_coupling.py`.
+
+### Corrected Stage A
+
+- **Stage A.1 — attractor setpoint** (#1048, shipped flagged-off).
+- **Stage A.2 — Φ/setpoint coupling** (this change, shipped flagged-off): a
+  prerequisite for A.1, not a follow-on. The flag is enable-safe only with both.
+- Red-team gate before enabling: `scripts/analysis/eisv_stage_a_redteam.py` must
+  show verdict/basin/status invariant and manifold-at-rest clearing 0.40.
+
+### Architecture note (for the operator)
+
+The coupling is the minimal, principled fix and keeps Φ as a usable signal. The
+alternative considered — demote Φ to telemetry and make the manifold the verdict
+driver (the spirit of former rec 1 / Stage B) — is a larger swing that the
+coupling does **not** foreclose: it keeps healthy agents correctly classified
+*today* so Stage B can proceed without a verdict regression in the interim. The
+two are compatible; the coupling buys correctness now, Stage B can still move the
+control signal later.

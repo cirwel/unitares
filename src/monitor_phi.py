@@ -19,8 +19,13 @@ def compute_phi_and_risk(
     if not delta_eta:
         delta_eta = [0.0, 0.0, 0.0, 0.0]
 
+    # Stage A coupling: when UNITARES_S_SETPOINT is on, the ODE rests at the
+    # measured-healthy S (≈0.2) not S*≈0.091. Φ penalizes S against zero, so we
+    # detrend by the SAME per-class σ — Φ then measures entropy above the healthy
+    # rest, keeping verdict/risk invariant under the attractor move. Off → no-op.
+    from src.monitor_setpoint import phi_eval_state
     phi = phi_objective(
-        state=monitor.state.unitaires_state,
+        state=phi_eval_state(monitor, monitor.state.unitaires_state),
         delta_eta=delta_eta,
         weights=DEFAULT_WEIGHTS
     )
