@@ -346,23 +346,26 @@ def build_resolution_outcome_args(
     """Map a Watcher finding resolution to an external-truth ``outcome_event``.
 
     A *confirmed* finding means Watcher's analytical judgment was RIGHT (a good
-    outcome); a *dismissed* finding is a false positive — Watcher was WRONG (a
-    bad outcome). The adjudication is operator/agent review, i.e. ground truth
-    from *outside* the governance loop, so ``verification_source='external_signal'``.
+    outcome). Only a ``fp`` dismissal means Watcher was WRONG (a bad outcome) —
+    that is the sole "true negative" in precision math. Other dismissals
+    (``out_of_scope``, ``wont_fix``, ``dup``, ``unclear``, ``stale``) drop a
+    *valid* finding that just won't be actioned, so Watcher was still right and
+    the outcome is NOT bad. The adjudication is operator/agent review, i.e.
+    ground truth from *outside* the loop, so ``verification_source='external_signal'``.
 
-    This is the first exogenous ground-truth channel for an EISV-bearing resident:
-    today every baselined agent's outcomes are self-referential (server_observation)
-    or self-attested, so the EISV signal is structurally unfalsifiable for them
-    (docs/proposals/eisv-maths-roadmap-v0.md Appendix B). The outcome_event handler
-    auto-snapshots the agent's EISV by ``agent_id``, so we attribute to Watcher's
-    governance UUID — creating the first row where a per-agent residual and an
-    external label coexist.
+    First exogenous ground-truth channel for an EISV-bearing resident (every
+    baselined agent's outcomes are otherwise self-referential/self-attested, so
+    the EISV signal is structurally unfalsifiable for them —
+    docs/proposals/eisv-maths-roadmap-v0.md Appendix B). The handler auto-snapshots
+    EISV by ``agent_id``, so attribute to Watcher's UUID.
     """
     confirmed = status == "confirmed"
+    # Only a false-positive dismissal is a bad outcome for Watcher (see above).
+    is_bad = (not confirmed) and (reason == "fp")
     return {
         "agent_id": agent_uuid,
         "outcome_type": "watcher_finding_confirmed" if confirmed else "watcher_finding_dismissed",
-        "is_bad": not confirmed,
+        "is_bad": is_bad,
         "verification_source": "external_signal",
         "detail": {
             "fingerprint": fingerprint,
