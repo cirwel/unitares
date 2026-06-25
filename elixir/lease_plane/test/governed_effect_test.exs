@@ -163,6 +163,23 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       assert {:error, :idempotency_conflict} =
                GovernedEffect.handle(base(%{"idempotency_key" => key, "surface" => "repo://b"}))
     end
+
+    test "a stored row with a NULL idempotency_digest does not crash the retry (CaseClauseError guard)" do
+      key = tracked_key()
+      # Simulate a corrupt/legacy row: a record_only event for this key whose
+      # payload has no idempotency_digest. The lookup must treat it as not-found
+      # (persist fresh) rather than returning a digest:nil map that matches no
+      # case clause and raises CaseClauseError.
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "INSERT INTO audit.events (ts, event_type, payload) " <>
+          "VALUES (now(), 'governed_effect.record_only', ($1::text)::jsonb)",
+        [Jason.encode!(%{"idempotency_key" => key, "effect_lane" => "governed_effect"})]
+      )
+
+      assert {:ok, body} = GovernedEffect.handle(base(%{"idempotency_key" => key}))
+      refute body.idempotent
+    end
   end
 
   describe "execute / agent_spawn (first execute slice)" do
