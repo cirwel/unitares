@@ -1031,6 +1031,19 @@ def s_setpoint_enabled() -> bool:
     return os.getenv("UNITARES_S_SETPOINT", "").strip().lower() in {"1", "true", "on", "yes"}
 
 
+def phi_telemetry_only() -> bool:
+    """Whether Φ is demoted to telemetry (UNITARES_PHI_TELEMETRY_ONLY). Default off.
+
+    When on, the behavioral/residual assessment is authoritative for the verdict
+    and risk score whenever it is confident; Φ no longer floors them (it only
+    over-flags hard work as risk — the RLHF/punish-toward-ideal shape, see
+    docs/proposals/eisv-maths-roadmap-v0.md §8.0). Φ is still computed and
+    surfaced as a telemetry field. Cold-start agents (behavioral confidence below
+    the gate) still fall back to the Φ path as the prior.
+    """
+    return os.getenv("UNITARES_PHI_TELEMETRY_ONLY", "").strip().lower() in {"1", "true", "on", "yes"}
+
+
 def get_s_setpoint(agent_class: str = "default") -> float:
     """Per-class S decay target σ for the dynamics.
 
