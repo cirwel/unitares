@@ -56,7 +56,7 @@ defmodule LeaseTestHelpers do
   def cleanup_governed_effect(idempotency_key) when is_binary(idempotency_key) do
     Postgrex.query!(
       DB,
-      "DELETE FROM audit.events WHERE event_type = 'governed_effect.record_only' " <>
+      "DELETE FROM audit.events WHERE event_type LIKE 'governed_effect.%' " <>
         "AND payload->>'idempotency_key' = $1",
       [idempotency_key]
     )

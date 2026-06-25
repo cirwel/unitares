@@ -683,18 +683,25 @@ defmodule UnitaresLeasePlane.Repo do
   end
 
   @doc """
-  Look up the most recent governed-effect record for an `idempotency_key`.
-  Returns `{:ok, %{idempotency_digest, payload}}` (string-keyed payload),
-  `{:ok, nil}` when none exists, or `{:error, reason}`.
+  Look up the most recent governed-effect record for an `idempotency_key` within
+  one `event_type` channel (defaults to the `record_only` shadow; `execute`
+  passes its own channel so an irreversible spawn can never double-fire on a
+  retry — the channels share no idempotency space). Returns
+  `{:ok, %{idempotency_digest, payload}}` (string-keyed payload), `{:ok, nil}`
+  when none exists, or `{:error, reason}`.
 
   The key is unindexed in `audit.events` — acceptable at shadow volume; a
   constraint-backed unique key arrives with the Phase 4 table.
   """
-  @spec governed_effect_by_idempotency_key(String.t()) ::
+  @spec governed_effect_by_idempotency_key(String.t(), String.t()) ::
           {:ok, %{idempotency_digest: String.t() | nil, payload: map()}}
           | {:ok, nil}
           | {:error, term()}
-  def governed_effect_by_idempotency_key(idempotency_key) when is_binary(idempotency_key) do
+  def governed_effect_by_idempotency_key(
+        idempotency_key,
+        event_type \\ "governed_effect.record_only"
+      )
+      when is_binary(idempotency_key) and is_binary(event_type) do
     sql = """
     SELECT payload->>'idempotency_digest' AS idempotency_digest, payload::text AS payload
     FROM audit.events
@@ -703,7 +710,7 @@ defmodule UnitaresLeasePlane.Repo do
     LIMIT 1
     """
 
-    case Postgrex.query(DB, sql, ["governed_effect.record_only", idempotency_key]) do
+    case Postgrex.query(DB, sql, [event_type, idempotency_key]) do
       {:ok, %{rows: []}} ->
         {:ok, nil}
 

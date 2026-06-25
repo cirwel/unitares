@@ -56,6 +56,26 @@ defmodule UnitaresLeasePlane.Application do
       Application.put_env(:lease_plane, :force_release_token, token)
     end
 
+    # Governed-effect `agent_spawn` execute (routes to the live orchestrator).
+    # FAIL-CLOSED on every axis: the per-type flag defaults off, and the spawn
+    # path additionally requires the orchestrator bearer to be present. With the
+    # flag unset, `execute` stays `execute_not_implemented` exactly as before.
+    Application.put_env(
+      :lease_plane,
+      :execute_agent_spawn_enabled,
+      System.get_env("UNITARES_GOVERNED_EFFECT_EXECUTE_AGENT_SPAWN") == "1"
+    )
+
+    Application.put_env(
+      :lease_plane,
+      :agent_orchestrator_url,
+      System.get_env("AGENT_ORCHESTRATOR_URL") || "http://127.0.0.1:8789"
+    )
+
+    if token = System.get_env("AGENT_ORCHESTRATOR_BEARER_TOKEN") do
+      Application.put_env(:lease_plane, :agent_orchestrator_bearer_token, token)
+    end
+
     children =
       [
         {Postgrex, postgrex_opts()},

@@ -52,11 +52,13 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   require Logger
 
+  alias UnitaresLeasePlane.OrchestratorClient
   alias UnitaresLeasePlane.Repo
 
   @custody_modes ~w(record_only execute)
   @effect_lane "governed_effect"
   @record_only_event_type "governed_effect.record_only"
+  @execute_event_type "governed_effect.execute"
 
   # Invariant 7 (no secret leakage): payload key substrings that must never be
   # stored or logged. A credential-shaped payload is rejected, not scrubbed —
@@ -66,8 +68,10 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   @doc """
   Handle a governed-effect proposal envelope. Returns:
 
-    * `{:ok, body_map}` — a 202 body (record_only recorded);
-    * `{:error, :execute_not_implemented}` — execute mode is gated;
+    * `{:ok, body_map}` — a 202 body (record_only recorded, or execute committed);
+    * `{:error, :execute_not_implemented}` — execute mode disabled / unsupported type;
+    * `{:error, :idempotency_conflict}` — same key, different digest;
+    * `{:error, :persist_failed}` / `{:error, :spawn_failed}`;
     * `{:error, detail}` — `schema_invalid` detail string.
   """
   @spec handle(map()) ::
@@ -75,12 +79,13 @@ defmodule UnitaresLeasePlane.GovernedEffect do
           | {:error, :execute_not_implemented}
           | {:error, :idempotency_conflict}
           | {:error, :persist_failed}
+          | {:error, :spawn_failed}
           | {:error, String.t()}
   def handle(%{} = body) do
     with {:ok, env} <- validate(body) do
       case env.custody_mode do
         "record_only" -> record_only(env)
-        "execute" -> {:error, :execute_not_implemented}
+        "execute" -> execute(env)
       end
     end
   end
@@ -287,6 +292,173 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   defp idempotent_body(stored) when is_map(stored) do
     response_body(stored, Map.get(stored, "observations", []), true)
+  end
+
+  # ---- execute (agent_spawn → live orchestrator) ----
+  #
+  # First execute slice. ONLY `agent_spawn` is wired, and only when the
+  # per-type flag is on AND the orchestrator bearer is configured — otherwise
+  # `execute` stays `execute_not_implemented` exactly as before. The spawn is
+  # delegated to the already-live agent orchestrator (`:8789`), which owns the
+  # OS-process spawn, OTP supervision, lease-binding and lineage.
+  #
+  # HONESTLY DEFERRED to the next slice (NOT faked here): the §7 strong-tier
+  # re-verification and the §6 governance veto. This slice's gates are the
+  # fail-closed flag + the orchestrator's own bearer + `check_allowed` cmd
+  # allowlist. `agent_spawn` is irreversible (§5b), so there is no rollback to
+  # prove; idempotency is the load-bearing safety property here — a retry must
+  # never spawn twice.
+  defp execute(%{effect_type: "agent_spawn"} = env) do
+    if execute_agent_spawn_enabled?() do
+      execute_agent_spawn(env)
+    else
+      {:error, :execute_not_implemented}
+    end
+  end
+
+  # Every other effect_type is still gated (file_write/repo_commit/etc. land in
+  # later slices with their rollback machinery).
+  defp execute(_env), do: {:error, :execute_not_implemented}
+
+  defp execute_agent_spawn_enabled? do
+    Application.get_env(:lease_plane, :execute_agent_spawn_enabled, false) == true and
+      is_binary(Application.get_env(:lease_plane, :agent_orchestrator_bearer_token))
+  end
+
+  defp execute_agent_spawn(env) do
+    digest = idempotency_digest(env)
+
+    case Repo.governed_effect_by_idempotency_key(env.idempotency_key, @execute_event_type) do
+      # Idempotent replay — a previously committed spawn. Return the original
+      # effect_id + agent_id; DO NOT spawn again (an agent_spawn is irreversible).
+      {:ok, %{idempotency_digest: ^digest, payload: stored}} ->
+        {:ok, execute_idempotent_body(stored)}
+
+      {:ok, %{idempotency_digest: other}} when is_binary(other) ->
+        {:error, :idempotency_conflict}
+
+      {:ok, nil} ->
+        spawn_and_record(env, digest)
+
+      {:error, reason} ->
+        Logger.warning(
+          "governed_effect execute idempotency lookup failed key=#{env.idempotency_key}: " <>
+            inspect(reason)
+        )
+
+        {:error, :persist_failed}
+    end
+  end
+
+  defp spawn_and_record(env, digest) do
+    effect_id = gen_effect_id()
+
+    case OrchestratorClient.spawn_agent(orchestrator_spec(env)) do
+      {:ok, agent_id} ->
+        Logger.info(
+          "governed_effect execute agent_spawn effect_id=#{effect_id} agent_id=#{agent_id} " <>
+            "surface=#{env.surface} digest=#{binary_part(digest, 0, 12)}"
+        )
+
+        payload =
+          execute_audit_payload(effect_id, env, digest, "committed", %{"agent_id" => agent_id})
+
+        # The spawn already happened; record best-effort. A persist failure must
+        # NOT re-spawn, so we still return committed with the agent_id (the audit
+        # gap is logged), never an error that invites a retry.
+        _ = persist_execute(env, payload)
+        {:ok, execute_body(payload, agent_id)}
+
+      {:error, reason} ->
+        Logger.warning(
+          "governed_effect execute agent_spawn FAILED effect_id=#{effect_id} " <>
+            "surface=#{env.surface}: #{inspect(reason)}"
+        )
+
+        payload =
+          execute_audit_payload(effect_id, env, digest, "rejected", %{"error" => inspect(reason)})
+
+        _ = persist_execute(env, payload)
+        {:error, :spawn_failed}
+    end
+  end
+
+  # Build the orchestrator spawn spec from the effect payload. The payload
+  # carries the command (`cmd`/`args`/`env`); lineage is provisioned from the
+  # proposer so the spawned agent's parentage is correct by construction. The
+  # proposer's `client_session_id` is NEVER forwarded (Invariant 1/7 — BEAM
+  # consumes proof, the child mints its own identity under provisioned lineage).
+  defp orchestrator_spec(env) do
+    p = env.payload || %{}
+
+    base = %{
+      "cmd" => Map.get(p, "cmd"),
+      "args" => Map.get(p, "args", []),
+      "env" => Map.get(p, "env", %{})
+    }
+
+    case env.proposer_agent_uuid do
+      uuid when is_binary(uuid) ->
+        # Orchestrator lineage contract: `parent_agent_uuid` (+ optional
+        # `spawn_reason`) — verified live, a `parent_agent_id` key 422s.
+        Map.put(base, "lineage", %{
+          "parent_agent_uuid" => uuid,
+          "spawn_reason" => "governed_effect"
+        })
+
+      _ ->
+        base
+    end
+  end
+
+  defp persist_execute(env, payload) do
+    Repo.insert_governed_effect_event(%{
+      event_type: @execute_event_type,
+      agent_id: env.proposer_agent_uuid,
+      session_id: env.provenance_session_id,
+      payload: payload
+    })
+  end
+
+  defp execute_audit_payload(effect_id, env, digest, status, extra) do
+    %{
+      "effect_lane" => @effect_lane,
+      "effect_id" => effect_id,
+      "custody_mode" => "execute",
+      "status" => status,
+      "effect_type" => env.effect_type,
+      "surface" => env.surface,
+      "idempotency_key" => env.idempotency_key,
+      "idempotency_digest" => digest,
+      "proposer_agent_uuid" => env.proposer_agent_uuid
+    }
+    |> Map.merge(extra)
+  end
+
+  defp execute_body(payload, agent_id) do
+    %{
+      ok: true,
+      effect_id: payload["effect_id"],
+      custody_mode: "execute",
+      status: "committed",
+      effect_lane: @effect_lane,
+      idempotency_digest: payload["idempotency_digest"],
+      agent_id: agent_id,
+      idempotent: false
+    }
+  end
+
+  defp execute_idempotent_body(stored) when is_map(stored) do
+    %{
+      ok: true,
+      effect_id: stored["effect_id"],
+      custody_mode: "execute",
+      status: stored["status"] || "committed",
+      effect_lane: @effect_lane,
+      idempotency_digest: stored["idempotency_digest"],
+      agent_id: stored["agent_id"],
+      idempotent: true
+    }
   end
 
   # Observe-not-acquire: peek the lease state, NEVER acquire (acquiring would

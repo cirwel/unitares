@@ -150,6 +150,13 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           reason: "could not durably record the proposal; nothing was recorded"
         })
 
+      {:error, :spawn_failed} ->
+        json(conn, 502, %{
+          ok: false,
+          error: "spawn_failed",
+          reason: "execute custody could not complete the spawn via the orchestrator"
+        })
+
       {:error, detail} when is_binary(detail) ->
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
     end
