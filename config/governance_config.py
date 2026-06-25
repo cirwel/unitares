@@ -1004,6 +1004,47 @@ def get_delta_norm_max(agent_class: str = "default") -> ScaleConstant:
 
 
 # =====================================================================
+# S-attractor setpoint (Stage A — EISV fixed-point calibration)
+# =====================================================================
+# The S equation rests at S* = (β_complexity·complexity − λ₂·C)/μ ≈ 0.091 at
+# baseline (complexity=0.5), but the *measured* healthy S is 0.17–0.31 per class
+# (HEALTHY_OPERATING_POINT_BY_CLASS). That offset makes the manifold readout
+# unthresholdable as a control signal (a healthy agent reads ~0.17, below the
+# 0.40 critical line). See docs/proposals/eisv-fixed-point-calibration-gap-v0.md.
+#
+# Fix: decay S toward a per-class setpoint σ instead of toward 0, i.e.
+# `-μ(S - σ)`. Choosing σ = healthy_S − S_SETPOINT_DRIVER_OFFSET lands the S
+# equilibrium on the measured healthy S (since S* = σ + drivers/μ).
+#
+# OFF BY DEFAULT (UNITARES_S_SETPOINT). When disabled, get_s_setpoint() returns
+# 0.0 and the dynamics are byte-identical to historical behavior. Enabling is
+# gated on red-team validation against the real agent_state corpus.
+#
+# S_SETPOINT_DRIVER_OFFSET is the baseline driver contribution to S* at
+# complexity=0.5, measured 2026-06-24 via scripts/analysis/eisv_equilibrium_gap.py
+# (integrated equilibrium S = 0.091). Regenerate if μ/β_complexity/λ₂ change.
+S_SETPOINT_DRIVER_OFFSET: float = 0.091
+
+
+def s_setpoint_enabled() -> bool:
+    """Whether the per-class S setpoint is active (UNITARES_S_SETPOINT). Default off."""
+    return os.getenv("UNITARES_S_SETPOINT", "").strip().lower() in {"1", "true", "on", "yes"}
+
+
+def get_s_setpoint(agent_class: str = "default") -> float:
+    """Per-class S decay target σ for the dynamics.
+
+    Returns 0.0 when the flag is off (historical ``-μS`` behavior). When on,
+    returns ``healthy_S(class) − S_SETPOINT_DRIVER_OFFSET`` clamped to ≥0, so the
+    S equilibrium lands on the class's measured healthy S.
+    """
+    if not s_setpoint_enabled():
+        return 0.0
+    healthy_S = get_healthy_operating_point(agent_class)[2]
+    return max(0.0, healthy_S - S_SETPOINT_DRIVER_OFFSET)
+
+
+# =====================================================================
 # Identity Honesty Part C — strict-mode gate
 # =====================================================================
 # Three ghost-creation paths are sources:

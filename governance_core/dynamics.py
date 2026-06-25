@@ -101,6 +101,7 @@ def _derivatives(
     noise_S: float,
     complexity: float,
     sensor_eisv: Optional[State],
+    s_setpoint: float = 0.0,
 ) -> tuple:
     """
     Compute raw EISV derivatives at a given state.
@@ -116,6 +117,11 @@ def _derivatives(
         noise_S: Calibration penalty / noise term for S
         complexity: Task complexity [0, 1]
         sensor_eisv: Optional sensor state for spring coupling
+        s_setpoint: Class-conditional rest target for S. Default 0.0 makes the
+            S decay term ``-μS`` (historical behavior). When non-zero the term
+            becomes ``-μ(S - s_setpoint)``, shifting the S equilibrium toward a
+            measured-healthy operating point (see config.get_s_setpoint). Off by
+            default; gated by UNITARES_S_SETPOINT at the call site.
 
     Returns:
         (dE_dt, dI_dt, dS_dt, dV_dt) tuple
@@ -145,9 +151,10 @@ def _derivatives(
     else:
         dI_dt = A - params.gamma_I * I * (1 - I)
 
-    # S dynamics: Ṡ = -μS + λ₁‖Δη‖² - λ₂C + β_c·complexity + noise
+    # S dynamics: Ṡ = -μ(S - σ) + λ₁‖Δη‖² - λ₂C + β_c·complexity + noise
+    # σ (s_setpoint) defaults to 0.0 → -μS, the historical behavior.
     dS_dt = (
-        -params.mu * S
+        -params.mu * (S - s_setpoint)
         + lam1 * d_eta_sq
         - lam2 * C
         + params.beta_complexity * complexity
@@ -197,9 +204,10 @@ def _integrate_euler(
     noise_S: float,
     complexity: float,
     sensor_eisv: Optional[State],
+    s_setpoint: float = 0.0,
 ) -> State:
     """Forward Euler integration: x_new = x + dt * f(x)."""
-    dE, dI, dS, dV = _derivatives(state, d_eta_sq, theta, params, noise_S, complexity, sensor_eisv)
+    dE, dI, dS, dV = _derivatives(state, d_eta_sq, theta, params, noise_S, complexity, sensor_eisv, s_setpoint)
 
     E_new = clip(state.E + dE * dt, params.E_min, params.E_max)
     I_new = clip(state.I + dI * dt, params.I_min, params.I_max)
@@ -218,6 +226,7 @@ def _integrate_rk4(
     noise_S: float,
     complexity: float,
     sensor_eisv: Optional[State],
+    s_setpoint: float = 0.0,
 ) -> State:
     """
     4th-order Runge-Kutta integration.
@@ -230,7 +239,7 @@ def _integrate_rk4(
     E, I, S, V = state.E, state.I, state.S, state.V
 
     # k1 = f(state)
-    k1 = _derivatives(state, d_eta_sq, theta, params, noise_S, complexity, sensor_eisv)
+    k1 = _derivatives(state, d_eta_sq, theta, params, noise_S, complexity, sensor_eisv, s_setpoint)
 
     # k2 = f(state + 0.5*dt*k1)
     s2 = State(
@@ -239,7 +248,7 @@ def _integrate_rk4(
         S=clip(S + 0.5 * dt * k1[2], params.S_min, params.S_max),
         V=clip(V + 0.5 * dt * k1[3], params.V_min, params.V_max),
     )
-    k2 = _derivatives(s2, d_eta_sq, theta, params, noise_S, complexity, sensor_eisv)
+    k2 = _derivatives(s2, d_eta_sq, theta, params, noise_S, complexity, sensor_eisv, s_setpoint)
 
     # k3 = f(state + 0.5*dt*k2)
     s3 = State(
@@ -248,7 +257,7 @@ def _integrate_rk4(
         S=clip(S + 0.5 * dt * k2[2], params.S_min, params.S_max),
         V=clip(V + 0.5 * dt * k2[3], params.V_min, params.V_max),
     )
-    k3 = _derivatives(s3, d_eta_sq, theta, params, noise_S, complexity, sensor_eisv)
+    k3 = _derivatives(s3, d_eta_sq, theta, params, noise_S, complexity, sensor_eisv, s_setpoint)
 
     # k4 = f(state + dt*k3)
     s4 = State(
@@ -257,7 +266,7 @@ def _integrate_rk4(
         S=clip(S + dt * k3[2], params.S_min, params.S_max),
         V=clip(V + dt * k3[3], params.V_min, params.V_max),
     )
-    k4 = _derivatives(s4, d_eta_sq, theta, params, noise_S, complexity, sensor_eisv)
+    k4 = _derivatives(s4, d_eta_sq, theta, params, noise_S, complexity, sensor_eisv, s_setpoint)
 
     # Combine: x_new = x + (dt/6)(k1 + 2k2 + 2k3 + k4)
     dt6 = dt / 6.0
@@ -278,6 +287,7 @@ def compute_dynamics(
     noise_S: float = 0.0,
     complexity: float = 0.5,
     sensor_eisv: Optional[State] = None,
+    s_setpoint: float = 0.0,
 ) -> State:
     """
     Compute one time step of UNITARES Phase-3 dynamics.
@@ -330,11 +340,11 @@ def compute_dynamics(
 
     if integrator == "euler":
         new_state = _integrate_euler(
-            state, d_eta_sq, theta, params, dt, noise_S, complexity, coupling_sensor,
+            state, d_eta_sq, theta, params, dt, noise_S, complexity, coupling_sensor, s_setpoint,
         )
     else:
         new_state = _integrate_rk4(
-            state, d_eta_sq, theta, params, dt, noise_S, complexity, coupling_sensor,
+            state, d_eta_sq, theta, params, dt, noise_S, complexity, coupling_sensor, s_setpoint,
         )
 
     # Post-integration: complexity-proportional entropy floor
@@ -355,6 +365,7 @@ def step_state(
     params: Optional[DynamicsParams] = None,
     complexity: float = 0.5,
     sensor_eisv: Optional[State] = None,
+    s_setpoint: float = 0.0,
 ) -> State:
     """
     Convenience wrapper for compute_dynamics with default params.
@@ -389,6 +400,7 @@ def step_state(
         noise_S=noise_S,
         complexity=complexity,
         sensor_eisv=sensor_eisv,
+        s_setpoint=s_setpoint,
     )
 
 
