@@ -8,20 +8,27 @@ class TestPydanticSchemas:
     full coverage of the type coercions and bounds checking previously handled 
     by manual validators."""
 
-    def test_lite_alias_coerces_minimal_for_bool_and_string(self):
-        """`lite` is documented as an alias for response_mode='minimal'. It must
+    def test_lite_alias_coerces_compact_for_bool_and_string(self):
+        """`lite` is documented as an alias for response_mode='compact'. It must
         honor a real JSON bool, not only the string form (which was the bug —
         `lite: true` was silently ignored). An explicit response_mode still wins."""
         from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
         # Real bool — previously ignored.
-        assert ProcessAgentUpdateParams(lite=True, response_text="T").response_mode == "minimal"
+        assert ProcessAgentUpdateParams(lite=True, response_text="T").response_mode == "compact"
         # Truthy string still works.
-        assert ProcessAgentUpdateParams(lite="true", response_text="T").response_mode == "minimal"
+        assert ProcessAgentUpdateParams(lite="true", response_text="T").response_mode == "compact"
         # Falsey leaves the default.
         assert ProcessAgentUpdateParams(lite=False, response_text="T").response_mode == "auto"
         assert ProcessAgentUpdateParams(response_text="T").response_mode == "auto"
         # Explicit response_mode always wins over lite.
         assert ProcessAgentUpdateParams(lite=True, response_mode="full", response_text="T").response_mode == "full"
+
+    def test_response_mode_aliases_are_canonicalized(self):
+        from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
+
+        assert ProcessAgentUpdateParams(response_text="T", response_mode="lite").response_mode == "compact"
+        assert ProcessAgentUpdateParams(response_text="T", response_mode="verbose").response_mode == "full"
+        assert ProcessAgentUpdateParams(response_text="T", response_mode="interpreted").response_mode == "standard"
 
     def test_float_bounds(self):
         """Test float range bounds are applied correctly (e.g., complexity 0.0-1.0)."""

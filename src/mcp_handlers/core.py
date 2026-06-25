@@ -367,8 +367,8 @@ async def handle_process_agent_update(arguments: Dict[str, Any]) -> Sequence[Tex
         task_type: "divergent" (exploring) or "convergent" (focused)
         complexity: 0.0-1.0 how complex was this work
         confidence: 0.0-1.0 how confident are you
-        lite: If true, returns minimal response (action + margin only). Alias for response_mode='minimal'
-        response_mode: 'minimal' (action only), 'compact' (brief metrics), 'standard' (interpreted), 'full' (everything), 'auto' (adapts to health - default)
+        lite: If true, returns compact response. Alias for response_mode='compact'
+        response_mode: 'auto' (compact unless action is needed), 'compact' (brief metrics), 'mirror' (actionable diagnostics), 'full' (everything). Legacy: 'minimal' and 'standard'.
 
     No api_key needed - identity is bound to session via UUID.
     """
@@ -398,7 +398,7 @@ async def handle_process_agent_update(arguments: Dict[str, Any]) -> Sequence[Tex
     # LITE MODE SHORTHAND
     if arguments.get("lite") in (True, "true", "1", 1):
         if not arguments.get("response_mode"):
-            arguments["response_mode"] = "minimal"
+            arguments["response_mode"] = "compact"
 
     logger.info(f"[SESSION_DEBUG] process_agent_update() entry: args_keys={list(arguments.keys()) if arguments else []}")
 

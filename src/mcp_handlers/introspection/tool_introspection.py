@@ -1312,7 +1312,8 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     },
                     "sync_state": {
                         "basic": "sync_state(response_text=\"Fixed bug\", complexity=0.3, confidence=0.9)",
-                        "mirror": "sync_state(response_text=\"Finished task\", complexity=0.5, response_mode=\"mirror\")",
+                        "compact": "sync_state(response_text=\"Finished task\", complexity=0.5, response_mode=\"compact\")",
+                        "diagnostic_mirror": "sync_state(response_text=\"Reviewing drift\", complexity=0.5, response_mode=\"mirror\")",
                     },
                     "check_working_state": {
                         "basic": "check_working_state()",

@@ -281,21 +281,31 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
             "bootstrap rows are labeled synthetic internally."
         ),
     )
-    response_mode: Literal["minimal", "compact", "standard", "full", "mirror", "auto"] = Field(
+    response_mode: Literal[
+        "auto",
+        "compact",
+        "mirror",
+        "full",
+        "minimal",
+        "standard",
+        "lite",
+        "verbose",
+        "interpreted",
+    ] = Field(
         default="auto",
         description=(
-            "Response verbosity. 'auto' (default) adapts to health — mirror when "
-            "healthy/disembodied, else minimal/standard/compact. 'mirror' returns "
-            "actionable self-awareness signals instead of raw EISV. 'standard' is a "
-            "human-readable interpretation. 'minimal' and 'compact' are both small "
-            "payloads (minimal = action + EISV snapshot + margin; compact = brief "
-            "metrics + decision). 'full' returns the complete payload unfiltered. "
-            "The 'lite' boolean below is an alias for 'minimal'."
+            "Agent-facing response shape. Prefer 'auto' or 'compact' for routine "
+            "check-ins. 'auto' resolves to compact for steady states and mirror "
+            "for actionable at-risk/guide/pause states. 'mirror' returns "
+            "actionable self-awareness signals. 'full' returns the complete "
+            "payload. Compatibility aliases: 'lite' -> compact, 'verbose' -> "
+            "full, 'interpreted' -> standard. 'minimal' and 'standard' remain "
+            "legacy explicit modes for skinny or human-interpreted payloads."
         )
     )
     lite: Union[bool, str, None] = Field(
         default=None,
-        description="Boolean alias for response_mode='minimal'. Applies only when response_mode is left at 'auto' (an explicit response_mode always wins)."
+        description="Boolean alias for response_mode='compact'. Applies only when response_mode is left at 'auto' (an explicit response_mode always wins)."
     )
     auto_export_on_significance: bool = Field(
         default=False,
@@ -355,7 +365,14 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
 
     @model_validator(mode='after')
     def coerce_types(self):
-        # `lite` is a boolean alias for response_mode='minimal'. Accept a real
+        response_aliases = {
+            "lite": "compact",
+            "verbose": "full",
+            "interpreted": "standard",
+        }
+        self.response_mode = response_aliases.get(self.response_mode, self.response_mode)
+
+        # `lite` is a boolean alias for response_mode='compact'. Accept a real
         # bool OR a truthy string — previously only the string form was honored,
         # so an actual JSON `lite: true` was silently ignored. Only applies when
         # response_mode is still 'auto', so an explicit response_mode always wins.
@@ -364,7 +381,7 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
                 str(self.lite).lower() in ('true', '1', 'yes')
             )
             if lite_on and self.response_mode == "auto":
-                self.response_mode = "minimal"
+                self.response_mode = "compact"
         if isinstance(self.require_strong_identity, str):
             self.require_strong_identity = self.require_strong_identity.lower() in ('true', '1', 'yes')
         return self
