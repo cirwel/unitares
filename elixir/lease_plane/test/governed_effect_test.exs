@@ -165,6 +165,83 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
     end
   end
 
+  describe "execute / agent_spawn (first execute slice)" do
+    test "fail-closed: agent_spawn execute is execute_not_implemented when the flag is off" do
+      # default state — flag unset
+      assert {:error, :execute_not_implemented} =
+               GovernedEffect.handle(
+                 base(%{"custody_mode" => "execute", "effect_type" => "agent_spawn"})
+               )
+    end
+
+    test "only agent_spawn is wired — other effect_types stay gated even with the flag on" do
+      set_execute_flag(true, "http://127.0.0.1:8789")
+
+      assert {:error, :execute_not_implemented} =
+               GovernedEffect.handle(
+                 base(%{"custody_mode" => "execute", "effect_type" => "file_write"})
+               )
+    end
+
+    test "flag on + unreachable orchestrator → spawn_failed, and a rejected execute row persists" do
+      key = tracked_key()
+      # Point at a closed port so the spawn fails fast without a real orchestrator.
+      set_execute_flag(true, "http://127.0.0.1:1")
+
+      assert {:error, :spawn_failed} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => key,
+                   "custody_mode" => "execute",
+                   "effect_type" => "agent_spawn",
+                   "payload" => %{"cmd" => "echo", "args" => ["hi"]}
+                 })
+               )
+
+      assert [row] = execute_rows(key)
+      assert row["custody_mode"] == "execute"
+      assert row["status"] == "rejected"
+      assert row["effect_lane"] == "governed_effect"
+    end
+  end
+
+  # Toggle the execute flag + orchestrator config for one test, resetting after.
+  defp set_execute_flag(enabled?, url) do
+    prev_enabled = Application.get_env(:lease_plane, :execute_agent_spawn_enabled)
+    prev_url = Application.get_env(:lease_plane, :agent_orchestrator_url)
+    prev_bearer = Application.get_env(:lease_plane, :agent_orchestrator_bearer_token)
+
+    Application.put_env(:lease_plane, :execute_agent_spawn_enabled, enabled?)
+    Application.put_env(:lease_plane, :agent_orchestrator_url, url)
+
+    Application.put_env(
+      :lease_plane,
+      :agent_orchestrator_bearer_token,
+      "test-orchestrator-bearer"
+    )
+
+    on_exit(fn ->
+      restore(:execute_agent_spawn_enabled, prev_enabled)
+      restore(:agent_orchestrator_url, prev_url)
+      restore(:agent_orchestrator_bearer_token, prev_bearer)
+    end)
+  end
+
+  defp restore(key, nil), do: Application.delete_env(:lease_plane, key)
+  defp restore(key, val), do: Application.put_env(:lease_plane, key, val)
+
+  defp execute_rows(key) do
+    %{rows: rows} =
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "SELECT payload::text FROM audit.events " <>
+          "WHERE event_type = 'governed_effect.execute' AND payload->>'idempotency_key' = $1",
+        [key]
+      )
+
+    Enum.map(rows, fn [payload_text] -> Jason.decode!(payload_text) end)
+  end
+
   # --- audit.events probes (the durable governed-effect sink) ---
 
   defp governed_effect_rows(key) do
