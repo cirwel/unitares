@@ -115,12 +115,14 @@ OPERATOR_READONLY_MODE_TOOLS: Set[str] = {
 OPERATOR_RECOVERY_MODE_TOOLS: Set[str] = OPERATOR_READONLY_MODE_TOOLS | {
     # Recovery tools
     "operator_resume_agent",      # Resume stuck agents (operator-only)
-    "check_recovery_options",     # Check if agent is recoverable
-    
+    "self_recovery",              # Recoverability check + recovery (action=check/quick/review)
+
     # Knowledge graph write (for audit trail)
-    "store_knowledge_graph",      # Log interventions
+    # `knowledge` (action="store") is inherited from readonly; `leave_note` is the
+    # low-friction path. Both are register=True wire tools — no standalone
+    # `store_knowledge_graph` entry, which is register=False and never surfaces.
     "leave_note",                 # Quick notes
-    
+
     # Agent lifecycle (limited)
     "mark_response_complete",     # Mark agents as waiting_input
 }
