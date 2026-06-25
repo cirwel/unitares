@@ -159,7 +159,7 @@ but not sufficient.
 
 - RFC: `docs/proposals/beam-wave-1-sentinel.md`
 - Roadmap exit criteria: `docs/proposals/beam-footprint-roadmap-v0.md`
-- §129 track: `docs/proposals/wave-1-window-evaluation-2026-05-18.md`,
+- §129 track: `docs/proposals/resolved/wave-1-window-evaluation-2026-05-18.md`,
   `wave-1-window-evaluation-T0-2026-05-19.md`,
   `section-129-measurement-fix-2026-06-03.md`
 - Implementation: `elixir/sentinel/`

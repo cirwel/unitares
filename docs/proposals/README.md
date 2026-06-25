@@ -58,30 +58,44 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`harness-event-safety-policy-v0.md`](harness-event-safety-policy-v0.md) | Draft (2026-06-20) — cross-harness event envelope and fail-closed policy for synthetic/replayed/duplicate events before harness-specific implementation PRs |
 | [`beam-event-adapter-design-v0.md`](beam-event-adapter-design-v0.md) | Design note (2026-06-20) — how BEAM residents/supervisors would populate the harness-event-safety envelope (PR #957); design-only, deferred to the 2026-06-24 Wave-3 gate read |
 | [`monitor-delegated-liveness-v0.md`](monitor-delegated-liveness-v0.md) | v0 (2026-06-21) — design-only, **DO NOT BUILD YET.** Delegate process-liveness to the owning runtime monitor (OTP supervisor / `:DOWN`) instead of self-report heartbeat. Build-trigger = the agent-orchestrator de-inerting to become the live spawn path; zero live consumers today (`feasible ≠ needed`) |
-| [`eisv-distributional-signal-probe-v0.md`](eisv-distributional-signal-probe-v0.md) | **Probe A run — KILL (2026-06-22).** Cheap falsifiable gate on the "make EISV distributional" work; dispersion shows no lift over the previous-outcome baseline (negative AUC delta), so the larger dynamics change is not greenlit. See the Run result block |
 
-## Shipped / resolved
+## Resolved — relocated to [`resolved/`](resolved/)
+
+Shipped, council-passed, closed-by-result, and dated point-in-time records live in
+the [`resolved/`](resolved/) subfolder, keeping this index focused on active
+threads. Each doc still carries its own status in its body; the links below point
+into `resolved/`. (The subfolder is still under `proposals/`, so the doc-health
+dead-ref exemption continues to apply to these point-in-time records.)
+
+### Shipped / resolved
 
 | Doc | Resolution |
 |---|---|
-| [`onboard-bootstrap-checkin.md`](onboard-bootstrap-checkin.md) | SHIPPED — Phase 5 landed via PR #188 |
-| [`onboard-bootstrap-checkin.filter-audit.md`](onboard-bootstrap-checkin.filter-audit.md) | SHIPPED — retained as historical control surface for the parent doc |
-| [`refined-phase-5-evidence-contract.md`](refined-phase-5-evidence-contract.md) | SHIPPED — paired with `onboard-bootstrap-checkin.md` (PR #188) |
-| [`path1-sync-fingerprint-check.md`](path1-sync-fingerprint-check.md) | SHIPPED — `sync_fingerprint` lives in `src/mcp_handlers/identity/shared.py` |
-| [`s19-attestation-mechanism.md`](s19-attestation-mechanism.md) | Mechanism selection council-passed 2026-04-25; implementation correctness gated separately |
-| [`section-129-measurement-fix-2026-06-03.md`](section-129-measurement-fix-2026-06-03.md) | Council-passed fix restoring the Wave 1 condition-1 measurement gate |
-| [`eisv-basin-health-gating-v0.md`](eisv-basin-health-gating-v0.md) | SHIPPED — PR #696 (issue #689), 2026-06-14; absolute-basin-health gating for self-relative risk, refined by #699 |
-| [`dashboard-hero-severity-rollup.md`](dashboard-hero-severity-rollup.md) | SHIPPED (Phase 1) — PR #875; hero reflects all severity sources + "needs attention" band; `computeFleetSeverity` + 12 tests; verified live 2026-06-22 |
+| [`onboard-bootstrap-checkin.md`](resolved/onboard-bootstrap-checkin.md) | SHIPPED — Phase 5 landed via PR #188 |
+| [`onboard-bootstrap-checkin.filter-audit.md`](resolved/onboard-bootstrap-checkin.filter-audit.md) | SHIPPED — retained as historical control surface for the parent doc |
+| [`refined-phase-5-evidence-contract.md`](resolved/refined-phase-5-evidence-contract.md) | SHIPPED — paired with `onboard-bootstrap-checkin.md` (PR #188) |
+| [`path1-sync-fingerprint-check.md`](resolved/path1-sync-fingerprint-check.md) | SHIPPED — `sync_fingerprint` lives in `src/mcp_handlers/identity/shared.py` |
+| [`s19-attestation-mechanism.md`](resolved/s19-attestation-mechanism.md) | Mechanism selection council-passed 2026-04-25; implementation correctness gated separately |
+| [`section-129-measurement-fix-2026-06-03.md`](resolved/section-129-measurement-fix-2026-06-03.md) | Council-passed fix restoring the Wave 1 condition-1 measurement gate |
+| [`eisv-basin-health-gating-v0.md`](resolved/eisv-basin-health-gating-v0.md) | SHIPPED — PR #696 (issue #689), 2026-06-14; absolute-basin-health gating for self-relative risk, refined by #699 |
+| [`dashboard-hero-severity-rollup.md`](resolved/dashboard-hero-severity-rollup.md) | SHIPPED (Phase 1) — PR #875; hero reflects all severity sources + "needs attention" band; `computeFleetSeverity` + 12 tests; verified live 2026-06-22 |
 
-## Dated evaluation / measurement records
+### Closed by negative result
 
-Point-in-time records; superseded analysis is preserved in place by design.
+| Doc | Resolution |
+|---|---|
+| [`eisv-distributional-signal-probe-v0.md`](resolved/eisv-distributional-signal-probe-v0.md) | **Probe A run — KILL (2026-06-22).** Cheap falsifiable gate on the "make EISV distributional" work; dispersion shows no lift over the previous-outcome baseline (negative AUC delta), so the larger dynamics change is not greenlit. See the Run result block |
+
+### Dated evaluation / measurement records
+
+Point-in-time records (now under `resolved/`); superseded analysis is preserved
+as-written by design.
 
 | Doc | What it captured |
 |---|---|
-| [`wave-0-step-2-call-site-scoping.md`](wave-0-step-2-call-site-scoping.md) | Coordination-failure call-site scoping (v0.3, post-2A-pivot; earlier prescriptions superseded by PR #345) |
-| [`wave-1-window-evaluation-2026-05-18.md`](wave-1-window-evaluation-2026-05-18.md) | Wave 1 exit-condition evaluation of the T+0=2026-05-05 → T+13 window |
-| [`wave-1-window-evaluation-T0-2026-05-19.md`](wave-1-window-evaluation-T0-2026-05-19.md) | Sibling re-anchor: next evaluation window under the prior doc's falsifier |
-| [`ode-profile-decomposition-2026-05-20.md`](ode-profile-decomposition-2026-05-20.md) | ODE profile decomposition + persistence — the BEAM roadmap's load-bearing unknown |
-| [`wave-1-completion-status-2026-06-14.md`](wave-1-completion-status-2026-06-14.md) | Read-only status roll-up across the Wave 1 surfaces + four exit conditions, consolidating the close decision into one ledger |
-| [`wave-1-condition-2-alarm-parity-audit-2026-06-14.md`](wave-1-condition-2-alarm-parity-audit-2026-06-14.md) | Alarm-rule parity audit (BEAM vs Python Sentinel) for Wave 1 exit condition 2 |
+| [`wave-0-step-2-call-site-scoping.md`](resolved/wave-0-step-2-call-site-scoping.md) | Coordination-failure call-site scoping (v0.3, post-2A-pivot; earlier prescriptions superseded by PR #345) |
+| [`wave-1-window-evaluation-2026-05-18.md`](resolved/wave-1-window-evaluation-2026-05-18.md) | Wave 1 exit-condition evaluation of the T+0=2026-05-05 → T+13 window |
+| [`wave-1-window-evaluation-T0-2026-05-19.md`](resolved/wave-1-window-evaluation-T0-2026-05-19.md) | Sibling re-anchor: next evaluation window under the prior doc's falsifier |
+| [`ode-profile-decomposition-2026-05-20.md`](resolved/ode-profile-decomposition-2026-05-20.md) | ODE profile decomposition + persistence — the BEAM roadmap's load-bearing unknown |
+| [`wave-1-completion-status-2026-06-14.md`](resolved/wave-1-completion-status-2026-06-14.md) | Read-only status roll-up across the Wave 1 surfaces + four exit conditions, consolidating the close decision into one ledger |
+| [`wave-1-condition-2-alarm-parity-audit-2026-06-14.md`](resolved/wave-1-condition-2-alarm-parity-audit-2026-06-14.md) | Alarm-rule parity audit (BEAM vs Python Sentinel) for Wave 1 exit condition 2 |

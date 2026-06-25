@@ -16,7 +16,7 @@ The conflict_batch case is load-bearing: it embeds an ISO-8601 timestamp, and
 Python's `datetime.isoformat()` ("+00:00") must stay byte-equal to BEAM's
 `Logic.iso8601_python/1` output — NOT `DateTime.to_iso8601/1` ("Z"), which was
 the GAP 1 drift the 2026-06-14 condition-2 parity audit found
-(`docs/proposals/wave-1-condition-2-alarm-parity-audit-2026-06-14.md`).
+(`docs/proposals/resolved/wave-1-condition-2-alarm-parity-audit-2026-06-14.md`).
 ad_hoc/deprecation_batch are ID-only and unaffected.
 """
 
