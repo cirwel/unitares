@@ -26,12 +26,16 @@ _MIN_TACTICAL_EVIDENCE_WEIGHT = GRADE_WEIGHTS[TOOL_OBSERVED]
 
 # Outcome types that are considered "bad" by default
 BAD_OUTCOME_TYPES = {"test_failed", "tool_rejected", "drawing_abandoned", "task_failed"}
-GOOD_OUTCOME_TYPES = {"test_passed", "drawing_completed", "task_completed"}
+# watcher_finding_confirmed = Watcher's analytical judgment held (good outcome).
+GOOD_OUTCOME_TYPES = {"test_passed", "drawing_completed", "task_completed", "watcher_finding_confirmed"}
 # dialectic_resolved is neutral: agreement was reached, but whether the
 # resolution holds up under the agreed conditions is a separate later test.
 # Recording it closes the dialectic→outcome_events tracking gap so downstream
 # back-tests can correlate resumption with subsequent agent state.
-NEUTRAL_OUTCOME_TYPES = {"trajectory_validated", "dialectic_resolved"}  # is_bad determined by score
+# watcher_finding_dismissed is neutral: only a 'fp' dismissal is bad, so the
+# caller (agents/watcher/agent.py) passes is_bad explicitly rather than inferring
+# it from the type.
+NEUTRAL_OUTCOME_TYPES = {"trajectory_validated", "dialectic_resolved", "watcher_finding_dismissed"}  # is_bad determined by score/explicit
 VALID_OUTCOME_TYPES = BAD_OUTCOME_TYPES | GOOD_OUTCOME_TYPES | NEUTRAL_OUTCOME_TYPES
 
 _HARD_EXOGENOUS_DETAIL_KEYS = (
