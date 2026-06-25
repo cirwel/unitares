@@ -264,6 +264,25 @@ class TestCompletenessScript:
         assert script.should_check_file(Path("/repo/.claude/worktrees/task/docs/note.md")) is False
         assert script.should_check_file(Path("/repo/htmlcov/index.json")) is False
 
+    def test_iter_checkable_files_prunes_skipped_directories(self, tmp_path):
+        script = _load_check_script()
+        checked_file = tmp_path / "src" / "state.py"
+        skipped_venv_file = tmp_path / ".venv" / "lib" / "pkg.py"
+        skipped_worktree_file = tmp_path / ".claude" / "worktrees" / "task" / "note.md"
+
+        checked_file.parent.mkdir(parents=True)
+        skipped_venv_file.parent.mkdir(parents=True)
+        skipped_worktree_file.parent.mkdir(parents=True)
+        checked_file.write_text("ok = True\n")
+        skipped_venv_file.write_text("example = {'E': 0.1, 'I': 0.2, 'S': 0.3}\n")
+        skipped_worktree_file.write_text("E=0.1, I=0.2, S=0.3\n")
+
+        files = set(script.iter_checkable_files(tmp_path))
+
+        assert checked_file in files
+        assert skipped_venv_file not in files
+        assert skipped_worktree_file not in files
+
     def test_complete_same_line_eisv_does_not_flag(self, tmp_path):
         script = _load_check_script()
         path = tmp_path / "state.py"

@@ -6,52 +6,90 @@ Usage:
     python scripts/analysis/count_tools.py --json       # Print as JSON
     python scripts/analysis/count_tools.py --by-module  # Breakdown by module
 """
-import sys
-import os
+from __future__ import annotations
+
+import argparse
 import json
-import re
 from collections import defaultdict
+from pathlib import Path
+import sys
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, PROJECT_ROOT)
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
-def count_tools():
-    """Count @mcp_tool decorated functions across handler modules."""
-    handlers_dir = os.path.join(PROJECT_ROOT, "src", "mcp_handlers")
-    if not os.path.isdir(handlers_dir):
-        return {}, 0
 
-    by_module = defaultdict(list)
-    total = 0
+def _registry_accessors():
+    import src.mcp_handlers  # noqa: F401 - populates decorator registry
+    from src.mcp_handlers.decorators import get_tool_definition, list_registered_tools
 
-    for fname in sorted(os.listdir(handlers_dir)):
-        if not fname.endswith(".py") or fname.startswith("_"):
+    return get_tool_definition, list_registered_tools
+
+
+def _module_bucket(module_name: str) -> str:
+    prefix = "src.mcp_handlers."
+    if module_name.startswith(prefix):
+        module_name = module_name[len(prefix):]
+    return module_name or "(unknown)"
+
+
+def count_tools(*, include_hidden: bool = False, include_deprecated: bool = True) -> tuple[dict[str, list[str]], int]:
+    """Count tools from the runtime registry that dispatch actually uses."""
+    get_tool_definition, list_registered_tools = _registry_accessors()
+    by_module: dict[str, list[str]] = defaultdict(list)
+
+    for tool_name in list_registered_tools(
+        include_hidden=include_hidden,
+        include_deprecated=include_deprecated,
+    ):
+        td = get_tool_definition(tool_name)
+        if td is None:
             continue
-        filepath = os.path.join(handlers_dir, fname)
-        with open(filepath) as f:
-            content = f.read()
+        module_name = _module_bucket(getattr(td.handler, "__module__", ""))
+        by_module[module_name].append(tool_name)
 
-        # Find @mcp_tool("tool_name") decorators
-        for match in re.finditer(r'@mcp_tool\(\s*["\'](\w+)["\']', content):
-            tool_name = match.group(1)
-            by_module[fname].append(tool_name)
-            total += 1
+    sorted_modules = {
+        module_name: sorted(tool_names)
+        for module_name, tool_names in sorted(by_module.items())
+    }
+    total = sum(len(tool_names) for tool_names in sorted_modules.values())
+    return sorted_modules, total
 
-    return dict(by_module), total
 
 def main():
-    by_module, total = count_tools()
+    parser = argparse.ArgumentParser(description="Count MCP tools")
+    parser.add_argument("--json", action="store_true", help="Output as JSON")
+    parser.add_argument("--by-module", action="store_true", help="Show breakdown by module")
+    parser.add_argument("--include-hidden", action="store_true", help="Include hidden/internal tools")
+    parser.add_argument(
+        "--exclude-deprecated",
+        action="store_true",
+        help="Exclude deprecated-but-callable tools",
+    )
+    args = parser.parse_args()
 
-    if "--json" in sys.argv:
-        print(json.dumps({"total": total, "by_module": by_module}, indent=2))
-    elif "--by-module" in sys.argv:
-        for module, tools in sorted(by_module.items()):
+    include_deprecated = not args.exclude_deprecated
+    by_module, total = count_tools(
+        include_hidden=args.include_hidden,
+        include_deprecated=include_deprecated,
+    )
+
+    if args.json:
+        output = {
+            "total": total,
+            "include_hidden": args.include_hidden,
+            "include_deprecated": include_deprecated,
+            "by_module": by_module,
+        }
+        print(json.dumps(output, indent=2))
+    elif args.by_module:
+        for module, tools in by_module.items():
             print(f"\n{module} ({len(tools)} tools):")
-            for t in tools:
-                print(f"  - {t}")
+            for tool_name in tools:
+                print(f"  - {tool_name}")
         print(f"\nTotal: {total} tools")
     else:
         print(f"{total} tools")
+
 
 if __name__ == "__main__":
     main()
