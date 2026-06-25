@@ -11,9 +11,21 @@ import os
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
-def main():
+
+def load_tool_count() -> int:
     from scripts.analysis.count_tools import count_tools
-    _, total = count_tools()
+
+    try:
+        _, total = count_tools()
+    except ModuleNotFoundError as exc:
+        print(f"WARNING: Tool count unavailable ({exc})", file=sys.stderr)
+        return 0
+
+    return total
+
+
+def main():
+    total = load_tool_count()
 
     if "--check" in sys.argv:
         if total == 0:

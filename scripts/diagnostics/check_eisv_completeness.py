@@ -6,17 +6,18 @@ This script scans code and documentation for patterns that might indicate
 incomplete EISV reporting (e.g., "E, I, S" without V).
 
 Usage:
-    python3 scripts/check_eisv_completeness.py [--fix]
+    python3 scripts/diagnostics/check_eisv_completeness.py [--fix]
 
 Exit codes:
     0 - All EISV references are complete
     1 - Found incomplete EISV references
 """
 
+import os
 import re
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import Iterator, List, Tuple
 
 NUMBER_RE = r'[+-]?\d+(?:\.\d+)?'
 
@@ -86,6 +87,18 @@ def should_check_file(filepath: Path) -> bool:
     return filepath.suffix in {'.py', '.md', '.txt', '.json'}
 
 
+def iter_checkable_files(project_root: Path) -> Iterator[Path]:
+    """Yield checkable files while pruning generated/cache directories."""
+    for root, dirs, files in os.walk(project_root):
+        dirs[:] = [dirname for dirname in dirs if dirname not in SKIP_DIRS]
+        root_path = Path(root)
+
+        for filename in files:
+            filepath = root_path / filename
+            if should_check_file(filepath):
+                yield filepath
+
+
 def _looks_complete_on_same_line(line: str, match: re.Match[str], pattern_name: str) -> bool:
     if 'without v' in line.lower() or 'missing v' in line.lower():
         return False
@@ -127,13 +140,7 @@ def main():
     print()
 
     # Scan all relevant files
-    for filepath in project_root.rglob('*'):
-        if not filepath.is_file():
-            continue
-
-        if not should_check_file(filepath):
-            continue
-
+    for filepath in iter_checkable_files(project_root):
         issues = check_file(filepath)
         if issues:
             all_issues.append((filepath, issues))
@@ -159,7 +166,7 @@ def main():
         print("   Please manually update the files to include V.")
     else:
         print("💡 To see suggestions for fixing, run:")
-        print("   python3 scripts/check_eisv_completeness.py --fix")
+        print("   python3 scripts/diagnostics/check_eisv_completeness.py --fix")
 
     print()
     print("📖 See docs/guides/EISV_COMPLETENESS.md for correct usage.")
