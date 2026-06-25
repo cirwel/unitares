@@ -714,6 +714,16 @@ defmodule UnitaresLeasePlane.Repo do
       {:ok, %{rows: []}} ->
         {:ok, nil}
 
+      # A row whose payload has no `idempotency_digest` (manual insert, migration
+      # replay, or a future code branch) is unusable for the digest comparison —
+      # treat it as not-found so the caller persists fresh, rather than returning
+      # a `digest: nil` map that matches none of the caller's case clauses
+      # (`^digest` / `is_binary(other)` / `nil` / `{:error, _}`) and raises
+      # CaseClauseError on the retry. The current writer always sets the digest;
+      # this guards the corrupt/legacy-row edge.
+      {:ok, %{rows: [[nil, _payload_text]]}} ->
+        {:ok, nil}
+
       {:ok, %{rows: [[digest, payload_text]]}} ->
         {:ok, %{idempotency_digest: digest, payload: decode_payload(payload_text)}}
 
