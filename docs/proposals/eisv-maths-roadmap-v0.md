@@ -254,3 +254,49 @@ Spend the red-team budget on one thing: **does the freeze/anchor rule actually
 keep "baseline learns normal" externally falsifiable?** (§4b/§7). That is the
 whole design in one line: *recenter the reference, but keep the reference
 externally falsifiable.*
+
+---
+
+## Appendix A — Stage 0 reconnaissance (2026-06-25)
+
+Stage 0's substrate already exists: **`audit.outcome_events`** (~79k rows,
+partitioned monthly since Feb 2026) carries per-agent attribution, an `is_bad`
+label, the EISV state *joined at the outcome moment* (`eisv_e/i/s/v/phi/verdict/
+coherence/regime`), and a **`verification_source`** column that *is* the §7
+trust-tier field. So Stage 0 is "tier and filter what already flows", not "build
+a table".
+
+**But Invariant 4 bites on the live data — 88% of rows are self-referential.**
+Tiering by `verification_source`:
+
+| source | count | bad | tier |
+|---|---|---|---|
+| `server_observation` (mostly `trajectory_validated`) | 29.6k | 934 | **EXCLUDED — self-referential** (the loop validating its own trajectories) |
+| `(null)` provenance | 45.8k | 947 | EXCLUDED — untiered |
+| `agent_reported_tool_result` | 2.1k | 36 | SOFT — self-attested, gameable |
+| **`external_signal`** | **1.6k** | **498** | **TRUSTED_EXTERNAL** (task/test outcomes verified outside the loop) |
+
+The dominant `trajectory_validated` signal is the governance loop validating its
+*own* trajectories. Using `outcome_events` unfiltered as the anchor would build
+the exact echo chamber this roadmap prevents. **Invariant 4 is load-bearing on
+this table today.**
+
+**Real exogenous label budget: ~1,632 events, ~498 bad.** That is the honest
+ceiling for B's falsifiability gate (§6.3). Enough for a per-class analysis of
+high-population classes (Lumen/Sentinel); **statistically thin for rare classes**
+until more exogenous labels accrue — B's justification will be class-uneven, and
+the roadmap should not claim otherwise.
+
+**Gap:** `test_failed` = **1** event. The most objective *bad* anchor — a failing
+test — is essentially not being captured. CI/test-failure wiring into
+`outcome_events` is a concrete Stage 0 task.
+
+**Stage 0 reduces to three tasks** (not a build-from-scratch):
+1. tier-map `verification_source` and expose only externally-anchored outcomes —
+   `external_signal` → trusted, `agent_reported_tool_result` → soft,
+   `server_observation`/`null` → **excluded** (Invariant 4). *(First code:
+   `src/grounding/outcome_anchors.py` + `scripts/analysis/outcome_anchor_inventory.py`.)*
+2. wire the missing CI/test-failed anchor.
+3. accept the ~498-bad-label ceiling as the current limit and let it grow;
+   gold/strong separation within `external_signal` (operator-correction vs CI)
+   is a later refinement (may live in `detail` jsonb).
