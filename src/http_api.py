@@ -694,6 +694,96 @@ async def http_call_tool(request):
         }, status_code=500)
 
 
+async def http_effect_veto(request):
+    """POST /v1/effect-veto — governance veto for a proposed governed effect.
+
+    The lease plane calls this BEFORE committing an ``execute`` agent_spawn
+    (governed-effect-plane-v0 §6). It reads the proposer's DURABLE last-decided
+    governance posture — ``verdict`` and ``action`` from the latest
+    ``core.agent_state.state_json`` — and vetoes if the proposer is flagged:
+    verdict ``high-risk`` OR a pause/block action (anything other than
+    ``approve`` / ``guide``).
+
+    Policy (operator-chosen 2026-06-25):
+      * VETO   verdict == high-risk OR action ∉ {approve, guide}
+      * ALLOW  safe/caution + approve/guide
+      * UNKNOWN proposer (no governance state) → ALLOW (fail-OPEN — the two
+        bearers already gate access; the veto's job is to stop a KNOWN-flagged
+        agent, not every newcomer).
+      * DB error → 503 so the CALLER fails closed (can't confirm safety).
+
+    Request:  ``{"proposer_agent_uuid": "...", "surface": "...",
+                 "effect_id": "...", "payload_sha256": "..."}``
+    Response: ``{"ok": true, "vetoed": bool, "verdict", "action",
+                 "risk_score", "reason"}``
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    proposer = body.get("proposer_agent_uuid") or body.get("agent_id")
+    if not proposer or not isinstance(proposer, str):
+        return JSONResponse(
+            {"ok": False, "error": "schema_invalid",
+             "detail": "proposer_agent_uuid required"},
+            status_code=422,
+        )
+
+    try:
+        from src.db import get_db
+        db = get_db()
+        async with db.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT s.state_json->>'verdict' AS verdict,
+                       s.state_json->>'action'  AS action,
+                       s.risk_score             AS risk_score
+                FROM core.identities i
+                JOIN core.agent_state s ON s.identity_id = i.identity_id
+                WHERE i.agent_id = $1 AND s.synthetic = false
+                ORDER BY s.recorded_at DESC
+                LIMIT 1
+                """,
+                proposer,
+            )
+    except Exception as e:  # noqa: BLE001 — governance read failed; let caller fail closed
+        logger.warning("effect-veto governance read failed for %s: %s", proposer, e)
+        return JSONResponse(
+            {"ok": False, "error": "governance_unavailable",
+             "detail": "could not read proposer governance state"},
+            status_code=503,
+        )
+
+    if row is None:
+        # Unknown proposer — fail open per policy.
+        return JSONResponse({
+            "ok": True, "vetoed": False, "verdict": None, "action": None,
+            "risk_score": None, "reason": "no_governance_state",
+        })
+
+    verdict = row["verdict"]
+    action = row["action"]
+    risk_score = row["risk_score"]
+    block_verdict = verdict == "high-risk"
+    block_action = action is not None and action not in ("approve", "guide")
+    vetoed = bool(block_verdict or block_action)
+
+    return JSONResponse({
+        "ok": True,
+        "vetoed": vetoed,
+        "verdict": verdict,
+        "action": action,
+        "risk_score": risk_score,
+        "reason": (f"verdict={verdict} action={action}" if vetoed else None),
+    })
+
+
 async def http_health(request):
     """Health check endpoint -- always public (monitoring, load balancers)"""
 
@@ -3092,6 +3182,7 @@ def register_http_routes(
     app.routes.append(Route("/", http_dashboard_redesign, methods=["GET"]))  # Root also serves the redesign
     app.routes.append(Route("/v1/tools", http_list_tools, methods=["GET"]))
     app.routes.append(Route("/v1/tools/call", http_call_tool, methods=["POST"]))
+    app.routes.append(Route("/v1/effect-veto", http_effect_veto, methods=["POST"]))
     app.routes.append(Route("/health", http_health, methods=["GET"]))
     app.routes.append(Route("/health/live", http_health_live, methods=["GET"]))
     app.routes.append(Route("/health/ready", http_health_ready, methods=["GET"]))

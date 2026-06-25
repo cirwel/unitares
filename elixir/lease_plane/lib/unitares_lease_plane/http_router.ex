@@ -157,6 +157,13 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           reason: "execute custody could not complete the spawn via the orchestrator"
         })
 
+      {:error, :governance_blocked} ->
+        json(conn, 403, %{
+          ok: false,
+          error: "governance_blocked",
+          reason: "governance vetoed the effect or could not affirmatively clear it"
+        })
+
       {:error, detail} when is_binary(detail) ->
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
     end

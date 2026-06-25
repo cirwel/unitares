@@ -76,6 +76,20 @@ defmodule UnitaresLeasePlane.Application do
       Application.put_env(:lease_plane, :agent_orchestrator_bearer_token, token)
     end
 
+    # Governance MCP base URL for the §6 effect-veto (governed-effect execute).
+    # Defaults to the local governance MCP REST surface; loopback bypasses its
+    # auth, so no token is needed in the default single-host setup.
+    Application.put_env(
+      :lease_plane,
+      :governance_url,
+      System.get_env("UNITARES_GOVERNANCE_URL") ||
+        System.get_env("GOVERNANCE_URL") || "http://127.0.0.1:8767"
+    )
+
+    if token = System.get_env("UNITARES_HTTP_API_TOKEN") do
+      Application.put_env(:lease_plane, :governance_api_token, token)
+    end
+
     children =
       [
         {Postgrex, postgrex_opts()},

@@ -200,36 +200,58 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
                )
     end
 
-    test "flag on + unreachable orchestrator → spawn_failed, and a rejected execute row persists" do
+    test "FAIL-CLOSED: flag on + governance veto unreachable → governance_blocked (never spawns)" do
       key = tracked_key()
-      # Point at a closed port so the spawn fails fast without a real orchestrator.
-      set_execute_flag(true, "http://127.0.0.1:1")
+      # Orchestrator reachable-looking, but the §6 governance veto points at a
+      # closed port → the veto cannot affirmatively clear the effect → we must
+      # NOT spawn. The orchestrator is never even reached.
+      set_execute_flag(true, "http://127.0.0.1:8789", "http://127.0.0.1:1")
 
-      assert {:error, :spawn_failed} =
+      assert {:error, :governance_blocked} =
                GovernedEffect.handle(
                  base(%{
                    "idempotency_key" => key,
                    "custody_mode" => "execute",
                    "effect_type" => "agent_spawn",
+                   "proposer" => %{"agent_uuid" => "00000000-0000-0000-0000-0000000000aa"},
                    "payload" => %{"cmd" => "echo", "args" => ["hi"]}
                  })
                )
 
       assert [row] = execute_rows(key)
       assert row["custody_mode"] == "execute"
-      assert row["status"] == "rejected"
+      assert row["status"] == "governance_blocked"
       assert row["effect_lane"] == "governed_effect"
+    end
+
+    test "FAIL-CLOSED: an execute agent_spawn with no proposer is governance_blocked (unattributed)" do
+      key = tracked_key()
+      set_execute_flag(true, "http://127.0.0.1:8789", "http://127.0.0.1:8767")
+
+      assert {:error, :governance_blocked} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => key,
+                   "custody_mode" => "execute",
+                   "effect_type" => "agent_spawn",
+                   "payload" => %{"cmd" => "echo"}
+                 })
+               )
     end
   end
 
-  # Toggle the execute flag + orchestrator config for one test, resetting after.
-  defp set_execute_flag(enabled?, url) do
+  # Toggle the execute flag + orchestrator + governance-veto config for one test,
+  # resetting after. `gov_url` defaults to a closed port so the veto fails closed
+  # unless a test deliberately points it somewhere reachable.
+  defp set_execute_flag(enabled?, url, gov_url \\ "http://127.0.0.1:1") do
     prev_enabled = Application.get_env(:lease_plane, :execute_agent_spawn_enabled)
     prev_url = Application.get_env(:lease_plane, :agent_orchestrator_url)
     prev_bearer = Application.get_env(:lease_plane, :agent_orchestrator_bearer_token)
+    prev_gov = Application.get_env(:lease_plane, :governance_url)
 
     Application.put_env(:lease_plane, :execute_agent_spawn_enabled, enabled?)
     Application.put_env(:lease_plane, :agent_orchestrator_url, url)
+    Application.put_env(:lease_plane, :governance_url, gov_url)
 
     Application.put_env(
       :lease_plane,
@@ -241,6 +263,7 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       restore(:execute_agent_spawn_enabled, prev_enabled)
       restore(:agent_orchestrator_url, prev_url)
       restore(:agent_orchestrator_bearer_token, prev_bearer)
+      restore(:governance_url, prev_gov)
     end)
   end
 
