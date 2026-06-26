@@ -79,6 +79,7 @@ How to run this in production. Most readers can skip these.
 - [`resident-validation-cohort.md`](operations/resident-validation-cohort.md) — experimental long-running resident validation tick contract
 - [`resident-validation-supervised-invocation.md`](operations/resident-validation-supervised-invocation.md) — local-only supervised canary invocation wrapper
 - [`dormant-capability-registry.md`](operations/dormant-capability-registry.md) — distinguishes built-but-unwired capability from genuine cruft, so cleanup is deliberate
+- [`research-registry.md`](operations/research-registry.md) — file-backed registry for agent-network research runs, rigor checklist, and REST/MCP query surfaces
 - [`kg-lineage-dashboard-handoff.md`](operations/kg-lineage-dashboard-handoff.md) — deferred implementation handoff for KG supersession/related-lineage dashboard exposure
 - [`test-suite-triage.md`](operations/test-suite-triage.md) — current state of the test gate and known-triaged suites
 - [`DATA_NOTES.md`](operations/DATA_NOTES.md) — operational data dictionary for the production governance database
