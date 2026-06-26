@@ -698,24 +698,36 @@ async def http_effect_veto(request):
     """POST /v1/effect-veto — governance veto for a proposed governed effect.
 
     The lease plane calls this BEFORE committing an ``execute`` agent_spawn
-    (governed-effect-plane-v0 §6). It reads the proposer's DURABLE last-decided
-    governance posture — ``verdict`` and ``action`` from the latest
-    ``core.agent_state.state_json`` — and vetoes if the proposer is flagged:
-    verdict ``high-risk`` OR a pause/block action (anything other than
-    ``approve`` / ``guide``).
+    (governed-effect-plane-v0 §6 + §7). Two independent gates compose; either
+    trips the veto:
 
-    Policy (operator-chosen 2026-06-25):
-      * VETO   verdict == high-risk OR action ∉ {approve, guide}
-      * ALLOW  safe/caution + approve/guide
-      * UNKNOWN proposer (no governance state) → ALLOW (fail-OPEN — the two
-        bearers already gate access; the veto's job is to stop a KNOWN-flagged
-        agent, not every newcomer).
+      §6 (verdict) — reads the proposer's DURABLE last-decided governance
+      posture (``verdict``/``action`` from the latest
+      ``core.agent_state.state_json``) and vetoes a flagged proposer:
+      verdict ``high-risk`` OR a pause/block action (∉ {approve, guide}).
+
+      §7 (tier) — re-certifies the proposer's IDENTITY tier as ``strong`` from
+      a forwarded ``proposer_continuity_token`` (HMAC + expiry, aid==proposer),
+      WITHOUT a fresh transport resolution. A proposer that does not
+      re-certify as strong is vetoed. This gate applies on EVERY path,
+      including the unknown-proposer branch §6 alone fails open.
+
+    Policy:
+      * VETO   §6 flagged  OR  §7 not strong (no/invalid/expired/mismatched token)
+      * ALLOW  safe/caution + approve/guide  AND  strong-tier re-cert
+      * UNKNOWN proposer (no governance state) → §6 fails OPEN, but §7 still
+        applies: allowed only if the token re-certifies strong (a strong,
+        never-flagged identity may spawn; a weak/unverified one may not).
       * DB error → 503 so the CALLER fails closed (can't confirm safety).
 
-    Request:  ``{"proposer_agent_uuid": "...", "surface": "...",
-                 "effect_id": "...", "payload_sha256": "..."}``
+    The ``proposer_continuity_token`` is a credential: verified transiently,
+    never read into the DB query, the response body, or any log line
+    (Invariant 7).
+
+    Request:  ``{"proposer_agent_uuid": "...", "proposer_continuity_token": "v1...",
+                 "surface": "...", "effect_type": "..."}``
     Response: ``{"ok": true, "vetoed": bool, "verdict", "action",
-                 "risk_score", "reason"}``
+                 "risk_score", "tier", "tier_ok", "reason"}``
     """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     if not _check_http_auth(request, http_api_token=http_api_token):
@@ -734,6 +746,21 @@ async def http_effect_veto(request):
              "detail": "proposer_agent_uuid required"},
             status_code=422,
         )
+
+    # §7 strong-tier re-certification (governed-effect-plane-v0 §2/§7). The
+    # proposer forwards its continuity_token (transport-robust HMAC proof); we
+    # re-verify it server-side to the `strong` tier WITHOUT a fresh transport
+    # resolution (that would stamp server_inferred → weak — the trap that would
+    # block every effect). This gate DOMINATES every allow path below: a
+    # proposer that does not re-certify as strong is vetoed regardless of its
+    # governance verdict — including the unknown-proposer branch that §6 alone
+    # fails OPEN. Fail-closed: a missing, malformed, expired, or aid-mismatched
+    # token → tier_ok False → vetoed. The token is consumed for verification
+    # only — never read into the DB query, the response, or any log line.
+    from src.mcp_handlers.identity.session import recertify_strong_tier
+    tier_ok = recertify_strong_tier(body.get("proposer_continuity_token"), proposer)
+    tier = "strong" if tier_ok else "unverified"
+    tier_reason = None if tier_ok else "tier_recert_failed:not_strong_identity"
 
     try:
         from src.db import get_db
@@ -761,10 +788,20 @@ async def http_effect_veto(request):
         )
 
     if row is None:
-        # Unknown proposer — fail open per policy.
+        # Unknown proposer. §6 (verdict) fails OPEN for newcomers — the two
+        # bearers already gate access and the veto's job is to stop a KNOWN-
+        # flagged agent. But §7 (tier) still applies: a newcomer must STILL
+        # re-certify as a strong identity to commit an RCE-class spawn. So an
+        # unknown proposer is allowed only when its token re-certifies strong;
+        # no/invalid token → vetoed. This is the intended composition —
+        # "a strong, never-flagged identity may spawn; a weak/unverified one
+        # may not" — not an emergent property of the old early return.
         return JSONResponse({
-            "ok": True, "vetoed": False, "verdict": None, "action": None,
-            "risk_score": None, "reason": "no_governance_state",
+            "ok": True,
+            "vetoed": not tier_ok,
+            "verdict": None, "action": None, "risk_score": None,
+            "tier": tier, "tier_ok": tier_ok,
+            "reason": (tier_reason if not tier_ok else "no_governance_state"),
         })
 
     verdict = row["verdict"]
@@ -772,7 +809,18 @@ async def http_effect_veto(request):
     risk_score = row["risk_score"]
     block_verdict = verdict == "high-risk"
     block_action = action is not None and action not in ("approve", "guide")
-    vetoed = bool(block_verdict or block_action)
+    # §6 verdict/action gate OR §7 tier gate — either trips the veto.
+    vetoed = bool(block_verdict or block_action or (not tier_ok))
+
+    if vetoed:
+        reasons = []
+        if block_verdict or block_action:
+            reasons.append(f"verdict={verdict} action={action}")
+        if not tier_ok:
+            reasons.append(tier_reason)
+        reason = " ; ".join(reasons)
+    else:
+        reason = None
 
     return JSONResponse({
         "ok": True,
@@ -780,7 +828,9 @@ async def http_effect_veto(request):
         "verdict": verdict,
         "action": action,
         "risk_score": risk_score,
-        "reason": (f"verdict={verdict} action={action}" if vetoed else None),
+        "tier": tier,
+        "tier_ok": tier_ok,
+        "reason": reason,
     })
 
 

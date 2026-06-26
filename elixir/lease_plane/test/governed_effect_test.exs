@@ -113,7 +113,7 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       assert row["idempotency_digest"] == body.idempotency_digest
     end
 
-    test "proposer.agent_uuid is stored as attribution; client_session_id is never stored" do
+    test "proposer.agent_uuid is stored as attribution; credentials are never stored" do
       key = tracked_key()
       agent = "11111111-2222-3333-4444-555555555555"
 
@@ -123,7 +123,9 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
                    "idempotency_key" => key,
                    "proposer" => %{
                      "agent_uuid" => agent,
-                     "client_session_id" => "SECRET-cs-token"
+                     "client_session_id" => "SECRET-cs-token",
+                     # §7 proof carried in the proposer object — also a credential.
+                     "continuity_token" => "v1.SECRET-continuity-payload.SECRET-sig"
                    },
                    "provenance" => %{"session_id" => "prov-sess-7"}
                  })
@@ -132,9 +134,11 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       assert {agent_id, session_id, payload_text} = governed_effect_attribution(key)
       assert agent_id == agent
       assert session_id == "prov-sess-7"
-      # Invariant 7: the credential must appear nowhere in the durable record.
+      # Invariant 1/7: neither credential may appear anywhere in the durable record.
       refute payload_text =~ "SECRET-cs-token"
       refute payload_text =~ "client_session_id"
+      refute payload_text =~ "SECRET-continuity-payload"
+      refute payload_text =~ "continuity_token"
     end
   end
 
@@ -237,6 +241,77 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
                    "payload" => %{"cmd" => "echo"}
                  })
                )
+    end
+
+    test "§7: a forwarded continuity_token never leaks into the persisted record" do
+      key = tracked_key()
+      # Gov veto unreachable → fail-closed regardless of the token (the token's
+      # only effect is being forwarded for verification). The point of THIS test
+      # is the no-leak invariant: even on the blocked path, the credential must
+      # appear nowhere in the durable governance_blocked row.
+      set_execute_flag(true, "http://127.0.0.1:8789", "http://127.0.0.1:1")
+
+      assert {:error, :governance_blocked} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => key,
+                   "custody_mode" => "execute",
+                   "effect_type" => "agent_spawn",
+                   "proposer" => %{
+                     "agent_uuid" => "00000000-0000-0000-0000-0000000000aa",
+                     "continuity_token" => "v1.SECRET-s7-payload.SECRET-s7-sig"
+                   },
+                   "payload" => %{"cmd" => "echo", "args" => ["hi"]}
+                 })
+               )
+
+      assert [row] = execute_rows(key)
+      assert row["status"] == "governance_blocked"
+      row_text = Jason.encode!(row)
+      refute row_text =~ "SECRET-s7-payload"
+      refute row_text =~ "continuity_token"
+    end
+  end
+
+  describe "§7 GovernanceVetoClient body forwarding" do
+    alias UnitaresLeasePlane.GovernanceVetoClient
+
+    test "the continuity_token is forwarded when present" do
+      body =
+        GovernanceVetoClient.build_veto_body(%{
+          proposer_agent_uuid: "00000000-0000-0000-0000-0000000000aa",
+          surface: "agent:x",
+          effect_type: "agent_spawn",
+          proposer_continuity_token: "v1.payload.sig"
+        })
+
+      assert body["proposer_continuity_token"] == "v1.payload.sig"
+      assert body["proposer_agent_uuid"] == "00000000-0000-0000-0000-0000000000aa"
+    end
+
+    test "the key is OMITTED (not null) when the token is absent or blank" do
+      for token <- [nil, ""] do
+        body =
+          GovernanceVetoClient.build_veto_body(%{
+            proposer_agent_uuid: "00000000-0000-0000-0000-0000000000aa",
+            surface: "agent:x",
+            effect_type: "agent_spawn",
+            proposer_continuity_token: token
+          })
+
+        refute Map.has_key?(body, "proposer_continuity_token"),
+               "token=#{inspect(token)} should be omitted, not sent as null"
+      end
+
+      # also when the env never carried the key at all
+      body =
+        GovernanceVetoClient.build_veto_body(%{
+          proposer_agent_uuid: "00000000-0000-0000-0000-0000000000aa",
+          surface: "agent:x",
+          effect_type: "agent_spawn"
+        })
+
+      refute Map.has_key?(body, "proposer_continuity_token")
     end
   end
 

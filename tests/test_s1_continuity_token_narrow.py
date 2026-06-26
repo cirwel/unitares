@@ -832,3 +832,76 @@ def test_handle_bind_session_s1c_rejection_wiring_present():
 def _b64url_decode(data: str) -> bytes:
     padding = "=" * (-len(data) % 4)
     return base64.urlsafe_b64decode(data + padding)
+
+
+# -----------------------------------------------------------------------------
+# §7 governed-effect strong-tier re-certification (recertify_strong_tier)
+# -----------------------------------------------------------------------------
+# Unit-level proof for the encapsulated §7 gate: "fresh HMAC AND aid == claimed
+# proposer." Single-sourced here so the invariant is tested as a function, not
+# only as an HTTP shape (see tests/test_http_api_effect_veto.py for the
+# endpoint-level proof).
+
+_S7_SECRET = {"UNITARES_CONTINUITY_TOKEN_SECRET": "test-secret-s7"}
+_S7_AID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+def test_recertify_strong_tier_accepts_fresh_matching_token():
+    from src.mcp_handlers.identity import session as session_mod
+
+    with patch.dict("os.environ", _S7_SECRET, clear=False):
+        token = session_mod.create_continuity_token(_S7_AID, "agent-aaa:claude")
+        assert session_mod.recertify_strong_tier(token, _S7_AID) is True
+
+
+def test_recertify_strong_tier_rejects_missing_token_or_proposer():
+    from src.mcp_handlers.identity import session as session_mod
+
+    with patch.dict("os.environ", _S7_SECRET, clear=False):
+        token = session_mod.create_continuity_token(_S7_AID, "agent-aaa:claude")
+        assert session_mod.recertify_strong_tier(None, _S7_AID) is False
+        assert session_mod.recertify_strong_tier("", _S7_AID) is False
+        assert session_mod.recertify_strong_tier(token, None) is False
+        assert session_mod.recertify_strong_tier(token, "") is False
+        # non-str inputs must not raise
+        assert session_mod.recertify_strong_tier(123, _S7_AID) is False
+        assert session_mod.recertify_strong_tier(token, 123) is False
+
+
+def test_recertify_strong_tier_rejects_aid_mismatch():
+    """A perfectly valid token for identity X cannot re-certify proposer Y."""
+    from src.mcp_handlers.identity import session as session_mod
+
+    with patch.dict("os.environ", _S7_SECRET, clear=False):
+        token = session_mod.create_continuity_token(_S7_AID, "agent-aaa:claude")
+        assert session_mod.recertify_strong_tier(token, "ffffffff-0000-0000-0000-000000000000") is False
+
+
+def test_recertify_strong_tier_rejects_expired_token():
+    """Freshness IS required (irreversible spawn) — an expired token is refused
+    even though its signature and aid are valid."""
+    from src.mcp_handlers.identity import session as session_mod
+
+    with patch.dict("os.environ", _S7_SECRET, clear=False):
+        with patch.object(session_mod.time, "time", return_value=int(time.time()) - 7200):
+            stale = session_mod.create_continuity_token(_S7_AID, "agent-aaa:claude")
+        assert session_mod.recertify_strong_tier(stale, _S7_AID) is False
+
+
+def test_recertify_strong_tier_rejects_tampered_signature():
+    from src.mcp_handlers.identity import session as session_mod
+
+    with patch.dict("os.environ", _S7_SECRET, clear=False):
+        token = session_mod.create_continuity_token(_S7_AID, "agent-aaa:claude")
+        tampered = token[:-4] + ("AAAA" if not token.endswith("AAAA") else "BBBB")
+        assert session_mod.recertify_strong_tier(tampered, _S7_AID) is False
+
+
+def test_recertify_strong_tier_fails_closed_without_secret():
+    from src.mcp_handlers.identity import session as session_mod
+
+    with patch.dict("os.environ", _S7_SECRET, clear=False):
+        token = session_mod.create_continuity_token(_S7_AID, "agent-aaa:claude")
+    # secret removed → no token can verify → fail closed
+    with patch.dict("os.environ", {}, clear=True):
+        assert session_mod.recertify_strong_tier(token, _S7_AID) is False

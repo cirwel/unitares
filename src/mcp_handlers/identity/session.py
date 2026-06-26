@@ -368,6 +368,46 @@ def resolve_continuity_token(
         return None
 
 
+def recertify_strong_tier(token: object, proposer_uuid: object) -> bool:
+    """Governed-effect §7 server-side strong-tier re-certification.
+
+    Returns ``True`` iff ``token`` is a valid, UNEXPIRED continuity token whose
+    ``aid`` claim equals ``proposer_uuid`` — i.e. the proposer cryptographically
+    proves a ``continuity_token``-sourced identity, which is in
+    ``_STRONG_IDENTITY_SOURCES`` (``updates.phases``) and so maps to the
+    ``strong`` tier. Every other input — missing/blank token or proposer, a
+    malformed/tampered token, an expired token, or an ``aid`` that does not
+    match the claimed proposer — returns ``False`` so the §7 gate fails CLOSED.
+
+    This is the single source of the §7 security invariant: "fresh HMAC AND
+    aid == claimed proposer." It is deliberately built from the canonical token
+    primitives rather than the full transport identity-resolution pipeline —
+    a fresh transport resolution stamps ``server_inferred`` → weak (the trap
+    that would block every effect). Reusing the primitives keeps the
+    HMAC/secret/expiry logic single-sourced so a future caller cannot
+    re-derive the gate wrong (``extract_*`` alone drops the expiry check;
+    ``resolve_*`` alone returns ``sid`` and ignores ``aid``).
+
+    Freshness IS required here: an ``agent_spawn`` is irreversible, so
+    ``resolve_continuity_token`` (HMAC + ``exp``) gates it — NOT the
+    resume-after-idle ``extract_token_agent_uuid`` path that intentionally
+    skips expiry.
+    """
+    if not token or not isinstance(token, str):
+        return False
+    if not proposer_uuid or not isinstance(proposer_uuid, str):
+        return False
+    # Freshness + signature: resolve_continuity_token verifies the HMAC AND the
+    # `exp` claim (returns None on either failure). Its return value is the
+    # `sid`, which we deliberately discard — the §7 binding is on `aid`.
+    if resolve_continuity_token(token) is None:
+        return False
+    # Ownership binding: the token must attest the CLAIMED proposer, closing the
+    # confused-deputy path (present A's token while claiming proposer=B).
+    aid = extract_token_agent_uuid(token)
+    return bool(aid) and aid == proposer_uuid
+
+
 def _normalize_pin_client_hint(client_hint: Optional[str]) -> Optional[str]:
     """Normalize client hint for scoped pin keys."""
     if not client_hint:
