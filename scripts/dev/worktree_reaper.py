@@ -38,6 +38,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+LEASE_SURFACE_ID = "resident:/worktree_reaper"
+LEASE_TTL_S = 900
 
 
 def _git(*args: str, cwd: Path = _REPO_ROOT) -> Tuple[int, str]:
@@ -138,16 +140,7 @@ def _idle_hours(path: str) -> Optional[float]:
     return max(0.0, (now - max(stamps)) / 3600.0)
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--apply", action="store_true",
-                    help="Actually remove eligible worktrees (default: dry-run).")
-    ap.add_argument("--min-idle-hours", type=float, default=12.0,
-                    help="Skip worktrees active more recently than this (default 12).")
-    ap.add_argument("--json", action="store_true", help="Emit JSON.")
-    args = ap.parse_args()
-
+def _run_reaper(args: argparse.Namespace) -> int:
     try:
         pr_states = _pr_states()
     except Exception as exc:
@@ -199,6 +192,32 @@ def main() -> int:
     else:
         print(f"\n(dry-run — re-run with --apply to remove the {len(elig)} eligible)")
     return 0
+
+
+def _lease_scope(*, apply: bool, min_idle_hours: float):
+    from unitares_sdk.lease_plane import advisory as lease_advisory
+
+    mode = "apply" if apply else "dry-run"
+    return lease_advisory.lease_advisory_scope(
+        surface_id=LEASE_SURFACE_ID,
+        holder_agent_uuid=lease_advisory.new_holder_uuid(),
+        ttl_s=LEASE_TTL_S,
+        intent=f"worktree reaper {mode} min_idle_hours={min_idle_hours:g}",
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--apply", action="store_true",
+                    help="Actually remove eligible worktrees (default: dry-run).")
+    ap.add_argument("--min-idle-hours", type=float, default=12.0,
+                    help="Skip worktrees active more recently than this (default 12).")
+    ap.add_argument("--json", action="store_true", help="Emit JSON.")
+    args = ap.parse_args(argv)
+
+    with _lease_scope(apply=args.apply, min_idle_hours=args.min_idle_hours):
+        return _run_reaper(args)
 
 
 if __name__ == "__main__":

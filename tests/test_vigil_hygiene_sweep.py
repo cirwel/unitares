@@ -3,6 +3,7 @@ ephemeral local git repo. Avoids network by stubbing list_open_pr_branches.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 from pathlib import Path
@@ -77,6 +78,33 @@ class TestKeepaliveLogic:
 
 
 class TestSweepDryRun:
+    def test_sweep_invokes_lease_advisory_with_expected_surface(
+        self, fake_repo: Path, monkeypatch
+    ):
+        from unitares_sdk.lease_plane import advisory as advisory_module
+
+        captured: dict = {}
+        events: list[str] = []
+
+        @contextlib.contextmanager
+        def fake_scope(**kwargs):
+            captured.update(kwargs)
+            events.append("enter")
+            yield ("held_by_other", None)
+            events.append("exit")
+
+        monkeypatch.setattr(advisory_module, "lease_advisory_scope", fake_scope)
+        monkeypatch.setattr(agent_mod, "list_open_pr_branches", lambda repo: set())
+
+        report = sweep(fake_repo, dry_run=True)
+
+        assert report.dry_run is True
+        assert events == ["enter", "exit"]
+        assert captured["surface_id"] == "resident:/vigil_hygiene_sweep"
+        assert captured["ttl_s"] == 900
+        assert "dry-run branch/worktree sweep" in captured["intent"]
+        assert str(fake_repo) in captured["intent"]
+
     def test_dry_run_does_not_delete_worktree(self, fake_repo: Path, monkeypatch):
         wt_dir = fake_repo / ".worktrees" / "wt1"
         _git(fake_repo, "worktree", "add", "-b", "feature/x", str(wt_dir))
