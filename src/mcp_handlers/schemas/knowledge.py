@@ -319,7 +319,7 @@ class KnowledgeParams(AgentIdentityMixin):
     response_to: Optional[dict] = Field(None, description="Typed response link {discovery_id, response_type} for threaded store/note writes")
     tags: Optional[List[str]] = Field(None, description="Tags for discovery (for action=store, search, note)")
     severity: Optional[str] = Field(None, description="Severity: low, medium, high, critical (for action=store)")
-    discovery_id: Optional[str] = Field(None, description="Discovery ID (for action=details, update; the NEW discovery for action=supersede)")
+    discovery_id: Optional[str] = Field(None, description="Discovery ID (for action=get/details, update; the NEW discovery for action=supersede)")
     status: Optional[str] = Field(None, description="Status filter/update value (open, resolved, archived, superseded)")
     resolution_notes: Optional[str] = Field(None, description="Rationale to append when closing or updating a discovery")
     # Supersession LINK params. Without these declared here the unified tool's
@@ -328,9 +328,9 @@ class KnowledgeParams(AgentIdentityMixin):
     supersedes: Optional[str] = Field(None, description="ID of an older discovery this new one replaces (for action=store)")
     superseded_by: Optional[str] = Field(None, description="ID of the discovery that supersedes this one (for action=update with status=superseded)")
     supersedes_id: Optional[str] = Field(None, description="ID of the older discovery being replaced (for action=supersede; discovery_id is the newer one)")
-    agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get, search)")
+    agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get, search; omit when using discovery_id readback)")
     limit: Optional[int] = Field(None, description="Max results")
-    include_details: Optional[bool] = Field(None, description="Include full details inline (for action=search/get)")
+    include_details: Optional[bool] = Field(None, description="Include full details inline (for action=search or agent-scoped action=get)")
     include_provenance: Union[bool, str, None] = Field(None, description="Include provenance and lineage chain fields in search/details results")
     search_mode: Optional[Literal["auto", "fts", "semantic", "hybrid"]] = Field(
         None,

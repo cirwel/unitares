@@ -1331,6 +1331,45 @@ class TestKnowledgeReadBroadcast:
         assert payload["result_count"] == 2
 
     @pytest.mark.asyncio
+    async def test_get_with_discovery_id_reads_details_unbound(self, patch_common):
+        _, mock_graph = patch_common
+        mock_graph.get_discovery.return_value = make_discovery(
+            id="disc-xyz",
+            agent_id="11111111-1111-4111-8111-111111111111",
+            summary="Search result readback",
+            details="Full details",
+        )
+        from src.mcp_handlers.knowledge.handlers import handle_get_knowledge_graph
+
+        result = await handle_get_knowledge_graph({"discovery_id": "disc-xyz"})
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["discovery"]["id"] == "disc-xyz"
+        assert data["discovery"]["details"] == "Full details"
+        mock_graph.get_discovery.assert_awaited_once_with("disc-xyz")
+        mock_graph.get_agent_discoveries.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_get_rejects_ambiguous_agent_and_discovery_targets(
+        self, patch_common, registered_agent,
+    ):
+        _, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_get_knowledge_graph
+
+        result = await handle_get_knowledge_graph({
+            "agent_id": registered_agent,
+            "discovery_id": "disc-xyz",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "AMBIGUOUS_KNOWLEDGE_GET_TARGET"
+        assert "either discovery_id or agent_id" in data["error"]
+        mock_graph.get_discovery.assert_not_awaited()
+        mock_graph.get_agent_discoveries.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_list_emits_knowledge_read(self, patch_common):
         mock_mcp_server, mock_graph = patch_common
         mock_graph.get_stats.return_value = {
