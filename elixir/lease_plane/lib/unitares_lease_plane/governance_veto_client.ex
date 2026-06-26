@@ -1,8 +1,17 @@
 defmodule UnitaresLeasePlane.GovernanceVetoClient do
   @moduledoc """
-  Calls the governance MCP `POST /v1/effect-veto` (governed-effect-plane §6)
-  BEFORE an `execute` agent_spawn commits. Governance reads the proposer's
-  durable last-decided posture and returns `{vetoed: bool}`.
+  Calls the governance MCP `POST /v1/effect-veto` (governed-effect-plane §6+§7)
+  BEFORE an `execute` agent_spawn commits. Governance composes two gates and
+  returns `{vetoed: bool}`:
+
+    * §6 — the proposer's durable last-decided verdict/action posture;
+    * §7 — strong-tier re-certification of the forwarded
+      `proposer_continuity_token`. The token is the proposer's transport-robust
+      HMAC proof; governance re-verifies it server-side to the `strong` tier.
+      It is forwarded for verification only and is never stored or logged here
+      (Invariant 1/7). When the proposer carried no token it is OMITTED from
+      the body (not sent as `null`) → governance reads it absent → §7 fails
+      closed → vetoed.
 
   Uses Erlang stdlib `:httpc` (localhost; the governance REST surface bypasses
   auth on trusted networks, so no token is needed for the loopback call).
@@ -26,12 +35,7 @@ defmodule UnitaresLeasePlane.GovernanceVetoClient do
 
   def check(env) do
     with {:ok, base} <- base_url() do
-      body =
-        Jason.encode!(%{
-          "proposer_agent_uuid" => env.proposer_agent_uuid,
-          "surface" => Map.get(env, :surface),
-          "effect_type" => Map.get(env, :effect_type)
-        })
+      body = Jason.encode!(build_veto_body(env))
 
       url = String.to_charlist(base <> "/v1/effect-veto")
       headers = veto_headers()
@@ -43,6 +47,29 @@ defmodule UnitaresLeasePlane.GovernanceVetoClient do
         {:ok, {{_v, status, _r}, _h, resp}} -> {:error, {:veto_status, status, truncate(resp)}}
         {:error, reason} -> {:error, {:veto_unreachable, reason}}
       end
+    end
+  end
+
+  @doc """
+  Build the veto request body (pre-encode) from an effect env. §7 proof: the
+  proposer's `continuity_token` is forwarded when present, and the key is
+  OMITTED entirely when absent/blank — so an unauthenticated proposer is judged
+  on a missing token (fail-closed at the veto), never sent an explicit `null`.
+
+  Public for unit-testability (assert forwarding without standing up a server);
+  not part of the stable API.
+  """
+  @spec build_veto_body(map()) :: map()
+  def build_veto_body(env) do
+    base = %{
+      "proposer_agent_uuid" => Map.get(env, :proposer_agent_uuid),
+      "surface" => Map.get(env, :surface),
+      "effect_type" => Map.get(env, :effect_type)
+    }
+
+    case Map.get(env, :proposer_continuity_token) do
+      t when is_binary(t) and t != "" -> Map.put(base, "proposer_continuity_token", t)
+      _ -> base
     end
   end
 

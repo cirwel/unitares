@@ -127,6 +127,14 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     proposer_agent_uuid = nested_string(body, "proposer", "agent_uuid")
     provenance_session_id = nested_string(body, "provenance", "session_id")
 
+    # §7 strong-tier re-cert proof — the proposer's continuity_token, carried in
+    # the `proposer` object (NOT `payload`, which `credential_shaped?` would
+    # reject). CREDENTIAL: forwarded transiently to the governance veto for
+    # re-verification, then dropped. It is NEVER written to any audit_payload,
+    # response body, or log line (Invariant 1/7); keep it out of every
+    # `inspect(env)`. Used only by the execute path (`GovernanceVetoClient`).
+    proposer_continuity_token = nested_string(body, "proposer", "continuity_token")
+
     cond do
       not (is_binary(idem) and byte_size(idem) > 0) ->
         {:error, "idempotency_key required (non-empty string)"}
@@ -159,7 +167,9 @@ defmodule UnitaresLeasePlane.GovernedEffect do
            required_leases: leases,
            payload: payload || %{},
            proposer_agent_uuid: proposer_agent_uuid,
-           provenance_session_id: provenance_session_id
+           provenance_session_id: provenance_session_id,
+           # CREDENTIAL — transient, never persisted/logged (see comment above).
+           proposer_continuity_token: proposer_continuity_token
          }}
     end
   end
@@ -305,12 +315,14 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   # delegated to the already-live agent orchestrator (`:8789`), which owns the
   # OS-process spawn, OTP supervision, lease-binding and lineage.
   #
-  # HONESTLY DEFERRED to the next slice (NOT faked here): the §7 strong-tier
-  # re-verification and the §6 governance veto. This slice's gates are the
-  # fail-closed flag + the orchestrator's own bearer + `check_allowed` cmd
-  # allowlist. `agent_spawn` is irreversible (§5b), so there is no rollback to
-  # prove; idempotency is the load-bearing safety property here — a retry must
-  # never spawn twice.
+  # Gates before commit (all fail-closed): the per-type flag + the
+  # orchestrator's own bearer + `check_allowed` cmd allowlist, the §6 governance
+  # veto (verdict/action), AND the §7 strong-tier re-certification — the veto
+  # endpoint re-verifies the proposer's forwarded continuity_token to the
+  # `strong` tier; a proposer that does not re-certify strong is blocked the
+  # same as a flagged one (`GovernanceVetoClient.check/1`). `agent_spawn` is
+  # irreversible (§5b), so there is no rollback to prove; idempotency is the
+  # load-bearing safety property here — a retry must never spawn twice.
   defp execute(%{effect_type: "agent_spawn"} = env) do
     if execute_agent_spawn_enabled?() do
       execute_agent_spawn(env)
