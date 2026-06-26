@@ -225,6 +225,35 @@ of declared tier; weight by tier; no self-referential anchor (Invariant 4).
 First task: inventory which of these the runtime already emits (`outcome_event`,
 `record_result`, task outcomes) vs. which need wiring.
 
+### 7a. Framing — informativeness, not suspicion (operator poke, 2026-06-26)
+
+Build the tiers as an **informativeness gradient** (how much an outcome tells you
+about the work), NOT a **trust/suspicion ledger** (how likely the agent is to be
+bluffing). The two yield similar weights — an independent+broad outcome is both more
+*trustworthy* and more *informative* than a self-selected+narrow one — but the
+ontology is the cooperative one (axiom 2, growth-not-punishment; the governor is a
+generous cooperator per §4c, not a dealer defending a pot). Consequences:
+
+- The "strong" tier's "objective but **gameable**" is better read as "objective but
+  **selection-limited**": a self-selected passing test has narrow coverage, so it
+  carries less information — discount it for *coverage*, not for imputed intent. No
+  accusation; just less signal. (A *failing* test is high-information regardless of
+  who triggered it — keep it trusted.)
+- Invariant 4 ("no self-referential anchor") survives — but on the **circularity**
+  basis, not the suspicion basis: validating the loop with the loop's own output is
+  mathematically degenerate (self-confirmation), independent of whether the agent is
+  cooperating. Keep it as an information rule, not a trust gate.
+- The genuinely adversarial case — *deliberate* concealment / sandbagging (the
+  cross-framing finding: EISV inverts on calibrated concealment) — is a
+  **detector-validation** question (red-team / model-organism lab), NOT a live trust
+  gate on cooperating agents. Adversarial-aware in the lab; cooperative at the table.
+  Do not import the lab's suspicion into the operating relationship.
+
+Build note: when Stage 0 wires tiers, weight by informativeness; do not encode
+suspicion of intent into the live path. (This is a framing constraint, not a recut
+of the live corroboration model — see operator call 2026-06-26: reframe, don't
+re-cut.)
+
 ---
 
 ## 8. L3 decisions — RESOLVED by operator (2026-06-25)
