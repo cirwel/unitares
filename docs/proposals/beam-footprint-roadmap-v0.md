@@ -1,12 +1,75 @@
 # BEAM Footprint Roadmap
 
 **Created:** May 3, 2026
-**Last Updated:** June 11, 2026 (v0.3.4 resolution — Wave 3 re-litigation resolves as (α): defer pending the §14 measurement window opened by PR #599; corrected §129 gate reads zero substrate-tax incidents for the Wave 1 window)
-**Status:** v0.3 — destination is **A′ (committed, operator-decision-driven, 2026-05-05)**. Stateful coordination ports to BEAM in waves; stateless computation (numpy ODE, embeddings, LLM SDK calls) stays Python and is called from BEAM via Ports / HTTP. v0.2 had reopened the destination after PR #350's verdict; v0.3 closes it again on operator call after four Python-fixable PRs (#350 / #354 / #360 / #361) closed every measured floor without moving the user-visible ~11s p50 per-turn overhead. **Read the V0.3 RESOLUTION block first**, then the V0.3.1 amendment for what changed on 2026-05-28. v0 / v0.1 / v0.2 bodies preserved as historical record.
+**Last Updated:** June 25, 2026 (v0.4 resolution — operator decision: **Wave 3 committed to proceed**, and **latency retired as a decision gate**. Ends the v0.3.x relitigation series. Supersedes the v0.3.4 (α) defer.)
+**Status:** v0.4 — destination is **A′ (committed, operator-decision-driven, 2026-05-05)** and **Wave 3 is now committed to proceed (operator decision, 2026-06-25)**. Stateful coordination ports to BEAM in waves; stateless computation (numpy ODE, embeddings, LLM SDK calls) stays Python and is called from BEAM via Ports / HTTP. Latency/measurement windows are **no longer a decision gate** for Wave 3 — every measured floor in project history resolved Python-side (#350/#354/#360/#361/#533), so a latency-conditioned gate is structurally undecidable and was manufacturing the doc's self-conflict (commit on coordination, adjudicate on latency). **Read the V0.4 RESOLUTION block first**, then V0.3 RESOLUTION for the original migration commit. v0.3.x amendments preserved as historical record of the relitigation series this resolution closes.
 **Council pass v0.1 (2026-05-04):** dialectic-knowledge-architect (2B/4C/3D/4N), feature-dev:code-reviewer (2B/3C/2D/2N), live-verifier (7 VERIFIED, 6 DRIFT, 0 REFUTED, 1 SOURCE_ONLY) — all findings folded inline. Architect C3 + reviewer C3 both flagged "v0.1 destination committed pre-experiment"; the v0.1 conditionality block was the fold for that finding, and v0.2 was the realization of it.
 **Council pass v0.3:** none on the migration call itself — that's an operator decision after a multi-session debate, and adversarial review of the call after operator commitment is the relitigation pattern v0.3 is trying to end. Council passes ARE expected on technical scope (Wave 1 supervisor topology, BEAM↔Python boundary contracts, identity-state migration) once those land as RFCs.
 
 ---
+
+## V0.4 RESOLUTION 2026-06-25 — operator decision: Wave 3 committed; latency gate retired
+
+**Read this first.** Operator call (2026-06-25), recorded — not a council finding, not an
+analysis verdict. Two decisions, taken together:
+
+1. **Latency is retired as a Wave 3 decision gate.** The roadmap committed to A′ on a
+   *coordination/ownership* argument but kept adjudicating Wave 3 on a *latency* argument.
+   Those are different axes, and the latency axis is structurally undecidable: every floor
+   the doc ever raised as a trigger resolved Python-side (#350 / #354 / #360 / #361, then
+   #533's 104× p50 collapse). A gate that always resolves the same way is a treadmill, not a
+   gate — and each new benchmark (v0.3.1, v0.3.1b, the §129 14-day window, the §14 window
+   from PR #599, Wave 3 RFC §0(A.2) production telemetry) *reopened* exactly what the v0.3
+   commitment closed. That is the source of the doc's self-conflict. The operator's read:
+   latency was never the real criterion, so it stops being a gate. These measurements may
+   still run as **information**; they no longer **reopen the commit**.
+
+2. **Wave 3 is committed to proceed.** "It's time" — the basis is that the
+   coordination/ownership case has matured and the decision is operator-time, not a profiler
+   read. This **supersedes the v0.3.4 (α) defer-pending-§14-window**. Wave 3 (handler
+   dispatch + identity middleware + dialectic resolution) moves from *deferred* to
+   *committed-to-design*.
+
+### What this retires
+- The **§14 measurement window** (PR #599), **Wave 3 RFC §0(A.2)** production-telemetry
+  measurement, and the **§129 14-day reeval** are struck as *decision* gates. The launchd
+  one-shot `com.unitares.wave-1-section-129-reeval` should be disabled (its gate no longer
+  decides anything).
+- The **§15 escalation rule** ("a sixth bias signature → relitigate the substrate question")
+  is retired *for the substrate decision*. The recurring bias signatures were the symptom of
+  a mis-specified latency gate forcing PG-as-arbiter framings, not evidence against
+  migrating. They remain useful as *design* review signal on the Wave 3 RFC.
+
+### What this explicitly does NOT retire — the honesty guardrail
+Retiring the latency *decision* gate is not "stop scrutinizing Wave 3." The **technical
+correctness gates stand**, and the Wave 3 RFC still requires its council passes on technical
+scope:
+- **Lock-invariant inventory** (V0.3.1 §B2) — the three named invariants + any others.
+- **Dialectic stateful/stateless split** (§C2).
+- **`resident:/` Phase B enforcement boundary** for handler-dispatch cutover (§C3) — resident
+  Phase B opened via PR #476, but Wave 3 must still specify its own enforcement-grade
+  boundary.
+- **State ownership + rollback during transition** (§B3) and the **Wave 1-style rollback
+  path** (§B4).
+- **Stop sign #4** (V0.3.1 §"Stop sign #4"): if the Ports/HTTP boundary accrues >1 distinct
+  workaround pattern, the boundary design is wrong — halt. The substrate-tax argument applies
+  recursively to the boundary; this stop sign is a *correctness* gate, not a latency one, and
+  it stays live.
+- **A′'s stateless-stays-Python principle** holds: numpy ODE / embeddings / LLM SDK stay
+  Python, called over Ports/HTTP. Wave 3 ports *coordination*, not compute.
+
+The distinction is the whole point: the **decision** ("do we migrate Wave 3") is closed; the
+**design** ("how, correctly, without replicating substrate-tax one level out") is wide open
+and adversarially reviewable.
+
+### Bias accountability
+The v0.3.x amendments repeatedly flagged a status-quo / anti-migration bias (memory
+`feedback_substrate-migration-status-quo-bias.md`). This decision moves **off** that pole —
+it commits the migration the bias note worried would be resisted — so it is not in the
+resist-direction. The honest opposite risk to name: "stop relitigating" can be misused to
+suppress legitimate technical dissent. The scope above is the safeguard — only the *latency
+decision gate* is retired; every *correctness* gate stays open to council. If Wave 3's RFC
+trips a correctness stop sign, that is not relitigation and is not silenced by this block.
 
 ## V0.3.1 AMENDMENT 2026-05-28 — ODE profile + post-lock enrichment Python-fix
 
