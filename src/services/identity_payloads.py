@@ -324,6 +324,21 @@ def build_onboard_response_data(
     # not inflate the tier (the binding genuinely is unproven until the agent
     # echoes the token) — we relabel it honestly and make the path actionable.
     _fresh_mint = bool(is_new or force_new)
+    # Transport-aware clarifier (#604 follow-up / dogfood false-positive fix):
+    # continuity_token is the universal ownership proof, but on session-maintaining
+    # clients (Claude Code/Desktop, Cursor) an echoed client_session_id alone also
+    # reaches strong. Spelling that out stops the dogfood probe from reading the
+    # token recommendation as a wrapper/nested contradiction and re-filing it each
+    # run — the guidance was correct, only its single-credential framing was not.
+    _session_maintaining = (client_hint or "").lower() in {
+        "claude_code", "claude_desktop", "cursor"
+    }
+    _csid_also_ok = (
+        " On this client (session-maintaining) an echoed client_session_id alone "
+        "also reaches strong."
+        if _session_maintaining
+        else ""
+    )
     _assurance = identity_context.get("identity_assurance")
     if _fresh_mint and isinstance(_assurance, dict) and _assurance.get("tier") != "strong":
         _assurance["baseline"] = "fresh_identity"
@@ -336,7 +351,7 @@ def build_onboard_response_data(
             _assurance["how_to_strengthen"] = (
                 "echo the continuity_token from this onboard response on your next "
                 "call to reach strong (works on stateless and session-maintaining "
-                "transports alike)"
+                "transports alike)" + _csid_also_ok
             )
         else:
             _assurance["baseline_note"] = (
@@ -358,7 +373,7 @@ def build_onboard_response_data(
             "Call process_agent_update with response_text describing your work — "
             "echo the continuity_token from this response as your ownership proof "
             "to reach 'strong' (it resolves on stateless and session-maintaining "
-            "transports alike)."
+            "transports alike)." + _csid_also_ok
         )
     else:
         ownership_proof = {"client_session_id": stable_session_id}
