@@ -39,6 +39,8 @@ from agents.vigil_hygiene.clean_check import check_worktree_clean
 KEEPALIVE_BRANCH_NAMES = frozenset({"master", "main", "feat/branch-hygiene-automation"})
 NEWER_THAN_SECONDS = 24 * 60 * 60
 LOG_FILE = Path.home() / "Library" / "Logs" / "unitares-vigil-hygiene.log"
+LEASE_SURFACE_ID = "resident:/vigil_hygiene_sweep"
+LEASE_TTL_S = 900
 
 
 @dataclass
@@ -196,7 +198,22 @@ def _safe_status(repo_or_wt: Path) -> Optional[str]:
         return None
 
 
-def sweep(repo: Path, dry_run: bool = True) -> SweepReport:
+def sweep(repo: Path, dry_run: bool = True, *, lease_client: object | None = None) -> SweepReport:
+    """Run a branch-hygiene sweep under a Phase A lease-plane advisory scope."""
+    from unitares_sdk.lease_plane import advisory as lease_advisory
+
+    mode = "dry-run" if dry_run else "live"
+    with lease_advisory.lease_advisory_scope(
+        surface_id=LEASE_SURFACE_ID,
+        holder_agent_uuid=lease_advisory.new_holder_uuid(),
+        ttl_s=LEASE_TTL_S,
+        intent=f"vigil-hygiene {mode} branch/worktree sweep repo={repo}",
+        client=lease_client,
+    ):
+        return _sweep_inner(repo, dry_run=dry_run)
+
+
+def _sweep_inner(repo: Path, dry_run: bool = True) -> SweepReport:
     started = time.time()
     report = SweepReport(
         started_at=datetime.now(timezone.utc).isoformat(),

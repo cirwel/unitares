@@ -4,6 +4,7 @@ The reaper exists because a naive "0 commits ahead" rule deleted a freshly-
 created worktree another session had just opened. These tests pin the safety
 invariants: merged authorizes, liveness/dirtiness vetoes.
 """
+import contextlib
 import importlib.util
 from pathlib import Path
 
@@ -57,3 +58,31 @@ def test_idle_floor_is_inclusive_boundary():
     # Exactly at the floor counts as idle-enough (>= floor removes).
     assert decide("MERGED", False, 12.0, 12.0)[0] == "remove"
     assert decide("MERGED", False, 11.99, 12.0)[0] == "skip"
+
+
+def test_main_invokes_lease_advisory_with_expected_surface(monkeypatch, capsys):
+    from unitares_sdk.lease_plane import advisory as advisory_module
+
+    captured = {}
+    events = []
+
+    @contextlib.contextmanager
+    def fake_scope(**kwargs):
+        captured.update(kwargs)
+        events.append("enter")
+        yield ("held_by_other", None)
+        events.append("exit")
+
+    monkeypatch.setattr(advisory_module, "lease_advisory_scope", fake_scope)
+    monkeypatch.setattr(reaper, "_pr_states", lambda: {})
+    monkeypatch.setattr(reaper, "_worktrees", lambda: [])
+
+    rc = reaper.main(["--json", "--min-idle-hours", "24"])
+
+    assert rc == 0
+    assert events == ["enter", "exit"]
+    assert captured["surface_id"] == "resident:/worktree_reaper"
+    assert captured["ttl_s"] == 900
+    assert "worktree reaper dry-run" in captured["intent"]
+    assert "min_idle_hours=24" in captured["intent"]
+    assert '"plan": []' in capsys.readouterr().out
