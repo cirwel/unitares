@@ -270,6 +270,25 @@
       );
     },
 
+    async researchRuns() {
+      // Agent-network research-run registry: scenario, topology, population,
+      // interventions, grounding anchors, outcomes, and artifacts.
+      return withFallback(async () => {
+        const [runs, stats] = await Promise.all([
+          authFetch("/v1/research/runs?limit=200"),
+          authFetch("/v1/research/stats").catch(() => null),
+        ]);
+        if (!runs || !Array.isArray(runs.runs)) return null;
+        return {
+          runs: runs.runs,
+          count: runs.count,
+          totalMatched: runs.total_matched,
+          warnings: runs.warnings || [],
+          stats: stats && stats.stats ? stats.stats : {},
+        };
+      }, () => S().research || { runs: [], count: 0, totalMatched: 0, warnings: [], stats: { total: 0, by_status: {}, by_grounding: {}, by_research_area: {}, rigor_complete: 0, rigor_incomplete: 0 } });
+    },
+
     async metricsCatalog() {
       // Chronicler's registered metric series (fleet/project/infra). Each entry:
       // { name, description, unit, last_point_ts } — last_point_ts lets the view

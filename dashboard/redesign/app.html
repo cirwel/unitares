@@ -38,6 +38,7 @@
     <a href="#dialectic" data-section="dialectic">Dialectic</a>
     <a href="#activity" data-section="activity">Activity</a>
     <a href="#eisv" data-section="eisv">EISV</a>
+    <a href="#research" data-section="research">Research</a>
     <a href="#metrics" data-section="metrics">Metrics</a>
     <a href="#residents" data-section="residents">Residents</a>
     <a href="#automations" data-section="automations">Automations</a>
@@ -100,6 +101,10 @@
       <h2 class="section-title">EISV</h2>
       <div id="eisv-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
     </section>
+    <section class="section" data-pane="research" hidden>
+      <h2 class="section-title">Research</h2>
+      <div id="research-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
+    </section>
     <section class="section" data-pane="metrics" hidden>
       <h2 class="section-title">Metrics</h2>
       <div id="met-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
@@ -127,6 +132,7 @@
 <script src="./sections/dialectic.js"></script>
 <script src="./sections/activity.js"></script>
 <script src="./sections/eisv.js"></script>
+<script src="./sections/research.js"></script>
 <script src="./sections/metrics.js"></script>
 <script src="./sections/residents.js"></script>
 <script src="./sections/automations.js"></script>
@@ -179,6 +185,7 @@ function lazyLoad(id) {
   if (id === "dialectic" && window.Dialectic) { loaded[id] = true; window.Dialectic.load(); }
   if (id === "activity" && window.Activity) { loaded[id] = true; window.Activity.load(); }
   if (id === "eisv" && window.EISV) { loaded[id] = true; window.EISV.load(); }
+  if (id === "research" && window.Research) { loaded[id] = true; window.Research.load(); }
   if (id === "metrics" && window.Metrics) { loaded[id] = true; window.Metrics.load(); }
   if (id === "residents" && window.Residents) { loaded[id] = true; window.Residents.load(); }
   if (id === "automations" && window.Automations) { loaded[id] = true; window.Automations.load(); }

@@ -43,6 +43,7 @@ def _load_pydantic_schemas():
         "src.mcp_handlers.schemas.identity",
         "src.mcp_handlers.schemas.admin",
         "src.mcp_handlers.schemas.dashboard",
+        "src.mcp_handlers.schemas.research",
         "src.mcp_handlers.schemas.skills",  # S15-a
         *_EXTRA_SCHEMA_MODULES,
     ]
@@ -138,6 +139,7 @@ TOOL_ORDER = [
     "bind_session",
     "debug_request_context",
     "knowledge",
+    "research_registry",
     "agent",
     "calibration",
     "cirs_protocol",
