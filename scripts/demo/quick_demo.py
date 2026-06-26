@@ -17,7 +17,8 @@ What you'll see:
 - The agent onboards (fresh UUID + thread).
 - Seven check-ins simulate clean work → calibration drift → confusion.
 - Each step prints the verdict, the reason, and the four-channel state.
-- A trajectory summary shows the risk_score climb from ~0.27 to >1.0.
+- risk_score climbs from ~0.27 as drift accumulates; when it crosses the
+  high-risk gate the agent is paused and further check-ins are refused.
 
 No Postgres reads, no dashboard required — everything you see comes back
 in the check-in response shape that any client would receive.
@@ -143,8 +144,15 @@ def main() -> int:
                 "response_mode": "compact",
             },
         )
-        d = r["decision"]
-        m = r["metrics"]
+        # A check-in on an agent that has crossed the high-risk gate returns an
+        # AGENT_PAUSED circuit-breaker reply with no `decision` block, so treat
+        # `decision` as optional (matching the rest of the codebase) and stop.
+        d = r.get("decision")
+        if d is None:
+            note = r.get("error") or r.get("message") or "agent paused"
+            print(f"\n   step {i}: check-in refused — {note}")
+            break
+        m = r.get("metrics", {})
         print(
             f"\n   step {i}: verdict = {d['action']:7s}"
             f"  ({d.get('margin','-')})"
@@ -162,18 +170,6 @@ def main() -> int:
     print("                   the percentage you see in `decision.reason`.")
     print("  • latest       = raw last observation. A single bad check-in can")
     print("                   spike this without moving the gating signal.")
-    print()
-    print("  On this 7-step cold-agent trajectory, latest climbs sharply (raw")
-    print("  signal sees the drift) while risk stays low (smoothing damps a")
-    print("  short history). Verdicts therefore stay `proceed`.")
-    print()
-    print("  This is the system being conservative on a fresh agent —")
-    print("  self-relative scoring needs ~30 check-ins to build a Welford")
-    print("  baseline. On a warm agent the same drift would shift the smoothed")
-    print("  risk faster and flip to `guide` or `pause`. The honest read of")
-    print("  this demo: latest tells you what just happened, risk tells you")
-    print("  what the gate believes — and the gap between them is the cold-")
-    print("  start cost.")
 
     banner("done")
     print("  • Every number above came from check-in responses — no DB queries.")
