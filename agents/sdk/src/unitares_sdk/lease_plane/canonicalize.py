@@ -30,7 +30,7 @@ import os.path
 import tempfile
 
 # v0.8 canonical scheme list (RFC §7.2.1) plus follow-on schemes. Single source
-# of truth in code. `agent` added by migration 042; `maintenance` by migration 049.
+# of truth in code. `agent` added by migration 042; `maintenance` by migration 050.
 CANONICAL_SCHEMES: tuple[str, ...] = (
     "file",
     "dialectic",

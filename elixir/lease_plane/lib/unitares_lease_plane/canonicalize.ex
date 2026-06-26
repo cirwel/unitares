@@ -361,7 +361,7 @@ defmodule UnitaresLeasePlane.Canonicalize do
 
   # maintenance:/ — opaque cleanup/repair coordination surface; case-sensitive,
   # strip trailing /. Same reserved-char set as resident:/, but deliberately not
-  # a resident lifecycle/presence surface. See migration 049.
+  # a resident lifecycle/presence surface. See migration 050.
   defp canonicalize_maintenance(path) do
     if String.match?(path, ~r/[ \t\n#&]/) do
       {:error, :invalid_scheme}

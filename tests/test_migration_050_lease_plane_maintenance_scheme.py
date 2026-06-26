@@ -1,7 +1,7 @@
 """
-Schema test for migration 049 — the `maintenance:/` cleanup/repair scheme.
+Schema test for migration 050 — the `maintenance:/` cleanup/repair scheme.
 
-Migration 049 extends the lease-plane `surface_id_grammar` CHECK to allow
+Migration 050 extends the lease-plane `surface_id_grammar` CHECK to allow
 `maintenance:/` surface_ids and registers the surface kind. These surfaces are
 for maintenance jobs, not resident lifecycle/presence rows. The generated
 `surface_kind` column derives `maintenance` from the scheme prefix.
@@ -54,7 +54,7 @@ async def _insert_lease(conn, *, surface_id: str, ttl_s: int = 60) -> uuid.UUID:
 
 
 @pytest.mark.asyncio
-async def test_migration_049_accepts_maintenance_scheme_and_derives_kind():
+async def test_migration_050_accepts_maintenance_scheme_and_derives_kind():
     """A maintenance:/ surface_id INSERTs cleanly and derives surface_kind."""
     await ensure_test_database_schema()
     conn = await asyncpg.connect(TEST_DB_URL)
@@ -73,8 +73,8 @@ async def test_migration_049_accepts_maintenance_scheme_and_derives_kind():
 
 
 @pytest.mark.asyncio
-async def test_migration_049_still_rejects_non_canonical_scheme():
-    """049 only adds maintenance:/; a bogus scheme is still rejected."""
+async def test_migration_050_still_rejects_non_canonical_scheme():
+    """050 only adds maintenance:/; a bogus scheme is still rejected."""
     await ensure_test_database_schema()
     conn = await asyncpg.connect(TEST_DB_URL)
     try:

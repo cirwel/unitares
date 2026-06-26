@@ -1,4 +1,4 @@
--- 049_lease_plane_maintenance_scheme.sql
+-- 050_lease_plane_maintenance_scheme.sql
 --
 -- Add `maintenance:/` to the lease-plane surface grammar.
 --
@@ -33,5 +33,5 @@ BEGIN
 END $$;
 
 INSERT INTO core.schema_migrations (version, name, applied_at)
-VALUES (49, 'lease_plane_maintenance_scheme', NOW())
+VALUES (50, 'lease_plane_maintenance_scheme', NOW())
 ON CONFLICT (version) DO NOTHING;

@@ -4,7 +4,7 @@ Phase A schema tests for surface-lease-plane migration 027.
 Migration 027 (per RFC v0.8 §7.11.1) adds two tables:
 
   1. lease_plane.surface_kind_catalog — canonical registry of allowed scheme prefixes.
-     Migration 027 seeds the 5 v0 schemes (file, dialectic, resident, capture, td).
+     Seeded with the canonical schemes (capture, dialectic, file, maintenance, resident, td).
   2. lease_plane.deprecated_schemes — first-class persistence substrate for
      §7.11 deprecation procedure. FK to surface_kind_catalog so deprecation
      can only target a registered kind.
@@ -39,7 +39,7 @@ if not can_connect_to_test_db():
 
 @pytest.mark.asyncio
 async def test_migration_027_surface_kind_catalog_seeded():
-    """Migration 027 creates surface_kind_catalog and seeds the 5 v0 schemes."""
+    """Migration 027 creates surface_kind_catalog and seeds canonical schemes."""
     await ensure_test_database_schema()
     conn = await asyncpg.connect(TEST_DB_URL)
     try:
@@ -47,9 +47,8 @@ async def test_migration_027_surface_kind_catalog_seeded():
             "SELECT surface_kind FROM lease_plane.surface_kind_catalog ORDER BY surface_kind"
         )
         kinds = [r["surface_kind"] for r in rows]
-        expected_v0 = {"capture", "dialectic", "file", "resident", "td"}
-        assert expected_v0 <= set(kinds), (
-            f"Expected v0 canonical schemes seeded, got {kinds}"
+        assert kinds == ["capture", "dialectic", "file", "maintenance", "resident", "td"], (
+            f"Expected canonical schemes seeded, got {kinds}"
         )
     finally:
         await conn.close()

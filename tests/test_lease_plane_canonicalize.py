@@ -105,7 +105,7 @@ def test_agent_scheme_canonicalizes_as_presence_surface():
 
 
 def test_maintenance_scheme_canonicalizes_as_cleanup_surface():
-    """maintenance:/ — cleanup/repair coordination surface (migration 049).
+    """maintenance:/ — cleanup/repair coordination surface (migration 050).
     Opaque, case-sensitive, strip trailing /, same reserved chars as resident:/."""
     from src.lease_plane import canonicalize as canon
     from src.lease_plane.canonicalize import CANONICAL_SCHEMES, CanonicalizeError
