@@ -61,6 +61,35 @@ class ProspectiveCohortSummary:
             else 0.0
         )
 
+    @property
+    def prediction_prior_state_coverage(self) -> float:
+        """Prior-state coverage within the registry-bound prediction cohort."""
+
+        return (
+            self.prediction_bound_prior_state / self.prediction_bound
+            if self.prediction_bound
+            else 0.0
+        )
+
+
+@dataclass(frozen=True)
+class ReadinessThresholds:
+    """Minimum bar for calling a prospective prediction cohort strong."""
+
+    min_prediction_bound: int = 100
+    min_prediction_bound_bad: int = 10
+    min_prediction_coverage: float = 0.05
+    min_prediction_prior_state_coverage: float = 0.8
+
+
+@dataclass(frozen=True)
+class ValidationReadiness:
+    """Readiness decision plus explicit unmet gates."""
+
+    status: str
+    reasons: tuple[str, ...]
+    thresholds: ReadinessThresholds
+
 
 def is_prospective_prediction_bound(row: OutcomeRow) -> bool:
     """True only for rows tied to a real registry prediction binding."""
@@ -101,8 +130,70 @@ def _fmt_lead(value: float) -> str:
     return f"{value:g}"
 
 
-def format_cohort_report(summary: ProspectiveCohortSummary) -> str:
+def evaluate_readiness(
+    summary: ProspectiveCohortSummary,
+    thresholds: ReadinessThresholds | None = None,
+) -> ValidationReadiness:
+    """Evaluate whether a prospective prediction cohort is strong enough.
+
+    This is a data-quality gate, not an EISV validation claim. It separates
+    registry-bound prospective volume, negative-class coverage, prediction
+    coverage, and prior-state coverage so weak datasets fail explicitly.
+    """
+
+    thresholds = thresholds or ReadinessThresholds()
+    reasons: list[str] = []
+    if summary.prediction_bound < thresholds.min_prediction_bound:
+        reasons.append(
+            f"prediction_bound {summary.prediction_bound} < {thresholds.min_prediction_bound}"
+        )
+    if summary.prediction_bound_bad < thresholds.min_prediction_bound_bad:
+        reasons.append(
+            "prediction_bound_bad "
+            f"{summary.prediction_bound_bad} < {thresholds.min_prediction_bound_bad}"
+        )
+    if summary.prediction_coverage < thresholds.min_prediction_coverage:
+        reasons.append(
+            "prediction_coverage "
+            f"{summary.prediction_coverage:.3f} < {thresholds.min_prediction_coverage:.3f}"
+        )
+    if summary.prediction_prior_state_coverage < thresholds.min_prediction_prior_state_coverage:
+        reasons.append(
+            "prediction_prior_state_coverage "
+            f"{summary.prediction_prior_state_coverage:.3f} < "
+            f"{thresholds.min_prediction_prior_state_coverage:.3f}"
+        )
+    return ValidationReadiness(
+        status="not_ready" if reasons else "strong",
+        reasons=tuple(reasons),
+        thresholds=thresholds,
+    )
+
+
+def format_cohort_report(
+    summary: ProspectiveCohortSummary,
+    *,
+    thresholds: ReadinessThresholds | None = None,
+) -> str:
     """Render a markdown summary for prospective holdout readiness."""
+
+    readiness = evaluate_readiness(summary, thresholds)
+    threshold_text = (
+        f"min_prediction_bound={readiness.thresholds.min_prediction_bound}, "
+        f"min_prediction_bound_bad={readiness.thresholds.min_prediction_bound_bad}, "
+        f"min_prediction_coverage={readiness.thresholds.min_prediction_coverage:.3f}, "
+        "min_prediction_prior_state_coverage="
+        f"{readiness.thresholds.min_prediction_prior_state_coverage:.3f}"
+    )
+    readiness_lines = [
+        f"readiness: {readiness.status}",
+        f"readiness_thresholds: {threshold_text}",
+    ]
+    if readiness.reasons:
+        readiness_lines.append("readiness_reasons:")
+        readiness_lines.extend(f"- {reason}" for reason in readiness.reasons)
+    else:
+        readiness_lines.append("readiness_reasons: none")
 
     lanes = ",".join(
         f"{lane}={count}" for lane, count in summary.by_harness_lane.items()
@@ -121,7 +212,10 @@ def format_cohort_report(summary: ProspectiveCohortSummary) -> str:
             f"prediction_bound_bad_rate: {summary.prediction_bound_bad_rate:.3f}",
             "prediction_bound_prior_state: "
             f"{summary.prediction_bound_prior_state}/{summary.prediction_bound}",
+            f"prediction_prior_state_coverage: {summary.prediction_prior_state_coverage:.3f}",
             f"harness_lanes: {lanes}",
+            "",
+            *readiness_lines,
             "",
             "Interpretation rule: this is prospective holdout plumbing only. "
             "It counts registry-bound predictions that existed before outcomes; "
@@ -162,6 +256,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scope", choices=("strict", "task"), default="task")
     parser.add_argument("--window-days", type=int, default=90)
     parser.add_argument("--lead-minutes", type=float, default=30.0)
+    default_thresholds = ReadinessThresholds()
+    parser.add_argument("--min-prediction-bound", type=int, default=default_thresholds.min_prediction_bound)
+    parser.add_argument("--min-prediction-bound-bad", type=int, default=default_thresholds.min_prediction_bound_bad)
+    parser.add_argument("--min-prediction-coverage", type=float, default=default_thresholds.min_prediction_coverage)
+    parser.add_argument(
+        "--min-prediction-prior-state-coverage",
+        type=float,
+        default=default_thresholds.min_prediction_prior_state_coverage,
+    )
     parser.add_argument("--output", help="Optional markdown output path")
     return parser.parse_args(argv)
 
@@ -175,7 +278,13 @@ async def main_async(args: argparse.Namespace) -> int:
         window_days=args.window_days,
         lead_minutes=args.lead_minutes,
     )
-    report = format_cohort_report(summary)
+    thresholds = ReadinessThresholds(
+        min_prediction_bound=args.min_prediction_bound,
+        min_prediction_bound_bad=args.min_prediction_bound_bad,
+        min_prediction_coverage=args.min_prediction_coverage,
+        min_prediction_prior_state_coverage=args.min_prediction_prior_state_coverage,
+    )
+    report = format_cohort_report(summary, thresholds=thresholds)
     if args.output:
         path = Path(args.output)
         path.parent.mkdir(parents=True, exist_ok=True)

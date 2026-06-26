@@ -238,6 +238,33 @@ def _derive_outcome(evidence: dict) -> tuple:
     return ("task_failed" if is_bad else "task_completed", is_bad)
 
 
+def _prediction_id_for_phase5_evidence(ctx: UpdateContext, evidence: dict) -> str | None:
+    """Return the prediction id to attach to one Phase-5 evidence row.
+
+    Caller-supplied evidence ids win. For unbound evidence rows, mint a fresh
+    tactical prediction from the current process_update confidence so each row
+    can resolve through outcome_event's one-shot registry path independently.
+    Reusing the process_update response's single prediction id would bind only
+    the first row; the rest would fall into missing/consumed fallback lanes.
+    """
+    explicit_prediction_id = evidence.get("prediction_id")
+    if explicit_prediction_id:
+        return explicit_prediction_id
+    if ctx.confidence is None:
+        return None
+    register_prediction = getattr(ctx.monitor, "register_tactical_prediction", None)
+    if not callable(register_prediction):
+        return None
+    decision = (ctx.result or {}).get("decision") or {}
+    decision_action = decision.get("action")
+    try:
+        minted = register_prediction(float(ctx.confidence), decision_action=decision_action)
+        return str(minted) if minted else None
+    except Exception as exc:
+        logger.debug("Phase-5 prediction id mint skipped: %s", exc, exc_info=True)
+        return None
+
+
 # Module-local strong-ref set for in-flight fire-and-forget persist tasks
 # (thread-identity, inferred-purpose). Without this, `asyncio.create_task(coro)`
 # returns a Task that CPython GC can collect mid-await — these persisters
@@ -2005,7 +2032,7 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                 await _record_outcome_event_inline({
                     "outcome_type": outcome_type,
                     "is_bad": is_bad,
-                    "prediction_id": evidence.get("prediction_id"),
+                    "prediction_id": _prediction_id_for_phase5_evidence(ctx, evidence),
                     "confidence": ctx.confidence,
                     "verification_source": "agent_reported_tool_result",
                     "detail": detail,

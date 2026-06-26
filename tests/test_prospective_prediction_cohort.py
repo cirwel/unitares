@@ -4,7 +4,9 @@ from datetime import datetime, timedelta, timezone
 
 from scripts.analysis.eisv_skeptic_report import OutcomeRow
 from scripts.analysis.prospective_prediction_cohort import (
+    ReadinessThresholds,
     build_cohort_summary,
+    evaluate_readiness,
     format_cohort_report,
 )
 
@@ -88,3 +90,69 @@ def test_format_cohort_report_keeps_holdout_language_and_lane_counts():
     assert "prediction_bound_prior_state: 1/2" in report
     assert "harness_lanes: beam=1,substrate=1" in report
     assert "prospective holdout" in report
+
+
+def test_evaluate_readiness_reports_strong_when_thresholds_are_met():
+    rows = [
+        _row(0, prediction_id="pred-1", binding="registry", prior_state=True),
+        _row(1, bad=True, prediction_id="pred-2", binding="registry", prior_state=True),
+        _row(2, prediction_id="pred-3", binding="registry", prior_state=False),
+        _row(3),
+    ]
+    summary = build_cohort_summary(rows, scope="task", window_days=90, lead_minutes=30)
+    thresholds = ReadinessThresholds(
+        min_prediction_bound=3,
+        min_prediction_bound_bad=1,
+        min_prediction_coverage=0.5,
+        min_prediction_prior_state_coverage=0.6,
+    )
+
+    readiness = evaluate_readiness(summary, thresholds)
+
+    assert readiness.status == "strong"
+    assert readiness.reasons == ()
+
+
+def test_evaluate_readiness_explains_weak_dataset_gaps():
+    rows = [
+        _row(0, prediction_id="pred-1", binding="registry", prior_state=False),
+        _row(1),
+        _row(2),
+        _row(3),
+    ]
+    summary = build_cohort_summary(rows, scope="task", window_days=90, lead_minutes=30)
+    thresholds = ReadinessThresholds(
+        min_prediction_bound=3,
+        min_prediction_bound_bad=1,
+        min_prediction_coverage=0.5,
+        min_prediction_prior_state_coverage=0.8,
+    )
+
+    readiness = evaluate_readiness(summary, thresholds)
+
+    assert readiness.status == "not_ready"
+    assert "prediction_bound 1 < 3" in readiness.reasons
+    assert "prediction_bound_bad 0 < 1" in readiness.reasons
+    assert "prediction_coverage 0.250 < 0.500" in readiness.reasons
+    assert "prediction_prior_state_coverage 0.000 < 0.800" in readiness.reasons
+
+
+def test_format_cohort_report_includes_readiness_gate():
+    rows = [
+        _row(0, prediction_id="pred-1", binding="registry", prior_state=False),
+        _row(1),
+    ]
+    summary = build_cohort_summary(rows, scope="task", window_days=90, lead_minutes=30)
+    thresholds = ReadinessThresholds(
+        min_prediction_bound=2,
+        min_prediction_bound_bad=1,
+        min_prediction_coverage=0.8,
+        min_prediction_prior_state_coverage=0.5,
+    )
+
+    report = format_cohort_report(summary, thresholds=thresholds)
+
+    assert "readiness: not_ready" in report
+    assert "readiness_reasons:" in report
+    assert "- prediction_bound 1 < 2" in report
+    assert "readiness_thresholds: min_prediction_bound=2" in report
