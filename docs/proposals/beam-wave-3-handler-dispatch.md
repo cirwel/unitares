@@ -1,7 +1,22 @@
 # Wave 3 RFC: handler dispatch + identity middleware + dialectic resolution → BEAM
 
-**Status:** DEFERRED per parent-roadmap V0.3.4 RESOLUTION (2026-06-11) — the v0.3.2 re-litigation resolved as (α): no redraft and no Wave-3-specific implementation before the §14 prereq 14-day measurement window (opened by PR #599, 2026-06-10) closes ~2026-06-24 and its data is read at the gate. Resume shapes favor (β)/(γ); see the parent roadmap. Body below preserved at v0.3.4 (§11 criterion-10 pin + reassignment event stream, 2026-06-11; v0.3.3 §5.2-audit fold 2026-06-10). Full redraft superseding v0.2 (which superseded v0.1.x). Each prior version is preserved on its branch as a historical record. v0.3 closes the architectural irony the v0.2 council surfaced: cache coherence and feature-flag state move off PostgreSQL into BEAM-native ETS, so the RFC stops piling new PG-coordination load onto the substrate it exists to relieve.
-**Parent:** `docs/proposals/beam-footprint-roadmap-v0.md` v0.3.4.
+**Status:** ACTIVE — COMMITTED TO IMPLEMENTATION per parent-roadmap **V0.4 RESOLUTION (operator decision, 2026-06-25)**. The v0.3.4 (α) defer is superseded: latency was retired as a Wave 3 *decision* gate (every measured floor resolved Python-side; the gate was structurally undecidable), and Wave 3 is committed to proceed on the coordination/ownership argument. The §14 measurement window (PR #599) it had deferred behind also closed on schedule (~2026-06-24); its data may inform design but no longer gates the decision. The **technical correctness gates remain owed before any cutover merges** — see "Implementation entry + owed council passes" below. Body preserved at v0.3.4 (§11 criterion-10 pin + reassignment event stream, 2026-06-11; v0.3.3 §5.2-audit fold 2026-06-10). Full redraft superseding v0.2 (which superseded v0.1.x). Each prior version is preserved on its branch as a historical record. v0.3 closes the architectural irony the v0.2 council surfaced: cache coherence and feature-flag state move off PostgreSQL into BEAM-native ETS, so the RFC stops piling new PG-coordination load onto the substrate it exists to relieve.
+
+## Implementation entry + owed council passes (v0.4, 2026-06-26)
+
+The decision is closed; the design is wide open and adversarially reviewable (parent v0.4 §"honesty guardrail"). Sequencing, safest-first — each runs **alongside** Python and changes nothing user-facing until proven:
+
+1. **Additive infra, zero cutover risk (start here).** §6 `audit.coordination_measurements` table, §8 shadow-divergence DDL + comparator, §9 saga-state DDL. New tables + BEAM modules in shadow mode; Python remains the sole writer. No handler is cut over.
+2. **Shadow soak.** Run the BEAM identity/dialectic ports in shadow, compare against Python per §8.2 (three divergence kinds) until byte-identical per §7.2 over the §8.3 window.
+3. **Cutover, per surface, behind enforcement.** Only after a clean shadow window, and only with §4 multi-writer enforcement live for that surface.
+
+**Owed council passes before the corresponding merge (NOT retired by v0.4 — these are correctness, not latency):**
+- §2 multi-process serialization: confirm option (ii) `SELECT … FOR UPDATE` lock-acquisition order is deadlock-safe against the `trg_dialectic_sessions_updated_at` BEFORE-UPDATE trigger (`db/postgres/schema.sql:253-256`) before any dialectic phase-mutation cutover.
+- §3.2 rollback procedure + §4 enforcement-grade boundary for each identity surface before its cutover.
+- §5 dialectic stateful/stateless split sign-off.
+- Stop-sign #4 (parent): if the Ports/HTTP boundary accrues >1 distinct workaround pattern, halt — the substrate-tax shape must not replicate one level out.
+
+**Parent:** `docs/proposals/beam-footprint-roadmap-v0.md` v0.4.
 **Sibling, completed:** `docs/proposals/beam-wave-1-sentinel.md` (Surface 1+2 shipped; Surface 3 in flight).
 **Sibling, completed:** `docs/proposals/surface-lease-plane-v0.md` Phase A + Wave 2 hardening + resident Phase B + lease RPC recorder/persistence (#412/#414/#417/#418/#419/#476/#480/#481).
 **Wave 0 channel:** `audit.coordination_events` exists with `event_type ~ '^(coordination_failure)(\.[a-z_]+)+$'` CHECK constraint; zero rows as of 2026-05-09. The constraint scopes the table to failure events only — informational latency lives in the parallel channel introduced in §6.
