@@ -1974,7 +1974,32 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
 
 @mcp_tool("get_knowledge_graph", timeout=15.0, register=False)
 async def handle_get_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Get all knowledge for an agent - summaries only (use get_discovery_details for full content)"""
+    """Get agent knowledge or read back a specific discovery.
+
+    ``knowledge(action="get")`` is the migration target for the legacy
+    ``get_knowledge_graph`` tool, whose historical contract is agent-scoped.
+    In practice, agents commonly pass a discovery id returned from search. Keep
+    that path useful by routing it to the existing details reader instead of
+    falling into the agent identity gate.
+    """
+    if arguments.get("discovery_id"):
+        if arguments.get("agent_id"):
+            return [error_response(
+                "knowledge get accepts either discovery_id or agent_id, not both",
+                error_code="AMBIGUOUS_KNOWLEDGE_GET_TARGET",
+                error_category="validation_error",
+                recovery={
+                    "action": "Choose one read target",
+                    "workflow": [
+                        "Use discovery_id for search-result readback",
+                        "Use agent_id to list one agent's knowledge",
+                    ],
+                    "related_tools": ["knowledge"],
+                },
+                arguments=arguments,
+            )]
+        return await handle_get_discovery_details(arguments)
+
     # SECURITY FIX: Verify agent_id is registered (prevents phantom agent_ids)
     agent_id, error = require_registered_agent(arguments)
     if error:

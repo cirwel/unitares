@@ -316,9 +316,10 @@ class KnowledgeParams(AgentIdentityMixin):
     details: Optional[str] = Field(None, description="Extended details for discovery (for action=store). Alias: content")
     summary: Optional[str] = Field(None, description="Discovery summary (for action=store)")
     discovery_type: Optional[str] = Field(None, description="Type: bug_found, insight, pattern, question, note, etc. (for action=store)")
+    response_to: Optional[dict] = Field(None, description="Typed response link {discovery_id, response_type} for threaded store/note writes")
     tags: Optional[List[str]] = Field(None, description="Tags for discovery (for action=store, search, note)")
     severity: Optional[str] = Field(None, description="Severity: low, medium, high, critical (for action=store)")
-    discovery_id: Optional[str] = Field(None, description="Discovery ID (for action=details, update; the NEW discovery for action=supersede)")
+    discovery_id: Optional[str] = Field(None, description="Discovery ID (for action=get/details, update; the NEW discovery for action=supersede)")
     status: Optional[str] = Field(None, description="Status filter/update value (open, resolved, archived, superseded)")
     resolution_notes: Optional[str] = Field(None, description="Rationale to append when closing or updating a discovery")
     # Supersession LINK params. Without these declared here the unified tool's
@@ -327,9 +328,21 @@ class KnowledgeParams(AgentIdentityMixin):
     supersedes: Optional[str] = Field(None, description="ID of an older discovery this new one replaces (for action=store)")
     superseded_by: Optional[str] = Field(None, description="ID of the discovery that supersedes this one (for action=update with status=superseded)")
     supersedes_id: Optional[str] = Field(None, description="ID of the older discovery being replaced (for action=supersede; discovery_id is the newer one)")
-    agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get, search)")
+    agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get, search; omit when using discovery_id readback)")
     limit: Optional[int] = Field(None, description="Max results")
-    include_details: Optional[bool] = Field(None, description="Include full details inline (for action=search/get)")
+    include_details: Optional[bool] = Field(None, description="Include full details inline (for action=search or agent-scoped action=get)")
+    include_provenance: Union[bool, str, None] = Field(None, description="Include provenance and lineage chain fields in search/details results")
+    search_mode: Optional[Literal["auto", "fts", "semantic", "hybrid"]] = Field(
+        None,
+        description="Force retrieval mode for action=search. 'semantic' and 'hybrid' fail honestly when unsupported by the active backend.",
+    )
+    semantic: Union[bool, str, None] = Field(None, description="Legacy action=search toggle to force or skip semantic retrieval when supported")
+    min_similarity: Union[float, str, None] = Field(None, description="Minimum cosine similarity for semantic retrieval modes")
+    operator: Optional[Literal["AND", "OR"]] = Field(None, description="Boolean operator for multi-term FTS queries")
+    offset: Optional[int] = Field(None, description="Character offset for action=details pagination")
+    length: Optional[int] = Field(None, description="Maximum details characters returned for action=details")
+    include_response_chain: Union[bool, str, None] = Field(None, description="Include typed response chain for action=details")
+    max_chain_depth: Optional[int] = Field(None, description="Maximum response-chain traversal depth for action=details")
     # Recall-recovery levers for action=search. Default search excludes archived
     # and cold-storage notes; pass these to reach them when an active-tier search
     # comes up empty. The handler already honors both — they were just never
@@ -354,4 +367,15 @@ class KnowledgeParams(AgentIdentityMixin):
             self.dry_run = self.dry_run.lower() in ('true', '1', 'yes')
         if isinstance(self.use_llm, str):
             self.use_llm = self.use_llm.lower() in ('true', '1', 'yes')
+        if isinstance(self.include_provenance, str):
+            self.include_provenance = self.include_provenance.lower() in ('true', '1', 'yes')
+        if isinstance(self.semantic, str):
+            self.semantic = self.semantic.lower() in ('true', '1', 'yes')
+        if isinstance(self.min_similarity, str):
+            try:
+                self.min_similarity = float(self.min_similarity)
+            except ValueError:
+                self.min_similarity = None
+        if isinstance(self.include_response_chain, str):
+            self.include_response_chain = self.include_response_chain.lower() in ('true', '1', 'yes')
         return self
