@@ -110,6 +110,8 @@ from .support.model_inference import handle_call_model
 from .observability.outcome_events import handle_outcome_event
 # Resident Progress - sentinel push-based pulse (Phase 1)
 from .resident_progress import handle_record_progress_pulse
+# Research-run registry
+from .research_registry import handle_research_registry
 # Consolidated tools - reduces cognitive load for agents (Jan 2026)
 from .consolidated import (
     handle_knowledge,
