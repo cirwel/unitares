@@ -1044,6 +1044,19 @@ def phi_telemetry_only() -> bool:
     return os.getenv("UNITARES_PHI_TELEMETRY_ONLY", "").strip().lower() in {"1", "true", "on", "yes"}
 
 
+def basin_shadow_enabled() -> bool:
+    """Whether to shadow-compare the behavioral-EISV basin against the live
+    ODE basin each warm check-in (UNITARES_BASIN_SHADOW). Default off.
+
+    Behavior-neutral measurement for kernel-split WS1 option b: it records
+    (via audit event 'basin_shadow') what classify_basin() would return if fed
+    the already-computed behavioral EISV instead of the ODE-evolved state, so
+    the swap can be validated before the ODE solve is gated off the check-in
+    critical path. Does NOT change any live decision.
+    """
+    return os.getenv("UNITARES_BASIN_SHADOW", "").strip().lower() in {"1", "true", "on", "yes"}
+
+
 def get_s_setpoint(agent_class: str = "default") -> float:
     """Per-class S decay target σ for the dynamics.
 

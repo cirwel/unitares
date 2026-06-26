@@ -1292,6 +1292,47 @@ class UNITARESMonitor:
             oscillation_state=oscillation_state
         )
 
+        # ── Basin shadow-compare (kernel-split WS1 option b, behavior-neutral) ──
+        # Record what classify_basin() would return if the boundary/void/coherence
+        # inputs were fed from the already-computed behavioral EISV instead of the
+        # ODE-evolved state. Warm agents only (the population that would skip the
+        # ODE). Coherence is a pure function of V — C(V,Θ) — so the behavioral
+        # coherence is just coherence_function(behavioral_V) on the same scale.
+        # This does NOT mutate `decision`; it only emits a 'basin_shadow' audit
+        # event so the swap can be validated before the ODE is gated off the hot
+        # path. Fully guarded — shadow measurement must never break the live path.
+        try:
+            from config.governance_config import basin_shadow_enabled, classify_basin
+            beh = self._behavioral_state
+            if (basin_shadow_enabled()
+                    and GovConfig.BEHAVIORAL_VERDICT_ENABLED
+                    and beh is not None
+                    and beh.confidence >= 0.3):
+                coh_beh = self.coherence_function(beh.V)
+                beh_basin = classify_basin(
+                    E=beh.E, I=beh.I, S=beh.S, V=beh.V,
+                    coherence=coh_beh, risk_score=risk_score,
+                )
+                ode_basin = decision.get('basin')
+                audit_logger.log_basin_shadow(
+                    agent_id=self.agent_id,
+                    ode_basin=ode_basin,
+                    behavioral_basin=beh_basin,
+                    agree=(ode_basin == beh_basin),
+                    confidence=beh.confidence,
+                    details={
+                        "ode_eisv": {"E": self.state.E, "I": self.state.I,
+                                     "S": self.state.S, "V": self.state.V,
+                                     "coherence": self.state.coherence},
+                        "behavioral_eisv": {"E": beh.E, "I": beh.I, "S": beh.S,
+                                            "V": beh.V, "coherence": coh_beh},
+                        "risk_score": risk_score,
+                        "sub_action": decision.get('sub_action'),
+                    },
+                )
+        except Exception as e:
+            logger.debug(f"basin_shadow skipped for {self.agent_id}: {e}")
+
         # Pre-flag gap-suppression so calibration, audit, and history can record
         # the *original* verdict truthfully — the actual decision mutation
         # happens after those recording paths so calibration doesn't learn from
