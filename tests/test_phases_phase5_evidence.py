@@ -252,6 +252,77 @@ async def test_evidence_iteration_enabled_calls_outcome_event(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_evidence_iteration_mints_prediction_ids_for_unbound_items(monkeypatch):
+    """Enabled Phase-5 evidence should bind each unbound item to a fresh prediction.
+
+    Reusing the process_update top-level prediction_id across several evidence
+    rows makes only the first row resolve as `registry`; later rows see a
+    consumed/missing id. The robust path is one freshly minted tactical
+    prediction per evidence row when the caller did not supply an explicit id.
+    """
+    monkeypatch.setenv("UNITARES_PHASE5_EVIDENCE_WRITE", "1")
+
+    outcome_event_mock = AsyncMock(return_value=[MagicMock(text='{"outcome_id":"eid"}')])
+    ctx = _make_ctx(
+        recent_tool_results=[
+            {"kind": "test", "tool": "pytest", "summary": "passed", "exit_code": 0},
+            {"kind": "lint", "tool": "ruff", "summary": "clean", "exit_code": 0},
+        ],
+        confidence=0.72,
+    )
+    assert ctx.monitor is not None
+    ctx.monitor.register_tactical_prediction = MagicMock(side_effect=["pred-phase5-1", "pred-phase5-2"])
+
+    with _make_patch_stack(ctx, outcome_event_mock=outcome_event_mock):
+        await execute_post_update_effects(ctx)
+
+    phase5_calls = [
+        c.args[0] for c in outcome_event_mock.call_args_list
+        if (c.args[0].get("detail") or {}).get("phase5_emitter") is True
+    ]
+    assert [args.get("prediction_id") for args in phase5_calls] == [
+        "pred-phase5-1",
+        "pred-phase5-2",
+    ]
+    assert ctx.monitor.register_tactical_prediction.call_count == 2
+    for call in ctx.monitor.register_tactical_prediction.call_args_list:
+        assert call.args == (0.72,)
+        assert call.kwargs == {"decision_action": "proceed"}
+
+
+@pytest.mark.asyncio
+async def test_evidence_iteration_preserves_explicit_prediction_id(monkeypatch):
+    """Explicit evidence prediction IDs are caller intent and must not be reminted."""
+    monkeypatch.setenv("UNITARES_PHASE5_EVIDENCE_WRITE", "1")
+
+    outcome_event_mock = AsyncMock(return_value=[MagicMock(text='{"outcome_id":"eid"}')])
+    ctx = _make_ctx(
+        recent_tool_results=[
+            {
+                "kind": "test",
+                "tool": "pytest",
+                "summary": "passed",
+                "exit_code": 0,
+                "prediction_id": "caller-prediction-id",
+            }
+        ]
+    )
+    assert ctx.monitor is not None
+    ctx.monitor.register_tactical_prediction = MagicMock(return_value="should-not-be-used")
+
+    with _make_patch_stack(ctx, outcome_event_mock=outcome_event_mock):
+        await execute_post_update_effects(ctx)
+
+    phase5_calls = [
+        c.args[0] for c in outcome_event_mock.call_args_list
+        if (c.args[0].get("detail") or {}).get("phase5_emitter") is True
+    ]
+    assert len(phase5_calls) == 1
+    assert phase5_calls[0].get("prediction_id") == "caller-prediction-id"
+    ctx.monitor.register_tactical_prediction.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_shadow_mode_sets_shadow_write_detail(monkeypatch):
     """UNITARES_PHASE5_EVIDENCE_WRITE=shadow → detail["shadow_write"]=True on each row."""
     monkeypatch.setenv("UNITARES_PHASE5_EVIDENCE_WRITE", "shadow")

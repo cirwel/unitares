@@ -66,6 +66,7 @@ class InventoryBucket:
     n_total: int = 0
     n_bad: int = 0
     prediction_id_count: int = 0
+    registry_prediction_bound_count: int = 0
     prior_state_counts: dict[float, int] = field(default_factory=dict)
 
     @property
@@ -89,7 +90,9 @@ class OutcomeInventory:
     hard_exogenous_count: int
     eprocess_eligible_count: int
     total_prediction_id_count: int
+    registry_prediction_bound_count: int = 0
     eprocess_eligible_by_harness_lane: dict[str, int] = field(default_factory=dict)
+    registry_prediction_bound_by_harness_lane: dict[str, int] = field(default_factory=dict)
 
     @property
     def total_bad_rate(self) -> float | None:
@@ -191,6 +194,11 @@ def _has_prediction_id(detail: Mapping[str, Any]) -> bool:
     return prediction_id not in (None, "")
 
 
+def _is_registry_prediction_bound(detail: Mapping[str, Any]) -> bool:
+    """Return whether an outcome has a real prospective registry binding."""
+    return _has_prediction_id(detail) and _prediction_binding(detail) == "registry"
+
+
 def harness_lane_from_detail(detail: Mapping[str, Any] | str | None) -> str:
     """Return the analysis lane for a row's harness provenance.
 
@@ -222,6 +230,8 @@ def build_inventory(
     eprocess_eligible_count = 0
     eprocess_eligible_by_harness_lane: dict[str, int] = {}
     total_prediction_id_count = 0
+    registry_prediction_bound_count = 0
+    registry_prediction_bound_by_harness_lane: dict[str, int] = {}
 
     for row in rows:
         detail = _normalized_detail(row.detail)
@@ -272,6 +282,12 @@ def build_inventory(
         if _has_prediction_id(detail):
             bucket.prediction_id_count += 1
             total_prediction_id_count += 1
+        if _is_registry_prediction_bound(detail):
+            bucket.registry_prediction_bound_count += 1
+            registry_prediction_bound_count += 1
+            registry_prediction_bound_by_harness_lane[harness_lane] = (
+                registry_prediction_bound_by_harness_lane.get(harness_lane, 0) + 1
+            )
         for lead in leads:
             if bool(row.prior_state_by_lead.get(lead, False)):
                 bucket.prior_state_counts[lead] += 1
@@ -300,8 +316,12 @@ def build_inventory(
         hard_exogenous_count=hard_exogenous_count,
         eprocess_eligible_count=eprocess_eligible_count,
         total_prediction_id_count=total_prediction_id_count,
+        registry_prediction_bound_count=registry_prediction_bound_count,
         eprocess_eligible_by_harness_lane=dict(
             sorted(eprocess_eligible_by_harness_lane.items())
+        ),
+        registry_prediction_bound_by_harness_lane=dict(
+            sorted(registry_prediction_bound_by_harness_lane.items())
         ),
     )
 
@@ -338,6 +358,7 @@ def _harness_lane_summary_rows(
                 "task_scope_bad": 0,
                 "eprocess_eligible": 0,
                 "prediction_id": 0,
+                "registry_prediction_bound": 0,
                 "prior_state": {lead: 0 for lead in leads},
             },
         )
@@ -352,6 +373,7 @@ def _harness_lane_summary_rows(
         if bucket.eprocess_eligible:
             lane_summary["eprocess_eligible"] += bucket.n_total
         lane_summary["prediction_id"] += bucket.prediction_id_count
+        lane_summary["registry_prediction_bound"] += bucket.registry_prediction_bound_count
         for lead in leads:
             lane_summary["prior_state"][lead] += bucket.prior_state_counts.get(lead, 0)
 
@@ -370,6 +392,7 @@ def _harness_lane_summary_rows(
                 str(summary["task_scope_bad"]),
                 str(summary["eprocess_eligible"]),
                 str(summary["prediction_id"]),
+                str(summary["registry_prediction_bound"]),
                 *[f"{prior_state[lead]}/{outcomes}" for lead in leads],
             ]
         )
@@ -405,6 +428,13 @@ def format_inventory_report(
             )
         ],
         f"prediction_id_present: {inventory.total_prediction_id_count}",
+        f"registry_prediction_bound: {inventory.registry_prediction_bound_count}",
+        *[
+            f"registry_prediction_bound_{lane}: {count}"
+            for lane, count in sorted(
+                inventory.registry_prediction_bound_by_harness_lane.items()
+            )
+        ],
         "",
         "## Harness Lane Summary",
         "",
@@ -420,6 +450,7 @@ def format_inventory_report(
         "Task-scope bad",
         "E-process eligible",
         "Prediction IDs",
+        "Registry-bound predictions",
         *[f"Prior state {_format_lead(lead)}m" for lead in leads],
     ]
     lines.append("| " + " | ".join(summary_headers) + " |")

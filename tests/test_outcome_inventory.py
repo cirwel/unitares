@@ -102,6 +102,69 @@ def test_build_inventory_groups_by_scope_type_source_and_evidence_flags():
     assert inventory.total_outcomes == 4
     assert inventory.total_bad == 2
     assert inventory.total_prediction_id_count == 2
+    assert inventory.registry_prediction_bound_count == 2
+
+
+def test_build_inventory_counts_registry_prediction_bindings_separately_from_ids():
+    rows = [
+        OutcomeInventoryRow(
+            outcome_type="test_passed",
+            is_bad=False,
+            verification_source="server_observation",
+            detail={"prediction_id": "pred-reg", "prediction_binding": "registry"},
+            prior_state_by_lead={0.0: True},
+        ),
+        OutcomeInventoryRow(
+            outcome_type="test_failed",
+            is_bad=True,
+            verification_source="server_observation",
+            detail={"prediction_id": "pred-missing", "prediction_binding": "missing_prediction"},
+            prior_state_by_lead={0.0: True},
+        ),
+        OutcomeInventoryRow(
+            outcome_type="task_completed",
+            is_bad=False,
+            verification_source="agent_reported_tool_result",
+            detail={"prediction_binding": "argument_fallback"},
+            prior_state_by_lead={0.0: True},
+        ),
+    ]
+
+    inventory = build_inventory(rows, lead_minutes=(0.0,))
+
+    assert inventory.total_prediction_id_count == 2
+    assert inventory.registry_prediction_bound_count == 1
+    assert inventory.registry_prediction_bound_by_harness_lane == {"substrate": 1}
+
+
+def test_format_inventory_report_exposes_registry_bound_prediction_count():
+    rows = [
+        OutcomeInventoryRow(
+            outcome_type="test_passed",
+            is_bad=False,
+            verification_source="server_observation",
+            detail={"prediction_id": "pred-reg", "prediction_binding": "registry"},
+            prior_state_by_lead={0.0: True},
+        ),
+        OutcomeInventoryRow(
+            outcome_type="test_failed",
+            is_bad=True,
+            verification_source="server_observation",
+            detail={"prediction_id": "pred-missing", "prediction_binding": "missing_prediction"},
+            prior_state_by_lead={0.0: True},
+        ),
+    ]
+
+    inventory = build_inventory(rows, lead_minutes=(0.0,))
+    report = format_inventory_report(inventory, window_days=90, lead_minutes=(0.0,))
+
+    assert "prediction_id_present: 2" in report
+    assert "registry_prediction_bound: 1" in report
+    assert (
+        "| Lane | Outcomes | Bad | Strict outcomes | Strict bad | Task-scope outcomes | Task-scope bad | E-process eligible | Prediction IDs | Registry-bound predictions | Prior state 0m |"
+        in report
+    )
+    assert "| substrate | 2 | 1 | 2 | 1 | 2 | 1 | 0 | 2 | 1 | 2/2 |" in report
 
 
 def test_build_inventory_splits_beam_harness_from_substrate_lane():
@@ -186,11 +249,11 @@ def test_format_inventory_report_includes_harness_lane_summary():
 
     assert "## Harness Lane Summary" in report
     assert (
-        "| Lane | Outcomes | Bad | Strict outcomes | Strict bad | Task-scope outcomes | Task-scope bad | E-process eligible | Prediction IDs | Prior state 0m |"
+        "| Lane | Outcomes | Bad | Strict outcomes | Strict bad | Task-scope outcomes | Task-scope bad | E-process eligible | Prediction IDs | Registry-bound predictions | Prior state 0m |"
         in report
     )
-    assert "| beam | 2 | 1 | 0 | 0 | 2 | 1 | 2 | 0 | 0/2 |" in report
-    assert "| substrate | 2 | 1 | 1 | 0 | 2 | 1 | 1 | 1 | 2/2 |" in report
+    assert "| beam | 2 | 1 | 0 | 0 | 2 | 1 | 2 | 0 | 0 | 0/2 |" in report
+    assert "| substrate | 2 | 1 | 1 | 0 | 2 | 1 | 1 | 1 | 0 | 2/2 |" in report
 
 
 def test_format_inventory_report_exposes_zero_bad_strict_and_prior_coverage():
