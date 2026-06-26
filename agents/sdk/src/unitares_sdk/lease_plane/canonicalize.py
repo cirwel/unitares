@@ -19,8 +19,8 @@ Three live-verifier findings drove the implementation details below:
     contain 'PC_CASE_SENSITIVE'. The RFC's original probe spec was wrong;
     helper uses a tmpfile probe instead (write 'PROBE', stat 'probe').
 
-  - Canonical scheme list (RFC §7.2.1) — five v0 schemes; helper dispatches
-    per-scheme.
+  - Canonical scheme list (RFC §7.2.1 plus follow-on presence/maintenance
+    schemes); helper dispatches per-scheme.
 """
 
 from __future__ import annotations
@@ -29,12 +29,20 @@ import os
 import os.path
 import tempfile
 
-# v0.8 canonical scheme list (RFC §7.2.1). Single source of truth in code.
-# `agent` (ephemeral-agent presence surfaces) added by migration 042.
-CANONICAL_SCHEMES: tuple[str, ...] = ("file", "dialectic", "resident", "capture", "td", "agent")
+# v0.8 canonical scheme list (RFC §7.2.1) plus follow-on schemes. Single source
+# of truth in code. `agent` added by migration 042; `maintenance` by migration 050.
+CANONICAL_SCHEMES: tuple[str, ...] = (
+    "file",
+    "dialectic",
+    "resident",
+    "maintenance",
+    "capture",
+    "td",
+    "agent",
+)
 
-# Compiled scheme-grammar regex matches what migrations 026 + 042 enforce at the DB layer.
-_SCHEME_GRAMMAR = "^(file://|dialectic:/|resident:/|capture:/|td:/|agent:/)"
+# Compiled scheme-grammar regex matches migrations 026 + 042 + 049 at the DB layer.
+_SCHEME_GRAMMAR = "^(file://|dialectic:/|resident:/|maintenance:/|capture:/|td:/|agent:/)"
 
 _PATH_MAX = 4096
 
@@ -99,6 +107,8 @@ def canonicalize(surface_id: str) -> str:
         return _canonicalize_dialectic(surface_id[len("dialectic:/") :])
     if surface_id.startswith("resident:/"):
         return _canonicalize_resident(surface_id[len("resident:/") :])
+    if surface_id.startswith("maintenance:/"):
+        return _canonicalize_maintenance(surface_id[len("maintenance:/") :])
     if surface_id.startswith("capture:/"):
         return _canonicalize_capture(surface_id[len("capture:/") :])
     if surface_id.startswith("td:/"):
@@ -163,6 +173,21 @@ def _canonicalize_resident(path: str) -> str:
             f"resident:/ surface_id contains reserved character (?, #, &, whitespace): {path!r}",
         )
     return f"resident:/{path.rstrip('/')}"
+
+
+def _canonicalize_maintenance(path: str) -> str:
+    """maintenance:/ — opaque maintenance job surface; case-sensitive.
+
+    Uses the same reserved-character and trailing-slash rules as resident:/,
+    but names cleanup/repair coordination surfaces that are not resident
+    lifecycle or presence handles. (Migration 049.)
+    """
+    if any(ch in path for ch in (" ", "\t", "\n", "?", "#", "&")):
+        raise CanonicalizeError(
+            "invalid_scheme",
+            f"maintenance:/ surface_id contains reserved character (?, #, &, whitespace): {path!r}",
+        )
+    return f"maintenance:/{path.rstrip('/')}"
 
 
 def _canonicalize_agent(path: str) -> str:

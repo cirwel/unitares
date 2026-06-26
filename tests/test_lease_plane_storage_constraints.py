@@ -101,6 +101,7 @@ async def test_surface_kind_derived_from_scheme():
         cases = [
             ("file:///tmp/storage_gate_x.py", "file"),
             ("dialectic:/storage-gate-y", "dialectic"),
+            ("maintenance:/storage-gate-maintenance", "maintenance"),
             ("td:/storage-gate-z", "td"),
         ]
         for sid, expected_kind in cases:

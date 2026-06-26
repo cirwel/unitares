@@ -514,19 +514,20 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   # their stable cross-session path, stayed locked for hours/days.
   #
   # `agent:/` surfaces are ephemeral-agent PRESENCE rows from the BEAM agent
-  # orchestrator (elixir/agent_orchestrator). They are session-scoped like file
-  # edits and MUST self-heal if the agent dies without releasing — and the
-  # surface is unique per agent, so local_beam's mutex/auto-renew would only leak
-  # a renewing holder while coordinating nothing. They take the same
-  # remote_heartbeat (pure-TTL-row) path. See migration 042.
+  # orchestrator (elixir/agent_orchestrator). `maintenance:/` surfaces are
+  # short-lived cleanup/repair jobs. Both are session-scoped like file edits and
+  # MUST self-heal if the caller dies without releasing. They take the same
+  # remote_heartbeat (pure-TTL-row) path. See migrations 042 and 049.
   #
   # Every other surface (resident:/ presence, migration:/, etc.) keeps the
   # local_beam auto-renew path. Residents are intentionally long-lived and rely
   # on server-side auto-renew for continuity, so the routing is scoped to the
-  # file + agent schemes precisely so it CANNOT regress resident coordination.
+  # file + agent + maintenance schemes precisely so it CANNOT regress resident
+  # coordination.
   defp acquire_for_surface(%{surface_id: surface_id} = params)
        when is_binary(surface_id) do
     if String.starts_with?(surface_id, "file://") or
+         String.starts_with?(surface_id, "maintenance:/") or
          String.starts_with?(surface_id, "agent:/") do
       UnitaresLeasePlane.acquire_remote_heartbeat(params)
     else

@@ -112,11 +112,130 @@ def fmt_metrics(m: dict) -> str:
     # risk_score: smoothed mean-of-10, the value make_decision gated on
     # risk_score_latest: raw last observation (spike), shown alongside
     latest = m.get("risk_score_latest")
-    latest_str = f" latest={latest:.2f}" if latest is not None else ""
+    latest_str = f" latest={fmt_float(latest)}" if latest is not None else ""
     return (
-        f"E={m['E']:+.2f} I={m['I']:+.2f} S={m['S']:+.2f} V={m['V']:+.2f}  "
-        f"coh={m['coherence']:.2f} risk={m['risk_score']:.2f}{latest_str}"
+        f"E={fmt_float(m.get('E'), signed=True)} "
+        f"I={fmt_float(m.get('I'), signed=True)} "
+        f"S={fmt_float(m.get('S'), signed=True)} "
+        f"V={fmt_float(m.get('V'), signed=True)}  "
+        f"coh={fmt_float(m.get('coherence'))} "
+        f"risk={fmt_float(m.get('risk_score'))}{latest_str}"
     )
+
+
+def fmt_float(value: object, *, signed: bool = False) -> str:
+    if isinstance(value, bool) or value is None:
+        return "-"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    return f"{number:+.2f}" if signed else f"{number:.2f}"
+
+
+def _nonempty_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _first_text(*values: object) -> str | None:
+    for value in values:
+        text = _nonempty_text(value)
+        if text is not None:
+            return text
+    return None
+
+
+def extract_decision(result: dict) -> dict:
+    """Return a decision-like dict from compact, mirror, minimal, or standard shapes."""
+    if not isinstance(result, dict):
+        raise TypeError("process_agent_update result must be a JSON object")
+
+    decision = result.get("decision")
+    if isinstance(decision, dict):
+        action = _first_text(decision.get("action"), result.get("action"))
+        if action:
+            return {
+                "action": action,
+                "reason": _first_text(decision.get("reason"), result.get("reason"), result.get("summary"))
+                or "No reason supplied.",
+                "margin": _first_text(decision.get("margin"), result.get("margin")) or "-",
+            }
+    elif isinstance(decision, str):
+        return {
+            "action": decision,
+            "reason": _first_text(result.get("reason"), result.get("summary")) or "No reason supplied.",
+            "margin": _first_text(result.get("margin")) or "-",
+        }
+
+    verdict = result.get("verdict")
+    extracted = _extract_verdict(verdict, result)
+    if extracted:
+        return extracted
+
+    metrics = result.get("metrics")
+    if isinstance(metrics, dict):
+        extracted = _extract_verdict(metrics.get("verdict"), result)
+        if extracted:
+            return extracted
+
+    action = _first_text(result.get("action"))
+    if action:
+        return {
+            "action": action,
+            "reason": _first_text(result.get("reason"), result.get("summary")) or "No reason supplied.",
+            "margin": _first_text(result.get("margin")) or "-",
+        }
+
+    keys = ", ".join(sorted(str(key) for key in result.keys()))
+    raise KeyError(f"process_agent_update result missing decision/verdict/action; keys: {keys}")
+
+
+def _extract_verdict(raw_verdict: object, result: dict) -> dict | None:
+    if isinstance(raw_verdict, dict):
+        action = _first_text(
+            raw_verdict.get("value"),
+            raw_verdict.get("action"),
+            raw_verdict.get("verdict"),
+        )
+        if not action:
+            return None
+        return {
+            "action": action,
+            "reason": _first_text(
+                result.get("reason"),
+                raw_verdict.get("reason"),
+                raw_verdict.get("meaning"),
+                raw_verdict.get("next_action"),
+                result.get("summary"),
+            )
+            or "No reason supplied.",
+            "margin": _first_text(result.get("margin"), raw_verdict.get("margin")) or "-",
+        }
+    if isinstance(raw_verdict, str):
+        return {
+            "action": raw_verdict,
+            "reason": _first_text(result.get("reason"), result.get("summary")) or "No reason supplied.",
+            "margin": _first_text(result.get("margin")) or "-",
+        }
+    return None
+
+
+def extract_metrics(result: dict) -> dict:
+    metrics = result.get("metrics")
+    if isinstance(metrics, dict):
+        return metrics
+    return {
+        "E": result.get("E"),
+        "I": result.get("I"),
+        "S": result.get("S"),
+        "V": result.get("V"),
+        "coherence": result.get("coherence"),
+        "risk_score": result.get("risk_score"),
+        "risk_score_latest": result.get("risk_score_latest"),
+    }
 
 
 def main() -> int:
@@ -144,15 +263,15 @@ def main() -> int:
                 "response_mode": "compact",
             },
         )
-        # A check-in on an agent that has crossed the high-risk gate returns an
-        # AGENT_PAUSED circuit-breaker reply with no `decision` block, so treat
-        # `decision` as optional (matching the rest of the codebase) and stop.
-        d = r.get("decision")
-        if d is None:
+        try:
+            d = extract_decision(r)
+        except KeyError:
+            # A check-in on an agent that has crossed the high-risk gate returns
+            # an AGENT_PAUSED circuit-breaker reply with no decision-like field.
             note = r.get("error") or r.get("message") or "agent paused"
             print(f"\n   step {i}: check-in refused — {note}")
             break
-        m = r.get("metrics", {})
+        m = extract_metrics(r)
         print(
             f"\n   step {i}: verdict = {d['action']:7s}"
             f"  ({d.get('margin','-')})"
@@ -160,7 +279,7 @@ def main() -> int:
         print(f"     said: \"{text[:70]}{'…' if len(text) > 70 else ''}\"")
         print(f"     self-report: complexity={complexity} confidence={confidence}")
         print(f"     {fmt_metrics(m)}")
-        print(f"     reason: {d['reason']}")
+        print(f"     reason: {d.get('reason', 'No reason supplied.')}")
 
     banner("3. what just happened")
     print("  Two risk signals to watch in each step above:")

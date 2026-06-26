@@ -24,8 +24,9 @@ defmodule UnitaresLeasePlane.CanonicalizeTest do
       assert {:error, :invalid_scheme} = Canonicalize.canonicalize(123)
     end
 
-    test "canonical_schemes/0 returns the v0.8 list" do
-      assert Canonicalize.canonical_schemes() == ~w(file dialectic resident capture td agent)
+    test "canonical_schemes/0 returns the canonical list" do
+      assert Canonicalize.canonical_schemes() ==
+               ~w(file dialectic resident maintenance capture td agent)
     end
   end
 
@@ -46,6 +47,9 @@ defmodule UnitaresLeasePlane.CanonicalizeTest do
 
       assert {:error, :reserved_query_string} =
                Canonicalize.canonicalize("resident:/q?x=1")
+
+      assert {:error, :reserved_query_string} =
+               Canonicalize.canonicalize("maintenance:/q?x=1")
 
       assert {:error, :reserved_query_string} =
                Canonicalize.canonicalize("capture:/A?,B")
@@ -135,6 +139,48 @@ defmodule UnitaresLeasePlane.CanonicalizeTest do
 
     test "is idempotent" do
       {:ok, once} = Canonicalize.canonicalize("resident:/watcher_scan_commits_repo/")
+      {:ok, twice} = Canonicalize.canonicalize(once)
+      assert once == twice
+    end
+  end
+
+  # ---------- maintenance:/ ----------
+
+  describe "maintenance:/" do
+    test "preserves case (case-sensitive)" do
+      assert {:ok, "maintenance:/Cleanup_Job"} =
+               Canonicalize.canonicalize("maintenance:/Cleanup_Job")
+    end
+
+    test "strips trailing slash" do
+      assert {:ok, "maintenance:/worktree_reaper"} =
+               Canonicalize.canonicalize("maintenance:/worktree_reaper/")
+    end
+
+    test "rejects whitespace in path" do
+      assert {:error, :invalid_scheme} =
+               Canonicalize.canonicalize("maintenance:/with space")
+
+      assert {:error, :invalid_scheme} =
+               Canonicalize.canonicalize("maintenance:/with\ttab")
+
+      assert {:error, :invalid_scheme} =
+               Canonicalize.canonicalize("maintenance:/with\nnewline")
+    end
+
+    test "rejects # and & (URL reserved chars; ? is caught at top level)" do
+      assert {:error, :invalid_scheme} = Canonicalize.canonicalize("maintenance:/h#frag")
+      assert {:error, :invalid_scheme} = Canonicalize.canonicalize("maintenance:/a&b")
+    end
+
+    test "does NOT reject \\r/\\f/\\v (parity with resident:/)" do
+      assert {:ok, _} = Canonicalize.canonicalize("maintenance:/path\rwith_cr")
+      assert {:ok, _} = Canonicalize.canonicalize("maintenance:/path\fwith_ff")
+      assert {:ok, _} = Canonicalize.canonicalize("maintenance:/path\vwith_vt")
+    end
+
+    test "is idempotent" do
+      {:ok, once} = Canonicalize.canonicalize("maintenance:/vigil_hygiene_sweep/")
       {:ok, twice} = Canonicalize.canonicalize(once)
       assert once == twice
     end
@@ -415,7 +461,7 @@ defmodule UnitaresLeasePlane.CanonicalizeTest do
 
   describe "cross-language parity with Python canonicalize.py" do
     # These pairs MUST produce the same output as the Python helper at
-    # src/lease_plane/canonicalize.py for the four implemented schemes.
+    # src/lease_plane/canonicalize.py for the implemented schemes.
     # Lock this in so future drift between the two implementations is caught
     # by `mix test` in CI rather than at production split-brain time.
     parity_cases = [
@@ -423,10 +469,13 @@ defmodule UnitaresLeasePlane.CanonicalizeTest do
       {"dialectic:/already-lower", "dialectic:/already-lower"},
       {"resident:/Watcher_Cycle/", "resident:/Watcher_Cycle"},
       {"resident:/sentinel_cycle", "resident:/sentinel_cycle"},
+      {"maintenance:/worktree_reaper/", "maintenance:/worktree_reaper"},
+      {"maintenance:/Vigil_Hygiene", "maintenance:/Vigil_Hygiene"},
       {"capture:/B,A,C", "capture:/A,B,C"},
       {"capture:/ x , y , z ", "capture:/x,y,z"},
       {"capture:/,A,,B,", "capture:/A,B"},
-      {"td:/eisv_basin_v31", "td:/eisv_basin_v31"}
+      {"td:/eisv_basin_v31", "td:/eisv_basin_v31"},
+      {"agent:/ag-abc/", "agent:/ag-abc"}
     ]
 
     for {input, expected} <- parity_cases do

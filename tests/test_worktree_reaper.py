@@ -81,7 +81,7 @@ def test_main_invokes_lease_advisory_with_expected_surface(monkeypatch, capsys):
 
     assert rc == 0
     assert events == ["enter", "exit"]
-    assert captured["surface_id"] == "resident:/worktree_reaper"
+    assert captured["surface_id"] == "maintenance:/worktree_reaper"
     assert captured["ttl_s"] == 900
     assert "worktree reaper dry-run" in captured["intent"]
     assert "min_idle_hours=24" in captured["intent"]

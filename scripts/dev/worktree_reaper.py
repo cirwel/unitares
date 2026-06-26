@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-LEASE_SURFACE_ID = "resident:/worktree_reaper"
+LEASE_SURFACE_ID = "maintenance:/worktree_reaper"
 LEASE_TTL_S = 900
 
 

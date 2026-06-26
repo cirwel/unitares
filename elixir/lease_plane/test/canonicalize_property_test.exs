@@ -58,9 +58,9 @@ defmodule UnitaresLeasePlane.CanonicalizeProperty do
     end)
   end
 
-  # resident:/ — exclude reserved chars (`?` already at top, plus space,
-  # tab, newline, `#`, `&`).
-  defp resident_surface_id do
+  # resident:/, maintenance:/, agent:/ — exclude reserved chars (`?` already
+  # at top, plus space, tab, newline, `#`, `&`).
+  defp opaque_surface_id(prefix) do
     StreamData.list_of(
       StreamData.string(
         Enum.concat([?A..?Z, ?a..?z, ?0..?9, [?_, ?-, ?., ?/, ?:, ?+, ?=]]),
@@ -69,7 +69,19 @@ defmodule UnitaresLeasePlane.CanonicalizeProperty do
       min_length: 1,
       max_length: 64
     )
-    |> StreamData.map(fn chars -> "resident:/" <> Enum.join(chars) end)
+    |> StreamData.map(fn chars -> prefix <> Enum.join(chars) end)
+  end
+
+  defp resident_surface_id do
+    opaque_surface_id("resident:/")
+  end
+
+  defp maintenance_surface_id do
+    opaque_surface_id("maintenance:/")
+  end
+
+  defp agent_surface_id do
+    opaque_surface_id("agent:/")
   end
 
   defp capture_member do
@@ -118,6 +130,15 @@ defmodule UnitaresLeasePlane.CanonicalizeProperty do
       end
     end
 
+    property "maintenance:/ canonicalize is idempotent" do
+      check all(input <- maintenance_surface_id()) do
+        case Canonicalize.canonicalize(input) do
+          {:ok, once} -> assert {:ok, ^once} = Canonicalize.canonicalize(once)
+          {:error, _} -> :ok
+        end
+      end
+    end
+
     property "capture:/ canonicalize is idempotent" do
       check all(input <- capture_surface_id()) do
         case Canonicalize.canonicalize(input) do
@@ -135,12 +156,29 @@ defmodule UnitaresLeasePlane.CanonicalizeProperty do
         end
       end
     end
+
+    property "agent:/ canonicalize is idempotent" do
+      check all(input <- agent_surface_id()) do
+        case Canonicalize.canonicalize(input) do
+          {:ok, once} -> assert {:ok, ^once} = Canonicalize.canonicalize(once)
+          {:error, _} -> :ok
+        end
+      end
+    end
   end
 
   describe "scheme preservation" do
     property "successful output starts with the same scheme prefix as input" do
       check all(
-              scheme <- StreamData.member_of(["dialectic:/", "resident:/", "capture:/", "td:/"]),
+              scheme <-
+                StreamData.member_of([
+                  "dialectic:/",
+                  "resident:/",
+                  "maintenance:/",
+                  "capture:/",
+                  "td:/",
+                  "agent:/"
+                ]),
               path <- safe_path_string()
             ) do
         input = scheme <> path
@@ -219,6 +257,22 @@ defmodule UnitaresLeasePlane.CanonicalizeProperty do
         end
       end
     end
+
+    property "maintenance:/ output never contains reserved chars (space, tab, newline, #, &)" do
+      check all(input <- maintenance_surface_id()) do
+        case Canonicalize.canonicalize(input) do
+          {:ok, "maintenance:/" <> path} ->
+            refute String.contains?(path, " ")
+            refute String.contains?(path, "\t")
+            refute String.contains?(path, "\n")
+            refute String.contains?(path, "#")
+            refute String.contains?(path, "&")
+
+          {:error, _} ->
+            :ok
+        end
+      end
+    end
   end
 
   describe "top-level ? rejection (PR 7 council BLOCK B1 — RFC §7.12.4 OPERATOR_NOTE 3)" do
@@ -228,8 +282,10 @@ defmodule UnitaresLeasePlane.CanonicalizeProperty do
                 StreamData.member_of([
                   "dialectic:/",
                   "resident:/",
+                  "maintenance:/",
                   "capture:/",
                   "td:/",
+                  "agent:/",
                   "file:///",
                   ""
                 ]),
