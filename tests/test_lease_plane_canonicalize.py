@@ -104,6 +104,30 @@ def test_agent_scheme_canonicalizes_as_presence_surface():
             canon.canonicalize(bad)
 
 
+def test_maintenance_scheme_canonicalizes_as_cleanup_surface():
+    """maintenance:/ — cleanup/repair coordination surface (migration 049).
+    Opaque, case-sensitive, strip trailing /, same reserved chars as resident:/."""
+    from src.lease_plane import canonicalize as canon
+    from src.lease_plane.canonicalize import CANONICAL_SCHEMES, CanonicalizeError
+
+    assert "maintenance" in CANONICAL_SCHEMES
+
+    assert canon.canonicalize("maintenance:/worktree_reaper") == "maintenance:/worktree_reaper"
+    assert canon.canonicalize("maintenance:/vigil_hygiene_sweep/") == (
+        "maintenance:/vigil_hygiene_sweep"
+    )
+    assert canon.canonicalize("maintenance:/Cleanup_Job") == "maintenance:/Cleanup_Job"
+
+    for bad in (
+        "maintenance:/with space",
+        "maintenance:/h#frag",
+        "maintenance:/a&b",
+        "maintenance:/q?x=1",
+    ):
+        with pytest.raises(CanonicalizeError):
+            canon.canonicalize(bad)
+
+
 def test_canonicalize_error_semantics():
     """Helper raises CanonicalizeError with named reasons for bounded failure modes."""
     from src.lease_plane.canonicalize import CanonicalizeError, canonicalize

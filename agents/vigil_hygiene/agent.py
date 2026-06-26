@@ -39,7 +39,7 @@ from agents.vigil_hygiene.clean_check import check_worktree_clean
 KEEPALIVE_BRANCH_NAMES = frozenset({"master", "main", "feat/branch-hygiene-automation"})
 NEWER_THAN_SECONDS = 24 * 60 * 60
 LOG_FILE = Path.home() / "Library" / "Logs" / "unitares-vigil-hygiene.log"
-LEASE_SURFACE_ID = "resident:/vigil_hygiene_sweep"
+LEASE_SURFACE_ID = "maintenance:/vigil_hygiene_sweep"
 LEASE_TTL_S = 900
 
 

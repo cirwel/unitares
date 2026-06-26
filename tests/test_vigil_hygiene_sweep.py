@@ -100,7 +100,7 @@ class TestSweepDryRun:
 
         assert report.dry_run is True
         assert events == ["enter", "exit"]
-        assert captured["surface_id"] == "resident:/vigil_hygiene_sweep"
+        assert captured["surface_id"] == "maintenance:/vigil_hygiene_sweep"
         assert captured["ttl_s"] == 900
         assert "dry-run branch/worktree sweep" in captured["intent"]
         assert str(fake_repo) in captured["intent"]

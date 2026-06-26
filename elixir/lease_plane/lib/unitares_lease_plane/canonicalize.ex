@@ -71,8 +71,9 @@ defmodule UnitaresLeasePlane.Canonicalize do
 
   require Logger
 
-  # v0.8 canonical scheme list (RFC §7.2.1). Single source of truth in Elixir.
-  @canonical_schemes ~w(file dialectic resident capture td agent)
+  # v0.8 canonical scheme list (RFC §7.2.1) plus follow-on schemes. Single
+  # source of truth in Elixir.
+  @canonical_schemes ~w(file dialectic resident maintenance capture td agent)
 
   @path_max 4096
 
@@ -102,6 +103,9 @@ defmodule UnitaresLeasePlane.Canonicalize do
 
       iex> UnitaresLeasePlane.Canonicalize.canonicalize("resident:/watcher_cycle/")
       {:ok, "resident:/watcher_cycle"}
+
+      iex> UnitaresLeasePlane.Canonicalize.canonicalize("maintenance:/worktree_reaper/")
+      {:ok, "maintenance:/worktree_reaper"}
 
       iex> UnitaresLeasePlane.Canonicalize.canonicalize("td:/eisv_basin_v31")
       {:ok, "td:/eisv_basin_v31"}
@@ -135,6 +139,7 @@ defmodule UnitaresLeasePlane.Canonicalize do
   defp dispatch("file://" <> rest), do: canonicalize_file(rest)
   defp dispatch("dialectic:/" <> rest), do: canonicalize_dialectic(rest)
   defp dispatch("resident:/" <> rest), do: canonicalize_resident(rest)
+  defp dispatch("maintenance:/" <> rest), do: canonicalize_maintenance(rest)
   defp dispatch("capture:/" <> rest), do: canonicalize_capture(rest)
   defp dispatch("td:/" <> rest), do: canonicalize_td(rest)
   defp dispatch("agent:/" <> rest), do: canonicalize_agent(rest)
@@ -351,6 +356,17 @@ defmodule UnitaresLeasePlane.Canonicalize do
       {:error, :invalid_scheme}
     else
       {:ok, "resident:/" <> String.trim_trailing(path, "/")}
+    end
+  end
+
+  # maintenance:/ — opaque cleanup/repair coordination surface; case-sensitive,
+  # strip trailing /. Same reserved-char set as resident:/, but deliberately not
+  # a resident lifecycle/presence surface. See migration 049.
+  defp canonicalize_maintenance(path) do
+    if String.match?(path, ~r/[ \t\n#&]/) do
+      {:error, :invalid_scheme}
+    else
+      {:ok, "maintenance:/" <> String.trim_trailing(path, "/")}
     end
   end
 

@@ -147,6 +147,10 @@ async def ensure_test_database_schema() -> None:
         # core.agents INCLUDING ALL — depend only on schema.sql base tables).
         await _execute_sql_file(conn, "db/postgres/migrations/043_identities_shadow.sql")
         await _execute_sql_file(conn, "db/postgres/migrations/044_agents_shadow.sql")
+        # Migration 049: maintenance:/ cleanup/repair coordination scheme
+        # (extends the 026/042 grammar CHECK). Applied after 042 here because
+        # it supersedes the same surface_id_grammar constraint.
+        await _execute_sql_file(conn, "db/postgres/migrations/049_lease_plane_maintenance_scheme.sql")
 
         # Ensure partitioned audit tables can accept inserts for current month.
         await _execute_sql_file(conn, "db/postgres/partitions.sql")

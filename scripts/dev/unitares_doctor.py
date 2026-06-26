@@ -476,7 +476,7 @@ def check_elixir_scheme_grammar_lint(db_url: str, repo_root: Path) -> CheckResul
     # scheme -> short site descriptor used in FAIL detail.
     elixir_mentions: dict[str, str] = {}
 
-    # 1. Wordlist: `@canonical_schemes ~w(file dialectic resident capture td)`.
+    # 1. Wordlist: `@canonical_schemes ~w(file dialectic resident maintenance capture td agent)`.
     for match in re.finditer(r"@canonical_schemes\s+~w\(([^)]+)\)", text):
         for scheme in match.group(1).split():
             if scheme:

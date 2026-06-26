@@ -446,7 +446,8 @@ def test_elixir_lint_excludes_deps_and_build_dirs(doctor, monkeypatch, tmp_path)
 
 
 _GRAMMAR_CHECK_DEF = (
-    "CHECK ((surface_id ~ '^(file://|dialectic:/|resident:/|capture:/|td:/)'::text))"
+    "CHECK ((surface_id ~ "
+    "'^(file://|dialectic:/|resident:/|maintenance:/|capture:/|td:/|agent:/)'::text))"
 )
 
 
@@ -489,17 +490,19 @@ def test_grammar_lint_passes_when_elixir_matches_grammar(doctor, monkeypatch, tm
     monkeypatch.setattr(doctor.subprocess, "run",
                         lambda *a, **kw: _Proc(returncode=0, stdout=_GRAMMAR_CHECK_DEF))
     _write_canonicalize(tmp_path, '''defmodule Canonicalize do
-      @canonical_schemes ~w(file dialectic resident capture td)
+      @canonical_schemes ~w(file dialectic resident maintenance capture td agent)
       defp dispatch("file://" <> rest), do: rest
       defp dispatch("dialectic:/" <> rest), do: rest
       defp dispatch("resident:/" <> rest), do: rest
+      defp dispatch("maintenance:/" <> rest), do: rest
       defp dispatch("capture:/" <> rest), do: rest
       defp dispatch("td:/" <> rest), do: rest
+      defp dispatch("agent:/" <> rest), do: rest
     end
     ''')
     result = doctor.check_elixir_scheme_grammar_lint("postgresql://example", tmp_path)
     assert result.status == doctor.Status.PASS, result.message
-    for scheme in ("file", "dialectic", "resident", "capture", "td"):
+    for scheme in ("file", "dialectic", "resident", "maintenance", "capture", "td", "agent"):
         assert scheme in result.message
 
 
@@ -510,7 +513,7 @@ def test_grammar_lint_fails_when_dispatch_arm_not_in_grammar(doctor, monkeypatch
     monkeypatch.setattr(doctor.subprocess, "run",
                         lambda *a, **kw: _Proc(returncode=0, stdout=_GRAMMAR_CHECK_DEF))
     _write_canonicalize(tmp_path, '''defmodule Canonicalize do
-      @canonical_schemes ~w(file dialectic resident capture td)
+      @canonical_schemes ~w(file dialectic resident maintenance capture td agent)
       defp dispatch("file://" <> rest), do: rest
       defp dispatch("foo:/" <> rest), do: rest
     end
@@ -530,7 +533,7 @@ def test_grammar_lint_fails_when_wordlist_has_extra_scheme(doctor, monkeypatch, 
     monkeypatch.setattr(doctor.subprocess, "run",
                         lambda *a, **kw: _Proc(returncode=0, stdout=_GRAMMAR_CHECK_DEF))
     _write_canonicalize(tmp_path, '''defmodule Canonicalize do
-      @canonical_schemes ~w(file dialectic resident capture td bar)
+      @canonical_schemes ~w(file dialectic resident maintenance capture td agent bar)
     end
     ''')
     result = doctor.check_elixir_scheme_grammar_lint("postgresql://example", tmp_path)

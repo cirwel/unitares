@@ -134,6 +134,24 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert lease["heartbeat_required"] == true
     end
 
+    test "maintenance:/ surface routes to the remote_heartbeat self-healing path",
+         _ctx do
+      maintenance_surface = "maintenance:/http-test-" <> binary_part(random_uuid(), 0, 8)
+      on_exit(fn -> cleanup_surface(maintenance_surface) end)
+
+      # Body asks for local_beam (the acquire_body default); maintenance jobs
+      # are short-lived cleanup/repair surfaces, so the plane coerces them to a
+      # TTL row that self-heals if the caller dies before release.
+      resp = post_json("/v1/lease/acquire", acquire_body(maintenance_surface))
+
+      assert resp.status == 200
+      lease = parsed(resp)["lease"]
+      assert lease["surface_id"] == maintenance_surface
+      assert lease["surface_kind"] == "maintenance"
+      assert lease["holder_kind"] == "remote_heartbeat"
+      assert lease["heartbeat_required"] == true
+    end
+
     test "idempotent retry from same holder", ctx do
       body = acquire_body(ctx.surface)
 
@@ -288,14 +306,13 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert payload["detail"] =~ "invalid_scheme"
     end
 
-    # --- file-lease self-heal routing (acquire_for_surface) ---
-    # file:// edit-leases must NOT spawn an auto-renewing local_beam holder
-    # (that made them immortal and locked memory files for hours). They route
-    # to the remote_heartbeat path — a pure DB row reaped at TTL — so a dead
-    # editing session self-heals. resident:/ and other coordination surfaces
-    # MUST stay local_beam (long-lived auto-renew presence), even when the
-    # caller sends holder_kind="remote_heartbeat" (as the resident advisory
-    # path does), so the routing is scoped strictly to the file scheme.
+    # --- self-heal routing (acquire_for_surface) ---
+    # file:// edit-leases, agent:/ presence rows, and maintenance:/ cleanup jobs
+    # must NOT spawn an auto-renewing local_beam holder. They route to the
+    # remote_heartbeat path — a pure DB row reaped at TTL — so a dead caller
+    # self-heals. resident:/ and other coordination surfaces MUST stay
+    # local_beam (long-lived auto-renew presence), even when the caller sends
+    # holder_kind="remote_heartbeat" (as the resident advisory path does).
 
     @tag :tmp_dir
     test "file:// surface routes to remote_heartbeat (self-healing, no holder)", ctx do
@@ -327,7 +344,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert resp.status == 200
       lease = parsed(resp)["lease"]
       on_exit(fn -> cleanup_surface(lease["surface_id"]) end)
-      # Routing is scoped to file://; residents keep auto-renew presence.
+      # Routing is scoped away from resident:/; residents keep auto-renew presence.
       assert lease["holder_kind"] == "local_beam"
     end
 
