@@ -65,15 +65,15 @@ INTERNAL_KEYS = {
 # not to grow it. Adding a NEW entry must be a deliberate, reviewed act.
 KNOWN_UNEXPOSED = {
     "auto_link_related", "confidence", "epoch_scope", "exclude_agent_labels",
-    "include_provenance",
     "include_response_chain", "including_cold", "length", "max_chain_depth",
-    "min_similarity", "offset", "operator", "related_files", "resolve_question",
-    "response_to", "scope", "search_mode", "semantic", "synthesize", "top_n",
+    "offset", "related_files", "resolve_question",
+    "response_to", "scope", "synthesize", "top_n",
     "use_model",
 }
 # include_archived / include_cold were exposed on KnowledgeParams (2026-06-22) as
-# recall-recovery levers — removed from the backlog above. Shrinking this set is
-# the goal; growing it is the smell.
+# recall-recovery levers. include_provenance / search_mode / semantic /
+# min_similarity / operator followed on 2026-06-26 as handler-documented search
+# controls. Shrinking this set is the goal; growing it is the smell.
 
 
 def _classify_undeclared() -> set[str]:
@@ -113,6 +113,18 @@ def test_archived_cold_recall_levers_exposed():
     """include_archived / include_cold must be agent-sendable (recall recovery)."""
     declared = set(KnowledgeParams.model_fields.keys())
     assert {"include_archived", "include_cold"} <= declared
+
+
+def test_search_routing_controls_exposed():
+    """Handler-documented search knobs must be agent-sendable on knowledge()."""
+    declared = set(KnowledgeParams.model_fields.keys())
+    assert {
+        "include_provenance",
+        "search_mode",
+        "semantic",
+        "min_similarity",
+        "operator",
+    } <= declared
 
 
 def test_supersession_link_params_stay_declared():

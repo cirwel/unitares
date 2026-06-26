@@ -15,6 +15,7 @@ Requires live Postgres + embeddings backend.
 
 import argparse
 import asyncio
+from contextlib import contextmanager
 import json
 import os
 import statistics
@@ -26,11 +27,63 @@ from typing import Any, Dict, List
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from scripts.eval.metrics import dcg, mrr, ndcg_at_k, recall_at_k  # noqa: F401  (dcg re-exported for callers)
-from src.knowledge_graph import get_knowledge_graph
+from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+
+def _parse_handler_response(result: Any) -> Dict[str, Any]:
+    """Parse a handler TextContent response into a JSON dict."""
+    if isinstance(result, (list, tuple)):
+        result = result[0]
+    return json.loads(result.text)
+
+
+@contextmanager
+def _temporary_env(overrides: Dict[str, str]):
+    """Temporarily apply env flags so CLI knobs hit the serving handler path."""
+    previous = {key: os.environ.get(key) for key in overrides}
+    os.environ.update(overrides)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+async def _serving_search(
+    query: str,
+    limit: int,
+    *,
+    rerank: bool = False,
+    hybrid: bool = False,
+    graph_expand: bool = False,
+) -> Dict[str, Any]:
+    """Run the same search handler used by knowledge(action='search')."""
+    arguments: Dict[str, Any] = {
+        "query": query,
+        "limit": limit,
+    }
+    env: Dict[str, str] = {}
+
+    if hybrid or graph_expand:
+        arguments["search_mode"] = "hybrid"
+        env["UNITARES_ENABLE_HYBRID"] = "1"
+    if graph_expand:
+        env["UNITARES_ENABLE_GRAPH_EXPANSION"] = "1"
+    if rerank:
+        env["UNITARES_ENABLE_RERANKER"] = "1"
+
+    with _temporary_env(env):
+        payload = _parse_handler_response(await handle_search_knowledge_graph(arguments))
+
+    if not payload.get("success"):
+        raise RuntimeError(payload.get("error") or payload.get("message") or "knowledge search failed")
+    return payload
 
 
 async def run_query(
-    graph,
     query: str,
     top_k: int,
     rerank: bool = False,
@@ -38,67 +91,45 @@ async def run_query(
     hybrid: bool = False,
     graph_expand: bool = False,
 ) -> tuple[List[str], List[float], float]:
-    """Run a single query against the current retrieval stack.
+    """Run a single query against the current serving retrieval stack.
 
     Returns (ids, scores, latency_ms). Supports:
-    - `hybrid=True`: fan out semantic + FTS, fuse via RRF (k=60). Phase 4.
-    - `graph_expand=True` (requires hybrid): pull 1-hop typed-edge neighbors
-      from top seeds into the pool at a discounted RRF score. Phase 5.
-    - `rerank=True`: apply cross-encoder to top `rerank_pool_size` candidates. Phase 3.
-    - Combined: hybrid fuse → graph expand → rerank the fused/expanded pool.
+    - default: live knowledge(action='search') routing for the active backend.
+    - `hybrid=True`: force the handler's hybrid mode.
+    - `graph_expand=True` (requires hybrid): enable the serving graph-expansion flag.
+    - `rerank=True`: enable the serving reranker flag.
     """
-    import asyncio as _asyncio
     t0 = time.perf_counter()
 
-    # First-stage retrieval
-    if hybrid:
-        from src.retrieval import rrf_fuse, expand_with_neighbors
-        fetch = max(top_k, rerank_pool_size if rerank else 50)
-        sem_task = graph.semantic_search(query, limit=fetch, min_similarity=0.0)
-        fts_task = graph.full_text_search(query, limit=fetch)
-        sem_res, fts_res = await _asyncio.gather(sem_task, fts_task)
-        sem_ids = [d.id for d, _ in sem_res]
-        fts_ids = [d.id for d in fts_res]
-        fused = rrf_fuse([sem_ids, fts_ids], k=60)
-        pool = {d.id: d for d, _ in sem_res}
-        for d in fts_res:
-            pool.setdefault(d.id, d)
-        if graph_expand:
-            seed_neighbors: Dict[str, set] = {}
-            for seed_id, _ in fused[:10]:
-                seed_doc = pool.get(seed_id)
-                if seed_doc is None:
-                    continue
-                nbrs: set = set()
-                nbrs.update(seed_doc.related_to or [])
-                nbrs.update(getattr(seed_doc, "responses_from", None) or [])
-                if seed_doc.response_to:
-                    nbrs.add(seed_doc.response_to.discovery_id)
-                nbrs.discard(seed_id)
-                seed_neighbors[seed_id] = nbrs
-            fused = expand_with_neighbors(
-                fused, seed_neighbors, edge_weight=0.5, max_seeds=10,
-            )
-        fused_docs = [pool[did] for did, _ in fused if did in pool]
-    else:
-        pool_size = max(top_k, rerank_pool_size) if rerank else top_k
-        first_stage = await graph.semantic_search(query, limit=pool_size, min_similarity=0.0)
-        fused_docs = [d for d, _ in first_stage]
-        fused = [(d.id, s) for d, s in first_stage]
+    # The old eval called graph.semantic_search() directly, which only exists
+    # on the AGE backend. The default backend is PostgreSQL FTS, and the live
+    # tool surface routes through handle_search_knowledge_graph(), so the eval
+    # must measure that path instead of a backend-private method.
+    payload = await _serving_search(
+        query,
+        limit=max(top_k, rerank_pool_size if rerank else top_k),
+        rerank=rerank,
+        hybrid=hybrid,
+        graph_expand=graph_expand,
+    )
+    ranked_ids = [
+        str(discovery["id"])
+        for discovery in payload.get("discoveries", [])[:top_k]
+        if discovery.get("id") is not None
+    ]
 
-    # Optional rerank on the first-stage top
-    if rerank and fused_docs:
-        from src.reranker import rerank as _rerank
-        pairs = [
-            (d.id, f"{d.summary}\n{(d.details or '')[:2000]}")
-            for d in fused_docs
-        ]
-        reranked = await _rerank(query, pairs, top_k=top_k, max_rerank_size=rerank_pool_size)
-        ranked_ids = [doc_id for doc_id, _ in reranked]
-        scores = [float(score) for _, score in reranked]
-    else:
-        ranked_ids = [did for did, _ in fused[:top_k]]
-        scores = [float(s) for _, s in fused[:top_k]]
+    score_map = (
+        payload.get("rerank_scores")
+        or payload.get("rrf_scores")
+        or payload.get("similarity_scores")
+        or {}
+    )
+    # PostgreSQL FTS does not expose a calibrated score through the handler.
+    # Metrics use rank only, so use reciprocal rank as a display placeholder.
+    scores = [
+        float(score_map.get(doc_id, 1.0 / (idx + 1)))
+        for idx, doc_id in enumerate(ranked_ids)
+    ]
 
     dt_ms = (time.perf_counter() - t0) * 1000.0
     return ranked_ids, scores, dt_ms
@@ -122,8 +153,6 @@ async def evaluate(
     if limit_queries:
         pairs = pairs[:limit_queries]
 
-    graph = await get_knowledge_graph()
-
     per_query: List[Dict[str, Any]] = []
     ndcgs, recalls, mrrs, latencies = [], [], [], []
 
@@ -131,7 +160,6 @@ async def evaluate(
         query = pair["query"]
         relevant = set(pair["relevant_ids"])
         ranked, scores, dt_ms = await run_query(
-            graph,
             query,
             max(top_k_fetch, recall_k),
             rerank=rerank,

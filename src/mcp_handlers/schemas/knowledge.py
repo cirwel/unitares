@@ -330,6 +330,14 @@ class KnowledgeParams(AgentIdentityMixin):
     agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get, search)")
     limit: Optional[int] = Field(None, description="Max results")
     include_details: Optional[bool] = Field(None, description="Include full details inline (for action=search/get)")
+    include_provenance: Union[bool, str, None] = Field(None, description="Include provenance and lineage chain fields in search/details results")
+    search_mode: Optional[Literal["auto", "fts", "semantic", "hybrid"]] = Field(
+        None,
+        description="Force retrieval mode for action=search. 'semantic' and 'hybrid' fail honestly when unsupported by the active backend.",
+    )
+    semantic: Union[bool, str, None] = Field(None, description="Legacy action=search toggle to force or skip semantic retrieval when supported")
+    min_similarity: Union[float, str, None] = Field(None, description="Minimum cosine similarity for semantic retrieval modes")
+    operator: Optional[Literal["AND", "OR"]] = Field(None, description="Boolean operator for multi-term FTS queries")
     # Recall-recovery levers for action=search. Default search excludes archived
     # and cold-storage notes; pass these to reach them when an active-tier search
     # comes up empty. The handler already honors both — they were just never
@@ -354,4 +362,13 @@ class KnowledgeParams(AgentIdentityMixin):
             self.dry_run = self.dry_run.lower() in ('true', '1', 'yes')
         if isinstance(self.use_llm, str):
             self.use_llm = self.use_llm.lower() in ('true', '1', 'yes')
+        if isinstance(self.include_provenance, str):
+            self.include_provenance = self.include_provenance.lower() in ('true', '1', 'yes')
+        if isinstance(self.semantic, str):
+            self.semantic = self.semantic.lower() in ('true', '1', 'yes')
+        if isinstance(self.min_similarity, str):
+            try:
+                self.min_similarity = float(self.min_similarity)
+            except ValueError:
+                self.min_similarity = None
         return self
