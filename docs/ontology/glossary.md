@@ -182,7 +182,9 @@ against a baseline.
 | Term | Question it answers | Canonical source |
 |---|---|---|
 | `process-instance` | Which live subject is speaking right now? | `identity.md`, `harness-substrate-plurality.md` |
-| `registry` (identity layer) | Which governance record is this claim bound to? (the UUID) | `harness-substrate-plurality.md` |
+| `EISV` | What proprioceptive state vector says how this agent is running right now? | `eisv-proprioception-contract.md`; runtime `primary_eisv` / `behavioral_eisv` / `ode_eisv` fields |
+| `outcome label` | What external evidence/rubric classified a result as task-negative, contract/process violation, authority/harm, synthetic fixture, or unknown? | `eisv-proprioception-contract.md`; `audit.outcome_events.is_bad` is the compact storage label, not a moral verdict |
+| `registry` (identity layer) | Which governance record is this claim bound to? (the UUID) | `harness-substrate-plurality.md`, `identity.md` |
 | `transport` | Through what channel does the process act? (CLI, MCP-http, Discord, cron) | `harness-substrate-plurality.md` |
 | `lease` | What time-bounded claim to a surface is live, with what proof obligation and expiry? | `beam-coordination-kernel.md` |
 | `handoff` | How is custody of a lease (or of work) transferred without TTL expiry or ghost claims? | `beam-coordination-kernel.md`, `identity.md` |

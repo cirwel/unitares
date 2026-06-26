@@ -1,7 +1,7 @@
 # Ablation Negative Controls
 
 **Created:** June 14, 2026
-**Last Updated:** June 14, 2026
+**Last Updated:** June 26, 2026
 **Status:** Experimental
 
 ---
@@ -10,9 +10,9 @@
 
 Ablation tests need negative controls. If every resident, dogfood probe, and
 outcome row is well-behaved, the analysis pipeline only proves the happy path.
-`ablation_negative_controls.py` creates known-safe synthetic bad outcomes so the
-EISV/outcome inventory path can prove it sees, counts, labels, and refuses to
-overinterpret adverse fixtures.
+`ablation_negative_controls.py` creates known-safe synthetic negative-class task
+outcomes so the EISV/outcome inventory path can prove it sees, counts, labels,
+and refuses to overinterpret adverse fixtures.
 
 These rows are **not** real failures. They are fixture data for local smoke tests
 and red-team checks.
@@ -36,10 +36,12 @@ Every serialized row carries:
 
 ## What the fixture proves
 
-The fixture includes strict bad outcomes (`test_failed`, `tool_rejected`) with
-high prior risk and strict good outcomes (`test_passed`) with low prior risk.
-That proves the local analysis path can observe a bad class and detect a
-predictive synthetic prior without claiming live validation.
+The fixture includes strict negative-class task outcomes (`test_failed`,
+`tool_rejected`) with high prior risk and strict good outcomes (`test_passed`)
+with low prior risk. That proves the local analysis path can observe a negative
+class and detect a predictive synthetic prior without claiming live validation.
+It does not prove EISV is an outcome oracle; it proves the plumbing preserves a
+known-safe label.
 
 Use this to test containment and instrumentation, not agent obedience.
 
@@ -64,7 +66,7 @@ The output JSONL is local fixture material. It is safe to delete after the smoke
 
 Good language:
 
-> Synthetic negative controls show the analysis path can observe a bad class and
+> Synthetic negative controls show the analysis path can observe a negative class and
 > route fixture evidence without contaminating production state.
 
 Bad language:

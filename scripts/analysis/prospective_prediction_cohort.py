@@ -217,9 +217,9 @@ def format_cohort_report(
             "",
             *readiness_lines,
             "",
-            "Interpretation rule: this is prospective holdout plumbing only. "
-            "It counts registry-bound predictions that existed before outcomes; "
-            "it does not validate EISV unless a frozen holdout later beats boring baselines.",
+            "Interpretation rule: this is registry-bound prediction coverage for future holdout scoring (prospective holdout), not a grand jury. "
+            "It counts predictions that existed before outcomes; EISV remains proprioceptive telemetry, "
+            "not an outcome oracle, unless a frozen holdout later beats boring baselines with external labels.",
         ]
     )
 

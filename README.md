@@ -27,7 +27,7 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 
 - **Drift surfaces while the output still looks fine.** Each agent is graded against its *own* baseline, so slow degradation shows up as integrity slipping and entropy rising before the work visibly breaks.
 - **Confidence is checked against results.** Self-reported `confidence` is scored against real evidence — tests, exit codes, tool output. An agent can inflate the number; it can't inflate its success rate.
-- **Agents get a state signal they can act on.** Each check-in returns one plain verdict — `proceed`, `guide`, `pause`, or `reject` — plus the agent's full health signals (the `EISV` state vector) for finer policies. Humans can watch the same fleet through the optional dashboard.
+- **Agents get a proprioceptive state signal they can act on.** Each check-in returns one plain policy action — `proceed`, `guide`, `pause`, or `reject` — plus the agent's full health signals (the `EISV` state vector) for finer policies. Humans can watch the same fleet through the optional dashboard.
 
 ## Use UNITARES if
 
@@ -36,7 +36,7 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 - you need agents to check their own state before continuing; and
 - you want an audit trail of confidence, evidence, drift, and recovery.
 
-UNITARES is **not** an output validator, sandbox, or hosted agent platform. It is the runtime state layer between evals and guardrails.
+UNITARES is **not** an output validator, sandbox, hosted agent platform, or grand jury. EISV is **not an outcome oracle**; it is proprioceptive telemetry for the running agent. External outcome evidence and policy/review layers own labels such as task-negative, contract violation, or authority/harm.
 
 ## Try the demo locally
 
@@ -64,10 +64,10 @@ UNITARES runs **alongside** your evals and guardrails — it doesn't replace eit
 ## How it works
 
 <div align="center">
-  <img src="docs/assets/flow.png" width="100%" alt="agent acts → checks in (sync_state) → graded vs its own baseline → state + verdict → self-regulates → durable audit trail"/>
+  <img src="docs/assets/flow.png" width="100%" alt="agent acts → checks in (sync_state) → graded vs its own baseline → state + action → self-regulates → durable audit trail"/>
 </div>
 
-After each unit of work, the agent checks in with `sync_state()` — passing its self-reported confidence plus verifiable evidence (test results, exit codes, tool output). It gets back one plain verdict:
+After each unit of work, the agent checks in with `sync_state()` — passing its self-reported confidence plus verifiable evidence (test results, exit codes, tool output). It gets back one plain policy action:
 
 <div align="center">
 
@@ -75,14 +75,14 @@ After each unit of work, the agent checks in with `sync_state()` — passing its
 
 </div>
 
-That's the whole contract: the agent reads the verdict and course-corrects *before* an external guardrail has to fire. No new vocabulary required to use it.
+That's the whole contract: the agent reads the policy action and course-corrects *before* an external guardrail has to fire. No new vocabulary required to use it.
 
 <details>
-<summary><strong>The four numbers behind the verdict (EISV)</strong></summary>
+<summary><strong>The four numbers behind the policy action (EISV)</strong></summary>
 
 <br/>
 
-Want to act on *why*, not just the verdict? Each check-in also returns four scores per agent, each graded against that agent's *own* ~30-check-in baseline — so slow drift surfaces even while output still looks fine:
+Want to act on *why*, not just the policy action? Each check-in also returns four scores per agent, each graded against that agent's *own* ~30-check-in baseline — so slow drift surfaces even while output still looks fine:
 
 | | | Goes wrong when… |
 |---|---|---|
@@ -95,7 +95,7 @@ Want to act on *why*, not just the verdict? Each check-in also returns four scor
 
 <div align="center">
 
-[How EISV is computed](docs/EISV_COMPUTATION.md) · [Architecture](docs/UNIFIED_ARCHITECTURE.md) · [Who it's for & threat model](docs/SCOPE_AND_THREAT_MODEL.md)
+[EISV proprioception contract](docs/ontology/eisv-proprioception-contract.md) · [How EISV is computed](docs/EISV_COMPUTATION.md) · [Architecture](docs/UNIFIED_ARCHITECTURE.md) · [Who it's for & threat model](docs/SCOPE_AND_THREAT_MODEL.md)
 
 </div>
 
@@ -150,9 +150,9 @@ For long-running or scheduled agents, the [SDK](agents/sdk/README.md) handles co
 
 ## Don't trust this README — verify it
 
-**Evaluating with an agent?** Don't take the prose. On a fresh clone, the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV against a deliberately dumb baseline (AUC, Brier) and self-labels each slice `INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING` rather than asserting. The harness is the part you run yourself.
+**Evaluating with an agent?** Don't take the prose. On a fresh clone, the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV/prior-state telemetry against a deliberately dumb baseline (AUC, Brier) using external outcome labels, and self-labels each slice `INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING` rather than asserting. The harness is the part you run yourself.
 
-**Honest about what fires.** Verdicts come from an auditable behavioral model ([`behavioral_assessment.py`](src/behavioral_assessment.py)), not a black box — the information-theoretic / free-energy formulation is the research *target*, not the live verdict path ([Paper v6](https://github.com/cirwel/unitares-paper-v6) · [how EISV is computed](docs/EISV_COMPUTATION.md)).
+**Honest about what fires.** Policy actions come from an auditable behavioral model ([`behavioral_assessment.py`](src/behavioral_assessment.py)), not a black box — the information-theoretic / free-energy formulation is the research *target*, not the live policy-action path ([Paper v6](https://github.com/cirwel/unitares-paper-v6) · [how EISV is computed](docs/EISV_COMPUTATION.md)).
 
 Human evaluators start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md).
 

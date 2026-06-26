@@ -10,6 +10,16 @@ name only are **~**. Freshness flags call out scripts that **won't run as-is** (
 backends, missing source symlinks). Hermes-agent's ablation/dogfood lives in its own
 repo (automation-side) and is intentionally *not* consolidated here.
 
+## Semantic guardrail: EISV is proprioception, not verdict authority
+
+Read [`docs/ontology/eisv-proprioception-contract.md`](ontology/eisv-proprioception-contract.md)
+before interpreting these reports. EISV/prior-state analysis asks whether
+proprioceptive telemetry adds signal over baselines. It does **not** let EISV
+supply its own outcome labels, and it does not treat ordinary CI/test failures as
+moral badness. Human-facing labels should distinguish task-negative evidence,
+contract/process violations, authority/harm events, synthetic red-team fixtures,
+and unknown/unmeasured outcomes.
+
 ## ⚠ Start here: the two scripts that already answer "does EISV discriminate?"
 
 Don't rebuild discrimination analysis — these exist and are current:
