@@ -58,6 +58,7 @@ class ProcessInfo:
     cwd: str
     command: str
     launch_label: str | None = None
+    expected_reason: str | None = None
 
 
 @dataclass
@@ -84,6 +85,7 @@ class CloseoutResult:
     stashed: bool
     stash_message: str | None
     repo_processes: list[ProcessInfo]
+    expected_repo_processes: list[ProcessInfo]
     stopped_processes: list[int]
     booted_out_labels: list[str]
     errors: list[str]
@@ -556,6 +558,65 @@ def repo_rooted_processes(
     return sorted(found, key=lambda item: item.pid)
 
 
+def expected_repo_process_reason(proc: ProcessInfo, root: Path) -> str | None:
+    """Classify known resident/control-plane processes.
+
+    These are still rendered for operator visibility, but they do not make
+    closeout fail. The goal is to distinguish normal UNITARES/Codex substrate
+    services from unexpected leftover task processes.
+    """
+    label = proc.launch_label or ""
+    if label.startswith("com.unitares."):
+        return f"launchd UNITARES service ({label})"
+
+    try:
+        relative_cwd = Path(proc.cwd).resolve().relative_to(root.resolve())
+        cwd_parts = relative_cwd.parts
+    except (OSError, ValueError):
+        cwd_parts = ()
+
+    if len(cwd_parts) >= 2 and cwd_parts[0] == "elixir":
+        service = cwd_parts[1]
+        if service in {"sentinel", "wave3a_handlers", "agent_orchestrator"}:
+            return f"UNITARES BEAM resident service ({service})"
+
+    command = proc.command
+    if "/Applications/Codex.app/" in command and "node_repl" in command:
+        return "Codex tool runtime helper"
+    if "date-context-mcp/src/mcp_server.py" in command:
+        return "Codex date-context MCP helper"
+    if "src/gateway_server.py --port 8768" in command:
+        return "UNITARES local gateway server"
+
+    raw_patterns = os.getenv("UNITARES_CLOSEOUT_EXPECTED_PROCESS_RE", "")
+    for raw in (part.strip() for part in raw_patterns.split("||")):
+        if not raw:
+            continue
+        try:
+            if re.search(raw, command) or re.search(raw, proc.cwd):
+                return f"operator-expected pattern ({raw})"
+        except re.error:
+            continue
+
+    return None
+
+
+def split_expected_processes(
+    processes: list[ProcessInfo],
+    root: Path,
+) -> tuple[list[ProcessInfo], list[ProcessInfo]]:
+    unexpected: list[ProcessInfo] = []
+    expected: list[ProcessInfo] = []
+    for proc in processes:
+        reason = expected_repo_process_reason(proc, root)
+        if reason:
+            proc.expected_reason = reason
+            expected.append(proc)
+        else:
+            unexpected.append(proc)
+    return unexpected, expected
+
+
 def stop_repo_processes(
     root: Path,
     processes: list[ProcessInfo],
@@ -652,6 +713,7 @@ def closeout(
             errors.append(str(exc))
 
     processes = repo_rooted_processes(root, baseline_keys=baseline_keys)
+    processes, expected_processes = split_expected_processes(processes, root)
     stopped: list[int] = []
     labels: list[str] = []
     if stop_processes and processes:
@@ -662,6 +724,7 @@ def closeout(
         )
         errors.extend(stop_errors)
         processes = repo_rooted_processes(root, baseline_keys=baseline_keys)
+        processes, expected_processes = split_expected_processes(processes, root)
 
     if branch_hygiene or branch_hygiene_live:
         try:
@@ -681,6 +744,7 @@ def closeout(
         stashed=stashed,
         stash_message=stash_message,
         repo_processes=processes,
+        expected_repo_processes=expected_processes,
         stopped_processes=stopped,
         booted_out_labels=labels,
         errors=errors,
@@ -719,6 +783,7 @@ def start_check(
             stashed=False,
             stash_message=None,
             repo_processes=[],
+            expected_repo_processes=[],
             stopped_processes=[],
             booted_out_labels=[],
             errors=[],
@@ -827,6 +892,18 @@ def render_text(result: CloseoutResult) -> str:
     else:
         lines.append("repo-rooted processes: none")
 
+    if result.expected_repo_processes:
+        lines.append(
+            f"expected repo-rooted processes: {len(result.expected_repo_processes)}"
+        )
+        for proc in result.expected_repo_processes:
+            label = f" label={proc.launch_label}" if proc.launch_label else ""
+            reason = proc.expected_reason or "expected"
+            lines.append(
+                f"  pid={proc.pid}{label} reason={reason} "
+                f"cwd={proc.cwd} cmd={proc.command}"
+            )
+
     if result.booted_out_labels:
         lines.append("booted out launch labels:")
         for label in result.booted_out_labels:
@@ -923,6 +1000,9 @@ def to_jsonable(result: CloseoutResult) -> dict[str, Any]:
         "stashed": result.stashed,
         "stash_message": result.stash_message,
         "repo_processes": [asdict(proc) for proc in result.repo_processes],
+        "expected_repo_processes": [
+            asdict(proc) for proc in result.expected_repo_processes
+        ],
         "stopped_processes": result.stopped_processes,
         "booted_out_labels": result.booted_out_labels,
         "errors": result.errors,

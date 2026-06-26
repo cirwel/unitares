@@ -137,6 +137,62 @@ def test_process_baseline_filters_existing_processes(closeout_module, tmp_path):
     assert closeout_module.process_key(new_proc) not in keys
 
 
+def test_split_expected_processes_keeps_substrate_visible_but_nonblocking(
+    closeout_module, tmp_path
+):
+    root = tmp_path / "repo"
+    root.mkdir()
+    expected = closeout_module.ProcessInfo(
+        pid=10,
+        ppid=1,
+        cwd=str(root / "elixir" / "sentinel"),
+        command="/opt/homebrew/bin/mix run --no-halt",
+    )
+    unexpected = closeout_module.ProcessInfo(
+        pid=11,
+        ppid=1,
+        cwd=str(root),
+        command="python scratch_task.py",
+    )
+
+    unexpected_result, expected_result = closeout_module.split_expected_processes(
+        [expected, unexpected],
+        root,
+    )
+
+    assert unexpected_result == [unexpected]
+    assert expected_result == [expected]
+    assert expected.expected_reason == "UNITARES BEAM resident service (sentinel)"
+
+
+def test_closeout_expected_processes_do_not_make_result_dirty(
+    closeout_module, git_repo, monkeypatch
+):
+    expected = closeout_module.ProcessInfo(
+        pid=10,
+        ppid=1,
+        cwd=str(git_repo / "elixir" / "agent_orchestrator"),
+        command="/opt/homebrew/bin/mix run --no-halt",
+    )
+    monkeypatch.setattr(
+        closeout_module,
+        "repo_rooted_processes",
+        lambda *args, **kwargs: [expected],
+    )
+
+    result = closeout_module.closeout(git_repo)
+    rendered = closeout_module.render_text(result)
+    payload = closeout_module.to_jsonable(result)
+
+    assert result.repo_processes == []
+    assert result.expected_repo_processes == [expected]
+    assert closeout_module.result_has_issues(result) is False
+    assert "repo-rooted processes: none" in rendered
+    assert "expected repo-rooted processes: 1" in rendered
+    assert payload["clean"] is True
+    assert payload["expected_repo_processes"][0]["expected_reason"]
+
+
 def test_closeout_stashes_dirty_repo_when_requested(closeout_module, git_repo, monkeypatch):
     monkeypatch.setattr(closeout_module, "repo_rooted_processes", lambda *args, **kwargs: [])
     (git_repo / "seed.py").write_text("dirty\n")

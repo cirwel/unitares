@@ -47,6 +47,7 @@ def _closeout(module, state):
         stashed=False,
         stash_message=None,
         repo_processes=[],
+        expected_repo_processes=[],
         stopped_processes=[],
         booted_out_labels=[],
         errors=[],
