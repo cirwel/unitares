@@ -316,6 +316,7 @@ class KnowledgeParams(AgentIdentityMixin):
     details: Optional[str] = Field(None, description="Extended details for discovery (for action=store). Alias: content")
     summary: Optional[str] = Field(None, description="Discovery summary (for action=store)")
     discovery_type: Optional[str] = Field(None, description="Type: bug_found, insight, pattern, question, note, etc. (for action=store)")
+    response_to: Optional[dict] = Field(None, description="Typed response link {discovery_id, response_type} for threaded store/note writes")
     tags: Optional[List[str]] = Field(None, description="Tags for discovery (for action=store, search, note)")
     severity: Optional[str] = Field(None, description="Severity: low, medium, high, critical (for action=store)")
     discovery_id: Optional[str] = Field(None, description="Discovery ID (for action=details, update; the NEW discovery for action=supersede)")
@@ -338,6 +339,10 @@ class KnowledgeParams(AgentIdentityMixin):
     semantic: Union[bool, str, None] = Field(None, description="Legacy action=search toggle to force or skip semantic retrieval when supported")
     min_similarity: Union[float, str, None] = Field(None, description="Minimum cosine similarity for semantic retrieval modes")
     operator: Optional[Literal["AND", "OR"]] = Field(None, description="Boolean operator for multi-term FTS queries")
+    offset: Optional[int] = Field(None, description="Character offset for action=details pagination")
+    length: Optional[int] = Field(None, description="Maximum details characters returned for action=details")
+    include_response_chain: Union[bool, str, None] = Field(None, description="Include typed response chain for action=details")
+    max_chain_depth: Optional[int] = Field(None, description="Maximum response-chain traversal depth for action=details")
     # Recall-recovery levers for action=search. Default search excludes archived
     # and cold-storage notes; pass these to reach them when an active-tier search
     # comes up empty. The handler already honors both — they were just never
@@ -371,4 +376,6 @@ class KnowledgeParams(AgentIdentityMixin):
                 self.min_similarity = float(self.min_similarity)
             except ValueError:
                 self.min_similarity = None
+        if isinstance(self.include_response_chain, str):
+            self.include_response_chain = self.include_response_chain.lower() in ('true', '1', 'yes')
         return self
