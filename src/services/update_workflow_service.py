@@ -29,6 +29,7 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
         transform_inputs,
     )
     from src.mcp_handlers.updates.pipeline import run_enrichment_pipeline
+    from src.mcp_handlers.updates.enrichments import run_grounding_stage
     from src.mcp_handlers.response_formatter import format_response
     from src.mcp_handlers.utils import error_response
 
@@ -122,6 +123,12 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
             )]
 
         # --- Everything below runs OUTSIDE the lock ---
+
+        # Grounding must run BEFORE persist + response-build read ctx.result.
+        # (enrich_grounding still runs in the late pipeline but is idempotent.)
+        # Flag-gated: no-op unless GROUNDING_SHADOW/APPLY set. See #1092 ordering fix.
+        await run_grounding_stage(ctx)
+        _tick("grounding")
 
         await execute_post_update_effects(ctx)
         _tick("post_update")
