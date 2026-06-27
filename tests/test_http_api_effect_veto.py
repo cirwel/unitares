@@ -40,7 +40,11 @@ def _continuity_secret_env():
     """The HMAC secret must be present for BOTH mint and server-side verify —
     `_get_continuity_secret()` reads env on each call. Without it
     `resolve_continuity_token` returns None and every token looks invalid."""
-    with patch.dict(os.environ, {"UNITARES_CONTINUITY_TOKEN_SECRET": TEST_SECRET}):
+    with patch.dict(os.environ, {
+        "UNITARES_CONTINUITY_TOKEN_SECRET": TEST_SECRET,
+        "UNITARES_HTTP_API_TOKEN": "",
+        "UNITARES_MCP_BEARER_TOKENS": "",
+    }):
         yield
 
 
