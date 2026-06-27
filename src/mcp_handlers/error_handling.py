@@ -21,7 +21,7 @@ def _infer_error_code_and_category(message: str) -> Tuple[Optional[str], Optiona
     error_patterns = [
         # Validation errors
         (["not found", "does not exist", "doesn't exist"], "NOT_FOUND", "validation_error"),
-        (["missing required", "required parameter", "must provide"], "MISSING_REQUIRED", "validation_error"),
+        (["missing required", "required parameter", "must provide", "is required"], "MISSING_REQUIRED", "validation_error"),
         (["invalid", "must be", "should be"], "INVALID_PARAM", "validation_error"),
         (["already exists", "duplicate"], "ALREADY_EXISTS", "validation_error"),
         (["too long", "exceeds maximum", "too large"], "VALUE_TOO_LARGE", "validation_error"),
@@ -32,6 +32,9 @@ def _infer_error_code_and_category(message: str) -> Tuple[Optional[str], Optiona
         # Keep these after validation so explicit parameter problems still win,
         # but before broad auth patterns like "session"; otherwise tool names
         # such as list_dialectic_sessions make timeout failures look like auth.
+        # Note: the "is required" validation pattern above must stay ahead of the
+        # "session" auth pattern below, so "session_id is required" classifies as
+        # a missing-parameter validation_error, not an auth_error.
         (["timeout", "timed out"], "TIMEOUT", "system_error"),
 
         # Auth errors
