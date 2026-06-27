@@ -62,6 +62,22 @@ UNITARES runs **alongside** your evals and guardrails — it doesn't replace eit
 | **Guardrails** | Is this *action* allowed right now? | per action |
 | **UNITARES** | Is this agent *still healthy* as it works? | continuously, mid-run |
 
+## Mechanisms
+
+The engine behind the verdict — what makes the decision *stateful* rather than a per-action rule:
+
+- **State-aware verdict engine.** Each verdict is a function of the agent's own baseline, calibration, and recent verdict history — not the current action in isolation. Auditable behavioral model, not a black box ([`behavioral_assessment.py`](src/behavioral_assessment.py)).
+- **Outcome-grounded calibration.** Self-reported `confidence` is scored against objective evidence — test exit codes, tool output, file ops — and the resulting calibration feeds back into future verdicts. The number is gameable; the success rate isn't.
+- **Dialectic peer review → runtime constraints.** A disputed verdict is reviewed by an authority-weighted peer agent from the fleet (self-review blocked; supermajority quorum on round exhaustion); the synthesized conditions *persist* and gate that agent's later verdicts — a runtime constraint, not debate text.
+- **Per-instance identity isolation.** Each process-instance is a distinct governed identity with its own state. Reads are open; writes are accountable to a bound caller. No cross-instance state bleed by default.
+- **Durable audit trail.** Every confidence, evidence, verdict, drift, and recovery is recorded and queryable — the basis for "verify it yourself," not a dashboard afterthought.
+
+<div align="center">
+
+[Architecture](docs/UNIFIED_ARCHITECTURE.md) · [Scope & threat model](docs/SCOPE_AND_THREAT_MODEL.md)
+
+</div>
+
 ## How it works
 
 <div align="center">
