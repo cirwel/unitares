@@ -23,6 +23,15 @@ class TestPydanticSchemas:
         # Explicit response_mode always wins over lite.
         assert ProcessAgentUpdateParams(lite=True, response_mode="full", response_text="T").response_mode == "full"
 
+    def test_logprobs_transport_field_accepted_and_roundtrips(self):
+        """tier-1 logprob-S transport: process_agent_update must accept an optional
+        `logprobs` field (defaults None) and carry it through so enrich_grounding's
+        compute_entropy can read it from ctx.arguments."""
+        from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
+        assert ProcessAgentUpdateParams(response_text="T").logprobs is None
+        lp = [[-0.1, -0.3, -0.8], [0.0, -20.0, -20.0]]
+        assert ProcessAgentUpdateParams(response_text="T", logprobs=lp).logprobs == lp
+
     def test_response_mode_aliases_are_canonicalized(self):
         from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
 

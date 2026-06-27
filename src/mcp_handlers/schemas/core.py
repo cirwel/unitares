@@ -355,6 +355,17 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
     task_label: Optional[str] = Field(None, description="S22 H5 provenance: human-readable bounded task label")
     task_outcome: Optional[str] = Field(None, description="S22 H5 provenance: outcome label for the bounded task")
     memory_context: Optional[str] = Field(None, description="S22 provenance: memory/KG/transcript surfaces visible to the writer")
+    logprobs: Optional[list] = Field(
+        None,
+        description=(
+            "Optional per-token top-k output logprobs from the inference layer "
+            "(OpenAI top_logprobs / Ollama / local models). When present, grounds "
+            "S (entropy) at tier-1 ('logprob' source) instead of the heuristic. "
+            "Absent for Claude (no logprobs API). Substrate/proxy-supplied — send "
+            "a compact top-k per token, e.g. [[lp, lp, ...], ...] or "
+            "[{\"top_logprobs\": [{\"logprob\": lp}, ...]}, ...]."
+        ),
+    )
 
     @model_validator(mode='before')
     @classmethod
