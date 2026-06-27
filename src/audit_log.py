@@ -150,6 +150,31 @@ class AuditLogger:
         )
         self._write_entry(entry)
 
+    def log_grounding_shadow(self, agent_id: str, ungrounded: dict, grounded: dict,
+                             sources: dict, applied: bool):
+        """Shadow-compare grounded vs ungrounded canonical metrics (E/I/S/coherence).
+
+        Records what enrich_grounding would change each dimension to, and which
+        tier produced it (s_source/coherence_source/...), before the persist and
+        response stages. `applied` says whether the grounded values were actually
+        kept this check-in (grounding_apply_enabled) or reverted (shadow only).
+        Lets the fleet-wide metric shift from activating grounding be measured.
+        """
+        dims = ("E", "I", "S", "coherence")
+        details = {"applied": bool(applied), "sources": sources or {}}
+        for d in dims:
+            u, g = ungrounded.get(d), grounded.get(d)
+            details[d] = {"ungrounded": u, "grounded": g,
+                          "delta": (g - u) if isinstance(u, (int, float)) and isinstance(g, (int, float)) else None}
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="grounding_shadow",
+            confidence=0.0,
+            details=details,
+        )
+        self._write_entry(entry)
+
     def log_pause_auto_expired(self, agent_id: str,
                                 original_paused_at: Optional[str],
                                 elapsed_seconds: float):

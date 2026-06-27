@@ -1986,3 +1986,76 @@ async def enrich_grounding(ctx: UpdateContext) -> None:
     # Surface the calibration class so audit/broadcast can see what
     # class-conditional constants were applied to this check-in.
     metrics["agent_class"] = ctx.agent_class
+
+
+async def run_grounding_stage(ctx: UpdateContext) -> None:
+    """Run grounding BEFORE persist + response-build, shadow-logging the shift.
+
+    Fixes the #1092 ordering bug: ``enrich_grounding`` was registered in the
+    late enrichment pipeline, which runs *after* ``execute_post_update_effects``
+    (persist) and ``build_process_update_response_data`` (response) — so its
+    grounded E/I/S/coherence reached neither, making grounding a silent no-op
+    since it shipped.
+
+    This stage runs early, but is gated:
+      * neither flag set  -> no-op (current behavior; the late enrich_grounding
+        stays the existing discarded no-op).
+      * GROUNDING_SHADOW   -> compute grounded metrics, emit a 'grounding_shadow'
+        audit event with the per-dimension shift, then REVERT the live metrics
+        (behavior-neutral) unless APPLY is also set.
+      * GROUNDING_APPLY    -> keep the grounded values, so persist + response use
+        them. LIVE-AFFECTING (coherence/E/I/S shift fleet-wide).
+    """
+    from config.governance_config import (
+        grounding_shadow_enabled,
+        grounding_apply_enabled,
+    )
+    from src.audit_log import audit_logger
+
+    shadow = grounding_shadow_enabled()
+    apply = grounding_apply_enabled()
+    if not (shadow or apply):
+        return
+
+    result = ctx.result or {}
+    metrics = result.get("metrics")
+    if not isinstance(metrics, dict) or "E_legacy" in metrics:
+        return  # nothing to ground, or already grounded
+
+    dims = ("E", "I", "S", "coherence")
+    pre = {d: metrics.get(d) for d in dims}
+
+    try:
+        await enrich_grounding(ctx)  # mutates metrics in place: sets grounded + *_legacy + *_source
+    except Exception as exc:  # pragma: no cover - defensive, must never break check-in
+        logger.debug(f"run_grounding_stage failed — metrics untouched: {exc}")
+        return
+
+    if "s_source" not in metrics:
+        return  # enrich_grounding returned early (e.g. metrics not dict) — nothing applied
+
+    if shadow:
+        try:
+            audit_logger.log_grounding_shadow(
+                agent_id=getattr(ctx, "agent_id", None) or "unknown",
+                ungrounded=pre,
+                grounded={d: metrics.get(d) for d in dims},
+                sources={
+                    "E": metrics.get("e_source"),
+                    "I": metrics.get("i_source"),
+                    "S": metrics.get("s_source"),
+                    "coherence": metrics.get("coherence_source"),
+                },
+                applied=apply,
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.debug(f"grounding_shadow audit failed: {exc}")
+
+    if not apply:
+        # Behavior-neutral: restore the ungrounded canonical values and drop the
+        # grounding bookkeeping so persist + response are byte-identical to today.
+        for d in dims:
+            metrics[d] = pre[d]
+        for k in ("E_legacy", "I_legacy", "S_legacy", "coherence_legacy",
+                  "e_source", "i_source", "s_source", "coherence_source", "agent_class"):
+            metrics.pop(k, None)

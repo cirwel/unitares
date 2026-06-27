@@ -1057,6 +1057,32 @@ def basin_shadow_enabled() -> bool:
     return os.getenv("UNITARES_BASIN_SHADOW", "").strip().lower() in {"1", "true", "on", "yes"}
 
 
+def grounding_shadow_enabled() -> bool:
+    """Whether to shadow-compare grounded vs ungrounded canonical metrics each
+    check-in (UNITARES_GROUNDING_SHADOW). Default off.
+
+    Behavior-neutral measurement: computes what enrich_grounding would produce
+    for E/I/S/coherence (incl. s_source from any supplied logprobs) BEFORE the
+    persist/response stages, records the per-dimension divergence via the
+    'grounding_shadow' audit event, then reverts the live metrics unless
+    grounding_apply_enabled(). Lets the fleet-wide metric shift be measured
+    before activation — see [[project_logprob-entropy-grounding]].
+    """
+    return os.getenv("UNITARES_GROUNDING_SHADOW", "").strip().lower() in {"1", "true", "on", "yes"}
+
+
+def grounding_apply_enabled() -> bool:
+    """Whether grounded E/I/S/coherence actually replace the ODE/heuristic values
+    in the canonical metrics (UNITARES_GROUNDING_APPLY). Default off.
+
+    When on, grounding runs BEFORE persist + response-build (the #1092 ordering
+    fix — enrich_grounding previously ran after both consumers and was a no-op).
+    LIVE-AFFECTING: turning this on shifts coherence (manifold)/E/I/S fleet-wide,
+    which moves basin/verdict/risk. Validate via grounding_shadow first.
+    """
+    return os.getenv("UNITARES_GROUNDING_APPLY", "").strip().lower() in {"1", "true", "on", "yes"}
+
+
 def get_s_setpoint(agent_class: str = "default") -> float:
     """Per-class S decay target σ for the dynamics.
 
