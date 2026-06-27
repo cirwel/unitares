@@ -319,6 +319,13 @@ class KnowledgeParams(AgentIdentityMixin):
     response_to: Optional[dict] = Field(None, description="Typed response link {discovery_id, response_type} for threaded store/note writes")
     tags: Optional[List[str]] = Field(None, description="Tags for discovery (for action=store, search, note)")
     severity: Optional[str] = Field(None, description="Severity: low, medium, high, critical (for action=store)")
+    confidence: Union[float, str, None] = Field(
+        None,
+        description=(
+            "Writer confidence for action=store, clamped to 0-1 and "
+            "cross-checked against agent coherence"
+        ),
+    )
     discovery_id: Optional[str] = Field(None, description="Discovery ID (for action=get/details, update; the NEW discovery for action=supersede)")
     status: Optional[str] = Field(None, description="Status filter/update value (open, resolved, archived, superseded)")
     resolution_notes: Optional[str] = Field(None, description="Rationale to append when closing or updating a discovery")
@@ -376,6 +383,11 @@ class KnowledgeParams(AgentIdentityMixin):
                 self.min_similarity = float(self.min_similarity)
             except ValueError:
                 self.min_similarity = None
+        if isinstance(self.confidence, str):
+            try:
+                self.confidence = float(self.confidence)
+            except ValueError:
+                self.confidence = None
         if isinstance(self.include_response_chain, str):
             self.include_response_chain = self.include_response_chain.lower() in ('true', '1', 'yes')
         return self
