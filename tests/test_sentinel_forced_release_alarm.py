@@ -53,9 +53,11 @@ async def _cleanup(conn):
     await conn.execute(
         "DELETE FROM lease_plane.surface_leases WHERE intent LIKE 'pr3b-test%'"
     )
-    # Reserved test-namespace events (force-release contract test fixtures).
+    # Reserved + legacy test-namespace events (force-release contract fixtures).
     await conn.execute(
-        "DELETE FROM lease_plane.lease_plane_events WHERE surface_id LIKE 'td:/test/%'"
+        "DELETE FROM lease_plane.lease_plane_events "
+        "WHERE surface_id LIKE 'td:/test/%' "
+        "OR surface_id LIKE 'td:/force-release-contract-test-%'"
     )
 
 

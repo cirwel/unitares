@@ -48,11 +48,23 @@ except ImportError:  # pragma: no cover — surfaces at first call site
 # live force-release / conflict paths MUST mint surfaces under this prefix.
 RESERVED_TEST_SURFACE_PREFIX = "td:/test/"
 
+# Legacy surface naming the force-release contract test used BEFORE the reserved
+# namespace existed (pre-PR #1102). Those events were already written to
+# lease_plane_events and stay there (the governance DB forbids DELETE), so a
+# Sentinel that re-scans them — fresh state file, reset cursor, or simply a
+# daemon still on old code that's just been restarted onto this build — must
+# also treat them as fixtures, not operator force-releases. Suppress both the
+# new reserved prefix and this legacy one.
+_SUPPRESSED_TEST_SURFACE_PREFIXES = (
+    RESERVED_TEST_SURFACE_PREFIX,
+    "td:/force-release-contract-test-",
+)
+
 
 def _is_reserved_test_surface(surface_id: Any) -> bool:
-    """True if `surface_id` is in the reserved test namespace (see prefix doc)."""
+    """True if `surface_id` is a test fixture surface (reserved or legacy)."""
     return isinstance(surface_id, str) and surface_id.startswith(
-        RESERVED_TEST_SURFACE_PREFIX
+        _SUPPRESSED_TEST_SURFACE_PREFIXES
     )
 
 
