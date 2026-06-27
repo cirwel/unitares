@@ -2,17 +2,17 @@
 
 <img alt="UNITARES — runtime governance for AI-agent fleets" src="docs/assets/hero-v2.png" width="100%">
 
-### A stateful governance runtime for fleets of autonomous AI agents.
+### Runtime governance for autonomous-agent fleets.
 
-**Each agent is judged against its own history and calibration — not a fixed per-action rule — and gets back a verdict it can act on, mid-run.**<br/>
-Most controls are stateless: they check one action against one rule. UNITARES carries each agent's trajectory, calibration, and recent verdicts into the next decision — so an agent *drifting* surfaces while its output still looks fine, and it self-corrects (`proceed` / `guide` / `pause` / `reject`) before an external guardrail has to fire.
+**UNITARES gives each running agent a stateful health check: a verdict based on its own history, calibration, and recent evidence.**<br/>
+Most controls inspect one action against one rule. UNITARES carries trajectory into the next check-in, so drift can surface before the output obviously fails and the agent gets one plain action to read: `proceed` / `guide` / `pause` / `reject`.
 
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-2f7d72?style=flat-square&labelColor=0f171f)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache_2.0-2f7d72?style=flat-square&labelColor=0f171f)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
 
-*Status: live. First public commit 2025-12-04 · 3.7M+ governance events in production · dogfooded.*
+*Status: live and dogfooded. Public snapshot: 3.7M+ governance events from a single-operator deployment, frozen 2026-06-16.*
 
 [![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#try-the-demo-locally)
 [![Docs](https://img.shields.io/badge/docs-read-7d8f97?style=for-the-badge&labelColor=0f171f)](docs/README.md)
@@ -25,11 +25,11 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 
 ---
 
-- **Stateful, state-aware verdicts.** Each agent is judged against its *own* ~30-check-in baseline and recent history — not a fixed per-action rule — so slow degradation surfaces while the output still looks fine, and the verdict reflects context, not just the current action.
-- **Confidence grounded in results.** Self-reported `confidence` is scored against real evidence — test exit codes, tool output, file ops. An agent can inflate the number; it can't inflate its success rate, and that calibration feeds back into future verdicts.
-- **Peer review that becomes a runtime constraint.** On a disputed verdict, an authority-weighted peer agent from the fleet reviews (self-review blocked); the synthesized conditions *persist* and gate that agent's future decisions — a runtime constraint, not just debate text.
-- **A governed shared-memory commons.** The knowledge graph is shared across the fleet, but writes are accountable: agents contribute durable discoveries, corrections, supersessions, and cross-agent relations with provenance. It is sediment, not a transcript dump.
-- **One signal the agent acts on.** Every check-in returns a plain verdict — `proceed` / `guide` / `pause` / `reject` — plus the agent's full health vector (`EISV`) for finer per-dimension policies. Humans watch the same fleet through the optional dashboard.
+- **State-aware verdicts.** Each agent is judged against its *own* ~30-check-in baseline and recent history, so the verdict reflects context rather than only the current action.
+- **Confidence grounded in results.** When outcomes or tool evidence are recorded, self-reported `confidence` is scored against exit codes, tool output, file ops, and task results. An agent can inflate the number; it cannot inflate the measured success rate.
+- **Peer review that can become a constraint.** On a disputed verdict, an authority-weighted peer agent can review (self-review blocked); synthesized conditions can persist and gate later decisions.
+- **Accountable shared memory.** The knowledge graph is shared across the fleet, but writes carry provenance: durable discoveries, corrections, supersessions, and cross-agent relations rather than transcript dumps.
+- **One signal the agent acts on.** Every check-in returns a plain verdict plus the agent's health vector (`EISV`) for finer per-dimension policies. Humans watch the same fleet through the optional dashboard.
 
 ## Use UNITARES if
 
@@ -51,7 +51,7 @@ docker compose up -d --wait && make demo
 
 For a human operator view, open the optional dashboard at `http://localhost:8767/dashboard`. Dashboard implementation details live in [`dashboard/README.md`](dashboard/README.md); public deployment screenshots live in [`docs/PRODUCTION_SNAPSHOT.md`](docs/PRODUCTION_SNAPSHOT.md).
 
-> **Running continuously since November 2025 · 3.7M+ governance events under sustained load · dogfooded** — the agents building UNITARES run under it. Every number is verifiable on a fresh clone. ([Production snapshot →](docs/PRODUCTION_SNAPSHOT.md))
+> **Running continuously since November 2025 · 3.7M+ governance events under sustained single-operator load · dogfooded** — the agents building UNITARES run under it. The snapshot documents deployment totals; the reviewer harness documents what can be regenerated from a clone or deployment data. ([Production snapshot →](docs/PRODUCTION_SNAPSHOT.md))
 
 ## Where it fits
 
@@ -63,15 +63,19 @@ UNITARES runs **alongside** your evals and guardrails — it doesn't replace eit
 | **Guardrails** | Is this *action* allowed right now? | per action |
 | **UNITARES** | Is this agent *still healthy* as it works? | continuously, mid-run |
 
+### How it relates to agent clients
+
+UNITARES is not an agent framework or chat interface. Hermes, Claude Code, Codex, Goose, Discord dispatchers, SDK residents, and local model hosts provide prompts, tools, files, terminals, browsers, scheduled work, and operator UX. UNITARES provides governed continuity underneath them: process identity, check-ins, EISV state, calibration against outcomes, shared-memory provenance, peer review, and auditable verdicts. For one-off chat or local coding, skip it; for persistent, multi-agent, high-side-effect, or resident work, mount the client through MCP/REST/SDK or a lifecycle adapter.
+
 ## Mechanisms
 
-The engine behind the verdict — what makes the decision *stateful* rather than a per-action rule:
+The engine behind the verdict is stateful, auditable behavior assessment rather than a per-action rule:
 
-- **State-aware verdict engine.** Each verdict is a function of the agent's own baseline, calibration, and recent verdict history — not the current action in isolation. Auditable behavioral model, not a black box ([`behavioral_assessment.py`](src/behavioral_assessment.py)).
-- **Outcome-grounded calibration.** Self-reported `confidence` is scored against objective evidence — test exit codes, tool output, file ops — and the resulting calibration feeds back into future verdicts. The number is gameable; the success rate isn't.
-- **Dialectic peer review → runtime constraints.** A disputed verdict is reviewed by an authority-weighted peer agent from the fleet (self-review blocked; supermajority quorum on round exhaustion); the synthesized conditions *persist* and gate that agent's later verdicts — a runtime constraint, not debate text.
+- **State-aware verdict engine.** Each verdict is a function of the agent's own baseline, calibration, and recent verdict history. The live policy path is an auditable behavioral model, not a black box ([`behavioral_assessment.py`](src/behavioral_assessment.py)).
+- **Outcome-grounded calibration.** Self-reported `confidence` is scored against objective evidence when available, and the resulting calibration feeds back into future verdicts.
+- **Dialectic peer review -> runtime constraints.** A disputed verdict can be reviewed by an authority-weighted peer agent (self-review blocked; supermajority quorum on round exhaustion); synthesized conditions can persist and gate later verdicts.
 - **Per-instance identity isolation.** Each process-instance is a distinct governed identity with its own state. Reads are open; writes are accountable to a bound caller. No cross-instance state bleed by default.
-- **Durable audit trail + governed shared memory.** Every confidence, evidence, verdict, drift, and recovery is recorded — the basis for "verify it yourself." The same store (Postgres + pgvector, with an Apache AGE graph view) also holds the fleet's knowledge graph: a commons in the narrow sense of shared, accountable memory across agents and clients, not a loose chat log or replacement for docs.
+- **Durable audit trail + governed shared memory.** Check-ins, evidence, verdicts, drift, and recovery are recorded for review. The same store (Postgres + pgvector, with an Apache AGE graph view) also holds the fleet's knowledge graph: shared, accountable memory across agents and clients, not a loose chat log or replacement for docs.
 
 <div align="center">
 
@@ -85,7 +89,7 @@ The engine behind the verdict — what makes the decision *stateful* rather than
   <img src="docs/assets/flow.png" width="100%" alt="agent acts → checks in (sync_state) → graded vs its own baseline → state + action → self-regulates → durable audit trail"/>
 </div>
 
-After each unit of work, the agent checks in with `sync_state()` — passing its self-reported confidence plus verifiable evidence (test results, exit codes, tool output). It gets back one plain policy action:
+After each unit of work, the agent checks in with `sync_state()` — passing self-reported confidence plus verifiable evidence when available (test results, exit codes, tool output). It gets back one plain policy action:
 
 <div align="center">
 
@@ -93,20 +97,20 @@ After each unit of work, the agent checks in with `sync_state()` — passing its
 
 </div>
 
-That's the whole contract: the agent reads the policy action and course-corrects *before* an external guardrail has to fire. No new vocabulary required to use it.
+That's the whole contract: the agent reads the policy action and can course-correct before an external guardrail has to fire. No new vocabulary required to use it.
 
 <details>
 <summary><strong>The four numbers behind the policy action (EISV)</strong></summary>
 
 <br/>
 
-Want to act on *why*, not just the policy action? Each check-in also returns four scores per agent, each graded against that agent's *own* ~30-check-in baseline — so slow drift surfaces even while output still looks fine:
+Want to act on *why*, not just the policy action? Each check-in also returns four scores per agent, each graded against that agent's *own* ~30-check-in baseline, so slow drift can surface while output still looks fine:
 
 | | | Goes wrong when… |
 |---|---|---|
 | **E** · Energy | is the work advancing? | thrashing, retries, no progress |
 | **I** · Integrity | do claims match results? | high confidence, low actual success |
-| **S** · Entropy | drifting from its own normal? | erratic, divergent behavior |
+| **S** · Entropy / drift | drifting from its own normal? | erratic, divergent behavior |
 | **V** · Valence | derived: energy vs integrity | motion without coherence (or vice-versa) |
 
 </details>
@@ -141,7 +145,7 @@ if action in ("pause", "reject"):
     agent.require_human_review(result.get("next_action", "Governance requested review"))
 ```
 
-The agent reads the action and acts — that's the whole loop. Self-reported `confidence` is strongest when paired with real outcomes, so include tool results or call `record_result(...)` when your client has evidence such as test status, exit codes, or deployment checks. UNITARES isn't an output validator or a sandbox; it's a state layer the agent itself can read, *before* external controls fire.
+The agent reads the action and acts. Self-reported `confidence` is strongest when paired with real outcomes, so include tool results or call `record_result(...)` when your client has evidence such as test status, exit codes, or deployment checks. UNITARES is not an output validator or sandbox; it is a state layer the agent itself can read before external controls fire.
 
 <details>
 <summary><strong>Finer control: branch on the EISV components</strong></summary>
