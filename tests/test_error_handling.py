@@ -65,6 +65,16 @@ class TestInferErrorCode:
         assert code == "INVALID_PARAM"
         assert category == "validation_error"
 
+    def test_is_required_classifies_as_validation_not_auth(self):
+        # Regression: "session_id is required" is a missing-parameter error, but
+        # the message contains the substring 'session', which would fall through
+        # to the broad SESSION/auth pattern unless "is required" is caught as a
+        # MISSING_REQUIRED validation error first. The "X is required" phrasing
+        # (used by the dialectic submit handlers) must not look like an auth error.
+        code, category = _infer_error_code_and_category("session_id is required")
+        assert code == "MISSING_REQUIRED"
+        assert category == "validation_error"
+
 
 # --------------------------------------------------------------------------- #
 # _sanitize_error_message

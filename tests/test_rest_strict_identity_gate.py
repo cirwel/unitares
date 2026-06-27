@@ -53,8 +53,24 @@ def test_refusal_payload_carries_the_425_contract_shape():
     assert p["status"] == "identity_required"
     assert p["tool"] == "knowledge"
     assert p["rollout_flag"] == "STRICT_IDENTITY_REQUIRED"
-    for key in ("hint", "ontology_ref", "tool_class"):
+    for key in ("hint", "ontology_ref", "tool_class", "next_step", "safe_options", "do_not"):
         assert p[key]
+    assert any("force_new=true" in option["call"] for option in p["safe_options"])
+    assert any("bare identity" in warning for warning in p["do_not"])
+
+
+def test_refusal_payload_accepts_surface_context():
+    p = strict_identity_refusal_payload(
+        "knowledge",
+        surface_context={
+            "transport_surface": "rest_tool_call",
+            "lifecycle_automation": "not_confirmed",
+        },
+    )
+    assert p["surface_context"] == {
+        "transport_surface": "rest_tool_call",
+        "lifecycle_automation": "not_confirmed",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +91,10 @@ def test_gate_exempts_pre_onboard_tools(strict_on, unbound_context):
 
 def test_gate_refuses_unbound_required_tool(strict_on, unbound_context):
     refusal = _strict_identity_refusal_or_none("knowledge", {"action": "store"})
-    assert refusal == strict_identity_refusal_payload("knowledge")
+    assert refusal is not None
+    assert refusal["status"] == "identity_required"
+    assert refusal["surface_context"]["transport_surface"] == "rest_tool_call"
+    assert refusal["surface_context"]["lifecycle_automation"] == "not_confirmed"
 
 
 def test_gate_fail_closed_for_unknown_tools(strict_on, unbound_context):
@@ -176,6 +195,9 @@ async def test_execute_refuses_with_transport_injected_session(strict_on, unboun
         )
 
     assert result["status"] == "identity_required"
+    assert result["next_step"]
+    assert result["surface_context"]["transport_surface"] == "rest_tool_call"
+    assert result["surface_context"]["lifecycle_automation"] == "not_confirmed"
     fallback.assert_not_awaited()
 
 

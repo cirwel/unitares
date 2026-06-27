@@ -105,6 +105,13 @@ def _is_refusal(result):
         return False
 
 
+def _refusal_payload(result):
+    if not result:
+        return {}
+    text = "".join(getattr(item, "text", "") or "" for item in result)
+    return json.loads(text)
+
+
 def _new_ctx():
     ctx = UpdateContext(arguments={})
     ctx.mcp_server = MagicMock()
@@ -132,6 +139,31 @@ async def test_strict_refuses_injected_csid_write(monkeypatch):
     _patch_db(monkeypatch, earned=False)
     result = await resolve_identity_and_guards(_new_ctx())
     assert _is_refusal(result)
+
+
+@pytest.mark.asyncio
+async def test_strict_refusal_payload_leads_with_continuity_token(monkeypatch):
+    """A denied write teaches the same credential order as success paths:
+    continuity_token first, client_session_id only as the session-maintaining
+    alternative. It also carries structured state instead of prose only."""
+    monkeypatch.setattr(ib, "is_strict_identity_required", lambda: True)
+    _patch_ctx(monkeypatch, agent_uuid="sibling-uuid",
+               source="explicit_client_session_id", proof_origin="server_inferred")
+    _patch_db(monkeypatch, earned=False)
+
+    result = await resolve_identity_and_guards(_new_ctx())
+    payload = _refusal_payload(result)
+
+    assert payload["status"] == "identity_required"
+    hint = payload["hint"]
+    assert "continuity_token" in hint
+    assert "client_session_id" in hint
+    assert hint.index("continuity_token") < hint.index("client_session_id")
+    assert "bare identity" in " ".join(payload["do_not"])
+    assert "continuity_token" in payload["next_step"]
+    assert payload["identity_assurance"]["proof_origin"] == "server_inferred"
+    assert payload["surface_context"]["session_resolution_source"] == "explicit_client_session_id"
+    assert payload["surface_context"]["proof_origin"] == "server_inferred"
 
 
 @pytest.mark.asyncio

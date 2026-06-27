@@ -189,7 +189,17 @@ def _strict_identity_refusal_or_none(
         "typed refusal (no auto-mint)",
         tool_name,
     )
-    return strict_identity_refusal_payload(tool_name)
+    return strict_identity_refusal_payload(
+        tool_name,
+        surface_context={
+            "transport_surface": "rest_tool_call",
+            "lifecycle_automation": "not_confirmed",
+            "note": (
+                "REST /v1/tools/call refusal; direct tool reachability does "
+                "not prove client lifecycle-hook automation."
+            ),
+        },
+    )
 
 
 async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:

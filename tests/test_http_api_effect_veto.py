@@ -36,15 +36,23 @@ TEST_SECRET = "test-continuity-secret-0123456789abcdef"
 
 
 @pytest.fixture(autouse=True)
-def _continuity_secret_env():
+def _effect_veto_env():
     """The HMAC secret must be present for BOTH mint and server-side verify —
     `_get_continuity_secret()` reads env on each call. Without it
-    `resolve_continuity_token` returns None and every token looks invalid."""
-    with patch.dict(os.environ, {
-        "UNITARES_CONTINUITY_TOKEN_SECRET": TEST_SECRET,
-        "UNITARES_HTTP_API_TOKEN": "",
-        "UNITARES_MCP_BEARER_TOKENS": "",
-    }):
+    `resolve_continuity_token` returns None and every token looks invalid.
+
+    Bearer auth for the REST surface is covered separately by
+    tests/test_rest_auth_align.py. Clear ambient operator/deploy bearer env so
+    this unit remains focused on the §6/§7 effect-veto gates.
+    """
+    with patch.dict(
+        os.environ,
+        {
+            "UNITARES_CONTINUITY_TOKEN_SECRET": TEST_SECRET,
+            "UNITARES_MCP_BEARER_TOKENS": "",
+            "UNITARES_HTTP_API_TOKEN": "",
+        },
+    ):
         yield
 
 
