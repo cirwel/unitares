@@ -413,6 +413,10 @@ class TestHandleRequestDialecticReview:
         data = parse_result(result)
         assert data["success"] is False
         assert data.get("error_code") == "SESSION_EXISTS"
+        assert data["recovery"]["action"] == (
+            "Use dialectic(action='get', session_id='...') to view the active session"
+        )
+        assert data["recovery"]["related_tools"] == ["dialectic"]
 
     @pytest.mark.asyncio
     async def test_pg_create_failure(
@@ -1357,6 +1361,7 @@ class TestHandleListDialecticSessions:
         assert data["success"] is True
         assert data["session_count"] == 2
         assert len(data["sessions"]) == 2
+        assert data["tip"] == "Use dialectic(action='get', session_id='...') for full details"
 
     @pytest.mark.asyncio
     async def test_empty_results(self, mock_context_agent):
@@ -1371,7 +1376,7 @@ class TestHandleListDialecticSessions:
         data = parse_result(result)
         assert data["success"] is True
         assert data["sessions"] == []
-        assert "tip" in data
+        assert data["tip"] == "Use dialectic(action='list') with no filters to see all sessions"
 
     @pytest.mark.asyncio
     async def test_filters_passed_through(self, mock_context_agent):
@@ -1423,6 +1428,7 @@ class TestHandleListDialecticSessions:
         data = parse_result(result)
         assert data["success"] is False
         assert "error" in data
+        assert data["recovery"]["related_tools"] == ["dialectic", "health_check"]
 
     @pytest.mark.asyncio
     async def test_default_limit_is_50(self, mock_context_agent):
@@ -1810,5 +1816,4 @@ class TestGetDialecticNextSteps:
         assert len(steps) == 3
         # Falls through to ESCALATE branch
         assert any("human" in s.lower() for s in steps)
-
 

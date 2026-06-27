@@ -319,6 +319,13 @@ class KnowledgeParams(AgentIdentityMixin):
     response_to: Optional[dict] = Field(None, description="Typed response link {discovery_id, response_type} for threaded store/note writes")
     tags: Optional[List[str]] = Field(None, description="Tags for discovery (for action=store, search, note)")
     severity: Optional[str] = Field(None, description="Severity: low, medium, high, critical (for action=store)")
+    confidence: Union[float, str, None] = Field(
+        None,
+        description=(
+            "Writer confidence for action=store, clamped to 0-1 and "
+            "cross-checked against agent coherence"
+        ),
+    )
     discovery_id: Optional[str] = Field(None, description="Discovery ID (for action=get/details, update; the NEW discovery for action=supersede)")
     status: Optional[str] = Field(None, description="Status filter/update value (open, resolved, archived, superseded)")
     resolution_notes: Optional[str] = Field(None, description="Rationale to append when closing or updating a discovery")
@@ -349,6 +356,8 @@ class KnowledgeParams(AgentIdentityMixin):
     # exposed on the unified tool (see test_knowledge_param_coverage backlog).
     include_archived: Optional[bool] = Field(None, description="Include archived discoveries in search results (default: excluded)")
     include_cold: Optional[bool] = Field(None, description="Include cold-storage (long-term) discoveries in search results (default: excluded)")
+    epoch_scope: Optional[Literal["current", "all"]] = Field(None, description="Stats/list scope: current epoch only or all epochs")
+    including_cold: Union[bool, str, None] = Field(None, description="Include cold-storage discoveries in action=list raw status aggregates")
     dry_run: Union[bool, str, None] = Field(None, description="Dry run mode (for action=cleanup, synthesize)")
     # Synthesis (action=synthesize): roll discoveries up into topic summaries.
     topic: Optional[str] = Field(None, description="Synthesize just this one tag/topic (for action=synthesize). Omit to sweep the densest topics.")
@@ -376,6 +385,13 @@ class KnowledgeParams(AgentIdentityMixin):
                 self.min_similarity = float(self.min_similarity)
             except ValueError:
                 self.min_similarity = None
+        if isinstance(self.confidence, str):
+            try:
+                self.confidence = float(self.confidence)
+            except ValueError:
+                self.confidence = None
         if isinstance(self.include_response_chain, str):
             self.include_response_chain = self.include_response_chain.lower() in ('true', '1', 'yes')
+        if isinstance(self.including_cold, str):
+            self.including_cold = self.including_cold.lower() in ('true', '1', 'yes')
         return self

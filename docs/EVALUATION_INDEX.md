@@ -15,10 +15,21 @@ repo (automation-side) and is intentionally *not* consolidated here.
 Read [`docs/ontology/eisv-proprioception-contract.md`](ontology/eisv-proprioception-contract.md)
 before interpreting these reports. EISV/prior-state analysis asks whether
 proprioceptive telemetry adds signal over baselines. It does **not** let EISV
-supply its own outcome labels, and it does not treat ordinary CI/test failures as
-moral badness. Human-facing labels should distinguish task-negative evidence,
-contract/process violations, authority/harm events, synthetic red-team fixtures,
-and unknown/unmeasured outcomes.
+supply its own outcome labels, hand down bad verdicts, or treat ordinary CI/test
+failures as moral badness. Human-facing labels should distinguish task-negative
+evidence, contract/process violations, authority/harm events, synthetic red-team
+fixtures, and unknown/unmeasured outcomes.
+
+### Outcome-label vocabulary
+
+Use `bad` only as a data label, never as an undefined success/failure slogan:
+
+| Term | Meaning |
+|---|---|
+| `is_bad=true` / `bad` | An outcome row labeled negative by its recorded type or rubric. It is an analysis label, not a moral category or an EISV bad verdict. |
+| `task-negative` | A failed test/tool/task result such as `test_failed`, `tool_rejected`, or `task_failed`. |
+| `strict_bad` | A strict-scope negative row with stronger provenance requirements; useful for validation only after enough rows exist. |
+| `prevented` | Only valid when a policy/actuator actually blocked, paused, rejected, or reverted an adverse effect. A counted `bad` row by itself is observed evidence, not prevention. |
 
 ## ⚠ Start here: the two scripts that already answer "does EISV discriminate?"
 
@@ -31,7 +42,7 @@ Don't rebuild discrimination analysis — these exist and are current:
 - **`scripts/analysis/eisv_ablation_matrix.py`** ✓ — same question across scope/window/lead
   slices with bootstrap CIs, permutation p-values, BEAM-lane exclusion.
 
-The honest current state of "does EISV discriminate / predict / prevent" lives in memory
+The honest current state of "does EISV discriminate / add predictive signal / support safer policy" lives in memory
 `project_eisv-validation-gap.md` (the `frt_autonomy_sandbagging` demo and its
 `REAL_LLM_FINDINGS.md` write-up were removed from the repo as out-of-scope — see
 [`REPO_SCOPE.md`](REPO_SCOPE.md); the headline below preserves the finding).

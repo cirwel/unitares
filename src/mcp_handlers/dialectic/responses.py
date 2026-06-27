@@ -13,7 +13,11 @@ def missing_session_id_recovery() -> Dict[str, Any]:
     """Recovery payload for submit handlers missing `session_id`."""
     return {
         "action": "Provide session_id",
-        "related_tools": ["get_dialectic_session", "identity"],
+        "related_tools": ["dialectic", "identity"],
+        "note": (
+            "Use dialectic(action='list') to find a session or "
+            "dialectic(action='get', session_id='...') to inspect one."
+        ),
     }
 
 
@@ -21,7 +25,11 @@ def session_not_found_recovery() -> Dict[str, Any]:
     """Recovery payload when a dialectic session cannot be loaded."""
     return {
         "action": "Session may have expired or been resolved",
-        "related_tools": ["get_dialectic_session", "request_dialectic_review"],
+        "related_tools": ["dialectic"],
+        "note": (
+            "Use dialectic(action='list') to browse sessions or "
+            "dialectic(action='request', ...) to open a new review."
+        ),
     }
 
 
@@ -77,7 +85,7 @@ def get_reviewer_reassigned_recovery(
             f"New reviewer '{new_reviewer_id}' should submit antithesis",
             "Session phase and transcript are preserved",
         ],
-        "related_tools": ["get_dialectic_session", "submit_antithesis"],
+        "related_tools": ["dialectic"],
     }
 
 
@@ -90,10 +98,10 @@ def get_awaiting_facilitation_recovery(session_id: str) -> Dict[str, Any]:
         ),
         "what_you_can_do": [
             f"1. Use dialectic(action='reassign', session_id='{session_id}', new_reviewer_id='<agent_id>') to assign a reviewer manually",
-            "2. Use list_agents to find available agents",
+            "2. Use agent(action='list') to find available agents",
             "3. Or let your bound session answer directly with dialectic(action='antithesis', session_id='...', reasoning='...', take_over_if_requested=true)",
         ],
-        "related_tools": ["dialectic", "list_agents", "get_dialectic_session", "identity"],
+        "related_tools": ["dialectic", "agent", "identity"],
         "note": "Session is paused, not failed. It will auto-fail after 4 hours total if no reviewer is assigned.",
     }
 
@@ -102,7 +110,7 @@ def get_agent_not_found_recovery() -> Dict[str, Any]:
     """Recovery payload when querying sessions for an unknown agent."""
     return {
         "action": "Agent must be registered first",
-        "related_tools": ["get_agent_api_key", "list_agents"],
+        "related_tools": ["identity", "agent"],
     }
 
 
@@ -119,7 +127,7 @@ def missing_session_or_agent_recovery() -> Dict[str, Any]:
     """Recovery payload when neither session_id nor agent_id is provided."""
     return {
         "action": "Provide session_id or agent_id to inspect a dialectic session",
-        "related_tools": ["list_agents", "get_governance_metrics"],
+        "related_tools": ["agent", "get_governance_metrics"],
         "note": "Use get_governance_metrics for live state when you are not targeting a dialectic session.",
     }
 
@@ -128,15 +136,15 @@ def get_session_exception_recovery() -> Dict[str, Any]:
     """Recovery payload for unexpected get_dialectic_session errors."""
     return {
         "action": "Check session_id or agent_id and try again",
-        "related_tools": ["list_agents", "get_governance_metrics"],
+        "related_tools": ["agent", "get_governance_metrics"],
     }
 
 
 def llm_unavailable_recovery() -> Dict[str, Any]:
     """Recovery payload when local Ollama is not available."""
     return {
-        "action": "Start Ollama: `ollama serve` or use request_dialectic_review for peer review",
-        "related_tools": ["request_dialectic_review", "health_check"],
+        "action": "Start Ollama: `ollama serve` or use dialectic(action='request') for peer review",
+        "related_tools": ["dialectic", "health_check"],
         "workflow": [
             "1. Check Ollama: curl http://localhost:11434/api/tags",
             "2. Start if needed: ollama serve",
@@ -226,7 +234,5 @@ def default_escalate_steps() -> List[str]:
     return [
         "The dialectic suggests human review may be needed",
         "Consider simplifying your approach",
-        "Use request_dialectic_review() for peer review if available",
+        "Use dialectic(action='request', ...) for peer review if available",
     ]
-
-

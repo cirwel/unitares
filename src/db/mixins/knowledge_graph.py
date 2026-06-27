@@ -296,6 +296,26 @@ class KnowledgeGraphMixin:
 
             return d
 
+    async def kg_get_discoveries_by_ids(
+        self, discovery_ids: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Batch variant of kg_get_discovery: fetch many discoveries in ONE query.
+
+        Returns an id -> discovery-dict map. Unlike the singular path this omits
+        the per-row backlinks (``responses_from``) — search/ranking callers don't
+        read them, and the whole point of the batch is to avoid the per-id round
+        trips that the in-handler anyio<->asyncpg amplification turns into a
+        multi-second N+1 (see "Substrate Tax" in CLAUDE.md).
+        """
+        if not discovery_ids:
+            return {}
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM knowledge.discoveries WHERE id = ANY($1::text[])",
+                discovery_ids,
+            )
+        return {row["id"]: self._row_to_discovery_dict(row) for row in rows}
+
     async def kg_stats(self, including_cold: bool = False) -> Dict[str, Any]:
         """Discovery-level aggregates straight from knowledge.discoveries.
 

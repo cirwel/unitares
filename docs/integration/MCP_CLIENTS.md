@@ -1,8 +1,13 @@
 # MCP client configuration
 
-Client-specific JSON for pointing an MCP-aware tool at a local Unitares governance server. Assumes the server is running on `http://localhost:8767/mcp/` — see the root README for startup.
+UNITARES is client-neutral at the MCP boundary. Any client that supports
+Streamable HTTP MCP can connect to a local governance server at
+`http://localhost:8767/mcp/`; clients without native HTTP support can usually
+bridge through stdio. Claude is one example client family, not a server-side
+assumption. Codex, Hermes, Goose, Cursor, hosted connectors, and custom hosts
+can use the same server when they expose MCP or go through a thin adapter.
 
-## Cursor / Claude Code
+## Streamable HTTP clients
 
 Native `type: http` support:
 
@@ -17,9 +22,10 @@ Native `type: http` support:
 }
 ```
 
-## Claude Desktop
+## Stdio-bridge clients
 
-Claude Desktop does not support `type: http` natively; use `mcp-remote` as a stdio bridge:
+Some clients do not support `type: http` natively; use `mcp-remote` as a stdio
+bridge. Claude Desktop is the common example:
 
 ```json
 {
@@ -63,7 +69,7 @@ The server binds to `127.0.0.1` by default. For LAN or remote access:
 
 See [`scripts/ops/`](../../scripts/ops/) for an example LaunchAgent plist with bind-all plus allowlists.
 
-## Remote connectors (Claude.ai, Perplexity, etc.)
+## Remote connectors (hosted Claude.ai, Perplexity, etc.)
 
 A hosted MCP connector reaches the server over the public internet, usually via
 a reverse proxy or Cloudflare tunnel (e.g. `https://gov.example.org/mcp/`).

@@ -608,8 +608,8 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             error_code="SESSION_EXISTS",
             error_category="validation_error",
             recovery={
-                "action": "Use get_dialectic_session() to view the active session",
-                "related_tools": ["get_dialectic_session"]
+                "action": "Use dialectic(action='get', session_id='...') to view the active session",
+                "related_tools": ["dialectic"],
             },
             arguments=arguments
         )]
@@ -1031,7 +1031,7 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
                     "status": status,
                     "limit": limit
                 },
-                "tip": "Use list_dialectic_sessions() with no filters to see all sessions"
+                "tip": "Use dialectic(action='list') with no filters to see all sessions"
             })
 
         return success_response({
@@ -1044,7 +1044,7 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
                 "limit": limit,
                 "include_transcript": include_transcript
             },
-            "tip": "Use get_dialectic_session(session_id='...') for full details"
+            "tip": "Use dialectic(action='get', session_id='...') for full details"
         })
 
     except Exception as e:
@@ -1053,7 +1053,7 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
             f"Error listing sessions: {str(e)}",
             recovery={
                 "action": "Try with different filters or check server logs",
-                "related_tools": ["get_dialectic_session", "health_check"]
+                "related_tools": ["dialectic", "health_check"],
             }
         )]
 
@@ -1547,7 +1547,7 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                         "action": "Use the assigned reviewer or explicitly take over reviewer ownership",
                         "assigned_reviewer_id": session.reviewer_agent_id,
                         "assigned_reviewer_label": _agent_label(session.reviewer_agent_id),
-                        "related_tools": ["get_dialectic_session", "dialectic", "identity"],
+                        "related_tools": ["dialectic", "identity"],
                         "workflow": workflow,
                     },
                 )]

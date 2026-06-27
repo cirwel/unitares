@@ -90,6 +90,7 @@ def test_format_cohort_report_keeps_holdout_language_and_lane_counts():
     assert "prediction_bound_prior_state: 1/2" in report
     assert "harness_lanes: beam=1,substrate=1" in report
     assert "prospective holdout" in report
+    assert "not an outcome oracle or bad-verdict dispenser" in report
 
 
 def test_evaluate_readiness_reports_strong_when_thresholds_are_met():

@@ -824,7 +824,17 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                     # Single-sourced payload — the REST gate returns the
                     # same dict, so the two transports cannot drift
                     # (stage-1 burn-in fold, 2026-06-11).
-                    return success_response(strict_identity_refusal_payload(name))
+                    return success_response(strict_identity_refusal_payload(
+                        name,
+                        surface_context={
+                            "transport_surface": "mcp_dispatch",
+                            "lifecycle_automation": "not_confirmed",
+                            "note": (
+                                "Direct MCP dispatch refusal; tool exposure does "
+                                "not prove client lifecycle-hook automation."
+                            ),
+                        },
+                    ))
                 logger.info(
                     "[DISPATCH] session_resolve_miss for %s... — minting "
                     "ephemeral dispatch identity (S21-a, spawn_reason="

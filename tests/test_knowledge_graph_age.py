@@ -2118,6 +2118,8 @@ class TestSemanticSearch:
         kg._pgvector_search = AsyncMock(return_value=[("d1", 0.9)])
 
         d1 = make_discovery(discovery_id="d1")
+        # Batch fetch returns nothing → code falls back to per-id get_discovery.
+        mock_db.kg_get_discoveries_by_ids = AsyncMock(return_value={})
         kg.get_discovery = AsyncMock(return_value=d1)
 
         kg._blend_with_connectivity = AsyncMock(return_value=[(d1, 0.85)])
@@ -2144,6 +2146,8 @@ class TestSemanticSearch:
 
         # Discovery belongs to wrong agent
         d1 = make_discovery(discovery_id="d1", agent_id="other-agent")
+        # Batch fetch returns nothing → code falls back to per-id get_discovery.
+        mock_db.kg_get_discoveries_by_ids = AsyncMock(return_value={})
         kg.get_discovery = AsyncMock(return_value=d1)
 
         with patch.dict("sys.modules", {"src.embeddings": mock_module}):

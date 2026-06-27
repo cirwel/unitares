@@ -2256,15 +2256,43 @@ class KnowledgeGraphAGE:
             )
             
             if scored_ids:
-                # Fetch full discovery nodes
+                # Fetch full discovery nodes in ONE batched query rather than an
+                # await-per-id loop. Each in-handler DB await pays the anyio<->
+                # asyncpg amplification tax, so a ~limit-long sequential
+                # get_discovery loop dominated the fast-path latency; collapsing
+                # it to a single fetch is the biggest in-handler win short of the
+                # substrate migration. SQL is the source of truth (get_discovery
+                # itself falls back to it), so this returns the same nodes; any id
+                # present only as an AGE node (rare) is picked up by the per-id
+                # fallback below.
+                db = await self._get_db()
+                ordered_ids = [did for did, _ in scored_ids]
+                dict_by_id = await db.kg_get_discoveries_by_ids(ordered_ids)
+                by_id = {}
+                for did in ordered_ids:
+                    d = dict_by_id.get(did)
+                    node = self._dict_to_discovery(d) if d else None
+                    if node is not None:
+                        by_id[did] = node
+                missing = [did for did in ordered_ids if did not in by_id]
+                if missing:
+                    fetched = await asyncio.gather(
+                        *(self.get_discovery(m) for m in missing),
+                        return_exceptions=True,
+                    )
+                    for m, node in zip(missing, fetched):
+                        if node and not isinstance(node, Exception):
+                            by_id[m] = node
+
                 raw_results = []
                 for discovery_id, similarity in scored_ids:
-                    discovery = await self.get_discovery(discovery_id)
-                    if discovery:
-                        # Apply agent filter if needed (pgvector doesn't filter by agent)
-                        if agent_id and discovery.agent_id != agent_id:
-                            continue
-                        raw_results.append((discovery, similarity))
+                    discovery = by_id.get(discovery_id)
+                    if not discovery:
+                        continue
+                    # Apply agent filter if needed (pgvector doesn't filter by agent)
+                    if agent_id and discovery.agent_id != agent_id:
+                        continue
+                    raw_results.append((discovery, similarity))
 
                 if raw_results:
                     # Blend with connectivity scores
