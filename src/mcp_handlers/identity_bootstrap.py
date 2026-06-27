@@ -34,6 +34,30 @@ _DEFAULT_REFUSAL_HINT = (
     "an exited session, pass parent_agent_id to declare lineage; otherwise "
     "pass force_new=true for a fresh identity."
 )
+_DEFAULT_REFUSAL_NEXT_STEP = (
+    "Call onboard(force_new=true) to mint a fresh process identity, or pass "
+    "parent_agent_id only for a real handoff from an exited predecessor."
+)
+_DEFAULT_REFUSAL_SAFE_OPTIONS = (
+    {
+        "action": "start_fresh",
+        "call": "onboard(force_new=true)",
+        "when": "This is a new process-instance with no causal predecessor.",
+    },
+    {
+        "action": "declare_lineage",
+        "call": "onboard(force_new=true, parent_agent_id=<prior UUID>, spawn_reason='new_session')",
+        "when": "A finished predecessor explicitly handed this work to you.",
+    },
+    {
+        "action": "stay_read_only",
+        "call": "get_governance_metrics() or list_tools()",
+        "when": "You do not yet have caller-proven identity for a write.",
+    },
+)
+_DEFAULT_REFUSAL_DO_NOT = (
+    "Do not retry bare identity(agent_uuid=..., resume=true); UUID alone is not ownership proof.",
+)
 
 
 def strict_identity_refusal_payload(
@@ -41,6 +65,11 @@ def strict_identity_refusal_payload(
     *,
     status: str = "identity_required",
     hint: str | None = None,
+    next_step: str | None = None,
+    safe_options: list[dict] | tuple[dict, ...] | None = None,
+    do_not: list[str] | tuple[str, ...] | None = None,
+    identity_assurance: dict | None = None,
+    surface_context: dict | None = None,
 ) -> dict:
     """The #425 typed-refusal shape, single-sourced.
 
@@ -59,11 +88,23 @@ def strict_identity_refusal_payload(
     A structured success-shape, not an error: error responses invite
     retry-with-mint catch paths and would reintroduce the ghost leak.
     """
-    return {
+    payload = {
         "status": status,
         "tool": tool_name,
         "tool_class": "required",
         "hint": hint if hint is not None else _DEFAULT_REFUSAL_HINT,
+        "next_step": next_step if next_step is not None else _DEFAULT_REFUSAL_NEXT_STEP,
+        "safe_options": [
+            dict(option) for option in (
+                safe_options if safe_options is not None else _DEFAULT_REFUSAL_SAFE_OPTIONS
+            )
+        ],
+        "do_not": list(do_not if do_not is not None else _DEFAULT_REFUSAL_DO_NOT),
         "ontology_ref": "CLAUDE.md \"STRICT_IDENTITY_REQUIRED (#425 staged rollout)\"",
         "rollout_flag": "STRICT_IDENTITY_REQUIRED",
     }
+    if identity_assurance is not None:
+        payload["identity_assurance"] = dict(identity_assurance)
+    if surface_context is not None:
+        payload["surface_context"] = dict(surface_context)
+    return payload
