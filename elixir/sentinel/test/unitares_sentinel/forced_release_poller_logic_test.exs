@@ -120,6 +120,48 @@ defmodule UnitaresSentinel.ForcedReleasePoller.LogicTest do
     assert alarm.extra.lease_id == nil
   end
 
+  test "reserved + legacy test surfaces are suppressed but advance the cursor" do
+    # The force-release contract test does a REAL force-release on every pytest
+    # run; the active (BEAM) Sentinel must not page on those fixtures. Parity
+    # with Python's `_is_reserved_test_surface` — both prefixes suppressed.
+    ts_reserved = dt("2026-05-05T01:00:00Z")
+    ts_legacy = dt("2026-05-05T02:00:00Z")
+    ts_real = dt("2026-05-05T03:00:00Z")
+
+    rows = [
+      ad_hoc_row(event_id: "evt-reserved", ts: ts_reserved, surface_id: "td:/test/force-release-contract-abc"),
+      ad_hoc_row(event_id: "evt-legacy", ts: ts_legacy, surface_id: "td:/force-release-contract-test-xyz"),
+      ad_hoc_row(event_id: "evt-real", ts: ts_real, surface_id: "dialectic:/real_surface")
+    ]
+
+    {alarms, new_cursor} = Logic.build_alarms(rows, nil)
+
+    # Only the genuine operator surface alarms.
+    assert [alarm] = alarms
+    assert alarm.extra.surface_id == "dialectic:/real_surface"
+    # Cursor still advances past the suppressed fixtures so they aren't rescanned.
+    assert new_cursor == ts_real
+  end
+
+  test "conflict_batch on a reserved test surface is suppressed but advances the cursor" do
+    ts = dt("2026-05-05T04:00:00Z")
+
+    rows = [
+      %{
+        surface_id: "td:/test/conflict-fixture",
+        surface_kind: "td",
+        event_count: 3,
+        first_ts: ts,
+        last_ts: ts
+      }
+    ]
+
+    {alarms, new_cursor} = Logic.build_conflict_batch_alarms(rows, nil)
+
+    assert alarms == []
+    assert new_cursor == ts
+  end
+
   test "fingerprint is unique per event_id (downstream dedup contract)" do
     ts = dt("2026-05-05T01:23:45Z")
 

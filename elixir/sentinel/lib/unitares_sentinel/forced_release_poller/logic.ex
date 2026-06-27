@@ -48,6 +48,17 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic do
   # Backwards-compat alias — earlier tests reference `Logic.row` as a type.
   @type row :: ad_hoc_row()
 
+  # Surfaces minted by the force-release contract test (a REAL force-release
+  # against the live router on every `pytest` run) are test fixtures, not
+  # operator-typed force-releases. Suppress them so the active Sentinel does not
+  # page on every test run. MUST stay byte-equal to Python's
+  # `_SUPPRESSED_TEST_SURFACE_PREFIXES`
+  # (agents/sentinel/forced_release_alarm.py) for cross-runtime parity:
+  #   * "td:/test/" — reserved namespace (PR #1102+)
+  #   * "td:/force-release-contract-test-" — legacy pre-#1102 naming whose
+  #     events still linger in lease_plane_events (governance DB forbids DELETE)
+  @suppressed_test_surface_prefixes ["td:/test/", "td:/force-release-contract-test-"]
+
   @type alarm :: %{
           kind: String.t(),
           severity: String.t(),
@@ -66,7 +77,13 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic do
   """
   @spec build_alarms([ad_hoc_row()], DateTime.t() | nil) :: {[alarm()], DateTime.t() | nil}
   def build_alarms(rows, prior_cursor) when is_list(rows) do
-    alarms = Enum.map(rows, &row_to_ad_hoc_alarm/1)
+    alarms =
+      rows
+      |> Enum.reject(&reserved_test_surface?(&1.surface_id))
+      |> Enum.map(&row_to_ad_hoc_alarm/1)
+
+    # Cursor advances over ALL rows (incl. suppressed test fixtures) so they
+    # aren't re-scanned next cycle.
     new_cursor = advance_cursor_from(rows, :ts, prior_cursor)
     {alarms, new_cursor}
   end
@@ -138,7 +155,12 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic do
   @spec build_conflict_batch_alarms([conflict_batch_row()], DateTime.t() | nil) ::
           {[alarm()], DateTime.t() | nil}
   def build_conflict_batch_alarms(rows, prior_cursor) when is_list(rows) do
-    alarms = Enum.map(rows, &row_to_conflict_alarm/1)
+    alarms =
+      rows
+      |> Enum.reject(&reserved_test_surface?(&1.surface_id))
+      |> Enum.map(&row_to_conflict_alarm/1)
+
+    # Cursor advances over ALL rows (incl. suppressed test fixtures).
     new_cursor = advance_cursor_from(rows, :last_ts, prior_cursor)
     {alarms, new_cursor}
   end
@@ -227,6 +249,14 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic do
   end
 
   # ---- internals -------------------------------------------------------
+
+  # True when `surface_id` is a force-release contract test fixture (reserved
+  # or legacy prefix). Mirrors Python's `_is_reserved_test_surface`.
+  defp reserved_test_surface?(surface_id) when is_binary(surface_id) do
+    Enum.any?(@suppressed_test_surface_prefixes, &String.starts_with?(surface_id, &1))
+  end
+
+  defp reserved_test_surface?(_), do: false
 
   defp advance_cursor_from([], _key, prior), do: prior
 
