@@ -1,7 +1,7 @@
 # UNITARES Reviewer Guide
 
 **Created:** May 23, 2026  
-**Last Updated:** June 16, 2026  
+**Last Updated:** June 26, 2026
 **Status:** Active
 
 ---
@@ -10,12 +10,13 @@ This guide is for a cold evaluator deciding whether UNITARES is real, what layer
 
 ## One-sentence read
 
-UNITARES is runtime state telemetry for long-lived AI-agent fleets: agents check in after units of work, UNITARES grades drift and calibration against each agent's own baseline, and the agent receives a verdict it can act on before failures become visible incidents.
+UNITARES is proprioceptive runtime state telemetry for long-lived AI-agent fleets: agents check in after units of work, UNITARES reads drift and calibration against each agent's own baseline, and policy/enforcement layers can use that signal before failures become visible incidents.
 
 ## What this is
 
 - A governance MCP + HTTP server for agent runtime state.
 - A continuous check-in loop: `onboard` -> `process_agent_update` -> `outcome_event` -> `get_governance_metrics`.
+- A proprioceptive signal layer for agent strain/coherence/overload, documented in [`docs/ontology/eisv-proprioception-contract.md`](ontology/eisv-proprioception-contract.md).
 - A calibration layer that combines self-reported confidence with exogenous outcomes such as tests, exit codes, and tool results.
 - A continuity and audit layer for long-running and repeated agent process-instances.
 - A research implementation backed by a public paper, DOI, reproducibility kit, and deployment-derived datasets.
@@ -24,6 +25,7 @@ UNITARES is runtime state telemetry for long-lived AI-agent fleets: agents check
 
 - Not an output filter or guardrail classifier.
 - Not a sandbox or permission system.
+- Not an outcome oracle or grand jury. EISV can report strain; external outcome evidence and policy/review layers decide task-negative, contract, authority/harm, or synthetic labels.
 - Not a universal ethics oracle. "No ethics classifier" means no hand-labeled ethics model — not that the system is value-free; drift is a salience flag, not a verdict, and Integrity is anchored to outcomes rather than to the agent's own history.
 - Not hardened against a motivated adversary gaming the EISV proxy. The design is adversarial-aware — outcomes can't be faked, baselines are self-relative — but enforcement leans lenient by intent and there has been no red-team. See [README → Scope and threat model](../README.md#scope-and-threat-model).
 - Not a claim of broad external adoption yet; the public deployment metrics describe a single-operator stress test.
@@ -71,7 +73,7 @@ The first integration is deliberately small:
 
 1. Give each process-instance an identity with `onboard`.
 2. Send one `process_agent_update` after each meaningful unit of work.
-3. Send `outcome_event` when a hard result exists: test passed/failed, tool rejected, task completed/failed, CI signal, or external observation.
+3. Send `outcome_event` when a hard result exists: test passed/failed, tool rejected, task completed/failed, CI signal, or external observation. Treat ordinary CI/test failures as task-negative evidence unless a separate contract, authority, or harm boundary was crossed.
 4. Let the agent read the returned state and verdict before deciding whether to proceed, narrow scope, ask for review, or pause.
 
 This complements evals, guardrails, and sandboxes. Evals ask whether a model should be deployed. Guardrails and sandboxes constrain actions. UNITARES asks what the already-running agent is doing now, whether it is still calibrated to its own baseline, and whether it should self-regulate.

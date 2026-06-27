@@ -27,6 +27,7 @@ So `r1-verify-lineage-claim.md` resolves row R1 in `plan.md`; `s1-continuity-tok
 ## Index by category
 
 **Conceptual entries** (read these for the model):
+- [`eisv-proprioception-contract.md`](eisv-proprioception-contract.md) — EISV as proprioceptive telemetry, not an outcome oracle; separates measurement, diagnosis, policy, enforcement, and external labels
 - [`identity.md`](identity.md) — v2 ontology
 - [`paper-positioning.md`](paper-positioning.md) — Q3, ontology ↔ paper relationship
 - [`harness-substrate-plurality.md`](harness-substrate-plurality.md) — R6, identity across variable harness/model/transport
