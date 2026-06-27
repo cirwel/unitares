@@ -101,6 +101,37 @@ def test_row_to_discovery_dict_decodes_provenance_chain_json():
 
 
 @pytest.mark.asyncio
+async def test_kg_get_discoveries_by_ids_batches_in_one_query():
+    """Batch fetch collapses the per-id get_discovery N+1 (the loop that the
+    in-handler anyio<->asyncpg await tax turned into a multi-second cost) into a
+    single query: one fetch, id->dict map, empty input short-circuits with no DB
+    round-trip."""
+    calls = {"fetch": 0}
+
+    async def fake_fetch(query, *args):
+        calls["fetch"] += 1
+        assert "id = ANY" in query  # single batched query, not per-id
+        now = datetime.now(timezone.utc)
+        return [
+            {"id": "d-1", "agent_id": "a", "type": "note", "summary": "one", "created_at": now},
+            {"id": "d-2", "agent_id": "a", "type": "note", "summary": "two", "created_at": now},
+        ]
+
+    conn = MagicMock()
+    conn.fetch = AsyncMock(side_effect=fake_fetch)
+    backend = _FakeKgBackend(conn)
+
+    out = await backend.kg_get_discoveries_by_ids(["d-1", "d-2"])
+    assert calls["fetch"] == 1
+    assert set(out) == {"d-1", "d-2"}
+    assert out["d-1"]["summary"] == "one"
+
+    # Empty input must not touch the DB.
+    assert await backend.kg_get_discoveries_by_ids([]) == {}
+    assert calls["fetch"] == 1
+
+
+@pytest.mark.asyncio
 class TestUpdateDiscoveryTimestampCoercion:
     async def _make_backend(self, captured: list):
         """KnowledgeGraphPostgres with a mocked pool that records fetchval args."""
