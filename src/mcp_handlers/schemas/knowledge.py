@@ -356,6 +356,8 @@ class KnowledgeParams(AgentIdentityMixin):
     # exposed on the unified tool (see test_knowledge_param_coverage backlog).
     include_archived: Optional[bool] = Field(None, description="Include archived discoveries in search results (default: excluded)")
     include_cold: Optional[bool] = Field(None, description="Include cold-storage (long-term) discoveries in search results (default: excluded)")
+    epoch_scope: Optional[Literal["current", "all"]] = Field(None, description="Stats/list scope: current epoch only or all epochs")
+    including_cold: Union[bool, str, None] = Field(None, description="Include cold-storage discoveries in action=list raw status aggregates")
     dry_run: Union[bool, str, None] = Field(None, description="Dry run mode (for action=cleanup, synthesize)")
     # Synthesis (action=synthesize): roll discoveries up into topic summaries.
     topic: Optional[str] = Field(None, description="Synthesize just this one tag/topic (for action=synthesize). Omit to sweep the densest topics.")
@@ -390,4 +392,6 @@ class KnowledgeParams(AgentIdentityMixin):
                 self.confidence = None
         if isinstance(self.include_response_chain, str):
             self.include_response_chain = self.include_response_chain.lower() in ('true', '1', 'yes')
+        if isinstance(self.including_cold, str):
+            self.including_cold = self.including_cold.lower() in ('true', '1', 'yes')
         return self
