@@ -10,15 +10,26 @@
 ## Correction to the original report
 
 This was first reported (and first recorded here) as *"prevented bad outcomes 0 → 1."*
-Live re-verification (Hermes, 2026-06-16) shows that wording is wrong on two counts:
+Live re-verification (Hermes, 2026-06-16) shows that wording is wrong on three counts:
 
 1. The metric that moved is **`strict_bad`** (count of strict-scope bad outcomes in
    the inventory), not a count of prevented outcomes.
 2. The captured row's `decision_action = proceed` — UNITARES **observed and
    classified** a strict bad outcome, it did **not** stop one.
+3. "Bad outcome" was undefined shorthand. The defined artifact is an
+   `outcome_events.is_bad = true` row; `strict_bad` is a filtered count of those
+   rows in the strict validation scope.
 
 > **Correct wording:** "strict bad evidence moved from zero to one."
 > **Not:** "UNITARES prevented a bad outcome."
+
+## Vocabulary guardrail
+
+| Term | Meaning in this report |
+|---|---|
+| `is_bad=true` / `bad` | A row labeled negative by its outcome type or external rubric; not a moral category. |
+| `strict_bad` | A strict-scope negative row counted by the ablation inventory. |
+| `prevented` | Requires separate enforcement evidence that a policy/actuator blocked, paused, rejected, or reverted an adverse effect. |
 
 The filename retains the original "initiates/finding" slug for branch/PR continuity;
 the content below is the corrected record.
@@ -92,7 +103,8 @@ All 30-day task slices remain skeptical.
 - **Diagnostic signal — weak / interesting.** One strict slice now beats baseline,
   but strict n=1 bad is too fragile to read as lift.
 - **Governance policy — not proven.** The row's `decision_action = proceed`.
-- **Enforcement / prevention — not shown.** Nothing here stopped a bad outcome.
+- **Enforcement / prevention — not shown.** Nothing here blocked, paused,
+  rejected, or reverted an adverse effect; this is a captured negative-label row.
 
 The most interesting angle: this is an **overconfidence case** — high reported
 confidence (~0.915) while a hard external test failed and the decision was
