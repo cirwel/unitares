@@ -1058,6 +1058,8 @@ class TestResolveAgentDisplay:
         assert "agent_id" in result
         assert "display_name" in result
         assert result["display_name"] == "TestAgent"
+        assert "identity_assurance" not in result
+        assert "identity_context" not in result
 
     def test_resolve_unknown_agent(self, patch_common):
         """Returns agent_id as fallback for unknown agents."""

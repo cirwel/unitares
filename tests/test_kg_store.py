@@ -69,6 +69,27 @@ def make_discovery(
     )
 
 
+def strong_signature(agent_uuid: str) -> Dict[str, Any]:
+    """Proof-aware identity signature used by KG response regression tests."""
+    assurance = {
+        "tier": "strong",
+        "score": 1.0,
+        "session_source": "continuity_token",
+        "caller_proven": True,
+    }
+    return {
+        "uuid": agent_uuid,
+        "agent_id": "test_agent_opus",
+        "structured_agent_id": "test_agent_opus",
+        "display_name": "TestAgent",
+        "identity_assurance": assurance,
+        "identity_context": {
+            "schema": "s22.identity_response.v1",
+            "identity_assurance": assurance,
+        },
+    }
+
+
 # ============================================================================
 # Shared fixtures
 # ============================================================================
@@ -159,6 +180,31 @@ class TestStoreKnowledgeGraph:
         assert "discovery_id" in data
         assert "Discovery stored" in data["message"]
         mock_graph.add_discovery.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_store_agent_block_reuses_agent_signature_assurance(
+        self, patch_common, registered_agent
+    ):
+        """Top-level KG agent proof must not contradict agent_signature (#1049)."""
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        signature = strong_signature(registered_agent)
+        with patch(
+            "src.mcp_handlers.support.agent_auth.compute_agent_signature",
+            return_value=signature,
+        ):
+            result = await handle_store_knowledge_graph({
+                "agent_id": registered_agent,
+                "summary": "Identity assurance regression",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["agent"]["uuid"] == data["agent_signature"]["uuid"]
+        assert (
+            data["agent"]["identity_assurance"]
+            == data["agent_signature"]["identity_assurance"]
+        )
 
     @pytest.mark.asyncio
     async def test_store_missing_summary(self, patch_common, registered_agent):
@@ -1214,6 +1260,30 @@ class TestKnowledgeWriteBroadcast:
         assert "vigil" in payload["tags"]
 
     @pytest.mark.asyncio
+    async def test_note_agent_block_reuses_agent_signature_assurance(
+        self, patch_common, registered_agent
+    ):
+        from src.mcp_handlers.knowledge.handlers import handle_leave_note
+
+        signature = strong_signature(registered_agent)
+        with patch(
+            "src.mcp_handlers.support.agent_auth.compute_agent_signature",
+            return_value=signature,
+        ):
+            result = await handle_leave_note({
+                "agent_id": registered_agent,
+                "summary": "Identity assurance note regression",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["agent"]["uuid"] == data["agent_signature"]["uuid"]
+        assert (
+            data["agent"]["identity_assurance"]
+            == data["agent_signature"]["identity_assurance"]
+        )
+
+    @pytest.mark.asyncio
     async def test_store_knowledge_graph_emits_knowledge_write(
         self, patch_common, registered_agent,
     ):
@@ -1329,6 +1399,31 @@ class TestKnowledgeReadBroadcast:
         assert payload["action"] == "get"
         assert payload["target_agent_id"] == registered_agent
         assert payload["result_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_get_agent_block_reuses_agent_signature_assurance(
+        self, patch_common, registered_agent
+    ):
+        _, mock_graph = patch_common
+        mock_graph.get_agent_discoveries.return_value = [
+            make_discovery(id="d1", agent_id=registered_agent),
+        ]
+        from src.mcp_handlers.knowledge.handlers import handle_get_knowledge_graph
+
+        signature = strong_signature(registered_agent)
+        with patch(
+            "src.mcp_handlers.support.agent_auth.compute_agent_signature",
+            return_value=signature,
+        ):
+            result = await handle_get_knowledge_graph({"agent_id": registered_agent})
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["agent"]["uuid"] == data["agent_signature"]["uuid"]
+        assert (
+            data["agent"]["identity_assurance"]
+            == data["agent_signature"]["identity_assurance"]
+        )
 
     @pytest.mark.asyncio
     async def test_get_with_discovery_id_reads_details_unbound(self, patch_common):
