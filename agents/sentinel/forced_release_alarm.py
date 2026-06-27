@@ -38,6 +38,24 @@ except ImportError:  # pragma: no cover — surfaces at first call site
     asyncpg = None  # type: ignore
 
 
+# Surfaces minted under this namespace are reserved for destructive integration
+# tests — e.g. tests/test_lease_plane_force_release_contract.py, which performs
+# a REAL force-release against the live router to exercise the §9 auth contract.
+# Those events land in lease_plane_events like any other, but they are test
+# fixtures, not operator-typed force-releases. Sentinel advances its cursor past
+# them WITHOUT emitting an alarm, so a normal `pytest` run against a live lease
+# plane does not page on every invocation. Tests that intentionally drive the
+# live force-release / conflict paths MUST mint surfaces under this prefix.
+RESERVED_TEST_SURFACE_PREFIX = "td:/test/"
+
+
+def _is_reserved_test_surface(surface_id: Any) -> bool:
+    """True if `surface_id` is in the reserved test namespace (see prefix doc)."""
+    return isinstance(surface_id, str) and surface_id.startswith(
+        RESERVED_TEST_SURFACE_PREFIX
+    )
+
+
 @dataclass
 class ForcedReleaseAlarm:
     """One alarm produced by `poll_forced_release_alarms`.
@@ -104,6 +122,13 @@ async def _poll_inner(
             ad_hoc_query.format(ts_filter="AND ts > $1"), last_event_ts,
         )
     for row in rows:
+        if _is_reserved_test_surface(row["surface_id"]):
+            # Reserved test-surface event: advance the cursor past it so it
+            # isn't re-scanned, but do NOT alarm — it is a test fixture, not an
+            # operator force-release.
+            if max_ts is None or row["ts"] > max_ts:
+                max_ts = row["ts"]
+            continue
         alarms.append(_ad_hoc_alarm(row))
         if max_ts is None or row["ts"] > max_ts:
             max_ts = row["ts"]
@@ -161,6 +186,11 @@ async def _poll_inner(
             conflict_query.format(ts_filter="AND ts > $1"), last_event_ts,
         )
     for row in rows:
+        if _is_reserved_test_surface(row["surface_id"]):
+            # Reserved test-surface conflict burst: advance the cursor, no alarm.
+            if max_ts is None or row["last_ts"] > max_ts:
+                max_ts = row["last_ts"]
+            continue
         alarms.append(_conflict_alarm(row))
         if max_ts is None or row["last_ts"] > max_ts:
             max_ts = row["last_ts"]

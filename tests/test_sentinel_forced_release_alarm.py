@@ -53,6 +53,10 @@ async def _cleanup(conn):
     await conn.execute(
         "DELETE FROM lease_plane.surface_leases WHERE intent LIKE 'pr3b-test%'"
     )
+    # Reserved test-namespace events (force-release contract test fixtures).
+    await conn.execute(
+        "DELETE FROM lease_plane.lease_plane_events WHERE surface_id LIKE 'td:/test/%'"
+    )
 
 
 async def _emit_event(
@@ -300,6 +304,52 @@ async def test_phase_zero_acquire_race_blocked():
             "WHERE marked_by_session_id = 'test-pr3b-race'"
         )
         assert count == 1
+    finally:
+        await _cleanup(conn)
+        await conn.close()
+
+
+# ---------- reserved test-surface exclusion ----------
+
+
+@pytest.mark.asyncio
+async def test_sentinel_reserved_test_surface_excluded_from_alarms():
+    """Forced + conflict events on the reserved test namespace
+    (RESERVED_TEST_SURFACE_PREFIX) advance the cursor but emit NO alarms.
+
+    The force-release contract test does a REAL force-release against the live
+    router on every run; without this exclusion Sentinel paged a fresh
+    high-severity alarm each `pytest` invocation. The cursor must still advance
+    past the event so it isn't re-scanned indefinitely.
+    """
+    from agents.sentinel.forced_release_alarm import (
+        RESERVED_TEST_SURFACE_PREFIX,
+        poll_forced_release_alarms,
+    )
+
+    await ensure_test_database_schema()
+    conn = await asyncpg.connect(TEST_DB_URL)
+    try:
+        await _cleanup(conn)
+        forced_surface = f"{RESERVED_TEST_SURFACE_PREFIX}force-release-contract-{uuid.uuid4()}"
+        conflict_surface = f"{RESERVED_TEST_SURFACE_PREFIX}conflict-{uuid.uuid4()}"
+        await _emit_event(conn, event_type="forced", surface_id=forced_surface)
+        await _emit_event(
+            conn, event_type="conflict_held_by_other", surface_id=conflict_surface,
+        )
+
+        alarms, new_cursor = await poll_forced_release_alarms(
+            db_url=TEST_DB_URL, last_event_ts=None,
+        )
+        reserved = [
+            a for a in alarms
+            if str(a.extra.get("surface_id", "")).startswith(RESERVED_TEST_SURFACE_PREFIX)
+        ]
+        assert reserved == [], (
+            f"reserved test-surface events must not alarm; got {reserved}"
+        )
+        # Cursor advanced past the events so they aren't re-scanned forever.
+        assert new_cursor is not None
     finally:
         await _cleanup(conn)
         await conn.close()

@@ -30,6 +30,16 @@ from pathlib import Path
 
 import pytest
 
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+# Reserved test namespace: surfaces minted here are excluded from Sentinel's
+# forced-release alarm so this destructive contract test doesn't page the
+# operator on every `pytest` run (see forced_release_alarm.RESERVED_TEST_SURFACE_PREFIX).
+from agents.sentinel.forced_release_alarm import (  # noqa: E402
+    RESERVED_TEST_SURFACE_PREFIX,
+)
+
 # ---------- skip predicate ----------
 
 _ROUTER_HOST = "127.0.0.1"
@@ -118,7 +128,7 @@ def _post_json(path: str, body: dict, *, authorization: str | None = None) -> tu
 def _acquire_lease(bearer_token: str) -> str:
     """Acquire a td:/ lease and return its lease_id string."""
     body = {
-        "surface_id": f"td:/force-release-contract-test-{uuid.uuid4()}",
+        "surface_id": f"{RESERVED_TEST_SURFACE_PREFIX}force-release-contract-{uuid.uuid4()}",
         "holder_agent_uuid": str(uuid.uuid4()),
         "holder_class": "process_instance",
         "holder_kind": "local_beam",
