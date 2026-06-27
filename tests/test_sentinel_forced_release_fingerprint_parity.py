@@ -30,12 +30,25 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from agents.sentinel.forced_release_alarm import (  # noqa: E402
+    RESERVED_TEST_SURFACE_PREFIX,
     _ad_hoc_alarm,
     _batch_alarm,
     _conflict_alarm,
+    _is_reserved_test_surface,
 )
 
 UTC = timezone.utc
+
+
+def test_reserved_test_surface_predicate():
+    # Pins the reserved namespace so the contract test and the alarm poller
+    # cannot drift apart. Events on this prefix are test fixtures, not operator
+    # force-releases, and must be excluded from alarms.
+    assert RESERVED_TEST_SURFACE_PREFIX == "td:/test/"
+    assert _is_reserved_test_surface("td:/test/force-release-contract-abc")
+    assert not _is_reserved_test_surface("td:/pr3b_a")
+    assert not _is_reserved_test_surface("dialectic:/x")
+    assert not _is_reserved_test_surface(None)
 
 
 def test_ad_hoc_fingerprint_is_event_id_only():
