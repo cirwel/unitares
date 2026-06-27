@@ -219,7 +219,7 @@ def format_cohort_report(
             "",
             "Interpretation rule: this is registry-bound prediction coverage for future holdout scoring (prospective holdout), not a grand jury. "
             "It counts predictions that existed before outcomes; EISV remains proprioceptive telemetry, "
-            "not an outcome oracle, unless a frozen holdout later beats boring baselines with external labels.",
+            "not an outcome oracle or bad-verdict dispenser, unless a frozen holdout later beats boring baselines with external labels.",
         ]
     )
 

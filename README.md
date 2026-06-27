@@ -43,7 +43,7 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 - you need agents to check their own state before continuing; and
 - you want an audit trail of confidence, evidence, drift, and recovery.
 
-UNITARES is **not** an output validator, sandbox, hosted agent platform, or grand jury. EISV is **not an outcome oracle**; it is proprioceptive telemetry for the running agent. External outcome evidence and policy/review layers own labels such as task-negative, contract violation, or authority/harm.
+UNITARES is **not** an output validator, sandbox, hosted agent platform, or grand jury. EISV is **not an outcome oracle** or bad-verdict dispenser; it is proprioceptive telemetry for the running agent. External outcome evidence and policy/review layers own labels such as task-negative, contract violation, or authority/harm.
 
 ## Try the demo locally
 
