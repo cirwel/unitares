@@ -105,7 +105,8 @@ def test_reports_preserve_proprioception_and_outcome_oracle_boundary():
         window_days=90,
         lead_minutes=(0.0,),
     )
-    assert "`bad` is an outcome-label class, not a moral verdict" in inventory_report
+    assert "`bad` is an outcome-label class (`is_bad=true`)" in inventory_report
+    assert "not a moral verdict or a prevented outcome" in inventory_report
     assert "CI/test failure is task-negative evidence" in inventory_report
 
     cohort_summary = build_cohort_summary(
