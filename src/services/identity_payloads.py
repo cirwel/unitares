@@ -88,7 +88,7 @@ def build_identity_response_data(
         response_data["identity_resolution_outcome"] = identity_resolution_outcome
     # R2 PR 3: surface persisted lineage flag at top level so callers
     # don't need a follow-up read to detect provisional edges. See
- # .
+    # docs/ontology/r2-honest-memory-integration.md.
     response_data["provisional_lineage"] = bool(provisional_lineage)
     # R2 PR 3 council fix: surface response-facing lineage_state when
     # the caller has derived it (slow paths). Fast paths default to
