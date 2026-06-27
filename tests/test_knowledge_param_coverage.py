@@ -64,8 +64,7 @@ INTERNAL_KEYS = {
 # it by declaring the real params on KnowledgeParams (then deleting them here),
 # not to grow it. Adding a NEW entry must be a deliberate, reviewed act.
 KNOWN_UNEXPOSED = {
-    "auto_link_related", "epoch_scope", "exclude_agent_labels",
-    "including_cold",
+    "auto_link_related", "exclude_agent_labels",
     "related_files", "resolve_question",
     "scope", "synthesize", "top_n",
     "use_model",
@@ -75,8 +74,9 @@ KNOWN_UNEXPOSED = {
 # min_similarity / operator followed on 2026-06-26 as handler-documented search
 # controls. offset / length / include_response_chain / max_chain_depth /
 # response_to followed as details/threading controls. confidence followed as a
-# store-path writer-authored quality signal. Shrinking this set is the goal;
-# growing it is the smell.
+# store-path writer-authored quality signal. epoch_scope / including_cold
+# followed as list/stats scope controls. Shrinking this set is the goal; growing
+# it is the smell.
 
 
 def _classify_undeclared() -> set[str]:
@@ -148,6 +148,15 @@ def test_store_confidence_signal_exposed():
     assert "confidence" in declared
     assert KnowledgeParams(action="store", summary="x", confidence="0.8").confidence == 0.8
     assert KnowledgeParams(action="store", summary="x", confidence="not-a-number").confidence is None
+
+
+def test_list_scope_controls_exposed():
+    """List/stats scope controls must be sendable through knowledge(action=list)."""
+    declared = set(KnowledgeParams.model_fields.keys())
+    assert {"epoch_scope", "including_cold"} <= declared
+    model = KnowledgeParams(action="list", epoch_scope="all", including_cold="true")
+    assert model.epoch_scope == "all"
+    assert model.including_cold is True
 
 
 def test_supersession_link_params_stay_declared():
