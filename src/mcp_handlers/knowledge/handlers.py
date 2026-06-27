@@ -589,8 +589,6 @@ def _resolve_agent_display(agent_id: str) -> Dict[str, Any]:
         agent_id: Either model+date format (new) or UUID (legacy lookups)
     """
     def _payload(uuid_key: str, meta, fallback_handle: str) -> Dict[str, Any]:
-        from src.services.identity_payloads import build_identity_signature_payload
-
         def _meta_text(name: str) -> Optional[str]:
             value = getattr(meta, name, None)
             if not isinstance(value, str):
@@ -608,11 +606,21 @@ def _resolve_agent_display(agent_id: str) -> Dict[str, Any]:
             or _meta_text('label')
             or public_handle
         )
-        payload = build_identity_signature_payload(
-            agent_uuid=uuid_key,
-            agent_id=public_handle,
-            display_name=display_name,
-        )
+        payload: Dict[str, Any] = {"uuid": uuid_key}
+        if public_handle:
+            payload["agent_id"] = public_handle
+            payload["structured_agent_id"] = public_handle
+        if display_name:
+            payload["display_name"] = display_name
+        if display_name and display_name not in (
+            _meta_text('public_agent_id'),
+            _meta_text('structured_id'),
+        ):
+            payload["label_source"] = "claimed"
+        elif display_name or public_handle:
+            payload["label_source"] = "auto"
+        else:
+            payload["label_source"] = "uuid"
         return payload
 
     try:
@@ -634,6 +642,46 @@ def _resolve_agent_display(agent_id: str) -> Dict[str, Any]:
         pass
     # Fallback: use agent_id as-is
     return {"agent_id": agent_id, "display_name": agent_id}
+
+
+def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Return display info enriched with the current call's proven identity.
+
+    ``_resolve_agent_display`` is metadata-only and must not invent proof
+    strength. For current-caller response blocks, mirror the same
+    ``agent_signature`` source used by ``success_response`` so top-level
+    ``agent.identity_assurance`` cannot disagree with the final envelope.
+    """
+    raw_display = arguments.get("_agent_display")
+    if isinstance(raw_display, dict):
+        agent_display = dict(raw_display)
+    else:
+        agent_display = _resolve_agent_display(agent_id)
+
+    try:
+        from ..support import agent_auth as _auth
+
+        signature = _auth.compute_agent_signature(arguments=arguments)
+    except Exception as exc:
+        logger.debug("Could not enrich KG agent display with signature: %s", exc)
+        return agent_display
+
+    if not isinstance(signature, dict) or not signature.get("uuid"):
+        return agent_display
+
+    for key in (
+        "uuid",
+        "agent_id",
+        "structured_agent_id",
+        "display_name",
+        "label_source",
+        "identity_context",
+        "identity_assurance",
+    ):
+        if key in signature:
+            agent_display[key] = signature[key]
+
+    return agent_display
 
 
 def _derive_anonymous_writer_id(arguments: Dict[str, Any]) -> str:
@@ -1039,7 +1087,7 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
             await _record_supersession_edge(graph, new_id=discovery_id, old_id=supersedes_id)
 
         # v2.5.3: Resolve UUID to display name for human-readable output
-        agent_display = arguments.get("_agent_display") or _resolve_agent_display(agent_id)
+        agent_display = _agent_display_for_response(agent_id, arguments)
         display_name = agent_display.get("display_name", agent_id)
 
         response = {
@@ -2017,7 +2065,7 @@ async def handle_get_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Text
         include_details = arguments.get("include_details", False)
 
         # UX FIX (Dec 2025): Display name FIRST for human readability
-        agent_display = arguments.get("_agent_display") or _resolve_agent_display(agent_id)
+        agent_display = _agent_display_for_response(agent_id, arguments)
         live_display_name = agent_display.get("display_name", agent_id)
         discovery_list = []
         for d in discoveries:
@@ -2891,7 +2939,7 @@ async def handle_leave_note(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         await _broadcast_knowledge_write(note, agent_id)
 
         # v2.5.3: Include agent display info
-        agent_display = arguments.get("_agent_display") or _resolve_agent_display(agent_id)
+        agent_display = _agent_display_for_response(agent_id, arguments)
 
         # UX FIX (Feb 2026): Clarify visibility - notes are shared and discoverable
         # KG loop closure: remind agents to resolve when addressed
