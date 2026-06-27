@@ -141,3 +141,33 @@ The adversarial pass confirmed these are live, correcting plausible "looks dead"
   not unwired surface.
 - **`retrieval.py` `rrf_fuse`/`apply_tag_boost`**, `find_similar`, `semantic_search`,
   `full_text_search`, `knowledge_graph_lifecycle` (daily task) — all live.
+
+---
+
+## Theme 6 — Shadow-gated validation surfaces (2026-06-26/27)
+
+Capabilities that run in **shadow** (measure, don't act) or are **flag-gated off**,
+each with an explicit **wake condition** — the test that separates deliberate dormancy
+from avoidance. The rule for this theme: *awaken the eyes (shadow), not the hands
+(apply), until the wake condition is met.* This theme exists because "built-but-unwired"
+caught one of its own as a silent no-op — #1092's grounding ran **after** its persist +
+response consumers and was discarded since it shipped (fixed by #1095, behind flags).
+
+| Capability | Flag / PR | Status | Wake condition |
+|---|---|---|---|
+| **EISV logprob-grounding** — tier-1 S from model output-distribution entropy | `#1092` Stages 1+2 shipped; Stage 3 (proxy supply) NOT built | KEEP-DORMANT | Build Stage 3 only if `grounding_shadow` shows `s_source="logprob"` S out-discriminates the heuristic **on outcomes**. Off-Claude only (Claude API exposes no logprobs — verified via claude-api skill). Depends on the grounding-apply path (#1095) working first. |
+| **Grounding apply** — grounded E/I/S/coherence replace ODE/heuristic in canonical metrics | `UNITARES_GROUNDING_APPLY` / `#1095` | KEEP-DORMANT (apply); shadow available | Run `UNITARES_GROUNDING_SHADOW=1` first → read `grounding_shadow` audit events → set APPLY only if the **fleet-wide** coherence/E/I/S shift (manifold coherence + re-derived E/I fire for *every* agent) causes no harmful verdict flips. LIVE-AFFECTING. |
+| **Behavioral-EISV basin** — kernel-split WS1 option b | `UNITARES_BASIN_SHADOW` / `#1089` | SHADOW-only | Feed `classify_basin` from behavioral EISV (and gate the 60–4500ms ODE off the check-in hot path) only when `basin_shadow` shows the behavioral basin tracks the ODE basin on the **broad** fleet. Current shadow (resident agents, small n): ~97% disagree, behavioral more conservative → **wake condition NOT met**; needs non-resident sampling + threshold recalibration. |
+| **Φ → telemetry-only** — behavioral verdict authoritative; Φ stops flooring risk | `UNITARES_PHI_TELEMETRY_ONLY` (default off) | DECIDE | A values call aligned with the design north-star (Φ = RLHF-shape → demote to predictor). No automated trigger: wake when making the behavioral/residual verdict fully authoritative is the intended posture. |
+
+**Counter-example (awakened, for contrast).** `UNITARES_GOVERNED_EFFECT_EXECUTE_AGENT_SPAWN=1`
+is a flag-gated capability that *was* deliberately awakened — operator flip 2026-06-25,
+a standing execute/RCE surface, persistent. That is what a met wake condition looks like:
+a named operator decision, not a default drift-on. Rollback = remove the plist key +
+bootout/bootstrap.
+
+**The test — apply to every `KEEP-DORMANT` entry, in this theme and above.** A dormancy
+with a written wake condition is discipline; a dormancy with none is avoidance wearing
+discipline's clothes — and becomes the looks-dead → deleted → rebuilt cycle this registry
+exists to stop. Treat dormancy as a **fermata, not a deletion**: a held note that resolves
+on its condition, not one held until the music stops.
