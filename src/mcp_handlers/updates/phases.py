@@ -377,9 +377,40 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
                     hint=(
                         "This write resolved your identity by transport fingerprint, "
                         "not by a proof you supplied — under strict identity, writes "
-                        "require a caller-proven binding. Echo the client_session_id "
-                        "your onboard() returned (or pass continuity_token)."
+                        "require a caller-proven binding. Echo the continuity_token "
+                        "from your onboard() response as ownership proof; a "
+                        "session-maintaining client may instead pass an explicit "
+                        "client_session_id."
                     ),
+                    next_step=(
+                        "Retry process_agent_update with the continuity_token from "
+                        "your onboard()/identity() response; use client_session_id "
+                        "only when this client maintains a proven session binding."
+                    ),
+                    safe_options=[
+                        {
+                            "action": "retry_with_ownership_proof",
+                            "call": "process_agent_update(..., continuity_token=<onboard token>)",
+                            "when": "You have the ownership proof from this live process.",
+                        },
+                        {
+                            "action": "retry_with_session_binding",
+                            "call": "process_agent_update(..., client_session_id=<active session id>)",
+                            "when": "A session-maintaining client has a caller-proven active binding.",
+                        },
+                        {
+                            "action": "stay_read_only",
+                            "call": "get_governance_metrics()",
+                            "when": "You cannot present caller-proven identity yet.",
+                        },
+                    ],
+                    identity_assurance=ctx.identity_assurance,
+                    surface_context={
+                        "transport_surface": "process_agent_update",
+                        "session_resolution_source": ctx.session_resolution_source,
+                        "proof_origin": ctx.identity_assurance.get("proof_origin"),
+                        "lifecycle_automation": "not_confirmed",
+                    },
                 ))
 
     if ctx.arguments.get("require_strong_identity"):
