@@ -70,7 +70,7 @@ The engine behind the verdict — what makes the decision *stateful* rather than
 - **Outcome-grounded calibration.** Self-reported `confidence` is scored against objective evidence — test exit codes, tool output, file ops — and the resulting calibration feeds back into future verdicts. The number is gameable; the success rate isn't.
 - **Dialectic peer review → runtime constraints.** A disputed verdict is reviewed by an authority-weighted peer agent from the fleet (self-review blocked; supermajority quorum on round exhaustion); the synthesized conditions *persist* and gate that agent's later verdicts — a runtime constraint, not debate text.
 - **Per-instance identity isolation.** Each process-instance is a distinct governed identity with its own state. Reads are open; writes are accountable to a bound caller. No cross-instance state bleed by default.
-- **Durable audit trail + shared knowledge.** Every confidence, evidence, verdict, drift, and recovery is recorded and queryable — the basis for "verify it yourself." The same store (Postgres + pgvector, with an Apache AGE graph view) also holds the fleet's shared knowledge graph, where agents contribute and search discoveries across instances.
+- **Durable audit trail + shared knowledge.** Every confidence, evidence, verdict, drift, and recovery is recorded — the basis for "verify it yourself." The same store (Postgres + pgvector, with an Apache AGE graph view) also holds the fleet's shared knowledge graph: agents contribute discoveries that are linked into a graph of cross-agent relations.
 
 <div align="center">
 
