@@ -60,7 +60,7 @@ Important current semantics:
 - `response_text` is the primary check-in input
 - `complexity` and `confidence` are optional reflective inputs, not the sole substrate
 - Behavioral EISV is the primary measurement source for governance policy when its confidence is sufficient
-- EISV is proprioceptive telemetry: it can indicate strain, drift, overload, or incoherence; it is not an outcome oracle, moral classifier, or grand jury
+- EISV is proprioceptive telemetry: it can indicate strain, drift, overload, or incoherence; it is not an outcome oracle, moral classifier, bad-verdict dispenser, or grand jury
 - ODE state is diagnostic/fallback, not the main verdict source
 - Governance responses separate measurement (`primary_eisv`, `behavioral_eisv`, `ode_eisv`), policy evaluation (`policy_evaluation`), and actuator state (`enforcement`)
 - External outcome evidence — tests, CI, tool rejection, human review, red-team fixtures, or harm/authority signals — owns the label that later validation scores
@@ -77,4 +77,4 @@ Important current semantics:
 ## Why This File Is Short
 This file used to be a larger onboarding guide from an earlier MCP/tooling phase. It is intentionally kept small now to avoid duplicated explanations drifting out of sync with the runtime.
 
-**Last Updated:** 2026-06-26 (EISV proprioception/outcome-oracle boundary added)
+**Last Updated:** 2026-06-27 (EISV proprioception/outcome-oracle boundary reinforced)

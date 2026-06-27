@@ -1036,7 +1036,10 @@ def build_report(
     a("")
     a(conclusion)
     a("")
-    a("Interpretation rule: EISV is proprioceptive telemetry, not an outcome oracle.")
+    a(
+        "Interpretation rule: EISV is proprioceptive telemetry, not an "
+        "outcome oracle or bad-verdict dispenser."
+    )
     a("Outcome labels come from external evidence/rubrics; this report only checks")
     a("whether EISV/prior-state fields add measurable predictive signal over simpler")
     a("baselines in this data slice.")

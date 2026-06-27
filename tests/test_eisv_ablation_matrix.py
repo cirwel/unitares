@@ -279,6 +279,7 @@ def test_format_matrix_report_contains_skeptical_ablation_table():
     assert "0.040" in report
     assert "`Bad` means rows labeled `is_bad=true`" in report
     assert "not a moral verdict or a count of prevented outcomes" in report
+    assert "bad-verdict authority" in report
     assert "prior_risk_binned" in report
     assert "KEEP TESTING" in report
 

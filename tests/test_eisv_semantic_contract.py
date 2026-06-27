@@ -56,6 +56,7 @@ def test_canonical_eisv_contract_doc_names_proprioception_not_grand_jury():
     assert "EISV is proprioception" in text
     assert "not an outcome oracle" in text
     assert "not a grand jury" in text
+    assert "bad-verdict dispenser" in text
     assert "measurement → diagnosis → policy → enforcement" in text
     assert "external outcome evidence" in text
     assert "task-negative" in text
@@ -71,7 +72,9 @@ def test_landing_docs_link_the_proprioception_contract():
         assert "eisv-proprioception-contract.md" in text
     assert "not an outcome oracle" in readme
     assert "grand jury" in readme
+    assert "bad-verdict dispenser" in readme
     assert "task-negative" in evaluation_index
+    assert "hand down bad verdicts" in evaluation_index
 
 
 def test_reports_preserve_proprioception_and_outcome_oracle_boundary():
@@ -85,7 +88,7 @@ def test_reports_preserve_proprioception_and_outcome_oracle_boundary():
         train_fraction=0.7,
         generated_at=rows[0].ts + timedelta(days=1),
     )
-    assert "EISV is proprioceptive telemetry, not an outcome oracle." in skeptic_report
+    assert "not an outcome oracle or bad-verdict dispenser" in skeptic_report
     assert "Outcome labels come from external evidence/rubrics" in skeptic_report
 
     inventory = build_inventory(
@@ -107,6 +110,7 @@ def test_reports_preserve_proprioception_and_outcome_oracle_boundary():
     )
     assert "`bad` is an outcome-label class (`is_bad=true`)" in inventory_report
     assert "not a moral verdict or a prevented outcome" in inventory_report
+    assert "not a bad-verdict dispenser" in inventory_report
     assert "CI/test failure is task-negative evidence" in inventory_report
 
     cohort_summary = build_cohort_summary(
@@ -114,4 +118,5 @@ def test_reports_preserve_proprioception_and_outcome_oracle_boundary():
     )
     cohort_report = format_cohort_report(cohort_summary)
     assert "not a grand jury" in cohort_report
+    assert "not an outcome oracle or bad-verdict dispenser" in cohort_report
     assert "registry-bound prediction coverage for future holdout scoring" in cohort_report

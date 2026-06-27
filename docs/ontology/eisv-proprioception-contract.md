@@ -1,7 +1,7 @@
 # EISV Proprioception Contract
 
 **Created:** June 26, 2026
-**Last Updated:** June 26, 2026
+**Last Updated:** June 27, 2026
 **Status:** Active
 
 ---
@@ -13,10 +13,11 @@ coherence, entropy, integrity, and imbalance. It is the system saying "my balanc
 is changing" or "this process is running hot," not a court deciding whether a
 worker was morally bad.
 
-EISV is **not an outcome oracle** and **not a grand jury**. It does not decide
-whether harm occurred, whether the user was wronged, or whether an agent is
-"guilty." Those judgments require external outcome evidence, policy, and review
-surfaces that are separate from the measurement vector.
+EISV is **not an outcome oracle**, **not a grand jury**, and **not a
+bad-verdict dispenser**. It does not decide whether harm occurred, whether the
+user was wronged, or whether an agent is "guilty." Those judgments require
+external outcome evidence, policy, and review surfaces that are separate from
+the measurement vector.
 
 ## Layer separation
 
@@ -28,7 +29,7 @@ measurement → diagnosis → policy → enforcement → external outcome eviden
 
 | Layer | Owns | Must not pretend to own |
 |---|---|---|
-| Measurement | EISV, confidence, coherence, risk, phi, provenance | Outcome truth or punishment |
+| Measurement | EISV, confidence, coherence, risk, phi, provenance | Outcome truth, blame, or punishment |
 | Diagnosis | Interpretations such as strained, scattered, brittle, running hot | The authority to pause by itself |
 | Policy | Rules mapping measured/diagnosed state to advice, review, or circuit-breaker candidates | Raw measurement truth |
 | Enforcement | Actual pause/block/review/allow effects, with actor and mode | The reason an outcome was good or bad |
@@ -95,7 +96,8 @@ Avoid:
 
 Ablations should ask whether EISV/prior-state telemetry adds predictive signal or
 useful policy steering over baselines. They should not imply EISV is the judge of
-badness. The skeptical report, inventory, and prospective cohort reports should
-make weak data obvious: sparse bad labels, synthetic fixtures, unbound prediction
-IDs, missing prior-state coverage, and harness-lane contamination are data-quality
-limits, not philosophical failures of proprioception.
+badness or the component handing down bad verdicts. The skeptical report,
+inventory, and prospective cohort reports should make weak data obvious: sparse
+bad labels, synthetic fixtures, unbound prediction IDs, missing prior-state
+coverage, and harness-lane contamination are data-quality limits, not
+philosophical failures of proprioception.

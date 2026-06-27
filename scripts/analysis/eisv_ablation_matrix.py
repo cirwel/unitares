@@ -443,7 +443,7 @@ def format_matrix_report(
         [
             "",
             "Interpretation rule: this matrix does not validate EISV as ontology. `Bad` means rows labeled `is_bad=true` by external/rubric evidence; it is not a moral verdict or a count of prevented outcomes.",
-            "It only checks whether EISV/prior-state fields add measurable predictive signal over a simple previous-outcome baseline across slices.",
+            "It only checks whether EISV/prior-state fields add measurable predictive signal over a simple previous-outcome baseline across slices; it does not make EISV the bad-verdict authority.",
         ]
     )
     return "\n".join(lines)
