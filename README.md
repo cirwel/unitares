@@ -2,10 +2,10 @@
 
 <img alt="UNITARES — runtime governance for AI-agent fleets" src="docs/assets/hero-v2.png" width="100%">
 
-### Catch an AI agent drifting — while it's still just numbers, not broken output.
+### A stateful governance runtime for fleets of autonomous AI agents.
 
-**Runtime governance & self-telemetry for fleets of autonomous AI agents.**<br/>
-UNITARES watches each agent while it works and tells you — and the agent itself — the moment one starts to drift, while it's still just numbers moving and not yet broken output.
+**Each agent is judged against its own history and calibration — not a fixed per-action rule — and gets back a verdict it can act on, mid-run.**<br/>
+Most controls are stateless: they check one action against one rule. UNITARES carries each agent's trajectory, calibration, and recent verdicts into the next decision — so an agent *drifting* surfaces while its output still looks fine, and it self-corrects (`proceed` / `guide` / `pause` / `reject`) before an external guardrail has to fire.
 
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-2f7d72?style=flat-square&labelColor=0f171f)](https://www.python.org/downloads/)
@@ -25,9 +25,10 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 
 ---
 
-- **Drift surfaces while the output still looks fine.** Each agent is graded against its *own* baseline, so slow degradation shows up as integrity slipping and entropy rising before the work visibly breaks.
-- **Confidence is checked against results.** Self-reported `confidence` is scored against real evidence — tests, exit codes, tool output. An agent can inflate the number; it can't inflate its success rate.
-- **Agents get a proprioceptive state signal they can act on.** Each check-in returns one plain policy action — `proceed`, `guide`, `pause`, or `reject` — plus the agent's full health signals (the `EISV` state vector) for finer policies. Humans can watch the same fleet through the optional dashboard.
+- **Stateful, state-aware verdicts.** Each agent is judged against its *own* ~30-check-in baseline and recent history — not a fixed per-action rule — so slow degradation surfaces while the output still looks fine, and the verdict reflects context, not just the current action.
+- **Confidence grounded in results.** Self-reported `confidence` is scored against real evidence — test exit codes, tool output, file ops. An agent can inflate the number; it can't inflate its success rate, and that calibration feeds back into future verdicts.
+- **Peer review that becomes a runtime constraint.** On a disputed verdict, an authority-weighted peer agent from the fleet reviews (self-review blocked); the synthesized conditions *persist* and gate that agent's future decisions — a runtime constraint, not just debate text.
+- **One signal the agent acts on.** Every check-in returns a plain verdict — `proceed` / `guide` / `pause` / `reject` — plus the agent's full health vector (`EISV`) for finer per-dimension policies. Humans watch the same fleet through the optional dashboard.
 
 ## Use UNITARES if
 
