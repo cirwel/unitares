@@ -400,6 +400,8 @@ def test_get_reviewer_reassigned_recovery():
     assert "reassigned" in r["action"].lower()
     assert "old-agent" in r["what_happened"]
     assert "new-agent" in r["what_happened"]
+    assert "get_dialectic_session" not in r["related_tools"]
+    assert "dialectic" in r["related_tools"]
 
 
 def test_get_awaiting_facilitation_recovery():
@@ -407,6 +409,7 @@ def test_get_awaiting_facilitation_recovery():
     r = get_awaiting_facilitation_recovery("session-123")
     assert "facilitation" in r["action"].lower()
     assert "session-123" in str(r["what_you_can_do"])
+    assert "get_dialectic_session" not in r["related_tools"]
 
 
 # ============================================================================

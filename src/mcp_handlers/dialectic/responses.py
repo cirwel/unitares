@@ -14,6 +14,10 @@ def missing_session_id_recovery() -> Dict[str, Any]:
     return {
         "action": "Provide session_id",
         "related_tools": ["dialectic", "identity"],
+        "note": (
+            "Use dialectic(action='list') to find a session or "
+            "dialectic(action='get', session_id='...') to inspect one."
+        ),
     }
 
 
@@ -22,6 +26,10 @@ def session_not_found_recovery() -> Dict[str, Any]:
     return {
         "action": "Session may have expired or been resolved",
         "related_tools": ["dialectic"],
+        "note": (
+            "Use dialectic(action='list') to browse sessions or "
+            "dialectic(action='request', ...) to open a new review."
+        ),
     }
 
 
@@ -135,8 +143,8 @@ def get_session_exception_recovery() -> Dict[str, Any]:
 def llm_unavailable_recovery() -> Dict[str, Any]:
     """Recovery payload when local Ollama is not available."""
     return {
-        "action": "Start Ollama: `ollama serve` or use request_dialectic_review for peer review",
-        "related_tools": ["request_dialectic_review", "health_check"],
+        "action": "Start Ollama: `ollama serve` or use dialectic(action='request') for peer review",
+        "related_tools": ["dialectic", "health_check"],
         "workflow": [
             "1. Check Ollama: curl http://localhost:11434/api/tags",
             "2. Start if needed: ollama serve",
@@ -226,7 +234,5 @@ def default_escalate_steps() -> List[str]:
     return [
         "The dialectic suggests human review may be needed",
         "Consider simplifying your approach",
-        "Use request_dialectic_review() for peer review if available",
+        "Use dialectic(action='request', ...) for peer review if available",
     ]
-
-

@@ -608,8 +608,8 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             error_code="SESSION_EXISTS",
             error_category="validation_error",
             recovery={
-                "action": "Use dialectic(action='get') to view the active session",
-                "related_tools": ["dialectic"]
+                "action": "Use dialectic(action='get', session_id='...') to view the active session",
+                "related_tools": ["dialectic"],
             },
             arguments=arguments
         )]
@@ -1053,7 +1053,7 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
             f"Error listing sessions: {str(e)}",
             recovery={
                 "action": "Try with different filters or check server logs",
-                "related_tools": ["dialectic", "health_check"]
+                "related_tools": ["dialectic", "health_check"],
             }
         )]
 
