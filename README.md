@@ -28,6 +28,7 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 - **Stateful, state-aware verdicts.** Each agent is judged against its *own* ~30-check-in baseline and recent history — not a fixed per-action rule — so slow degradation surfaces while the output still looks fine, and the verdict reflects context, not just the current action.
 - **Confidence grounded in results.** Self-reported `confidence` is scored against real evidence — test exit codes, tool output, file ops. An agent can inflate the number; it can't inflate its success rate, and that calibration feeds back into future verdicts.
 - **Peer review that becomes a runtime constraint.** On a disputed verdict, an authority-weighted peer agent from the fleet reviews (self-review blocked); the synthesized conditions *persist* and gate that agent's future decisions — a runtime constraint, not just debate text.
+- **A governed shared-memory commons.** The knowledge graph is shared across the fleet, but writes are accountable: agents contribute durable discoveries, corrections, supersessions, and cross-agent relations with provenance. It is sediment, not a transcript dump.
 - **One signal the agent acts on.** Every check-in returns a plain verdict — `proceed` / `guide` / `pause` / `reject` — plus the agent's full health vector (`EISV`) for finer per-dimension policies. Humans watch the same fleet through the optional dashboard.
 
 ## Use UNITARES if
@@ -70,7 +71,7 @@ The engine behind the verdict — what makes the decision *stateful* rather than
 - **Outcome-grounded calibration.** Self-reported `confidence` is scored against objective evidence — test exit codes, tool output, file ops — and the resulting calibration feeds back into future verdicts. The number is gameable; the success rate isn't.
 - **Dialectic peer review → runtime constraints.** A disputed verdict is reviewed by an authority-weighted peer agent from the fleet (self-review blocked; supermajority quorum on round exhaustion); the synthesized conditions *persist* and gate that agent's later verdicts — a runtime constraint, not debate text.
 - **Per-instance identity isolation.** Each process-instance is a distinct governed identity with its own state. Reads are open; writes are accountable to a bound caller. No cross-instance state bleed by default.
-- **Durable audit trail + shared knowledge.** Every confidence, evidence, verdict, drift, and recovery is recorded — the basis for "verify it yourself." The same store (Postgres + pgvector, with an Apache AGE graph view) also holds the fleet's shared knowledge graph: agents contribute discoveries that are linked into a graph of cross-agent relations.
+- **Durable audit trail + governed shared memory.** Every confidence, evidence, verdict, drift, and recovery is recorded — the basis for "verify it yourself." The same store (Postgres + pgvector, with an Apache AGE graph view) also holds the fleet's knowledge graph: a commons in the narrow sense of shared, accountable memory across agents and clients, not a loose chat log or replacement for docs.
 
 <div align="center">
 
@@ -163,7 +164,7 @@ elif eisv.get("E", 1) < 0.2:
 
 </details>
 
-For long-running or scheduled agents, the [SDK](agents/sdk/README.md) handles connection, identity, check-ins, and heartbeats. ([Getting started](docs/guides/START_HERE.md) · [MCP client config](docs/integration/MCP_CLIENTS.md))
+For long-running or scheduled agents, the [SDK](agents/sdk/README.md) handles connection, identity, check-ins, and heartbeats. Any MCP client that accepts Streamable HTTP can connect to `/mcp/`; REST is available for non-MCP clients and host adapters. ([Getting started](docs/guides/START_HERE.md) · [MCP client config](docs/integration/MCP_CLIENTS.md))
 
 ## Don't trust this README — verify it
 
@@ -215,7 +216,7 @@ python src/mcp_server.py --port 8767
 | [Architecture](docs/UNIFIED_ARCHITECTURE.md) | Pipeline, verdicts, recovery, storage |
 | [Glossary](docs/ontology/glossary.md) | Terms keyed by the question they answer — published at [cirwel.github.io/unitares](https://cirwel.github.io/unitares/) |
 | [Production snapshot](docs/PRODUCTION_SNAPSHOT.md) | Live metrics + dashboard views |
-| [MCP Clients](docs/integration/MCP_CLIENTS.md) | Cursor / Claude Code / Claude Desktop config |
+| [MCP Clients](docs/integration/MCP_CLIENTS.md) | Client-neutral MCP setup: Streamable HTTP, stdio bridges, hosted connectors |
 | [Troubleshooting](docs/guides/TROUBLESHOOTING.md) | Common issues |
 | [Changelog](docs/CHANGELOG.md) | Releases |
 
@@ -227,8 +228,8 @@ UNITARES is the governance runtime at the center of a larger body of work. The f
 
 | | What it is |
 |---|---|
-| [**unitares-governance-plugin**](https://github.com/cirwel/unitares-governance-plugin) | Mount any agent into governance — Claude Code / Codex plugin that wires check-ins, dialectic review, and verdicts into the loop via hooks |
-| [**unitares-host-adapter**](https://github.com/cirwel/unitares-host-adapter) | Thin client bindings — Hermes, Claude Code, Goose, and arbitrary OpenAI-compatible clients |
+| [**unitares-governance-plugin**](https://github.com/cirwel/unitares-governance-plugin) | Mount agent clients into governance — Codex and Claude adapters that wire check-ins, dialectic review, and verdicts into the loop |
+| [**unitares-host-adapter**](https://github.com/cirwel/unitares-host-adapter) | Thin client bindings — Hermes, Claude Code, Goose, and arbitrary OpenAI-compatible or REST clients |
 | [**anima-mcp**](https://github.com/cirwel/anima-mcp) | Physical longitudinal testbed — the same EISV model mapped from Raspberry Pi sensor/system telemetry; the source cited in the papers |
 | [**fermata**](https://github.com/cirwel/fermata) | Governed-effect runtime seed — agents *propose* effects; only governed effects *commit* |
 | [**unitares-discord-bridge**](https://github.com/cirwel/unitares-discord-bridge) | Governance events, agent presence, and system health as a live Discord server |

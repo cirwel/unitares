@@ -52,7 +52,7 @@ User- and integrator-facing how-tos. Thin by design — most architecture lives 
 
 ### `integration/` — MCP and client wiring
 
-- [`MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) — Streamable HTTP MCP endpoints and how to point Claude Code / other clients at them
+- [`MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) — Streamable HTTP MCP endpoints, stdio bridges, and hosted/client-neutral setup
 
 ### `ontology/` — identity ontology
 
