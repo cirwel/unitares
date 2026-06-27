@@ -2215,6 +2215,12 @@ class KnowledgeGraphAGE:
             Callers should check: if isinstance(result, tuple) and len(result) == 2
             and isinstance(result[1], dict), it's a degraded response.
         """
+        # Defensive: callers (notably the search handler reading an Optional
+        # schema field) can pass min_similarity=None; without this the later
+        # `similarity < min_similarity` comparison raises TypeError. Coalesce to
+        # the documented default, preserving an explicit 0.0 ("accept all").
+        if min_similarity is None:
+            min_similarity = 0.3
         try:
             from src.embeddings import get_embeddings_service, embeddings_available
         except ImportError:

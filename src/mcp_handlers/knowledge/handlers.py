@@ -1323,7 +1323,8 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
                 )
             if hybrid_path:
                 import asyncio as _asyncio
-                min_similarity = arguments.get("min_similarity", 0.3)
+                _ms = arguments.get("min_similarity")
+                min_similarity = 0.3 if _ms is None else _ms
                 hybrid_fetch_limit = max(first_stage_limit, 50)
                 sem_task = graph.semantic_search(
                     str(query_text), limit=hybrid_fetch_limit, min_similarity=min_similarity
@@ -1413,7 +1414,8 @@ async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[T
             elif use_semantic:
                 # Semantic search using vector embeddings
                 # Default 0.3 for precision; auto-fallback to 0.2 catches edge cases
-                min_similarity = arguments.get("min_similarity", 0.3)
+                _ms = arguments.get("min_similarity")
+                min_similarity = 0.3 if _ms is None else _ms
                 semantic_results = await graph.semantic_search(
                     str(query_text),
                     limit=first_stage_limit,  # wider pool when reranker is on

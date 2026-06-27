@@ -161,6 +161,34 @@ class TestSearchKnowledgeGraph:
         assert data["search_mode_used"] == "indexed_filters"
 
     @pytest.mark.asyncio
+    async def test_search_coalesces_none_min_similarity(self, patch_common):
+        """Regression (dogfood 2026-06-27): the knowledge schema defaults
+        min_similarity to None, so arguments.get('min_similarity', 0.3) returned
+        None (key present, not absent) and semantic_search crashed at
+        `similarity < min_similarity` with "'<' not supported between instances of
+        'float' and 'NoneType'". The handler must coalesce None -> 0.3 before
+        calling semantic_search."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        mock_graph.semantic_search = AsyncMock(return_value=[])
+        mock_graph.full_text_search = AsyncMock(return_value=[])
+
+        # arguments as the validated schema produces them when the caller does not
+        # set a threshold: the key is present with value None.
+        result = await handle_search_knowledge_graph(
+            {"query": "MagicDNS", "limit": 3, "min_similarity": None,
+             "search_mode": "semantic"}
+        )
+
+        assert parse_result(result)["success"] is True
+        assert mock_graph.semantic_search.await_count >= 1
+        for call in mock_graph.semantic_search.await_args_list:
+            passed = call.kwargs.get("min_similarity")
+            assert passed is not None, "handler must not pass min_similarity=None down"
+            assert passed == 0.3
+
+    @pytest.mark.asyncio
     async def test_superseded_result_is_flagged(self, patch_common):
         """Agent-facing trust flag (2026-06-21): a superseded result is marked
         superseded + carries the replacement id, so an agent doesn't cite stale
