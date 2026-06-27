@@ -1,9 +1,61 @@
 # Continuous verdict blending — so numerical/config drift can't flip a verdict
 
-**Status:** v0 proposal, for the Φ→telemetry (EISV) workstream. Not a committed change.
+**Status:** v0.2 — **council pass (2026-06-26) corrected the locus; do NOT implement
+the v0 blend as written.** For the Φ→telemetry (EISV) owners. Not a committed change.
 **Author:** surfaced from a quickstart-canary investigation, 2026-06-26.
-**Why now:** to make dependency updates *free* — i.e. so a fresh agent's verdict
-cannot flip on a numerical or config perturbation. Today it can.
+**Why now:** to make dependency updates *free* — i.e. so a verdict cannot flip on a
+numerical perturbation.
+
+## v0.2 — council fold (READ FIRST; supersedes the v0 locus + corrects a safety flaw)
+
+A three-lane council (architect + live-verifier) reviewed the v0 blend before any
+code. Verdict: **right primitive, wrong-and-incomplete locus, and the v0 blend
+formula is unsafe.** Three findings, the first two live-verified against the running
+governance server:
+
+1. **The demo's 0.15↔0.76 flip is a CONFIG-FLAG difference, not numerical drift.**
+   `resolve_verdict_risk` is gated (caller `governance_monitor.py:1269`) by the
+   `phi_telemetry_only()` env flag (confirmed `UNITARES_PHI_TELEMETRY_ONLY=1` on the
+   live process) and by `behavioral_state.confidence >= 0.3`, where
+   `confidence = update_count/10` is **integer-derived** (`behavioral_state.py:283-285`).
+   Neither a config flag nor an integer counter is tipped by float/dependency drift.
+   So the v0 blend smooths a *flag/maturity* transition — not the drift one.
+
+2. **Where numerical drift ACTUALLY flips a verdict: the φ=0.0 kink**
+   (`monitor_risk.py:70-79`). At φ=0.0, `verdict_from_phi` (`governance_core/scoring.py:69`)
+   flips caution→high-risk — which pauses unconditionally at `monitor_decision.py:156`
+   **with no risk threshold** — *and* `phi_risk` hits exactly 0.70, which equals both the
+   CIRS `beta_high` hard-block (`cirs.py:313/353`) and `BASIN_LOW_RISK_FLOOR`
+   (`config/governance_config.py:80`, → basin pause `monitor_decision.py:189`). A ΔS≈0.03
+   in the ODE → Δφ≈0.015 crosses all three at once. The v0 blend reaches none of them.
+
+3. **The v0 blend formula is unsafe (safety-ontology change).** The Φ floor is a
+   *one-sided* operator — `max(phi_risk, behavioral_risk)` / `_more_severe_verdict`
+   (`:65-67`) — so behavioral can only ever *add* severity, never erase a worse φ
+   (comment `:1264-1267`). The v0 convex blend `(1−a)·max(φ,beh) + a·beh` is
+   **symmetric**: at high `authority` a confident behavioral EMA slides resolved risk
+   *below* the φ floor — the exact erasure the floor forbids. Any blend MUST stay
+   one-sided: `resolved = max(phi_floor_when_φ_high_risk, blend(...))`.
+
+**Corrected fix (what to actually build):**
+- **Primary — hysteresis / dead-band at the decision gate** (`monitor_decision.py`,
+  at the 0.70 basin floor and the `high-risk` verdict gate): a verdict only flips when
+  risk clears the threshold *by a margin*, and falls back only below `threshold−margin`.
+  This makes the verdict drift-robust *where it is actually decided*. Reuse the existing
+  `BOUNDARY` basin + `margin: tight` + `compute_proprioceptive_margin` machinery
+  (`monitor_decision.py:208`, `config/governance_config.py:420`).
+- **Secondary — the blend, made one-sided** (see #3) to remove the boolean cliff and
+  shrink jump magnitude so a smaller dead-band suffices. Add an *interior* test (rising
+  φ-risk + confident-low behavioral → must still floor), not just endpoint tests.
+- **Separate track — config-flag drift** (`phi_telemetry_only` differing per
+  environment) is NOT a numerical-margin problem; neither blend nor hysteresis fixes
+  it. It belongs to the reproducibility/pinning bridge.
+
+**Honest goal restatement:** "no drift can flip a verdict" is unachievable — a pause is
+a binary decision over a continuous state (IVT). The achievable goal is **"no drift
+within a defined margin flips a verdict, and near-boundary verdicts are marked
+low-confidence."** The v0 body below is preserved as the *secondary* (blend) half; the
+*primary* (gate hysteresis) is the load-bearing fix and was missing from v0.
 
 ## The problem: a hard binary switch in the verdict math
 
