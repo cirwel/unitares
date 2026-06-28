@@ -229,18 +229,53 @@ class DialecticDB:
         resolution: Dict[str, Any],
         status: str = "resolved"
     ) -> bool:
-        """Mark session as resolved or failed with resolution data."""
+        """Mark session as resolved or failed with resolution data.
+
+        Idempotent terminal-transition guard (council 2026-06-28, "B-4"): the
+        UPDATE refuses to write a session that is already in a terminal state
+        (``resolved``/``failed``). This is the database-layer defense that makes
+        the transition safe across *processes* — the in-process asyncio.Lock in
+        ``mcp_handlers/dialectic/session.py`` only serializes within one Python
+        process, so a crash-recovery re-drive or a second writer (e.g. the
+        forthcoming BEAM session owner) could otherwise overwrite a committed
+        ``resolution_json``. Return semantics:
+          * True  — this call performed the terminal transition, OR the session
+                    is already in the *requested* terminal state (idempotent).
+          * False — the session is missing, or is already in a *different*
+                    terminal state (conflict; the existing resolution is kept).
+        """
         await self._ensure_pool()
         # Phase should match status - don't hardcode 'resolved' when status is 'failed'
         phase = "resolved" if status == "resolved" else status
         async with self._pool.acquire() as conn:
-            result = await conn.execute("""
+            row = await conn.fetchrow("""
                 UPDATE core.dialectic_sessions
                 SET status = $1, phase = $2, resolution_json = $3, updated_at = now()
-                WHERE session_id = $4
+                WHERE session_id = $4 AND status NOT IN ('resolved', 'failed')
+                RETURNING session_id
             """, status, phase, json.dumps(resolution), session_id)
-            logger.info(f"Resolved session {session_id[:16]}... with status {status}")
-            return "UPDATE 1" in result
+            if row is not None:
+                logger.info(f"Resolved session {session_id[:16]}... with status {status}")
+                return True
+            # No row written: inspect why (idempotent replay vs conflict vs missing).
+            existing = await conn.fetchrow(
+                "SELECT status FROM core.dialectic_sessions WHERE session_id = $1",
+                session_id,
+            )
+            if existing is None:
+                logger.warning(f"resolve_session: {session_id[:16]}... not found")
+                return False
+            if existing["status"] == status:
+                logger.info(
+                    f"resolve_session: {session_id[:16]}... already {status} "
+                    "(idempotent no-op, overwrite prevented)"
+                )
+                return True
+            logger.warning(
+                f"resolve_session: {session_id[:16]}... already terminal as "
+                f"{existing['status']!r}; refused overwrite to {status!r}"
+            )
+            return False
 
     async def add_message(
         self,

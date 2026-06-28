@@ -709,38 +709,45 @@ class TestUpdateSessionStatus:
 class TestResolveSession:
     @pytest.mark.asyncio
     async def test_resolve_session_success(self, db):
-        """resolve_session sets status, phase, resolution_json."""
+        """resolve_session sets status, phase, resolution_json via the guarded UPDATE."""
         instance, pool, conn = db
-        conn.execute = AsyncMock(return_value="UPDATE 1")
+        # B-4 guard: UPDATE...RETURNING now goes through fetchrow; a returned row
+        # means the terminal transition was performed.
+        conn.fetchrow = AsyncMock(return_value={"session_id": "sess-001"})
 
         resolution = {"outcome": "resumed", "conditions": ["monitor"]}
         result = await instance.resolve_session("sess-001", resolution)
 
         assert result is True
-        call_args = conn.execute.call_args[0]
-        # args: status, phase, resolution_json, session_id
+        call_args = conn.fetchrow.call_args_list[0][0]  # UPDATE...RETURNING
+        # args: sql, status, phase, resolution_json, session_id
         assert call_args[1] == "resolved"  # status
         assert call_args[2] == "resolved"  # phase matches status
         assert call_args[3] == json.dumps(resolution)
         assert call_args[4] == "sess-001"
+        assert "NOT IN ('resolved', 'failed')" in call_args[0]  # idempotent guard
 
     @pytest.mark.asyncio
     async def test_resolve_session_custom_status(self, db):
         """resolve_session accepts custom status (e.g. failed)."""
         instance, pool, conn = db
-        conn.execute = AsyncMock(return_value="UPDATE 1")
+        conn.fetchrow = AsyncMock(return_value={"session_id": "sess-001"})
 
         result = await instance.resolve_session("sess-001", {"x": 1}, status="failed")
         assert result is True
-        call_args = conn.execute.call_args[0]
+        call_args = conn.fetchrow.call_args_list[0][0]
         assert call_args[1] == "failed"   # status
         assert call_args[2] == "failed"   # phase matches status (no longer hardcoded 'resolved')
 
     @pytest.mark.asyncio
     async def test_resolve_session_not_found(self, db):
-        """resolve_session returns False when session missing."""
+        """resolve_session returns False when session missing.
+
+        The guarded UPDATE matches no row (fetchrow -> None); the follow-up
+        existence SELECT also returns None -> the session does not exist.
+        """
         instance, pool, conn = db
-        conn.execute = AsyncMock(return_value="UPDATE 0")
+        conn.fetchrow = AsyncMock(side_effect=[None, None])
 
         result = await instance.resolve_session("sess-nope", {"x": 1})
         assert result is False
@@ -1292,7 +1299,7 @@ class TestEdgeCases:
     async def test_resolve_session_serializes_complex_resolution(self, db):
         """resolve_session correctly JSON-serializes complex resolution objects."""
         instance, pool, conn = db
-        conn.execute = AsyncMock(return_value="UPDATE 1")
+        conn.fetchrow = AsyncMock(return_value={"session_id": "sess-complex"})
 
         resolution = {
             "outcome": "resumed",
@@ -1305,8 +1312,8 @@ class TestEdgeCases:
 
         await instance.resolve_session("sess-complex", resolution)
 
-        call_args = conn.execute.call_args[0]
-        # args: status, phase, resolution_json, session_id
+        call_args = conn.fetchrow.call_args_list[0][0]  # UPDATE...RETURNING
+        # args: sql, status, phase, resolution_json, session_id
         assert json.loads(call_args[3]) == resolution
 
     @pytest.mark.asyncio
