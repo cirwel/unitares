@@ -182,8 +182,15 @@ class SessionMixin:
         (xmax<>0); when mint_guard blocks, the conditional UPDATE matches no row
         and RETURNING yields nothing -> "blocked".
         """
+        # mint_guard blocks an overwrite ONLY when a *live* row binds a
+        # different agent_uuid. An expired row (expires_at in the past; NULL =
+        # permanent, never expired) is overwritable — it matches Redis TTL
+        # semantics where the key has vanished, so a fresh claim succeeds rather
+        # than being blocked by a stale binding (Codex review #1: TTL/NX parity).
         guard_clause = (
-            "WHERE core.session_bindings.agent_uuid = EXCLUDED.agent_uuid"
+            "WHERE core.session_bindings.agent_uuid = EXCLUDED.agent_uuid "
+            "OR (core.session_bindings.expires_at IS NOT NULL "
+            "AND core.session_bindings.expires_at <= now())"
             if mint_guard else ""
         )
         sql = f"""
@@ -263,21 +270,31 @@ class SessionMixin:
         """Write an onboard pin (fingerprint -> client_session_id) with a TTL.
 
         if_absent=True implements the NX-claim semantics (a subagent must not
-        displace the driver's pin): INSERT ... ON CONFLICT DO NOTHING, returning
-        True only when this call actually claimed the slot. if_absent=False
-        upserts unconditionally and always returns True.
+        displace the driver's *live* pin), returning True only when this call
+        actually claimed the slot. An EXPIRED pin is claimable — it matches Redis
+        SET NX EX where the expired key is gone, so a new NX claim succeeds
+        (Codex review #1: TTL/NX parity). if_absent=False upserts unconditionally
+        and always returns True.
         """
         async with self.acquire() as conn:
             if if_absent:
-                result = await conn.execute(
+                # Claim when the slot is empty OR the existing pin is expired;
+                # a live pin (expires_at in the future) is left untouched (the
+                # conditional UPDATE matches no row -> RETURNING is empty).
+                row = await conn.fetchrow(
                     """
                     INSERT INTO core.onboard_pins (fingerprint, agent_uuid, client_session_id, expires_at)
                     VALUES ($1, $2, $3, now() + ($4 * interval '1 second'))
-                    ON CONFLICT (fingerprint) DO NOTHING
+                    ON CONFLICT (fingerprint) DO UPDATE SET
+                        agent_uuid        = EXCLUDED.agent_uuid,
+                        client_session_id = EXCLUDED.client_session_id,
+                        expires_at        = EXCLUDED.expires_at
+                    WHERE core.onboard_pins.expires_at <= now()
+                    RETURNING 1
                     """,
                     fingerprint, agent_uuid, client_session_id, ttl_seconds,
                 )
-                return "INSERT 0 1" in result
+                return row is not None
             await conn.execute(
                 """
                 INSERT INTO core.onboard_pins (fingerprint, agent_uuid, client_session_id, expires_at)
