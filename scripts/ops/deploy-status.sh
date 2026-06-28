@@ -39,9 +39,9 @@ H="$HOME"
 # label "" = no launchd service. subdir "" = repo root. port "" = no health probe.
 COMPONENTS=(
 "governance-mcp|com.unitares.governance-mcp|$H/projects/unitares-deploy||restart|8767"
-"gateway-mcp|com.unitares.gateway-mcp|$H/projects/unitares||restart-DEV|"
-"sentinel-beam|com.unitares.sentinel-beam|$H/projects/unitares|elixir/sentinel|restart-DEV|"
-"wave3a-handlers|com.unitares.wave3a-handlers|$H/projects/unitares|elixir/wave3a_handlers|restart-DEV|8770"
+"gateway-mcp|com.unitares.gateway-mcp|$H/projects/unitares-deploy||restart|8768"
+"sentinel-beam|com.unitares.sentinel-beam|$H/projects/unitares-deploy|elixir/sentinel|restart|"
+"wave3a-handlers|com.unitares.wave3a-handlers|$H/projects/unitares-deploy|elixir/wave3a_handlers|restart|8770"
 "lease-plane|com.unitares.lease-plane|$H/projects/unitares-deploy|elixir/lease_plane|hot-reload|"
 "discord-bridge|com.unitares.discord-bridge|$H/projects/unitares-discord-bridge||restart|"
 "dispatch-beam|com.cirwel.dispatch-beam|$H/projects/dispatch_beam||restart|"
