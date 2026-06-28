@@ -416,7 +416,8 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
                 )]
 
     # Activity tracking for auto-heartbeat
-    agent_id = arguments.get('agent_id')
+    agent_id = arguments.get('agent_id') if isinstance(arguments, dict) else None
+    session_id = arguments.get('client_session_id') if isinstance(arguments, dict) else None
     if agent_id and HEARTBEAT_CONFIG.enabled:
         should_trigger, trigger_reason = activity_tracker.track_tool_call(agent_id, name)
 
@@ -466,10 +467,12 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
             record_tool_usage(tool_name=name,
                               agent_id=resolve_minted_agent_id(name, agent_id, result),
                               success=success,
-                              error_type=error_type, latency_ms=latency_ms)
+                              error_type=error_type, latency_ms=latency_ms,
+                              session_id=session_id)
             return result
         record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
-                          error_type="unknown_tool", latency_ms=latency_ms)
+                          error_type="unknown_tool", latency_ms=latency_ms,
+                          session_id=session_id)
         return [TextContent(type="text", text=json.dumps({"success": False, "error": f"Unknown tool: {name}"}, indent=2))]
     except ImportError:
         return [TextContent(type="text", text=json.dumps({"success": False, "error": f"Handler registry not available for tool '{name}'"}, indent=2))]
@@ -482,7 +485,8 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
             recovery={"action": "Check tool parameters and try again"}
         )
         record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
-                          error_type="execution_error", latency_ms=latency_ms)
+                          error_type="execution_error", latency_ms=latency_ms,
+                          session_id=session_id)
         return [sanitized_error]
 
 

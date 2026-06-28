@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Optional, Tuple
+from uuid import UUID
 
 from src.logging_utils import get_logger
 
@@ -86,6 +87,55 @@ def classify_tool_result(result: Any) -> Tuple[bool, Optional[str]]:
 _IDENTITY_MINTING_TOOLS = frozenset({"onboard", "start_session"})
 
 
+# Off-path activity that proves process liveness without going through the
+# ceremonial process_agent_update handler. The check-in path already refreshes
+# presence directly; keep this list to value-bearing tools that otherwise leave
+# onboard+work agents with an expiring agent:/ lease.
+_PRESENCE_REFRESH_TOOLS = frozenset({
+    "knowledge",
+    "search_knowledge_graph",
+    "store_knowledge_graph",
+    "leave_note",
+    "outcome_event",
+    "observe",
+    "observe_agent",
+})
+
+
+def _is_uuid_like(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    try:
+        UUID(str(value))
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _schedule_presence_refresh(
+    *,
+    tool_name: str,
+    agent_id: Optional[str],
+    success: bool,
+    session_id: Optional[str],
+) -> None:
+    """Refresh agent:/ presence for successful off-path value activity."""
+    if (
+        not success
+        or tool_name not in _PRESENCE_REFRESH_TOOLS
+        or not _is_uuid_like(agent_id)
+    ):
+        return
+    try:
+        from src.mcp_handlers.identity.agent_presence_lease import (
+            schedule_agent_presence_heartbeat,
+        )
+
+        schedule_agent_presence_heartbeat(str(agent_id), session_id)
+    except Exception as e:  # pragma: no cover - observability must never break tools
+        logger.debug(f"agent presence refresh scheduling failed (non-fatal): {e}")
+
+
 def resolve_minted_agent_id(tool_name: str, agent_id: Optional[str], result: Any) -> Optional[str]:
     """Return the audit-attribution agent_id for a completed tool call.
 
@@ -116,6 +166,7 @@ def record_tool_usage(
     success: bool,
     error_type: Optional[str] = None,
     latency_ms: Optional[int] = None,
+    session_id: Optional[str] = None,
 ) -> None:
     """Record a tool call. Never raises — telemetry failure must not break the call."""
     try:
@@ -136,6 +187,7 @@ def record_tool_usage(
                 latency_ms=latency_ms,
                 success=success,
                 error_type=error_type,
+                session_id=session_id,
             ),
             name="persist_tool_usage",
         )
@@ -143,3 +195,10 @@ def record_tool_usage(
         pass  # no running event loop (CLI / tests)
     except Exception as e:
         logger.debug(f"DB tool_usage persist failed (non-fatal): {e}")
+
+    _schedule_presence_refresh(
+        tool_name=tool_name,
+        agent_id=agent_id,
+        success=success,
+        session_id=session_id,
+    )
