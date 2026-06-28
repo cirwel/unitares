@@ -6,6 +6,19 @@ _Companion to `eisv-maths-roadmap-v0.md` (§6.3 falsifiability gate, §7 anchor 
 
 `agents/watcher/agent.py:343` (`build_resolution_outcome_args`) already maps a Watcher finding resolution to an `external_signal` outcome attributed to **Watcher's own UUID** — confirmed = good outcome, false-positive dismissal = bad. With PR #1210 the handler now auto-snapshots Watcher's EISV onto that row. So for Watcher, the pipe exists. The disjointness in Appendix B (0 joinable rows, recon 2026-06-25) predates this wiring landing at volume. The remaining work is to make the join actually populate, with the right semantics, across more than one resident.
 
+## Live floor (2026-06-28) — the disjointness is thawing
+
+`stage_b_viability.py` queries run live against the governance DB:
+
+| metric | 2026-06-25 | 2026-06-28 |
+|---|---|---|
+| `external_signal` outcomes | 1,632 | 1,693 |
+| …carrying EISV | 2 | 20 |
+| …joinable to a prior baselined state (**OVERLAP**) | **0** | **17** |
+| baselined agents with external outcomes | 0 | 1 (Watcher) |
+
+The 17 joinable rows are *exactly* the `watcher_finding_*` outcomes (16 dismissed + 1 confirmed), all EISV-bearing, all attributed to Watcher's baselined UUID via the inline-recorder snapshot. So the channel works — but the probe floor is **overlap ≥ 20** before it emits an AUC, and the labels are single-resident and skewed (only fp-dismissals are `is_bad`, so the bad-label count is ~1). **The binding constraint is no longer the snapshot — it's breadth and volume.** Reprioritize: P3 (more baselined-resident channels) is now the lever to cross the floor and diversify labels; P2 (temporal binding) is a correctness refinement on rows that already join.
+
 ## The real gaps (the half-(b) work)
 
 1. **Baseline verification (blocking).** A label only yields a *residual* if the attributed UUID has a non-synthetic EISV baseline. Confirm Watcher (and each target resident) has `core.agent_state.synthetic = false` rows — i.e. it checks in often enough to build a Welford baseline. If a resident emits findings but never syncs EISV, the snapshot is null and the row still doesn't join. **Verify first; if absent, ensure the resident check-ins land before anything else.**
@@ -22,7 +35,7 @@ _Companion to `eisv-maths-roadmap-v0.md` (§6.3 falsifiability gate, §7 anchor 
 
 ## Phased plan
 
-- **P1 — verify + measure.** Confirm Watcher/Sentinel UUIDs are baselined; run `stage_b_viability.py` to see whether PR #1210 alone moved overlap off zero for Watcher's recent resolves. Establishes the live floor.
+- **P1 — verify + measure. ✅ DONE 2026-06-28.** Live overlap = **17** (Watcher channel), up from 0; floor is ≥20. Watcher is baselined; the task_* population is not. See "Live floor" above.
 - **P2 — temporal binding.** Register-at-emission / consume-at-adjudication for Watcher (and Sentinel). Smallest correctness fix; makes the residual-at-emission the thing being tested.
 - **P3 — breadth.** Sentinel + dialectic + operator-correction channels, tiered.
 - **P4 — wire `test_failed`.** The most objective bad anchor (1 event in 79k today); route CI/test failures to the responsible agent.
