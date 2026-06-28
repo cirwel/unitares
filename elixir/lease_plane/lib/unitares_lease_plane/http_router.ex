@@ -226,6 +226,31 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
+  # ---------- /v1/dialectic/reviewer ----------
+  # BEAM-owned reviewer assignment/reassignment — the last session-row column.
+  post "/v1/dialectic/reviewer" do
+    with %{"session_id" => sid, "reviewer_agent_id" => rev} <- conn.body_params,
+         true <- is_binary(sid) and byte_size(sid) > 0 and is_binary(rev) and byte_size(rev) > 0 do
+      case UnitaresLeasePlane.DialecticSaga.update_reviewer(sid, rev) do
+        :ok ->
+          json(conn, 200, %{ok: true, session_id: sid, reviewer_agent_id: rev})
+
+        {:error, :session_not_found} ->
+          json(conn, 404, %{ok: false, error: "session_not_found"})
+
+        {:error, _} ->
+          json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+      end
+    else
+      _ ->
+        json(conn, 422, %{
+          ok: false,
+          error: "schema_invalid",
+          detail: "session_id and reviewer_agent_id required"
+        })
+    end
+  end
+
   # ---------- /v1/dialectic/resolve ----------
   # BEAM-owned dialectic SYNTHESIS->RESOLVED commit (dialectic-on-BEAM Slice 1).
   # Python computes the resolution payload (convergence + agent-state mutation

@@ -253,6 +253,25 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
     end
   end
 
+  describe "update_reviewer/2" do
+    test "assigns a reviewer on an active session" do
+      session_id = insert_dialectic_session(phase: "antithesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert :ok = DialecticSaga.update_reviewer(session_id, "rev-99")
+      assert session_reviewer(session_id) == "rev-99"
+    end
+
+    test "rejects a blank reviewer" do
+      assert {:error, :invalid_reviewer} = DialecticSaga.update_reviewer("x", "")
+    end
+
+    test "missing session -> :session_not_found" do
+      assert {:error, :session_not_found} =
+               DialecticSaga.update_reviewer("test_elixir_nope_rev", "rev-1")
+    end
+  end
+
   describe "create_session/1" do
     test "inserts a session and starts a liveness watcher" do
       sid = "test_elixir_create_" <> Integer.to_string(System.unique_integer([:positive]))
@@ -315,6 +334,17 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       ])
 
     phase
+  end
+
+  defp session_reviewer(session_id) do
+    %{rows: [[rev]]} =
+      Postgrex.query!(
+        DB,
+        "SELECT reviewer_agent_id FROM core.dialectic_sessions WHERE session_id = $1",
+        [session_id]
+      )
+
+    rev
   end
 
   defp saga_state(saga_id) do

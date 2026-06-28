@@ -228,6 +228,42 @@ defmodule UnitaresLeasePlane.DialecticSaga do
 
   def update_phase(_session_id, _phase), do: {:error, :invalid_phase}
 
+  @doc """
+  Guarded reviewer assignment/reassignment — the last session-row column written
+  Python-side. BEAM as sole writer of `reviewer_agent_id` too. Refuses an
+  already-terminal session; missing session -> :session_not_found; otherwise :ok.
+  """
+  @spec update_reviewer(String.t(), String.t()) ::
+          :ok | {:error, :invalid_reviewer | :session_not_found | term()}
+  def update_reviewer(session_id, reviewer)
+      when is_binary(session_id) and is_binary(reviewer) and byte_size(reviewer) > 0 do
+    sql = """
+    UPDATE core.dialectic_sessions
+    SET reviewer_agent_id = $2, updated_at = now()
+    WHERE session_id = $1 AND status NOT IN ('resolved', 'failed', 'escalated')
+    RETURNING session_id
+    """
+
+    case Postgrex.query(DB, sql, [session_id, reviewer]) do
+      {:ok, %{num_rows: 1}} ->
+        :ok
+
+      {:ok, %{num_rows: 0}} ->
+        case Postgrex.query(DB, "SELECT 1 FROM core.dialectic_sessions WHERE session_id = $1", [
+               session_id
+             ]) do
+          {:ok, %{num_rows: 1}} -> :ok
+          {:ok, %{num_rows: 0}} -> {:error, :session_not_found}
+          {:error, e} -> {:error, e}
+        end
+
+      {:error, e} ->
+        {:error, e}
+    end
+  end
+
+  def update_reviewer(_session_id, _reviewer), do: {:error, :invalid_reviewer}
+
   defp do_resolve(params, session_id, payload, status) do
     case claim(params) do
       {:ok, %{saga_id: saga_id, origin: origin}} ->
