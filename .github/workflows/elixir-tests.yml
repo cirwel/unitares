@@ -1,0 +1,75 @@
+name: Elixir Tests
+
+# Closes the BEAM-vs-Python drift gap: the active Sentinel is the Elixir runtime
+# (com.unitares.sentinel-beam), but until this workflow nothing ran its test
+# suite in CI — so a regression in the BEAM forced-release poller (or any other
+# elixir/sentinel module) could merge unvalidated. This runs `mix test` for the
+# Sentinel app on every PR that touches it.
+#
+# Scope note: only elixir/sentinel runs here. Its test_helper.exs auto-detects
+# Postgres and EXCLUDES :db-tagged integration tests when the DB is unreachable,
+# so the pure-logic suite (incl. the cross-runtime fingerprint parity tests)
+# runs cleanly without a database service. elixir/lease_plane is intentionally
+# NOT included yet: its test_helper.exs raises without a live governance DB +
+# the lease_plane.* schema, which needs a Postgres service + migration load —
+# a follow-up once that harness exists.
+
+on:
+  push:
+    branches: [ master, main ]
+    paths:
+      - 'elixir/sentinel/**'
+      - '.github/workflows/elixir-tests.yml'
+  pull_request:
+    branches: [ master, main ]
+    paths:
+      - 'elixir/sentinel/**'
+      - '.github/workflows/elixir-tests.yml'
+
+# Least-privilege: this job only reads the repo and runs tests.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Structured as a matrix so adding DB-free apps later is one line.
+        app: [ sentinel ]
+
+    defaults:
+      run:
+        working-directory: elixir/${{ matrix.app }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - name: Set up Elixir / OTP
+      uses: erlef/setup-beam@v1
+      with:
+        otp-version: '27'
+        elixir-version: '1.19'
+
+    - name: Cache deps and build
+      uses: actions/cache@v4
+      with:
+        path: |
+          elixir/${{ matrix.app }}/deps
+          elixir/${{ matrix.app }}/_build
+        key: ${{ runner.os }}-mix-${{ matrix.app }}-${{ hashFiles(format('elixir/{0}/mix.lock', matrix.app), format('elixir/{0}/mix.exs', matrix.app)) }}
+        restore-keys: |
+          ${{ runner.os }}-mix-${{ matrix.app }}-
+
+    - name: Install dependencies
+      run: mix deps.get
+
+    - name: Run tests
+      # No DB service: test_helper.exs excludes :db-tagged integration tests
+      # when Postgres is unreachable, so the pure-logic suite runs green.
+      run: mix test
