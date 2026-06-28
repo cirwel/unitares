@@ -87,6 +87,39 @@ defmodule LeaseTestHelpers do
     parts |> Enum.map_join("-", &Base.encode16(&1, case: :lower))
   end
 
+  @doc """
+  Insert a dialectic session fixture into `core.dialectic_sessions` so a saga
+  (FK -> session_id) can be claimed against it. Returns the session_id.
+  """
+  def insert_dialectic_session(opts \\ []) do
+    session_id = Keyword.get(opts, :session_id, "test_elixir_dia_" <> short_rand())
+    paused = Keyword.get(opts, :paused_agent_id, "test_paused_" <> short_rand())
+    phase = Keyword.get(opts, :phase, "synthesis")
+    status = Keyword.get(opts, :status, "active")
+
+    Postgrex.query!(
+      DB,
+      "INSERT INTO core.dialectic_sessions (session_id, paused_agent_id, phase, status) VALUES ($1, $2, $3, $4)",
+      [session_id, paused, phase, status]
+    )
+
+    session_id
+  end
+
+  @doc "Cleanup hook — DELETE sagas then the session row for a fixture session_id."
+  def cleanup_dialectic_session(session_id) when is_binary(session_id) do
+    Postgrex.query!(
+      DB,
+      "DELETE FROM coordination.session_resolution_sagas WHERE session_id = $1",
+      [session_id]
+    )
+
+    Postgrex.query!(DB, "DELETE FROM core.dialectic_sessions WHERE session_id = $1", [session_id])
+    :ok
+  end
+
+  defp short_rand, do: :crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower)
+
   @doc "Standard local_beam acquire fixture, returns the params map."
   def local_beam_params(surface_id, opts \\ []) do
     %{
