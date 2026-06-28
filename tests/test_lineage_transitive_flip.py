@@ -87,7 +87,7 @@ async def _run_archive(srv_metadata, lease_fn=_false):
 
 
 def _chain_metadata():
-    old = datetime.now(timezone.utc) - timedelta(minutes=10)
+    old = datetime.now(timezone.utc) - timedelta(minutes=45)
     recent = datetime.now(timezone.utc) - timedelta(minutes=2)
     # p1 superseded single-hop (live child c1); gp1 reachable only transitively.
     return {

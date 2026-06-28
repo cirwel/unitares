@@ -675,6 +675,13 @@ async def _archive_superseded_parents(current_time) -> list:
         # 0 check-ins, because sibling ad111882 onboarded declaring it parent.)
         if int(getattr(meta, "total_updates", 0) or 0) == 0:
             continue
+        # A recently-checking-in parent is still an active participant, even if
+        # binding/lease liveness is absent or stale. Delay destructive
+        # succession archival until the parent has also gone quiet for the same
+        # freshness window that makes the child count as live.
+        parent_age = _agent_age_minutes(meta, current_time)
+        if parent_age is not None and parent_age <= LINEAGE_SUCCESSION_FRESH_WINDOW_MINUTES:
+            continue
         # Self-managed agents own their lifecycle — same exclusion as detection.
         agent_tags = getattr(meta, "tags", []) or []
         if {"autonomous", "embodied", "anima"} & set(t.lower() for t in agent_tags):
