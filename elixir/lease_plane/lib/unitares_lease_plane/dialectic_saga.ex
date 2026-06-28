@@ -127,6 +127,65 @@ defmodule UnitaresLeasePlane.DialecticSaga do
 
   def resolve(_), do: {:error, :invalid_params}
 
+  @doc """
+  BEAM-owned dialectic session creation: guarded INSERT into
+  `core.dialectic_sessions` + immediately start a liveness watcher, so a session
+  is watched from birth rather than waiting for the 30s reconciler. Idempotent on
+  `session_id` (`ON CONFLICT DO NOTHING`): a duplicate returns `{:ok, :exists}`.
+
+  Python still computes the `session_id` and field values (it owns id generation
+  + the request semantics); BEAM owns the write + the watcher start. Required:
+  `:session_id`, `:paused_agent_id`. Phase/status default to thesis/active (what
+  Python sets on create); all other fields are optional.
+  """
+  @spec create_session(map()) :: {:ok, :created | :exists} | {:error, term()}
+  def create_session(%{session_id: sid, paused_agent_id: paused} = p)
+      when is_binary(sid) and byte_size(sid) > 0 and is_binary(paused) and byte_size(paused) > 0 do
+    sql = """
+    INSERT INTO core.dialectic_sessions
+      (session_id, paused_agent_id, reviewer_agent_id, phase, status,
+       session_type, topic, reason, discovery_id, dispute_type,
+       max_synthesis_rounds, synthesis_round, paused_agent_state_json, trigger_source)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14)
+    ON CONFLICT (session_id) DO NOTHING
+    RETURNING session_id
+    """
+
+    args = [
+      sid,
+      paused,
+      Map.get(p, :reviewer_agent_id),
+      Map.get(p, :phase, "thesis"),
+      Map.get(p, :status, "active"),
+      Map.get(p, :session_type),
+      Map.get(p, :topic),
+      Map.get(p, :reason),
+      Map.get(p, :discovery_id),
+      Map.get(p, :dispute_type),
+      Map.get(p, :max_synthesis_rounds),
+      Map.get(p, :synthesis_round, 0),
+      encode_json(Map.get(p, :paused_agent_state)),
+      Map.get(p, :trigger_source)
+    ]
+
+    case Postgrex.query(DB, sql, args) do
+      {:ok, %{rows: [[_sid]]}} ->
+        UnitaresLeasePlane.DialecticLivenessSupervisor.ensure_started(sid)
+        {:ok, :created}
+
+      {:ok, %{rows: []}} ->
+        {:ok, :exists}
+
+      {:error, e} ->
+        {:error, e}
+    end
+  end
+
+  def create_session(_), do: {:error, :invalid_params}
+
+  defp encode_json(nil), do: nil
+  defp encode_json(v), do: Jason.encode!(v)
+
   defp do_resolve(params, session_id, payload, status) do
     case claim(params) do
       {:ok, %{saga_id: saga_id, origin: origin}} ->

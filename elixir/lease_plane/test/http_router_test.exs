@@ -47,6 +47,32 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
   defp parsed(conn), do: Jason.decode!(conn.resp_body)
 
+  describe "/v1/dialectic/session" do
+    test "creates a session (201) then idempotent replay (200)" do
+      sid = "test_elixir_httpcreate_" <> Integer.to_string(System.unique_integer([:positive]))
+      on_exit(fn -> cleanup_dialectic_session(sid) end)
+
+      r1 =
+        post_json("/v1/dialectic/session", %{
+          session_id: sid,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          reason: "test"
+        })
+
+      assert r1.status == 201
+      assert parsed(r1)["created"] == true
+
+      r2 = post_json("/v1/dialectic/session", %{session_id: sid, paused_agent_id: "p"})
+      assert r2.status == 200
+      assert parsed(r2)["created"] == false
+    end
+
+    test "missing fields → 422 schema_invalid" do
+      assert post_json("/v1/dialectic/session", %{session_id: "x"}).status == 422
+    end
+  end
+
   describe "/v1/dialectic/presence" do
     test "lists live sessions; resolved ones drop off" do
       session_id = insert_dialectic_session()

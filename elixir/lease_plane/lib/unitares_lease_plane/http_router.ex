@@ -169,6 +169,29 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
+  # ---------- /v1/dialectic/session ----------
+  # BEAM-owned dialectic session creation (Slice 2): guarded INSERT + start a
+  # liveness watcher at birth. Python computes the session_id + fields; BEAM owns
+  # the write. Gated Python-side by UNITARES_DIALECTIC_BEAM_RESOLUTION.
+  post "/v1/dialectic/session" do
+    case extract_create_params(conn.body_params) do
+      {:ok, params} ->
+        case UnitaresLeasePlane.DialecticSaga.create_session(params) do
+          {:ok, :created} ->
+            json(conn, 201, %{ok: true, session_id: params.session_id, created: true})
+
+          {:ok, :exists} ->
+            json(conn, 200, %{ok: true, session_id: params.session_id, created: false})
+
+          {:error, _} ->
+            json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+        end
+
+      {:error, detail} ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+    end
+  end
+
   # ---------- /v1/dialectic/resolve ----------
   # BEAM-owned dialectic SYNTHESIS->RESOLVED commit (dialectic-on-BEAM Slice 1).
   # Python computes the resolution payload (convergence + agent-state mutation
@@ -589,6 +612,26 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   end
 
   defp acquire_for_surface(params), do: UnitaresLeasePlane.acquire_local_beam(params)
+
+  defp extract_create_params(%{"session_id" => sid, "paused_agent_id" => paused} = body)
+       when is_binary(sid) and byte_size(sid) > 0 and is_binary(paused) and byte_size(paused) > 0 do
+    optional =
+      ~w(reviewer_agent_id session_type topic reason discovery_id dispute_type
+                  max_synthesis_rounds synthesis_round paused_agent_state trigger_source phase status)
+
+    params =
+      Enum.reduce(optional, %{session_id: sid, paused_agent_id: paused}, fn key, acc ->
+        case Map.get(body, key) do
+          nil -> acc
+          val -> Map.put(acc, String.to_atom(key), val)
+        end
+      end)
+
+    {:ok, params}
+  end
+
+  defp extract_create_params(_),
+    do: {:error, "session_id and paused_agent_id (non-empty strings) required"}
 
   defp extract_resolve_params(
          %{

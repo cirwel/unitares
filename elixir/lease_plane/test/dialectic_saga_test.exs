@@ -225,6 +225,39 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
     end
   end
 
+  describe "create_session/1" do
+    test "inserts a session and starts a liveness watcher" do
+      sid = "test_elixir_create_" <> Integer.to_string(System.unique_integer([:positive]))
+      on_exit(fn -> cleanup_dialectic_session(sid) end)
+
+      assert {:ok, :created} =
+               DialecticSaga.create_session(%{
+                 session_id: sid,
+                 paused_agent_id: "p",
+                 reviewer_agent_id: "r",
+                 reason: "test"
+               })
+
+      assert session_status(sid) == "active"
+      assert :gone != UnitaresLeasePlane.DialecticLiveness.snapshot(sid)
+    end
+
+    test "is idempotent on a duplicate session_id" do
+      sid = "test_elixir_create_" <> Integer.to_string(System.unique_integer([:positive]))
+      on_exit(fn -> cleanup_dialectic_session(sid) end)
+
+      assert {:ok, :created} =
+               DialecticSaga.create_session(%{session_id: sid, paused_agent_id: "p"})
+
+      assert {:ok, :exists} =
+               DialecticSaga.create_session(%{session_id: sid, paused_agent_id: "p"})
+    end
+
+    test "rejects missing paused_agent_id" do
+      assert {:error, :invalid_params} = DialecticSaga.create_session(%{session_id: "x"})
+    end
+  end
+
   defp insert_stale_reserved(session_id) do
     Postgrex.query!(
       DB,
