@@ -53,6 +53,11 @@ def update_lambda1(state) -> float:
     K_p_adj, K_i_adj = modulate_gains(base_K_p, base_K_i, rho)
 
     gains_modulated = (K_p_adj != base_K_p or K_i_adj != base_K_i)
+    # Surface the modulation so the monitor/result can report it honestly.
+    # Previously this flag stayed local and `_gains_modulated` was always False
+    # even when ρ(t) drove a real gain reduction — the HCK signal was decoupled
+    # from its own reported effect (F4).
+    state.gains_modulated = gains_modulated
 
     # PI calculation with modulated gains
     error_void = config.TARGET_VOID_FREQ - void_freq_current

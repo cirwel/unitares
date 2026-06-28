@@ -36,13 +36,19 @@ def run_calibration_recording(monitor, confidence: float, decision: Dict, drift_
     if (monitor._prev_verdict_action is not None
             and monitor._prev_drift_norm is not None
             and elapsed_since_prev > 10.0):
-        norm_delta = monitor._prev_drift_norm - current_norm  # positive = improved
+        # `improvement` is the trajectory-quality quantity: positive = drift
+        # dropped since the previous check-in (the intervention helped).
+        improvement = monitor._prev_drift_norm - current_norm
+        # `norm_delta` is the plain delta exposed in the payload and must follow
+        # the math convention current - prev (positive = norm rose). Keeping the
+        # two distinct prevents the field name from contradicting its sign (F3).
+        norm_delta = current_norm - monitor._prev_drift_norm
 
-        # Convert to [0, 1] quality signal via sigmoid
-        trajectory_quality = 1.0 / (1.0 + math.exp(-norm_delta * 10.0))
+        # Convert improvement to [0, 1] quality signal via sigmoid
+        trajectory_quality = 1.0 / (1.0 + math.exp(-improvement * 10.0))
 
         if (monitor._prev_verdict_action in ('proceed', 'pause')
-                and abs(norm_delta) > 0.03):
+                and abs(improvement) > 0.03):
             calibration_checker.record_tactical_decision(
                 confidence=monitor._prev_confidence,
                 decision=monitor._prev_verdict_action,
@@ -55,6 +61,7 @@ def run_calibration_recording(monitor, confidence: float, decision: Dict, drift_
             'prev_norm': monitor._prev_drift_norm,
             'current_norm': current_norm,
             'norm_delta': norm_delta,
+            'improvement': improvement,
         }
 
     # Store current verdict for next check-in's validation

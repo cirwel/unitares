@@ -15,7 +15,13 @@ def test_mark_circuit_breaker_enforcement_applied_preserves_policy_request():
             "mode": "circuit_breaker_candidate",
             "actor": None,
             "effect": None,
-            "note": "Policy requested enforcement; actuator state is applied by the caller/runtime boundary.",
+            "note": (
+                "Policy requested enforcement. This envelope is the pre-actuation "
+                "candidate; the authenticated update boundary applies it as a circuit "
+                "breaker (agent metadata -> status=paused, blocking later writes) and "
+                "overwrites this with applied=true. A non-actuating path (e.g. "
+                "simulate) leaves it unapplied."
+            ),
         },
     }
 

@@ -84,7 +84,11 @@ class TestTrajectoryValidationGating:
         assert result["prev_verdict"] == "proceed"
         assert result["prev_norm"] == 0.3
         assert result["current_norm"] == 0.1
-        assert result["norm_delta"] == pytest.approx(0.2)
+        # norm_delta follows the plain math convention current - prev; the norm
+        # dropped 0.3 -> 0.1, so the delta is negative (F3).
+        assert result["norm_delta"] == pytest.approx(-0.2)
+        # improvement is the trajectory-quality quantity (positive = drift dropped).
+        assert result["improvement"] == pytest.approx(0.2)
         assert 0.0 <= result["quality"] <= 1.0
         assert result["quality"] > 0.5  # improvement → quality above 0.5
 
