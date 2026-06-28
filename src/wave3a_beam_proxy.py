@@ -155,7 +155,7 @@ async def _emit_event(event_type: str, payload: Dict[str, Any]) -> None:
     ``emit_event`` only calls ``pool.acquire()``, which both the wrapper
     and a raw asyncpg pool expose, so the call works against either. An
     earlier ``isinstance(pool, asyncpg.Pool)`` guard here silently dropped
-    every emit in production (FIND-R1, council fold). The probe module
+    every emit in production (FIND-R1, review fold). The probe module
     (``wave3a_probe.py::_write_measurement``) demonstrates the same
     pattern using ``db.acquire()`` directly.
     """

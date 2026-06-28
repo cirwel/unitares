@@ -54,7 +54,7 @@ def _allowlisted_operator_tokens() -> Set[str]:
     ``WAVE_3A_ADMIN_TOKEN``. Acceptable for Wave 3a (manual rollback only).
     If automated rollback (e.g., Sentinel-triggered on §4.2 breach) is
     added, mint a dedicated narrower token so Sentinel does not acquire
-    full operator privileges. FIND-R3 council fold.
+    full operator privileges. FIND-R3 review fold.
     """
     raw = os.environ.get(OPERATOR_TOKENS_ENV, "")
     return {t.strip() for t in raw.split(",") if t.strip()}

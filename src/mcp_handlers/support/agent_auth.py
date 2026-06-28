@@ -456,7 +456,7 @@ def require_registered_agent(arguments: Dict[str, Any]) -> Tuple[str, Optional[T
         # core.identities has marked archived/deleted/disabled. Without this
         # gate, a stale-positive caller passes auth and writes against a row
         # that downstream lifecycle code treats as terminal — the 67-row
-        # active/archived inversion observed in council pass-2 (live-verifier).
+        # active/archived inversion observed in review pass-2 (live verification).
         #
         # Allowlist (not blocklist) so a future status value not enumerated
         # below fails closed instead of silently passing through (council

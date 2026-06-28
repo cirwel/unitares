@@ -1218,7 +1218,7 @@ async def resolve_session_identity(
             # S21-b §1: hydrate the in-memory dict so require_registered_agent
             # sees this UUID in the same request that minted it. Without this,
             # the caller's next tool call gets "not registered" until the next
-            # bulk reload (axiom-#3 violation H14, council pass-2).
+            # bulk reload (axiom-#3 violation H14, review pass-2).
             try:
                 from src.agent_metadata_persistence import register_minted_agent_in_dict
                 register_minted_agent_in_dict(
