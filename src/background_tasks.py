@@ -356,7 +356,7 @@ async def background_metadata_load():
 # The periodic sweep used to hide real onboarding/check-in bugs (initializing
 # agents being archived before their first check-in). The canonical engine
 # ``auto_archive_orphan_agents`` remains available for manual operator use via
-# the ``archive_orphan_agents`` MCP tool, which defaults to dry_run=True.
+# the ``archive_orphan_agents`` MCP tool, which defaults to preview-only.
 # ---------------------------------------------------------------------------
 
 
@@ -1775,7 +1775,7 @@ def start_all_background_tasks(set_ready):
     _supervised_create_task(background_metadata_load(), name="metadata_load")
     # periodic_orphan_cleanup removed 2026-04-19 — auto-sweep was hiding
     # onboarding bugs behind archival. Use the archive_orphan_agents MCP tool
-    # manually (defaults to dry_run) if a sweep is actually wanted.
+    # manually (defaults to preview-only) if a sweep is actually wanted.
     _supervised_create_task(stuck_agent_recovery_task(), name="stuck_agent_recovery")
     _supervised_create_task(
         dialectic_auto_resolve_sweeper_task(), name="dialectic_auto_resolve_sweeper"

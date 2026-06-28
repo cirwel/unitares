@@ -6,9 +6,9 @@ bulk manual archive swept agents that a workflow still expected):
 1. ``handle_archive_agent`` refuses to silently archive an agent that looks
    live — a running process binding, recent activity, or a declared *causal*
    lineage edge — unless the caller passes ``force=true``.
-2. ``handle_archive_old_test_agents`` defaults to ``dry_run=true`` (preview
-   first), mirroring ``archive_orphan_agents``, so the fleet-wide
-   ``include_all`` lever can't execute without an explicit opt-in.
+2. ``handle_archive_old_test_agents`` defaults to ``dry_run=true`` and still
+   refuses to mutate unless ``UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL`` is enabled,
+   so the fleet-wide ``include_all`` lever can't execute by accident.
 
 These are complementary to PRs #720/#721, which harden the *automatic*
 archival paths; this covers the *manual* path and the bulk-sweep default.
@@ -248,7 +248,35 @@ class TestArchiveOldTestAgentsPreviewDefault:
         mock_arch.assert_not_awaited()  # but nothing is actually archived
 
     @pytest.mark.asyncio
-    async def test_dry_run_false_executes(self):
+    async def test_dry_run_false_still_does_not_execute_without_env_opt_in(self):
+        agent_uuid = "real_002"
+        meta = _make_meta(agent_id=agent_uuid, label="real-agent")
+        mock_server = MagicMock()
+        mock_server.agent_metadata = {agent_uuid: meta}
+        mock_server.load_metadata_async = AsyncMock()
+        mock_server.monitors = {}
+
+        with patch("src.mcp_handlers.lifecycle.operations.mcp_server", mock_server), \
+             patch("src.agent_lifecycle._agent_age_hours", return_value=1000.0), \
+             patch(
+                 "src.mcp_handlers.lifecycle.operations._archive_one_agent",
+                 new=AsyncMock(return_value=True),
+             ) as mock_arch:
+            from src.mcp_handlers.lifecycle.operations import handle_archive_old_test_agents
+            result = await handle_archive_old_test_agents(
+                {"include_all": True, "dry_run": False}
+            )
+
+        body = _payload(result)
+        assert body["dry_run"] is False
+        assert body["auto_archival_enabled"] is False
+        assert body["archived_count"] == 0
+        assert body["would_archive_count"] >= 1
+        mock_arch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dry_run_false_executes_with_env_opt_in(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL", "true")
         agent_uuid = "real_002"
         meta = _make_meta(agent_id=agent_uuid, label="real-agent")
         mock_server = MagicMock()

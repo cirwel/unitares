@@ -6,6 +6,7 @@ Monitor creation, agent archival, standardized info building.
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime
 
@@ -91,6 +92,19 @@ _UUID_PATTERN = re.compile(
 _EPHEMERAL_LABEL = re.compile(r'^claude_\w+_\d{8}', re.I)
 _PROTECTED_TIERS = frozenset({"verified", "established", "trusted"})
 _SYSTEM_AGENT_IDS: frozenset[str] = frozenset()
+_AUTO_ARCHIVAL_ENV = "UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL"
+
+
+def auto_agent_archival_enabled() -> bool:
+    """Return whether automated agent archival may mutate lifecycle state.
+
+    Default-off by policy: automatic sweeps are allowed to identify candidates,
+    but only manual archive_agent should hide an agent unless an operator
+    deliberately enables this escape hatch.
+    """
+    return os.getenv(_AUTO_ARCHIVAL_ENV, "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
 
 def is_agent_protected(agent_id: str, meta: AgentMetadata) -> bool:
@@ -165,11 +179,11 @@ async def auto_archive_orphan_agents(
     _monitors: dict | None = None,
 ) -> list[dict]:
     """
-    Archive orphan and ephemeral agents to prevent proliferation.
+    Identify orphan and ephemeral agents without archiving by default.
 
     Delegates classification to ``classify_for_archival`` and protection
-    checks to ``is_agent_protected``. Archival execution uses the
-    persist-first ``_archive_one_agent`` helper.
+    checks to ``is_agent_protected``. Automatic mutation is disabled unless
+    ``UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL`` is explicitly set true.
 
     Args:
         zero_update_hours: Accepted for back-compat with callers that still
@@ -179,13 +193,19 @@ async def auto_archive_orphan_agents(
             that need to iterate mcp_server.agent_metadata instead).
 
     Returns:
-        List of dicts describing each archived (or would-archive) agent.
+        List of dicts describing each archived or would-archive agent.
     """
-    from src.mcp_handlers.lifecycle.helpers import _archive_one_agent
     del zero_update_hours  # accepted for back-compat, no longer used
 
     source = _metadata if _metadata is not None else agent_metadata
     mon = _monitors if _monitors is not None else monitors
+    auto_enabled = auto_agent_archival_enabled()
+    mutation_enabled = auto_enabled and not dry_run
+    archive_one = None
+    if mutation_enabled:
+        from src.mcp_handlers.lifecycle.helpers import _archive_one_agent
+        archive_one = _archive_one_agent
+
     results: list[dict] = []
 
     for agent_id, meta in list(source.items()):
@@ -204,13 +224,15 @@ async def auto_archive_orphan_agents(
         if not should:
             continue
 
-        if not dry_run:
-            ok = await _archive_one_agent(
+        archived = False
+        if mutation_enabled and archive_one is not None:
+            ok = await archive_one(
                 agent_id, meta, f"Auto-archived: {reason}",
                 monitors=mon,
             )
             if not ok:
                 continue
+            archived = True
             try:
                 from src.sequential_calibration import get_sequential_calibration_tracker
                 get_sequential_calibration_tracker().drop_agent_state(agent_id)
@@ -228,6 +250,9 @@ async def auto_archive_orphan_agents(
             "reason": reason,
             "updates": _agent_update_count(meta),
             "label": getattr(meta, 'label', None),
+            "would_archive": True,
+            "archived": archived,
+            "auto_archival_enabled": auto_enabled,
         })
 
     return results

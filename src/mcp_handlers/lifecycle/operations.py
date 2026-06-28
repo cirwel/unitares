@@ -548,23 +548,21 @@ async def handle_ping_agent(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
 @mcp_tool("archive_old_test_agents", timeout=20.0)
 async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Archive stale agents - test agents by default, or ALL stale agents with include_all=true
+    """Preview stale agents - test agents by default, or ALL stale agents with include_all=true
 
-    Use include_all=true to clean up any agent inactive for max_age_days (default: 3 days).
+    Use include_all=true to review any agent inactive for max_age_days (default: 3 days).
 
-    PREVIEW-FIRST: this sweep defaults to dry_run=true (mirrors
-    archive_orphan_agents) so a fleet-wide ``include_all`` pass shows what it
-    WOULD archive before touching anything. Pass dry_run=false to execute.
+    Automatic archival is disabled by default. This tool reports what would be
+    archived; use archive_agent for deliberate manual archival.
     """
-    from src.agent_lifecycle import _agent_age_hours
+    from src.agent_lifecycle import _agent_age_hours, auto_agent_archival_enabled
 
     max_age_hours = arguments.get("max_age_hours", 6)
     max_age_days = arguments.get("max_age_days")
     include_all = arguments.get("include_all", False)
-    # Default to preview: a bulk archival lever that executes immediately is the
-    # "archive everyone" footgun (2026-06-14 incident). Opt into execution
-    # explicitly with dry_run=false.
     dry_run = arguments.get("dry_run", True)
+    auto_enabled = auto_agent_archival_enabled()
+    mutation_enabled = auto_enabled and not dry_run
 
     if include_all and max_age_days is None and "max_age_hours" not in arguments:
         max_age_days = 3
@@ -578,6 +576,7 @@ async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[
     await mcp_server.load_metadata_async()
 
     archived_agents = []
+    candidates = []
 
     for agent_id, meta in list(mcp_server.agent_metadata.items()):
         if meta.status in ("archived", "deleted"):
@@ -591,12 +590,14 @@ async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[
         # Immediate archive: test/ping agents with very low update count
         if meta.total_updates <= 2 and is_test:
             reason = f"Auto-archived: test/ping agent with {meta.total_updates} update(s)"
-            if not dry_run:
+            candidate = {"id": agent_id, "reason": "low_updates", "updates": meta.total_updates}
+            candidates.append(candidate)
+            if mutation_enabled:
                 if not await _archive_one_agent(
                     agent_id, meta, reason, monitors=mcp_server.monitors,
                 ):
                     continue
-            archived_agents.append({"id": agent_id, "reason": "low_updates", "updates": meta.total_updates})
+                archived_agents.append(candidate)
             continue
 
         # Initializing agents (never checked in) are ghosts, not orphans —
@@ -613,27 +614,39 @@ async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[
         if age_h is None or age_h < max_age_hours:
             continue
         reason = f"Inactive for {age_h:.1f} hours (threshold: {max_age_hours} hours)"
-        if not dry_run:
+        candidate = {"id": agent_id, "reason": "stale", "days_inactive": round(age_h / 24, 1)}
+        candidates.append(candidate)
+        if mutation_enabled:
             if not await _archive_one_agent(
                 agent_id, meta, reason, monitors=mcp_server.monitors,
             ):
                 continue
-        archived_agents.append({"id": agent_id, "reason": "stale", "days_inactive": round(age_h / 24, 1)})
+            archived_agents.append(candidate)
+
+    if not auto_enabled:
+        action = "auto archival disabled - preview only; use archive_agent for manual archive"
+    elif dry_run:
+        action = "preview - use dry_run=false to execute"
+    else:
+        action = "archived"
 
     return success_response({
         "success": True,
         "dry_run": dry_run,
+        "auto_archival_enabled": auto_enabled,
         "archived_count": len(archived_agents),
         "archived_agents": archived_agents[:20],
-        "total_would_archive": len(archived_agents),
+        "would_archive_count": len(candidates),
+        "would_archive_agents": candidates[:20],
+        "total_would_archive": len(candidates),
         "max_age_days": max_age_hours / 24,
         "include_all": include_all,
-        "action": "preview - use dry_run=false to execute" if dry_run else "archived"
+        "action": action,
     })
 
 @mcp_tool("archive_orphan_agents", timeout=30.0)
 async def handle_archive_orphan_agents(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Aggressively archive orphan agents to prevent proliferation.
+    """Preview orphan agents without archiving by default.
 
     Thin wrapper around the canonical orphan heuristic engine in
     ``agent_lifecycle.auto_archive_orphan_agents``.
@@ -643,11 +656,12 @@ async def handle_archive_orphan_agents(arguments: Dict[str, Any]) -> Sequence[Te
     - max_updates: Skip agents with more updates than this (default: 3).
     - dry_run: Preview without archiving (default: true).
     """
-    from src.agent_lifecycle import auto_archive_orphan_agents
+    from src.agent_lifecycle import auto_archive_orphan_agents, auto_agent_archival_enabled
 
     max_age_hours = float(arguments.get("max_age_hours", 6))
     max_updates = int(arguments.get("max_updates", 3))
     dry_run = arguments.get("dry_run", True)
+    auto_enabled = auto_agent_archival_enabled()
 
     low_update_hours = min(max(max_age_hours / 2, 1.0), max_age_hours)
     unlabeled_hours = max_age_hours
@@ -668,16 +682,27 @@ async def handle_archive_orphan_agents(arguments: Dict[str, Any]) -> Sequence[Te
     )
 
     filtered = [r for r in results if r.get("updates", 0) <= max_updates]
+    archived = [r for r in filtered if r.get("archived")]
 
     for r in filtered:
         if len(r.get("id", "")) > 12:
             r["id"] = r["id"][:12] + "..."
 
+    if not auto_enabled:
+        action = "auto archival disabled - preview only; use archive_agent for manual archive"
+    elif dry_run:
+        action = "preview - set dry_run=false to execute"
+    else:
+        action = "archived"
+
     return success_response({
         "success": True,
         "dry_run": dry_run,
-        "archived_count": len(filtered),
-        "archived_agents": filtered[:30],
+        "auto_archival_enabled": auto_enabled,
+        "archived_count": len(archived),
+        "archived_agents": archived[:30],
+        "would_archive_count": len(filtered),
+        "would_archive_agents": filtered[:30],
         "total_would_archive": len(filtered),
         "thresholds": {
             "max_age_hours": max_age_hours,
@@ -685,5 +710,5 @@ async def handle_archive_orphan_agents(arguments: Dict[str, Any]) -> Sequence[Te
             "low_update_hours": low_update_hours,
             "unlabeled_hours": unlabeled_hours
         },
-        "action": "preview - set dry_run=false to execute" if dry_run else "archived"
+        "action": action,
     })

@@ -613,7 +613,7 @@ class GovernanceClient:
     # --- Lifecycle ---
 
     async def archive_orphan_agents(self, **kwargs: Any) -> ArchiveResult:
-        """Archive orphan agents. Maps to server tool: archive_orphan_agents."""
+        """Preview orphan archival candidates. Maps to archive_orphan_agents."""
         raw = await self.call_tool("archive_orphan_agents", kwargs)
         return ArchiveResult.model_validate(raw)
 

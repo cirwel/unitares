@@ -1348,7 +1348,7 @@ class TestAutoArchiveOrphanAgents:
             agent_metadata.pop(test_id, None)
 
     @pytest.mark.asyncio
-    async def test_persistence_failure_does_not_mutate_in_memory_state(self):
+    async def test_persistence_failure_does_not_mutate_in_memory_state(self, monkeypatch):
         """Regression (2026-04-10 stuck-monitor leak incident):
         auto_archive_orphan_agents used to mutate meta.status in memory only.
         On the next load_metadata_async(force=True), the mutation was wiped
@@ -1357,6 +1357,7 @@ class TestAutoArchiveOrphanAgents:
         calls archive_agent() to persist to Postgres FIRST, and if persistence
         fails the in-memory meta must not be mutated (avoid divergence).
         """
+        monkeypatch.setenv("UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL", "true")
         # Tier-2 fixture (non-UUID, unlabeled, 1 update, 5h old) since tier-1
         # (UUID + 0 updates) no longer classifies as archivable.
         from src.agent_state import auto_archive_orphan_agents, agent_metadata, AgentMetadata
@@ -1381,8 +1382,9 @@ class TestAutoArchiveOrphanAgents:
             agent_metadata.pop(test_id, None)
 
     @pytest.mark.asyncio
-    async def test_successful_archive_prunes_sequential_calibration_agent_state(self):
+    async def test_successful_archive_prunes_sequential_calibration_agent_state(self, monkeypatch):
         """Archive lifecycle is the retention boundary for per-agent calibration slices."""
+        monkeypatch.setenv("UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL", "true")
         from src.agent_state import auto_archive_orphan_agents, agent_metadata, AgentMetadata
         old_time = (datetime.now() - timedelta(hours=5)).isoformat()
         test_id = "calibration-prune-test-agent"

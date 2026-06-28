@@ -337,8 +337,9 @@ def _detect_stuck_agents(
         # Lineage succession: a parent whose declared-lineage child is actively
         # checking in is not stuck — the process rotated, lineage continuous
         # (KG 2026-05-06). Suppress EVERY stuck reason for it (cadence-silence,
-        # margin, pattern); the auto_recover sweep archives it as
-        # lineage_succession via _archive_superseded_parents.
+        # margin, pattern). The auto_recover sweep can archive it as
+        # lineage_succession only when automatic agent archival is explicitly
+        # enabled.
         if _is_superseded_by_lineage(agent_id, meta, live_parent_ids):
             continue
 
@@ -616,18 +617,22 @@ def _transitive_archival_enabled() -> bool:
 
 
 async def _archive_superseded_parents(current_time) -> list:
-    """Archive active parents whose declared-lineage child has taken over.
+    """Optionally archive active parents whose declared-lineage child took over.
 
     Mirrors the suppression in _detect_stuck_agents: a parent with a live
-    lineage successor is retired with a lineage_succession lifecycle event
-    rather than left to re-trip detection until the stale cap. Mutation path —
-    only called from the auto_recover sweep, never the read-only dashboard
-    refresh. Best-effort: _archive_one_agent persists-first and returns False
-    on DB failure, so a failed write simply leaves the parent for next sweep.
+    lineage successor is not treated as stuck. Automatic archival is disabled by
+    default so succession does not hide uncertain agents; mutation only happens
+    when UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL is explicitly enabled. This is only
+    called from the auto_recover sweep, never the read-only dashboard refresh.
     """
-    from .helpers import _archive_one_agent
+    from src.agent_lifecycle import auto_agent_archival_enabled
 
     results = []
+    if not auto_agent_archival_enabled():
+        return results
+
+    from .helpers import _archive_one_agent
+
     live_parent_ids = _live_lineage_parent_ids(current_time)
     if not live_parent_ids:
         return results
@@ -851,9 +856,9 @@ async def handle_detect_stuck_agents(arguments: Dict[str, Any]) -> Sequence:
         # Auto-recover if requested
         recovered = []
         if auto_recover:
-            # Retire superseded parents first (lineage_succession). These were
-            # already suppressed from stuck_agents by detection; archiving them
-            # stops the next sweep from re-evaluating a process that rotated.
+            # Superseded parents are already suppressed from stuck_agents by
+            # detection. Automatic archival is default-off; this only retires
+            # them when an operator explicitly enables auto agent archival.
             superseded = await _archive_superseded_parents(datetime.now(timezone.utc))
             if superseded:
                 recovered.extend(superseded)

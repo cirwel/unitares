@@ -662,7 +662,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         "update_agent_metadata": "✏️ Update tags and notes",
         "archive_agent": "📦 Archive for long-term storage",
         "delete_agent": "🗑️ Delete agent (protected for pioneers)",
-        "archive_old_test_agents": "🧹 Auto-archive stale test agents",
+        "archive_old_test_agents": "🧹 Preview stale agent archival candidates",
         "mark_response_complete": "✅ Mark agent as having completed response, waiting for input",
         "self_recovery": "▶️ Self-recovery: use action='quick' for safe states, action='review' for full recovery with reflection",
         "get_system_history": "📜 Export time-series history (inline)",
