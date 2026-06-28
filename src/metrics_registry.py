@@ -59,6 +59,28 @@ DIALECTIC_SESSIONS_ACTIVE = Gauge(
     'Number of active dialectic sessions'
 )
 
+# Wave 3a BEAM-outbound proxy metrics (governance MCP -> BEAM listener).
+# The DB-backed coordination events + measurement rows in
+# src/wave3a_beam_proxy.py are the durable §4.2 audit channel; these two are
+# the live /metrics surface (Grafana) the audit channel does not expose:
+# per-tool call counts, latency, and fallback reason in real time.
+# `outcome` is "ok" on success or the ProxyResult.fallback_reason on failure
+# (timeout / non_200 / connect_error / decode_error / envelope_invalid / other).
+BEAM_PROXY_CALLS_TOTAL = Counter(
+    'unitares_beam_proxy_calls_total',
+    'Total BEAM proxy dispatch attempts by tool and outcome',
+    ['tool_name', 'outcome']
+)
+
+BEAM_PROXY_LATENCY = Histogram(
+    'unitares_beam_proxy_latency_seconds',
+    'BEAM proxy outbound call latency in seconds by tool and outcome',
+    ['tool_name', 'outcome'],
+    # Bucketed tight around the 500ms (§3.2) hard timeout budget so the
+    # timeout cliff and the sub-budget distribution are both legible.
+    buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.4, 0.5, 0.75, 1.0)
+)
+
 # Server info (static)
 SERVER_INFO = Gauge(
     'unitares_server_info',

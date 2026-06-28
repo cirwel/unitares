@@ -30,6 +30,28 @@ UNITARES is proprioceptive runtime state telemetry for long-lived AI-agent fleet
 - Not hardened against a motivated adversary gaming the EISV proxy. The design is adversarial-aware — outcomes can't be faked, baselines are self-relative — but enforcement leans lenient by intent and there has been no red-team. See [README → Scope and threat model](../README.md#scope-and-threat-model).
 - Not a claim of broad external adoption yet; the public deployment metrics describe a single-operator stress test.
 
+## Implementation status: what's live vs proposed
+
+A cold reader who greps the code and also reads `docs/proposals/` can easily
+mistake a *proposed* surface for vaporware, or conclude a *live* surface is
+"not implemented" because the README mentions it and the obvious file doesn't.
+This table is the authoritative shipped/proposed line. If it disagrees with
+runtime, trust [`dev/CANONICAL_SOURCES.md`](dev/CANONICAL_SOURCES.md) and the
+referenced files.
+
+| Surface | Status | Where to verify it's real |
+|---|---|---|
+| Check-in / EISV / verdict loop | **Live** | `src/behavioral_assessment.py`, `src/behavioral_state.py`; flow in [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md) |
+| Self-relative (z-score vs own Welford baseline) scoring | **Live** | `behavioral_assessment.py` module docstring + `SIGMA_*` constants (provenance documented inline) |
+| Dialectic review (thesis / antithesis / synthesis, reviewer selection) | **Live** | `src/mcp_handlers/dialectic/handlers.py` — `submit_thesis` / `submit_antithesis` / `submit_synthesis` / `request_dialectic_review`, all in `TOOL_ORDER`. Not a stub. |
+| Knowledge graph (discoveries, edges, FTS) | **Live, advisory** | Committed schema `db/postgres/knowledge_schema.sql` + migration `002_knowledge_schema.sql`; tools `knowledge()`, `store_knowledge_graph`, `search_knowledge_graph`. AGE relational store is canonical; AGE graph is advisory. |
+| HTTP write/decision endpoints | **Live** | `src/http_api.py` — `POST /v1/effect-veto`, `POST /v1/tools/call`, `POST /api/findings`, `POST /v1/substrate/observe`. The **dashboard UI** is read-only by design; the **API** mutates. |
+| ODE / thermodynamic model | **Live but diagnostic only** | Runs in parallel; does **not** drive verdicts (behavioral path overrides). See [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md). |
+| BEAM Wave 3a outbound proxy | **Live, optimization-only** | `src/wave3a_beam_proxy.py`. Python in-process dispatch is the authority; BEAM is a routed fast-path that **fails open to Python** on any error (500ms hard timeout). Routing is env-flag-gated (`src/wave3a_routing.py`). Observability: DB coordination events + `unitares_beam_proxy_*` Prometheus metrics. |
+
+If a capability is **not** in this table and only appears under `docs/proposals/`,
+treat it as proposed, not shipped.
+
 ## Fast path: three minutes
 
 ```bash

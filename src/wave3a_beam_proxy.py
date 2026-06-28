@@ -191,6 +191,31 @@ async def _emit_event(event_type: str, payload: Dict[str, Any]) -> None:
         )
 
 
+def _record_proxy_metric(tool_name: str, outcome: str, elapsed_ms: int) -> None:
+    """Record the Prometheus call-count + latency for one proxy attempt.
+
+    Prometheus is the live ``/metrics`` surface (Grafana); the DB-backed
+    coordination events and ``measurement.wave_3a.request`` rows above remain
+    the durable §4.2 audit channel. This adds the missing real-time
+    observability dimension — calls / latency / fallback-reason per tool —
+    without touching that contract. ``outcome`` is ``"ok"`` on success or the
+    ``fallback_reason`` on any failure. Swallows all errors: a metrics failure
+    MUST NOT perturb the dispatch path (same discipline as ``_emit_event``).
+    """
+    try:
+        from src.metrics_registry import (
+            BEAM_PROXY_CALLS_TOTAL,
+            BEAM_PROXY_LATENCY,
+        )
+
+        BEAM_PROXY_CALLS_TOTAL.labels(tool_name=tool_name, outcome=outcome).inc()
+        BEAM_PROXY_LATENCY.labels(tool_name=tool_name, outcome=outcome).observe(
+            elapsed_ms / 1000.0
+        )
+    except Exception as exc:  # noqa: BLE001 — metrics are observability infra
+        logger.debug("[wave3a-proxy] metric record failed: %r", exc)
+
+
 def _spawn_emit(event_type: str, payload: Dict[str, Any]) -> None:
     """Fire-and-forget the event emit, keeping a strong task ref.
 
@@ -377,6 +402,7 @@ async def proxy_to_beam(
             tool_name,
             elapsed_ms,
         )
+        _record_proxy_metric(tool_name, "timeout", elapsed_ms)
         return ProxyResult(
             ok=False, fallback_reason="timeout", elapsed_ms=elapsed_ms
         )
@@ -398,6 +424,7 @@ async def proxy_to_beam(
             exc.response.status_code if exc.response else "?",
             elapsed_ms,
         )
+        _record_proxy_metric(tool_name, "non_200", elapsed_ms)
         return ProxyResult(
             ok=False, fallback_reason="non_200", elapsed_ms=elapsed_ms
         )
@@ -418,6 +445,7 @@ async def proxy_to_beam(
             type(exc).__name__,
             elapsed_ms,
         )
+        _record_proxy_metric(tool_name, "connect_error", elapsed_ms)
         return ProxyResult(
             ok=False, fallback_reason="connect_error", elapsed_ms=elapsed_ms
         )
@@ -442,6 +470,7 @@ async def proxy_to_beam(
             exc,
             elapsed_ms,
         )
+        _record_proxy_metric(tool_name, trigger, elapsed_ms)
         return ProxyResult(
             ok=False, fallback_reason=trigger, elapsed_ms=elapsed_ms
         )
@@ -465,6 +494,7 @@ async def proxy_to_beam(
             violation,
             elapsed_ms,
         )
+        _record_proxy_metric(tool_name, "envelope_invalid", elapsed_ms)
         return ProxyResult(
             ok=False,
             fallback_reason="envelope_invalid",
@@ -490,6 +520,7 @@ async def proxy_to_beam(
         payload_bytes=payload_bytes,
         beam_url=beam_url,
     )
+    _record_proxy_metric(tool_name, "ok", elapsed_ms)
     return ProxyResult(ok=True, response=body, elapsed_ms=elapsed_ms)
 
 
