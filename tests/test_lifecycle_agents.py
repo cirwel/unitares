@@ -1533,6 +1533,39 @@ class TestArchiveOrphanAgents:
             assert data["archived_count"] == 0
 
     @pytest.mark.asyncio
+    async def test_max_updates_blocks_env_enabled_mutation(self, server, monkeypatch):
+        monkeypatch.setenv("UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL", "true")
+        old = (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat()
+        high_update_id = "12345678-1234-1234-1234-123456789abc"
+        low_update_id = "low-id"
+        server.agent_metadata = {
+            high_update_id: make_agent_meta(
+                status="active", total_updates=5, last_update=old, label=None
+            ),
+            low_update_id: make_agent_meta(
+                status="active", total_updates=1, last_update=old, label=None
+            ),
+        }
+        server.monitors = {
+            high_update_id: MagicMock(),
+            low_update_id: MagicMock(),
+        }
+        with patch_lifecycle_server(server), \
+             patch_agent_storage() as mock_storage:
+            mock_storage.archive_agent = AsyncMock()
+            from src.mcp_handlers.lifecycle.handlers import handle_archive_orphan_agents
+            result = await handle_archive_orphan_agents({"dry_run": False})
+            data = _parse(result)
+
+        archived_ids = [
+            call.args[0] for call in mock_storage.archive_agent.await_args_list
+        ]
+        assert archived_ids == [low_update_id]
+        assert data["archived_count"] == 1
+        assert server.agent_metadata[high_update_id].status == "active"
+        assert server.agent_metadata[low_update_id].status == "archived"
+
+    @pytest.mark.asyncio
     async def test_max_age_hours_scales_thresholds(self, server):
         # Tier-2 (non-UUID, unlabeled, 1 update): with max_age_hours=2 the
         # low_update_hours tier fires at 1.0h, agent is 2h old → archived.

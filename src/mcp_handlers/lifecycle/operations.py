@@ -656,7 +656,11 @@ async def handle_archive_orphan_agents(arguments: Dict[str, Any]) -> Sequence[Te
     - max_updates: Skip agents with more updates than this (default: 3).
     - dry_run: Preview without archiving (default: true).
     """
-    from src.agent_lifecycle import auto_archive_orphan_agents, auto_agent_archival_enabled
+    from src.agent_lifecycle import (
+        _agent_update_count,
+        auto_archive_orphan_agents,
+        auto_agent_archival_enabled,
+    )
 
     max_age_hours = float(arguments.get("max_age_hours", 6))
     max_updates = int(arguments.get("max_updates", 3))
@@ -671,17 +675,25 @@ async def handle_archive_orphan_agents(arguments: Dict[str, Any]) -> Sequence[Te
     # threshold-based classification.
     await mcp_server.load_metadata_async()
 
+    eligible_metadata = {
+        agent_id: meta
+        for agent_id, meta in mcp_server.agent_metadata.items()
+        if _agent_update_count(meta) <= max_updates
+    }
+
     # Initializing agents (0 updates) are never archived — see
     # classify_for_archival. The old tier-1 zero_update_hours sweep is gone.
+    # Apply the max_updates gate before invoking the archival engine because
+    # that call can mutate when explicit auto-archival opt-in is enabled.
     results = await auto_archive_orphan_agents(
         low_update_hours=low_update_hours,
         unlabeled_hours=unlabeled_hours,
         dry_run=dry_run,
-        _metadata=mcp_server.agent_metadata,
+        _metadata=eligible_metadata,
         _monitors=mcp_server.monitors,
     )
 
-    filtered = [r for r in results if r.get("updates", 0) <= max_updates]
+    filtered = results
     archived = [r for r in filtered if r.get("archived")]
 
     for r in filtered:
