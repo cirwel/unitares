@@ -12,23 +12,28 @@ Status: canonical prose summary. If this file and runtime code disagree, trust [
 
   Do work                     HTTP POST /mcp/
   Report: what you did,      ------------------->
-    complexity, confidence    process_agent_update     EISV dynamics
-                                                      +----------+
-                                                      | dE/dt    |
-                                                      | dI/dt    |
-                                                      | dS/dt    |
-                                                      | dV/dt    |
-                                                      +----+-----+
-                                                           |
-                                                      coherence C(V)
-                                                      risk_score
-                                                      margin level
-                                                           |
-                              <---------------------------+
+    complexity, confidence    process_agent_update   Behavioral EISV
+                                                      +---------------------+
+                                                      | grounded signals    |
+                                                      |  (logs, tools,      |
+                                                      |   calibration)      |
+                                                      | -> EMA + z-score    |
+                                                      |    vs own baseline  |
+                                                      +----------+----------+
+                                                                 |       ODE / free-energy
+                                                            coherence    runs in parallel as a
+                                                            risk_score   diagnostic lens — it
+                                                            margin       does NOT drive verdicts
+                                                                 |
+                              <----------------------------------+
                               {"action": "proceed",
                                "margin": "comfortable",
                                "guidance": "..."}
 ```
+
+The engine is the **behavioral** path: observable work signals scored against
+the agent's own baseline. The ODE / free-energy formulation is a parallel
+research lens, not the verdict authority — see [§2](#2-eisv-evolution).
 
 ## The Governance Pipeline
 
@@ -49,7 +54,7 @@ At runtime, the reflective fields above (`complexity`, `confidence`) are not tru
 
 **Primary system: Behavioral EISV** — EMA (exponential moving average) observations from grounded behavioral signals. These signals are assembled from operational log analysis, continuity metrics, tool usage, calibration history, and outcome history; self-reports are one input, not the whole substrate. After ~30 check-ins, the system builds per-agent Welford baselines and assesses agents by z-score deviation from their own operating point rather than universal thresholds.
 
-**Secondary system: ODE (diagnostic only)** — coupled differential equations run in parallel but do not drive verdicts. The ODE provides a thermodynamic lens for analysis but behavioral verdicts override.
+**Secondary system: ODE (diagnostic only)** — coupled differential equations run in parallel but do not drive verdicts. The ODE provides a dynamical-systems lens for analysis but behavioral verdicts override.
 
 The grounding path lives in `src/dual_log/`, `src/behavioral_sensor.py`, `src/behavioral_state.py`, and `src/behavioral_assessment.py`. The ODE engine lives in `governance_core` (compiled package, unitares-core).
 
@@ -121,7 +126,9 @@ Agents contribute discoveries to a shared store. **PostgreSQL FTS is the canonic
 |  +- core.identities          |     All agent state, audit,
 |  +- core.agent_state         |     and knowledge lives here.
 |  +- audit.events             |
-|  +- core.discoveries (AGE)   |     There is no SQLite.
+|  +- knowledge.discoveries    |     relational KG record + FTS.
+|  +- discovery_embeddings     |     pgvector semantic search.
+|  +- governance_graph (AGE)   |     There is no SQLite.
 |  +- dialectic.*              |
 |  +- core.calibration         |
 |  +- core.tool_usage          |
