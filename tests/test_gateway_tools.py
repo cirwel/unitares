@@ -122,8 +122,16 @@ class TestHandleNote:
     async def test_with_tags(self, mock_client):
         mock_client.call_tool.return_value = {"node_id": "n-2"}
         await handle_note(mock_client, content="Test", tags="redis,perf")
-        mock_client.call_tool.assert_called_with("leave_note", {
-            "content": "Test", "tags": "redis,perf",
+        mock_client.call_tool.assert_called_with("knowledge", {
+            "action": "note", "summary": "Test", "tags": ["redis", "perf"],
+        })
+
+    @pytest.mark.asyncio
+    async def test_routes_through_canonical_knowledge_tool(self, mock_client):
+        mock_client.call_tool.return_value = {"note_id": "n-3"}
+        await handle_note(mock_client, content="Important finding")
+        mock_client.call_tool.assert_called_with("knowledge", {
+            "action": "note", "summary": "Important finding",
         })
 
 
