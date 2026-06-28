@@ -12,7 +12,7 @@ Most controls inspect one action against one rule. UNITARES carries trajectory i
 [![License](https://img.shields.io/badge/license-Apache_2.0-2f7d72?style=flat-square&labelColor=0f171f)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
 
-*Status: live and dogfooded. Public snapshot: 3.7M+ governance events from a single-operator deployment, frozen 2026-06-16.*
+*Status: live since November 2025 — 3.7M+ governance events (public snapshot frozen 2026-06-16).*
 
 [![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#try-the-demo-locally)
 [![Docs](https://img.shields.io/badge/docs-read-7d8f97?style=for-the-badge&labelColor=0f171f)](docs/README.md)
@@ -30,7 +30,7 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 ## What you get after install
 
 - **A governance server for heterogeneous agents.** MCP on `/mcp/`, REST on `/v1/tools/call`, an optional dashboard on `/dashboard`, and an SDK for resident or scheduled agents.
-- **Online agent-state estimation / proprioception.** Each process identity gets EISV state readings against its *own* baseline and recent history once warm. During baseline warmup, the live path uses fixed universal thresholds and self-reported signals, so the reading is not yet drift-discriminative — the payload flags this explicitly.
+- **Online agent-state estimation / proprioception.** Each process identity gets EISV state readings graded against its *own* baseline and recent history. The baseline warms over ~30 check-ins; until then the reading uses universal thresholds, and the payload flags warmup explicitly. ([how warmup works →](docs/EISV_COMPUTATION.md))
 - **Evidence-grounded calibration.** Self-reported `confidence` is scored against real evidence — tests, exit codes, tool output, file ops, deployments, and task results — and that calibration keeps future state readings and policy actions honest.
 - **Governed shared memory.** A Postgres + pgvector + Apache AGE knowledge graph lets agents search and contribute durable discoveries, corrections, supersessions, and cross-agent relations with provenance. It is sediment, not a transcript dump.
 - **Dialectic review and durable constraints.** Disputed policy actions can be reviewed by authority-weighted peers; synthesized conditions persist and can gate that agent's future decisions.
@@ -56,7 +56,7 @@ docker compose up -d --wait && make demo
 
 For a human operator view, open the optional dashboard at `http://localhost:8767/dashboard`. Dashboard implementation details live in [`dashboard/README.md`](dashboard/README.md); public deployment screenshots live in [`docs/PRODUCTION_SNAPSHOT.md`](docs/PRODUCTION_SNAPSHOT.md).
 
-> **Running continuously since November 2025 · 3.7M+ governance events under sustained single-operator load · dogfooded** — the agents building UNITARES run under it. The snapshot documents deployment totals; the reviewer harness documents what can be regenerated from a clone or deployment data. ([Production snapshot →](docs/PRODUCTION_SNAPSHOT.md))
+> **Running continuously since November 2025 · 3.7M+ governance events** — the agents building UNITARES run under it. ([Production snapshot →](docs/PRODUCTION_SNAPSHOT.md) · [verify the numbers →](docs/REVIEWER_GUIDE.md))
 
 ## Where it fits
 
@@ -184,11 +184,11 @@ elif eisv.get("E", 1) < 0.2:
 
 For long-running or scheduled agents, the [SDK](agents/sdk/README.md) handles connection, identity, check-ins, and heartbeats. Any MCP client that accepts Streamable HTTP can connect to `/mcp/`; REST is available for non-MCP clients, Discord/dispatch bridges, local-model hosts, and adapters. ([Getting started](docs/guides/START_HERE.md) · [MCP client config](docs/integration/MCP_CLIENTS.md))
 
-## Don't trust this README — verify it
+## Verify every claim yourself
 
-**Evaluating with an agent?** Don't take the prose. On a fresh clone, the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) asks whether EISV/prior-state telemetry adds signal over deliberately dumb baselines (AUC, Brier) using externally labeled task/result evidence, and self-labels each slice `INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING` rather than asserting. That harness tests calibration and falsifiability of the proprioceptive signal; it is not the product story.
+**Evaluating with an agent?** On a fresh clone, the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) grades whether EISV/prior-state telemetry beats deliberately dumb baselines (AUC, Brier) on externally labeled task/result evidence, reporting each slice honestly rather than asserting it. Most projects don't ship the means to disprove them; this one does. ([Reviewer Guide →](docs/REVIEWER_GUIDE.md))
 
-**Honest about what fires.** Policy actions come from an auditable behavioral model ([`behavioral_assessment.py`](src/behavioral_assessment.py)), not a black box — the information-theoretic / free-energy formulation is the research *target*, not the live policy-action path ([Paper v6](https://github.com/cirwel/unitares-paper-v6) · [how EISV is computed](docs/EISV_COMPUTATION.md)).
+**Auditable, not a black box.** Policy actions come from an inspectable behavioral model ([`behavioral_assessment.py`](src/behavioral_assessment.py)); the information-theoretic formulation in [Paper v6](https://github.com/cirwel/unitares-paper-v6) is the research roadmap, not a claim about the current decision path ([how EISV is computed](docs/EISV_COMPUTATION.md)).
 
 Human evaluators start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md).
 
