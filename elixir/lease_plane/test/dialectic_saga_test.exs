@@ -116,6 +116,24 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
                DialecticSaga.resolve(claim_params(session_id))
     end
 
+    test "commits a failed terminal transition when status=failed" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      params = Map.put(claim_params(session_id, %{"reason" => "safety"}), :status, "failed")
+
+      assert {:ok, %{status: "failed", saga_id: saga_id, origin: :new}} =
+               DialecticSaga.resolve(params)
+
+      assert session_status(session_id) == "failed"
+      assert saga_state(saga_id) == "pg_committed"
+    end
+
+    test "rejects an invalid status" do
+      assert {:error, :invalid_status} =
+               DialecticSaga.resolve(Map.put(claim_params("s"), :status, "bogus"))
+    end
+
     test "rejects when a different live resolution is in flight" do
       session_id = insert_dialectic_session()
       on_exit(fn -> cleanup_dialectic_session(session_id) end)

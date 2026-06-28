@@ -590,22 +590,33 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
   defp acquire_for_surface(params), do: UnitaresLeasePlane.acquire_local_beam(params)
 
-  defp extract_resolve_params(%{
-         "session_id" => session_id,
-         "paused_agent_id" => paused,
-         "reviewer_agent_id" => reviewer,
-         "resolution" => resolution
-       })
+  defp extract_resolve_params(
+         %{
+           "session_id" => session_id,
+           "paused_agent_id" => paused,
+           "reviewer_agent_id" => reviewer,
+           "resolution" => resolution
+         } = body
+       )
        when is_binary(session_id) and byte_size(session_id) > 0 and
               is_binary(paused) and byte_size(paused) > 0 and
               is_binary(reviewer) and byte_size(reviewer) > 0 and is_map(resolution) do
-    {:ok,
-     %{
-       session_id: session_id,
-       paused_agent_id: paused,
-       reviewer_agent_id: reviewer,
-       resolution_payload: resolution
-     }}
+    # status is optional, defaults to "resolved"; only the two terminal states
+    # are valid (BEAM owns both the resolved and failed terminal writes).
+    case Map.get(body, "status", "resolved") do
+      status when status in ["resolved", "failed"] ->
+        {:ok,
+         %{
+           session_id: session_id,
+           paused_agent_id: paused,
+           reviewer_agent_id: reviewer,
+           resolution_payload: resolution,
+           status: status
+         }}
+
+      _ ->
+        {:error, "status must be 'resolved' or 'failed'"}
+    end
   end
 
   defp extract_resolve_params(_),

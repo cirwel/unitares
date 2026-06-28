@@ -121,6 +121,36 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert parsed(resp2)["origin"] == "already_terminal"
     end
 
+    test "status=failed commits a failed terminal transition" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: %{reason: "safety_violation"},
+          status: "failed"
+        })
+
+      assert resp.status == 200
+      assert parsed(resp)["status"] == "failed"
+    end
+
+    test "invalid status → 422 schema_invalid" do
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: "x",
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: %{},
+          status: "bogus"
+        })
+
+      assert resp.status == 422
+    end
+
     test "unknown session → 404 session_not_found" do
       resp =
         post_json("/v1/dialectic/resolve", %{

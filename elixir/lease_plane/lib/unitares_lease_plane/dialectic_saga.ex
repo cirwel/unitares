@@ -111,38 +111,51 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     * `{:error, :saga_in_flight}` — a live resolve already holds the session
     * `{:error, :session_not_found}` / other `{:error, term}`
   """
+  @terminal_statuses ~w(resolved failed)
+
   @spec resolve(map()) :: {:ok, map()} | {:error, term()}
   def resolve(%{session_id: session_id, resolution_payload: payload} = params)
       when is_binary(session_id) and is_map(payload) do
+    status = Map.get(params, :status, "resolved")
+
+    if status in @terminal_statuses do
+      do_resolve(params, session_id, payload, status)
+    else
+      {:error, :invalid_status}
+    end
+  end
+
+  def resolve(_), do: {:error, :invalid_params}
+
+  defp do_resolve(params, session_id, payload, status) do
     case claim(params) do
       {:ok, %{saga_id: saga_id, origin: origin}} ->
-        with :ok <- commit_session_row(session_id, payload),
+        with :ok <- commit_session_row(session_id, payload, status),
              :ok <- commit(saga_id) do
-          {:ok, %{status: "resolved", saga_id: saga_id, origin: origin}}
+          {:ok, %{status: status, saga_id: saga_id, origin: origin}}
         end
 
-      {:error, {:session_terminal, status}} ->
-        # Already resolved/failed: nothing to write, treat as idempotent success.
-        {:ok, %{status: status, saga_id: nil, origin: :already_terminal}}
+      {:error, {:session_terminal, existing}} ->
+        # Already terminal: nothing to write, treat as idempotent success.
+        {:ok, %{status: existing, saga_id: nil, origin: :already_terminal}}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  def resolve(_), do: {:error, :invalid_params}
-
-  # Guarded terminal write of the session row — BEAM is the sole writer. Mirrors
-  # the Python B-4 guard (#1171): refuses to overwrite an already-terminal row.
-  defp commit_session_row(session_id, payload) do
+  # Guarded terminal write of the session row — BEAM is the sole writer for both
+  # terminal transitions (resolved AND failed). Mirrors the Python B-4 guard
+  # (#1171): refuses to overwrite an already-terminal row. phase tracks status.
+  defp commit_session_row(session_id, payload, status) do
     sql = """
     UPDATE core.dialectic_sessions
-    SET status = 'resolved', phase = 'resolved', resolution_json = $2::jsonb, updated_at = now()
+    SET status = $2, phase = $2, resolution_json = $3::jsonb, updated_at = now()
     WHERE session_id = $1 AND status NOT IN ('resolved', 'failed')
     RETURNING session_id
     """
 
-    case Postgrex.query(DB, sql, [session_id, Jason.encode!(payload)]) do
+    case Postgrex.query(DB, sql, [session_id, status, Jason.encode!(payload)]) do
       {:ok, %{num_rows: 1}} -> :ok
       # Already terminal (raced/idempotent) — saga still commits; not an error.
       {:ok, %{num_rows: 0}} -> :ok
