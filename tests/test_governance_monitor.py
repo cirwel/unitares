@@ -1081,8 +1081,14 @@ class TestEstimateRisk:
         risk = monitor.estimate_risk({'response_text': 'Test'}, score_result=score_result)
         assert 0.0 <= risk <= 1.0
 
-    def test_worsening_declared_inputs_do_not_lower_risk_after_behavioral_override(self):
-        """Behavioral risk may add signal, but must not erase worse self-attested risk."""
+    def test_worsening_declared_inputs_do_not_lower_risk_after_behavioral_override(self, monkeypatch):
+        """Behavioral risk may add signal, but must not erase worse self-attested risk.
+
+        This is the Φ-FLOOR invariant. Since UNITARES_PHI_TELEMETRY_ONLY now
+        defaults ON (behavioral authoritative, which may de-escalate Φ), floor
+        mode is opt-in — force it off here to validate it still holds.
+        """
+        monkeypatch.setenv("UNITARES_PHI_TELEMETRY_ONLY", "0")
         monitor = UNITARESMonitor("test-risk-monotonic", load_state=False)
         sequence = [
             (0.40, 0.70, []),

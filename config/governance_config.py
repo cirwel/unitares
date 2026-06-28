@@ -1027,21 +1027,27 @@ S_SETPOINT_DRIVER_OFFSET: float = 0.091
 
 
 def s_setpoint_enabled() -> bool:
-    """Whether the per-class S setpoint is active (UNITARES_S_SETPOINT). Default off."""
-    return os.getenv("UNITARES_S_SETPOINT", "").strip().lower() in {"1", "true", "on", "yes"}
+    """Whether the per-class S setpoint is active (UNITARES_S_SETPOINT). Default ON
+    (live-proven): the S equilibrium rests on the class's measured-healthy S rather
+    than decaying toward ~0. Set the env to 0/false/off/"" to force the legacy -μS."""
+    return os.getenv("UNITARES_S_SETPOINT", "1").strip().lower() in {"1", "true", "on", "yes"}
 
 
 def phi_telemetry_only() -> bool:
-    """Whether Φ is demoted to telemetry (UNITARES_PHI_TELEMETRY_ONLY). Default off.
+    """Whether Φ is demoted to telemetry (UNITARES_PHI_TELEMETRY_ONLY). Default ON
+    (live-proven; the central maths-revamp posture).
 
     When on, the behavioral/residual assessment is authoritative for the verdict
     and risk score whenever it is confident; Φ no longer floors them (it only
     over-flags hard work as risk — the RLHF/punish-toward-ideal shape, see
     docs/proposals/eisv-maths-roadmap-v0.md §8.0). Φ is still computed and
     surfaced as a telemetry field. Cold-start agents (behavioral confidence below
-    the gate) still fall back to the Φ path as the prior.
+    the gate) still fall back to the Φ path as the prior. Because authoritative
+    behavioral can only *de-escalate* relative to the Φ floor, this never
+    introduces a pause — it removes Φ's over-flagging. Set the env to
+    0/false/off/"" to restore Φ-floors-risk (the legacy invariant).
     """
-    return os.getenv("UNITARES_PHI_TELEMETRY_ONLY", "").strip().lower() in {"1", "true", "on", "yes"}
+    return os.getenv("UNITARES_PHI_TELEMETRY_ONLY", "1").strip().lower() in {"1", "true", "on", "yes"}
 
 
 def grounding_shadow_enabled() -> bool:

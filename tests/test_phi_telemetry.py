@@ -48,10 +48,15 @@ def test_off_is_byte_identical_to_historical_floor(pv, pr, bv, br):
     assert r == max(pr, br)
 
 
-def test_flag_default_off():
-    assert phi_telemetry_only() is False
+def test_flag_default_on(monkeypatch):
+    # Default ON (live-proven maths posture) when the env is unset.
+    monkeypatch.delenv("UNITARES_PHI_TELEMETRY_ONLY", raising=False)
+    assert phi_telemetry_only() is True
 
 
 def test_flag_reads_env(monkeypatch):
     monkeypatch.setenv("UNITARES_PHI_TELEMETRY_ONLY", "1")
     assert phi_telemetry_only() is True
+    # Explicit off override restores the legacy Φ-floor.
+    monkeypatch.setenv("UNITARES_PHI_TELEMETRY_ONLY", "0")
+    assert phi_telemetry_only() is False
