@@ -239,11 +239,20 @@ setInterval(() => {
 }, STATS_REFRESH_MS);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshActive(); });
 
-// Live event stream — pushed events trigger a debounced refresh of the active
-// monitor view (sub-second), so polling is just the fallback.
+// Live event stream. A section may register a direct apply that patches its
+// view straight from the pushed event payload (true diff-push, instant). If no
+// apply handles the event, we fall back to the doorbell: a debounced refresh of
+// the active monitor view through the normal render path. Polling is the last
+// resort (only when the stream is down).
+const APPLY = {
+  eisv: (msg) => window.EISV && window.EISV.applyEvent && window.EISV.applyEvent(msg),
+};
 let wsDebounce = null;
-function onWsEvent() {
-  if (document.hidden || isTyping() || !isAutoSection(activeSection) || wsDebounce) return;
+function onWsEvent(msg) {
+  if (document.hidden || isTyping() || !isAutoSection(activeSection)) return;
+  const apply = APPLY[activeSection];
+  if (apply && apply(msg)) return; // handled live — no refetch
+  if (wsDebounce) return;
   wsDebounce = setTimeout(() => { wsDebounce = null; refreshActive(); }, 1500);
 }
 function onWsStatus(s) { wsStatus = s; updateLivePill(); }
