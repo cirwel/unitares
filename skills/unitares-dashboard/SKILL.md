@@ -6,7 +6,7 @@ description: >
   pattern (window.X = { load }), the live-or-snapshot data seam, theme-aware
   charts via design tokens, and the app.html wiring (nav / pane / lazyLoad /
   RELOAD / retheme). A repo-specific reference — not general dashboard advice.
-last_verified: "2026-06-27"
+last_verified: "2026-06-28"
 freshness_days: 30
 source_files:
   - unitares/dashboard/redesign/app.html
@@ -35,10 +35,12 @@ its own mount and is wired in `app.html`.
 ## The section-module pattern
 
 A section is an IIFE that attaches `window.<Name> = { load }` (add `retheme`
-if it draws charts). `load()` renders into its mount on first call and updates
-**in place** on subsequent calls (so the 10s auto-refresh doesn't flicker or
-reset form state). Worked references: `sections/eisv.js` (charts, retheme) and
-`sections/metrics.js` (charts + a picker that survives auto-refresh).
+if it draws charts; add `applyEvent` / `notifyNew` if it's a live surface — see
+**Live-surface hooks** below). `load()` renders into its mount on first call and
+updates **in place** on subsequent calls (so the 10s auto-refresh doesn't flicker
+or reset form state). Worked references: `sections/eisv.js` (charts, retheme,
+`applyEvent`) and `sections/metrics.js` (charts + a picker that survives
+auto-refresh).
 
 ## Integration checklist (all in `dashboard/redesign/`)
 
@@ -53,6 +55,8 @@ reset form state). Worked references: `sections/eisv.js` (charts, retheme) and
 | 7 | `lazyLoad` entry: `if (id === "NAME" && window.NAME) { loaded[id]=true; window.NAME.load(); }` | `app.html` |
 | 8 | If it's a live monitor view, add to `RELOAD` (10s tick) | `app.html` |
 | 9 | If it draws charts, call `window.NAME.retheme()` in the theme-toggle handler | `app.html` |
+| 10 | (live surface) Expose `applyEvent(msg)` → truthy when handled in place; register `APPLY.NAME = (msg) => window.NAME?.applyEvent?.(msg)` | `sections/NAME.js`, `app.html` |
+| 11 | (badge) Expose `notifyNew()`; register `NOTIFY.<event_type> = () => window.NAME?.notifyNew?.()` | `sections/NAME.js`, `app.html` |
 
 ## Data seam — live-or-snapshot (Item 2)
 
@@ -105,6 +109,29 @@ and no input is focused. So `load()` must: update charts/data **in place**
 operator is using. The global tick already skips while an input is focused, so
 repopulating a closed dropdown on refresh is safe — but preserve the current
 selection. `sections/metrics.js` shows the first-render-then-update pattern.
+
+## Live-surface hooks (WS diff-push) — #1164
+
+The WS connection is a **hybrid**, not pure doorbell→refetch: a section can apply
+a live event in place instead of refetching. `onWsEvent(msg)` in `app.html`
+dispatches each incoming event through two maps:
+
+- **`NOTIFY[msg.type]()`** fires first, regardless of the active section — for
+  "N new since you loaded" badges that must not auto-refetch
+  (`NOTIFY.knowledge_write = () => window.Discoveries?.notifyNew?.()`).
+- **`APPLY[activeSection](msg)`** then runs the *active* section's live handler.
+  If the section exposes `applyEvent(msg)` and it returns **truthy** ("handled
+  live"), `onWsEvent` returns early and **suppresses** the debounced
+  `refreshActive()` refetch. Return falsy / omit `applyEvent` to fall through to
+  the doorbell→refetch fallback (~1500ms debounce). Register as
+  `APPLY.NAME = (msg) => window.NAME?.applyEvent?.(msg)`.
+
+So the model is **notify → apply-in-place → else doorbell-refetch**. `applyEvent`
+updates **in place** (same discipline as `load()`) and must not fabricate state
+the event doesn't carry. Worked references: `sections/eisv.js::applyEvent`
+(appends a push, re-buckets via `updateInPlace`), `sections/landing.js`
+(composite status snaps on check-in), `sections/discoveries.js` (`notifyNew`
+badge). The WS plumbing lives in `ws.js`.
 
 ## Read-only today
 
