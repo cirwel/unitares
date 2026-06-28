@@ -30,6 +30,18 @@ defmodule UnitaresLeasePlane.FileWriteExecutor do
   @impl true
   def reversible?, do: true
 
+  @doc """
+  Resolve a payload's bytes + content hash through the SAME path apply_effect
+  uses. The dispatch calls this to populate the durable effects.payloads row
+  BEFORE committing — record_pre_image is an UPDATE and needs the row to exist.
+  """
+  def resolved_payload(payload) do
+    case resolve_content(payload) do
+      {:ok, bytes} -> {:ok, bytes, sha256_hex(bytes)}
+      {:error, _} = err -> err
+    end
+  end
+
   @impl true
   def apply_effect(effect_id, payload, leases) do
     with {:ok, path} <- resolve_path(payload, leases),

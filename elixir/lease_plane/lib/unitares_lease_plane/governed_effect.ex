@@ -53,6 +53,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   require Logger
 
   alias UnitaresLeasePlane.Canonicalize
+  alias UnitaresLeasePlane.EffectRepo
   alias UnitaresLeasePlane.FileWriteExecutor
   alias UnitaresLeasePlane.GovernanceVetoClient
   alias UnitaresLeasePlane.OrchestratorClient
@@ -402,12 +403,30 @@ defmodule UnitaresLeasePlane.GovernedEffect do
           # §6 veto re-checked HERE, on the commit path, with the lease held.
           case GovernanceVetoClient.check(env) do
             :allow ->
-              result =
-                FileWriteExecutor.apply_effect(effect_id, env.payload, canon_leases)
+              # Insert the durable effects.payloads row BEFORE the commit so the
+              # executor's record_pre_image UPDATE (and crash recovery) have a row
+              # to act on. record_pre_image is UPDATE-only; without this the file
+              # would commit with no rollback/pre-image record.
+              case ensure_payload_row(effect_id, env, digest) do
+                :ok ->
+                  result =
+                    FileWriteExecutor.apply_effect(effect_id, env.payload, canon_leases)
 
-              {status, extra} = result_audit(result)
-              _ = persist_execute(env, execute_audit_payload(effect_id, env, digest, status, extra))
-              result_to_reply(result, effect_id)
+                  {status, extra} = result_audit(result)
+                  _ = persist_execute(env, execute_audit_payload(effect_id, env, digest, status, extra))
+                  result_to_reply(result, effect_id)
+
+                {:error, reason} ->
+                  _ =
+                    persist_execute(
+                      env,
+                      execute_audit_payload(effect_id, env, digest, "persist_failed", %{
+                        "error" => inspect(reason)
+                      })
+                    )
+
+                  {:error, :persist_failed}
+              end
 
             blocked ->
               payload =
@@ -429,6 +448,35 @@ defmodule UnitaresLeasePlane.GovernedEffect do
         Logger.warning("governed_effect file_write lease acquire failed: #{inspect(reason)}")
         {:error, :lease_acquire_failed}
     end
+  end
+
+  # Durable row for the commit path only — a dry-run writes nothing and needs no
+  # rollback row, so it would otherwise leave an orphan for recovery to reconcile.
+  defp ensure_payload_row(effect_id, env, digest) do
+    if file_write_commit_enabled?() do
+      case FileWriteExecutor.resolved_payload(env.payload) do
+        {:ok, bytes, sha} ->
+          EffectRepo.insert_effect_payload(%{
+            effect_id: effect_id,
+            effect_type: env.effect_type,
+            payload_bytes: bytes,
+            payload_sha256: sha,
+            required_leases: env.required_leases,
+            proposer_agent_uuid: env.proposer_agent_uuid,
+            idempotency_key: env.idempotency_key,
+            idempotency_digest: digest
+          })
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp file_write_commit_enabled? do
+    Application.get_env(:lease_plane, :execute_file_write_commit_enabled, false) == true
   end
 
   defp canonicalize_leases(leases) do
