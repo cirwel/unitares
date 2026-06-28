@@ -24,6 +24,7 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 ### Canonical reference
 
 - **[`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)** — the canonical architecture doc. End-to-end picture of the server, state model, transports, and storage.
+- **[`CANONICAL_COMPONENTS.md`](CANONICAL_COMPONENTS.md)** — component/layer map, orthogonal to the check-in pipeline view in `UNIFIED_ARCHITECTURE.md`.
 - **[`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md)** — guided tour for reviewers evaluating the project.
 - **[`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md)** — who this is for, why an agent can't game the signal, and what robustness is still unproven.
 - **[`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md)** — frozen live metrics and dashboard views.
@@ -69,7 +70,9 @@ How to run this in production. Most readers can skip these.
 - [`merge-automation-plan.md`](operations/merge-automation-plan.md) — branch-protection + operator-armed auto-merge plan (not yet applied)
 - [`ci-issue-surfacing.md`](operations/ci-issue-surfacing.md) — experiment wiring the surfacing instinct into GitHub CI (deduped issues from new findings)
 - [`automation-overrides.md`](operations/automation-overrides.md) — operator-authored metadata layered onto the automation census for accountability/gate classification
+- [`automation-census-setup.md`](operations/automation-census-setup.md) — agnostic setup for the automation census behind the dashboard Automations registry
 - [`resident-roster.md`](operations/resident-roster.md) — `UNITARES_RESIDENTS` configuration; the named resident set is config, not a hardcoded fleet
+- [`redis-retirement-soak-runbook.md`](operations/redis-retirement-soak-runbook.md) — staged Redis identity/session mirror retirement checks and rollback gates
 - [`ablation-negative-controls.md`](operations/ablation-negative-controls.md) — synthetic bad-outcome fixtures for red-team ablation plumbing
 - [`DEFINITIVE_PORTS.md`](operations/DEFINITIVE_PORTS.md) — port assignments across services
 - [`database_architecture.md`](operations/database_architecture.md) — single-Postgres / schema-isolation model
@@ -91,6 +94,7 @@ How to run this in production. Most readers can skip these.
 For people working on UNITARES itself, not using it.
 
 - [`CANONICAL_SOURCES.md`](dev/CANONICAL_SOURCES.md) — arch-dispute resolution
+- [`DRIFT_LEDGER.md`](dev/DRIFT_LEDGER.md) — guard/seam index for drift prevention and known unguarded seams
 - [`TOOL_REGISTRATION.md`](dev/TOOL_REGISTRATION.md) — how tools are wired into the MCP server
 - [`CIRCUIT_BREAKER_DIALECTIC.md`](dev/CIRCUIT_BREAKER_DIALECTIC.md) — recovery semantics (specialized)
 

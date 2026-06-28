@@ -4,7 +4,7 @@ description: >
   Use when setting up or operating the UNITARES Discord bridge — a standalone bot that
   surfaces governance events, agent presence, Lumen's state, and autonomous governance
   actions as a living Discord server.
-last_verified: "2026-04-25"
+last_verified: "2026-06-27"
 freshness_days: 14
 source_files:
   - unitares-discord-bridge/src/bridge/bot.py
@@ -16,9 +16,9 @@ source_files:
 
 The UNITARES Discord bridge is a standalone Python bot (in the `unitares-discord-bridge` repo) that polls both the governance MCP server and the anima MCP server, then forwards events and state to a Discord server. It turns governance into something visible — agent presence, EISV changes, dialectic sessions, knowledge graph updates, and Lumen's physical state all appear as Discord messages and embeds.
 
-## The 8 Layers
+## Operating Layers
 
-The bridge operates in 8 layers, each handling a different aspect:
+The bridge operates across several visible layers:
 
 1. **Events**: Governance events (verdicts, state changes, alerts) forwarded to Discord channels
 2. **HUD**: Heads-up display with current system state, agent counts, risk levels
@@ -26,8 +26,9 @@ The bridge operates in 8 layers, each handling a different aspect:
 4. **Lumen**: Physical state from anima-mcp — temperature, humidity, light, neural bands, drawing state
 5. **Dialectic**: Active dialectic sessions surfaced as threads with thesis/antithesis/synthesis
 6. **Knowledge**: New discoveries and updates from the knowledge graph
-7. **Polls**: Discord polls for human input on governance decisions
-8. **Resonance**: Cross-agent patterns and system-wide health indicators
+7. **Class routing / violations**: WebSocket governance events routed to class-specific channels when enabled
+8. **Phase-B lease transitions**: Optional operator-managed channel for lease-plane transition events
+9. **Lumen digest**: Optional weekly Q&A / connection-signal digest
 
 ## Autonomous Governance
 
@@ -80,8 +81,9 @@ The bot will create missing channels on first startup and begin polling both MCP
 
 Key design decisions:
 
-- **Polling, not webhooks**: The bridge polls MCP servers on intervals rather than receiving push notifications. This keeps the MCP servers simple and the bridge self-contained.
+- **Polling plus event subscription**: The bridge polls MCP/REST surfaces for state and also subscribes to the governance WebSocket for typed events not present in `/api/events`.
 - **Read-heavy, write-light**: The bridge reads governance state frequently but writes back rarely (only autonomous actions).
 - **SQLite cursor-based delivery**: Tracks what has been sent to Discord to avoid duplicate messages. Uses cursors per channel per event type.
 - **Rate-limited message queue**: Messages are queued and sent with 150ms spacing to respect Discord rate limits.
 - **Stateless restarts**: The bridge can restart cleanly — cursor tracking means it picks up where it left off without replaying history.
+- **Governed identity**: On startup the bridge best-effort mints its own UNITARES identity so polling traffic can be attributed when governance is available.

@@ -21,7 +21,7 @@ index; that one is the curated decision record.
 | `GOVERNANCE_DATABASE_URL` | `'postgresql://postgres:postgr…` | Poll lease_plane_events for forced-release alarms; emit findings | agents/sentinel/agent.py:658 |
 | `GOVERNANCE_HEALTH_URL` | `'http://localhost:8767/health'` | — | agents/vigil/checks/governance_health.py:18 |
 | `GOVERNANCE_TOOL_MODE` | `'lite'` | — | src/tool_modes.py:18 |
-| `GOVERNANCE_URL` | `''` | read by _governance_url() | src/mcp_handlers/dialectic/orchestrator_dispatch.py:54, agents/dialectic_reviewer/reviewer.py:242 |
+| `GOVERNANCE_URL` | `'http://localhost:8767/mcp/'` | read by _governance_url() | src/gateway/constants.py:6, src/mcp_handlers/dialectic/orchestrator_dispatch.py:54, agents/dialectic_reviewer/reviewer.py:242 |
 | `GOVERNANCE_WARMUP_STRUCTURAL_GRACE` | `'true'` | — | config/governance_config.py:713 |
 | `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Async exclusive lock for agent state updates | src/state_locking.py:331, src/services/update_workflow_service.py:88 |
 | `UNITARES_ANCHORS_DIR` | `(required)` | Return the anchors directory path | src/identity/substrate.py:92 |
