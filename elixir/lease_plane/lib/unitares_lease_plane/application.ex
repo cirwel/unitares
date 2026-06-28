@@ -107,7 +107,13 @@ defmodule UnitaresLeasePlane.Application do
         UnitaresLeasePlane.HandoffServer,
         UnitaresLeasePlane.SurfaceRegistry,
         {Registry, keys: :unique, name: UnitaresLeasePlane.DialecticLivenessRegistry},
-        UnitaresLeasePlane.DialecticLivenessSupervisor
+        UnitaresLeasePlane.DialecticLivenessSupervisor,
+        # Governed-effect EXECUTE crash recovery (§5b). Runs its orphan scan in
+        # init/1 synchronously — placed AFTER Postgrex and BEFORE the HTTP
+        # listener so no new effect is accepted while a prior crash's orphans are
+        # unresolved. Fail-soft: a missing effects.* schema (pre-migration-052) or
+        # a DB error is logged and skipped, never crashes boot.
+        UnitaresLeasePlane.EffectRecovery
       ] ++ worker_children() ++ http_children()
 
     opts = [strategy: :one_for_one, name: UnitaresLeasePlane.Supervisor]
