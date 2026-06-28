@@ -172,32 +172,16 @@ async def save_session(session: DialecticSession) -> None:
     try:
         from src.dialectic_db import update_session_phase_async as pg_update_phase
         from src.dialectic_db import resolve_session_async as pg_resolve_session
-        from .beam_resolve_client import beam_resolve, beam_update_phase
         if session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED):
             resolution_dict = session.resolution.to_dict() if session.resolution else None
             status = session.phase.value if session.phase == DialecticPhase.RESOLVED else "failed"
-            # save_session is the catch-all flush that resolves the session in the
-            # orchestrated-reviewer flow (verified 2026-06-28: it, not the explicit
-            # handle_submit_synthesis sites, wrote the terminal row there). Route it
-            # through BEAM so the sole-writer invariant holds for that flow too;
-            # fail-safe fallback to Python keeps it flag-off-safe.
-            beam_done = await beam_resolve(
+            await pg_resolve_session(
                 session_id=session.session_id,
-                paused_agent_id=getattr(session, "paused_agent_id", None),
-                reviewer_agent_id=getattr(session, "reviewer_agent_id", None),
-                resolution=resolution_dict or {},
+                resolution=resolution_dict,
                 status=status,
             )
-            if beam_done is None:
-                await pg_resolve_session(
-                    session_id=session.session_id,
-                    resolution=resolution_dict,
-                    status=status,
-                )
         else:
-            beam_ph = await beam_update_phase(session.session_id, session.phase.value)
-            if beam_ph is None:
-                await pg_update_phase(session.session_id, session.phase.value)
+            await pg_update_phase(session.session_id, session.phase.value)
         logger.debug(f"Session {session.session_id} synced to PostgreSQL (phase={session.phase.value})")
     except Exception as e:
         logger.error(f"PostgreSQL sync failed for session {session.session_id}: {e}")

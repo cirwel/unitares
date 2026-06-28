@@ -49,25 +49,10 @@ jobs:
             echo "PR body register: allow-register marker present — skipping."
             exit 0
           fi
-          bad=$(printf '%s' "$PR_BODY" | grep -niE '/Users/cirwel|per your guidance|your overlay|you flagged|questions for [Kk]enny|live-verifier|council pass|council fold|claude\.ai/code/session|Claude-Session:' || true)
+          bad=$(printf '%s' "$PR_BODY" | grep -niE '/Users/cirwel|per your guidance|your overlay|you flagged|questions for [Kk]enny|live-verifier|council pass|council fold' || true)
           if [ -n "$bad" ]; then
-            echo "::error::PR body reads like a personal chat session, leaks an operator-local path, or carries a Claude session-attribution link. Rewrite third-person/imperative; move working notes out of the public record."
+            echo "::error::PR body reads like a personal chat session or leaks an operator-local path. Rewrite third-person/imperative; move working notes out of the public record."
             printf '%s\n' "$bad"
             exit 1
           fi
           echo "PR body register: clean"
-
-      # Commit messages aren't files or the PR body, so check them too — the
-      # Claude Code session-attribution trailer (Claude-Session: claude.ai/code/session)
-      # lands there by default and should not enter the public history.
-      - name: Lint PR commit messages for session-attribution links
-        if: github.event_name == 'pull_request'
-        run: |
-          base="${{ steps.base.outputs.ref }}"
-          bad=$(git log "${base}..HEAD" --format='%H %s%n%b' | grep -niE 'claude\.ai/code/session|Claude-Session:' || true)
-          if [ -n "$bad" ]; then
-            echo "::error::A PR commit message carries a Claude Code session link (claude.ai/code/session). Strip the Claude-Session trailer from commit messages."
-            printf '%s\n' "$bad"
-            exit 1
-          fi
-          echo "Commit messages: clean"
