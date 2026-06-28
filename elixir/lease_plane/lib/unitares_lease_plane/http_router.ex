@@ -169,6 +169,88 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
+  # ---------- /v1/dialectic/session ----------
+  # BEAM-owned dialectic session creation (Slice 2): guarded INSERT + start a
+  # liveness watcher at birth. Python computes the session_id + fields; BEAM owns
+  # the write. Gated Python-side by UNITARES_DIALECTIC_BEAM_RESOLUTION.
+  post "/v1/dialectic/session" do
+    case extract_create_params(conn.body_params) do
+      {:ok, params} ->
+        case UnitaresLeasePlane.DialecticSaga.create_session(params) do
+          {:ok, :created} ->
+            json(conn, 201, %{ok: true, session_id: params.session_id, created: true})
+
+          {:ok, :exists} ->
+            json(conn, 200, %{ok: true, session_id: params.session_id, created: false})
+
+          {:error, _} ->
+            json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+        end
+
+      {:error, detail} ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+    end
+  end
+
+  # ---------- /v1/dialectic/phase ----------
+  # BEAM-owned non-terminal phase advance (thesis/antithesis/synthesis). Makes
+  # BEAM sole writer of the session row across the whole lifecycle. Gated
+  # Python-side by UNITARES_DIALECTIC_BEAM_RESOLUTION.
+  post "/v1/dialectic/phase" do
+    with %{"session_id" => sid, "phase" => phase} <- conn.body_params,
+         true <- is_binary(sid) and byte_size(sid) > 0 and is_binary(phase) do
+      case UnitaresLeasePlane.DialecticSaga.update_phase(sid, phase) do
+        :ok ->
+          json(conn, 200, %{ok: true, session_id: sid, phase: phase})
+
+        {:error, :invalid_phase} ->
+          json(conn, 422, %{
+            ok: false,
+            error: "schema_invalid",
+            detail: "invalid non-terminal phase"
+          })
+
+        {:error, :session_not_found} ->
+          json(conn, 404, %{ok: false, error: "session_not_found"})
+
+        {:error, _} ->
+          json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+      end
+    else
+      _ ->
+        json(conn, 422, %{
+          ok: false,
+          error: "schema_invalid",
+          detail: "session_id and phase required"
+        })
+    end
+  end
+
+  # ---------- /v1/dialectic/reviewer ----------
+  # BEAM-owned reviewer assignment/reassignment — the last session-row column.
+  post "/v1/dialectic/reviewer" do
+    with %{"session_id" => sid, "reviewer_agent_id" => rev} <- conn.body_params,
+         true <- is_binary(sid) and byte_size(sid) > 0 and is_binary(rev) and byte_size(rev) > 0 do
+      case UnitaresLeasePlane.DialecticSaga.update_reviewer(sid, rev) do
+        :ok ->
+          json(conn, 200, %{ok: true, session_id: sid, reviewer_agent_id: rev})
+
+        {:error, :session_not_found} ->
+          json(conn, 404, %{ok: false, error: "session_not_found"})
+
+        {:error, _} ->
+          json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+      end
+    else
+      _ ->
+        json(conn, 422, %{
+          ok: false,
+          error: "schema_invalid",
+          detail: "session_id and reviewer_agent_id required"
+        })
+    end
+  end
+
   # ---------- /v1/dialectic/resolve ----------
   # BEAM-owned dialectic SYNTHESIS->RESOLVED commit (dialectic-on-BEAM Slice 1).
   # Python computes the resolution payload (convergence + agent-state mutation
@@ -199,6 +281,26 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
       {:error, detail} ->
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+    end
+  end
+
+  # ---------- /v1/dialectic/presence ----------
+  # BEAM-served liveness read: which dialectic sessions are alive right now, each
+  # with phase, age, and whether a resolution saga is in flight. A coordination
+  # signal sourced from BEAM rather than each consumer polling the DB directly.
+  get "/v1/dialectic/presence" do
+    limit =
+      case Integer.parse(Map.get(conn.query_params, "limit", "100")) do
+        {n, _} when n > 0 and n <= 500 -> n
+        _ -> 100
+      end
+
+    case UnitaresLeasePlane.DialecticSaga.live_sessions(limit) do
+      {:ok, sessions} ->
+        json(conn, 200, %{ok: true, count: length(sessions), sessions: sessions})
+
+      {:error, _} ->
+        json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
     end
   end
 
@@ -570,22 +672,53 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
   defp acquire_for_surface(params), do: UnitaresLeasePlane.acquire_local_beam(params)
 
-  defp extract_resolve_params(%{
-         "session_id" => session_id,
-         "paused_agent_id" => paused,
-         "reviewer_agent_id" => reviewer,
-         "resolution" => resolution
-       })
+  defp extract_create_params(%{"session_id" => sid, "paused_agent_id" => paused} = body)
+       when is_binary(sid) and byte_size(sid) > 0 and is_binary(paused) and byte_size(paused) > 0 do
+    optional =
+      ~w(reviewer_agent_id session_type topic reason discovery_id dispute_type
+                  max_synthesis_rounds synthesis_round paused_agent_state trigger_source phase status)
+
+    params =
+      Enum.reduce(optional, %{session_id: sid, paused_agent_id: paused}, fn key, acc ->
+        case Map.get(body, key) do
+          nil -> acc
+          val -> Map.put(acc, String.to_atom(key), val)
+        end
+      end)
+
+    {:ok, params}
+  end
+
+  defp extract_create_params(_),
+    do: {:error, "session_id and paused_agent_id (non-empty strings) required"}
+
+  defp extract_resolve_params(
+         %{
+           "session_id" => session_id,
+           "paused_agent_id" => paused,
+           "reviewer_agent_id" => reviewer,
+           "resolution" => resolution
+         } = body
+       )
        when is_binary(session_id) and byte_size(session_id) > 0 and
               is_binary(paused) and byte_size(paused) > 0 and
               is_binary(reviewer) and byte_size(reviewer) > 0 and is_map(resolution) do
-    {:ok,
-     %{
-       session_id: session_id,
-       paused_agent_id: paused,
-       reviewer_agent_id: reviewer,
-       resolution_payload: resolution
-     }}
+    # status is optional, defaults to "resolved"; only the two terminal states
+    # are valid (BEAM owns both the resolved and failed terminal writes).
+    case Map.get(body, "status", "resolved") do
+      status when status in ["resolved", "failed"] ->
+        {:ok,
+         %{
+           session_id: session_id,
+           paused_agent_id: paused,
+           reviewer_agent_id: reviewer,
+           resolution_payload: resolution,
+           status: status
+         }}
+
+      _ ->
+        {:error, "status must be 'resolved' or 'failed'"}
+    end
   end
 
   defp extract_resolve_params(_),

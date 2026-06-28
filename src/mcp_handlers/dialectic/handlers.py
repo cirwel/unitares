@@ -92,7 +92,12 @@ from .calibration import (
     backfill_calibration_from_historical_sessions,  # noqa: F401 — re-exported; tests patch via this module
 )
 from .resolution import execute_resolution
-from .beam_resolve_client import beam_resolve
+from .beam_resolve_client import (
+    beam_resolve,
+    beam_create_session,
+    beam_update_phase,
+    beam_update_reviewer,
+)
 from .reviewer import select_reviewer, is_agent_in_active_session
 
 # Import PostgreSQL async functions for dialectic session storage
@@ -481,7 +486,9 @@ async def _apply_reviewer_reassignment(
     session.transcript.append(reassign_msg)
 
     try:
-        await pg_update_reviewer(session_id, new_reviewer_id)
+        # BEAM owns the reviewer write when flagged; else Python. (Slice 2.3)
+        if await beam_update_reviewer(session_id, new_reviewer_id) is None:
+            await pg_update_reviewer(session_id, new_reviewer_id)
         await pg_add_message(
             session_id=session_id,
             agent_id="system",
@@ -709,20 +716,40 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
     # Persist to PostgreSQL (single source of truth)
     # JSON snapshots removed - use export_dialectic_session() for debugging
     try:
-        await pg_create_session(
+        # BEAM owns the write + starts a liveness watcher at birth when flagged;
+        # otherwise (or on any BEAM error) fall back to the Python insert.
+        # (dialectic-on-BEAM Slice 2.1)
+        beam_created = await beam_create_session(
             session_id=session.session_id,
             paused_agent_id=session.paused_agent_id,
-            reviewer_agent_id=session.reviewer_agent_id,
-            reason=reason,
-            discovery_id=discovery_id,
-            dispute_type=dispute_type,
-            session_type=session_type,
-            topic=topic,
-            max_synthesis_rounds=session.max_synthesis_rounds,
-            synthesis_round=session.synthesis_round,
-            paused_agent_state=paused_agent_state,
-            trigger_source=trigger_source,
+            fields={
+                "reviewer_agent_id": session.reviewer_agent_id,
+                "reason": reason,
+                "discovery_id": discovery_id,
+                "dispute_type": dispute_type,
+                "session_type": session_type,
+                "topic": topic,
+                "max_synthesis_rounds": session.max_synthesis_rounds,
+                "synthesis_round": session.synthesis_round,
+                "paused_agent_state": paused_agent_state,
+                "trigger_source": trigger_source,
+            },
         )
+        if beam_created is None:
+            await pg_create_session(
+                session_id=session.session_id,
+                paused_agent_id=session.paused_agent_id,
+                reviewer_agent_id=session.reviewer_agent_id,
+                reason=reason,
+                discovery_id=discovery_id,
+                dispute_type=dispute_type,
+                session_type=session_type,
+                topic=topic,
+                max_synthesis_rounds=session.max_synthesis_rounds,
+                synthesis_round=session.synthesis_round,
+                paused_agent_state=paused_agent_state,
+                trigger_source=trigger_source,
+            )
         logger.info(f"Dialectic session {session.session_id} persisted to PostgreSQL")
     except Exception as e:
         logger.error(f"Dialectic session create FAILED: {e}")
@@ -1363,7 +1390,10 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     proposed_conditions=proposed_conditions,
                     reasoning=arguments.get('reasoning'),
                 )
-                await pg_update_phase(session_id, session.phase.value)
+                # BEAM owns the phase write when flagged; else Python. (Slice 2.2)
+                _beam_ph = await beam_update_phase(session_id, session.phase.value)
+                if _beam_ph is None:
+                    await pg_update_phase(session_id, session.phase.value)
             except Exception as e:
                 logger.warning(f"Could not update PostgreSQL after thesis: {e}")
 
@@ -1606,7 +1636,8 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
             # If reviewer was auto-assigned (first-responder pattern), persist to PG
             if original_reviewer_id is None and session.reviewer_agent_id == agent_id:
                 try:
-                    await pg_update_reviewer(session_id, agent_id)
+                    if await beam_update_reviewer(session_id, agent_id) is None:
+                        await pg_update_reviewer(session_id, agent_id)
                     result["reviewer_auto_assigned"] = True
                     logger.info("Reviewer auto-assigned for dialectic session")
                 except Exception as e:
@@ -1627,7 +1658,10 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                     concerns=arguments.get('concerns', []),
                     reasoning=arguments.get('reasoning'),
                 )
-                await pg_update_phase(session_id, session.phase.value)
+                # BEAM owns the phase write when flagged; else Python. (Slice 2.2)
+                _beam_ph = await beam_update_phase(session_id, session.phase.value)
+                if _beam_ph is None:
+                    await pg_update_phase(session_id, session.phase.value)
             except Exception as e:
                 logger.warning(f"Could not update PostgreSQL after antithesis: {e}")
 
@@ -1786,7 +1820,9 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         agrees=agrees,
                     )
                     if not result.get("converged"):
-                        await pg_update_phase(session_id, session.phase.value)
+                        _beam_ph = await beam_update_phase(session_id, session.phase.value)
+                        if _beam_ph is None:
+                            await pg_update_phase(session_id, session.phase.value)
                 except Exception as e:
                     logger.warning(f"Could not update PostgreSQL after synthesis: {e}")
     
@@ -1819,7 +1855,16 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     result["success"] = False
                     result["reason"] = f"Safety violation: {violation}"
                     try:
-                        await pg_resolve_session(session_id=session_id, resolution={"action": "block", "reason": violation}, status="failed")
+                        _block = {"action": "block", "reason": violation}
+                        beam_result = await beam_resolve(
+                            session_id=session_id,
+                            paused_agent_id=session.paused_agent_id,
+                            reviewer_agent_id=session.reviewer_agent_id,
+                            resolution=_block,
+                            status="failed",
+                        )
+                        if beam_result is None:
+                            await pg_resolve_session(session_id=session_id, resolution=_block, status="failed")
                     except Exception as e:
                         logger.warning(f"Could not resolve session in PostgreSQL: {e}")
                 else:
@@ -1860,7 +1905,15 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         result["execution_error"] = str(e)
                         result["next_step"] = next_step_execution_failed(e)
                         try:
-                            await pg_resolve_session(session_id=session_id, resolution=resolution.to_dict(), status="failed")
+                            beam_result = await beam_resolve(
+                                session_id=session_id,
+                                paused_agent_id=session.paused_agent_id,
+                                reviewer_agent_id=session.reviewer_agent_id,
+                                resolution=resolution.to_dict(),
+                                status="failed",
+                            )
+                            if beam_result is None:
+                                await pg_resolve_session(session_id=session_id, resolution=resolution.to_dict(), status="failed")
                         except Exception as pg_e:
                             logger.warning(f"Could not mark failed session in PostgreSQL: {pg_e}")
     
