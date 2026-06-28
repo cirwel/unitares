@@ -382,6 +382,108 @@ def test_dated_record_exempt_from_orphan_check(tmp_path, monkeypatch, doc_health
     assert doc_health.check_index_orphans([dated]) == []
 
 
+# --- check_demotion_candidates (shipped-status docs in active locations) -----
+
+
+def _demotion_for(tmp_path, monkeypatch, doc_health, rel, body):
+    """Write *body* to docs/<rel> and return demotion warnings for it."""
+    p = tmp_path / "docs" / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body)
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    return doc_health.check_demotion_candidates([p])
+
+
+def test_fully_shipped_proposal_flagged(tmp_path, monkeypatch, doc_health):
+    """A proposal whose status says shipped, with no remaining work, is a candidate."""
+    warnings = _demotion_for(
+        tmp_path, monkeypatch, doc_health, "proposals/thing-v0.md",
+        "# Thing\n\n**Status:** shipped 2026-05-03 via PR #305. Enforcement deployed.\n",
+    )
+    assert len(warnings) == 1 and "fully shipped" in warnings[0]
+
+
+def test_partially_shipped_proposal_flagged_as_split(tmp_path, monkeypatch, doc_health):
+    """Shipped + named remaining work → 'partially shipped' (split, don't move whole)."""
+    warnings = _demotion_for(
+        tmp_path, monkeypatch, doc_health, "proposals/wave.md",
+        "# Wave\n\n**Status:** Wave 1 shipped; Wave 3 write-path not started.\n",
+    )
+    assert len(warnings) == 1 and "partially shipped" in warnings[0]
+
+
+def test_active_proposal_without_shipped_marker_not_flagged(tmp_path, monkeypatch, doc_health):
+    """A genuinely-active draft (no shipped marker in header) is not a candidate."""
+    warnings = _demotion_for(
+        tmp_path, monkeypatch, doc_health, "proposals/idea-v0.md",
+        "# Idea\n\n**Status:** draft, in progress. Proposed design under review.\n",
+    )
+    assert warnings == []
+
+
+def test_resolved_proposal_not_flagged(tmp_path, monkeypatch, doc_health):
+    """Already-demoted docs under proposals/resolved/ are not re-flagged."""
+    warnings = _demotion_for(
+        tmp_path, monkeypatch, doc_health, "proposals/resolved/old.md",
+        "# Old\n\n**Status:** shipped and complete.\n",
+    )
+    assert warnings == []
+
+
+def test_dated_record_with_shipped_status_not_flagged(tmp_path, monkeypatch, doc_health):
+    """A dated point-in-time record may say 'shipped' — it's a record, kept in place."""
+    warnings = _demotion_for(
+        tmp_path, monkeypatch, doc_health, "proposals/audit-2026-06-14.md",
+        "# Audit\n\n**Status:** shipped; deployed.\n",
+    )
+    assert warnings == []
+
+
+def test_ontology_anchor_not_flagged(tmp_path, monkeypatch, doc_health):
+    """ontology/ anchor docs (identity.md etc.) are living, not plans to demote."""
+    warnings = _demotion_for(
+        tmp_path, monkeypatch, doc_health, "ontology/identity.md",
+        "# Identity\n\nThe v2 ontology is deployed and complete in production.\n",
+    )
+    assert warnings == []
+
+
+def test_ontology_plan_flagged_with_location_hint(tmp_path, monkeypatch, doc_health):
+    """A shipped non-anchor doc in ontology/ is flagged, naming the identity tree."""
+    warnings = _demotion_for(
+        tmp_path, monkeypatch, doc_health, "ontology/coordination-plan.md",
+        "# Coordination Plan\n\n**Status:** lease plane live; Wave 1 shipped.\n",
+    )
+    assert len(warnings) == 1 and "ontology/ (identity tree)" in warnings[0]
+
+
+def test_widely_referenced_doc_exempt_as_living_reference(tmp_path, monkeypatch, doc_health):
+    """A doc cited by >= threshold other docs is a living reference, not a stale plan."""
+    target_rel = "proposals/contract-v0.md"
+    target = tmp_path / "docs" / target_rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("# Contract\n\n**Status:** shipped; the canonical spec.\n")
+    # Create threshold-many sibling docs that cite it by basename.
+    for i in range(doc_health._DEMOTION_LIVING_REF_THRESHOLD):
+        sib = tmp_path / "docs" / f"ref{i}.md"
+        sib.write_text("See [contract](contract-v0.md) for the spec.\n")
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    assert doc_health.check_demotion_candidates([target]) == []
+
+
+def test_demotion_does_not_gate_strict_exit(tmp_path, monkeypatch, doc_health, capsys):
+    """A demotion candidate alone must NOT make even --strict exit non-zero."""
+    p = tmp_path / "docs" / "proposals" / "shipped-v0.md"
+    p.parent.mkdir(parents=True)
+    p.write_text("# X\n\n**Status:** shipped, deployed, complete.\n")
+    # Reference it from an index so it isn't also flagged as an orphan (which
+    # WOULD gate strict). We want a clean case: demotion candidate and nothing else.
+    (p.parent / "README.md").write_text("- [x](shipped-v0.md)\n")
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(doc_health.sys, "argv", ["check_doc_health.py", "--strict"])
+    assert doc_health.main() == 0
+
+
 def test_collect_md_files_skips_elixir_deps_and_build_dirs(tmp_path, monkeypatch, doc_health):
     """Vendored Elixir deps and Mix build output are not repo documentation."""
     (tmp_path / "docs").mkdir()

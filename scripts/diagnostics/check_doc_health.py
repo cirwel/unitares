@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """Check documentation health: dead refs, ghost tools, hardcoded IPs/counts.
 
+Also prints an advisory **demotion-candidate** list: planning/RFC docs whose own
+status says the work shipped but which still live in an active location
+(proposals/ outside resolved/, or the ontology/ identity tree). That list is
+triage, not a defect — it never affects the exit code; clear it by moving
+fully-shipped docs to proposals/resolved/ (or stubbing them out) on a real
+signal, rather than letting a subsystem's doc set sprawl.
+
 Usage:
     python3 scripts/diagnostics/check_doc_health.py [--strict]
 
 Exit codes:
-    0 — no warnings (or warnings only in non-strict mode)
-    1 — warnings found (strict mode only)
+    0 — no warnings (or warnings only in non-strict mode; the demotion advisory
+        never sets a non-zero code)
+    1 — warnings found (strict mode only) — demotion candidates excluded
 """
 
 import os
@@ -410,6 +418,100 @@ def check_hardcoded_counts(md_files: list[Path]) -> list[str]:
     return warnings
 
 
+# --- Check 5: Demotion candidates (shipped-status docs in an active location) ---
+#
+# A planning/RFC doc whose own status says the work shipped, but which still
+# lives in an "active" location (docs/proposals/ outside resolved/, or
+# docs/ontology/ which is the identity tree), is a demotion candidate: its
+# forward-looking body keeps reading as a plan after the thing landed, and the
+# subsystem's doc set sprawls. This does NOT auto-demote — it surfaces a triage
+# list the operator clears on a real signal (the 2026-06 BEAM/lease thread
+# reached ~21 docs this way). Advisory only: never affects the exit code,
+# because "should this move to resolved/" is a judgment call, not a defect.
+#
+# Heuristic, deliberately conservative — requires an explicit shipped marker in
+# the doc's own header region (first lines / frontmatter), so a doc that merely
+# mentions "deployed" deep in its body does not trip it. A doc that is shipped
+# AND still names remaining work is flagged as "partially shipped" (split the
+# done part out) rather than "fully shipped" (move it wholesale).
+
+# Anchor docs of docs/ontology/ — living canonical/ledger docs, not plans.
+_DEMOTION_SKIP_ONTOLOGY = {
+    "README.md", "identity.md", "plan.md", "paper-positioning.md", "glossary.md",
+}
+
+_SHIPPED_MARKERS = re.compile(
+    r'\b(shipped|deployed|landed|merged|in production|live in prod|'
+    r'enforcement shipped|complete[d]?|resolved|done)\b',
+    re.IGNORECASE,
+)
+# Signals the doc still tracks open work — distinguishes "fully shipped" (move
+# it) from "partially shipped" (split out the done part, keep the open part).
+_ACTIVE_REMAINING = re.compile(
+    r'\b(not started|remaining|in progress|in-flight|wip|todo|pending|'
+    r'proposed|design-gated|draft|next step|open question|phase [b-z] remains)\b',
+    re.IGNORECASE,
+)
+
+
+# A doc cited from this many places is a load-bearing reference (e.g. a
+# canonical contract spec like surface-lease-plane-v0.md, 13 inbound) — moving
+# it would break references, so it is not a demotion candidate even when its
+# status says "shipped." Tuned to keep genuine candidates (beam-coordination-
+# kernel.md, 7 inbound) while exempting the few living references above it.
+_DEMOTION_LIVING_REF_THRESHOLD = 10
+
+
+def check_demotion_candidates(md_files: list[Path]) -> list[str]:
+    refs = _collect_md_basename_refs()
+    warnings = []
+    for fpath in md_files:
+        rel = fpath.relative_to(REPO_ROOT)
+        parts = rel.parts
+        if not parts or parts[0] != "docs":
+            continue
+        # Scope: proposals/ (but not already-demoted resolved/) and ontology/.
+        in_proposals = "proposals" in parts and "resolved" not in parts
+        in_ontology = "ontology" in parts
+        if not (in_proposals or in_ontology):
+            continue
+        if rel.name == "README.md":
+            continue
+        # Living reference (cited widely by other docs) — not a stale plan to
+        # move. Count doc-to-doc citations only; code/test mentions of a
+        # filename don't make a planning doc a load-bearing reference.
+        inbound = {
+            m for m in refs.get(rel.name, set())
+            if m.startswith("docs/") and m.endswith(".md") and m != rel.as_posix()
+        }
+        if len(inbound) >= _DEMOTION_LIVING_REF_THRESHOLD:
+            continue
+        if _DATED_RECORD.search(rel.name):
+            # Dated point-in-time records are kept in place by design; a shipped
+            # status on a record is correct, not a demotion signal.
+            continue
+        if in_ontology and rel.name in _DEMOTION_SKIP_ONTOLOGY:
+            continue
+        # Status/header region only: frontmatter + the first prose lines, where
+        # docs put **Status:** / **Last Updated:** banners.
+        lines = fpath.read_text(errors="replace").splitlines()
+        header = "\n".join(lines[:15])
+        if not _SHIPPED_MARKERS.search(header):
+            continue
+        loc = "ontology/ (identity tree)" if in_ontology else "proposals/"
+        if _ACTIVE_REMAINING.search(header):
+            warnings.append(
+                f"  {rel}: partially shipped in {loc} — split the shipped part "
+                f"to resolved/ (or a stub) and keep only the open work forward-looking"
+            )
+        else:
+            warnings.append(
+                f"  {rel}: reads fully shipped in {loc} — consider moving to "
+                f"proposals/resolved/, or stub + point at the live canonical doc"
+            )
+    return warnings
+
+
 # --- Main ---
 
 def collect_md_files() -> list[Path]:
@@ -453,19 +555,32 @@ def main():
     if counts:
         all_warnings.append(("Hardcoded counts (will go stale)", counts))
 
-    if not all_warnings:
+    # Advisory: surfaced for triage, never gates the exit code (demotion is a
+    # judgment call, not a defect). Printed separately from the warning total.
+    demotion = check_demotion_candidates(md_files)
+
+    if not all_warnings and not demotion:
         print("📄 Doc health: all clear")
         return 0
 
-    total = sum(len(w) for _, w in all_warnings)
-    print(f"📄 Doc health: {total} warning(s)")
-    for category, items in all_warnings:
-        print(f"\n  {category}:")
-        for item in items:
-            print(item)
-    print()
+    if all_warnings:
+        total = sum(len(w) for _, w in all_warnings)
+        print(f"📄 Doc health: {total} warning(s)")
+        for category, items in all_warnings:
+            print(f"\n  {category}:")
+            for item in items:
+                print(item)
+        print()
+    else:
+        print("📄 Doc health: all clear")
 
-    return 1 if strict else 0
+    if demotion:
+        print(f"📦 Demotion candidates ({len(demotion)}) — advisory, does not fail the check:")
+        for item in demotion:
+            print(item)
+        print()
+
+    return 1 if (strict and all_warnings) else 0
 
 
 if __name__ == "__main__":
