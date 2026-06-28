@@ -60,6 +60,7 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`beam-event-adapter-design-v0.md`](beam-event-adapter-design-v0.md) | Design note (2026-06-20) — how BEAM residents/supervisors would populate the harness-event-safety envelope (PR #957); design-only, deferred to the 2026-06-24 Wave-3 gate read |
 | [`monitor-delegated-liveness-v0.md`](monitor-delegated-liveness-v0.md) | v0 (2026-06-21) — design-only, **DO NOT BUILD YET.** Delegate process-liveness to the owning runtime monitor (OTP supervisor / `:DOWN`) instead of self-report heartbeat. Build-trigger = the agent-orchestrator de-inerting to become the live spawn path; zero live consumers today (`feasible ≠ needed`) |
 | [`governed-effect-s7-strong-tier-recert.md`](governed-effect-s7-strong-tier-recert.md) | Design v0.2, council-folded — strong-tier re-certification gate for governed-effect `execute agent_spawn`; implementation landed separately in the governed-effect track |
+| [`harness-registry-v0.md`](harness-registry-v0.md) | v0 (2026-06-28) — design-only, **DO NOT BUILD YET.** Authoritative catalog of harness *types* (not identity; instances stay observed in the census). Resolves the type-vs-instance open question by splitting declared-type authority from observed-instance telemetry. Build-trigger = harness-census evidence (PR #1153) crosses the §6 promotion thresholds; conforms to plan.md Track D |
 
 ## Resolved — relocated to [`resolved/`](resolved/)
 
