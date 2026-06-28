@@ -1,12 +1,74 @@
 # Wave 3 (γ) hybrid — successor to the halted 8-surface handler-dispatch port
 
-**Status:** DRAFT v0 (2026-06-28). Successor scope after the (D) state-ownership red-team
+**Status:** DRAFT — v0 wide-cut REJECTED by design council 2026-06-28 (see §0a); active direction is
+the **narrow cut (§0b)**, which owes a v0.2 redraw. Successor scope after the (D) state-ownership red-team
 **halted** the original `beam-wave-3-handler-dispatch.md` 8-surface port (artifact:
 `docs/handoffs/wave-3-state-ownership-redteam-2026-06-28.md`). Operator selected resume shape **(γ)
 hybrid**. This is a design to react to, not an implementation plan; it owes a council pass + its own
 disconfirmer gate before any code (see §6).
 
-## 0. Why (γ), in one paragraph
+## 0a. Council review (2026-06-28) — the v0 wide-cut + envelope is REJECTED; pivot to the narrow cut
+
+A three-lane design council (security / architecture / live-verifier, independent, against live code)
+reviewed §0–§7 below. Verdict: **the wide cut (port the §2 update pipeline wholesale + bridge with a
+signed envelope) should not proceed as drawn.** It is self-contradictory against live code and the
+envelope introduces avoidable risk. A strictly better seam exists. §0b records the pivot; §1–§7 below
+are preserved as the rejected v0 for the record.
+
+**Why the wide cut fails (architecture lane, grounded in `phases.py`):**
+- **§3 vs §4.4 are mutually exclusive.** `phases.py` mints PG identity at three sites — `:469`
+  `ensure_agent_persisted`, `:1225` `get_or_create_agent`, `:1789` `create_agent` (lazy
+  mint-on-first-work). So "PG identity writes STAY Python" (§3) is false if `phases.py` ports to
+  BEAM, and the api_key 3-way reconcile (`:1221-1296`) cannot be atomic across the boundary (F4 not
+  closed — it is restated as a contradiction).
+- **F2 substrate-EARNED exemption is omitted.** The strict gate calls `is_substrate_earned()` +
+  `verify_substrate_earned()` mid-handler (`phases.py:343-365`) — the embodied/anchored-resident
+  exemption (Lumen), distinct from `peer_pid` `substrate_ok`. A fail-closed BEAM gate without it
+  either breaks resident check-ins or calls back into Python identity resolution (re-introducing the
+  exact (D) boundary coordination the cut was meant to remove).
+- **5c is a real two-writer hazard**, not a deferrable risk: circuit-breaker reads `meta.status`
+  (`:438/:639`), cross-agent label scan (`:586-590`), and lost-update on the shared `AgentMetadata`
+  record.
+
+**Why the envelope adds avoidable risk (security lane):** shared-secret leak ⇒ fleet-wide attestation
+forgery incl. substrate residents (vs kernel attestation, which cannot be leaked); `proof_origin`
+fail-open **survives in BEAM-internal paths that carry no envelope** (saga recovery, auto-resolve —
+needs an allowlist gate + a BEAM-only-signed internal proof type); **dialectic-on-BEAM is LIVE today
+writing agent state with no attestation** and must be covered; the envelope lacks operation-binding
+(confused-deputy in saga recovery) and durable nonce tracking (replay within `exp` on BEAM restart).
+
+## 0b. The narrow cut (v0.2 direction — council-recommended)
+
+Port **only the state-estimation critical section** (`run_enrichment_pipeline` + the locked
+ODE/persist compute — the ~96% the §5a measurement identified as the substrate-tax prize) as a
+**stateless compute RPC**: Python sends the state-vector inputs, BEAM returns the decision +
+state-update; **Python applies the resulting writes** (status transitions, `core.agent_states`
+persist) as a post-step. Identity resolution, the strict gate, all PG identity mint, and the api_key
+reconcile **stay in Python, in-process.**
+
+Consequences (each a council concern, dissolved):
+- **No envelope.** Identity facts never cross a trust boundary → no shared secret (kills C1), no
+  fail-open-across-boundary (C2 moot for identity — Python gates in-process before the handoff), no
+  operation-binding/nonce problem (I1/I2). 5b gone.
+- **F4 stays atomic** — PG-agents + metadata + ctx api_key writes remain one Python process.
+- **F2/F5 moot** — gate, assurance computation, substrate-earned exemption stay where the contextvars
+  and DB live; no callback across the boundary.
+- **5c shrinks to nothing** — metadata stays single-writer Python; BEAM holds **no metadata replica**
+  (value-in → decision-out).
+- **Matches the proven pattern** — dialectic-on-BEAM (already live) is itself a pure-compute/coordination
+  port, not an identity port. The narrow cut applies the same discipline.
+
+Open questions for the v0.2 narrow-cut design (smaller than the wide cut's): (i) exact RPC boundary —
+which of the locked block's PG writes move to BEAM vs stay Python post-step (state writes can move;
+identity/api_key writes must not); (ii) whether the StateLockManager critical section's serialization
+moves to BEAM (the dialectic saga pattern is the template) or stays a Python lock around a BEAM
+compute call; (iii) the §2 lock-invariants 1/3/4/7 that must collapse to one message — re-evaluate
+under the narrow cut. The dialectic-on-BEAM attestation gap (security C3) is a **separate, already-live
+issue** to fix regardless of the γ outcome.
+
+---
+
+## 0. (REJECTED v0 — preserved for the record) Why (γ), in one paragraph
 
 The red-team confirmed the identity middleware is **not** a clean set of movable state surfaces. The
 genuine caches/tables (session cache, onboard PIN, transport binding, agent-metadata, the PG
