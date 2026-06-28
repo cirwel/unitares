@@ -39,6 +39,12 @@ def isolated_silence_state(monkeypatch):
     monkeypatch.setattr(broadcaster_module, "broadcaster_instance", broadcaster)
     monkeypatch.setattr(audit_module, "append_audit_event_async", audit)
 
+    # Label-based intervals are deployment-local now (UNITARES_CLASS_CALIBRATION
+    # overlay); inject representative test values so the silence detector has a
+    # label map to exercise, without depending on shipped per-resident config.
+    monkeypatch.setattr(background_tasks, "_PERSISTENT_AGENT_INTERVALS",
+                        {"Vigil": 1800, "Lumen": 300, "Sentinel": 600, "Watcher": 21600})
+
     yield broadcaster, audit
 
     agent_metadata.clear()
