@@ -47,6 +47,14 @@ class ToolDefinition:
     # Mirror of action_router's default_action so the call-level resolver
     # treats an action-less call exactly as the router will route it.
     default_action: Optional[str] = None
+    # Stakes-gate override (#775). One of:
+    #   "baseline" — default; observed by the substrate sink, not pre-gated.
+    #   "high"     — every call to this tool is a high-consequence boundary.
+    # Per-action classification for mixed-action (action_router) tools lives in
+    # stakes_table.py, the standalone authoritative table; this field is the
+    # tool-level escape hatch for a single-purpose tool that wants to declare
+    # its stakes inline. The table still wins for any (tool, action) it lists.
+    requires_verdict: str = "baseline"
 
 _TOOL_DEFINITIONS: Dict[str, ToolDefinition] = {}
 
@@ -62,6 +70,7 @@ def mcp_tool(
     requires_identity: str = "required",
     pre_onboard_actions: Optional[set] = None,
     default_action: Optional[str] = None,
+    requires_verdict: str = "baseline",
 ):
     """
     Decorator for MCP tool handlers with auto-registration and timeout protection.
@@ -107,6 +116,11 @@ def mcp_tool(
                 f"Tool {tool_name!r}: pre_onboard_actions only applies to "
                 f"requires_identity='required' tools (a 'pre_onboard' tool "
                 f"already exempts every action); got {requires_identity!r}"
+            )
+        if requires_verdict not in ("baseline", "high"):
+            raise ValueError(
+                f"Tool {tool_name!r}: requires_verdict must be one of "
+                f"'baseline', 'high'; got {requires_verdict!r}"
             )
         _pre_onboard_actions = (
             frozenset(a.lower() for a in pre_onboard_actions)
@@ -232,6 +246,7 @@ def mcp_tool(
                 requires_identity=requires_identity,
                 pre_onboard_actions=_pre_onboard_actions,
                 default_action=_default_action,
+                requires_verdict=requires_verdict,
             )
 
         return wrapper
@@ -333,7 +348,7 @@ def get_call_identity_requirement(tool_name: str, arguments) -> str:
     except Exception:
         # Anything else is a REGRESSION in alias resolution with a
         # security consequence (every alias call would refuse under
-        # strict) — fail closed but never silently (council fold,
+        # strict) — fail closed but never silently (review fold,
         # PR #611: the bare except ate a wrong-import-name bug during
         # development).
         logger.warning(
@@ -361,6 +376,73 @@ def get_call_identity_requirement(tool_name: str, arguments) -> str:
     if action and action in td.pre_onboard_actions:
         return "pre_onboard"
     return td.requires_identity
+
+
+def _resolve_canonical_and_action(tool_name: str, arguments):
+    """Canonical tool name + resolved action for a CALL — the shared seam.
+
+    Both the #425 identity resolver and the #775 stakes resolver must agree on
+    which canonical (tool, action) a call maps to, or their decisions diverge on
+    aliased calls. This helper is the single canonicalization point the stakes
+    resolver uses; `get_call_identity_requirement` keeps its own inline copy for
+    now (hot, heavily tested path), and `test_stakes_table.py` pins that the two
+    agree on the canonical name for aliased inputs. Unifying them is a follow-up
+    when the gate mechanism lands.
+    """
+    canonical = tool_name
+    implied_action = None
+    try:
+        from src.mcp_handlers.tool_stability import resolve_tool_alias
+        canonical, alias = resolve_tool_alias(tool_name)
+        if alias is not None:
+            implied_action = getattr(alias, "inject_action", None)
+            if implied_action:
+                implied_action = str(implied_action).lower()
+    except ImportError:
+        pass
+    except Exception:
+        logger.warning(
+            "_resolve_canonical_and_action: alias resolution failed for %r — "
+            "judging on the raw name (fails closed)",
+            tool_name,
+            exc_info=True,
+        )
+
+    action = None
+    if isinstance(arguments, dict):
+        action = arguments.get("action") or arguments.get("op")
+    action = (str(action).lower() if action else None) or implied_action
+    td = _TOOL_DEFINITIONS.get(canonical)
+    if action is None and td is not None:
+        action = td.default_action
+    return canonical, action
+
+
+def get_call_stakes_requirement(tool_name: str, arguments) -> str:
+    """Stakes level for a CALL: "high" or "baseline" (#775).
+
+    Mirrors `get_call_identity_requirement`'s call-granular, alias-aware shape so
+    the future stakes gate judges the canonical call, not the alias string.
+
+    Resolution:
+      1. Alias-canonicalize the tool name and resolve the action (shared helper).
+      2. A tool-level `requires_verdict="high"` declaration on the ToolDefinition
+         wins outright (the inline escape hatch for single-purpose tools).
+      3. Otherwise delegate to the standalone `stakes_table`, which is the
+         authoritative per-action classification and FAILS CLOSED to "high" for
+         any unknown tool/action.
+
+    Pure and synchronous — no I/O, safe to call on the dispatch path. This
+    resolver does NOT gate anything on its own; it is the classification half of
+    #775. The gate mechanism that consumes it is parked (see the proposal doc).
+    """
+    from src.mcp_handlers import stakes_table
+
+    canonical, action = _resolve_canonical_and_action(tool_name, arguments)
+    td = _TOOL_DEFINITIONS.get(canonical)
+    if td is not None and td.requires_verdict == "high":
+        return "high"
+    return stakes_table.get_action_stakes(canonical, action)
 
 
 def get_tool_definition(tool_name: str) -> Optional[ToolDefinition]:
@@ -423,7 +505,7 @@ def action_router(
         # Compare lowercase-to-lowercase: action keys are lowercase by
         # convention everywhere today, but a mixed-case key would
         # otherwise make this guard fire a confusing false positive on a
-        # CORRECT exemption (council fold, PR #611).
+        # CORRECT exemption (review fold, PR #611).
         unknown = set(a.lower() for a in pre_onboard_actions) - set(
             a.lower() for a in valid_actions
         )
