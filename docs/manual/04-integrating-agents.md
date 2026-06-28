@@ -79,7 +79,7 @@ The server exposes ~50 tools; most are consolidated behind an `action` parameter
 - **`bind_session`** — bind a session to an existing identity (cross-process anti-hijack gate).
 
 ### Check-in & metrics
-- **`process_agent_update`** / `sync_state` — the main check-in. Key params: `response_text`, `complexity` [0–1], `confidence` [0–1], `ethical_drift` ([float,float,float]), `recent_tool_results` (array of `{tool, summary, is_bad}`), `response_mode` (`auto`/`compact`/`mirror`/`full`; aliases: `lite`→`compact`, `verbose`→`full`; legacy: `minimal`, `standard`). Returns the verdict + EISV state, risk, coherence, margin.
+- **`process_agent_update`** / `sync_state` — the main check-in. Key params: `response_text`, `complexity` [0–1], `confidence` [0–1], `ethical_drift` ([float,float,float]), `recent_tool_results` (array of `{tool, summary, is_bad}`), `response_mode` (`auto`/`compact`/`mirror`/`full`; aliases: `lite`→`compact`, `verbose`→`full`; legacy: `minimal`, `standard`). Returns an online state estimate (EISV state, risk, coherence, margin) plus a policy action; the API may expose that action as `verdict`/`decision`.
 - **`get_governance_metrics`** / `check_working_state` — read-only snapshot, no state update. Fleet-scoped read when unbound.
 
 ### Knowledge graph
@@ -102,9 +102,9 @@ The server exposes ~50 tools; most are consolidated behind an `action` parameter
 
 Definitive schemas live in [`src/tool_schemas.py`](../../src/tool_schemas.py) and `src/mcp_handlers/schemas/`. At runtime, call `list_tools()` / `describe_tool(tool_name=...)`.
 
-## 4.6 Handling the verdict
+## 4.6 Handling the policy action
 
-The minimal contract: read `verdict` and course-correct.
+The minimal contract: read the state estimate, read the policy action, and course-correct. Some response shapes expose that action in a historical `verdict` field; treat it as an action affordance, not a moral judgment.
 
 ```python
 result = sync_state(response_text=output, complexity=0.6, confidence=0.8,
@@ -115,7 +115,7 @@ if verdict in ("pause", "reject"):
     agent.require_human_review(result["verdict"]["next_action"])
 ```
 
-For per-dimension policies, branch on the EISV components instead of the single verdict:
+For per-dimension policies, branch on the EISV components instead of only the single policy action:
 
 ```python
 eisv = result.get("raw_governance", result).get("primary_eisv", {})
@@ -127,7 +127,7 @@ elif eisv.get("E", 1) < 0.2:
     agent.stop_and_summarize()   # avoid thrashing
 ```
 
-What each verdict and dimension *means* is [chapter 5](05-reading-the-signals.md).
+What each policy action and dimension *means* is [chapter 5](05-reading-the-signals.md).
 
 ## 4.7 Long-running / scheduled agents — the SDK
 
@@ -142,7 +142,7 @@ The resident agents (Vigil, Sentinel, Chronicler) in [`../../agents/`](../../age
 
 ## 4.8 Mounting an existing agent without code changes
 
-If you don't want to edit the agent's loop at all, the [governance plugin](https://github.com/cirwel/unitares-governance-plugin) wires check-ins, dialectic review, and verdicts into Claude Code / Codex via hooks, and the [host adapter](https://github.com/cirwel/unitares-host-adapter) provides thin bindings for Hermes, Goose, and arbitrary OpenAI-compatible clients.
+If you don't want to edit the agent's loop at all, the [governance plugin](https://github.com/cirwel/unitares-governance-plugin) wires check-ins, dialectic review, and policy actions into Claude Code / Codex via hooks, and the [host adapter](https://github.com/cirwel/unitares-host-adapter) provides thin bindings for Hermes, Goose, and arbitrary OpenAI-compatible clients.
 
 ---
 
