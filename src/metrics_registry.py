@@ -47,12 +47,6 @@ GOVERNANCE_COHERENCE = Gauge(
     ['agent_id']
 )
 
-# Knowledge graph metrics
-KNOWLEDGE_NODES_TOTAL = Gauge(
-    'unitares_knowledge_nodes_total',
-    'Total knowledge graph nodes'
-)
-
 # Dialectic metrics
 DIALECTIC_SESSIONS_ACTIVE = Gauge(
     'unitares_dialectic_sessions_active',

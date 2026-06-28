@@ -30,7 +30,6 @@ from src.logging_utils import get_logger
 from src.metrics_registry import (
     AGENTS_TOTAL,
     DIALECTIC_SESSIONS_ACTIVE,
-    KNOWLEDGE_NODES_TOTAL,
     SERVER_INFO,
     SERVER_UPTIME,
 )

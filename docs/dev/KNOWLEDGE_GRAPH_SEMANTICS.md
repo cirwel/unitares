@@ -83,8 +83,12 @@ reader→writer pairs, and a self-grading verdict. It deliberately flags
 usually a resident sweeper bulk-searching the corpus, not broad peer-to-peer
 use — the verdict says so rather than letting the headline mislead.
 
-### Known gap
+### Metrics note
 
-`KNOWLEDGE_NODES_TOTAL` (`src/metrics_registry.py`) is declared but never set —
-a dead gauge that always reads 0. Wire it (on store / via a background count)
-or remove it; do not trust it on a dashboard as-is.
+There is no live "total KG nodes" Prometheus gauge. A `KNOWLEDGE_NODES_TOTAL`
+gauge previously existed but was never set (a permanent zero — worse than
+absent on a dashboard) and nothing consumed it, so it was removed. The
+`/metrics` handler is deliberately DB-free (it must not `await` asyncpg on the
+scrape path), so a node-count gauge would have to be fed from a background
+task; add that only if a consumer actually needs it. For KG size/usage
+questions today, use `scripts/analysis/kg_usage_report.py`.
