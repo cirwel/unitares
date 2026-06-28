@@ -285,6 +285,7 @@ def test_format_inventory_report_exposes_zero_bad_strict_and_prior_coverage():
     assert "strict_bad_gap_to_min: 10" in report
     assert "`bad` is an outcome-label class (`is_bad=true`)" in report
     assert "not a moral verdict or a prevented outcome" in report
+    assert "online agent-state estimation (agent proprioception)" in report
     assert "not a bad-verdict dispenser" in report
     assert "task_failed" in report
     assert "prior_state_5m" in report

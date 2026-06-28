@@ -439,7 +439,7 @@ def format_inventory_report(
         "## Interpretation rule",
         "",
         "`bad` is an outcome-label class (`is_bad=true`), not a moral verdict or a prevented outcome. CI/test failure is task-negative evidence; strict governance-bad claims require external outcome evidence for contract, authority, or harm boundaries.",
-        "EISV is proprioceptive telemetry and policy input, not a bad-verdict dispenser, outcome-truth source, or enforcement evidence.",
+        "EISV is online agent-state estimation (agent proprioception) and policy input, not a bad-verdict dispenser, outcome-truth source, or enforcement evidence.",
         "",
         "## Harness Lane Summary",
         "",
