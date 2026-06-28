@@ -164,8 +164,41 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           reason: "governance vetoed the effect or could not affirmatively clear it"
         })
 
+      {:error, :proposer_invalid} ->
+        json(conn, 422, %{
+          ok: false,
+          error: "proposer_invalid",
+          reason: "proposer.agent_uuid must be a valid UUID"
+        })
+
+      {:error, :lease_ttl_too_short} ->
+        json(conn, 422, %{
+          ok: false,
+          error: "lease_ttl_too_short",
+          reason: "every required lease must request ttl_s above the execute floor"
+        })
+
+      {:error, :lease_held} ->
+        json(conn, 409, %{
+          ok: false,
+          error: "lease_held",
+          reason: "a required surface is currently leased by another holder"
+        })
+
+      {:error, reason} when reason in [:lease_acquire_failed, :idempotency_lookup_failed] ->
+        json(conn, 503, %{
+          ok: false,
+          error: Atom.to_string(reason),
+          reason: "transient lease-plane error; nothing was committed"
+        })
+
       {:error, detail} when is_binary(detail) ->
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+
+      # Catch-all: an unmapped error atom must never crash the handler into a
+      # bare 500 — report it cleanly. Nothing is committed on any error path.
+      {:error, other} ->
+        json(conn, 500, %{ok: false, error: "internal", reason: inspect(other)})
     end
   end
 

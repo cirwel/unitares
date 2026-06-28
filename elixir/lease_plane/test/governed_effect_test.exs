@@ -80,6 +80,27 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       assert {:error, :execute_not_implemented} =
                GovernedEffect.handle(base(%{"custody_mode" => "execute"}))
     end
+
+    test "file_write execute with missing/invalid proposer rejects cleanly (no acquire crash)" do
+      Application.put_env(:lease_plane, :execute_file_write_enabled, true)
+
+      body =
+        base(%{
+          "custody_mode" => "execute",
+          "surface" => "file:///tmp/x",
+          "required_leases" => [%{"surface" => "file:///tmp/x", "ttl_s" => 300}],
+          "payload" => %{"path" => "/tmp/x", "content" => "y"}
+        })
+
+      # no proposer → must reject BEFORE Repo.acquire (which would crash on a nil
+      # uuid), and a malformed uuid is rejected the same way.
+      assert {:error, :proposer_invalid} = GovernedEffect.handle(body)
+
+      assert {:error, :proposer_invalid} =
+               GovernedEffect.handle(Map.put(body, "proposer", %{"agent_uuid" => "not-a-uuid"}))
+    after
+      Application.delete_env(:lease_plane, :execute_file_write_enabled)
+    end
   end
 
   describe "record_only result" do
