@@ -8,7 +8,7 @@
 #
 # This brings up:
 #   - postgres-age      Postgres 17 + Apache AGE + pgvector  (port 5432)
-#   - redis             Session cache + locks                 (port 6379)
+#   - redis             De-facto primary session store + locks (port 6379)
 #   - governance-mcp    UNITARES governance server            (port 8767)
 #
 # All ports bind to 127.0.0.1 only. Override credentials via .env (copy

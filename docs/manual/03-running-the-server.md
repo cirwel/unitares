@@ -22,7 +22,7 @@ A full UNITARES deployment is several bound services. All bind loopback by defau
 | Gateway MCP | `8768` | `/mcp/` | Reduced surface for weak external clients |
 | Lease plane | `8788` | `/v1/lease/*` (bearer-auth, fail-closed) | Elixir/OTP coordination for single-writer surfaces |
 | PostgreSQL + AGE | `5432` | `postgresql://…/governance` | Single source of truth |
-| Redis | `6379` | `redis://…/0` | Session cache (optional) |
+| Redis | `6379` | `redis://…/0` | Session/identity store — degrades to local-only without it, but de-facto primary for most live sessions (not optional) |
 
 Full port map: [`../operations/DEFINITIVE_PORTS.md`](../operations/DEFINITIVE_PORTS.md).
 
