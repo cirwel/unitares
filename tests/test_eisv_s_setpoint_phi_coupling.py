@@ -39,8 +39,12 @@ def _healthy_rest_state(agent_class):
     return State(E=0.805, I=0.822, S=s_healthy, V=-0.013)
 
 
-def test_phi_eval_state_noop_when_flag_off():
-    """Flag off → phi_eval_state returns the state unchanged (byte-identical Φ)."""
+def test_phi_eval_state_noop_when_flag_off(monkeypatch):
+    """Flag off → phi_eval_state returns the state unchanged (byte-identical Φ).
+
+    S_SETPOINT now defaults ON, so force it off to exercise the no-op path.
+    """
+    monkeypatch.setenv("UNITARES_S_SETPOINT", "0")
     st = _healthy_rest_state("Watcher")
     mon = _FakeMonitor("Watcher", st)
     out = phi_eval_state(mon, st)

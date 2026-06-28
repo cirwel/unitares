@@ -52,7 +52,15 @@ def test_setpoint_shifts_equilibrium_by_offset():
     assert _rest(sigma).S == pytest.approx(sigma + 0.091, abs=0.01)
 
 
-def test_get_s_setpoint_off_by_default():
+def test_get_s_setpoint_on_by_default(monkeypatch):
+    # Default ON (live-proven) when the env is unset.
+    monkeypatch.delenv("UNITARES_S_SETPOINT", raising=False)
+    assert s_setpoint_enabled()
+
+
+def test_get_s_setpoint_off_when_disabled(monkeypatch):
+    # Explicit off restores the legacy -μS behavior (setpoint 0.0).
+    monkeypatch.setenv("UNITARES_S_SETPOINT", "0")
     assert not s_setpoint_enabled()
     assert get_s_setpoint("default") == 0.0
     assert get_s_setpoint("Lumen") == 0.0
