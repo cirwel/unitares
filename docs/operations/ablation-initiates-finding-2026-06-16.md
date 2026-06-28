@@ -100,17 +100,17 @@ All 30-day task slices remain skeptical.
   row, classified its provenance, bound it to a prediction, incorporated it into
   the matrix, and the watchdog noticed the delta. Targeted tests still pass
   (16 passed).
-- **Diagnostic signal — weak / interesting.** One strict slice now beats baseline,
-  but strict n=1 bad is too fragile to read as lift.
+- **Online state-estimation signal — weak / interesting.** One strict slice now
+  beats baseline, but strict n=1 bad is too fragile to read as lift.
 - **Governance policy — not proven.** The row's `decision_action = proceed`.
 - **Enforcement / prevention — not shown.** Nothing here blocked, paused,
   rejected, or reverted an adverse effect; this is a captured negative-label row.
 
 The most interesting angle: this is an **overconfidence case** — high reported
 confidence (~0.915) while a hard external test failed and the decision was
-`proceed`. That is a clean label for "confidence was high, outcome was bad," which
-is exactly the failure mode UNITARES cares about — captured as calibration
-evidence, not caught-and-stopped.
+`proceed`. That is a clean label for "confidence was high, outcome was bad,"
+which is exactly the state-estimation failure mode UNITARES cares about —
+captured as calibration evidence, not caught-and-stopped.
 
 ## Evidence discipline — what would move this forward
 
