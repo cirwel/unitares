@@ -24,6 +24,10 @@ storing the task reference for later cancellation or cleanup.
 **Seen in:** `background_tasks.py` stuck_agent_recovery_task (2026-04-10 incident,
 1.1GB RSS runaway)
 
+**Test-file exclusion:** suppressed under `/tests/` (`_PATTERN_FILE_PATH_EXCLUSIONS`
+in `agent.py`) — this is a live-runtime invariant; tests legitimately spawn
+unreferenced tasks.
+
 **SAFE — DO NOT FLAG:**
 ```python
 # Pattern A: task ref stored in a set with done-callback cleanup
@@ -100,6 +104,13 @@ not a transient call site. False-positive sweep 2026-04-17: flagged
 `agent_lifecycle.py:26` (the `monitor = UNITARESMonitor(agent_id)` line
 that the cache uses to populate itself). See
 `_is_inside_get_or_create_monitor` in `agent.py`.
+
+**Test-file exclusion:** suppressed under `/tests/` (`_PATTERN_FILE_PATH_EXCLUSIONS`
+in `agent.py`). The init-storm concern is a live-runtime invariant; tests
+legitimately construct isolated transient monitors
+(`UNITARESMonitor(agent_id, load_state=False)`) and would otherwise generate a
+large false-positive class (156 call sites across 32 test files, confirmed
+2026-06-27 — e.g. `test_hck_rho_coupling.py:20/26/33/49`).
 
 **Hint template:** `transient monitor — use get_or_create_monitor`
 
@@ -238,6 +249,10 @@ test. This is a standing rule for this project — see
 
 Mutating in-memory state BEFORE (or WITHOUT) the corresponding DB persistence
 call. The temporal ordering matters: **persist must come first**, then mutate.
+
+**Test-file exclusion:** suppressed under `/tests/` (`_PATTERN_FILE_PATH_EXCLUSIONS`
+in `agent.py`) — a live-runtime persistence invariant; tests deliberately poke
+in-memory state without persisting.
 
 **BAD (flag this):**
 ```python

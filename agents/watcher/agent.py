@@ -1434,6 +1434,23 @@ _PATTERN_FILE_PATH_CONSTRAINTS: dict[str, tuple[str, ...]] = {
     "P004": ("/src/mcp_handlers/",),
 }
 
+# File-path substrings that SUPPRESS a pattern when present in finding.file —
+# the inverse of the constraints above. The runtime-hygiene patterns listed
+# here encode invariants about LIVE runtime behavior (fire-and-forget task
+# cleanup, the monitor cache, persist-before-mutate ordering) that do not apply
+# to test code: tests legitimately spawn unreferenced tasks, construct isolated
+# transient monitors (`UNITARESMonitor(agent_id, load_state=False)`), and poke
+# in-memory state without persisting. Security patterns (P008 shell-injection,
+# P012 unsafe-deserialization) are deliberately NOT listed — they must still
+# fire on tests. False-positive class confirmed 2026-06-27: 156
+# `UNITARESMonitor(` call sites across 32 test files would all trip P003
+# (e.g. test_hck_rho_coupling.py:20/26/33/49).
+_PATTERN_FILE_PATH_EXCLUSIONS: dict[str, tuple[str, ...]] = {
+    "P001": ("/tests/",),
+    "P003": ("/tests/",),
+    "P011": ("/tests/",),
+}
+
 # Regex: `name = ...create_task(...)` on one line. If this matches the P001
 # flagged line, the task reference is stored — not fire-and-forget.
 _P001_TASK_ASSIGNMENT = re.compile(r"\b[a-zA-Z_]\w*\s*=\s*[^=].*create_task\(")
@@ -1816,6 +1833,20 @@ def _verify_finding_against_source(
             "warning",
         )
         return False
+    # Path-exclusion: runtime-hygiene patterns do not apply to test code.
+    # Normalize with a leading "/" so a "/tests/" segment matches both absolute
+    # finding paths (/Users/…/tests/x.py) and relative ones (tests/x.py), while
+    # still NOT matching unrelated dirs like src/subtests/ (→ /src/subtests/).
+    path_exclusions = _PATTERN_FILE_PATH_EXCLUSIONS.get(finding.pattern)
+    if path_exclusions:
+        norm_file = "/" + finding.file.lstrip("/")
+        if any(seg in norm_file for seg in path_exclusions):
+            log(
+                f"drop {finding.pattern} {finding.file}:{finding.line} — file under "
+                f"excluded path segments {path_exclusions!r} (runtime-hygiene rule N/A to tests)",
+                "warning",
+            )
+            return False
     src_line = snippet_lines_by_num.get(finding.line, "")
     if not src_line:
         log(
