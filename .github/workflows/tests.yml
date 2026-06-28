@@ -54,10 +54,13 @@ jobs:
         python scripts/dev/skills_manifest.py --check
 
     - name: Validate skill freshness (last_verified within freshness_days)
-      # Fails if any skill's last_verified is past its freshness_days window.
-      # Moves staleness-catching to author-time (blocks the PR) instead of
-      # inject-time — the SessionStart hook only warned, then shipped the stale
-      # body anyway. Re-verify against source_files and bump last_verified to clear.
+      # Date-age check only (SKILL_FRESHNESS_AGE_ONLY=1): a skill whose
+      # last_verified is older than its freshness_days window blocks the PR.
+      # The richer source-file-mtime check stays LOCAL (ship.sh / pre-commit) —
+      # it reads filesystem mtime, which a fresh CI checkout rewrites to "now",
+      # so in CI it would false-flag every skill not verified on the run date.
+      env:
+        SKILL_FRESHNESS_AGE_ONLY: "1"
       run: |
         bash scripts/client/check-skill-freshness.sh
 

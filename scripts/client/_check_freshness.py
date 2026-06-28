@@ -38,6 +38,15 @@ def check_skills(plugin_root: str, projects_root: str) -> int:
     skills_dir = Path(plugin_root) / "skills"
     has_stale = False
 
+    # The source-file check below compares last_verified to the *filesystem*
+    # mtime of each cited source file. That is meaningful locally (real edit
+    # times) but useless in CI: a fresh `actions/checkout` rewrites every file's
+    # mtime to checkout time, so every skill not verified on the CI run's exact
+    # date would falsely flag STALE. CI therefore sets SKILL_FRESHNESS_AGE_ONLY=1
+    # to run the checkout-independent date-age check only; the richer source
+    # check stays a local author-time hint (ship.sh / pre-commit).
+    age_only = os.environ.get("SKILL_FRESHNESS_AGE_ONLY") == "1"
+
     for skill_dir in sorted(skills_dir.iterdir()):
         skill_file = skill_dir / "SKILL.md"
         if not skill_file.exists():
@@ -56,17 +65,19 @@ def check_skills(plugin_root: str, projects_root: str) -> int:
         verified_date_start = datetime.strptime(meta["last_verified"], "%Y-%m-%d")
         age_days = (datetime.now() - verified_date_start).days
 
-        # Check if source files were modified after last_verified
+        # Check if source files were modified after last_verified (local only —
+        # filesystem mtime is unreliable in CI; see age_only note above).
         source_modified = False
         modified_file = ""
-        for src in meta["source_files"]:
-            full_path = Path(projects_root) / src
-            if full_path.exists():
-                mtime = datetime.fromtimestamp(os.path.getmtime(full_path))
-                if mtime > verified_date:
-                    source_modified = True
-                    modified_file = f"{src} (modified {mtime.strftime('%Y-%m-%d')})"
-                    break
+        if not age_only:
+            for src in meta["source_files"]:
+                full_path = Path(projects_root) / src
+                if full_path.exists():
+                    mtime = datetime.fromtimestamp(os.path.getmtime(full_path))
+                    if mtime > verified_date:
+                        source_modified = True
+                        modified_file = f"{src} (modified {mtime.strftime('%Y-%m-%d')})"
+                        break
 
         if source_modified:
             print(f"  [{RED}STALE{NC}] {skill_name}: verified {meta['last_verified']}, but {modified_file}")
