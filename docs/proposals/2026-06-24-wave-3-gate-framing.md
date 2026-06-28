@@ -1,5 +1,7 @@
 # 2026-06-24 Wave-3 Gate — Framing Note
 
+> **Design record.** A planning / RFC document kept as design provenance; it captures intent at a point in time and may lag the running code. For current behavior see [`UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md) and the runtime sources it points to.
+
 **Created:** 2026-06-22
 **Status:** **RESOLVED 2026-06-24.** Both gate decisions are made (see RESOLUTION below). Body preserved as the framing that led here.
 **Scope:** Frames the single decision that resolves the largest cluster of open proposals at once. Does not relitigate destination A′ (operator-committed 2026-05-05); it asks whether the *Wave-3 forward build* still has a basis.

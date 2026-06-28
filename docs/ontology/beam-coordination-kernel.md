@@ -1,5 +1,7 @@
 # BEAM Coordination Kernel Plan
 
+> **Design record.** A planning / RFC document kept as design provenance; it captures intent at a point in time and may lag the running code. For current behavior see [`UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md) and the runtime sources it points to.
+
 **Created:** April 30, 2026
 **Last Updated:** June 28, 2026
 **Status:** Placement decided; lease-plane live; Sentinel Wave 1 shipped (`com.unitares.sentinel-beam`); **Wave 3a read-only handlers DEPLOYED (:8770, first inbound BEAM listener) and dialectic-on-BEAM merged (flags off, 2026-06-28)**. Remaining = Wave 3 write-path (3b/3c `handler_dispatch`, not started).

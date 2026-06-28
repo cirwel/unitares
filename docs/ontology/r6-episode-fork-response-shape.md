@@ -1,5 +1,7 @@
 # R6 — Episode-fork vs identity-lineage-fork response-shape decision
 
+> **Design record.** A planning / RFC document kept as design provenance; it captures intent at a point in time and may lag the running code. For current behavior see [`UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md) and the runtime sources it points to.
+
 **Status:** Decision doc, revision pass 3, with 2026-05-05 v2.1 onboard-side field-shape decision and 2026-05-08 durable-provenance follow-up landed.
 **Scope:** A response-shape decision under plan row R6 (`docs/ontology/plan.md`). Promotes two fork-discrimination fields to plan row S22 for both `process_agent_update`'s thin `thread_context` and `onboard()`'s rich `thread_context`. As of 2026-05-08 those two fields also flow into the durable S22 write context persisted to `core.agent_state.state_json.provenance_context` and `knowledge.discoveries.provenance.s22_context`. Does NOT promote the broader candidate provenance envelope.
 **Companion to:** `harness-substrate-plurality.md` (R6 design + candidate envelope), `r6-h1-h5-dogfood-20260429.md` (dogfood pass; April 30 forcing observation).

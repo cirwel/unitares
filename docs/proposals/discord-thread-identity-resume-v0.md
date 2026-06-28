@@ -1,5 +1,7 @@
 # Discord BEAM thread identity — resume-per-thread (v0)
 
+> **Design record.** A planning / RFC document kept as design provenance; it captures intent at a point in time and may lag the running code. For current behavior see [`UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md) and the runtime sources it points to.
+
 **Created:** June 18, 2026
 **Status:** Orchestrator + reference-hook side merged (#834). The **fail-closed
 guard** (anchor honored only with an explicit orchestration marker) was mirrored
