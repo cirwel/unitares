@@ -4,9 +4,9 @@
 **Scope:** Plan row R1 (`docs/ontology/plan.md`). Produces: signature, plausibility model, implementation sketch including the series-reconstruction helper, and test-fixture plan.
 **Revision history:**
 - v1 (2026-04-24 morning) — one-shot draft; five-channel model, `verify_lineage_claim` naming. Dismissed as not implementable and carrying security-gate framing.
-- v2 (2026-04-24 afternoon) — two-channel reduction (C1 trajectory DTW + C2 homeostatic composite); renamed `score_behavioral_continuity`. Reviewed by second council; council found the C1/C2 channels were themselves gated on agents explicitly uploading `TrajectorySignature.attractor` — both unavailable on the standard `process_agent_update` path. v2 also smuggled in a recursive-weight inconsistency (C2's internal 0.4/0.3/0.3 weights exempted from the "no weights until MI" rule applied at the outer level).
+- v2 (2026-04-24 afternoon) — two-channel reduction (C1 trajectory DTW + C2 homeostatic composite); renamed `score_behavioral_continuity`. Reviewed in a second pass, which found the C1/C2 channels were themselves gated on agents explicitly uploading `TrajectorySignature.attractor` — both unavailable on the standard `process_agent_update` path. v2 also smuggled in a recursive-weight inconsistency (C2's internal 0.4/0.3/0.3 weights exempted from the "no weights until MI" rule applied at the outer level).
 - v3 (2026-04-24 evening). Single-channel spec. Renamed `score_behavioral_continuity` → `score_trajectory_continuity` to match what the primitive actually measures. C1 retained via a new server-side helper that reconstructs per-dimension EISV series from `agent_states` rows — no agent-side cooperation required. C2/C3/C4/C5 all deferred with named prerequisites. No weighting question remains (one channel). Thresholds explicitly tagged "seeded, not earned; shadow-mode-calibrate before enforcement."
-- **v3.1 (2026-04-24 late) — current.** Third council pass. Dialectic found no forcing issues (dynamics-confound noted but below primitive's resolution; `plausibility` at API boundary already scoped honestly — dialectic's own recommendation: stop iterating, let next signal come from shadow-mode data or downstream adoption). Code review found three factual errors in the implementation sketch — corrected below. No scope changes.
+- **v3.1 (2026-04-24 late) — current.** Third review pass. Dialectic found no forcing issues (dynamics-confound noted but below primitive's resolution; `plausibility` at API boundary already scoped honestly — dialectic's own recommendation: stop iterating, let next signal come from shadow-mode data or downstream adoption). Code review found three factual errors in the implementation sketch — corrected below. No scope changes.
 
 ---
 
@@ -110,7 +110,7 @@ ORDER BY s.recorded_at ASC;
 
 Index coverage: `db/postgres/schema.sql:169` provides `idx_agent_state_identity_time ON core.agent_state(identity_id, recorded_at DESC)`. Planner resolves identity first, then range-scans the index. No new index needed.
 
-**Epoch filter (v3.2 correction).** The 2026-04-25 council code-review pass found that every row written by `record_agent_state` (`src/db/mixins/state.py:33`) stamps an `epoch` column, and every existing read query filters on `s.epoch = $N`. Without the filter, the helper returns rows from all epochs (pre-grounding + grounded) on any deployed instance, conflating calibration data across the EISV grounding boundary. Use `GovernanceConfig.CURRENT_EPOCH` as the bound at call time; do not hardcode a literal.
+**Epoch filter (v3.2 correction).** The 2026-04-25 code-review pass found that every row written by `record_agent_state` (`src/db/mixins/state.py:33`) stamps an `epoch` column, and every existing read query filters on `s.epoch = $N`. Without the filter, the helper returns rows from all epochs (pre-grounding + grounded) on any deployed instance, conflating calibration data across the EISV grounding boundary. Use `GovernanceConfig.CURRENT_EPOCH` as the bound at call time; do not hardcode a literal.
 
 **Schema specifics** (for implementor): columns are `REAL NOT NULL DEFAULT ...`; `recorded_at` is `TIMESTAMPTZ NOT NULL`. Group rows into per-dimension lists in Python by reading the four scalar columns in order.
 
@@ -214,9 +214,9 @@ v3.1 applies the v3 code-review corrections in-place (SQL JOIN, correct env var,
 
 ---
 
-## Amendment v3.2 (2026-04-25) — post-acceptance council pass
+## Amendment v3.2 (2026-04-25) — post-acceptance review pass
 
-After the operator accepted v3.1 on 2026-04-25, a fourth council pass (dialectic + code-review) ran specifically on the implementation surface. It found four issues v3.1 didn't address. None invalidate v3.1's single-channel design; all add specifications the implementation row must follow.
+After the operator accepted v3.1 on 2026-04-25, a fourth review pass (dialectic + code-review) ran specifically on the implementation surface. It found four issues v3.1 didn't address. None invalidate v3.1's single-channel design; all add specifications the implementation row must follow.
 
 ### v3.2-A. Telemetry-as-lineage-leak surface
 
@@ -272,7 +272,7 @@ The transition from `seeded → earned` is a single explicit operator action, no
 
 ### v3.2-E. Inline corrections to v3.1 implementation sketch
 
-The council code-review surfaced three additional implementation-row gotchas:
+The code-review surfaced three additional implementation-row gotchas:
 
 1. **`epoch` column filter** in the SQL (already applied above to `reconstruct_eisv_series`).
 2. **conftest stub registration:** `tests/conftest.py:_isolate_db_backend` is autouse and replaces `_db_instance` with an `AsyncMock`. Any new method the helper adds must be registered as a method stub on `mock_backend` or new tests will get auto-generated `AsyncMock` children returning coroutines instead of lists. Implementation row must add `mock_backend.reconstruct_eisv_series` and `mock_backend.score_trajectory_continuity` to the conftest fixture.
@@ -280,7 +280,7 @@ The council code-review surfaced three additional implementation-row gotchas:
 
 ### v3.2-F. Known limitation — script-driven trajectory pairs
 
-The trajectory council agent surfaced this: under S1-a (TTL shrink), Chronicler-style daily-cron processes get forced through `force_new` re-onboard on each wake. They will appear to R1 as declared-lineage pairs (the cron has a stable identity it can declare as parent), and their DTW similarity will be high — not because of behavioral lineage but because the script is deterministic.
+The trajectory review agent surfaced this: under S1-a (TTL shrink), Chronicler-style daily-cron processes get forced through `force_new` re-onboard on each wake. They will appear to R1 as declared-lineage pairs (the cron has a stable identity it can declare as parent), and their DTW similarity will be high — not because of behavioral lineage but because the script is deterministic.
 
 **Captured as known limitation, not a v3.2 fix.** Mitigation lives in S8a Phase 2: when `session_like` (or a sibling `script_driven` class) is added, R1's calibration partition can filter these out. Until then, R1 implementation should:
 
@@ -291,15 +291,15 @@ The trajectory council agent surfaced this: under S1-a (TTL shrink), Chronicler-
 
 Four normative additions (v3.2-A through D), three implementation-row corrections (v3.2-E), one captured limitation (v3.2-F). Single-channel design from v3.1 unchanged. No changes to `score_trajectory_continuity` signature; one new column on lineage records (`provisional_lineage`); one new field on score records (`calibration_status`); one new audit table (`r1_score_audit`).
 
-**Implementation row sequencing reminder (per `plan.md` 2026-04-25 appendix):** R1 implementation row blocks on (1) S8c (`spawn_reason` write-path repair), (2) S8a Phase 2 (`session_like` class), (3) light council confirmation pass on this v3.2 amendment.
+**Implementation row sequencing reminder (per `plan.md` 2026-04-25 appendix):** R1 implementation row blocks on (1) S8c (`spawn_reason` write-path repair), (2) S8a Phase 2 (`session_like` class), (3) light review confirmation pass on this v3.2 amendment.
 
 ---
 
-## Amendment v3.3 (2026-05-03) — council confirmation pass
+## Amendment v3.3 (2026-05-03) — review confirmation pass
 
-The "light council confirmation pass" named at the end of v3.2 ran 2026-05-03 as three parallel agents (`dialectic-knowledge-architect` + `feature-dev:code-reviewer` + `live-verifier`) against the v3.2 amendment. All three returned **WITHHOLD-PENDING-V3.3** with overlapping forcing items. v3.3 folds operator decisions on three taste-level choices and converts every council finding into either (a) a normative tightening, (b) an explicit implementation-row constraint, or (c) a doc-text correction.
+The "light review confirmation pass" named at the end of v3.2 ran 2026-05-03 as parallel independent reviewers against the v3.2 amendment. All three returned **WITHHOLD-PENDING-V3.3** with overlapping forcing items. v3.3 folds operator decisions on three taste-level choices and converts every review finding into either (a) a normative tightening, (b) an explicit implementation-row constraint, or (c) a doc-text correction.
 
-Single-channel design from v3.1 is unchanged. v3.2's normative additions (provisional lifecycle, calibration_status, dedupe/TTL) stand; v3.3 corrects their text and tightens their semantics where the council found leakage or under-specification.
+Single-channel design from v3.1 is unchanged. v3.2's normative additions (provisional lifecycle, calibration_status, dedupe/TTL) stand; v3.3 corrects their text and tightens their semantics where the review found leakage or under-specification.
 
 ### v3.3-A. Public payload — strict redaction (supersedes v3.2-A)
 
@@ -315,7 +315,7 @@ Single-channel design from v3.1 is unchanged. v3.2's normative additions (provis
 
 **Join semantics.** The public KG node carries `score_id` (UUID). The audit row with that `score_id` is the canonical record; the public node is its redacted projection. When dedupe fires on `(parent_id, successor_id)` (v3.2-D), the public node's `score_id` updates to the new audit row's UUID. Audit table is append-only; previous `score_id` values remain queryable for the operator-only calibration analysis path.
 
-This closes v3.2's residual leak and pre-resolves council finding A4 (audit↔public join key was implicit in v3.2; v3.3 makes `score_id` the explicit primitive).
+This closes v3.2's residual leak and pre-resolves review finding A4 (audit↔public join key was implicit in v3.2; v3.3 makes `score_id` the explicit primitive).
 
 **Internal-caller surface unchanged.** The `TrajectoryContinuityScore` dataclass returned to *internal callers* (the policy layer making `blocks` / `marks` decisions) remains complete per v3.1 §"Input signature." Only the KG-published shape narrows.
 
@@ -381,11 +381,11 @@ Migration slot: take the next available slot in `db/postgres/migrations/`. No ne
 |---|---|---|
 | Trust-tier (S6) | `src/identity/trust_tier_routing.py` (`resolve_trust_tier`) | Read `provisional_lineage`; if true, do not contribute to tier upgrades |
 | KG provenance (S7) | `src/storage/knowledge_graph_postgres.py` + `src/db/mixins/knowledge_graph.py` (provenance-chain query path; identify exact site during impl) | Aggregations of "lineage-attributed activity" exclude `provisional_lineage=true` by default; explicit query opt-in shows them |
-| R3 role baselines | **Deferred — no in-process consumer exists today** (3-agent council 2026-05-04 confirmed: `audit.r1_score_audit` is write-only; no aggregator queries it; live runtime has 2 rows / 0 confirmed lineages). Provisional exclusion is a SQL query-time discipline for operator-side calibration analysis (the `seeded → earned` flip per v3.3-C is operator-driven, not automatic — building a runtime aggregator that fires on the hot path would violate that invariant). When the in-process or operator-tool reader lands, signature should be `get_r1_plausibility_distribution_by_class(exclude_provisional=True, *, window_days=180)` joining `audit.r1_score_audit` against `core.identities` and filtering on `provisional_lineage = FALSE`. | Bind when the reader lands; the spec contract is that `exclude_provisional` defaults to `True` and the reader's caller must opt in to seeing provisional rows. |
+| R3 role baselines | **Deferred — no in-process consumer exists today** (3-agent review 2026-05-04 confirmed: `audit.r1_score_audit` is write-only; no aggregator queries it; live runtime has 2 rows / 0 confirmed lineages). Provisional exclusion is a SQL query-time discipline for operator-side calibration analysis (the `seeded → earned` flip per v3.3-C is operator-driven, not automatic — building a runtime aggregator that fires on the hot path would violate that invariant). When the in-process or operator-tool reader lands, signature should be `get_r1_plausibility_distribution_by_class(exclude_provisional=True, *, window_days=180)` joining `audit.r1_score_audit` against `core.identities` and filtering on `provisional_lineage = FALSE`. | Bind when the reader lands; the spec contract is that `exclude_provisional` defaults to `True` and the reader's caller must opt in to seeing provisional rows. |
 | R2 honest memory | (R2 impl row prereq, not in R1's PR — see v3.3-B sequencing) | Exclude provisional from forward-only chain crediting |
 | Dashboard | `unitares-dashboard/` (specific file TBD during impl) | Show "provisional" badge with `provisional_recorded_at` |
 
-Migration + first three consumers shipped in the R1 implementation row (PRs #306/#309/#314/#320/#321/#324). The R3 row was originally framed as a fourth in-PR consumer; council pass 2026-05-04 (architect + reviewer + live-verifier) found the named consumer site does not exist in code and that constructing one would violate v3.3-C's "calibration is operator-driven, not automatic" invariant. R3 row deferred per the table above; PR 4b folded into this doc-correction edit. Dashboard patch may ship in a follow-up if scoping demands it (note: per memory `unitares-dashboard.md`, dashboard panel changes follow file-allowlist conventions). R2 consumer patch lives in R2's own implementation PR.
+Migration + first three consumers shipped in the R1 implementation row (PRs #306/#309/#314/#320/#321/#324). The R3 row was originally framed as a fourth in-PR consumer; review pass 2026-05-04 (architect + reviewer + live verification) found the named consumer site does not exist in code and that constructing one would violate v3.3-C's "calibration is operator-driven, not automatic" invariant. R3 row deferred per the table above; PR 4b folded into this doc-correction edit. Dashboard patch may ship in a follow-up if scoping demands it (note: per memory `unitares-dashboard.md`, dashboard panel changes follow file-allowlist conventions). R2 consumer patch lives in R2's own implementation PR.
 
 **Why explicit columns, not JSON metadata.** R2 / trust-tier / R3 / dashboard all need to query on `provisional_lineage = false`. JSONB metadata makes the predicate awkward and untyped. Explicit columns + SQL constraints are the source-of-truth shape; AGE edge property can mirror later via a write-side trigger if graph traversal benefits surface.
 
@@ -408,7 +408,7 @@ Migration + first three consumers shipped in the R1 implementation row (PRs #306
 
 **Specification (impl row work).** Implementor identifies the migration that added `epoch` (search `db/postgres/migrations/` for `epoch` or `CURRENT_EPOCH`) and either (a) cites it directly in the v3.2-E correction, or (b) backports the column into `schema.sql` so the base DDL is honest. The latter is the migration-discipline-clean path; the former is the minimal-scope path. **Operator default:** backport into `schema.sql` if it's a one-line addition; cite-only if the migration carries other unrelated changes that complicate a partial backport.
 
-This is migration-discipline housekeeping, not R1-specific work; it surfaces here because R1 is the first reader to depend on `epoch`'s presence and the gap was hidden until live-verifier ran.
+This is migration-discipline housekeeping, not R1-specific work; it surfaces here because R1 is the first reader to depend on `epoch`'s presence and the gap was hidden until live verification ran.
 
 ### v3.3-G. `class_tag` on score record (closes flag A5)
 
@@ -427,7 +427,7 @@ The following are not normative changes to the spec but explicit constraints the
 3. **A4 — join key.** Already specified in v3.3-A: `score_id` UUID is the explicit join key between public KG node and audit table row. No additional impl-row work; this constraint is informational.
 4. **A6 — lifecycle scope expansion noted.** v3.2's normative additions (`provisional_lineage`, `calibration_status`) create a 2×2 lifecycle state (provisional × calibration_status) on what v3.1 framed as stateless-per-call. v3.3 acknowledges this explicitly. Test coverage in the impl row must include the four cells, not just happy-path single-call regression: `(provisional=false, status=seeded)`, `(provisional=true, status=seeded)`, `(provisional=false, status=earned)`, and crucially the failure-mode cells where `status=calibration_failed` degrades verdicts to `inconclusive` per v3.3-C.
 
-### v3.3-I. Doc-text corrections (live-verifier ground truth)
+### v3.3-I. Doc-text corrections (live verification ground truth)
 
 These are mechanical fixes to v3.1/v3.2 prose — no spec impact. Future readers and implementors should trust v3.3 paths/lines over v3.1/v3.2 where they conflict.
 
@@ -442,7 +442,7 @@ These are mechanical fixes to v3.1/v3.2 prose — no spec impact. Future readers
 | `record_agent_state` at line 33 | def at line 17; epoch arg at line 39 | `src/db/mixins/state.py:17,39` |
 | `_write_entry` at lines 431-439 | def at line 515; fire-and-forget docstring at line 541 | `src/audit_log.py:515,541` |
 
-**KG upsert primitive — flag refuted, not folded as forcing.** v3.2-D's dedupe-by-pair claim was challenged by the code-reviewer council pass as requiring a MERGE primitive that "doesn't exist." Live-verifier ground-truthed this: `src/storage/knowledge_graph_postgres.py:82` already has `ON CONFLICT (id) DO UPDATE SET`. The dedupe-by-pair pattern is feasible against the existing write path; v3.2-D stands as specified.
+**KG upsert primitive — flag refuted, not folded as forcing.** v3.2-D's dedupe-by-pair claim was challenged by the code-reviewer review pass as requiring a MERGE primitive that "doesn't exist." Live-verifier ground-truthed this: `src/storage/knowledge_graph_postgres.py:82` already has `ON CONFLICT (id) DO UPDATE SET`. The dedupe-by-pair pattern is feasible against the existing write path; v3.2-D stands as specified.
 
 ### v3.3 summary
 
@@ -456,7 +456,7 @@ These are mechanical fixes to v3.1/v3.2 prose — no spec impact. Future readers
 
 **Four flags converted to explicit impl-row constraints** (A4 join key, A6 lifecycle scope, C4 empty-dim skip, C5 function placement).
 
-**One flag refuted by live-verifier** (KG MERGE primitive — exists at `src/storage/knowledge_graph_postgres.py:82`).
+**One flag refuted by live verification** (KG MERGE primitive — exists at `src/storage/knowledge_graph_postgres.py:82`).
 
 **Eight doc-text bugs corrected** (v3.3-I table).
 
@@ -468,7 +468,7 @@ Single-channel design (v3.1) unchanged. Normative shape (v3.2) preserved; tighte
 |---|---|
 | S8c (`spawn_reason` write-path repair) | ✅ shipped 2026-04-25 (#155) |
 | S8a Phase 2 (`session_like` class) | ✅ shipped 2026-05-01 (#252) |
-| Light council confirmation pass on v3.2 | ✅ ran 2026-05-03; verdict WITHHOLD-PENDING-V3.3 |
+| Light review confirmation pass on v3.2 | ✅ ran 2026-05-03; verdict WITHHOLD-PENDING-V3.3 |
 | v3.3 amendment | ✅ this section |
 
 **The R1 implementation row may open against v3.3.**

@@ -5,8 +5,8 @@
 **Builds on (design dependency only — see §"Implementation status"):** R1 v3.2 (`r1-verify-lineage-claim.md`) provides the trajectory-similarity gate; R2 specifies the protocol that wraps it.
 
 **Revision history:**
-- v1 (2026-05-02 morning) — single-channel, R1-as-integration-test, recommendation A (retroactive trust-tier crediting). Reviewed by parallel three-agent council (`dialectic-knowledge-architect` + `feature-dev:code-reviewer` + `live-verifier`). All three returned "withhold pending v2." Convergent forcing items: (1) asymmetry-claim violated by recommendation A's interpretive rewrite of parent's history; (2) axiom #12 conflation between "trajectory similarity" and "memory operative on behavior" (R1 explicitly disclaims being an integration test, R2 v1 conscripted it as one); (3) multi-generation chain semantics unspecified; (4) R1 is entirely unimplemented in master so all "R1 provides X" claims are forward references, not callable code; (5) `provisional_lineage` column does not exist in any schema (R2 v1 said "reuses, does not re-introduce" — false premise); (6) check-in-triggered evaluation as described would deadlock under the anyio-asyncio conflict (CLAUDE.md). Plus substantive findings on cross-role lineage silently demoting, demote-vs-fork interpretive-rewrite symmetry, FSM gaps, audit-write-path gaps, identity-vs-onboard-response gaps, subject-identity language slips.
-- **v2 (2026-05-02 afternoon).** Forcing items addressed via the strategic calls listed at end of v1 council writeup. Substantive items addressed in-line. Remaining items surfaced as open questions for the operator.
+- v1 (2026-05-02 morning) — single-channel, R1-as-integration-test, recommendation A (retroactive trust-tier crediting). Reviewed by parallel independent design review. All three returned "withhold pending v2." Convergent forcing items: (1) asymmetry-claim violated by recommendation A's interpretive rewrite of parent's history; (2) axiom #12 conflation between "trajectory similarity" and "memory operative on behavior" (R1 explicitly disclaims being an integration test, R2 v1 conscripted it as one); (3) multi-generation chain semantics unspecified; (4) R1 is entirely unimplemented in master so all "R1 provides X" claims are forward references, not callable code; (5) `provisional_lineage` column does not exist in any schema (R2 v1 said "reuses, does not re-introduce" — false premise); (6) check-in-triggered evaluation as described would deadlock under the anyio-asyncio conflict (CLAUDE.md). Plus substantive findings on cross-role lineage silently demoting, demote-vs-fork interpretive-rewrite symmetry, FSM gaps, audit-write-path gaps, identity-vs-onboard-response gaps, subject-identity language slips.
+- **v2 (2026-05-02 afternoon).** Forcing items addressed via the strategic calls listed at end of v1 review writeup. Substantive items addressed in-line. Remaining items surfaced as open questions for the operator.
 - **Phase 1 implementation (2026-05-05, #357) — current runtime.** Storage helpers, migration 036, FSM/audit events, cross-role pre-check, `onboard()` / `identity()` response fields, 30-minute sweeper, and `process_agent_update` trigger shipped. Phase 2 downstream consumers remain deferred until telemetry matures.
 
 ---
@@ -69,7 +69,7 @@ This is a **necessary-but-not-sufficient** gate toward axiom #12. R2 v1 honestly
 | **Effect of demotion on confirmed chains** | Per open question #3 (kept open): demote-in-v1 vs. fork-in-v1 trades interpretive-honesty for protocol simplicity. Default in this draft: demote, with explicit clawback semantics specified below. |
 | **Multi-generation chain handling** | R1 evaluates only against immediate declared parent. No transitive trajectory windowing. Forward-only trust-tier crediting is per-link, not transitive across the chain. (See §"Multi-generation chains.") |
 
-The asymmetry is the load-bearing structural claim: **successor's behavior cannot rewrite parent's records and — under forward-only crediting — cannot rewrite the *interpretation* of parent's pre-promotion records either.** Forward-only crediting is what makes the asymmetry honest at the interpretive layer; v1's recommendation A retroactively reinterpreted parent's prior records as "chain-continuous" based on successor's behavior, which the council flagged as an interpretive-rewrite that violated the asymmetry claim.
+The asymmetry is the load-bearing structural claim: **successor's behavior cannot rewrite parent's records and — under forward-only crediting — cannot rewrite the *interpretation* of parent's pre-promotion records either.** Forward-only crediting is what makes the asymmetry honest at the interpretive layer; v1's recommendation A retroactively reinterpreted parent's prior records as "chain-continuous" based on successor's behavior, which the review flagged as an interpretive-rewrite that violated the asymmetry claim.
 
 ### What does NOT change at promotion
 
@@ -88,7 +88,7 @@ The chain gains a *new* observation counter at promotion that begins at 0 and ac
 
 This means: a successor inheriting from a tier-3 parent does NOT become tier-3 at promotion. The successor remains at whatever tier its own observation count has earned. The chain has its own tier accrual, starting from 0. Over time, if the chain accumulates ≥ tier-3 observations under sustained behavioral similarity, the chain itself reaches tier-3 — but that takes ≥ N actual successor check-ins post-promotion, not "inherits parent's 500 in one moment."
 
-Trade-off acknowledged: this loses the operational ergonomics of "successor jumps to parent's tier on a passing R1 score." It buys the asymmetry-honesty that the v1 council pass said was load-bearing. If R5 ships and provides replay-discrimination strong enough to close the security exposure of recommendation A, the trade can be revisited. Until then, B is the honest default.
+Trade-off acknowledged: this loses the operational ergonomics of "successor jumps to parent's tier on a passing R1 score." It buys the asymmetry-honesty that the v1 review pass said was load-bearing. If R5 ships and provides replay-discrimination strong enough to close the security exposure of recommendation A, the trade can be revisited. Until then, B is the honest default.
 
 ## Cross-role pre-check
 
@@ -158,7 +158,7 @@ Same as v1, with explicit acknowledgement these are deferred *not* because they'
 | **Decision-distribution overlap** | Successor's decision distribution overlaps parent's | Persistent per-agent decision log (R1 deferred C4). |
 | **Forced re-derivation** (R5's domain) | Successor independently reproduces N of parent's KG conclusions from raw inputs | R5 — out of scope for R2; this is the integration-vs-replay discriminator. |
 
-**Open question #2:** should KG cite-and-extend ship as a v1.1 supplemental channel? It has no blocking prerequisite, and adding *any* channel orthogonal to trajectory similarity tightens the necessary-but-not-sufficient gap. Argument against v1: maintain R1's discipline of "single channel until prerequisite-blocked." Argument for v1.1: cite-and-extend is genuinely orthogonal (R1 cannot see KG writes), and it directly attacks the council's axiom-#12-conflation finding. Recommendation: **defer to v1.1**, after Phase 1 telemetry establishes a baseline. Surface the question now so it doesn't get lost.
+**Open question #2:** should KG cite-and-extend ship as a v1.1 supplemental channel? It has no blocking prerequisite, and adding *any* channel orthogonal to trajectory similarity tightens the necessary-but-not-sufficient gap. Argument against v1: maintain R1's discipline of "single channel until prerequisite-blocked." Argument for v1.1: cite-and-extend is genuinely orthogonal (R1 cannot see KG writes), and it directly attacks the review's axiom-#12-conflation finding. Recommendation: **defer to v1.1**, after Phase 1 telemetry establishes a baseline. Surface the question now so it doesn't get lost.
 
 ## Promotion / demotion / archival protocol
 
@@ -236,7 +236,7 @@ Audit events fire from two contexts:
 | **provisional → archived** | Mark edge `archived=true`; `lineage_archived_at=now`. Successor's `parent_agent_id` retained but inert. | `lineage_grace_expired` (new) | Same as demoted, with reason = "insufficient observations within grace window." |
 | **confirmed → demoted (post-promotion divergence)** | Remove edge; **clawback chain counter** (set to 0; do not credit successor with chain counter accrual). | `lineage_demoted`, payload `reason="post_promotion_divergence"` | Trust-tier *for the chain* claws back; trust-tier *for successor as fresh agent* unaffected (forward-only credit was always per-link, not transitive). KG provenance must invalidate any chain-attributed aggregations. *(See open question #3.)* |
 
-**Clawback honesty.** Confirmed→demoted does erase the chain-counter accrual that happened during the confirmed period. This is the operational consequence of the council's interpretive-rewrite finding: if we want to be honest that "post-promotion divergence means the chain was not what we thought it was," we have to claw back the credit the chain accumulated. The alternative (keep the chain counter, just stop adding) is dishonest because it preserves a trust signal whose underlying premise was retracted.
+**Clawback honesty.** Confirmed→demoted does erase the chain-counter accrual that happened during the confirmed period. This is the operational consequence of the review's interpretive-rewrite finding: if we want to be honest that "post-promotion divergence means the chain was not what we thought it was," we have to claw back the credit the chain accumulated. The alternative (keep the chain counter, just stop adding) is dishonest because it preserves a trust signal whose underlying premise was retracted.
 
 The forward-only trust-tier policy means clawback is bounded: only the *chain's* counter resets. Successor's per-UUID counter (which would have accrued naturally from check-ins) is unaffected.
 
@@ -260,7 +260,7 @@ R2 uses the following columns on `core.identities` (canonical lineage table). R1
 
 **No `r1_score_audit` table introduced by R2.** R1 v3.2-A specified that table as part of R1's implementation row. R2 reads from it (for shadow-mode telemetry inspection) but does not introduce it.
 
-## Multi-generation chains (v2 — addresses council finding 5a)
+## Multi-generation chains (v2 — addresses review finding 5a)
 
 A chain may have arbitrary depth: `A → B → C → D` where each successor declared its immediate predecessor. R2 handles depth as follows:
 
@@ -330,7 +330,7 @@ R1 implementation row ─── blocks ──────────── R2 i
 
 R2 design proceeds in parallel with R1 implementation. R2 implementation sequences after R1 implementation lands.
 
-(v1 mistakenly framed Q2 as "informs but does not unblock." Per the council finding, R2 *does* unblock Q2's operational definition even if it doesn't force code action. Corrected.)
+(v1 mistakenly framed Q2 as "informs but does not unblock." Per the review finding, R2 *does* unblock Q2's operational definition even if it doesn't force code action. Corrected.)
 
 ## Appendix: what this does NOT solve (v2 — expanded)
 
@@ -344,12 +344,12 @@ R2 design proceeds in parallel with R1 implementation. R2 implementation sequenc
 
 ## Appendix: review provenance
 
-- v1 council pass 2026-05-02 (parallel three-agent: `dialectic-knowledge-architect` + `feature-dev:code-reviewer` + `live-verifier`). Convergent verdict: withhold pending v2. Forcing items: asymmetry violation by recommendation A; axiom #12 conflation; multi-generation chains unspecified; R1 entirely unimplemented; `provisional_lineage` column nonexistent; check-in eval anyio-deadlock risk. Substantive items: trust-tier-vs-security boundary under R1 forgery; demote-vs-fork interpretive symmetry; cross-role silent demotion; orphan-re-emergence asymmetry; FSM gaps; audit-write path; identity-vs-onboard response asymmetry; subject-identity language slips. Live-verifier ground-truthed all runtime claims via `mcp__unitares-governance__list_tools`, `identity()`, `agent(get)`, `describe_tool(onboard)`, and direct DB queries on `core.identities`, `core.agents`, `audit.events` (38 distinct event types enumerated, no `lineage_*` collisions), `core.schema_migrations` (latest = v29 lease_plane).
+- v1 review pass 2026-05-02 (parallel three-agent: independent reviewers). Convergent verdict: withhold pending v2. Forcing items: asymmetry violation by recommendation A; axiom #12 conflation; multi-generation chains unspecified; R1 entirely unimplemented; `provisional_lineage` column nonexistent; check-in eval anyio-deadlock risk. Substantive items: trust-tier-vs-security boundary under R1 forgery; demote-vs-fork interpretive symmetry; cross-role silent demotion; orphan-re-emergence asymmetry; FSM gaps; audit-write path; identity-vs-onboard response asymmetry; subject-identity language slips. Live-verifier ground-truthed all runtime claims via `mcp__unitares-governance__list_tools`, `identity()`, `agent(get)`, `describe_tool(onboard)`, and direct DB queries on `core.identities`, `core.agents`, `audit.events` (38 distinct event types enumerated, no `lineage_*` collisions), `core.schema_migrations` (latest = v29 lease_plane).
 
 - v2 (this revision) addresses every forcing item, all substantive items, and the relevant nits. Three remaining open questions (cross-role reject vs. flag-allow; v1.1 cite-and-extend; demote vs. fork) are surfaced for operator decision rather than silently defaulted.
 
-- Future council pass on v2: should be lighter-touch — verify forcing items closed, check no new ones introduced, confirm the strategic calls (forward-only crediting, single-channel discipline maintained, anyio sidestep pattern) are sound. If v2 lands clean, R2 design is acceptance-ready pending the operator's three open questions.
+- Future review pass on v2: should be lighter-touch — verify forcing items closed, check no new ones introduced, confirm the strategic calls (forward-only crediting, single-channel discipline maintained, anyio sidestep pattern) are sound. If v2 lands clean, R2 design is acceptance-ready pending the operator's three open questions.
 
 ---
 
-**End v2 draft.** Ready for second-pass council review (light) and for the operator's read on the three open questions.
+**End v2 draft.** Ready for a light second-pass review and for the operator's read on the three open questions.

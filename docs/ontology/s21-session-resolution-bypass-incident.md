@@ -7,7 +7,7 @@
 **Related plan rows:** S13 clause (d) — `derive_session_key` step 7 audit event; this incident is the pre-condition that makes that audit event *necessary*.
 **Synthesis context:** filed under the operator's "lumen reboots but is the same, our identity system worked when we first started months ago and now is all over the place" pivot (2026-04-27 conversation). This is the empirical floor under that intuition.
 
-**Postscript — rate correction (2026-04-27, S21-a council pass):** the headline "95.1% fleet-wide ghost-fork rate" cited at lines 66 and 95 is the snapshot at incident-write time. After applying audit-window scoping (memory entry `feedback_audit-window-scoping.md`) the corrected rate is ~38%; live verification on 2026-04-27 (post-onboard restoration) shows ~20% on a 30-day window in `core.agents` (442 of 2210 fresh agents with `parent_agent_id IS NULL AND spawn_reason IS NULL`). The diagnosis still stands — the resolution path silently mints — but the magnitude was inflated by counting pre-audit-window entries that pre-dated the recording. The DoD threshold below ("drops below a threshold to be set after a calibration period") reads correctly either way; the calibration period is what determines the post-fix target.
+**Postscript — rate correction (2026-04-27, S21-a review pass):** the headline "95.1% fleet-wide ghost-fork rate" cited at lines 66 and 95 is the snapshot at incident-write time. After applying audit-window scoping (memory entry `feedback_audit-window-scoping.md`) the corrected rate is ~38%; live verification on 2026-04-27 (post-onboard restoration) shows ~20% on a 30-day window in `core.agents` (442 of 2210 fresh agents with `parent_agent_id IS NULL AND spawn_reason IS NULL`). The diagnosis still stands — the resolution path silently mints — but the magnitude was inflated by counting pre-audit-window entries that pre-dated the recording. The DoD threshold below ("drops below a threshold to be set after a calibration period") reads correctly either way; the calibration period is what determines the post-fix target.
 
 ---
 
@@ -90,7 +90,7 @@ All KG cleanup performed between 03:13:46 and 03:28:06 — 7 status updates (6 a
 
 ## Council review (2026-04-27, three-agent parallel pass)
 
-Council ran across `dialectic-knowledge-architect`, `feature-dev:code-reviewer`, and `live-verifier`. Major upgrades to the diagnosis:
+Council ran across independent reviewers. Major upgrades to the diagnosis:
 
 ### Live-verifier (production blast radius)
 
@@ -118,7 +118,7 @@ Quote: *"the ontology is sound; the implementation has slipped one layer down (r
 
 **S1-a is blocked by S21.** Retiring `continuity_token` while `client_session_id` can't survive one process is removing a non-functional layer above an already-broken one. The plan-row sequencing is wrong without S21 first.
 
-### Resolved diagnosis (council follow-up pass)
+### Resolved diagnosis (review follow-up pass)
 
 Possibility #3 is correct. **There is one Redis slot per session, and PATH 3 ratifies the ghost into it on every silent re-mint.**
 
@@ -175,7 +175,7 @@ Concrete code changes per the "Resolved diagnosis" above:
 
 ### Council-required before merge
 
-Per memory entry "Council also for load-bearing implementation" (PR #24 vs PR #23 collision lesson, 2026-04-26): identity resolution is fleet-bricking territory. Both S21-a and S21-b need parallel `dialectic-knowledge-architect` + `feature-dev:code-reviewer` + `live-verifier` review on the actual diff before merging. The first council pass diagnosed the bug; the implementation diff needs its own pass.
+Per memory entry "Council also for load-bearing implementation" (PR #24 vs PR #23 collision lesson, 2026-04-26): identity resolution is fleet-bricking territory. Both S21-a and S21-b need parallel independent review on the actual diff before merging. The first review pass diagnosed the bug; the implementation diff needs its own pass.
 
 ## Definition of done
 
