@@ -92,7 +92,7 @@ Convergence happens when both sides agree on conditions. The synthesis should re
 - **Propose measurable conditions.** "Entropy below X within Y check-ins" is verifiable. "I will be more careful" is not.
 - **Do not be defensive.** A pause verdict is data, not judgment. Analyze why it happened.
 - **Acknowledge valid concerns.** If the antithesis raises a real issue, say so. Partial agreement strengthens your position.
-- **Look at EISV data, not feelings.** Call `get_governance_metrics()` for actual values. The thermodynamic model is the shared ground truth.
+- **Look at EISV data, not feelings.** Call `get_governance_metrics()` for actual values — the governance metrics are the shared ground truth, not anyone's narrative. (The live verdict path is behavioral EISV; the ODE / thermodynamic model runs in parallel as a diagnostic lens and is not the authority.)
 
 ## Common Mistakes
 
