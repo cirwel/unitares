@@ -97,6 +97,15 @@ halt/reopen decision remain the operator-led red-team's**, per (D).
    fold (PATH 0 → H; PATH 2 PG-lookup → C/D read-tier with S21-a fail-closed → H; PATH 2.8's
    token-rebind proper → E). Full worktree worksheet: `docs/handoffs/wave-3-state-ownership-redteam-prep-2026-06-28.md`.
 
+3. **(C) SDK candidates are stale — re-pin `hermes_mcp` → `anubis-mcp`.** The (C) desk-spike
+   (`docs/handoffs/wave-3-mcp-sdk-spike-2026-06-28.md`) found both RFC-named candidates outdated:
+   `mcp_elixir_sdk` and `hermes_mcp 0.14.1` (last release 2025-08-14, spec 2025-03-26). `hermes_mcp`
+   was forked/rebranded to **`anubis-mcp`**, which is the live path — v1.6.2 (2026-06-09), spec
+   **2025-06-18 + 2025-11-25 (Tasks)**, StreamableHTTP + OAuth 2.1. **(C) does not fire** (a current,
+   spec-fresh, streaming-capable SDK exists), but §6's SDK assumptions and the (C) clause's named
+   versions should re-pin to `anubis-mcp` (≥v1.6.2) at the implementation gate. Optional hands-on
+   Anthropic-streaming code spike remains to close that clause beyond desk evidence.
+
 ## What changed in v0.3.4 (vs v0.3.3)
 
 19. **§11 criterion 10 pinned (prereq PR #9 executed, 2026-06-11).** The (F) baseline is formally unpinnable — trailing 30-day window held 1 session vs the ≥30 the haltspec requires — so the pin records the halt condition plus 90d/all-time context rates. The deeper finding: (F)'s reassignment-rate metric had no measurement source (reassignments were transcript-only; zero matching `audit.events` rows all-time). `_apply_reviewer_reassignment` now emits `dialectic_reviewer_reassigned`, making the threshold settable from the emission's deploy forward. Volume recovery (dialectic-rework arc) is upstream of any future re-pin.
