@@ -83,6 +83,7 @@ calibrated concealment (~0.19)**, where **cross-framing dominates (~0.97)**.
 | `scripts/analysis/dogfood_dialectic.py` ✓ | Live dogfood: onboard→request_review→submit_thesis, asserts UUID consistency | PASS/FAIL; needs live MCP :8767 | current |
 | `agents/common/dogfood_friction.py` ✓ | Normalizes friction observations into `/api/findings` events | Library; event dict + deterministic fingerprint | current |
 | `tests/test_r6_dogfood.py` ~ | R6 dogfood test | — | unread |
+| `docs/operations/self-report-verdict-dependence-2026-06-28.md` ✓ | Worked example: identical `proceed/safe` verdict for a clean refactor vs a confessed-sabotage check-in carrying identical self-reported drift | shows verdict is self-attested-driven (total pre-warmup, escalate-only after); `primary_driver: self_reported` | logged |
 
 ## Resident validation
 
