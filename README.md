@@ -2,17 +2,17 @@
 
 <img alt="UNITARES — runtime governance for AI-agent fleets" src="docs/assets/hero-v2.png" width="100%">
 
-### A stateful governance runtime for fleets of autonomous AI agents.
+### Runtime governance for autonomous-agent fleets.
 
-**Each agent is judged against its own history and calibration — not a fixed per-action rule — and gets back a verdict it can act on, mid-run.**<br/>
-Most controls are stateless: they check one action against one rule. UNITARES carries each agent's trajectory, calibration, and recent verdicts into the next decision — so an agent *drifting* surfaces while its output still looks fine, and it self-corrects (`proceed` / `guide` / `pause` / `reject`) before an external guardrail has to fire.
+**UNITARES gives each running agent a stateful health check: a verdict based on its own history, calibration, and recent evidence.**<br/>
+Most controls inspect one action against one rule. UNITARES carries trajectory into the next check-in, so drift can surface before the output obviously fails and the agent gets one plain action to read: `proceed` / `guide` / `pause` / `reject`.
 
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-2f7d72?style=flat-square&labelColor=0f171f)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache_2.0-2f7d72?style=flat-square&labelColor=0f171f)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
 
-*Status: live. First public commit 2025-12-04 · 3.7M+ governance events in production · dogfooded.*
+*Status: live and dogfooded. Public snapshot: 3.7M+ governance events from a single-operator deployment, frozen 2026-06-16.*
 
 [![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#try-the-demo-locally)
 [![Docs](https://img.shields.io/badge/docs-read-7d8f97?style=for-the-badge&labelColor=0f171f)](docs/README.md)
@@ -30,10 +30,10 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 ## What you get after install
 
 - **A governance server for heterogeneous agents.** MCP on `/mcp/`, REST on `/v1/tools/call`, an optional dashboard on `/dashboard`, and an SDK for resident or scheduled agents.
-- **Stateful, state-aware verdicts.** Each process identity is judged against its *own* baseline and recent history, so slow degradation surfaces while the output still looks fine.
-- **Outcome-grounded calibration.** Self-reported `confidence` is scored against real evidence — tests, exit codes, tool output, file ops, deployments — and that calibration feeds future verdicts.
-- **Governed shared memory.** A Postgres + pgvector + Apache AGE knowledge graph lets agents search and contribute durable discoveries, corrections, supersessions, and cross-agent relations with provenance. It is sediment, not a transcript dump.
-- **Dialectic review and durable constraints.** Disputed verdicts can be reviewed by authority-weighted peers; synthesized conditions persist and can gate that agent's future decisions.
+- **State-aware verdicts.** Each process identity is judged against its *own* baseline and recent history, so slow degradation can surface before output obviously fails.
+- **Outcome-grounded calibration.** When outcomes or tool evidence are recorded, self-reported `confidence` is scored against tests, exit codes, tool output, file ops, deployments, and task results.
+- **Governed shared memory.** A Postgres + pgvector + Apache AGE knowledge graph lets agents search and contribute durable discoveries, corrections, supersessions, and cross-agent relations with provenance rather than transcript dumps.
+- **Dialectic review and durable constraints.** Disputed verdicts can be reviewed by authority-weighted peers; synthesized conditions can persist and gate later decisions.
 - **One action the agent can obey.** Every check-in returns `proceed` / `guide` / `pause` / `reject`, plus the full EISV health vector for finer policies. Humans watch the same fleet through the optional dashboard.
 
 ## Use UNITARES if
@@ -56,7 +56,7 @@ docker compose up -d --wait && make demo
 
 For a human operator view, open the optional dashboard at `http://localhost:8767/dashboard`. Dashboard implementation details live in [`dashboard/README.md`](dashboard/README.md); public deployment screenshots live in [`docs/PRODUCTION_SNAPSHOT.md`](docs/PRODUCTION_SNAPSHOT.md).
 
-> **Running continuously since November 2025 · 3.7M+ governance events under sustained load · dogfooded** — the agents building UNITARES run under it. Every number is verifiable on a fresh clone. ([Production snapshot →](docs/PRODUCTION_SNAPSHOT.md))
+> **Running continuously since November 2025 · 3.7M+ governance events under sustained single-operator load · dogfooded** — the agents building UNITARES run under it. The snapshot documents deployment totals; the reviewer harness documents what can be regenerated from a clone or deployment data. ([Production snapshot →](docs/PRODUCTION_SNAPSHOT.md))
 
 ## Where it fits
 
@@ -70,14 +70,14 @@ UNITARES runs **alongside** your evals and guardrails — it doesn't replace eit
 
 ### How it relates to agent clients
 
-UNITARES is not an agent framework or chat interface. Hermes, Claude Code, Codex, Goose, Discord dispatchers, SDK residents, and local-model hosts provide the hands: prompts, tools, files, terminals, browsers, scheduled work, and operator UX. UNITARES provides governed continuity underneath them: process identity, check-ins, EISV state, calibration against outcomes, shared-memory provenance, dialectic review, and auditable verdicts. For one-off chat or local coding, skip the governance loop; for persistent, multi-agent, high-side-effect, or resident work, mount the client through MCP/REST/SDK or a lifecycle adapter.
+UNITARES is not an agent framework or chat interface. Hermes, Claude Code, Codex, Goose, Discord dispatchers, SDK residents, and local-model hosts provide prompts, tools, files, terminals, browsers, scheduled work, and operator UX. UNITARES provides governed continuity underneath them: process identity, check-ins, EISV state, calibration against outcomes, shared-memory provenance, dialectic review, and auditable verdicts. For one-off chat or local coding, skip the governance loop; for persistent, multi-agent, high-side-effect, or resident work, mount the client through MCP/REST/SDK or a lifecycle adapter.
 
 <details>
 <summary><strong>Mechanisms behind the verdict</strong></summary>
 
 - **State-aware verdict engine** — baseline, calibration, and recent history; not the current action alone ([`behavioral_assessment.py`](src/behavioral_assessment.py)).
-- **Outcome-grounded calibration** — self-reported `confidence` is scored against objective evidence.
-- **Dialectic review → constraints** — disputed verdicts can become durable gating conditions.
+- **Outcome-grounded calibration** — self-reported `confidence` is scored against objective evidence when available.
+- **Dialectic review → constraints** — disputed verdicts can become durable gating conditions after peer review.
 - **Per-instance identity isolation** — each process has its own governed state; reads are open, writes are accountable.
 - **Audit trail + KG** — confidence, evidence, verdicts, drift, recovery, and shared-memory contributions remain inspectable.
 
@@ -91,7 +91,7 @@ UNITARES is not an agent framework or chat interface. Hermes, Claude Code, Codex
   <img src="docs/assets/flow.png" width="100%" alt="agent acts → checks in (sync_state) → graded vs its own baseline → state + action → self-regulates → durable audit trail"/>
 </div>
 
-After each unit of work, the agent checks in with `sync_state()` — passing its self-reported confidence plus verifiable evidence (test results, exit codes, tool output). It gets back one plain policy action:
+After each unit of work, the agent checks in with `sync_state()` — passing self-reported confidence plus verifiable evidence when available (test results, exit codes, tool output). It gets back one plain policy action:
 
 <div align="center">
 
@@ -99,20 +99,20 @@ After each unit of work, the agent checks in with `sync_state()` — passing its
 
 </div>
 
-That's the whole contract: the agent reads the policy action and course-corrects *before* an external guardrail has to fire. No new vocabulary required to use it.
+That's the whole contract: the agent reads the policy action and can course-correct before an external guardrail has to fire. No new vocabulary required to use it.
 
 <details>
 <summary><strong>The four numbers behind the policy action (EISV)</strong></summary>
 
 <br/>
 
-Want to act on *why*, not just the policy action? Each check-in also returns four scores per agent, each graded against that agent's *own* ~30-check-in baseline — so slow drift surfaces even while output still looks fine:
+Want to act on *why*, not just the policy action? Each check-in also returns four scores per agent, each graded against that agent's *own* ~30-check-in baseline, so slow drift can surface while output still looks fine:
 
 | | | Goes wrong when… |
 |---|---|---|
 | **E** · Energy | is the work advancing? | thrashing, retries, no progress |
 | **I** · Integrity | do claims match results? | high confidence, low actual success |
-| **S** · Entropy | drifting from its own normal? | erratic, divergent behavior |
+| **S** · Entropy / drift | drifting from its own normal? | erratic, divergent behavior |
 | **V** · Valence | derived: energy vs integrity | motion without coherence (or vice-versa) |
 
 </details>
@@ -147,7 +147,7 @@ if action in ("pause", "reject"):
     agent.require_human_review(result.get("next_action", "Governance requested review"))
 ```
 
-The agent reads the action and acts — that's the whole loop. Self-reported `confidence` is strongest when paired with real outcomes, so include tool results or call `record_result(...)` when your client has evidence such as test status, exit codes, or deployment checks. UNITARES isn't an output validator or a sandbox; it's a state layer the agent itself can read, *before* external controls fire.
+The agent reads the action and acts. Self-reported `confidence` is strongest when paired with real outcomes, so include tool results or call `record_result(...)` when your client has evidence such as test status, exit codes, or deployment checks. UNITARES is not an output validator or sandbox; it is a state layer the agent itself can read before external controls fire.
 
 The same primary tool surface also gives agents a few optional moves:
 
