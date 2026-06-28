@@ -92,6 +92,7 @@ from .calibration import (
     backfill_calibration_from_historical_sessions,  # noqa: F401 — re-exported; tests patch via this module
 )
 from .resolution import execute_resolution
+from .beam_resolve_client import beam_resolve
 from .reviewer import select_reviewer, is_agent_in_active_session
 
 # Import PostgreSQL async functions for dialectic session storage
@@ -1835,9 +1836,21 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                                 execution_result.get("warning")
                             )
     
-                        # Execution succeeded - mark resolved in PG
+                        # Execution succeeded - mark resolved. When
+                        # UNITARES_DIALECTIC_BEAM_RESOLUTION is on, BEAM owns the
+                        # saga + the terminal session-row write; otherwise (or on
+                        # any BEAM error) fall back to the Python path, whose B-4
+                        # guard still prevents an overwrite. (dialectic-on-BEAM
+                        # Slice 1.2)
                         try:
-                            await pg_resolve_session(session_id=session_id, resolution=resolution.to_dict(), status="resolved")
+                            beam_result = await beam_resolve(
+                                session_id=session_id,
+                                paused_agent_id=session.paused_agent_id,
+                                reviewer_agent_id=session.reviewer_agent_id,
+                                resolution=resolution.to_dict(),
+                            )
+                            if beam_result is None:
+                                await pg_resolve_session(session_id=session_id, resolution=resolution.to_dict(), status="resolved")
                         except Exception as e:
                             logger.warning(f"Could not resolve session in PostgreSQL: {e}")
                     except Exception as e:
