@@ -124,13 +124,13 @@ Manual Plexus Zero may use human-readable `repo://unitares/...` aliases in Disco
 
 | Manual Plexus Zero alias | Canonical service surface | Purpose | Notes |
 |---|---|---|---|
-| `repo://unitares/docs/proposals/plexus-scope.md` | `file:///Users/cirwel/projects/unitares/docs/proposals/plexus-scope.md` | Canonical Plexus boundary | This document; one holder at a time for edits |
-| `repo://unitares/docs/proposals/surface-lease-plane-v0.md` | `file:///Users/cirwel/projects/unitares/docs/proposals/surface-lease-plane-v0.md` | Lease-plane contract/RFC | Existing canonical implementation contract |
-| `repo://unitares/docs/proposals/surface-lease-plane-phase-a-plan.md` | `file:///Users/cirwel/projects/unitares/docs/proposals/surface-lease-plane-phase-a-plan.md` | Phase A staging plan | Implementation sequencing |
-| `repo://unitares/docs/ontology/beam-coordination-kernel.md` | `file:///Users/cirwel/projects/unitares/docs/ontology/beam-coordination-kernel.md` | Ontology/integration framing | BEAM sidecar role and non-goals |
-| `repo://unitares/src/lease_plane/<file>` | `file:///Users/cirwel/projects/unitares/src/lease_plane/<file>` | Python client/advisory contract | Choose the exact file before acquiring |
-| `repo://unitares/elixir/lease_plane/<file>` | `file:///Users/cirwel/projects/unitares/elixir/lease_plane/<file>` | BEAM implementation | Choose the exact file before acquiring |
-| `repo://unitares/db/postgres/migrations/<lease-plane-migration>.sql` | `file:///Users/cirwel/projects/unitares/db/postgres/migrations/<lease-plane-migration>.sql` | Durable lease schema | Migrations are high-risk surfaces; use explicit exact-path claims |
+| `repo://unitares/docs/proposals/plexus-scope.md` | `file://$HOME/projects/unitares/docs/proposals/plexus-scope.md` | Canonical Plexus boundary | This document; one holder at a time for edits |
+| `repo://unitares/docs/proposals/surface-lease-plane-v0.md` | `file://$HOME/projects/unitares/docs/proposals/surface-lease-plane-v0.md` | Lease-plane contract/RFC | Existing canonical implementation contract |
+| `repo://unitares/docs/proposals/surface-lease-plane-phase-a-plan.md` | `file://$HOME/projects/unitares/docs/proposals/surface-lease-plane-phase-a-plan.md` | Phase A staging plan | Implementation sequencing |
+| `repo://unitares/docs/ontology/beam-coordination-kernel.md` | `file://$HOME/projects/unitares/docs/ontology/beam-coordination-kernel.md` | Ontology/integration framing | BEAM sidecar role and non-goals |
+| `repo://unitares/src/lease_plane/<file>` | `file://$HOME/projects/unitares/src/lease_plane/<file>` | Python client/advisory contract | Choose the exact file before acquiring |
+| `repo://unitares/elixir/lease_plane/<file>` | `file://$HOME/projects/unitares/elixir/lease_plane/<file>` | BEAM implementation | Choose the exact file before acquiring |
+| `repo://unitares/db/postgres/migrations/<lease-plane-migration>.sql` | `file://$HOME/projects/unitares/db/postgres/migrations/<lease-plane-migration>.sql` | Durable lease schema | Migrations are high-risk surfaces; use explicit exact-path claims |
 
 Do not generalize this table into a fleet-wide taxonomy until manual use shows which surfaces actually collide.
 

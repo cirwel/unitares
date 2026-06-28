@@ -330,10 +330,10 @@ class TestErrorSanitization:
         """Sanitization removes full file paths"""
         from src.mcp_handlers.utils import _sanitize_error_message
 
-        msg = "Error in /Users/cirwel/projects/unitares/src/mcp_handlers/utils.py"
+        msg = "Error in /Users/testuser/projects/unitares/src/mcp_handlers/utils.py"
         sanitized = _sanitize_error_message(msg)
 
-        assert "/Users/cirwel" not in sanitized
+        assert "/Users/testuser" not in sanitized
 
     def test_removes_stack_traces(self):
         """Sanitization simplifies stack traces"""

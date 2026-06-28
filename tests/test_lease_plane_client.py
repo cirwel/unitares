@@ -32,7 +32,7 @@ from src.lease_plane.client import LeaseHTTPRequest
 def _lease_payload(
     *,
     lease_id: UUID | None = None,
-    surface_id: str = "file:///Users/cirwel/projects/unitares/src/x.py",
+    surface_id: str = "file://$HOME/projects/unitares/src/x.py",
     holder_agent_uuid: UUID | None = None,
     holder_kind: str = "remote_heartbeat",
 ) -> dict[str, Any]:

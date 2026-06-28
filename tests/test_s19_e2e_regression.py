@@ -231,7 +231,7 @@ async def test_uds_path_with_executable_mismatch_rejects(db):
     # Right label, WRONG executable path — the binary was substituted.
     fake_pa = SimpleNamespace(
         read_service_label=lambda pid: label,
-        read_executable_path=lambda pid: "/Users/cirwel/projects/swapped-binary",
+        read_executable_path=lambda pid: "$HOME/projects/swapped-binary",
         read_process_start_time=lambda pid: 1_777_000_000,
     )
 
