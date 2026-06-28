@@ -361,27 +361,41 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   @min_execute_ttl_s 120
 
   defp execute_file_write(env) do
-    if min_ttl_ok?(env) do
-      digest = idempotency_digest(env)
+    cond do
+      # Validate the proposer BEFORE acquiring any lease — otherwise a nil or
+      # malformed uuid crashes uuid_to_binary inside Repo.acquire and surfaces as
+      # an opaque 500 instead of a clean client error.
+      not valid_proposer?(env) ->
+        {:error, :proposer_invalid}
 
-      case Repo.governed_effect_by_idempotency_key(env.idempotency_key, @execute_event_type) do
-        {:ok, %{idempotency_digest: ^digest, payload: stored}} ->
-          {:ok, execute_idempotent_body(stored)}
+      not min_ttl_ok?(env) ->
+        {:error, :lease_ttl_too_short}
 
-        {:ok, %{idempotency_digest: other}} when is_binary(other) ->
-          {:error, :idempotency_conflict}
+      true ->
+        digest = idempotency_digest(env)
 
-        {:ok, nil} ->
-          file_write_under_custody(env, digest)
+        case Repo.governed_effect_by_idempotency_key(env.idempotency_key, @execute_event_type) do
+          {:ok, %{idempotency_digest: ^digest, payload: stored}} ->
+            {:ok, execute_idempotent_body(stored)}
 
-        {:error, reason} ->
-          Logger.warning("governed_effect file_write idempotency lookup failed: #{inspect(reason)}")
-          {:error, :idempotency_lookup_failed}
-      end
-    else
-      {:error, :lease_ttl_too_short}
+          {:ok, %{idempotency_digest: other}} when is_binary(other) ->
+            {:error, :idempotency_conflict}
+
+          {:ok, nil} ->
+            file_write_under_custody(env, digest)
+
+          {:error, reason} ->
+            Logger.warning("governed_effect file_write idempotency lookup failed: #{inspect(reason)}")
+            {:error, :idempotency_lookup_failed}
+        end
     end
   end
+
+  @proposer_uuid_re ~r/\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z/
+  defp valid_proposer?(%{proposer_agent_uuid: u}) when is_binary(u),
+    do: Regex.match?(@proposer_uuid_re, u)
+
+  defp valid_proposer?(_), do: false
 
   defp min_ttl_ok?(env) do
     Enum.all?(env.required_leases, fn l -> (lease_ttl(l) || 0) >= @min_execute_ttl_s end)
