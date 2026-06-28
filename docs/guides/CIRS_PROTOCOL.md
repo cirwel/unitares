@@ -138,7 +138,6 @@ Most CIRS signals are emitted automatically during `process_agent_update()`. You
 | Void-alert helper | After check-in if |V| > threshold |
 | State-announce helper | After every check-in |
 | Resonance-signal helper | If neighbor agents have similar state |
-| Neighbor-pressure helper | Coordinate with similar agents in same basin |
 
 Additional standalone signals:
 - `resonance_alert` — emitted when multi-agent resonance detected

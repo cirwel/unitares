@@ -1,8 +1,8 @@
 # BEAM Coordination Kernel Plan
 
 **Created:** April 30, 2026
-**Last Updated:** May 21, 2026
-**Status:** Placement decided; lease-plane service is live; BEAM Sentinel Wave 1 is in progress; Wave 3 handler-dispatch RFC is the next large design gate
+**Last Updated:** June 28, 2026
+**Status:** Placement decided; lease-plane live; Sentinel Wave 1 shipped (`com.unitares.sentinel-beam`); **Wave 3a read-only handlers DEPLOYED (:8770, first inbound BEAM listener) and dialectic-on-BEAM merged (flags off, 2026-06-28)**. Remaining = Wave 3 write-path (3b/3c `handler_dispatch`, not started).
 
 ## Related artifacts (independent convergence, 2026-04-30)
 

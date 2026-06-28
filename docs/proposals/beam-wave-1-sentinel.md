@@ -1,6 +1,6 @@
 # Wave 1 RFC: Sentinel-on-BEAM
 
-**Status:** v0.1.3, 2026-05-05. Surface 1 cycle worker (PR #376) shipped + flagged a binding architectural constraint for the next layer. **Read v0.1.3 AMENDMENT first**, then v0.1.2, then v0.1.1, then v0.1 body as historical record.
+**Status:** ✅ SHIPPED — Wave 1 Sentinel-on-BEAM complete; `elixir/sentinel/` built and `com.unitares.sentinel-beam` running. Sole remainder = Phase-B promotion port → Wave 2. Body below is the executed record (v0.1.3, 2026-05-05); exit-criteria / "pending" language is historical. **Read v0.1.3 AMENDMENT first**, then v0.1.2, then v0.1.1, then v0.1 body.
 **Parent:** `docs/proposals/beam-footprint-roadmap-v0.md` v0.3 / v0.3.1 (operator-decision migration commit + council fold).
 **Sibling:** `docs/proposals/surface-lease-plane-v0.md` (Phase A complete, BEAM service running on `127.0.0.1:8788`).
 **Bootstrap shipped:** PR #373 — `elixir/sentinel/` skeleton + `AtomicWrite` helper.
