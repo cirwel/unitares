@@ -81,7 +81,7 @@ fi
 
 # --- environment ------------------------------------------------------------
 
-SECRETS_FILE="${HOME}/.config/cirwel/secrets.env"
+SECRETS_FILE="${UNITARES_SECRETS_ENV:-${HOME}/.config/cirwel/secrets.env}"
 if [[ -z "${UNITARES_OPERATOR_TOKEN:-}" && -r "$SECRETS_FILE" ]]; then
     # shellcheck disable=SC1090
     set -a; source "$SECRETS_FILE"; set +a

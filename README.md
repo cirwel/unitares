@@ -4,8 +4,8 @@
 
 ### Runtime governance for autonomous-agent fleets.
 
-**UNITARES gives each running agent online state estimation: EISV, calibration, evidence, and drift over its own trajectory, surfaced as a policy action it can use mid-run.**<br/>
-Most controls inspect one action against one rule. UNITARES carries trajectory into the next check-in, so drift is measurable while output still looks fine and the agent can course-correct — not a hidden detector trying to catch agents after the fact.
+**UNITARES gives each running agent online proprioception: EISV state estimation, calibration, evidence, and drift over its own trajectory, surfaced as a policy action it can use mid-run.**<br/>
+Most controls inspect one action against one rule. UNITARES carries trajectory into the next check-in, measuring residual state — how far current behavior has moved from this agent's own operating history once a baseline exists — so the agent can course-correct while output still looks fine.
 
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-2f7d72?style=flat-square&labelColor=0f171f)](https://www.python.org/downloads/)
@@ -30,8 +30,8 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 ## What you get after install
 
 - **A governance server for heterogeneous agents.** MCP on `/mcp/`, REST on `/v1/tools/call`, an optional dashboard on `/dashboard`, and an SDK for resident or scheduled agents.
-- **Online agent-state estimation.** Each process identity gets EISV state readings against its *own* baseline and recent history, so slow degradation surfaces while output still looks fine. (During the baseline warmup the reading leans on self-reported signals and is not yet drift-discriminative — the payload flags this explicitly.)
-- **Outcome-grounded calibration.** Self-reported `confidence` is scored against real evidence — tests, exit codes, tool output, file ops, deployments, and task results — and that calibration feeds future state readings and policy actions.
+- **Online agent-state estimation / proprioception.** Each process identity gets EISV state readings against its *own* baseline and recent history once warm. During baseline warmup, the live path uses fixed universal thresholds and self-reported signals, so the reading is not yet drift-discriminative — the payload flags this explicitly.
+- **Evidence-grounded calibration.** Self-reported `confidence` is scored against real evidence — tests, exit codes, tool output, file ops, deployments, and task results — and that calibration keeps future state readings and policy actions honest.
 - **Governed shared memory.** A Postgres + pgvector + Apache AGE knowledge graph lets agents search and contribute durable discoveries, corrections, supersessions, and cross-agent relations with provenance. It is sediment, not a transcript dump.
 - **Dialectic review and durable constraints.** Disputed policy actions can be reviewed by authority-weighted peers; synthesized conditions persist and can gate that agent's future decisions.
 - **One action the agent can obey.** Every check-in returns `proceed` / `guide` / `pause` / `reject`, plus the full EISV health vector for finer policies. Humans watch the same fleet through the optional dashboard.
@@ -43,7 +43,7 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 - you need agents to check their own state before continuing; and
 - you want an audit trail of confidence, evidence, drift, and recovery.
 
-UNITARES is **not** an output validator, sandbox, hosted agent platform, or grand jury. EISV is **not an outcome oracle** or bad-verdict dispenser; it is proprioceptive telemetry for the running agent. External outcome evidence and policy/review layers own labels such as task-negative, contract violation, or authority/harm.
+UNITARES is **not** an output validator, sandbox, hosted agent platform, or grand jury. EISV is **not an outcome oracle** or bad-verdict dispenser; it is proprioceptive telemetry for the running agent. External evidence calibrates the signal and policy/review layers own labels such as task-negative, contract violation, or authority/harm.
 
 ## Try the demo locally
 
@@ -70,14 +70,14 @@ UNITARES runs **alongside** your evals and guardrails — it doesn't replace eit
 
 ### How it relates to agent clients
 
-UNITARES is not an agent framework or chat interface. Hermes, Claude Code, Codex, Goose, Discord dispatchers, SDK residents, and local-model hosts provide the hands: prompts, tools, files, terminals, browsers, scheduled work, and operator UX. UNITARES provides governed continuity underneath them: process identity, check-ins, online agent-state estimation, calibration against outcomes, shared-memory provenance, dialectic review, and auditable policy actions. For one-off chat or local coding, skip the governance loop; for persistent, multi-agent, high-side-effect, or resident work, mount the client through MCP/REST/SDK or a lifecycle adapter.
+UNITARES is not an agent framework or chat interface. Hermes, Claude Code, Codex, Goose, Discord dispatchers, SDK residents, and local-model hosts provide the hands: prompts, tools, files, terminals, browsers, scheduled work, and operator UX. UNITARES provides governed continuity underneath them: process identity, check-ins, online agent-state estimation, evidence-grounded calibration, shared-memory provenance, dialectic review, and auditable policy actions. For one-off chat or local coding, skip the governance loop; for persistent, multi-agent, high-side-effect, or resident work, mount the client through MCP/REST/SDK or a lifecycle adapter.
 
 <details>
 <summary><strong>Mechanisms behind the state reading</strong></summary>
 
 - **State-aware policy engine** — baseline, calibration, and recent history; not the current action alone ([`behavioral_assessment.py`](src/behavioral_assessment.py)).
 - **Online state-estimation loop** — EISV, confidence, evidence provenance, and policy margin are fed back to the agent as runtime telemetry.
-- **Outcome-grounded calibration** — self-reported `confidence` is scored against objective evidence when available.
+- **Evidence-grounded calibration** — self-reported `confidence` is scored against objective evidence when available.
 - **Dialectic review → constraints** — disputed policy actions can become durable gating conditions after peer review.
 - **Per-instance identity isolation** — each process has its own governed state; reads are open, writes are accountable.
 - **Audit trail + KG** — confidence, evidence, policy actions, drift, recovery, and shared-memory contributions remain inspectable.
@@ -100,7 +100,7 @@ After each unit of work, the agent checks in with `sync_state()` — passing sel
 
 </div>
 
-That's the whole contract: the agent reads the policy action and course-corrects using its own state estimate, without waiting for an external guardrail to catch it. No new vocabulary required to use it.
+That's the whole contract: the agent reads the policy action and course-corrects using its own state estimate, without waiting for an external guardrail to catch it. Once a baseline exists, the central signal is a residual — current state minus this agent's own operating reference — so deviation is treated first as information, not as guilt or punishment. No new vocabulary required to use it.
 
 <details>
 <summary><strong>The four numbers behind the policy action (EISV)</strong></summary>
@@ -150,7 +150,7 @@ if action in ("pause", "reject"):
     agent.require_human_review(result.get("next_action", "Governance requested review"))
 ```
 
-The agent reads the action and acts — that's the whole loop. Self-reported `confidence` is strongest when paired with real outcomes, so include tool results or call `record_result(...)` when your client has evidence such as test status, exit codes, or deployment checks. UNITARES is not an output validator or sandbox; it is an agent-facing state-estimation layer while external controls remain separate.
+The agent reads the action and acts — that's the whole loop. Self-reported `confidence` is strongest when paired with verifiable evidence, so include tool results or call `record_result(...)` when your client has evidence such as test status, exit codes, or deployment checks. UNITARES is not an output validator or sandbox; it is an agent-facing state-estimation layer while external controls remain separate.
 
 The same primary tool surface also gives agents a few optional moves:
 
@@ -186,7 +186,7 @@ For long-running or scheduled agents, the [SDK](agents/sdk/README.md) handles co
 
 ## Don't trust this README — verify it
 
-**Evaluating with an agent?** Don't take the prose. On a fresh clone, the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV/prior-state telemetry against a deliberately dumb baseline (AUC, Brier) using external outcome labels, and self-labels each slice `INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING` rather than asserting. The harness is the part you run yourself.
+**Evaluating with an agent?** Don't take the prose. On a fresh clone, the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) asks whether EISV/prior-state telemetry adds signal over deliberately dumb baselines (AUC, Brier) using externally labeled task/result evidence, and self-labels each slice `INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING` rather than asserting. That harness tests calibration and falsifiability of the proprioceptive signal; it is not the product story.
 
 **Honest about what fires.** Policy actions come from an auditable behavioral model ([`behavioral_assessment.py`](src/behavioral_assessment.py)), not a black box — the information-theoretic / free-energy formulation is the research *target*, not the live policy-action path ([Paper v6](https://github.com/cirwel/unitares-paper-v6) · [how EISV is computed](docs/EISV_COMPUTATION.md)).
 

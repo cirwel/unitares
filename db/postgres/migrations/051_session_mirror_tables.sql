@@ -68,6 +68,43 @@ COMMENT ON TABLE core.session_bindings IS
     'soak shows material cold-mints not covered by an onboard pin. Distinct from '
     'coordination.session_resolution_sagas (Wave 3 saga state).';
 
+-- Reaper: extend core.cleanup_expired_sessions() (called by the session-cleanup
+-- background task) to also physically delete expired mirror rows. Without this,
+-- expired session_bindings / onboard_pins accumulate over a long soak AND the
+-- stale rows worsen the TTL/NX claim guards (Codex review #4). Read paths and the
+-- claim guards already filter expires_at, so this is hygiene, not correctness —
+-- but it bounds table growth and keeps the guards clean. CREATE OR REPLACE so the
+-- migration is re-runnable; runs after schema.sql in every bootstrap so this
+-- extended definition wins. session_bindings permanent rows (expires_at IS NULL)
+-- are intentionally never reaped here.
+CREATE OR REPLACE FUNCTION core.cleanup_expired_sessions()
+RETURNS INTEGER AS $$
+DECLARE
+    v_count INTEGER;
+BEGIN
+    WITH deleted_sessions AS (
+        DELETE FROM core.sessions
+        WHERE expires_at < now() OR (is_active = FALSE AND last_active < now() - INTERVAL '1 hour')
+        RETURNING 1
+    ),
+    deleted_bindings AS (
+        DELETE FROM core.session_bindings
+        WHERE expires_at IS NOT NULL AND expires_at < now()
+        RETURNING 1
+    ),
+    deleted_pins AS (
+        DELETE FROM core.onboard_pins
+        WHERE expires_at < now()
+        RETURNING 1
+    )
+    SELECT (SELECT COUNT(*) FROM deleted_sessions)
+         + (SELECT COUNT(*) FROM deleted_bindings)
+         + (SELECT COUNT(*) FROM deleted_pins)
+      INTO v_count;
+    RETURN v_count;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Register migration
 INSERT INTO core.schema_migrations (version, name, applied_at)
 VALUES (51, 'session_mirror_tables', NOW())

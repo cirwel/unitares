@@ -2,14 +2,16 @@
 name: governance-fundamentals
 description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
-  basins, verdicts, coherence, calibration. Reference material for interpreting governance
-  metrics and understanding the thermodynamic model.
-last_verified: "2026-06-27"
+  basins, policy actions, coherence, calibration. Reference material for interpreting
+  governance metrics as proprioceptive state estimation, not outcome judgment.
+last_verified: "2026-06-28"
 freshness_days: 14
 source_files:
   - unitares/config/governance_config.py
   - unitares/src/auto_ground_truth.py
   - unitares/src/governance_monitor.py
+  - unitares/src/behavioral_state.py
+  - unitares/src/behavioral_assessment.py
   - unitares/src/monitor_decision.py
   - unitares/src/mcp_handlers/core.py
 ---
@@ -18,7 +20,7 @@ source_files:
 
 ## What UNITARES Is
 
-UNITARES provides digital proprioception for AI agents — awareness of your own state, your relationship to the system, and whether you are drifting. It tracks agent work through a thermodynamic model (energy, entropy, coherence) and maintains a shared knowledge graph across all agents.
+UNITARES provides digital proprioception for AI agents — awareness of your own state, your relationship to the system, and whether you are drifting. The live path is behavioral state estimation: observable work signals become EISV readings, smoothed over time and compared with the agent's own trajectory once a baseline exists. The thermodynamic / ODE model remains useful as a research lens and telemetry; do not present it as cold-start authority or live verdict authority.
 
 ## EISV State Vector
 
@@ -27,18 +29,36 @@ Every agent has four dimensions, updated through check-ins:
 | Dimension | Range | Meaning |
 |-----------|-------|---------|
 | **E** (Energy) | [0, 1] | Productive capacity |
-| **I** (Information Integrity) | [0, 1] | Signal fidelity |
-| **S** (Entropy) | [0, 1] | Semantic uncertainty (lower is better) |
-| **V** (Valence) | [-1, 1] | Accumulated E-I imbalance |
+| **I** (Information Integrity) | [0, 1] | Claims matching results / calibration |
+| **S** (Entropy) | [0, 1] | Drift / instability from normal (lower is usually steadier) |
+| **V** (Valence) | [-1, 1] | EMA-smoothed E-I imbalance |
 
-### How They Couple
+### How the Live Path Reads Them
 
-- **E (Energy)**: Couples toward I (when I > E, energy rises). Dragged down by high entropy via E*S cross-coupling. High complexity affects E indirectly through S.
-- **I (Information Integrity)**: Boosted by coherence C(V,Theta), reduced by entropy S. Has logistic self-regulation. Confidence and calibration affect I indirectly via the check-in pipeline (they drive S and ethical drift, which couple to I).
-- **S (Entropy)**: Naturally decays (mu*S), rises with ethical drift and task complexity, reduced by coherence. The only dimension that directly responds to complexity.
-- **V (Valence)**: Accumulated E-I imbalance. Positive when energy exceeds integrity (running hot), negative when integrity exceeds energy (running careful). Decays toward zero over time. Drives coherence via C(V,Theta).
+- **E (Energy)** blends observable progress signals such as decision success, coherence, complexity calibration, and sometimes external task evidence.
+- **I (Integrity)** tracks whether claims/confidence match observed results and whether coherence is holding.
+- **S (Entropy / drift)** rises with drift norm, regime instability, and complexity divergence.
+- **V (Valence)** is derived from the E-I imbalance. Positive means running hot (motion outruns integrity); negative means running careful (integrity outruns progress).
 
-These combine into a **coherence** score and **risk** score that determine governance decisions. Prefer live tool output over static range lore if the current runtime reports a narrower or more precise bound.
+The headline math is proprioceptive residuals. In the live behavioral path,
+warmup uses fixed universal thresholds; after warmup, residual-like state comes
+from self-relative z-score deviation against the agent's own Welford baseline,
+with absolute safety floors and basin-health gates always in force.
+
+Roadmap target semantics for richer cold-start grounding are:
+
+```text
+measurement_t = EISV_t
+reference_t   = blend(agent_baseline_t, class_anchor; w(grounding))
+residual_t    = measurement_t - reference_t
+```
+
+Do not present the class-anchor blend as deployed unless live code exposes it.
+Deviation is information first, not a guilty verdict. Policy can map persistent or
+high-margin residuals to `guide`, `pause`, or `reject`, but EISV itself is
+measurement/diagnosis, not prosecution.
+
+Prefer live tool output over static range lore if the current runtime reports a narrower or more precise bound.
 
 ## Basins
 
@@ -61,7 +81,7 @@ Governance issues a decision after each check-in. The response's `verdict` field
 | **pause** | `reject` | Risk threshold reached | Stop current work, reflect; dialectic review or human input |
 | **pause** | `void_pause`, `coherence_pause`, `basin_pause`, `risk_pause`, `cirs_block` | A specific subsystem tripped | Read the `reason`/`guidance` fields; consider dialectic review |
 
-Separately, `metrics.verdict` carries the internal UNITARES verdict from phi scoring — `safe` / `caution` / `high-risk`. It drives the decision above; read it as context, not as the action itself.
+Separately, `metrics.verdict` may carry an internal UNITARES verdict such as `safe` / `caution` / `high-risk`. Read it as interpreted state/context, not as moral judgment. In current default posture, behavioral assessment drives live policy actions: fixed thresholds during warmup, Welford z-score residuals after warmup, with floors and gates always in force. Φ/ODE scoring is telemetry and research lens, not the control loop.
 
 ### Margin
 
@@ -81,19 +101,19 @@ The plain-English `mirror` array in your check-in response already summarizes an
 
 ## Coherence
 
-Coherence measures how well your state vector holds together. It is calculated from the EISV values — not from the content of your work. Think of it as structural health, not semantic quality.
+Coherence measures how well your state vector holds together. It is calculated from EISV/monitor signals — not from the content of your work. Think of it as structural health, not semantic quality.
 
-- Full range is [0, 1], clipped from thermodynamic C(V, Theta)
+- Full range is [0, 1]
 - Critical threshold is available via `get_governance_metrics()` in the `thresholds` field — do not hardcode it
 - Do not chase a number — check in honestly and let it track naturally
-- Coherence is derived from C(V, Theta) — it reflects balance, not performance
+- Coherence reflects balance, not performance
 
 ## Calibration
 
-The system tracks whether your stated confidence matches outcomes. Over time this builds a calibration curve.
+The system tracks whether your stated confidence matches evidence. Over time this builds a calibration curve.
 
-- Ground truth comes from objective signals: test pass/fail, command exit codes, lint results, file operations. These feed calibration automatically via `auto_ground_truth.py` and the `outcome_event` hook. Human validation is not required for deterministic outcomes.
-- Overconfidence is tracked and penalizes Information Integrity through the entropy coupling
+- Grounding comes from objective signals: test pass/fail, command exit codes, lint results, file operations. These feed calibration automatically via `auto_ground_truth.py` and the `outcome_event` hook. Human validation is not required for deterministic evidence.
+- Overconfidence is tracked and can lower Integrity / raise uncertainty through the check-in pipeline
 
 ## Diagnostics
 

@@ -114,6 +114,59 @@ async def test_corrective_write_overwrites_divergent_uuid(backend):
 
 
 @pytest.mark.asyncio
+async def test_expired_binding_does_not_block_mint_guard(backend):
+    """TTL/NX parity (Codex #1): an EXPIRED row for a different uuid must NOT
+    block a fresh mint_guard claim — Redis TTL would have dropped the key."""
+    sk, au1, au2 = "agent-" + _uuid()[:12], _uuid(), _uuid()
+    await backend.upsert_session_binding(sk, au1, expires_at=_past())  # already expired
+    outcome = await backend.upsert_session_binding(sk, au2, mint_guard=True, expires_at=_future())
+    assert outcome == "updated"  # claimed the expired slot, not "blocked"
+    row = await backend.get_session_binding(sk)
+    assert row["agent_uuid"] == au2
+
+
+@pytest.mark.asyncio
+async def test_live_binding_still_blocks_mint_guard(backend):
+    """Counterpart: a LIVE different-uuid row still blocks (guard intact)."""
+    sk, au1, au2 = "agent-" + _uuid()[:12], _uuid(), _uuid()
+    await backend.upsert_session_binding(sk, au1, expires_at=_future())
+    assert await backend.upsert_session_binding(sk, au2, mint_guard=True, expires_at=_future()) == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_expired_pin_is_claimable_via_nx(backend):
+    """TTL/NX parity (Codex #1): if_absent must claim over an EXPIRED pin."""
+    fp = f"ua:{_uuid()[:6]}|claude"
+    old_csid, new_csid = "agent-" + _uuid()[:12], "agent-" + _uuid()[:12]
+    await backend.set_onboard_pin_pg(fp, _uuid(), old_csid, ttl_seconds=-10)  # expired
+    claimed = await backend.set_onboard_pin_pg(fp, _uuid(), new_csid, if_absent=True)
+    assert claimed is True
+    assert await backend.lookup_onboard_pin_pg(fp) == new_csid
+
+
+@pytest.mark.asyncio
+async def test_reaper_deletes_expired_mirror_rows(backend):
+    """cleanup_expired_sessions() (Codex #4) physically removes expired mirror
+    rows in both tables while leaving live rows."""
+    live_sk, exp_sk = "agent-" + _uuid()[:12], "agent-" + _uuid()[:12]
+    live_fp, exp_fp = f"ua:{_uuid()[:6]}", f"ua:{_uuid()[:6]}"
+    await backend.upsert_session_binding(live_sk, _uuid(), expires_at=_future())
+    await backend.upsert_session_binding(exp_sk, _uuid(), expires_at=_past())
+    await backend.set_onboard_pin_pg(live_fp, _uuid(), "agent-" + _uuid()[:12], ttl_seconds=3600)
+    await backend.set_onboard_pin_pg(exp_fp, _uuid(), "agent-" + _uuid()[:12], ttl_seconds=-10)
+
+    await backend.cleanup_expired_sessions()
+
+    # expired rows physically gone; live rows remain (raw existence check, not the
+    # expiry-filtered getter, so we prove physical deletion).
+    async with backend.acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM core.session_bindings WHERE session_key=$1", exp_sk) == 0
+        assert await conn.fetchval("SELECT count(*) FROM core.session_bindings WHERE session_key=$1", live_sk) == 1
+        assert await conn.fetchval("SELECT count(*) FROM core.onboard_pins WHERE fingerprint=$1", exp_fp) == 0
+        assert await conn.fetchval("SELECT count(*) FROM core.onboard_pins WHERE fingerprint=$1", live_fp) == 1
+
+
+@pytest.mark.asyncio
 async def test_expired_binding_is_invisible(backend):
     sk, au = "agent-" + _uuid()[:12], _uuid()
     await backend.upsert_session_binding(sk, au, expires_at=_past())

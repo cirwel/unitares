@@ -12,7 +12,7 @@ set -u
 
 LABEL="com.unitares.wave-1-section-129-reeval"
 PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
-PROJECT_ROOT="/Users/cirwel/projects/unitares"
+PROJECT_ROOT="${UNITARES_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 LOG_DIR="${PROJECT_ROOT}/data/logs"
 LOG_FILE="${LOG_DIR}/section_129_reeval_2026-06-02.log"
 

@@ -63,28 +63,53 @@ def test_get_s_setpoint_off_when_disabled(monkeypatch):
     monkeypatch.setenv("UNITARES_S_SETPOINT", "0")
     assert not s_setpoint_enabled()
     assert get_s_setpoint("default") == 0.0
-    assert get_s_setpoint("Lumen") == 0.0
+    assert get_s_setpoint("embodied") == 0.0
 
 
 def test_get_s_setpoint_enabled(monkeypatch):
     monkeypatch.setenv("UNITARES_S_SETPOINT", "1")
     assert s_setpoint_enabled()
-    for cls in ("default", "Lumen", "Watcher"):
+    for cls in ("default", "embodied", "resident_persistent"):
         expected = get_healthy_operating_point(cls)[2] - S_SETPOINT_DRIVER_OFFSET
         assert get_s_setpoint(cls) == pytest.approx(expected, abs=1e-9)
 
 
-def test_setpoint_lands_on_measured_healthy_and_clears_critical():
-    """With the per-class setpoint, S-rest ≈ measured healthy S and manifold-at-
-    rest clears the 0.40 critical threshold (the Stage-B enabler)."""
-    for cls in ("default", "Lumen", "Watcher", "Vigil"):
+def test_setpoint_lands_on_measured_healthy_S():
+    """With the per-class setpoint, the ODE S-rest ≈ that class's measured healthy
+    S, for every class (S is the only axis the setpoint drives)."""
+    for cls in ("default", "embodied", "resident_persistent", "engaged_ephemeral"):
         hp = get_healthy_operating_point(cls)
         sigma = hp[2] - S_SETPOINT_DRIVER_OFFSET
         r = _rest(sigma)
         assert r.S == pytest.approx(hp[2], abs=0.02), f"{cls}: S-rest off target"
-        dmax = get_delta_norm_max(cls).value
-        norm = math.sqrt((r.E-hp[0])**2 + (r.I-hp[1])**2 + (r.S-hp[2])**2)
-        manifold = 1.0 - max(0.0, min(1.0, norm / dmax))
-        assert manifold >= GC.COHERENCE_CRITICAL_THRESHOLD, (
-            f"{cls}: manifold@rest {manifold:.3f} still below critical line"
+
+
+def _manifold_at_rest(cls: str) -> float:
+    hp = get_healthy_operating_point(cls)
+    r = _rest(hp[2] - S_SETPOINT_DRIVER_OFFSET)
+    norm = math.sqrt((r.E-hp[0])**2 + (r.I-hp[1])**2 + (r.S-hp[2])**2)
+    return 1.0 - max(0.0, min(1.0, norm / get_delta_norm_max(cls).value))
+
+
+def test_manifold_at_ode_rest_only_clears_critical_for_default():
+    """Characterizes a real, currently-open gap (NOT a passing Stage-B enabler).
+
+    The S-setpoint lands S on each class's measured healthy S, but there is no
+    E/I setpoint — the ODE rests near a single universal point (E≈0.70, I≈0.73)
+    regardless of class. With the generic 2026-06-27 anchors (which reflect where
+    classes ACTUALLY operate), only `default` sits close enough to that ODE rest
+    for manifold-at-rest to clear the 0.40 critical line; `embodied` (low-E),
+    `resident_persistent`, and `engaged_ephemeral` do not. (The old April anchors
+    masked this — they were all clustered near the ODE rest.)
+
+    Harmless live: manifold coherence is read on the *behavioral* EISV (which
+    matches the anchor) and grounding APPLY is off. But it is the concrete
+    precondition for GROUNDING_APPLY: low-/off-rest classes need an E/I setpoint
+    or a behavioral-path manifold before the ODE rest reads coherent. When that
+    lands, this test should flip — that's the signal to re-evaluate APPLY."""
+    assert _manifold_at_rest("default") >= GC.COHERENCE_CRITICAL_THRESHOLD
+    for cls in ("embodied", "resident_persistent", "engaged_ephemeral"):
+        assert _manifold_at_rest(cls) < GC.COHERENCE_CRITICAL_THRESHOLD, (
+            f"{cls}: manifold@rest now clears critical — E/I-setpoint gap may be "
+            f"closed; re-evaluate GROUNDING_APPLY and update this characterization"
         )

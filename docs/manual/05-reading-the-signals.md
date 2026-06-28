@@ -7,15 +7,15 @@ This chapter is the interpretation guide: what the numbers mean, how they're pro
 ## 5.1 The pipeline at a glance
 
 ```
-observables ──► observation blend ──► EMA smoothing ──► component risk ──► verdict
-(decisions,     (behavioral_         (behavioral_       (behavioral_       proceed/
- calibration,    sensor.py)           state.py)          assessment.py)     guide/
- drift, tools)                                                              pause/reject
+observables ──► observation blend ──► EMA state ──► residual / basin risk ──► policy action
+(decisions,     (behavioral_         (behavioral_    (behavioral_          proceed/
+ calibration,    sensor.py)           state.py)       assessment.py)        guide/
+ drift, tools)                                                               pause/reject
 ```
 
 The **behavioral EISV** path (EMA observations from grounded signals) is primary and drives verdicts. The **ODE / thermodynamic model** (`governance_core/`) runs in parallel as a research lens and does **not** drive verdicts by default.
 
-After ~30 check-ins the system builds per-agent **Welford baselines** and assesses by z-score deviation from the agent's *own* operating point, rather than universal thresholds. Before that ("warmup"), it uses fixed universal thresholds.
+After ~30 check-ins the system builds per-agent **Welford baselines** and assesses by z-score deviation from the agent's *own* operating point, rather than universal thresholds. Before that ("warmup"), it uses fixed universal thresholds. Read the result as proprioceptive residuals — state change against a grounded reference — not as an outcome judgment.
 
 ## 5.2 The four dimensions
 
@@ -49,9 +49,9 @@ Total risk is the **sum of named components** (`low_E`, `low_I`, high-`S`, `|V|`
 
 ## 5.4 Calibration: why the signal resists gaming
 
-The system tracks whether stated `confidence` matches **objective** outcomes — test pass/fail, command exit codes, lint results — fed back via `record_result` / `outcome_event`. Over time this builds a calibration curve, and persistent overconfidence penalizes **Integrity** through entropy coupling.
+The system tracks whether stated `confidence` matches **objective** evidence — test pass/fail, command exit codes, lint results — fed back via `record_result` / `outcome_event`. Over time this builds a calibration curve, and persistent overconfidence penalizes **Integrity** through the check-in pipeline.
 
-The practical consequence: an agent can inflate the `confidence` number it reports, but it cannot inflate its actual success rate. Reported confidence is checked *against results*, so dishonest self-assessment shows up as falling Integrity rather than as a passing grade. Feed real outcomes back (`record_result`) to make the calibration meaningful.
+The practical consequence: an agent can inflate the `confidence` number it reports, but it cannot inflate externally observed evidence. Reported confidence is checked *against results*, so dishonest self-assessment shows up as falling Integrity rather than as a passing grade. Feed verifiable evidence back (`record_result`) to make the calibration meaningful.
 
 ## 5.5 Recovery: self-recovery → dialectic
 
@@ -71,7 +71,7 @@ The KG isn't just storage — searching it *before* acting is how agents avoid r
 
 The most important interpretation rule. The deployed EISV is **auditable heuristics over observable behavior**, not the information-theoretic quantities (free energy, mutual information, entropy) the paper targets — those become instrumentable only when the inference layer exposes things like token-level logprobs. Every coordinate carries a provenance tier (`e_source`, `s_source`, …) so a heuristic is never laundered as a measurement.
 
-Whether the numbers predict anything beyond a dumb baseline is an **open, measured question.** The [falsifiability harness](../REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV against a deliberately dumb `previous_outcome_bad` baseline on ranking (AUC) and calibration (Brier), self-labeling each slice `INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING`. Current read: a **weak early signal** at short lead, **no demonstrated prevention**, and a caveat that the lift may be carried by a single `prior_risk` feature rather than the full decomposition. Run it yourself before treating EISV as load-bearing.
+Whether the numbers add useful signal beyond dumb baselines is an **open, measured question.** The [falsifiability harness](../REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) asks whether EISV/prior-state telemetry adds signal over deliberately boring baselines on ranking (AUC) and calibration (Brier), self-labeling each slice `INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING`. Treat that as a test of calibration and falsifiability for the proprioceptive signal, not the product's headline. Current read: a **weak early signal** at short lead, **no demonstrated prevention**, and a caveat that the lift may be carried by a single `prior_risk` feature rather than the full decomposition. Run it yourself before treating EISV as load-bearing.
 
 For intuition (not a spec), [`../tonality-metaphor.md`](../tonality-metaphor.md) maps key signatures and chromaticism onto EISV, coherence, and drift.
 

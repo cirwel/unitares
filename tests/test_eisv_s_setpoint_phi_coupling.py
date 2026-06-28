@@ -45,8 +45,8 @@ def test_phi_eval_state_noop_when_flag_off(monkeypatch):
     S_SETPOINT now defaults ON, so force it off to exercise the no-op path.
     """
     monkeypatch.setenv("UNITARES_S_SETPOINT", "0")
-    st = _healthy_rest_state("Watcher")
-    mon = _FakeMonitor("Watcher", st)
+    st = _healthy_rest_state("resident_persistent")
+    mon = _FakeMonitor("resident_persistent", st)
     out = phi_eval_state(mon, st)
     assert (out.E, out.I, out.S, out.V) == (st.E, st.I, st.S, st.V)
     assert setpoint_for_monitor(mon) == 0.0
@@ -54,17 +54,17 @@ def test_phi_eval_state_noop_when_flag_off(monkeypatch):
 
 def test_phi_eval_state_detrends_by_sigma_when_on(monkeypatch):
     monkeypatch.setenv("UNITARES_S_SETPOINT", "1")
-    st = _healthy_rest_state("Watcher")
-    mon = _FakeMonitor("Watcher", st)
-    sigma = get_s_setpoint("Watcher")
+    st = _healthy_rest_state("resident_persistent")
+    mon = _FakeMonitor("resident_persistent", st)
+    sigma = get_s_setpoint("resident_persistent")
     assert sigma == pytest.approx(
-        get_healthy_operating_point("Watcher")[2] - S_SETPOINT_DRIVER_OFFSET, abs=1e-9)
+        get_healthy_operating_point("resident_persistent")[2] - S_SETPOINT_DRIVER_OFFSET, abs=1e-9)
     out = phi_eval_state(mon, st)
     assert out.S == pytest.approx(st.S - sigma, abs=1e-12)
     assert (out.E, out.I, out.V) == (st.E, st.I, st.V)
 
 
-@pytest.mark.parametrize("agent_class", ["default", "Watcher", "Vigil", "engaged_ephemeral"])
+@pytest.mark.parametrize("agent_class", ["default", "embodied", "resident_persistent", "engaged_ephemeral"])
 def test_coupling_keeps_healthy_verdict_safe(monkeypatch, agent_class):
     """At the measured-healthy ODE rest, the coupled Φ keeps verdict 'safe';
     the uncoupled Φ (raw state) would degrade — this is the regression guard."""
@@ -87,7 +87,7 @@ def test_coupled_phi_matches_historical_rest(monkeypatch):
     """Φ at the new (correct) attractor with coupling ≈ Φ at the old S≈0.091
     attractor without it: verdict/risk are invariant under the attractor move."""
     monkeypatch.setenv("UNITARES_S_SETPOINT", "1")
-    for agent_class in ("default", "Lumen", "Watcher", "engaged_ephemeral"):
+    for agent_class in ("default", "embodied", "resident_persistent", "engaged_ephemeral"):
         st_new = _healthy_rest_state(agent_class)
         mon = _FakeMonitor(agent_class, st_new)
         coupled_phi = phi_objective(

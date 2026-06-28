@@ -52,10 +52,7 @@ def test_get_void_threshold_no_agent_class_uses_adaptive_default():
 def test_get_void_threshold_resident_class_returns_override():
     """Each known resident class returns 0.30 regardless of history shape."""
     history = np.array([0.05] * 100)
-    for cls in (
-        "Lumen", "Vigil", "Sentinel", "Watcher", "Steward", "Chronicler",
-        "embodied", "resident_persistent",
-    ):
+    for cls in ("embodied", "resident_persistent"):
         threshold = config.get_void_threshold(history, adaptive=True, agent_class=cls)
         assert threshold == 0.30, f"class {cls!r} should override to 0.30"
 
@@ -74,7 +71,7 @@ def test_get_void_threshold_override_ignores_adaptive_flag():
     """The class override returns the per-class value even when adaptive=False —
     the override is intentional, not derived from the adaptive window."""
     history = np.array([0.05] * 100)
-    assert config.get_void_threshold(history, adaptive=False, agent_class="Steward") == 0.30
+    assert config.get_void_threshold(history, adaptive=False, agent_class="resident_persistent") == 0.30
 
 
 # ---------- check_void_state integration ----------
@@ -97,7 +94,7 @@ def test_check_void_state_resident_class_kwarg_at_steward_v_ss_does_not_trip():
     standard 0.15 threshold. With agent_class='Steward' the threshold becomes
     0.30 — V_ss = 0.19 no longer trips."""
     state = _FakeState(V=0.19)
-    void = check_void_state(state, agent_class="Steward")
+    void = check_void_state(state, agent_class="resident_persistent")
     assert void is False
     assert state.void_active is False
 
@@ -114,7 +111,7 @@ def test_check_void_state_default_at_steward_v_ss_does_trip():
 def test_check_void_state_resident_class_via_state_attribute_also_works():
     """Per the resolution order in monitor_void: kwarg → state.agent_class → None.
     Populating state.agent_class is equivalent to passing the kwarg."""
-    state = _FakeState(V=0.19, agent_class="Sentinel")
+    state = _FakeState(V=0.19, agent_class="resident_persistent")
     void = check_void_state(state)  # no kwarg
     assert void is False
 
@@ -123,7 +120,7 @@ def test_check_void_state_kwarg_takes_precedence_over_state_attribute():
     """kwarg wins. State carries 'default' (no override); kwarg passes
     'Steward'. Should use the resident threshold, not fall through."""
     state = _FakeState(V=0.19, agent_class="default")
-    void = check_void_state(state, agent_class="Steward")
+    void = check_void_state(state, agent_class="resident_persistent")
     assert void is False
 
 
@@ -132,7 +129,7 @@ def test_check_void_state_extreme_v_still_trips_for_resident():
     0.30 still trips even for residents — the safety net is widening, not
     removal."""
     state = _FakeState(V=0.5)
-    void = check_void_state(state, agent_class="Steward")
+    void = check_void_state(state, agent_class="resident_persistent")
     assert void is True
 
 
@@ -260,7 +257,8 @@ def test_governance_monitor_check_void_state_residents_exempt_at_steward_v_ss():
     trip void_active — the API surface ties through correctly."""
     from src.governance_monitor import UNITARESMonitor
 
-    monitor = UNITARESMonitor(agent_id="Steward", load_state=False)
+    monitor = UNITARESMonitor(agent_id="some-uuid", load_state=False)
+    monitor.state.agent_class = "resident_persistent"
     monitor.state.unitaires_state.V = 0.19
     monitor.state.V_history = [0.19]
     void = monitor.check_void_state()

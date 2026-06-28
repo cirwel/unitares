@@ -104,7 +104,12 @@ def _read_force_release_token() -> str | None:
     tok = os.environ.get("LEASE_FORCE_RELEASE_TOKEN")
     if tok:
         return tok
-    secrets_path = Path.home() / ".config" / "cirwel" / "secrets.env"
+    _env_override = os.environ.get("UNITARES_SECRETS_ENV")
+    secrets_path = (
+        Path(_env_override)
+        if _env_override
+        else Path.home() / ".config" / "cirwel" / "secrets.env"
+    )
     if not secrets_path.exists():
         return None
     for line in secrets_path.read_text().splitlines():
