@@ -34,11 +34,14 @@ agent (or no agent) against it.
   discusses these patterns (this guard, a register cleanup, meta-docs) can opt
   the PR-body lint out with the HTML comment `<!-- scope-guard: allow-register -->`.
 - **Claude session-attribution links** — `claude.ai/code/session` / a
-  `Claude-Session:` trailer. The Claude Code harness appends these to commit
-  messages and PR bodies by default, but they tie the public repo to a private
-  session, signal AI authorship, and are dead links to anyone but the operator
-  (the commit-level analogue of `Co-Authored-By`, which this repo also omits).
-  The guard checks committed files, the PR body, **and the PR's commit messages**.
+  `Claude-Session:` trailer. They tie the public repo to a private session,
+  signal AI authorship, and are dead links to anyone but the operator (the
+  commit-level analogue of `Co-Authored-By`, which this repo also omits). The
+  guard flags them only in **committed file content** — it does **not** gate PR
+  bodies or commit messages, because the Claude Code harness injects the trailer
+  there automatically with no setting to disable it, so a blocking check would
+  reject every Claude PR. Omitting the trailer from bodies/commits is a
+  best-effort convention, not a CI gate.
 
 ## Why a guard, not just this doc
 
