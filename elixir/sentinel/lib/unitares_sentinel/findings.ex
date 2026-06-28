@@ -44,6 +44,33 @@ defmodule UnitaresSentinel.Findings do
     |> post_json(opts)
   end
 
+  @doc """
+  POST a one-shot build-info finding (`sentinel_build_finding`, severity info)
+  so the alert stream records exactly which commit the running node booted from
+  — the queryable answer to "is the merged fix actually live?".
+
+  The fingerprint includes the sha, so a boot onto NEW code emits a fresh
+  finding while a reboot onto the SAME code dedups (no per-restart spam).
+  Takes a `UnitaresSentinel.BuildInfo.t()` map.
+  """
+  @spec post_build_info(map(), keyword()) :: boolean()
+  def post_build_info(info, opts \\ []) when is_map(info) do
+    sha = Map.get(info, :sha, "unknown")
+
+    %{
+      "type" => "sentinel_build_finding",
+      "severity" => "info",
+      "message" => "BEAM Sentinel booted: " <> Map.get(info, :summary, sha),
+      "agent_id" => agent_id(opts),
+      "agent_name" => agent_name(opts),
+      "fingerprint" => compute_fingerprint(["sentinel", "build", sha]),
+      "git_sha" => sha,
+      "version" => Map.get(info, :version, "unknown"),
+      "dirty" => Map.get(info, :dirty, false)
+    }
+    |> post_json(opts)
+  end
+
   @doc false
   @spec alarm_body(UnitaresSentinel.ForcedReleasePoller.Logic.alarm(), keyword()) :: map()
   def alarm_body(alarm, opts \\ []) when is_map(alarm) do

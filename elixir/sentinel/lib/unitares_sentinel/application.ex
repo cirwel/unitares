@@ -35,7 +35,28 @@ defmodule UnitaresSentinel.Application do
         fleet_state_children() ++
         websocket_children() ++ fleet_finding_emitter_children() ++ poller_children()
 
-    Supervisor.start_link(children, strategy: :one_for_one, name: UnitaresSentinel.Supervisor)
+    result =
+      Supervisor.start_link(children, strategy: :one_for_one, name: UnitaresSentinel.Supervisor)
+
+    maybe_emit_build_finding()
+    result
+  end
+
+  # Emit a one-shot build-info finding on boot so #alerts records exactly which
+  # commit the running node is on — makes "is the fix live?" answerable from the
+  # alert stream instead of an SSH-and-`git log` guess. Off the boot path (the
+  # findings POST is best-effort and Finch may still be warming), gated by the
+  # same :emit_findings flag the poller uses + Finch being enabled.
+  defp maybe_emit_build_finding do
+    info = UnitaresSentinel.BuildInfo.info()
+    Logger.info("BEAM Sentinel booted: #{info.summary}")
+
+    if Application.get_env(:unitares_sentinel, :emit_findings, true) and
+         Application.get_env(:unitares_sentinel, :start_finch, true) do
+      Task.start(fn -> UnitaresSentinel.Findings.post_build_info(info) end)
+    end
+
+    :ok
   end
 
   defp postgrex_children do
