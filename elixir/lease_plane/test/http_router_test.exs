@@ -47,6 +47,37 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
   defp parsed(conn), do: Jason.decode!(conn.resp_body)
 
+  describe "/v1/dialectic/presence" do
+    test "lists live sessions; resolved ones drop off" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      live =
+        :get
+        |> conn("/v1/dialectic/presence")
+        |> authed()
+        |> HTTPRouter.call(@opts)
+
+      assert live.status == 200
+      body = parsed(live)
+      assert body["ok"] == true
+      assert Enum.any?(body["sessions"], &(&1["session_id"] == session_id))
+
+      # Resolve it, then it should no longer appear.
+      post_json("/v1/dialectic/resolve", %{
+        session_id: session_id,
+        paused_agent_id: "p",
+        reviewer_agent_id: "r",
+        resolution: %{verdict: "resume"}
+      })
+
+      after_resolve =
+        :get |> conn("/v1/dialectic/presence") |> authed() |> HTTPRouter.call(@opts)
+
+      refute Enum.any?(parsed(after_resolve)["sessions"], &(&1["session_id"] == session_id))
+    end
+  end
+
   describe "/v1/dialectic/resolve" do
     test "missing fields → 422 schema_invalid" do
       resp = post_json("/v1/dialectic/resolve", %{session_id: "x"})

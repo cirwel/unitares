@@ -202,6 +202,26 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
+  # ---------- /v1/dialectic/presence ----------
+  # BEAM-served liveness read: which dialectic sessions are alive right now, each
+  # with phase, age, and whether a resolution saga is in flight. A coordination
+  # signal sourced from BEAM rather than each consumer polling the DB directly.
+  get "/v1/dialectic/presence" do
+    limit =
+      case Integer.parse(Map.get(conn.query_params, "limit", "100")) do
+        {n, _} when n > 0 and n <= 500 -> n
+        _ -> 100
+      end
+
+    case UnitaresLeasePlane.DialecticSaga.live_sessions(limit) do
+      {:ok, sessions} ->
+        json(conn, 200, %{ok: true, count: length(sessions), sessions: sessions})
+
+      {:error, _} ->
+        json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+    end
+  end
+
   # ---------- /v1/health ----------
   # Wave 2 §"Lease-integration boundary hardening" — Phase C (supervised
   # health). Liveness signal for the boundary itself: if this responds 200,

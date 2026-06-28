@@ -138,7 +138,15 @@ defmodule UnitaresLeasePlane.Application do
          worker: UnitaresLeasePlane.AuditOutboxForwarder,
          interval_ms: Application.get_env(:lease_plane, :audit_outbox_forward_interval_ms, 30_000),
          initial_delay_ms:
-           Application.get_env(:lease_plane, :audit_outbox_forward_initial_delay_ms, 2_000)}
+           Application.get_env(:lease_plane, :audit_outbox_forward_initial_delay_ms, 2_000)},
+        {UnitaresLeasePlane.PeriodicWorker,
+         id: UnitaresLeasePlane.DialecticSagaReaper,
+         name: UnitaresLeasePlane.DialecticSagaReaperScheduler,
+         worker: UnitaresLeasePlane.DialecticSagaReaper,
+         interval_ms:
+           Application.get_env(:lease_plane, :dialectic_saga_reaper_interval_ms, 60_000),
+         initial_delay_ms:
+           Application.get_env(:lease_plane, :dialectic_saga_reaper_initial_delay_ms, 5_000)}
       ]
     else
       []

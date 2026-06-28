@@ -210,6 +210,60 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     end
   end
 
+  @doc """
+  Periodic recovery: revert every orphaned (old, still-`reserved`) saga across
+  ALL sessions. The on-claim `reclaim_stale_reserved` only frees a session being
+  re-claimed; this sweep frees an orphan even if its session is never resolved
+  again, so a crashed resolver can never permanently wedge a session. Returns
+  `{:ok, count}`. Run by `DialecticSagaReaper` under the PeriodicWorker.
+  """
+  @spec reclaim_all_stale() :: {:ok, non_neg_integer()} | {:error, term()}
+  def reclaim_all_stale do
+    sql = """
+    UPDATE coordination.session_resolution_sagas
+    SET state = 'reverted', reverted_at = now(), updated_at = now()
+    WHERE state = 'reserved'
+      AND last_attempt_at < now() - ($1 || ' seconds')::interval
+    """
+
+    case Postgrex.query(DB, sql, [Integer.to_string(@stale_reserved_seconds)]) do
+      {:ok, %{num_rows: n}} -> {:ok, n}
+      {:error, e} -> {:error, e}
+    end
+  end
+
+  @doc """
+  Live (non-terminal) dialectic sessions as a BEAM-served presence read: each
+  with phase, age in seconds, and whether a resolution saga is currently in
+  flight. Backs `GET /v1/dialectic/presence`.
+  """
+  @spec live_sessions(pos_integer()) :: {:ok, [map()]} | {:error, term()}
+  def live_sessions(limit \\ 100) when is_integer(limit) and limit > 0 do
+    sql = """
+    SELECT s.session_id, s.phase,
+           EXTRACT(EPOCH FROM (now() - s.created_at))::bigint AS age_s,
+           EXISTS(
+             SELECT 1 FROM coordination.session_resolution_sagas g
+             WHERE g.session_id = s.session_id AND g.state = ANY($1)
+           ) AS resolving
+    FROM core.dialectic_sessions s
+    WHERE s.status NOT IN ('resolved', 'failed', 'escalated')
+    ORDER BY s.created_at DESC
+    LIMIT $2
+    """
+
+    case Postgrex.query(DB, sql, [@inflight_states, limit]) do
+      {:ok, %{rows: rows}} ->
+        {:ok,
+         Enum.map(rows, fn [sid, phase, age, resolving] ->
+           %{session_id: sid, phase: phase, age_seconds: age, resolving: resolving}
+         end)}
+
+      {:error, e} ->
+        {:error, e}
+    end
+  end
+
   @doc "Return the in-flight saga_id for a session, or nil. Used by recovery + the Python sweeper guard's BEAM-side mirror."
   @spec get_inflight(String.t()) :: {:ok, String.t() | nil} | {:error, term()}
   def get_inflight(session_id) when is_binary(session_id) do

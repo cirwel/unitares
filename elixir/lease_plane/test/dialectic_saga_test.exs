@@ -161,6 +161,65 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
     end
   end
 
+  describe "reclaim_all_stale/0 + reaper" do
+    test "reverts orphaned reserved sagas across sessions" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      insert_stale_reserved(session_id)
+      assert {:ok, n} = DialecticSaga.reclaim_all_stale()
+      assert n >= 1
+      # The session's one-pending slot is free again.
+      assert {:ok, nil} = DialecticSaga.get_inflight(session_id)
+    end
+
+    test "DialecticSagaReaper.perform returns a reclaimed count" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      insert_stale_reserved(session_id)
+      assert {:ok, %{reclaimed: n}} = UnitaresLeasePlane.DialecticSagaReaper.perform(%{})
+      assert n >= 1
+    end
+  end
+
+  describe "live_sessions/1" do
+    test "lists a non-terminal session with phase, age, and resolving flag" do
+      session_id = insert_dialectic_session(phase: "synthesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert {:ok, %{origin: :new}} = DialecticSaga.claim(claim_params(session_id))
+
+      {:ok, sessions} = DialecticSaga.live_sessions(500)
+      mine = Enum.find(sessions, &(&1.session_id == session_id))
+      assert mine.phase == "synthesis"
+      assert mine.resolving == true
+      assert is_integer(mine.age_seconds)
+    end
+
+    test "excludes resolved sessions" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert {:ok, _} = DialecticSaga.resolve(claim_params(session_id))
+      {:ok, sessions} = DialecticSaga.live_sessions(500)
+      refute Enum.any?(sessions, &(&1.session_id == session_id))
+    end
+  end
+
+  defp insert_stale_reserved(session_id) do
+    Postgrex.query!(
+      DB,
+      """
+      INSERT INTO coordination.session_resolution_sagas
+        (saga_id, session_id, paused_agent_id, reviewer_agent_id, state,
+         resolution_payload_json, resolution_payload_hash, last_attempt_at, attempt_count)
+      VALUES (gen_random_uuid(), $1, 'p', 'r', 'reserved', '{}'::jsonb, $2, now() - interval '10 minutes', 1)
+      """,
+      [session_id, "stale-hash-#{session_id}"]
+    )
+  end
+
   defp session_status(session_id) do
     %{rows: [[status]]} =
       Postgrex.query!(DB, "SELECT status FROM core.dialectic_sessions WHERE session_id = $1", [
