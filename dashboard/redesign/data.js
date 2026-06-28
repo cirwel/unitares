@@ -52,7 +52,29 @@
 
   const S = () => window.SNAPSHOT;
 
+  // Fleet-average raw eisv_update events into 1-min buckets (last 20). Shared by
+  // the REST seed path (eisv() below) and the live push-apply path in the EISV
+  // section, so "the live point" and "the historical point" are computed the
+  // same way — a pushed event re-buckets the window exactly as a refetch would.
+  function bucketEisv(evs) {
+    const buckets = {};
+    (evs || []).forEach((e) => {
+      const ts = e.timestamp || "";
+      if (ts.length < 16) return;
+      const k = ts.slice(11, 16);
+      const m = e.eisv || {};
+      (buckets[k] || (buckets[k] = [])).push({ E: m.E, I: m.I, S: m.S, V: m.V, C: e.coherence, R: e.risk });
+    });
+    const avg = (xs, f) => { const v = xs.map((x) => x[f]).filter((n) => typeof n === "number"); return v.length ? v.reduce((a, n) => a + n, 0) / v.length : null; };
+    return Object.keys(buckets).sort().slice(-20).map((t) => {
+      const xs = buckets[t];
+      return { t, E: avg(xs, "E"), I: avg(xs, "I"), S: avg(xs, "S"), V: avg(xs, "V"), C: avg(xs, "C"), R: avg(xs, "R") };
+    });
+  }
+
   const DATA = {
+    bucketEisv,
+
     async health() {
       return withFallback(async () => {
         const h = await authFetch("/health");
@@ -244,22 +266,11 @@
         const r = await authFetch("/v1/eisv/recent?limit=120");
         const evs = (r && r.events) || [];
         if (!evs.length) return null;
-        // fleet-average into 1-min buckets (mirrors eisv-charts __fleet__)
-        const buckets = {};
-        evs.forEach((e) => {
-          const ts = e.timestamp || "";
-          if (ts.length < 16) return;
-          const k = ts.slice(11, 16);
-          const m = e.eisv || {};
-          (buckets[k] || (buckets[k] = [])).push({ E: m.E, I: m.I, S: m.S, V: m.V, C: e.coherence, R: e.risk });
-        });
-        const avg = (xs, f) => { const v = xs.map((x) => x[f]).filter((n) => typeof n === "number"); return v.length ? v.reduce((a, n) => a + n, 0) / v.length : null; };
-        const series = Object.keys(buckets).sort().slice(-20).map((t) => {
-          const xs = buckets[t];
-          return { t, E: avg(xs, "E"), I: avg(xs, "I"), S: avg(xs, "S"), V: avg(xs, "V"), C: avg(xs, "C"), R: avg(xs, "R") };
-        });
-        return { series, coherenceEq: 0.5 };
-      }, () => S().eisv);
+        // `raw` carries the unaveraged events so the section can keep
+        // accumulating live pushes (same shape arrives over /ws/eisv) and
+        // re-bucket the window itself, no refetch.
+        return { series: bucketEisv(evs), raw: evs, coherenceEq: 0.5 };
+      }, () => { const e = S().eisv; return { series: e.series, raw: e.raw || [], coherenceEq: e.coherenceEq }; });
     },
 
     async automations() {

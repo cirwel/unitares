@@ -83,7 +83,7 @@
     // Anomalies — pure stats with no detail view) stay plain, so the clickable
     // affordance is honest rather than implied on everything.
     const cards = [
-      { h: "Fleet Coherence", num: num(fleetCoh), sub: `${live.length} of ${residents.length} residents reporting`, cls: "up", rule: true, href: "#residents" },
+      { h: "Fleet Coherence", id: "fleetcoh", num: num(fleetCoh), sub: `${live.length} of ${residents.length} residents reporting`, cls: "up", rule: true, href: "#residents" },
       { h: "Agents", num: un(stats.agentsActive) ? "—" : stats.agentsActive, of: un(stats.agentsTotal) ? "" : "/ " + stats.agentsTotal, sub: un(stats.agentsActive) ? "unavailable" : "active / total", href: "#agents" },
       { h: "Stuck", num: un(stats.stuck) ? "—" : stats.stuck, sub: un(stats.stuck) ? "unavailable" : (stats.stuck ? "needs attention" : "none flagged"), cls: un(stats.stuck) ? "" : (stats.stuck ? "down" : "up"), href: "#agents" },
       { h: "Automations", num: asum.total || 0, sub: autoSub, cls: aWarn ? "down" : "up", href: "#automations" },
@@ -113,7 +113,8 @@
       : `<div class="sub" style="color:var(--muted)">unavailable</div>`;
     $("stats").innerHTML = degradeBanner + cards.map((s) => {
       const tag = s.href ? "a" : "div"; const attr = s.href ? ` href="${s.href}" style="text-decoration:none;color:inherit"` : "";
-      return `<${tag} class="card ${s.rule ? "accent-rule" : ""}"${attr}><h3>${s.h}</h3>`
+      const dataAttr = s.id ? ` data-card="${s.id}"` : "";
+      return `<${tag} class="card ${s.rule ? "accent-rule" : ""}"${attr}${dataAttr}><h3>${s.h}</h3>`
         + `<div class="num">${s.num}${s.of ? `<span class="of"> ${s.of}</span>` : ""}</div>`
         + `<div class="sub ${s.cls || ""}">${s.sub}</div></${tag}>`;
     }).join("")
@@ -150,7 +151,70 @@
     }).join("");
   }
 
-  let lastResidents = null;
+  // In-memory resident model. Each entry is the DATA.residents() shape plus an
+  // absolute `_lastSeenMs` (when it last checked in), so silence is computed at
+  // render time rather than frozen at fetch time — it ticks up live and snaps to
+  // 0 when a resident checks in. Seeded from the REST fetch; mutated by pushed
+  // eisv_update events (see applyEvent) so the strip updates without a refetch.
+  let RMODEL = [];
+  let lastSource = "snapshot";
+
+  function seedResidents(list, source) {
+    const now = Date.now();
+    lastSource = source;
+    RMODEL = (list || []).map((r) => Object.assign({}, r, {
+      _lastSeenMs: typeof r.silence === "number" ? now - r.silence * 1000 : null,
+    }));
+  }
+  // Render-ready snapshot with live silence derived from _lastSeenMs.
+  function viewResidents() {
+    const now = Date.now();
+    return RMODEL.map((r) => Object.assign({}, r, {
+      silence: r._lastSeenMs != null ? Math.round((now - r._lastSeenMs) / 1000) : r.silence,
+    }));
+  }
+  // Recompute the Fleet Coherence card in place (a derived aggregate, so it
+  // shifts as residents report) without rebuilding the whole stats grid.
+  function updateFleetCoherence(residents) {
+    const el = document.querySelector('[data-card="fleetcoh"]');
+    if (!el) return;
+    const live = residents.filter((r) => r.coherence != null);
+    const fleetCoh = live.length ? live.reduce((a, r) => a + r.coherence, 0) / live.length : null;
+    const numEl = el.querySelector(".num"), subEl = el.querySelector(".sub");
+    if (numEl) numEl.textContent = num(fleetCoh);
+    if (subEl) subEl.textContent = `${live.length} of ${residents.length} residents reporting`;
+  }
+
+  // Apply one pushed eisv_update to the residents strip directly — no refetch.
+  // Returns true only when the event belongs to a known resident (matched by
+  // agent_name == label, the same rule the server uses); other agents' check-ins
+  // return false so the caller falls back to the doorbell refresh.
+  function applyEvent(msg) {
+    if (!msg || msg.type !== "eisv_update" || !msg.agent_name) return false;
+    const r = RMODEL.find((x) => x.name === msg.agent_name);
+    if (!r) return false;
+    if (msg.eisv) r.eisv = msg.eisv;
+    if (typeof msg.coherence === "number") r.coherence = msg.coherence;
+    if (typeof msg.risk === "number") r.risk = msg.risk;
+    const act = msg.decision && msg.decision.action;
+    if (act) r.verdict = act;
+    r._lastSeenMs = Date.now(); // just checked in: not silent, not dark
+    if (r.status === "dark" || r.status === "silent") r.status = "healthy";
+    const view = viewResidents();
+    renderResidents(view, lastSource);
+    renderPulse(view);
+    updateFleetCoherence(view);
+    return true;
+  }
+
+  // Re-render the strip from the model so silence visibly accrues during quiet
+  // periods (driven by app.html on a slow tick while the Overview is visible).
+  function tickSilence() {
+    if (!RMODEL.length || !$("residents")) return;
+    const view = viewResidents();
+    renderResidents(view, lastSource);
+    renderPulse(view);
+  }
 
   function applyHealth(health) {
     if (health.data) {
@@ -168,30 +232,32 @@
   // Full first render — light (residents/pulse/health) + heavy (stats) together.
   async function render() {
     const [health, residents, stats, auto] = await Promise.all([DATA.health(), DATA.residents(), DATA.stats(), DATA.automations()]);
-    lastResidents = residents;
+    seedResidents(residents.data, residents.source);
+    const view = viewResidents();
     applyHealth(health);
-    renderResidents(residents.data, residents.source);
-    renderStats(stats.data, residents.data, stats.source, auto.data);
-    renderPulse(residents.data);
+    renderResidents(view, residents.source);
+    renderStats(stats.data, view, stats.source, auto.data);
+    renderPulse(view);
     footnote([residents, stats, health].some((r) => r.source === "live"));
   }
 
   // Light refresh (fast cadence) — the "is the fleet alive" glance only.
   async function refresh() {
     const [health, residents] = await Promise.all([DATA.health(), DATA.residents()]);
-    lastResidents = residents;
+    seedResidents(residents.data, residents.source);
+    const view = viewResidents();
     applyHealth(health);
-    renderResidents(residents.data, residents.source);
-    renderPulse(residents.data);
+    renderResidents(view, residents.source);
+    renderPulse(view);
   }
 
-  // Heavy refresh (slow cadence) — the 7-tool headline batch; reuse last residents
-  // for fleet coherence rather than refetching them.
+  // Heavy refresh (slow cadence) — the 7-tool headline batch; reuse the resident
+  // model for fleet coherence rather than refetching it.
   async function refreshStats() {
     const [stats, auto] = await Promise.all([DATA.stats(), DATA.automations()]);
-    const residents = lastResidents || (lastResidents = await DATA.residents());
-    renderStats(stats.data, residents.data, stats.source, auto.data);
+    if (!RMODEL.length) { const residents = await DATA.residents(); seedResidents(residents.data, residents.source); }
+    renderStats(stats.data, viewResidents(), lastSource, auto.data);
   }
 
-  window.Landing = { render, refresh, refreshStats };
+  window.Landing = { render, refresh, refreshStats, applyEvent, tickSilence };
 })();

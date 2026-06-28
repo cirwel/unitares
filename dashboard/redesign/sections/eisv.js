@@ -14,6 +14,11 @@
 
   let MODEL = { series: [], coherenceEq: 0.5, source: "snapshot" };
   let upper = null, lower = null;
+  // Raw eisv_update events in the live window — seeded from the REST backfill,
+  // then grown by pushed events so the chart re-buckets in place (true diff-push
+  // instead of a full refetch). Bounded so a long-lived tab can't grow unbounded.
+  let RAW = [];
+  const RAW_MAX = 400;
 
   function rgba(hex, a) {
     const h = hex.replace("#", "");
@@ -120,13 +125,28 @@
 
   async function load() {
     const r = await DATA.eisv();
+    RAW = (r.data.raw || []).slice(-RAW_MAX);
     MODEL = { series: r.data.series || [], coherenceEq: r.data.coherenceEq || 0.5, source: r.source };
     // Refresh in place if the charts are already mounted; full render on first load.
     if (upper && lower && document.getElementById("eisv-upper") && window.Chart) updateInPlace();
     else render();
   }
+
+  // Apply one pushed eisv_update directly — no refetch. Returns true if it
+  // handled the event (the caller then skips the doorbell refetch). Only acts
+  // once the charts are mounted; first paint still goes through load().
+  function applyEvent(msg) {
+    if (!msg || msg.type !== "eisv_update" || !msg.eisv || !msg.timestamp) return false;
+    if (!upper || !lower || !window.Chart) return false;
+    RAW.push({ timestamp: msg.timestamp, eisv: msg.eisv, coherence: msg.coherence, risk: msg.risk });
+    if (RAW.length > RAW_MAX) RAW = RAW.slice(-RAW_MAX);
+    MODEL.series = DATA.bucketEisv(RAW);
+    MODEL.source = "live"; // a live push by definition
+    updateInPlace();
+    return true;
+  }
   // re-theme without refetch (called on theme toggle) — full rebuild reads new tokens
   function retheme() { if (MODEL.series.length && window.Chart) build(); }
 
-  window.EISV = { load, retheme };
+  window.EISV = { load, retheme, applyEvent };
 })();

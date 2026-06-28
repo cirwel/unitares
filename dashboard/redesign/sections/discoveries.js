@@ -37,6 +37,10 @@
 
   let MODEL = { list: [], byType: {}, byStatus: {}, total: 0, source: "snapshot" };
   let typeFilter = "all", timeFilter = "all";
+  // "N new" since the last load. An explore pane stays manual, so a knowledge_write
+  // doesn't refetch (that would disrupt search/filter/scroll) — it just bumps this
+  // badge as a refresh nudge. Reset on load().
+  let newCount = 0;
 
   function card(d, q) {
     const tags = (d.tags || []).slice(0, 5).map((t) => `<span class="tag">${esc(t)}</span>`).join(" ");
@@ -102,6 +106,7 @@
          <input id="dsc-search" placeholder="search summary · details · tags" value="${esc(q)}"
            style="flex:1;min-width:200px;padding:var(--space-2) var(--space-3);font-family:var(--font-sans);font-size:var(--text-sm);background:var(--surface);color:var(--ink);border:var(--hairline) solid var(--line-2);border-radius:var(--radius-sm)" />
          <select id="dsc-time" class="theme-toggle">${[["all", "all time"], ["24h", "24h"], ["7d", "7 days"], ["30d", "30 days"]].map(([v, t]) => `<option value="${v}" ${v === timeFilter ? "selected" : ""}>${t}</option>`).join("")}</select>
+         <button id="dsc-new" class="theme-toggle" title="New knowledge written since you loaded — click to refresh" style="display:${newCount > 0 ? "inline-flex" : "none"};border-color:var(--accent);color:var(--accent)">${newCount} new · refresh</button>
        </div>
        <div style="display:flex;flex-direction:column;gap:var(--space-3)">
          ${rows.length ? rows.map((d) => card(d, q)).join("") : `<p class="empty">No matches. Clear filters or change search.</p>`}
@@ -113,12 +118,23 @@
     const s = $("#dsc-search"); if (s) { s.oninput = render; if (s.value) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }
     const t = $("#dsc-time"); if (t) t.onchange = () => { timeFilter = t.value; render(); };
     document.querySelectorAll(".dsc-type").forEach((b) => b.onclick = () => { typeFilter = b.dataset.type; render(); });
+    const n = $("#dsc-new"); if (n) n.onclick = load;
   }
 
   async function load() {
     const r = await DATA.discoveries();
     MODEL = { list: r.data.list || [], byType: r.data.byType || {}, byStatus: r.data.byStatus || {}, total: r.data.total || (r.data.list || []).length, source: r.source };
+    newCount = 0; // freshly loaded — nothing new yet
     render();
   }
-  window.Discoveries = { load };
+
+  // A knowledge_write landed — bump the badge in place (no re-render, so a search
+  // in progress keeps its focus). The badge element is always present (hidden at
+  // 0), so this just flips it visible and updates the count.
+  function notifyNew() {
+    newCount += 1;
+    const b = $("#dsc-new");
+    if (b) { b.textContent = newCount + " new · refresh"; b.style.display = "inline-flex"; }
+  }
+  window.Discoveries = { load, notifyNew };
 })();

@@ -3,10 +3,11 @@
  * --------------------------------------------------------
  * Thin WebSocket client: the server pushes {type:"eisv_update", …} on every
  * agent check-in and {type:<event>, …} for governance events (lifecycle,
- * knowledge, circuit-breaker…). We don't surgically patch the DOM per event —
- * each pushed event just signals "something changed," and the consumer does a
- * debounced refresh of the active view through the normal render path. That's
- * real-time (sub-second) without per-event DOM fragility.
+ * knowledge, circuit-breaker…). The full event object is handed to the consumer
+ * (app.html onWsEvent). Sections that can patch from the payload do so directly
+ * (true diff-push, e.g. the EISV chart re-buckets in place); everything else
+ * treats the event as a doorbell and does a debounced refresh of the active view
+ * through the normal render path. Real-time (sub-second) either way.
  *
  * Reconnects with capped exponential backoff. Status is reported so the header
  * pill can show streaming vs the polling fallback.
