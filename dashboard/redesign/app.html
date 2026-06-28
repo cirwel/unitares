@@ -255,8 +255,14 @@ setInterval(() => {
   if (document.hidden || activeSection !== "overview") return;
   if (window.Landing && window.Landing.tickSilence) window.Landing.tickSilence();
 }, 5000);
+// Badge notifications fire regardless of the active section (and while hidden),
+// so an explore pane can show "N new since you loaded" without auto-refetching.
+const NOTIFY = {
+  knowledge_write: () => window.Discoveries && window.Discoveries.notifyNew && window.Discoveries.notifyNew(),
+};
 let wsDebounce = null;
 function onWsEvent(msg) {
+  if (msg && NOTIFY[msg.type]) NOTIFY[msg.type]();
   if (document.hidden || isTyping() || !isAutoSection(activeSection)) return;
   const apply = APPLY[activeSection];
   if (apply && apply(msg)) return; // handled live — no refetch
