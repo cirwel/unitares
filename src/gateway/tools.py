@@ -82,10 +82,10 @@ async def handle_search(
 ) -> str:
     """Search the shared knowledge graph."""
     try:
-        args: dict = {"query": query, "limit": limit}
+        args: dict = {"action": "search", "query": query, "limit": limit}
         if agent_id:
-            args["agent_id_filter"] = agent_id
-        raw = await client.call_tool("search_knowledge_graph", args)
+            args["agent_id"] = agent_id
+        raw = await client.call_tool("knowledge", args)
         return json.dumps(simplifiers.simplify_search(raw))
     except Exception as exc:
         logger.warning("search failed: %s", exc)

@@ -94,7 +94,7 @@ def simplify_checkin(raw: dict) -> dict:
 
 
 def simplify_search(raw: dict) -> dict:
-    """Simplify search_knowledge_graph response."""
+    """Simplify knowledge search response."""
     if not isinstance(raw, dict):
         return ok("Search complete", {"raw": raw})
 

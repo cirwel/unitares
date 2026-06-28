@@ -105,8 +105,16 @@ class TestHandleSearch:
     async def test_limit(self, mock_client):
         mock_client.call_tool.return_value = {"results": []}
         await handle_search(mock_client, query="test", limit=10)
-        mock_client.call_tool.assert_called_with("search_knowledge_graph", {
-            "query": "test", "limit": 10,
+        mock_client.call_tool.assert_called_with("knowledge", {
+            "action": "search", "query": "test", "limit": 10,
+        })
+
+    @pytest.mark.asyncio
+    async def test_agent_filter(self, mock_client):
+        mock_client.call_tool.return_value = {"results": []}
+        await handle_search(mock_client, query="test", agent_id="agent-1")
+        mock_client.call_tool.assert_called_with("knowledge", {
+            "action": "search", "query": "test", "limit": 5, "agent_id": "agent-1",
         })
 
 
