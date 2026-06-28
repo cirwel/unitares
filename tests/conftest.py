@@ -662,34 +662,6 @@ async def live_postgres_backend():
     await be.close()
 
 
-@pytest.fixture(autouse=True)
-def _stable_governance_config_class():
-    """Undo cross-test pollution from importlib.reload(config.governance_config).
-
-    reload() re-executes the module body and REPLACES the GovernanceConfig *class*
-    object (same module object, new class). A later test that patches the class via
-    a stale top-level ``from config.governance_config import GovernanceConfig`` then
-    patches a dead object, while code under test re-imports the live one — so the
-    patch silently does nothing. The symptom is a test that passes in isolation and
-    fails in the full suite (observed on the verification-floor wiring tests; the
-    reloaders include test_phases_pause_ttl, test_mcp_bearer_gate,
-    test_behavioral_trajectory, test_grounding_scale_constants,
-    test_process_management).
-
-    Restore the original class object after any test that swapped it. No-op for the
-    >99% of tests that never reload, so it cannot change their behavior.
-    """
-    try:
-        import config.governance_config as cfg
-    except Exception:
-        yield
-        return
-    original = cfg.GovernanceConfig
-    yield
-    if cfg.GovernanceConfig is not original:
-        cfg.GovernanceConfig = original
-
-
 @pytest.fixture
 def set_governance_config(monkeypatch):
     """Patch a GovernanceConfig attribute on the LIVE class (reload-safe).
@@ -697,7 +669,11 @@ def set_governance_config(monkeypatch):
     Resolves the class from sys.modules at call time, matching what
     ``from config.governance_config import GovernanceConfig`` inside a handler sees.
     Prefer this over a top-level import + ``monkeypatch.setattr(GovernanceConfig, …)``,
-    which patches a stale class object once any other test has reloaded the module.
+    which patches a stale class object once any other test has reloaded the module
+    (reloaders: test_phases_pause_ttl, test_mcp_bearer_gate, test_behavioral_trajectory,
+    test_grounding_scale_constants, test_process_management). Note: code that reads the
+    module-level ``config`` *singleton* (``from config.governance_config import config``)
+    should patch ``cfg.config`` directly — this helper targets the class.
 
         def test_x(set_governance_config):
             set_governance_config("VERIFICATION_FLOOR_ENABLED", True)
