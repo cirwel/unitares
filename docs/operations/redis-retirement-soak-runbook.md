@@ -6,25 +6,29 @@ This is operational, not aspirational: every step below maps to code already mer
 
 ## The PR stack and merge order
 
-| PR | What it lands | Depends on |
+| PR | What it lands | Status |
 |---|---|---|
-| #1122 | Prep fix: PG session-collision detection → `pg_session_collision` event | — |
-| #1123 | Migration 051 (`core.session_bindings`, `core.onboard_pins`) + DB methods | — |
-| #1132 ✅ merged | Hijack-check helper extracted from PATH 1 (behavior-identical) | — |
-| #1129 | Shadow dual-write (writes the mirror when the flag is on) | #1123 |
-| #1130 | Birth-cohort parity checker (`scripts/ops/session_mirror_parity_check.py`) | #1123 |
+| #1122 | Prep fix: PG session-collision → `pg_session_collision` event | ✅ merged |
+| #1123 | Migration 051 (`core.session_bindings`, `core.onboard_pins`) + DB methods | ✅ merged |
+| #1132 | Hijack-check helper extracted from PATH 1 | ✅ merged |
+| #1129 | Shadow dual-write (writes the mirror when the flag is on) | ✅ merged |
+| #1130 | Birth-cohort parity checker (`scripts/ops/session_mirror_parity_check.py`) | ✅ merged |
+| **#1135** | **TTL/NX parity fix + reaper** (Codex review #1, #4) | **OPEN — merge BEFORE the soak** |
+| #1137 | Parity flip-gate (`--gate`) + api_key_hash note (Codex review #2, #3) | OPEN — needed before the flip decision |
 
-Merge order: **#1123 first** (the tables/methods everything else needs), then #1129 and #1130 (either order), then **apply migration 051** (manual — see below). #1122 and the merged #1132 are independent.
+**Merge order now:** the original stack is merged. **#1135 MUST merge before you enable the shadow flag** — it fixes the TTL/NX guard bug (an expired row wrongly blocking a fresh claim), and that bug would skew the soak's parity numbers (spurious `missing_in_pg`). #1137 is needed before the flip decision, not before the soak.
 
 ## Step 1 — apply migration 051 (manual)
 
-Migrations are MANUAL in this repo (diff vs `core.schema_migrations` on every deploy). After #1123 merges and deploys:
+Migrations are MANUAL in this repo (diff vs `core.schema_migrations` on every deploy). **Apply 051 only after #1135 is merged** — #1135 edits 051 to add the reaper (extends `core.cleanup_expired_sessions()`). If you already applied the pre-#1135 051, just re-run the file: it's idempotent (`CREATE TABLE IF NOT EXISTS`, `CREATE OR REPLACE FUNCTION`, `INSERT … ON CONFLICT DO NOTHING`).
 
 ```bash
 psql "$GOVERNANCE_DATABASE_URL" -f db/postgres/migrations/051_session_mirror_tables.sql
-# verify:
+# verify table + reaper:
 psql "$GOVERNANCE_DATABASE_URL" -Atqc "SELECT version||'|'||name FROM core.schema_migrations WHERE version=51"
 #   expect: 51|session_mirror_tables
+psql "$GOVERNANCE_DATABASE_URL" -Atqc "SELECT pg_get_functiondef('core.cleanup_expired_sessions()'::regprocedure) LIKE '%session_bindings%'"
+#   expect: t  (reaper present)
 ```
 
 `unitares_doctor.py` reports `missing 51:session_mirror_tables` until this runs — that's the expected pending state, not drift.
@@ -39,6 +43,8 @@ Set the flag in the governance-mcp LaunchAgent env and restart (plist env change
 launchctl bootout gui/$(id -u)/com.unitares.governance-mcp
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
 ```
+
+**Precondition: #1135 merged and migration 051 (with the reaper) applied** — otherwise the expired-row guard bug skews the soak parity you're about to measure.
 
 What this does: `_cache_session` and `set_onboard_pin` now ALSO write to `core.session_bindings` / `core.onboard_pins` alongside Redis. **Redis stays authoritative for all reads.** The PG writes are best-effort (failures swallowed, latency-bounded) — if the mirror write fails or is slow, the live identity path is unaffected. Nothing reads the mirror yet.
 
@@ -56,7 +62,12 @@ Let it run long enough to capture a full session-TTL cycle of real traffic — *
 ## Step 4 — measure parity (gates the read flip)
 
 ```bash
+# informational (cron-friendly, always exit 0):
 python3 scripts/ops/session_mirror_parity_check.py | tee /tmp/parity.json
+
+# enforceable flip-gate (#1137 — exits non-zero unless decision-grade):
+python3 scripts/ops/session_mirror_parity_check.py --gate --min-cohort 100 --min-ratio 0.99
+#   exit 0 only if status=ran, cohort>=100, parity>=0.99, zero uuid_mismatch.
 ```
 
 Reads a JSON summary. What the fields mean:
