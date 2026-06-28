@@ -995,7 +995,7 @@ class TestLineageSuccession:
     @pytest.mark.asyncio
     async def test_archive_superseded_parents_archives_parent(self):
         """auto_recover sweep retires a superseded parent as lineage_succession."""
-        old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+        old_time = datetime.now(timezone.utc) - timedelta(minutes=45)
         recent = datetime.now(timezone.utc) - timedelta(minutes=2)
         with patch(_PATCHES["mcp_server"]) as mock_server, \
              patch("src.mcp_handlers.lifecycle.helpers._archive_one_agent") as mock_arch, \
@@ -1025,6 +1025,47 @@ class TestLineageSuccession:
         assert archived_ids == ["p1"]
 
     @pytest.mark.asyncio
+    async def test_archive_superseded_parents_skips_freshly_active_parent(self):
+        """A parent that checked in recently is not safe to retire.
+
+        Regression for 2026-06-28: a Codex session checked in, continued a long
+        local test/PR workflow, and was archived four minutes later by
+        lineage_succession because binding/lease liveness was absent.
+        """
+        recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+        with patch(_PATCHES["mcp_server"]) as mock_server, \
+             patch("src.mcp_handlers.lifecycle.helpers._archive_one_agent") as mock_arch, \
+             patch("src.mcp_handlers.identity.process_binding.get_live_bindings") as mock_live, \
+             patch("src.mcp_handlers.identity.process_binding.has_live_agent_lease") as mock_lease:
+            mock_server.agent_metadata = {
+                "parent": _make_agent_meta(last_update=recent, total_updates=7),
+                "child": _make_agent_meta(
+                    last_update=recent,
+                    parent_agent_id="parent",
+                    spawn_reason="new_session",
+                ),
+            }
+            mock_server.monitors = {}
+
+            async def _ok(*a, **k):
+                return True
+            mock_arch.side_effect = _ok
+
+            async def _no_bindings(*a, **k):
+                return []
+            mock_live.side_effect = _no_bindings
+
+            async def _no_lease(*a, **k):
+                return False
+            mock_lease.side_effect = _no_lease
+
+            from src.mcp_handlers.lifecycle.stuck import _archive_superseded_parents
+            results = await _archive_superseded_parents(datetime.now(timezone.utc))
+
+        assert mock_arch.call_args_list == []
+        assert results == []
+
+    @pytest.mark.asyncio
     async def test_archive_superseded_parents_skips_initializing_ghost(self):
         """A parent that has never checked in (total_updates == 0) is an
         initializing ghost and must NOT be archived even when a live child
@@ -1036,6 +1077,7 @@ class TestLineageSuccession:
         Mirrors classify_for_archival's ghost protection.
         """
         recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+        stale = datetime.now(timezone.utc) - timedelta(minutes=45)
         with patch(_PATCHES["mcp_server"]) as mock_server, \
              patch("src.mcp_handlers.lifecycle.helpers._archive_one_agent") as mock_arch, \
              patch("src.mcp_handlers.identity.process_binding.get_live_bindings") as mock_live:
@@ -1046,7 +1088,7 @@ class TestLineageSuccession:
                     last_update=recent, parent_agent_id="ghost"
                 ),
                 # checked-in parent superseded by a live child → still archived
-                "done": _make_agent_meta(last_update=recent, total_updates=4),
+                "done": _make_agent_meta(last_update=stale, total_updates=4),
                 "c_done": _make_agent_meta(
                     last_update=recent, parent_agent_id="done"
                 ),
@@ -1121,13 +1163,14 @@ class TestLineageSuccession:
         conceptually-correct liveness signal (architect council finding).
         """
         recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+        stale = datetime.now(timezone.utc) - timedelta(minutes=45)
         with patch(_PATCHES["mcp_server"]) as mock_server, \
              patch("src.mcp_handlers.lifecycle.helpers._archive_one_agent") as mock_arch, \
              patch("src.mcp_handlers.identity.process_binding.get_live_bindings") as mock_live:
             mock_server.agent_metadata = {
                 # checked-in parent, superseded by a live child, but its own
                 # process is still alive → must survive.
-                "alive": _make_agent_meta(last_update=recent, total_updates=7),
+                "alive": _make_agent_meta(last_update=stale, total_updates=7),
                 "c_alive": _make_agent_meta(
                     last_update=recent, parent_agent_id="alive"
                 ),
