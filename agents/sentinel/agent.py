@@ -865,6 +865,40 @@ class SentinelAgent(GovernanceAgent):
 
 
 # ---------------------------------------------------------------------------
+# Finding adjudication → exogenous outcome (Stage-0 bridge half b, option A)
+# ---------------------------------------------------------------------------
+
+async def adjudicate_finding(
+    agent: "SentinelAgent",
+    client: GovernanceClient,
+    status: str,
+    fingerprint: str,
+    reason: str | None = None,
+) -> dict:
+    """Record an operator's adjudication of a Sentinel finding as an external-truth
+    ``outcome_event`` attributed to Sentinel's own (baselined) UUID.
+
+    The operator verdict is ground truth from outside the loop, so the outcome is
+    ``external_signal``; the handler auto-snapshots Sentinel's EISV by agent_id,
+    giving the residual-vs-Φ falsifiability test a second baselined-resident
+    channel beyond Watcher (docs/proposals/eisv-stage0-bridge-b-label-routing.md).
+    Option A: the outcome_event is the durable adjudication record — backlog /
+    audit.events status mutation is a deliberate follow-up.
+    """
+    from agents.common.resolution_outcome import build_resolution_outcome_args
+
+    await agent._ensure_identity(client)
+    if not agent.agent_uuid:
+        raise RuntimeError("Sentinel identity unresolved — refusing to attribute outcome")
+    args = build_resolution_outcome_args(
+        "sentinel_finding", status, fingerprint, agent.agent_uuid, reason
+    )
+    await client.call_tool("outcome_event", args)
+    log(f"recorded external-truth outcome ({status}) for sentinel finding {fingerprint}")
+    return args
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -875,6 +909,9 @@ async def main():
     parser.add_argument("--once", action="store_true", help="Run one analysis cycle and exit")
     parser.add_argument("--sitrep", action="store_true", help="Generate situation report and exit")
     parser.add_argument("--hours", type=float, default=6.0, help="Sitrep window (hours)")
+    parser.add_argument("--resolve", metavar="FINGERPRINT", help="Adjudicate a finding as CONFIRMED (Sentinel was right) → external-truth outcome")
+    parser.add_argument("--dismiss", metavar="FINGERPRINT", help="Adjudicate a finding as DISMISSED → external-truth outcome (use --reason fp for a false positive)")
+    parser.add_argument("--reason", default=None, help="Dismissal reason; 'fp' marks a false positive (the only 'bad' outcome for Sentinel)")
     parser.add_argument("--url", default=GOV_MCP_URL, help="MCP URL")
     parser.add_argument("--ws-url", default=GOV_WS_URL, help="WebSocket URL")
     parser.add_argument("--interval", type=int, default=ANALYSIS_INTERVAL, help="Analysis interval (seconds)")
@@ -885,6 +922,18 @@ async def main():
         ws_url=args.ws_url,
         analysis_interval=args.interval,
     )
+
+    if args.resolve or args.dismiss:
+        status = "confirmed" if args.resolve else "dismissed"
+        fingerprint = args.resolve or args.dismiss
+        async with GovernanceClient(
+            mcp_url=agent.mcp_url,
+            timeout=agent.timeout,
+            connect_timeout=agent.connect_timeout,
+            connect_retries=agent.connect_retries,
+        ) as client:
+            await adjudicate_finding(agent, client, status, fingerprint, args.reason)
+        return
 
     if args.sitrep:
         await agent.run_sitrep(args.hours)
