@@ -7,6 +7,9 @@ archival. Pins:
                     retired as lineage_succession
   * SAFETY       -> a live ancestor (lease/binding) is NEVER archived even when
                     transitively reached — the liveness guard still wins.
+
+These tests opt into the global ``UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL`` gate so
+they only cover the transitive switch, not the default-off archival policy.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -78,7 +81,8 @@ async def _run_archive(srv_metadata, lease_fn=_false):
          patch("src.mcp_handlers.identity.process_binding.has_live_agent_lease",
                side_effect=lease_fn), \
          patch("src.mcp_handlers.lifecycle.lineage_reachability.reachable_ancestors",
-               side_effect=_ret_gp1):
+               side_effect=_ret_gp1), \
+         patch.dict("os.environ", {"UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL": "true"}):
         srv.agent_metadata = srv_metadata
         srv.monitors = {}
         arch.side_effect = _ok

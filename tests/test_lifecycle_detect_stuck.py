@@ -993,8 +993,29 @@ class TestLineageSuccession:
         assert live == {"pred"}
 
     @pytest.mark.asyncio
-    async def test_archive_superseded_parents_archives_parent(self):
-        """auto_recover sweep retires a superseded parent as lineage_succession."""
+    async def test_archive_superseded_parents_disabled_by_default(self, monkeypatch):
+        """auto_recover no longer archives lineage-superseded parents by default."""
+        monkeypatch.delenv("UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL", raising=False)
+        old_time = datetime.now(timezone.utc) - timedelta(minutes=45)
+        recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+        with patch(_PATCHES["mcp_server"]) as mock_server, \
+             patch("src.mcp_handlers.lifecycle.helpers._archive_one_agent") as mock_arch:
+            mock_server.agent_metadata = {
+                "p1": _make_agent_meta(last_update=old_time),
+                "c1": _make_agent_meta(last_update=recent, parent_agent_id="p1"),
+            }
+            mock_server.monitors = {}
+
+            from src.mcp_handlers.lifecycle.stuck import _archive_superseded_parents
+            results = await _archive_superseded_parents(datetime.now(timezone.utc))
+
+        assert results == []
+        assert mock_arch.call_args_list == []
+
+    @pytest.mark.asyncio
+    async def test_archive_superseded_parents_env_opt_in_archives_parent(self, monkeypatch):
+        """Explicit env opt-in retires a superseded parent as lineage_succession."""
+        monkeypatch.setenv("UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL", "true")
         old_time = datetime.now(timezone.utc) - timedelta(minutes=45)
         recent = datetime.now(timezone.utc) - timedelta(minutes=2)
         with patch(_PATCHES["mcp_server"]) as mock_server, \
@@ -1025,13 +1046,14 @@ class TestLineageSuccession:
         assert archived_ids == ["p1"]
 
     @pytest.mark.asyncio
-    async def test_archive_superseded_parents_skips_freshly_active_parent(self):
+    async def test_archive_superseded_parents_skips_freshly_active_parent(self, monkeypatch):
         """A parent that checked in recently is not safe to retire.
 
         Regression for 2026-06-28: a Codex session checked in, continued a long
         local test/PR workflow, and was archived four minutes later by
         lineage_succession because binding/lease liveness was absent.
         """
+        monkeypatch.setenv("UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL", "true")
         recent = datetime.now(timezone.utc) - timedelta(minutes=2)
         with patch(_PATCHES["mcp_server"]) as mock_server, \
              patch("src.mcp_handlers.lifecycle.helpers._archive_one_agent") as mock_arch, \
@@ -1066,7 +1088,7 @@ class TestLineageSuccession:
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_archive_superseded_parents_skips_initializing_ghost(self):
+    async def test_archive_superseded_parents_skips_initializing_ghost(self, monkeypatch):
         """A parent that has never checked in (total_updates == 0) is an
         initializing ghost and must NOT be archived even when a live child
         declares it — declaring parent_agent_id attests ancestry, not exit.
@@ -1076,6 +1098,7 @@ class TestLineageSuccession:
         concurrent same-workspace sibling onboarded declaring it parent.
         Mirrors classify_for_archival's ghost protection.
         """
+        monkeypatch.setenv("UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL", "true")
         recent = datetime.now(timezone.utc) - timedelta(minutes=2)
         stale = datetime.now(timezone.utc) - timedelta(minutes=45)
         with patch(_PATCHES["mcp_server"]) as mock_server, \
@@ -1112,13 +1135,14 @@ class TestLineageSuccession:
         assert [r["agent_id"] for r in results] == ["done"]
 
     @pytest.mark.asyncio
-    async def test_archive_superseded_parents_skips_parent_of_subagents(self):
+    async def test_archive_superseded_parents_skips_parent_of_subagents(self, monkeypatch):
         """End-to-end regression for the 2026-06-16 incident: a live parent
         whose only 'superseding' children are dispatched subagents must NOT be
         archived — even with no live process binding (the parent's fingerprint
         was churning, so the binding signal alone didn't protect it). The
         spawn_reason exemption keeps the parent out of the superseded set
         entirely, before the binding gate is ever consulted."""
+        monkeypatch.setenv("UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL", "true")
         recent = datetime.now(timezone.utc) - timedelta(minutes=1)
         with patch(_PATCHES["mcp_server"]) as mock_server, \
              patch("src.mcp_handlers.lifecycle.helpers._archive_one_agent") as mock_arch, \
@@ -1151,7 +1175,7 @@ class TestLineageSuccession:
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_archive_superseded_parents_skips_live_process_binding(self):
+    async def test_archive_superseded_parents_skips_live_process_binding(self, monkeypatch):
         """A checked-in parent that is STILL a running process (live process
         binding) must NOT be archived even when a live child declares it —
         lineage declaration attests ancestry, not that the parent exited.
@@ -1162,6 +1186,7 @@ class TestLineageSuccession:
         onboards declaring it parent. The live process binding is the
         conceptually-correct liveness signal (architect council finding).
         """
+        monkeypatch.setenv("UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL", "true")
         recent = datetime.now(timezone.utc) - timedelta(minutes=2)
         stale = datetime.now(timezone.utc) - timedelta(minutes=45)
         with patch(_PATCHES["mcp_server"]) as mock_server, \

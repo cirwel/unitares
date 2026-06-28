@@ -581,7 +581,8 @@ class TestArchiveOldTestAgents:
             data = json.loads(result[0].text)
             assert data["dry_run"] is True
             # test_agent_1 should be found (12h old > 6h default)
-            assert data["archived_count"] >= 1
+            assert data["archived_count"] == 0
+            assert data["would_archive_count"] >= 1
             # But dry_run means nothing was actually archived
             mock_storage.archive_agent.assert_not_called()
 
@@ -600,10 +601,12 @@ class TestArchiveOldTestAgents:
             result = await handle_archive_old_test_agents({})
 
             data = json.loads(result[0].text)
-            # Low-update test agent (<=2 updates) should be archived immediately
-            assert data["archived_count"] >= 1
-            archived_ids = [a["id"] for a in data["archived_agents"]]
-            assert "test_ping_1" in archived_ids
+            # Low-update test agent (<=2 updates) should be reported, not archived.
+            assert data["archived_count"] == 0
+            assert data["would_archive_count"] >= 1
+            would_archive_ids = [a["id"] for a in data["would_archive_agents"]]
+            assert "test_ping_1" in would_archive_ids
+            mock_storage.archive_agent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_archive_matches_on_label_not_just_agent_id(self, mock_mcp_server):
@@ -651,14 +654,16 @@ class TestArchiveOldTestAgents:
             result = await handle_archive_old_test_agents({})
             data = json.loads(result[0].text)
 
-        archived_ids = {a["id"] for a in data["archived_agents"]}
-        assert archived_ids == {
+        assert data["archived_count"] == 0
+        would_archive_ids = {a["id"] for a in data["would_archive_agents"]}
+        assert would_archive_ids == {
             "Claude_20260414_a", "Claude_20260414_b", "Claude_Code_20260417_d",
         }, (
-            f"expected label-based matches only, got {archived_ids}"
+            f"expected label-based matches only, got {would_archive_ids}"
         )
-        assert "Claude_20260414_c" not in archived_ids, "dogfood label must not match"
-        assert "Claude_Opus_20260414" not in archived_ids, "no-label production must not match"
+        assert "Claude_20260414_c" not in would_archive_ids, "dogfood label must not match"
+        assert "Claude_Opus_20260414" not in would_archive_ids, "no-label production must not match"
+        mock_storage.archive_agent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_archive_skips_already_archived(self, mock_mcp_server):
@@ -710,7 +715,9 @@ class TestArchiveOldTestAgents:
             data = json.loads(result[0].text)
             assert data["include_all"] is True
             # 5 days old > 3 day default for include_all
-            assert data["archived_count"] >= 1
+            assert data["archived_count"] == 0
+            assert data["would_archive_count"] >= 1
+            mock_storage.archive_agent.assert_not_called()
 
 
 # ============================================================================

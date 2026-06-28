@@ -1283,7 +1283,8 @@ class TestArchiveOldTestAgents:
             result = await handle_archive_old_test_agents({"dry_run": True})
             data = _parse(result)
             assert data["dry_run"] is True
-            assert data["archived_count"] >= 1
+            assert data["archived_count"] == 0
+            assert data["would_archive_count"] >= 1
             mock_storage.archive_agent.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1298,9 +1299,11 @@ class TestArchiveOldTestAgents:
             from src.mcp_handlers.lifecycle.handlers import handle_archive_old_test_agents
             result = await handle_archive_old_test_agents({})
             data = _parse(result)
-            assert data["archived_count"] >= 1
-            archived_ids = [a["id"] for a in data["archived_agents"]]
-            assert "test_ping_1" in archived_ids
+            assert data["archived_count"] == 0
+            assert data["would_archive_count"] >= 1
+            would_archive_ids = [a["id"] for a in data["would_archive_agents"]]
+            assert "test_ping_1" in would_archive_ids
+            mock_storage.archive_agent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_skips_already_archived(self, server):
@@ -1342,7 +1345,9 @@ class TestArchiveOldTestAgents:
             result = await handle_archive_old_test_agents({"include_all": True})
             data = _parse(result)
             assert data["include_all"] is True
-            assert data["archived_count"] >= 1
+            assert data["archived_count"] == 0
+            assert data["would_archive_count"] >= 1
+            mock_storage.archive_agent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_max_age_hours_too_small_returns_error(self, server):
@@ -1365,7 +1370,9 @@ class TestArchiveOldTestAgents:
             result = await handle_archive_old_test_agents({"max_age_days": 7})
             data = _parse(result)
             assert data["max_age_days"] == 7.0
-            assert data["archived_count"] >= 1
+            assert data["archived_count"] == 0
+            assert data["would_archive_count"] >= 1
+            mock_storage.archive_agent.assert_not_called()
 
 
 # ============================================================================
@@ -1451,7 +1458,8 @@ class TestArchiveOrphanAgents:
             result = await handle_archive_orphan_agents({"dry_run": True})
             data = _parse(result)
             assert data["dry_run"] is True
-            assert data["archived_count"] >= 1
+            assert data["archived_count"] == 0
+            assert data["would_archive_count"] >= 1
             mock_storage.archive_agent.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1484,7 +1492,9 @@ class TestArchiveOrphanAgents:
             from src.mcp_handlers.lifecycle.handlers import handle_archive_orphan_agents
             result = await handle_archive_orphan_agents({})
             data = _parse(result)
-            assert data["archived_count"] >= 1
+            assert data["archived_count"] == 0
+            assert data["would_archive_count"] >= 1
+            mock_storage.archive_agent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_stale_uuid_with_many_updates(self, server):
@@ -1501,7 +1511,9 @@ class TestArchiveOrphanAgents:
             result = await handle_archive_orphan_agents({"max_updates": 10})
             data = _parse(result)
             # UUID-named, unlabeled, 5 updates, 30h old > unlabeled_hours threshold
-            assert data["archived_count"] >= 1
+            assert data["archived_count"] == 0
+            assert data["would_archive_count"] >= 1
+            mock_storage.archive_agent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_max_updates_skips_high_update_agents(self, server):
@@ -1536,8 +1548,10 @@ class TestArchiveOrphanAgents:
             from src.mcp_handlers.lifecycle.handlers import handle_archive_orphan_agents
             result = await handle_archive_orphan_agents({"max_age_hours": 2})
             data = _parse(result)
-            assert data["archived_count"] >= 1
+            assert data["archived_count"] == 0
+            assert data["would_archive_count"] >= 1
             assert data["thresholds"]["max_age_hours"] == 2.0
+            mock_storage.archive_agent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_thresholds_in_response(self, server):
@@ -2499,8 +2513,9 @@ class TestArchiveOldTestAgentsEdgeCases:
         return make_mock_server()
 
     @pytest.mark.asyncio
-    async def test_unloads_monitor_on_low_update_archive(self, server):
+    async def test_unloads_monitor_on_low_update_archive(self, server, monkeypatch):
         """Lines 1013, 1017-1018: archiving unloads monitor and handles PG failure."""
+        monkeypatch.setenv("UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL", "true")
         recent = datetime.now(timezone.utc).isoformat()
         meta = make_agent_meta(status="active", last_update=recent, total_updates=1)
         server.agent_metadata = {"test_ping": meta}
@@ -2516,8 +2531,9 @@ class TestArchiveOldTestAgentsEdgeCases:
             assert "test_ping" not in server.monitors  # Monitor unloaded
 
     @pytest.mark.asyncio
-    async def test_stale_agent_unloads_monitor(self, server):
+    async def test_stale_agent_unloads_monitor(self, server, monkeypatch):
         """Lines 1037, 1041-1042: stale agent archival unloads monitor."""
+        monkeypatch.setenv("UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL", "true")
         old = (datetime.now() - timedelta(hours=12)).isoformat()
         meta = make_agent_meta(status="active", last_update=old, total_updates=10)
         server.agent_metadata = {"test_stale": meta}
@@ -2533,8 +2549,9 @@ class TestArchiveOldTestAgentsEdgeCases:
             assert "test_stale" not in server.monitors
 
     @pytest.mark.asyncio
-    async def test_include_all_default_max_age_3_days(self, server):
+    async def test_include_all_default_max_age_3_days(self, server, monkeypatch):
         """Lines 1025-1026: include_all with no explicit age uses 3 days default."""
+        monkeypatch.setenv("UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL", "true")
         old = (datetime.now() - timedelta(days=5)).isoformat()
         server.agent_metadata = {
             "non-test-stale": make_agent_meta(status="active", last_update=old, total_updates=5),
@@ -2546,7 +2563,9 @@ class TestArchiveOldTestAgentsEdgeCases:
             result = await handle_archive_old_test_agents({"include_all": True})
             data = _parse(result)
             assert data["max_age_days"] == 3.0
-            assert data["archived_count"] >= 1
+            assert data["archived_count"] == 0
+            assert data["would_archive_count"] >= 1
+            mock_storage.archive_agent.assert_not_called()
 
 
 # ============================================================================
@@ -2576,7 +2595,9 @@ class TestArchiveOrphanAgentsEdgeCases:
             from src.mcp_handlers.lifecycle.handlers import handle_archive_orphan_agents
             result = await handle_archive_orphan_agents({})
             data = _parse(result)
-            assert data["archived_count"] >= 1
+            assert data["archived_count"] == 0
+            assert data["would_archive_count"] >= 1
+            mock_storage.archive_agent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_unparseable_date_skipped(self, server):
@@ -2598,8 +2619,9 @@ class TestArchiveOrphanAgentsEdgeCases:
             assert data["archived_count"] == 0
 
     @pytest.mark.asyncio
-    async def test_archive_unloads_monitor(self, server):
+    async def test_archive_unloads_monitor(self, server, monkeypatch):
         """Line 1144: archiving orphan unloads monitor from memory."""
+        monkeypatch.setenv("UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL", "true")
         # Tier-2 case (non-UUID, 1 update) since tier-1 no longer classifies.
         old = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
         agent_id = "some-non-uuid-agent"
@@ -2619,8 +2641,9 @@ class TestArchiveOrphanAgentsEdgeCases:
             assert agent_id not in server.monitors
 
     @pytest.mark.asyncio
-    async def test_archive_postgres_failure(self, server):
+    async def test_archive_postgres_failure(self, server, monkeypatch):
         """Lines 1148-1149: PG failure on orphan archive is logged but continues."""
+        monkeypatch.setenv("UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL", "true")
         # Tier-2 case since tier-1 (UUID + 0 updates) no longer classifies.
         old = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
         server.agent_metadata = {

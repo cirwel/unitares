@@ -89,6 +89,8 @@ class ArchiveResult(_GovModel):
     # Server returns `archived_count`, not `archived`. Keep both so older
     # callers don't break while new code reads archived_count directly.
     archived_count: int = 0
+    would_archive_count: int = 0
+    would_archive_agents: list[dict] = Field(default_factory=list)
     dry_run: bool = False
 
 

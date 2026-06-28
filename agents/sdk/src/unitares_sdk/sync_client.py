@@ -276,6 +276,7 @@ class SyncGovernanceClient:
     # --- Lifecycle ---
 
     def archive_orphan_agents(self, **kwargs: Any) -> ArchiveResult:
+        """Preview orphan archival candidates. Maps to archive_orphan_agents."""
         raw = self.call_tool("archive_orphan_agents", kwargs)
         return ArchiveResult.model_validate(raw)
 

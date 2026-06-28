@@ -520,7 +520,7 @@ async def main():
 
         # Startup orphan sweep removed 2026-04-19 — it was part of the
         # auto-archive behavior that hid initializing-agent bugs. Call the
-        # archive_orphan_agents MCP tool manually (defaults to dry_run) if
+        # archive_orphan_agents MCP tool manually (defaults to preview-only) if
         # wanted.
 
         try:
