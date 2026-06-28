@@ -33,6 +33,12 @@ agent (or no agent) against it.
   `~/projects/_notes-archive/<repo>/`; ship clean docs. A PR that legitimately
   discusses these patterns (this guard, a register cleanup, meta-docs) can opt
   the PR-body lint out with the HTML comment `<!-- scope-guard: allow-register -->`.
+- **Claude session-attribution links** — `claude.ai/code/session` / a
+  `Claude-Session:` trailer. The Claude Code harness appends these to commit
+  messages and PR bodies by default, but they tie the public repo to a private
+  session, signal AI authorship, and are dead links to anyone but the operator
+  (the commit-level analogue of `Co-Authored-By`, which this repo also omits).
+  The guard checks committed files, the PR body, **and the PR's commit messages**.
 
 ## Why a guard, not just this doc
 

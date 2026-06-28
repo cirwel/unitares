@@ -127,6 +127,9 @@ while IFS= read -r f; do
       if grep -nIE 'live-verifier|council pass|council fold|three-lane council' "$f" >/dev/null 2>&1; then
         report "$f" "Exposes the AI-review process (council/live-verifier) — internal deliberation, not product content. Keep working notes in ~/projects/_notes-archive and ship clean docs."
       fi
+      if grep -nIE 'claude\.ai/code/session|Claude-Session:' "$f" >/dev/null 2>&1; then
+        report "$f" "Contains a Claude Code session-attribution link (claude.ai/code/session) — it ties the public repo to a private session and signals AI authorship. Keep it out of committed content, commit messages, and PR bodies (cf. the no-Co-Authored-By convention)."
+      fi
       ;;
   esac
 done <<EOF
