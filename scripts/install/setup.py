@@ -324,10 +324,15 @@ def run_pipeline(
 
     # Phase 2: filesystem scaffolding.
     plan.append(ensure_anchor_dir(home / ".unitares", apply=apply))
-    plan.append(ensure_secrets_file(
-        home / ".config" / "cirwel" / "secrets.env",
-        apply=apply,
-    ))
+    # Secrets file location is overridable via UNITARES_SECRETS_ENV so a fresh
+    # operator can scaffold outside the default ~/.config/cirwel/ path.
+    _secrets_override = os.environ.get("UNITARES_SECRETS_ENV")
+    secrets_path = (
+        Path(_secrets_override).expanduser()
+        if _secrets_override
+        else home / ".config" / "cirwel" / "secrets.env"
+    )
+    plan.append(ensure_secrets_file(secrets_path, apply=apply))
 
     # Phase 3: client detection + snippet generation.
     detected = detect_clients(home)
