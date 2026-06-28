@@ -68,6 +68,10 @@ UNITARES runs **alongside** your evals and guardrails — it doesn't replace eit
 | **Guardrails** | Is this *action* allowed right now? | per action |
 | **UNITARES** | Is this agent *still healthy* as it works? | continuously, mid-run |
 
+### How it relates to agent clients
+
+UNITARES is not an agent framework or chat interface. Hermes, Claude Code, Codex, Goose, Discord dispatchers, SDK residents, and local-model hosts provide the hands: prompts, tools, files, terminals, browsers, scheduled work, and operator UX. UNITARES provides governed continuity underneath them: process identity, check-ins, EISV state, calibration against outcomes, shared-memory provenance, dialectic review, and auditable verdicts. For one-off chat or local coding, skip the governance loop; for persistent, multi-agent, high-side-effect, or resident work, mount the client through MCP/REST/SDK or a lifecycle adapter.
+
 <details>
 <summary><strong>Mechanisms behind the verdict</strong></summary>
 
