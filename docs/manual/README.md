@@ -6,7 +6,7 @@ An end-to-end, task-ordered guide to **installing, running, integrating with, re
 
 ## What UNITARES is, in one breath
 
-Runtime governance and online state estimation for fleets of autonomous AI agents. Each agent checks in while it works; UNITARES compares the current run to that agent's *own* baseline and returns a four-number state vector (EISV) plus one plain policy action — `proceed` / `guide` / `pause` / `reject` — so drift becomes visible to the agent while the output still looks fine. It runs **alongside** evals (pre-deploy) and guardrails (per-action), answering a third question: *is this agent still healthy as it works?*
+Runtime governance and online proprioception for fleets of autonomous AI agents. Each agent checks in while it works; once the agent has enough history, UNITARES compares the current run to that agent's *own* baseline and returns a four-number state vector (EISV) plus one plain policy action: `proceed` / `guide` / `pause` / `reject`. During baseline warmup, the live path uses fixed universal thresholds instead of a personalized drift read. The point is to make drift visible to the agent while the output still looks fine. It runs **alongside** evals (pre-deploy) and guardrails (per-action), answering a third question: *is this agent still healthy as it works?*
 
 ## How to read this manual
 

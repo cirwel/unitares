@@ -225,17 +225,14 @@ class GovernanceConfig:
     # 0.30 (= VOID_THRESHOLD_MAX) for residents widens the gate enough to clear
     # the observed substrate-asymmetry baseline while still being a real bound.
     #
-    # Class names match `src/grounding/class_indicator.py::classify_agent`
-    # output. KNOWN_RESIDENT_LABELS plus tag-derived `embodied` and
+    # Generic behavior classes from `classify_agent` (USER-AGNOSTIC — no named
+    # residents). The tag-derived resident tiers `embodied` and
     # `resident_persistent` get the wider threshold; everything else (default,
-    # ephemeral, engaged_ephemeral) keeps standard behavior.
+    # ephemeral, engaged_ephemeral) keeps standard behavior. A deployment whose
+    # residents classify by unique label (UNITARES_RESIDENTS) adds them via the
+    # UNITARES_CLASS_CALIBRATION "void_threshold" overlay; without it a named
+    # resident keeps the standard threshold.
     VOID_THRESHOLD_BY_CLASS: ClassVar[dict[str, float]] = {
-        "Lumen": 0.30,
-        "Vigil": 0.30,
-        "Sentinel": 0.30,
-        "Watcher": 0.30,
-        "Steward": 0.30,
-        "Chronicler": 0.30,
         "embodied": 0.30,
         "resident_persistent": 0.30,
     }
@@ -834,6 +831,10 @@ class ScaleConstant:
                        agent is a known resident but has no independent corpus
                        yet (makes the fallback explicit in config instead of
                        relying on silent get(…, DEFAULT) at lookup time)
+      - "overlay":     supplied at load by a deployment-local calibration file
+                       (UNITARES_CLASS_CALIBRATION) — measured off-repo, e.g.
+                       per-named-resident anchors that must not ship in the
+                       user-agnostic repo
     """
     name: str
     value: float
@@ -844,7 +845,7 @@ class ScaleConstant:
     notes: str = ""
 
     def __post_init__(self) -> None:
-        if self.provenance not in {"placeholder", "measured", "derived", "alias"}:
+        if self.provenance not in {"placeholder", "measured", "derived", "alias", "overlay"}:
             raise ValueError(f"unknown provenance {self.provenance!r}")
         if self.value <= 0:
             raise ValueError(f"scale constant {self.name} must be positive")
@@ -917,50 +918,27 @@ I_SCALE_BY_CLASS: Dict[str, ScaleConstant] = {}
 E_SCALE_BY_CLASS: Dict[str, ScaleConstant] = {}
 
 # Manifold radius — the 95th percentile of state-space distance from each
-# class's own healthy operating point. Re-measured 2026-06-27 on a 30-day
-# healthy-regime slice of core.agent_state via
-# `UNITARES_RESIDENTS='Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler' \
-#   python3 scripts/calibrate_class_conditional.py` (roster matches the live
-# classifier so per-label residents map to these keys). Per-class envelopes
-# differ by ~3.4× (Vigil 0.09 vs engaged_ephemeral 0.30), confirming the
-# homogenization failure mode of paper §2.
+# class's own healthy operating point. USER-AGNOSTIC: only generic behavior
+# classes (the tag taxonomy from classify_agent) ship here — no named residents.
+# Measured 2026-06-27 on a 30-day healthy-regime slice via
+# `python3 scripts/calibrate_class_conditional.py` (empty roster → tag classes).
+# Per-class envelopes differ ~3.4× (ephemeral 0.09 vs engaged_ephemeral 0.30),
+# confirming the homogenization failure mode of paper §2.
 #
-# The 2026-04-18 values went stale (esp. Lumen's healthy E, see
-# HEALTHY_OPERATING_POINT_BY_CLASS) — the manifold coherence saturated to 0 for
-# Lumen on every check-in until this refresh. Re-run the generator when the
-# fleet's operating regime shifts.
+# A deployment that names specific residents (UNITARES_RESIDENTS → they classify
+# by their unique label, e.g. "Lumen") supplies their per-agent anchors via the
+# UNITARES_CLASS_CALIBRATION overlay (see _apply_class_calibration_overlay) —
+# deployment-local, OUT of this repo. Without an overlay, a named resident falls
+# back to DEFAULT here.
 DELTA_NORM_MAX_BY_CLASS: Dict[str, ScaleConstant] = {
-    "Lumen": ScaleConstant(
-        name="DELTA_NORM_MAX[Lumen]", value=0.1635, measured_on="2026-06-27",
-        corpus_size=12500, percentile=95, provenance="measured",
+    "embodied": ScaleConstant(
+        name="DELTA_NORM_MAX[embodied]", value=0.1635, measured_on="2026-06-27",
+        corpus_size=12501, percentile=95, provenance="measured",
         notes="Class-conditional manifold radius from healthy slice."),
-    "default": ScaleConstant(
-        name="DELTA_NORM_MAX[default]", value=0.2018, measured_on="2026-04-18",
-        corpus_size=2033, percentile=95, provenance="measured",
-        notes="Retained from 2026-04-18; 2026-06-27 slice had N=16 (<30 "
-              "threshold), too thin to re-measure."),
-    "Sentinel": ScaleConstant(
-        name="DELTA_NORM_MAX[Sentinel]", value=0.0881, measured_on="2026-06-27",
-        corpus_size=5529, percentile=95, provenance="measured",
+    "resident_persistent": ScaleConstant(
+        name="DELTA_NORM_MAX[resident_persistent]", value=0.1237, measured_on="2026-06-27",
+        corpus_size=8406, percentile=95, provenance="measured",
         notes="Class-conditional manifold radius from healthy slice."),
-    "Vigil": ScaleConstant(
-        name="DELTA_NORM_MAX[Vigil]", value=0.0885, measured_on="2026-06-27",
-        corpus_size=1415, percentile=95, provenance="measured",
-        notes="Class-conditional manifold radius from healthy slice."),
-    "Watcher": ScaleConstant(
-        name="DELTA_NORM_MAX[Watcher]", value=0.2391, measured_on="2026-06-27",
-        corpus_size=1436, percentile=95, provenance="measured",
-        notes="Class-conditional manifold radius from healthy slice."),
-    "Steward": ScaleConstant(
-        name="DELTA_NORM_MAX[Steward]", value=0.2018, measured_on="2026-06-27",
-        corpus_size=0, percentile=None, provenance="alias",
-        notes="Alias to default. Still 0 healthy rows in the 2026-06-27 window. "
-              "Re-run scripts/calibrate_class_conditional.py once corpus exists."),
-    "Chronicler": ScaleConstant(
-        name="DELTA_NORM_MAX[Chronicler]", value=0.2018, measured_on="2026-06-27",
-        corpus_size=26, percentile=None, provenance="alias",
-        notes="Alias to default. N=26 in the 2026-06-27 window, below the 30 "
-              "threshold. Re-run scripts/calibrate_class_conditional.py later."),
     "engaged_ephemeral": ScaleConstant(
         name="DELTA_NORM_MAX[engaged_ephemeral]", value=0.2952, measured_on="2026-06-27",
         corpus_size=2115, percentile=95, provenance="measured",
@@ -968,32 +946,29 @@ DELTA_NORM_MAX_BY_CLASS: Dict[str, ScaleConstant] = {
     "ephemeral": ScaleConstant(
         name="DELTA_NORM_MAX[ephemeral]", value=0.0857, measured_on="2026-06-27",
         corpus_size=277, percentile=95, provenance="measured",
-        notes="Class-conditional manifold radius from healthy slice (new key; "
-              "the tag-classified ephemeral population is now large enough)."),
+        notes="Class-conditional manifold radius from healthy slice."),
+    "default": ScaleConstant(
+        name="DELTA_NORM_MAX[default]", value=0.2018, measured_on="2026-04-18",
+        corpus_size=2033, percentile=95, provenance="measured",
+        notes="Fleet fallback; 2026-06-27 slice had N=16 (<30), too thin to re-measure."),
 }
 
 # Healthy operating points per class — median (E, I, S) on healthy-regime
 # slice. Used by _compute_manifold as the class-conditional baseline that
-# replaces the fleet-wide BASIN_HIGH corner. Re-measured 2026-06-27 (same
-# generator + roster as DELTA_NORM_MAX_BY_CLASS above).
+# replaces the fleet-wide BASIN_HIGH corner. USER-AGNOSTIC: generic behavior
+# classes only (measured 2026-06-27, empty-roster generator). Named residents
+# come from the UNITARES_CLASS_CALIBRATION overlay, deployment-local.
 #
-# NOTE: Lumen's healthy E moved 0.745 -> 0.316 between 2026-04-18 and
-# 2026-06-27 (N=12500 healthy-slice samples). This is Lumen's GENUINE normal —
-# a low-energy Pi edge resident — not degradation; the old anchor assumed it ran
-# hot like a coding agent (the individuality axiom: judge against its own
-# normal). The stale anchor was why Lumen's manifold coherence read 0 on every
-# check-in. healthy_S also feeds get_s_setpoint (live when UNITARES_S_SETPOINT
-# is on) — the S shifts here are small but live-affecting.
+# NOTE: `embodied` healthy E is ~0.32 — embodied/edge agents (e.g. a Pi
+# resident) genuinely run low-energy; that is their normal, not degradation (the
+# individuality axiom). healthy_S also feeds get_s_setpoint (live when
+# UNITARES_S_SETPOINT is on), so these are live-affecting, not shadow-only.
 HEALTHY_OPERATING_POINT_BY_CLASS: Dict[str, Tuple[float, float, float]] = {
-    "Lumen":    (0.3160, 0.7824, 0.2104),   # N=12500 (E 0.745 -> 0.316; see note)
-    "default":  (0.7264, 0.7934, 0.2364),   # retained 2026-04-18 (N=16 in 06-27 window)
-    "Sentinel": (0.7804, 0.6852, 0.2492),   # N=5529
-    "Vigil":    (0.7576, 0.7639, 0.1596),   # N=1415
-    "Watcher":  (0.7932, 0.7097, 0.2140),   # N=1436
-    "Steward":  (0.7264, 0.7934, 0.2364),   # alias=default (N=0; see DELTA_NORM_MAX[Steward])
-    "Chronicler": (0.7264, 0.7934, 0.2364), # alias=default (N=26<30; see DELTA_NORM_MAX[Chronicler])
-    "engaged_ephemeral": (0.7685, 0.6918, 0.3536), # N=2115
-    "ephemeral": (0.7032, 0.7995, 0.1898),  # N=277 (new key)
+    "embodied":            (0.3159, 0.7824, 0.2104),  # N=12501
+    "resident_persistent": (0.7804, 0.6855, 0.2185),  # N=8406
+    "engaged_ephemeral":   (0.7685, 0.6918, 0.3536),  # N=2115
+    "ephemeral":           (0.7032, 0.7995, 0.1898),  # N=277
+    "default":             (0.7264, 0.7934, 0.2364),  # fleet fallback (N=16 in 06-27 window)
 }
 
 # Default healthy operating point (fleet fallback for unclassified agents).
@@ -1028,6 +1003,64 @@ def get_e_scale(agent_class: str = "default") -> ScaleConstant:
 def get_delta_norm_max(agent_class: str = "default") -> ScaleConstant:
     """Return class-conditional manifold radius; fall back to fleet-wide default."""
     return DELTA_NORM_MAX_BY_CLASS.get(agent_class, DELTA_NORM_MAX_DEFAULT)
+
+
+def _apply_class_calibration_overlay() -> None:
+    """Merge a deployment-local per-class calibration overlay into the
+    class-keyed dicts, if ``UNITARES_CLASS_CALIBRATION`` names a JSON file.
+
+    The public repo ships only generic behavior-class anchors (embodied,
+    resident_persistent, engaged_ephemeral, ephemeral, default) — user-agnostic.
+    A deployment that names specific residents via ``UNITARES_RESIDENTS`` (so they
+    classify by their unique label) supplies their per-agent calibration HERE,
+    out of the repo. Schema (every section optional)::
+
+        {
+          "healthy_operating_point": {"<class>": [E, I, S], ...},
+          "delta_norm_max":          {"<class>": <float>, ...},
+          "void_threshold":          {"<class>": <float>, ...}
+        }
+
+    Fail-soft: a missing/unreadable/malformed file is a silent no-op so the
+    user-agnostic defaults always stand.
+    """
+    path = os.getenv("UNITARES_CLASS_CALIBRATION", "").strip()
+    if not path:
+        return
+    try:
+        import json
+        with open(os.path.expanduser(path)) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict):
+        return
+
+    for cls, triple in (data.get("healthy_operating_point") or {}).items():
+        try:
+            HEALTHY_OPERATING_POINT_BY_CLASS[cls] = (
+                float(triple[0]), float(triple[1]), float(triple[2]))
+        except (TypeError, ValueError, IndexError, KeyError):
+            pass
+
+    for cls, val in (data.get("delta_norm_max") or {}).items():
+        try:
+            DELTA_NORM_MAX_BY_CLASS[cls] = ScaleConstant(
+                name=f"DELTA_NORM_MAX[{cls}]", value=float(val),
+                measured_on="", corpus_size=0, percentile=None,
+                provenance="overlay",
+                notes="Deployment-local (UNITARES_CLASS_CALIBRATION).")
+        except (TypeError, ValueError):
+            pass
+
+    for cls, val in (data.get("void_threshold") or {}).items():
+        try:
+            GovernanceConfig.VOID_THRESHOLD_BY_CLASS[cls] = float(val)
+        except (TypeError, ValueError):
+            pass
+
+
+_apply_class_calibration_overlay()
 
 
 # =====================================================================

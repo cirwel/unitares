@@ -49,12 +49,13 @@
     <key>EnvironmentVariables</key>
     <dict>
         <!-- Resident roster for this deployment (comma-separated labels).
-             Each named resident is its own N=1 calibration class. Omit or
-             leave empty for a user-agnostic install with no named residents.
-             MUST match the residents this deployment actually runs (and the
-             UNITARES_RESIDENTS set in each resident's plist). -->
+             Each named resident is its own N=1 calibration class. Empty (the
+             default below) is the user-agnostic install with no named
+             residents. If you run named residents, list them here and match
+             the UNITARES_RESIDENTS set in each resident's plist.
+             Example (the maintainer's fleet): Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler -->
         <key>UNITARES_RESIDENTS</key>
-        <string>Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler</string>
+        <string></string>
         <!-- Resident-progress probe manifest (JSON). Points at the shipped
              canonical fleet; copy + edit for a different deployment, or omit
              for a user-agnostic install that probes no residents. -->
@@ -109,8 +110,11 @@
         <string>GENERATE_YOUR_OWN_TOKEN</string>
         <key>UNITARES_CONTINUITY_TOKEN_SECRET</key>
         <string>GENERATE_YOUR_OWN_SECRET</string>
+        <!-- Local model id for call_model (e.g. an Ollama tag on this host).
+             Set to a model you actually have pulled, or omit this key to fall
+             back to the server default. -->
         <key>UNITARES_LLM_MODEL</key>
-        <string>qwen3.6:27b-coding-nvfp4</string>
+        <string>YOUR_LOCAL_MODEL</string>
     </dict>
 </dict>
 </plist>

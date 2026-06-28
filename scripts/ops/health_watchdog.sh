@@ -21,15 +21,19 @@ check() {
 
 failures=0
 
-# Governance (Mac local)
-check "governance" "http://localhost:8767/health" || failures=$((failures + 1))
+# Governance (Mac local). Override host/port via GOVERNANCE_HEALTH_URL.
+GOVERNANCE_HEALTH_URL="${GOVERNANCE_HEALTH_URL:-http://localhost:8767/health}"
+check "governance" "$GOVERNANCE_HEALTH_URL" || failures=$((failures + 1))
 
-# Anima (Pi via Tailscale)
-check "anima" "http://100.79.215.83:8766/health" 10 || failures=$((failures + 1))
+# Anima edge node (e.g. a Pi over Tailscale). Set ANIMA_HEALTH_URL to your
+# node's health endpoint; unset disables the check (localhost default rarely
+# runs Anima).
+ANIMA_HEALTH_URL="${ANIMA_HEALTH_URL:-http://localhost:8766/health}"
+check "anima" "$ANIMA_HEALTH_URL" 10 || failures=$((failures + 1))
 
 # PostgreSQL (via governance health detail)
 if [ $failures -eq 0 ]; then
-    db_status=$(curl -s --max-time 5 http://localhost:8767/health 2>/dev/null | python3 -c "
+    db_status=$(curl -s --max-time 5 "$GOVERNANCE_HEALTH_URL" 2>/dev/null | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)

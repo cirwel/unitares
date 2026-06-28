@@ -4,9 +4,9 @@ Bootstrap for Claude Code sessions in this repo. Content below the `SHARED CONTR
 
 The installable Codex/Claude adapter bundle is canonical in the companion `unitares-governance-plugin` repo. This file only governs how Claude Code should behave while working directly inside the `unitares` server repo.
 
-## Operator constraints (read first)
+## Execution-cost policy (read first)
 
-- **No paid LLM API budget.** Do not propose, scaffold, or depend on solutions that require an `ANTHROPIC_API_KEY` or any other paid model API — this rules out `anthropics/claude-code-action` and any CI/automation that calls a metered API. Prefer free / self-hosted paths: the local Ollama detector for Watcher, `GITHUB_TOKEN`-only CI, and deterministic CLI tools (ruff, the doctor, the surfacing collectors). If a feature genuinely needs a paid API, surface it as a *deferred, operator-funded* option and do not build it inert "just in case."
+- **No metered model-API dependencies.** Do not propose, scaffold, or depend on solutions that require an `ANTHROPIC_API_KEY` or any other paid model API — this rules out `anthropics/claude-code-action` and any CI/automation that calls a metered API. This project targets free / self-hosted execution paths: the local Ollama detector for Watcher, `GITHUB_TOKEN`-only CI, and deterministic CLI tools (ruff, the doctor, the surfacing collectors). If a feature genuinely needs a paid API, surface it as a *deferred, opt-in* option and do not build it inert "just in case."
 
 ## Claude-specific wiring
 
@@ -76,7 +76,7 @@ Surfaces:
 - **Active proposal/RFC docs in hot phase** — the Plexus / lease-plane / BEAM thread (`docs/proposals/plexus-scope.md`, `surface-lease-plane-v0.md`, `surface-lease-plane-phase-a-plan.md`, `beam-footprint-roadmap-v0.md`, `beam-coordination-kernel.md`). Restructure-during-flight is normal here; same rule as plan.md: branch from another session's head if one is in flight.
 - **Large test-layout consolidation** — `tests/` directory. If you're about to delete more than ~200 lines of tests, surface intent in a draft PR or issue first; a stale −3496 diff (`feat/agentskills-compat`) was lost to drift this way.
 
-This section is operator-protective, not session-protective. The deeper fix is on the dispatcher's side: do not launch multiple sessions on the same single-writer surface in the same window.
+This section protects against wasted parallel work across agents, not just mistakes within one session. The deeper fix is upstream of any single agent: do not run multiple agents on the same single-writer surface in the same window.
 
 ## Before Committing
 
@@ -113,9 +113,9 @@ This section is operator-protective, not session-protective. The deeper fix is o
 
 Codex and Claude share one delivery contract so concurrent sessions stay predictable. Full reference: `docs/operations/github-workflow-conventions.md`.
 
-- **Branch naming — one pattern, agent-prefixed:** `<agent>/<topic>-<short-id>` where `<agent>` is `claude` or `codex` (self-identifying for parallel attribution). Both `ship.sh`'s `<agent>/auto/<timestamp>-<slug>` and the web harness's `claude/<topic>-<id>` satisfy this shape. Never push to `main`/`master`.
-- **Delivery — draft PR for everything:** every session lands its work as a draft PR, regardless of agent and regardless of whether the change is runtime code or docs/tests. The operator is the merge gate. Do NOT direct-push to a shared branch and do NOT enable auto-merge by default. `ship.sh` enforces this: its default `auto` route opens a draft PR for every change (`--direct` opts out for docs/tests-only pushes; `--auto-merge` only when the operator explicitly asks).
-- **Delivery requests authorize delivery:** when the operator asks to ship, finish, deliver, open a PR, or otherwise complete a delivery workflow, Codex may assume branch -> commit -> push -> draft PR is in scope and should not ask for a second confirmation just to push or open the draft PR.
+- **Branch naming — one pattern, author-prefixed:** `<author>/<topic>-<short-id>` where `<author>` identifies who is making the change — an agent (`claude`, `codex`) or a contributor handle — for parallel attribution. Both `ship.sh`'s `<author>/auto/<timestamp>-<slug>` and the web harness's `claude/<topic>-<id>` satisfy this shape. Never push to `main`/`master`.
+- **Delivery — draft PR for everything:** every session lands its work as a draft PR, regardless of agent and regardless of whether the change is runtime code or docs/tests. A human maintainer is the merge gate. Do NOT direct-push to a shared branch and do NOT enable auto-merge by default. `ship.sh` enforces this: its default `auto` route opens a draft PR for every change (`--direct` opts out for docs/tests-only pushes; `--auto-merge` only when a maintainer explicitly asks).
+- **Delivery requests authorize delivery:** when a maintainer asks to ship, finish, deliver, open a PR, or otherwise complete a delivery workflow, the working agent may assume branch -> commit -> push -> draft PR is in scope and should not ask for a second confirmation just to push or open the draft PR.
 - **Mark-ready / merge is a deliberate action:** a draft PR means "visible, not claiming merged." Only mark ready or merge after CI is green and you've confirmed no collision with an in-flight branch (see the single-writer-surface rules above).
 
 ## Substrate Tax: anyio-asyncio Coupling

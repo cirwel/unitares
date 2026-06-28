@@ -34,7 +34,7 @@ same-live-owner diagnostic rebinds.
 Call `onboard()` against UNITARES using the strongest honest mode:
 
 - default: a fresh session onboards fresh — pass `force_new=true` with no `parent_agent_id`
-- declare lineage only for a real causal event: a dispatched subagent (`parent_agent_id=<dispatcher uuid>`, `spawn_reason="subagent"`, usually set automatically by the dispatcher) or a handoff from an EXITED prior session (`parent_agent_id=<exited uuid>`, `spawn_reason="explicit"`). Declaring a currently-live agent as parent is rejected (`lineage_coincidental_rejected`).
+- declare lineage only for a real causal event: a dispatched subagent (`parent_agent_id=<dispatcher uuid>`, `spawn_reason="subagent"`, usually set automatically by the dispatcher) or a handoff from a finished prior session (`parent_agent_id=<prior uuid>`, `spawn_reason="new_session"`). Declaring a currently-live agent as parent is rejected (`lineage_coincidental_rejected`).
 - include `model_type` when the current runtime is clear from context
 - do not invent a display name unless the user asked for one
 

@@ -101,28 +101,46 @@ def test_class_conditional_delta_norm_max_is_measured_or_alias():
             )
 
 
-def test_known_residents_have_explicit_class_entries():
-    """Every KNOWN_RESIDENT_LABELS member must appear as a key in the
-    class-conditional maps — measured or aliased, but never silently absent.
-
-    Silent absence caused Steward's class baseline to fall back to 'default'
-    undetected on the 2026-04-18 calibration run (Steward had 0 state rows
-    due to a loop-detection bug; the calibrator skipped it without comment).
+def test_public_dicts_are_user_agnostic_generic_classes_only():
+    """The shipped class-conditional maps must NOT name specific residents — the
+    repo is user-agnostic. Only generic behavior classes from the tag taxonomy
+    (+ 'default') ship here; named residents come from the deployment-local
+    UNITARES_CLASS_CALIBRATION overlay (see the overlay test below).
     """
     from config.governance_config import (
         DELTA_NORM_MAX_BY_CLASS, HEALTHY_OPERATING_POINT_BY_CLASS,
     )
-    from src.grounding.class_indicator import KNOWN_RESIDENT_LABELS
-    missing_delta = KNOWN_RESIDENT_LABELS - DELTA_NORM_MAX_BY_CLASS.keys()
-    missing_hop = KNOWN_RESIDENT_LABELS - HEALTHY_OPERATING_POINT_BY_CLASS.keys()
-    assert not missing_delta, (
-        f"Residents missing from DELTA_NORM_MAX_BY_CLASS: {missing_delta}. "
-        f"Add an explicit entry (measured or provenance='alias')."
-    )
-    assert not missing_hop, (
-        f"Residents missing from HEALTHY_OPERATING_POINT_BY_CLASS: {missing_hop}. "
-        f"Add an explicit entry (measured or alias tuple mirroring default)."
-    )
+    allowed = {"embodied", "resident_persistent", "engaged_ephemeral",
+               "ephemeral", "default"}
+    assert set(DELTA_NORM_MAX_BY_CLASS) <= allowed, (
+        f"non-generic keys leaked into DELTA_NORM_MAX_BY_CLASS: "
+        f"{set(DELTA_NORM_MAX_BY_CLASS) - allowed}")
+    assert set(HEALTHY_OPERATING_POINT_BY_CLASS) <= allowed, (
+        f"non-generic keys leaked into HEALTHY_OPERATING_POINT_BY_CLASS: "
+        f"{set(HEALTHY_OPERATING_POINT_BY_CLASS) - allowed}")
+
+
+def test_class_calibration_overlay_merges_named_residents(tmp_path, monkeypatch):
+    """A deployment supplies named-resident anchors via UNITARES_CLASS_CALIBRATION
+    (out of the repo); the loader merges them over the generic defaults."""
+    import json, importlib
+    overlay = tmp_path / "cc.json"
+    overlay.write_text(json.dumps({
+        "healthy_operating_point": {"Lumen": [0.316, 0.782, 0.210]},
+        "delta_norm_max": {"Lumen": 0.1635},
+        "void_threshold": {"Lumen": 0.30},
+    }))
+    monkeypatch.setenv("UNITARES_CLASS_CALIBRATION", str(overlay))
+    import config.governance_config as g
+    importlib.reload(g)
+    try:
+        assert g.get_healthy_operating_point("Lumen") == pytest.approx((0.316, 0.782, 0.210))
+        dnm = g.get_delta_norm_max("Lumen")
+        assert dnm.value == pytest.approx(0.1635) and dnm.provenance == "overlay"
+        assert g.GovernanceConfig.VOID_THRESHOLD_BY_CLASS.get("Lumen") == 0.30
+    finally:
+        monkeypatch.delenv("UNITARES_CLASS_CALIBRATION", raising=False)
+        importlib.reload(g)
 
 
 def test_class_conditional_lookup_falls_back_for_unknown_classes():
@@ -131,7 +149,7 @@ def test_class_conditional_lookup_falls_back_for_unknown_classes():
         get_delta_norm_max, DELTA_NORM_MAX_DEFAULT,
     )
     assert get_delta_norm_max("nonexistent_class") is DELTA_NORM_MAX_DEFAULT
-    assert get_delta_norm_max("Lumen").provenance == "measured"
+    assert get_delta_norm_max("embodied").provenance == "measured"
 
 
 def test_healthy_operating_point_class_conditional():
@@ -139,9 +157,9 @@ def test_healthy_operating_point_class_conditional():
     from config.governance_config import (
         get_healthy_operating_point, HEALTHY_OPERATING_POINT_DEFAULT,
     )
-    lumen_hop = get_healthy_operating_point("Lumen")
-    assert lumen_hop != HEALTHY_OPERATING_POINT_DEFAULT
-    assert all(0.0 <= v <= 1.0 for v in lumen_hop)
+    embodied_hop = get_healthy_operating_point("embodied")
+    assert embodied_hop != HEALTHY_OPERATING_POINT_DEFAULT
+    assert all(0.0 <= v <= 1.0 for v in embodied_hop)
 
     unknown_hop = get_healthy_operating_point("nonexistent")
     assert unknown_hop == HEALTHY_OPERATING_POINT_DEFAULT

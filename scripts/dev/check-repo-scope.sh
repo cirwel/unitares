@@ -111,6 +111,44 @@ done <<EOF
 $FILES
 EOF
 
+# Rule 4: the per-class config dicts must use only generic behavior classes —
+# never named residents. The 2026-06-27 anchor recalibration baked one
+# deployment's residents (Lumen/Vigil/Sentinel/...) with their measured EISV
+# operating points into this user-agnostic repo; named residents belong in the
+# deployment-local UNITARES_CLASS_CALIBRATION overlay. Allowlist-based (AST, no
+# import) so a NEW resident name is caught too, not just the known set.
+CFG="config/governance_config.py"
+if printf '%s\n' "$FILES" | grep -qx "$CFG" && [ -f "$CFG" ] && ! is_allowed "$CFG" && command -v python3 >/dev/null 2>&1; then
+  leaked="$(python3 - "$CFG" <<'PY'
+import ast, sys
+ALLOWED = {"embodied", "resident_persistent", "engaged_ephemeral", "ephemeral", "default"}
+TARGETS = {"DELTA_NORM_MAX_BY_CLASS", "HEALTHY_OPERATING_POINT_BY_CLASS", "VOID_THRESHOLD_BY_CLASS"}
+bad = set()
+def keys_of(node):
+    if isinstance(node, ast.Dict):
+        for k in node.keys:
+            if isinstance(k, ast.Constant) and isinstance(k.value, str) and k.value not in ALLOWED:
+                bad.add(k.value)
+try:
+    tree = ast.parse(open(sys.argv[1]).read())
+except Exception:
+    sys.exit(0)  # parse failure is handled elsewhere, not here
+for node in ast.walk(tree):
+    if isinstance(node, ast.Assign):
+        for t in node.targets:
+            if isinstance(t, ast.Name) and t.id in TARGETS:
+                keys_of(node.value)
+    elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) \
+            and node.target.id in TARGETS and node.value is not None:
+        keys_of(node.value)
+print(",".join(sorted(bad)))
+PY
+)"
+  if [ -n "$leaked" ]; then
+    report "$CFG" "Named-resident keys in class-conditional dicts: ${leaked}. unitares is user-agnostic — use generic behavior classes (embodied/resident_persistent/engaged_ephemeral/ephemeral/default) and put named residents in the deployment-local UNITARES_CLASS_CALIBRATION overlay."
+  fi
+fi
+
 if [ "$violations" -gt 0 ]; then
   echo ""
   echo "❌ Repo scope guard: $violations issue(s). unitares is user/agent-agnostic — see docs/REPO_SCOPE.md."
