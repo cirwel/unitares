@@ -82,6 +82,33 @@ class ToolUsageMixin:
         """
         from src.outcome_corroboration import enrich_detail_with_corroboration
         from config.governance_config import GovernanceConfig
+
+        # --- EISV outcome-snapshot bridge (Stage-0 population bridge; roadmap §4a / Appendix B) ---
+        # External-signal / test outcomes arrive through callers that do not carry an EISV
+        # snapshot, so eisv_* land NULL and the row can never join an agent's state for the
+        # residual-vs-Phi falsifiability test (§6.3). When no EISV was supplied and the agent
+        # has a real (non-synthetic) measured state, snapshot it at outcome time. Fires only
+        # when every channel is None — never overrides an explicit snapshot — and self-limits
+        # to agents already in the EISV system (get_latest_eisv_by_agent_id excludes bootstrap
+        # rows and returns None otherwise, so non-instrumented agents stay NULL, never faked).
+        if (
+            eisv_e is None and eisv_i is None and eisv_s is None and eisv_v is None
+            and eisv_phi is None and eisv_verdict is None
+            and eisv_coherence is None and eisv_regime is None
+        ):
+            try:
+                _snap = await self.get_latest_eisv_by_agent_id(agent_id)
+            except Exception:
+                _snap = None
+            if _snap:
+                eisv_e, eisv_i, eisv_s, eisv_v = (
+                    _snap.get("E"), _snap.get("I"), _snap.get("S"), _snap.get("V"),
+                )
+                eisv_phi, eisv_verdict = _snap.get("phi"), _snap.get("verdict")
+                eisv_coherence, eisv_regime = _snap.get("coherence"), _snap.get("regime")
+                detail = dict(detail or {})
+                detail["eisv_snapshot_source"] = "outcome_bridge"
+
         corroborated_detail = enrich_detail_with_corroboration(
             detail,
             outcome_type=outcome_type,

@@ -343,3 +343,77 @@ async def test_inline_outcome_response_echoes_corroboration_metadata():
     assert persisted_detail["corroboration_grade"] == "claim_only"
     assert persisted_detail["eprocess_eligible"] is False
     assert persisted_detail["hard_exogenous"] is False
+
+
+# --- EISV outcome-snapshot bridge (Stage-0 population bridge; roadmap §6.3 falsifiability) ---
+# External-signal/test outcomes arrive with no EISV, so eisv_* land NULL and the row can
+# never join an agent's state for the residual-vs-Phi falsifiability test. These pin the
+# bridge that snapshots the agent's latest measured EISV at outcome time.
+
+@pytest.mark.asyncio
+async def test_bridge_snapshots_eisv_when_caller_supplies_none():
+    """An external_signal outcome with no EISV gets the agent's latest measured
+    state snapshotted, so the row becomes joinable for the falsifiability test."""
+    conn = _FakeOutcomeConn(["bridged-id"])
+    db = _OutcomeMixinHarness(conn)
+    db.get_latest_eisv_by_agent_id = AsyncMock(return_value={
+        "E": 0.70, "I": 0.60, "S": 0.20, "V": 0.0,
+        "phi": 0.50, "verdict": "continue", "coherence": 0.55, "regime": "EXPLORATION",
+    })
+
+    result = await db.record_outcome_event(
+        agent_id="agent-1",
+        outcome_type="test_failed",
+        is_bad=True,
+        verification_source="external_signal",
+    )
+
+    assert result == "bridged-id"
+    db.get_latest_eisv_by_agent_id.assert_awaited_once_with("agent-1")
+    args = conn.calls[0][1]
+    assert args[5] == 0.70   # eisv_e
+    assert args[9] == 0.50   # eisv_phi
+    detail = json.loads(args[13])
+    assert detail["eisv_snapshot_source"] == "outcome_bridge"
+
+
+@pytest.mark.asyncio
+async def test_bridge_no_op_when_agent_has_no_measured_state():
+    """Non-instrumented agents (no real EISV) stay NULL — the bridge never fabricates."""
+    conn = _FakeOutcomeConn(["null-id"])
+    db = _OutcomeMixinHarness(conn)
+    db.get_latest_eisv_by_agent_id = AsyncMock(return_value=None)
+
+    result = await db.record_outcome_event(
+        agent_id="ephemeral-agent",
+        outcome_type="test_failed",
+        is_bad=True,
+        verification_source="external_signal",
+    )
+
+    assert result == "null-id"
+    args = conn.calls[0][1]
+    assert args[5] is None  # eisv_e stays null
+    detail = json.loads(args[13])
+    assert "eisv_snapshot_source" not in detail
+
+
+@pytest.mark.asyncio
+async def test_bridge_does_not_override_explicit_eisv():
+    """When a caller already carries an EISV snapshot, the bridge stays out of the way."""
+    conn = _FakeOutcomeConn(["explicit-id"])
+    db = _OutcomeMixinHarness(conn)
+    db.get_latest_eisv_by_agent_id = AsyncMock(return_value={"E": 0.99})
+
+    result = await db.record_outcome_event(
+        agent_id="agent-1",
+        outcome_type="task_completed",
+        is_bad=False,
+        eisv_e=0.42,
+        verification_source="server_observation",
+    )
+
+    assert result == "explicit-id"
+    db.get_latest_eisv_by_agent_id.assert_not_awaited()
+    args = conn.calls[0][1]
+    assert args[5] == 0.42  # explicit value preserved, not overridden
