@@ -3,3 +3,10 @@
 # in the agnostic repo (rare). Prefer moving the file out over allowlisting.
 # Example:
 #   docs/integration/career-mode-adapter.md
+
+# Historical BEAM Wave RFC records — shipped work; their bodies document the
+# council/live-verifier review process inline and are frozen technical records,
+# not living product docs. Allowlisted so status-header refreshes can land
+# without a gutting rewrite (2026-06-28).
+docs/proposals/beam-wave-1-sentinel.md
+docs/proposals/beam-wave-3a-read-only-handlers.md

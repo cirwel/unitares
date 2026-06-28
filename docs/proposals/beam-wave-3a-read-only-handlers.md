@@ -1,6 +1,6 @@
 # BEAM Wave 3a — Read-Only Handler Port
 
-**Status:** v0.2 — council-fold pass complete; operator review pending.
+**Status:** ✅ DEPLOYED (2026-06-28) — Wave 3a read-only handlers live on :8770 (first inbound BEAM MCP listener; `com.unitares.wave3a-handlers`, `RunAtLoad`, `wave3a.v1`). Body below is the executed record (v0.2).
 **Created:** 2026-05-28.
 **Parent:** `docs/proposals/beam-footprint-roadmap-v0.md` (V0.3.1 AMENDMENT 2026-05-28).
 **Sibling, in flight:** `docs/proposals/beam-wave-3-handler-dispatch.md` (v0.3.2, re-litigation gate open).
