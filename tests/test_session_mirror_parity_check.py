@@ -96,3 +96,34 @@ def test_unparseable_bound_at_excluded():
 def test_empty_cohort_ratio_none():
     s = _run({}, {})
     assert s["cohort_size"] == 0 and s["parity_ratio"] is None
+
+
+# --- evaluate_gate (Codex review #3: flip-decision gate) ---
+
+def _gate(summary, min_cohort=100, min_ratio=0.99):
+    return mod.evaluate_gate(summary, min_cohort=min_cohort, min_ratio=min_ratio)
+
+
+def test_gate_fails_on_inert():
+    passed, reasons = _gate({"status": "inert"})
+    assert passed is False and any("status" in r for r in reasons)
+
+
+def test_gate_passes_on_clean_ran():
+    passed, reasons = _gate({"status": "ran", "cohort_size": 250, "parity_ratio": 1.0, "uuid_mismatch": 0})
+    assert passed is True and reasons == []
+
+
+def test_gate_fails_on_thin_cohort():
+    passed, reasons = _gate({"status": "ran", "cohort_size": 10, "parity_ratio": 1.0, "uuid_mismatch": 0})
+    assert passed is False and any("cohort_size" in r for r in reasons)
+
+
+def test_gate_fails_on_low_parity():
+    passed, reasons = _gate({"status": "ran", "cohort_size": 250, "parity_ratio": 0.80, "uuid_mismatch": 0})
+    assert passed is False and any("parity_ratio" in r for r in reasons)
+
+
+def test_gate_fails_on_any_uuid_mismatch():
+    passed, reasons = _gate({"status": "ran", "cohort_size": 250, "parity_ratio": 1.0, "uuid_mismatch": 1})
+    assert passed is False and any("uuid_mismatch" in r for r in reasons)

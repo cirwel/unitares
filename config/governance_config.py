@@ -910,63 +910,83 @@ I_SCALE_BY_CLASS: Dict[str, ScaleConstant] = {}
 E_SCALE_BY_CLASS: Dict[str, ScaleConstant] = {}
 
 # Manifold radius — the 95th percentile of state-space distance from each
-# class's own healthy operating point. Measured 2026-04-18 on a 30-day
-# healthy-regime slice of core.agent_state. Per-class envelopes differ by
-# 3.3× (Lumen 0.12 vs Watcher 0.40), confirming the homogenization
-# failure mode of paper §2.
+# class's own healthy operating point. Re-measured 2026-06-27 on a 30-day
+# healthy-regime slice of core.agent_state via
+# `UNITARES_RESIDENTS='Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler' \
+#   python3 scripts/calibrate_class_conditional.py` (roster matches the live
+# classifier so per-label residents map to these keys). Per-class envelopes
+# differ by ~3.4× (Vigil 0.09 vs engaged_ephemeral 0.30), confirming the
+# homogenization failure mode of paper §2.
+#
+# The 2026-04-18 values went stale (esp. Lumen's healthy E, see
+# HEALTHY_OPERATING_POINT_BY_CLASS) — the manifold coherence saturated to 0 for
+# Lumen on every check-in until this refresh. Re-run the generator when the
+# fleet's operating regime shifts.
 DELTA_NORM_MAX_BY_CLASS: Dict[str, ScaleConstant] = {
     "Lumen": ScaleConstant(
-        name="DELTA_NORM_MAX[Lumen]", value=0.1187, measured_on="2026-04-18",
-        corpus_size=7320, percentile=95, provenance="measured",
+        name="DELTA_NORM_MAX[Lumen]", value=0.1635, measured_on="2026-06-27",
+        corpus_size=12500, percentile=95, provenance="measured",
         notes="Class-conditional manifold radius from healthy slice."),
     "default": ScaleConstant(
         name="DELTA_NORM_MAX[default]", value=0.2018, measured_on="2026-04-18",
         corpus_size=2033, percentile=95, provenance="measured",
-        notes="Class-conditional manifold radius from healthy slice."),
+        notes="Retained from 2026-04-18; 2026-06-27 slice had N=16 (<30 "
+              "threshold), too thin to re-measure."),
     "Sentinel": ScaleConstant(
-        name="DELTA_NORM_MAX[Sentinel]", value=0.1702, measured_on="2026-04-18",
-        corpus_size=1870, percentile=95, provenance="measured",
+        name="DELTA_NORM_MAX[Sentinel]", value=0.0881, measured_on="2026-06-27",
+        corpus_size=5529, percentile=95, provenance="measured",
         notes="Class-conditional manifold radius from healthy slice."),
     "Vigil": ScaleConstant(
-        name="DELTA_NORM_MAX[Vigil]", value=0.1705, measured_on="2026-04-18",
-        corpus_size=384, percentile=95, provenance="measured",
+        name="DELTA_NORM_MAX[Vigil]", value=0.0885, measured_on="2026-06-27",
+        corpus_size=1415, percentile=95, provenance="measured",
         notes="Class-conditional manifold radius from healthy slice."),
     "Watcher": ScaleConstant(
-        name="DELTA_NORM_MAX[Watcher]", value=0.3948, measured_on="2026-04-18",
-        corpus_size=283, percentile=95, provenance="measured",
+        name="DELTA_NORM_MAX[Watcher]", value=0.2391, measured_on="2026-06-27",
+        corpus_size=1436, percentile=95, provenance="measured",
         notes="Class-conditional manifold radius from healthy slice."),
     "Steward": ScaleConstant(
-        name="DELTA_NORM_MAX[Steward]", value=0.2018, measured_on="2026-04-18",
+        name="DELTA_NORM_MAX[Steward]", value=0.2018, measured_on="2026-06-27",
         corpus_size=0, percentile=None, provenance="alias",
-        notes="Alias to default. Steward created 2026-04-17, blocked by "
-              "loop-detection on calibration day so 0 rows in core.agent_state. "
+        notes="Alias to default. Still 0 healthy rows in the 2026-06-27 window. "
               "Re-run scripts/calibrate_class_conditional.py once corpus exists."),
     "Chronicler": ScaleConstant(
-        name="DELTA_NORM_MAX[Chronicler]", value=0.2018, measured_on="2026-04-23",
-        corpus_size=0, percentile=None, provenance="alias",
-        notes="Alias to default. Chronicler minted an identity on 2026-04-23; "
-              "one check-in per day means a corpus takes weeks to build. "
-              "Re-run scripts/calibrate_class_conditional.py once corpus exists."),
+        name="DELTA_NORM_MAX[Chronicler]", value=0.2018, measured_on="2026-06-27",
+        corpus_size=26, percentile=None, provenance="alias",
+        notes="Alias to default. N=26 in the 2026-06-27 window, below the 30 "
+              "threshold. Re-run scripts/calibrate_class_conditional.py later."),
     "engaged_ephemeral": ScaleConstant(
-        name="DELTA_NORM_MAX[engaged_ephemeral]", value=0.4246, measured_on="2026-05-30",
-        corpus_size=1289, percentile=95, provenance="measured",
-        notes="S8a 30-day REVIEW BY recalibration. engaged_ephemeral active "
-              "identity count grew from 163 to 261; healthy production slice "
-              "is now large enough to replace the default alias."),
+        name="DELTA_NORM_MAX[engaged_ephemeral]", value=0.2952, measured_on="2026-06-27",
+        corpus_size=2115, percentile=95, provenance="measured",
+        notes="Class-conditional manifold radius from healthy slice."),
+    "ephemeral": ScaleConstant(
+        name="DELTA_NORM_MAX[ephemeral]", value=0.0857, measured_on="2026-06-27",
+        corpus_size=277, percentile=95, provenance="measured",
+        notes="Class-conditional manifold radius from healthy slice (new key; "
+              "the tag-classified ephemeral population is now large enough)."),
 }
 
 # Healthy operating points per class — median (E, I, S) on healthy-regime
 # slice. Used by _compute_manifold as the class-conditional baseline that
-# replaces the fleet-wide BASIN_HIGH corner.
+# replaces the fleet-wide BASIN_HIGH corner. Re-measured 2026-06-27 (same
+# generator + roster as DELTA_NORM_MAX_BY_CLASS above).
+#
+# NOTE: Lumen's healthy E moved 0.745 -> 0.316 between 2026-04-18 and
+# 2026-06-27 (N=12500 healthy-slice samples). This is Lumen's GENUINE normal —
+# a low-energy Pi edge resident — not degradation; the old anchor assumed it ran
+# hot like a coding agent (the individuality axiom: judge against its own
+# normal). The stale anchor was why Lumen's manifold coherence read 0 on every
+# check-in. healthy_S also feeds get_s_setpoint (live when UNITARES_S_SETPOINT
+# is on) — the S shifts here are small but live-affecting.
 HEALTHY_OPERATING_POINT_BY_CLASS: Dict[str, Tuple[float, float, float]] = {
-    "Lumen":    (0.7454, 0.8001, 0.1678),   # N=7320
-    "default":  (0.7264, 0.7934, 0.2364),   # N=2033
-    "Sentinel": (0.7506, 0.7981, 0.1934),   # N=1870
-    "Vigil":    (0.7371, 0.7896, 0.2404),   # N=384
-    "Watcher":  (0.7482, 0.7686, 0.2477),   # N=283
+    "Lumen":    (0.3160, 0.7824, 0.2104),   # N=12500 (E 0.745 -> 0.316; see note)
+    "default":  (0.7264, 0.7934, 0.2364),   # retained 2026-04-18 (N=16 in 06-27 window)
+    "Sentinel": (0.7804, 0.6852, 0.2492),   # N=5529
+    "Vigil":    (0.7576, 0.7639, 0.1596),   # N=1415
+    "Watcher":  (0.7932, 0.7097, 0.2140),   # N=1436
     "Steward":  (0.7264, 0.7934, 0.2364),   # alias=default (N=0; see DELTA_NORM_MAX[Steward])
-    "Chronicler": (0.7264, 0.7934, 0.2364), # alias=default (N=0; see DELTA_NORM_MAX[Chronicler])
-    "engaged_ephemeral": (0.7556, 0.6853, 0.3068), # measured 2026-05-30; N=1289
+    "Chronicler": (0.7264, 0.7934, 0.2364), # alias=default (N=26<30; see DELTA_NORM_MAX[Chronicler])
+    "engaged_ephemeral": (0.7685, 0.6918, 0.3536), # N=2115
+    "ephemeral": (0.7032, 0.7995, 0.1898),  # N=277 (new key)
 }
 
 # Default healthy operating point (fleet fallback for unclassified agents).
@@ -1027,21 +1047,27 @@ S_SETPOINT_DRIVER_OFFSET: float = 0.091
 
 
 def s_setpoint_enabled() -> bool:
-    """Whether the per-class S setpoint is active (UNITARES_S_SETPOINT). Default off."""
-    return os.getenv("UNITARES_S_SETPOINT", "").strip().lower() in {"1", "true", "on", "yes"}
+    """Whether the per-class S setpoint is active (UNITARES_S_SETPOINT). Default ON
+    (live-proven): the S equilibrium rests on the class's measured-healthy S rather
+    than decaying toward ~0. Set the env to 0/false/off/"" to force the legacy -μS."""
+    return os.getenv("UNITARES_S_SETPOINT", "1").strip().lower() in {"1", "true", "on", "yes"}
 
 
 def phi_telemetry_only() -> bool:
-    """Whether Φ is demoted to telemetry (UNITARES_PHI_TELEMETRY_ONLY). Default off.
+    """Whether Φ is demoted to telemetry (UNITARES_PHI_TELEMETRY_ONLY). Default ON
+    (live-proven; the central maths-revamp posture).
 
     When on, the behavioral/residual assessment is authoritative for the verdict
     and risk score whenever it is confident; Φ no longer floors them (it only
     over-flags hard work as risk — the RLHF/punish-toward-ideal shape, see
     docs/proposals/eisv-maths-roadmap-v0.md §8.0). Φ is still computed and
     surfaced as a telemetry field. Cold-start agents (behavioral confidence below
-    the gate) still fall back to the Φ path as the prior.
+    the gate) still fall back to the Φ path as the prior. Because authoritative
+    behavioral can only *de-escalate* relative to the Φ floor, this never
+    introduces a pause — it removes Φ's over-flagging. Set the env to
+    0/false/off/"" to restore Φ-floors-risk (the legacy invariant).
     """
-    return os.getenv("UNITARES_PHI_TELEMETRY_ONLY", "").strip().lower() in {"1", "true", "on", "yes"}
+    return os.getenv("UNITARES_PHI_TELEMETRY_ONLY", "1").strip().lower() in {"1", "true", "on", "yes"}
 
 
 def grounding_shadow_enabled() -> bool:

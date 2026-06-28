@@ -251,10 +251,14 @@ async def _shadow_mirror_session_binding(
     on the handler path, no anyio guard needed; the caller bounds latency with
     asyncio.wait_for). Redis-retirement Phase 1A.
 
-    KNOWN GAP (close before the Phase 1B read flip): api_key_hash is not written
-    here — _cache_session does not carry it — so legacy sessions (≈40% of live
-    Redis payloads) mirror with api_key_hash=NULL. Harmless while the mirror is
-    write-only; must be plumbed before the mirror is read as authoritative.
+    api_key_hash note (Codex review #2): not written here, so the mirror has
+    api_key_hash=NULL. Verified this is NOT a read-flip blocker: every identity
+    write on the resolution path passes api_key_hash="" (it is not populated for
+    new sessions and not consumed for auth — auth is the bearer/agent_id stack),
+    and the parity checker compares only agent_uuid. The ≈40% of *legacy* Redis
+    payloads that carry a non-empty api_key_hash predate current writes; nothing
+    reads it back. If a future change makes api_key_hash auth-bearing, plumb it
+    here and add it to the parity comparison first.
     """
     try:
         from config.governance_config import session_mirror_shadow_enabled

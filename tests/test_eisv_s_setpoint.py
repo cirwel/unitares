@@ -52,7 +52,15 @@ def test_setpoint_shifts_equilibrium_by_offset():
     assert _rest(sigma).S == pytest.approx(sigma + 0.091, abs=0.01)
 
 
-def test_get_s_setpoint_off_by_default():
+def test_get_s_setpoint_on_by_default(monkeypatch):
+    # Default ON (live-proven) when the env is unset.
+    monkeypatch.delenv("UNITARES_S_SETPOINT", raising=False)
+    assert s_setpoint_enabled()
+
+
+def test_get_s_setpoint_off_when_disabled(monkeypatch):
+    # Explicit off restores the legacy -μS behavior (setpoint 0.0).
+    monkeypatch.setenv("UNITARES_S_SETPOINT", "0")
     assert not s_setpoint_enabled()
     assert get_s_setpoint("default") == 0.0
     assert get_s_setpoint("Lumen") == 0.0
@@ -66,14 +74,32 @@ def test_get_s_setpoint_enabled(monkeypatch):
         assert get_s_setpoint(cls) == pytest.approx(expected, abs=1e-9)
 
 
-def test_setpoint_lands_on_measured_healthy_and_clears_critical():
-    """With the per-class setpoint, S-rest ≈ measured healthy S and manifold-at-
-    rest clears the 0.40 critical threshold (the Stage-B enabler)."""
+def test_setpoint_lands_on_measured_healthy_S():
+    """With the per-class setpoint, the ODE S-rest ≈ that class's measured healthy
+    S, for every class (S is the only axis the setpoint drives)."""
     for cls in ("default", "Lumen", "Watcher", "Vigil"):
         hp = get_healthy_operating_point(cls)
         sigma = hp[2] - S_SETPOINT_DRIVER_OFFSET
         r = _rest(sigma)
         assert r.S == pytest.approx(hp[2], abs=0.02), f"{cls}: S-rest off target"
+
+
+def test_manifold_at_ode_rest_clears_critical_where_e_rest_matches_healthy():
+    """Manifold-at-ODE-rest clears the 0.40 critical line for classes whose ODE
+    E/I rest coincides with their measured healthy E/I (the Stage-B enabler).
+
+    Lumen is deliberately EXCLUDED: its measured healthy E is ~0.32 (a low-energy
+    Pi resident, recalibrated 2026-06-27) while the ODE rests E high (~0.74) —
+    the setpoint drives S but not E/I — so the manifold distance at the ODE rest
+    is large for Lumen. Harmless live (manifold coherence is read on the
+    *behavioral* EISV, where Lumen's E≈0.32 matches the anchor, and grounding
+    APPLY is off) but it flags a real gap: low-E classes need an E/I setpoint, or
+    the behavioral-path manifold, before the ODE rest itself reads coherent.
+    Tracked for the grounding-APPLY scope."""
+    for cls in ("default", "Watcher", "Vigil"):
+        hp = get_healthy_operating_point(cls)
+        sigma = hp[2] - S_SETPOINT_DRIVER_OFFSET
+        r = _rest(sigma)
         dmax = get_delta_norm_max(cls).value
         norm = math.sqrt((r.E-hp[0])**2 + (r.I-hp[1])**2 + (r.S-hp[2])**2)
         manifold = 1.0 - max(0.0, min(1.0, norm / dmax))

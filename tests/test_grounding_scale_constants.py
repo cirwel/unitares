@@ -85,8 +85,10 @@ def test_class_conditional_delta_norm_max_is_measured_or_alias():
             assert sc.corpus_size > 0
             assert sc.percentile == 95
         else:  # alias
-            assert sc.corpus_size == 0, (
-                f"alias entry {cls_name} must declare corpus_size=0"
+            # Alias = no usable corpus: either zero rows, or a sub-threshold
+            # count (<30) too thin to measure (e.g. Chronicler N=26 on 06-27).
+            assert sc.corpus_size < 30, (
+                f"alias entry {cls_name} must declare a sub-threshold corpus_size"
             )
             # Alias must mirror another class's value exactly — not a free guess.
             # Acceptable targets: the fleet placeholder DEFAULT, or any measured
@@ -146,7 +148,8 @@ def test_healthy_operating_point_class_conditional():
 
 
 def test_engaged_ephemeral_review_cookie_recalibrated():
-    """S8a 30-day review replaced the default alias with measured values."""
+    """engaged_ephemeral carries measured values, refreshed on the 2026-06-27
+    fleet-wide recalibration (was the 2026-05-30 S8a snapshot)."""
     from config.governance_config import (
         DELTA_NORM_MAX_BY_CLASS,
         HEALTHY_OPERATING_POINT_BY_CLASS,
@@ -154,12 +157,12 @@ def test_engaged_ephemeral_review_cookie_recalibrated():
 
     sc = DELTA_NORM_MAX_BY_CLASS["engaged_ephemeral"]
     assert sc.provenance == "measured"
-    assert sc.measured_on == "2026-05-30"
-    assert sc.corpus_size == 1289
+    assert sc.measured_on == "2026-06-27"
+    assert sc.corpus_size == 2115
     assert sc.percentile == 95
-    assert sc.value == pytest.approx(0.4246)
+    assert sc.value == pytest.approx(0.2952)
     assert HEALTHY_OPERATING_POINT_BY_CLASS["engaged_ephemeral"] == pytest.approx(
-        (0.7556, 0.6853, 0.3068)
+        (0.7685, 0.6918, 0.3536)
     )
 
 
