@@ -142,7 +142,10 @@ def checkins_7d(_repo_root: Path) -> float:
 # "current non-archived org surface" — adding a new public repo automatically
 # folds it into the next day's snapshot, and archiving one drops it.
 
-GITHUB_ORG = "CIRWEL"
+# Org whose traffic this Chronicler scrapes. Override per deployment via
+# GITHUB_SCRAPE_ORG; the metric *names* below stay `github.cirwel.*` as stable
+# keys (renaming them would break stored-metric continuity).
+GITHUB_ORG = os.getenv("GITHUB_SCRAPE_ORG", "CIRWEL")
 
 
 @functools.lru_cache(maxsize=1)

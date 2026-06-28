@@ -38,7 +38,7 @@ cd "$PROJECT_ROOT"
 # which surfaces as "lease: service_unavailable" — harmless per RFC v0.5 §6.1
 # (Phase A is non-fatal) but obscures real outages. Sourcing is best-effort:
 # missing file is fine, agents on hosts without the secrets still ship.
-SECRETS_FILE="${HOME}/.config/cirwel/secrets.env"
+SECRETS_FILE="${UNITARES_SECRETS_ENV:-${HOME}/.config/cirwel/secrets.env}"
 if [[ -f "$SECRETS_FILE" ]]; then
     set -a
     # shellcheck disable=SC1090

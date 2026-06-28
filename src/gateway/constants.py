@@ -1,8 +1,11 @@
 """Gateway constants — ports, URLs, help text."""
 
-GOVERNANCE_URL = "http://localhost:8767/mcp/"
-GATEWAY_PORT = 8768
-GATEWAY_HOST = "127.0.0.1"
+import os
+
+# Deployment-overridable via env; defaults suit a local single-host install.
+GOVERNANCE_URL = os.getenv("GOVERNANCE_URL", "http://localhost:8767/mcp/")
+GATEWAY_PORT = int(os.getenv("GATEWAY_PORT", "8768"))
+GATEWAY_HOST = os.getenv("GATEWAY_HOST", "127.0.0.1")
 
 # Circuit breaker defaults
 CIRCUIT_THRESHOLD = 2

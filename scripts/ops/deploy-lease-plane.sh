@@ -67,7 +67,8 @@ launchctl kickstart -k "gui/$UID_NUM/$LABEL"
 echo "[deploy] verifying health"
 TOKEN="$(
   python3 - <<'PY'
-for line in open(f"{__import__('os').environ['HOME']}/.config/cirwel/secrets.env"):
+import os
+for line in open(os.environ.get("UNITARES_SECRETS_ENV", f"{os.environ['HOME']}/.config/cirwel/secrets.env")):
     line = line.strip()
     if line.startswith("export "):
         line = line[7:]

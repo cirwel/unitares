@@ -41,9 +41,9 @@ def test_explicit_uds_path_argument_wins(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_env_var_picked_up_when_no_explicit_arg(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("UNITARES_UDS_SOCKET", "/Users/cirwel/.unitares/governance.sock")
+    monkeypatch.setenv("UNITARES_UDS_SOCKET", "/home/agent/.unitares/governance.sock")
     client = GovernanceClient()
-    assert client.uds_path == "/Users/cirwel/.unitares/governance.sock"
+    assert client.uds_path == "/home/agent/.unitares/governance.sock"
 
 
 def test_explicit_arg_overrides_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
