@@ -126,7 +126,7 @@ curate this catalog" — plus a fresh `s22_candidate_envelope_coverage` reading 
 
 ---
 
-## Open questions (for the council pass)
+## Open questions (for owner review)
 
 - **Catalog home & format.** `config/harness_catalog.yaml` vs `docs/ontology/` vs a small
   Python module. File-backed is the constraint; exact location is owners' call.
