@@ -1083,6 +1083,30 @@ def grounding_apply_enabled() -> bool:
     return os.getenv("UNITARES_GROUNDING_APPLY", "").strip().lower() in {"1", "true", "on", "yes"}
 
 
+def session_mirror_shadow_enabled() -> bool:
+    """Whether to dual-write session/identity bindings into the PostgreSQL mirror
+    tables (core.session_bindings, core.onboard_pins) alongside the Redis writes
+    (UNITARES_SESSION_MIRROR_SHADOW). Default off.
+
+    Behavior-neutral: Redis stays the authoritative read source; the PG writes
+    are best-effort (failures swallowed) and nothing reads the mirror yet. Lets
+    the durable mirror be populated and its write-path parity measured before the
+    read flip. Redis-retirement Phase 1A — see
+    docs/proposals/redis-retirement-phase-1-plan.md.
+    """
+    return os.getenv("UNITARES_SESSION_MIRROR_SHADOW", "").strip().lower() in {"1", "true", "on", "yes"}
+
+
+def session_mirror_apply_enabled() -> bool:
+    """Whether the resolver READS the PostgreSQL session mirror as a source of
+    truth (UNITARES_SESSION_MIRROR_APPLY). Default off. LIVE-AFFECTING when on:
+    PATH 2 resolves from core.session_bindings and pin lookup reads
+    core.onboard_pins. Only flip after session_mirror_shadow parity is proven.
+    Not wired in this PR — the read flip is a separate change.
+    """
+    return os.getenv("UNITARES_SESSION_MIRROR_APPLY", "").strip().lower() in {"1", "true", "on", "yes"}
+
+
 def get_s_setpoint(agent_class: str = "default") -> float:
     """Per-class S decay target σ for the dynamics.
 

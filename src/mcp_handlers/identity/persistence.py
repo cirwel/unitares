@@ -202,6 +202,90 @@ async def _cache_session(
             # WARNING level (v2.5.7): Cache failures can cause identity loss
             logger.warning(f"Redis cache write failed for session binding: {e}")
 
+    # Redis-retirement Phase 1A: dual-write the binding into the PostgreSQL
+    # mirror (core.session_bindings) when the shadow flag is on. Best-effort and
+    # behavior-neutral — Redis stays authoritative for reads, nothing reads the
+    # mirror yet, and a mirror failure never affects the live path. Runs even
+    # when Redis is unavailable so the mirror is populated regardless.
+    #
+    # Latency-bounded with the same _REDIS_WRITE_TIMEOUT budget as the Redis
+    # write above: get_db() is ExecutorPool-wrapped (no anyio deadlock), but the
+    # pool's own acquire() can block up to 10s when saturated. A best-effort
+    # shadow write must never hold the onboard path that long — on timeout we
+    # skip the mirror, exactly as we skip the Redis write on its timeout.
+    try:
+        await asyncio.wait_for(
+            _shadow_mirror_session_binding(
+                session_key,
+                agent_uuid,
+                display_agent_id=display_agent_id,
+                spawn_reason=spawn_reason,
+                bind_ip_ua=bind_ip_ua,
+                trajectory_required=trajectory_required,
+                mint_guard=mint_guard,
+            ),
+            timeout=_REDIS_WRITE_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.debug(
+            "[IDENTITY] session-binding shadow mirror timed out after %ss — skipped",
+            _REDIS_WRITE_TIMEOUT,
+        )
+
+
+async def _shadow_mirror_session_binding(
+    session_key: str,
+    agent_uuid: str,
+    *,
+    display_agent_id: Optional[str] = None,
+    spawn_reason: Optional[str] = None,
+    bind_ip_ua: Optional[str] = None,
+    trajectory_required: bool = False,
+    mint_guard: bool = False,
+) -> None:
+    """Best-effort dual-write of a session binding to core.session_bindings.
+
+    Gated on session_mirror_shadow_enabled(); no-op when off. Failures are
+    swallowed (logged at debug) so the durable mirror can never break the live
+    identity path. Uses get_db() (ExecutorPool-wrapped — safe to await directly
+    on the handler path, no anyio guard needed; the caller bounds latency with
+    asyncio.wait_for). Redis-retirement Phase 1A.
+
+    KNOWN GAP (close before the Phase 1B read flip): api_key_hash is not written
+    here — _cache_session does not carry it — so legacy sessions (≈40% of live
+    Redis payloads) mirror with api_key_hash=NULL. Harmless while the mirror is
+    write-only; must be plumbed before the mirror is read as authoritative.
+    """
+    try:
+        from config.governance_config import session_mirror_shadow_enabled
+        if not session_mirror_shadow_enabled():
+            return
+    except Exception:
+        return
+    try:
+        db = get_db()
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            seconds=GovernanceConfig.SESSION_TTL_SECONDS
+        )
+        outcome = await db.upsert_session_binding(
+            session_key,
+            agent_uuid,
+            public_agent_id=display_agent_id,
+            display_agent_id=display_agent_id,
+            spawn_reason=spawn_reason,
+            bind_ip_ua=bind_ip_ua,
+            trajectory_required=trajectory_required,
+            expires_at=expires_at,
+            mint_guard=mint_guard,
+        )
+        if outcome == "blocked":
+            logger.warning(
+                "[S21A_PG_BINDING_BLOCKED] session mirror refused overwrite of a "
+                "different agent_uuid for session_key=%s...", session_key[:24],
+            )
+    except Exception as e:
+        logger.debug(f"session-binding shadow mirror skipped: {e}")
+
 
 async def _cache_session_redis_write(
     session_cache,

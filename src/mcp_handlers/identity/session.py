@@ -951,7 +951,7 @@ async def set_onboard_pin(
         logger.debug("[ONBOARD_PIN] No fingerprint — skip pin-set")
         return False
     try:
-        return await asyncio.wait_for(
+        result = await asyncio.wait_for(
             _set_onboard_pin_inner(
                 base_fingerprint,
                 agent_uuid,
@@ -968,10 +968,45 @@ async def set_onboard_pin(
             f"[ONBOARD_PIN] Pin-set timed out after {_PIN_REDIS_TIMEOUT}s "
             "— onboard proceeds, future requests skip pin"
         )
-        return False
+        result = False
     except Exception as e:
         logger.warning(f"[ONBOARD_PIN] Could not set pin: {e}")
-        return False
+        result = False
+
+    # Redis-retirement Phase 1A: dual-write the pins into the PostgreSQL mirror
+    # (core.onboard_pins) when the shadow flag is on. Best-effort/behavior-neutral
+    # — Redis stays authoritative, nothing reads the PG pins yet, failures are
+    # swallowed. Deliberately OUTSIDE the Redis _PIN_REDIS_TIMEOUT budget (so a
+    # slow PG write can't make a successful Redis pin report timed-out) and
+    # independent of Redis availability (so the mirror is populated even when
+    # Redis is down). Bounded by its own timeout. The Redis pin result is
+    # returned regardless of the mirror outcome.
+    try:
+        from config.governance_config import session_mirror_shadow_enabled
+        _mirror_on = session_mirror_shadow_enabled()
+    except Exception:
+        _mirror_on = False
+    if _mirror_on:
+        candidates = _build_pin_fingerprint_candidates(
+            base_fingerprint,
+            client_hint=client_hint,
+            model_type=model_type,
+            user_agent=user_agent,
+            include_unscoped_fallback=not bool(client_hint or model_type),
+        )
+        if candidates:
+            try:
+                await asyncio.wait_for(
+                    _shadow_mirror_onboard_pins(
+                        candidates, agent_uuid, client_session_id, if_absent=if_absent,
+                    ),
+                    timeout=_PIN_REDIS_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.debug("[ONBOARD_PIN] shadow mirror timed out — skipped")
+            except Exception as e:
+                logger.debug(f"[ONBOARD_PIN] shadow mirror skipped: {e}")
+    return result
 
 
 async def _set_onboard_pin_inner(
@@ -1028,3 +1063,38 @@ async def _set_onboard_pin_inner(
         wrote_any = True
         logger.info(f"[ONBOARD_PIN] Set pin for agent {agent_uuid[:8]}...")
     return wrote_any
+
+
+async def _shadow_mirror_onboard_pins(
+    candidates: list,
+    agent_uuid: str,
+    client_session_id: str,
+    *,
+    if_absent: bool = False,
+) -> None:
+    """Best-effort dual-write of onboard pins to core.onboard_pins.
+
+    Gated on session_mirror_shadow_enabled(); no-op when off. Failures swallowed
+    (debug-logged) so the durable mirror never breaks pin-setting. The PG
+    fingerprint column holds the full suffix after "recent_onboard:" — i.e. each
+    candidate fp verbatim — so it matches the future PG lookup. Phase 1A.
+    """
+    try:
+        from config.governance_config import session_mirror_shadow_enabled
+        if not session_mirror_shadow_enabled():
+            return
+    except Exception:
+        return
+    try:
+        from src.db import get_db
+        db = get_db()
+        for fp in candidates:
+            try:
+                await db.set_onboard_pin_pg(
+                    fp, agent_uuid, client_session_id,
+                    ttl_seconds=_PIN_TTL, if_absent=if_absent,
+                )
+            except Exception as e:
+                logger.debug(f"onboard-pin shadow mirror skipped for {fp}: {e}")
+    except Exception as e:
+        logger.debug(f"onboard-pin shadow mirror unavailable: {e}")
