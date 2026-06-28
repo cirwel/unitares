@@ -164,17 +164,56 @@ async def _pg_binding_count(dsn: str) -> int:
         await conn.close()
 
 
-async def run(dsn: str, redis_url: str, min_age_min: int, max_age_min: int) -> int:
+def evaluate_gate(summary: Dict[str, Any], *, min_cohort: int, min_ratio: float):
+    """Operational gate for the read flip (Codex review #3). A plain JSON
+    summary + exit 0 is fine for cron, but the *decision* to flip
+    UNITARES_SESSION_MIRROR_APPLY must require an actually-ran check with a
+    non-trivial cohort, high parity, and zero UUID mismatch — an `inert` or
+    thin-cohort run must NOT read as "safe to flip".
+
+    Returns (passed: bool, reasons: list[str]). Pure — unit-testable.
+    """
+    reasons: List[str] = []
+    if summary.get("status") != "ran":
+        reasons.append(f"status={summary.get('status')!r} (need 'ran' — mirror empty or runner error)")
+        return False, reasons
+    cohort = summary.get("cohort_size") or 0
+    if cohort < min_cohort:
+        reasons.append(f"cohort_size={cohort} < min_cohort={min_cohort} (insufficient signal)")
+    ratio = summary.get("parity_ratio")
+    if ratio is None or ratio < min_ratio:
+        reasons.append(f"parity_ratio={ratio} < min_ratio={min_ratio}")
+    mismatch = summary.get("uuid_mismatch") or 0
+    if mismatch > 0:
+        reasons.append(f"uuid_mismatch={mismatch} > 0 (corruption — never flip)")
+    return (len(reasons) == 0), reasons
+
+
+async def run(
+    dsn: str,
+    redis_url: str,
+    min_age_min: int,
+    max_age_min: int,
+    *,
+    gate: bool = False,
+    min_cohort: int = 100,
+    min_ratio: float = 0.99,
+) -> int:
     # Inert gate: an empty mirror means the shadow writer hasn't run
     # (UNITARES_SESSION_MIRROR_SHADOW off) — every key would report
     # missing_in_pg, which is non-signal. Report and exit 0.
     mirror_rows = await _pg_binding_count(dsn)
     if mirror_rows == 0:
-        print(json.dumps({
+        summary = {
             "status": "inert",
             "reason": "core.session_bindings is empty — enable UNITARES_SESSION_MIRROR_SHADOW first",
             "mirror_rows": 0,
-        }))
+        }
+        print(json.dumps(summary))
+        if gate:
+            passed, reasons = evaluate_gate(summary, min_cohort=min_cohort, min_ratio=min_ratio)
+            print(json.dumps({"gate": "FAIL", "reasons": reasons}), file=sys.stderr)
+            return 0 if passed else 1
         return 0
 
     redis_items = await _gather_redis_items(redis_url)
@@ -189,6 +228,10 @@ async def run(dsn: str, redis_url: str, min_age_min: int, max_age_min: int) -> i
     summary["mirror_rows"] = mirror_rows
     summary["redis_session_keys"] = len(redis_items)
     print(json.dumps(summary, indent=2))
+    if gate:
+        passed, reasons = evaluate_gate(summary, min_cohort=min_cohort, min_ratio=min_ratio)
+        print(json.dumps({"gate": "PASS" if passed else "FAIL", "reasons": reasons}), file=sys.stderr)
+        return 0 if passed else 1
     return 0
 
 
@@ -200,9 +243,19 @@ def main() -> int:
                     help="cohort lower bound: bindings at least this old (committed)")
     ap.add_argument("--max-age-min", type=int, default=60,
                     help="cohort upper bound: bindings at most this old (not yet expired)")
+    ap.add_argument("--gate", action="store_true",
+                    help="exit non-zero unless the run passes the flip gate "
+                         "(status=ran, cohort>=--min-cohort, parity>=--min-ratio, zero mismatch)")
+    ap.add_argument("--min-cohort", type=int, default=100,
+                    help="--gate: minimum birth-cohort size for a trustworthy reading")
+    ap.add_argument("--min-ratio", type=float, default=0.99,
+                    help="--gate: minimum parity_ratio to pass")
     args = ap.parse_args()
     try:
-        return asyncio.run(run(args.dsn, args.redis_url, args.min_age_min, args.max_age_min))
+        return asyncio.run(run(
+            args.dsn, args.redis_url, args.min_age_min, args.max_age_min,
+            gate=args.gate, min_cohort=args.min_cohort, min_ratio=args.min_ratio,
+        ))
     except Exception as e:  # runner error
         print(json.dumps({"status": "error", "error": str(e)}), file=sys.stderr)
         return 1
