@@ -53,6 +53,14 @@ def _make_mock_pool():
     acm.__aexit__ = AsyncMock(return_value=False)
     pool.acquire.return_value = acm
 
+    # conn.transaction() is a SYNC call returning an async context manager
+    # (asyncpg semantics). The phase-mutating writers wrap their advisory-lock +
+    # UPDATE in `async with conn.transaction():` (the saga slot).
+    txn = AsyncMock()
+    txn.__aenter__ = AsyncMock(return_value=None)
+    txn.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=txn)
+
     return pool, conn
 
 
@@ -632,8 +640,9 @@ class TestUpdateSessionPhase:
 
         result = await instance.update_session_phase("sess-001", "antithesis")
         assert result is True
-        conn.execute.assert_awaited_once()
-        call_args = conn.execute.call_args[0]
+        # Two awaited execs now: the saga-slot advisory lock, then the UPDATE.
+        assert conn.execute.await_count == 2
+        call_args = conn.execute.call_args[0]  # last call == the UPDATE
         assert call_args[1] == "antithesis"
         assert call_args[2] == "sess-001"
 
@@ -1386,3 +1395,63 @@ class TestEdgeCases:
         assert result["resolution"] == resolution
         assert "paused_agent_state_json" not in result
         assert "resolution_json" not in result
+
+
+# ============================================================================
+# Saga slot — cross-process phase-transition serialization (BEAM-port prereq)
+# ============================================================================
+
+from src.dialectic_db import _DIALECTIC_PHASE_LOCK_NS
+
+
+class TestPhaseSagaSlot:
+    """Every phase/status writer must take the transaction-scoped advisory slot
+    BEFORE its UPDATE, so a second Python worker / the REST path / a future BEAM
+    GenServer serialize on the same key instead of split-braining the row."""
+
+    def _assert_slot_then_update(self, conn, session_id):
+        # opened exactly one transaction
+        conn.transaction.assert_called_once()
+        calls = conn.execute.await_args_list
+        assert len(calls) == 2, "expected advisory-lock SELECT then UPDATE"
+        lock_sql, lock_args = calls[0][0][0], calls[0][0]
+        assert "pg_advisory_xact_lock" in lock_sql
+        assert lock_args[1] == _DIALECTIC_PHASE_LOCK_NS
+        assert lock_args[2] == session_id
+        # the UPDATE is the second statement, strictly after the lock
+        assert "UPDATE core.dialectic_sessions" in calls[1][0][0]
+
+    @pytest.mark.asyncio
+    async def test_update_session_phase_takes_slot_first(self, db):
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+        await instance.update_session_phase("sess-A", "synthesis")
+        self._assert_slot_then_update(conn, "sess-A")
+
+    @pytest.mark.asyncio
+    async def test_update_session_status_takes_slot_first(self, db):
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+        await instance.update_session_status("sess-B", "failed")
+        self._assert_slot_then_update(conn, "sess-B")
+
+    @pytest.mark.asyncio
+    async def test_update_session_reviewer_takes_slot_first(self, db):
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+        await instance.update_session_reviewer("sess-C", "reviewer-Z")
+        self._assert_slot_then_update(conn, "sess-C")
+
+    @pytest.mark.asyncio
+    async def test_resolve_session_takes_slot_first(self, db):
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+        await instance.resolve_session("sess-D", {"action": "approve"}, status="resolved")
+        self._assert_slot_then_update(conn, "sess-D")
+
+    def test_namespace_is_disjoint_from_agent_lock(self):
+        # 'DLPH' must differ from the agent-lock 'AGNT' classid so the two
+        # advisory-lock spaces never collide (PR #1017 council note).
+        assert _DIALECTIC_PHASE_LOCK_NS == 0x444C5048
+        assert _DIALECTIC_PHASE_LOCK_NS != 0x41474E54
+        assert 0 < _DIALECTIC_PHASE_LOCK_NS < 2**31  # valid positive int4

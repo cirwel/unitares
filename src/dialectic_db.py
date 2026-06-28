@@ -16,6 +16,25 @@ from src.db.acquire_compat import compatible_acquire
 logger = get_logger(__name__)
 
 
+# Saga-slot namespace for dialectic phase transitions (BEAM-port prerequisite).
+# A transaction-scoped PG advisory lock keyed on this int4 classid + the session
+# id is the *cross-process* serialization point for phase/status mutations on
+# core.dialectic_sessions. The in-process asyncio.Lock in
+# mcp_handlers/dialectic/session.py only serializes one Python process; this lock
+# is honored by every writer — a second Python worker, the REST path, and a
+# future BEAM GenServer alike — so dual-writer becomes SAFE rather than
+# split-brain. That is the correctness prerequisite the dialectic-on-BEAM port
+# needs, and it also closes the already-documented intra-Python double-resolve
+# race (session.py NEW-1).
+#
+# 0x444C5048 = 'DLPH'. Deliberately DISJOINT from the agent-lock advisory
+# namespace (0x41474E54 'AGNT', src/services/update_workflow_service.py) so the
+# two lock spaces never collide (PR #1017 council note on advisory lock-space
+# separation). Both use the two-arg pg_advisory_*_lock(classid int4, key int4)
+# form, which lives in a different space from the single-arg form.
+_DIALECTIC_PHASE_LOCK_NS = 0x444C5048
+
+
 # =============================================================================
 # PostgreSQL Backend (Primary and Only)
 # =============================================================================
@@ -190,38 +209,59 @@ class DialecticDB:
                     sessions.append(session)
             return sessions
 
+    async def _acquire_phase_slot(self, conn, session_id: str) -> None:
+        """Take the transaction-scoped saga slot for a session's phase line.
+
+        MUST be called as the first statement inside the same transaction as a
+        phase/status mutation. pg_advisory_xact_lock auto-releases at COMMIT/
+        ROLLBACK, so there is no unlock to leak (unlike a session-level lock).
+        Serializes every cross-process writer of this session's phase — see
+        _DIALECTIC_PHASE_LOCK_NS.
+        """
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock($1, hashtext($2))",
+            _DIALECTIC_PHASE_LOCK_NS,
+            session_id,
+        )
+
     async def update_session_phase(self, session_id: str, phase: str) -> bool:
-        """Update session phase/status."""
+        """Update session phase/status (saga-slot serialized)."""
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
-            result = await conn.execute("""
-                UPDATE core.dialectic_sessions
-                SET phase = $1, updated_at = now()
-                WHERE session_id = $2
-            """, phase, session_id)
-            return "UPDATE 1" in result
+            async with conn.transaction():
+                await self._acquire_phase_slot(conn, session_id)
+                result = await conn.execute("""
+                    UPDATE core.dialectic_sessions
+                    SET phase = $1, updated_at = now()
+                    WHERE session_id = $2
+                """, phase, session_id)
+                return "UPDATE 1" in result
 
     async def update_session_reviewer(self, session_id: str, reviewer_agent_id: str) -> bool:
-        """Assign reviewer to session."""
+        """Assign reviewer to session (saga-slot serialized)."""
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
-            result = await conn.execute("""
-                UPDATE core.dialectic_sessions
-                SET reviewer_agent_id = $1, updated_at = now()
-                WHERE session_id = $2
-            """, reviewer_agent_id, session_id)
-            return "UPDATE 1" in result
+            async with conn.transaction():
+                await self._acquire_phase_slot(conn, session_id)
+                result = await conn.execute("""
+                    UPDATE core.dialectic_sessions
+                    SET reviewer_agent_id = $1, updated_at = now()
+                    WHERE session_id = $2
+                """, reviewer_agent_id, session_id)
+                return "UPDATE 1" in result
 
     async def update_session_status(self, session_id: str, status: str) -> bool:
-        """Update session status (e.g., to 'failed' for auto-resolve)."""
+        """Update session status (e.g., to 'failed' for auto-resolve); saga-slot serialized."""
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
-            result = await conn.execute("""
-                UPDATE core.dialectic_sessions
-                SET status = $1, phase = $1, updated_at = now()
-                WHERE session_id = $2
-            """, status, session_id)
-            return "UPDATE 1" in result
+            async with conn.transaction():
+                await self._acquire_phase_slot(conn, session_id)
+                result = await conn.execute("""
+                    UPDATE core.dialectic_sessions
+                    SET status = $1, phase = $1, updated_at = now()
+                    WHERE session_id = $2
+                """, status, session_id)
+                return "UPDATE 1" in result
 
     async def resolve_session(
         self,
@@ -229,18 +269,26 @@ class DialecticDB:
         resolution: Dict[str, Any],
         status: str = "resolved"
     ) -> bool:
-        """Mark session as resolved or failed with resolution data."""
+        """Mark session as resolved or failed with resolution data (saga-slot serialized).
+
+        The saga slot closes the NEW-1 race: two concurrent synthesis calls that
+        both pass the in-memory SYNTHESIS-phase check can no longer both write a
+        resolution — the second serializes behind the first and sees the
+        committed terminal state.
+        """
         await self._ensure_pool()
         # Phase should match status - don't hardcode 'resolved' when status is 'failed'
         phase = "resolved" if status == "resolved" else status
         async with self._pool.acquire() as conn:
-            result = await conn.execute("""
-                UPDATE core.dialectic_sessions
-                SET status = $1, phase = $2, resolution_json = $3, updated_at = now()
-                WHERE session_id = $4
-            """, status, phase, json.dumps(resolution), session_id)
-            logger.info(f"Resolved session {session_id[:16]}... with status {status}")
-            return "UPDATE 1" in result
+            async with conn.transaction():
+                await self._acquire_phase_slot(conn, session_id)
+                result = await conn.execute("""
+                    UPDATE core.dialectic_sessions
+                    SET status = $1, phase = $2, resolution_json = $3, updated_at = now()
+                    WHERE session_id = $4
+                """, status, phase, json.dumps(resolution), session_id)
+                logger.info(f"Resolved session {session_id[:16]}... with status {status}")
+                return "UPDATE 1" in result
 
     async def add_message(
         self,
