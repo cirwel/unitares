@@ -71,7 +71,7 @@ UNITARES governance MCP server. Information-theoretic governance framework for A
 
 - Python 3.12+, asyncio
 - PostgreSQL@17 + AGE 1.7.0 (Apache Graph Extension) via Homebrew
-- Redis (optional session cache)
+- Redis — de-facto primary session/identity store, **not optional** (boots in degraded local-only mode without it, but most live sessions exist only in Redis; see `docs/proposals/redis-retirement-v0.md`)
 - Pydantic v2 for parameter validation
 - MCP (Model Context Protocol) server
 
