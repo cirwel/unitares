@@ -14,6 +14,17 @@ from .query_engine import route_query
 logger = logging.getLogger("gateway.tools")
 
 
+def _normalize_tags(tags: Optional[str | list[str]]) -> list[str] | None:
+    """Normalize gateway tag input to the canonical knowledge schema."""
+    if tags is None:
+        return None
+    if isinstance(tags, str):
+        values = [tag.strip() for tag in tags.split(",")]
+    else:
+        values = [str(tag).strip() for tag in tags]
+    return [tag for tag in values if tag]
+
+
 def _error_envelope(exc: Exception) -> str:
     """Convert an exception to a JSON error envelope string."""
     if isinstance(exc, CircuitOpenError):
@@ -84,17 +95,18 @@ async def handle_search(
 async def handle_note(
     client: GovernanceMCPClient,
     content: str,
-    tags: Optional[str] = None,
+    tags: Optional[str | list[str]] = None,
     agent_id: Optional[str] = None,
 ) -> str:
     """Leave a note or discovery in the knowledge graph."""
     try:
-        args: dict = {"content": content}
-        if tags:
-            args["tags"] = tags
+        args: dict = {"action": "note", "summary": content}
+        normalized_tags = _normalize_tags(tags)
+        if normalized_tags:
+            args["tags"] = normalized_tags
         if agent_id:
             args["agent_id"] = agent_id
-        raw = await client.call_tool("leave_note", args)
+        raw = await client.call_tool("knowledge", args)
         return json.dumps(simplifiers.simplify_note(raw))
     except Exception as exc:
         logger.warning("note failed: %s", exc)
