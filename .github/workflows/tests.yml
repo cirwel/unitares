@@ -53,6 +53,14 @@ jobs:
       run: |
         python scripts/dev/skills_manifest.py --check
 
+    - name: Validate skill freshness (last_verified within freshness_days)
+      # Fails if any skill's last_verified is past its freshness_days window.
+      # Moves staleness-catching to author-time (blocks the PR) instead of
+      # inject-time — the SessionStart hook only warned, then shipped the stale
+      # body anyway. Re-verify against source_files and bump last_verified to clear.
+      run: |
+        bash scripts/client/check-skill-freshness.sh
+
     - name: Validate tool-mode / schema config
       # DB-free: confirms TOOL_CATEGORIES matches the tool schema (alias-aware)
       # and minimal/lite keep their discovery tools, so TOOL_MODE filtering stays
