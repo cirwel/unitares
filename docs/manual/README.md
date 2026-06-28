@@ -6,7 +6,7 @@ An end-to-end, task-ordered guide to **installing, running, integrating with, re
 
 ## What UNITARES is, in one breath
 
-Runtime governance and self-telemetry for fleets of autonomous AI agents. Each agent checks in while it works; UNITARES grades it against its *own* baseline and returns one plain verdict — `proceed` / `guide` / `pause` / `reject` — plus a four-number state vector (EISV), so drift surfaces while the output still looks fine. It runs **alongside** evals (pre-deploy) and guardrails (per-action), answering a third question: *is this agent still healthy as it works?*
+Runtime governance and online state estimation for fleets of autonomous AI agents. Each agent checks in while it works; UNITARES compares the current run to that agent's *own* baseline and returns a four-number state vector (EISV) plus one plain policy action — `proceed` / `guide` / `pause` / `reject` — so drift becomes visible to the agent while the output still looks fine. It runs **alongside** evals (pre-deploy) and guardrails (per-action), answering a third question: *is this agent still healthy as it works?*
 
 ## How to read this manual
 
@@ -16,7 +16,7 @@ Runtime governance and self-telemetry for fleets of autonomous AI agents. Each a
 | Get a server running on your machine | [2 · Installation](02-install.md) |
 | Run, configure, and expose the server; open the dashboard | [3 · Running the server](03-running-the-server.md) |
 | Wire an agent or MCP client into the check-in loop | [4 · Integrating agents](04-integrating-agents.md) |
-| Interpret EISV, verdicts, coherence, drift, and the knowledge graph | [5 · Reading the signals](05-reading-the-signals.md) |
+| Interpret EISV, policy actions, coherence, drift, and the knowledge graph | [5 · Reading the signals](05-reading-the-signals.md) |
 | Keep it healthy in production | [6 · Operating](06-operating.md) |
 | Fix something that's broken | [7 · Troubleshooting & FAQ](07-troubleshooting.md) |
 
@@ -27,11 +27,11 @@ Runtime governance and self-telemetry for fleets of autonomous AI agents. Each a
 
 ## Chapters
 
-1. **[Overview & concepts](01-overview.md)** — what it is, where it fits, the EISV / verdict / coherence / drift vocabulary, and the honest scope.
+1. **[Overview & concepts](01-overview.md)** — what it is, where it fits, the EISV / policy-action / coherence / drift vocabulary, and the honest scope.
 2. **[Installation](02-install.md)** — Docker quickstart and the bare-metal (Postgres + AGE + pgvector) playbook.
 3. **[Running the server](03-running-the-server.md)** — entry point, ports, transports, the dashboard, environment configuration, and exposing beyond loopback.
-4. **[Integrating agents](04-integrating-agents.md)** — the check-in loop, identity rules, the full tool surface, verdict handling, and the long-running-agent SDK.
-5. **[Reading the signals](05-reading-the-signals.md)** — EISV computation, verdicts and margin, calibration, the knowledge graph, dialectic review, and how *not* to trust the numbers blindly.
+4. **[Integrating agents](04-integrating-agents.md)** — the check-in loop, identity rules, the full tool surface, policy-action handling, and the long-running-agent SDK.
+5. **[Reading the signals](05-reading-the-signals.md)** — EISV computation, policy actions and margin, calibration, the knowledge graph, dialectic review, and how *not* to trust the numbers blindly.
 6. **[Operating](06-operating.md)** — resident agents, security posture, database ownership, config tuning, and the operator runbook map.
 7. **[Troubleshooting & FAQ](07-troubleshooting.md)** — common failures and the questions new users actually ask.
 

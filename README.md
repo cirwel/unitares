@@ -4,8 +4,8 @@
 
 ### Runtime governance for autonomous-agent fleets.
 
-**UNITARES gives each running agent a stateful health check: a verdict based on its own history, calibration, and recent evidence.**<br/>
-Most controls inspect one action against one rule. UNITARES carries trajectory into the next check-in, so drift can surface before the output obviously fails and the agent gets one plain action to read: `proceed` / `guide` / `pause` / `reject`.
+**UNITARES gives each running agent online state estimation: EISV, calibration, evidence, and drift over its own trajectory, surfaced as a policy action it can use mid-run.**<br/>
+Most controls inspect one action against one rule. UNITARES carries trajectory into the next check-in, so drift is measurable while output still looks fine and the agent can course-correct — not a hidden detector trying to catch agents after the fact.
 
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-2f7d72?style=flat-square&labelColor=0f171f)](https://www.python.org/downloads/)
@@ -30,10 +30,10 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 ## What you get after install
 
 - **A governance server for heterogeneous agents.** MCP on `/mcp/`, REST on `/v1/tools/call`, an optional dashboard on `/dashboard`, and an SDK for resident or scheduled agents.
-- **State-aware verdicts.** Each process identity is judged against its *own* baseline and recent history, so slow degradation can surface before output obviously fails.
-- **Outcome-grounded calibration.** When outcomes or tool evidence are recorded, self-reported `confidence` is scored against tests, exit codes, tool output, file ops, deployments, and task results.
-- **Governed shared memory.** A Postgres + pgvector + Apache AGE knowledge graph lets agents search and contribute durable discoveries, corrections, supersessions, and cross-agent relations with provenance rather than transcript dumps.
-- **Dialectic review and durable constraints.** Disputed verdicts can be reviewed by authority-weighted peers; synthesized conditions can persist and gate later decisions.
+- **Online agent-state estimation.** Each process identity gets EISV state readings against its *own* baseline and recent history, so slow degradation surfaces while output still looks fine.
+- **Outcome-grounded calibration.** Self-reported `confidence` is scored against real evidence — tests, exit codes, tool output, file ops, deployments, and task results — and that calibration feeds future state readings and policy actions.
+- **Governed shared memory.** A Postgres + pgvector + Apache AGE knowledge graph lets agents search and contribute durable discoveries, corrections, supersessions, and cross-agent relations with provenance. It is sediment, not a transcript dump.
+- **Dialectic review and durable constraints.** Disputed policy actions can be reviewed by authority-weighted peers; synthesized conditions persist and can gate that agent's future decisions.
 - **One action the agent can obey.** Every check-in returns `proceed` / `guide` / `pause` / `reject`, plus the full EISV health vector for finer policies. Humans watch the same fleet through the optional dashboard.
 
 ## Use UNITARES if
@@ -52,7 +52,7 @@ git clone https://github.com/cirwel/unitares.git && cd unitares
 docker compose up -d --wait && make demo
 ```
 
-`make demo` drives a synthetic agent through seven check-ins — clean work, then confidence drifting from results, then confusion — and prints the verdict at each step. First run can spend a few minutes building Docker images; later runs are the fast path. Then point any MCP client at `http://localhost:8767/mcp/`.
+`make demo` drives a synthetic agent through seven check-ins — clean work, then confidence drifting from results, then confusion — and prints the policy action at each step. First run can spend a few minutes building Docker images; later runs are the fast path. Then point any MCP client at `http://localhost:8767/mcp/`.
 
 For a human operator view, open the optional dashboard at `http://localhost:8767/dashboard`. Dashboard implementation details live in [`dashboard/README.md`](dashboard/README.md); public deployment screenshots live in [`docs/PRODUCTION_SNAPSHOT.md`](docs/PRODUCTION_SNAPSHOT.md).
 
@@ -70,16 +70,17 @@ UNITARES runs **alongside** your evals and guardrails — it doesn't replace eit
 
 ### How it relates to agent clients
 
-UNITARES is not an agent framework or chat interface. Hermes, Claude Code, Codex, Goose, Discord dispatchers, SDK residents, and local-model hosts provide prompts, tools, files, terminals, browsers, scheduled work, and operator UX. UNITARES provides governed continuity underneath them: process identity, check-ins, EISV state, calibration against outcomes, shared-memory provenance, dialectic review, and auditable verdicts. For one-off chat or local coding, skip the governance loop; for persistent, multi-agent, high-side-effect, or resident work, mount the client through MCP/REST/SDK or a lifecycle adapter.
+UNITARES is not an agent framework or chat interface. Hermes, Claude Code, Codex, Goose, Discord dispatchers, SDK residents, and local-model hosts provide the hands: prompts, tools, files, terminals, browsers, scheduled work, and operator UX. UNITARES provides governed continuity underneath them: process identity, check-ins, online agent-state estimation, calibration against outcomes, shared-memory provenance, dialectic review, and auditable policy actions. For one-off chat or local coding, skip the governance loop; for persistent, multi-agent, high-side-effect, or resident work, mount the client through MCP/REST/SDK or a lifecycle adapter.
 
 <details>
-<summary><strong>Mechanisms behind the verdict</strong></summary>
+<summary><strong>Mechanisms behind the state reading</strong></summary>
 
-- **State-aware verdict engine** — baseline, calibration, and recent history; not the current action alone ([`behavioral_assessment.py`](src/behavioral_assessment.py)).
+- **State-aware policy engine** — baseline, calibration, and recent history; not the current action alone ([`behavioral_assessment.py`](src/behavioral_assessment.py)).
+- **Online state-estimation loop** — EISV, confidence, evidence provenance, and policy margin are fed back to the agent as runtime telemetry.
 - **Outcome-grounded calibration** — self-reported `confidence` is scored against objective evidence when available.
-- **Dialectic review → constraints** — disputed verdicts can become durable gating conditions after peer review.
+- **Dialectic review → constraints** — disputed policy actions can become durable gating conditions after peer review.
 - **Per-instance identity isolation** — each process has its own governed state; reads are open, writes are accountable.
-- **Audit trail + KG** — confidence, evidence, verdicts, drift, recovery, and shared-memory contributions remain inspectable.
+- **Audit trail + KG** — confidence, evidence, policy actions, drift, recovery, and shared-memory contributions remain inspectable.
 
 [Architecture](docs/UNIFIED_ARCHITECTURE.md) · [Scope & threat model](docs/SCOPE_AND_THREAT_MODEL.md)
 
@@ -99,7 +100,7 @@ After each unit of work, the agent checks in with `sync_state()` — passing sel
 
 </div>
 
-That's the whole contract: the agent reads the policy action and can course-correct before an external guardrail has to fire. No new vocabulary required to use it.
+That's the whole contract: the agent reads the policy action and course-corrects using its own state estimate, without waiting for an external guardrail to catch it. No new vocabulary required to use it.
 
 <details>
 <summary><strong>The four numbers behind the policy action (EISV)</strong></summary>
@@ -147,7 +148,7 @@ if action in ("pause", "reject"):
     agent.require_human_review(result.get("next_action", "Governance requested review"))
 ```
 
-The agent reads the action and acts. Self-reported `confidence` is strongest when paired with real outcomes, so include tool results or call `record_result(...)` when your client has evidence such as test status, exit codes, or deployment checks. UNITARES is not an output validator or sandbox; it is a state layer the agent itself can read before external controls fire.
+The agent reads the action and acts — that's the whole loop. Self-reported `confidence` is strongest when paired with real outcomes, so include tool results or call `record_result(...)` when your client has evidence such as test status, exit codes, or deployment checks. UNITARES is not an output validator or sandbox; it is an agent-facing state-estimation layer while external controls remain separate.
 
 The same primary tool surface also gives agents a few optional moves:
 
@@ -163,7 +164,7 @@ The same primary tool surface also gives agents a few optional moves:
 
 <br/>
 
-For per-dimension policies, read the four scores instead of the single verdict:
+For per-dimension policies, read the four scores instead of only the single policy action:
 
 ```python
 raw = result.get("raw_governance", result)
@@ -228,7 +229,7 @@ python src/mcp_server.py --port 8767
 | [How EISV is computed](docs/EISV_COMPUTATION.md) | Deployed formulas vs. target semantics |
 | [Reviewer Guide](docs/REVIEWER_GUIDE.md) | Cold-evaluator path + falsifiability harness |
 | [Scope & threat model](docs/SCOPE_AND_THREAT_MODEL.md) | Who it's for, why agents can't game it, what's unproven |
-| [Architecture](docs/UNIFIED_ARCHITECTURE.md) | Pipeline, verdicts, recovery, storage |
+| [Architecture](docs/UNIFIED_ARCHITECTURE.md) | Pipeline, policy actions, recovery, storage |
 | [Glossary](docs/ontology/glossary.md) | Terms keyed by the question they answer — published at [cirwel.github.io/unitares](https://cirwel.github.io/unitares/) |
 | [Production snapshot](docs/PRODUCTION_SNAPSHOT.md) | Live metrics + dashboard views |
 | [MCP Clients](docs/integration/MCP_CLIENTS.md) | Client-neutral MCP setup: Streamable HTTP, stdio bridges, hosted connectors |
