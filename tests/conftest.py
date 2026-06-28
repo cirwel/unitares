@@ -660,3 +660,25 @@ async def live_postgres_backend():
 
     yield be
     await be.close()
+
+
+@pytest.fixture
+def set_governance_config(monkeypatch):
+    """Patch a GovernanceConfig attribute on the LIVE class (reload-safe).
+
+    Resolves the class from sys.modules at call time, matching what
+    ``from config.governance_config import GovernanceConfig`` inside a handler sees.
+    Prefer this over a top-level import + ``monkeypatch.setattr(GovernanceConfig, …)``,
+    which patches a stale class object once any other test has reloaded the module
+    (reloaders: test_phases_pause_ttl, test_mcp_bearer_gate, test_behavioral_trajectory,
+    test_grounding_scale_constants, test_process_management). Note: code that reads the
+    module-level ``config`` *singleton* (``from config.governance_config import config``)
+    should patch ``cfg.config`` directly — this helper targets the class.
+
+        def test_x(set_governance_config):
+            set_governance_config("VERIFICATION_FLOOR_ENABLED", True)
+    """
+    def _set(attr, value):
+        import config.governance_config as cfg
+        monkeypatch.setattr(cfg.GovernanceConfig, attr, value)
+    return _set

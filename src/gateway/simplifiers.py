@@ -25,20 +25,27 @@ def simplify_status(raw: dict) -> dict:
         return ok("Status retrieved", {"raw": raw})
 
     # Extract EISV
-    eisv = raw.get("eisv") or raw.get("state", {}).get("eisv") or {}
-    coherence = raw.get("coherence") or raw.get("state", {}).get("coherence")
-    basin = raw.get("basin") or raw.get("state", {}).get("basin")
-    risk = raw.get("risk") or raw.get("state", {}).get("risk")
-    verdict = raw.get("verdict") or raw.get("action")
-    agent_id = raw.get("agent_id") or raw.get("resolved_agent_id")
+    nested_state = raw.get("state") if isinstance(raw.get("state"), dict) else {}
+    eisv = raw.get("eisv") or nested_state.get("eisv") or {}
+    coherence = _first_present(raw, "coherence")
+    if coherence is None:
+        coherence = _first_present(nested_state, "coherence")
+    basin = _first_present(raw, "basin")
+    if basin is None:
+        basin = _first_present(nested_state, "basin")
+    risk = _first_present(raw, "risk")
+    if risk is None:
+        risk = _first_present(nested_state, "risk")
+    verdict = _first_present(raw, "verdict", "action")
+    agent_id = _first_present(raw, "agent_id", "resolved_agent_id")
 
     # Build compact state
     state = {}
     if eisv:
-        e = eisv.get("E") or eisv.get("energy")
-        i = eisv.get("I") or eisv.get("information_integrity")
-        s = eisv.get("S") or eisv.get("entropy")
-        v = eisv.get("V") or eisv.get("void")
+        e = _first_present(eisv, "E", "energy")
+        i = _first_present(eisv, "I", "information_integrity")
+        s = _first_present(eisv, "S", "entropy")
+        v = _first_present(eisv, "V", "void")
         state["eisv"] = {"E": e, "I": i, "S": s, "V": v}
 
     if coherence is not None:
@@ -94,7 +101,7 @@ def simplify_checkin(raw: dict) -> dict:
 
 
 def simplify_search(raw: dict) -> dict:
-    """Simplify search_knowledge_graph response."""
+    """Simplify knowledge search response."""
     if not isinstance(raw, dict):
         return ok("Search complete", {"raw": raw})
 
@@ -153,3 +160,13 @@ def _round(val: Any) -> Any:
         if isinstance(v, (int, float)):
             return round(v, 4)
     return val
+
+
+def _first_present(data: Any, *keys: str) -> Any:
+    """Return the first non-None value without treating 0 as absent."""
+    if not isinstance(data, dict):
+        return None
+    for key in keys:
+        if key in data and data[key] is not None:
+            return data[key]
+    return None

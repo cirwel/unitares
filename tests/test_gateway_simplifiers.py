@@ -53,6 +53,20 @@ class TestSimplifyStatus:
         assert result["ok"] is True
         assert result["data"]["eisv"]["E"] == 0.8
 
+    def test_preserves_zero_values(self):
+        raw = {
+            "eisv": {"E": 0.0, "I": 0.0, "S": 0.0, "V": 0.0},
+            "coherence": 0.0,
+            "risk": 0.0,
+            "action": "proceed",
+        }
+        result = simplify_status(raw)
+        assert result["ok"] is True
+        assert result["data"]["eisv"] == {"E": 0.0, "I": 0.0, "S": 0.0, "V": 0.0}
+        assert result["data"]["coherence"] == 0.0
+        assert result["data"]["risk"] == 0.0
+        assert "coherence=0.0" in result["summary"]
+
     def test_non_dict(self):
         result = simplify_status("some string")
         assert result["ok"] is True
