@@ -21,6 +21,16 @@ agent (or no agent) against it.
   vendor-specific surface), not in this agnostic repo.
 - **Personal contact info** — personal emails / identifiers. Use the project's
   public contact surfaces only.
+- **Chat-session / AI-deliberation register** — committed docs, code comments,
+  and PR descriptions should read as product engineering, not as a continued
+  personal chat session or an AI-review scratchpad. The guard flags, in changed
+  files and in PR bodies: operator-local paths (`/Users/cirwel`), second-person
+  address of the operator (`per your guidance`, `your overlay`, `you flagged`,
+  `questions for Kenny`), and exposed AI-review process (`council pass`,
+  `council fold`, `live-verifier`, `three-lane council`). It deliberately does
+  **not** flag the real product vocabulary `operator`, `council`, or `dialectic`,
+  and exempts stored session data under `src/data/`. Working notes belong in
+  `~/projects/_notes-archive/<repo>/`; ship clean docs.
 
 ## Why a guard, not just this doc
 

@@ -107,6 +107,28 @@ while IFS= read -r f; do
   if grep -nIE '"includeCoAuthoredBy"|"attribution"[[:space:]]*:' "$f" >/dev/null 2>&1; then
     report "$f" "Per-vendor attribution config belongs in local ~/.claude config, not the agnostic repo."
   fi
+
+  # Rule 5: Claude session/deliberation register leaking into committed content.
+  # Public docs/code should read as product engineering, not as a continued chat
+  # session or an AI-review scratchpad. (Codex-authored content does not carry
+  # this register; this catches the Claude-specific pattern.) Tight, near-zero-
+  # false-positive markers ONLY — never bare "operator"/"council", which are real
+  # product vocab (src/mcp_handlers/identity/operator.py, the dialectic system).
+  # Stored dialectic session data under src/data/ is exempt.
+  case "$f" in
+    src/data/*) ;;
+    *)
+      if grep -nIE '/Users/cirwel' "$f" >/dev/null 2>&1; then
+        report "$f" "Leaks an operator-local path (/Users/cirwel) — use ~, \$HOME, or an env var, never a machine-absolute path."
+      fi
+      if grep -nIE 'per your guidance|your overlay|you flagged|questions for [Kk]enny' "$f" >/dev/null 2>&1; then
+        report "$f" "Addresses the operator in second person (chat-session register) — product docs/PRs are third-person/imperative, not a reply to one operator."
+      fi
+      if grep -nIE 'live-verifier|council pass|council fold|three-lane council' "$f" >/dev/null 2>&1; then
+        report "$f" "Exposes the AI-review process (council/live-verifier) — internal deliberation, not product content. Keep working notes in ~/projects/_notes-archive and ship clean docs."
+      fi
+      ;;
+  esac
 done <<EOF
 $FILES
 EOF
