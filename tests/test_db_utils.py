@@ -153,6 +153,10 @@ async def ensure_test_database_schema() -> None:
         # (extends the 026/042 grammar CHECK). Applied after 042 here because
         # it supersedes the same surface_id_grammar constraint.
         await _execute_sql_file(conn, "db/postgres/migrations/050_lease_plane_maintenance_scheme.sql")
+        # Migration 051: Redis-retirement Phase 1 session-binding + onboard-pin
+        # mirror tables (FK-less; additive/inert). Depends only on the core
+        # schema. See docs/proposals/redis-retirement-phase-1-plan.md.
+        await _execute_sql_file(conn, "db/postgres/migrations/051_session_mirror_tables.sql")
 
         # Ensure partitioned audit tables can accept inserts for current month.
         await _execute_sql_file(conn, "db/postgres/partitions.sql")
@@ -183,6 +187,8 @@ TRUNCATE_TABLES = [
     "core.agent_state",
     "core.agent_sessions",
     "core.agent_baselines",
+    "core.session_bindings",
+    "core.onboard_pins",
     "core.sessions",
     "core.identities",
     "core.agents",
