@@ -125,31 +125,6 @@ class AuditLogger:
         )
         self._write_entry(entry)
 
-    def log_basin_shadow(self, agent_id: str, ode_basin: str, behavioral_basin: str,
-                         agree: bool, confidence: float, details: dict = None):
-        """Shadow-compare the live ODE-derived basin against a basin computed
-        from the (already-available) behavioral EISV.
-
-        Behavior-neutral: records what the decision basin *would* be if the
-        boundary/void/coherence inputs were fed from behavioral EISV instead of
-        the ODE-evolved state (kernel-split WS1 option b). It does NOT change the
-        live decision — it only measures divergence so the swap can be validated
-        before the ODE is gated off the check-in critical path.
-        """
-        entry = AuditEntry(
-            timestamp=datetime.now().isoformat(),
-            agent_id=agent_id,
-            event_type="basin_shadow",
-            confidence=float(confidence),
-            details={
-                "ode_basin": ode_basin,
-                "behavioral_basin": behavioral_basin,
-                "agree": bool(agree),
-                **(details or {}),
-            }
-        )
-        self._write_entry(entry)
-
     def log_grounding_shadow(self, agent_id: str, ungrounded: dict, grounded: dict,
                              sources: dict, applied: bool):
         """Shadow-compare grounded vs ungrounded canonical metrics (E/I/S/coherence).
