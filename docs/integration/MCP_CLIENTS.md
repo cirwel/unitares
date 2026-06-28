@@ -109,7 +109,10 @@ tool runs:
      server then advertises Dynamic Client Registration, so a DCR-capable
      client (e.g. Claude.ai custom connector) leaves client_id/client_secret
      blank and self-registers. Note: client registrations are in-memory and
-     reset on restart. See `src/oauth_provider.py`.
+     reset on restart. The protected MCP resource defaults to
+     `<UNITARES_OAUTH_ISSUER_URL>/mcp`; set `UNITARES_OAUTH_RESOURCE_URL` only
+     if a reverse proxy exposes the MCP resource at a different public URL.
+     See `src/oauth_provider.py`.
 
 The Host allowlist applies regardless of the auth choice — set it even when
 using "none" locally is fine, but for a public host you need both the
@@ -120,7 +123,7 @@ outside:
 
 ```bash
 curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
-# 403 gone -> Host gate open. 401 -> bearer gate is on (expected once a key is set).
+# 403 gone -> Host gate open. 401 -> auth gate is on (expected before the client sends a valid bearer/OAuth access token).
 ```
 
 ## Agent Identity

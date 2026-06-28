@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hmac
 import os
+import time
 from typing import List, Optional
 
 from mcp.server.transport_security import TransportSecuritySettings
@@ -125,14 +126,57 @@ def check_mcp_bearer(
         allow = mcp_bearer_tokens()
     if not allow:
         return True  # gate off — default posture
-    if not authorization_header:
-        return False
-    # RFC 7235: the auth scheme is case-insensitive. Accept "Bearer"/"bearer"/etc.
-    scheme, _, presented = authorization_header.partition(" ")
-    if scheme.lower() != "bearer":
-        return False
-    presented = presented.strip()
+    presented = bearer_token_from_authorization(authorization_header)
     if not presented:
         return False
     # Constant-time membership test over a small allowlist.
     return any(hmac.compare_digest(presented, tok) for tok in allow)
+
+
+def bearer_token_from_authorization(authorization_header: Optional[str]) -> Optional[str]:
+    """Return the bearer token from an Authorization header, if present."""
+    if not authorization_header:
+        return None
+    # RFC 7235: the auth scheme is case-insensitive. Accept "Bearer"/"bearer"/etc.
+    scheme, _, presented = authorization_header.partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    presented = presented.strip()
+    return presented or None
+
+
+async def check_oauth_bearer(
+    authorization_header: Optional[str],
+    provider,
+    required_scopes: Optional[List[str]] = None,
+) -> tuple[bool, Optional[str]]:
+    """Validate an OAuth bearer token against an MCP SDK auth provider.
+
+    Returns ``(allowed, client_id)``. OAuth is separate from the static hosted
+    bearer allowlist above: a DCR client presents a provider-minted access
+    token, not a value from ``UNITARES_MCP_BEARER_TOKENS``.
+    """
+    token = bearer_token_from_authorization(authorization_header)
+    if not token or provider is None:
+        return False, None
+
+    try:
+        access_token = await provider.load_access_token(token)
+    except Exception:
+        return False, None
+
+    if access_token is None:
+        return False, None
+
+    expires_at = getattr(access_token, "expires_at", None)
+    if expires_at and expires_at < int(time.time()):
+        return False, None
+
+    required = required_scopes or []
+    if required:
+        scopes = set(getattr(access_token, "scopes", None) or [])
+        if any(scope not in scopes for scope in required):
+            return False, None
+
+    client_id = getattr(access_token, "client_id", None)
+    return True, client_id if isinstance(client_id, str) else None
