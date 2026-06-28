@@ -46,6 +46,9 @@ def test_reserved_test_surface_predicate():
     # force-releases, and must be excluded from alarms.
     assert RESERVED_TEST_SURFACE_PREFIX == "td:/test/"
     assert _is_reserved_test_surface("td:/test/force-release-contract-abc")
+    # Legacy pre-PR-#1102 naming must also be suppressed so lingering historical
+    # events don't re-alarm on a cursor reset / freshly-restarted daemon.
+    assert _is_reserved_test_surface("td:/force-release-contract-test-abc")
     assert not _is_reserved_test_surface("td:/pr3b_a")
     assert not _is_reserved_test_surface("dialectic:/x")
     assert not _is_reserved_test_surface(None)
