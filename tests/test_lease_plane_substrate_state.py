@@ -340,7 +340,7 @@ def test_resident_class_exempted_from_void_threshold():
     history = np.array([0.05] * 100)
     threshold_default = config.get_void_threshold(history, adaptive=True)
     threshold_resident = config.get_void_threshold(
-        history, adaptive=True, agent_class="Steward"
+        history, adaptive=True, agent_class="resident_persistent"
     )
     assert threshold_resident > threshold_default
     assert threshold_resident == 0.30

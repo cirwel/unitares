@@ -12,17 +12,17 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**90 flags.**
+**91 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
 | `GOVERNANCE_AGENT_PREFIX` | `(required)` | Detect interface and context information for name generation | src/mcp_handlers/support/naming_helpers.py:24, src/mcp_handlers/support/naming_helpers.py:25 |
-| `GOVERNANCE_BEHAVIORAL_VERDICT` | `'true'` | — | config/governance_config.py:406 |
+| `GOVERNANCE_BEHAVIORAL_VERDICT` | `'true'` | — | config/governance_config.py:403 |
 | `GOVERNANCE_DATABASE_URL` | `'postgresql://postgres:postgr…` | Poll lease_plane_events for forced-release alarms; emit findings | agents/sentinel/agent.py:658 |
 | `GOVERNANCE_HEALTH_URL` | `'http://localhost:8767/health'` | — | agents/vigil/checks/governance_health.py:18 |
 | `GOVERNANCE_TOOL_MODE` | `'lite'` | — | src/tool_modes.py:18 |
 | `GOVERNANCE_URL` | `''` | read by _governance_url() | src/mcp_handlers/dialectic/orchestrator_dispatch.py:54, agents/dialectic_reviewer/reviewer.py:242 |
-| `GOVERNANCE_WARMUP_STRUCTURAL_GRACE` | `'true'` | — | config/governance_config.py:716 |
+| `GOVERNANCE_WARMUP_STRUCTURAL_GRACE` | `'true'` | — | config/governance_config.py:713 |
 | `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Async exclusive lock for agent state updates | src/state_locking.py:331, src/services/update_workflow_service.py:88 |
 | `UNITARES_ANCHORS_DIR` | `(required)` | Return the anchors directory path | src/identity/substrate.py:92 |
 | `UNITARES_API_TOKEN` | `(required)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py:106, src/mcp_handlers/identity/session.py:169 |
@@ -32,6 +32,7 @@ index; that one is the curated decision record.
 | `UNITARES_AUTO_DIALECTIC_RECOVERY` | `'1'` | Process governance update with authentication enforcement (async version) | src/agent_loop_detection.py:612 |
 | `UNITARES_BASELINE_CACHE_MAXLEN` | `'1000'` | — | governance_core/ethical_drift.py:55 |
 | `UNITARES_CALIBRATION_BACKEND` | `'postgres'` | Initialize calibration checker with confidence bins | src/calibration.py:106 |
+| `UNITARES_CLASS_CALIBRATION` | `''` | Merge a deployment-local per-class calibration overlay into the class-keyed dicts, if ``UNITARES_CLASS_CALIBRATION`` names a JSON file | config/governance_config.py:1020 |
 | `UNITARES_CONNECT_RETRIES` | `'1'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py:107 |
 | `UNITARES_CONNECT_TIMEOUT` | `'10'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py:105 |
 | `UNITARES_CONTINUITY_TOKEN_SECRET` | `(required)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py:94, src/mcp_handlers/identity/session.py:167 |
@@ -50,15 +51,15 @@ index; that one is the curated decision record.
 | `UNITARES_FINDINGS_URL` | `'http://localhost:8767/api/fi…` | — | agents/common/findings.py:21 |
 | `UNITARES_FIRST_RUN` | `(required)` | Resolve Watcher identity via proof-owned UUID-direct → fresh onboard | agents/watcher/agent.py:271, agents/sdk/src/unitares_sdk/agent.py:364 |
 | `UNITARES_GOVERNANCE_URL` | `(required)` | read by _governance_url() | src/mcp_handlers/dialectic/orchestrator_dispatch.py:53, agents/dialectic_reviewer/reviewer.py:242 |
-| `UNITARES_GROUNDING_APPLY` | `''` | Whether grounded E/I/S/coherence actually replace the ODE/heuristic values in the canonical metrics (UNITARES_GROUNDING_APPLY) | config/governance_config.py:1076 |
-| `UNITARES_GROUNDING_SHADOW` | `''` | Whether to shadow-compare grounded vs ungrounded canonical metrics each check-in (UNITARES_GROUNDING_SHADOW) | config/governance_config.py:1064 |
+| `UNITARES_GROUNDING_APPLY` | `''` | Whether grounded E/I/S/coherence actually replace the ODE/heuristic values in the canonical metrics (UNITARES_GROUNDING_APPLY) | config/governance_config.py:1129 |
+| `UNITARES_GROUNDING_SHADOW` | `''` | Whether to shadow-compare grounded vs ungrounded canonical metrics each check-in (UNITARES_GROUNDING_SHADOW) | config/governance_config.py:1117 |
 | `UNITARES_HEALTH_PROBE_INTERVAL_SECONDS` | `(required)` | Periodically run the deep health check and cache the result | src/background_tasks.py:526 |
 | `UNITARES_HTTP_API_TOKEN` | `(required)` | List all tools in OpenAI-compatible format Query params: mode: Tool mode filter - "minimal", "lite", "full" | src/http_api.py:436, src/http_api.py:485 (+34 more) |
 | `UNITARES_HTTP_CORS_ALLOW_ORIGIN` | `(required)` | Main entry point for governance MCP server. | src/mcp_server.py:841, src/mcp_server.py:883 |
-| `UNITARES_IDENTITY_STRICT` | `'log'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1129, config/governance_config.py:1138 |
+| `UNITARES_IDENTITY_STRICT` | `'log'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1182, config/governance_config.py:1191 |
 | `UNITARES_INCLUDE_API_KEY_IN_RESPONSES` | `(required)` | Include onboarding guidance, API key hints, welcome message. | src/mcp_handlers/updates/enrichments.py:533 |
 | `UNITARES_INTEGRATOR` | `'rk4'` | Returns the ODE integration method | governance_core/parameters.py:143 |
-| `UNITARES_IPUA_PIN_CHECK` | `'strict'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1251, config/governance_config.py:1262 |
+| `UNITARES_IPUA_PIN_CHECK` | `'strict'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1304, config/governance_config.py:1315 |
 | `UNITARES_I_DYNAMICS` | `'linear'` | Returns the I-channel dynamics mode | governance_core/parameters.py:160 |
 | `UNITARES_KG_PROACTIVE_EVERY` | `'0'` | Gate the proactive (steady-state) KG surface — cadence + warmup + length | src/mcp_handlers/updates/enrichments.py:1555 |
 | `UNITARES_KNOWLEDGE_BACKEND` | `'auto'` | Get global knowledge graph instance (singleton) | src/knowledge_graph.py:265, src/knowledge_graph.py:340 |
@@ -79,10 +80,10 @@ index; that one is the curated decision record.
 | `UNITARES_PARAMS_JSON` | `(required)` | Returns the active dynamics parameters | governance_core/parameters.py:269 |
 | `UNITARES_PARAMS_PROFILE` | `'default'` | Returns the active parameters profile name | governance_core/parameters.py:243 |
 | `UNITARES_PARENT_AGENT_ID` | `(required)` | read by main() | agents/dialectic_reviewer/reviewer.py:243 |
-| `UNITARES_PAUSE_AUTO_EXPIRE_SECONDS` | `str(72 * 3600)` | — | config/governance_config.py:749 |
+| `UNITARES_PAUSE_AUTO_EXPIRE_SECONDS` | `str(72 * 3600)` | — | config/governance_config.py:746 |
 | `UNITARES_PHASE5_EVIDENCE_WRITE` | `''` | Health check, CIRS emissions, PG record, outcome events | src/mcp_handlers/updates/phases.py:2049 |
-| `UNITARES_PHI_TELEMETRY_ONLY` | `'1'` | Whether Φ is demoted to telemetry (UNITARES_PHI_TELEMETRY_ONLY) | config/governance_config.py:1050 |
-| `UNITARES_PREFIX_BIND_FINGERPRINT` | `'off'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1213, config/governance_config.py:1222 |
+| `UNITARES_PHI_TELEMETRY_ONLY` | `'1'` | Whether Φ is demoted to telemetry (UNITARES_PHI_TELEMETRY_ONLY) | config/governance_config.py:1103 |
+| `UNITARES_PREFIX_BIND_FINGERPRINT` | `'off'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1266, config/governance_config.py:1275 |
 | `UNITARES_PROCESS_UPDATE_RESPONSE_MODE` | `'auto'` | Apply response mode filtering to fully-built response_data | src/mcp_handlers/response_formatter.py:238 |
 | `UNITARES_PROGRESS_FLAT_PROBE_INTERVAL_SECONDS` | `(required)` | Resident-progress telemetry probe | src/background_tasks.py:579 |
 | `UNITARES_PROXY_URL` | `(required)` | — | src/mcp_server_std.py:127 |
@@ -90,15 +91,15 @@ index; that one is the curated decision record.
 | `UNITARES_RERANKER_MODEL` | `'bge-m3'` | — | src/reranker.py:38 |
 | `UNITARES_RESIDENT_AGENTS` | `''` | Figure out which agent labels to treat as residents | src/http_api.py:2661 |
 | `UNITARES_SENSOR_COUPLING` | `(required)` | Whether sensor-derived EISV spring-couples into the ODE | governance_core/parameters.py:182, governance_core/parameters.py:204 |
-| `UNITARES_SESSION_FINGERPRINT_CHECK` | `'log'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1165, config/governance_config.py:1176 |
-| `UNITARES_SESSION_MIRROR_APPLY` | `''` | Whether the resolver READS the PostgreSQL session mirror as a source of truth (UNITARES_SESSION_MIRROR_APPLY) | config/governance_config.py:1100 |
-| `UNITARES_SESSION_MIRROR_SHADOW` | `''` | Whether to dual-write session/identity bindings into the PostgreSQL mirror tables (core.session_bindings, core.onboard_pins) alongside the R | config/governance_config.py:1090 |
+| `UNITARES_SESSION_FINGERPRINT_CHECK` | `'log'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1218, config/governance_config.py:1229 |
+| `UNITARES_SESSION_MIRROR_APPLY` | `''` | Whether the resolver READS the PostgreSQL session mirror as a source of truth (UNITARES_SESSION_MIRROR_APPLY) | config/governance_config.py:1153 |
+| `UNITARES_SESSION_MIRROR_SHADOW` | `''` | Whether to dual-write session/identity bindings into the PostgreSQL mirror tables (core.session_bindings, core.onboard_pins) alongside the R | config/governance_config.py:1143 |
 | `UNITARES_STDIO_PROXY_HTTP_BEARER_TOKEN` | `(required)` | — | src/mcp_server_std.py:131 |
 | `UNITARES_STDIO_PROXY_HTTP_URL` | `(required)` | — | src/mcp_server_std.py:126 |
 | `UNITARES_STDIO_PROXY_SSE_URL` | `(required)` | — | src/mcp_server_std.py:129 |
 | `UNITARES_STDIO_PROXY_STRICT` | `'1'` | — | src/mcp_server_std.py:130 |
 | `UNITARES_STDIO_PROXY_URL` | `(required)` | — | src/mcp_server_std.py:128 |
-| `UNITARES_S_SETPOINT` | `'1'` | Whether the per-class S setpoint is active (UNITARES_S_SETPOINT) | config/governance_config.py:1033 |
+| `UNITARES_S_SETPOINT` | `'1'` | Whether the per-class S setpoint is active (UNITARES_S_SETPOINT) | config/governance_config.py:1086 |
 | `UNITARES_TOOL_SCHEMA_STRIP_FIELD_DESCRIPTIONS` | `'0'` | Build the list of MCP Tool objects from Pydantic schemas + descriptions. | src/tool_schemas.py:234 |
 | `UNITARES_TOOL_SCHEMA_VERBOSITY` | `'short'` | Build the list of MCP Tool objects from Pydantic schemas + descriptions. | src/tool_schemas.py:231 |
 | `UNITARES_TOOL_USAGE_LOG` | `(required)` | read by __init__() | src/tool_usage_tracker.py:57 |
