@@ -445,6 +445,17 @@ async def handle_process_agent_update(arguments: Dict[str, Any]) -> Sequence[Tex
                 }
             )]
     except Exception as e:
+        # FAIL-OPEN posture (deliberate). When the assessment pipeline itself
+        # errors (DB/Redis outage, internal bug), governance returns an error
+        # response with NO verdict/action field — it does NOT synthesize a
+        # `pause`. The agent therefore proceeds. This is correct for an
+        # advisory, non-guardrail system (see docs/REVIEWER_GUIDE.md "Failure &
+        # oscillation postures"): fail-CLOSED would let a transient infra blip
+        # mass-pause the whole fleet, and the anyio/asyncpg/Redis latency class
+        # documented in CLAUDE.md makes that a live risk, not a hypothetical.
+        # The verdict path's normal pauses (CIRS/void/coherence/high-risk/low
+        # basin in monitor_decision.py) are unaffected — this branch only covers
+        # the case where the assessment could not be computed at all.
         logger.error(f"Unexpected error in process_agent_update: {e}", exc_info=True)
         return [error_response(
             f"An unexpected error occurred: {str(e)}",
