@@ -89,7 +89,16 @@ while IFS= read -r f; do
   fi
 
   # Rule 2: career / personal artifacts by name or path segment.
-  if [[ "$bn" =~ [Rr]esume ]] || \
+  # "resume"/"cv" only count as a CV artifact when they're the trailing word of a
+  # *document* name (resume.pdf, kenny-resume.docx, cv.md) — NOT the verb "resume"
+  # buried in technical names (lifecycle/resume.py, identity-resume-v0.md), which
+  # were false-flagged before.
+  cv_artifact=0
+  case "${bn##*.}" in
+    py|js|ts|tsx|jsx|mjs|cjs|ex|exs|go|rs|rb|java|kt|c|cc|cpp|h|hpp|sh|bash|zsh|sql|yaml|yml|toml|json|lock|cfg|ini|env|mod|tf) ;;  # code/config — never a résumé
+    *) [[ "$bn" =~ (^|[-_])([Rr][eé]sum[eé]|[Cc][Vv])(\.[A-Za-z0-9]+)?$ ]] && cv_artifact=1 ;;
+  esac
+  if [[ "$cv_artifact" == 1 ]] || \
      [[ "$bn" =~ [Cc]over[-_]?[Ll]etter ]] || \
      [[ "/$f" =~ /[Cc]areer/ ]] || \
      [[ "/$f" =~ /[Jj]ob[-_][Aa]pplication ]] || \
