@@ -1,10 +1,16 @@
 # Redis Retirement — v0.1
 
-**Status:** Draft / scoping — **central claim of v0 REFUTED by council (2026-06-27); corrected here.**
+**Status:** Draft / scoping — **central claim of v0 REFUTED by live verification (2026-06-27); corrected here.**
 **Author:** scoped 2026-06-27
 **Scope:** the `unitares` server only. Decoupled from the BEAM Wave 3 roadmap — this can ship independently and does not gate on, nor is gated by, `beam-footprint-roadmap-v0.md`.
 
-> **v0 → v0.1 correction.** v0 claimed Redis "is the system of record for nothing" and that retiring the session cache was "near-free" because Postgres already mirrors sessions. **An adversarial council (architect + code-reviewer + live-verifier) refuted this against the running system.** Live state: **920 Redis session keys vs. 57 `core.sessions` rows — ~94% of active sessions exist only in Redis** (347 of them permanent, TTL=-1). The Postgres mirror is only written on the `persist=True` onboard/first-work path; the *default* resolution path (`persist=False`, used by `identity()` and middleware auto-mint) writes Redis + in-process dict only. So **today Redis is the de-facto primary store for most session/identity state.** Retirement is still feasible and worthwhile, but the order inverts: **build the durable Postgres write-through FIRST, run it until PG genuinely mirrors Redis, then retire.** This document is corrected accordingly.
+> **v0 → v0.1 correction.** v0 claimed Redis "is the system of record for nothing" and that retiring the session cache was "near-free" because Postgres already mirrors sessions. **Direct measurement against the running system refuted this.** Live state: **920 Redis session keys vs. 57 `core.sessions` rows — ~94% of active sessions exist only in Redis** (347 of them permanent, TTL=-1). The Postgres mirror is only written on the `persist=True` onboard/first-work path; the *default* resolution path (`persist=False`, used by `identity()` and middleware auto-mint) writes Redis + in-process dict only. So **today Redis is the de-facto primary store for most session/identity state.** Retirement is still feasible and worthwhile, but the order inverts: **build the durable Postgres write-through FIRST, run it until PG genuinely mirrors Redis, then retire.** This document is corrected accordingly.
+
+> **v0.1 → topology decision (operator, 2026-06-28).** The keep/drop scope below was implicitly a bet on process topology. **Decision: the server's permanent target is multi-process — single-process is never the long-term shape.** That changes the endpoint, not the immediate work:
+> - The observation "Redis is server-internal, not a cross-process bus" (§Current state) is true **only for today's single process**. Under the multi-process target Redis *becomes* the cross-process coordination + shared-TTL layer, which is exactly what it is good at.
+> - **The goal was never "remove Redis." It is "evict the durable data Redis should not be holding."** Endpoint = **two stores, each its right job**: durable identity/session/transport bindings → Postgres (the Phase 1 mirror work — **unchanged and still correct**); ephemeral + cross-process coordination (metadata cache, distributed lock, rate limiter, onboard-pin TTL, dedup) → Redis, **permanently**.
+> - **This strikes Phase 2's "remove `redis_client.py` / drop the `redis` dependency / `brew services stop redis`"** and reclassifies **Surface D (metadata cache)** and **Surface E (distributed lock)** as **NOT safe deletions** (see row notes). Under multi-process, per-worker in-process copies *break*: cache = N× the ~17s hydrate tax + cross-worker stale skew; `src/cache/rate_limiter.py` = each worker independently allows the full limit → real ceiling N× configured (a correctness bug); `distributed_lock` = no actual mutual exclusion. Phase 0's "safe deletions now" therefore shrinks to genuinely dead code only (the `identity_notifications` reader, the false `rate_limiter` PG-backend comment).
+> - **New prerequisite the decision creates (separate from retirement):** going multi-process requires auditing every in-process global that is currently load-bearing and confirming its cross-process backstop — notably the **`_session_identities` slot guard** (`persistence.py:116-121`, today's load-bearing mint guard) and the in-memory `src/rate_limiter.py`. The slot guard's cross-process backstop is `create_session`'s `ON CONFLICT DO NOTHING` (argued *stronger* in §S21-a) — verify that before worker #2 ships, do not assume it.
 
 ## Summary
 
@@ -39,8 +45,8 @@ Resident agents (Sentinel/Vigil/Watcher/Steward) hold **zero** Redis connections
 | C2 | **Onboard pin** (`recent_onboard:*`, `identity/session.py:879-1003`) — **NEW, missed in v0** | ❌ Redis sole store | Sole session-routing for IP:UA-fallback clients (Claude Desktop, REST w/o `client_session_id`). Drop → fresh session key every call → S21 ghost-fork for that population. **Must port to PG or in-process TTL store.** | **M — blocker** |
 | C3 | **PATH 1 fingerprint hijack check** (`resolution.py:651-753`) — **NEW, missed in v0** | n/a | `identity_hijack_suspected` enforcement (`UNITARES_PREFIX_BIND_FINGERPRINT`) lives ONLY in the Redis fast path. Retiring PATH 1 silently disables it; PATH 2 has no equivalent. **Must port to PATH 2 first.** | **M — blocker** |
 | C4 | **KG surfaced dedup** (`kg_surfaced:*`, `enrichments.py:1583-1616`) — **NEW, missed in v0** | ❌ Redis sole store (fail-open) | Drop → duplicate KG notifications every check-in. Behavioral regression, not correctness. | **S** |
-| D | Metadata cache (`src/cache/metadata_cache.py`) | ✅ clean direct-PG fallback (verified) | Delete module | **Trivial — safe now** |
-| E | Distributed lock (`src/cache/distributed_lock.py`) | ✅ `fcntl` file fallback is the single-node path | Delete Redis branch | **Trivial — safe now** |
+| D | Metadata cache (`src/cache/metadata_cache.py`) | ✅ clean direct-PG fallback (verified) | ~~Delete module~~ **KEEP — cross-worker cache under multi-process (see topology decision); in-process copy = N× hydrate tax + stale skew** | ~~Trivial — safe now~~ **not a deletion** |
+| E | Distributed lock (`src/cache/distributed_lock.py`) | ✅ `fcntl` file fallback is the single-node path | ~~Delete Redis branch~~ **KEEP — `fcntl` is single-node only; this is the correct cross-process primitive once workers contend** | ~~Trivial — safe now~~ **not a deletion** |
 | F | Circuit breaker / metrics (`redis_client.py`) | n/a | Vanishes with Redis | **Free** |
 
 `identity_notifications:*` (read at `enrichments.py:1795`) is **dead code** — no writer exists. Remove on cleanup, no migration needed.
@@ -51,7 +57,7 @@ Resident agents (Sentinel/Vigil/Watcher/Steward) hold **zero** Redis connections
 
 Additionally, the Redis session payload carries `trajectory_required`, `spawn_reason`, `bind_ip_ua`, and `bound_at` that `core.sessions` does not store (verified: `metadata={}` on a live row), and `agent_id` is a **UUID in Redis but a display label in PG `client_info`** — a read-path correctness hazard for any naive fallback.
 
-**S21-a note (council, architect):** the Redis slot guard (`_redis_slot_blocks_overwrite`, `persistence.py:304`) was never atomic (`get` then `setex`, last-writer-wins). The load-bearing guard is the in-memory `_session_identities` check (`persistence.py:116-121`), and `create_session`'s `ON CONFLICT (session_id) DO NOTHING` (`mixins/session.py:38`) is *stronger* than Redis here. So moving the guard to PG does **not** reintroduce the ghost-fork race — but the call site at `persistence.py:583` currently **ignores `create_session`'s return value**; the port must check it and reconcile the cache on conflict.
+**S21-a note:** the Redis slot guard (`_redis_slot_blocks_overwrite`, `persistence.py:304`) was never atomic (`get` then `setex`, last-writer-wins). The load-bearing guard is the in-memory `_session_identities` check (`persistence.py:116-121`), and `create_session`'s `ON CONFLICT (session_id) DO NOTHING` (`mixins/session.py:38`) is *stronger* than Redis here. So moving the guard to PG does **not** reintroduce the ghost-fork race — but the call site at `persistence.py:583` currently **ignores `create_session`'s return value**; the port must check it and reconcile the cache on conflict.
 
 ## Corrected sequencing
 
@@ -64,9 +70,9 @@ Additionally, the Redis session payload carries `trajectory_required`, `spawn_re
 4. Decide + implement B (transport binding) and C (rate limiter).
 5. Run **dual-write with Redis still authoritative** in production until a parity check shows PG mirrors ≥99% of live Redis bindings (the inverse of today's 6%).
 
-**Phase 2 — cut over:** flip reads to PG/in-process, delete PATH 1 and the Redis branches, accept C4 (dedup) regression or port it, then remove `redis_client.py`, the `redis` dependency, the `asyncio.wait_for` guards, update stack docs, `brew services stop redis`.
+**Phase 2 — cut over the durable surfaces (NOT full Redis removal — see topology decision):** flip the *session/identity/transport* reads from PATH 1 (Redis) to PG, delete only those Redis write/read branches, and accept-or-port C4 (dedup). **Do NOT remove `redis_client.py`, drop the `redis` dependency, or `brew services stop redis`** — under the multi-process target Redis stays as the coordination/TTL layer (metadata cache, distributed lock, rate limiter, onboard-pin TTL, dedup). Keep the `asyncio.wait_for` Redis guards. Endpoint is two stores, not one.
 
-**Test impact (council):** ~229 Redis test functions across 7 files plus ~33 partial mocks — over the CLAUDE.md single-writer-deletion tripwire. Phase 2 deletions must be surfaced as their own draft PR, not folded in.
+**Test impact:** ~229 Redis test functions across 7 files plus ~33 partial mocks — over the CLAUDE.md single-writer-deletion tripwire. Phase 2 deletions must be surfaced as their own draft PR, not folded in.
 
 ## Decisions required
 
@@ -81,4 +87,4 @@ Additionally, the Redis session payload carries `trajectory_required`, `spawn_re
 
 ## Provenance
 
-v0 inventory came from file exploration. v0.1 corrections came from an adversarial council on 2026-06-27: architect (steelman + S21-a race analysis), code-reviewer (hidden consumers, missed surfaces, test blast radius), live-verifier (the 94%-Redis-only finding against the running instance). The live-verifier refutation is the reason this is v0.1 and not an implementation PR.
+v0 inventory came from file exploration. v0.1 corrections came from direct verification against the running instance on 2026-06-27: an S21-a race analysis, a sweep for hidden consumers / missed surfaces / test blast radius, and a live key census (Redis `--scan` vs. `core.sessions` row count). The 94%-Redis-only finding is what refuted v0's "near-free" claim, and is the reason this is v0.1 and not an implementation PR.
