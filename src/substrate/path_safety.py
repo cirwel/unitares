@@ -53,8 +53,8 @@ def first_user_writable_ancestor(path: str) -> Optional[str]:
     ``None`` if no path component up to root grants write access.
 
     Used by the enrollment CLI to make warning messages specific:
-    "binary at /Users/cirwel/projects/.../sentinel is user-writable via
-    /Users/cirwel/projects" rather than just "is user-writable."
+    "binary at /home/user/projects/.../sentinel is user-writable via
+    /home/user/projects" rather than just "is user-writable."
     """
     resolved = Path(path).expanduser().resolve()
 

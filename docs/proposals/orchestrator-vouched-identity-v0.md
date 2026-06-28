@@ -451,7 +451,7 @@ that travels."
   (live-verifier 2026-06-17).** The orchestrator builds against **Erlang/OTP 28 /
   Elixir 1.19.5**, so `:gen_tcp.connect({:local, path}, 0, …)` AF_UNIX (OTP 19+) is
   available. The governance UDS listener is **live**: `UNITARES_UDS_SOCKET =
-  /Users/cirwel/.unitares/governance.sock` is set in the gov-mcp plist and the
+  ~/.unitares/governance.sock` is set in the gov-mcp plist and the
   socket exists (`srw-rw-rw-`, last bound today). It speaks HTTP framing over
   AF_UNIX (`uds_listener.py`, uvicorn H11). **The remaining cost, not a blocker:**
   `:httpc` cannot do AF_UNIX, and the existing `LeasePlaneClient` (`:httpc` + TCP)

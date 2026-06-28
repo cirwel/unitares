@@ -342,7 +342,7 @@ A file rename, dialectic-session ID rotation, or resident relabel changes a surf
 
 **Failure mode**
 
-Agent A holds `file:///Users/cirwel/x.py`. Operator (or another tool) renames `x.py` → `y.py`. Agent A's lease still references `file:///Users/cirwel/x.py` — that path no longer exists. Agent B can now `acquire(file:///Users/cirwel/y.py)` and succeed; the "same surface semantically" is double-leased. The orphan ages out via TTL on its `original_ttl_s` clock — at most 1h per RFC §4.4 hard cap.
+Agent A holds `file:///home/user/x.py`. Operator (or another tool) renames `x.py` → `y.py`. Agent A's lease still references `file:///home/user/x.py` — that path no longer exists. Agent B can now `acquire(file:///home/user/y.py)` and succeed; the "same surface semantically" is double-leased. The orphan ages out via TTL on its `original_ttl_s` clock — at most 1h per RFC §4.4 hard cap.
 
 **Detection**
 
