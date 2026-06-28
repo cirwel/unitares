@@ -93,12 +93,16 @@ signed *verdict* about them.** Only the socket-owning Python front door can mint
 
 ## 5. Honest open risks (must be closed before/at the new gate)
 
-- **5a — the win may be partial (the load-bearing measurement).** The substrate tax lives in the
-  Python event loop. (γ) leaves **identity resolution** (Redis + PG lookups) on that taxed loop and
-  moves only handler compute to BEAM. (A.1) showed governance_core *math* is 0.8% of the p99 floor —
-  but identity-resolution I/O is part of "the rest." **New measurement required:** what fraction of
-  `process_agent_update` p99 is identity-resolution (stays taxed) vs handler/update compute (moves to
-  BEAM)? If resolution dominates, (γ)'s latency win is small and "shelve" may beat it.
+- **5a — the win-is-partial risk: MEASURED 2026-06-28, does not materialize.** The substrate tax
+  lives in the Python event loop; (γ) leaves identity resolution on it and moves handler compute to
+  BEAM. The concern was that resolution might dominate the floor, making the win small. Cross-tool
+  decomposition of `audit.tool_usage` (14d) refutes that: identity resolution runs on every tool, so
+  a light tool's latency bounds the resolution floor. `process_agent_update` p99 = 2751ms; the
+  heaviest identity-path tool `onboard` (full resolution + mint, more than a check-in does) p99 =
+  118ms; trivial-handler tools (`identity`, `get_governance_metrics`, `check_calibration`) p99 =
+  9–14ms. So identity resolution is ≤~4% of the `process_agent_update` floor; the ~96%+ (the
+  StateLockManager critical section + persist + event-loop coordination) is what moves to BEAM. The
+  latency win is substantial, not partial. Method/data: `docs/handoffs/wave-3-gamma-5a-floor-split-2026-06-28.md`.
 - **5b — the envelope is a new trust primitive.** New shared secret (key management, rotation),
   signature canonicalization (byte-parity hazard, same family as §5.3's signature concern), and a
   new forgery surface if the secret leaks. The front door becomes a single point of authz-trust.
