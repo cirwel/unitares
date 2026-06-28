@@ -441,6 +441,17 @@ _DEMOTION_SKIP_ONTOLOGY = {
     "README.md", "identity.md", "plan.md", "paper-positioning.md", "glossary.md",
 }
 
+# A doc that already labels itself historical/archived/superseded is honest
+# about its status — it is not a stale plan masquerading as current, so it is
+# not a demotion candidate even if it also says "shipped". (e.g. s10-fleet-
+# aggregation-plan.md: "archived implementation plan ... retained as design
+# provenance" — flagging it would be noise.)
+_ALREADY_HISTORICAL = re.compile(
+    r'\b(archived|superseded|withdrawn|retained as|design provenance|'
+    r'historical record|historical provenance|for provenance|deprecated)\b',
+    re.IGNORECASE,
+)
+
 _SHIPPED_MARKERS = re.compile(
     r'\b(shipped|deployed|landed|merged|in production|live in prod|'
     r'enforcement shipped|complete[d]?|resolved|done)\b',
@@ -498,6 +509,9 @@ def check_demotion_candidates(md_files: list[Path]) -> list[str]:
         lines = fpath.read_text(errors="replace").splitlines()
         header = "\n".join(lines[:15])
         if not _SHIPPED_MARKERS.search(header):
+            continue
+        # Already honest about being historical → not a stale-plan candidate.
+        if _ALREADY_HISTORICAL.search(header):
             continue
         loc = "ontology/ (identity tree)" if in_ontology else "proposals/"
         if _ACTIVE_REMAINING.search(header):

@@ -457,6 +457,21 @@ def test_ontology_plan_flagged_with_location_hint(tmp_path, monkeypatch, doc_hea
     assert len(warnings) == 1 and "ontology/ (identity tree)" in warnings[0]
 
 
+def test_already_historical_doc_not_flagged(tmp_path, monkeypatch, doc_health):
+    """A doc that already self-labels as archived/provenance is honest, not stale.
+
+    Regression: s10-fleet-aggregation-plan.md says "archived implementation plan
+    ... retained as design provenance" yet was flagged because it also says
+    "shipped". Self-labeled-historical docs must be exempt.
+    """
+    warnings = _demotion_for(
+        tmp_path, monkeypatch, doc_health, "proposals/old-plan.md",
+        "# Old\n\n**Status:** archived implementation plan. Shipped in PR #471; "
+        "retained as design provenance.\n",
+    )
+    assert warnings == []
+
+
 def test_widely_referenced_doc_exempt_as_living_reference(tmp_path, monkeypatch, doc_health):
     """A doc cited by >= threshold other docs is a living reference, not a stale plan."""
     target_rel = "proposals/contract-v0.md"
