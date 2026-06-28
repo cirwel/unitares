@@ -12,14 +12,12 @@ numbers that baseline it:
      NAMED agents, excluding operator credentials (the dashboard).
      Baseline: 3 per 14d, and both callers were burn-in probes — real
      agent-initiated retrieval was zero.
-  3. Onboard engagement (three honest cuts). The legacy "conversion" (did a
-     ceremonial process_agent_update) is artifact-prone: ~22% of onboards are
-     infra (dispatch_beam_harness / operator / probes) that never check in by
-     design, and most real agents do value work WITHOUT the discouraged
-     ceremonial check-in. Reports: legacy `converted`; adopter-cohort
+  3. Onboard engagement (three honest cuts). `converted` means the agent made
+     itself visible through either ceremonial process_agent_update OR the BEAM
+     harness's external outcome signal. `ceremonial_converted` preserves the old
+     process_agent_update-only cut. Reports: `converted`; adopter-cohort
      `cohort_engaged` (any value action — check-in / KG / outcome); and
      `did_nothing` (onboarded, made no UUID-attributed call = true bounce).
-     The legacy ~19% is mostly measurement artifact; true bounce is far lower.
   4. Ground-truth pipe health — outcome_event success rate.
      Baseline: 17% (290/416 identity_error); fixed client-side 2026-06-12.
 
@@ -44,8 +42,8 @@ def connect():
     return psycopg2.connect(dsn)
 
 
-def snapshot(days: int) -> dict:
-    queries = {
+def _snapshot_queries() -> dict:
+    return {
         "checkin_concentration": """
             WITH calls AS (
                 SELECT agent_id, count(*) n
@@ -71,16 +69,12 @@ def snapshot(days: int) -> dict:
               AND u.agent_id IS NOT NULL
               AND coalesce(a.label, '') NOT LIKE 'operator\\_%%'
         """,
-        # Onboard engagement. The legacy `converted` (did a process_agent_update)
-        # under-counts badly: ~22% of onboards are infra (dispatch_beam_harness,
-        # operator, probes) that never check in by design, and most real agents
-        # do value work (KG, outcomes) without the ceremonial check-in — which the
-        # session-start hook explicitly discourages. So we report three honest cuts:
-        #   converted        — legacy (process_agent_update only); kept for continuity
-        #   cohort_engaged    — real-agent cohort that did ANY value action
-        #   did_nothing       — onboarded and made no UUID-attributed call (true bounce)
-        # NOTE: BEAM-dispatch agents check in off-path → counted as non-converting
-        # (issue tracked); excluded from the adopter cohort so they don't distort it.
+        # Onboard engagement. `converted` used to mean process_agent_update only,
+        # which made BEAM-dispatch harness identities look like permanent
+        # non-converters even though they emit externally verified outcome_event
+        # rows under their governance UUID (#1055). Keep the ceremonial-only cut
+        # as a separate continuity field, and make the headline conversion count
+        # the real BEAM check-in surface too.
         "onboard_conversion": """
             WITH a AS (
                 SELECT a.id,
@@ -96,14 +90,28 @@ def snapshot(days: int) -> dict:
             f AS (
                 SELECT a.id, a.is_adopter,
                     EXISTS (SELECT 1 FROM audit.tool_usage t WHERE t.agent_id = a.id::text
-                            AND t.success AND t.tool_name = 'process_agent_update') AS checked_in,
-                    EXISTS (SELECT 1 FROM audit.tool_usage t WHERE t.agent_id = a.id::text AND t.success
-                            AND t.tool_name IN ('process_agent_update','knowledge','search_knowledge_graph','outcome_event')) AS engaged_value,
-                    EXISTS (SELECT 1 FROM audit.tool_usage t WHERE t.agent_id = a.id::text) AS did_anything
+                            AND t.success AND t.tool_name = 'process_agent_update') AS ceremonial_checked_in,
+                    EXISTS (SELECT 1 FROM audit.outcome_events oe WHERE oe.agent_id = a.id::text
+                            AND oe.ts > now() - make_interval(days => %(days)s)
+                            AND oe.verification_source = 'external_signal'
+                            AND oe.detail->>'harness' = 'beam') AS beam_checked_in,
+                    (
+                        EXISTS (SELECT 1 FROM audit.tool_usage t WHERE t.agent_id = a.id::text AND t.success
+                                AND t.tool_name IN ('process_agent_update','knowledge','search_knowledge_graph','outcome_event'))
+                        OR EXISTS (SELECT 1 FROM audit.outcome_events oe WHERE oe.agent_id = a.id::text
+                                   AND oe.ts > now() - make_interval(days => %(days)s))
+                    ) AS engaged_value,
+                    (
+                        EXISTS (SELECT 1 FROM audit.tool_usage t WHERE t.agent_id = a.id::text)
+                        OR EXISTS (SELECT 1 FROM audit.outcome_events oe WHERE oe.agent_id = a.id::text
+                                   AND oe.ts > now() - make_interval(days => %(days)s))
+                    ) AS did_anything
                 FROM a
             )
             SELECT count(*) AS minted,
-                   count(*) FILTER (WHERE checked_in) AS converted,
+                   count(*) FILTER (WHERE ceremonial_checked_in OR beam_checked_in) AS converted,
+                   count(*) FILTER (WHERE ceremonial_checked_in) AS ceremonial_converted,
+                   count(*) FILTER (WHERE beam_checked_in) AS beam_converted,
                    count(*) FILTER (WHERE is_adopter) AS cohort_minted,
                    count(*) FILTER (WHERE is_adopter AND engaged_value) AS cohort_engaged,
                    count(*) FILTER (WHERE NOT did_anything) AS did_nothing
@@ -131,6 +139,10 @@ def snapshot(days: int) -> dict:
               AND payload->'signals' @> '[{"signal_type": "kg_proactive_surface"}]'
         """,
     }
+
+
+def snapshot(days: int) -> dict:
+    queries = _snapshot_queries()
     out: dict = {"window_days": days}
     with connect() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -141,6 +153,12 @@ def snapshot(days: int) -> dict:
     cc["top2_share_pct"] = round(100 * cc["top2"] / cc["total"], 1) if cc["total"] else None
     oc = out["onboard_conversion"]
     oc["conversion_pct"] = round(100 * oc["converted"] / oc["minted"], 1) if oc["minted"] else None
+    oc["ceremonial_conversion_pct"] = (
+        round(100 * oc["ceremonial_converted"] / oc["minted"], 1) if oc["minted"] else None
+    )
+    oc["beam_conversion_pct"] = (
+        round(100 * oc["beam_converted"] / oc["minted"], 1) if oc["minted"] else None
+    )
     oc["cohort_engaged_pct"] = round(100 * oc["cohort_engaged"] / oc["cohort_minted"], 1) if oc["cohort_minted"] else None
     oc["did_nothing_pct"] = round(100 * oc["did_nothing"] / oc["minted"], 1) if oc["minted"] else None
     op = out["outcome_pipe_health"]
@@ -181,8 +199,12 @@ def main() -> int:
     print(f"  check-ins: {cc['total']} total, top-2 callers {cc['top2_share_pct']}%")
     print(f"  voluntary KG retrieval (named agents): {kg['named_searches']} calls "
           f"by {kg['distinct_agents']} agents")
-    print(f"  onboard→checkin (legacy, ceremonial): {oc['converted']}/{oc['minted']} "
-          f"({oc['conversion_pct']}%) — counts infra + check-in only; under-reports")
+    print(f"  onboard→checkin (process + BEAM external): {oc['converted']}/{oc['minted']} "
+          f"({oc['conversion_pct']}%)")
+    print(f"    ceremonial-only: {oc['ceremonial_converted']}/{oc['minted']} "
+          f"({oc['ceremonial_conversion_pct']}%); "
+          f"BEAM external: {oc['beam_converted']}/{oc['minted']} "
+          f"({oc['beam_conversion_pct']}%)")
     print(f"  adopter value-engagement: {oc['cohort_engaged']}/{oc['cohort_minted']} "
           f"({oc['cohort_engaged_pct']}%) — real-agent cohort, ANY value action (check-in/KG/outcome)")
     print(f"  true bounce (onboarded, did nothing): {oc['did_nothing']}/{oc['minted']} "
