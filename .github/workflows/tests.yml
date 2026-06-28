@@ -53,6 +53,17 @@ jobs:
       run: |
         python scripts/dev/skills_manifest.py --check
 
+    - name: Validate skill freshness (last_verified within freshness_days)
+      # Date-age check only (SKILL_FRESHNESS_AGE_ONLY=1): a skill whose
+      # last_verified is older than its freshness_days window blocks the PR.
+      # The richer source-file-mtime check stays LOCAL (ship.sh / pre-commit) —
+      # it reads filesystem mtime, which a fresh CI checkout rewrites to "now",
+      # so in CI it would false-flag every skill not verified on the run date.
+      env:
+        SKILL_FRESHNESS_AGE_ONLY: "1"
+      run: |
+        bash scripts/client/check-skill-freshness.sh
+
     - name: Validate tool-mode / schema config
       # DB-free: confirms TOOL_CATEGORIES matches the tool schema (alias-aware)
       # and minimal/lite keep their discovery tools, so TOOL_MODE filtering stays
