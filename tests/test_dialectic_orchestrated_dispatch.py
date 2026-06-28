@@ -54,6 +54,29 @@ def test_build_spec_omits_parent_when_absent():
     assert json.loads(spec["env"]["DIALECTIC_THESIS_CONDITIONS"]) == []
 
 
+def test_build_spec_propagates_beam_flag_and_creds(monkeypatch):
+    """When gov-mcp has the dialectic-on-BEAM flag + lease creds, the reviewer
+    spawn env carries them so the reviewer's own writes route through BEAM."""
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok-xyz")
+    monkeypatch.setenv("LEASE_PLANE_BASE_URL", "http://127.0.0.1:8788")
+    spec = od._build_spec("s", {"root_cause": "", "proposed_conditions": [], "reasoning": ""}, None)
+    env = spec["env"]
+    assert env["UNITARES_DIALECTIC_BEAM_RESOLUTION"] == "1"
+    assert env["LEASE_PLANE_BEARER_TOKEN"] == "tok-xyz"
+    assert env["LEASE_PLANE_BASE_URL"] == "http://127.0.0.1:8788"
+
+
+def test_build_spec_omits_beam_flag_when_parent_off(monkeypatch):
+    """Forward-only: flag absent in gov-mcp env => not in the reviewer spec
+    (reviewer falls back to Python). Keeps it flag-off-safe."""
+    monkeypatch.delenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", raising=False)
+    monkeypatch.delenv("LEASE_PLANE_BEARER_TOKEN", raising=False)
+    spec = od._build_spec("s", {"root_cause": "", "proposed_conditions": [], "reasoning": ""}, None)
+    assert "UNITARES_DIALECTIC_BEAM_RESOLUTION" not in spec["env"]
+    assert "LEASE_PLANE_BEARER_TOKEN" not in spec["env"]
+
+
 @pytest.mark.parametrize("env_val,expected", [
     (None, "http://127.0.0.1:8767/mcp/"),                       # default has the path
     ("http://127.0.0.1:8767", "http://127.0.0.1:8767/mcp/"),    # bare base → append
