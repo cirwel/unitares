@@ -131,8 +131,11 @@ if [ "$JSON" = 1 ]; then
   for r in "${rows[@]}"; do
     IFS='|' read -r name verdict br sha behindf pidf pickup hz <<< "$r"
     [ "$first" = 1 ] || printf ','; first=0
-    printf '{"name":"%s","verdict":"%s","branch":"%s","commit":"%s","%s","%s","pickup":"%s","health":"%s"}' \
-      "$name" "$verdict" "$br" "$sha" "$behindf" "$pidf" "$pickup" "$(echo "$hz" | tr -d '"')"
+    # behindf/pidf carry "behind=N"/"pid=X"; strip the prefixes so the JSON has
+    # real keys (the previous form emitted keyless values → invalid JSON, which
+    # broke any agent trying to parse --json as the header promises).
+    printf '{"name":"%s","verdict":"%s","branch":"%s","commit":"%s","behind":"%s","pid":"%s","pickup":"%s","health":"%s"}' \
+      "$name" "$verdict" "$br" "$sha" "${behindf#behind=}" "${pidf#pid=}" "$pickup" "$(echo "$hz" | tr -d '"\\')"
   done
   printf ']\n'
 else
