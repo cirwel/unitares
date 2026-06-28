@@ -47,6 +47,16 @@ GOVERNANCE_COHERENCE = Gauge(
     ['agent_id']
 )
 
+# Knowledge graph metrics. Set by the KG lifecycle background task
+# (src/knowledge_graph_lifecycle.py::run_kg_lifecycle_cleanup) at startup and on
+# its periodic sweep — an absolute COUNT(*), not inc-on-store, so it survives
+# restarts and reflects deletes/archival. NOT set in the /metrics handler, which
+# is deliberately DB-free (must not await asyncpg on the scrape path).
+KNOWLEDGE_NODES_TOTAL = Gauge(
+    'unitares_knowledge_nodes_total',
+    'Total knowledge graph discoveries (refreshed by the KG lifecycle task)'
+)
+
 # Dialectic metrics
 DIALECTIC_SESSIONS_ACTIVE = Gauge(
     'unitares_dialectic_sessions_active',

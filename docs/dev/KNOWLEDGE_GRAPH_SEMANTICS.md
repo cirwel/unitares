@@ -83,12 +83,13 @@ reader→writer pairs, and a self-grading verdict. It deliberately flags
 usually a resident sweeper bulk-searching the corpus, not broad peer-to-peer
 use — the verdict says so rather than letting the headline mislead.
 
-### Metrics note
+### Metrics
 
-There is no live "total KG nodes" Prometheus gauge. A `KNOWLEDGE_NODES_TOTAL`
-gauge previously existed but was never set (a permanent zero — worse than
-absent on a dashboard) and nothing consumed it, so it was removed. The
-`/metrics` handler is deliberately DB-free (it must not `await` asyncpg on the
-scrape path), so a node-count gauge would have to be fed from a background
-task; add that only if a consumer actually needs it. For KG size/usage
-questions today, use `scripts/analysis/kg_usage_report.py`.
+`KNOWLEDGE_NODES_TOTAL` (`unitares_knowledge_nodes_total`) is the live corpus
+size — total `knowledge.discoveries`. It is set by the KG lifecycle background
+task (`run_kg_lifecycle_cleanup`) at startup and on its periodic sweep, as an
+absolute `COUNT(*)` rather than incremented on store — so it survives restarts
+and reflects deletes/archival. It is deliberately **not** set in the `/metrics`
+handler, which must stay DB-free (no `await` on asyncpg in the scrape path).
+The refresh cadence follows the lifecycle task (startup + periodic); for
+on-demand size/usage breakdowns use `scripts/analysis/kg_usage_report.py`.

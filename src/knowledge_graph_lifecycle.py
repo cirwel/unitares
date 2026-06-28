@@ -475,6 +475,25 @@ class KnowledgeGraphLifecycle:
 
 
 # Convenience function for MCP handler
+async def _refresh_knowledge_nodes_gauge() -> None:
+    """Set the KNOWLEDGE_NODES_TOTAL gauge from an absolute COUNT(*).
+
+    Runs in the KG lifecycle background context (asyncpg-safe), NOT in the
+    DB-free /metrics scrape handler. Best-effort: a metrics/DB hiccup must not
+    fail the lifecycle sweep.
+    """
+    try:
+        from src.db import get_db
+        from src.metrics_registry import KNOWLEDGE_NODES_TOTAL
+
+        db = get_db()
+        async with db.acquire() as conn:
+            total = await conn.fetchval("SELECT COUNT(*) FROM knowledge.discoveries") or 0
+        KNOWLEDGE_NODES_TOTAL.set(total)
+    except Exception as exc:  # noqa: BLE001 — telemetry must not break the sweep
+        logger.debug(f"knowledge_nodes gauge refresh skipped: {exc}")
+
+
 async def run_kg_lifecycle_cleanup(dry_run: bool = False) -> Dict[str, Any]:
     """Run knowledge graph lifecycle cleanup."""
     lifecycle = KnowledgeGraphLifecycle()
@@ -484,6 +503,7 @@ async def run_kg_lifecycle_cleanup(dry_run: bool = False) -> Dict[str, Any]:
         _record_kg_lifecycle_status(status="error", last_error=str(errors[0]))
     else:
         _record_kg_lifecycle_status(status="healthy")
+    await _refresh_knowledge_nodes_gauge()
     return result
 
 
