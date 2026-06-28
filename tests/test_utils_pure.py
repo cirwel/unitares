@@ -282,9 +282,9 @@ class TestSanitizeErrorMessage:
     """Tests for _sanitize_error_message."""
 
     def test_removes_full_file_path_keeps_filename(self):
-        msg = "Error in /Users/cirwel/projects/unitares/src/mcp_handlers/utils.py"
+        msg = "Error in /Users/testuser/projects/unitares/src/mcp_handlers/utils.py"
         result = _sanitize_error_message(msg)
-        assert "/Users/cirwel/" not in result
+        assert "/Users/testuser/" not in result
         assert "utils.py" in result
 
     def test_removes_unix_path(self):

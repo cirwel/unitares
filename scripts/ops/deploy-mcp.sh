@@ -24,7 +24,7 @@
 # ONE-TIME SETUP (run interactively from a normal login shell, NOT automated):
 #   PLIST=~/Library/LaunchAgents/com.unitares.governance-mcp.plist
 #   cp "$PLIST" "$PLIST.bak"
-#   sed -i '' 's|/Users/cirwel/projects/unitares|/Users/cirwel/projects/unitares-deploy|g' "$PLIST"
+#   sed -i '' 's|$HOME/projects/unitares|$HOME/projects/unitares-deploy|g' "$PLIST"
 #   launchctl unload "$PLIST" && launchctl load "$PLIST"   # RELOAD (kickstart won't)
 #   curl -s http://127.0.0.1:8767/health/ready             # expect {"status":"ready"}
 #   # rollback: cp "$PLIST.bak" "$PLIST"; launchctl unload "$PLIST"; launchctl load "$PLIST"

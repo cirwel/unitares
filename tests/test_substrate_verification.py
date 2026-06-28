@@ -154,7 +154,7 @@ def test_exec_mismatch_when_actual_path_differs() -> None:
     claim = _make_claim(executable="/opt/homebrew/bin/sentinel")
     pa = _fake_pa(
         label=claim.expected_launchd_label,
-        executable="/Users/cirwel/projects/unitares/agents/sentinel/agent.py",
+        executable="$HOME/projects/unitares/agents/sentinel/agent.py",
     )
     result = verify_substrate_claim(claim, peer_pid=1234, pa_module=pa)
     assert result.accepted is False
