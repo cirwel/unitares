@@ -225,6 +225,34 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
     end
   end
 
+  describe "update_phase/2" do
+    test "advances a non-terminal phase" do
+      session_id = insert_dialectic_session(phase: "thesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert :ok = DialecticSaga.update_phase(session_id, "antithesis")
+      assert session_phase(session_id) == "antithesis"
+    end
+
+    test "rejects an invalid / terminal target phase" do
+      assert {:error, :invalid_phase} = DialecticSaga.update_phase("x", "resolved")
+      assert {:error, :invalid_phase} = DialecticSaga.update_phase("x", "bogus")
+    end
+
+    test "does not move an already-terminal session (no-op :ok)" do
+      session_id = insert_dialectic_session(phase: "resolved", status: "resolved")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert :ok = DialecticSaga.update_phase(session_id, "antithesis")
+      assert session_phase(session_id) == "resolved"
+    end
+
+    test "missing session -> :session_not_found" do
+      assert {:error, :session_not_found} =
+               DialecticSaga.update_phase("test_elixir_nope_phase", "thesis")
+    end
+  end
+
   describe "create_session/1" do
     test "inserts a session and starts a liveness watcher" do
       sid = "test_elixir_create_" <> Integer.to_string(System.unique_integer([:positive]))
@@ -278,6 +306,15 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       ])
 
     status
+  end
+
+  defp session_phase(session_id) do
+    %{rows: [[phase]]} =
+      Postgrex.query!(DB, "SELECT phase FROM core.dialectic_sessions WHERE session_id = $1", [
+        session_id
+      ])
+
+    phase
   end
 
   defp saga_state(saga_id) do

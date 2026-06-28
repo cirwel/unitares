@@ -192,6 +192,40 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
+  # ---------- /v1/dialectic/phase ----------
+  # BEAM-owned non-terminal phase advance (thesis/antithesis/synthesis). Makes
+  # BEAM sole writer of the session row across the whole lifecycle. Gated
+  # Python-side by UNITARES_DIALECTIC_BEAM_RESOLUTION.
+  post "/v1/dialectic/phase" do
+    with %{"session_id" => sid, "phase" => phase} <- conn.body_params,
+         true <- is_binary(sid) and byte_size(sid) > 0 and is_binary(phase) do
+      case UnitaresLeasePlane.DialecticSaga.update_phase(sid, phase) do
+        :ok ->
+          json(conn, 200, %{ok: true, session_id: sid, phase: phase})
+
+        {:error, :invalid_phase} ->
+          json(conn, 422, %{
+            ok: false,
+            error: "schema_invalid",
+            detail: "invalid non-terminal phase"
+          })
+
+        {:error, :session_not_found} ->
+          json(conn, 404, %{ok: false, error: "session_not_found"})
+
+        {:error, _} ->
+          json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+      end
+    else
+      _ ->
+        json(conn, 422, %{
+          ok: false,
+          error: "schema_invalid",
+          detail: "session_id and phase required"
+        })
+    end
+  end
+
   # ---------- /v1/dialectic/resolve ----------
   # BEAM-owned dialectic SYNTHESIS->RESOLVED commit (dialectic-on-BEAM Slice 1).
   # Python computes the resolution payload (convergence + agent-state mutation

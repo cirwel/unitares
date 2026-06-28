@@ -47,6 +47,32 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
   defp parsed(conn), do: Jason.decode!(conn.resp_body)
 
+  describe "/v1/dialectic/phase" do
+    test "advances a non-terminal phase (200)" do
+      session_id = insert_dialectic_session(phase: "thesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      resp = post_json("/v1/dialectic/phase", %{session_id: session_id, phase: "antithesis"})
+      assert resp.status == 200
+      assert parsed(resp)["phase"] == "antithesis"
+    end
+
+    test "invalid phase -> 422" do
+      resp = post_json("/v1/dialectic/phase", %{session_id: "x", phase: "resolved"})
+      assert resp.status == 422
+    end
+
+    test "missing session -> 404" do
+      resp =
+        post_json("/v1/dialectic/phase", %{
+          session_id: "test_elixir_nope_#{System.unique_integer([:positive])}",
+          phase: "antithesis"
+        })
+
+      assert resp.status == 404
+    end
+  end
+
   describe "/v1/dialectic/session" do
     test "creates a session (201) then idempotent replay (200)" do
       sid = "test_elixir_httpcreate_" <> Integer.to_string(System.unique_integer([:positive]))

@@ -186,6 +186,48 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   defp encode_json(nil), do: nil
   defp encode_json(v), do: Jason.encode!(v)
 
+  @non_terminal_phases ~w(awaiting_thesis thesis antithesis synthesis quorum_voting)
+
+  @doc """
+  Guarded non-terminal phase advance (thesis -> antithesis -> synthesis ...) —
+  BEAM as sole writer of `core.dialectic_sessions.phase` for intermediate
+  transitions too, not just creation + the terminal write. Refuses to touch an
+  already-terminal session (those move only via `resolve/1`) and only accepts a
+  non-terminal target phase. Idempotent: a no-op UPDATE still returns `:ok`.
+  """
+  @spec update_phase(String.t(), String.t()) ::
+          :ok | {:error, :invalid_phase | :session_not_found | term()}
+  def update_phase(session_id, phase)
+      when is_binary(session_id) and phase in @non_terminal_phases do
+    sql = """
+    UPDATE core.dialectic_sessions
+    SET phase = $2, updated_at = now()
+    WHERE session_id = $1 AND status NOT IN ('resolved', 'failed', 'escalated')
+    RETURNING session_id
+    """
+
+    case Postgrex.query(DB, sql, [session_id, phase]) do
+      {:ok, %{num_rows: 1}} ->
+        :ok
+
+      {:ok, %{num_rows: 0}} ->
+        # No row updated: session missing or already terminal. Distinguish so the
+        # caller can fall back vs treat as a benign no-op.
+        case Postgrex.query(DB, "SELECT 1 FROM core.dialectic_sessions WHERE session_id = $1", [
+               session_id
+             ]) do
+          {:ok, %{num_rows: 1}} -> :ok
+          {:ok, %{num_rows: 0}} -> {:error, :session_not_found}
+          {:error, e} -> {:error, e}
+        end
+
+      {:error, e} ->
+        {:error, e}
+    end
+  end
+
+  def update_phase(_session_id, _phase), do: {:error, :invalid_phase}
+
   defp do_resolve(params, session_id, payload, status) do
     case claim(params) do
       {:ok, %{saga_id: saga_id, origin: origin}} ->
