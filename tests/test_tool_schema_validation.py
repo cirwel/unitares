@@ -14,7 +14,11 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.tool_schemas import get_tool_definitions
+from src.tool_schemas import (
+    get_tool_definitions,
+    get_pydantic_schemas,
+    TOOL_ORDER,
+)
 from src.mcp_handlers.decorators import (
     get_tool_registry,
     list_registered_tools,
@@ -81,6 +85,54 @@ class TestRegistryConsistency:
         with_hidden = list_registered_tools(include_hidden=True)
         assert len(with_hidden) >= len(default), (
             "Including hidden tools should not reduce the count"
+        )
+
+
+# ============================================================================
+# TOOL_ORDER <-> Pydantic schema sync (silent-drop drift gate)
+# ============================================================================
+
+class TestToolOrderSchemaSync:
+    """Hard gate against the silent tool-registration footgun.
+
+    ``get_tool_definitions()`` iterates ``TOOL_ORDER``; an entry with no
+    matching Pydantic ``*Params`` schema is ``print``-warned and ``continue``d,
+    so the tool silently vanishes from the advertised MCP surface for every
+    client — no exception, no CI failure, just a missing tool. The structural
+    tests below this class only inspect what survived that filter, so they
+    cannot catch the drop. This class asserts the invariant at the source.
+    """
+
+    def test_every_tool_order_entry_has_a_schema(self):
+        """Every name in TOOL_ORDER must resolve to a Pydantic schema.
+
+        A missing schema means the tool is silently dropped from the MCP
+        registry at boot (tool_schemas.py:get_tool_definitions warns + skips).
+        """
+        schemas = get_pydantic_schemas()
+        missing = [name for name in TOOL_ORDER if name not in schemas]
+        assert not missing, (
+            "TOOL_ORDER entries with no Pydantic *Params schema will be "
+            "SILENTLY DROPPED from the MCP tool surface at boot "
+            f"(tool_schemas.py prints a warning and continues): {missing}. "
+            "Add the matching *Params model in src/mcp_handlers/schemas/, or "
+            "remove the entry from TOOL_ORDER."
+        )
+
+    def test_no_duplicate_tool_order_entries(self):
+        """TOOL_ORDER must have no duplicate names (ordering/merge drift guard)."""
+        seen = set()
+        dupes = sorted({n for n in TOOL_ORDER if n in seen or seen.add(n)})
+        assert not dupes, f"Duplicate entries in TOOL_ORDER: {dupes}"
+
+    def test_every_tool_order_entry_is_advertised(self):
+        """Round-trip: every TOOL_ORDER name must survive into the built
+        tool list. Catches a drop from any cause, not just a missing schema."""
+        advertised = {t.name for t in get_tool_definitions()}
+        dropped = [name for name in TOOL_ORDER if name not in advertised]
+        assert not dropped, (
+            f"TOOL_ORDER entries that did not reach get_tool_definitions() "
+            f"output (silently dropped at boot): {dropped}"
         )
 
 

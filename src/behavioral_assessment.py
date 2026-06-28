@@ -80,10 +80,37 @@ BASIN_I_HEALTHY = 0.70   # == BASIN_HIGH.I_min
 BASIN_S_HEALTHY = 0.25   # == BASIN_HIGH.S_max
 BASIN_V_HEALTHY = 0.15   # == BASIN_HIGH.V_abs_max
 
-# Sigma thresholds for self-relative scoring
-SIGMA_MILD = 1.5      # noticeably different from self
-SIGMA_MODERATE = 2.0   # concerning
-SIGMA_SEVERE = 3.0     # severe deviation
+# Sigma thresholds for self-relative scoring.
+#
+# Provenance (be honest about what these are and are NOT):
+#   - These are the conventional Gaussian deviation landmarks — 1.5σ / 2σ / 3σ
+#     — NOT constants empirically tuned on a labelled dataset. There is no
+#     hidden fit behind the specific values; treat them as principled defaults,
+#     not validated optima.
+#   - They are defensible as *global* constants precisely because the signal
+#     they threshold is already per-agent-normalized: after warmup, scoring is
+#     a z-score of the agent's deviation from its OWN Welford baseline (see the
+#     module docstring), so "2.0" means "two of THIS agent's own standard
+#     deviations," not an absolute EISV cut. The per-agent adaptation lives in
+#     the baseline, not in these multipliers — which is why one set of σ
+#     landmarks can apply across agents without a one-size-fits-all absolute
+#     threshold.
+#   - Reference shape (2σ ≈ ~95th pct, 3σ ≈ ~99.7th pct under normality) is the
+#     intuition; the EISV residual distribution is not guaranteed Gaussian, so
+#     the percentile reading is a heuristic, not a calibrated false-positive
+#     rate.
+#
+# Known limitations / open calibration questions (do not silently treat these
+# as solved):
+#   - Applied UNIFORMLY across E/I/S/V and across all agent types; there is no
+#     per-dimension or per-task-type (convergent vs exploratory) variant.
+#   - No committed sensitivity analysis for how much verdict churn a ±10% move
+#     in any landmark produces.
+# Per-agent/per-class adaptation, when it lands, belongs in the baseline /
+# class-anchor calibration path, NOT by forking these constants.
+SIGMA_MILD = 1.5      # ~1.5σ from self — noticeably different from own baseline
+SIGMA_MODERATE = 2.0   # ~2σ — concerning (≈95th pct under normality, heuristic)
+SIGMA_SEVERE = 3.0     # ~3σ — severe (≈99.7th pct under normality, heuristic)
 
 
 def _basin_health_gate(state: BehavioralEISV) -> Dict[str, float]:
