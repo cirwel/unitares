@@ -1116,14 +1116,12 @@ def cadence_from_tags(tags) -> int | None:
     return None
 
 
-# Back-compat label-based intervals: used only when an agent has no
-# ``cadence.*`` tag yet. Retire this once Lumen/Vigil/Sentinel are tagged.
-_PERSISTENT_AGENT_INTERVALS = {
-    "Vigil": 1800,     # 30 min
-    "Lumen": 300,      # 5 min
-    "Sentinel": 600,   # 10 min
-    "Watcher": 21600,  # 6 hr; hook-driven, not a 5-minute daemon
-}
+# Back-compat label-based intervals: used only when an agent has no ``cadence.*``
+# tag yet. USER-AGNOSTIC: empty in the repo — named residents would leak one
+# deployment's roster + schedule. The generic path is the ``cadence.*`` tag
+# taxonomy (CADENCE_FROM_TAG above); per-label residents come from the
+# deployment-local UNITARES_CLASS_CALIBRATION overlay ("label_intervals").
+from config.governance_config import LABEL_CHECKIN_INTERVALS as _PERSISTENT_AGENT_INTERVALS
 
 _silence_alerted: set[str] = set()
 _silence_critical_alerted: set[str] = set()
