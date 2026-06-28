@@ -277,6 +277,39 @@ class DialecticDB:
             )
             return False
 
+    async def has_inflight_saga(self, session_id: str) -> bool:
+        """True if a non-terminal resolution saga is in flight for this session.
+
+        The BEAM session owner (forthcoming) claims a row in
+        ``coordination.session_resolution_sagas`` for the lifetime of a
+        SYNTHESIS->RESOLVED resolution. The Python auto-resolve sweeper must NOT
+        mark such a session ``failed`` or reassign its reviewer mid-resolution —
+        doing so would race the saga and corrupt the outcome. Non-terminal saga
+        states are: reserved, paused_agent_applied, both_agents_applied,
+        reverting (pg_committed / reverted are terminal and do not block).
+
+        Fail-open: any error (e.g. the saga table absent in a bare test schema)
+        returns False. That is safe — if no saga infrastructure is live, BEAM is
+        not writing sagas, so there is nothing to race.
+        """
+        await self._ensure_pool()
+        try:
+            async with self._pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT 1 FROM coordination.session_resolution_sagas
+                    WHERE session_id = $1
+                      AND state IN ('reserved', 'paused_agent_applied',
+                                    'both_agents_applied', 'reverting')
+                    LIMIT 1
+                    """,
+                    session_id,
+                )
+                return row is not None
+        except Exception as e:  # pragma: no cover - defensive fail-open
+            logger.debug(f"has_inflight_saga check failed for {session_id[:16]}...: {e}")
+            return False
+
     async def add_message(
         self,
         session_id: str,
@@ -467,6 +500,11 @@ async def get_all_sessions_by_agent_async(agent_id: str) -> List[Dict[str, Any]]
 async def is_agent_in_active_session_async(agent_id: str) -> bool:
     db = await get_dialectic_db()
     return await db.is_agent_in_active_session(agent_id)
+
+
+async def has_inflight_saga_async(session_id: str) -> bool:
+    db = await get_dialectic_db()
+    return await db.has_inflight_saga(session_id)
 
 
 async def has_recently_reviewed_async(reviewer_id: str, paused_agent_id: str, hours: int = 24) -> bool:

@@ -18,6 +18,19 @@ sys.path.insert(0, str(project_root))
 AUTO_RESOLVE = "src.mcp_handlers.dialectic.auto_resolve"
 
 
+@pytest.fixture(autouse=True)
+def _no_inflight_saga():
+    """Default the C1 saga-inflight guard to False (no BEAM saga in flight).
+
+    The sweeper now calls has_inflight_saga_async before touching a session;
+    these tests exercise the no-saga path. The guard behavior itself is covered
+    in test_dialectic_sweeper_saga_guard.py.
+    """
+    with patch(f"{AUTO_RESOLVE}.has_inflight_saga_async",
+               new_callable=AsyncMock, return_value=False):
+        yield
+
+
 def _make_mock_server(agents=None):
     mock = MagicMock()
     mock.agent_metadata = agents or {}
