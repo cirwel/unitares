@@ -396,6 +396,104 @@ async def _substrate_http_reject(agent_uuid: str, source: str):
         return None
 
 
+async def _fingerprint_hijack_check(
+    session_key: str,
+    bound_bind_ip_ua: Optional[str],
+    agent_uuid: str,
+    *,
+    path_label: str = "path1_session_id",
+    source_label: str = "path1_fingerprint_mismatch",
+) -> bool:
+    """Shared fingerprint hijack check for PATH 1 (Redis) and PATH 2 (PG mirror).
+
+    Compares the binding-time fingerprint (``bound_bind_ip_ua``) against the
+    current request's ip_ua_fingerprint and, on a violation, fires the
+    ``identity_hijack_suspected`` broadcast. Returns True **iff strict mode says
+    the caller should fall through to a fresh session** — the helper does NOT
+    mutate caller state (B1: it cannot set the caller's ``resume``; the caller
+    applies ``resume = False`` on a True return).
+
+    Mode resolution (unchanged from the inline PATH 1 logic): the global
+    ``session_fingerprint_check_mode()`` and, for ``agent-``-prefix keys, the
+    stricter-of ``prefix_bind_fingerprint_mode()`` (#802). Under the per-path
+    (prefix) mode an absent binding-time OR current fingerprint is itself
+    non-authorizing; the global check never penalizes a missing fingerprint
+    (legacy-cache backward-compat contract).
+
+    Extracted so PATH 2 can run the identical check on the PG-mirror binding's
+    bind_ip_ua. Redis-retirement Phase 1A — docs/proposals/redis-retirement-phase-1-plan.md.
+    """
+    from config.governance_config import (
+        session_fingerprint_check_mode,
+        prefix_bind_fingerprint_mode,
+    )
+    _is_prefix_key = session_key.startswith("agent-")
+    _global_fp_mode = session_fingerprint_check_mode()
+    _prefix_fp_mode = prefix_bind_fingerprint_mode() if _is_prefix_key else "off"
+    _FP_RANK = {"off": 0, "log": 1, "strict": 2}
+    _fp_mode = _global_fp_mode
+    if _FP_RANK.get(_prefix_fp_mode, 0) > _FP_RANK.get(_global_fp_mode, 0):
+        _fp_mode = _prefix_fp_mode
+    _prefix_active = _is_prefix_key and _prefix_fp_mode != "off"
+
+    if _fp_mode == "off":
+        return False
+
+    cached_bind_fp = bound_bind_ip_ua
+    try:
+        from ..context import get_session_signals
+        _sig = get_session_signals()
+        current_fp = getattr(_sig, "ip_ua_fingerprint", None) if _sig else None
+    except Exception:
+        current_fp = None
+
+    _violation = None
+    if cached_bind_fp and current_fp and current_fp != cached_bind_fp:
+        _violation = "fingerprint_mismatch"
+    elif _prefix_active and not cached_bind_fp:
+        _violation = "no_bind_fingerprint"
+    elif _prefix_active and not current_fp:
+        _violation = "no_current_fingerprint"
+
+    if not _violation:
+        return False
+
+    # session_key prefix rides the structured payload, not this clear-text
+    # warning (its name trips CodeQL's clear-text-logging heuristic); agent_uuid
+    # already identifies the subject.
+    logger.warning(
+        "[PATH1_FINGERPRINT_MISMATCH] bound_fp=%s current_fp=%s reason=%s "
+        "— suspected hijack of agent=%s... (mode=%s)",
+        (cached_bind_fp or "<none>")[:16],
+        (current_fp or "<none>")[:16],
+        _violation,
+        agent_uuid[:8],
+        _fp_mode,
+    )
+    try:
+        from .handlers import _broadcaster
+        _b = _broadcaster()
+        if _b is not None:
+            await _b.broadcast_event(
+                event_type="identity_hijack_suspected",
+                agent_id=agent_uuid,
+                payload={
+                    "path": path_label,
+                    "mode": _fp_mode,
+                    "source": source_label,
+                    "reason": _violation,
+                    "prefix_scoped": _prefix_active,
+                    "session_key_prefix": session_key[:20],
+                    "bind_fp_prefix": (cached_bind_fp or "")[:8],
+                    "current_fp_prefix": (current_fp or "")[:8],
+                },
+            )
+    except Exception as _be:
+        logger.warning(f"[PATH1_FINGERPRINT_MISMATCH] broadcast failed: {_be}")
+
+    return _fp_mode == "strict"
+
+
 async def resolve_session_identity(
 
     session_key: str,
@@ -648,109 +746,20 @@ async def resolve_session_identity(
                                 )
                             resume = False
 
-                        # PATH 1 fingerprint cross-check (2026-04-20 council follow-up
-                        # to identity-honesty Part C). Session IDs of form
-                        # `agent-{uuid[:12]}` are UUID-derivable; PATH 1 resume by
-                        # session_id alone has no ownership proof. Compare the
-                        # binding-time fingerprint (written by _cache_session) against
-                        # the current request's fingerprint. Mismatch fires
-                        # identity_hijack_suspected with path="path1_session_id" and,
-                        # in strict mode, falls through to a fresh session.
-                        #
-                        # #802 per-path hardening: the `agent-` prefix shape also
-                        # honors UNITARES_PREFIX_BIND_FINGERPRINT, which may be set
-                        # stricter than the global default. Under that per-path mode an
-                        # ABSENT binding-time OR current fingerprint is itself
-                        # non-authorizing for the prefix shape (a UUID-derivable key
-                        # with no recorded fingerprint has no ownership proof — the
-                        # bind_ip_ua-absent hole). The per-path mode is scoped to the
-                        # prefix shape, so non-prefix keys and the default-off posture
-                        # stay byte-identical to prior behavior. Closes only the
-                        # cross-fingerprint hijack; same-fingerprint co-residents still
-                        # pass (residual needs the substrate/UDS path — see #802).
-                        from config.governance_config import (
-                            session_fingerprint_check_mode,
-                            prefix_bind_fingerprint_mode,
-                        )
-                        _is_prefix_key = session_key.startswith("agent-")
-                        _global_fp_mode = session_fingerprint_check_mode()
-                        _prefix_fp_mode = (
-                            prefix_bind_fingerprint_mode() if _is_prefix_key else "off"
-                        )
-                        _FP_RANK = {"off": 0, "log": 1, "strict": 2}
-                        _fp_mode = _global_fp_mode
-                        if _FP_RANK.get(_prefix_fp_mode, 0) > _FP_RANK.get(_global_fp_mode, 0):
-                            _fp_mode = _prefix_fp_mode
-                        # The absent-fingerprint branches fire ONLY when the per-path
-                        # flag is active (>=log). The global check must never penalize
-                        # a missing fingerprint — that is the legacy-cache backward-
-                        # compat contract (test_legacy_cache_without_bind_fp_no_event):
-                        # strict-mode promotion must not retroactively invalidate every
-                        # pre-existing session that predates the bind_ip_ua field.
-                        _prefix_active = _is_prefix_key and _prefix_fp_mode != "off"
-
-                        if _fp_mode != "off":
-                            cached_bind_fp = cached.get("bind_ip_ua")
-                            try:
-                                from ..context import get_session_signals
-                                _sig = get_session_signals()
-                                current_fp = getattr(_sig, "ip_ua_fingerprint", None) if _sig else None
-                            except Exception:
-                                current_fp = None
-
-                            _violation = None
-                            if cached_bind_fp and current_fp and current_fp != cached_bind_fp:
-                                _violation = "fingerprint_mismatch"
-                            elif _prefix_active and not cached_bind_fp:
-                                _violation = "no_bind_fingerprint"
-                            elif _prefix_active and not current_fp:
-                                _violation = "no_current_fingerprint"
-
-                            if _violation:
-                                # NB: the session_key prefix is carried in the
-                                # structured broadcast payload below rather than in
-                                # this clear-text warning. session_key is a non-secret,
-                                # UUID-derivable identifier (the whole premise of #802),
-                                # but its name trips CodeQL's clear-text-logging name
-                                # heuristic; agent_uuid already identifies the subject.
-                                logger.warning(
-                                    "[PATH1_FINGERPRINT_MISMATCH] bound_fp=%s "
-                                    "current_fp=%s reason=%s — suspected hijack of "
-                                    "agent=%s... (mode=%s)",
-                                    (cached_bind_fp or "<none>")[:16],
-                                    (current_fp or "<none>")[:16],
-                                    _violation,
-                                    agent_uuid[:8],
-                                    _fp_mode,
-                                )
-                                try:
-                                    from .handlers import _broadcaster
-                                    _b = _broadcaster()
-                                    if _b is not None:
-                                        await _b.broadcast_event(
-                                            event_type="identity_hijack_suspected",
-                                            agent_id=agent_uuid,
-                                            payload={
-                                                "path": "path1_session_id",
-                                                "mode": _fp_mode,
-                                                "source": "path1_fingerprint_mismatch",
-                                                "reason": _violation,
-                                                "prefix_scoped": _prefix_active,
-                                                "session_key_prefix": session_key[:20],
-                                                "bind_fp_prefix": (cached_bind_fp or "")[:8],
-                                                "current_fp_prefix": (current_fp or "")[:8],
-                                            },
-                                        )
-                                except Exception as _be:
-                                    logger.warning(
-                                        f"[PATH1_FINGERPRINT_MISMATCH] broadcast failed: {_be}"
-                                    )
-                                if _fp_mode == "strict":
-                                    # Fall through to PATH 3 (fresh session).
-                                    # Do NOT delete the cache entry — the
-                                    # legitimate owner can still resume from
-                                    # the correct fingerprint.
-                                    resume = False
+                        # PATH 1 fingerprint cross-check — extracted to the shared
+                        # _fingerprint_hijack_check helper (2026-04-20 council
+                        # follow-up + #802 per-path hardening; see the helper
+                        # docstring). It resolves the fp mode, classifies the
+                        # violation, fires identity_hijack_suspected, and returns
+                        # True iff strict mode says fall through to a fresh session.
+                        # B1: the helper cannot mutate `resume`, so we apply it here.
+                        if await _fingerprint_hijack_check(
+                            session_key, cached.get("bind_ip_ua"), agent_uuid,
+                        ):
+                            # strict-mode mismatch: do NOT delete the cache entry —
+                            # the legitimate owner can still resume from the correct
+                            # fingerprint; fall through to PATH 2/3 for a fresh bind.
+                            resume = False
 
                         # If strict-mode fingerprint mismatch set resume=False
                         # above, skip the cached-resume return and fall through
