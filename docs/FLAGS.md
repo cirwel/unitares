@@ -73,6 +73,7 @@ index; that one is the curated decision record.
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py:44 |
 | `UNITARES_OAUTH_AUTO_APPROVE` | `'true'` | — | src/mcp_server.py:192 |
 | `UNITARES_OAUTH_ISSUER_URL` | `(required)` | — | src/mcp_server.py:182 |
+| `UNITARES_OAUTH_RESOURCE_URL` | `'<issuer>/mcp'` | Optional OAuth protected-resource URL override | src/mcp_server.py:194 |
 | `UNITARES_OAUTH_SECRET` | `(required)` | — | src/mcp_server.py:191 |
 | `UNITARES_OLLAMA_BASE` | `'http://localhost:11434'` | Native Ollama /api/chat endpoint (supports JSON-schema-constrained output via the `format` field) | src/mcp_handlers/support/llm_delegation.py:168 |
 | `UNITARES_OLLAMA_BASE_URL` | `'http://localhost:11434/v1'` | — | agents/dialectic_reviewer/reviewer.py:37 |

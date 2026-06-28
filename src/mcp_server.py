@@ -173,6 +173,7 @@ SERVER_VERSION = _load_version()
 from src.mcp_listen_config import (
     build_transport_security_settings,
     check_mcp_bearer,
+    check_oauth_bearer,
     cors_extra_origins,
     default_listen_host,
     mcp_bearer_tokens,
@@ -182,6 +183,7 @@ from src.mcp_listen_config import (
 _oauth_issuer_url = os.environ.get("UNITARES_OAUTH_ISSUER_URL")
 _oauth_provider = None
 _auth_settings = None
+_OAUTH_REQUIRED_SCOPES = ["mcp:tools"]
 
 if _oauth_issuer_url:
     try:
@@ -190,10 +192,15 @@ if _oauth_issuer_url:
 
         _oauth_secret = os.environ.get("UNITARES_OAUTH_SECRET")
         _auto_approve = os.environ.get("UNITARES_OAUTH_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
+        _oauth_resource_url = (
+            os.environ.get("UNITARES_OAUTH_RESOURCE_URL")
+            or f"{_oauth_issuer_url.rstrip('/')}/mcp"
+        )
         _oauth_provider = GovernanceOAuthProvider(secret=_oauth_secret, auto_approve=_auto_approve)
         _auth_settings = AuthSettings(
             issuer_url=_oauth_issuer_url,
-            resource_server_url=_oauth_issuer_url,
+            resource_server_url=_oauth_resource_url,
+            required_scopes=_OAUTH_REQUIRED_SCOPES,
             client_registration_options=ClientRegistrationOptions(
                 enabled=True,
                 valid_scopes=["mcp:tools"],
@@ -926,23 +933,55 @@ async def main():
                 if scope.get("type") != "http":
                     return
 
-                # Bearer gate (default-OFF; see src/mcp_listen_config). When
-                # UNITARES_MCP_BEARER_TOKENS is set, every /mcp request must
-                # present a matching `Authorization: Bearer <tok>`. No trusted-
-                # network bypass — a hosted endpoint authenticates every call.
-                # When unset, this is a no-op and localhost dev is unchanged.
-                # Fetch the allowlist once and pass it through, so "is the gate
-                # on" and "is this token valid" read the same snapshot.
+                # Auth gate (default-OFF unless bearer or OAuth is configured).
+                # UNITARES_MCP_BEARER_TOKENS accepts static operator-minted
+                # tokens. UNITARES_OAUTH_ISSUER_URL accepts provider-minted
+                # OAuth access tokens. No trusted-network bypass — a hosted
+                # endpoint authenticates every call. Fetch the static allowlist
+                # once and pass it through, so "is the gate on" and "is this
+                # token valid" read the same snapshot.
+                validated_oauth_client_id = None
                 _bearer_allow = mcp_bearer_tokens()
-                if _bearer_allow:
+                if _bearer_allow or _oauth_provider:
                     from starlette.datastructures import Headers as _BearerHeaders
                     _auth = _BearerHeaders(scope=scope).get("authorization")
-                    if not check_mcp_bearer(_auth, _bearer_allow):
+                    _static_bearer_ok = bool(_bearer_allow) and check_mcp_bearer(_auth, _bearer_allow)
+                    _oauth_bearer_ok = False
+                    if _oauth_provider:
+                        _oauth_bearer_ok, _oauth_client_id = await check_oauth_bearer(
+                            _auth,
+                            _oauth_provider,
+                            required_scopes=(
+                                _auth_settings.required_scopes
+                                if _auth_settings
+                                else _OAUTH_REQUIRED_SCOPES
+                            ),
+                        )
+                        if _oauth_client_id:
+                            validated_oauth_client_id = f"oauth:{_oauth_client_id}"
+
+                    if not (_static_bearer_ok or _oauth_bearer_ok):
+                        _www_authenticate = "Bearer"
+                        if _auth_settings and _auth_settings.resource_server_url:
+                            try:
+                                from mcp.server.auth.routes import build_resource_metadata_url
+                                _resource_metadata_url = build_resource_metadata_url(
+                                    _auth_settings.resource_server_url
+                                )
+                                _www_authenticate = (
+                                    f'Bearer resource_metadata="{_resource_metadata_url}"'
+                                )
+                            except Exception:
+                                pass
                         await JSONResponse(
                             {"error": "unauthorized",
-                             "detail": "valid bearer token required for /mcp"},
+                             "detail": (
+                                 "valid bearer token or OAuth access token required for /mcp"
+                                 if _oauth_provider
+                                 else "valid bearer token required for /mcp"
+                             )},
                             status_code=401,
-                            headers={"WWW-Authenticate": "Bearer"},
+                            headers={"WWW-Authenticate": _www_authenticate},
                         )(scope, receive, send)
                         return
 
@@ -971,17 +1010,9 @@ async def main():
                     x_session_id = headers.get("x-session-id")
                     x_client_id = headers.get("x-client-id") or headers.get("x-mcp-client-id")
 
-                    # Extract OAuth client identity from Bearer token
-                    oauth_client_id = None
-                    auth_header = headers.get("authorization", "")
-                    if auth_header.startswith("Bearer "):
-                        token = auth_header[7:]
-                        try:
-                            client_id = _oauth_provider.get_token_client_id(token) if _oauth_provider else None
-                            if client_id:
-                                oauth_client_id = f"oauth:{client_id}"
-                        except Exception:
-                            pass
+                    # OAuth client identity is set only after the auth gate has
+                    # validated the provider-minted access token.
+                    oauth_client_id = validated_oauth_client_id
 
                     detected_client = detect_client_from_user_agent(ua)
                     ip_ua_fp = f"{client_ip}:{ua_fingerprint}"

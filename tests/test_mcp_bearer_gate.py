@@ -10,8 +10,10 @@ on-path accept/reject rules — plus the deliberate no-trusted-bypass design.
 from __future__ import annotations
 
 import importlib
+import time
 
 import pytest
+from mcp.server.auth.provider import AccessToken
 
 import src.mcp_listen_config as cfg
 
@@ -62,6 +64,89 @@ def test_bearer_scheme_is_case_insensitive(monkeypatch, header):
     # RFC 7235: the auth scheme is case-insensitive. Real clients send "bearer".
     monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "s3cret")
     assert cfg.check_mcp_bearer(header) is True
+
+
+class _OAuthProvider:
+    def __init__(self, tokens):
+        self.tokens = tokens
+
+    async def load_access_token(self, token):
+        return self.tokens.get(token)
+
+
+@pytest.mark.asyncio
+async def test_oauth_bearer_accepts_provider_token():
+    provider = _OAuthProvider({
+        "oauth-token": AccessToken(
+            token="oauth-token",
+            client_id="client-1",
+            scopes=["mcp:tools"],
+            expires_at=int(time.time()) + 60,
+        )
+    })
+
+    ok, client_id = await cfg.check_oauth_bearer(
+        "Bearer oauth-token",
+        provider,
+        required_scopes=["mcp:tools"],
+    )
+
+    assert ok is True
+    assert client_id == "client-1"
+
+
+@pytest.mark.asyncio
+async def test_oauth_bearer_rejects_unknown_token():
+    ok, client_id = await cfg.check_oauth_bearer(
+        "Bearer missing",
+        _OAuthProvider({}),
+        required_scopes=["mcp:tools"],
+    )
+
+    assert ok is False
+    assert client_id is None
+
+
+@pytest.mark.asyncio
+async def test_oauth_bearer_rejects_missing_required_scope():
+    provider = _OAuthProvider({
+        "oauth-token": AccessToken(
+            token="oauth-token",
+            client_id="client-1",
+            scopes=["profile"],
+            expires_at=int(time.time()) + 60,
+        )
+    })
+
+    ok, client_id = await cfg.check_oauth_bearer(
+        "Bearer oauth-token",
+        provider,
+        required_scopes=["mcp:tools"],
+    )
+
+    assert ok is False
+    assert client_id is None
+
+
+@pytest.mark.asyncio
+async def test_oauth_bearer_rejects_expired_token():
+    provider = _OAuthProvider({
+        "oauth-token": AccessToken(
+            token="oauth-token",
+            client_id="client-1",
+            scopes=["mcp:tools"],
+            expires_at=int(time.time()) - 1,
+        )
+    })
+
+    ok, client_id = await cfg.check_oauth_bearer(
+        "Bearer oauth-token",
+        provider,
+        required_scopes=["mcp:tools"],
+    )
+
+    assert ok is False
+    assert client_id is None
 
 
 def test_token_rotation_accepts_any_listed(monkeypatch):

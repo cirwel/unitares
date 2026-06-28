@@ -89,13 +89,13 @@ python src/mcp_server.py --port 8767
    export UNITARES_MCP_BEARER_TOKENS="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
    ```
 
-   Comma-separated values rotate without a restart. For OAuth 2.1 with Dynamic Client Registration, set `UNITARES_OAUTH_ISSUER_URL` instead (see [`../integration/MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md#remote-connectors-claudeai-perplexity-etc) and `src/oauth_provider.py`).
+   Comma-separated values rotate without a restart. For OAuth 2.1 with Dynamic Client Registration, set `UNITARES_OAUTH_ISSUER_URL` instead (see [`../integration/MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md#remote-connectors-claudeai-perplexity-etc) and `src/oauth_provider.py`). OAuth protects the `/mcp` resource by default; use `UNITARES_OAUTH_RESOURCE_URL` only if a proxy exposes it at a different public URL.
 
 After changing any of these, restart and sanity-check from outside:
 
 ```bash
 curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
-# 403 gone → Host gate open. 401 → bearer gate on (expected once a key is set).
+# 403 gone → Host gate open. 401 → auth gate on (expected before the client sends a valid bearer/OAuth access token).
 ```
 
 ## 3.6 Key environment variables
@@ -110,6 +110,7 @@ curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
 | `UNITARES_MCP_ALLOWED_HOSTS` / `UNITARES_MCP_ALLOWED_ORIGINS` | Host/Origin allowlists |
 | `UNITARES_MCP_BEARER_TOKENS` | Bearer auth (comma-separated, hot-rotatable) |
 | `UNITARES_OAUTH_ISSUER_URL` | Enable OAuth 2.1 / DCR |
+| `UNITARES_OAUTH_RESOURCE_URL` | Optional OAuth protected-resource URL override (defaults to `<issuer>/mcp`) |
 | `UNITARES_HTTP_API_TOKEN` / `UNITARES_OPERATOR_TOKENS` | Dashboard read / operator-write tokens |
 | `UNITARES_RESIDENTS` | The named resident agent set (config, not hardcoded) |
 
