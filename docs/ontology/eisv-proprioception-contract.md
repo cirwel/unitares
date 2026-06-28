@@ -1,7 +1,7 @@
 # EISV Proprioception Contract
 
 **Created:** June 26, 2026
-**Last Updated:** June 27, 2026
+**Last Updated:** June 28, 2026
 **Status:** Active
 
 ---
@@ -18,6 +18,31 @@ bad-verdict dispenser**. It does not decide whether harm occurred, whether the
 user was wronged, or whether an agent is "guilty." Those judgments require
 external outcome evidence, policy, and review surfaces that are separate from
 the measurement vector.
+
+## Core mathematical posture
+
+The public math should lead with proprioceptive residuals, not bad-outcome
+classification. The live behavioral path is deliberately modest:
+
+- **Warmup:** fixed universal thresholds while the agent has too little history
+  for individualized drift.
+- **After warmup:** self-relative z-score deviation from the agent's own Welford
+  baseline.
+- **Always:** absolute safety floors and basin-health gates remain in force.
+
+The roadmap target for richer cold-start grounding is a hierarchical reference:
+
+```text
+measurement_t = EISV_t
+reference_t   = blend(agent_baseline_t, class_anchor; w(grounding))
+residual_t    = measurement_t - reference_t
+```
+
+Until that hierarchical blend is the live path, public docs should describe class
+or population anchors as roadmap semantics, not deployed authority. The stable
+semantics are still residual-first: `residual_t` is information about state change
+— running hot, brittle, scattered, or unusually careful — before it is a policy
+concern. Deviation inside a healthy basin is room to learn, not proof of failure.
 
 ## Layer separation
 
@@ -39,7 +64,7 @@ A thermometer can inform a safety protocol; it does not itself pause the body.
 Likewise, EISV can inform governance policy, but pause authority belongs to a
 policy/enforcement layer.
 
-## Outcome taxonomy
+## Evidence / label taxonomy
 
 The word `bad` in storage and reports is a compact label class, not a moral
 verdict. Human-facing docs should name the class whenever possible:

@@ -8,7 +8,7 @@ This chapter gives you the mental model and the vocabulary. Read it once; the re
 
 Autonomous and semi-autonomous agents fail *gradually*. By the time output visibly breaks, the agent has usually been drifting for a while — looping, getting overconfident, wandering off its own normal behavior. Pre-deploy evals can't see this (they run before the work), and per-action guardrails can't either (they only see one action at a time).
 
-UNITARES watches each agent **mid-run** and reports degradation as it happens — to you *and to the agent itself* — while it's still just numbers moving and not yet broken output.
+UNITARES watches each agent **mid-run** and reports state change as it happens — to you *and to the agent itself* — while it's still just numbers moving and not yet broken output.
 
 ## 1.2 Where it fits
 
@@ -37,11 +37,11 @@ if verdict in ("pause", "reject"):
     agent.require_human_review(result["verdict"]["next_action"])
 ```
 
-The agent reports **what it did** plus its self-reported `complexity` and `confidence`, and gets back a verdict it can act on *before* an external guardrail has to fire. That's it — no new vocabulary required to *use* it. The vocabulary below is for when you want to act on *why*, not just the verdict.
+The agent reports **what it did** plus its self-reported `complexity` and `confidence`, and gets back a policy action it can act on using its own state estimate. That's it — no new vocabulary required to *use* it. The vocabulary below is for when you want to act on *why*, not just the action.
 
 ## 1.4 The four numbers: EISV
 
-Each check-in returns four scores per agent, each graded against that agent's **own** ~30-check-in baseline (so slow drift surfaces even while output still looks fine):
+Each check-in returns four proprioceptive scores per agent. After warmup, the useful signal is a residual — current state against that agent's **own** ~30-check-in baseline — so slow drift surfaces even while output still looks fine. Before warmup, the live path uses fixed universal thresholds and should be read as cold-start guidance, not a personalized drift read:
 
 | | Name | Reads | Goes wrong when… |
 |---|---|---|---|
@@ -72,14 +72,14 @@ Verdicts also carry a **margin** (`comfortable` / `tight` / `critical`) indicati
 
 - **Coherence** — a scalar summary of how internally consistent the agent's state is; it modulates risk and is one input to the E/I observations.
 - **Ethical drift** — a four-signal vector (calibration deviation, complexity divergence, coherence deviation, stability deviation) that feeds entropy. No human oracle is needed for runtime drift estimation.
-- **Calibration** — the system tracks whether stated `confidence` matches *real* outcomes (test pass/fail, exit codes, lint). Persistent overconfidence costs Integrity. This is why an agent can inflate its `confidence` number but not its success rate.
+- **Calibration** — the system tracks whether stated `confidence` matches *verifiable evidence* (test pass/fail, exit codes, lint). Persistent overconfidence costs Integrity. This is why an agent can inflate its `confidence` number but not the evidence trail.
 - **Knowledge graph (KG)** — a shared discovery store across all agents and sessions, so agents build on each other's findings instead of re-discovering known issues. Agent-facing discipline: [`../../skills/knowledge-graph/SKILL.md`](../../skills/knowledge-graph/SKILL.md).
 - **Dialectic** — the structured recovery/peer-review protocol (thesis → antithesis → synthesis) an agent enters after a `pause`/`reject`.
 - **Identity** — a fresh process mints a fresh agent UUID; cross-process continuity is *declared* and verified, never silently inherited. See [chapter 4](04-integrating-agents.md#43-identity-the-one-rule-that-matters) and [`../ontology/identity.md`](../ontology/identity.md).
 
 ## 1.7 Don't trust the prose — verify it
 
-A central design stance: the project does not ask you to believe the numbers predict anything. On a fresh clone, the [falsifiability harness](../REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV against a deliberately dumb baseline (AUC, Brier) and self-labels each slice `INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING` rather than asserting. The current honest read is a *weak early signal* at short lead, with no demonstrated prevention — run it yourself before relying on it for anything load-bearing.
+A central design stance: the project does not ask you to believe the numbers by prose. On a fresh clone, the [falsifiability harness](../REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) asks whether EISV/prior-state telemetry adds signal over deliberately dumb baselines (AUC, Brier) and self-labels each slice `INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING` rather than asserting. The harness tests calibration and falsifiability for a proprioceptive signal; it is not a claim that UNITARES is an outcome oracle. The current honest read is a *weak early signal* at short lead, with no demonstrated prevention — run it yourself before relying on it for anything load-bearing.
 
 ---
 
