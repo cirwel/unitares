@@ -12,7 +12,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**88 flags.**
+**90 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
@@ -55,10 +55,10 @@ index; that one is the curated decision record.
 | `UNITARES_HEALTH_PROBE_INTERVAL_SECONDS` | `(required)` | Periodically run the deep health check and cache the result | src/background_tasks.py:526 |
 | `UNITARES_HTTP_API_TOKEN` | `(required)` | List all tools in OpenAI-compatible format Query params: mode: Tool mode filter - "minimal", "lite", "full" | src/http_api.py:436, src/http_api.py:485 (+34 more) |
 | `UNITARES_HTTP_CORS_ALLOW_ORIGIN` | `(required)` | Main entry point for governance MCP server. | src/mcp_server.py:841, src/mcp_server.py:883 |
-| `UNITARES_IDENTITY_STRICT` | `'log'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1099, config/governance_config.py:1108 |
+| `UNITARES_IDENTITY_STRICT` | `'log'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1123, config/governance_config.py:1132 |
 | `UNITARES_INCLUDE_API_KEY_IN_RESPONSES` | `(required)` | Include onboarding guidance, API key hints, welcome message. | src/mcp_handlers/updates/enrichments.py:533 |
 | `UNITARES_INTEGRATOR` | `'rk4'` | Returns the ODE integration method | governance_core/parameters.py:143 |
-| `UNITARES_IPUA_PIN_CHECK` | `'strict'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1221, config/governance_config.py:1232 |
+| `UNITARES_IPUA_PIN_CHECK` | `'strict'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1245, config/governance_config.py:1256 |
 | `UNITARES_I_DYNAMICS` | `'linear'` | Returns the I-channel dynamics mode | governance_core/parameters.py:160 |
 | `UNITARES_KG_PROACTIVE_EVERY` | `'0'` | Gate the proactive (steady-state) KG surface — cadence + warmup + length | src/mcp_handlers/updates/enrichments.py:1555 |
 | `UNITARES_KNOWLEDGE_BACKEND` | `'auto'` | Get global knowledge graph instance (singleton) | src/knowledge_graph.py:265, src/knowledge_graph.py:340 |
@@ -80,9 +80,9 @@ index; that one is the curated decision record.
 | `UNITARES_PARAMS_PROFILE` | `'default'` | Returns the active parameters profile name | governance_core/parameters.py:243 |
 | `UNITARES_PARENT_AGENT_ID` | `(required)` | read by main() | agents/dialectic_reviewer/reviewer.py:243 |
 | `UNITARES_PAUSE_AUTO_EXPIRE_SECONDS` | `str(72 * 3600)` | — | config/governance_config.py:749 |
-| `UNITARES_PHASE5_EVIDENCE_WRITE` | `''` | Health check, CIRS emissions, PG record, outcome events | src/mcp_handlers/updates/phases.py:2048 |
+| `UNITARES_PHASE5_EVIDENCE_WRITE` | `''` | Health check, CIRS emissions, PG record, outcome events | src/mcp_handlers/updates/phases.py:2049 |
 | `UNITARES_PHI_TELEMETRY_ONLY` | `''` | Whether Φ is demoted to telemetry (UNITARES_PHI_TELEMETRY_ONLY) | config/governance_config.py:1044 |
-| `UNITARES_PREFIX_BIND_FINGERPRINT` | `'off'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1183, config/governance_config.py:1192 |
+| `UNITARES_PREFIX_BIND_FINGERPRINT` | `'off'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1207, config/governance_config.py:1216 |
 | `UNITARES_PROCESS_UPDATE_RESPONSE_MODE` | `'auto'` | Apply response mode filtering to fully-built response_data | src/mcp_handlers/response_formatter.py:238 |
 | `UNITARES_PROGRESS_FLAT_PROBE_INTERVAL_SECONDS` | `(required)` | Resident-progress telemetry probe | src/background_tasks.py:579 |
 | `UNITARES_PROXY_URL` | `(required)` | — | src/mcp_server_std.py:127 |
@@ -90,7 +90,9 @@ index; that one is the curated decision record.
 | `UNITARES_RERANKER_MODEL` | `'bge-m3'` | — | src/reranker.py:38 |
 | `UNITARES_RESIDENT_AGENTS` | `''` | Figure out which agent labels to treat as residents | src/http_api.py:2661 |
 | `UNITARES_SENSOR_COUPLING` | `(required)` | Whether sensor-derived EISV spring-couples into the ODE | governance_core/parameters.py:182, governance_core/parameters.py:204 |
-| `UNITARES_SESSION_FINGERPRINT_CHECK` | `'log'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1135, config/governance_config.py:1146 |
+| `UNITARES_SESSION_FINGERPRINT_CHECK` | `'log'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1159, config/governance_config.py:1170 |
+| `UNITARES_SESSION_MIRROR_APPLY` | `''` | Whether the resolver READS the PostgreSQL session mirror as a source of truth (UNITARES_SESSION_MIRROR_APPLY) | config/governance_config.py:1094 |
+| `UNITARES_SESSION_MIRROR_SHADOW` | `''` | Whether to dual-write session/identity bindings into the PostgreSQL mirror tables (core.session_bindings, core.onboard_pins) alongside the R | config/governance_config.py:1084 |
 | `UNITARES_STDIO_PROXY_HTTP_BEARER_TOKEN` | `(required)` | — | src/mcp_server_std.py:131 |
 | `UNITARES_STDIO_PROXY_HTTP_URL` | `(required)` | — | src/mcp_server_std.py:126 |
 | `UNITARES_STDIO_PROXY_SSE_URL` | `(required)` | — | src/mcp_server_std.py:129 |

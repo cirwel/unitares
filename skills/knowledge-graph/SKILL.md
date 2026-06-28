@@ -3,7 +3,7 @@ name: knowledge-graph
 description: >
   Use when an agent needs to search the shared knowledge graph, contribute a discovery,
   or update existing entries. Covers search, tagging, discovery types, and status lifecycle.
-last_verified: "2026-06-11"
+last_verified: "2026-06-27"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/knowledge/handlers.py
@@ -34,16 +34,17 @@ The runtime may still expose older search aliases, but prefer the unified `knowl
 
 ## Quick Contribution
 
-For low-friction contributions, use `leave_note()`:
+For low-friction contributions, use the unified note action:
 
 ```
-leave_note(
+knowledge(
+  action: "note",
   summary: "What you discovered or observed",
   tags: ["domain", "type", "context"]
 )
 ```
 
-Notes are automatically shared with all agents. Use this when you find something useful, spot a bug, or have an insight that others should know about.
+Notes are automatically shared with all agents. Use this when you find something useful, spot a bug, or have an insight that others should know about. The legacy `leave_note()` tool remains as a compatibility alias, but it is deprecated.
 
 ## Full CRUD Operations
 
@@ -57,7 +58,7 @@ For more control, use the `knowledge()` tool with an action parameter:
 | `list` | List graph statistics or summary views |
 | `update` | Modify an existing discovery (status, content, tags) |
 | `details` | Get full details including graph relationships |
-| `note` | Same as `leave_note()` but through the unified interface |
+| `note` | Quick note storage through the unified interface |
 | `cleanup` | Run lifecycle cleanup for stale entries |
 | `synthesize` | Roll up a topic's discoveries into a summary row (see below) |
 | `stats` | Get knowledge graph statistics |

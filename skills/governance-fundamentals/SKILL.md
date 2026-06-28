@@ -4,7 +4,7 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, verdicts, coherence, calibration. Reference material for interpreting governance
   metrics and understanding the thermodynamic model.
-last_verified: "2026-06-15"
+last_verified: "2026-06-27"
 freshness_days: 14
 source_files:
   - unitares/config/governance_config.py
