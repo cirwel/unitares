@@ -73,6 +73,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
 
     Postgrex.transaction(DB, fn conn ->
       with {:ok, _phase} <- guard_session_phase(conn, session_id),
+           :ok <- reclaim_stale_reserved(conn, session_id),
            {:ok, result} <-
              insert_reserved(conn, session_id, paused_agent_id, reviewer_agent_id, json, hash) do
         result
@@ -87,6 +88,91 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   end
 
   def claim(_), do: {:error, :invalid_params}
+
+  # Default: a `reserved` saga older than this with no forward progress is
+  # assumed orphaned by a crashed resolver and may be reverted so the session
+  # is not permanently wedged. Resolutions complete in well under a second; a
+  # 2-minute floor is far above the happy path. Only `reserved` is reclaimable —
+  # later states (paused_agent_applied/…) imply real partial work and are left
+  # for explicit recovery.
+  @stale_reserved_seconds 120
+
+  @doc """
+  End-to-end BEAM-owned resolve of the SYNTHESIS->RESOLVED transition.
+
+  BEAM owns two things here: the cross-runtime serialization slot (the saga)
+  and the single write of the terminal session row. The resolution payload is
+  computed Python-side (synthesis convergence + agent-state mutation stay in
+  Python); BEAM is handed the finished payload and is the authority that commits
+  it. Steps: claim saga -> guarded write of `core.dialectic_sessions` -> commit
+  saga. Idempotent throughout.
+
+    * `{:ok, %{status: "resolved", saga_id: id, origin: :new | :idempotent | :already_terminal}}`
+    * `{:error, :saga_in_flight}` — a live resolve already holds the session
+    * `{:error, :session_not_found}` / other `{:error, term}`
+  """
+  @spec resolve(map()) :: {:ok, map()} | {:error, term()}
+  def resolve(%{session_id: session_id, resolution_payload: payload} = params)
+      when is_binary(session_id) and is_map(payload) do
+    case claim(params) do
+      {:ok, %{saga_id: saga_id, origin: origin}} ->
+        with :ok <- commit_session_row(session_id, payload),
+             :ok <- commit(saga_id) do
+          {:ok, %{status: "resolved", saga_id: saga_id, origin: origin}}
+        end
+
+      {:error, {:session_terminal, status}} ->
+        # Already resolved/failed: nothing to write, treat as idempotent success.
+        {:ok, %{status: status, saga_id: nil, origin: :already_terminal}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def resolve(_), do: {:error, :invalid_params}
+
+  # Guarded terminal write of the session row — BEAM is the sole writer. Mirrors
+  # the Python B-4 guard (#1171): refuses to overwrite an already-terminal row.
+  defp commit_session_row(session_id, payload) do
+    sql = """
+    UPDATE core.dialectic_sessions
+    SET status = 'resolved', phase = 'resolved', resolution_json = $2::jsonb, updated_at = now()
+    WHERE session_id = $1 AND status NOT IN ('resolved', 'failed')
+    RETURNING session_id
+    """
+
+    case Postgrex.query(DB, sql, [session_id, Jason.encode!(payload)]) do
+      {:ok, %{num_rows: 1}} -> :ok
+      # Already terminal (raced/idempotent) — saga still commits; not an error.
+      {:ok, %{num_rows: 0}} -> :ok
+      {:error, e} -> {:error, e}
+    end
+  end
+
+  defp reclaim_stale_reserved(conn, session_id) do
+    sql = """
+    UPDATE coordination.session_resolution_sagas
+    SET state = 'reverted', reverted_at = now(), updated_at = now()
+    WHERE session_id = $1 AND state = 'reserved'
+      AND last_attempt_at < now() - ($2 || ' seconds')::interval
+    """
+
+    case Postgrex.query(conn, sql, [session_id, Integer.to_string(@stale_reserved_seconds)]) do
+      {:ok, %{num_rows: n}} when n > 0 ->
+        Logger.warning(
+          "dialectic_saga: reclaimed #{n} stale reserved saga(s) for session #{String.slice(session_id, 0, 16)} (assumed orphaned)"
+        )
+
+        :ok
+
+      {:ok, _} ->
+        :ok
+
+      {:error, e} ->
+        {:error, e}
+    end
+  end
 
   @doc """
   Mark a claimed saga committed (terminal success). Idempotent: a saga already

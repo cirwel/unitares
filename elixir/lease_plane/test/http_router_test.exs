@@ -47,6 +47,63 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
   defp parsed(conn), do: Jason.decode!(conn.resp_body)
 
+  describe "/v1/dialectic/resolve" do
+    test "missing fields → 422 schema_invalid" do
+      resp = post_json("/v1/dialectic/resolve", %{session_id: "x"})
+      assert resp.status == 422
+      assert parsed(resp)["error"] == "schema_invalid"
+    end
+
+    test "resolves a synthesis session and commits row + saga" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: %{verdict: "resume", conditions: ["monitor"]}
+        })
+
+      assert resp.status == 200
+      body = parsed(resp)
+      assert body["ok"] == true
+      assert body["status"] == "resolved"
+      assert is_binary(body["saga_id"])
+    end
+
+    test "second resolve of a resolved session is idempotent (200, already_terminal)" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      body = %{
+        session_id: session_id,
+        paused_agent_id: "p",
+        reviewer_agent_id: "r",
+        resolution: %{verdict: "resume"}
+      }
+
+      assert post_json("/v1/dialectic/resolve", body).status == 200
+      resp2 = post_json("/v1/dialectic/resolve", body)
+      assert resp2.status == 200
+      assert parsed(resp2)["origin"] == "already_terminal"
+    end
+
+    test "unknown session → 404 session_not_found" do
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: "test_elixir_nope_#{System.unique_integer([:positive])}",
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: %{verdict: "resume"}
+        })
+
+      assert resp.status == 404
+      assert parsed(resp)["error"] == "session_not_found"
+    end
+  end
+
   describe "bearer auth" do
     test "missing Authorization header → 401 permission_denied", ctx do
       resp =

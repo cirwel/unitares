@@ -10,6 +10,7 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
   use ExUnit.Case, async: false
 
   alias UnitaresLeasePlane.DialecticSaga
+  alias UnitaresLeasePlane.DB
   import LeaseTestHelpers
 
   defp claim_params(session_id, payload \\ %{"verdict" => "resume", "conditions" => ["monitor"]}) do
@@ -91,5 +92,92 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
     a = %{"verdict" => "resume", "conditions" => ["x", "y"], "n" => 1}
     b = %{"n" => 1, "conditions" => ["x", "y"], "verdict" => "resume"}
     assert DialecticSaga.payload_hash(a) == DialecticSaga.payload_hash(b)
+  end
+
+  describe "resolve/1" do
+    test "commits the terminal session row and the saga" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert {:ok, %{status: "resolved", saga_id: saga_id, origin: :new}} =
+               DialecticSaga.resolve(claim_params(session_id))
+
+      assert session_status(session_id) == "resolved"
+      assert saga_state(saga_id) == "pg_committed"
+    end
+
+    test "is idempotent on an already-resolved session" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert {:ok, %{status: "resolved"}} = DialecticSaga.resolve(claim_params(session_id))
+      # Second resolve: the session is terminal -> idempotent success, no new saga.
+      assert {:ok, %{status: "resolved", saga_id: nil, origin: :already_terminal}} =
+               DialecticSaga.resolve(claim_params(session_id))
+    end
+
+    test "rejects when a different live resolution is in flight" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      # A fresh (non-stale) reserved saga held by a different payload blocks.
+      assert {:ok, %{origin: :new}} = DialecticSaga.claim(claim_params(session_id))
+
+      assert {:error, :saga_in_flight} =
+               DialecticSaga.resolve(claim_params(session_id, %{"verdict" => "other"}))
+    end
+  end
+
+  describe "stale-reserved reclaim" do
+    test "claim reclaims an orphaned (old, reserved) saga and proceeds" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      # Simulate a crashed resolver: a reserved saga with an old last_attempt_at.
+      Postgrex.query!(
+        DB,
+        """
+        INSERT INTO coordination.session_resolution_sagas
+          (saga_id, session_id, paused_agent_id, reviewer_agent_id, state,
+           resolution_payload_json, resolution_payload_hash, last_attempt_at, attempt_count)
+        VALUES (gen_random_uuid(), $1, 'p', 'r', 'reserved', '{}'::jsonb, $2, now() - interval '10 minutes', 1)
+        """,
+        [session_id, "orphan-hash-#{session_id}"]
+      )
+
+      # A new claim with a different payload must reclaim the orphan and succeed.
+      assert {:ok, %{origin: :new}} =
+               DialecticSaga.claim(claim_params(session_id, %{"verdict" => "fresh"}))
+    end
+
+    test "a recent reserved saga is NOT reclaimed" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert {:ok, %{origin: :new}} = DialecticSaga.claim(claim_params(session_id))
+      # Recent reserved saga still blocks a different payload.
+      assert {:error, :saga_in_flight} =
+               DialecticSaga.claim(claim_params(session_id, %{"verdict" => "other"}))
+    end
+  end
+
+  defp session_status(session_id) do
+    %{rows: [[status]]} =
+      Postgrex.query!(DB, "SELECT status FROM core.dialectic_sessions WHERE session_id = $1", [
+        session_id
+      ])
+
+    status
+  end
+
+  defp saga_state(saga_id) do
+    %{rows: [[state]]} =
+      Postgrex.query!(
+        DB,
+        "SELECT state FROM coordination.session_resolution_sagas WHERE saga_id::text = $1",
+        [saga_id]
+      )
+
+    state
   end
 end
