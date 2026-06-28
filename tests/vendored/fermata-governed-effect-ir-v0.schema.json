@@ -1,0 +1,317 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/CIRWEL/fermata/main/references/governed-effect-ir-v0.schema.json",
+  "title": "Governed Effect IR v0",
+  "description": "Canonical records for a governed-effect runtime: agents may propose; only governed effects may commit.",
+  "oneOf": [
+    { "$ref": "#/$defs/Scope" },
+    { "$ref": "#/$defs/Proposal" },
+    { "$ref": "#/$defs/Intent" },
+    { "$ref": "#/$defs/EffectRecord" },
+    { "$ref": "#/$defs/Trace" }
+  ],
+  "$defs": {
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "IsoTimestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "SpeechAct": {
+      "type": "string",
+      "enum": ["need", "claim", "doubt", "intend", "remember", "boundary"]
+    },
+    "EffectState": {
+      "type": "string",
+      "enum": ["proposal", "intent", "admissible", "verified", "approved", "committed", "rejected", "paused"]
+    },
+    "CustodyMode": {
+      "type": "string",
+      "enum": ["record_only", "execute"],
+      "description": "Explicit, up-front declaration of how the runtime handles the effect: record_only — the runtime validates and records but does NOT commit (the external actor commits; shadow/dry-run); execute — the runtime holds custody and commits. The core 8-state EffectState distinguishes these only by terminal state (reached committed or not); this names the intent BEFORE termination, so a record_only proposal is distinguishable from an execute one up front. Optional in the core IR (back-compat); a profile MAY require it."
+    },
+    "Resource": {
+      "type": "object",
+      "required": ["kind", "target"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "enum": ["file", "db", "message", "memory", "network", "tool"] },
+        "target": { "$ref": "#/$defs/NonEmptyString" },
+        "metadata": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "Capability": {
+      "type": "object",
+      "required": ["name", "resource_kind", "mode"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/NonEmptyString" },
+        "resource_kind": { "type": "string", "enum": ["file", "db", "message", "memory", "network", "tool"] },
+        "mode": { "$ref": "#/$defs/NonEmptyString" },
+        "allow": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/NonEmptyString" },
+          "default": []
+        },
+        "deny": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/NonEmptyString" },
+          "default": []
+        }
+      }
+    },
+    "PolicyRule": {
+      "type": "object",
+      "required": ["id", "effect", "condition"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/NonEmptyString" },
+        "effect": { "type": "string", "enum": ["allow", "deny", "pause", "require_approval", "require_evidence"] },
+        "condition": { "$ref": "#/$defs/NonEmptyString" },
+        "reason": { "type": "string" }
+      }
+    },
+    "ApprovalRule": {
+      "type": "object",
+      "required": ["authority", "condition"],
+      "additionalProperties": false,
+      "properties": {
+        "authority": { "type": "string", "enum": ["performer", "council", "runtime", "none"] },
+        "condition": { "$ref": "#/$defs/NonEmptyString" },
+        "expires_after_seconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "AuditSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "retain": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["trace", "dry_run", "approval", "input_hash", "output_hash", "actor", "scope", "adapter_ack", "verification"]
+          },
+          "default": ["trace", "actor", "scope"]
+        },
+        "redact": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/NonEmptyString" },
+          "default": []
+        }
+      }
+    },
+    "Scope": {
+      "type": "object",
+      "required": ["schema_version", "scope_id", "resources", "capabilities"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": "0.1" },
+        "record_type": { "const": "scope" },
+        "scope_id": { "$ref": "#/$defs/NonEmptyString" },
+        "actor": { "type": "string" },
+        "resources": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Resource" },
+          "minItems": 1
+        },
+        "capabilities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Capability" },
+          "minItems": 1
+        },
+        "policies": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PolicyRule" },
+          "default": []
+        },
+        "approvals": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ApprovalRule" },
+          "default": []
+        },
+        "audit": { "$ref": "#/$defs/AuditSpec" }
+      }
+    },
+    "Intent": {
+      "type": "object",
+      "required": ["intent_id", "proposal_id", "adapter", "operation", "target", "input", "required_capability"],
+      "additionalProperties": false,
+      "properties": {
+        "intent_id": { "$ref": "#/$defs/NonEmptyString" },
+        "proposal_id": { "$ref": "#/$defs/NonEmptyString" },
+        "adapter": { "type": "string", "enum": ["file", "db", "message", "memory", "network", "tool"] },
+        "operation": { "$ref": "#/$defs/NonEmptyString" },
+        "target": { "$ref": "#/$defs/NonEmptyString" },
+        "input": { "type": "object", "additionalProperties": true },
+        "required_capability": { "$ref": "#/$defs/NonEmptyString" },
+        "idempotency_key": { "type": "string" },
+        "custody_mode": { "$ref": "#/$defs/CustodyMode" },
+        "profile": {
+          "$ref": "#/$defs/NonEmptyString",
+          "description": "Names a downstream profile of this IR (e.g. \"unitares\"). Core stays strict; profile-specific data goes in `profile_ext`."
+        },
+        "profile_ext": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Namespaced extension data for the declared `profile` — keeps profile-specific fields out of the strict core (e.g. a UNITARES profile attaches its tier requirement / UNITARES effect_type here)."
+        }
+      }
+    },
+    "Proposal": {
+      "type": "object",
+      "required": ["schema_version", "record_type", "proposal_id", "actor", "speech_act", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": "0.1" },
+        "record_type": { "const": "proposal" },
+        "proposal_id": { "$ref": "#/$defs/NonEmptyString" },
+        "actor": { "$ref": "#/$defs/NonEmptyString" },
+        "speech_act": { "$ref": "#/$defs/SpeechAct" },
+        "reason": { "type": "string" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/NonEmptyString" },
+          "default": []
+        },
+        "payload": { "type": "object", "additionalProperties": true },
+        "intent": { "$ref": "#/$defs/Intent" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "speech_act": { "const": "intend" } },
+            "required": ["speech_act"]
+          },
+          "then": { "required": ["intent"] }
+        }
+      ]
+    },
+    "CheckResult": {
+      "type": "object",
+      "required": ["name", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/NonEmptyString" },
+        "result": { "type": "string", "enum": ["pass", "fail", "not_applicable", "unknown"] },
+        "detail": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "ApprovalRecord": {
+      "type": "object",
+      "required": ["status", "authority"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string", "enum": ["not_required", "requested", "approved", "denied", "expired"] },
+        "authority": { "type": "string", "enum": ["performer", "council", "runtime", "none"] },
+        "approval_id": { "type": "string" },
+        "approver": { "type": "string" },
+        "decided_at": { "$ref": "#/$defs/IsoTimestamp" },
+        "expires_at": { "$ref": "#/$defs/IsoTimestamp" },
+        "scope_id": { "$ref": "#/$defs/NonEmptyString" },
+        "intent_id": { "$ref": "#/$defs/NonEmptyString" },
+        "intent_sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "reason": { "type": "string" }
+      }
+    },
+    "Acknowledgement": {
+      "type": "object",
+      "required": ["adapter", "target", "handle"],
+      "additionalProperties": true,
+      "properties": {
+        "adapter": { "type": "string" },
+        "target": { "$ref": "#/$defs/NonEmptyString" },
+        "handle": { "$ref": "#/$defs/NonEmptyString" },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "Verification": {
+      "type": "object",
+      "required": ["status"],
+      "additionalProperties": true,
+      "properties": {
+        "status": { "type": "string", "enum": ["unverified", "verified", "failed", "not_applicable"] },
+        "method": { "type": "string" },
+        "detail": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "EffectRecord": {
+      "type": "object",
+      "required": ["schema_version", "record_type", "effect_id", "state", "scope_id", "trace_id"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": "0.1" },
+        "record_type": { "const": "effect" },
+        "effect_id": { "$ref": "#/$defs/NonEmptyString" },
+        "state": { "$ref": "#/$defs/EffectState" },
+        "intent_id": { "$ref": "#/$defs/NonEmptyString" },
+        "scope_id": { "$ref": "#/$defs/NonEmptyString" },
+        "trace_id": { "$ref": "#/$defs/NonEmptyString" },
+        "checks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CheckResult" },
+          "default": []
+        },
+        "approval": { "$ref": "#/$defs/ApprovalRecord" },
+        "acknowledgement": { "$ref": "#/$defs/Acknowledgement" },
+        "verification": { "$ref": "#/$defs/Verification" },
+        "rejection_reason": { "type": "string" },
+        "required_input": { "$ref": "#/$defs/NonEmptyString" },
+        "committed_at": { "$ref": "#/$defs/IsoTimestamp" },
+        "custody_mode": { "$ref": "#/$defs/CustodyMode" },
+        "profile": { "$ref": "#/$defs/NonEmptyString" },
+        "profile_ext": { "type": "object", "additionalProperties": true }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "state": { "const": "committed" } },
+            "required": ["state"]
+          },
+          "then": { "required": ["intent_id", "acknowledgement", "verification", "committed_at"] }
+        },
+        {
+          "if": {
+            "properties": { "state": { "const": "rejected" } },
+            "required": ["state"]
+          },
+          "then": { "required": ["rejection_reason"] }
+        },
+        {
+          "if": {
+            "properties": { "state": { "const": "paused" } },
+            "required": ["state"]
+          },
+          "then": { "required": ["intent_id", "required_input"] }
+        }
+      ]
+    },
+    "TraceEvent": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": true,
+      "properties": {
+        "type": { "$ref": "#/$defs/NonEmptyString" },
+        "at": { "$ref": "#/$defs/IsoTimestamp" }
+      }
+    },
+    "Trace": {
+      "type": "object",
+      "required": ["schema_version", "record_type", "trace_id", "events"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": "0.1" },
+        "record_type": { "const": "trace" },
+        "trace_id": { "$ref": "#/$defs/NonEmptyString" },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/TraceEvent" },
+          "default": []
+        }
+      }
+    }
+  }
+}
