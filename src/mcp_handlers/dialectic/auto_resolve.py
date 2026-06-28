@@ -16,6 +16,7 @@ from src.dialectic_db import (
     update_session_status_async,
     update_session_reviewer_async,
     add_message_async,
+    has_inflight_saga_async,
 )
 
 logger = get_logger(__name__)
@@ -102,6 +103,18 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
             phase = session.get("phase")
 
             if not session_id:
+                continue
+
+            # Saga-inflight guard (C1, council 2026-06-28): if a BEAM session
+            # owner is mid-resolution for this session, skip it entirely this
+            # cycle. Marking it failed / reassigning its reviewer here would race
+            # the saga and corrupt the outcome. Fail-open (no saga infra -> no
+            # skip), so this is a no-op until BEAM begins writing sagas.
+            if await has_inflight_saga_async(session_id):
+                logger.info(
+                    f"Skipping stuck-session sweep for {session_id[:16]}...: "
+                    "resolution saga in flight (BEAM owns this transition)"
+                )
                 continue
 
             check_time = _parse_timestamp(session.get("updated_at") or session.get("created_at"))
