@@ -45,6 +45,35 @@ async def test_save_session_routes_resolve_through_beam(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_save_session_snapshot_serializes_datetime(monkeypatch, tmp_path):
+    """The JSON snapshot must not choke on datetime objects nested in
+    paused_agent_state (was: 'Object of type datetime is not JSON serializable')."""
+    from datetime import datetime, timezone
+    monkeypatch.setattr(sess_mod, "UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT", True, raising=False)
+    monkeypatch.setattr(sess_mod, "SESSION_STORAGE_DIR", tmp_path, raising=False)
+
+    sess = SimpleNamespace(
+        session_id="snap-dt-1",
+        phase=DialecticPhase.THESIS,  # non-terminal -> phase-update branch (no resolve)
+        to_dict=lambda: {
+            "session_id": "snap-dt-1",
+            "created_at": datetime.now(timezone.utc),
+            "paused_agent_state": {"last_update": datetime.now(timezone.utc)},
+        },
+    )
+    beam_ph = AsyncMock(return_value={"ok": True})  # phase write owned by BEAM, no pg
+    with patch("src.mcp_handlers.dialectic.beam_resolve_client.beam_update_phase", beam_ph):
+        await sess_mod.save_session(sess)  # previously raised inside the snapshot writer
+
+    import json as _json
+    snap = tmp_path / "snap-dt-1.json"
+    assert snap.exists()
+    data = _json.loads(snap.read_text())  # valid JSON
+    assert data["session_id"] == "snap-dt-1"
+    assert isinstance(data["created_at"], str)  # datetime rendered via default=str
+
+
+@pytest.mark.asyncio
 async def test_save_session_falls_back_to_python_when_beam_declines(monkeypatch):
     monkeypatch.setattr(sess_mod, "UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT", False, raising=False)
     beam = AsyncMock(return_value=None)  # flag off / unreachable / etc.
