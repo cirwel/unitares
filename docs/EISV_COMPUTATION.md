@@ -4,15 +4,15 @@
 
 UNITARES is described with thermodynamic and information-theoretic language (energy, entropy, valence, coherence; in [Paper v6](https://github.com/cirwel/unitares-paper-v6), `S` as response-distribution entropy, `I` as mutual information, `E` as negative variational free energy). That vocabulary is the **target semantics** — the model the project is working toward and tests honestly. It is **not** what the running code computes today.
 
-What the deployed system actually computes is the honest, defensible claim: **EISV is a set of auditable heuristic blends over observable agent behavior, EMA-smoothed, with verdicts from a transparent weighted-threshold model.** No entropy, mutual information, or free energy is computed on the primary path. Every coordinate carries a provenance tier tag (`e_source`, `s_source`, …) so a heuristic is never laundered as a measurement. This document gives the exact formulas with source references, so you can judge — or reproduce — them.
+What the deployed system actually computes is the honest, defensible claim: **EISV is a set of auditable heuristic blends over observable agent behavior, EMA-smoothed, with verdicts from a transparent weighted-threshold model.** No entropy, mutual information, or free energy is computed on the primary path. Every coordinate carries a provenance tier tag (`e_source`, `s_source`, …) so a heuristic is never laundered as a measurement. Think of this path as online proprioception: the useful signal is how the agent's current state differs from a grounded reference for its own trajectory, not whether EISV has handed down an outcome verdict. This document gives the exact formulas with source references, so you can judge — or reproduce — them.
 
 ## Pipeline (primary, verdict-driving path)
 
 ```
-observables ──► observation blend ──► EMA smoothing ──► component risk ──► verdict
-(decisions,     (behavioral_         (behavioral_       (behavioral_       proceed/
- calibration,    sensor.py)           state.py)          assessment.py)     guide/
- drift, tools)                                                              pause/reject
+observables ──► observation blend ──► EMA state ──► residual / basin risk ──► policy action
+(decisions,     (behavioral_         (behavioral_    (behavioral_          proceed/
+ calibration,    sensor.py)           state.py)       assessment.py)        guide/
+ drift, tools)                                                               pause/reject
 ```
 
 The dynamical-systems / thermodynamic model (`governance_core/`, the ODE) runs **in parallel and does not drive verdicts** by default (`governance_monitor.py:1013-1017`: *"The ODE engine runs in parallel but does NOT drive verdicts… Primary verdicts come from behavioral assessment (EMA + z-score deviations)."*). It supplies the phi objective, regime detection, and historical continuity — the research lens, not the control loop.
@@ -65,7 +65,24 @@ So "four-dimensional state vector" is really three observed axes (E, I, S) plus 
 
 (If you grep the codebase you will find a second `_compute_V` — a slope-plus-level formula — in `behavioral_sensor.py`. It is **unused on the verdict path**: `governance_monitor.py:1002` passes only E/I/S observations to `behavioral_state.update()`, which recomputes V as the EMA of E−I above. The live V is the one described here.)
 
-## Step 3 — Verdict (`src/behavioral_assessment.py`)
+## Step 3 — Residuals: proprioception, not prosecution
+
+The operational question is not "did EISV decide this was bad?" It is "how far
+has this running process moved from a grounded reference for itself?" In roadmap
+terms:
+
+```text
+reference_t = blend(agent_baseline_t, class_anchor; w(grounding))
+residual_t  = measurement_t - reference_t
+```
+
+The current verdict path implements the live version of that posture with
+self-relative z-scores after warmup, absolute safety floors, and a basin-health
+gate. External evidence (tests, exit codes, tool results, deployments, review
+labels) calibrates the signal and can license baseline recentering; it is not the
+identity of EISV itself.
+
+## Step 4 — Policy action (`src/behavioral_assessment.py`)
 
 *"No sigmoid/phi black box. Each risk component has a clear source and weight. Assessment is auditable — you can trace exactly why a verdict was issued."* (module docstring.)
 
@@ -90,4 +107,4 @@ The paper states this plainly: the deployed resource-rate form *"is **not** equi
 
 ## Don't take this document's word for it
 
-Whether these numbers predict anything beyond a dumb baseline is an **open, measured** question — not an assumption. The [Reviewer Guide's falsifiability harness](REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV/prior-state features against a deliberately dumb `previous_outcome_bad` baseline on ranking (AUC) and calibration (Brier) and self-labels each slice (`INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING`). The current read is a weak early signal on the task scope at short lead, no demonstrated prevention, and a caveat that the lift may be carried by a single `prior_risk` feature rather than the full decomposition. Run it yourself.
+Whether these numbers add useful signal beyond dumb baselines is an **open, measured** question — not an assumption. The [Reviewer Guide's falsifiability harness](REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV/prior-state features against deliberately boring baselines such as `previous_outcome_bad` on ranking (AUC) and calibration (Brier), then self-labels each slice (`INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING`). Treat that as a test of calibration and falsifiability for the proprioceptive signal, not as the headline purpose of UNITARES. The current read is a weak early signal on the task scope at short lead, no demonstrated prevention, and a caveat that the lift may be carried by a single `prior_risk` feature rather than the full decomposition. Run it yourself.
