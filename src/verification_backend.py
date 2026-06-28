@@ -29,9 +29,6 @@ from governance_core.verification import (
     VerificationSignal,
     score_harm_confession,
     _verdict_for,
-    CAUTION_THRESHOLD,
-    HIGH_RISK_THRESHOLD,
-    SAFE,
 )
 
 # Known category vocabulary (must match the regex backend's categories so the
