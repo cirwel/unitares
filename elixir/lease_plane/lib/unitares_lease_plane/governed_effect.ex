@@ -52,6 +52,8 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   require Logger
 
+  alias UnitaresLeasePlane.Canonicalize
+  alias UnitaresLeasePlane.FileWriteExecutor
   alias UnitaresLeasePlane.GovernanceVetoClient
   alias UnitaresLeasePlane.OrchestratorClient
   alias UnitaresLeasePlane.Repo
@@ -331,9 +333,164 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     end
   end
 
-  # Every other effect_type is still gated (file_write/repo_commit/etc. land in
-  # later slices with their rollback machinery).
+  # file_write — the first REVERSIBLE execute surface. Synchronous: acquire the
+  # lease, re-check the §6 veto on the commit path, hand to FileWriteExecutor
+  # (which captures the pre-image, then dry-runs or commits per
+  # :execute_file_write_commit_enabled), release the lease. Crash recovery is
+  # EffectRecovery (boot) + the executor's in-process compensation; a fast write
+  # is covered by the min-TTL lease floor. (A supervised EffectCustodian with a
+  # lease heartbeat + immediate :transient recovery is a robustness follow-up.)
+  defp execute(%{effect_type: "file_write"} = env) do
+    if execute_file_write_enabled?() do
+      execute_file_write(env)
+    else
+      {:error, :execute_not_implemented}
+    end
+  end
+
+  # Every other effect_type is still gated.
   defp execute(_env), do: {:error, :execute_not_implemented}
+
+  defp execute_file_write_enabled? do
+    Application.get_env(:lease_plane, :execute_file_write_enabled, false) == true
+  end
+
+  # Restart + compensation budget: a too-short lease cannot survive a crash and
+  # recovery, so reject before any custody starts.
+  @min_execute_ttl_s 120
+
+  defp execute_file_write(env) do
+    if min_ttl_ok?(env) do
+      digest = idempotency_digest(env)
+
+      case Repo.governed_effect_by_idempotency_key(env.idempotency_key, @execute_event_type) do
+        {:ok, %{idempotency_digest: ^digest, payload: stored}} ->
+          {:ok, execute_idempotent_body(stored)}
+
+        {:ok, %{idempotency_digest: other}} when is_binary(other) ->
+          {:error, :idempotency_conflict}
+
+        {:ok, nil} ->
+          file_write_under_custody(env, digest)
+
+        {:error, reason} ->
+          Logger.warning("governed_effect file_write idempotency lookup failed: #{inspect(reason)}")
+          {:error, :idempotency_lookup_failed}
+      end
+    else
+      {:error, :lease_ttl_too_short}
+    end
+  end
+
+  defp min_ttl_ok?(env) do
+    Enum.all?(env.required_leases, fn l -> (lease_ttl(l) || 0) >= @min_execute_ttl_s end)
+  end
+
+  defp lease_ttl(%{"ttl_s" => t}), do: t
+  defp lease_ttl(%{ttl_s: t}), do: t
+  defp lease_ttl(_), do: nil
+
+  defp file_write_under_custody(env, digest) do
+    effect_id = gen_effect_id()
+    # Canonicalize lease surfaces ONCE so the acquired surface_id and the
+    # executor's canonical(path) match (the path-canonicalization seam).
+    canon_leases = canonicalize_leases(env.required_leases)
+
+    case acquire_all(canon_leases, env.proposer_agent_uuid) do
+      {:ok, acquired} ->
+        try do
+          # §6 veto re-checked HERE, on the commit path, with the lease held.
+          case GovernanceVetoClient.check(env) do
+            :allow ->
+              result =
+                FileWriteExecutor.apply_effect(effect_id, env.payload, canon_leases)
+
+              {status, extra} = result_audit(result)
+              _ = persist_execute(env, execute_audit_payload(effect_id, env, digest, status, extra))
+              result_to_reply(result, effect_id)
+
+            blocked ->
+              payload =
+                execute_audit_payload(effect_id, env, digest, "governance_blocked", %{
+                  "veto_reason" => veto_reason(blocked)
+                })
+
+              _ = persist_execute(env, payload)
+              {:error, :governance_blocked}
+          end
+        after
+          release_all(acquired)
+        end
+
+      {:error, :held_by_other} ->
+        {:error, :lease_held}
+
+      {:error, reason} ->
+        Logger.warning("governed_effect file_write lease acquire failed: #{inspect(reason)}")
+        {:error, :lease_acquire_failed}
+    end
+  end
+
+  defp canonicalize_leases(leases) do
+    Enum.map(leases, fn l ->
+      surface = Map.get(l, "surface") || Map.get(l, :surface)
+
+      case Canonicalize.canonicalize(surface) do
+        {:ok, canon} -> %{"surface" => canon, "ttl_s" => lease_ttl(l)}
+        _ -> %{"surface" => surface, "ttl_s" => lease_ttl(l)}
+      end
+    end)
+  end
+
+  # Acquire every required lease; on the first conflict, release what we hold and
+  # bail (atomic-ish: no partial custody escapes).
+  defp acquire_all(leases, proposer) do
+    Enum.reduce_while(leases, {:ok, []}, fn l, {:ok, acc} ->
+      params = %{
+        surface_id: Map.get(l, "surface"),
+        holder_agent_uuid: proposer,
+        holder_kind: "remote_heartbeat",
+        ttl_s: lease_ttl(l)
+      }
+
+      case Repo.acquire(params) do
+        {:ok, lease, _} ->
+          {:cont, {:ok, [lease | acc]}}
+
+        {:error, :held_by_other, _} ->
+          release_all(acc)
+          {:halt, {:error, :held_by_other}}
+
+        {:error, reason} ->
+          release_all(acc)
+          {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp release_all(leases) do
+    Enum.each(leases, fn lease ->
+      lease_id = Map.get(lease, :lease_id) || Map.get(lease, "lease_id")
+      if is_binary(lease_id), do: Repo.release(lease_id, "governed_effect_file_write_complete")
+    end)
+  end
+
+  defp result_audit({:committed, meta}),
+    do: {if(meta[:dry_run], do: "dry_run", else: "committed"), %{"result" => stringify(meta)}}
+
+  defp result_audit({:rejected, reason}),
+    do: {"rejected", %{"error" => inspect(reason)}}
+
+  defp result_to_reply({:committed, meta}, effect_id),
+    do: {:ok, %{ok: true, effect_id: effect_id, custody_mode: "execute", result: meta}}
+
+  defp result_to_reply({:rejected, reason}, _effect_id), do: {:error, reason}
+
+  defp stringify(map), do: Map.new(map, fn {k, v} -> {to_string(k), v} end)
+
+  defp veto_reason({:blocked, r}), do: r
+  defp veto_reason({:error, r}), do: "veto_unavailable:#{inspect(r)}"
+  defp veto_reason(_), do: "vetoed"
 
   defp execute_agent_spawn_enabled? do
     Application.get_env(:lease_plane, :execute_agent_spawn_enabled, false) == true and

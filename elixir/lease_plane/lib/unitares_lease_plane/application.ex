@@ -66,6 +66,22 @@ defmodule UnitaresLeasePlane.Application do
       System.get_env("UNITARES_GOVERNED_EFFECT_EXECUTE_AGENT_SPAWN") == "1"
     )
 
+    # file_write execute (first reversible surface). TWO flags, both fail-closed:
+    # _ENABLED gates the dispatch; _COMMIT gates the real write (dry-run when off).
+    Application.put_env(
+      :lease_plane,
+      :execute_file_write_enabled,
+      System.get_env("UNITARES_GOVERNED_EFFECT_EXECUTE_FILE_WRITE") == "1"
+    )
+
+    Application.put_env(
+      :lease_plane,
+      :execute_file_write_commit_enabled,
+      System.get_env("UNITARES_GOVERNED_EFFECT_EXECUTE_FILE_WRITE_COMMIT") == "1"
+    )
+
+    validate_execute_type_flags!()
+
     Application.put_env(
       :lease_plane,
       :agent_orchestrator_url,
@@ -118,6 +134,22 @@ defmodule UnitaresLeasePlane.Application do
 
     opts = [strategy: :one_for_one, name: UnitaresLeasePlane.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  # Fail-closed boot guard for the file_write execute flags: turning ON the real
+  # write (_COMMIT) without turning ON the dispatch (_ENABLED) is a misconfig —
+  # a write capability with no governed path to reach it. Refuse to boot rather
+  # than run in that ambiguous state.
+  defp validate_execute_type_flags! do
+    enabled = Application.get_env(:lease_plane, :execute_file_write_enabled, false)
+    commit = Application.get_env(:lease_plane, :execute_file_write_commit_enabled, false)
+
+    if commit and not enabled do
+      raise "lease_plane boot refused: UNITARES_GOVERNED_EFFECT_EXECUTE_FILE_WRITE_COMMIT is on " <>
+              "but UNITARES_GOVERNED_EFFECT_EXECUTE_FILE_WRITE (dispatch) is off — enable both or neither."
+    end
+
+    :ok
   end
 
   defp http_children do
