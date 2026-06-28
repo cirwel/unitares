@@ -94,13 +94,14 @@ defmodule LeaseTestHelpers do
   def insert_dialectic_session(opts \\ []) do
     session_id = Keyword.get(opts, :session_id, "test_elixir_dia_" <> short_rand())
     paused = Keyword.get(opts, :paused_agent_id, "test_paused_" <> short_rand())
+    reviewer = Keyword.get(opts, :reviewer_agent_id)
     phase = Keyword.get(opts, :phase, "synthesis")
     status = Keyword.get(opts, :status, "active")
 
     Postgrex.query!(
       DB,
-      "INSERT INTO core.dialectic_sessions (session_id, paused_agent_id, phase, status) VALUES ($1, $2, $3, $4)",
-      [session_id, paused, phase, status]
+      "INSERT INTO core.dialectic_sessions (session_id, paused_agent_id, reviewer_agent_id, phase, status) VALUES ($1, $2, $3, $4, $5)",
+      [session_id, paused, reviewer, phase, status]
     )
 
     session_id

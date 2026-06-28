@@ -47,6 +47,89 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
   defp parsed(conn), do: Jason.decode!(conn.resp_body)
 
+  describe "/v1/dialectic/phase" do
+    test "advances a non-terminal phase (200)" do
+      session_id = insert_dialectic_session(phase: "thesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      resp = post_json("/v1/dialectic/phase", %{session_id: session_id, phase: "antithesis"})
+      assert resp.status == 200
+      assert parsed(resp)["phase"] == "antithesis"
+    end
+
+    test "invalid phase -> 422" do
+      resp = post_json("/v1/dialectic/phase", %{session_id: "x", phase: "resolved"})
+      assert resp.status == 422
+    end
+
+    test "missing session -> 404" do
+      resp =
+        post_json("/v1/dialectic/phase", %{
+          session_id: "test_elixir_nope_#{System.unique_integer([:positive])}",
+          phase: "antithesis"
+        })
+
+      assert resp.status == 404
+    end
+  end
+
+  describe "/v1/dialectic/session" do
+    test "creates a session (201) then idempotent replay (200)" do
+      sid = "test_elixir_httpcreate_" <> Integer.to_string(System.unique_integer([:positive]))
+      on_exit(fn -> cleanup_dialectic_session(sid) end)
+
+      r1 =
+        post_json("/v1/dialectic/session", %{
+          session_id: sid,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          reason: "test"
+        })
+
+      assert r1.status == 201
+      assert parsed(r1)["created"] == true
+
+      r2 = post_json("/v1/dialectic/session", %{session_id: sid, paused_agent_id: "p"})
+      assert r2.status == 200
+      assert parsed(r2)["created"] == false
+    end
+
+    test "missing fields → 422 schema_invalid" do
+      assert post_json("/v1/dialectic/session", %{session_id: "x"}).status == 422
+    end
+  end
+
+  describe "/v1/dialectic/presence" do
+    test "lists live sessions; resolved ones drop off" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      live =
+        :get
+        |> conn("/v1/dialectic/presence")
+        |> authed()
+        |> HTTPRouter.call(@opts)
+
+      assert live.status == 200
+      body = parsed(live)
+      assert body["ok"] == true
+      assert Enum.any?(body["sessions"], &(&1["session_id"] == session_id))
+
+      # Resolve it, then it should no longer appear.
+      post_json("/v1/dialectic/resolve", %{
+        session_id: session_id,
+        paused_agent_id: "p",
+        reviewer_agent_id: "r",
+        resolution: %{verdict: "resume"}
+      })
+
+      after_resolve =
+        :get |> conn("/v1/dialectic/presence") |> authed() |> HTTPRouter.call(@opts)
+
+      refute Enum.any?(parsed(after_resolve)["sessions"], &(&1["session_id"] == session_id))
+    end
+  end
+
   describe "/v1/dialectic/resolve" do
     test "missing fields → 422 schema_invalid" do
       resp = post_json("/v1/dialectic/resolve", %{session_id: "x"})
@@ -88,6 +171,36 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       resp2 = post_json("/v1/dialectic/resolve", body)
       assert resp2.status == 200
       assert parsed(resp2)["origin"] == "already_terminal"
+    end
+
+    test "status=failed commits a failed terminal transition" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: %{reason: "safety_violation"},
+          status: "failed"
+        })
+
+      assert resp.status == 200
+      assert parsed(resp)["status"] == "failed"
+    end
+
+    test "invalid status → 422 schema_invalid" do
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: "x",
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: %{},
+          status: "bogus"
+        })
+
+      assert resp.status == 422
     end
 
     test "unknown session → 404 session_not_found" do

@@ -116,6 +116,24 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
                DialecticSaga.resolve(claim_params(session_id))
     end
 
+    test "commits a failed terminal transition when status=failed" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      params = Map.put(claim_params(session_id, %{"reason" => "safety"}), :status, "failed")
+
+      assert {:ok, %{status: "failed", saga_id: saga_id, origin: :new}} =
+               DialecticSaga.resolve(params)
+
+      assert session_status(session_id) == "failed"
+      assert saga_state(saga_id) == "pg_committed"
+    end
+
+    test "rejects an invalid status" do
+      assert {:error, :invalid_status} =
+               DialecticSaga.resolve(Map.put(claim_params("s"), :status, "bogus"))
+    end
+
     test "rejects when a different live resolution is in flight" do
       session_id = insert_dialectic_session()
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
@@ -161,6 +179,145 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
     end
   end
 
+  describe "reclaim_all_stale/0 + reaper" do
+    test "reverts orphaned reserved sagas across sessions" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      insert_stale_reserved(session_id)
+      assert {:ok, n} = DialecticSaga.reclaim_all_stale()
+      assert n >= 1
+      # The session's one-pending slot is free again.
+      assert {:ok, nil} = DialecticSaga.get_inflight(session_id)
+    end
+
+    test "DialecticSagaReaper.perform returns a reclaimed count" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      insert_stale_reserved(session_id)
+      assert {:ok, %{reclaimed: n}} = UnitaresLeasePlane.DialecticSagaReaper.perform(%{})
+      assert n >= 1
+    end
+  end
+
+  describe "live_sessions/1" do
+    test "lists a non-terminal session with phase, age, and resolving flag" do
+      session_id = insert_dialectic_session(phase: "synthesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert {:ok, %{origin: :new}} = DialecticSaga.claim(claim_params(session_id))
+
+      {:ok, sessions} = DialecticSaga.live_sessions(500)
+      mine = Enum.find(sessions, &(&1.session_id == session_id))
+      assert mine.phase == "synthesis"
+      assert mine.resolving == true
+      assert is_integer(mine.age_seconds)
+    end
+
+    test "excludes resolved sessions" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert {:ok, _} = DialecticSaga.resolve(claim_params(session_id))
+      {:ok, sessions} = DialecticSaga.live_sessions(500)
+      refute Enum.any?(sessions, &(&1.session_id == session_id))
+    end
+  end
+
+  describe "update_phase/2" do
+    test "advances a non-terminal phase" do
+      session_id = insert_dialectic_session(phase: "thesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert :ok = DialecticSaga.update_phase(session_id, "antithesis")
+      assert session_phase(session_id) == "antithesis"
+    end
+
+    test "rejects an invalid / terminal target phase" do
+      assert {:error, :invalid_phase} = DialecticSaga.update_phase("x", "resolved")
+      assert {:error, :invalid_phase} = DialecticSaga.update_phase("x", "bogus")
+    end
+
+    test "does not move an already-terminal session (no-op :ok)" do
+      session_id = insert_dialectic_session(phase: "resolved", status: "resolved")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert :ok = DialecticSaga.update_phase(session_id, "antithesis")
+      assert session_phase(session_id) == "resolved"
+    end
+
+    test "missing session -> :session_not_found" do
+      assert {:error, :session_not_found} =
+               DialecticSaga.update_phase("test_elixir_nope_phase", "thesis")
+    end
+  end
+
+  describe "update_reviewer/2" do
+    test "assigns a reviewer on an active session" do
+      session_id = insert_dialectic_session(phase: "antithesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert :ok = DialecticSaga.update_reviewer(session_id, "rev-99")
+      assert session_reviewer(session_id) == "rev-99"
+    end
+
+    test "rejects a blank reviewer" do
+      assert {:error, :invalid_reviewer} = DialecticSaga.update_reviewer("x", "")
+    end
+
+    test "missing session -> :session_not_found" do
+      assert {:error, :session_not_found} =
+               DialecticSaga.update_reviewer("test_elixir_nope_rev", "rev-1")
+    end
+  end
+
+  describe "create_session/1" do
+    test "inserts a session and starts a liveness watcher" do
+      sid = "test_elixir_create_" <> Integer.to_string(System.unique_integer([:positive]))
+      on_exit(fn -> cleanup_dialectic_session(sid) end)
+
+      assert {:ok, :created} =
+               DialecticSaga.create_session(%{
+                 session_id: sid,
+                 paused_agent_id: "p",
+                 reviewer_agent_id: "r",
+                 reason: "test"
+               })
+
+      assert session_status(sid) == "active"
+      assert :gone != UnitaresLeasePlane.DialecticLiveness.snapshot(sid)
+    end
+
+    test "is idempotent on a duplicate session_id" do
+      sid = "test_elixir_create_" <> Integer.to_string(System.unique_integer([:positive]))
+      on_exit(fn -> cleanup_dialectic_session(sid) end)
+
+      assert {:ok, :created} =
+               DialecticSaga.create_session(%{session_id: sid, paused_agent_id: "p"})
+
+      assert {:ok, :exists} =
+               DialecticSaga.create_session(%{session_id: sid, paused_agent_id: "p"})
+    end
+
+    test "rejects missing paused_agent_id" do
+      assert {:error, :invalid_params} = DialecticSaga.create_session(%{session_id: "x"})
+    end
+  end
+
+  defp insert_stale_reserved(session_id) do
+    Postgrex.query!(
+      DB,
+      """
+      INSERT INTO coordination.session_resolution_sagas
+        (saga_id, session_id, paused_agent_id, reviewer_agent_id, state,
+         resolution_payload_json, resolution_payload_hash, last_attempt_at, attempt_count)
+      VALUES (gen_random_uuid(), $1, 'p', 'r', 'reserved', '{}'::jsonb, $2, now() - interval '10 minutes', 1)
+      """,
+      [session_id, "stale-hash-#{session_id}"]
+    )
+  end
+
   defp session_status(session_id) do
     %{rows: [[status]]} =
       Postgrex.query!(DB, "SELECT status FROM core.dialectic_sessions WHERE session_id = $1", [
@@ -168,6 +325,26 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       ])
 
     status
+  end
+
+  defp session_phase(session_id) do
+    %{rows: [[phase]]} =
+      Postgrex.query!(DB, "SELECT phase FROM core.dialectic_sessions WHERE session_id = $1", [
+        session_id
+      ])
+
+    phase
+  end
+
+  defp session_reviewer(session_id) do
+    %{rows: [[rev]]} =
+      Postgrex.query!(
+        DB,
+        "SELECT reviewer_agent_id FROM core.dialectic_sessions WHERE session_id = $1",
+        [session_id]
+      )
+
+    rev
   end
 
   defp saga_state(saga_id) do

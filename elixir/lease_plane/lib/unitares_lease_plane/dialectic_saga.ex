@@ -111,38 +111,188 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     * `{:error, :saga_in_flight}` — a live resolve already holds the session
     * `{:error, :session_not_found}` / other `{:error, term}`
   """
+  @terminal_statuses ~w(resolved failed)
+
   @spec resolve(map()) :: {:ok, map()} | {:error, term()}
   def resolve(%{session_id: session_id, resolution_payload: payload} = params)
       when is_binary(session_id) and is_map(payload) do
-    case claim(params) do
-      {:ok, %{saga_id: saga_id, origin: origin}} ->
-        with :ok <- commit_session_row(session_id, payload),
-             :ok <- commit(saga_id) do
-          {:ok, %{status: "resolved", saga_id: saga_id, origin: origin}}
+    status = Map.get(params, :status, "resolved")
+
+    if status in @terminal_statuses do
+      do_resolve(params, session_id, payload, status)
+    else
+      {:error, :invalid_status}
+    end
+  end
+
+  def resolve(_), do: {:error, :invalid_params}
+
+  @doc """
+  BEAM-owned dialectic session creation: guarded INSERT into
+  `core.dialectic_sessions` + immediately start a liveness watcher, so a session
+  is watched from birth rather than waiting for the 30s reconciler. Idempotent on
+  `session_id` (`ON CONFLICT DO NOTHING`): a duplicate returns `{:ok, :exists}`.
+
+  Python still computes the `session_id` and field values (it owns id generation
+  + the request semantics); BEAM owns the write + the watcher start. Required:
+  `:session_id`, `:paused_agent_id`. Phase/status default to thesis/active (what
+  Python sets on create); all other fields are optional.
+  """
+  @spec create_session(map()) :: {:ok, :created | :exists} | {:error, term()}
+  def create_session(%{session_id: sid, paused_agent_id: paused} = p)
+      when is_binary(sid) and byte_size(sid) > 0 and is_binary(paused) and byte_size(paused) > 0 do
+    sql = """
+    INSERT INTO core.dialectic_sessions
+      (session_id, paused_agent_id, reviewer_agent_id, phase, status,
+       session_type, topic, reason, discovery_id, dispute_type,
+       max_synthesis_rounds, synthesis_round, paused_agent_state_json, trigger_source)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14)
+    ON CONFLICT (session_id) DO NOTHING
+    RETURNING session_id
+    """
+
+    args = [
+      sid,
+      paused,
+      Map.get(p, :reviewer_agent_id),
+      Map.get(p, :phase, "thesis"),
+      Map.get(p, :status, "active"),
+      Map.get(p, :session_type),
+      Map.get(p, :topic),
+      Map.get(p, :reason),
+      Map.get(p, :discovery_id),
+      Map.get(p, :dispute_type),
+      Map.get(p, :max_synthesis_rounds),
+      Map.get(p, :synthesis_round, 0),
+      encode_json(Map.get(p, :paused_agent_state)),
+      Map.get(p, :trigger_source)
+    ]
+
+    case Postgrex.query(DB, sql, args) do
+      {:ok, %{rows: [[_sid]]}} ->
+        UnitaresLeasePlane.DialecticLivenessSupervisor.ensure_started(sid)
+        {:ok, :created}
+
+      {:ok, %{rows: []}} ->
+        {:ok, :exists}
+
+      {:error, e} ->
+        {:error, e}
+    end
+  end
+
+  def create_session(_), do: {:error, :invalid_params}
+
+  defp encode_json(nil), do: nil
+  defp encode_json(v), do: Jason.encode!(v)
+
+  @non_terminal_phases ~w(awaiting_thesis thesis antithesis synthesis quorum_voting)
+
+  @doc """
+  Guarded non-terminal phase advance (thesis -> antithesis -> synthesis ...) —
+  BEAM as sole writer of `core.dialectic_sessions.phase` for intermediate
+  transitions too, not just creation + the terminal write. Refuses to touch an
+  already-terminal session (those move only via `resolve/1`) and only accepts a
+  non-terminal target phase. Idempotent: a no-op UPDATE still returns `:ok`.
+  """
+  @spec update_phase(String.t(), String.t()) ::
+          :ok | {:error, :invalid_phase | :session_not_found | term()}
+  def update_phase(session_id, phase)
+      when is_binary(session_id) and phase in @non_terminal_phases do
+    sql = """
+    UPDATE core.dialectic_sessions
+    SET phase = $2, updated_at = now()
+    WHERE session_id = $1 AND status NOT IN ('resolved', 'failed', 'escalated')
+    RETURNING session_id
+    """
+
+    case Postgrex.query(DB, sql, [session_id, phase]) do
+      {:ok, %{num_rows: 1}} ->
+        :ok
+
+      {:ok, %{num_rows: 0}} ->
+        # No row updated: session missing or already terminal. Distinguish so the
+        # caller can fall back vs treat as a benign no-op.
+        case Postgrex.query(DB, "SELECT 1 FROM core.dialectic_sessions WHERE session_id = $1", [
+               session_id
+             ]) do
+          {:ok, %{num_rows: 1}} -> :ok
+          {:ok, %{num_rows: 0}} -> {:error, :session_not_found}
+          {:error, e} -> {:error, e}
         end
 
-      {:error, {:session_terminal, status}} ->
-        # Already resolved/failed: nothing to write, treat as idempotent success.
-        {:ok, %{status: status, saga_id: nil, origin: :already_terminal}}
+      {:error, e} ->
+        {:error, e}
+    end
+  end
+
+  def update_phase(_session_id, _phase), do: {:error, :invalid_phase}
+
+  @doc """
+  Guarded reviewer assignment/reassignment — the last session-row column written
+  Python-side. BEAM as sole writer of `reviewer_agent_id` too. Refuses an
+  already-terminal session; missing session -> :session_not_found; otherwise :ok.
+  """
+  @spec update_reviewer(String.t(), String.t()) ::
+          :ok | {:error, :invalid_reviewer | :session_not_found | term()}
+  def update_reviewer(session_id, reviewer)
+      when is_binary(session_id) and is_binary(reviewer) and byte_size(reviewer) > 0 do
+    sql = """
+    UPDATE core.dialectic_sessions
+    SET reviewer_agent_id = $2, updated_at = now()
+    WHERE session_id = $1 AND status NOT IN ('resolved', 'failed', 'escalated')
+    RETURNING session_id
+    """
+
+    case Postgrex.query(DB, sql, [session_id, reviewer]) do
+      {:ok, %{num_rows: 1}} ->
+        :ok
+
+      {:ok, %{num_rows: 0}} ->
+        case Postgrex.query(DB, "SELECT 1 FROM core.dialectic_sessions WHERE session_id = $1", [
+               session_id
+             ]) do
+          {:ok, %{num_rows: 1}} -> :ok
+          {:ok, %{num_rows: 0}} -> {:error, :session_not_found}
+          {:error, e} -> {:error, e}
+        end
+
+      {:error, e} ->
+        {:error, e}
+    end
+  end
+
+  def update_reviewer(_session_id, _reviewer), do: {:error, :invalid_reviewer}
+
+  defp do_resolve(params, session_id, payload, status) do
+    case claim(params) do
+      {:ok, %{saga_id: saga_id, origin: origin}} ->
+        with :ok <- commit_session_row(session_id, payload, status),
+             :ok <- commit(saga_id) do
+          {:ok, %{status: status, saga_id: saga_id, origin: origin}}
+        end
+
+      {:error, {:session_terminal, existing}} ->
+        # Already terminal: nothing to write, treat as idempotent success.
+        {:ok, %{status: existing, saga_id: nil, origin: :already_terminal}}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  def resolve(_), do: {:error, :invalid_params}
-
-  # Guarded terminal write of the session row — BEAM is the sole writer. Mirrors
-  # the Python B-4 guard (#1171): refuses to overwrite an already-terminal row.
-  defp commit_session_row(session_id, payload) do
+  # Guarded terminal write of the session row — BEAM is the sole writer for both
+  # terminal transitions (resolved AND failed). Mirrors the Python B-4 guard
+  # (#1171): refuses to overwrite an already-terminal row. phase tracks status.
+  defp commit_session_row(session_id, payload, status) do
     sql = """
     UPDATE core.dialectic_sessions
-    SET status = 'resolved', phase = 'resolved', resolution_json = $2::jsonb, updated_at = now()
+    SET status = $2, phase = $2, resolution_json = $3::jsonb, updated_at = now()
     WHERE session_id = $1 AND status NOT IN ('resolved', 'failed')
     RETURNING session_id
     """
 
-    case Postgrex.query(DB, sql, [session_id, Jason.encode!(payload)]) do
+    case Postgrex.query(DB, sql, [session_id, status, Jason.encode!(payload)]) do
       {:ok, %{num_rows: 1}} -> :ok
       # Already terminal (raced/idempotent) — saga still commits; not an error.
       {:ok, %{num_rows: 0}} -> :ok
@@ -204,6 +354,91 @@ defmodule UnitaresLeasePlane.DialecticSaga do
           {:ok, %{num_rows: 0}} -> {:error, :saga_not_found}
           {:error, e} -> {:error, e}
         end
+
+      {:error, e} ->
+        {:error, e}
+    end
+  end
+
+  @doc """
+  Periodic recovery: revert every orphaned (old, still-`reserved`) saga across
+  ALL sessions. The on-claim `reclaim_stale_reserved` only frees a session being
+  re-claimed; this sweep frees an orphan even if its session is never resolved
+  again, so a crashed resolver can never permanently wedge a session. Returns
+  `{:ok, count}`. Run by `DialecticSagaReaper` under the PeriodicWorker.
+  """
+  @spec reclaim_all_stale() :: {:ok, non_neg_integer()} | {:error, term()}
+  def reclaim_all_stale do
+    sql = """
+    UPDATE coordination.session_resolution_sagas
+    SET state = 'reverted', reverted_at = now(), updated_at = now()
+    WHERE state = 'reserved'
+      AND last_attempt_at < now() - ($1 || ' seconds')::interval
+    """
+
+    case Postgrex.query(DB, sql, [Integer.to_string(@stale_reserved_seconds)]) do
+      {:ok, %{num_rows: n}} -> {:ok, n}
+      {:error, e} -> {:error, e}
+    end
+  end
+
+  @doc """
+  Live (non-terminal) dialectic sessions as a BEAM-served presence read: each
+  with phase, age in seconds, and whether a resolution saga is currently in
+  flight. Backs `GET /v1/dialectic/presence`.
+  """
+  @spec live_sessions(pos_integer()) :: {:ok, [map()]} | {:error, term()}
+  def live_sessions(limit \\ 100) when is_integer(limit) and limit > 0 do
+    sql = """
+    SELECT s.session_id, s.phase,
+           EXTRACT(EPOCH FROM (now() - s.created_at))::bigint AS age_s,
+           EXISTS(
+             SELECT 1 FROM coordination.session_resolution_sagas g
+             WHERE g.session_id = s.session_id AND g.state = ANY($1)
+           ) AS resolving
+    FROM core.dialectic_sessions s
+    WHERE s.status NOT IN ('resolved', 'failed', 'escalated')
+    ORDER BY s.created_at DESC
+    LIMIT $2
+    """
+
+    case Postgrex.query(DB, sql, [@inflight_states, limit]) do
+      {:ok, %{rows: rows}} ->
+        {:ok,
+         Enum.map(rows, fn [sid, phase, age, resolving] ->
+           %{session_id: sid, phase: phase, age_seconds: age, resolving: resolving}
+         end)}
+
+      {:error, e} ->
+        {:error, e}
+    end
+  end
+
+  @doc """
+  Per-session liveness snapshot for the live-timer layer: status, the two agent
+  ids (needed to drive a `failed` resolve), and seconds since the last update.
+  `{:ok, nil}` if the session is gone.
+  """
+  @spec get_session_liveness(String.t()) :: {:ok, map() | nil} | {:error, term()}
+  def get_session_liveness(session_id) when is_binary(session_id) do
+    sql = """
+    SELECT status, paused_agent_id, reviewer_agent_id,
+           EXTRACT(EPOCH FROM (now() - updated_at))::bigint AS inactive_s
+    FROM core.dialectic_sessions WHERE session_id = $1
+    """
+
+    case Postgrex.query(DB, sql, [session_id]) do
+      {:ok, %{rows: [[status, paused, reviewer, inactive_s]]}} ->
+        {:ok,
+         %{
+           status: status,
+           paused_agent_id: paused,
+           reviewer_agent_id: reviewer,
+           inactive_seconds: inactive_s
+         }}
+
+      {:ok, %{rows: []}} ->
+        {:ok, nil}
 
       {:error, e} ->
         {:error, e}
