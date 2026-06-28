@@ -63,6 +63,7 @@ addopts = ["-v"]
 markers = [
     "smoke: Fast smoke tests for pre-push validation (target <60s)",
     "integration: Full-stack tests that drive a running governance stack (opt-in; gated on RUN_INTEGRATION_STACK=1, skip cleanly when no stack is up)",
+    "chaos: Deterministic failure-injection tests asserting documented degradation contracts (no live services; selectable with -m chaos)",
 ]
 filterwarnings = [
     "ignore::ResourceWarning",
