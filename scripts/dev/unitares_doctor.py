@@ -783,6 +783,62 @@ def check_flags_catalog_fresh(repo_root: Path) -> CheckResult:
     )
 
 
+def check_class_anchors_fresh(repo_root: Path) -> CheckResult:
+    """WARN if the per-class manifold anchors have gone stale.
+
+    HEALTHY_OPERATING_POINT_BY_CLASS / DELTA_NORM_MAX_BY_CLASS
+    (config/governance_config.py) are hand-snapshotted from a healthy-regime
+    slice via scripts/calibrate_class_conditional.py. They feed manifold
+    coherence and (via healthy_S) the live S-setpoint, but nothing forces a
+    refresh — so they silently drift from reality. In 2026-06 Lumen's anchor was
+    ~2 months stale, pinning its manifold coherence at 0 on every check-in. WARN
+    (not FAIL — staleness degrades a signal, it doesn't break the build) when the
+    newest 'measured_on' is older than the threshold.
+
+    Regenerate WITH the live roster so per-label residents map to the keys:
+      UNITARES_RESIDENTS=<csv> python3 scripts/calibrate_class_conditional.py
+    """
+    name, mode = "class_anchors_fresh", "local"
+    stale_days = 90
+    try:
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        from config.governance_config import DELTA_NORM_MAX_BY_CLASS
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        # Per-class, measured-only: an alias (provenance!='measured') is
+        # deliberately not a measurement, so it never counts as stale. Keying on
+        # the OLDEST measured class (not the newest) is the point — a fresh
+        # refresh of one class must not mask a stale neighbour (Lumen 2026-06).
+        stale = []
+        for cls, sc in DELTA_NORM_MAX_BY_CLASS.items():
+            if getattr(sc, "provenance", None) != "measured":
+                continue
+            mo = getattr(sc, "measured_on", None)
+            if not mo:
+                continue
+            try:
+                age = (now - datetime.strptime(mo, "%Y-%m-%d").replace(tzinfo=timezone.utc)).days
+            except ValueError:
+                continue
+            if age > stale_days:
+                stale.append((cls, age))
+        if not stale:
+            return CheckResult(name, mode, Status.PASS,
+                               "all measured class anchors within "
+                               f"{stale_days}d")
+        stale.sort(key=lambda x: -x[1])
+        worst = stale[0]
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"{len(stale)} class anchor(s) stale (oldest {worst[0]} {worst[1]}d > {stale_days}d)",
+            detail=("stale: " + ", ".join(f"{c}({a}d)" for c, a in stale)
+                    + "  -> UNITARES_RESIDENTS=<csv> python3 scripts/calibrate_class_conditional.py"),
+        )
+    except Exception as e:
+        return CheckResult(name, mode, Status.SKIP, f"anchor freshness check skipped: {e}")
+
+
 def build_checks(repo_root: Path, db_url: str) -> list[Check]:
     loaded_cache: dict[str, set[str]] = {}
 
@@ -806,6 +862,8 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
               lambda: check_dockerfile_pinned_tags(repo_root)),
         Check("flags_catalog_fresh", "local",
               lambda: check_flags_catalog_fresh(repo_root)),
+        Check("class_anchors_fresh", "local",
+              lambda: check_class_anchors_fresh(repo_root)),
         Check("anchor_directory", "local", check_anchor_dir),
         Check("secrets_file", "local", check_secrets_file),
         Check("http_listening", "operator", check_http_listening),

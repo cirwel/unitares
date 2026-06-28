@@ -598,3 +598,20 @@ def test_dockerfile_pinned_tags_ignores_build_stage_refs(doctor, tmp_path):
     )
     result = doctor.check_dockerfile_pinned_tags(tmp_path)
     assert result.status == doctor.Status.PASS
+
+
+def test_check_class_anchors_fresh_runs_and_classifies(doctor):
+    """Against the real anchor dicts the freshness check returns a valid result
+    (PASS/WARN), is registered, and reports per-class age."""
+    result = doctor.check_class_anchors_fresh(REPO_ROOT)
+    assert result.name == "class_anchors_fresh"
+    assert result.status in {doctor.Status.PASS, doctor.Status.WARN}
+    # WARN must name the stale classes so the operator knows what to regenerate.
+    if result.status == doctor.Status.WARN:
+        assert "stale" in result.message
+        assert "calibrate_class_conditional.py" in (result.detail or "")
+
+
+def test_class_anchors_fresh_is_registered(doctor):
+    names = {c.name for c in doctor.build_checks(REPO_ROOT, "postgresql://x/y")}
+    assert "class_anchors_fresh" in names
