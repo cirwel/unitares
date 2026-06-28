@@ -198,7 +198,11 @@ async def save_session(session: DialecticSession) -> None:
 
         def _write_session_sync():
             SESSION_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-            json_str = json.dumps(session_data, indent=2)
+            # default=str so non-JSON-native values nested in the snapshot (e.g.
+            # datetime objects in paused_agent_state) serialize instead of raising
+            # "Object of type datetime is not JSON serializable" — this is an
+            # offline debug snapshot, so str() rendering is fine.
+            json_str = json.dumps(session_data, indent=2, default=str)
             with open(session_file, 'w', encoding='utf-8') as f:
                 f.write(json_str)
                 f.flush()
