@@ -30,11 +30,10 @@ import argparse
 import json
 import os
 
-import psycopg2  # type: ignore
-import psycopg2.extras  # type: ignore
-
 
 def connect():
+    import psycopg2  # type: ignore
+
     dsn = os.environ.get(
         "GOVERNANCE_DATABASE_URL",
         "postgresql://postgres:postgres@localhost:5432/governance",
@@ -142,6 +141,8 @@ def _snapshot_queries() -> dict:
 
 
 def snapshot(days: int) -> dict:
+    import psycopg2.extras  # type: ignore
+
     queries = _snapshot_queries()
     out: dict = {"window_days": days}
     with connect() as conn:
