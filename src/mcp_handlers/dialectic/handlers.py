@@ -1111,7 +1111,7 @@ def _synthetic_reviewer_enabled() -> bool:
     showing up (the historical failure mode: auto-select is disabled, no peer
     claims the slot, the session sits stuck for hours). The reviewer is a local
     model (gemma4) heterogeneous to Claude, so it satisfies the independence
-    requirement the 2026-06-02 dialectic council set: a genuine antithesis, not a
+    requirement the 2026-06-02 dialectic review set: a genuine antithesis, not a
     self-review at one remove. Set UNITARES_DIALECTIC_SYNTHETIC_REVIEWER=0 to fall
     back to pure peer/manual review (request leaves the slot open as before).
     """
