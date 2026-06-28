@@ -1,6 +1,6 @@
 # Canonical Sources
 
-**Last Updated:** 2026-04-11
+**Last Updated:** 2026-06-28 (re-verified: all listed runtime sources and thin-doc targets resolve)
 
 Use this page to resolve architecture disputes and doc drift.
 
