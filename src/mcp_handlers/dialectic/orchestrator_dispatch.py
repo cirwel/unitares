@@ -91,20 +91,12 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
     if parent_agent_id:
         env["UNITARES_PARENT_AGENT_ID"] = parent_agent_id
 
-    # Propagate the dialectic-on-BEAM routing flag + lease-plane creds so the
-    # spawned reviewer's OWN session-row writes (its antithesis phase advance,
-    # reviewer-slot claim, and any synthesis resolve it drives) route through
-    # BEAM too — matching the gov-mcp process. Forward-only: a key absent from
-    # the parent env is simply not set, so the reviewer falls back to the Python
-    # path. Stays flag-off-safe (nothing forwarded when gov-mcp is off).
-    for _key in (
-        "UNITARES_DIALECTIC_BEAM_RESOLUTION",
-        "LEASE_PLANE_BEARER_TOKEN",
-        "LEASE_PLANE_BASE_URL",
-    ):
-        _val = os.environ.get(_key)
-        if _val:
-            env[_key] = _val
+    # NB: we deliberately do NOT forward UNITARES_DIALECTIC_BEAM_RESOLUTION into
+    # the reviewer's env. The reviewer submits its antithesis/synthesis via the
+    # gov-mcp `dialectic` tool (client.call_tool), so those writes EXECUTE IN
+    # gov-mcp where the flag already applies — the reviewer process never does its
+    # own session-row writes. (Reverts #1185, which forwarded the flag on a wrong
+    # premise; it was a dead no-op.)
 
     return {
         "cmd": sys.executable,  # the MCP process's own interpreter has the deps
