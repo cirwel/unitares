@@ -55,6 +55,33 @@ envelope is in flight), **rows 2 / 7 / 8a / 8b** (Wave-3-specific
 implementation — paused under (α); 8b additionally gated on the row-6
 14-day window by `check-wave3-prereq-data-window.sh`).
 
+## What changed in v0.3.5 (vs v0.3.4) — §3.1 surface-inventory factual corrections (2026-06-28)
+
+Factual corrections only (no architecture redraft; the (α) deferral still binds). A runtime
+re-derivation pass against the *live* code/DB — prep for the (D) state-ownership red-team —
+found two §3.1 errors and surfaced a candidate ninth surface. Recorded here so the canonical
+inventory is not wrong while the gate is pending; the **reducibility verdicts and the
+halt/reopen decision remain the operator-led red-team's**, per (D).
+
+1. **§3.1-H source-of-truth was wrong.** H listed `core.feature_flags` (PG) + §10 FeatureFlagWriter
+   as the current SoT. That table **does not exist in the live DB**; the honesty gates are read from
+   `config.governance_config.identity_strict_mode()` / `ipua_pin_check_mode()` (env/config
+   functions). `core.feature_flags` + FeatureFlagWriter are *unbuilt §10 target* state. Consequence:
+   porting H is **net-new durable coordination**, not a reduction — it must be counted on the
+   introduces-coordination side of disconfirmer (B), not the removes-tax side.
+
+2. **§3.1 was not exhaustive — candidate 9th surface (I) added.** `resolution.py`'s PATH 2.8 holds
+   the **substrate-anchored-UUID / UDS-peer-attestation gate** (SoT `core.substrate_claims`, exists
+   live; mechanism `verify_substrate_claim(peer_pid)` → `read_service_label(peer_pid)` = OS-kernel
+   peer-credential attestation). The RFC body mentions `substrate_claims` / `peer_pid` / UDS **zero
+   times**. It is identity-middleware-scoped (lives in the onboard resolution path) and **likely
+   irreducible**: kernel UDS attestation is bound to the OS process/socket boundary and cannot move
+   to GenServer state without replicating the peer-cred check at the BEAM boundary — verbatim the
+   (D) "irreducible per-request semantics" thesis. **Under (D)'s rules, a confirmed 9th surface
+   halts the gate and reopens the RFC.** PATH-enumeration also confirmed the other unmapped paths
+   fold (PATH 0 → H; PATH 2 PG-lookup → C/D read-tier with S21-a fail-closed → H; PATH 2.8's
+   token-rebind proper → E). Full worktree worksheet: `docs/handoffs/wave-3-state-ownership-redteam-prep-2026-06-28.md`.
+
 ## What changed in v0.3.4 (vs v0.3.3)
 
 19. **§11 criterion 10 pinned (prereq PR #9 executed, 2026-06-11).** The (F) baseline is formally unpinnable — trailing 30-day window held 1 session vs the ≥30 the haltspec requires — so the pin records the halt condition plus 90d/all-time context rates. The deeper finding: (F)'s reassignment-rate metric had no measurement source (reassignments were transcript-only; zero matching `audit.events` rows all-time). `_apply_reviewer_reassignment` now emits `dialectic_reviewer_reassigned`, making the threshold settable from the emission's deploy forward. Volume recovery (dialectic-rework arc) is upstream of any future re-pin.
@@ -202,7 +229,13 @@ Three-lane pass (dialectic-knowledge-architect / feature-dev:code-reviewer / liv
 
 ### 3.1 Surface inventory
 
-Identity middleware decomposes into eight state surfaces.
+Identity middleware decomposes into eight documented state surfaces (A–H). **A runtime
+re-derivation pass (2026-06-28, recorded below) surfaced a candidate ninth (I) that this
+inventory had omitted, plus a source-of-truth error in H — see the v0.3.5 fold.** The (D)
+gate's exhaustiveness criterion ("find a 9th surface OR mark the eight exhaustive after
+independent re-derivation") is therefore NOT yet satisfiable as "eight": surface I must be
+confirmed-or-folded by the operator-led red-team before the gate can read this section as
+complete.
 
 | # | Surface | Read | Write | Source of truth | BEAM port strategy | Cutover semantics |
 |---|---------|------|-------|------------------|---------------------|---------------------|
@@ -213,7 +246,8 @@ Identity middleware decomposes into eight state surfaces.
 | E | Continuity token (HMAC over agent_uuid + chh + exp + iat + sid + opv); actual fields: `v`, `opv`, `sid`, `aid`, `mf`, `ch`, `iat`, `exp` | `session.py:176-220` | `session.py` (`create_continuity_token` at onboard) | Cryptographic — token string IS source | Stays Python OR moves to BEAM — orthogonal | No rollback contract |
 | F | Onboard PIN (Redis-keyed `onboard_pin:{ip_ua_fingerprint}` with model scoping; IPUA pin treats `agent_id` as proof per `project_ipua-pin-agent-id-proof.md`) | `session.py:769-797` (`lookup_onboard_pin` with `_PIN_REDIS_TIMEOUT = 0.5s` at line 28) | `session.py` (`set_onboard_pin` SETEX, 30m TTL) | Redis (TTL 30m); IPUA invariant locked by contract test | Shadow ≥1 cycle then flip; IPUA invariant CANNOT be relaxed | Shadow then flip |
 | G | Agent metadata cache (`mcp_server.agent_metadata[uuid]`) | `agent_auth.py:59-134, :151, :309-549` (`require_registered_agent` body) | `background_tasks.py:343` (`background_metadata_load`) | PostgreSQL `core.agents` canonical; in-memory dict is read-side cache | BEAM-native ETS cache via single-writer GenServer (§10). Reads from any BEAM handler are `:ets.lookup`. Python compute paths receive metadata as request payload from BEAM, never read directly | No rollback contract — read-mostly |
-| H | Identity honesty gates (`identity_strict_mode`, `ipua_pin_check_mode`) | `identity_step.py:384-474`, `agent_auth.py:271-293` | `core.feature_flags` PG row + ETS via §10's FeatureFlagWriter GenServer | PG durable canonical; ETS canonical-live | BEAM mirrors flag check at same dispatch entry; reads from ETS | Direct flip via flag write; both runtimes converge within reconciliation interval (slow cadence: 5min) |
+| H | Identity honesty gates (`identity_strict_mode`, `ipua_pin_check_mode`) | `identity_step.py:384-474` (reads via `config.governance_config.identity_strict_mode()` at `:628`), `agent_auth.py:271-293, 312-315` | **CURRENT: `config.governance_config.identity_strict_mode()` / `ipua_pin_check_mode()` (env/config functions).** ⚠ The previously-listed `core.feature_flags` PG row + §10 FeatureFlagWriter is the *target* (post-§10) state — `core.feature_flags` does **not exist** in the live DB (verified 2026-06-28); the FeatureFlagWriter + table are **unbuilt Wave-3 §10 work** | CURRENT: config/env function. TARGET: PG durable + ETS canonical-live | BEAM target mirrors flag check from ETS — but note this surface is **net-new durable state introduced by the port**, not a reduction of existing coordination (today it is a config-function read) | Direct flip via flag write (target); converge within reconciliation interval (slow cadence: 5min) |
+| I | **(CANDIDATE 9th — pending (D) red-team confirmation)** Substrate-anchored-UUID / UDS-peer-attestation gate | `resolution.py` PATH 2.8 (`grep -n "PATH 2.8"`); per-request `peer_pid` via `context.get_session_signals()` | n/a (read-gate; refuses HTTP token-resume for substrate-anchored UUIDs) | `core.substrate_claims` (exists live, 2026-06-28) + **OS-kernel peer-credential attestation** via `src/substrate/verification.py::verify_substrate_claim(peer_pid)` → `read_service_label(peer_pid)` | **Likely IRREDUCIBLE** — kernel UDS peer-cred attestation is intrinsically bound to the OS process/socket boundary; moving the gate to a BEAM GenServer would require replicating the UDS peer-cred check at the BEAM boundary (verbatim disconfirmer (D) thesis). Closes the Hermes-incident HTTP-token leak | No clean cutover if irreducible — the attestation cannot be a copyable token/payload by design |
 
 ### 3.2 Rollback procedure
 

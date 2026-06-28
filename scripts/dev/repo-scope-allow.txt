@@ -10,3 +10,4 @@
 # without a gutting rewrite (2026-06-28).
 docs/proposals/beam-wave-1-sentinel.md
 docs/proposals/beam-wave-3a-read-only-handlers.md
+docs/proposals/beam-wave-3-handler-dispatch.md
