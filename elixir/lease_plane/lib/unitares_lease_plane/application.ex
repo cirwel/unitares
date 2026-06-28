@@ -90,13 +90,24 @@ defmodule UnitaresLeasePlane.Application do
       Application.put_env(:lease_plane, :governance_api_token, token)
     end
 
+    # dialectic-on-BEAM Slice 2: per-session liveness timers. The flag gates only
+    # whether a stuck-timeout *acts* (fails the session); the watcher processes
+    # and presence run regardless and are always safe.
+    Application.put_env(
+      :lease_plane,
+      :dialectic_beam_liveness,
+      System.get_env("UNITARES_DIALECTIC_BEAM_LIVENESS") == "1"
+    )
+
     children =
       [
         {Postgrex, postgrex_opts()},
         {Registry, keys: :unique, name: UnitaresLeasePlane.HolderRegistry},
         UnitaresLeasePlane.LeaseSupervisor,
         UnitaresLeasePlane.HandoffServer,
-        UnitaresLeasePlane.SurfaceRegistry
+        UnitaresLeasePlane.SurfaceRegistry,
+        {Registry, keys: :unique, name: UnitaresLeasePlane.DialecticLivenessRegistry},
+        UnitaresLeasePlane.DialecticLivenessSupervisor
       ] ++ worker_children() ++ http_children()
 
     opts = [strategy: :one_for_one, name: UnitaresLeasePlane.Supervisor]
@@ -146,7 +157,19 @@ defmodule UnitaresLeasePlane.Application do
          interval_ms:
            Application.get_env(:lease_plane, :dialectic_saga_reaper_interval_ms, 60_000),
          initial_delay_ms:
-           Application.get_env(:lease_plane, :dialectic_saga_reaper_initial_delay_ms, 5_000)}
+           Application.get_env(:lease_plane, :dialectic_saga_reaper_initial_delay_ms, 5_000)},
+        {UnitaresLeasePlane.PeriodicWorker,
+         id: UnitaresLeasePlane.DialecticLivenessReconciler,
+         name: UnitaresLeasePlane.DialecticLivenessReconcilerScheduler,
+         worker: UnitaresLeasePlane.DialecticLivenessReconciler,
+         interval_ms:
+           Application.get_env(:lease_plane, :dialectic_liveness_reconcile_interval_ms, 30_000),
+         initial_delay_ms:
+           Application.get_env(
+             :lease_plane,
+             :dialectic_liveness_reconcile_initial_delay_ms,
+             7_000
+           )}
       ]
     else
       []

@@ -277,6 +277,37 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     end
   end
 
+  @doc """
+  Per-session liveness snapshot for the live-timer layer: status, the two agent
+  ids (needed to drive a `failed` resolve), and seconds since the last update.
+  `{:ok, nil}` if the session is gone.
+  """
+  @spec get_session_liveness(String.t()) :: {:ok, map() | nil} | {:error, term()}
+  def get_session_liveness(session_id) when is_binary(session_id) do
+    sql = """
+    SELECT status, paused_agent_id, reviewer_agent_id,
+           EXTRACT(EPOCH FROM (now() - updated_at))::bigint AS inactive_s
+    FROM core.dialectic_sessions WHERE session_id = $1
+    """
+
+    case Postgrex.query(DB, sql, [session_id]) do
+      {:ok, %{rows: [[status, paused, reviewer, inactive_s]]}} ->
+        {:ok,
+         %{
+           status: status,
+           paused_agent_id: paused,
+           reviewer_agent_id: reviewer,
+           inactive_seconds: inactive_s
+         }}
+
+      {:ok, %{rows: []}} ->
+        {:ok, nil}
+
+      {:error, e} ->
+        {:error, e}
+    end
+  end
+
   @doc "Return the in-flight saga_id for a session, or nil. Used by recovery + the Python sweeper guard's BEAM-side mirror."
   @spec get_inflight(String.t()) :: {:ok, String.t() | nil} | {:error, term()}
   def get_inflight(session_id) when is_binary(session_id) do
