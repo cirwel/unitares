@@ -580,13 +580,55 @@ async def ensure_agent_persisted(
             client_info = {"agent_id": agent_uuid, "agent_uuid": agent_uuid, "lazy_created": True}
             if public_agent_id and public_agent_id != agent_uuid:
                 client_info["public_agent_id"] = public_agent_id
-            await db.create_session(
+            created = await db.create_session(
                 session_id=session_key,
                 identity_id=identity.identity_id,
                 expires_at=datetime.now() + timedelta(hours=GovernanceConfig.SESSION_TTL_HOURS),
                 client_type="mcp",
                 client_info=client_info,
             )
+            # create_session uses ON CONFLICT (session_id) DO NOTHING, so a
+            # False return means a row for this session_key already existed.
+            # That is benign when it maps to the same identity (a re-persist),
+            # but a divergent identity is a PG-layer session collision — the
+            # S21-a ghost-fork shape at the durable layer. The Redis guard
+            # (_redis_slot_blocks_overwrite) caught this for the cache; the PG
+            # path was silent. Surface it (observability only — the agent_uuid
+            # was already decided upstream, so we do not change control flow here;
+            # the atomic guard in the Phase 1 session-binding mirror is where the
+            # block is enforced). See redis-retirement-phase-1-plan.md.
+            if not created:
+                try:
+                    existing = await db.get_session(session_key)
+                    existing_uuid = getattr(existing, "agent_id", None) if existing else None
+                    if existing_uuid and existing_uuid != agent_uuid:
+                        # The identifying UUIDs go to the structured broadcast
+                        # event (durable audit channel), NOT the clear-text log:
+                        # logging a DB-sourced identity value trips CodeQL
+                        # py/clear-text-logging-sensitive-data. The log stays
+                        # identifier-free; the detail rides the
+                        # pg_session_collision event, same pattern as
+                        # resident_fork_detected / identity_hijack_suspected.
+                        logger.warning(
+                            "[S21A_PG_SESSION_COLLISION] session_key already bound "
+                            "to a different identity at the PG layer — refusing to "
+                            "overwrite (detail in pg_session_collision event)"
+                        )
+                        b = _broadcaster()
+                        if b is not None:
+                            try:
+                                await b.broadcast_event(
+                                    event_type="pg_session_collision",
+                                    agent_id=agent_uuid,
+                                    payload={
+                                        "existing_agent_id": existing_uuid,
+                                        "incoming_agent_id": agent_uuid,
+                                    },
+                                )
+                            except Exception as _be:
+                                logger.debug(f"pg_session_collision broadcast failed: {_be}")
+                except Exception as _e:
+                    logger.debug(f"PG session collision check skipped: {_e}")
 
         logger.info(f"Lazy-persisted agent on first work: {agent_uuid[:8]}...")
         return True
