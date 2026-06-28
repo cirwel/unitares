@@ -50,7 +50,7 @@ Out of scope (unchanged from v1):
 
 ### Transport: UDS additive to existing HTTP
 
-Governance-mcp gains a Unix-domain socket listener at `/Users/cirwel/.unitares/governance.sock` alongside the existing HTTP-on-loopback at port 8767. UDS is for substrate-anchored residents only; HTTP stays for non-substrate-anchored clients. Q1 confirmed by code-architect: HTTP-only listener today (`src/mcp_server.py:217-223, 714, 738-963`); UDS is additive surface; `SessionSignals` extends with one `peer_pid: Optional[int]` field; the existing ASGI pipeline handles requests identically once `peer_pid` is populated.
+Governance-mcp gains a Unix-domain socket listener at `~/.unitares/governance.sock` alongside the existing HTTP-on-loopback at port 8767. UDS is for substrate-anchored residents only; HTTP stays for non-substrate-anchored clients. Q1 confirmed by code-architect: HTTP-only listener today (`src/mcp_server.py:217-223, 714, 738-963`); UDS is additive surface; `SessionSignals` extends with one `peer_pid: Optional[int]` field; the existing ASGI pipeline handles requests identically once `peer_pid` is populated.
 
 Per the anyio-asyncio constraint (CLAUDE.md "Known Issue"), the verification call (launchctl + executable path + start-time) MUST be wrapped in `loop.run_in_executor` — the existing pattern at `src/agent_loop_detection.py:374` is the reference. Verification result is cached in the connection's contextvar for that connection's lifetime; not re-verified per tool call.
 
@@ -128,7 +128,7 @@ Implementation tests use fixture outputs (recorded `launchctl print` and `launch
 
 `agents/sdk/src/unitares_sdk/agent.py:_ensure_identity` (line 279) and `_save_session` (per-resident) adopt:
 
-- New env var `UNITARES_UDS_SOCKET=/Users/cirwel/.unitares/governance.sock` set in each substrate-anchored resident's plist. SDK's `GovernanceClient.connect()` (`agents/sdk/src/unitares_sdk/client.py:75-99`) detects this env var and routes through UDS instead of HTTP.
+- New env var `UNITARES_UDS_SOCKET=~/.unitares/governance.sock` set in each substrate-anchored resident's plist. SDK's `GovernanceClient.connect()` (`agents/sdk/src/unitares_sdk/client.py:75-99`) detects this env var and routes through UDS instead of HTTP.
 - Substrate-anchored mode detected by env var presence; in this mode, `_save_session()` writes only `{agent_uuid}` (and optional `parent_agent_id`); it does NOT persist `continuity_token` or `client_session_id`. The Steward-shape anchor becomes the canonical pattern for the substrate-anchored class.
 - `_ensure_identity` fast-path: when `agent_uuid` is in the anchor and `UNITARES_UDS_SOCKET` is set, calls `client.identity(agent_uuid=agent_uuid, resume=True)` over UDS. Server-side substrate-claim verification (§Verification at connection-accept above) gates the resume.
 

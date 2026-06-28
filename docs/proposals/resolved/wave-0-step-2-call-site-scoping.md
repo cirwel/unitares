@@ -110,7 +110,7 @@ PR descriptions for 2A and 2B MUST include a row in the test plan table:
 {"_coord_event":true,"service":"governance_mcp","event_type":"coordination_failure.asyncpg_connect_error.bootstrap","payload":{"error_class":"OSError","db_url_hash":"abc123","timeout_s":5.0,"attempt":1,"incident_id":"<uuid>"},"context":{...}}
 ```
 
-**Chronicler sweeper** (separate Wave 0 step 3 work — runs on its existing daily cadence): `tail -F /Users/cirwel/Library/Logs/governance-mcp-stderr.log | grep '_coord_event' | jq | INSERT into audit.coordination_events`. Buffered between sweeps; loss bounded to "events from windows where governance-mcp was down AND Chronicler hadn't run yet" — a small tail.
+**Chronicler sweeper** (separate Wave 0 step 3 work — runs on its existing daily cadence): `tail -F ~/Library/Logs/governance-mcp-stderr.log | grep '_coord_event' | jq | INSERT into audit.coordination_events`. Buffered between sweeps; loss bounded to "events from windows where governance-mcp was down AND Chronicler hadn't run yet" — a small tail.
 
 ### 1.runtime
 
