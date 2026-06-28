@@ -67,6 +67,28 @@ def resolve_verdict_risk(
         max(float(phi_risk), float(behavioral_risk)),
     )
 
+
+def apply_verification_floor(
+    verdict: Optional[str],
+    risk: float,
+    verification_verdict: Optional[str],
+    verification_score: float,
+) -> tuple:
+    """Combine an independent verification signal as a one-sided (escalate-only) floor.
+
+    verdict = more-severe(verdict, verification_verdict); risk = max(risk, score).
+    The verification signal can only RAISE the verdict/risk — it never lowers a
+    worse self-attested Φ/drift signal, mirroring the Φ-floor invariant the council
+    protects (continuous-verdict-blending-v0.md #3). An empty signal ("safe"/0.0)
+    is a no-op. Phase-2 actuator wiring of the v2 verification layer; see
+    docs/proposals/verification-weighted-verdict-v0.md. Gated default-off by
+    GovernanceConfig.VERIFICATION_FLOOR_ENABLED at the call site.
+    """
+    return (
+        _more_severe_verdict(verdict, verification_verdict),
+        max(float(risk), float(verification_score)),
+    )
+
 # Import audit logging and calibration for accountability and self-awareness
 from src.audit_log import audit_logger
 from src.calibration import calibration_checker
@@ -1294,6 +1316,24 @@ class UNITARESMonitor:
                 phi_telemetry=phi_telemetry_only(),
             )
 
+        # ── Independent verification floor (escalate-only; default-off) ──
+        # The verdict above is self-attested (ethical_drift/complexity/confidence).
+        # A deterministic, self-report-INDEPENDENT read of *described* adverse
+        # actions can RAISE the verdict/risk but never lower it — closing the
+        # sub-warmup hole where a confessed-sabotage check-in scores like a clean
+        # refactor (docs/proposals/verification-weighted-verdict-v0.md). Applied
+        # regardless of behavioral confidence because it is self-report-independent.
+        # Only the fast regex floor runs inline; the local-model backend is
+        # out-of-band by design (40–70s/call must never sit on the request path).
+        self._last_verification_signal = None
+        if GovConfig.VERIFICATION_FLOOR_ENABLED:
+            from governance_core.verification import score_harm_confession
+            _vsig = score_harm_confession(agent_state.get('response_text', '') or '')
+            unitares_verdict, risk_score = apply_verification_floor(
+                unitares_verdict, risk_score, _vsig.verdict, _vsig.score,
+            )
+            self._last_verification_signal = _vsig
+
         oscillation_state, response_tier, cirs_result, damping_result = self._run_cirs(
             risk_score=risk_score,
             unitares_verdict=unitares_verdict,
@@ -1441,7 +1481,7 @@ class UNITARESMonitor:
         # Expire stale predictions each cycle to prevent unbounded growth
         self.expire_old_predictions()
 
-        return self._build_result(
+        result = self._build_result(
             status=status,
             decision=decision,
             metrics=metrics,
@@ -1455,6 +1495,12 @@ class UNITARESMonitor:
             damping_result=damping_result,
             behavioral_assessment=behavioral_assessment,
         )
+        # Surface the verification floor when it ran (flag on), so an escalation is
+        # never silent and the provenance is auditable alongside risk_attribution.
+        _vsig = getattr(self, '_last_verification_signal', None)
+        if _vsig is not None:
+            result['verification_floor'] = _vsig.to_dict()
+        return result
     
     def _compute_drift_vector(self, grounded_agent_state, agent_state, confidence, task_type, continuity_metrics):
         """Compute concrete ethical drift vector from measurable signals."""

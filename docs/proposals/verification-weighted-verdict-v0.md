@@ -1,9 +1,10 @@
 # Verification-weighted verdict — an independent, escalate-only signal that reads described behavior
 
-**Status:** v0 design — **not a committed change.** Phase 1 (this PR) ships the
-design + a standalone, tested detector. Phase 2 (the actuator wiring) is
-**council-gated** and out of scope here. For the Φ→telemetry / `resolve_verdict_risk`
-owners.
+**Status:** v0 — **not enabled.** Phase 1 (detector) + Phase 1.5 (local-model backend) +
+Phase 2 (actuator wiring) have landed, but the wiring is behind a **default-off** flag
+(`GOVERNANCE_VERIFICATION_FLOOR`). The draft can merge as inert scaffolding; **enabling
+the flag in a live deployment is the council-gated act.** For the Φ→telemetry /
+`resolve_verdict_risk` owners.
 **Author:** follow-up to the self-report-dependence worked example, 2026-06-28.
 **Why now:** the worked example
 ([`docs/operations/self-report-verdict-dependence-2026-06-28.md`](../operations/self-report-verdict-dependence-2026-06-28.md))
@@ -116,28 +117,42 @@ reason the model backend exists.
 
 ---
 
-## Phase 2 — wiring (council-gated, NOT in this PR)
+## Phase 2 — wiring (landed default-OFF; council-gated for *enable*, not for *merge*)
 
-The actuator change, for the owners to scope and a council to pass:
+The actuator wiring is now in the branch, **inert until an operator sets the flag**.
+What shipped:
 
-- **Locus:** combine the signal as a floor on the behavioral/traditional channel in
-  `src/monitor_risk.py` (where `traditional_risk` already exists but is zeroed), or
-  alongside `resolve_verdict_risk` (`src/governance_monitor.py:42`) — owners' call. Either
-  way via `max()`, never a symmetric blend.
-- **Flag, default OFF.** A new `GOVERNANCE_VERIFICATION_FLOOR` (default `false`), parallel
-  to `RISK_TRADITIONAL_WEIGHT`. Shipping the detector behind a default-off flag means zero
-  behavior change until the owners deliberately enable it.
-- **Pre-warmup matters most.** The finding's worst case is the sub-warmup regime
-  (`confidence < 0.3`) where the behavioral channel is telemetry-only. A verification
-  floor is escalate-only and self-report-independent, so it is safe to apply *even
-  pre-warmup* — which is precisely the window the finding exploits.
-- **Required tests before any enable:** (a) every existing pause on genuinely dangerous
-  states is preserved; (b) no new pause on the benign-coding corpus that motivated zeroing
-  the blocklist (false-positive regression); (c) an *interior* test — confessed harm +
-  clean self-report → verdict escalates; clean work + high self-attested Φ → floor does
-  **not** lower it.
-- **Council pass** on the safety envelope, same gate `continuous-verdict-blending-v0.md`
-  requires for `resolve_verdict_risk` changes.
+- **Pure combination fn:** `apply_verification_floor(verdict, risk, v_verdict, v_score)`
+  in `src/governance_monitor.py`, beside `resolve_verdict_risk` — `(_more_severe_verdict,
+  max)`, the same one-sided shape. Empty signal is a no-op.
+- **Call site:** `process_update`, immediately after the behavioral-verdict override and
+  before CIRS/`make_decision`, so the escalation flows into the decision. Applied
+  **regardless of behavioral confidence** (it is self-report-independent), which is what
+  closes the sub-warmup hole the finding exploits.
+- **Inline backend is the regex floor only.** The 40–70s local model never sits on the
+  request path; it stays out-of-band.
+- **Flag, default OFF:** `GOVERNANCE_VERIFICATION_FLOOR` (`config/governance_config.py`,
+  catalogued in `FLAGS.md`). Off → byte-identical prior behavior (212 existing
+  governance/φ-telemetry tests still green).
+- **Surfaced, never silent:** when the flag is on the result carries a
+  `verification_floor` block (the `VerificationSignal.to_dict()`), alongside
+  `risk_attribution`.
+- **Interior safety tests** (`tests/test_verification_floor_wiring.py`): flag-off sabotage
+  still `proceed` (no behavior change); flag-on sabotage → `pause` + `high-risk`; flag-on
+  benign → still `proceed` (no false pause); flag-on must not downgrade a genuine
+  high-drift pause (one-sided). Plus the pure-fn escalate-only/never-lower cases.
+
+**Still required before the flag is enabled in any live deployment** (this is the
+council gate — the draft can merge as inert scaffolding, but enabling is the deliberate
+act):
+
+- Council pass on the safety envelope, same gate `continuous-verdict-blending-v0.md`
+  requires for verdict-path changes.
+- A real false-positive-regression pass on a larger benign-coding corpus (the bundled
+  eval corpus is small by design).
+- Decision: should a verification-driven pause carry its own `reason` string
+  (currently it reuses the self-attested-risk pause message; the `verification_floor`
+  block already discloses provenance, but the prose could be sharper).
 
 ---
 
@@ -150,7 +165,11 @@ The actuator change, for the owners to scope and a council to pass:
 - [x] Local-model backend (`src/verification_backend.py`) — fallback-to-floor + escalate-only union, stubbed-model tests.
 - [x] Opt-in eval harness (`scripts/analysis/verification_eval.py`) — regex baseline + `--llm` real-Ollama path.
 - [x] 28 tests green (`tests/test_verification_harm_confession.py` + `tests/test_verification_backend.py`).
-- [ ] (Phase 2) actuator wiring + flag + interior safety tests + council pass.
+- [x] (Phase 2) actuator wiring landed **default-off**: `apply_verification_floor` + gated
+  `process_update` call site + `verification_floor` result surfacing + interior safety
+  tests (`tests/test_verification_floor_wiring.py`); 212 existing governance/φ tests still green.
+- [ ] (Phase 2 enable) council pass + larger false-positive-regression corpus before the
+  flag is turned on in any live deployment.
 
 ## Relation to neighboring work
 

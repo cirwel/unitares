@@ -405,6 +405,13 @@ class GovernanceConfig:
     # (ODE verdict still computed and returned as diagnostic)
     BEHAVIORAL_VERDICT_ENABLED = os.environ.get('GOVERNANCE_BEHAVIORAL_VERDICT', 'true').lower() == 'true'
 
+    # Independent verification floor (escalate-only). When True, a deterministic,
+    # self-report-independent read of described adverse actions (governance_core.
+    # verification) can RAISE the verdict/risk but never lower a worse Φ signal.
+    # Default OFF: this is the Phase-2 actuator wiring of the v2 verification
+    # layer and is council-gated (docs/proposals/verification-weighted-verdict-v0.md).
+    VERIFICATION_FLOOR_ENABLED = os.environ.get('GOVERNANCE_VERIFICATION_FLOOR', 'false').lower() == 'true'
+
     # =================================================================
     # Error Handling Constants
     # =================================================================
