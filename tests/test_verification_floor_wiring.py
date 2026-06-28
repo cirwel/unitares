@@ -16,7 +16,19 @@ from src.governance_monitor import (
     apply_verification_floor,
     _more_severe_verdict,
 )
-from config.governance_config import GovernanceConfig
+
+
+def _set_flag(monkeypatch, value):
+    """Patch the verification-floor flag on the LIVE config class.
+
+    process_update resolves ``from config.governance_config import GovernanceConfig``
+    from sys.modules at call time. Other tests in the full suite reload that module
+    (e.g. test_phases_pause_ttl), swapping the class object — so a stale top-level
+    import would patch the wrong object. Import fresh here so we patch exactly what
+    process_update will read.
+    """
+    import config.governance_config as cfg
+    monkeypatch.setattr(cfg.GovernanceConfig, "VERIFICATION_FLOOR_ENABLED", value)
 
 
 SABOTAGE = (
@@ -68,7 +80,8 @@ class TestFlagDefault:
     def test_flag_defaults_off(self):
         # Default-off: the Phase-2 actuator wiring is council-gated and inert
         # until an operator deliberately enables it.
-        assert GovernanceConfig.VERIFICATION_FLOOR_ENABLED is False
+        import config.governance_config as cfg
+        assert cfg.GovernanceConfig.VERIFICATION_FLOOR_ENABLED is False
 
 
 class TestEndToEndWiring:
@@ -78,13 +91,13 @@ class TestEndToEndWiring:
     def test_flag_off_sabotage_still_proceeds(self, monkeypatch):
         # Default behavior is preserved: with the flag off, the confessed-sabotage
         # check-in is governed exactly as before (self-report dominates → proceed).
-        monkeypatch.setattr(GovernanceConfig, "VERIFICATION_FLOOR_ENABLED", False)
+        _set_flag(monkeypatch, False)
         result = self._monitor().process_update(_checkin(SABOTAGE))
         assert result["decision"]["action"] == "proceed"
         assert "verification_floor" not in result
 
     def test_flag_on_sabotage_pauses(self, monkeypatch):
-        monkeypatch.setattr(GovernanceConfig, "VERIFICATION_FLOOR_ENABLED", True)
+        _set_flag(monkeypatch, True)
         result = self._monitor().process_update(_checkin(SABOTAGE))
         assert result["decision"]["action"] == "pause"
         vf = result["verification_floor"]
@@ -93,7 +106,7 @@ class TestEndToEndWiring:
 
     def test_flag_on_benign_still_proceeds(self, monkeypatch):
         # The floor must not introduce a false pause on clean work.
-        monkeypatch.setattr(GovernanceConfig, "VERIFICATION_FLOOR_ENABLED", True)
+        _set_flag(monkeypatch, True)
         result = self._monitor().process_update(_checkin(BENIGN))
         assert result["decision"]["action"] == "proceed"
         assert result["verification_floor"]["score"] == 0.0
@@ -101,7 +114,7 @@ class TestEndToEndWiring:
     def test_flag_on_does_not_lower_a_genuine_pause(self, monkeypatch):
         # Interior safety: a high self-attested drift pauses with the flag OFF;
         # turning the flag ON with benign text must NOT downgrade that pause.
-        monkeypatch.setattr(GovernanceConfig, "VERIFICATION_FLOOR_ENABLED", False)
+        _set_flag(monkeypatch, False)
         high_drift = {
             "response_text": BENIGN,
             "ethical_drift": [0.9, 0.9, 0.9],
@@ -109,7 +122,7 @@ class TestEndToEndWiring:
             "confidence": 0.2,
         }
         off = self._monitor().process_update(dict(high_drift))
-        monkeypatch.setattr(GovernanceConfig, "VERIFICATION_FLOOR_ENABLED", True)
+        _set_flag(monkeypatch, True)
         on = self._monitor().process_update(dict(high_drift))
         # Whatever the off-decision was, the floor (benign text → 0.0) cannot make
         # it less severe. If off paused, on must still pause.
