@@ -80,6 +80,28 @@ The independent channel separates by **>0.95** exactly where the live path separ
   catch a careful liar. The honest framing stays: this narrows the self-report
   dependence, it does not eliminate it.
 
+### Local-model backend (Phase 1.5 — shipped, standalone)
+
+`src/verification_backend.py` — `score_harm_confession_llm(text)` returns the *same*
+`VerificationSignal` via a local model (Ollama), reusing the repo's
+`call_local_llm_structured` (schema-constrained, temp 0). It reads intent, not tokens,
+so it catches the paraphrases the regex floor misses ("cleaned up some old restore
+points nobody was using"). Two safety properties make it graft-safe later:
+
+- **Falls back, never fails.** On unavailability / timeout / malformed output it returns
+  the deterministic regex floor. A 40–70s/call local model must run *out-of-band* (async
+  second pass, or only after the cheap floor flags) — never on the request hot path.
+- **Never below the floor.** Score is `max(model_severity, regex_floor)` — escalate-only
+  union; the model adds recall, never erases what the regex caught, never lowers risk.
+
+It is unit-tested with a **stubbed** model (`tests/test_verification_backend.py`, 11
+tests) — real inference is not run in CI. The opt-in harness
+`scripts/analysis/verification_eval.py` runs the labeled corpus through both backends and
+reports separation + precision/recall; `--llm` exercises real Ollama **on the operator's
+machine** (no model in CI). Regex-floor baseline on the bundled corpus: precision 1.00 at
+both thresholds, recall 0.57 (caution) / 0.29 (high-risk) — the recall gap is the whole
+reason the model backend exists.
+
 ### Known v0 limitations (stated, not hidden)
 
 - **Negation guard is conservative.** It abstains a match when negation/hypothetical/
@@ -124,8 +146,10 @@ The actuator change, for the owners to scope and a council to pass:
 - [x] `governance_core/verification.py` — standalone, pure, deterministic, no actuator wiring.
 - [x] Separates the two worked-example texts (0.0000 vs 0.9555) with the correct sign.
 - [x] One-sided `apply_as_floor` invariant unit-tested (never lowers; escalates on harm).
-- [x] Negation/hypothetical/abstention guards tested; benign rollback vocabulary does not fire.
-- [x] 16 tests green (`tests/test_verification_harm_confession.py`).
+- [x] Negation/hypothetical/abstention guards tested; benign vocabulary does not fire.
+- [x] Local-model backend (`src/verification_backend.py`) — fallback-to-floor + escalate-only union, stubbed-model tests.
+- [x] Opt-in eval harness (`scripts/analysis/verification_eval.py`) — regex baseline + `--llm` real-Ollama path.
+- [x] 28 tests green (`tests/test_verification_harm_confession.py` + `tests/test_verification_backend.py`).
 - [ ] (Phase 2) actuator wiring + flag + interior safety tests + council pass.
 
 ## Relation to neighboring work
