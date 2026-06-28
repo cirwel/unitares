@@ -11,3 +11,4 @@
 docs/proposals/beam-wave-1-sentinel.md
 docs/proposals/beam-wave-3a-read-only-handlers.md
 docs/proposals/beam-wave-3-handler-dispatch.md
+docs/proposals/beam-wave-3-gamma-hybrid-v0.md
