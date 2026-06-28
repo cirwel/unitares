@@ -246,7 +246,15 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
 // resort (only when the stream is down).
 const APPLY = {
   eisv: (msg) => window.EISV && window.EISV.applyEvent && window.EISV.applyEvent(msg),
+  overview: (msg) => window.Landing && window.Landing.applyEvent && window.Landing.applyEvent(msg),
 };
+// Silence ticker — re-render the Overview residents strip from its in-memory
+// model so "ran Xago" accrues during quiet periods (no network). Visibility-
+// gated; only matters while watching the Overview.
+setInterval(() => {
+  if (document.hidden || activeSection !== "overview") return;
+  if (window.Landing && window.Landing.tickSilence) window.Landing.tickSilence();
+}, 5000);
 let wsDebounce = null;
 function onWsEvent(msg) {
   if (document.hidden || isTyping() || !isAutoSection(activeSection)) return;
