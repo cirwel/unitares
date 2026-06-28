@@ -169,6 +169,39 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
+  # ---------- /v1/dialectic/resolve ----------
+  # BEAM-owned dialectic SYNTHESIS->RESOLVED commit (dialectic-on-BEAM Slice 1).
+  # Python computes the resolution payload (convergence + agent-state mutation
+  # stay Python) and POSTs the finished payload here; BEAM is the serialization
+  # owner (saga slot) and the sole writer of the terminal session row. Gated on
+  # the Python side by UNITARES_DIALECTIC_BEAM_RESOLUTION (default off), so this
+  # endpoint is dormant until an operator flips the flag.
+  post "/v1/dialectic/resolve" do
+    case extract_resolve_params(conn.body_params) do
+      {:ok, params} ->
+        case UnitaresLeasePlane.DialecticSaga.resolve(params) do
+          {:ok, result} ->
+            json(conn, 200, Map.put(result, :ok, true))
+
+          {:error, :saga_in_flight} ->
+            json(conn, 409, %{
+              ok: false,
+              error: "saga_in_flight",
+              reason: "a resolution is already in progress for this session"
+            })
+
+          {:error, :session_not_found} ->
+            json(conn, 404, %{ok: false, error: "session_not_found"})
+
+          {:error, _other} ->
+            json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+        end
+
+      {:error, detail} ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+    end
+  end
+
   # ---------- /v1/health ----------
   # Wave 2 §"Lease-integration boundary hardening" — Phase C (supervised
   # health). Liveness signal for the boundary itself: if this responds 200,
@@ -536,6 +569,29 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   end
 
   defp acquire_for_surface(params), do: UnitaresLeasePlane.acquire_local_beam(params)
+
+  defp extract_resolve_params(%{
+         "session_id" => session_id,
+         "paused_agent_id" => paused,
+         "reviewer_agent_id" => reviewer,
+         "resolution" => resolution
+       })
+       when is_binary(session_id) and byte_size(session_id) > 0 and
+              is_binary(paused) and byte_size(paused) > 0 and
+              is_binary(reviewer) and byte_size(reviewer) > 0 and is_map(resolution) do
+    {:ok,
+     %{
+       session_id: session_id,
+       paused_agent_id: paused,
+       reviewer_agent_id: reviewer,
+       resolution_payload: resolution
+     }}
+  end
+
+  defp extract_resolve_params(_),
+    do:
+      {:error,
+       "session_id, paused_agent_id, reviewer_agent_id (non-empty strings) and resolution (object) required"}
 
   defp extract_release_params(%{"lease_id" => lease_id} = body)
        when is_binary(lease_id) and byte_size(lease_id) > 0 do
