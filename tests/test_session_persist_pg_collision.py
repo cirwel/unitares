@@ -17,7 +17,7 @@ See docs/proposals/redis-retirement-phase-1-plan.md (prep fix).
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
 
@@ -57,34 +57,52 @@ def _make_db(*, create_session_result: bool, existing_session_agent_id):
     return db
 
 
-async def _run(db):
+async def _run(db, broadcaster=None):
     # _redis_cache=False makes _get_redis() return None -> skips Redis hydration.
+    # _broadcaster patched so the collision detail goes to a mock event, not the
+    # real broadcaster — and so the identifiers never reach a clear-text log.
     with patch.object(persistence, "_redis_cache", False), \
-         patch.object(persistence, "get_db", return_value=db):
+         patch.object(persistence, "get_db", return_value=db), \
+         patch.object(persistence, "_broadcaster", return_value=broadcaster):
         return await persistence.ensure_agent_persisted(_AGENT_UUID, _SESSION_KEY)
 
 
 @pytest.mark.asyncio
-async def test_divergent_pg_session_logs_collision(caplog):
+async def test_divergent_pg_session_emits_event_and_clean_log(caplog):
     """create_session returns False AND the existing row maps to a different
-    UUID -> [S21A_PG_SESSION_COLLISION] warning fires."""
+    UUID -> identifier-free warning + structured pg_session_collision event."""
     db = _make_db(create_session_result=False, existing_session_agent_id=_OTHER_UUID)
+    bcast = MagicMock()
+    bcast.broadcast_event = AsyncMock()
     with caplog.at_level("WARNING"):
-        await _run(db)
+        await _run(db, broadcaster=bcast)
     db.get_session.assert_awaited_once_with(_SESSION_KEY)
-    assert any("S21A_PG_SESSION_COLLISION" in r.message for r in caplog.records), \
-        "divergent PG session binding must emit the collision warning"
+    # log fires with the tag...
+    collision_logs = [r for r in caplog.records if "S21A_PG_SESSION_COLLISION" in r.message]
+    assert collision_logs, "divergent binding must emit the collision warning"
+    # ...but must NOT leak either UUID into the clear-text log (CodeQL).
+    for r in collision_logs:
+        assert _OTHER_UUID not in r.getMessage() and _AGENT_UUID not in r.getMessage()
+    # the identifiers ride the structured event instead.
+    bcast.broadcast_event.assert_awaited_once()
+    kw = bcast.broadcast_event.call_args.kwargs
+    assert kw["event_type"] == "pg_session_collision"
+    assert kw["payload"]["existing_agent_id"] == _OTHER_UUID
+    assert kw["payload"]["incoming_agent_id"] == _AGENT_UUID
 
 
 @pytest.mark.asyncio
 async def test_same_identity_repersist_is_quiet(caplog):
     """create_session returns False but the existing row maps to the SAME
-    UUID -> benign re-persist, no warning."""
+    UUID -> benign re-persist, no warning, no event."""
     db = _make_db(create_session_result=False, existing_session_agent_id=_AGENT_UUID)
+    bcast = MagicMock()
+    bcast.broadcast_event = AsyncMock()
     with caplog.at_level("WARNING"):
-        await _run(db)
+        await _run(db, broadcaster=bcast)
     assert not any("S21A_PG_SESSION_COLLISION" in r.message for r in caplog.records), \
         "same-identity re-persist must not warn"
+    bcast.broadcast_event.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -602,12 +602,31 @@ async def ensure_agent_persisted(
                     existing = await db.get_session(session_key)
                     existing_uuid = getattr(existing, "agent_id", None) if existing else None
                     if existing_uuid and existing_uuid != agent_uuid:
+                        # The identifying UUIDs go to the structured broadcast
+                        # event (durable audit channel), NOT the clear-text log:
+                        # logging a DB-sourced identity value trips CodeQL
+                        # py/clear-text-logging-sensitive-data. The log stays
+                        # identifier-free; the detail rides the
+                        # pg_session_collision event, same pattern as
+                        # resident_fork_detected / identity_hijack_suspected.
                         logger.warning(
                             "[S21A_PG_SESSION_COLLISION] session_key already bound "
                             "to a different identity at the PG layer — refusing to "
-                            "overwrite (existing=%s... incoming=%s...)",
-                            existing_uuid[:8], agent_uuid[:8],
+                            "overwrite (detail in pg_session_collision event)"
                         )
+                        b = _broadcaster()
+                        if b is not None:
+                            try:
+                                await b.broadcast_event(
+                                    event_type="pg_session_collision",
+                                    agent_id=agent_uuid,
+                                    payload={
+                                        "existing_agent_id": existing_uuid,
+                                        "incoming_agent_id": agent_uuid,
+                                    },
+                                )
+                            except Exception as _be:
+                                logger.debug(f"pg_session_collision broadcast failed: {_be}")
                 except Exception as _e:
                     logger.debug(f"PG session collision check skipped: {_e}")
 
