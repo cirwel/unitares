@@ -242,4 +242,46 @@ def make_decision(
         coherence_history=state.coherence_history,
     )
     decision['basin'] = basin
+
+    # F2 fast-trip: the gate above runs on the (possibly task-adjusted) risk_score.
+    # The latest *raw* risk observation can spike past the pause threshold while
+    # the adjusted/smoothed value still clears — a real spike then silently
+    # approves. Surface at least a guide so the latent spike is not invisible.
+    decision = _maybe_latest_risk_fast_trip(state, decision, risk_score)
+    return decision
+
+
+def _maybe_latest_risk_fast_trip(state, decision: Dict, gated_risk: float) -> Dict:
+    """Upgrade a clean 'approve' to 'guide' when the latest raw risk observation
+    crossed the pause (revise) threshold even though the gated risk cleared it.
+
+    Never weakens a decision: applies only when the action is already an
+    unqualified ``proceed``/``approve``. Pauses and existing guides are left
+    intact. This is the F2 fast-trip — it guarantees that a single check-in whose
+    latest risk reaches PAUSE raises at least a guide, regardless of whether the
+    gated value was task-adjusted or smoothed below threshold.
+    """
+    if decision.get('action') != 'proceed' or decision.get('sub_action') != 'approve':
+        return decision
+    if not state.risk_history:
+        return decision
+    latest_risk = float(state.risk_history[-1])
+    pause_threshold = get_effective_threshold(
+        "risk_revise_threshold", default=config.RISK_REVISE_THRESHOLD)
+    if latest_risk >= pause_threshold and latest_risk > gated_risk:
+        decision['sub_action'] = 'guide'
+        decision['reason'] = (
+            f'Latest risk spiked (risk_latest={latest_risk:.2f} >= '
+            f'{pause_threshold:.2f}) though gated risk cleared (risk={gated_risk:.2f})'
+        )
+        decision['guidance'] = (
+            'A recent observation crossed the pause threshold even though the '
+            'adjusted/smoothed risk did not. Reflect on whether the latest step '
+            'introduced real risk before continuing.'
+        )
+        decision['latest_risk_fast_trip'] = {
+            'latest_risk': round(latest_risk, 4),
+            'gated_risk': round(gated_risk, 4),
+            'threshold': round(pause_threshold, 4),
+        }
     return decision

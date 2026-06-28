@@ -151,6 +151,7 @@ def test_build_result_exposes_policy_and_unapplied_enforcement_layers():
             "nearest_edge": "coherence",
             "phi": 0.24,
             "risk_score": 0.72,
+            "risk_score_latest": None,
             "verdict": "high-risk",
             "void_active": False,
         },
@@ -162,7 +163,13 @@ def test_build_result_exposes_policy_and_unapplied_enforcement_layers():
         "mode": "circuit_breaker_candidate",
         "actor": None,
         "effect": None,
-        "note": "Policy requested enforcement; actuator state is applied by the caller/runtime boundary.",
+        "note": (
+            "Policy requested enforcement. This envelope is the pre-actuation "
+            "candidate; the authenticated update boundary applies it as a circuit "
+            "breaker (agent metadata -> status=paused, blocking later writes) and "
+            "overwrites this with applied=true. A non-actuating path (e.g. "
+            "simulate) leaves it unapplied."
+        ),
     }
 
 

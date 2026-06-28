@@ -28,21 +28,31 @@ _POLICY_INPUT_FIELDS = (
 )
 
 
-def _build_policy_evaluation(decision: Dict, metrics: Dict) -> Dict:
+def _build_policy_evaluation(decision: Dict, metrics: Dict,
+                             latest_risk: float = None) -> Dict:
     """Describe the policy layer that consumed measurements.
 
     EISV/risk/coherence are instrument readings. ``monitor_decision`` is the
     policy layer that maps those readings to guidance/action. Keeping this
     envelope distinct from ``decision`` lets clients and operators inspect the
     policy without treating the measurement itself as the actuator.
+
+    ``risk_score`` here is the value the gate ran on; ``risk_score_latest`` is
+    the most-recent raw observation. Surfacing both makes the relationship
+    explicit so a reader can never conclude "the policy never sees the latest
+    value" (F2) — and the fast-trip below acts on it.
     """
     inputs = {
         "basin": decision.get("basin"),
         **{field: metrics.get(field) for field in _POLICY_INPUT_FIELDS},
+        "risk_score_latest": (
+            latest_risk if latest_risk is not None
+            else metrics.get("latest_risk_score")
+        ),
         "margin": decision.get("margin"),
         "nearest_edge": decision.get("nearest_edge"),
     }
-    return {
+    evaluation = {
         "policy_name": "monitor_decision",
         "policy_version": "v1",
         "action": decision.get("action"),
@@ -52,6 +62,9 @@ def _build_policy_evaluation(decision: Dict, metrics: Dict) -> Dict:
         "inputs": inputs,
         "measurement_role": "EISV/risk/coherence are policy inputs, not the actuator itself.",
     }
+    if decision.get("latest_risk_fast_trip"):
+        evaluation["latest_risk_fast_trip"] = decision["latest_risk_fast_trip"]
+    return evaluation
 
 
 def _build_enforcement_stub(decision: Dict) -> Dict:
@@ -64,7 +77,11 @@ def _build_enforcement_stub(decision: Dict) -> Dict:
         "actor": None,
         "effect": None,
         "note": (
-            "Policy requested enforcement; actuator state is applied by the caller/runtime boundary."
+            "Policy requested enforcement. This envelope is the pre-actuation "
+            "candidate; the authenticated update boundary applies it as a circuit "
+            "breaker (agent metadata -> status=paused, blocking later writes) and "
+            "overwrites this with applied=true. A non-actuating path (e.g. "
+            "simulate) leaves it unapplied."
             if requested else
             "No enforcement requested by policy."
         ),
@@ -76,6 +93,7 @@ def _build_risk_attribution(
     drift_vector,
     continuity_metrics,
     behavioral_assessment,
+    baseline_status: Dict = None,
 ) -> Dict:
     """Decompose the risk/verdict by signal provenance.
 
@@ -121,10 +139,13 @@ def _build_risk_attribution(
     behavioral: Dict = {
         "provenance": "measured",
         "description": (
-            "Independent text-risk model — the only non-self-attested signal. "
-            "Not yet weighted into the enforcement verdict (verification layer "
-            "reserved for v2); shown for comparison against the self-reported "
-            "drivers."
+            "Per-agent behavioral EISV assessment (EMA z-scores vs this agent's "
+            "own baseline, plus tool-outcome signals) — the least self-attested "
+            "input. It IS combined into the verdict once the behavioral state is "
+            "warm (confidence >= 0.3): the enforcement pair takes the more-severe "
+            "verdict and the max risk, so it can escalate but not erase Φ. Before "
+            "warmup it is telemetry-only. A stronger verification/adversarial "
+            "weighting (the real fix for drift-discriminability) is reserved for v2."
         ),
         "risk": (
             float(behavioral_assessment.risk)
@@ -138,16 +159,19 @@ def _build_risk_attribution(
         ),
     }
 
-    return {
+    attribution = {
         "risk_score": metrics.get("risk_score"),
         "verdict": metrics.get("verdict"),
         "primary_driver": "self_reported",
         "note": (
             "At current maturity this verdict is driven primarily by signals you "
             "reported (ethical_drift, complexity, confidence). An agent that "
-            "under-reports ethical_drift lowers this risk regardless of its "
-            "actual behavior. The behavioral signal is the only non-self-attested "
-            "input and does not yet carry enforcement weight."
+            "under-reports ethical_drift lowers Φ-based risk regardless of its "
+            "actual behavior. The per-agent behavioral signal is the least "
+            "self-attested input; once warm (confidence >= 0.3) it is combined "
+            "into the verdict and can escalate it (more-severe verdict, max risk), "
+            "but it cannot lower a worse Φ and is not yet the primary driver — "
+            "stronger verification-weighted behavioral scoring is reserved for v2."
         ),
         "sources": {
             "self_reported": self_reported,
@@ -155,6 +179,38 @@ def _build_risk_attribution(
             "behavioral": behavioral,
         },
     }
+
+    # F1(b): during behavioral bootstrap the phi-based risk keys on
+    # baseline-deviation terms that sit near zero, so risk_score is NOT
+    # discriminative of absolute drift magnitude — it does not move under a
+    # worsening drift vector. Flag it explicitly (mirroring restorative's
+    # `suppressed` pattern) rather than letting a reader treat a confident
+    # margin-to-PAUSE as meaningful in this window. The real fix is a
+    # baseline-independent drift floor + v2 behavioral weighting (F1a / v2).
+    if baseline_status is not None:
+        is_baselined = bool(baseline_status.get("is_baselined", False))
+        completed = baseline_status.get("updates_completed")
+        target = baseline_status.get("baseline_target")
+        until = None
+        if isinstance(completed, int) and isinstance(target, int):
+            until = max(0, target - completed)
+        attribution["discriminability"] = {
+            "baselined": is_baselined,
+            "non_discriminative": not is_baselined,
+            "updates_completed": completed,
+            "baseline_target": target,
+            "updates_until_baseline": until,
+            "note": (
+                None if is_baselined else
+                "Behavioral baseline not yet established — risk_score keys on "
+                "baseline-deviation terms that are ~0 during bootstrap and does "
+                "not track absolute drift magnitude. Treat risk_score (and any "
+                "margin-to-PAUSE derived from it) as non-discriminative until "
+                "baselined; rely on the reported ethical_drift norm directly."
+            ),
+        }
+
+    return attribution
 
 
 def _complexity_divergence_novel(monitor, cm) -> bool:
@@ -212,7 +268,14 @@ def build_result(
     result = {
         'status': status,
         'decision': decision,
-        'policy_evaluation': _build_policy_evaluation(decision, metrics),
+        'policy_evaluation': _build_policy_evaluation(
+            decision, metrics,
+            latest_risk=(
+                float(monitor.state.risk_history[-1])
+                if getattr(getattr(monitor, 'state', None), 'risk_history', None)
+                else None
+            ),
+        ),
         'enforcement': _build_enforcement_stub(decision),
         'metrics': metrics,
         'timestamp': datetime.now(timezone.utc).isoformat(),
@@ -229,11 +292,21 @@ def build_result(
 
     # Verdict provenance: decompose risk by signal source so a reader can see
     # how much of the verdict is self-attested vs measured (dogfood P0).
+    _beh = getattr(monitor, '_behavioral_state', None)
+    _baseline_status = None
+    if _beh is not None:
+        from src.behavioral_state import BASELINE_WARMUP_UPDATES
+        _baseline_status = {
+            "is_baselined": _beh.is_baselined,
+            "updates_completed": getattr(_beh, 'update_count', None),
+            "baseline_target": BASELINE_WARMUP_UPDATES,
+        }
     result['risk_attribution'] = _build_risk_attribution(
         metrics,
         monitor._last_drift_vector,
         monitor._last_continuity_metrics,
         behavioral_assessment,
+        baseline_status=_baseline_status,
     )
 
     if task_type_adjustment:

@@ -30,7 +30,7 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 ## What you get after install
 
 - **A governance server for heterogeneous agents.** MCP on `/mcp/`, REST on `/v1/tools/call`, an optional dashboard on `/dashboard`, and an SDK for resident or scheduled agents.
-- **Online agent-state estimation.** Each process identity gets EISV state readings against its *own* baseline and recent history, so slow degradation surfaces while output still looks fine.
+- **Online agent-state estimation.** Each process identity gets EISV state readings against its *own* baseline and recent history, so slow degradation surfaces while output still looks fine. (During the baseline warmup the reading leans on self-reported signals and is not yet drift-discriminative — the payload flags this explicitly.)
 - **Outcome-grounded calibration.** Self-reported `confidence` is scored against real evidence — tests, exit codes, tool output, file ops, deployments, and task results — and that calibration feeds future state readings and policy actions.
 - **Governed shared memory.** A Postgres + pgvector + Apache AGE knowledge graph lets agents search and contribute durable discoveries, corrections, supersessions, and cross-agent relations with provenance. It is sediment, not a transcript dump.
 - **Dialectic review and durable constraints.** Disputed policy actions can be reviewed by authority-weighted peers; synthesized conditions persist and can gate that agent's future decisions.
@@ -115,6 +115,8 @@ Want to act on *why*, not just the policy action? Each check-in also returns fou
 | **I** · Integrity | do claims match results? | high confidence, low actual success |
 | **S** · Entropy / drift | drifting from its own normal? | erratic, divergent behavior |
 | **V** · Valence | derived: energy vs integrity | motion without coherence (or vice-versa) |
+
+The baseline takes ~30 check-ins to establish. Until then the verdict falls back to self-reported signals and fixed thresholds, so it is *not yet* discriminative of absolute drift magnitude — a worsening drift vector will not, on its own, move the verdict during warmup. After baselining, the per-agent behavioral assessment is combined into the verdict and can escalate it. A pause is enforced (the runtime boundary marks the agent `paused` and blocks further writes until recovery), not merely advisory.
 
 </details>
 

@@ -2035,6 +2035,7 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                         'prev_norm': tv['prev_norm'],
                         'current_norm': tv['current_norm'],
                         'norm_delta': tv['norm_delta'],
+                        'improvement': tv.get('improvement'),
                     },
                     # Quality computed server-side from ctx.result trajectory data.
                     verification_source='server_observation',

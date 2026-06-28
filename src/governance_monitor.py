@@ -909,7 +909,12 @@ class UNITARESMonitor:
     
     def update_lambda1(self) -> float:
         """Updates lambda1 using PI controller based on void frequency and coherence targets."""
-        return _update_lambda1(self.state)
+        result = _update_lambda1(self.state)
+        # Propagate the HCK gain-modulation flag so the surfaced
+        # hck.gains_modulated reflects whether ρ(t) actually modulated PI gains
+        # this cycle, rather than the always-False stub (F4).
+        self._gains_modulated = getattr(self.state, 'gains_modulated', False)
+        return result
     
     def estimate_risk(self, agent_state: Dict, score_result: Dict = None) -> float:
         """Estimate risk score using governance_core phi_objective and verdict_from_phi."""
@@ -1166,7 +1171,21 @@ class UNITARESMonitor:
 
         self._behavioral_state.update(beh_E_obs, beh_I_obs, beh_S_obs)
 
-        # Assess behavioral state with auxiliary signals
+        # ── ODE Dynamics (Diagnostic) ──
+        # The ODE engine runs in parallel but does NOT drive verdicts when
+        # BEHAVIORAL_VERDICT_ENABLED is True (default). Primary verdicts
+        # come from behavioral assessment (EMA + z-score deviations).
+        # ODE provides: phi objective, regime detection, historical continuity.
+        #
+        # Dynamics runs BEFORE the behavioral assessment so the assessment pairs
+        # THIS cycle's observations with THIS cycle's update coherence ρ(t) and
+        # continuity energy (both produced by update_dynamics). Previously the
+        # assessment read the prior cycle's ρ/CE, so an adversarial ρ spike could
+        # surface in hck.rho while adversarial_rho stayed 0.0 — the signal that
+        # detected the anomaly was decoupled from the verdict (F4).
+        self.update_dynamics(grounded_agent_state, dt=effective_dt)
+
+        # Assess behavioral state with auxiliary signals (now sees fresh ρ/CE).
         behavioral_assessment = assess_behavioral_state(
             state=self._behavioral_state,
             rho=getattr(self.state, 'current_rho', 0.0),
@@ -1174,13 +1193,6 @@ class UNITARESMonitor:
             agent_context={'task_type': task_type},
         )
         self._last_behavioral_verdict = behavioral_assessment.verdict
-
-        # ── ODE Dynamics (Diagnostic) ──
-        # The ODE engine runs in parallel but does NOT drive verdicts when
-        # BEHAVIORAL_VERDICT_ENABLED is True (default). Primary verdicts
-        # come from behavioral assessment (EMA + z-score deviations).
-        # ODE provides: phi objective, regime detection, historical continuity.
-        self.update_dynamics(grounded_agent_state, dt=effective_dt)
 
         # Step 1b: Confidence handling
         # When agent reports confidence, use it as-is — capping created calibration
@@ -1220,6 +1232,9 @@ class UNITARESMonitor:
         
         # Step 3: Update λ₁ (every N updates) - WITH CONFIDENCE GATING
         # Updated to every 5 cycles for faster adaptation (was 10)
+        # Reset the per-cycle gain-modulation flag: it is True only on a cycle
+        # where update_lambda1 actually ran AND ρ(t) reduced the PI gains (F4).
+        self._gains_modulated = False
         lambda1_skipped = False
         if self.state.update_count % 5 == 0:  # Update λ₁ every 5 cycles
             # Gate lambda1 updates based on confidence
