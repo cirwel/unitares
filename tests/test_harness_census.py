@@ -22,14 +22,16 @@ def _row(entry_id, source, agent_id, recorded_at, ctx):
 # codex, one hermes, and one row with no harness label at all.
 ROWS = [
     _row("e1", "agent_state", "agent-A", "2026-06-01T00:00:00+00:00",
-         {"harness_type": "claude-code", "transport": "cli", "model": "opus",
-          "model_provider": "anthropic", "comparison_key": "k1"}),
+         {"harness_type": "claude-code", "harness_id": "cc-inst-1", "transport": "cli",
+          "model": "opus", "model_provider": "anthropic", "comparison_key": "k1"}),
     _row("e2", "agent_state", "agent-B", "2026-06-03T00:00:00+00:00",
-         {"harness_type": "claude", "transport": "cli", "comparison_key": "k2"}),  # alias
+         {"harness_type": "claude", "harness_id": "cc-inst-2", "transport": "cli",
+          "comparison_key": "k2"}),  # alias type, second instance
     _row("e3", "knowledge_discovery", "agent-A", "2026-06-02T00:00:00+00:00",
-         {"harness_type": "claude-code", "transport": "vscode", "model": "sonnet"}),
+         {"harness_type": "claude-code", "harness_id": "cc-inst-1", "transport": "vscode",
+          "model": "sonnet"}),  # same instance as e1
     _row("e4", "agent_state", "agent-C", "2026-06-04T00:00:00+00:00",
-         {"harness_type": "codex-cli", "transport": "cli"}),
+         {"harness_type": "codex-cli", "transport": "cli"}),  # type but NO instance label
     _row("e5", "agent_state", "agent-D", "2026-06-05T00:00:00+00:00",
          {"harness": "hermes-agent", "model": "local"}),  # 'harness' alias + canonicalized
     _row("e6", "agent_state", "agent-E", "2026-06-06T00:00:00+00:00",
@@ -84,6 +86,19 @@ class TestPerHarnessRollup:
     def test_distinct_comparison_keys(self):
         h = self._claude()
         assert h["distinct_comparison_keys"] == 2
+
+    def test_instance_granularity_type_vs_instance(self):
+        # claude-code is one TYPE with two distinct INSTANCES (cc-inst-1 x2, cc-inst-2).
+        h = self._claude()
+        assert h["distinct_harness_ids"] == 2
+        assert h["instance_label_ratio"] == 1.0  # all 3 claude entries carry harness_id
+
+    def test_instance_label_gap_is_visible(self):
+        # codex-cli has a type label but NO instance label — the exact sparsity the
+        # ontology's promotion decision keys on.
+        codex = next(h for h in _census()["harnesses"] if h["canonical_harness"] == "codex-cli")
+        assert codex["distinct_harness_ids"] == 0
+        assert codex["instance_label_ratio"] == 0.0
 
 
 class TestSituatingRatio:

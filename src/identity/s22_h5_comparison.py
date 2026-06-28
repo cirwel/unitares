@@ -91,6 +91,11 @@ class S22H5Entry:
     memory_context: Optional[str]
     tool_surface: tuple[str, ...]
     has_situating_metadata: bool
+    # Instance granularity. harness_type/canonical_harness are the *type*; harness_id
+    # is the concrete body/runtime instance. The ontology (plan.md Track D) keys its
+    # promotion decision on type-vs-instance, so the census needs both. Defaulted so
+    # existing constructors stay valid.
+    harness_id: Optional[str] = None
 
     @property
     def is_comparable(self) -> bool:
@@ -184,6 +189,7 @@ def normalize_s22_h5_entry(raw: Mapping[str, Any]) -> Optional[S22H5Entry]:
         memory_context=memory_context,
         tool_surface=tool_surface,
         has_situating_metadata=has_situating_metadata,
+        harness_id=_first_text(context, ("harness_id",)),
     )
 
 

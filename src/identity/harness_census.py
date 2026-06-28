@@ -74,6 +74,8 @@ def build_harness_census(
             "raw_harness_types": set(),
             "entry_count": 0,
             "_agents": set(),
+            "_harness_ids": set(),
+            "_labelled_ids": 0,
             "first_seen": None,
             "last_seen": None,
             "sources": {},
@@ -86,6 +88,9 @@ def build_harness_census(
         rec["entry_count"] += 1
         if e.harness_type:
             rec["raw_harness_types"].add(e.harness_type)
+        if e.harness_id:
+            rec["_harness_ids"].add(e.harness_id)
+            rec["_labelled_ids"] += 1
         if e.agent_id:
             rec["_agents"].add(e.agent_id)
         rec["first_seen"], rec["last_seen"] = _minmax(
@@ -112,6 +117,12 @@ def build_harness_census(
             "raw_harness_types": sorted(rec["raw_harness_types"]),
             "entry_count": count,
             "distinct_agents": len(rec["_agents"]),
+            # Type-vs-instance: how many concrete harness instances under this type,
+            # and how many entries carried an instance label at all (the Track D
+            # promotion question). instance_label_ratio < 1.0 means harness_id is
+            # sparse — not yet safe to promote to first-class.
+            "distinct_harness_ids": len(rec["_harness_ids"]),
+            "instance_label_ratio": round(rec["_labelled_ids"] / count, 3) if count else 0.0,
             "first_seen": rec["first_seen"],
             "last_seen": rec["last_seen"],
             "sources": dict(sorted(rec["sources"].items())),

@@ -45,12 +45,13 @@ def _render_markdown(census: dict) -> str:
         f"unattributed {census['unattributed_entries']})",
         f"- distinct harnesses: **{census['distinct_harnesses']}**",
         "",
-        "| harness | entries | agents | situated | first seen | last seen | transports | models |",
-        "|---|--:|--:|--:|---|---|---|---|",
+        "| harness | entries | agents | instances | inst.label | situated | first seen | last seen | transports | models |",
+        "|---|--:|--:|--:|--:|--:|---|---|---|---|",
     ]
     for h in census["harnesses"]:
         lines.append(
             f"| `{h['canonical_harness']}` | {h['entry_count']} | {h['distinct_agents']} | "
+            f"{h['distinct_harness_ids']} | {h['instance_label_ratio']:.2f} | "
             f"{h['situating_metadata_ratio']:.2f} | {h['first_seen'] or '—'} | "
             f"{h['last_seen'] or '—'} | {', '.join(h['transports']) or '—'} | "
             f"{', '.join(h['models']) or '—'} |"
