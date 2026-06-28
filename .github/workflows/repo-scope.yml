@@ -42,6 +42,13 @@ jobs:
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
+          # Escape hatch for PRs that legitimately discuss these patterns (this
+          # guard, register cleanups, meta-docs): add the HTML comment
+          # <!-- scope-guard: allow-register --> to the PR body. Rare by design.
+          if printf '%s' "$PR_BODY" | grep -q 'scope-guard: allow-register'; then
+            echo "PR body register: allow-register marker present — skipping."
+            exit 0
+          fi
           bad=$(printf '%s' "$PR_BODY" | grep -niE '/Users/cirwel|per your guidance|your overlay|you flagged|questions for [Kk]enny|live-verifier|council pass|council fold' || true)
           if [ -n "$bad" ]; then
             echo "::error::PR body reads like a personal chat session or leaks an operator-local path. Rewrite third-person/imperative; move working notes out of the public record."

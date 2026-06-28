@@ -30,7 +30,9 @@ agent (or no agent) against it.
   `council fold`, `live-verifier`, `three-lane council`). It deliberately does
   **not** flag the real product vocabulary `operator`, `council`, or `dialectic`,
   and exempts stored session data under `src/data/`. Working notes belong in
-  `~/projects/_notes-archive/<repo>/`; ship clean docs.
+  `~/projects/_notes-archive/<repo>/`; ship clean docs. A PR that legitimately
+  discusses these patterns (this guard, a register cleanup, meta-docs) can opt
+  the PR-body lint out with the HTML comment `<!-- scope-guard: allow-register -->`.
 
 ## Why a guard, not just this doc
 
