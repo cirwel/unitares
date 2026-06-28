@@ -1,0 +1,88 @@
+# Redis Retirement — Shadow Soak Runbook
+
+**Audience:** operator. **Purpose:** drive the Phase 1 shadow soak that gates the read flip, and decide whether `core.session_bindings` earns its place. Companion to `docs/proposals/redis-retirement-v0.md` (inventory) and `redis-retirement-phase-1-plan.md` (design, v1.1).
+
+This is operational, not aspirational: every step below maps to code already merged or in draft. Nothing here changes live behavior until you set `UNITARES_SESSION_MIRROR_SHADOW=1`, and that step is itself behavior-neutral (best-effort writes to inert tables).
+
+## The PR stack and merge order
+
+| PR | What it lands | Depends on |
+|---|---|---|
+| #1122 | Prep fix: PG session-collision detection → `pg_session_collision` event | — |
+| #1123 | Migration 051 (`core.session_bindings`, `core.onboard_pins`) + DB methods | — |
+| #1132 ✅ merged | Hijack-check helper extracted from PATH 1 (behavior-identical) | — |
+| #1129 | Shadow dual-write (writes the mirror when the flag is on) | #1123 |
+| #1130 | Birth-cohort parity checker (`scripts/ops/session_mirror_parity_check.py`) | #1123 |
+
+Merge order: **#1123 first** (the tables/methods everything else needs), then #1129 and #1130 (either order), then **apply migration 051** (manual — see below). #1122 and the merged #1132 are independent.
+
+## Step 1 — apply migration 051 (manual)
+
+Migrations are MANUAL in this repo (diff vs `core.schema_migrations` on every deploy). After #1123 merges and deploys:
+
+```bash
+psql "$GOVERNANCE_DATABASE_URL" -f db/postgres/migrations/051_session_mirror_tables.sql
+# verify:
+psql "$GOVERNANCE_DATABASE_URL" -Atqc "SELECT version||'|'||name FROM core.schema_migrations WHERE version=51"
+#   expect: 51|session_mirror_tables
+```
+
+`unitares_doctor.py` reports `missing 51:session_mirror_tables` until this runs — that's the expected pending state, not drift.
+
+## Step 2 — enable the shadow dual-write
+
+Set the flag in the governance-mcp LaunchAgent env and restart (plist env changes need bootout+bootstrap, not just reload):
+
+```bash
+# add to com.unitares.governance-mcp.plist EnvironmentVariables:
+#   UNITARES_SESSION_MIRROR_SHADOW = 1
+launchctl bootout gui/$(id -u)/com.unitares.governance-mcp
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
+```
+
+What this does: `_cache_session` and `set_onboard_pin` now ALSO write to `core.session_bindings` / `core.onboard_pins` alongside Redis. **Redis stays authoritative for all reads.** The PG writes are best-effort (failures swallowed, latency-bounded) — if the mirror write fails or is slow, the live identity path is unaffected. Nothing reads the mirror yet.
+
+Confirm it's populating (after a few minutes of traffic):
+
+```bash
+psql "$GOVERNANCE_DATABASE_URL" -Atqc "SELECT count(*) FROM core.session_bindings"   # should climb from 0
+psql "$GOVERNANCE_DATABASE_URL" -Atqc "SELECT count(*) FROM core.onboard_pins"
+```
+
+## Step 3 — soak
+
+Let it run long enough to capture a full session-TTL cycle of real traffic — **at least 24h** (the session TTL), ideally a few days to cover weekday/weekend traffic shapes and at least one service restart. The mirror only reflects bindings created *while the flag was on*, so parity climbs over the first 24h as the pre-existing Redis bindings age out and new ones get dual-written.
+
+## Step 4 — measure parity (gates the read flip)
+
+```bash
+python3 scripts/ops/session_mirror_parity_check.py | tee /tmp/parity.json
+```
+
+Reads a JSON summary. What the fields mean:
+
+- `parity_ratio` — of the **birth cohort** (bindings 5–60 min old: committed, not yet expired), the fraction whose Redis `agent_id` matches the PG mirror. **This is the gate.** A faithful dual-writer should sit near **1.0**. Sustained < ~0.99 means the writer is dropping or corrupting writes — investigate before flipping.
+- `missing_in_pg` — birth-cohort Redis bindings absent from PG (dropped writes).
+- `uuid_mismatch` — present in both but bound to different UUIDs (corruption — should be ~0).
+- `sample_missing` / `sample_mismatch` — up to 10 examples to investigate.
+- `status: "inert"` — the mirror is empty; you haven't enabled the shadow flag (Step 2) or no traffic yet.
+
+Why birth-cohort and not a full snapshot: comparing all keys conflates real dropped writes with expiry-race noise (independent Redis/PG TTL clocks) and never converges to 1.0. The cohort window excludes the mid-flight and freshly-reaped tails. Run it a few times across the soak; look for a stable high ratio, not one reading.
+
+## ⚠️ What is NOT yet measured: the keep/drop question
+
+The parity checker answers **"is the mirror faithful enough to read from?"** (the APPLY-flip gate). It does **not** answer the separate **Phase 1B question: is `core.session_bindings` worth keeping at all, vs. a simpler pins-only design?**
+
+That question needs a different metric the council defined and which is **not yet built**: *how often would dropping the ephemeral binding mirror cause a cold-mint that neither `core.sessions` (PATH 2) nor a live onboard pin would have covered?* If that number is ~zero, the table should be dropped and the read flip is smaller (pins + persisted `core.sessions` only). Building that instrumentation is the next code task — flagged here so the soak isn't mistaken for answering it.
+
+## Step 5 — the read flip (future PR, gated on the above)
+
+Once parity is proven AND the keep/drop question is answered, a separate PR wires `UNITARES_SESSION_MIRROR_APPLY`: PATH 2 resolves from `core.session_bindings` (or, in the pins-only outcome, from `core.sessions` + `core.onboard_pins`), and calls the already-extracted `_fingerprint_hijack_check` (from merged #1132) so hijack detection survives the eventual Redis removal. That flip is LIVE-AFFECTING — it is not in any current PR by design.
+
+## Rollback
+
+At any point, to stop shadow writing: unset `UNITARES_SESSION_MIRROR_SHADOW` (or set to `0`) and bootout+bootstrap. No data migration to undo — the mirror tables are inert and self-expire. Redis was authoritative throughout, so there is nothing to recover.
+
+## Invariant
+
+Redis remains the system of record for sessions until the APPLY flip lands AND a subsequent Phase 2 removes the Redis read path. Until then this whole effort is observable, reversible, and off the live read path.
