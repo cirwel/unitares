@@ -333,7 +333,7 @@ def get_call_identity_requirement(tool_name: str, arguments) -> str:
     except Exception:
         # Anything else is a REGRESSION in alias resolution with a
         # security consequence (every alias call would refuse under
-        # strict) — fail closed but never silently (council fold,
+        # strict) — fail closed but never silently (review fold,
         # PR #611: the bare except ate a wrong-import-name bug during
         # development).
         logger.warning(
@@ -423,7 +423,7 @@ def action_router(
         # Compare lowercase-to-lowercase: action keys are lowercase by
         # convention everywhere today, but a mixed-case key would
         # otherwise make this guard fire a confusing false positive on a
-        # CORRECT exemption (council fold, PR #611).
+        # CORRECT exemption (review fold, PR #611).
         unknown = set(a.lower() for a in pre_onboard_actions) - set(
             a.lower() for a in valid_actions
         )

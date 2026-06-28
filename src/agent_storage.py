@@ -293,7 +293,7 @@ async def update_agent(
         disabled_at = datetime.now(timezone.utc) if status in ("archived", "deleted") else None
         await db.update_identity_status(agent_id, status, disabled_at)
         # S21-b §3: mirror PG status into the in-memory dict so the auth
-        # check doesn't return stale-positive (live-verifier's 67-row
+        # check doesn't return stale-positive (live verification's 67-row
         # active/archived inversion class).
         try:
             from src.agent_metadata_persistence import mirror_status_to_dict

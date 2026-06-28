@@ -1645,7 +1645,7 @@ def _get_complexity_disagreement(response_data: dict, meta: Any = None) -> dict 
             # Respect the novelty gate when the payload carries it: a stable
             # session-long gap should not trigger a KG search on every
             # check-in any more than it should repeat the mirror line
-            # (council fold, PR #603). A missing key (older builders) keeps
+            # (review fold, PR #603). A missing key (older builders) keeps
             # the legacy always-fire behavior.
             if continuity.get("divergence_novel") is False:
                 return None

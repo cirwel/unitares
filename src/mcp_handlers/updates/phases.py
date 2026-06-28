@@ -1206,7 +1206,7 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
                 strict_identity_refusal_payload,
             )
             from src.mcp_handlers.response_base import success_response
-            # Single-sourced refusal shape (council fold, PR #610) — only
+            # Single-sourced refusal shape (review fold, PR #610) — only
             # the hint is Path-C-specific.
             return success_response(strict_identity_refusal_payload(
                 "process_agent_update",

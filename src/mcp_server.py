@@ -96,7 +96,7 @@ from src.mcp_handlers import dispatch_tool
 # (a) the per-call ~200-500ns import cost vanishes from the dispatch hot
 # path, and (b) ``patch("src.wave3a_routing.get_route")`` style mocks
 # affect the wrapper (function-local imports bypass module-level patches —
-# see memory ``feedback_patch-local-imports``). FIND-A3 council fold.
+# see memory ``feedback_patch-local-imports``). FIND-A3 review fold.
 from src.wave3a_routing import get_route as _wave3a_get_route
 from src.wave3a_beam_proxy import proxy_to_beam as _wave3a_proxy_to_beam
 
@@ -278,7 +278,7 @@ def get_tool_wrapper(tool_name: str):
                 # Hot-path discipline: the lookup is O(1) and cheap. For
                 # the ~100 tools NOT in the routing table the lookup returns
                 # None and the existing dispatch fires unchanged. Imports
-                # are at module top-level (FIND-A3 council fold) so the
+                # are at module top-level (FIND-A3 review fold) so the
                 # per-call cost is zero and ``patch()``-style mocks work.
                 beam_url = _wave3a_get_route(tool_name)
                 if beam_url is not None:

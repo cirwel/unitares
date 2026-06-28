@@ -547,7 +547,7 @@ def mirror_status_to_dict(agent_uuid: str, status: str) -> bool:
 
     S21-b §3: `db.update_identity_status` writes only PG. Without this
     mirror, the in-memory copy stays at the prior status and
-    `require_registered_agent` returns stale-positive (live-verifier
+    `require_registered_agent` returns stale-positive (live verification
     observed 67 active/archived inversions).
 
     Returns True if the in-memory entry was updated, False if the UUID
