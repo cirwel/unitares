@@ -72,6 +72,7 @@ How to run this in production. Most readers can skip these.
 - [`automation-overrides.md`](operations/automation-overrides.md) — operator-authored metadata layered onto the automation census for accountability/gate classification
 - [`automation-census-setup.md`](operations/automation-census-setup.md) — agnostic setup for the automation census behind the dashboard Automations registry
 - [`resident-roster.md`](operations/resident-roster.md) — `UNITARES_RESIDENTS` configuration; the named resident set is config, not a hardcoded fleet
+- [`redis-retirement-soak-runbook.md`](operations/redis-retirement-soak-runbook.md) — staged Redis identity/session mirror retirement checks and rollback gates
 - [`ablation-negative-controls.md`](operations/ablation-negative-controls.md) — synthetic bad-outcome fixtures for red-team ablation plumbing
 - [`DEFINITIVE_PORTS.md`](operations/DEFINITIVE_PORTS.md) — port assignments across services
 - [`database_architecture.md`](operations/database_architecture.md) — single-Postgres / schema-isolation model
