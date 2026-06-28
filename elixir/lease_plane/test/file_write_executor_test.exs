@@ -104,21 +104,11 @@ defmodule UnitaresLeasePlane.FileWriteExecutorTest do
     assert File.read!(path) == "x"
   end
 
-  @tag :tmp_dir
-  test "two-flag fail-safe: even with commit enabled this slice refuses to write", %{tmp_dir: dir} do
-    Application.put_env(:lease_plane, :execute_file_write_commit_enabled, true)
-    path = Path.join(dir, "note.txt")
-    File.write!(path, "untouched")
-    leases = [%{"surface" => canonical_surface(path)}]
-    payload = %{"path" => path, "content" => "would-be"}
-
-    # commit path is the NEXT slice (gated on fault-injection tests) — refuse.
-    assert {:rejected, :commit_not_enabled} =
-             FileWriteExecutor.apply_effect("e7", payload, leases)
-    assert File.read!(path) == "untouched"
-  after
-    Application.delete_env(:lease_plane, :execute_file_write_commit_enabled)
-  end
+  # NOTE: the prior "commit-enabled still refuses to write" fail-safe test was
+  # removed when the live commit path landed — commit-enabled now performs the
+  # real write. The default (commit DISABLED -> dry-run) fail-safe is still
+  # exercised by every test above (none of which sets the commit flag); the live
+  # commit + compensation is covered by file_write_executor_commit_test.exs.
 
   test "executor declares itself reversible" do
     assert FileWriteExecutor.reversible?() == true

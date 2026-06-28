@@ -31,16 +31,14 @@ defmodule UnitaresLeasePlane.FileWriteExecutor do
   def reversible?, do: true
 
   @impl true
-  def apply_effect(_effect_id, payload, leases) do
+  def apply_effect(effect_id, payload, leases) do
     with {:ok, path} <- resolve_path(payload, leases),
          {:ok, content} <- resolve_content(payload),
          :ok <- check_ceiling(content) do
-      {pre_sha, existed?} = read_pre_image(path)
+      {pre_sha, pre_bytes, existed?} = read_pre_image(path)
 
       if commit_enabled?() do
-        # Slice 2b: real write + mark_committed + in-process compensation, gated
-        # on the fault-injection tests the dialectic made a hard precondition.
-        {:rejected, :commit_not_enabled}
+        commit(effect_id, path, content, pre_sha, pre_bytes, existed?)
       else
         {:committed,
          %{
@@ -56,6 +54,61 @@ defmodule UnitaresLeasePlane.FileWriteExecutor do
       {:error, reason} -> {:rejected, reason}
     end
   end
+
+  # --- live commit + in-process compensation (§5b) ---------------------------
+  # Order: persist the pre-image FIRST (so crash recovery can reconcile), then
+  # write, then mark committed. On a write failure, restore the pre-image while
+  # we still hold the lease, then tombstone (retry re-executes); if the restore
+  # itself fails, quarantine (surface is dirty, operator-first).
+
+  defp commit(effect_id, path, content, pre_sha, pre_bytes, existed?) do
+    case repo().record_pre_image(effect_id, pre_sha, pre_bytes, existed?) do
+      res when res in [:ok, :already] -> do_write(effect_id, path, content, pre_bytes, existed?)
+      {:error, reason} -> {:rejected, {:persist_failed, reason}}
+    end
+  end
+
+  defp do_write(effect_id, path, content, pre_bytes, existed?) do
+    case file_ops().write(path, content) do
+      :ok ->
+        case repo().mark_committed(effect_id) do
+          :ok ->
+            {:committed, committed_meta(path, content)}
+
+          {:error, _reason} ->
+            # The write IS durable. NEVER compensate a successful commit — that
+            # would undo a real change. Leave rollback_state 'pending'; crash
+            # recovery will commit-forward (hash == payload_sha256). Report
+            # success with the deferred mark noted.
+            {:committed, Map.put(committed_meta(path, content), :mark_deferred, true)}
+        end
+
+      {:error, write_reason} ->
+        compensate(effect_id, path, pre_bytes, existed?, write_reason)
+    end
+  end
+
+  defp compensate(effect_id, path, pre_bytes, existed?, write_reason) do
+    restore =
+      if existed?, do: file_ops().write(path, pre_bytes), else: normalize_rm(file_ops().rm(path))
+
+    case restore do
+      :ok ->
+        repo().tombstone(effect_id)
+        {:rejected, {:committed_failed_rolled_back, write_reason}}
+
+      {:error, _restore_reason} ->
+        repo().quarantine(effect_id)
+        {:rejected, :rollback_failed}
+    end
+  end
+
+  # rm of an already-absent file means "nothing we created to undo" -> success.
+  defp normalize_rm({:error, :enoent}), do: :ok
+  defp normalize_rm(other), do: other
+
+  defp committed_meta(path, content),
+    do: %{path: path, bytes_written: byte_size(content), payload_sha256: sha256_hex(content)}
 
   # --- validation (the path the dry-run proves) ------------------------------
 
@@ -98,14 +151,19 @@ defmodule UnitaresLeasePlane.FileWriteExecutor do
   end
 
   defp read_pre_image(path) do
-    case File.read(path) do
-      {:ok, bytes} -> {sha256_hex(bytes), true}
-      {:error, :enoent} -> {nil, false}
-      # a read error is surfaced as "exists but unknown" — the dry-run records it
-      # honestly; the commit slice will reject on an unreadable target.
-      {:error, _} -> {nil, true}
+    case file_ops().read(path) do
+      {:ok, bytes} -> {sha256_hex(bytes), bytes, true}
+      {:error, :enoent} -> {nil, nil, false}
+      # exists but unreadable: record honestly; no bytes to restore.
+      {:error, _} -> {nil, nil, true}
     end
   end
+
+  # Injectable seams (default real File / EffectRepo) so the live commit AND
+  # every step of the compensation can be fault-injected in tests — the dialectic
+  # precondition for the live-write path.
+  defp file_ops, do: Application.get_env(:lease_plane, :effect_file_ops, UnitaresLeasePlane.EffectFileOps)
+  defp repo, do: Application.get_env(:lease_plane, :effect_repo, UnitaresLeasePlane.EffectRepo)
 
   defp commit_enabled?,
     do: Application.get_env(:lease_plane, :execute_file_write_commit_enabled, false) == true
