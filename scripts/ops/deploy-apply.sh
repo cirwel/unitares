@@ -40,10 +40,12 @@ done
 # associative array, so this runs on macOS's stock bash 3.2 like the siblings.)
 deploy_script_for() {
   case "$1" in
-    governance-mcp) echo "$OPS_DIR/deploy-mcp.sh" ;;
-    lease-plane)    echo "$OPS_DIR/deploy-lease-plane.sh" ;;
-    sentinel-beam)  echo "$OPS_DIR/deploy-sentinel.sh" ;;
-    *)              echo "" ;;
+    governance-mcp)  echo "$OPS_DIR/deploy-mcp.sh" ;;
+    gateway-mcp)     echo "$OPS_DIR/deploy-gateway.sh" ;;
+    lease-plane)     echo "$OPS_DIR/deploy-lease-plane.sh" ;;
+    sentinel-beam)   echo "$OPS_DIR/deploy-sentinel.sh" ;;
+    wave3a-handlers) echo "$OPS_DIR/deploy-wave3a.sh" ;;
+    *)               echo "" ;;
   esac
 }
 
