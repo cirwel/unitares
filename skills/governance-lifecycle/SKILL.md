@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-06-11"
+last_verified: "2026-06-27"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -16,7 +16,7 @@ source_files:
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-06-11
+**Last Updated:** 2026-06-27
 
 ## Primary Workflow Names
 
@@ -41,8 +41,8 @@ Choose creation, lineage, or proof-owned resume explicitly:
 start_session(force_new=true)                                        # any fresh session — the default; co-location is not lineage
 start_session(force_new=true, parent_agent_id="<dispatcher-uuid>",
               spawn_reason="subagent")                               # dispatched subagent (usually set automatically by the dispatcher)
-start_session(force_new=true, parent_agent_id="<exited-uuid>",
-              spawn_reason="explicit")                               # handoff from an EXITED prior session
+start_session(force_new=true, parent_agent_id="<prior-uuid>",
+              spawn_reason="new_session")                            # handoff from a finished prior session
 identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true) # same live owner / proof-owned rebind
 ~~~
 
@@ -64,7 +64,7 @@ Returns:
 Default rules:
 
 1. Any fresh session: call `start_session(force_new=true)` with no parent. Co-location in a workspace is not lineage.
-2. Declare lineage only for a real causal event — a dispatched subagent (`parent_agent_id="<dispatcher-uuid>", spawn_reason="subagent"`, usually set automatically by the dispatcher) or a handoff from an EXITED prior session (`parent_agent_id="<exited-uuid>", spawn_reason="explicit"`). Declaring a currently-live agent as parent is rejected.
+2. Declare lineage only for a real causal event — a dispatched subagent (`parent_agent_id="<dispatcher-uuid>", spawn_reason="subagent"`, usually set automatically by the dispatcher) or a handoff from a finished prior session (`parent_agent_id="<prior-uuid>", spawn_reason="new_session"`). Declaring a currently-live agent as parent is rejected.
 3. Same live process or explicit ownership rebind: call `identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true)`.
 4. Ordinary check-ins: rely on the active session binding or `client_session_id`; reserve `continuity_token` for explicit proof-owned rebinds.
 
