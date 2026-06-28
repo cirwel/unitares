@@ -211,6 +211,15 @@ class TestCadenceFromTags:
 # ============================================================================
 
 class TestExpectedInterval:
+    @pytest.fixture(autouse=True)
+    def _inject_label_intervals(self, monkeypatch):
+        """Label-based intervals are deployment-local now (UNITARES_CLASS_CALIBRATION
+        overlay); inject representative test values so the label-fallback path has
+        a map to exercise, without depending on shipped per-resident config."""
+        import src.background_tasks as bt
+        monkeypatch.setattr(bt, "_PERSISTENT_AGENT_INTERVALS",
+                            {"Vigil": 1800, "Lumen": 300, "Sentinel": 600, "Watcher": 21600})
+
     def test_prefers_cadence_tag_over_label(self):
         """Tag-driven cadence wins even when the label matches the legacy map."""
         meta = _protection_meta(label="Lumen", tags=["cadence.10min"])

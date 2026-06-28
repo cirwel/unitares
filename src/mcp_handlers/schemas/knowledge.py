@@ -358,6 +358,8 @@ class KnowledgeParams(AgentIdentityMixin):
     include_cold: Optional[bool] = Field(None, description="Include cold-storage (long-term) discoveries in search results (default: excluded)")
     epoch_scope: Optional[Literal["current", "all"]] = Field(None, description="Stats/list scope: current epoch only or all epochs")
     including_cold: Union[bool, str, None] = Field(None, description="Include cold-storage discoveries in action=list raw status aggregates")
+    scope: Optional[Literal["open", "all", "by_agent"]] = Field(None, description="KG audit scope for action=audit")
+    top_n: Optional[int] = Field(None, description="Maximum stale entries returned by action=audit")
     dry_run: Union[bool, str, None] = Field(None, description="Dry run mode (for action=cleanup, synthesize)")
     # Synthesis (action=synthesize): roll discoveries up into topic summaries.
     topic: Optional[str] = Field(None, description="Synthesize just this one tag/topic (for action=synthesize). Omit to sweep the densest topics.")

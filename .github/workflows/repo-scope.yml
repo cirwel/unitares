@@ -33,3 +33,26 @@ jobs:
 
       - name: Run repo scope guard
         run: bash scripts/dev/check-repo-scope.sh --base "${{ steps.base.outputs.ref }}"
+
+      # The file guard checks committed content; a PR description is not a file,
+      # so lint it separately for the same chat-session register. Body passed via
+      # env (never inlined) to avoid script injection.
+      - name: Lint PR body for chat-session register
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # Escape hatch for PRs that legitimately discuss these patterns (this
+          # guard, register cleanups, meta-docs): add the HTML comment
+          # <!-- scope-guard: allow-register --> to the PR body. Rare by design.
+          if printf '%s' "$PR_BODY" | grep -q 'scope-guard: allow-register'; then
+            echo "PR body register: allow-register marker present — skipping."
+            exit 0
+          fi
+          bad=$(printf '%s' "$PR_BODY" | grep -niE '/Users/cirwel|per your guidance|your overlay|you flagged|questions for [Kk]enny|live-verifier|council pass|council fold' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::PR body reads like a personal chat session or leaks an operator-local path. Rewrite third-person/imperative; move working notes out of the public record."
+            printf '%s\n' "$bad"
+            exit 1
+          fi
+          echo "PR body register: clean"

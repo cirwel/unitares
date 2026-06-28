@@ -107,6 +107,12 @@ class TestSimplifyNote:
         assert result["data"]["id"] == "n-123"
         assert result["data"]["saved"] is True
 
+    def test_with_canonical_note_id(self):
+        raw = {"note_id": "n-456", "message": "Note saved"}
+        result = simplify_note(raw)
+        assert result["ok"] is True
+        assert result["data"]["id"] == "n-456"
+
     def test_without_id(self):
         raw = {"status": "ok"}
         result = simplify_note(raw)

@@ -128,7 +128,7 @@ Three items, not two:
 
 1. **Threshold sensitivity.** Day-7 data may add or shift agents in the 1-2 bucket. If 5+ new agents arrive in 1-2 between now and ratification, revisit the cut.
 2. **Stamping-gap fix sequencing.** Bundle into the Phase-2 PR or ship a-bis first as a tiny standalone? My read: bundle. Council review covers both.
-3. **Council requirement.** Calibration-consequence territory — S6 thresholds depend on Phase 2's class composition. Per memory entry "Council also for load-bearing implementation," parallel `dialectic-knowledge-architect` + `feature-dev:code-reviewer` + `live-verifier` review pre-merge.
+3. **Council requirement.** Calibration-consequence territory — S6 thresholds depend on Phase 2's class composition. Per memory entry "Council also for load-bearing implementation," parallel independent review pre-merge.
 
 ## What this prep is NOT
 

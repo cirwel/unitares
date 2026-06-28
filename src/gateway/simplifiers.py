@@ -118,11 +118,11 @@ def simplify_search(raw: dict) -> dict:
 
 
 def simplify_note(raw: dict) -> dict:
-    """Simplify leave_note response."""
+    """Simplify knowledge note response."""
     if not isinstance(raw, dict):
         return ok("Note saved", {"raw": raw})
 
-    node_id = raw.get("id") or raw.get("node_id") or raw.get("entry_id")
+    node_id = raw.get("id") or raw.get("node_id") or raw.get("note_id") or raw.get("entry_id")
     data = {"saved": True}
     if node_id:
         data["id"] = node_id

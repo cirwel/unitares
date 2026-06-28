@@ -66,8 +66,7 @@ INTERNAL_KEYS = {
 KNOWN_UNEXPOSED = {
     "auto_link_related", "exclude_agent_labels",
     "related_files", "resolve_question",
-    "scope", "synthesize", "top_n",
-    "use_model",
+    "synthesize", "use_model",
 }
 # include_archived / include_cold were exposed on KnowledgeParams (2026-06-22) as
 # recall-recovery levers. include_provenance / search_mode / semantic /
@@ -75,8 +74,9 @@ KNOWN_UNEXPOSED = {
 # controls. offset / length / include_response_chain / max_chain_depth /
 # response_to followed as details/threading controls. confidence followed as a
 # store-path writer-authored quality signal. epoch_scope / including_cold
-# followed as list/stats scope controls. Shrinking this set is the goal; growing
-# it is the smell.
+# followed as list/stats scope controls. audit scope / top_n followed as public
+# read-only audit controls. Shrinking this set is the goal; growing it is the
+# smell.
 
 
 def _classify_undeclared() -> set[str]:
@@ -157,6 +157,24 @@ def test_list_scope_controls_exposed():
     model = KnowledgeParams(action="list", epoch_scope="all", including_cold="true")
     assert model.epoch_scope == "all"
     assert model.including_cold is True
+
+
+def test_audit_scope_controls_exposed():
+    """Audit controls must be sendable through knowledge(action=audit)."""
+    declared = set(KnowledgeParams.model_fields.keys())
+    assert {"scope", "top_n"} <= declared
+    model = KnowledgeParams(action="audit", scope="by_agent", top_n="3")
+    assert model.scope == "by_agent"
+    assert model.top_n == 3
+
+
+def test_audit_scope_controls_advertised_in_tool_schema():
+    """Declaring fields is not enough; list_tools must advertise them."""
+    from src.tool_schemas import get_tool_definitions
+
+    knowledge = next(t for t in get_tool_definitions(verbosity="full") if t.name == "knowledge")
+    props = knowledge.inputSchema["properties"]
+    assert {"scope", "top_n"} <= set(props)
 
 
 def test_supersession_link_params_stay_declared():

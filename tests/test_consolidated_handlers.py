@@ -764,3 +764,13 @@ class TestKnowledgeParamMaps:
             await handle_knowledge({"action": "cleanup", "dry_run": "false"})
             args_passed = mock_cleanup.call_args[0][0]
             assert args_passed["dry_run"] == "false"
+
+    @pytest.mark.asyncio
+    async def test_audit_preserves_scope_and_top_n(self):
+        from src.mcp_handlers.consolidated import handle_knowledge
+        mock_audit = AsyncMock(return_value=_ok_response({"audit": {}}))
+        with _patch_router_action(handle_knowledge, "audit", mock_audit):
+            await handle_knowledge({"action": "audit", "scope": "all", "top_n": 4})
+            args_passed = mock_audit.call_args[0][0]
+            assert args_passed["scope"] == "all"
+            assert args_passed["top_n"] == 4

@@ -402,6 +402,13 @@ class GovernanceConfig:
     # (ODE verdict still computed and returned as diagnostic)
     BEHAVIORAL_VERDICT_ENABLED = os.environ.get('GOVERNANCE_BEHAVIORAL_VERDICT', 'true').lower() == 'true'
 
+    # Independent verification floor (escalate-only). When True, a deterministic,
+    # self-report-independent read of described adverse actions (governance_core.
+    # verification) can RAISE the verdict/risk but never lower a worse Φ signal.
+    # Default OFF: this is the Phase-2 actuator wiring of the v2 verification
+    # layer and is council-gated (docs/proposals/verification-weighted-verdict-v0.md).
+    VERIFICATION_FLOOR_ENABLED = os.environ.get('GOVERNANCE_VERIFICATION_FLOOR', 'false').lower() == 'true'
+
     # =================================================================
     # Error Handling Constants
     # =================================================================
@@ -993,6 +1000,15 @@ def get_e_scale(agent_class: str = "default") -> ScaleConstant:
     return E_SCALE_BY_CLASS.get(agent_class, E_SCALE_DEFAULT)
 
 
+# Back-compat label → expected check-in interval (seconds), for residents that
+# classify by unique label and have no `cadence.*` tag yet (background_tasks'
+# silence detector reads it). USER-AGNOSTIC: empty in the repo — the generic
+# path is the `cadence.*` tag taxonomy (background_tasks.CADENCE_FROM_TAG). Named
+# residents come from the deployment-local UNITARES_CLASS_CALIBRATION overlay
+# ("label_intervals"), so one deployment's roster + schedule never ships here.
+LABEL_CHECKIN_INTERVALS: Dict[str, int] = {}
+
+
 def get_delta_norm_max(agent_class: str = "default") -> ScaleConstant:
     """Return class-conditional manifold radius; fall back to fleet-wide default."""
     return DELTA_NORM_MAX_BY_CLASS.get(agent_class, DELTA_NORM_MAX_DEFAULT)
@@ -1049,6 +1065,12 @@ def _apply_class_calibration_overlay() -> None:
     for cls, val in (data.get("void_threshold") or {}).items():
         try:
             GovernanceConfig.VOID_THRESHOLD_BY_CLASS[cls] = float(val)
+        except (TypeError, ValueError):
+            pass
+
+    for label, secs in (data.get("label_intervals") or {}).items():
+        try:
+            LABEL_CHECKIN_INTERVALS[label] = int(secs)
         except (TypeError, ValueError):
             pass
 
