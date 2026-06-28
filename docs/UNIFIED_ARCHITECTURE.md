@@ -79,6 +79,14 @@ The server returns a governance decision:
 
 Verdicts include `margin` (comfortable / tight / critical) indicating proximity to basin boundaries.
 
+#### Edge-regime postures: oscillation and assessment failure
+
+Two behaviors at the edges of the verdict path are deliberate and easy to miss when reading the code:
+
+**Oscillation / churn near a threshold.** There is no deadband on the risk cut itself — a single check-in crossing a threshold can change the action. Stability instead comes from two layers: (1) the EISV inputs are EMA-smoothed before scoring (`src/behavioral_state.py`, per-dimension α ≈ 0.08–0.15), and (2) a dedicated always-on oscillation governor, **CIRS** (`src/cirs.py`, `src/monitor_decision.py`), watches the *decision* stream over a sliding window (default `window=8`, `flip_threshold=3`, `oi_threshold=3.0`). When decisions flip-flop, CIRS `soft_dampen` nudges `safe → caution`, and sustained resonance triggers a `hard_block` (`sub_action=cirs_block`, "governance is flip-flopping — wait for state to settle"). So churn is handled by *escalation to a settle-pause*, not by a hold-band — a deliberate trade (it prevents flip spam but biases conservative near the boundary; see the false-pause history behind the basin-health gate, issue #689).
+
+**Assessment failure is fail-open.** If the assessment pipeline itself errors (DB/Redis outage, internal bug — distinct from the BEAM proxy, which fails open to in-process Python), the check-in handler returns an error response with **no `verdict`/`action` field** — it does not synthesize a `pause`. The agent proceeds. This is intentional for an advisory, non-guardrail system: fail-*closed* would let a transient infra blip mass-pause the whole fleet, and the anyio/asyncpg/Redis latency class (see `CLAUDE.md`) makes that a live risk. The normal pause gates (CIRS / void / coherence / high-risk / low-basin) are unaffected; this covers only the case where no verdict could be computed at all. See the design comment at `src/mcp_handlers/core.py` (`process_agent_update` handler).
+
 ### 5. Calibration
 
 The system tracks whether stated confidence matches outcomes. Ground truth comes from objective signals — test pass/fail, command exit codes, lint results. Over time this builds a calibration curve. Persistent overconfidence penalizes Information Integrity through entropy coupling.
