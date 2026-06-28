@@ -6,6 +6,16 @@ the v0 blend as written.** For the Φ→telemetry (EISV) owners. Not a committed
 **Why now:** to make dependency updates *free* — i.e. so a verdict cannot flip on a
 numerical perturbation.
 
+**Related motivation (separate axis, same locus):** the φ→behavioral weighting this
+proposal governs is also the lever that decides how much an *independent* signal counts
+against a self-attested verdict. The
+[self-report-dependence worked example](../operations/self-report-verdict-dependence-2026-06-28.md)
+shows that pre-warmup the verdict is a pure function of caller-reported `ethical_drift`
+(a confessed-sabotage and a clean-refactor check-in score identically), and even
+post-warmup the behavioral signal is escalate-only. That is *not* the numerical-drift
+problem this doc primarily targets, but the v2 verification-weighted behavioral scoring
+it defers to is what would close it — keep the two motivations distinct when scoping.
+
 ## v0.2 — council fold (READ FIRST; supersedes the v0 locus + corrects a safety flaw)
 
 A three-lane council (architect + live-verifier) reviewed the v0 blend before any
