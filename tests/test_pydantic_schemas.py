@@ -256,10 +256,21 @@ class TestPydanticSchemas:
         # the schema surfaces as a test failure, not a runtime PARAMETER_ERROR.
         dispatcher_actions = {
             "store", "search", "get", "list", "update", "details",
-            "note", "cleanup", "stats", "supersede", "audit",
+            "note", "cleanup", "synthesize", "stats", "supersede", "audit",
         }
         missing = dispatcher_actions - schema_actions
         assert not missing, f"Schema missing dispatcher actions: {missing}"
+
+    def test_knowledge_audit_controls_survive_validation_dump(self):
+        """Unified knowledge(audit) controls must survive the Pydantic strip point."""
+        from src.mcp_handlers.schemas.knowledge import KnowledgeParams
+
+        model = KnowledgeParams(action="audit", scope="by_agent", top_n="5", agent_id="agent-1")
+        dumped = model.model_dump()
+
+        assert dumped["scope"] == "by_agent"
+        assert dumped["top_n"] == 5
+        assert dumped["agent_id"] == "agent-1"
 
     def test_leave_note_accepts_s22_h5_agent_knowable_fields(self):
         """Quick notes must preserve the same S22 diagnostic fields as store."""
