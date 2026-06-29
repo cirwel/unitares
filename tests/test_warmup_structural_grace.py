@@ -40,6 +40,7 @@ class TestSuppressesWhenBaselinedSafeInWindow:
         assert out["action"] == "proceed"
         assert out["warmup_structural_suppressed"] is True
         assert out["original_action"] == "pause"
+        assert out["original_sub_action"] == sub
 
 
 class TestNeverSuppresses:

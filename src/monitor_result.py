@@ -42,8 +42,16 @@ def _build_policy_evaluation(decision: Dict, metrics: Dict,
     explicit so a reader can never conclude "the policy never sees the latest
     value" (F2) — and the fast-trip below acts on it.
     """
+    policy_basin = decision.get("basin")
     inputs = {
-        "basin": decision.get("basin"),
+        # Backward-compatible field: this is the basin consumed by
+        # monitor_decision, not necessarily the same state presentation that
+        # later agent-facing response fields compute. New source fields below
+        # make that distinction explicit.
+        "basin": policy_basin,
+        "policy_basin": policy_basin,
+        "policy_basin_source": "monitor_decision.classify_basin",
+        "primary_eisv_source": metrics.get("primary_eisv_source"),
         **{field: metrics.get(field) for field in _POLICY_INPUT_FIELDS},
         "risk_score_latest": (
             latest_risk if latest_risk is not None
@@ -62,6 +70,24 @@ def _build_policy_evaluation(decision: Dict, metrics: Dict,
         "inputs": inputs,
         "measurement_role": "EISV/risk/coherence are policy inputs, not the actuator itself.",
     }
+    if metrics.get("primary_eisv_source") and metrics.get("primary_eisv_source") != "ode_fallback":
+        evaluation["state_source_note"] = (
+            "policy_evaluation.inputs.basin is the decision-time policy basin; "
+            "agent-facing state/metrics may use the primary EISV source named "
+            "in inputs.primary_eisv_source."
+        )
+    suppression = {
+        key: decision[key]
+        for key in (
+            "original_action",
+            "original_sub_action",
+            "gap_suppressed",
+            "warmup_structural_suppressed",
+        )
+        if key in decision
+    }
+    if suppression:
+        evaluation["suppression"] = suppression
     if decision.get("latest_risk_fast_trip"):
         evaluation["latest_risk_fast_trip"] = decision["latest_risk_fast_trip"]
     return evaluation

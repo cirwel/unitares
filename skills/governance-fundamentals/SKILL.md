@@ -4,7 +4,7 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, policy actions, coherence, calibration. Reference material for interpreting
   governance metrics as proprioceptive state estimation, not outcome judgment.
-last_verified: "2026-06-28"
+last_verified: "2026-06-29"
 freshness_days: 14
 source_files:
   - unitares/config/governance_config.py
@@ -69,6 +69,12 @@ Your state sits in a basin — a region of the EISV space:
 - **Boundary**: Transitioning between basins. Extra attention from governance. Verdicts may carry `margin: tight`.
 
 Use `get_governance_metrics()` as the source of truth for the current basin/mode labels rather than assuming they are constant across runtime versions.
+
+When a response includes `policy_evaluation.inputs.basin`, read it as the
+decision-time policy basin. Agent-facing state fields can be sourced from the
+primary EISV path for that response, so newer responses also include
+`policy_basin`, `policy_basin_source`, and `primary_eisv_source` to make that
+measurement distinction explicit.
 
 ## Verdicts
 

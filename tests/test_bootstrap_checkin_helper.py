@@ -98,13 +98,28 @@ def test_state_json_marks_source_and_carries_digest():
     assert sj["epistemic_class"] == "synthetic"
 
 
-def test_pydantic_rejects_extra_fields():
-    """`extra='forbid'` on the model means {synthetic: false} cannot sneak in."""
+def test_initial_state_freeform_context_is_quarantined():
+    params = BootstrapStateParams(
+        objective="Scope UNITARES dogfood frictions",
+        workspace="/tmp/unitares",
+    )
+    assert params.context == {
+        "objective": "Scope UNITARES dogfood frictions",
+        "workspace": "/tmp/unitares",
+    }
+    filled = fill_defaults(params)
+    sj = build_state_json(filled)
+    assert sj["context"]["objective"] == "Scope UNITARES dogfood frictions"
+    assert "objective" not in sj
+
+
+def test_pydantic_rejects_reserved_extra_fields():
+    """Reserved state/control fields cannot sneak through as context."""
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         BootstrapStateParams(synthetic=False)
     with pytest.raises(ValidationError):
-        BootstrapStateParams(arbitrary_key="value")
+        BootstrapStateParams(coherence=0.99)
 
 
 def test_pydantic_rejects_out_of_range_floats():
