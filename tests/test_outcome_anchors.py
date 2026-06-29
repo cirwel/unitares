@@ -71,6 +71,21 @@ def test_sql_predicates_exclude_self_referential():
     assert "agent_reported_tool_result" in ANCHORED_OUTCOMES_WITH_SOFT_SQL
 
 
+def test_table_alias_qualifies_columns():
+    """With table_alias, every column ref is prefixed so the predicate can be
+    AND-ed into an aliased query (e.g. the skeptic report's `... o`)."""
+    p = anchored_outcomes_predicate(table_alias="o")
+    assert "o.verification_source" in p
+    assert "o.eisv_e" in p
+    assert "o.detail->>" in p
+    # no bare (unqualified) column tokens leak through
+    assert "(verification_source" not in p and " verification_source" not in p
+    assert "(eisv_e" not in p
+    # no alias requested -> unchanged constant
+    assert anchored_outcomes_predicate() == ANCHORED_OUTCOMES_SQL
+    assert anchored_outcomes_predicate(include_soft=True, table_alias="o").count("o.eisv_e") == 1
+
+
 def test_anchor_predicates_require_joinable_snapshot():
     """Both anchor predicates must AND-in the joinable-snapshot requirement, so a
     snapshot-less row (synthetic harness traffic / non-instrumented agent) cannot

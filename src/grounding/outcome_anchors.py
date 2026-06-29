@@ -159,10 +159,28 @@ EXCLUDED_OUTCOMES_SQL = (
 )
 
 
-def anchored_outcomes_predicate(*, include_soft: bool = False) -> str:
+def anchored_outcomes_predicate(
+    *, include_soft: bool = False, table_alias: Optional[str] = None
+) -> str:
     """Return the SQL predicate selecting anchorable outcome rows.
 
     Selects rows with exogenous provenance AND a joinable EISV snapshot — both
     are required (see module note; roadmap §6.3).
+
+    ``table_alias`` qualifies the column references (``verification_source``,
+    ``eisv_e``, ``detail``) with ``<alias>.`` so the predicate can be AND-ed into
+    a query that aliases ``audit.outcome_events`` (e.g. ``... o`` in the skeptic
+    report). With no alias the bare-column constants are returned unchanged.
     """
-    return ANCHORED_OUTCOMES_WITH_SOFT_SQL if include_soft else ANCHORED_OUTCOMES_SQL
+    base = ANCHORED_OUTCOMES_WITH_SOFT_SQL if include_soft else ANCHORED_OUTCOMES_SQL
+    if not table_alias:
+        return base
+    a = f"{table_alias}."
+    # The three column tokens are distinct and do not appear as substrings of one
+    # another in the predicate, so targeted replacement is safe here.
+    return (
+        base
+        .replace("verification_source", f"{a}verification_source")
+        .replace("eisv_e", f"{a}eisv_e")
+        .replace("detail->>", f"{a}detail->>")
+    )
