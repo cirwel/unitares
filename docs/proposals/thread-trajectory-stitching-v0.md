@@ -2,6 +2,17 @@
 
 **Status:** v0 proposal, for the governance-metrics / identity-rollup owners. Not a committed change.
 **Author:** surfaced 2026-06-26 from a session-expiry investigation.
+
+> **DEMOTED TO BACKSTOP (operator, 2026-06-26).** This proposal's framing — "the
+> re-mint is honest; don't force continuity; stitch in metrics" — is partly
+> *reversed* by the operator's preferred ontology: **Cylon-style instance-mortal /
+> self-continuous**, where the thread *self* (identity + memory + trajectory) should
+> persist across mortal instances rather than fragment. Under that frame the PRIMARY
+> direction is the self actually carrying across a body-death (resurrection), capped
+> today by the LLM provider's own session lifecycle (→ local models are the real
+> end-to-end unlock). This stitch is retained as a **backstop**: even with a
+> continuous self, genuine deaths (true long gaps) still occur and their segments
+> should stay legible. Kept for the record; not the headline fix.
 **Relationship:** extends `principal_rollup` (`src/services/principal_rollup.py`,
 `docs/proposals/principal-rollup-v0.md`, council 2026-06-18) — same pattern, one new grouping signal.
 
