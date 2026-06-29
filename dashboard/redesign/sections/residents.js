@@ -117,11 +117,14 @@
     const rows = Object.keys(items).sort((a, b) => rank(items[a] && items[a].status) - rank(items[b] && items[b].status))
       .map((name) => {
         const c = items[name] || {}, st = c.status || "unknown", det = healthDetail(c);
+        // The detail span is the flexible middle element: it fills the space
+        // (pushing the status label right, in place of a spring) and truncates
+        // with an ellipsis when a check's note is long, so a verbose note like
+        // identity_continuity's can't overflow the card. Full text on hover.
         return `<div style="display:flex;gap:var(--space-3);align-items:baseline;font-size:var(--text-sm);padding:var(--space-1) 0">
           <span class="dot-pip" style="background:${healthColor(st)};flex:none;align-self:center"></span>
           <span style="font-family:var(--font-mono);color:var(--ink-2);flex:none">${esc(name)}</span>
-          <span class="spring"></span>
-          ${det ? `<span class="fresh" style="flex:none">${esc(det)}</span>` : ""}
+          <span class="fresh"${det ? ` title="${esc(det)}"` : ""} style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right">${esc(det)}</span>
           <span style="color:${healthColor(st)};flex:none;text-transform:uppercase;font-size:var(--text-xs);letter-spacing:var(--tracking-label)">${esc(st)}</span></div>`;
       }).join("");
     // Operator banner: only when something is actually failing/degraded.
