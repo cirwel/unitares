@@ -88,7 +88,7 @@ not** drive verdicts.
 |---|---|---|---|
 | **Coordination / lease plane** | BEAM (Elixir/OTP) kernel for single-writer coordination + liveness on shared surfaces (Plexus). Port 8788, bearer-gated. | `lease_plane.*`, the `dispatch_beam` client | **PARTIAL** — advisory-first rollout; Wave 3a first cutovers live |
 | **Resident agents** | Always-on governed agents | Vigil (cron janitorial) · Sentinel (continuous analytical) · Watcher (PostToolUse) · Steward (Pi→Mac) · Chronicler (daily) · Lumen (embodied Pi) | **LIVE** (launchd) |
-| **Substrate** | Durable truth | ONE Postgres = relational + Apache AGE 1.7 + pgvector; Redis optional | **MATURE** |
+| **Substrate** | Durable truth | ONE Postgres = relational + Apache AGE 1.7 + pgvector; Redis = de-facto primary session store (not optional), being migrated to PG-mirror | **MATURE** |
 | **Surfaces** | How agents/humans reach it | MCP `/mcp/` · REST `/v1/tools/call` · Dashboard `/dashboard` · SDK · governance plugin (Claude Code/Codex hooks) · host-adapter | **LIVE** |
 
 ---

@@ -198,7 +198,7 @@ Human evaluators start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md).
 
 ## Stack & setup
 
-**Python 3.12+ · PostgreSQL + AGE + pgvector · Redis (optional).** Transports: MCP on `/mcp/` (Streamable HTTP) · REST on `/v1/tools/call` · Dashboard on `/dashboard`.
+**Python 3.12+ · PostgreSQL + AGE + pgvector · Redis.** Transports: MCP on `/mcp/` (Streamable HTTP) · REST on `/v1/tools/call` · Dashboard on `/dashboard`.
 
 <details>
 <summary><strong>Alternate ports, bare-metal, and thin clients</strong></summary>
@@ -210,7 +210,7 @@ POSTGRES_HOST_PORT=15432 REDIS_HOST_PORT=16379 GOVERNANCE_HOST_PORT=18767 docker
 UNITARES_DEMO_PORT=18767 make demo
 ```
 
-**Bare-metal** (lower overhead, what the maintainer runs in production): PostgreSQL 16+ with Apache AGE + pgvector compiled and installed (examples use PG 17), Redis optional.
+**Bare-metal** (lower overhead, what the maintainer runs in production): PostgreSQL 16+ with Apache AGE + pgvector compiled and installed (examples use PG 17). Redis: the server boots in degraded local-only mode without it, but production uses it as the primary session store.
 
 ```bash
 pip install -r requirements-full.txt
