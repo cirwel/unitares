@@ -1,15 +1,20 @@
 /*
- * EISV section — fleet trajectory charts (Chart.js).
+ * EISV section — fleet trajectory charts (Chart.js) + per-resident heatmap.
  * Built from eisv-charts.js oracle, distilled to two line charts:
  *   upper = E, I, coherence (+ coherence equilibrium line)
  *   lower = S, V (+ zero line)
- * Upgrade over the oracle: series/grid/tick colours are read from the
- * design tokens via getComputedStyle, so the charts are THEME-AWARE —
- * they re-render correctly in paper or ink. Reads DATA.eisv().
+ * Plus a Fleet heatmap (revived from the classic dashboard): a residents ×
+ * {E,I,S,V,coherence} grid so an outlier resident pops out instead of being
+ * averaged into the blended fleet line. Reads DATA.eisv() + DATA.residents().
+ * Upgrade over the oracle: series/grid/tick colours are read from the design
+ * tokens via getComputedStyle, and heatmap cells use color-mix(var(--ok)…
+ * var(--danger)), so everything is THEME-AWARE — re-renders correctly in
+ * paper or ink.
  */
 (function () {
   "use strict";
   const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
   let MODEL = { series: [], coherenceEq: 0.5, source: "snapshot" };
@@ -91,11 +96,47 @@
     });
   }
 
+  // Fleet heatmap — residents × {E,I,S,V,coherence}. Each cell is tinted from
+  // a per-metric "health" fraction (high-good for E/I/coherence, low-good for
+  // S, near-zero-good for V) via color-mix between the --ok and --danger
+  // tokens, so the colour scale follows the active theme with no JS recompute.
+  // Lives in its own #eisv-heatmap container so a periodic refresh can swap it
+  // without tearing down the Chart.js canvases beside it.
+  function heatmapHTML(residents) {
+    const rows = (residents || []).filter((r) => r && r.eisv && r.eisv.E != null);
+    if (!rows.length) return "";
+    const clamp = (x) => Math.max(0, Math.min(1, x == null ? 0 : x));
+    const fmt = (x) => (x == null ? "—" : Number(x).toFixed(2));
+    const cols = [
+      { label: "E", val: (r) => r.eisv.E, frac: (r) => clamp(r.eisv.E) },
+      { label: "I", val: (r) => r.eisv.I, frac: (r) => clamp(r.eisv.I) },
+      { label: "S", val: (r) => r.eisv.S, frac: (r) => clamp(1 - r.eisv.S) },
+      { label: "V", val: (r) => r.eisv.V, frac: (r) => clamp(1 - Math.abs(r.eisv.V)) },
+      { label: "Coh", val: (r) => r.coherence, frac: (r) => clamp(r.coherence) },
+    ];
+    const cell = (frac, value, title) => {
+      const pct = Math.round(frac * 100);
+      return `<div title="${esc(title)}" style="background:color-mix(in srgb, var(--ok) ${pct}%, var(--danger));color:#fff;font-family:var(--font-mono);font-size:var(--text-sm);text-align:center;padding:6px 0;border-radius:var(--radius-1)">${value}</div>`;
+    };
+    const headLbl = (t) => `<div style="text-align:center;font-size:var(--text-xs);color:var(--muted);text-transform:uppercase;letter-spacing:var(--tracking-label)">${t}</div>`;
+    const header = `<div></div>` + cols.map((c) => headLbl(c.label)).join("");
+    const body = rows.map((r) => {
+      const name = `<div style="font-size:var(--text-sm);color:var(--ink-2);display:flex;align-items:center;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(r.name)}</div>`;
+      return name + cols.map((c) => cell(c.frac(r), fmt(c.val(r)), `${r.name} ${c.label} = ${fmt(c.val(r))}`)).join("");
+    }).join("");
+    return `<div class="panel" style="margin-bottom:var(--space-5)">
+        <div class="panel-head" style="margin-bottom:var(--space-3)"><h2>Fleet heatmap</h2>
+          <span class="spring"></span><span class="fresh">green = healthy · red = strained</span></div>
+        <div style="display:grid;grid-template-columns:minmax(72px,1.4fr) repeat(${cols.length}, 1fr);gap:4px;align-items:stretch">
+          ${header}${body}</div></div>`;
+  }
+
   function render() {
     $("#eisv-mount").innerHTML =
       `<div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-4)">
          <span class="eyebrow" style="margin:0">Fleet trajectory · last ${MODEL.series.length} min</span>
          <span class="spring"></span><span class="src-badge ${MODEL.source}">${MODEL.source}</span></div>
+       <div id="eisv-heatmap">${heatmapHTML(MODEL.residents)}</div>
        <div class="panel" style="margin-bottom:var(--space-5)">
          <div class="panel-head" style="margin-bottom:var(--space-3)"><h2>Energy · Integrity · Coherence</h2></div>
          <div style="height:240px"><canvas id="eisv-upper"></canvas></div>
@@ -119,14 +160,23 @@
     lower.data.datasets[0].data = s.map((p) => p.S);
     lower.data.datasets[1].data = s.map((p) => p.V);
     upper.update(); lower.update();
+    // Swap the heatmap in place too — its own container, so the canvases above
+    // are untouched.
+    const hm = document.getElementById("eisv-heatmap");
+    if (hm) hm.innerHTML = heatmapHTML(MODEL.residents);
     const badge = document.querySelector("#eisv-mount .src-badge");
     if (badge) { badge.className = "src-badge " + MODEL.source; badge.textContent = MODEL.source; }
   }
 
   async function load() {
-    const r = await DATA.eisv();
+    // Fleet trajectory (DATA.eisv) and the per-resident snapshot (DATA.residents)
+    // in one batch — the heatmap reads the latter.
+    const [r, res] = await Promise.all([DATA.eisv(), DATA.residents()]);
     RAW = (r.data.raw || []).slice(-RAW_MAX);
-    MODEL = { series: r.data.series || [], coherenceEq: r.data.coherenceEq || 0.5, source: r.source };
+    MODEL = {
+      series: r.data.series || [], coherenceEq: r.data.coherenceEq || 0.5,
+      source: r.source, residents: (res && res.data) || [],
+    };
     // Refresh in place if the charts are already mounted; full render on first load.
     if (upper && lower && document.getElementById("eisv-upper") && window.Chart) updateInPlace();
     else render();
