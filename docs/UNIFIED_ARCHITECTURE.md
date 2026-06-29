@@ -106,7 +106,7 @@ Agents and operators interact through several bound services. All bind to `127.0
 | Gateway MCP | `8768` | `/mcp/` | Reduced surface for weak external clients |
 | Lease plane | `8788` | `/v1/lease/*` (bearer-auth, fail-closed) | Elixir/OTP coordination layer for single-writer surfaces — runbook in [`operations/lease-plane-operator-runbook.md`](operations/lease-plane-operator-runbook.md) |
 | PostgreSQL@17 + AGE | `5432` | `postgresql://…/governance` | Single source of truth |
-| Redis | `6379` | `redis://…/0` | Session cache, optional |
+| Redis | `6379` | `redis://…/0` | De-facto primary session/identity store — not optional; most live sessions exist only here. Being migrated to a Postgres-mirror model (`docs/proposals/redis-retirement-v0.md`) |
 
 ## Recovery: Circuit Breaker + Dialectic
 
@@ -141,8 +141,8 @@ Agents contribute discoveries to a shared store. **PostgreSQL FTS is the canonic
 |  +- core.calibration         |
 |  +- core.tool_usage          |
 |                              |
-|  Redis (port 6379)           |     Session cache only.
-|  audit_log.jsonl (raw)       |     Falls back gracefully without Redis.
+|  Redis (port 6379)           |     De-facto primary session store —
+|  audit_log.jsonl (raw)       |     not optional; degraded local-only without it.
 +------------------------------+
 ```
 
