@@ -396,6 +396,17 @@ class BehavioralEISV:
             "S": self._baseline_S.to_dict(),
             "V": self._baseline_V.to_dict(),
         }
+        # This check-in's RAW (pre-EMA) observation [E_obs, I_obs, S_obs]. Just
+        # the latest triple — NOT the full obs_history — so the append-only DB
+        # row carries the un-smoothed input at ~3 floats/row (negligible, unlike
+        # the ~5KB full history). Across successive rows this reconstructs the raw
+        # per-agent series, which the smoothed E/I/S/V cannot: it is the input the
+        # honest persistence/AR(1) self-predictability test needs (the
+        # individuality axiom cannot be earned against a pre-smoothed signal — see
+        # scripts/analysis/eisv_self_predictability.py scope limit). Absent before
+        # the first update() (no observation recorded yet).
+        if self.obs_history:
+            d["raw_obs"] = [round(v, 4) for v in self.obs_history[-1]]
         return d
 
     def to_dict_with_history(self) -> Dict:
