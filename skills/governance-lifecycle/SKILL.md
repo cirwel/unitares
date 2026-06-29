@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-06-28"
+last_verified: "2026-06-29"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -16,7 +16,7 @@ source_files:
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-06-27
+**Last Updated:** 2026-06-29
 
 ## Primary Workflow Names
 
@@ -24,21 +24,21 @@ The core lifecycle should use primary task-verb tools. Each is implemented by a 
 
 | Task | Primary workflow tool | Raw implementation tool |
 |------|---------------|----------------|
-| Start working | `start_session(force_new=true, ...)` | `onboard` |
+| Start a fresh process identity | `start_session(force_new=true, ...)` | `onboard` |
 | Check in after meaningful work | `sync_state(response_text=..., complexity=...)` | `process_agent_update` |
 | Check your working state | `check_working_state()` | `get_governance_metrics` |
 | Avoid duplicate work | `search_shared_memory(query=...)` | `knowledge(action="search")` |
 | Record what actually happened | `record_result(...)` | `outcome_event` |
 | Ask for a structured review | `request_review(issue_description=...)` | `dialectic(action="request")` |
 
-Use the primary workflow tools by default. Use raw implementation names only for older servers, compatibility code, or when you explicitly need the unwrapped handler response.
+Use the primary workflow tools by default. Use raw implementation names only for older servers, compatibility code, or when you explicitly need the unwrapped handler response. `start_session(force_new=true)` is a process-start operation, not a per-turn continuation primitive.
 
 ## Starting a Session
 
 Choose creation, lineage, or proof-owned resume explicitly:
 
 ~~~text
-start_session(force_new=true)                                        # any fresh session — the default; co-location is not lineage
+start_session(force_new=true)                                        # one fresh process identity — the default; co-location is not lineage
 start_session(force_new=true, parent_agent_id="<dispatcher-uuid>",
               spawn_reason="subagent")                               # dispatched subagent (usually set automatically by the dispatcher)
 start_session(force_new=true, parent_agent_id="<prior-uuid>",
@@ -46,7 +46,7 @@ start_session(force_new=true, parent_agent_id="<prior-uuid>",
 identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true) # same live owner / proof-owned rebind
 ~~~
 
-Declaring a currently-live agent as parent is rejected (`lineage_coincidental_rejected`): a live agent is a concurrent sibling, not a predecessor. `subagent` and `compaction` are exempt — their parent is legitimately live. A genuine handoff to an exited predecessor stays provisional until R1 confirms it.
+Declaring a currently-live agent as parent is rejected (`lineage_coincidental_rejected`): a live agent is a concurrent sibling, not a predecessor. `subagent` and `compaction` are exempt — their parent is legitimately live. A genuine handoff to an exited predecessor stays provisional until R1 confirms it. Continuing the same still-running process means reusing the active binding or `client_session_id`, not minting another child.
 
 Use raw `onboard(...)` instead when targeting older servers or when you
 need the unwrapped raw response.
@@ -63,10 +63,10 @@ Returns:
 
 Default rules:
 
-1. Any fresh session: call `start_session(force_new=true)` with no parent. Co-location in a workspace is not lineage.
+1. Any fresh process: call `start_session(force_new=true)` with no parent. Co-location in a workspace is not lineage.
 2. Declare lineage only for a real causal event — a dispatched subagent (`parent_agent_id="<dispatcher-uuid>", spawn_reason="subagent"`, usually set automatically by the dispatcher) or a handoff from a finished prior session (`parent_agent_id="<prior-uuid>", spawn_reason="new_session"`). Declaring a currently-live agent as parent is rejected.
 3. Same live process or explicit ownership rebind: call `identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true)`.
-4. Ordinary check-ins: rely on the active session binding or `client_session_id`; reserve `continuity_token` for explicit proof-owned rebinds.
+4. Ordinary same-process check-ins: rely on the active session binding or `client_session_id`; reserve `continuity_token` for explicit proof-owned rebinds.
 
 Avoid these patterns:
 
@@ -145,7 +145,7 @@ Recovery is not a shortcut — `self_recovery()` examines your EISV state and de
 
 ### Essential (use in every session)
 
-- `start_session(force_new=true, parent_agent_id=...)` — Create a fresh process identity, optionally declaring lineage
+- `start_session(force_new=true, parent_agent_id=...)` — Create a fresh process identity once, optionally declaring lineage
 - `sync_state()` — Check in with work summary, complexity, confidence
 - `check_working_state()` — Read your current EISV state
 - `identity()` — Confirm who the runtime thinks you are and how continuity was resolved; include `continuity_token` for proof-owned UUID rebinds

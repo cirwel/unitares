@@ -249,6 +249,24 @@ def test_search_envelope_counts_and_suggests():
     assert env["memory_suggestions"][0]["summary"] == "prior art"
 
 
+def test_search_envelope_promotes_low_confidence():
+    payload = {
+        "success": True,
+        "count": 2,
+        "search_mode_used": "hybrid_rrf",
+        "discoveries": [{"id": "d1", "summary": "semantic lead"}],
+        "low_confidence": True,
+        "confidence_note": "Semantic-only matches; verify before use.",
+    }
+    env = build_experience_envelope("search_shared_memory", "knowledge", payload)
+    assert "exploratory low-confidence" in env["next_action"]
+    assert env["low_confidence"] is True
+    assert env["confidence_note"] == "Semantic-only matches; verify before use."
+    assert env["state_summary"]["low_confidence"] is True
+    assert env["state_summary"]["confidence_note"] == "Semantic-only matches; verify before use."
+    assert env["memory_suggestions"][0]["summary"] == "semantic lead"
+
+
 def test_search_envelope_counts_nested_raw_governance_payload():
     payload = {
         "success": True,

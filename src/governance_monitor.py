@@ -1452,11 +1452,17 @@ class UNITARESMonitor:
         # Primary EISV: behavioral (per-agent EMA observations) when confident,
         # ODE fallback for new agents. ODE values preserved in 'ode' sub-field.
         pE, pI, pS, pV = self.get_primary_eisv()
+        primary_eisv_source = (
+            "behavioral"
+            if self._behavioral_state.confidence >= 0.3
+            else "ode_fallback"
+        )
         metrics = {
             'E': pE,
             'I': pI,
             'S': pS,
             'V': pV,
+            'primary_eisv_source': primary_eisv_source,
             'coherence': float(self.state.coherence),
             'lambda1': float(self.state.lambda1),
             'risk_score': float(risk_score),  # Governance/operational risk (70% phi-based + 30% traditional)
@@ -1522,6 +1528,8 @@ class UNITARESMonitor:
         if decision.get('action') == 'pause':
             original_reason = decision.get('reason', 'pause')
             decision['original_action'] = 'pause'
+            if decision.get('sub_action'):
+                decision['original_sub_action'] = decision.get('sub_action')
             decision['gap_suppressed'] = True
             decision['action'] = 'proceed'
             decision['reason'] = (
@@ -1594,6 +1602,8 @@ class UNITARESMonitor:
         original_reason = decision.get('reason', 'pause')
         original_sub = decision.get('sub_action')
         decision['original_action'] = 'pause'
+        if original_sub:
+            decision['original_sub_action'] = original_sub
         decision['warmup_structural_suppressed'] = True
         decision['action'] = 'proceed'
         decision['reason'] = (
