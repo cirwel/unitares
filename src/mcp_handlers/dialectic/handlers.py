@@ -55,6 +55,7 @@ async def _resolve_dialectic_agent_id(
         arguments, enforce_session_ownership=enforce_session_ownership
     )
 from src.logging_utils import get_logger
+from src.broadcaster import broadcaster_instance
 
 logger = get_logger(__name__)
 
@@ -120,6 +121,41 @@ from src.dialectic_db import (
 # ACTIVE: get_dialectic_session, list_dialectic_sessions, llm_assisted_dialectic
 # Still removed: request_exploration_session, nudge_dialectic_session, handle_self_recovery
 # ==============================================================================
+
+
+async def _emit_dialectic_event(event_type: str, session, **payload_extra) -> None:
+    """Best-effort broadcast of a dialectic lifecycle event (#1167 Ask 1).
+
+    Telemetry only — must never raise into the resolution path, so it mirrors the
+    knowledge handlers' guarded broadcast pattern. The broadcaster auto-persists to
+    audit.events and serves the WS firehose; the dashboard and the Phoenix dialectic
+    pane subscribe to any ``dialectic_*`` event as a doorbell to refetch
+    authoritative state. Names are the engine-owner-ratified set from #1167:
+    ``dialectic_opened``, ``dialectic_facilitation_needed``, ``dialectic_resolved``.
+
+    Emitted from the Python handler intentionally: when
+    UNITARES_DIALECTIC_BEAM_RESOLUTION is on, BEAM is an alternative *persistence*
+    backend, not an alternative control flow — this handler still runs, so a single
+    emit here covers both the BEAM and pg-fallback paths.
+    """
+    try:
+        phase = getattr(session, "phase", None)
+        payload = {
+            "session_id": getattr(session, "session_id", None),
+            "phase": getattr(phase, "value", phase),
+            "topic": getattr(session, "topic", None),
+            "session_type": getattr(session, "session_type", None),
+            "awaiting_facilitation": getattr(session, "awaiting_facilitation", False),
+        }
+        payload.update(payload_extra)
+        await broadcaster_instance.broadcast_event(
+            event_type,
+            agent_id=getattr(session, "paused_agent_id", None),
+            payload=payload,
+        )
+    except Exception as e:  # pragma: no cover - telemetry must not break the flow
+        logger.debug("dialectic event %s emit skipped: %s", event_type, e)
+
 
 async def check_reviewer_stuck(session: DialecticSession) -> bool:
     """
@@ -765,6 +801,7 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
 
     # Cache in-memory for quick access
     ACTIVE_SESSIONS[session.session_id] = session
+    await _emit_dialectic_event("dialectic_opened", session)
 
     if auto_awaiting_reviewer:
         # No independent reviewer yet; the antithesis is owed by a summoned or
@@ -777,6 +814,9 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             await pg_update_awaiting_facilitation(session.session_id, True)
         except Exception as e:
             logger.error(f"Failed to persist awaiting_facilitation on create: {e}")
+        await _emit_dialectic_event(
+            "dialectic_facilitation_needed", session, reason="no_independent_reviewer"
+        )
 
     # Build response based on reviewer assignment
     if auto_awaiting_reviewer:
@@ -937,6 +977,9 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                         except Exception as e:
                             logger.error(f"Failed to persist facilitation status: {e}")
                         logger.info(f"[DIALECTIC] Session {session_id[:16]} awaiting human facilitation (reviewer {old_reviewer} stuck)")
+                        await _emit_dialectic_event(
+                            "dialectic_facilitation_needed", session, reason="reviewer_stuck"
+                        )
 
                     return success_response({
                         "success": False,
@@ -1317,6 +1360,7 @@ async def _run_synthetic_review(
             )
             session.awaiting_facilitation = False
             resolved = True
+            await _emit_dialectic_event("dialectic_resolved", session, action="resume")
         except Exception as e:
             logger.warning("[DIALECTIC] Synthetic resolution finalize failed: %s", e)
 
@@ -1942,6 +1986,12 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                 for aid in (session.paused_agent_id, session.reviewer_agent_id):
                     if aid and aid in _SESSION_METADATA_CACHE:
                         del _SESSION_METADATA_CACHE[aid]
+
+                # Resolution is committed (BEAM or pg fallback above); announce the
+                # terminal outcome. session.phase is RESOLVED or FAILED here.
+                await _emit_dialectic_event(
+                    "dialectic_resolved", session, action=result.get("action")
+                )
     
                 await save_session(session)
     
@@ -2313,11 +2363,15 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
                 status="resolved",
             )
             logger.info(f"LLM dialectic session {session_id} resolved via protocol")
+            await _emit_dialectic_event("dialectic_resolved", session, action="resume")
         else:
             session.awaiting_facilitation = True
             logger.info(
                 f"LLM dialectic session {session_id}: reviewer did not approve "
                 f"(recommendation={recommendation}); left unresolved for facilitation"
+            )
+            await _emit_dialectic_event(
+                "dialectic_facilitation_needed", session, reason="reviewer_did_not_approve"
             )
         # Store in ACTIVE_SESSIONS regardless so the verdict is recorded.
         ACTIVE_SESSIONS[session_id] = session
