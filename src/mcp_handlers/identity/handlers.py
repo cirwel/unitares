@@ -2579,6 +2579,8 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             get_session_resolution_source,
             get_pin_match_scope,
             get_shadow_pin_observation,
+            get_session_proof_origin,
+            get_csid_transport_injected,
         )
         _ires_token = arguments.get("continuity_token")
         _ires_iat: Optional[int] = None
@@ -2601,6 +2603,8 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             token_iat=_ires_iat,
             token_exp=_ires_exp,
             token_age_seconds=_ires_age,
+            proof_origin=get_session_proof_origin(),
+            csid_transport_injected=get_csid_transport_injected(),
         )
     except Exception as _ires_err:  # pragma: no cover — defensive
         logger.debug(f"[IRES] identity_resolution_observed write failed (non-fatal): {_ires_err}")

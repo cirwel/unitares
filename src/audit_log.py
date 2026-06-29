@@ -463,6 +463,8 @@ class AuditLogger:
         token_iat: Optional[int] = None,
         token_exp: Optional[int] = None,
         token_age_seconds: Optional[int] = None,
+        proof_origin: Optional[str] = None,
+        csid_transport_injected: Optional[bool] = None,
     ) -> None:
         """Record one observation per onboard/resume identity resolution.
 
@@ -476,6 +478,13 @@ class AuditLogger:
         token was presented at resume. ``agent_uuid`` may be None when the
         resolution did not bind to a known agent (e.g., onboard that minted
         a fresh identity has it set; pre-bind diagnostics may not).
+
+        ``proof_origin`` ("caller_asserted" | "server_inferred") and
+        ``csid_transport_injected`` make the #807 over-claim countable: how
+        many tokenless prefix-echo resolves stamp the strong/``caller_proven``
+        label (caller_proven = proof_origin == "caller_asserted") versus the
+        honestly-weaker transport-injected ones. Lets a burn-in size the
+        cross-process subset without changing any tier or write gate.
         """
         entry = AuditEntry(
             timestamp=datetime.now().isoformat(),
@@ -491,6 +500,8 @@ class AuditLogger:
                 "token_iat": token_iat,
                 "token_exp": token_exp,
                 "token_age_seconds": token_age_seconds,
+                "proof_origin": proof_origin,
+                "csid_transport_injected": csid_transport_injected,
             },
         )
         self._write_entry(entry)

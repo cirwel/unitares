@@ -125,6 +125,8 @@ class TestLogIdentityResolutionObserved:
             token_iat=1700_000_000,
             token_exp=1700_003_600,
             token_age_seconds=900,
+            proof_origin="server_inferred",
+            csid_transport_injected=False,
         )
         entries = _read_jsonl(logger.log_file)
         assert len(entries) == 1
@@ -139,6 +141,37 @@ class TestLogIdentityResolutionObserved:
         assert d["token_iat"] == 1700_000_000
         assert d["token_exp"] == 1700_003_600
         assert d["token_age_seconds"] == 900
+        assert d["proof_origin"] == "server_inferred"
+        assert d["csid_transport_injected"] is False
+
+    def test_records_proof_origin_for_prefix_echo_overclaim(self, tmp_path):
+        """#807: the tokenless prefix-echo over-claim must be countable — record
+        proof_origin + csid_transport_injected so a burn-in can size how many
+        explicit_client_session_id* resolves stamp the strong/caller_proven
+        label vs. the honestly-weaker transport-injected ones."""
+        logger = _make_logger(tmp_path)
+        logger.log_identity_resolution_observed(
+            agent_uuid="agent-prefix-echo",
+            resolution_source="explicit_client_session_id_scoped",
+            proof_origin="caller_asserted",
+            csid_transport_injected=False,
+        )
+        d = _read_jsonl(logger.log_file)[0]["details"]
+        assert d["resolution_source"] == "explicit_client_session_id_scoped"
+        # caller_proven is derivable: proof_origin == "caller_asserted"
+        assert d["proof_origin"] == "caller_asserted"
+        assert d["csid_transport_injected"] is False
+
+    def test_new_fields_default_none(self, tmp_path):
+        """Back-compat: callers that omit the new fields get None, not a crash."""
+        logger = _make_logger(tmp_path)
+        logger.log_identity_resolution_observed(
+            agent_uuid="agent-legacy",
+            resolution_source="ip_ua_fingerprint",
+        )
+        d = _read_jsonl(logger.log_file)[0]["details"]
+        assert d["proof_origin"] is None
+        assert d["csid_transport_injected"] is None
 
     def test_accepts_none_agent_uuid(self, tmp_path):
         """Resolutions that don't bind to an agent (pre-bind diagnostic paths)
