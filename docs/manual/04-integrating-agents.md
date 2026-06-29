@@ -135,7 +135,7 @@ For daemons and cron-style agents, the **`unitares-sdk`** ([`../../agents/sdk/RE
 
 - Subclass **`GovernanceAgent`** and override `run_cycle(client)` (required). Optional hooks: `on_after_checkin(...)`, `on_verdict_pause(...)` (return `True` to retry the check-in after self-recovery).
 - **Daemon:** `agent.run_forever(interval=60)` loops with idle heartbeats. **Scheduled:** `agent.run_once()` for one cycle under launchd/systemd/cron.
-- Identity anchors persist at `~/.unitares/anchors/<name>.json`; agent state via `save_state(dict)` / `load_state()`.
+- Identity anchors persist at `~/.unitares/anchors/<name>.json`; agent state via `save_state(dict)` / `load_state`.
 - Constructor knobs: `name`, `mcp_url` (default `http://127.0.0.1:8767/mcp/`), `persistent`, `refuse_fresh_onboard`, `cycle_timeout_seconds`, `parent_agent_id`, `spawn_reason`.
 
 The resident agents (Vigil, Sentinel, Chronicler) in [`../../agents/`](../../agents/) are reference implementations of these patterns.

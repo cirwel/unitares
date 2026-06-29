@@ -1,8 +1,8 @@
 # Session-key derivation — schemes, stability, and privacy/security model
 
 How the server decides "which caller is this?" on each request, and what each
-signal is and isn't trusted for. The mechanics live in one function —
-`derive_session_key()` / `_derive_session_key_impl()` in
+signal is and isn't trusted for. The mechanics live in one function path:
+`derive_session_key` / `_derive_session_key_impl` in
 `src/mcp_handlers/identity/session.py` — fed by a frozen `SessionSignals`
 snapshot captured once at the transport layer (`src/mcp_handlers/context.py`).
 This doc is the privacy/security companion to that code and to the identity
@@ -75,6 +75,6 @@ identity — hence injected ⇒ `server_inferred`.
 
 ## One-line summary
 
-`derive_session_key()` picks the strongest *present* signal; `proof_origin`
+`derive_session_key` picks the strongest *present* signal; `proof_origin`
 then decides whether that signal is strong enough to **write**. Reads are
 lenient; writes require a proof the caller actually transmitted.
