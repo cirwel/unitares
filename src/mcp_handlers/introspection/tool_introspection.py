@@ -14,6 +14,37 @@ from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = get_logger(__name__)
 
+import time as _time
+
+# Progressive-ordering usage cache. list_tools(progressive=True) reads tool-call
+# counts to order the tool list; reading audit.tool_usage per call would put a
+# ~100ms windowed aggregate on the discovery path, so the {tool: stats} map is
+# cached briefly. Keyed by window_hours -> (monotonic_expiry, tools_dict).
+_USAGE_ORDER_CACHE: Dict[float, Any] = {}
+_USAGE_ORDER_TTL_S = 120.0
+
+
+async def _usage_tools_for_ordering(window_hours: float = 168) -> Dict[str, Dict[str, Any]]:
+    """Tool-call stats for progressive ordering — DB-first (audit.tool_usage),
+    TTL-cached, JSONL fallback. Returns ``{tool: {total_calls, ...}}`` (empty on
+    any failure so ordering degrades to tier-based)."""
+    now = _time.monotonic()
+    cached = _USAGE_ORDER_CACHE.get(window_hours)
+    if cached and cached[0] > now:
+        return cached[1]
+    tools: Dict[str, Any] = {}
+    try:
+        from src.audit_db import get_tool_usage_stats_async
+        stats = await get_tool_usage_stats_async(window_hours=window_hours)
+        if stats is None:
+            from src.tool_usage_tracker import get_tool_usage_tracker
+            stats = get_tool_usage_tracker().get_usage_stats(window_hours=window_hours)
+        tools = stats.get("tools", {}) if isinstance(stats, dict) else {}
+    except Exception:
+        tools = {}
+    _USAGE_ORDER_CACHE[window_hours] = (now + _USAGE_ORDER_TTL_S, tools)
+    return tools
+
 
 def _describe_tool_deprecation_block(tool_name: str) -> Dict[str, Any] | None:
     return tool_catalog.describe_tool_deprecation_block(tool_name)
@@ -194,34 +225,29 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         tools_list.append(tool_info)
     
     # PROGRESSIVE DISCLOSURE: Order tools by usage frequency (if enabled)
-    def get_usage_data(window_hours: int = 168) -> Dict[str, Dict[str, Any]]:
-        """Get tool usage statistics for ordering."""
-        try:
-            from src.tool_usage_tracker import get_tool_usage_tracker
-            tracker = get_tool_usage_tracker()
-            stats = tracker.get_usage_stats(window_hours=window_hours)
-            return stats.get("tools", {})
-        except Exception:
-            return {}
-    
+    async def get_usage_data(window_hours: int = 168) -> Dict[str, Dict[str, Any]]:
+        """Get tool usage statistics for ordering (DB-first, cached, JSONL fallback)."""
+        return await _usage_tools_for_ordering(window_hours)
+
     def order_tools_by_usage(tools: List[Dict[str, Any]], usage_data: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Order tools by usage frequency, fallback to tier-based ordering."""
         # Tier priority for fallback (essential > common > advanced)
         tier_priority = {"essential": 3, "common": 2, "advanced": 1}
-        
+
         def sort_key(tool: Dict[str, Any]) -> tuple:
             tool_name = tool["name"]
-            call_count = usage_data.get(tool_name, {}).get("call_count", 0)
+            # get_usage_stats reports per-tool counts under "total_calls".
+            call_count = usage_data.get(tool_name, {}).get("total_calls", 0)
             tier_prio = tier_priority.get(tool.get("tier", "common"), 0)
             # Primary: usage count (descending), Secondary: tier priority (descending)
             return (-call_count, -tier_prio)
-        
+
         return sorted(tools, key=sort_key)
-    
+
     # Apply progressive ordering if enabled
     usage_data = {}
     if progressive:
-        usage_data = get_usage_data()
+        usage_data = await get_usage_data()
         tools_list = order_tools_by_usage(tools_list, usage_data)
     
     # Count tools by tier
@@ -381,8 +407,9 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             
             for tool in tools:
                 tool_name = tool["name"]
-                call_count = usage_data.get(tool_name, {}).get("call_count", 0)
-                
+                # get_usage_stats reports per-tool counts under "total_calls".
+                call_count = usage_data.get(tool_name, {}).get("total_calls", 0)
+
                 if call_count > 10:
                     most_used.append(tool["name"])
                 elif call_count > 0:
@@ -410,7 +437,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         
         try:
             if not usage_data:  # Get if not already fetched
-                usage_data = get_usage_data()
+                usage_data = await get_usage_data()
             progressive_sections = group_tools_progressively(tools_list, usage_data)
         except Exception:
             pass  # Graceful degradation - skip grouping if stats unavailable

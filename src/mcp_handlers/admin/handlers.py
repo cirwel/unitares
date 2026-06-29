@@ -260,19 +260,29 @@ async def handle_check_continuity_health(arguments: Dict[str, Any]) -> Sequence[
 @mcp_tool("get_tool_usage_stats", timeout=15.0)
 async def handle_get_tool_usage_stats(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Get tool usage statistics to identify which tools are actually used vs unused"""
-    from src.tool_usage_tracker import get_tool_usage_tracker
-    
     window_hours = arguments.get("window_hours", 24 * 7)  # Default: 7 days
     tool_name = arguments.get("tool_name")
     agent_id = arguments.get("agent_id")
-    
-    tracker = get_tool_usage_tracker()
-    stats = tracker.get_usage_stats(
+
+    # Prefer the authoritative DB sink (audit.tool_usage); the legacy JSONL sink
+    # is best-effort and has drifted stale. Fall back to JSONL only when the DB
+    # is unavailable (degraded/local mode).
+    from src.audit_db import get_tool_usage_stats_async
+    stats = await get_tool_usage_stats_async(
         window_hours=window_hours,
         tool_name=tool_name,
-        agent_id=agent_id
+        agent_id=agent_id,
     )
-    
+    if stats is None:
+        from src.tool_usage_tracker import get_tool_usage_tracker
+        stats = get_tool_usage_tracker().get_usage_stats(
+            window_hours=window_hours,
+            tool_name=tool_name,
+            agent_id=agent_id,
+        )
+        if isinstance(stats, dict):
+            stats["source"] = "jsonl_fallback"
+
     return success_response(stats)
 
 def get_workspace_last_agent_file(mcp_server) -> Path:

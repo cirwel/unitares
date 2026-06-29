@@ -368,13 +368,10 @@ class TestGetToolUsageStats:
 
     @pytest.mark.asyncio
     async def test_usage_stats_default(self, patch_context_agent_id):
-        mock_tracker = MagicMock()
-        mock_tracker.get_usage_stats.return_value = {
-            "total_calls": 100,
-            "unique_tools": 15,
-        }
-        with patch("src.tool_usage_tracker.get_tool_usage_tracker",
-                    return_value=mock_tracker):
+        # DB sink (audit.tool_usage) is now the primary source.
+        db_stats = {"total_calls": 100, "unique_tools": 15, "source": "db"}
+        with patch("src.audit_db.get_tool_usage_stats_async",
+                    new=AsyncMock(return_value=db_stats)):
             from src.mcp_handlers.admin.handlers import handle_get_tool_usage_stats
             result = await handle_get_tool_usage_stats({})
 
@@ -384,11 +381,8 @@ class TestGetToolUsageStats:
 
     @pytest.mark.asyncio
     async def test_usage_stats_with_filters(self, patch_context_agent_id):
-        mock_tracker = MagicMock()
-        mock_tracker.get_usage_stats.return_value = {"total_calls": 5}
-
-        with patch("src.tool_usage_tracker.get_tool_usage_tracker",
-                    return_value=mock_tracker):
+        db_reader = AsyncMock(return_value={"total_calls": 5, "source": "db"})
+        with patch("src.audit_db.get_tool_usage_stats_async", new=db_reader):
             from src.mcp_handlers.admin.handlers import handle_get_tool_usage_stats
             result = await handle_get_tool_usage_stats({
                 "tool_name": "health_check",
@@ -396,10 +390,11 @@ class TestGetToolUsageStats:
                 "window_hours": 48,
             })
 
-            # Verify filters were passed through
-            call_kwargs = mock_tracker.get_usage_stats.call_args
-            assert call_kwargs.kwargs.get("tool_name") == "health_check" or \
-                   call_kwargs[1].get("tool_name") == "health_check"
+            # Filters flow through to the DB reader.
+            call_kwargs = db_reader.call_args.kwargs
+            assert call_kwargs.get("tool_name") == "health_check"
+            assert call_kwargs.get("agent_id") == "agent-1"
+            assert call_kwargs.get("window_hours") == 48
 
 
 # ============================================================================
@@ -1860,16 +1855,20 @@ class TestListTools:
         mock_mcp_server.SERVER_VERSION = "test-1.0.0"
 
         mock_tracker = MagicMock()
+        # Per-tool counts live under "total_calls" (DB reader and JSONL reader
+        # agree on this key). The DB path returns None in tests (no DB), so the
+        # JSONL fallback — this mocked tracker — supplies the counts.
         mock_tracker.get_usage_stats.return_value = {
             "tools": {
-                "onboard": {"call_count": 15},
-                "health_check": {"call_count": 3},
-                "list_tools": {"call_count": 0},
-                "process_agent_update": {"call_count": 50},
+                "onboard": {"total_calls": 15},
+                "health_check": {"total_calls": 3},
+                "list_tools": {"total_calls": 0},
+                "process_agent_update": {"total_calls": 50},
             }
         }
 
-        with patch("src.mcp_handlers.admin.handlers.mcp_server", mock_mcp_server), \
+        with patch("src.audit_db.get_tool_usage_stats_async", new=AsyncMock(return_value=None)), \
+             patch("src.mcp_handlers.admin.handlers.mcp_server", mock_mcp_server), \
              patch("src.mcp_handlers.TOOL_HANDLERS", {
                  "onboard": None,
                  "process_agent_update": None,
@@ -1905,6 +1904,14 @@ class TestListTools:
             assert "progressive" in data
             assert data["progressive"]["enabled"] is True
             assert "sections" in data
+            # Grouping must reflect the real counts (regression for the
+            # call_count→total_calls key bug: with the bug every tool reads 0,
+            # so most_used/commonly_used would be empty and these would fail).
+            sections = data["sections"]
+            assert "onboard" in sections["most_used"]["tools"]            # 15 > 10
+            assert "process_agent_update" in sections["most_used"]["tools"]  # 50 > 10
+            assert "health_check" in sections["commonly_used"]["tools"]   # 3 in 1..10
+            assert "list_tools" in sections["available"]["tools"]         # 0
 
     @pytest.mark.asyncio
     async def test_list_tools_lite_progressive(self, mock_mcp_server, patch_context_agent_id):
@@ -1914,12 +1921,13 @@ class TestListTools:
         mock_tracker = MagicMock()
         mock_tracker.get_usage_stats.return_value = {
             "tools": {
-                "onboard": {"call_count": 20},
-                "health_check": {"call_count": 5},
+                "onboard": {"total_calls": 20},
+                "health_check": {"total_calls": 5},
             }
         }
 
-        with patch("src.mcp_handlers.admin.handlers.mcp_server", mock_mcp_server), \
+        with patch("src.audit_db.get_tool_usage_stats_async", new=AsyncMock(return_value=None)), \
+             patch("src.mcp_handlers.admin.handlers.mcp_server", mock_mcp_server), \
              patch("src.mcp_handlers.TOOL_HANDLERS", {
                  "onboard": None,
                  "process_agent_update": None,
