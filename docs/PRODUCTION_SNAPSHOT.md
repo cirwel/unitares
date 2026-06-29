@@ -25,21 +25,26 @@ they don't show:* product-market traction. External adoption is the open questio
 ## Dashboard views
 
 <p align="center">
-  <img src="assets/dashboard-pulse.png" width="80%" alt="Pulse — live event feed and EISV time series"/>
+  <img src="assets/dashboard-overview.png" width="80%" alt="Overview — resident fleet, headline metrics, trust tiers, live Pulse feed"/>
 </p>
-<p align="center"><em>Pulse — live event feed, drift indicators, and EISV time series charts</em></p>
+<p align="center"><em>Overview — resident-fleet status, headline metrics (fleet coherence, agents, discoveries, system health, calibration, anomalies), trust-tier distribution, and the live Pulse check-in feed</em></p>
 
 <p align="center">
-  <img src="assets/dashboard-agents.png" width="80%" alt="Agents and Discoveries panels"/>
+  <img src="assets/dashboard-agents.png" width="80%" alt="Agents — per-instance verdict, coherence, risk, updates, recency"/>
 </p>
-<p align="center"><em>Agents (sorted by recency, with trust tiers) and Discoveries (filterable by type and time range)</em></p>
+<p align="center"><em>Agents — every governed process-instance with verdict, coherence, risk, update count, and recency; searchable and filterable by trust tier</em></p>
 
 <p align="center">
-  <img src="assets/dashboard-dialectic.png" width="80%" alt="Dialectic sessions — recovery and review history"/>
+  <img src="assets/dashboard-eisv.png" width="80%" alt="EISV — live fleet trajectory charts"/>
 </p>
-<p align="center"><em>Peer-review sessions — failed, resolved, and active recovery sessions with message counts</em></p>
+<p align="center"><em>EISV — live fleet trajectory: Energy · Integrity · Coherence and Entropy · Valence over time</em></p>
 
 <p align="center">
-  <img src="assets/dashboard-activity.png" width="80%" alt="Activity timeline — check-ins, verdicts, discoveries"/>
+  <img src="assets/dashboard-discoveries.png" width="80%" alt="Discoveries — shared knowledge graph"/>
 </p>
-<p align="center"><em>Activity timeline — filterable event log across all agents</em></p>
+<p align="center"><em>Discoveries — the shared knowledge graph: findings, corrections, and supersessions, filterable by type and time</em></p>
+
+<p align="center">
+  <img src="assets/dashboard-activity.png" width="80%" alt="Activity — filterable event log across all agents"/>
+</p>
+<p align="center"><em>Activity — filterable event log across all agents: check-ins, verdicts, and discoveries</em></p>

@@ -53,9 +53,8 @@ Type: system sans (`system-ui` in SVG; Liberation Sans when rasterizing).
 |---|---|---|
 | `hero.svg` | Banner wordmark + EISV diamond | README hero |
 | `social-preview.png` | 1280×640 share card | repo social-preview setting |
-| `dashboard.png` | Main dashboard | Retained as a general screenshot; root README links to dashboard docs instead |
-| `dashboard-pulse.png` | Live event feed + EISV charts | Production snapshot |
-| `dashboard-agents.png` | Agents + discoveries panels | Production snapshot |
-| `dashboard-dialectic.png` | Peer-review sessions | Production snapshot |
-| `dashboard-activity.png` | Activity timeline | Production snapshot |
-| `dashboard-eisv.png` | EISV charts | (available) |
+| `dashboard-overview.png` | Overview — fleet, metrics, trust tiers, Pulse | Production snapshot |
+| `dashboard-agents.png` | Agents — per-instance verdict/coherence/risk | Production snapshot |
+| `dashboard-eisv.png` | EISV — live fleet trajectory charts | Production snapshot |
+| `dashboard-discoveries.png` | Discoveries — shared knowledge graph | Production snapshot |
+| `dashboard-activity.png` | Activity — filterable event log | Production snapshot |
