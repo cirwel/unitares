@@ -945,6 +945,7 @@ async def http_health(request):
     server_ready = request.state._http_api_server_ready_fn()
     server_start_time = request.state._http_api_server_start_time
     server_version = request.state._http_api_server_version
+    server_build_sha = getattr(request.state, "_http_api_server_build_sha", "unknown")
     has_streamable_http = request.state._http_api_has_streamable_http
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
 
@@ -985,6 +986,7 @@ async def http_health(request):
     return JSONResponse({
         "status": "ok" if server_ready else "warming_up",
         "version": server_version,
+        "build_sha": server_build_sha,
         "uptime": {
             "seconds": int(uptime_seconds),
             "formatted": uptime_str,
@@ -1074,11 +1076,12 @@ async def http_metrics(request):
     # These are injected by register_http_routes via request.state
     server_start_time = request.state._http_api_server_start_time
     server_version = request.state._http_api_server_version
+    server_build_sha = getattr(request.state, "_http_api_server_build_sha", "unknown")
 
     try:
         # Update gauges with current values before generating output
         # Server info (static, set once)
-        SERVER_INFO.labels(version=server_version).set(1)
+        SERVER_INFO.labels(version=server_version, commit=server_build_sha).set(1)
 
         # Server uptime
         uptime_seconds = time.time() - server_start_time
@@ -3361,6 +3364,7 @@ def register_http_routes(
     server_version: str,
     has_streamable_http: bool,
     mcp_server_name: str = "governance-monitor-v1",
+    server_build_sha: str = "unknown",
 ):
     """
     Register all HTTP REST endpoints on the given Starlette ``app``.
@@ -3385,6 +3389,7 @@ def register_http_routes(
                 state["_http_api_server_ready_fn"] = server_ready_fn
                 state["_http_api_server_start_time"] = server_start_time
                 state["_http_api_server_version"] = server_version
+                state["_http_api_server_build_sha"] = server_build_sha
                 state["_http_api_has_streamable_http"] = has_streamable_http
                 state["_http_api_mcp_server_name"] = mcp_server_name
             await self.app(scope, receive, send)

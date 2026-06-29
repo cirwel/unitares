@@ -12,6 +12,7 @@ from pathlib import Path
 
 DEFAULT_VERSION_FALLBACK = "0.0.0"
 DEFAULT_BUILD_DATE_FALLBACK = "unknown"
+DEFAULT_BUILD_SHA_FALLBACK = "unknown"
 
 
 def load_version_from_file(project_root: Path) -> str:
@@ -57,3 +58,27 @@ def load_build_date_from_repo(project_root: Path) -> str:
         pass
 
     return DEFAULT_BUILD_DATE_FALLBACK
+
+
+def load_build_sha_from_repo(project_root: Path) -> str:
+    """Best-effort short commit SHA of the running build (``git rev-parse``).
+
+    This is the precise answer to "what code is live" — unlike the hand-typed
+    semver, it can't drift, so observability can key on it instead of the
+    version string. Returns ``"unknown"`` when ``.git`` is absent (sdist/wheel
+    install) or git is unavailable; never raises.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(project_root), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        sha = out.stdout.strip()
+        if out.returncode == 0 and sha:
+            return sha
+    except Exception:
+        pass
+
+    return DEFAULT_BUILD_SHA_FALLBACK

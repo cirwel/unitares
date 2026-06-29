@@ -60,7 +60,7 @@ from src.services.identity_continuity import (
     format_identity_continuity_startup_message,
     probe_identity_continuity_status,
 )
-from src.versioning import load_version_from_file
+from src.versioning import load_build_sha_from_repo, load_version_from_file
 logger = get_logger(__name__)
 
 # Server readiness flag - prevents "request before initialization" errors
@@ -100,6 +100,7 @@ def _load_version():
     return load_version_from_file(project_root)
 
 SERVER_VERSION = _load_version()
+SERVER_BUILD_SHA = load_build_sha_from_repo(project_root)
 
 
 # ============================================================================
@@ -503,6 +504,7 @@ async def main():
             server_version=SERVER_VERSION,
             has_streamable_http=HAS_STREAMABLE_HTTP,
             mcp_server_name=mcp.name,
+            server_build_sha=SERVER_BUILD_SHA,
         )
 
         # === Wave 3a probe endpoint (PR #1 scaffolding, see docs/proposals/

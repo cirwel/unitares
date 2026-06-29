@@ -114,8 +114,12 @@ except ImportError:
             self.type = type
             self.text = text
 
-# Server version + build date - derived at startup, never hand-maintained
-from src.versioning import load_build_date_from_repo, load_version_from_file
+# Server version + build date + commit sha - derived at startup, never hand-maintained
+from src.versioning import (
+    load_build_date_from_repo,
+    load_build_sha_from_repo,
+    load_version_from_file,
+)
 
 def _load_version():
     """Load version from VERSION file (single source of truth)."""
@@ -123,6 +127,7 @@ def _load_version():
 
 SERVER_VERSION = _load_version()
 SERVER_BUILD_DATE = load_build_date_from_repo(project_root)
+SERVER_BUILD_SHA = load_build_sha_from_repo(project_root)
 
 
 def _normalize_http_proxy_base(url: str) -> str:

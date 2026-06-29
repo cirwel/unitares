@@ -89,7 +89,7 @@ BEAM_PROXY_LATENCY = Histogram(
 SERVER_INFO = Gauge(
     'unitares_server_info',
     'Server version info',
-    ['version']
+    ['version', 'commit']
 )
 
 # Server uptime and health metrics

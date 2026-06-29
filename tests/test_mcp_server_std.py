@@ -157,6 +157,27 @@ class TestLoadBuildDate:
 
 
 # ============================================================================
+# Test: load_build_sha_from_repo
+# ============================================================================
+
+class TestLoadBuildSha:
+    """Commit SHA is the drift-proof 'what's live' answer; semver is optional."""
+
+    def test_short_sha_at_real_repo(self):
+        import re
+        from src.agent_metadata_model import project_root
+        from src.versioning import load_build_sha_from_repo
+        result = load_build_sha_from_repo(project_root)
+        assert re.fullmatch(r"[0-9a-f]{7,40}", result), result
+
+    def test_unknown_when_git_unavailable(self, tmp_path):
+        from src.versioning import DEFAULT_BUILD_SHA_FALLBACK, load_build_sha_from_repo
+        with patch("src.versioning.subprocess.run", side_effect=Exception("no git")):
+            result = load_build_sha_from_repo(tmp_path)
+        assert result == DEFAULT_BUILD_SHA_FALLBACK
+
+
+# ============================================================================
 # Test: AgentMetadata dataclass
 # ============================================================================
 

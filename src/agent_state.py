@@ -26,6 +26,7 @@ from src.agent_metadata_model import (
     _load_version,
     SERVER_VERSION,
     SERVER_BUILD_DATE,
+    SERVER_BUILD_SHA,
     _normalize_http_proxy_base,
     _metadata_loading_lock,
     _metadata_loading,
@@ -125,7 +126,7 @@ from src.lock_cleanup import cleanup_stale_state_locks
 __all__ = [
     # Constants & config
     "project_root",
-    "SERVER_VERSION", "SERVER_BUILD_DATE",
+    "SERVER_VERSION", "SERVER_BUILD_DATE", "SERVER_BUILD_SHA",
     "PID_FILE", "LOCK_FILE", "MAX_KEEP_PROCESSES", "CURRENT_PID",
     "AIOFILES_AVAILABLE", "PSUTIL_AVAILABLE",
     "METADATA_FILE", "UNITARES_METADATA_BACKEND", "UNITARES_METADATA_WRITE_JSON_SNAPSHOT",
