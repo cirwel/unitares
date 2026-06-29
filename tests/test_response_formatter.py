@@ -444,6 +444,13 @@ class TestFormatResponse:
         result = format_response(data, {"response_mode": "verbose"})
         assert set(result.keys()) == original_keys
 
+    def test_interpreted_alias_for_standard_uses_real_import(self):
+        data = _sample_response()
+        result = format_response(data, {"response_mode": "interpreted"})
+        assert result["_mode"] == "standard"
+        assert "state" in result
+        assert result["decision"] == "continue"
+
     def test_auto_mode_healthy_becomes_compact_for_disembodied(self):
         data = _sample_response()
         data["health_status"] = "healthy"
@@ -1136,20 +1143,6 @@ class TestEmitMirrorSignalRecords:
 # Task 2: prediction_id + warnings pass-through (spec §6 + §2)
 # ============================================================================
 
-def _make_governance_state_mocks():
-    """Create sys.modules stubs for governance_state + governance_core."""
-    mock_gs_instance = MagicMock()
-    mock_gs_instance.interpret_state.return_value = {"summary": "mocked"}
-    mock_gs_module = MagicMock()
-    mock_gs_module.GovernanceState = MagicMock(return_value=mock_gs_instance)
-
-    mock_core_module = MagicMock()
-    mock_core_module.State = MagicMock()
-    mock_core_module.Theta = MagicMock()
-    mock_core_module.DEFAULT_THETA = MagicMock()
-    return mock_gs_module, mock_core_module
-
-
 def _policy_enforcement_fields():
     return {
         "policy_evaluation": {
@@ -1168,22 +1161,14 @@ def _policy_enforcement_fields():
 class TestFormatStandardPreservesPredictionId:
     """_format_standard must pass prediction_id and warnings through (spec §6 + §2).
 
-    _format_standard does local imports (from governance_state import ...) so we
-    must inject into sys.modules. Same strategy as other tests in this suite that
-    call format_response with auto→standard routing (those mock _format_standard
-    wholesale; we mock the deps so we can actually exercise the body).
+    Exercise the real local imports so the legacy `standard` / `interpreted`
+    path cannot regress to a missing top-level module.
     """
 
     def _call_format_standard(self, response_data):
-        """Call _format_standard with all required module-level deps mocked."""
-        import sys
+        """Call _format_standard with the real local modules."""
         from src.mcp_handlers.response_formatter import _format_standard
-        gs_mock, core_mock = _make_governance_state_mocks()
-        with patch.dict(sys.modules, {
-            "governance_state": gs_mock,
-            "governance_core": core_mock,
-        }):
-            return _format_standard(response_data, task_type="general")
+        return _format_standard(response_data, task_type="general")
 
     def test_prediction_id_passes_through(self):
         response_data = {

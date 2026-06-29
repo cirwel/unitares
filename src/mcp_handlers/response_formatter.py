@@ -94,12 +94,17 @@ def _copy_passthrough_fields(response_data: dict, result: dict, fields: tuple) -
             result[field] = value
 
 
-def _coerce_response_mode(value: Any) -> str:
+def canonical_response_mode(value: Any) -> str:
     """Return the canonical spelling for one response mode value."""
     mode = str(value or "auto").strip().lower()
     if not mode:
         mode = "auto"
     return _RESPONSE_MODE_ALIASES.get(mode, mode)
+
+
+def _coerce_response_mode(value: Any) -> str:
+    """Compatibility wrapper for older tests/internal imports."""
+    return canonical_response_mode(value)
 
 
 def _auto_response_mode(response_data: dict) -> str:
@@ -138,7 +143,7 @@ def _auto_response_mode(response_data: dict) -> str:
 
 def _resolve_response_mode(raw_mode: Any, response_data: dict) -> str:
     """Normalize aliases and resolve auto into the actual response shape."""
-    mode = _coerce_response_mode(raw_mode)
+    mode = canonical_response_mode(raw_mode)
     if mode == "auto":
         return _auto_response_mode(response_data)
     if mode in _SUPPORTED_RESPONSE_MODES:
@@ -275,7 +280,7 @@ def format_response(
 
 def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any = None) -> dict:
     """Build standard (interpreted) response."""
-    from governance_state import GovernanceState
+    from src.governance_state import GovernanceState
     from governance_core import State, Theta, DEFAULT_THETA
 
     metrics = response_data.get("metrics", {}) if isinstance(response_data.get("metrics"), dict) else {}

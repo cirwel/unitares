@@ -14,10 +14,12 @@ Usage:
 """
 
 import inspect
+import os
 import time
 from typing import Callable, List, NamedTuple
 
 from src.logging_utils import get_logger
+from src.mcp_handlers.response_formatter import canonical_response_mode
 
 logger = get_logger(__name__)
 
@@ -31,6 +33,29 @@ class _EnrichmentEntry(NamedTuple):
 
 
 _ENRICHMENTS: List[_EnrichmentEntry] = []
+
+
+def _requested_response_mode(ctx) -> str:
+    """Return the canonical caller-requested mode before response data exists.
+
+    This mirrors the formatter's request priority for the one mode that matters
+    before formatting: legacy `minimal`, whose response-shaping enrichments can
+    be skipped safely. `auto` cannot be resolved until response_data exists, so
+    it stays `auto` here and runs all enrichments.
+    """
+    arguments = getattr(ctx, "arguments", None) or {}
+    raw_mode = arguments.get("response_mode")
+
+    if not raw_mode:
+        meta = getattr(ctx, "meta", None)
+        preferences = getattr(meta, "preferences", None)
+        if isinstance(preferences, dict):
+            raw_mode = preferences.get("verbosity")
+
+    if not raw_mode:
+        raw_mode = os.getenv("UNITARES_PROCESS_UPDATE_RESPONSE_MODE", "auto")
+
+    return canonical_response_mode(raw_mode)
 
 
 def enrichment(order: int, *, lite_safe: bool = False):
@@ -63,7 +88,7 @@ async def run_enrichment_pipeline(ctx) -> None:
     runs serially today; this instrumentation is the prerequisite for
     deciding which enrichments are safe to parallelize.
     """
-    is_minimal = (getattr(ctx, "arguments", None) or {}).get("response_mode") == "minimal"
+    is_minimal = _requested_response_mode(ctx) == "minimal"
     timings: List[tuple[str, int]] = []
     for entry in _ENRICHMENTS:
         if is_minimal and entry.lite_safe:
