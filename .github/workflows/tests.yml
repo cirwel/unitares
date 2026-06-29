@@ -98,6 +98,7 @@ jobs:
       # in the smoke job. Re-run the named generator and commit to fix.
       run: |
         python3 scripts/dev/flag_catalog.py --check
+        python3 scripts/dev/ports_catalog.py --check
 
     - name: Run smoke tests
       run: |
