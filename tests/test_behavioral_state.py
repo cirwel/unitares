@@ -266,3 +266,27 @@ def test_to_dict_for_persistence_round_trips_baseline_without_histories():
     assert restored.is_baselined is True
     # Welford baseline survived → z-scoring works post-restore
     assert restored._baseline_E.count == src._baseline_E.count
+
+
+class TestRawObsPersistence:
+    """to_dict_for_persistence carries this check-in's raw (pre-EMA) observation
+    so a forward raw series is reconstructable from append-only DB rows."""
+
+    def test_raw_obs_absent_before_any_update(self):
+        state = BehavioralEISV()
+        assert "raw_obs" not in state.to_dict_for_persistence()
+
+    def test_raw_obs_is_latest_observation(self):
+        state = BehavioralEISV()
+        state.update(0.8, 0.7, 0.2)
+        state.update(0.3, 0.4, 0.85)  # the latest raw input
+        d = state.to_dict_for_persistence()
+        assert d["raw_obs"] == [0.3, 0.4, 0.85]
+
+    def test_raw_obs_reflects_clamping_not_smoothing(self):
+        state = BehavioralEISV()
+        state.update(1.5, -0.2, 0.5)  # clamped to [0,1] in update()
+        d = state.to_dict_for_persistence()
+        # raw obs is the clamped input, NOT the EMA-smoothed E/I/S
+        assert d["raw_obs"] == [1.0, 0.0, 0.5]
+        assert d["raw_obs"] != [round(state.E, 4), round(state.I, 4), round(state.S, 4)]
