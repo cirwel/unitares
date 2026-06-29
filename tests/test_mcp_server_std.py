@@ -127,6 +127,36 @@ class TestLoadVersion:
 
 
 # ============================================================================
+# Test: load_build_date_from_repo
+# ============================================================================
+
+class TestLoadBuildDate:
+    """Build date is derived, not a hand-maintained constant that can freeze."""
+
+    def test_git_head_commit_date_at_real_repo(self):
+        import re
+        from src.agent_metadata_model import project_root
+        from src.versioning import load_build_date_from_repo
+        # Real repo root resolves via git HEAD (or VERSION mtime); both are ISO dates.
+        result = load_build_date_from_repo(project_root)
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", result), result
+
+    def test_mtime_fallback_when_not_a_git_repo(self, tmp_path):
+        import re
+        from src.versioning import load_build_date_from_repo
+        (tmp_path / "VERSION").write_text("9.9.9\n")
+        with patch("src.versioning.subprocess.run", side_effect=Exception("no git")):
+            result = load_build_date_from_repo(tmp_path)
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", result), result
+
+    def test_unknown_when_no_git_and_no_version(self, tmp_path):
+        from src.versioning import DEFAULT_BUILD_DATE_FALLBACK, load_build_date_from_repo
+        with patch("src.versioning.subprocess.run", side_effect=Exception("no git")):
+            result = load_build_date_from_repo(tmp_path)
+        assert result == DEFAULT_BUILD_DATE_FALLBACK
+
+
+# ============================================================================
 # Test: AgentMetadata dataclass
 # ============================================================================
 

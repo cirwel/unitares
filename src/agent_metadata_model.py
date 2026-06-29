@@ -114,15 +114,15 @@ except ImportError:
             self.type = type
             self.text = text
 
-# Server version - auto-synced from VERSION file at startup
-from src.versioning import load_version_from_file
+# Server version + build date - derived at startup, never hand-maintained
+from src.versioning import load_build_date_from_repo, load_version_from_file
 
 def _load_version():
     """Load version from VERSION file (single source of truth)."""
     return load_version_from_file(project_root)
 
 SERVER_VERSION = _load_version()
-SERVER_BUILD_DATE = "2026-02-05"
+SERVER_BUILD_DATE = load_build_date_from_repo(project_root)
 
 
 def _normalize_http_proxy_base(url: str) -> str:
