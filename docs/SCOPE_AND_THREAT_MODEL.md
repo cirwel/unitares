@@ -66,16 +66,72 @@ codebase and papers this is called *dialectic*.) See
 ## Scope and threat model
 
 UNITARES is **adversarial-aware, not adversarial-naive**, with deliberately
-conservative enforcement. The signal is anchored to outcomes an agent can't fake
-— test pass/fail, exit codes, tool results via `record_result()`: an agent can
-inflate its self-reported `confidence` but not its actual success rate, and drift
-(S) is graded against its *own* prior trajectory, so there is no fixed threshold
-to pre-game. Verdicts lean toward `proceed`/`guide` over `pause`/`reject` by
+conservative enforcement. One channel is anchored to outcomes an agent can't
+fake: the Integrity (I) calibration term is trained only on *hard-exogenous*
+outcomes — test pass/fail, exit codes, task results above an evidence-weight
+floor (`record_result()` → `outcome_events.py`, `HARD_EXOGENOUS_TYPES`);
+self-declared synthetic outcomes are excluded from the calibration channels by
+construction. So over a track record an agent can inflate its self-reported
+`confidence` but not its actual success rate, and drift (S) is graded against its
+*own* prior trajectory, so there is no fixed threshold to pre-game. **That
+outcome-anchoring is real but partial — it is one input, not the whole verdict,
+and at current maturity it is not the dominant one. Read _What actually drives
+the verdict today_ below before treating the anchoring as a robustness
+guarantee.** Verdicts lean toward `proceed`/`guide` over `pause`/`reject` by
 design — a false-positive pause on a productive agent is itself a failure mode
 (acutely so here, since the agents building UNITARES run under it). And "no ethics
 classifier" means no hand-labeled ethics model, *not* that the system is
-value-free: drift (S) is a salience flag, not a verdict, and Integrity (I) is
-anchored to ground-truth outcomes rather than to the agent's own history.
+value-free: drift (S) is a salience flag, not a verdict.
+
+### What actually drives the verdict today
+
+The outcome-anchoring above is genuine but easy to over-read. Two scoping facts,
+both disclosed in-band on every `process_agent_update` (the `risk_attribution`
+block) and demonstrated in
+[`operations/self-report-verdict-dependence-2026-06-28.md`](operations/self-report-verdict-dependence-2026-06-28.md):
+
+1. **The calibration anchor is dormant until it has evidence.**
+   `compute_calibration_error` returns `None` until a confidence bin holds ≥10
+   hard-exogenous samples ([`src/monitor_drift.py`](../src/monitor_drift.py)).
+   Until then the outcome anchor contributes nothing and the verdict runs on
+   self-attested inputs alone.
+2. **The enforcement verdict is dominated by self-attested inputs.** At current
+   maturity it is set by the caller's self-reported `ethical_drift` (plus
+   `complexity` / `confidence`), not by an independent measurement of what the
+   agent did. Pre-warmup — behavioral confidence `< 0.3`, i.e. before ~update #3
+   ([`src/governance_monitor.py`](../src/governance_monitor.py)) — the behavioral
+   channel is telemetry-only and the verdict is a *pure function of self-attested
+   inputs*. Post-warmup the behavioral signal folds in **escalate-only**: it takes
+   the more-severe verdict and the max risk, so it can *raise* a verdict but
+   cannot pull a clean-but-lying Φ down to match dishonest behavior. Demonstrated:
+   a benign refactor and a *confessed sabotage* submitted with identical
+   `ethical_drift=[0,0,0]` receive indistinguishable `proceed/safe` verdicts — the
+   saboteur even scored marginally *lower* risk.
+
+The system does not hide this: every verdict carries
+`risk_attribution.primary_driver: "self_reported"`, and the high-risk guidance text
+states in plain language that the inputs are self-attested. Closing the gap —
+making the φ→behavioral blend drift-robust while preserving the escalate-only
+invariant — is v2-adjacent work tracked in
+[`proposals/continuous-verdict-blending-v0.md`](proposals/continuous-verdict-blending-v0.md).
+
+### Signal provenance — attested vs observed
+
+| Input | Provenance | Anchored to | Movable in one call? |
+|---|---|---|---|
+| `confidence` | agent-attested | clamped to `coherence + 0.3` on KG writes | yes, within the clamp |
+| `complexity` | agent-attested | server estimates a divergence term against it | the report yes; the divergence no |
+| `ethical_drift` | agent-attested | nothing independent at current maturity | yes — **and it dominates the verdict** |
+| Integrity calibration term | derived | hard-exogenous outcomes only (tests/tasks, evidence-gated) | no — needs ≥10 samples/bin |
+| Coherence (ρ) | derived | server-computed E–I divergence | no |
+| Behavioral text-risk | derived | the response text itself | no — escalate-only, unweighted pre-warmup |
+| Self-relative baseline | derived | the agent's own EISV history | only slowly, within observed signals |
+| Absolute floors (E,I ≥ 0.30; S ≤ 0.70; \|V\| ≤ 0.50) | hardcoded | — | never — cannot be talked out of ([`behavioral_assessment.py`](../src/behavioral_assessment.py)) |
+
+Honest one-line robustness statement: **the Integrity/calibration channel is
+genuinely hard to game over a track record; the live verdict is currently only as
+trustworthy as the agent's self-reported `ethical_drift` — totally so before the
+behavioral baseline warms, and dominantly so after.**
 
 **The genuine open question.** Robustness against a *motivated* attacker
 deliberately optimizing the EISV proxy, at scale, is unproven — red-teaming so far
