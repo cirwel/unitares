@@ -92,6 +92,13 @@ jobs:
         sys.exit(1 if r.status == d.Status.FAIL else 0)
         PY
 
+    - name: Check generated docs are fresh
+      # Fails the build if a generated doc has drifted from its source. These
+      # generators read the tree (AST / config) and need no live DB, so they run
+      # in the smoke job. Re-run the named generator and commit to fix.
+      run: |
+        python3 scripts/dev/flag_catalog.py --check
+
     - name: Run smoke tests
       run: |
         make test-smoke
