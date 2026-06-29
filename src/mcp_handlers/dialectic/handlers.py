@@ -157,6 +157,19 @@ async def _emit_dialectic_event(event_type: str, session, **payload_extra) -> No
         logger.debug("dialectic event %s emit skipped: %s", event_type, e)
 
 
+async def _emit_phase_changed(session, prev_phase) -> None:
+    """Emit dialectic_phase_changed when an interactive submit advanced the phase
+    (thesis -> antithesis -> synthesis), for live intra-session progress. No-op if
+    the phase did not move (e.g. another synthesis round stays in SYNTHESIS).
+    Terminal phases (resolved/failed) are announced by dialectic_resolved, not here.
+    """
+    to_phase = getattr(getattr(session, "phase", None), "value", None)
+    if to_phase and to_phase != prev_phase:
+        await _emit_dialectic_event(
+            "dialectic_phase_changed", session, from_phase=prev_phase, to_phase=to_phase
+        )
+
+
 async def check_reviewer_stuck(session: DialecticSession) -> bool:
     """
     Check if reviewer is stuck (paused or hasn't responded after thesis submission).
@@ -1431,6 +1444,7 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
         )
 
         # Submit to session
+        _prev_phase = session.phase.value
         result = session.submit_thesis(message, api_key)
 
         if result["success"]:
@@ -1452,6 +1466,9 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     await pg_update_phase(session_id, session.phase.value)
             except Exception as e:
                 logger.warning(f"Could not update PostgreSQL after thesis: {e}")
+
+            # Live progress: thesis submitted -> phase advanced (-> antithesis).
+            await _emit_phase_changed(session, _prev_phase)
 
             # Persist to JSON (export snapshot)
             try:
@@ -1684,6 +1701,7 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
         )
 
         # Submit to session
+        _prev_phase = session.phase.value
         result = session.submit_antithesis(message, api_key)
 
         if result["success"]:
@@ -1720,6 +1738,9 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                     await pg_update_phase(session_id, session.phase.value)
             except Exception as e:
                 logger.warning(f"Could not update PostgreSQL after antithesis: {e}")
+
+            # Live progress: antithesis submitted -> phase advanced (-> synthesis).
+            await _emit_phase_changed(session, _prev_phase)
 
             # Persist to JSON
             try:

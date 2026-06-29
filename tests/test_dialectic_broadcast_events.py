@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.mcp_handlers.dialectic.handlers import _emit_dialectic_event
+from src.mcp_handlers.dialectic.handlers import _emit_dialectic_event, _emit_phase_changed
 
 
 def _fake_session(**over):
@@ -104,3 +104,34 @@ async def test_emit_tolerates_a_minimal_session(monkeypatch):
     assert captured["event_type"] == "dialectic_opened"
     assert captured["payload"]["session_id"] == "s1"
     assert captured["agent_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_phase_changed_emits_on_transition(monkeypatch):
+    """dialectic_phase_changed fires with from/to when the phase actually moved."""
+    captured = {}
+    monkeypatch.setattr(
+        "src.mcp_handlers.dialectic.handlers.broadcaster_instance.broadcast_event",
+        AsyncMock(side_effect=lambda *a, **k: captured.update(k, event_type=a[0])),
+    )
+
+    session = _fake_session(phase=SimpleNamespace(value="antithesis"))
+    await _emit_phase_changed(session, "thesis")
+
+    assert captured["event_type"] == "dialectic_phase_changed"
+    assert captured["payload"]["from_phase"] == "thesis"
+    assert captured["payload"]["to_phase"] == "antithesis"
+
+
+@pytest.mark.asyncio
+async def test_phase_changed_noop_when_phase_unchanged(monkeypatch):
+    """No event when the phase did not move (e.g. another synthesis round)."""
+    mock = AsyncMock()
+    monkeypatch.setattr(
+        "src.mcp_handlers.dialectic.handlers.broadcaster_instance.broadcast_event", mock
+    )
+
+    session = _fake_session(phase=SimpleNamespace(value="synthesis"))
+    await _emit_phase_changed(session, "synthesis")
+
+    mock.assert_not_awaited()
