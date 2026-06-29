@@ -28,7 +28,10 @@ What you'll see:
   code still handles that AGENT_PAUSED reply, you just won't trip it in 7 steps.
 
 No Postgres reads, no dashboard required — everything you see comes back
-in the check-in response shape that any client would receive.
+in the check-in response shape that any client would receive. The run still
+persists controlled demo identities/state/outcome rows on the target server;
+analysis scripts classify ``quick-demo-agent*`` identities as controlled harness
+rows and exclude them from live validation cohorts.
 """
 from __future__ import annotations
 

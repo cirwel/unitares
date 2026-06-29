@@ -21,11 +21,11 @@ realistic payload through the live in-handler path and reports two things:
      stage (in practice ``enrichment`` and ``locked_update`` dominate), not just a
      lump total.
 
-This is READ-ONLY: it adds no production instrumentation and changes no server
-code. It only *drives* real check-ins and *reads* the log the server already
-writes. It extends ``scripts/dev/parse_update_phase_logs.py`` (which parses only
-``total`` + ``enrichment`` from an arbitrary log slice) by generating a controlled
-run and decomposing every phase.
+This is CODE-READ-ONLY: it adds no production instrumentation and changes no
+server code. It does drive real ``onboard``/``process_agent_update`` calls, so a
+live server will persist controlled profiling identities, state, and auto-checkin
+outcome rows. The analysis scripts classify ``perf-profile-checkin*`` identities
+as controlled harness rows and exclude them from live validation cohorts.
 
 Usage::
 

@@ -1,3 +1,4 @@
+from scripts.analysis import outcome_inventory as inventory_module
 from scripts.analysis.outcome_inventory import (
     OutcomeInventoryRow,
     build_inventory,
@@ -301,3 +302,35 @@ def test_controlled_validation_fixture_detection_covers_legacy_and_new_markers()
     )
     assert is_controlled_validation_fixture({"calibration_excluded": True})
     assert not is_controlled_validation_fixture({"test_name": "real_pytest_suite"})
+
+
+def test_controlled_validation_fixture_detection_covers_demo_perf_identity_metadata():
+    assert is_controlled_validation_fixture(
+        {"_identity_metadata": {"label": "quick-demo-agent_6d051ff8"}}
+    )
+    assert is_controlled_validation_fixture(
+        {"_identity_metadata": {"label": "perf-profile-checkin_be34425f"}}
+    )
+    assert is_controlled_validation_fixture(
+        {"_identity_metadata": {"purpose": "testing", "label": "demo-harness"}}
+    )
+    assert not is_controlled_validation_fixture(
+        {"_identity_metadata": {"purpose": "implementation", "label": "real-agent"}}
+    )
+
+
+def test_inventory_record_conversion_preserves_identity_metadata_for_fixture_filtering():
+    row = inventory_module._row_from_record(
+        {
+            "outcome_type": "task_failed",
+            "is_bad": True,
+            "verification_source": "agent_reported_tool_result",
+            "detail": {"source": "auto_checkin"},
+            "identity_metadata": {"label": "quick-demo-agent_abc123"},
+            "prior_state_lead_0": False,
+        },
+        (0.0,),
+    )
+
+    assert row.detail["_identity_metadata"] == {"label": "quick-demo-agent_abc123"}
+    assert is_controlled_validation_fixture(row.detail)

@@ -1,6 +1,7 @@
 import dataclasses
 from datetime import datetime, timedelta, timezone
 
+from scripts.analysis import eisv_skeptic_report as skeptic_module
 from scripts.analysis.eisv_skeptic_report import (
     MIN_DISPERSION_SNAPSHOTS,
     ModelScore,
@@ -210,3 +211,43 @@ def test_build_report_includes_ablation_delta_section():
     assert "| `prior_risk_binned` |" in report
     assert "AUC delta" in report
     assert "Brier improvement" in report
+
+
+def test_skeptic_record_conversion_preserves_identity_metadata_for_fixture_filtering():
+    row = skeptic_module._row_from_record(
+        {
+            "ts": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "outcome_id": "outcome-1",
+            "agent_id": "agent-demo",
+            "outcome_type": "task_failed",
+            "outcome_score": 0.0,
+            "is_bad": True,
+            "detail": {"source": "auto_checkin"},
+            "identity_metadata": {"label": "perf-profile-checkin_be34425f"},
+            "verification_source": "agent_reported_tool_result",
+            "prior_state_age_seconds": None,
+            "prior_risk": None,
+            "prior_phi": None,
+            "prior_verdict": None,
+            "prior_coherence": None,
+            "prior_e": None,
+            "prior_i": None,
+            "prior_s": None,
+            "prior_v": None,
+            "eisv_verdict": None,
+            "eisv_e": None,
+            "eisv_i": None,
+            "eisv_s": None,
+            "eisv_v": None,
+            "eisv_phi": None,
+            "eisv_coherence": None,
+            "n_prior_snapshots": None,
+            "prior_s_disp": None,
+            "prior_e_disp": None,
+            "prior_i_disp": None,
+            "prior_v_disp": None,
+            "prior_risk_disp": None,
+        }
+    )
+
+    assert row.detail["_identity_metadata"] == {"label": "perf-profile-checkin_be34425f"}

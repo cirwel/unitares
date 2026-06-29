@@ -65,7 +65,7 @@ def test_resolve_session_binding_uses_newest_cache_entry(mcp_call_module, tmp_pa
     assert arguments["client_session_id"] == "agent-new"
 
 
-def test_retry_with_lineage_mints_and_persists_fresh_session(
+def test_maybe_retry_with_lineage_mints_and_persists_fresh_session(
     mcp_call_module, tmp_path, monkeypatch
 ):
     calls: list[tuple[str, dict, str | None]] = []
@@ -114,3 +114,8 @@ def test_retry_with_lineage_mints_and_persists_fresh_session(
     cache_payload = (tmp_path / ".unitares" / "session-agent-child.json").read_text()
     assert '"uuid": "child-uuid"' in cache_payload
     assert '"continuity_token"' not in cache_payload
+
+
+def test_module_docstring_uses_actual_diagnostics_path(mcp_call_module):
+    assert "scripts/diagnostics/mcp_call.py --list" in mcp_call_module.__doc__
+    assert "python scripts/mcp_call.py" not in mcp_call_module.__doc__
