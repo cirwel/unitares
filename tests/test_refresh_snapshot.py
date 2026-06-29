@@ -79,7 +79,7 @@ def test_apply_to_readme_updates_db_rows_and_leaves_static(mod, snap):
         "| Governance events processed | 351,000+ (≈94K in the last 7 days) |\n"
         "| Knowledge graph discoveries | 860 |\n"
         "| V operating range | Active agents often within [-0.1, 0.1] |\n"
-        "| Tests | 8,500+ collected · smoke/pre-push subset plus 25% min coverage gate |\n"
+        "| Tests | 8,500+ collected · smoke/pre-push subset plus 75% min coverage gate |\n"
     )
     updated = mod.apply_to_readme(original, snap, "June 16, 2026")
     assert "**3.7M+ governance events processed · ≈714K in the last 7 days**." in updated
@@ -87,7 +87,7 @@ def test_apply_to_readme_updates_db_rows_and_leaves_static(mod, snap):
     assert "| Knowledge graph discoveries | 1,054 |" in updated
     # Non-DB rows are untouched.
     assert "| V operating range | Active agents often within [-0.1, 0.1] |" in updated
-    assert "| Tests | 8,500+ collected · smoke/pre-push subset plus 25% min coverage gate |" in updated
+    assert "| Tests | 8,500+ collected · smoke/pre-push subset plus 75% min coverage gate |" in updated
     # Old numbers are gone.
     assert "351,000+" not in updated
     assert "| Knowledge graph discoveries | 860 |" not in updated

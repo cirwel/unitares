@@ -3,8 +3,9 @@
 Frozen public snapshot from June 16, 2026 (single-operator — the author's own
 traffic). Headline: **3.7M+ governance events processed · ≈714K in the last 7
 days**. Running continuously since November 2025 and dogfooded — the agents
-building UNITARES run under it. Every number here is verifiable on a fresh clone;
-see the [Reviewer Guide](REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc).
+building UNITARES run under it. The falsifiability checks run on a fresh clone;
+the live deployment metrics below need governance-DB access to reproduce — see
+the [Reviewer Guide](REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc).
 
 ## Full metrics table
 
@@ -16,7 +17,7 @@ see the [Reviewer Guide](REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-do
 | Governance events processed | 3,748,000+ (≈714K in the last 7 days) |
 | Knowledge graph discoveries | 1,054 |
 | V operating range | Active agents often within [-0.1, 0.1] |
-| Tests | 8,500+ collected · smoke/pre-push subset plus 25% min coverage gate |
+| Tests | 8,500+ collected · smoke/pre-push subset plus 75% min coverage gate |
 
 *What these numbers show:* the pipeline holds up under sustained volume. *What
 they don't show:* product-market traction. External adoption is the open question.
