@@ -25,3 +25,8 @@ COMMENT ON COLUMN core.dialectic_sessions.awaiting_facilitation IS
     'TRUE when the reviewer is stuck and no auto-replacement was found, routing '
     'the session to human facilitation (#1015). Highest-priority surface signal. '
     'Mirrors the in-memory DialecticSession.awaiting_facilitation flag (#1167).';
+
+-- Register migration
+INSERT INTO core.schema_migrations (version, name, applied_at)
+VALUES (53, 'dialectic_awaiting_facilitation', NOW())
+ON CONFLICT (version) DO NOTHING;
