@@ -26,11 +26,38 @@ defmodule UnitaresLeasePlane.EffectRecovery do
   end
 
   @impl true
+  # Default periodic sweep interval. The boot scan only catches orphans left by a
+  # full VM restart; a single-request crash (handler process dies, VM stays up)
+  # would otherwise leave its orphan until the next reboot. The sweep reconciles
+  # those promptly. Set :effect_recovery_sweep_ms to 0 to disable (boot-only).
+  @default_sweep_ms 60_000
+
   def init(opts) do
     repo = Keyword.get(opts, :repo, EffectRepo)
+
+    sweep_ms =
+      Keyword.get(
+        opts,
+        :sweep_ms,
+        Application.get_env(:lease_plane, :effect_recovery_sweep_ms, @default_sweep_ms)
+      )
+
     result = scan(repo)
-    {:ok, result}
+    schedule_sweep(sweep_ms)
+    {:ok, %{repo: repo, sweep_ms: sweep_ms, last: result}}
   end
+
+  @impl true
+  def handle_info(:sweep, %{repo: repo, sweep_ms: sweep_ms} = state) do
+    result = scan(repo)
+    schedule_sweep(sweep_ms)
+    {:noreply, %{state | last: result}}
+  end
+
+  defp schedule_sweep(ms) when is_integer(ms) and ms > 0,
+    do: Process.send_after(self(), :sweep, ms)
+
+  defp schedule_sweep(_), do: :ok
 
   @doc """
   Run the orphan scan once. Returns a summary map. Never raises — a missing
@@ -45,7 +72,7 @@ defmodule UnitaresLeasePlane.EffectRecovery do
       {:ok, orphans} ->
         outcomes = Enum.map(orphans, &reconcile_one(&1, repo))
         counts = Enum.frequencies_by(outcomes, &outcome_kind/1)
-        Logger.warning("effect_recovery: drained #{length(orphans)} orphan(s) at boot: #{inspect(counts)}")
+        Logger.warning("effect_recovery: drained #{length(orphans)} orphan(s): #{inspect(counts)}")
         %{scanned: length(orphans), outcomes: counts}
 
       {:skip, reason} ->
