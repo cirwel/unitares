@@ -237,10 +237,13 @@ def test_health_reports_status_and_version(cli_env):
 def test_tools_lists_core_governance_tools(cli_env):
     result = _run(cli_env, "tools")
     assert "Tools:" in result.stdout
-    # A few tools are always exposed in lite mode.
+    # The /v1/tools REST surface lists canonical handler names (not the workflow
+    # aliases). Assert core tools that are stably present; the duplicate raw twins
+    # (process_agent_update / get_governance_metrics) were dropped from the lite
+    # orientation surface, so don't assert on them here.
     assert "onboard" in result.stdout
-    assert "process_agent_update" in result.stdout
-    assert "get_governance_metrics" in result.stdout
+    assert "health_check" in result.stdout
+    assert "list_tools" in result.stdout
 
 
 def test_onboard_persists_session_and_continuity_token(cli_env, tmp_path):

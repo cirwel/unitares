@@ -65,13 +65,16 @@ LITE_MODE_TOOLS: Set[str] = {
     # Session hook (required by automation)
     "bind_session",               # Session-start hook for MCP identity sync
 
-    # Raw implementation tools kept callable for compatibility wrappers/hooks.
-    # They are intentionally common-tier, not essential-tier: primary workflow
-    # names remain the promoted agent-facing surface.
-    "onboard",                    # Raw implementation for start_session
-    "process_agent_update",       # Raw implementation for sync_state
-    "get_governance_metrics",     # Raw implementation for check_working_state
-    "outcome_event",              # Raw implementation for record_result
+    # Raw implementation tools stay register=True (so the gateway, hooks, and
+    # compat wrappers can still call them by name — the server dispatches any
+    # registered handler whether or not it is advertised), but are NOT advertised
+    # in the lite orientation surface: agents saw both the friendly alias AND its
+    # raw twin (start_session+onboard, sync_state+process_agent_update, ...), which
+    # is duplicate noise when orienting. The promoted friendly names carry the wire.
+    # onboard is kept advertised for now — it sits in the identity/onboarding
+    # coupled surface (CLAUDE.md) and the gov-plugin nudges still name it; hiding it
+    # is a deliberate cross-repo follow-up, not this change.
+    "onboard",                    # Raw implementation for start_session (identity surface — kept)
 
     # Recovery
     "self_recovery",              # Primary recovery path for stuck agents
