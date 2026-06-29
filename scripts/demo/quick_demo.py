@@ -17,8 +17,15 @@ What you'll see:
 - The agent onboards (fresh UUID + thread).
 - Seven check-ins simulate clean work → calibration drift → confusion.
 - Each step prints the verdict, the reason, and the four-channel state.
-- risk_score climbs from ~0.27 as drift accumulates; when it crosses the
-  high-risk gate the agent is paused and further check-ins are refused.
+- The graded proprioceptive signal moves in the drift direction: entropy S
+  rises, integrity I slips, valence V swings, and the decision margin tightens
+  (settling → tight) as the calibration miss and confusion accumulate.
+- The verdict stays `proceed` across this short run. Governance gates on a
+  smoothed risk (mean-of-10), which a seven-step synthetic trajectory does not
+  push over the pause threshold — by design, to avoid false pauses on normal
+  work. A `proceed` whose margin has gone `tight` is the signal here, not a
+  pause. Sustained or higher-severity drift can cross the gate and pause; the
+  code still handles that AGENT_PAUSED reply, you just won't trip it in 7 steps.
 
 No Postgres reads, no dashboard required — everything you see comes back
 in the check-in response shape that any client would receive.
