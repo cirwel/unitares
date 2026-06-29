@@ -144,6 +144,7 @@ defmodule AgentOrchestrator.HTTPRouter do
          {:ok, env} <- fetch_env(body),
          {:ok, cd} <- fetch_string(body, "cd"),
          {:ok, max_lines} <- fetch_max_lines(body),
+         {:ok, max_runtime} <- fetch_max_runtime(body),
          {:ok, lease} <- fetch_lease(body),
          {:ok, lineage} <- fetch_lineage(body),
          {:ok, server_url} <- fetch_string(body, "server_url"),
@@ -152,6 +153,7 @@ defmodule AgentOrchestrator.HTTPRouter do
         %{cmd: cmd, args: args, env: env}
         |> put_opt(:cd, cd)
         |> put_opt(:max_output_lines, max_lines)
+        |> put_opt(:max_runtime_ms, max_runtime)
         |> put_opt(:lineage, lineage)
         |> put_opt(:server_url, server_url)
         |> put_opt(:client_session_id, client_session_id)
@@ -212,6 +214,18 @@ defmodule AgentOrchestrator.HTTPRouter do
       nil -> {:ok, nil}
       n when is_integer(n) and n > 0 -> {:ok, n}
       _ -> {:error, "max_output_lines must be a positive integer"}
+    end
+  end
+
+  # Absent => omit (runner applies its configured default ceiling). A positive
+  # integer overrides the lifetime cap for this spawn. HTTP callers can raise the
+  # cap for a legitimately long agent; the in-VM API additionally accepts nil to
+  # disable, which is not exposed here (the control surface should stay bounded).
+  defp fetch_max_runtime(body) do
+    case Map.get(body, "max_runtime_ms") do
+      nil -> {:ok, nil}
+      n when is_integer(n) and n > 0 -> {:ok, n}
+      _ -> {:error, "max_runtime_ms must be a positive integer"}
     end
   end
 

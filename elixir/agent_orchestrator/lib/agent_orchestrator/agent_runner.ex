@@ -31,6 +31,8 @@ defmodule AgentOrchestrator.AgentRunner do
         env: [{String.t(), String.t()}],   # extra env for the child (default [])
         cd: String.t() | nil,              # working dir
         max_output_lines: pos_integer(),   # buffer cap (default 1000)
+        max_runtime_ms: pos_integer(),     # wall-clock lifetime cap; self-reaps on expiry
+                                           # (default :default_max_runtime_ms; nil/<=0 disables)
         lease: nil | false | lease_cfg,    # default (absent/nil) = best-effort agent:/ presence;
                                            # false = no presence; map = override
         lease_client: module(),            # injectable, default LeasePlaneClient
@@ -141,6 +143,13 @@ defmodule AgentOrchestrator.AgentRunner do
 
   @default_max_lines 1000
   @line_max_bytes 65_536
+
+  # Default ceiling on a single agent's wall-clock lifetime (30 min). Generous —
+  # well past the slowest known consumer (orchestrated reviewer ~70s, council
+  # lanes ~120s) — so it only ever fires on a genuinely wedged agent. Per-spawn
+  # overridable via the spec's `max_runtime_ms` (nil / <= 0 disables it);
+  # config-overridable via :default_max_runtime_ms.
+  @default_max_runtime_ms 1_800_000
 
   # Lineage-provisioning env vars surfaced to the child (candidate
   # declarations — see "Lineage provisioning" in the moduledoc).
@@ -331,6 +340,13 @@ defmodule AgentOrchestrator.AgentRunner do
               "agent #{state.agent_id} started os_pid=#{os_pid} lease=#{lease_id || "none"} cmd=#{Map.get(spec, :cmd)}"
             )
 
+            # Arm the max-runtime backstop. No caller is obligated to DELETE a
+            # wedged agent (the live dialectic reviewer explicitly "leaves it
+            # async" on a 504), so without this an agent that never exits leaks
+            # its OS process + subprocess tree until the orchestrator restarts.
+            # The timer fires :max_runtime into our own mailbox; we self-reap.
+            maybe_arm_max_runtime(spec)
+
             {:ok, %{state | port: port, os_pid: os_pid}}
 
           {:error, reason} ->
@@ -394,6 +410,26 @@ defmodule AgentOrchestrator.AgentRunner do
     end
   end
 
+  # Max-runtime backstop fired and we are still running. Reap the whole tree
+  # (a wedged child won't exit on its own; kill_tree gets its MCP-subproc
+  # descendants too), then finalize with a synthetic terminal status so waiters
+  # get a definitive result instead of hanging on their own await. We kill +
+  # close here rather than leaving it to terminate/2 because finalize sets
+  # exit_status (→ terminate's reap guard would skip) and nils the port.
+  def handle_info(:max_runtime, %{exit_status: nil} = state) do
+    Logger.warning(
+      "agent #{state.agent_id} exceeded max runtime — reaping os_pid=#{inspect(state.os_pid)}"
+    )
+
+    if is_integer(state.os_pid), do: kill_tree(state.os_pid)
+    safe_close(state.port)
+    finalize(%{state | port: nil}, {:killed, :max_runtime})
+  end
+
+  # Already finalized (the agent exited before its deadline) — the stale timer
+  # is a no-op.
+  def handle_info(:max_runtime, state), do: {:noreply, state}
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   # Terminal finalize: flush any partial line, release the lease, record the
@@ -423,6 +459,17 @@ defmodule AgentOrchestrator.AgentRunner do
 
   @impl true
   def terminate(_reason, state) do
+    # Reap the whole process TREE when the child is still running at teardown
+    # (operator stop / app shutdown — exit_status still nil). `claude`/SDK
+    # children spawn their own subprocesses (MCP servers); closing the Port alone
+    # orphans those descendants — they reparent to init and pile up on the
+    # always-on orchestrator. This MUST run before safe_close: once the parent
+    # dies its children reparent and can no longer be found by walking the tree.
+    # Guarded on a NOT-yet-finalized state so we never signal a clean exit's
+    # os_pid, which by now could belong to an unrelated reused pid (the same
+    # guard AgentPort uses via its `exited` flag).
+    if is_nil(state.exit_status) and is_integer(state.os_pid), do: kill_tree(state.os_pid)
+
     # Idempotent with the exit-status path: release returns :not_found harmlessly
     # if already released. Closing the port here kills the child on operator stop.
     if state.port, do: safe_close(state.port)
@@ -652,6 +699,25 @@ defmodule AgentOrchestrator.AgentRunner do
   defp maybe_opt(opts, _key, []), do: opts
   defp maybe_opt(opts, key, val), do: [{key, val} | opts]
 
+  # Arm the self-reap timer unless this spawn opted out. The message lands in our
+  # own mailbox after init returns, handled by handle_info(:max_runtime, ...).
+  defp maybe_arm_max_runtime(spec) do
+    case max_runtime_ms(spec) do
+      ms when is_integer(ms) and ms > 0 -> Process.send_after(self(), :max_runtime, ms)
+      _ -> :ok
+    end
+  end
+
+  # An explicit `max_runtime_ms` in the spec wins (an integer caps; nil / <= 0
+  # disables — the per-spawn escape hatch for a legitimately long agent). Absent,
+  # fall back to the configured/default ceiling.
+  defp max_runtime_ms(spec) do
+    case Map.fetch(spec, :max_runtime_ms) do
+      {:ok, v} -> v
+      :error -> Application.get_env(:agent_orchestrator, :default_max_runtime_ms, @default_max_runtime_ms)
+    end
+  end
+
   defp encode_env([]), do: []
 
   defp encode_env(env) do
@@ -697,6 +763,28 @@ defmodule AgentOrchestrator.AgentRunner do
     if Port.info(port) != nil, do: Port.close(port)
   catch
     :error, _ -> :ok
+  end
+
+  # Recursively SIGKILL a process and all its descendants, deepest first, so a
+  # reaped agent leaves no orphaned subprocesses (e.g. the MCP servers `claude`
+  # spawns). Best-effort and side-effecting; an already-dead pid just fails the
+  # kill harmlessly. Children are discovered via `pgrep -P` BEFORE the parent is
+  # signalled — once the parent dies its children reparent to init and can no
+  # longer be found by walking from it.
+  defp kill_tree(pid) do
+    children =
+      case System.cmd("pgrep", ["-P", "#{pid}"], stderr_to_stdout: true) do
+        {out, 0} -> out |> String.split() |> Enum.map(&String.to_integer/1)
+        _ -> []
+      end
+
+    Enum.each(children, &kill_tree/1)
+    System.cmd("kill", ["-KILL", "#{pid}"], stderr_to_stdout: true)
+    :ok
+  catch
+    # pgrep/kill are external; a malformed pid or a transient System.cmd failure
+    # must not crash terminate/2 (which would skip the lease release below it).
+    _, _ -> :ok
   end
 
   # RFC-4122 v4 UUID without a third-party dep. Version nibble forced to 4 and

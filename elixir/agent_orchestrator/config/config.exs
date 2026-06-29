@@ -12,6 +12,12 @@ config :agent_orchestrator,
   # pure DB TTL row reaped by the lease plane's reaper, so a crashed orchestrator
   # self-heals within one TTL rather than leaking the surface forever.
   default_lease_ttl_s: 300,
+  # Wall-clock ceiling on a single agent's lifetime (30 min). No caller is
+  # obligated to DELETE a wedged agent, so this is the backstop that keeps a
+  # never-exiting child (and its subprocess tree) from leaking until restart.
+  # Generous — only fires on a genuinely stuck agent; per-spawn overridable via
+  # the spec's max_runtime_ms (nil/<=0 disables).
+  default_max_runtime_ms: 1_800_000,
   # AgentOrchestrator.ResultStore retention (closes the await-vs-fast-exit race,
   # #581). A finished runner retains its final result for this long so a late
   # await/snapshot survives process death; the sweep evicts expired rows and the
