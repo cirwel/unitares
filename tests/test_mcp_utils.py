@@ -686,9 +686,9 @@ class TestRequireRegisteredAgent:
         u, e = require_registered_agent({"agent_id": "Bot"})
         assert u == "real-uuid" and e is None
 
-    # --- S21-b §3 status-check (council pass-2 stale-positive class) ---
+    # --- S21-b §3 status-check (review pass-2 stale-positive class) ---
     # `update_identity_status` writes only PG, so the in-memory dict drifts
-    # (live-verifier observed 67 active/archived inversions). The auth check
+    # (verifier observed 67 active/archived inversions). The auth check
     # must gate on meta.status to refuse rows whose dict copy is stale-active.
 
     @patch("src.mcp_handlers.validators.validate_agent_id_reserved_names",
@@ -840,7 +840,7 @@ class TestRequireRegisteredAgent:
     @patch("src.mcp_handlers.shared.get_mcp_server")
     def test_unknown_status_rejected_fail_closed(self, ms, mc, mf, mr):
         # Allowlist gate: any status outside {active,paused,waiting_input}
-        # fails closed (council pass-2 dialectic — blocklist was fail-open).
+        # fails closed (review pass-2 dialectic — blocklist was fail-open).
         uid = "66666666-6666-4666-8666-666666666666"
         s = _mock_server({uid: _meta(status="quarantined", label="Q")})
         s.ensure_metadata_loaded = MagicMock()

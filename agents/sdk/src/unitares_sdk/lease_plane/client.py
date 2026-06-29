@@ -242,7 +242,7 @@ class LeasePlaneClient:
             )
 
         # AcquireHeldByOther is the only retry-triggering result type;
-        # AcquireOk no longer needed here (NIT-1 fix from council pass).
+        # AcquireOk no longer needed here (NIT-1 fix from review pass).
         from .models import AcquireHeldByOther
 
         sleep_fn = sleep or time.sleep

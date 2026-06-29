@@ -101,7 +101,7 @@ if req != "pre_onboard":
         2,
         f"error: get_tool_identity_requirement({tool_name!r}) returned "
         f"{req!r}, expected 'pre_onboard'.\n"
-        "       Per RFC §2.4 (council fold), the middleware's attribute "
+        "       Per RFC §2.4 (review), the middleware's attribute "
         "lookup is\n"
         "       the operative gate; a non-'pre_onboard' value means callers "
         "without\n"

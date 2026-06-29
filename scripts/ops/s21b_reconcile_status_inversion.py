@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reconcile core.identities.status against core.agents.status.
 
-S21-b §4. Live-verifier observed (council pass-2, 2026-04-27):
+S21-b §4. Verifier observed (review pass-2, 2026-04-27):
   - 67 rows where core.identities.status='active' AND core.agents.status='archived'
     (auth-relevant: with S21-b §2 status-gate, identity slips through as active
     while the dict / agents view says archived)
@@ -54,7 +54,7 @@ WHERE i.status IS DISTINCT FROM a.status
 ORDER BY a.updated_at DESC NULLS LAST, i.created_at DESC
 """
 
-# Council pass-2 (code-reviewer #3): the INNER JOIN above silently excludes
+# Review pass-2 (code-reviewer #3): the INNER JOIN above silently excludes
 # identities with no matching core.agents row. Those are the H12 ghost
 # identities (PATH 3 minted via upsert_identity but no create_agent call) —
 # the most operationally interesting class. Surface them informationally.

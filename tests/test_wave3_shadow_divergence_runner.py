@@ -1,5 +1,5 @@
 """Unit tests for scripts/ops/wave3_shadow_divergence_check.py (PR #597
-council fold) — the alias→column derivation and row-kind logic, plus a drift
+review) — the alias→column derivation and row-kind logic, plus a drift
 guard pinning the comparator's alias contract.
 
 The runner derives the payload's `divergent_columns` by stripping `_diff`

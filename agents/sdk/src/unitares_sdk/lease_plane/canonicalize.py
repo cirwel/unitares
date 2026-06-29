@@ -8,7 +8,7 @@ must produce the same canonical surface_id IFF both go through this helper.
 Authority is server-side: the lease plane re-canonicalizes on receipt against
 its own filesystem semantics (RFC §7.12.1, dialectic option (i)).
 
-Three live-verifier findings drove the implementation details below:
+Three verifier findings drove the implementation details below:
 
   - DRIFT-2 (/var → /private/var): os.path.realpath on macOS does NOT
     idempotently re-resolve. /var/folders/.../tmpfile and

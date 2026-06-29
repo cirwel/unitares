@@ -184,7 +184,7 @@ def test_acquire_with_retry_returns_service_unavailable_without_retry():
 
 def _http_error(status: int, body_dict: dict | None) -> urllib.error.HTTPError:
     """Construct a real HTTPError with a JSON body (the failure path
-    `_urllib_transport` was historically uncovered for; live-verifier finding)."""
+    `_urllib_transport` was historically uncovered for; verifier finding)."""
     body_bytes = json.dumps(body_dict).encode("utf-8") if body_dict is not None else b""
     return urllib.error.HTTPError(
         url="http://stub/v1/lease/acquire",

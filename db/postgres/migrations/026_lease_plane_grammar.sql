@@ -5,9 +5,9 @@
 -- Implements RFC v0.8:
 --   §7.2.2 — Postgres CHECK constraint on surface_id scheme grammar
 --            (closes three-voice convergence: dialectic BLOCK-2 + code-reviewer
---             BLOCK-1 + live-verifier DRIFT-A).
+--             BLOCK-1 + verifier DRIFT-A).
 --   §7.2.3 — surface_kind becomes a generated column derived from surface_id
---            (closes code-reviewer CONCERN-2 + live-verifier DRIFT-B).
+--            (closes code-reviewer CONCERN-2 + verifier DRIFT-B).
 --
 -- Pre-flight rule (operator decision 2026-04-30, see Phase A plan):
 -- aborts with a clear remediation error if lease_plane.surface_leases
