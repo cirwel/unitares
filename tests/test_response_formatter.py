@@ -223,6 +223,24 @@ class TestFormatCompact:
         assert d["reason"] == "Low risk, high coherence"
         assert d["margin"] == 0.15
 
+    def test_decision_surfaces_sub_action(self):
+        # Parity with mirror/full: compact must carry the structured sub_action,
+        # not just the free-text reason, so a client that forces compact and hits
+        # a guide (e.g. the F2 latest-risk fast-trip) can read it as a field.
+        data = _sample_response()
+        data["decision"]["sub_action"] = "guide"
+        result = _format_compact(data, using_default_mode=False, saved_trust_tier=None)
+        assert result["decision"]["sub_action"] == "guide"
+
+    def test_decision_sub_action_present_when_absent(self):
+        # On a plain approve the key is present and None — never silently missing,
+        # so structured clients can rely on its presence.
+        data = _sample_response()
+        data["decision"].pop("sub_action", None)
+        result = _format_compact(data, using_default_mode=False, saved_trust_tier=None)
+        assert "sub_action" in result["decision"]
+        assert result["decision"]["sub_action"] is None
+
     def test_summary_format(self):
         data = _sample_response()
         result = _format_compact(data, using_default_mode=False, saved_trust_tier=None)
