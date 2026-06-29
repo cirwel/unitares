@@ -1,15 +1,16 @@
 """
 Consolidated MCP Tool Handlers
 
-Reduces cognitive load for AI agents by consolidating related tools:
-- knowledge: 11 actions → 1 tool (store, search, get, list, update, details, note, cleanup, stats, supersede, audit)
-- agent: 6 actions → 1 tool (list, get, update, archive, resume, delete)
-- calibration: 4 actions → 1 tool (check, update, backfill, rebuild)
-- config: 2 actions → 1 tool (get, set)
-- export: 2 actions → 1 tool (history, file)
-- observe: observation and audit actions → 1 tool
-- pi: 12 actions → 1 tool (tools, context, health, sync_eisv, display, say, message, qa, query, workflow, git_pull, power)
-- dialectic: 2 actions → 1 tool (get, list)
+Reduces cognitive load for AI agents by consolidating related tools into a
+single ``action``-dispatched tool each: knowledge, agent, calibration, config,
+export, observe, admin, and dialectic (``pi`` lives in unitares-pi-plugin).
+
+The authoritative per-tool action list is the ``actions={}`` map passed to each
+``action_router`` below — the router derives the tool description and the
+error-recovery action list from it, so this docstring deliberately does NOT
+enumerate actions (that enumeration drifted: it once claimed dialectic had only
+``get, list`` when it routes eight actions). Read the ``actions={}`` block, not
+prose, for what a tool can do.
 
 Each consolidated tool uses an 'action' parameter to select the operation.
 Original tools remain available for backwards compatibility.
@@ -110,7 +111,7 @@ handle_knowledge = action_router(
         "audit": handle_audit_knowledge_graph,
     },
     timeout=120.0,
-    description="Unified knowledge graph operations: store, search, get, list, update, details, note, cleanup, synthesize, stats, supersede, audit",
+    description="Unified knowledge graph operations",
     # #425 action-level identity: browsable READS may serve unbound
     # (fleet-scoped KG queries — the dashboard's search/stats calls);
     # every write/admin action stays identity-gated.
@@ -145,7 +146,7 @@ handle_agent = action_router(
         "delete": handle_delete_agent,
     },
     timeout=20.0,
-    description="Unified agent lifecycle operations: list, get, update, archive, resume, delete",
+    description="Unified agent lifecycle operations",
     # #425 action-level identity: fleet reads unbound; lifecycle writes
     # (update/archive/resume/delete) stay identity-gated — the dashboard's
     # operator buttons will need an operator credential under strict.
@@ -172,7 +173,7 @@ handle_calibration = action_router(
         "rebuild": handle_rebuild_calibration,
     },
     timeout=60.0,
-    description="Unified calibration operations: check, update, backfill, rebuild",
+    description="Unified calibration operations",
     default_action="check",
     # #425 action-level identity: 'check' is a fleet-scoped read (the
     # dashboard's check_calibration); update/backfill/rebuild mutate
@@ -195,7 +196,7 @@ handle_config = action_router(
         "set": handle_set_thresholds,
     },
     timeout=15.0,
-    description="Unified configuration operations: get, set thresholds",
+    description="Unified threshold configuration operations",
     default_action="get",
     # #425 action-level identity: threshold reads unbound; 'set' is an
     # operator write.
@@ -217,7 +218,7 @@ handle_export = action_router(
         "file": handle_export_to_file,
     },
     timeout=45.0,
-    description="Unified export operations: history, file",
+    description="Unified export operations",
     default_action="history",
     examples=[
         "export(action='history', format='json')",
@@ -242,7 +243,7 @@ handle_observe = action_router(
         "outcome_evidence": handle_outcome_evidence,
     },
     timeout=15.0,
-    description="Unified observability operations: agent, compare, similar, anomalies, aggregate, telemetry, audit_events, outcome_evidence",
+    description="Unified observability operations",
     # #425 action-level identity: the analysis reads (incl. the
     # dashboard's anomalies/compare) serve unbound; telemetry,
     # audit_events, and outcome_evidence are operator surfaces and stay
@@ -280,7 +281,7 @@ handle_admin = action_router(
         "cleanup_locks": handle_cleanup_stale_locks,
     },
     timeout=20.0,
-    description="Unified admin/diagnostics operations: server_info, connections, workspace_health, tool_usage, telemetry, debug_context, validate_path, reset_monitor, cleanup_locks",
+    description="Unified admin/diagnostics operations",
     # #425 action-level identity: only the cheap protocol-inspection read
     # (server_info — the standalone get_server_info is pre_onboard) serves
     # unbound. Every other diagnostic/maintenance action stays identity-gated,
@@ -317,7 +318,7 @@ handle_dialectic = action_router(
     # ceiling, so it must clear the submit_thesis handler timeout (90s) and the
     # synthetic-review budget (~55s) with headroom. Other actions return fast.
     timeout=90.0,
-    description="Dialectic operations: get, list, request, thesis, antithesis, synthesis, reassign",
+    description="Dialectic operations",
     default_action="list",
     # #425 action-level identity: session browsing (get/list) serves
     # unbound; every session-mutating action stays identity-gated.
@@ -328,6 +329,6 @@ handle_dialectic = action_router(
         "dialectic(action='quick', issue_description='Should I proceed?', position='Proceed after tests pass')",
         "dialectic(action='request', issue_description='Agent stuck in loop')",
         "dialectic(action='thesis', session_id='abc123', root_cause='...', proposed_conditions=[...])",
-        "dialectic(action='vote', session_id='abc123', vote='resume', reasoning='...')",
+        "dialectic(action='synthesis', session_id='abc123', agrees=True, reasoning='...', proposed_conditions=[...])",
     ],
 )
