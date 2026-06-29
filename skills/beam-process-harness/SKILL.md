@@ -33,6 +33,14 @@ future harness iterations).
 `os_pid`; `POST /v1/agents` spawns, no adopt-existing route). dispatch_beam uses
 the same plain-Port + `claude -p`/stream-json shape.
 
+**It is NOT inert and NOT greenfield — scan before you build (`gh pr list`).**
+The orchestrator is a proven spawn-chassis with live consumers (dialectic
+reviewer, governed-effect `agent_spawn`) and in-flight wiring (council
+fire-and-collect lanes via dispatch_beam, and tree-reaping hardening — see §1).
+What is *still* greenfield is the **persistent streaming runner + stdin
+mailbox** (the actual "born-in-BEAM" novelty); the ephemeral spawn→await→parse
+path is being built out by others. Refine, don't duplicate.
+
 **Why this skill exists:** the tradeoffs below cost a full deep-research arc
 (fan-out + 3-vote adversarial verification) to pin down. Don't re-research them
 — read this, then re-verify only the volatile/un-de-risked parts flagged below.
@@ -49,32 +57,46 @@ the same plain-Port + `claude -p`/stream-json shape.
 
 ---
 
-## 1. Owning the OS process: erlexec, not raw Port, not MuonTrap
+## 1. Owning the OS process: the fleet already solves tree-cleanup in pure Elixir
 
-**[VERIFIED] Use `erlexec` (saleyn/erlexec) to own a long-lived child.** It is
-actively maintained (v2.3.4, 2026-06-12). **Pin a commit dated after
-2026-06-23** — a *critical security/race-condition fix* landed that day. It
-gives, over raw `Port.open`:
+**FLEET POSTURE (in-flight, ground-truth — supersedes "reach for erlexec to
+stop orphans"):** tree-reaping is being solved **without a new dependency**.
+`agent_orchestrator`'s `AgentRunner` ports dispatch_beam's proven **`kill_tree`**
+(`pgrep -P`, deepest-first) into `terminate/2` plus a **`:max_runtime` backstop
+timer** (default **30 min**, `:default_max_runtime_ms` / per-spawn
+`max_runtime_ms`; self-reaps a wedged child), both **guarded on
+`exit_status == nil`** so a clean exit's possibly-reused `os_pid` is never
+signalled, and `catch`-wrapped so a `pgrep`/`kill` hiccup can't skip the lease
+release. *Non-obvious gotcha that motivated the backstop:* **no caller anywhere
+`DELETE`s a running orchestrator agent** (reviewer dispatch "leaves it async" on
+a 504), so before the timer a wedged agent leaked until service restart. So for
+orphan/tree cleanup on this fleet, **use/extend `kill_tree` + the max-runtime
+timer — do NOT add erlexec just for reaping.**
 
-- **OS-child cleanup at port-program termination AND emulator exit** — the
-  reason it's recommended over `Port.open` for "no orphans on BEAM crash." This
-  is the fix for the `:brutal_kill`-skips-`terminate/2` → orphaned `agent:/<id>`
-  lease class seen in the orchestrator.
-- **Signals** (`:exec.kill/2`, `:exec.stop/1`) and `kill_group`.
-- **stdin streaming** into a live child (`:exec.send/2`, `eof`).
-- Elixir-native API (`:exec.start`, `:exec.run`).
+**Where erlexec is still worth it (and where it ISN'T):** erlexec
+(saleyn/erlexec, v2.3.4 2026-06-12, **pin post-2026-06-23** for a critical
+security/race fix) earns its dependency cost ONLY for the **persistent
+streaming runner** — a live child you feed mid-session: `:exec.send/2`+`eof`
+stdin streaming and `:exec.kill/2` signals, plus emulator-**exit** cleanup
+(clean VM shutdown, NOT SIGKILL). It is **NOT** needed for tree-cleanup-on-crash
+(solved above) and its pty mode is a NO-GO for the channel (§2). So treat
+erlexec as a **[DIRECTIONAL]** choice for slice 2's persistent runner, weighed
+against extending the existing `kill_tree` Port path — not a settled "adopt it."
 
-  *Cleanup caveats (still your problem):* double-forked grandchildren that
-  escape the process group survive; an emulator **SIGKILL** still orphans
-  children (fundamental Unix limit, nothing fixes it).
+  *Cleanup limits that bind BOTH approaches:* a `:brutal_kill` skips
+  `terminate/2` (so it skips `kill_tree` too); double-forked grandchildren that
+  escape the process group survive; an emulator **SIGKILL** orphans children
+  (fundamental Unix limit). erlexec's emulator-exit cleanup covers only the
+  *clean* VM-shutdown case.
 
 **[VERIFIED] On macOS, `MuonTrap` is the WRONG tool here.** Its headline
 "no-escapees / every descendant dies with the owner" guarantee is **Linux
 cgroup-v2 only**; on darwin it degrades to SIGTERM/SIGKILL of the **direct child
 only** (no tree teardown — its own test suite skips cgroup tests off-Linux). It
-also explicitly disclaims interactive-stdin / signal use. ⇒ On this fleet,
-erlexec is the only real process-tree-cleanup option. (MuonTrap is fine for a
-*contained, fire-and-forget Linux daemon* — not our case.)
+also explicitly disclaims interactive-stdin / signal use. ⇒ On darwin its tree
+guarantee evaporates, so it adds nothing over the `kill_tree` path above.
+(MuonTrap is fine for a *contained, fire-and-forget Linux daemon* — not our
+case.)
 
 **[VERIFIED — go/no-go GATE] erlexec's Apple-Silicon support is UNDOCUMENTED.**
 The README lists "MacOS X" but is **silent on arm64** — macOS-listed is not
@@ -82,14 +104,17 @@ arm64-confirmed. **Before depending on it, run a local smoke test:** build under
 OTP 28 / Elixir 1.19.5, then spawn → stream stdin → send a signal → confirm
 clean child teardown. Pass = GO; this is the cheapest way to retire the unknown.
 
-| Axis | `Port.open` | **erlexec** | MuonTrap (darwin) |
+| Axis | `Port.open` + `kill_tree` (fleet today) | erlexec | MuonTrap (darwin) |
 |---|---|---|---|
-| stream stdin to child | yes | **yes** (`:exec.send`) | disclaimed |
+| stream stdin to live child | one-shot/close only | **yes** (`:exec.send`+`eof`) | disclaimed |
 | send signals | no (close only) | **yes** (`:exec.kill`) | direct child only |
 | pty | no | yes¹ | no |
-| child-TREE cleanup on crash | no | **yes** (`kill_group`, emulator-exit) | **no** (cgroup=Linux) |
+| child-TREE cleanup on stop/wedge | **yes** (`kill_tree` + max-runtime, #1243) | yes (`kill_group`, emulator-exit) | **no** (cgroup=Linux) |
 
 ¹ pty exists but is a **NO-GO for the NDJSON channel** — see §2.
+² erlexec's only real edge for *this* harness is **persistent mid-session stdin
+streaming** (the slice-2 runner); the `Port.open`+`kill_tree` path already
+covers spawn→await→reap (the ephemeral consumers).
 
 ---
 
