@@ -87,7 +87,7 @@
         const j = await authFetch("/v1/residents");
         if (!j || !j.residents) return null;
         return j.residents.map((r) => ({
-          name: r.label, status: r.status, coherence: r.coherence, risk: r.risk_score,
+          id: r.agent_id, name: r.label, status: r.status, coherence: r.coherence, risk: r.risk_score,
           verdict: r.verdict, eisv: r.eisv, silence: r.silence_seconds,
           silenceThreshold: r.silence_threshold_seconds, event_driven: r.event_driven === true,
         }));
@@ -329,7 +329,12 @@
         return r && Array.isArray(r.points)
           ? { points: r.points, total: r.total || r.points.length, mode: r.mode || "recent" }
           : null;
-      }, () => ({ points: [], total: 0, mode: "recent" }));
+      }, () => {
+        // Offline: serve a bundled trajectory if the snapshot carries one for
+        // this agent, otherwise an honest empty result.
+        const h = (S().agentHistory || {})[id];
+        return h ? { points: h, total: h.length, mode: "all" } : { points: [], total: 0, mode: "recent" };
+      });
     },
 
     async residentPanels() {
