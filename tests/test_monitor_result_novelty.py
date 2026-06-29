@@ -146,6 +146,9 @@ def test_build_result_exposes_policy_and_unapplied_enforcement_layers():
         "guidance": "Simplify and regroup",
         "inputs": {
             "basin": "low",
+            "policy_basin": "low",
+            "policy_basin_source": "monitor_decision.classify_basin",
+            "primary_eisv_source": None,
             "coherence": 0.31,
             "margin": "critical",
             "nearest_edge": "coherence",

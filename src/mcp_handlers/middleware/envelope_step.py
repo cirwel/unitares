@@ -263,11 +263,37 @@ def build_experience_envelope(
             total = source_payload.get("count")
         if total is None:
             total = len(candidates)
-        next_action = (
-            f"{total} prior discoveries matched - read before redoing work. "
-            "Full context: knowledge(action='details', discovery_id=...). "
-            "Record new findings: knowledge(action='store', summary='...')."
+        low_confidence = bool(source_payload.get("low_confidence"))
+        if low_confidence:
+            next_action = (
+                f"{total} exploratory low-confidence discoveries surfaced. "
+                "Treat them as possible leads, not authoritative matches; "
+                "rephrase with distinctive terms or open details before using them."
+            )
+        elif total:
+            next_action = (
+                f"{total} prior discoveries matched - read before redoing work. "
+                "Full context: knowledge(action='details', discovery_id=...). "
+                "Record new findings: knowledge(action='store', summary='...')."
+            )
+        else:
+            next_action = (
+                "No prior discoveries matched. Broaden terms or search tags before "
+                "recording a new finding."
+            )
+        state_summary = _lift(
+            source_payload,
+            "count",
+            "total_count",
+            "search_mode_used",
+            "search_mode_requested",
+            "operator_used",
+            "low_confidence",
+            "search_degraded",
         )
+        note = source_payload.get("confidence_note")
+        if note:
+            state_summary["confidence_note"] = note
 
     elif canonical_name == "outcome_event":
         state_summary = _lift(
@@ -307,6 +333,15 @@ def build_experience_envelope(
     suggestions = _memory_suggestions(payload)
     if suggestions:
         envelope["memory_suggestions"] = suggestions
+    for key in (
+        "low_confidence",
+        "confidence_note",
+        "search_degraded",
+        "search_degraded_message",
+    ):
+        value = source_payload.get(key)
+        if value is not None:
+            envelope[key] = value
 
     hint = _recovery_hint(source_payload, coherence, risk)
     if hint:

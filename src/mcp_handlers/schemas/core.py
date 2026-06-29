@@ -92,11 +92,37 @@ def _infer_tool_result_kind(tool: Any, summary: Any = "") -> str:
     return "tool_call"
 
 
+_BOOTSTRAP_CONTEXT_RESERVED_KEYS = frozenset({
+    "source",
+    "synthetic",
+    "epistemic_class",
+    "bootstrap_digest",
+    "identity_id",
+    "agent_id",
+    "agent_uuid",
+    "uuid",
+    "client_session_id",
+    "continuity_token",
+    "E",
+    "I",
+    "S",
+    "V",
+    "coherence",
+    "risk_score",
+})
+
+
 class BootstrapStateParams(BaseModel):
     """Subset of process_agent_update fields accepted as a bootstrap check-in
-    via onboard.initial_state. All fields optional; the server fills defaults
-    when absent. Extras are rejected (model_config below) so this isn't a
-    back-door for setting arbitrary internal state."""
+    via onboard.initial_state. All behavioral fields are optional; the server
+    fills defaults when absent.
+
+    Agent/client context is allowed, but quarantined under ``context`` so it
+    can never become an internal state override. For example,
+    ``initial_state={"objective": "...", "workspace": "..."}`` is accepted
+    and persisted as context metadata; reserved control fields such as
+    ``synthetic`` or ``coherence`` are still rejected.
+    """
     model_config = ConfigDict(extra="forbid")
 
     response_text: Optional[str] = Field(default=None)
@@ -106,6 +132,42 @@ class BootstrapStateParams(BaseModel):
     ethical_drift: Optional[List[float]] = Field(
         default=None, min_length=3, max_length=3
     )
+    context: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Optional bootstrap context/provenance metadata. Free-form "
+            "initial_state keys are moved here and persisted only as metadata; "
+            "they do not affect EISV, calibration, or policy decisions."
+        ),
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def quarantine_context_extras(cls, data):
+        if not isinstance(data, dict):
+            return data
+        known = set(cls.model_fields)
+        extras = {k: v for k, v in data.items() if k not in known}
+        if not extras:
+            return data
+        reserved = sorted(k for k in extras if k in _BOOTSTRAP_CONTEXT_RESERVED_KEYS)
+        if reserved:
+            raise ValueError(
+                "initial_state context cannot set reserved bootstrap/state "
+                f"fields: {reserved}"
+            )
+        normalized = dict(data)
+        context = normalized.get("context")
+        if context is None:
+            context = {}
+        elif not isinstance(context, dict):
+            raise ValueError("initial_state.context must be an object")
+        else:
+            context = dict(context)
+        for key in extras:
+            context[key] = normalized.pop(key)
+        normalized["context"] = context
+        return normalized
 
 
 class GetGovernanceMetricsParams(AgentIdentityMixin):

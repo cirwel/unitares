@@ -84,6 +84,7 @@ def fill_defaults(
         "confidence": params.confidence if params.confidence is not None else _DEFAULTS["confidence"],
         "task_type": params.task_type or _DEFAULTS["task_type"],
         "ethical_drift": params.ethical_drift or list(_DEFAULTS["ethical_drift"]),
+        "context": dict(params.context or {}),
         "bootstrap_digest": digest,
     }
 
@@ -104,6 +105,7 @@ def build_state_json(filled: Dict[str, Any]) -> Dict[str, Any]:
         "task_type": filled["task_type"],
         "ethical_drift": filled["ethical_drift"],
         "epistemic_class": "synthetic",
+        **({"context": filled["context"]} if filled.get("context") else {}),
     }
 
 
