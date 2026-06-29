@@ -2260,16 +2260,62 @@ def _sentinel_summary_from_events(
     }
 
 
+def _sentinel_event_from_audit(row):
+    """Flatten an audit.events row into the flat event shape
+    ``_sentinel_summary_from_events`` consumes.
+
+    Sentinel findings are persisted to audit.events with the finding fields
+    nested under ``details`` (see broadcaster._persist_event); the aggregator
+    expects them at the top level. ``timestamp``/``agent_id``/``event_id`` are
+    already top-level on the audit row.
+    """
+    details = row.get("details") or {}
+    return {
+        "timestamp": row.get("timestamp"),
+        "severity": details.get("severity"),
+        "violation_class": details.get("violation_class"),
+        "finding_type": details.get("finding_type"),
+        # Alarm rows carry alarm_kind instead of finding_type — the aggregator
+        # falls one back to the other for the recent stream.
+        "alarm_kind": details.get("alarm_kind"),
+        "message": details.get("message"),
+        "agent_id": row.get("agent_id"),
+        "event_id": row.get("event_id"),
+    }
+
+
+async def _sentinel_events_durable(window_hours, recent_limit):
+    """Read sentinel findings from the durable audit.events store.
+
+    Returns flat events (newest-first from the DB) for the aggregator. Raises
+    on DB failure so the caller can fall back to the in-memory ring.
+    """
+    from src.audit_db import query_audit_events_async
+    start_time = (
+        datetime.now(timezone.utc) - timedelta(hours=window_hours)
+    ).isoformat()
+    rows = await query_audit_events_async(
+        event_types=list(_SENTINEL_FINDING_EVENT_TYPES),
+        start_time=start_time,
+        order="desc",
+        limit=max(recent_limit * 4, 500),
+    )
+    return [_sentinel_event_from_audit(r) for r in rows]
+
+
 async def http_sentinel_summary(request):
     """GET /v1/sentinel/summary — aggregate recent sentinel_finding and
     sentinel_alarm_finding events for the dashboard panel.
 
-    Reads from event_detector's in-memory ring buffer (same source that
-    powers the live event stream). Transient across governance-mcp
-    restarts by design — sentinel findings are fleet-state signals, not a
-    historical backlog. Both fleet-analysis findings and forced-release
-    alarms are surfaced together so the panel reflects the full Sentinel
-    output stream (Surface 2 + Surface 3 + Surface 4)."""
+    Reads from the durable audit.events store (broadcaster._persist_event
+    writes every finding there), so the panel survives governance-mcp
+    restarts — a HIGH finding that fired before the last restart still shows
+    instead of an empty 0/0/0 panel. Falls back to event_detector's in-memory
+    ring buffer if the durable read fails, so the panel degrades rather than
+    500s. Both fleet-analysis findings and forced-release alarms are surfaced
+    together so the panel reflects the full Sentinel output stream (Surface 2
+    + Surface 3 + Surface 4). The ``source`` field reports which path served
+    the response."""
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     if not _check_http_auth(request, http_api_token=http_api_token):
         return _http_unauthorized()
@@ -2286,22 +2332,30 @@ async def http_sentinel_summary(request):
         recent_limit = _SENTINEL_DEFAULT_RECENT_LIMIT
     recent_limit = max(1, min(recent_limit, 500))
 
-    from src.event_detector import event_detector
-    # Fetch both Sentinel emit shapes. Pre-2026-05-06 the alarm path's
-    # `type` was `sentinel_forced_release_alarm` and got 400'd at the gate
-    # (#398); now that it lands as `sentinel_alarm_finding`, the panel
-    # also has to look it up here or alarms remain invisible.
-    events = list(event_detector.get_recent_events(
-        event_type="sentinel_finding", limit=500,
-    ))
-    events.extend(event_detector.get_recent_events(
-        event_type="sentinel_alarm_finding", limit=500,
-    ))
+    source = "audit_durable"
+    try:
+        events = await _sentinel_events_durable(window_hours, recent_limit)
+    except Exception as e:
+        # Durable read failed — degrade to the transient ring so the panel
+        # still shows whatever's in memory rather than erroring out.
+        logger.warning(f"sentinel summary: durable read failed ({e}); falling back to in-memory ring")
+        source = "memory_ring"
+        from src.event_detector import event_detector
+        # Pre-2026-05-06 the alarm path's `type` was
+        # `sentinel_forced_release_alarm` and got 400'd at the gate (#398);
+        # now that it lands as `sentinel_alarm_finding`, look it up here too.
+        events = list(event_detector.get_recent_events(
+            event_type="sentinel_finding", limit=500,
+        ))
+        events.extend(event_detector.get_recent_events(
+            event_type="sentinel_alarm_finding", limit=500,
+        ))
 
     summary = _sentinel_summary_from_events(
         events, window_hours=window_hours, recent_limit=recent_limit,
     )
     summary["success"] = True
+    summary["source"] = source
     return JSONResponse(summary)
 
 
