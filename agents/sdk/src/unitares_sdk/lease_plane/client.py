@@ -14,6 +14,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -319,6 +320,53 @@ class LeasePlaneClient:
     def handoff_accept(self, request: HandoffAcceptRequest) -> SimpleResult:
         payload = self._request_json("POST", "/v1/lease/handoff/accept", request.model_dump(mode="json", exclude_none=True))
         return _parse_simple(payload)
+
+    def propose_file_write(
+        self,
+        *,
+        path: str,
+        content: str,
+        proposer_uuid: str,
+        continuity_token: str,
+        session_id: str,
+        ttl_s: int = 300,
+        idempotency_key: str | None = None,
+        encoding: str | None = None,
+    ) -> Mapping[str, Any]:
+        """Propose a governed ``file_write`` effect on the lease plane.
+
+        Instead of writing the file directly, the caller asks the plane to do
+        it under governance: the plane acquires the ``file://`` surface lease,
+        re-checks the §6 veto on the commit path, captures a rollback pre-image,
+        commits the bytes, and records a durable ``effect_id``. This is the
+        consumer side of governed file writes — a write that is audited,
+        rollback-tracked, and lease-coordinated rather than ad-hoc.
+
+        ``proposer_uuid``/``continuity_token`` are the caller's governance
+        identity (from ``onboard``); they are forwarded to the §6 veto and never
+        persisted. Returns the raw ``/v1/effects`` envelope: ``{"ok": true,
+        "effect_id": ..., "custody_mode": "execute", "result": {...}}`` on
+        success, or an error envelope (e.g. ``proposer_invalid`` 422,
+        ``governance_blocked`` 403, ``not_implemented`` 501 when the server
+        flags are off). The bytes are committed only on ``ok: true``.
+        """
+        fs_path = path[len("file://") :] if path.startswith("file://") else path
+        surface = f"file://{fs_path}"
+        payload: dict[str, Any] = {"path": fs_path, "content": content}
+        if encoding:
+            payload["encoding"] = encoding
+
+        body = {
+            "effect_type": "file_write",
+            "custody_mode": "execute",
+            "surface": surface,
+            "required_leases": [{"surface": surface, "ttl_s": ttl_s}],
+            "payload": payload,
+            "proposer": {"agent_uuid": proposer_uuid, "continuity_token": continuity_token},
+            "provenance": {"session_id": session_id},
+            "idempotency_key": idempotency_key or f"fw-{uuid.uuid4().hex}",
+        }
+        return self._request_json("POST", "/v1/effects", body)
 
     def health_check(self, *, timeout_s: float | None = None) -> HealthResult:
         """Liveness probe against the BEAM lease-plane (Wave 2 Phase C).
