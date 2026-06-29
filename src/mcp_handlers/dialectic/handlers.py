@@ -1987,6 +1987,18 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     if aid and aid in _SESSION_METADATA_CACHE:
                         del _SESSION_METADATA_CACHE[aid]
 
+                # A terminal session no longer needs human facilitation. The
+                # synthetic-success (~submit_synthetic) and reviewer-reassignment
+                # paths already clear this flag, but the main multi-agent resolve
+                # did not — leaving a stale awaiting_facilitation=true on a resolved
+                # session, which the live surface wrongly badges / floats to top.
+                if getattr(session, "awaiting_facilitation", False):
+                    session.awaiting_facilitation = False
+                    try:
+                        await pg_update_awaiting_facilitation(session.session_id, False)
+                    except Exception as e:
+                        logger.warning(f"Could not clear awaiting_facilitation on resolve: {e}")
+
                 # Resolution is committed (BEAM or pg fallback above); announce the
                 # terminal outcome. session.phase is RESOLVED or FAILED here.
                 await _emit_dialectic_event(

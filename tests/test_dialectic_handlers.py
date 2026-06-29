@@ -1070,6 +1070,48 @@ class TestHandleSubmitSynthesis:
         assert data.get("action") == "resume"
 
     @pytest.mark.asyncio
+    async def test_convergence_clears_awaiting_facilitation(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_pg_resolve_session, mock_context_agent,
+    ):
+        """A session that was awaiting facilitation must clear the flag — and
+        persist the clear — when the main multi-agent path resolves. Otherwise the
+        live surface keeps badging / floating a resolved session. Regression for
+        the gap the synthetic-success and reassignment paths already covered."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+        session.awaiting_facilitation = True  # flagged earlier in its life
+
+        mock_result = {"success": True, "converged": True, "phase": "resolved"}
+        mock_resolution = MagicMock()
+        mock_resolution.to_dict.return_value = {"action": "resume", "conditions": ["Lower threshold"]}
+
+        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
+             patch.object(session, "submit_synthesis", return_value=mock_result), \
+             patch.object(session, "finalize_resolution", return_value=mock_resolution), \
+             patch.object(session, "check_hard_limits", return_value=(True, None)), \
+             patch(f"{DIALECTIC}.execute_resolution", new_callable=AsyncMock,
+                   return_value={"resumed": True}), \
+             patch(f"{DIALECTIC}.pg_update_awaiting_facilitation",
+                   new_callable=AsyncMock) as mock_clear, \
+             mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_pg_resolve_session, mock_context_agent:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-paused",
+                "proposed_conditions": ["Lower threshold"],
+                "agrees": True,
+                "api_key": "key",
+            })
+
+        data = parse_result(result)
+        assert data.get("converged") is True
+        assert session.awaiting_facilitation is False  # in-memory flag cleared
+        mock_clear.assert_awaited_with(session.session_id, False)  # and persisted
+
+    @pytest.mark.asyncio
     async def test_convergence_safety_violation(
         self, mock_server, mock_pg_add_message, mock_pg_update_phase,
         mock_save_session, mock_pg_resolve_session, mock_context_agent,
