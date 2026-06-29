@@ -9,7 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Curated backfill of notable changes merged since 2.13.0 (2026-05-04). Versioned on the next release bump; `pyproject.toml`/`VERSION` remain at 2.13.0._
+_No unreleased changes yet. New entries accumulate here until the next release bump._
+
+---
+
+## [2.14.0] - 2026-06-28
+
+_Backfill of notable changes merged between 2.13.0 (2026-05-04) and this release. `pyproject.toml`/`VERSION` bumped to 2.14.0._
 
 ### Added
 
@@ -204,7 +210,7 @@ _Curated backfill of notable changes merged since 2.13.0 (2026-05-04). Versioned
 - **monitor:** persist last_update across restarts; clamp NTP step-back; log DT_MAX saturation (#224) (9c37ce4)
 - **migrations:** seed epoch 3 in core.epochs (021) (#227) (f9648d2)
 - **ci:** restore README Status line for check_doc_drift (#222) (a12a72f)
-- drop hardcoded /Users/cirwel default in vigil_hygiene --repo (#216) (1aa6e72)
+- drop hardcoded home-path default in vigil_hygiene --repo (#216) (1aa6e72)
 - **tests:** opt-in coverage + align CI with make test and README (#214) (19c6402)
 - **self_recovery:** persist paused_at + lifecycle_event in quick_resume and operator_resume (#208) (6742322)
 - **observe:** decision_history hydration + verdict_distribution + redundant-hydrate cleanup (#205) (1d7e420)
@@ -257,7 +263,7 @@ _Curated backfill of notable changes merged since 2.13.0 (2026-05-04). Versioned
 - **proposals:** BEAM footprint roadmap v0 — Read A (control plane → BEAM, intelligence plane stays Python) (#333) (dbceb5e)
 - **watcher:** record P016 FP sweep 2026-05-04 — SDK envelope parsing (#329) (c69e94d)
 - **r1:** bookkeeping — mark §4.1 shipped (#321), §4.3 in flight (#324) (#325) (20efb92)
-- **lease-plane:** §7.13 v0.11 TENTATIVE — resident heartbeat surface + substrate-state separation from monitor_decision (3 council passes) (#319) (db07cbb)
+- **lease-plane:** §7.13 v0.11 TENTATIVE — resident heartbeat surface + substrate-state separation from monitor_decision (3 review passes) (#319) (db07cbb)
 - **lease-plane:** §7.2.8 + §7.2.9 RESOLVED v0.10 — payload-shape spec pinned by test, scheme grammar lint already shipped (#318) (ebac3ef)
 - **lease-plane:** §7.5 RESOLVED v0.9 — Pi remote_heartbeat TTL 180s→1000s from measured Steward audit data (#317) (8574d7c)
 - **plexus-scope:** add lease-plane source + migration rows to surface-ID table (2402877)
@@ -294,7 +300,7 @@ _Curated backfill of notable changes merged since 2.13.0 (2026-05-04). Versioned
 - remove CASE_STUDY.md (translation-layer that deep-tech evaluators don't need) (4231275)
 - **ontology:** S21 canonical lineage-decl gap metric (PR #226 followup) (3ac1eeb)
 - **ontology:** fix dead session_cache.py path reference (00f0663)
-- **ontology:** S21-a council pass 2 — adversarial review post-merge (684944b)
+- **ontology:** S21-a review pass 2 — adversarial review post-merge (684944b)
 - **ontology:** S19 closed in status board + S21-a fix council review (2140440)
 - **ontology:** surface S21 session-resolution bypass + ledger row (03d1a90)
 - drop relocated answer_lumen_questions row from cross-machine-surface (9371cdf)
@@ -321,7 +327,7 @@ _Curated backfill of notable changes merged since 2.13.0 (2026-05-04). Versioned
 - **plan:** add S16 (audit-write fire-and-forget) + S17 (Redis-in-handler) tech-debt rows surfaced by S13 Watcher pass (1f8b116)
 - **identity:** align user-facing copy with Part-C ownership-proof posture (#149) (a89ca01)
 - **ontology:** add scheduled-re-reads section for date-gated triggers (a24b511)
-- **ontology:** council pass — S8c+S14 rows, R1 v3.2 amendment, S1 scope correction (62113ef)
+- **ontology:** review pass — S8c+S14 rows, R1 v3.2 amendment, S1 scope correction (62113ef)
 - **ontology:** record operator acceptances for R1, S1, S8a Phase 2 (7f71c02)
 - spec for config hot-reload (option C — admin tools, no watcher) (4caf2e8)
 - **ontology:** add S13 row — server-side complement of S11 (1092aec)
@@ -1654,10 +1660,10 @@ next_action: 📝 Call process_agent_update() to start governance tracking
 - **Standardized error handling** - `require_agent_id()`, `success_response()`, `error_response()`
 
 #### New Tools & Scripts
-- `/Users/cirwel/scripts/fix_cursor_freeze.sh` - One-command recovery tool for Cursor/IDE freezes
-- `/Users/cirwel/scripts/test_enhanced_locking.py` - Comprehensive lock system test suite (4 tests)
-- `/Users/cirwel/scripts/test_mcp_json_rpc.py` - MCP protocol verification tool
-- `/Users/cirwel/scripts/diagnose_cursor_mcp.sh` - Complete system diagnostic script
+- `~/scripts/fix_cursor_freeze.sh` - One-command recovery tool for Cursor/IDE freezes
+- `~/scripts/test_enhanced_locking.py` - Comprehensive lock system test suite (4 tests)
+- `~/scripts/test_mcp_json_rpc.py` - MCP protocol verification tool
+- `~/scripts/diagnose_cursor_mcp.sh` - Complete system diagnostic script
 
 ### Changed
 
@@ -1691,11 +1697,11 @@ next_action: 📝 Call process_agent_update() to start governance tracking
 - **CHANGELOG.md** - Created comprehensive changelog (this file)
 
 #### Created
-- `/Users/cirwel/scripts/cursor_implementations_summary.md` - Complete v2.1 feature documentation
-- `/Users/cirwel/scripts/session_final_status.md` - Session summary and status
+- `~/scripts/cursor_implementations_summary.md` - Complete v2.1 feature documentation
+- `~/scripts/session_final_status.md` - Session summary and status
 
 #### Consolidated
-- Archived 5 redundant session documentation files to `/Users/cirwel/scripts/Archive/session_docs_20251125/`
+- Archived 5 redundant session documentation files to `~/scripts/Archive/session_docs_20251125/`
 - Kept 2 comprehensive docs: `cursor_implementations_summary.md` and `session_final_status.md`
 
 ### Testing
@@ -1810,18 +1816,18 @@ git pull
 
 **Optional - Install new tools:**
 ```bash
-chmod +x /Users/cirwel/scripts/fix_cursor_freeze.sh
-chmod +x /Users/cirwel/scripts/diagnose_cursor_mcp.sh
+chmod +x ~/scripts/fix_cursor_freeze.sh
+chmod +x ~/scripts/diagnose_cursor_mcp.sh
 ```
 
 **If experiencing Cursor freezes:**
 ```bash
-/Users/cirwel/scripts/fix_cursor_freeze.sh
+~/scripts/fix_cursor_freeze.sh
 ```
 
 **To test new locking system:**
 ```bash
-python3 /Users/cirwel/scripts/test_enhanced_locking.py
+python3 ~/scripts/test_enhanced_locking.py
 ```
 
 ---
