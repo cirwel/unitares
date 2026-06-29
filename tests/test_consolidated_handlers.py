@@ -301,15 +301,26 @@ class TestActionRouterRegistration:
         )
         assert "test_reg_check" in _TOOL_DEFINITIONS
 
-    def test_router_uses_provided_description(self):
+    def test_router_uses_provided_description_and_derives_actions(self):
         handler = _make_mock_handler()
         action_router(
             "test_reg_desc",
-            actions={"ping": handler},
+            actions={"ping": handler, "pong": handler},
             description="My description",
         )
         td = _TOOL_DEFINITIONS["test_reg_desc"]
-        assert td.description == "My description"
+        # The router keeps the caller's prose and DERIVES the action list from
+        # the action map so discovery can't drift from routing (PR #1288).
+        assert td.description == "My description — actions: ping, pong."
+
+    def test_router_derives_description_when_prose_omitted(self):
+        handler = _make_mock_handler()
+        action_router(
+            "test_reg_desc_default",
+            actions={"ping": handler},
+        )
+        td = _TOOL_DEFINITIONS["test_reg_desc_default"]
+        assert td.description == "test_reg_desc_default operations — actions: ping."
 
     def test_router_uses_provided_timeout(self):
         handler = _make_mock_handler()
