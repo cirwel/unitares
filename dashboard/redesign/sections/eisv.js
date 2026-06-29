@@ -194,7 +194,8 @@
     const r = await DATA.agentHistory(id, { mode: "all", limit: 120 });
     if (selectedId !== id) return; // a newer selection won — drop this result
     trajLoading = false;
-    trajPoints = (r && r.points) || [];
+    // withFallback wraps the result as { source, data: { points, ... } }.
+    trajPoints = (r && r.data && r.data.points) || [];
     renderTrajectory();
   }
 
