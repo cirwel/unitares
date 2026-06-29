@@ -41,7 +41,7 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
       verbatim — no silent aliasing.
     - Hugging Face Inference Providers (privacy="cloud", provider="hf")
       — requires HF_TOKEN or HUGGINGFACE_TOKEN. Model names like
-      "deepseek-ai/DeepSeek-R1" or "Qwen/Qwen2.5-72B-Instruct" route here.
+      "deepseek-ai/DeepSeek-R1" or "Qwen/Qwen3-235B-A22B-Instruct" route here.
 
     Usage tracked in EISV (Energy consumption):
     - Model calls consume Energy
