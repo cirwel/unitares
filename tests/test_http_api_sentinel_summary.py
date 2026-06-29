@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.http_api import _sentinel_summary_from_events
+from src.http_api import _sentinel_event_from_audit, _sentinel_summary_from_events
 
 
 NOW = datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc)
@@ -250,3 +250,64 @@ class TestAlarmEventsSurface:
         ]
         out = _sentinel_summary_from_events(events, now=NOW)
         assert out["by_severity"] == {"warning": 1, "high": 1}
+
+
+class TestAuditRowFlatten:
+    """`_sentinel_event_from_audit` adapts a durable audit.events row (finding
+    fields nested under `details`) into the flat shape the aggregator consumes.
+
+    This is what makes /v1/sentinel/summary survive restarts: the panel now
+    reads persisted rows instead of the in-memory ring that's wiped on every
+    governance-mcp restart. Pinning the mapping stops a future details-schema
+    change from silently zeroing the panel."""
+
+    def _row(self, **details):
+        base_details = {
+            "severity": "high",
+            "violation_class": "coordinated_degradation",
+            "finding_type": "cross_agent",
+            "message": "coordinated EISV degradation across 3 agents",
+        }
+        base_details.update(details)
+        return {
+            "timestamp": NOW.isoformat(),
+            "agent_id": "sentinel-uuid",
+            "event_id": 42,
+            "details": base_details,
+        }
+
+    def test_lifts_nested_detail_fields_to_top_level(self):
+        flat = _sentinel_event_from_audit(self._row())
+        assert flat["severity"] == "high"
+        assert flat["violation_class"] == "coordinated_degradation"
+        assert flat["finding_type"] == "cross_agent"
+        assert flat["message"] == "coordinated EISV degradation across 3 agents"
+        assert flat["timestamp"] == NOW.isoformat()
+        assert flat["agent_id"] == "sentinel-uuid"
+        assert flat["event_id"] == 42
+
+    def test_alarm_kind_carried_through_for_fallback(self):
+        """Alarm rows nest alarm_kind, not finding_type — the flattener must
+        carry it so the aggregator's finding_type fallback works end-to-end."""
+        flat = _sentinel_event_from_audit(
+            self._row(finding_type=None, alarm_kind="ad_hoc")
+        )
+        assert flat["alarm_kind"] == "ad_hoc"
+
+    def test_flattened_alarm_row_aggregates_into_summary(self):
+        """End-to-end: a durable alarm row flattens and the aggregator falls
+        finding_type back to alarm_kind, matching the in-memory ring path."""
+        flat = _sentinel_event_from_audit(
+            self._row(finding_type=None, alarm_kind="conflict_batch",
+                      message="forced release: dialectic:/x")
+        )
+        out = _sentinel_summary_from_events([flat], now=NOW)
+        assert out["total"] == 1
+        assert out["recent"][0]["finding_type"] == "conflict_batch"
+
+    def test_missing_details_does_not_crash(self):
+        """A malformed row without `details` should flatten to a sparse event
+        (counted, fields None) rather than raising and 500-ing the panel."""
+        flat = _sentinel_event_from_audit({"timestamp": NOW.isoformat()})
+        assert flat["severity"] is None
+        assert flat["message"] is None
