@@ -38,3 +38,43 @@ def test_baselined_clears_caveat():
     assert disc["non_discriminative"] is False
     assert disc["updates_until_baseline"] == 0
     assert disc["note"] is None
+
+
+# --- primary_driver accuracy (correction 2026-06-28) -------------------------
+# The verdict driver must reflect the actual posture, not a hardcoded
+# "self_reported". With Φ telemetry (default UNITARES_PHI_TELEMETRY_ONLY=1) a
+# warm behavioral verdict is authoritative; cold-start falls back to the Φ prior.
+
+class _StubAssessment:
+    def __init__(self, verdict="safe", risk=0.1):
+        self.verdict = verdict
+        self.risk = risk
+
+
+def test_cold_start_driver_is_phi_not_self_reported(monkeypatch):
+    monkeypatch.setenv("UNITARES_PHI_TELEMETRY_ONLY", "1")
+    # No behavioral assessment / sub-warmup confidence → Φ cold-start prior.
+    attr = _build_risk_attribution(_metrics(), None, None, None, behavioral_confidence=0.1)
+    assert attr["primary_driver"] == "phi_cold_start"
+    # The legacy mislabel must be gone.
+    assert attr["primary_driver"] != "self_reported"
+    assert "self_reported" not in attr["sources"]
+    assert "phi_drift" in attr["sources"]
+
+
+def test_warm_driver_is_behavioral_under_phi_telemetry(monkeypatch):
+    monkeypatch.setenv("UNITARES_PHI_TELEMETRY_ONLY", "1")
+    attr = _build_risk_attribution(
+        _metrics(), None, None, _StubAssessment(verdict="high-risk", risk=0.8),
+        behavioral_confidence=0.5,
+    )
+    assert attr["primary_driver"] == "behavioral_assessment"
+
+
+def test_warm_driver_is_phi_floor_when_telemetry_off(monkeypatch):
+    monkeypatch.setenv("UNITARES_PHI_TELEMETRY_ONLY", "0")
+    attr = _build_risk_attribution(
+        _metrics(), None, None, _StubAssessment(verdict="caution", risk=0.5),
+        behavioral_confidence=0.5,
+    )
+    assert attr["primary_driver"] == "phi_floor"

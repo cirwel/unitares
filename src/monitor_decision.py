@@ -164,20 +164,21 @@ def make_decision(
             'action': 'pause',
             'sub_action': 'risk_pause',
             'reason': f'UNITARES high-risk verdict (risk_score={risk_score:.2f}) - safety pause suggested',
-            # Honest provenance: the verdict is driven by the signals the caller
-            # reported (ethical_drift, complexity, confidence), not by an
-            # independent measurement of behavior. Saying "the system detected
-            # high ethical risk" overclaimed — at current maturity the only
-            # non-self-attested signal (behavioral text model) does not carry
-            # this weight. See result['risk_attribution'] for the decomposition
-            # (dogfood 2026-06-13, P0).
+            # Honest provenance, regime-aware: which signal drove this verdict
+            # depends on warmup. Post-warmup, with Φ telemetry (the default), it
+            # is the independent behavioral assessment; pre-warmup it is the Φ
+            # cold-start prior (mostly server-derived). risk_attribution carries
+            # the exact primary_driver, so the guidance points there rather than
+            # asserting a single (now-stale) "self-attested" provenance
+            # (dogfood 2026-06-13 P0; driver-accuracy correction 2026-06-28).
             'guidance': (
-                'This is a safety check, not a failure. Based on the signals you '
-                'reported (ethical_drift, complexity, confidence), this check-in '
-                'scored high-risk. These inputs are self-attested — the verdict '
-                'reflects what you reported, not an independent measurement of '
-                'your behavior (see risk_attribution). Consider simplifying your '
-                'approach.'
+                'This is a safety check, not a failure. This check-in scored '
+                'high-risk. See risk_attribution for what drove it: once your '
+                'behavioral baseline is warm the verdict is an independent '
+                'assessment of your trajectory; before then it leans on the '
+                'signals you reported (ethical_drift, complexity, confidence). '
+                'Consider simplifying your approach or requesting a dialectic '
+                'review.'
             ),
             'critical': is_critical,
             'basin': basin,
