@@ -664,6 +664,13 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
 
     compact_decision = {
         "action": decision.get("action"),
+        # sub_action qualifies the binary action (proceed/pause): "approve",
+        # "guide" (e.g. the F2 latest-risk fast-trip), or "reject". Without it a
+        # client that forces response_mode='compact' and hits a guide would see
+        # the guidance only in the free-text reason, not as a structured field —
+        # diverging from mirror/full, which carry sub_action. Surface it here for
+        # parity (None on a plain approve).
+        "sub_action": decision.get("sub_action"),
         "reason": decision.get("reason"),
         "require_human": decision.get("require_human"),
         "margin": decision.get("margin"),
