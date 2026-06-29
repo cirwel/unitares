@@ -1,7 +1,8 @@
 # Wave 3 (γ) hybrid — successor to the halted 8-surface handler-dispatch port
 
-**Status:** DRAFT — v0 wide-cut REJECTED by design council 2026-06-28 (see §0a); active direction is
-the **narrow cut (§0b)**, which owes a v0.2 redraw. Successor scope after the (D) state-ownership red-team
+**Status:** DRAFT — v0 wide-cut REJECTED (§0a); narrow cut (§0b) REVIEWED by a second council + live
+telemetry (§0c) → **recommend SHELVING the BEAM handler port for `process_agent_update`; the
+addressable win is in Python (enrichment), not in BEAM.** Successor scope after the (D) state-ownership red-team
 **halted** the original `beam-wave-3-handler-dispatch.md` 8-surface port (artifact:
 `docs/handoffs/wave-3-state-ownership-redteam-2026-06-28.md`). Operator selected resume shape **(γ)
 hybrid**. This is a design to react to, not an implementation plan; it owes a council pass + its own
@@ -119,6 +120,49 @@ Two options for the per-agent serialization the StateLockManager provides today:
 
 (Not a γ concern: the dialectic-on-BEAM C3 was investigated and found over-stated — see §0a
 correction; no action.)
+
+---
+
+## 0c. v0.2 council + live telemetry (2026-06-28) — recommend SHELVE the handler port
+
+A second council (boundary-integrity / architecture / adversarial) reviewed the §0b narrow cut, and
+the decisive `[checkin_phases]` telemetry (n=2169 live check-ins,
+`docs/handoffs/wave-3-checkin-phase-telemetry-2026-06-28.md`) was pulled. Both converge: **the narrow
+cut does not target the actual cost.**
+
+**Telemetry — where the `process_agent_update` time actually goes** (slowest 1% of check-ins):
+`enrichment ~1031ms`, `locked_update ~78ms`, `prepare_unlocked ~40ms`, `post_update ~38ms`. The
+**locked compute the narrow cut moves to BEAM is ~78ms**; the **~1s tail is the enrichment pipeline.**
+
+**Council findings against §0b:**
+- **Boundary lane:** the slim RPC payload is wrong by ~100×. The real prior-state is the full
+  `UNITARESMonitor` (rolling E/I/S/V histories ≥50, behavioral EMA, continuity layer, adaptive
+  governor), not `{EISV+baseline}`. Five identity/metadata writes execute *inside* the compute block
+  (pause enforcement `meta.status`, `_persist_thread_identity_async`→`core.identities`, the #425 Path-D
+  `create_agent`→`core.agents`, `persist_runtime_state`, loop-cooldown). `run_enrichment_pipeline`
+  reads ≥6 in-process singletons (`pattern_tracker`, `calibration_checker`, `event_detector`,
+  `ACTIVE_SESSIONS`, the dashboard `broadcaster_instance`) → **cannot be a stateless RPC.**
+- **Architecture lane:** the atomic seam is **inverted** — the durable state persist already runs
+  *outside* the lock today; the atomic-under-lock piece is the *status transition*, which §0b pulls
+  out to a Python post-step. That creates an **unsafe-direction crash window** (state row says
+  `pause`, `meta.status` stays `active`) with **no reconciler** (existing sweeps only auto-*resume*) —
+  a blocker. The `core.agent_states.identity_id` FK forbids cross-runtime atomic identity+state, and
+  the #425 recovery mint sneaks an identity write into the BEAM path.
+- **Adversarial lane:** the ~96% premise does not map to live code — the anyio↔asyncpg tax is already
+  mitigated (ExecutorPool PR #218 + ODE/auth/loop-detect all on `run_in_executor`); the 2751ms
+  `audit.tool_usage` p99 vs the 404ms handler-internal p99 means the ~2.3s gap is **event-loop
+  queue-wait around the handler**, which a handler port does not remove.
+
+**Recommendation: shelve the BEAM handler port for `process_agent_update`.** The addressable wins are
+both in Python and do not need BEAM:
+1. **Parallelize the enrichment pipeline** — the independent, fail-safe enrichments with
+   `asyncio.gather`; make KG-heavy ones fire-and-forget. Targets the ~1s tail directly.
+2. **Profile the 404→2751ms event-loop-queue gap** (likely default-pool saturation) → a dedicated ODE
+   thread pool / pool sizing. Targets the substrate-tax gap without a port.
+
+Dialectic-on-BEAM (already shipped — a pure-compute/coordination port, not a state/identity port)
+remains the correct use of BEAM. The update handler's bottleneck is simply not what BEAM removes.
+§0a/§0b and §1–§7 are preserved below as the design record that led here.
 
 ---
 
