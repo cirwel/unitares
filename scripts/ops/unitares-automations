@@ -17,13 +17,13 @@ import subprocess
 import sys
 import tomllib
 from dataclasses import asdict, dataclass, field, fields
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 
 TOOL_NAME = "unitares-automations"
-TOOL_VERSION = "0.1.0"
+TOOL_VERSION = "0.1.1"
 
 HOME = Path.home()
 DEFAULT_PROJECTS_ROOT = HOME / "projects"
@@ -167,6 +167,56 @@ def repo_for_workdir(workdir: str | None) -> str | None:
     if out.returncode == 0 and out.stdout.strip():
         return out.stdout.strip()
     return None
+
+
+def git_common_dir(workdir: str | Path | None) -> str | None:
+    if not workdir:
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(workdir), "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0 or not out.stdout.strip():
+        return None
+    common = Path(out.stdout.strip())
+    if not common.is_absolute():
+        common = Path(workdir) / common
+    try:
+        return str(common.resolve())
+    except OSError:
+        return str(common)
+
+
+def parse_utc_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def next_run_past_due(item: Automation, now: datetime) -> bool:
+    status = (item.status or "").lower()
+    if status not in {"active", "enabled", "scheduled"}:
+        return False
+    next_run = parse_utc_datetime(item.next_run)
+    if next_run is None:
+        return False
+    return next_run < now - timedelta(minutes=15)
 
 
 def calendar_interval_to_text(value: Any) -> str | None:
@@ -324,7 +374,8 @@ def collect_systemd(warnings: list[str]) -> list[Automation]:
                 timeout=5,
             )
         except FileNotFoundError:
-            warnings.append("systemd: systemctl not found (not a systemd host)")
+            if sys.platform.startswith("linux"):
+                warnings.append("systemd: systemctl not found")
             return results
         except (OSError, subprocess.TimeoutExpired) as exc:
             warnings.append(f"systemd ({scope_label}): unavailable: {exc}")
@@ -530,17 +581,34 @@ def collect_github_actions(projects_root: Path, warnings: list[str]) -> list[Aut
             continue
         workflow_files.append(path)
 
-    for path in sorted(workflow_files):
+    by_workflow: dict[tuple[str, str], tuple[int, Path, Path]] = {}
+    for path in workflow_files:
+        repo_path = None
+        for parent in path.parents:
+            if (parent / ".git").exists():
+                repo_path = parent
+                break
+        if repo_path is None:
+            continue
+        try:
+            workflow_rel = str(path.relative_to(repo_path))
+        except ValueError:
+            workflow_rel = path.name
+        common_dir = git_common_dir(repo_path) or str(repo_path)
+        rank = 0 if common_dir == str((repo_path / ".git").resolve()) else 1
+        key = (common_dir, workflow_rel)
+        existing = by_workflow.get(key)
+        candidate = (rank, repo_path, path)
+        if existing is None or candidate < existing:
+            by_workflow[key] = candidate
+
+    for _, repo_path, path in sorted(by_workflow.values(), key=lambda entry: str(entry[2])):
         try:
             text = path.read_text(errors="replace")
         except OSError as exc:
             warnings.append(f"github-actions: failed to read {short_path(path)}: {exc}")
             continue
-        repo = None
-        for parent in path.parents:
-            if (parent / ".git").exists():
-                repo = str(parent)
-                break
+        repo = str(repo_path)
         name = workflow_name(text, path)
         triggers = workflow_trigger_summary(text)
         runner = "github-actions"
@@ -719,6 +787,7 @@ def collect_all(projects_root: Path) -> dict[str, Any]:
 
     apply_overrides(items, warnings)
 
+    generated_at = datetime.now(timezone.utc)
     by_source: dict[str, int] = {}
     by_kind: dict[str, int] = {}
     needs_attention = []
@@ -727,10 +796,14 @@ def collect_all(projects_root: Path) -> dict[str, Any]:
         by_kind[item.kind] = by_kind.get(item.kind, 0) + 1
         status = (item.status or "").lower()
         last_status = (item.last_status or "").lower()
+        is_past_due = next_run_past_due(item, generated_at)
+        if is_past_due and "attention:next_run_past_due" not in item.notes:
+            item.notes.append("attention:next_run_past_due")
         if (
             status in {"disabled", "paused", "failing", "failed"}
             or last_status in {"failed", "error"}
             or (item.source == "claude" and status == "pending")
+            or is_past_due
         ):
             needs_attention.append(item.id)
 
@@ -739,7 +812,7 @@ def collect_all(projects_root: Path) -> dict[str, Any]:
         "tool_name": TOOL_NAME,
         "tool_version": TOOL_VERSION,
         "tool_path": str(Path(__file__).resolve()),
-        "generated_at": now_iso(),
+        "generated_at": generated_at.isoformat(),
         "host": os.uname().nodename,
         "projects_root": str(projects_root),
         "overrides_path": str(OVERRIDES_JSON) if OVERRIDES_JSON.exists() else None,
@@ -797,11 +870,17 @@ def filtered_report(report: dict[str, Any], args: argparse.Namespace) -> dict[st
         by_source[item["source"]] = by_source.get(item["source"], 0) + 1
         by_kind[item["kind"]] = by_kind.get(item["kind"], 0) + 1
     filtered = dict(report)
+    item_ids = {item["id"] for item in items}
     filtered["summary"] = {
         **report["summary"],
         "total": len(items),
         "by_source": dict(sorted(by_source.items())),
         "by_kind": dict(sorted(by_kind.items())),
+        "needs_attention": [
+            item_id
+            for item_id in report["summary"].get("needs_attention", [])
+            if item_id in item_ids
+        ],
         "filtered_from_total": len(report["automations"]),
     }
     filtered["automations"] = items
