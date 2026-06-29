@@ -9,13 +9,35 @@ window.SNAPSHOT = {
   capturedAt: "2026-06-19T19:30:00Z",
   health: { version: "2.13.0", uptime: "21h 15m", db: "connected" },
   residents: [
-    { name:"Watcher",    status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.77,I:0.66,S:0.24,V:+0.10}, silence:25,    silenceThreshold:3600,   event_driven:true },
-    { name:"Vigil",      status:"healthy", coherence:0.49, risk:0.00, verdict:"proceed", eisv:{E:0.75,I:0.77,S:0.16,V:-0.02}, silence:101,   silenceThreshold:3600 },
-    { name:"Lumen",      status:"careful", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.31,I:0.83,S:0.15,V:-0.52}, silence:56,    silenceThreshold:3600 },
-    { name:"Sentinel",   status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.77,I:0.68,S:0.26,V:+0.09}, silence:273,   silenceThreshold:3600 },
-    { name:"Steward",    status:"dark",    coherence:null, risk:null, verdict:null,      eisv:null,                          silence:32,    silenceThreshold:3600 },
-    { name:"Chronicler", status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.81,I:0.68,S:0.22,V:+0.11}, silence:67156, silenceThreshold:172800 },
+    { id:"mcp_20260416_907e3195", name:"Watcher",    status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.77,I:0.66,S:0.24,V:+0.10}, silence:25,    silenceThreshold:3600,   event_driven:true },
+    { id:"mcp_20260406_e55caaf1", name:"Vigil",      status:"healthy", coherence:0.49, risk:0.00, verdict:"proceed", eisv:{E:0.75,I:0.77,S:0.16,V:-0.02}, silence:101,   silenceThreshold:3600 },
+    { id:"mcp_20260428_69a1a4f7", name:"Lumen",      status:"careful", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.31,I:0.83,S:0.15,V:-0.52}, silence:56,    silenceThreshold:3600 },
+    { id:"mcp_20260407_f92dcea8", name:"Sentinel",   status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.77,I:0.68,S:0.26,V:+0.09}, silence:273,   silenceThreshold:3600 },
+    { id:"mcp_20260417_9a6681ec", name:"Steward",    status:"dark",    coherence:null, risk:null, verdict:null,      eisv:null,                          silence:32,    silenceThreshold:3600 },
+    { id:"mcp_20260419_chron001", name:"Chronicler", status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.81,I:0.68,S:0.22,V:+0.11}, silence:67156, silenceThreshold:172800 },
   ],
+  // Bundled per-agent trajectory for the offline drill-down demo — Lumen's
+  // energy declining into the strained cell the heatmap flags. Live uses
+  // /v1/agents/{id}/history (thousands of real points); this is just the
+  // offline stand-in for one agent.
+  agentHistory: {
+    "mcp_20260428_69a1a4f7": [
+      { t:"2026-06-06", E:0.55, I:0.84, S:0.11, V:-0.30, coherence:0.51, risk:0.10 },
+      { t:"2026-06-07", E:0.53, I:0.84, S:0.12, V:-0.33, coherence:0.51, risk:0.11 },
+      { t:"2026-06-08", E:0.50, I:0.83, S:0.12, V:-0.36, coherence:0.50, risk:0.12 },
+      { t:"2026-06-09", E:0.48, I:0.84, S:0.13, V:-0.39, coherence:0.50, risk:0.13 },
+      { t:"2026-06-10", E:0.46, I:0.83, S:0.13, V:-0.41, coherence:0.50, risk:0.14 },
+      { t:"2026-06-11", E:0.44, I:0.83, S:0.14, V:-0.43, coherence:0.50, risk:0.15 },
+      { t:"2026-06-12", E:0.42, I:0.83, S:0.14, V:-0.45, coherence:0.50, risk:0.16 },
+      { t:"2026-06-13", E:0.40, I:0.83, S:0.14, V:-0.47, coherence:0.50, risk:0.17 },
+      { t:"2026-06-14", E:0.38, I:0.83, S:0.15, V:-0.48, coherence:0.50, risk:0.18 },
+      { t:"2026-06-15", E:0.36, I:0.83, S:0.15, V:-0.49, coherence:0.50, risk:0.18 },
+      { t:"2026-06-16", E:0.35, I:0.83, S:0.15, V:-0.50, coherence:0.50, risk:0.19 },
+      { t:"2026-06-17", E:0.33, I:0.83, S:0.15, V:-0.51, coherence:0.50, risk:0.19 },
+      { t:"2026-06-18", E:0.32, I:0.83, S:0.15, V:-0.51, coherence:0.50, risk:0.19 },
+      { t:"2026-06-19", E:0.31, I:0.83, S:0.15, V:-0.52, coherence:0.50, risk:0.19 },
+    ],
+  },
   // representative until wired to live tool calls (agent/detect_stuck/knowledge/calibration)
   stats: {
     agentsActive: 6, agentsTotal: 658, stuck: 0, discoveries: 1204, discoveriesToday: 12,

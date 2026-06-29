@@ -119,16 +119,98 @@
       return `<div title="${esc(title)}" style="background:color-mix(in srgb, var(--ok) ${pct}%, var(--danger));color:#fff;font-family:var(--font-mono);font-size:var(--text-sm);text-align:center;padding:6px 0;border-radius:var(--radius-1)">${value}</div>`;
     };
     const headLbl = (t) => `<div style="text-align:center;font-size:var(--text-xs);color:var(--muted);text-transform:uppercase;letter-spacing:var(--tracking-label)">${t}</div>`;
-    const header = `<div></div>` + cols.map((c) => headLbl(c.label)).join("");
+    // Each resident is its own grid row (shared column template) so the whole
+    // row is a click target for the per-agent trajectory below. Rows without an
+    // agent id (e.g. snapshot-only) stay inert.
+    const gridCols = `minmax(72px,1.4fr) repeat(${cols.length}, 1fr)`;
+    const rowGrid = `display:grid;grid-template-columns:${gridCols};gap:4px;align-items:stretch`;
+    const header = `<div style="${rowGrid};padding:0 1px"><div></div>${cols.map((c) => headLbl(c.label)).join("")}</div>`;
     const body = rows.map((r) => {
       const name = `<div style="font-size:var(--text-sm);color:var(--ink-2);display:flex;align-items:center;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(r.name)}</div>`;
-      return name + cols.map((c) => cell(c.frac(r), fmt(c.val(r)), `${r.name} ${c.label} = ${fmt(c.val(r))}`)).join("");
+      const cells = cols.map((c) => cell(c.frac(r), fmt(c.val(r)), `${r.name} ${c.label} = ${fmt(c.val(r))}`)).join("");
+      const clickable = !!r.id;
+      const attrs = clickable
+        ? ` data-traj-id="${esc(r.id)}" data-traj-name="${esc(r.name)}" title="Click for ${esc(r.name)}'s EISV trajectory"` : "";
+      return `<div${attrs} style="${rowGrid};border-radius:var(--radius-1);padding:1px${clickable ? ";cursor:pointer" : ""}">${name}${cells}</div>`;
     }).join("");
     return `<div class="panel" style="margin-bottom:var(--space-5)">
         <div class="panel-head" style="margin-bottom:var(--space-3)"><h2>Fleet heatmap</h2>
-          <span class="spring"></span><span class="fresh">green = healthy · red = strained</span></div>
-        <div style="display:grid;grid-template-columns:minmax(72px,1.4fr) repeat(${cols.length}, 1fr);gap:4px;align-items:stretch">
-          ${header}${body}</div></div>`;
+          <span class="spring"></span><span class="fresh">green = healthy · red = strained · click a row</span></div>
+        <div style="display:flex;flex-direction:column;gap:4px">${header}${body}</div></div>`;
+  }
+
+  // ---- Per-agent EISV trajectory (drill-down from the heatmap) -------------
+  let trajChart = null, selectedId = null, selectedName = null, trajPoints = [], trajLoading = false, clickBound = false;
+
+  function fmtT(t) {
+    const d = new Date(t);
+    return isNaN(d) ? "" : (d.getMonth() + 1) + "/" + d.getDate();
+  }
+
+  function buildTrajectory() {
+    if (trajChart) { trajChart.destroy(); trajChart = null; }
+    const cv = $("#eisv-traj-canvas");
+    if (!cv || !window.Chart || !trajPoints.length) return;
+    const E = cssVar("--eisv-e"), I = cssVar("--eisv-i"), C = cssVar("--eisv-c"), muted = cssVar("--muted");
+    const labels = trajPoints.map((p) => fmtT(p.t));
+    trajChart = new Chart(cv, {
+      type: "line",
+      data: { labels, datasets: [
+        ds("Energy", trajPoints.map((p) => p.E), E),
+        ds("Integrity", trajPoints.map((p) => p.I), I),
+        ds("Coherence", trajPoints.map((p) => p.coherence), C, { fill: false, borderDash: [5, 4], borderWidth: 1.5 }),
+      ] },
+      options: baseOptions({ min: 0, max: 1 }),
+      plugins: [refLine(MODEL.coherenceEq, muted)],
+    });
+  }
+
+  function renderTrajectory() {
+    const mount = $("#eisv-trajectory");
+    if (!mount) return;
+    const headHTML = (sub) => `<div class="panel-head" style="margin-bottom:var(--space-3)">
+        <h2>${selectedName ? esc(selectedName) + " · trajectory" : "Agent trajectory"}</h2>
+        <span class="spring"></span><span class="fresh">${sub}</span></div>`;
+    const note = (txt) => `<p style="color:var(--muted);font-size:var(--text-sm);margin:0">${txt}</p>`;
+    let inner;
+    if (!selectedId) inner = headHTML("click a resident above") + note("Select a resident in the heatmap to see its own EISV check-in history.");
+    else if (trajLoading) inner = headHTML("loading…") + note("Loading trajectory…");
+    else if (!trajPoints.length) inner = headHTML("no history") + note("No check-in history available" + (MODEL.source === "snapshot" ? " offline." : "."));
+    else inner = headHTML(trajPoints.length + " check-ins") + `<div style="height:220px"><canvas id="eisv-traj-canvas"></canvas></div>`;
+    mount.innerHTML = `<div class="panel" style="margin-bottom:var(--space-5)">${inner}</div>`;
+    if (selectedId && !trajLoading && trajPoints.length) buildTrajectory();
+  }
+
+  function applySelectionHighlight() {
+    document.querySelectorAll("#eisv-heatmap [data-traj-id]").forEach((el) => {
+      el.style.outline = el.getAttribute("data-traj-id") === selectedId ? "1.5px solid var(--accent)" : "none";
+      el.style.outlineOffset = "-1px";
+    });
+  }
+
+  async function selectAgent(id, name) {
+    selectedId = id; selectedName = name; trajLoading = true; trajPoints = [];
+    renderTrajectory(); applySelectionHighlight();
+    const r = await DATA.agentHistory(id, { mode: "all", limit: 120 });
+    if (selectedId !== id) return; // a newer selection won — drop this result
+    trajLoading = false;
+    trajPoints = (r && r.points) || [];
+    renderTrajectory();
+  }
+
+  // Delegated click on the stable mount, bound once. Closest [data-traj-id]
+  // survives the heatmap's periodic in-place re-render.
+  function bindHeatmapClicks() {
+    if (clickBound) return;
+    const mount = document.getElementById("eisv-mount");
+    if (!mount) return;
+    mount.addEventListener("click", (e) => {
+      const row = e.target.closest("[data-traj-id]");
+      if (!row || !mount.contains(row)) return;
+      const id = row.getAttribute("data-traj-id");
+      if (id) selectAgent(id, row.getAttribute("data-traj-name") || id);
+    });
+    clickBound = true;
   }
 
   function render() {
@@ -137,6 +219,7 @@
          <span class="eyebrow" style="margin:0">Fleet trajectory · last ${MODEL.series.length} min</span>
          <span class="spring"></span><span class="src-badge ${MODEL.source}">${MODEL.source}</span></div>
        <div id="eisv-heatmap">${heatmapHTML(MODEL.residents)}</div>
+       <div id="eisv-trajectory"></div>
        <div class="panel" style="margin-bottom:var(--space-5)">
          <div class="panel-head" style="margin-bottom:var(--space-3)"><h2>Energy · Integrity · Coherence</h2></div>
          <div style="height:240px"><canvas id="eisv-upper"></canvas></div>
@@ -145,6 +228,9 @@
          <div class="panel-head" style="margin-bottom:var(--space-3)"><h2>Entropy · Valence</h2></div>
          <div style="height:200px"><canvas id="eisv-lower"></canvas></div>
        </div>`;
+    bindHeatmapClicks();
+    renderTrajectory();
+    applySelectionHighlight();
     if (window.Chart) build();
     else $("#eisv-mount").insertAdjacentHTML("beforeend", `<p class="empty">Chart.js not loaded.</p>`);
   }
@@ -163,7 +249,7 @@
     // Swap the heatmap in place too — its own container, so the canvases above
     // are untouched.
     const hm = document.getElementById("eisv-heatmap");
-    if (hm) hm.innerHTML = heatmapHTML(MODEL.residents);
+    if (hm) { hm.innerHTML = heatmapHTML(MODEL.residents); applySelectionHighlight(); }
     const badge = document.querySelector("#eisv-mount .src-badge");
     if (badge) { badge.className = "src-badge " + MODEL.source; badge.textContent = MODEL.source; }
   }
@@ -196,7 +282,10 @@
     return true;
   }
   // re-theme without refetch (called on theme toggle) — full rebuild reads new tokens
-  function retheme() { if (MODEL.series.length && window.Chart) build(); }
+  function retheme() {
+    if (MODEL.series.length && window.Chart) build();
+    if (selectedId && trajPoints.length && window.Chart) buildTrajectory();
+  }
 
   window.EISV = { load, retheme, applyEvent };
 })();
