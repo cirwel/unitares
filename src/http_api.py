@@ -2873,6 +2873,72 @@ def _latest_eisv_for_agent(agent_id: str) -> Optional[dict]:
     return None
 
 
+async def _durable_latest_eisv_for_agent(
+    agent_id: str, label: Optional[str] = None,
+) -> Optional[dict]:
+    """Most recent durable EISV check-in for an agent from core.agent_state.
+
+    The residents panel reads live EISV from the broadcaster's in-memory ring
+    (~6h, fleet-wide). A *daily* resident like Chronicler checks in once per
+    24h, so its eisv_update has almost always rotated out of the ring by the
+    time the panel loads — leaving its EISV blank even though it checked in
+    fine. core.agent_state persists every check-in (the same source
+    /v1/agents/{id}/history reads), so fall back to it.
+
+    Returns a broadcaster-event-shaped dict so ``_extract_eisv_fields`` consumes
+    it unchanged (E in state_json; I/S/V/coherence/risk_score in columns;
+    verdict/action in state_json). Read-only; returns None on miss or error so
+    the panel degrades to "no EISV" rather than erroring.
+    """
+    try:
+        from src.db import get_db
+        db = get_db()
+        async with db.acquire() as conn:
+            # Identity resolution mirrors http_agent_history: history is keyed by
+            # the agent's UUID identity, but the resident row may carry the
+            # structured id (mcp_DATE_<8hex>) whose suffix is that UUID's prefix.
+            row = await conn.fetchrow(
+                """
+                WITH ids AS (
+                    SELECT identity_id FROM core.identities WHERE agent_id = $1
+                    UNION
+                    SELECT identity_id FROM core.identities
+                     WHERE substring($1 from '([0-9a-f]{8})$') IS NOT NULL
+                       AND agent_id ~ '^[0-9a-f]{8}-'
+                       AND agent_id LIKE substring($1 from '([0-9a-f]{8})$') || '%'
+                )
+                SELECT s.recorded_at,
+                       (s.state_json->>'E')::real AS e,
+                       s.integrity AS i, s.entropy AS s_entropy, s.volatility AS v,
+                       s.coherence, s.risk_score,
+                       s.state_json->>'verdict' AS verdict,
+                       s.state_json->>'action'  AS action
+                FROM core.agent_state s
+                WHERE s.identity_id IN (SELECT identity_id FROM ids)
+                  AND s.synthetic = false
+                ORDER BY s.recorded_at DESC
+                LIMIT 1
+                """,
+                agent_id,
+            )
+        if not row:
+            return None
+        recorded_at = row["recorded_at"]
+        return {
+            "type": "eisv_update",
+            "agent_id": agent_id,
+            "agent_name": label,
+            "timestamp": recorded_at.isoformat() if recorded_at else None,
+            "eisv": {"E": row["e"], "I": row["i"], "S": row["s_entropy"], "V": row["v"]},
+            "coherence": row["coherence"],
+            "metrics": {"risk_score": row["risk_score"], "verdict": row["verdict"]},
+            "decision": {"action": row["action"]},
+        }
+    except Exception as exc:  # noqa: BLE001 — read-only panel fallback, degrade gracefully
+        logger.debug("durable EISV fallback failed for %s: %s", agent_id, exc)
+        return None
+
+
 def _extract_eisv_fields(event: dict) -> dict:
     """Pull the data-shape we expose to the dashboard from a raw broadcaster event.
 
@@ -3098,6 +3164,19 @@ async def http_residents(request):
                         agent_id = event_agent_id
                         meta = getattr(mcp_server_obj, "agent_metadata", {}).get(event_agent_id)
 
+            # Durable EISV fallback. A daily resident (Chronicler) checks in once
+            # per 24h, so its eisv_update has usually rotated out of the
+            # broadcaster's ~6h in-memory ring by the time the panel loads — the
+            # ring lookups above return None and its EISV shows blank. Read the
+            # latest persisted check-in from core.agent_state instead. Labeled
+            # distinctly ("agent_state") so the provenance stays honest.
+            eisv_source = "broadcaster_eisv"
+            if latest is None and agent_id:
+                durable_latest = await _durable_latest_eisv_for_agent(agent_id, label)
+                if durable_latest:
+                    latest = durable_latest
+                    eisv_source = "agent_state"
+
             history = _coherence_history_for_agent(agent_id) if agent_id else []
             recent_writes = await _recent_writes_for_agent(agent_id) if agent_id else []
 
@@ -3118,13 +3197,13 @@ async def http_residents(request):
                     last_checkin_source = "agent_metadata"
                 else:
                     last_checkin_str = latest_eisv_at
-                    last_checkin_source = "broadcaster_eisv"
+                    last_checkin_source = eisv_source
             elif metadata_dt:
                 last_checkin_str = metadata_last_update
                 last_checkin_source = "agent_metadata"
             elif latest_dt:
                 last_checkin_str = latest_eisv_at
-                last_checkin_source = "broadcaster_eisv"
+                last_checkin_source = eisv_source
 
             silence_seconds: Optional[float] = None
             last_dt = _parse_resident_timestamp(last_checkin_str)

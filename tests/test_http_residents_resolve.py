@@ -340,3 +340,100 @@ async def test_residents_event_driven_flag_authoritative_for_watcher():
     by_label = {r["label"]: r for r in data["residents"]}
     assert by_label["Watcher"]["event_driven"] is True
     assert by_label["Vigil"]["event_driven"] is False
+
+
+@pytest.mark.asyncio
+async def test_residents_durable_eisv_fallback_populates_daily_resident():
+    """A daily resident's EISV must survive the broadcaster ring rotating out.
+
+    Chronicler checks in once per 24h; its eisv_update has almost always
+    rotated out of the broadcaster's ~6h in-memory ring by the time the panel
+    loads, so the in-memory lookups return None and its EISV would render
+    blank. The durable core.agent_state fallback fills it. Here the ring is
+    empty (post-rotation), and the durable read supplies the latest check-in.
+    """
+    from src import http_api
+
+    request = SimpleNamespace(
+        headers={},
+        query_params={},
+        url=SimpleNamespace(path="/v1/residents"),
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+    server = SimpleNamespace(agent_metadata={
+        "uuid-chron": _resident_meta(
+            label="Chronicler",
+            last_update="2026-06-29T00:19:38+00:00",
+            tags=[],
+        ),
+    })
+
+    http_api.broadcaster_instance.event_history.clear()  # ring rotated out
+
+    durable = {
+        "type": "eisv_update",
+        "agent_id": "uuid-chron",
+        "agent_name": "Chronicler",
+        "timestamp": "2026-06-29T00:19:38+00:00",
+        "eisv": {"E": 0.767, "I": 0.727, "S": 0.269, "V": 0.028},
+        "coherence": 0.517,
+        "metrics": {"risk_score": 0.0, "verdict": "approve"},
+        "decision": {"action": "approve"},
+    }
+
+    with patch("src.mcp_handlers.shared.lazy_mcp_server", server), \
+            patch("src.http_api._recent_writes_for_agent", AsyncMock(return_value=[])), \
+            patch("src.http_api._durable_latest_eisv_for_agent",
+                  AsyncMock(return_value=durable)) as durable_mock:
+        resp = await http_api.http_residents(request)
+
+    data = json.loads(resp.body.decode())
+    chron = next(r for r in data["residents"] if r["label"] == "Chronicler")
+    # The core fix: EISV is populated from the durable store, not blank.
+    assert chron["eisv"] == {"E": 0.767, "I": 0.727, "S": 0.269, "V": 0.028}
+    assert chron["coherence"] == 0.517
+    assert chron["verdict"] == "approve"
+    # Fallback only fires once, and only because the ring had nothing.
+    durable_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_residents_durable_eisv_not_consulted_when_ring_has_event():
+    """The durable fallback is a backstop, not the primary path. When the
+    broadcaster ring already has a live event for the agent, the DB read must
+    be skipped — live signal wins and we don't pay a query per resident."""
+    from src import http_api
+
+    request = SimpleNamespace(
+        headers={},
+        query_params={},
+        url=SimpleNamespace(path="/v1/residents"),
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+    server = SimpleNamespace(agent_metadata={
+        "uuid-vigil": _resident_meta(
+            label="Vigil",
+            last_update="2026-04-28T10:01:56+00:00",
+            tags=[],
+        ),
+    })
+
+    http_api.broadcaster_instance.event_history.clear()
+    http_api.broadcaster_instance.event_history.append({
+        "type": "eisv_update",
+        "agent_id": "uuid-vigil",
+        "timestamp": "2026-04-28T10:06:04+00:00",
+        "eisv": {"E": 0.8, "I": 0.8, "S": 0.1, "V": 0.0},
+        "metrics": {"coherence": 0.49, "risk_score": 0.0, "verdict": "proceed"},
+    })
+
+    with patch("src.mcp_handlers.shared.lazy_mcp_server", server), \
+            patch("src.http_api._recent_writes_for_agent", AsyncMock(return_value=[])), \
+            patch("src.http_api._durable_latest_eisv_for_agent",
+                  AsyncMock(return_value=None)) as durable_mock:
+        resp = await http_api.http_residents(request)
+
+    data = json.loads(resp.body.decode())
+    vigil = next(r for r in data["residents"] if r["label"] == "Vigil")
+    assert vigil["last_checkin_source"] == "broadcaster_eisv"
+    durable_mock.assert_not_awaited()
