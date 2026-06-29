@@ -67,6 +67,9 @@ REALISTIC_PAYLOAD = {
 }
 
 PHASE_LINE_MARKER = "[checkin_phases]"
+# The enrichment stage logs its own per-enricher breakdown. `=skip` entries are
+# non-numeric and naturally excluded by the ms regex.
+ENRICHMENT_LINE_MARKER = "[enrichment_phases]"
 
 
 def _default_rest_url() -> str:
@@ -115,18 +118,26 @@ def _parse_phase_line(line: str) -> dict[str, float]:
     return {key: float(val) for key, val in re.findall(r"(\w+)=(\d+(?:\.\d+)?)ms", line)}
 
 
-def _read_new_phase_lines(log_path: Path, start_offset: int) -> tuple[list[dict[str, float]], int]:
-    """Read [checkin_phases] lines appended after ``start_offset`` bytes."""
-    parsed: list[dict[str, float]] = []
+def _read_new_phase_lines(
+    log_path: Path, start_offset: int
+) -> tuple[list[dict[str, float]], list[dict[str, float]], int]:
+    """Read [checkin_phases] and [enrichment_phases] lines appended after
+    ``start_offset`` bytes."""
+    checkin: list[dict[str, float]] = []
+    enrichment: list[dict[str, float]] = []
     with log_path.open("r", encoding="utf-8", errors="replace") as handle:
         handle.seek(start_offset)
         for line in handle:
             if PHASE_LINE_MARKER in line:
                 fields = _parse_phase_line(line)
                 if fields:
-                    parsed.append(fields)
+                    checkin.append(fields)
+            elif ENRICHMENT_LINE_MARKER in line:
+                fields = _parse_phase_line(line)
+                if fields:
+                    enrichment.append(fields)
         end_offset = handle.tell()
-    return parsed, end_offset
+    return checkin, enrichment, end_offset
 
 
 def _resolve_log_path(arg: str | None) -> Path | None:
@@ -196,13 +207,15 @@ def main(argv: list[str] | None = None) -> int:
 
     latency_dist = _dist(latencies_ms)
 
-    # Per-stage breakdown from the server's own [checkin_phases] instrumentation.
+    # Per-stage breakdown from the server's own [checkin_phases] instrumentation,
+    # plus the per-enricher breakdown of the enrichment stage ([enrichment_phases]).
     stage_report: dict | None = None
+    enrichment_report: dict | None = None
     phase_note = None
     if log_path:
         # Give the fire-and-forget log flush a beat to land.
         time.sleep(1.0)
-        phase_lines, _ = _read_new_phase_lines(log_path, start_offset)
+        phase_lines, enrichment_lines, _ = _read_new_phase_lines(log_path, start_offset)
         if phase_lines:
             phases = list(dict.fromkeys(k for fields in phase_lines for k in fields))
             ordered = (["total"] if "total" in phases else []) + [p for p in phases if p != "total"]
@@ -217,6 +230,23 @@ def main(argv: list[str] | None = None) -> int:
                 f"no [checkin_phases] lines found in {log_path} for this run — "
                 "the server may log elsewhere; pass --log-file or set UNITARES_MCP_LOG."
             )
+        if enrichment_lines:
+            enrichers = sorted(
+                {k for fields in enrichment_lines for k in fields},
+                key=lambda k: statistics.mean([f[k] for f in enrichment_lines if k in f]),
+                reverse=True,
+            )
+            # Per-call sum of attributed enricher time vs the enrichment stage
+            # wall-clock — a small gap is scheduling overhead; a large dominant
+            # enricher means the cost is that enricher's own (KG/DB) await work.
+            enrichment_report = {
+                "enrichment_lines_captured": len(enrichment_lines),
+                "attributed_sum_ms": _dist([sum(f.values()) for f in enrichment_lines]),
+                "top_enrichers": {
+                    k: _dist([f[k] for f in enrichment_lines if k in f]) for k in enrichers[:8]
+                },
+            }
+
     else:
         phase_note = (
             "no readable server log found; per-stage data lives in the server's "
@@ -229,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
         "warmup": args.warmup,
         "in_handler_latency_ms": latency_dist,
         "per_stage": stage_report,
+        "enrichment_breakdown": enrichment_report,
         "per_stage_note": phase_note,
     }
 
@@ -269,6 +300,27 @@ def main(argv: list[str] | None = None) -> int:
             )
     elif phase_note:
         print(f"\nPer-stage breakdown: {phase_note}")
+
+    if enrichment_report:
+        es = enrichment_report["attributed_sum_ms"]
+        print(
+            f"\nEnrichment stage breakdown (server [enrichment_phases], "
+            f"{enrichment_report['enrichment_lines_captured']} lines):"
+        )
+        print(f"  attributed enricher sum: mean={es['mean']}ms p95={es['p95']}ms")
+        print(f"  {'enricher':<34} {'mean':>7} {'p95':>6} {'max':>6}")
+        for name, ed in enrichment_report["top_enrichers"].items():
+            if ed.get("n"):
+                print(f"  {name:<34} {ed['mean']:>7} {ed['p95']:>6} {ed['max']:>6}")
+        print(
+            "  note: enrich_mirror_signals (KG semantic search) is the known tail; it skips in\n"
+            "  routine compact and is bounded by UNITARES_KG_SEARCH_TIMEOUT_S + cadence + dedup,\n"
+            "  so routine traffic pays little. What remains is real but modest, and structural:\n"
+            "  the anyio+asyncpg shared-loop amplification (CLAUDE.md 'Substrate Tax') — a bug\n"
+            "  class per-process substrates (BEAM/db_connection) lack by construction. On that\n"
+            "  architecture axis it is modest supporting evidence for such a substrate; it is\n"
+            "  not decided on latency and is not a priority-setter on its own."
+        )
 
     print()
     return 0
