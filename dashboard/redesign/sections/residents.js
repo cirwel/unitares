@@ -86,11 +86,55 @@
       ${e.E != null ? `<div style="margin-top:var(--space-3);display:flex;gap:var(--space-5);font-family:var(--font-mono);font-size:var(--text-sm);color:var(--ink-2)"><span>E ${e.E.toFixed(2)}</span><span>I ${e.I.toFixed(2)}</span><span>S ${e.S.toFixed(2)}</span><span>V ${e.V.toFixed(2)}</span></div>` : ""}</div>`;
   }
 
+  // Map a per-check status string to a pip color. Anything other than the
+  // known-good/known-soft states reads as a hard failure.
+  function healthColor(st) {
+    return st === "healthy" ? "var(--ok)"
+      : st === "warning" ? "var(--warn)"
+      : st === "deprecated" ? "var(--muted)"
+      : "var(--danger)"; // error / unavailable / unknown
+  }
+  // Pick the single most operator-useful field a check exposes, so each row
+  // says something beyond its name. Order = most-to-least diagnostic.
+  function healthDetail(c) {
+    if (!c || typeof c !== "object") return "";
+    if (c.latency_ms != null) return Math.round(c.latency_ms) + "ms";
+    if (c.note) return String(c.note);
+    if (c.init_error) return String(c.init_error);
+    if (c.pending_updates) return c.pending_updates + " pending";
+    if (c.mode) return String(c.mode);
+    if (c.backend) return String(c.backend);
+    return "";
+  }
+
   function health(h) {
     if (!h) return "";
     const ch = h.checks || {};
-    return `<div class="panel">${head("System Health", h.status === "healthy" ? "healthy" : "silent", "v" + esc(h.version || "") + " · continuity " + esc(h.continuity || "—"))}
-      ${statRow([stat("checks ok", ch.healthy || 0, "var(--ok)"), stat("warnings", ch.warning || 0, (ch.warning ? "var(--warn)" : "var(--muted)")), stat("breaker trips 24h", (h.breakers || {}).governance || 0, "var(--ok)"), stat("calibration", h.calibration || "—", "var(--ok)")])}</div>`;
+    const items = h.items || {};
+    const op = h.operator || {};
+    // Sort non-healthy checks to the top so a degraded one is never buried.
+    const rank = (st) => (st === "healthy" ? 2 : st === "deprecated" ? 1 : 0);
+    const rows = Object.keys(items).sort((a, b) => rank(items[a] && items[a].status) - rank(items[b] && items[b].status))
+      .map((name) => {
+        const c = items[name] || {}, st = c.status || "unknown", det = healthDetail(c);
+        return `<div style="display:flex;gap:var(--space-3);align-items:baseline;font-size:var(--text-sm);padding:var(--space-1) 0">
+          <span class="dot-pip" style="background:${healthColor(st)};flex:none;align-self:center"></span>
+          <span style="font-family:var(--font-mono);color:var(--ink-2);flex:none">${esc(name)}</span>
+          <span class="spring"></span>
+          ${det ? `<span class="fresh" style="flex:none">${esc(det)}</span>` : ""}
+          <span style="color:${healthColor(st)};flex:none;text-transform:uppercase;font-size:var(--text-xs);letter-spacing:var(--tracking-label)">${esc(st)}</span></div>`;
+      }).join("");
+    // Operator banner: only when something is actually failing/degraded.
+    const fails = (op.failing_checks || []).concat(op.degraded_checks || []);
+    const banner = fails.length
+      ? `<div style="margin:var(--space-3) 0;padding:var(--space-2) var(--space-3);border-left:2px solid var(--warn);background:var(--surface-2);font-size:var(--text-sm);color:var(--ink-2)">
+           <b>${fails.length}</b> need${fails.length === 1 ? "s" : ""} attention: <span style="font-family:var(--font-mono)">${esc(fails.join(", "))}</span>${op.first_action && op.first_action !== "No action needed." ? ` — ${esc(op.first_action)}` : ""}</div>`
+      : "";
+    const allOk = h.status === "healthy" && !fails.length;
+    return `<div class="panel">${head("System Health", allOk ? "healthy" : "silent", "v" + esc(h.version || "") + " · continuity " + esc(h.continuity || "—"))}
+      ${statRow([stat("checks ok", ch.healthy || 0, "var(--ok)"), stat("warnings", ch.warning || 0, (ch.warning ? "var(--warn)" : "var(--muted)")), stat("errors", ch.error || 0, (ch.error ? "var(--danger)" : "var(--muted)")), stat("breaker trips 24h", (h.breakers || {}).governance || 0, "var(--ok)")])}
+      ${banner}
+      ${rows ? `<div style="margin-top:var(--space-3)">${rows}</div>` : ""}</div>`;
   }
 
   async function load() {

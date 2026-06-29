@@ -352,6 +352,9 @@
           lastCycleAgeS: vg.stats.last_cycle_age_seconds, avgCoherence: vg.stats.avg_coherence_window,
           eisv: vg.cycles && vg.cycles[0] ? vg.cycles[0] : null };
         if (h) out.health = { status: h.status, version: h.version, checks: h.status_breakdown || {},
+          // Per-check detail — the 12 named checks /health/deep already returns,
+          // so the panel can name what's degraded instead of only counting.
+          items: h.checks || {}, operator: h.operator_summary || {},
           breakers: { governance: (h.circuit_breakers && h.circuit_breakers.governance || {}).trips_24h || 0, redis: (h.circuit_breakers && h.circuit_breakers.redis || {}).trips_24h || 0 },
           calibration: (h.checks && h.checks.calibration || {}).status, redis: h.redis_present, continuity: h.identity_continuity_mode };
         // Chronicler has no dedicated summary endpoint — pull its live state from
