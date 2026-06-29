@@ -31,6 +31,8 @@ defmodule AgentOrchestrator.AgentRunner do
         env: [{String.t(), String.t()}],   # extra env for the child (default [])
         cd: String.t() | nil,              # working dir
         max_output_lines: pos_integer(),   # buffer cap (default 1000)
+        max_runtime_ms: pos_integer(),     # wall-clock lifetime cap; self-reaps on expiry
+                                           # (default :default_max_runtime_ms; nil/<=0 disables)
         lease: nil | false | lease_cfg,    # default (absent/nil) = best-effort agent:/ presence;
                                            # false = no presence; map = override
         lease_client: module(),            # injectable, default LeasePlaneClient
@@ -141,6 +143,13 @@ defmodule AgentOrchestrator.AgentRunner do
 
   @default_max_lines 1000
   @line_max_bytes 65_536
+
+  # Default ceiling on a single agent's wall-clock lifetime (30 min). Generous —
+  # well past the slowest known consumer (orchestrated reviewer ~70s, council
+  # lanes ~120s) — so it only ever fires on a genuinely wedged agent. Per-spawn
+  # overridable via the spec's `max_runtime_ms` (nil / <= 0 disables it);
+  # config-overridable via :default_max_runtime_ms.
+  @default_max_runtime_ms 1_800_000
 
   # Lineage-provisioning env vars surfaced to the child (candidate
   # declarations — see "Lineage provisioning" in the moduledoc).
@@ -331,6 +340,13 @@ defmodule AgentOrchestrator.AgentRunner do
               "agent #{state.agent_id} started os_pid=#{os_pid} lease=#{lease_id || "none"} cmd=#{Map.get(spec, :cmd)}"
             )
 
+            # Arm the max-runtime backstop. No caller is obligated to DELETE a
+            # wedged agent (the live dialectic reviewer explicitly "leaves it
+            # async" on a 504), so without this an agent that never exits leaks
+            # its OS process + subprocess tree until the orchestrator restarts.
+            # The timer fires :max_runtime into our own mailbox; we self-reap.
+            maybe_arm_max_runtime(spec)
+
             {:ok, %{state | port: port, os_pid: os_pid}}
 
           {:error, reason} ->
@@ -393,6 +409,26 @@ defmodule AgentOrchestrator.AgentRunner do
       {:noreply, %{state | port: nil}}
     end
   end
+
+  # Max-runtime backstop fired and we are still running. Reap the whole tree
+  # (a wedged child won't exit on its own; kill_tree gets its MCP-subproc
+  # descendants too), then finalize with a synthetic terminal status so waiters
+  # get a definitive result instead of hanging on their own await. We kill +
+  # close here rather than leaving it to terminate/2 because finalize sets
+  # exit_status (→ terminate's reap guard would skip) and nils the port.
+  def handle_info(:max_runtime, %{exit_status: nil} = state) do
+    Logger.warning(
+      "agent #{state.agent_id} exceeded max runtime — reaping os_pid=#{inspect(state.os_pid)}"
+    )
+
+    if is_integer(state.os_pid), do: kill_tree(state.os_pid)
+    safe_close(state.port)
+    finalize(%{state | port: nil}, {:killed, :max_runtime})
+  end
+
+  # Already finalized (the agent exited before its deadline) — the stale timer
+  # is a no-op.
+  def handle_info(:max_runtime, state), do: {:noreply, state}
 
   def handle_info(_msg, state), do: {:noreply, state}
 
@@ -662,6 +698,25 @@ defmodule AgentOrchestrator.AgentRunner do
   defp maybe_opt(opts, _key, nil), do: opts
   defp maybe_opt(opts, _key, []), do: opts
   defp maybe_opt(opts, key, val), do: [{key, val} | opts]
+
+  # Arm the self-reap timer unless this spawn opted out. The message lands in our
+  # own mailbox after init returns, handled by handle_info(:max_runtime, ...).
+  defp maybe_arm_max_runtime(spec) do
+    case max_runtime_ms(spec) do
+      ms when is_integer(ms) and ms > 0 -> Process.send_after(self(), :max_runtime, ms)
+      _ -> :ok
+    end
+  end
+
+  # An explicit `max_runtime_ms` in the spec wins (an integer caps; nil / <= 0
+  # disables — the per-spawn escape hatch for a legitimately long agent). Absent,
+  # fall back to the configured/default ceiling.
+  defp max_runtime_ms(spec) do
+    case Map.fetch(spec, :max_runtime_ms) do
+      {:ok, v} -> v
+      :error -> Application.get_env(:agent_orchestrator, :default_max_runtime_ms, @default_max_runtime_ms)
+    end
+  end
 
   defp encode_env([]), do: []
 

@@ -590,6 +590,61 @@ defmodule AgentOrchestratorTest do
     end
   end
 
+  describe "max-runtime backstop" do
+    test "self-reaps the agent and its descendant tree when max_runtime elapses (no caller delete)" do
+      # A wedged agent that never exits would otherwise leak its OS process +
+      # subprocess tree until the orchestrator restarts — no caller is obligated
+      # to DELETE it. The max-runtime timer must reap it on its own.
+      {:ok, id, _pid} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", "sleep 300 & echo CHILD_PID=$! ; sleep 300"],
+          max_runtime_ms: 400,
+          lease: false
+        })
+
+      child_pid =
+        eventually_value(fn ->
+          with {:ok, %{output: lines}} <- AgentOrchestrator.snapshot(id) do
+            Enum.find_value(lines, fn line ->
+              case Regex.run(~r/CHILD_PID=(\d+)/, line) do
+                [_, pid] -> String.to_integer(pid)
+                _ -> nil
+              end
+            end)
+          else
+            _ -> nil
+          end
+        end)
+
+      assert is_integer(child_pid)
+      assert os_process_alive?(child_pid), "grandchild should be alive before the deadline"
+
+      # We never stop or await it — the orchestrator's own timer must reap.
+      assert eventually(fn -> not os_process_alive?(child_pid) end, 200),
+             "grandchild #{child_pid} survived the max-runtime deadline — not reaped"
+
+      # And the result is retained with the synthetic terminal status.
+      assert {:ok, %{running: false, exit_status: {:killed, :max_runtime}}} =
+               AgentOrchestrator.snapshot(id)
+    end
+
+    test "max_runtime_ms: nil disables the cap (long agent keeps running)" do
+      {:ok, id, _pid} =
+        AgentOrchestrator.run(%{
+          cmd: "sleep",
+          args: ["300"],
+          max_runtime_ms: nil,
+          lease: false
+        })
+
+      # No timer armed → still running after a window that a tiny cap would reap in.
+      Process.sleep(150)
+      assert {:ok, %{running: true}} = AgentOrchestrator.snapshot(id)
+      assert :ok = AgentOrchestrator.stop(id, :test_cleanup)
+    end
+  end
+
   # Like eventually/2 but returns the first truthy value the probe yields (or nil
   # after exhausting retries), for polling a value into existence rather than a
   # boolean condition.
