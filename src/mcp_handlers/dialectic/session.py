@@ -138,6 +138,12 @@ def _reconstruct_session_from_dict(session_id: str, session_data: Dict) -> Optio
         session.transcript = transcript
         session.resolution = resolution
         session.synthesis_round = int(session_data.get("synthesis_round", 0) or 0)
+        # Restore awaiting_facilitation (#1259). The DialecticSession ctor defaults
+        # it to False, so without this a loaded session always looks not-awaiting in
+        # memory — which silently defeated the #1253 resolve-clear guard (a resolved
+        # session kept a stale awaiting_facilitation=true) and re-armed the
+        # reviewer-stuck set/emit path. get_session is SELECT *, so the column is present.
+        session.awaiting_facilitation = bool(session_data.get("awaiting_facilitation", False))
         created_at_str = session_data.get("created_at")
         if created_at_str:
             # Handle both string and datetime objects from different backends
