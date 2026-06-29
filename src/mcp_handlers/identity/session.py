@@ -824,10 +824,12 @@ def _extract_base_fingerprint(session_key: str) -> Optional[str]:
     parts = session_key.split(":")
     if len(parts) >= 2:
         ua_hash = parts[1]
-        logger.debug(f"[ONBOARD_PIN] extract_fp: raw={session_key!r} ({len(parts)} parts) -> ua_hash={ua_hash!r}")
+        # Redact the full session_key (it is a write-proof string); a prefix +
+        # length keeps the fingerprint shape debuggable without logging the proof.
+        logger.debug(f"[ONBOARD_PIN] extract_fp: raw={session_key[:8]}...(len={len(session_key)}) ({len(parts)} parts) -> ua_hash={ua_hash!r}")
         return f"ua:{ua_hash}"
     # Single-part key (unusual) — return as-is
-    logger.debug(f"[ONBOARD_PIN] extract_fp: raw={session_key!r} (single part) -> as-is")
+    logger.debug(f"[ONBOARD_PIN] extract_fp: raw={session_key[:8]}...(len={len(session_key)}) (single part) -> as-is")
     return session_key
 
 
