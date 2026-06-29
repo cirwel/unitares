@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Check documentation health: dead refs, ghost tools, hardcoded IPs/counts.
 
-Also prints an advisory **demotion-candidate** list: planning/RFC docs whose own
-status says the work shipped but which still live in an active location
+Can also print an advisory **demotion-candidate** list: planning/RFC docs whose
+own status says the work shipped but which still live in an active location
 (proposals/ outside resolved/, or the ontology/ identity tree). That list is
-triage, not a defect — it never affects the exit code; clear it by moving
-fully-shipped docs to proposals/resolved/ (or stubbing them out) on a real
-signal, rather than letting a subsystem's doc set sprawl.
+triage, not a defect, so it is opt-in via ``--demotion-candidates`` and never
+affects the exit code; clear it by moving fully-shipped docs to
+proposals/resolved/ (or stubbing them out) on a real signal, rather than letting
+a subsystem's doc set sprawl.
 
 Usage:
-    python3 scripts/diagnostics/check_doc_health.py [--strict]
+    python3 scripts/diagnostics/check_doc_health.py [--strict] [--demotion-candidates]
 
 Exit codes:
-    0 — no warnings (or warnings only in non-strict mode; the demotion advisory
-        never sets a non-zero code)
+    0 — no warnings (or warnings only in non-strict mode)
     1 — warnings found (strict mode only) — demotion candidates excluded
 """
 
@@ -310,6 +310,7 @@ _TOOL_ALLOWLIST = {
     "acquire", "release",  # asyncio.Lock / Semaphore methods
     "accept",  # socket.accept(), TLS accept
     "getAuthToken",  # JS dashboard helper
+    "load", "retheme", "applyEvent", "notifyNew", "refreshActive",  # dashboard hooks
 }
 
 # Files/dirs where ghost tool warnings are noise (plans, specs, internal
@@ -526,6 +527,7 @@ def collect_md_files() -> list[Path]:
 
 def main():
     strict = "--strict" in sys.argv
+    show_demotion = "--demotion-candidates" in sys.argv
     md_files = collect_md_files()
     tool_names = _load_tool_names()
 
@@ -555,9 +557,10 @@ def main():
     if counts:
         all_warnings.append(("Hardcoded counts (will go stale)", counts))
 
-    # Advisory: surfaced for triage, never gates the exit code (demotion is a
-    # judgment call, not a defect). Printed separately from the warning total.
-    demotion = check_demotion_candidates(md_files)
+    # Advisory: surfaced only when requested, never gates the exit code
+    # (demotion is a judgment call, not a defect). Printed separately from the
+    # warning total so pre-push stays quiet unless an operator is auditing docs.
+    demotion = check_demotion_candidates(md_files) if show_demotion else []
 
     if not all_warnings and not demotion:
         print("📄 Doc health: all clear")

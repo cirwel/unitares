@@ -20,8 +20,8 @@ builds on it. All actions route through the consolidated `knowledge(...)` tool
    `knowledge_read` event.
 3. **B responds** — `knowledge(action="answer_question",
    response_to={discovery_id, response_type}, summary=...)` → a new discovery
-   linked back via `response_to_id`, forming a chain queryable through
-   `get_response_chain()`.
+   linked back via `response_to_id`, forming a chain queryable through the
+   internal `get_response_chain` helper.
 
 > Write discipline (see CLAUDE.md "Strict Identity"): **search before writing.**
 > If a related entry exists, prefer a linked correction or `supersede` over a

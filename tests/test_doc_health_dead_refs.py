@@ -480,8 +480,29 @@ def test_demotion_does_not_gate_strict_exit(tmp_path, monkeypatch, doc_health, c
     # WOULD gate strict). We want a clean case: demotion candidate and nothing else.
     (p.parent / "README.md").write_text("- [x](shipped-v0.md)\n")
     monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
-    monkeypatch.setattr(doc_health.sys, "argv", ["check_doc_health.py", "--strict"])
+    monkeypatch.setattr(
+        doc_health.sys,
+        "argv",
+        ["check_doc_health.py", "--strict", "--demotion-candidates"],
+    )
     assert doc_health.main() == 0
+    assert "Demotion candidates" in capsys.readouterr().out
+
+
+def test_demotion_advisory_is_opt_in(tmp_path, monkeypatch, doc_health, capsys):
+    """Default doc-health output stays quiet for advisory-only demotion candidates."""
+    p = tmp_path / "docs" / "proposals" / "shipped-v0.md"
+    p.parent.mkdir(parents=True)
+    p.write_text("# X\n\n**Status:** shipped, deployed, complete.\n")
+    (p.parent / "README.md").write_text("- [x](shipped-v0.md)\n")
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(doc_health.sys, "argv", ["check_doc_health.py"])
+
+    assert doc_health.main() == 0
+    out = capsys.readouterr().out
+    assert "Doc health: all clear" in out
+    assert "Demotion candidates" not in out
 
 
 def test_collect_md_files_skips_elixir_deps_and_build_dirs(tmp_path, monkeypatch, doc_health):

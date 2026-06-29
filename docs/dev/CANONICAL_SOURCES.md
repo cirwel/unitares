@@ -63,6 +63,8 @@ These are live but intentionally specialized. They should not be treated as gene
 |-----|--------|--------------|
 | `docs/guides/CIRS_PROTOCOL.md` | specialized protocol reference | CIRS-specific coordination flows |
 | `docs/dev/CIRCUIT_BREAKER_DIALECTIC.md` | specialized recovery reference | Circuit-breaker and dialectic recovery flow |
+| `docs/dev/KNOWLEDGE_GRAPH_SEMANTICS.md` | specialized developer reference | Shared-memory write/read, link, and audit semantics |
+| `docs/dev/SESSION_KEY_DERIVATION.md` | specialized developer reference | Session-key resolution priority and proof-origin trust model |
 | `docs/dev/TOOL_REGISTRATION.md` | specialized developer reference | MCP/tool registration work |
 
 ## Supporting Non-Canonical Artifacts

@@ -40,8 +40,9 @@ mix deps.get
 mix phx.server          # http://127.0.0.1:8790
 ```
 
-Config (`config/runtime.exs`, all overridable by env): `PORT` (8790),
-`GOVERNANCE_WS_URL`, `GOVERNANCE_TOOLS_URL`, `UNITARES_HTTP_API_TOKEN`,
-`GOVERNANCE_START_FIREHOSE`. As a standing service it runs via
-`scripts/start.sh` under `scripts/ops/com.unitares.dialectic-live.plist.template`
-(operator-promoted; no `RunAtLoad`).
+Config ([`./config/runtime.exs`](./config/runtime.exs), all overridable by env):
+`PORT` (8790), `GOVERNANCE_WS_URL`, `GOVERNANCE_TOOLS_URL`,
+`UNITARES_HTTP_API_TOKEN`, `GOVERNANCE_START_FIREHOSE`. As a standing service it
+runs via [`./scripts/start.sh`](./scripts/start.sh) under
+`scripts/ops/com.unitares.dialectic-live.plist.template` (operator-promoted; no
+`RunAtLoad`).
