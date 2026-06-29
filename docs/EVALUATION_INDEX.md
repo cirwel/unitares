@@ -83,7 +83,7 @@ calibrated concealment (~0.19)**, where **cross-framing dominates (~0.97)**.
 | `scripts/analysis/dogfood_dialectic.py` ✓ | Live dogfood: onboard→request_review→submit_thesis, asserts UUID consistency | PASS/FAIL; needs live MCP :8767 | current |
 | `agents/common/dogfood_friction.py` ✓ | Normalizes friction observations into `/api/findings` events | Library; event dict + deterministic fingerprint | current |
 | `tests/test_r6_dogfood.py` ~ | R6 dogfood test | — | unread |
-| `docs/operations/self-report-verdict-dependence-2026-06-28.md` ✓ | Worked example: identical `proceed/safe` verdict for a clean refactor vs a confessed-sabotage check-in carrying identical self-reported drift | shows verdict is self-attested-driven (total pre-warmup, escalate-only after); `primary_driver: self_reported` | logged |
+| `docs/operations/self-report-verdict-dependence-2026-06-28.md` ✓ | Worked example: identical `proceed/safe` verdict for a clean refactor vs a confessed-sabotage check-in carrying identical `[0,0,0]` drift | **pre-warmup** verdict runs on the Φ cold-start prior (mostly server-derived `complexity_divergence`); the `[0,0,0]` self-report is *ignored*, not trusted; behavioral text-risk registered the sabotage but is unweighted until warm. Post-warmup (default `UNITARES_PHI_TELEMETRY_ONLY=1`) the verdict IS the behavioral assessment. The legacy `primary_driver: self_reported` label was hardcoded/stale — see correction note in the doc | logged (interpretation corrected 2026-06-28) |
 
 ## Resident validation
 

@@ -41,6 +41,14 @@ After about 30 check-ins, the four numbers are graded against the agent's *own*
 running history rather than a one-size-fits-all threshold. Absolute safety floors
 still apply on top of that.
 
+**Before the behavioral baseline warms** (behavioral confidence < 0.3 — the first
+few check-ins), the verdict falls back to the Φ cold-start prior: computed mostly
+from server-derived signals (complexity divergence, coherence, calibration), with
+any self-reported `ethical_drift` only a capped ≤30% blend and the independent
+behavioral signal telemetry-only. Described-behavior semantics don't fully register
+until the agent is warm; the self-relative defenses described here are the warmed
+steady state, not the cold-start regime.
+
 State lives in PostgreSQL + AGE. **The verdict path is the auditable behavioral
 model** — component risk plus self-relative z-scores, source in
 [`src/behavioral_assessment.py`](../src/behavioral_assessment.py). A separate
