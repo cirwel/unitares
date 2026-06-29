@@ -119,7 +119,13 @@ PATTERNS_FILE = Path(__file__).resolve().parent / "patterns.md"
 OLLAMA_URL = os.environ.get(
     "WATCHER_OLLAMA_URL", "http://localhost:11434/v1/chat/completions"
 )
-DEFAULT_MODEL = os.environ.get("WATCHER_MODEL", "qwen3-coder-next:latest")
+# Default detector: qwen3.6:27b-coding-nvfp4 — a newer-generation coding model,
+# same 256K context window as the prior qwen3-coder-next:79B but ~19GB vs ~51GB,
+# so it loads/runs faster on a detector that fires on every tool use. It is a
+# size-down (27B vs 79B), so detection-quality parity is not pre-verified;
+# override via WATCHER_MODEL=qwen3-coder-next:latest to revert if findings regress
+# (qwen3.6:27b-coding-mxfp8 is a higher-precision middle option at ~31GB).
+DEFAULT_MODEL = os.environ.get("WATCHER_MODEL", "qwen3.6:27b-coding-nvfp4")
 DEFAULT_TIMEOUT = int(os.environ.get("WATCHER_TIMEOUT", "90"))
 
 WATCHER_FINDINGS_LEASE_MODE_ENV = "WATCHER_FINDINGS_LEASE_MODE"
@@ -129,7 +135,7 @@ WATCHER_FINDINGS_LEASE_BLOCK_RC = 3
 _LEASE_ACQUIRED_OUTCOMES = {"acquired_new", "acquired_idempotent"}
 
 # How many lines of context to include when no explicit region is given.
-# Qwen3-Coder-Next (the current default detector) has a 256K context window,
+# The default detector (qwen3.6:27b-coding-nvfp4) has a 256K context window,
 # and should_skip() already caps at 256KB of file bytes (~6500 lines at
 # typical density), so DEFAULT_CONTEXT_LINES is effectively a last-resort
 # sanity cap rather than a real limit. The old 200-line value was a
