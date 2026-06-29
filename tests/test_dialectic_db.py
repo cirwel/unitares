@@ -703,6 +703,43 @@ class TestUpdateSessionStatus:
 
 
 # ============================================================================
+# DialecticDB.update_session_awaiting_facilitation (#1167 Ask 2)
+# ============================================================================
+
+class TestUpdateSessionAwaitingFacilitation:
+    @pytest.mark.asyncio
+    async def test_set_true_success(self, db):
+        """update_session_awaiting_facilitation persists the flag and returns True."""
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        result = await instance.update_session_awaiting_facilitation("sess-001", True)
+        assert result is True
+        call_args = conn.execute.call_args[0]
+        assert call_args[1] is True
+        assert call_args[2] == "sess-001"
+
+    @pytest.mark.asyncio
+    async def test_clear_false_success(self, db):
+        """Clearing the flag passes False to the UPDATE."""
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        result = await instance.update_session_awaiting_facilitation("sess-001", False)
+        assert result is True
+        assert conn.execute.call_args[0][1] is False
+
+    @pytest.mark.asyncio
+    async def test_not_found(self, db):
+        """Returns False when no row matched."""
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 0")
+
+        result = await instance.update_session_awaiting_facilitation("sess-gone", True)
+        assert result is False
+
+
+# ============================================================================
 # DialecticDB.resolve_session
 # ============================================================================
 

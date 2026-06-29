@@ -966,6 +966,62 @@ class TestListAllSessions:
         assert result[0]["session_id"] == "pg_list_1"
         assert result[0]["phase"] == "thesis"
         assert result[0]["message_count"] == 2
+        # Backward-compatible: rows without the column default the flag to False.
+        assert result[0]["awaiting_facilitation"] is False
+
+    @pytest.mark.asyncio
+    async def test_list_sessions_surfaces_awaiting_facilitation(self):
+        """#1167 Ask 2: dialectic(list) exposes the persisted awaiting_facilitation flag."""
+        from src.mcp_handlers.dialectic.session import list_all_sessions
+
+        now = datetime.now()
+        mock_rows = [
+            {
+                "session_id": "pg_stuck",
+                "phase": "antithesis",
+                "status": "active",
+                "session_type": "recovery",
+                "paused_agent_id": "agent_a",
+                "reviewer_agent_id": "agent_b",
+                "topic": "Stuck reviewer",
+                "created_at": now,
+                "resolution_json": None,
+                "awaiting_facilitation": True,
+                "message_count": 1,
+            },
+            {
+                "session_id": "pg_ok",
+                "phase": "thesis",
+                "status": "active",
+                "session_type": "recovery",
+                "paused_agent_id": "agent_c",
+                "reviewer_agent_id": "agent_d",
+                "topic": "Healthy",
+                "created_at": now,
+                "resolution_json": None,
+                "awaiting_facilitation": False,
+                "message_count": 0,
+            },
+        ]
+
+        mock_conn = AsyncMock()
+        mock_conn.fetch = AsyncMock(return_value=mock_rows)
+
+        mock_pool = AsyncMock()
+        mock_pool.acquire = MagicMock()
+        mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        mock_db = AsyncMock()
+        mock_db._pool = mock_pool
+        mock_db._ensure_pool = AsyncMock()
+
+        with patch("src.dialectic_db.get_dialectic_db", new_callable=AsyncMock, return_value=mock_db):
+            result = await list_all_sessions()
+
+        by_id = {r["session_id"]: r for r in result}
+        assert by_id["pg_stuck"]["awaiting_facilitation"] is True
+        assert by_id["pg_ok"]["awaiting_facilitation"] is False
 
     @pytest.mark.asyncio
     async def test_list_sessions_postgres_with_resolution_string(self):
