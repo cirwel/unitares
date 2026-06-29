@@ -1153,18 +1153,23 @@ class TestMakeDecision:
         assert decision['action'] == 'pause'
         assert decision['critical'] is not None
 
-    def test_high_risk_guidance_states_self_reported_provenance(self, monitor):
-        """Dogfood 2026-06-13 P0: guidance must not claim the system
-        "detected high ethical risk" — the verdict is driven by self-reported
-        signals, not an independent measurement. The copy must say so."""
+    def test_high_risk_guidance_states_honest_provenance(self, monitor):
+        """Dogfood 2026-06-13 P0 + driver-accuracy correction 2026-06-28:
+        guidance must not overclaim ("detected high ethical risk"), and must not
+        re-assert the stale "self-attested, not an independent measurement" copy
+        — post-warmup the verdict IS the independent behavioral assessment. The
+        regime-aware copy points to risk_attribution for the exact driver."""
         decision = monitor.make_decision(0.8, unitares_verdict='high-risk')
         guidance = decision['guidance'].lower()
         # The overclaiming copy is gone...
         assert 'detected high ethical risk' not in guidance
         assert 'protecting you' not in guidance
-        # ...replaced with honest provenance.
+        # ...and so is the stale blanket "not an independent measurement" claim.
+        assert 'not an independent measurement' not in guidance
+        # ...replaced with regime-aware honest provenance that defers to the
+        # risk_attribution decomposition.
+        assert 'risk_attribution' in guidance
         assert 'reported' in guidance
-        assert 'self-attested' in guidance
 
     def test_caution_verdict_low_risk(self, monitor):
         """Caution verdict with low risk should proceed."""

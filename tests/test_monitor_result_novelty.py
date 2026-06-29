@@ -174,10 +174,10 @@ def test_build_result_exposes_policy_and_unapplied_enforcement_layers():
 
 
 def test_risk_attribution_decomposes_by_provenance():
-    """Dogfood 2026-06-13 P0: the verdict is self-attested, not measured.
-    The result must expose WHAT drove the risk, grouped by provenance, so a
-    reader sees that risk is driven by self-reported ethical_drift while the
-    only non-self-attested signal (behavioral) is shown for comparison."""
+    """Dogfood 2026-06-13 P0 + driver-accuracy correction 2026-06-28: the result
+    must expose WHAT drove the risk, grouped by provenance. The Φ-drift norm is
+    a COMPUTED quantity (not labeled self-attested), and the driver is reported
+    honestly: cold-start (no warm behavioral signal) → the Φ cold-start prior."""
     from src.monitor_result import _build_risk_attribution
 
     drift = SimpleNamespace(norm=0.84)
@@ -185,17 +185,18 @@ def test_risk_attribution_decomposes_by_provenance():
     behavioral = SimpleNamespace(risk=0.006, verdict="safe")
     metrics = {"risk_score": 0.72, "verdict": "high-risk"}
 
+    # No behavioral_confidence passed → sub-warmup → Φ cold-start prior.
     attr = _build_risk_attribution(metrics, drift, cm, behavioral)
 
     assert attr["risk_score"] == 0.72
     assert attr["verdict"] == "high-risk"
-    assert attr["primary_driver"] == "self_reported"
-    assert attr["sources"]["self_reported"]["provenance"] == "self_attested"
-    assert attr["sources"]["self_reported"]["ethical_drift_norm"] == pytest.approx(0.84)
+    assert attr["primary_driver"] == "phi_cold_start"
+    # The drift norm is computed, not mislabeled self-attested.
+    assert attr["sources"]["phi_drift"]["provenance"] == "computed"
+    assert attr["sources"]["phi_drift"]["ethical_drift_norm"] == pytest.approx(0.84)
     assert attr["sources"]["derived"]["provenance"] == "derived"
     assert attr["sources"]["derived"]["complexity_divergence"] == pytest.approx(0.55)
-    # The non-self-attested signal is labeled "measured" and surfaced even
-    # though it disagrees with the self-reported verdict (0.006 vs high-risk).
+    # The least-self-attested signal is labeled "measured" and surfaced.
     assert attr["sources"]["behavioral"]["provenance"] == "measured"
     assert attr["sources"]["behavioral"]["risk"] == pytest.approx(0.006)
     assert attr["sources"]["behavioral"]["verdict"] == "safe"
@@ -209,7 +210,7 @@ def test_risk_attribution_handles_missing_signals():
     attr = _build_risk_attribution(
         {"risk_score": 0.26, "verdict": "safe"}, None, None, None
     )
-    assert attr["sources"]["self_reported"]["ethical_drift_norm"] is None
+    assert attr["sources"]["phi_drift"]["ethical_drift_norm"] is None
     assert attr["sources"]["derived"]["complexity_divergence"] is None
     assert attr["sources"]["behavioral"]["risk"] is None
     assert attr["sources"]["behavioral"]["verdict"] is None
@@ -285,7 +286,7 @@ def test_build_result_includes_risk_attribution():
     )
 
     assert "risk_attribution" in result
-    assert result["risk_attribution"]["sources"]["self_reported"]["ethical_drift_norm"] == pytest.approx(0.9)
+    assert result["risk_attribution"]["sources"]["phi_drift"]["ethical_drift_norm"] == pytest.approx(0.9)
     assert result["risk_attribution"]["sources"]["behavioral"]["risk"] == pytest.approx(0.006)
 
 

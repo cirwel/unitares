@@ -94,26 +94,55 @@ def _build_risk_attribution(
     continuity_metrics,
     behavioral_assessment,
     baseline_status: Dict = None,
+    *,
+    behavioral_confidence=None,
 ) -> Dict:
     """Decompose the risk/verdict by signal provenance.
 
-    The verdict path is a self-report integrity mechanism, not an
-    adversary-resistant monitor: risk is driven primarily by the
-    caller-supplied ``ethical_drift`` vector (it dominates the phi-based
-    score) plus self-reported complexity/confidence. The only
-    non-self-attested signal is the behavioral text model, and at current
-    maturity it does not carry enforcement weight (verification layer
-    reserved for v2). Surfacing the decomposition lets a reader see *what*
-    drove the verdict and how much of it is self-attested vs measured
-    (dogfood 2026-06-13, P0). All inputs here are already computed elsewhere
-    in the result; this only re-exposes them grouped by provenance.
+    Reports the *actual* verdict driver rather than a fixed label. With Φ
+    demoted to telemetry (the default, ``UNITARES_PHI_TELEMETRY_ONLY=1``), the
+    post-warmup verdict IS the independent behavioral assessment (z-scores vs
+    the agent's own baseline + absolute floors); the Φ path — fed by an
+    ethical-drift vector that is itself ~70%+ server-computed — is telemetry.
+    Pre-warmup (behavioral confidence < 0.3) the verdict falls back to the Φ
+    cold-start prior. The decomposition lets a reader see *what* drove the
+    verdict and how much of it is self-attested vs measured (dogfood
+    2026-06-13, P0; driver-accuracy correction 2026-06-28). All inputs here
+    are already computed elsewhere in the result; this only re-exposes them
+    grouped by provenance.
     """
-    self_reported: Dict = {
-        "provenance": "self_attested",
+    # Determine the ACTUAL verdict driver instead of hardcoding "self_reported".
+    # Mirrors resolve_verdict_risk (governance_monitor.py): with Φ telemetry
+    # (default) the warm behavioral verdict is authoritative; otherwise Φ floors;
+    # pre-warmup the verdict is the Φ cold-start prior.
+    from config.governance_config import (
+        GovernanceConfig as _GovConfig,
+        phi_telemetry_only as _phi_telemetry_only,
+    )
+
+    _behavioral_verdict = getattr(behavioral_assessment, "verdict", None)
+    _behavioral_warm = (
+        _GovConfig.BEHAVIORAL_VERDICT_ENABLED
+        and _behavioral_verdict is not None
+        and behavioral_confidence is not None
+        and behavioral_confidence >= 0.3
+    )
+    if _behavioral_warm and _phi_telemetry_only():
+        primary_driver = "behavioral_assessment"
+    elif _behavioral_warm:
+        primary_driver = "phi_floor"
+    else:
+        primary_driver = "phi_cold_start"
+
+    phi_drift: Dict = {
+        "provenance": "computed",
         "description": (
-            "Magnitude of the caller-supplied ethical_drift vector — the "
-            "dominant input to the phi-based risk score. Reported by the agent, "
-            "not independently verified."
+            "Norm of the ethical-drift vector that feeds the Φ telemetry. It is "
+            ">=70% server-derived (coherence deviation, complexity divergence, "
+            "calibration error, decision-consistency); the agent's self-reported "
+            "ethical_drift is blended at a capped 30% and only when nonzero — a "
+            "[0,0,0] report contributes nothing. Φ is telemetry by default, so "
+            "this drives the live verdict only pre-warmup (the cold-start prior)."
         ),
         "ethical_drift_norm": (
             float(drift_vector.norm)
@@ -140,12 +169,14 @@ def _build_risk_attribution(
         "provenance": "measured",
         "description": (
             "Per-agent behavioral EISV assessment (EMA z-scores vs this agent's "
-            "own baseline, plus tool-outcome signals) — the least self-attested "
-            "input. It IS combined into the verdict once the behavioral state is "
-            "warm (confidence >= 0.3): the enforcement pair takes the more-severe "
-            "verdict and the max risk, so it can escalate but not erase Φ. Before "
-            "warmup it is telemetry-only. A stronger verification/adversarial "
-            "weighting (the real fix for drift-discriminability) is reserved for v2."
+            "own baseline + absolute floors, plus tool-outcome signals) — the "
+            "least self-attested input. With Φ demoted to telemetry (default "
+            "UNITARES_PHI_TELEMETRY_ONLY=1), once warm (confidence >= 0.3) this IS "
+            "the verdict: it replaces the Φ floor and can de-escalate it. Before "
+            "warmup it is telemetry-only and the verdict falls back to the Φ "
+            "cold-start prior. (Under the non-default phi_telemetry=False it is "
+            "escalate-only and cannot lower a worse Φ.) Stronger "
+            "verification/adversarial weighting is reserved for v2."
         ),
         "risk": (
             float(behavioral_assessment.risk)
@@ -159,22 +190,34 @@ def _build_risk_attribution(
         ),
     }
 
+    if primary_driver == "behavioral_assessment":
+        note = (
+            "This verdict is the independent behavioral assessment (EMA residuals "
+            "vs this agent's own baseline + absolute floors). Φ and your reported "
+            "ethical_drift are telemetry here, not the driver."
+        )
+    elif primary_driver == "phi_floor":
+        note = (
+            "Behavioral is warm but Φ-telemetry is disabled (non-default): the "
+            "verdict is the more-severe of Φ and behavioral, with Φ flooring — "
+            "behavioral can escalate but not lower a worse Φ."
+        )
+    else:
+        note = (
+            "Behavioral baseline not yet warm (confidence < 0.3): the verdict uses "
+            "the Φ cold-start prior, computed mostly from server-derived signals "
+            "(complexity divergence, coherence, calibration). Your self-reported "
+            "ethical_drift contributes a capped <=30% blend only when nonzero; the "
+            "independent behavioral signal is not yet weighted."
+        )
+
     attribution = {
         "risk_score": metrics.get("risk_score"),
         "verdict": metrics.get("verdict"),
-        "primary_driver": "self_reported",
-        "note": (
-            "At current maturity this verdict is driven primarily by signals you "
-            "reported (ethical_drift, complexity, confidence). An agent that "
-            "under-reports ethical_drift lowers Φ-based risk regardless of its "
-            "actual behavior. The per-agent behavioral signal is the least "
-            "self-attested input; once warm (confidence >= 0.3) it is combined "
-            "into the verdict and can escalate it (more-severe verdict, max risk), "
-            "but it cannot lower a worse Φ and is not yet the primary driver — "
-            "stronger verification-weighted behavioral scoring is reserved for v2."
-        ),
+        "primary_driver": primary_driver,
+        "note": note,
         "sources": {
-            "self_reported": self_reported,
+            "phi_drift": phi_drift,
             "derived": derived,
             "behavioral": behavioral,
         },
@@ -206,7 +249,8 @@ def _build_risk_attribution(
                 "baseline-deviation terms that are ~0 during bootstrap and does "
                 "not track absolute drift magnitude. Treat risk_score (and any "
                 "margin-to-PAUSE derived from it) as non-discriminative until "
-                "baselined; rely on the reported ethical_drift norm directly."
+                "baselined; rely on the ethical_drift norm in sources.phi_drift "
+                "directly."
             ),
         }
 
@@ -307,6 +351,7 @@ def build_result(
         monitor._last_continuity_metrics,
         behavioral_assessment,
         baseline_status=_baseline_status,
+        behavioral_confidence=getattr(_beh, 'confidence', None),
     )
 
     if task_type_adjustment:
