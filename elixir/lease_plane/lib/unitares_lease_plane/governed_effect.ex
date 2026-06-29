@@ -138,6 +138,14 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     # `inspect(env)`. Used only by the execute path (`GovernanceVetoClient`).
     proposer_continuity_token = nested_string(body, "proposer", "continuity_token")
 
+    # §8 effect-binding proof (#1075) — the proposer's single-use, content-bound
+    # grant, carried in the `proposer` object alongside the token. CREDENTIAL:
+    # forwarded transiently to the governance veto for §8 verification, then
+    # dropped. NEVER written to any audit_payload, response body, or log line
+    # (Invariant 1/7); keep it out of every `inspect(env)`. Optional — absent
+    # today (no proposer mints grants until the binding flag flips).
+    proposer_effect_grant = nested_string(body, "proposer", "effect_grant")
+
     cond do
       not (is_binary(idem) and byte_size(idem) > 0) ->
         {:error, "idempotency_key required (non-empty string)"}
@@ -172,7 +180,9 @@ defmodule UnitaresLeasePlane.GovernedEffect do
            proposer_agent_uuid: proposer_agent_uuid,
            provenance_session_id: provenance_session_id,
            # CREDENTIAL — transient, never persisted/logged (see comment above).
-           proposer_continuity_token: proposer_continuity_token
+           proposer_continuity_token: proposer_continuity_token,
+           # CREDENTIAL — transient §8 effect-binding proof (see comment above).
+           proposer_effect_grant: proposer_effect_grant
          }}
     end
   end
@@ -385,7 +395,10 @@ defmodule UnitaresLeasePlane.GovernedEffect do
             file_write_under_custody(env, digest)
 
           {:error, reason} ->
-            Logger.warning("governed_effect file_write idempotency lookup failed: #{inspect(reason)}")
+            Logger.warning(
+              "governed_effect file_write idempotency lookup failed: #{inspect(reason)}"
+            )
+
             {:error, :idempotency_lookup_failed}
         end
     end
@@ -427,7 +440,13 @@ defmodule UnitaresLeasePlane.GovernedEffect do
                     FileWriteExecutor.apply_effect(effect_id, env.payload, canon_leases)
 
                   {status, extra} = result_audit(result)
-                  _ = persist_execute(env, execute_audit_payload(effect_id, env, digest, status, extra))
+
+                  _ =
+                    persist_execute(
+                      env,
+                      execute_audit_payload(effect_id, env, digest, status, extra)
+                    )
+
                   result_to_reply(result, effect_id)
 
                 {:error, reason} ->

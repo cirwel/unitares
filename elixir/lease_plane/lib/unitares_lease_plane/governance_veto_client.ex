@@ -67,10 +67,46 @@ defmodule UnitaresLeasePlane.GovernanceVetoClient do
       "effect_type" => Map.get(env, :effect_type)
     }
 
+    base
+    |> maybe_put_token(env)
+    |> maybe_put_binding(env)
+  end
+
+  defp maybe_put_token(body, env) do
     case Map.get(env, :proposer_continuity_token) do
-      t when is_binary(t) and t != "" -> Map.put(base, "proposer_continuity_token", t)
-      _ -> base
+      t when is_binary(t) and t != "" -> Map.put(body, "proposer_continuity_token", t)
+      _ -> body
     end
+  end
+
+  # §8 effect-binding (#1075): when the proposer carried a grant, forward it PLUS
+  # the content fields gov-mcp needs to verify the grant binds THIS effect
+  # (payload_sha256/custody_mode/idempotency_key; surface+effect_type already in
+  # base). When absent — today, always — the body is byte-identical to the §6/§7
+  # request, so this is a pure no-op until proposers start minting grants.
+  defp maybe_put_binding(body, env) do
+    case Map.get(env, :proposer_effect_grant) do
+      g when is_binary(g) and g != "" ->
+        body
+        |> Map.put("proposer_effect_grant", g)
+        |> Map.put("payload_sha256", payload_sha256(env))
+        |> Map.put("custody_mode", Map.get(env, :custody_mode))
+        |> Map.put("idempotency_key", Map.get(env, :idempotency_key))
+
+      _ ->
+        body
+    end
+  end
+
+  # Canonical payload hash — MUST match the proposer's mint-time payload_sha256
+  # so the grant's bound `psha` equals what gov-mcp verifies. Same computation as
+  # GovernedEffect.idempotency_digest's payload_hash: sha256 of the JSON-encoded
+  # payload, lowercase hex. (Cross-language canonicalization — Elixir Jason vs a
+  # Python proposer's json — is the slice-4 wiring integration item; a mismatch
+  # fails CLOSED at the veto, never open.)
+  defp payload_sha256(env) do
+    :crypto.hash(:sha256, Jason.encode!(Map.get(env, :payload, %{})))
+    |> Base.encode16(case: :lower)
   end
 
   defp parse(resp) do
