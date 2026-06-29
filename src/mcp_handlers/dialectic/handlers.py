@@ -2008,11 +2008,11 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     if aid and aid in _SESSION_METADATA_CACHE:
                         del _SESSION_METADATA_CACHE[aid]
 
-                # A terminal session no longer needs human facilitation. The
-                # synthetic-success (~submit_synthetic) and reviewer-reassignment
-                # paths already clear this flag, but the main multi-agent resolve
-                # did not — leaving a stale awaiting_facilitation=true on a resolved
-                # session, which the live surface wrongly badges / floats to top.
+                # A terminal session no longer needs human facilitation. The guard
+                # reads the in-memory flag, which is now accurate on the resolve path
+                # because _reconstruct_session_from_dict restores it (#1259) — before
+                # that fix the loaded session always looked not-awaiting here, so this
+                # silently no-op'd and a resolved session kept a stale flag.
                 if getattr(session, "awaiting_facilitation", False):
                     session.awaiting_facilitation = False
                     try:

@@ -179,6 +179,24 @@ class TestReconstructSessionFromDict:
         assert session.phase == DialecticPhase.SYNTHESIS
         assert session.synthesis_round == 1
 
+    def test_reconstruction_restores_awaiting_facilitation(self):
+        """#1259: the flag must round-trip through reconstruction. The ctor
+        defaults it False, so if reconstruct drops it a loaded session looks
+        not-awaiting in memory — which silently no-op'd the #1253 resolve-clear
+        guard (resolved sessions kept a stale awaiting_facilitation=true)."""
+        from src.mcp_handlers.dialectic.session import _reconstruct_session_from_dict
+
+        data = _make_session_dict()
+        data["awaiting_facilitation"] = True
+        session = _reconstruct_session_from_dict("sess_aw", data)
+        assert session.awaiting_facilitation is True
+
+        # Absent key -> safe default False (no regression for older snapshots).
+        data2 = _make_session_dict()
+        data2.pop("awaiting_facilitation", None)
+        session2 = _reconstruct_session_from_dict("sess_aw2", data2)
+        assert session2.awaiting_facilitation is False
+
     def test_reconstruction_with_resolution(self):
         from src.mcp_handlers.dialectic.session import _reconstruct_session_from_dict
 
