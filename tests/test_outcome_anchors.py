@@ -11,9 +11,11 @@ from src.grounding.outcome_anchors import (
     AnchorTier,
     tier_for_source,
     is_exogenous_anchor,
+    is_anchorable,
     anchored_outcomes_predicate,
     ANCHORED_OUTCOMES_SQL,
     ANCHORED_OUTCOMES_WITH_SOFT_SQL,
+    JOINABLE_SNAPSHOT_SQL,
 )
 
 
@@ -62,8 +64,49 @@ def test_soft_requires_explicit_optin():
 def test_sql_predicates_exclude_self_referential():
     assert "server_observation" not in ANCHORED_OUTCOMES_SQL
     assert "server_observation" not in ANCHORED_OUTCOMES_WITH_SOFT_SQL
-    assert ANCHORED_OUTCOMES_SQL == "verification_source = 'external_signal'"
+    assert "verification_source = 'external_signal'" in ANCHORED_OUTCOMES_SQL
     assert anchored_outcomes_predicate() == ANCHORED_OUTCOMES_SQL
     assert anchored_outcomes_predicate(include_soft=True) == ANCHORED_OUTCOMES_WITH_SOFT_SQL
     # the soft predicate admits exactly the two non-excluded sources
     assert "agent_reported_tool_result" in ANCHORED_OUTCOMES_WITH_SOFT_SQL
+
+
+def test_table_alias_qualifies_columns():
+    """With table_alias, every column ref is prefixed so the predicate can be
+    AND-ed into an aliased query (e.g. the skeptic report's `... o`)."""
+    p = anchored_outcomes_predicate(table_alias="o")
+    assert "o.verification_source" in p
+    assert "o.eisv_e" in p
+    assert "o.detail->>" in p
+    # no bare (unqualified) column tokens leak through
+    assert "(verification_source" not in p and " verification_source" not in p
+    assert "(eisv_e" not in p
+    # no alias requested -> unchanged constant
+    assert anchored_outcomes_predicate() == ANCHORED_OUTCOMES_SQL
+    assert anchored_outcomes_predicate(include_soft=True, table_alias="o").count("o.eisv_e") == 1
+
+
+def test_anchor_predicates_require_joinable_snapshot():
+    """Both anchor predicates must AND-in the joinable-snapshot requirement, so a
+    snapshot-less row (synthetic harness traffic / non-instrumented agent) cannot
+    anchor the residual test (roadmap §6.3)."""
+    assert JOINABLE_SNAPSHOT_SQL in ANCHORED_OUTCOMES_SQL
+    assert JOINABLE_SNAPSHOT_SQL in ANCHORED_OUTCOMES_WITH_SOFT_SQL
+    assert "eisv_e IS NOT NULL" in JOINABLE_SNAPSHOT_SQL
+    assert "snapshot_missing" in JOINABLE_SNAPSHOT_SQL
+
+
+def test_is_anchorable_requires_provenance_and_snapshot():
+    # trusted provenance + a real snapshot anchors
+    assert is_anchorable("external_signal", eisv_present=True) is True
+    # trusted provenance but no snapshot does NOT anchor (the synthetic-smoke case)
+    assert is_anchorable("external_signal", eisv_present=False) is False
+    # snapshot present but flagged missing does NOT anchor
+    assert is_anchorable("external_signal", eisv_present=True, snapshot_missing=True) is False
+    # excluded provenance never anchors, snapshot or not
+    assert is_anchorable("server_observation", eisv_present=True) is False
+    assert is_anchorable(None, eisv_present=True) is False
+    # soft self-attested only with explicit opt-in, and still needs a snapshot
+    assert is_anchorable("agent_reported_tool_result", eisv_present=True) is False
+    assert is_anchorable("agent_reported_tool_result", eisv_present=True, include_soft=True) is True
+    assert is_anchorable("agent_reported_tool_result", eisv_present=False, include_soft=True) is False

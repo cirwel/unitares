@@ -85,27 +85,102 @@ def is_exogenous_anchor(
     return False
 
 
+def is_anchorable(
+    verification_source: Optional[str],
+    *,
+    eisv_present: bool,
+    snapshot_missing: bool = False,
+    include_soft: bool = False,
+) -> bool:
+    """True if an outcome row may anchor the residual/falsifiability test.
+
+    Full anchorability = exogenous provenance (``is_exogenous_anchor``) AND a
+    joinable EISV snapshot at outcome time. The row-level twin of
+    ``ANCHORED_OUTCOMES_SQL``: a trusted-provenance row with no state has nothing
+    to compute a residual against (roadmap §6.3), and snapshot-less synthetic
+    harness traffic must never train the gate. ``eisv_present`` is whether the row
+    carries an EISV vector (e.g. ``eisv_e is not None``); ``snapshot_missing``
+    mirrors the ``detail.snapshot_missing`` flag.
+    """
+    if not is_exogenous_anchor(verification_source, include_soft=include_soft):
+        return False
+    return bool(eisv_present) and not snapshot_missing
+
+
 # --- Canonical SQL predicates -------------------------------------------------
 # The single source of truth for "which outcome_events rows may anchor". Use
 # these in any query that feeds a baseline update or a falsifiability gate, so
-# the Invariant-4 exclusion is applied uniformly and is greppable.
+# both the Invariant-4 exclusion AND the joinability requirement are applied
+# uniformly and greppably.
+#
+# Anchorability has two parts, both required:
+#   1. exogenous provenance  (tier, below) — Invariant 4;
+#   2. a joinable EISV snapshot at outcome time — roadmap §6.3.
+# A trusted-provenance row with no state at outcome time cannot anchor the
+# residual test: there is nothing to compute `measurement − reference` against.
+# This is not a cosmetic filter — it is the §6.3 precondition. It also removes
+# synthetic harness traffic (BEAM wiring smoke tests emit external_signal with
+# snapshot_missing=true and no eisv_*), which must never train the gate. The
+# snapshot bridge (db/mixins/tool_usage.py) attaches state for genuinely
+# instrumented agents, so real outcomes pass; non-instrumented/synthetic ones
+# correctly do not.
 
-#: Externally-anchored outcomes only (default — the honest anchor set).
-ANCHORED_OUTCOMES_SQL = "verification_source = 'external_signal'"
+#: A row carries the EISV state needed to compute a residual at outcome time.
+#: Required for any anchor — see module note above (roadmap §6.3).
+JOINABLE_SNAPSHOT_SQL = (
+    "(eisv_e IS NOT NULL "
+    "AND coalesce((detail->>'snapshot_missing')::boolean, false) = false)"
+)
 
-#: Externally-anchored + soft self-attested (opt-in; tolerate gameable signal).
-ANCHORED_OUTCOMES_WITH_SOFT_SQL = (
+_TRUSTED_SOURCE_SQL = "verification_source = 'external_signal'"
+_TRUSTED_OR_SOFT_SOURCE_SQL = (
     "verification_source IN ('external_signal', 'agent_reported_tool_result')"
 )
 
-#: Rows that must NEVER anchor — self-referential or unknown provenance. Useful
-#: for an assertion / audit that nothing leaked the loop's self-validation in.
+#: Externally-anchored outcomes only (default — the honest anchor set):
+#: exogenous provenance AND a joinable snapshot.
+ANCHORED_OUTCOMES_SQL = f"({_TRUSTED_SOURCE_SQL}) AND {JOINABLE_SNAPSHOT_SQL}"
+
+#: Externally-anchored + soft self-attested (opt-in; tolerate gameable signal).
+#: Still requires a joinable snapshot.
+ANCHORED_OUTCOMES_WITH_SOFT_SQL = (
+    f"({_TRUSTED_OR_SOFT_SOURCE_SQL}) AND {JOINABLE_SNAPSHOT_SQL}"
+)
+
+#: Rows that must NEVER anchor on *provenance* grounds — self-referential or
+#: unknown source. Useful for an assertion / audit that nothing leaked the loop's
+#: self-validation in. NB: this is provenance-only and is deliberately NOT the
+#: complement of ANCHORED_OUTCOMES_SQL — a trusted-provenance row that simply
+#: lacks a snapshot is neither an anchor nor a provenance leak (it is unjoinable,
+#: a coverage gap, not an Invariant-4 violation).
 EXCLUDED_OUTCOMES_SQL = (
     "(verification_source IS NULL "
     "OR verification_source NOT IN ('external_signal', 'agent_reported_tool_result'))"
 )
 
 
-def anchored_outcomes_predicate(*, include_soft: bool = False) -> str:
-    """Return the SQL predicate selecting anchorable outcome rows."""
-    return ANCHORED_OUTCOMES_WITH_SOFT_SQL if include_soft else ANCHORED_OUTCOMES_SQL
+def anchored_outcomes_predicate(
+    *, include_soft: bool = False, table_alias: Optional[str] = None
+) -> str:
+    """Return the SQL predicate selecting anchorable outcome rows.
+
+    Selects rows with exogenous provenance AND a joinable EISV snapshot — both
+    are required (see module note; roadmap §6.3).
+
+    ``table_alias`` qualifies the column references (``verification_source``,
+    ``eisv_e``, ``detail``) with ``<alias>.`` so the predicate can be AND-ed into
+    a query that aliases ``audit.outcome_events`` (e.g. ``... o`` in the skeptic
+    report). With no alias the bare-column constants are returned unchanged.
+    """
+    base = ANCHORED_OUTCOMES_WITH_SOFT_SQL if include_soft else ANCHORED_OUTCOMES_SQL
+    if not table_alias:
+        return base
+    a = f"{table_alias}."
+    # The three column tokens are distinct and do not appear as substrings of one
+    # another in the predicate, so targeted replacement is safe here.
+    return (
+        base
+        .replace("verification_source", f"{a}verification_source")
+        .replace("eisv_e", f"{a}eisv_e")
+        .replace("detail->>", f"{a}detail->>")
+    )

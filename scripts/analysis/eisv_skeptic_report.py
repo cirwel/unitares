@@ -37,6 +37,7 @@ from scripts.analysis.outcome_inventory import (
     attach_identity_metadata,
     is_controlled_validation_fixture,
 )
+from src.grounding.outcome_anchors import anchored_outcomes_predicate
 
 
 DEFAULT_DB_URL = os.environ.get(
@@ -1120,6 +1121,7 @@ async def fetch_rows(
     lead_minutes: float,
     outcome_types: Sequence[str],
     dispersion_window_minutes: float = DISPERSION_WINDOW_MINUTES,
+    anchor_predicate: str | None = None,
 ) -> list[OutcomeRow]:
     try:
         import asyncpg
@@ -1240,8 +1242,9 @@ async def fetch_rows(
             ) disp ON TRUE
             WHERE o.ts >= now() - ($1::int * INTERVAL '1 day')
               AND o.outcome_type = ANY($3::text[])
+              AND {anchor_clause}
             ORDER BY o.ts ASC
-            """,
+            """.format(anchor_clause=(anchor_predicate or "TRUE")),
             window_days,
             lead_minutes,
             list(outcome_types),
@@ -1279,6 +1282,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "The task scope has more data but weaker objectivity."
         ),
     )
+    parser.add_argument(
+        "--anchor-scope",
+        choices=("trusted", "soft", "all"),
+        default="soft",
+        help=(
+            "Which outcomes may anchor the falsifiability test (src.grounding.outcome_anchors). "
+            "trusted = external_signal + a joinable EISV snapshot; soft = also agent-self-attested "
+            "(default — more data); all = no anchor filter (legacy/contaminated: includes "
+            "self-referential and snapshot-less synthetic rows). Use 'all' only to reproduce the "
+            "pre-anchor-honesty numbers."
+        ),
+    )
     parser.add_argument("--output", help="Optional markdown output path")
     return parser.parse_args(argv)
 
@@ -1288,12 +1303,19 @@ async def main_async(args: argparse.Namespace) -> int:
         print("error: --train-fraction must be between 0.1 and 0.9", file=sys.stderr)
         return 2
     outcome_types = STRICT_OUTCOMES if args.scope == "strict" else TASK_OUTCOMES
+    if args.anchor_scope == "all":
+        anchor_predicate = None
+    else:
+        anchor_predicate = anchored_outcomes_predicate(
+            include_soft=(args.anchor_scope == "soft"), table_alias="o"
+        )
     rows = await fetch_rows(
         args.db_url,
         window_days=args.window_days,
         lead_minutes=args.lead_minutes,
         outcome_types=outcome_types,
         dispersion_window_minutes=args.dispersion_window_minutes,
+        anchor_predicate=anchor_predicate,
     )
     report = build_report(
         rows,

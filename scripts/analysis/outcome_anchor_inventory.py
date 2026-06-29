@@ -30,7 +30,12 @@ except ImportError:
     print("ERROR: psycopg2 not installed. Run: pip install psycopg2-binary", file=sys.stderr)
     sys.exit(1)
 
-from src.grounding.outcome_anchors import AnchorTier, tier_for_source  # noqa: E402
+from src.grounding.outcome_anchors import (  # noqa: E402
+    AnchorTier,
+    tier_for_source,
+    ANCHORED_OUTCOMES_SQL,
+    ANCHORED_OUTCOMES_WITH_SOFT_SQL,
+)
 
 
 def main() -> int:
@@ -76,6 +81,59 @@ def main() -> int:
     if total:
         print(f"Self-referential / unknown EXCLUDED: {excl_c}/{total} "
               f"({100*excl_c/total:.0f}%) — Invariant 4 in effect")
+
+    # Joinability gap: provenance-trusted is necessary but not sufficient. A row
+    # can only anchor the residual test if it carries an EISV snapshot at outcome
+    # time (roadmap §6.3); the canonical ANCHORED_OUTCOMES_SQL ANDs that in. The
+    # delta vs the raw TRUSTED count above is snapshot-less / synthetic traffic
+    # (e.g. BEAM wiring smoke tests) that must NOT train the gate.
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT count(*),
+                   sum(CASE WHEN is_bad THEN 1 ELSE 0 END),
+                   count(DISTINCT agent_id)
+            FROM audit.outcome_events
+            WHERE {ANCHORED_OUTCOMES_SQL}
+            """
+        )
+        anchorable_c, anchorable_bad, anchorable_agents = cur.fetchone()
+        anchorable_bad = int(anchorable_bad or 0)
+        cur.execute(
+            f"""
+            SELECT count(*), sum(CASE WHEN is_bad THEN 1 ELSE 0 END)
+            FROM audit.outcome_events
+            WHERE {ANCHORED_OUTCOMES_WITH_SOFT_SQL}
+            """
+        )
+        soft_anchorable_c, soft_anchorable_bad = cur.fetchone()
+        soft_anchorable_bad = int(soft_anchorable_bad or 0)
+
+    print(f"\nJoinable anchor budget (TRUSTED + EISV snapshot): {anchorable_c} events, "
+          f"{anchorable_bad} bad, across {anchorable_agents} agents")
+    print(f"  (+soft self-attested if opted in: {soft_anchorable_c} events, {soft_anchorable_bad} bad)")
+    contamination = trusted_c - anchorable_c
+    if contamination > 0:
+        print(f"  ⚠ {contamination} TRUSTED rows are snapshot-less/synthetic "
+              f"({100*contamination/trusted_c:.0f}% of TRUSTED) — excluded from anchoring, "
+              f"correctly not training the gate")
+    # Per-agent coverage bounds B's per-agent falsifiability gate (§6.3).
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            WITH a AS (
+                SELECT agent_id,
+                       sum(CASE WHEN NOT is_bad THEN 1 ELSE 0 END) good,
+                       sum(CASE WHEN is_bad THEN 1 ELSE 0 END) bad
+                FROM audit.outcome_events WHERE {ANCHORED_OUTCOMES_SQL}
+                GROUP BY agent_id)
+            SELECT count(*) FILTER (WHERE good >= 5 AND bad >= 5)
+            FROM a
+            """
+        )
+        rich_agents = cur.fetchone()[0]
+    flag = "  ⚠ no agent has a balanced label set — B's per-agent gate un-runnable" if rich_agents == 0 else ""
+    print(f"agents with good>=5 AND bad>=5 (B-gate-ready): {rich_agents}{flag}")
 
     # Gap check: is the most objective bad anchor (a failing test) flowing?
     with conn.cursor() as cur:
