@@ -42,7 +42,6 @@ import argparse
 import json
 import os
 import subprocess
-import sys
 
 DEFAULT_DSN = "postgresql://postgres:postgres@localhost:5432/governance"
 ACTIONABLE_TYPES = (
