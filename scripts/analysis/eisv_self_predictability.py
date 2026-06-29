@@ -14,10 +14,13 @@ That is the estimator's falsifiable claim, and it maps to the design axioms:
      mean beat naive persistence at predicting the next measurement? If
      persistence wins, the state is a random walk and the baseline is fitting
      noise.
-  2. Individuality (axiom 1) — does the agent's *own* mean beat the *fleet* mean
-     at predicting that agent's next state? If the global mean is as good, agents
-     are not distinguishable and per-agent modeling overfits — the individuality
-     premise is unsupported by data.
+  2. Distinguishability (a NECESSARY condition for axiom 1, not the whole of it)
+     — does the agent's *own* mean beat the *fleet* mean at predicting that
+     agent's next state? If the global mean is as good, agents are not even
+     distinguishable. NB: beating the fleet mean is NOT sufficient for the
+     individuality axiom's "stable per-agent normal" — that needs beating a
+     per-agent persistence/AR(1) null, which is confounded on the pre-smoothed
+     stored signal (see the "scope limit" section of the report).
   3. Non-stationarity / growth (axiom 2) — does a recency-weighted EMA beat the
      expanding mean? If so, the "normal" genuinely moves and a moving reference
      is warranted; if not, a static baseline suffices.
@@ -260,13 +263,13 @@ def build_report(res: dict, *, min_states: int) -> str:
     a.append("\n## Reading (robust comparisons only)")
     verdicts = []
     if exp < glob:
-        verdicts.append("Per-agent reference beats the fleet reference — "
-                        "**individuality is supported by data**: agents occupy distinct "
-                        "regions of EISV space worth modeling per-agent (axiom 1).")
+        verdicts.append("Per-agent reference beats the fleet reference — agents are "
+                        "**distinguishable**: they occupy distinct regions of EISV space, "
+                        "so per-agent modeling is not redundant with a fleet centroid.")
     else:
-        verdicts.append("The fleet reference is as good as the per-agent one — "
-                        "**individuality is NOT supported** in this data; per-agent baselines "
-                        "may be overfitting a common normal.")
+        verdicts.append("The fleet reference is as good as the per-agent one — agents "
+                        "are NOT distinguishable in this data; per-agent baselines may be "
+                        "overfitting a common centroid.")
     if ema < exp:
         verdicts.append("Recency helps — the normal is **non-stationary**; a moving "
                         "reference (EMA) is warranted over a static mean (axiom 2: the "
@@ -276,15 +279,38 @@ def build_report(res: dict, *, min_states: int) -> str:
                         "the normal is approximately stationary.")
     for v in verdicts:
         a.append(f"- {v}")
-    # which dims drive individuality (largest global-vs-agent gap)
+    # which dims drive distinguishability (largest global-vs-agent gap)
     gaps = sorted(DIMS, key=lambda d: (mae["global_mean"][d] - mae["expanding_mean"][d]), reverse=True)
-    a.append(f"- Individuality is concentrated in **{gaps[0]} and {gaps[1]}** "
+    a.append(f"- Distinguishability is concentrated in **{gaps[0]} and {gaps[1]}** "
              f"(largest per-agent advantage over the fleet mean); weakest in {gaps[-1]}.")
+
+    a.append("\n## What this does NOT establish (scope limit)")
+    a.append(
+        "**Distinguishable + non-stationary is weaker than the individuality axiom's "
+        "'stable per-agent normal'.** The axiom wants a reference a residual can be "
+        "measured *against*; that requires the per-agent reference to beat a per-agent "
+        "**persistence / AR(1)** null (predict next = this agent's last value), not just "
+        "the fleet mean. Here persistence dominates every reference — but ONLY because "
+        f"the stored signal is pre-EMA-smoothed (persistence MAE {pers:.4f}); the "
+        "persistence-vs-reference test is confounded and CANNOT be run cleanly on this "
+        "table. So 'agents have stable normals worth measuring deviation from' is "
+        "**untested**, not confirmed. The same per-agent autocorrelation is what the "
+        "outcome eval's 'previous-outcome' baseline exploits — do not count it as "
+        "evidence both for individuality here and against EISV there."
+    )
+    a.append(
+        "\nTo settle it, log the RAW (un-smoothed) per-check-in EISV and re-run "
+        "expanding_mean / ema vs a per-agent persistence+AR(1) null on the raw series. "
+        "That is the label-free test that would actually earn the individuality axiom."
+    )
     a.append(
         "\nInterpretation rule: this measures the *estimator* (does the self-model "
-        "predict the self), not the *policy* (does deviation predict bad outcomes — "
-        "that needs exogenous labels; see eisv_skeptic_report.py). A good estimator "
-        "is necessary but not sufficient for a good governor."
+        "predict the self), not the *policy* (does deviation warrant intervention). "
+        "Note the policy is NOT only validatable via exogenous outcomes — label-free "
+        "stress-tests (invariance under agent-relabel / time-shuffle; response to "
+        "synthetic injected regime-shifts) probe it without tripping the "
+        "self-referential-anchor circularity. A good estimator is necessary, not "
+        "sufficient, for a good governor."
     )
     return "\n".join(a) + "\n"
 
