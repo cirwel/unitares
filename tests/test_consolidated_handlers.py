@@ -578,6 +578,63 @@ class TestObserveHandler:
         assert valid == expected
 
 
+class TestAdminHandler:
+    """Tests for the admin/diagnostics consolidated handler."""
+
+    @pytest.mark.asyncio
+    async def test_missing_action_returns_error(self):
+        from src.mcp_handlers.consolidated import handle_admin
+        result = await handle_admin({})
+        data = _parse_response(result)
+        assert data["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_invalid_action_returns_error(self):
+        from src.mcp_handlers.consolidated import handle_admin
+        result = await handle_admin({"action": "rm_rf"})
+        data = _parse_response(result)
+        assert data["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_valid_actions_list_complete(self):
+        from src.mcp_handlers.consolidated import handle_admin
+        result = await handle_admin({"action": "bad"})
+        data = _parse_response(result)
+        valid = sorted(data["recovery"]["valid_actions"])
+        expected = sorted(["server_info", "connections", "workspace_health",
+                           "tool_usage", "telemetry", "debug_context",
+                           "validate_path", "reset_monitor", "cleanup_locks"])
+        assert valid == expected
+
+    @pytest.mark.asyncio
+    async def test_routes_to_underlying_handler(self):
+        from src.mcp_handlers.consolidated import handle_admin
+        mock = _make_mock_handler({"server": "ok"})
+        with _patch_router_action(handle_admin, "server_info", mock):
+            result = await handle_admin({"action": "server_info"})
+        mock.assert_awaited_once()
+        assert _parse_response(result) == {"server": "ok"}
+
+
+class TestAdminParamsSchema:
+    """The action-routed schema must declare every routable field and resolve
+    the divergent window_hours default (telemetry=24, tool_usage=168)."""
+
+    def test_window_default_diverges_by_action(self):
+        from src.mcp_handlers.schemas.admin import AdminParams
+        assert AdminParams(action="telemetry").window_hours == 24.0
+        assert AdminParams(action="tool_usage").window_hours == 168.0
+        # Explicit value is never overridden.
+        assert AdminParams(action="telemetry", window_hours=72).window_hours == 72
+        # Non-window actions leave it unset.
+        assert AdminParams(action="server_info").window_hours is None
+
+    def test_schema_auto_maps_to_admin_tool(self):
+        from src.tool_schemas import get_pydantic_schemas
+        from src.mcp_handlers.schemas.admin import AdminParams
+        assert get_pydantic_schemas().get("admin") is AdminParams
+
+
 @pytest.fixture
 def _pi_handler():
     """``pi`` action router lives in unitares-pi-plugin as of Phase B1.

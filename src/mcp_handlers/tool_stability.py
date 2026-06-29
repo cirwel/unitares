@@ -268,6 +268,26 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     "aggregate_metrics": ToolAlias(old_name="aggregate_metrics", new_name="observe", reason="consolidated",
         migration_note="Use observe(action='aggregate')", inject_action="aggregate"),
 
+    # Admin / diagnostics tools → admin(action='...')
+    "get_server_info": ToolAlias(old_name="get_server_info", new_name="admin", reason="consolidated",
+        migration_note="Use admin(action='server_info')", inject_action="server_info"),
+    "get_connection_status": ToolAlias(old_name="get_connection_status", new_name="admin", reason="consolidated",
+        migration_note="Use admin(action='connections')", inject_action="connections"),
+    "get_workspace_health": ToolAlias(old_name="get_workspace_health", new_name="admin", reason="consolidated",
+        migration_note="Use admin(action='workspace_health')", inject_action="workspace_health"),
+    "get_tool_usage_stats": ToolAlias(old_name="get_tool_usage_stats", new_name="admin", reason="consolidated",
+        migration_note="Use admin(action='tool_usage')", inject_action="tool_usage"),
+    "get_telemetry_metrics": ToolAlias(old_name="get_telemetry_metrics", new_name="admin", reason="consolidated",
+        migration_note="Use admin(action='telemetry') or observe(action='telemetry')", inject_action="telemetry"),
+    "debug_request_context": ToolAlias(old_name="debug_request_context", new_name="admin", reason="consolidated",
+        migration_note="Use admin(action='debug_context')", inject_action="debug_context"),
+    "validate_file_path": ToolAlias(old_name="validate_file_path", new_name="admin", reason="consolidated",
+        migration_note="Use admin(action='validate_path', file_path='...')", inject_action="validate_path"),
+    "reset_monitor": ToolAlias(old_name="reset_monitor", new_name="admin", reason="consolidated",
+        migration_note="Use admin(action='reset_monitor')", inject_action="reset_monitor"),
+    "cleanup_stale_locks": ToolAlias(old_name="cleanup_stale_locks", new_name="admin", reason="consolidated",
+        migration_note="Use admin(action='cleanup_locks')", inject_action="cleanup_locks"),
+
     # Dialectic tools → dialectic(action='...')
     "get_dialectic_session": ToolAlias(old_name="get_dialectic_session", new_name="dialectic", reason="consolidated",
         migration_note="Use dialectic(action='get', session_id='...')", inject_action="get"),

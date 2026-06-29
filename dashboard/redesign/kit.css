@@ -229,8 +229,11 @@ a.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)
 
 /* Two-up layouts (agent detail state|identity, resident panels, Pulse risk|eisv)
    that collapse to a single stacked column on phones — see the 640px block. */
-.split-2 { display: grid; grid-template-columns: 1fr 1fr; }
-.split-wide { display: grid; grid-template-columns: 1.4fr 1fr; }
+/* minmax(0,…) not 1fr: a 1fr column has an `auto` minimum, so long unbreakable
+   content (e.g. a System Health check note) blows the column past its share.
+   minmax(0,…) lets the column shrink so nested ellipsis/wrap can take over. */
+.split-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.split-wide { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
 
 @media (max-width: 860px) {
   .grid { grid-template-columns: repeat(2, 1fr); }
