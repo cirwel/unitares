@@ -32,6 +32,12 @@ defmodule UnitaresLeasePlane.FileWriteExecutorCommitTest do
     defp rec(call, result), do: (send(self(), {:fileop, call}) && result)
   end
 
+  # NOTE: this fake is deliberately lenient — it exercises the EXECUTOR's commit
+  # logic in isolation (write / mark / compensation), assuming the durable row
+  # already exists (the DISPATCH inserts it). It does NOT model the real
+  # UPDATE-only semantics of record_pre_image; that contract — and the #1204
+  # "committed file, no durable row" bug it once hid — is pinned by the real-DB
+  # effect_repo_contract_test.exs.
   defmodule FakeRepo do
     def record_pre_image(_id, _sha, _bytes, _existed?),
       do: rec(:record_pre_image, Process.get(:record_result, :ok))
