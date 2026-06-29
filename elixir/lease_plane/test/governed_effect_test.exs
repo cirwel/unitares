@@ -292,6 +292,31 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       refute row_text =~ "SECRET-s7-payload"
       refute row_text =~ "continuity_token"
     end
+
+    test "§8: a forwarded effect_grant never leaks into the persisted record" do
+      key = tracked_key()
+      set_execute_flag(true, "http://127.0.0.1:8789", "http://127.0.0.1:1")
+
+      assert {:error, :governance_blocked} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => key,
+                   "custody_mode" => "execute",
+                   "effect_type" => "agent_spawn",
+                   "proposer" => %{
+                     "agent_uuid" => "00000000-0000-0000-0000-0000000000aa",
+                     "effect_grant" => "gnt.v1.SECRET-s8-grant-payload.SECRET-s8-sig"
+                   },
+                   "payload" => %{"cmd" => "echo", "args" => ["hi"]}
+                 })
+               )
+
+      assert [row] = execute_rows(key)
+      assert row["status"] == "governance_blocked"
+      row_text = Jason.encode!(row)
+      refute row_text =~ "SECRET-s8-grant-payload"
+      refute row_text =~ "effect_grant"
+    end
   end
 
   describe "§7 GovernanceVetoClient body forwarding" do
@@ -333,6 +358,65 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
         })
 
       refute Map.has_key?(body, "proposer_continuity_token")
+    end
+  end
+
+  describe "§8 effect-binding body forwarding (#1075)" do
+    alias UnitaresLeasePlane.GovernanceVetoClient
+
+    test "the grant + content fields are forwarded when a grant is present" do
+      body =
+        GovernanceVetoClient.build_veto_body(%{
+          proposer_agent_uuid: "00000000-0000-0000-0000-0000000000aa",
+          surface: "file://sandbox/x",
+          effect_type: "file_write",
+          custody_mode: "execute",
+          idempotency_key: "idem-001",
+          payload: %{"path" => "sandbox/x", "bytes" => "hi"},
+          proposer_effect_grant: "gnt.v1.payload.sig"
+        })
+
+      assert body["proposer_effect_grant"] == "gnt.v1.payload.sig"
+      assert body["custody_mode"] == "execute"
+      assert body["idempotency_key"] == "idem-001"
+      # payload_sha256 must equal the idempotency payload_hash (sha256 of the
+      # JSON-encoded payload, lowercase hex) so the grant's psha verifies.
+      expected =
+        :crypto.hash(:sha256, Jason.encode!(%{"path" => "sandbox/x", "bytes" => "hi"}))
+        |> Base.encode16(case: :lower)
+
+      assert body["payload_sha256"] == expected
+    end
+
+    test "no binding keys are added when the grant is absent or blank (byte-identical)" do
+      for grant <- [nil, ""] do
+        env = %{
+          proposer_agent_uuid: "00000000-0000-0000-0000-0000000000aa",
+          surface: "file://sandbox/x",
+          effect_type: "file_write",
+          custody_mode: "execute",
+          idempotency_key: "idem-001",
+          payload: %{"a" => 1},
+          proposer_effect_grant: grant
+        }
+
+        body = GovernanceVetoClient.build_veto_body(env)
+
+        for k <- ~w(proposer_effect_grant payload_sha256 custody_mode idempotency_key) do
+          refute Map.has_key?(body, k),
+                 "grant=#{inspect(grant)} should add no binding key #{k}"
+        end
+      end
+
+      # and when the env never carried the grant key at all
+      body =
+        GovernanceVetoClient.build_veto_body(%{
+          proposer_agent_uuid: "00000000-0000-0000-0000-0000000000aa",
+          surface: "file://sandbox/x",
+          effect_type: "file_write"
+        })
+
+      refute Map.has_key?(body, "proposer_effect_grant")
     end
   end
 

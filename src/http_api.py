@@ -798,6 +798,53 @@ async def http_effect_grant(request):
     return JSONResponse({"ok": True, "grant": grant})
 
 
+async def _check_effect_binding(body: dict, proposer: str):
+    """§8 effect-binding: verify the forwarded grant covers THIS effect, then
+    consume its nonce exactly once (#1075 Phase 1). Returns (binding_ok, reason).
+
+    Called only when UNITARES_GOVERNED_EFFECT_BINDING is on. Fail-closed: a
+    missing/invalid/expired/mismatched grant, a replayed nonce, or a store error
+    → (False, reason). On a valid grant the nonce is consumed atomically
+    (INSERT ... ON CONFLICT DO NOTHING in one statement — no SELECT-then-INSERT
+    TOCTOU); a second presentation of the same grant finds the row present →
+    replay → vetoed. The grant is a credential: verified transiently, never
+    logged.
+    """
+    grant = body.get("proposer_effect_grant")
+    if not grant or not isinstance(grant, str):
+        return False, "binding_absent"
+    from src.effect_grant import verify_effect_grant
+    v = verify_effect_grant(
+        grant,
+        aid=proposer,
+        payload_sha256=str(body.get("payload_sha256") or ""),
+        surface=str(body.get("surface") or ""),
+        custody_mode=str(body.get("custody_mode") or ""),
+        idempotency_key=str(body.get("idempotency_key") or ""),
+    )
+    if not v.ok:
+        return False, f"binding_{v.reason}"
+    try:
+        from src.db import get_db
+        db = get_db()
+        async with db.acquire() as conn:
+            result = await conn.execute(
+                """
+                INSERT INTO effects.consumed_nonces (nonce, grant_exp)
+                VALUES ($1, to_timestamp($2))
+                ON CONFLICT (nonce) DO NOTHING
+                """,
+                v.nonce, int(v.exp),
+            )
+    except Exception as e:  # noqa: BLE001 — store failure → fail closed
+        logger.warning("effect-binding nonce consume failed: %s", e)
+        return False, "binding_store_unavailable"
+    # asyncpg returns a command tag like "INSERT 0 1" (1 row) or "INSERT 0 0".
+    if str(result).split()[-1] != "1":
+        return False, "binding_replayed"
+    return True, None
+
+
 async def http_effect_veto(request):
     """POST /v1/effect-veto — governance veto for a proposed governed effect.
 
@@ -866,6 +913,16 @@ async def http_effect_veto(request):
     tier = "strong" if tier_ok else "unverified"
     tier_reason = None if tier_ok else "tier_recert_failed:not_strong_identity"
 
+    # §8 effect-binding (governed-effect-effect-binding-v0 §5 / #1075). ADDITIVE,
+    # flag-gated: when UNITARES_GOVERNED_EFFECT_BINDING is off (default), this is
+    # a no-op (binding_ok=True) and the live §6/§7 veto is byte-identical. When
+    # on, the forwarded grant must cover THIS exact effect and its nonce must be
+    # unconsumed — otherwise binding_ok is False and the effect is vetoed. Like
+    # §7, this gate applies on EVERY exit path below.
+    binding_ok, binding_reason = True, None
+    if _http_bool(os.getenv("UNITARES_GOVERNED_EFFECT_BINDING")):
+        binding_ok, binding_reason = await _check_effect_binding(body, proposer)
+
     try:
         from src.db import get_db
         db = get_db()
@@ -900,12 +957,14 @@ async def http_effect_veto(request):
         # no/invalid token → vetoed. This is the intended composition —
         # "a strong, never-flagged identity may spawn; a weak/unverified one
         # may not" — not an emergent property of the old early return.
+        unknown_reasons = [r for r in (tier_reason, binding_reason) if r]
         return JSONResponse({
             "ok": True,
-            "vetoed": not tier_ok,
+            "vetoed": not (tier_ok and binding_ok),
             "verdict": None, "action": None, "risk_score": None,
             "tier": tier, "tier_ok": tier_ok,
-            "reason": (tier_reason if not tier_ok else "no_governance_state"),
+            "binding_ok": binding_ok,
+            "reason": (" ; ".join(unknown_reasons) if unknown_reasons else "no_governance_state"),
         })
 
     verdict = row["verdict"]
@@ -913,8 +972,8 @@ async def http_effect_veto(request):
     risk_score = row["risk_score"]
     block_verdict = verdict == "high-risk"
     block_action = action is not None and action not in ("approve", "guide")
-    # §6 verdict/action gate OR §7 tier gate — either trips the veto.
-    vetoed = bool(block_verdict or block_action or (not tier_ok))
+    # §6 verdict/action OR §7 tier OR §8 effect-binding — any trips the veto.
+    vetoed = bool(block_verdict or block_action or (not tier_ok) or (not binding_ok))
 
     if vetoed:
         reasons = []
@@ -922,7 +981,9 @@ async def http_effect_veto(request):
             reasons.append(f"verdict={verdict} action={action}")
         if not tier_ok:
             reasons.append(tier_reason)
-        reason = " ; ".join(reasons)
+        if not binding_ok:
+            reasons.append(binding_reason)
+        reason = " ; ".join(r for r in reasons if r)
     else:
         reason = None
 
@@ -934,6 +995,7 @@ async def http_effect_veto(request):
         "risk_score": risk_score,
         "tier": tier,
         "tier_ok": tier_ok,
+        "binding_ok": binding_ok,
         "reason": reason,
     })
 
