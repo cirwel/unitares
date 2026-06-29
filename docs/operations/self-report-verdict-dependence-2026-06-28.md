@@ -1,5 +1,20 @@
 # Self-report dependence of the enforcement verdict — worked example
 
+> **Correction (2026-06-28, same day):** the original headline framing — "the verdict
+> is only as trustworthy as the agent's self-reported drift" — is **inverted** and is
+> kept below only for the audit trail. Verified against source:
+> (1) the drift vector feeding Φ is ~70%+ server-computed
+> (`governance_core/ethical_drift.py:301-389`); a `[0,0,0]` self-report *skips* the 30%
+> blend (`src/monitor_drift.py:102-113`), so the two demo agents matched because the
+> **Φ cold-start prior** (dominantly `complexity_divergence`) was identical — the
+> self-report was ignored, not trusted.
+> (2) Φ is telemetry-only by **default** (`UNITARES_PHI_TELEMETRY_ONLY=1`), so
+> **post-warmup the verdict IS the behavioral assessment** (`governance_monitor.py:63-64`),
+> not the Φ/self-report path. The narrow finding that survives: **pre-warmup** (behavioral
+> confidence < 0.3) the verdict runs on the Φ cold-start prior and the independent
+> behavioral text-risk signal is unweighted, so described-behavior semantics don't
+> register yet. The corrected reading is folded into the sections below.
+
 **Recorded:** June 28, 2026
 **Status:** Dogfood finding logged — **demonstration of a disclosed property**, not a
 newly discovered defect. The system surfaces this mechanism in-band on every
@@ -22,18 +37,23 @@ signal" claim holds in.
 
 ## The claim (falsifiable)
 
-At current maturity the UNITARES enforcement verdict is set by the caller's
-self-reported `ethical_drift` vector (plus self-reported `complexity` / `confidence`),
-not by an independent measurement of what the agent did. An agent reporting
-`ethical_drift: [0,0,0]` receives `proceed / safe` regardless of the behavior described
-in its own `response_text`. Two check-ins — one a clean refactor, one a full confession
-of sabotage — submitted with identical self-reported drift received indistinguishable
-verdicts.
+**Scoped to the pre-warmup regime (behavioral confidence < 0.3).** In that window the
+UNITARES enforcement verdict is the **Φ cold-start prior** — computed from server-derived
+signals (dominantly `complexity_divergence`), with the caller's self-reported
+`ethical_drift` contributing only a capped **≤30%** blend, and *only when nonzero*. An
+agent reporting `ethical_drift: [0,0,0]` receives `proceed / safe` not because the zero is
+trusted but because it is **ignored** (the blend is skipped, `monitor_drift.py:102-113`)
+and the prior is benign. Two check-ins — a clean refactor and a full confession of
+sabotage — submitted with identical `[0,0,0]` drift received indistinguishable verdicts,
+because the only differentiator (the `response_text`) reaches the behavioral text-risk
+channel, which is unweighted pre-warmup.
 
-The system **discloses** this in every response. The point of this artifact is that the
-disclosure is accurate and that, **in the pre-warmup regime exercised here**, the
-magnitude is total: the worst-case behavioral input is verdict-equivalent to the benign
-one.
+**Post-warmup the claim does not hold.** With `UNITARES_PHI_TELEMETRY_ONLY=1` (the
+default), once behavioral confidence ≥ 0.3 the verdict IS the independent behavioral
+assessment (`resolve_verdict_risk`, `governance_monitor.py:63-64`), not the Φ/self-report
+path. The load-bearing, corrected finding is that **described-behavior semantics do not
+register until the behavioral channel warms** — not that the verdict trusts self-reported
+drift.
 
 ---
 
@@ -164,20 +184,28 @@ and the worked example is constructed to sit there. Precisely:
   (Under the separate `phi_telemetry_only` mode it becomes authoritative but can only
   *de-escalate*, never introduce a pause.)
 
-So the load-bearing claim survives but must be scoped: **for a fresh / sub-warmup agent
-the verdict is a pure function of self-attested inputs**, and even after warmup the
-behavioral signal can only *add* severity — it is never the primary driver, and a
-truthful-text / false-drift combination still under-flags because behavioral cannot pull
-a clean Φ down to match honest text, nor (escalate-only) is it asked to.
+So the corrected claim must be scoped to warmup state: **for a fresh / sub-warmup agent
+the verdict is the Φ cold-start prior** (mostly server-derived `complexity_divergence`,
+with self-reported drift only a capped ≤30% nonzero-gated blend), and the behavioral text
+signal is unweighted there. **After warmup, under the default Φ-telemetry posture
+(`UNITARES_PHI_TELEMETRY_ONLY=1`), the behavioral assessment is authoritative** — it
+replaces the Φ floor and can *de-escalate* it, so it is the primary driver, not an
+escalate-only add-on. (Only under the non-default `phi_telemetry=False` is behavioral
+escalate-only and unable to pull a clean Φ down — the legacy posture this finding
+originally described.) The genuine residual gap is pre-warmup: a truthful-text /
+false-drift combination still under-flags while described behavior is not yet weighted.
 
 ---
 
 ## Interpretation — what this does and does not establish
 
 **Establishes:**
-- The enforcement verdict is a function of caller-attested inputs (`ethical_drift`,
-  `complexity`, `confidence`), not of independent behavioral measurement — totally so
-  pre-warmup, dominantly so after.
+- **Pre-warmup**, the enforcement verdict is the Φ cold-start prior, computed mostly from
+  server-derived signals (`complexity_divergence`); the caller's self-reported
+  `ethical_drift` is only a capped ≤30% blend and a `[0,0,0]` report is *ignored*, not
+  trusted. The independent behavioral text-risk signal registers described behavior but is
+  unweighted in this window. **Post-warmup** (default `UNITARES_PHI_TELEMETRY_ONLY=1`) the
+  verdict is the independent behavioral assessment, not the self-report path.
 - The field that dominates the verdict (`ethical_drift`) is the field an adversarial or
   merely miscalibrated agent has every incentive to under-report.
 - The one non-self-attested signal (behavioral text-risk) registered the difference but,
@@ -192,10 +220,12 @@ a clean Φ down to match honest text, nor (escalate-only) is it asked to.
 - That a *warmed* agent's verdict ignores behavior — post-warmup the signal escalates
   (but never erases Φ). See *Reconciliation*.
 
-Honest one-line framing: *at current maturity the checker's verdict is only as
-trustworthy as the checked agent's self-report of its own drift — totally so before the
-behavioral baseline warms, and even after, behavior can only escalate the verdict, never
-substitute for an honest drift report.* For a tool positioned around "who checks the
+Honest one-line framing (corrected): *pre-warmup, the verdict is blind to
+described-behavior semantics — it runs on the Φ cold-start prior (mostly
+`complexity_divergence`) while the behavioral text signal is unweighted, and the agent's
+self-reported drift is only a capped ≤30% nonzero-gated blend, not the driver.
+Post-warmup, under the default Φ-telemetry posture, the verdict is the independent
+behavioral assessment.* For a tool positioned around "who checks the
 checker," that is the load-bearing question, and this is a clean, reproducible instance.
 
 ---
