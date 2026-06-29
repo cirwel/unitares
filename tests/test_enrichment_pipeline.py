@@ -1,7 +1,7 @@
 """Tests for the enrichment pipeline registry and runner."""
 
 import asyncio
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -175,6 +175,105 @@ class TestLiteModeSkipping:
         try:
             ctx = MagicMock()
             ctx.arguments = {"response_mode": "minimal"}
+            await run_enrichment_pipeline(ctx)
+            assert call_log == ["cheap"]
+        finally:
+            _ENRICHMENTS.clear()
+            _ENRICHMENTS.extend(original)
+
+    @pytest.mark.asyncio
+    async def test_lite_alias_runs_lite_safe_enrichments(self):
+        """response_mode='lite' is compact, not the legacy skinny path."""
+        from src.mcp_handlers.updates.pipeline import (
+            _EnrichmentEntry,
+            _ENRICHMENTS,
+        )
+
+        call_log = []
+
+        def heavy(ctx):
+            call_log.append("heavy")
+
+        def cheap(ctx):
+            call_log.append("cheap")
+
+        original = list(_ENRICHMENTS)
+        _ENRICHMENTS.clear()
+        _ENRICHMENTS.extend([
+            _EnrichmentEntry(fn=cheap, order=1, name="cheap", is_async=False, lite_safe=False),
+            _EnrichmentEntry(fn=heavy, order=2, name="heavy", is_async=False, lite_safe=True),
+        ])
+
+        try:
+            ctx = MagicMock()
+            ctx.arguments = {"response_mode": "lite"}
+            await run_enrichment_pipeline(ctx)
+            assert call_log == ["cheap", "heavy"]
+        finally:
+            _ENRICHMENTS.clear()
+            _ENRICHMENTS.extend(original)
+
+    @pytest.mark.asyncio
+    async def test_lite_safe_skipped_when_env_default_is_minimal(self):
+        """The skinny path also applies when minimal is selected by default."""
+        from src.mcp_handlers.updates.pipeline import (
+            _EnrichmentEntry,
+            _ENRICHMENTS,
+        )
+
+        call_log = []
+
+        def heavy(ctx):
+            call_log.append("heavy")
+
+        def cheap(ctx):
+            call_log.append("cheap")
+
+        original = list(_ENRICHMENTS)
+        _ENRICHMENTS.clear()
+        _ENRICHMENTS.extend([
+            _EnrichmentEntry(fn=cheap, order=1, name="cheap", is_async=False, lite_safe=False),
+            _EnrichmentEntry(fn=heavy, order=2, name="heavy", is_async=False, lite_safe=True),
+        ])
+
+        try:
+            ctx = MagicMock()
+            ctx.arguments = {}
+            with patch.dict("os.environ", {"UNITARES_PROCESS_UPDATE_RESPONSE_MODE": "minimal"}):
+                await run_enrichment_pipeline(ctx)
+            assert call_log == ["cheap"]
+        finally:
+            _ENRICHMENTS.clear()
+            _ENRICHMENTS.extend(original)
+
+    @pytest.mark.asyncio
+    async def test_lite_safe_skipped_when_agent_prefers_minimal(self):
+        """Agent verbosity preferences use the same canonical response contract."""
+        from src.mcp_handlers.updates.pipeline import (
+            _EnrichmentEntry,
+            _ENRICHMENTS,
+        )
+
+        call_log = []
+
+        def heavy(ctx):
+            call_log.append("heavy")
+
+        def cheap(ctx):
+            call_log.append("cheap")
+
+        original = list(_ENRICHMENTS)
+        _ENRICHMENTS.clear()
+        _ENRICHMENTS.extend([
+            _EnrichmentEntry(fn=cheap, order=1, name="cheap", is_async=False, lite_safe=False),
+            _EnrichmentEntry(fn=heavy, order=2, name="heavy", is_async=False, lite_safe=True),
+        ])
+
+        try:
+            ctx = MagicMock()
+            ctx.arguments = {}
+            ctx.meta = MagicMock()
+            ctx.meta.preferences = {"verbosity": "minimal"}
             await run_enrichment_pipeline(ctx)
             assert call_log == ["cheap"]
         finally:
