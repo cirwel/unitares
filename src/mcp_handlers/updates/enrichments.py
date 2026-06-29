@@ -45,6 +45,13 @@ _RELATED_DISCOVERY_RELEVANCE_FLOOR = 0.1
 #   3. Novelty — session-scoped dedup (Redis) so a given discovery is surfaced
 #      at most once per session; what reaches the agent is always new to it.
 _KG_PROACTIVE_FLOOR = 0.35
+# KG-search timeout for the mirror-signals enrichment. The KG semantic/full-text
+# search is the dominant check-in tail: per-enrichment telemetry (2026-06-28,
+# n=2133) put enrich_mirror_signals at p99=281ms / max=2624ms while every other
+# enrichment was <16ms mean — the cost is this anyio-amplified KG I/O (see
+# CLAUDE.md "Substrate Tax"). KG surfacing is advisory, so a slow search degrades
+# to "no surfacing this turn" (return []) instead of blocking the response.
+_KG_SEARCH_TIMEOUT = float(os.getenv("UNITARES_KG_SEARCH_TIMEOUT_S", "0.25"))
 # Session-scope TTL for the per-agent set of already-surfaced discovery_ids.
 _KG_SURFACED_TTL_SECONDS = 86400
 
@@ -1489,13 +1496,26 @@ async def _search_kg_by_checkin_text(
         from src.knowledge_graph import get_knowledge_graph
         graph = await get_knowledge_graph()
 
-        # Try semantic search first, fall back to full-text
+        # Try semantic search first, fall back to full-text. Both are wrapped in
+        # a tight timeout: KG search is the dominant check-in tail (anyio-amplified
+        # I/O), and surfacing is advisory — a slow/contended search degrades to
+        # "no surfacing this turn" rather than blocking the response up to seconds.
         results = []
         try:
-            results = await graph.semantic_search(response_text, limit=3)
+            results = await asyncio.wait_for(
+                graph.semantic_search(response_text, limit=3), timeout=_KG_SEARCH_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            logger.debug("KG semantic_search exceeded %.0fms budget; skipping surfacing", _KG_SEARCH_TIMEOUT * 1000)
+            return []
         except (AttributeError, NotImplementedError):
             try:
-                results = await graph.full_text_search(response_text, limit=3)
+                results = await asyncio.wait_for(
+                    graph.full_text_search(response_text, limit=3), timeout=_KG_SEARCH_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                logger.debug("KG full_text_search exceeded %.0fms budget; skipping surfacing", _KG_SEARCH_TIMEOUT * 1000)
+                return []
             except (AttributeError, NotImplementedError):
                 pass
 

@@ -21,7 +21,38 @@ from src.mcp_handlers.updates.enrichments import (
     _should_search_kg_by_checkin_text,
     _proactive_kg_due,
     _dedupe_surfaced_kg,
+    _search_kg_by_checkin_text,
 )
+
+
+@pytest.mark.asyncio
+async def test_kg_search_times_out_to_empty(monkeypatch):
+    """A slow/contended KG search must degrade to [] within the budget, not block
+    the response. KG search is the dominant check-in tail (anyio-amplified I/O);
+    surfacing is advisory."""
+    import asyncio, time
+    import src.mcp_handlers.updates.enrichments as enr
+
+    async def _hang(*a, **k):
+        await asyncio.sleep(5)  # far exceeds the budget
+        return [("x", 1.0)]
+
+    graph = MagicMock()
+    graph.semantic_search = _hang
+    graph.full_text_search = _hang
+
+    monkeypatch.setattr(enr, "_KG_SEARCH_TIMEOUT", 0.05, raising=False)
+    import src.knowledge_graph as kg_mod
+    monkeypatch.setattr(kg_mod, "get_knowledge_graph", AsyncMock(return_value=graph))
+
+    ctx = _make_ctx(response_text="a real check-in long enough to pass the >=10 char gate")
+
+    t0 = time.perf_counter()
+    result = await _search_kg_by_checkin_text(ctx)
+    elapsed = time.perf_counter() - t0
+
+    assert result == []              # degraded to no surfacing
+    assert elapsed < 1.0             # did NOT wait for the 5s hang
 
 
 # ============================================================================
