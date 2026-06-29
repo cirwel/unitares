@@ -31,3 +31,8 @@ COMMENT ON TABLE effects.consumed_nonces IS
     'Single-use ledger for effect-binding grant nonces (#1075). One row per '
     'consumed gnt.v1 grant; INSERT ... ON CONFLICT DO NOTHING enforces single '
     'use at /v1/effect-veto. Purge on grant_exp < now().';
+
+-- Register migration
+INSERT INTO core.schema_migrations (version, name, applied_at)
+VALUES (54, 'effects_consumed_nonces', NOW())
+ON CONFLICT (version) DO NOTHING;
