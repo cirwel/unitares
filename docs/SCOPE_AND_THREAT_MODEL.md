@@ -120,3 +120,20 @@ the full server pipeline (sensors, continuity, dialectic peer review); the
 structural argument is expected to carry to those paths but has not been measured
 there.
 
+**The highest-stakes surface: the governed-effect execute plane.** Everything above
+concerns the *signal* and whether an agent can game it. The most security-relevant
+capability is different in kind: an optional **governed-effect execute plane** (BEAM,
+port 8788) where an agent proposes an effect — `agent_spawn`, `file_write`, or a
+file-write commit — and only governance commits it. That is a genuine new safety
+property ("agents propose, governance commits"), but it is also a host code-execution
+surface, so it is the place a motivated attacker would aim. It is **off by default**
+(all three execute flags default off; the shipped plist templates do not enable them;
+a fail-closed boot guard blocks commit-without-dispatch), and when an operator enables
+it every effect is gated by strong-tier identity re-certification, a per-effect
+governance veto (`POST /v1/effect-veto`) on every path, a bearer token, loopback
+binding, per-class payload ceilings, and content-hash reversibility. The honest
+residual: those gates have had the same ad-hoc-rather-than-sustained adversarial
+testing as the rest of the system, and a compromised strong-tier proposer credential
+would convert to host execution — so the credential boundary is load-bearing. The
+security-reporting contract for this surface lives in [`SECURITY.md`](../SECURITY.md).
+
