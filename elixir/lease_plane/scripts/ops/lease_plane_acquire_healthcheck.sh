@@ -27,6 +27,18 @@ STATE_FILE="${LEASE_PLANE_HEALTHCHECK_STATE:-$HOME/.unitares/lease-plane-healthc
 ALERT_LOG="${UNITARES_ALERT_LOG:-/tmp/unitares_alerts.log}"
 MAX_FAILURES="${MAX_FAILURES:-2}"
 TIMEOUT_S="${HEALTHCHECK_TIMEOUT_S:-5}"
+# Auto-remediation (#1277). The 2026-06-27 outage failed OPEN for ~5.4h: this
+# probe paged 66x but nothing restarted the plane. start.sh self-heals (mix
+# deps.get) on boot, so a restart is the fix — the deploy never triggers one.
+# OPT-IN (default off): set LEASE_PLANE_HEALTHCHECK_AUTORESTART=1 to enable. When
+# on, after REMEDIATE_FAILURES consecutive failures we issue ONE `launchctl
+# kickstart -k` per outage streak (the same mechanism deploy-lease-plane.sh uses)
+# and let the next probe confirm recovery. One-shot per streak (RESTART_MARKER,
+# cleared on recovery) so a persistent fault never becomes a restart storm.
+AUTORESTART="${LEASE_PLANE_HEALTHCHECK_AUTORESTART:-0}"
+REMEDIATE_FAILURES="${REMEDIATE_FAILURES:-3}"
+LEASE_PLANE_LABEL="${LEASE_PLANE_LABEL:-com.unitares.lease-plane}"
+RESTART_MARKER="${STATE_FILE}.restart-attempted"
 # A dedicated probe surface in /tmp — never a real file, so the check can never
 # collide with a genuine holder. TTL is short so a crash mid-probe self-reaps.
 SURFACE="${HEALTHCHECK_SURFACE:-file:///tmp/lease-plane-acquire-healthcheck}"
@@ -74,6 +86,30 @@ print(json.dumps({
     -X POST "$GOV_API_URL/api/findings" -d "$payload" 2>/dev/null || true
 }
 
+# Auto-restart the plane once per outage streak (#1277). `kickstart -k` restarts
+# the LaunchAgent in place; start.sh re-runs `mix deps.get` on boot, healing the
+# missing-deps fault that causes the fail-open. Best-effort — a restart failure
+# is itself surfaced; the next probe verifies recovery and clears the marker.
+maybe_remediate() {
+  local n="$1"
+  [ "$AUTORESTART" = "1" ] || return 0
+  [ "$n" -ge "$REMEDIATE_FAILURES" ] || return 0
+  if [ -f "$RESTART_MARKER" ]; then
+    echo "[$(ts)] auto-restart already attempted this streak; awaiting recovery / manual intervention" >&2
+    return 0
+  fi
+  : >"$RESTART_MARKER" 2>/dev/null || true
+  local domain="gui/$(id -u)"
+  echo "[$(ts)] auto-remediating: launchctl kickstart -k $domain/$LEASE_PLANE_LABEL" >&2
+  if launchctl kickstart -k "$domain/$LEASE_PLANE_LABEL" 2>/dev/null; then
+    local m="auto-restart of $LEASE_PLANE_LABEL issued after ${n} consecutive acquire failures (start.sh re-runs mix deps.get); next probe verifies recovery"
+    alert "$m"; post_finding "info" "lease-plane-acquire-autorestart" "$m"
+  else
+    local m="auto-restart FAILED: launchctl kickstart -k $domain/$LEASE_PLANE_LABEL returned nonzero — manual bootout+bootstrap needed"
+    alert "$m"; post_finding "critical" "lease-plane-acquire-autorestart-failed" "$m"
+  fi
+}
+
 fail() {
   local n; n=$(( $(read_failcount) + 1 ))
   write_failcount "$n"
@@ -83,6 +119,7 @@ fail() {
     alert "$msg"
     post_finding "critical" "lease-plane-acquire-outage" "$msg"
   fi
+  maybe_remediate "$n"
   exit 1
 }
 
@@ -117,6 +154,7 @@ lease_id=$(printf '%s' "$json" | python3 -c "import sys,json; print(json.load(sy
 
 prev=$(read_failcount)
 write_failcount 0
+rm -f "$RESTART_MARKER" 2>/dev/null || true   # streak over — re-arm auto-restart
 if [ "$prev" -ge "$MAX_FAILURES" ]; then
   rec="RECOVERED: lease plane synthetic acquire succeeding again after $prev consecutive failures"
   alert "$rec"

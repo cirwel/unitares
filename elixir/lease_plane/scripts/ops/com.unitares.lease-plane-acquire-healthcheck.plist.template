@@ -52,5 +52,16 @@
 
     <key>StandardErrorPath</key>
     <string>__UNITARES_ROOT__/data/logs/lease_plane_acquire_healthcheck.log</string>
+
+    <!-- Auto-remediation (#1277), OPT-IN. With "1", after REMEDIATE_FAILURES
+         consecutive failures the probe issues ONE `launchctl kickstart -k` of
+         the lease plane per outage streak (start.sh self-heals deps on boot),
+         instead of only paging and waiting for a human. Leave "0" to keep the
+         alert-only behavior; flip to "1" after watching a few alert cycles. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>LEASE_PLANE_HEALTHCHECK_AUTORESTART</key>
+        <string>0</string>
+    </dict>
 </dict>
 </plist>
