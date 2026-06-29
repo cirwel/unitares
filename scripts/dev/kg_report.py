@@ -42,7 +42,6 @@ import argparse
 import json
 import os
 import subprocess
-import sys
 
 DEFAULT_DSN = "postgresql://postgres:postgres@localhost:5432/governance"
 ACTIONABLE_TYPES = (
@@ -194,28 +193,46 @@ def gather(cold_age_days: int) -> dict:
     }
 
 
-def apply_cooling(cold_candidates: list, dry_run: bool) -> dict:
+def apply_cooling(cold_candidates: list, dry_run: bool, limit: int | None = None) -> dict:
     """Transition the cold candidates open -> cold via the sanctioned dual-store
     primitive. Candidate selection already happened (pure SQL); this only mutates.
+
+    `limit` bounds how many are cooled in one run (oldest first — candidates are
+    created_at-ordered), so a scheduled job drains the tail gradually instead of
+    cooling everything in one sweep.
     """
-    ids = [c["id"] for c in cold_candidates]
+    selected = cold_candidates if limit is None else cold_candidates[: max(0, limit)]
+    ids = [c["id"] for c in selected]
     if dry_run or not ids:
-        return {"cooled": 0, "dry_run": dry_run, "ids": ids}
+        return {"cooled": 0, "dry_run": dry_run, "ids": ids,
+                "eligible": len(cold_candidates)}
 
-    # Real mutation needs the app context (active KG backend + PG). Imported here
-    # so report/dry-run never depend on it.
-    sys.path.insert(0, os.getcwd())
-    import asyncio
-    from datetime import datetime, timezone
-    from src.knowledge_graph_lifecycle import KnowledgeGraphLifecycle  # type: ignore
-
-    async def _run():
-        lc = KnowledgeGraphLifecycle()
-        graph = await lc._get_graph()
-        await lc._batch_update_status(graph, ids, "cold", datetime.now(timezone.utc))
-
-    asyncio.run(_run())
-    return {"cooled": len(ids), "dry_run": False, "ids": ids}
+    # Cool via a direct UPDATE on the canonical relational table. The relational
+    # store is canonical (AGE is a LIVE advisory mirror that reconciles); this is
+    # exactly the PG-alignment step the in-server lifecycle primitive performs.
+    # We deliberately do NOT import the app's KnowledgeGraphLifecycle here: it is
+    # heavy (needs the full server env) and its graph.update_discovery currently
+    # raises `AttributeError: 'ExecutorPool' object has no attribute 'fetchval'`
+    # (knowledge_graph_postgres.py — stale db._pool.fetchval vs the post-#218
+    # ExecutorPool contract). A dependency-light UPDATE is the robust path for a
+    # scheduled job. `status='open'` guard keeps it idempotent.
+    conn = connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE knowledge.discoveries
+            SET status='cold', updated_at=now()
+            WHERE id = ANY(%s) AND status='open'
+            """,
+            (ids,),
+        )
+        cooled = cur.rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    return {"cooled": cooled, "dry_run": False, "ids": ids,
+            "eligible": len(cold_candidates)}
 
 
 def _print(r: dict, applied: dict) -> None:
@@ -265,11 +282,13 @@ def main() -> None:
     ap.add_argument("--cold-age-days", type=int, default=COLD_AGE_DAYS_DEFAULT)
     ap.add_argument("--apply", action="store_true",
                     help="cool aged note/insight rows to cold (default: dry-run)")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="max rows to cool this run (oldest first; bounds a scheduled sweep)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
     r = gather(args.cold_age_days)
-    applied = apply_cooling(r["cold_candidates"], dry_run=not args.apply)
+    applied = apply_cooling(r["cold_candidates"], dry_run=not args.apply, limit=args.limit)
     if args.json:
         print(json.dumps({"report": r, "applied": applied}, indent=2, default=str))
     else:
