@@ -194,6 +194,7 @@ TOOL_TIERS: dict[str, Set[str]] = {
         "compare_me_to_similar",
         "get_knowledge_graph",
         "cleanup_knowledge_graph",       # KG lifecycle cleanup (Dec 2025)
+        "admin",                         # Consolidated diagnostics/maintenance (Jun 2026)
     }
 }
 
@@ -236,6 +237,9 @@ TOOL_OPERATIONS: dict[str, str] = {
     # Configuration
     "get_thresholds": "read",             # Get current thresholds
     "set_thresholds": "write",            # Set threshold overrides
+
+    # Consolidated diagnostics/maintenance
+    "admin": "admin",                     # Mixed read/maintenance (action-routed)
 
     # Knowledge Graph
     "store_knowledge_graph": "write",     # Store discovery

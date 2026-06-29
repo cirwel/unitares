@@ -48,6 +48,9 @@ ROUTER_ACTIONS = {
     "dialectic": ["get", "list", "quick", "request", "thesis", "antithesis",
                   "synthesis", "reassign"],
     "research_registry": ["list", "query", "get", "stats", "export", "record"],
+    "admin": ["server_info", "connections", "workspace_health", "tool_usage",
+              "telemetry", "debug_context", "validate_path", "reset_monitor",
+              "cleanup_locks"],
 }
 
 # External-plugin surfaces this server does not own. They register only when an

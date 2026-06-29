@@ -83,6 +83,10 @@ _HIGH: frozenset[tuple[str, Optional[str]]] = frozenset({
     # dialectic — resolve / reassign a governance review
     ("dialectic", "synthesis"),
     ("dialectic", "reassign"),
+    # admin — destructive / state-resetting maintenance (mirrors the
+    # standalone reset_monitor / cleanup_stale_locks classification)
+    ("admin", "reset_monitor"),
+    ("admin", "cleanup_locks"),
     # single-purpose admin / destructive / pause-state tools
     ("archive_old_test_agents", None),
     ("archive_orphan_agents", None),
@@ -134,6 +138,15 @@ _BASELINE: frozenset[tuple[str, Optional[str]]] = frozenset({
     ("observe", "telemetry"),
     ("observe", "audit_events"),
     ("observe", "outcome_evidence"),
+    # admin — diagnostic reads (destructive actions are in _HIGH); mirrors the
+    # standalone get_server_info / get_workspace_health / ... classification
+    ("admin", "server_info"),
+    ("admin", "connections"),
+    ("admin", "workspace_health"),
+    ("admin", "tool_usage"),
+    ("admin", "telemetry"),
+    ("admin", "debug_context"),
+    ("admin", "validate_path"),
     # dialectic — participation + reads (resolution is in _HIGH)
     ("dialectic", "get"),
     ("dialectic", "list"),

@@ -48,6 +48,14 @@ from .admin.calibration import (
 )
 from .admin.handlers import (
     handle_get_telemetry_metrics,
+    handle_get_server_info,
+    handle_get_connection_status,
+    handle_get_workspace_health,
+    handle_get_tool_usage_stats,
+    handle_reset_monitor,
+    handle_cleanup_stale_locks,
+    handle_debug_request_context,
+    handle_validate_file_path,
 )
 from .admin.config import (
     handle_get_thresholds,
@@ -253,6 +261,40 @@ handle_observe = action_router(
 )
 
 # ``pi`` consolidated tool moved to unitares-pi-plugin (see register() there).
+
+# ============================================================
+# Consolidated Admin / Diagnostics Tool
+# ============================================================
+
+handle_admin = action_router(
+    "admin",
+    actions={
+        "server_info": handle_get_server_info,
+        "connections": handle_get_connection_status,
+        "workspace_health": handle_get_workspace_health,
+        "tool_usage": handle_get_tool_usage_stats,
+        "telemetry": handle_get_telemetry_metrics,
+        "debug_context": handle_debug_request_context,
+        "validate_path": handle_validate_file_path,
+        "reset_monitor": handle_reset_monitor,
+        "cleanup_locks": handle_cleanup_stale_locks,
+    },
+    timeout=20.0,
+    description="Unified admin/diagnostics operations: server_info, connections, workspace_health, tool_usage, telemetry, debug_context, validate_path, reset_monitor, cleanup_locks",
+    # #425 action-level identity: only the cheap protocol-inspection read
+    # (server_info — the standalone get_server_info is pre_onboard) serves
+    # unbound. Every other diagnostic/maintenance action stays identity-gated,
+    # preserving each standalone tool's current requirement.
+    pre_onboard_actions={"server_info"},
+    examples=[
+        "admin(action='server_info')",
+        "admin(action='workspace_health')",
+        "admin(action='tool_usage', window_hours=168)",
+        "admin(action='telemetry', include_calibration=false)",
+        "admin(action='validate_path', file_path='docs/notes.md')",
+        "admin(action='cleanup_locks', dry_run=true)",
+    ],
+)
 
 # ============================================================
 # Consolidated Dialectic Tool
