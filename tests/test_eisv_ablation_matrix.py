@@ -65,6 +65,30 @@ def test_filter_rows_for_validation_excludes_beam_harness_by_default():
     ]
 
 
+def test_filter_rows_for_validation_always_excludes_controlled_demo_perf_rows():
+    substrate = _row(0, bad=False, risk=0.1)
+    demo = _row(1, bad=True, risk=None)
+    demo = OutcomeRow(
+        **{
+            **demo.__dict__,
+            "detail": {"_identity_metadata": {"label": "quick-demo-agent_6d051ff8"}},
+        }
+    )
+    perf = _row(2, bad=False, risk=0.2)
+    perf = OutcomeRow(
+        **{
+            **perf.__dict__,
+            "detail": {"_identity_metadata": {"label": "perf-profile-checkin"}},
+        }
+    )
+
+    assert filter_rows_for_validation([substrate, demo, perf]) == [substrate]
+    assert filter_rows_for_validation(
+        [substrate, demo, perf],
+        exclude_harness_lanes=(),
+    ) == [substrate]
+
+
 def test_split_rows_by_harness_lane_keeps_beam_visible():
     substrate = _row(0, bad=False, risk=0.1)
     beam = _row(1, bad=True, risk=None)

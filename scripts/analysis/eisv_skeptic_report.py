@@ -33,7 +33,10 @@ from typing import Any, Sequence
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.analysis.outcome_inventory import is_controlled_validation_fixture
+from scripts.analysis.outcome_inventory import (
+    attach_identity_metadata,
+    is_controlled_validation_fixture,
+)
 
 
 DEFAULT_DB_URL = os.environ.get(
@@ -1059,7 +1062,12 @@ def _parse_detail(raw: Any) -> dict[str, Any]:
 
 
 def _row_from_record(record: Any) -> OutcomeRow:
-    detail = _parse_detail(record.get("detail"))
+    detail = dict(
+        attach_identity_metadata(
+            record.get("detail"),
+            record.get("identity_metadata"),
+        )
+    )
     n_prior = record.get("n_prior_snapshots")
     n_prior = int(n_prior) if n_prior is not None else None
     # Gate dispersion on a minimum snapshot count: a stddev over 1-2 points is
@@ -1138,6 +1146,7 @@ async def fetch_rows(
                 o.eisv_verdict,
                 o.eisv_coherence,
                 o.detail,
+                identity_meta.metadata AS identity_metadata,
                 o.verification_source,
                 EXTRACT(EPOCH FROM (o.ts - ps.recorded_at))::float AS prior_state_age_seconds,
                 ps.risk_score AS prior_risk,
@@ -1171,6 +1180,13 @@ async def fetch_rows(
                 disp.prior_v_disp,
                 disp.prior_risk_disp
             FROM audit.outcome_events o
+            LEFT JOIN LATERAL (
+                SELECT ident_meta.metadata
+                FROM core.identities ident_meta
+                WHERE ident_meta.agent_id = o.agent_id
+                ORDER BY ident_meta.updated_at DESC NULLS LAST
+                LIMIT 1
+            ) identity_meta ON TRUE
             LEFT JOIN LATERAL (
                 SELECT
                     s.recorded_at,

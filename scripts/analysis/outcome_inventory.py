@@ -137,6 +137,35 @@ _CONTROLLED_FIXTURE_FLAGS = frozenset(
 )
 _CONTROLLED_FIXTURE_BINDINGS = frozenset({"synthetic_negative_control"})
 _CONTROLLED_FIXTURE_TEST_NAMES = frozenset({"clean_control", "overconfidence_probe"})
+_IDENTITY_METADATA_DETAIL_KEY = "_identity_metadata"
+_CONTROLLED_IDENTITY_LABEL_PREFIXES = (
+    "quick-demo-agent",
+    "perf-profile-checkin",
+)
+_CONTROLLED_IDENTITY_PURPOSES = frozenset({"testing", "demo", "profiling", "benchmark"})
+
+
+def attach_identity_metadata(
+    detail: Mapping[str, Any] | str | None,
+    identity_metadata: Mapping[str, Any] | str | None,
+) -> Mapping[str, Any]:
+    """Return detail with identity metadata attached under a private key.
+
+    Historical demo/perf check-in harnesses wrote ordinary auto-checkin outcome
+    details while the controlled-harness signal lived on ``core.identities``.
+    Attach it to the analysis detail map so fixture filters can keep those rows
+    out of live validation without changing the public outcome schema.
+    """
+    normalized = dict(_normalized_detail(detail))
+    metadata = _normalized_detail(identity_metadata)
+    if metadata and _IDENTITY_METADATA_DETAIL_KEY not in normalized:
+        normalized[_IDENTITY_METADATA_DETAIL_KEY] = dict(metadata)
+    return normalized
+
+
+def _identity_metadata_from_detail(detail: Mapping[str, Any]) -> Mapping[str, Any]:
+    metadata = detail.get(_IDENTITY_METADATA_DETAIL_KEY) or detail.get("identity_metadata")
+    return _normalized_detail(metadata)
 
 
 def is_controlled_validation_fixture(detail: Mapping[str, Any] | str | None) -> bool:
@@ -144,8 +173,9 @@ def is_controlled_validation_fixture(detail: Mapping[str, Any] | str | None) -> 
 
     These rows are useful for harness plumbing and local red-team checks, but they
     must not be counted as live fleet validation evidence. Keep this deliberately
-    conservative: explicit fixture flags win, and the legacy one-shot calibration
-    probe names cover rows written before the flags existed.
+    conservative: explicit fixture flags win, legacy one-shot calibration probe
+    names cover rows written before the flags existed, and known demo/perf
+    identity labels catch auto-checkin outcomes whose detail was otherwise plain.
     """
     normalized = _normalized_detail(detail)
     if any(_truthy(normalized.get(flag)) for flag in _CONTROLLED_FIXTURE_FLAGS):
@@ -154,7 +184,32 @@ def is_controlled_validation_fixture(detail: Mapping[str, Any] | str | None) -> 
     if binding in _CONTROLLED_FIXTURE_BINDINGS:
         return True
     test_name = normalized.get("test_name")
-    return bool(test_name in _CONTROLLED_FIXTURE_TEST_NAMES)
+    if test_name in _CONTROLLED_FIXTURE_TEST_NAMES:
+        return True
+
+    identity_metadata = _identity_metadata_from_detail(normalized)
+    if identity_metadata:
+        if any(_truthy(identity_metadata.get(flag)) for flag in _CONTROLLED_FIXTURE_FLAGS):
+            return True
+        labels = (
+            identity_metadata.get("label"),
+            identity_metadata.get("display_name"),
+            identity_metadata.get("name"),
+            identity_metadata.get("agent_id"),
+            identity_metadata.get("public_agent_id"),
+        )
+        normalized_labels = [str(label).strip().lower() for label in labels if label]
+        if any(
+            label.startswith(prefix)
+            for label in normalized_labels
+            for prefix in _CONTROLLED_IDENTITY_LABEL_PREFIXES
+        ):
+            return True
+        purpose = str(identity_metadata.get("purpose") or "").strip().lower()
+        if purpose in _CONTROLLED_IDENTITY_PURPOSES:
+            return True
+
+    return False
 
 
 def _verification_source(row: OutcomeInventoryRow) -> str:
@@ -542,8 +597,16 @@ def _build_fetch_query(lead_minutes: Sequence[float]) -> str:
             o.is_bad,
             COALESCE(o.verification_source, o.detail->>'verification_source') AS verification_source,
             o.detail,
+            identity_meta.metadata AS identity_metadata,
             {", ".join(lead_selects)}
         FROM audit.outcome_events o
+        LEFT JOIN LATERAL (
+            SELECT ident_meta.metadata
+            FROM core.identities ident_meta
+            WHERE ident_meta.agent_id = o.agent_id
+            ORDER BY ident_meta.updated_at DESC NULLS LAST
+            LIMIT 1
+        ) identity_meta ON TRUE
         WHERE o.ts >= now() - ($1::int * INTERVAL '1 day')
         ORDER BY o.ts ASC
     """
@@ -562,7 +625,10 @@ def _row_from_record(
         outcome_type=str(data["outcome_type"]),
         is_bad=bool(data["is_bad"]),
         verification_source=data.get("verification_source"),
-        detail=_normalized_detail(data.get("detail")),
+        detail=attach_identity_metadata(
+            data.get("detail"),
+            data.get("identity_metadata"),
+        ),
         prior_state_by_lead=prior_state_by_lead,
     )
 

@@ -43,7 +43,10 @@ from scripts.analysis.eisv_skeptic_report import (
     score_deltas_vs_baseline,
     summarize_conclusion,
 )
-from scripts.analysis.outcome_inventory import harness_lane_from_detail
+from scripts.analysis.outcome_inventory import (
+    harness_lane_from_detail,
+    is_controlled_validation_fixture,
+)
 
 DEFAULT_EXCLUDED_HARNESS_LANES = ("beam",)
 
@@ -258,9 +261,14 @@ def filter_rows_for_validation(
     coverage collapse when it is really instrumentation.
     """
     excluded = {str(lane) for lane in exclude_harness_lanes if str(lane)}
+    eligible_rows = [
+        row for row in rows if not is_controlled_validation_fixture(row.detail)
+    ]
     if not excluded:
-        return list(rows)
-    return [row for row in rows if harness_lane_from_detail(row.detail) not in excluded]
+        return eligible_rows
+    return [
+        row for row in eligible_rows if harness_lane_from_detail(row.detail) not in excluded
+    ]
 
 
 def split_rows_by_harness_lane(

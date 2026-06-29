@@ -4,16 +4,16 @@ MCP Tool Caller - Clean CLI for calling MCP tools without shell quoting issues.
 
 Usage:
     # List all tools
-    python scripts/mcp_call.py --list
+    python scripts/diagnostics/mcp_call.py --list
 
     # Call a tool
-    python scripts/mcp_call.py process_agent_update agent_id=my_agent update_type=reflection content="Hello world"
+    python scripts/diagnostics/mcp_call.py process_agent_update agent_id=my_agent update_type=reflection content="Hello world"
 
     # With session binding
-    python scripts/mcp_call.py --session my_session bind_identity agent_id=my_agent
+    python scripts/diagnostics/mcp_call.py --session my_session bind_identity agent_id=my_agent
 
     # Show tool schema
-    python scripts/mcp_call.py --describe update_agent_metadata
+    python scripts/diagnostics/mcp_call.py --describe update_agent_metadata
 """
 
 import argparse
