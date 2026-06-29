@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    KG-hygiene launchd template.
+
+    Weekly knowledge-graph backlog digest + conservative cooling. Runs
+    scripts/ops/kg_hygiene_run.sh every Sunday at 09:30 local (offset from
+    dep-sweep's 09:00 so they don't overlap). The runner reuses
+    scripts/dev/kg_report.py: prints the actionable-backlog / stale-citation /
+    promote digest and cools a bounded batch of aged open note/insight rows to
+    `cold` (reversible; canonical rows kept warm; actionable rows never touched).
+
+    Digest log: $HOME/Library/Logs/unitares-kg-hygiene.log
+    launchd stdout/err: $HOME/Library/Logs/unitares-kg-hygiene-launchd.log
+
+    Before installing, substitute placeholders:
+      __UNITARES_ROOT__  → absolute path to your unitares checkout
+      __HOME__           → your $HOME (expanded absolute path)
+      __PYTHON__         → interpreter that has psycopg2 (same one the
+                           governance-mcp service runs; see its plist)
+
+    Example:
+      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
+          -e "s|__HOME__|$HOME|g" \
+          -e "s|__PYTHON__|/Library/Frameworks/Python.framework/Versions/3.14/bin/python3|g" \
+          scripts/ops/com.unitares.kg-hygiene.plist.template \
+          > ~/Library/LaunchAgents/com.unitares.kg-hygiene.plist
+      launchctl load ~/Library/LaunchAgents/com.unitares.kg-hygiene.plist
+
+    Start report-only first (recommended): add KG_HYGIENE_APPLY=0 below, watch a
+    couple of digests, then flip to 1 to enable cooling.
+
+    Run-once smoke test (skip the cron and run immediately):
+      launchctl kickstart -k gui/$(id -u)/com.unitares.kg-hygiene
+      tail -50 $HOME/Library/Logs/unitares-kg-hygiene.log
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unitares.kg-hygiene</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__UNITARES_ROOT__/scripts/ops/kg_hygiene_run.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__UNITARES_ROOT__</string>
+
+    <!-- Sunday 09:30 local -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <!-- Don't run on launchctl load — wait for the next scheduled fire. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/unitares-kg-hygiene-launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/unitares-kg-hygiene-launchd.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>UNITARES_ROOT</key>
+        <string>__UNITARES_ROOT__</string>
+        <key>KG_HYGIENE_PYTHON</key>
+        <string>__PYTHON__</string>
+        <!-- Cooling on by default; set to 0 to run report-only during burn-in. -->
+        <key>KG_HYGIENE_APPLY</key>
+        <string>1</string>
+        <key>KG_HYGIENE_COOL_LIMIT</key>
+        <string>20</string>
+    </dict>
+</dict>
+</plist>
