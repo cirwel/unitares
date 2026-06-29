@@ -1,7 +1,7 @@
 -- 029_lease_plane_earned_status_guard.sql
 --
 -- Restores the `earned_status` immutability guard that migration 028 silently
--- dropped. Surfaced by the council pass on the PR 1-4 stack (dialectic voice
+-- dropped. Surfaced by the review pass on the PR 1-4 stack (dialectic voice
 -- BLOCK-2): migration 025 originally guarded 8 fields against UPDATE; migration
 -- 028 was authored to drop the surface_kind guard (it became a generated column
 -- post-026) but the rewrite also dropped the earned_status guard as collateral

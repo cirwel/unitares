@@ -18,7 +18,7 @@ Two data sources:
      ``state_json->'behavioral_eisv'`` per recently-baselined agent from
      ``core.agent_state`` and run the same comparison across the real fleet.
      Requires asyncpg and a reachable PostgreSQL (DATABASE_URL or PG* env, or
-     --dsn). This is the path the live-verifier runs post-merge.
+     --dsn). This is the path the verifier runs post-merge.
 
 NOTE on field provenance (issue #689 gotcha): read behavioral E/I/S/V/phi from
 ``state_json->'behavioral_eisv'`` (and phi from ``state_json->>'phi'``). The

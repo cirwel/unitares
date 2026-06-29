@@ -6,7 +6,7 @@ defmodule UnitaresSentinel.CycleStateConfigTest do
   `CycleState.save/1` or `CycleState.load/0` with no `:path` opt could pick
   up the polluted config key and resolve to this test's tmp path.
 
-  Surface 1 council fold (reviewer Critical-2): the prior shape had this
+  Surface 1 review (reviewer Critical-2): the prior shape had this
   test in the async module; the race was latent because the only no-opts
   callers in the test file were here. But the contract surface is global —
   any future test that defaults the path would join the race. Isolating

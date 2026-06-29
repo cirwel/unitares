@@ -126,9 +126,9 @@ defmodule Wave3aHandlers.EnvelopeShapeTest do
              "§2.2 401 envelope must match RFC verbatim; got: #{inspect(body)}"
     end
 
-    test "wrong bearer returns the verbatim 401 shape (council fold: 401 includes 'reason')" do
+    test "wrong bearer returns the verbatim 401 shape (review: 401 includes 'reason')" do
       # v0.1 of the RFC missed the `reason` field on the 401 path; v0.2
-      # restored it after the council fold against the lease plane's live
+      # restored it after the review against the lease plane's live
       # behavior. This test pins that the fix is present and cannot drift.
       resp =
         :post
@@ -141,7 +141,7 @@ defmodule Wave3aHandlers.EnvelopeShapeTest do
       body = parsed(resp)
 
       assert Map.has_key?(body, "reason"),
-             "council fold: 401 envelope MUST include 'reason' — v0.1 missed this"
+             "review: 401 envelope MUST include 'reason' — v0.1 missed this"
 
       assert body["reason"] == "bearer token missing or invalid"
       assert body["error"] == "permission_denied"

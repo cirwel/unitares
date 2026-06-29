@@ -4,7 +4,7 @@ mark_lineage_provisional / confirm_lineage update core.identities provisional
 columns. read_r1_calibration_state / transition_r1_calibration_state operate
 on the calibration_state singleton from migration 032.
 
-Live SQL behavior is covered by the live-verifier council pass at PR 3 ship;
+Live SQL behavior is covered by the verifier review pass at PR 3 ship;
 these tests pin contract + signature + branch coverage with mocked acquire().
 """
 
@@ -220,7 +220,7 @@ async def test_transition_r1_calibration_state_to_earned_atomic_via_returning():
     closes the TOCTOU window where a concurrent operator transition could
     replace the state between UPDATE and SELECT). Datetime fields are
     represented as strings in this mock-level pin; live datetime semantics
-    are exercised by the live-verifier council pass."""
+    are exercised by the verifier review pass."""
     from src.db.mixins.identity import IdentityMixin
 
     captured: list = []

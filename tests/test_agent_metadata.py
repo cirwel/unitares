@@ -293,10 +293,10 @@ class TestAddRecentUpdate:
 # ============================================================================
 # S21-b §1 / §3: register_minted_agent_in_dict + mirror_status_to_dict
 # ============================================================================
-# These helpers close the H14 axiom-#3 gap surfaced by S21-a council pass-2.
+# These helpers close the H14 axiom-#3 gap surfaced by S21-a review pass-2.
 # Without them, freshly-minted core.identities rows are invisible to
 # require_registered_agent, and update_identity_status writes silently drift
-# the dict away from PG (live-verifier observed 67 active/archived inversions).
+# the dict away from PG (verifier observed 67 active/archived inversions).
 
 
 class TestRegisterMintedAgentInDict:

@@ -2,7 +2,7 @@
 --
 -- Surface lease plane v0 — close council-found gaps.
 --
--- Council finding 2 (live-verifier confirmed via direct UPDATE):
+-- Council finding 2 (verifier confirmed via direct UPDATE):
 -- migration 024's enforce_immutable_lease_fields trigger only locked
 -- holder_kind, holder_class, original_ttl_s. surface_id, surface_kind,
 -- holder_agent_uuid, and acquired_at were silently mutable on a live

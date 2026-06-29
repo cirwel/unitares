@@ -161,7 +161,7 @@ defmodule UnitaresSentinel.CycleState do
 
   Public so the `mix sentinel.cursor_diff` task and any future Sentinel
   diagnostic can share the resolution discipline — eliminates the drift
-  class flagged in the Surface 1 council fold (reviewer concern: two
+  class flagged in the Surface 1 review (reviewer concern: two
   copies of the resolution order).
 
   Raises if neither `:unitares_sentinel, :state_file_path` (Application env)
@@ -207,7 +207,7 @@ defmodule UnitaresSentinel.CycleState do
   # compare against an empty placeholder. The earlier shape (cursor
   # compare with `||""` defaults) silently dropped sibling keys when
   # one side was `%{"forced_release_alarm" => %{}}` and the other was
-  # truly absent. Surface 1 council fold catch.
+  # truly absent. Surface 1 review catch.
   defp pick_max(%{} = canonical, shadow) when map_size(canonical) == 0, do: shadow
   defp pick_max(canonical, %{} = shadow) when map_size(shadow) == 0, do: canonical
 

@@ -6,7 +6,7 @@
 -- (launchd: com.unitares.wave3-shadow-divergence-check), which emits one
 -- coordination_failure.beam_python_boundary.shadow_divergence event per row.
 --
--- Alias contract (council fold, PR #597): every diff alias is EXACTLY
+-- Alias contract (review, PR #597): every diff alias is EXACTLY
 -- '<canonical_column_name>_diff' — the runner derives the payload's
 -- divergent_columns by stripping the '_diff' suffix, so abbreviated aliases
 -- would emit names that match no real column. The RFC §8.2 sketch used
@@ -15,7 +15,7 @@
 -- pins alias-stem == canonical-column for every alias in this file.
 --
 -- Column-set rationale (live-schema verified 2026-06-10 against the
--- governance DB; §15 live-verifier lane re-verified on review):
+-- governance DB; §15 verifier lane re-verified on review):
 --   * identities: compares every live column EXCEPT
 --       - identity_id   (serial PK; canonical and shadow draw the same
 --                        sequence but the shadow writer copies values —

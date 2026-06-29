@@ -15,7 +15,7 @@
 --     text array, not as a structured anchor.
 --
 -- Both columns NULLable for backwards compatibility with the small number of
--- audit rows that landed before this migration (the live-verifier's PR 2 +
+-- audit rows that landed before this migration (the verifier's PR 2 +
 -- PR 3 test rows were all cleaned up; this is purely defensive). Production
 -- writes from `score_trajectory_continuity` always populate both.
 

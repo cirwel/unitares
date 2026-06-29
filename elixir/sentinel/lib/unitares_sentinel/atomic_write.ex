@@ -2,7 +2,7 @@ defmodule UnitaresSentinel.AtomicWrite do
   @moduledoc """
   Atomic file write with mode-0600 permissions and orphan-tmp cleanup.
 
-  Binding contract per the v0.1.1 council fold (B1 reviewer): the Python
+  Binding contract per the v0.1.1 review (B1 reviewer): the Python
   helper at `agents/sdk/src/unitares_sdk/utils.py:atomic_write` (used for
   `~/.unitares/anchors/sentinel.json`) creates with 0o600 via
   `tempfile.mkstemp` + `os.fchmod` + `os.replace`. Naive `File.write/2`

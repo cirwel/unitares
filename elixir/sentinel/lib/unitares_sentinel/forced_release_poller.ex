@@ -65,7 +65,7 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
     3. **Coordinator + workers** — fan-out to three workers, fan-in
        on a single cursor advance. Most code; cleanest topology.
 
-  Architect council fold for #376 made this binding. Whichever path the
+  Architect review for #376 made this binding. Whichever path the
   next PR picks, it must be explicit in the RFC before any code lands.
   """
 
@@ -121,7 +121,7 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
         # Use DateTime.compare/2 (not `!=`) because two DateTime structs with
         # the same instant but different `:microsecond` precision tuples
         # would compare unequal by struct identity. Architect #3 in PR #378
-        # council fold.
+        # review.
         if persist? and new_cursor != nil and not same_cursor?(new_cursor, prior_cursor) do
           persist_cursor(new_cursor, opts)
         end
@@ -275,7 +275,7 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
   end
 
   defp persist_cursor(new_cursor, opts) do
-    # Council fold: reviewer Critical-1 (PR #376). Building from %{} would
+    # Review: reviewer Critical-1 (PR #376). Building from %{} would
     # silently erase any sibling keys in the shadow file — most importantly
     # the v0.1.2 §B3 `runtime: "beam_canonical"` cutover flag. Load the
     # existing state first, then update only the cursor, preserving every
@@ -450,7 +450,7 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
   end
 
   defp run_runtime_tick(state) do
-    # Council fold: architect #2 (PR #376). Re-read the file cursor each tick
+    # Review: architect #2 (PR #376). Re-read the file cursor each tick
     # and use max(in-memory, file). Defends against an operator (or a future
     # cursor_repair task) writing the shadow file between ticks; without this,
     # the GenServer would clobber the operator's edit on the next tick.
