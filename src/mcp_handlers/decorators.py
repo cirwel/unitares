@@ -489,6 +489,10 @@ def action_router(
         timeout: Timeout in seconds
         description: Tool description
         default_action: If set, use this action when 'action' param is missing
+        description: Prose summary ONLY (e.g. "Unified knowledge graph
+            operations"). Do NOT hand-list the actions — the router appends the
+            canonical action list derived from ``actions`` so discovery can
+            never drift from the routing table.
         param_maps: Per-action parameter remapping.
             {"search": {"query": "search_query"}} means if action="search"
             and "query" is in arguments but "search_query" is not, copy it.
@@ -500,6 +504,17 @@ def action_router(
     valid_actions = sorted(actions.keys())
     _param_maps = param_maps or {}
     _examples = examples or [f"{name}(action='{valid_actions[0]}')"]
+
+    # Drift-proof discovery: the authoritative action list is DERIVED from the
+    # action map, never a hand-maintained string. Callers pass prose only; the
+    # router appends the canonical actions so a newly-wired action can't be
+    # silently omitted from list_tools/describe_tool. This had drifted twice —
+    # the `dialectic` description dropped `quick`, `knowledge` dropped
+    # `synthesize`. Insertion order (not sorted) preserves the author's intended
+    # reading order, e.g. dialectic's request -> thesis -> antithesis ->
+    # synthesis flow.
+    _prose = (description or f"{name} operations").rstrip(" .:")
+    _full_description = f"{_prose} — actions: {', '.join(actions.keys())}."
 
     if pre_onboard_actions:
         # Compare lowercase-to-lowercase: action keys are lowercase by
@@ -520,7 +535,7 @@ def action_router(
     @mcp_tool(
         name,
         timeout=timeout,
-        description=description,
+        description=_full_description,
         pre_onboard_actions=pre_onboard_actions,
         default_action=default_action,
     )
