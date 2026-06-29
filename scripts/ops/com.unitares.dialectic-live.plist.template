@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd manifest for the dialectic_live Phoenix/LiveView app (Elixir/OTP, port 8790).
+
+  The Phoenix UI-platform beachhead (one-pane strangler). Renders a live-ish
+  dialectic-sessions pane, fed by the Python governance MCP (:8767): a
+  Mint.WebSocket consumer of the broadcaster firehose (/ws/eisv) re-published onto
+  Phoenix.PubSub, plus /v1/tools/call POSTs for dialectic list/get. Binds
+  127.0.0.1:8790 by default (DIALECTIC_LIVE_BIND_ALL=1 to expose).
+
+  Like the wave3a-handlers template, this ships in-tree but is NOT loaded by
+  default: there is intentionally NO `RunAtLoad`. The operator promotes it when
+  ready to evaluate the LiveView pane against the buildless JS dashboard, which
+  stays the live+sole UI until then.
+
+  Prereq: a prod secret. Generate once and add to ~/.config/cirwel/secrets.env:
+    echo "DIALECTIC_LIVE_SECRET_KEY_BASE=$(cd elixir/dialectic_live && mix phx.gen.secret)" \
+      >> ~/.config/cirwel/secrets.env
+
+  Install (render __VARS__ then load):
+    sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
+        -e "s|__HOME__|$HOME|g" \
+        scripts/ops/com.unitares.dialectic-live.plist.template \
+        > ~/Library/LaunchAgents/com.unitares.dialectic-live.plist
+    launchctl load ~/Library/LaunchAgents/com.unitares.dialectic-live.plist
+
+  Verify:
+    launchctl list | grep com.unitares.dialectic-live
+    tail -f ~/Library/Logs/unitares-dialectic-live.log
+    curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8790/
+
+  Unload (rollback):
+    launchctl unload ~/Library/LaunchAgents/com.unitares.dialectic-live.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unitares.dialectic-live</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__UNITARES_ROOT__/elixir/dialectic_live/scripts/start.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__UNITARES_ROOT__/elixir/dialectic_live</string>
+
+    <!--
+      RunAtLoad is intentionally absent (mirrors wave3a-handlers). The plist is
+      configuration; the operator promotes it to running when ready to evaluate
+      the pane. Do NOT add this key without an explicit operator decision.
+    -->
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/unitares-dialectic-live.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/unitares-dialectic-live.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>MIX_ENV</key>
+        <string>prod</string>
+        <key>PORT</key>
+        <string>8790</string>
+    </dict>
+</dict>
+</plist>
