@@ -86,6 +86,73 @@ class TestDbScrapers:
             assert name in SCRAPERS, f"{name} missing from SCRAPERS registry"
 
 
+class TestGovernanceHealthScrapers:
+    """The governance-health series — EISV/verdict/finding aggregates that were
+    live-only until now. Each reads core.agent_state or audit.events over a
+    trailing 7-day window. Tests pin the SQL shape (table, window, filter) so a
+    refactor can't silently change what the chart means."""
+
+    def test_coherence_mean_averages_nonsynthetic_checkins(self, tmp_path: Path):
+        from agents.chronicler import scrapers
+
+        with patch.object(scrapers, "_fetchval", return_value=0.49) as m:
+            value = scrapers.governance_coherence_mean_7d(tmp_path)
+
+        assert value == 0.49
+        sql = m.call_args.args[0]
+        assert "avg(coherence)" in sql
+        assert "core.agent_state" in sql
+        assert "synthetic = false" in sql
+        assert "7 days" in sql
+
+    def test_risk_mean_averages_risk_score(self, tmp_path: Path):
+        from agents.chronicler import scrapers
+
+        with patch.object(scrapers, "_fetchval", return_value=0.07) as m:
+            value = scrapers.governance_risk_mean_7d(tmp_path)
+
+        assert value == 0.07
+        sql = m.call_args.args[0]
+        assert "avg(risk_score)" in sql
+        assert "synthetic = false" in sql
+
+    def test_guide_counts_guide_action(self, tmp_path: Path):
+        from agents.chronicler import scrapers
+
+        with patch.object(scrapers, "_fetchval", return_value=310.0) as m:
+            value = scrapers.governance_guide_7d(tmp_path)
+
+        assert value == 310.0
+        sql = m.call_args.args[0]
+        assert "state_json->>'action' = 'guide'" in sql
+        assert "7 days" in sql
+
+    def test_pause_counts_nonapprove_nonguide_actions(self, tmp_path: Path):
+        """Hard interventions = anything that isn't approve/guide, kept
+        open-ended so a new hard-stop action folds in without a code change."""
+        from agents.chronicler import scrapers
+
+        with patch.object(scrapers, "_fetchval", return_value=3.0) as m:
+            value = scrapers.governance_pause_7d(tmp_path)
+
+        assert value == 3.0
+        sql = m.call_args.args[0]
+        assert "NOT IN ('approve', 'guide')" in sql
+        assert "IS NOT NULL" in sql  # NULL action must not count as a pause
+
+    def test_sentinel_findings_count_durable_audit_events(self, tmp_path: Path):
+        from agents.chronicler import scrapers
+
+        with patch.object(scrapers, "_fetchval", return_value=135.0) as m:
+            value = scrapers.governance_sentinel_findings_7d(tmp_path)
+
+        assert value == 135.0
+        sql = m.call_args.args[0]
+        assert "audit.events" in sql
+        assert "sentinel_finding" in sql
+        assert "sentinel_alarm_finding" in sql
+
+
 class TestTestsCountScraper:
     def test_counts_only_test_prefixed_py_files(self, tmp_path: Path):
         from agents.chronicler.scrapers import tests_unitares_count

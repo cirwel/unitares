@@ -129,6 +129,74 @@ def checkins_7d(_repo_root: Path) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Governance-health series. The metrics above answer "how big / how busy";
+# these answer "how healthy" — the core EISV / verdict / finding signal, which
+# was live-only (no time-series) until now. Each reads core.agent_state (every
+# non-synthetic check-in) or audit.events over a trailing 7-day window, so they
+# share the `.7d` convention and group under "governance" on the dashboard.
+# ---------------------------------------------------------------------------
+
+
+def governance_coherence_mean_7d(_repo_root: Path) -> float:
+    """Fleet-mean coherence over the last 7 days — headline governance health.
+
+    avg() across every non-synthetic check-in. A sustained drop is the earliest
+    broad signal that the fleet is drifting."""
+    return _fetchval(
+        "SELECT avg(coherence) FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false"
+    )
+
+
+def governance_risk_mean_7d(_repo_root: Path) -> float:
+    """Fleet-mean risk_score over the last 7 days — counterpart to coherence."""
+    return _fetchval(
+        "SELECT avg(risk_score) FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false"
+    )
+
+
+def governance_guide_7d(_repo_root: Path) -> float:
+    """`guide` sub-actions in the last 7 days — soft governance corrections.
+
+    The verdict sub-action is persisted in state_json->>'action'. `guide` is a
+    proceed-with-nudge; its count shows how often governance is steering rather
+    than just approving."""
+    return _fetchval(
+        "SELECT count(*) FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false "
+        "AND state_json->>'action' = 'guide'"
+    )
+
+
+def governance_pause_7d(_repo_root: Path) -> float:
+    """Hard governance interventions in the last 7 days — pauses/blocks/rejects.
+
+    Anything that is neither approve nor guide (e.g. cirs_block, pause, reject).
+    Kept open-ended via NOT IN so a new hard-stop action folds in automatically
+    instead of being silently dropped."""
+    return _fetchval(
+        "SELECT count(*) FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days' AND synthetic = false "
+        "AND state_json->>'action' IS NOT NULL "
+        "AND state_json->>'action' NOT IN ('approve', 'guide')"
+    )
+
+
+def governance_sentinel_findings_7d(_repo_root: Path) -> float:
+    """Sentinel findings (incl. forced-release alarms) in the last 7 days.
+
+    Reads the durable audit.events store — the same source /v1/sentinel/backlog
+    queries — so the count tracks what the analytical resident is flagging over
+    time, not just what's currently in the in-memory ring."""
+    return _fetchval(
+        "SELECT count(*) FROM audit.events "
+        "WHERE event_type IN ('sentinel_finding', 'sentinel_alarm_finding') "
+        "AND ts > now() - interval '7 days'"
+    )
+
+
+# ---------------------------------------------------------------------------
 # GitHub traffic (CIRWEL org, non-archived repos, rolling 14-day window)
 # ---------------------------------------------------------------------------
 #
@@ -213,6 +281,11 @@ SCRAPERS: dict[str, Callable[[Path], float]] = {
     "agents.active.7d": agents_active_7d,
     "kg.entries.count": kg_entries_count,
     "checkins.7d": checkins_7d,
+    "governance.coherence.mean.7d": governance_coherence_mean_7d,
+    "governance.risk.mean.7d": governance_risk_mean_7d,
+    "governance.guide.7d": governance_guide_7d,
+    "governance.pause.7d": governance_pause_7d,
+    "governance.sentinel.findings.7d": governance_sentinel_findings_7d,
     "github.cirwel.traffic.views.14d": github_cirwel_traffic_views_14d,
     "github.cirwel.traffic.views.uniques.14d": github_cirwel_traffic_views_uniques_14d,
     "github.cirwel.traffic.clones.14d": github_cirwel_traffic_clones_14d,

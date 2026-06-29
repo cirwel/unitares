@@ -109,6 +109,37 @@ register(Metric(
     unit="calls",
 ))
 
+# Governance-health series — the core EISV / verdict / finding signal over
+# time. Live state has always exposed these, but they were never historized,
+# so "is the fleet trending healthier or worse this month?" had no chart. Each
+# is a trailing-7-day aggregate over core.agent_state or audit.events, scraped
+# daily by Chronicler.
+register(Metric(
+    name="governance.coherence.mean.7d",
+    description="Fleet-mean coherence over the last 7 days (non-synthetic check-ins). Headline governance-health signal; a sustained drop = broad drift.",
+    unit="coherence",
+))
+register(Metric(
+    name="governance.risk.mean.7d",
+    description="Fleet-mean risk_score over the last 7 days (non-synthetic check-ins). Counterpart to coherence.",
+    unit="risk",
+))
+register(Metric(
+    name="governance.guide.7d",
+    description="`guide` sub-actions in the last 7 days — soft governance corrections (proceed-with-nudge). From core.agent_state.state_json->>'action'.",
+    unit="verdicts",
+))
+register(Metric(
+    name="governance.pause.7d",
+    description="Hard governance interventions in the last 7 days — actions other than approve/guide (cirs_block, pause, reject). Open-ended so new hard-stop actions fold in.",
+    unit="verdicts",
+))
+register(Metric(
+    name="governance.sentinel.findings.7d",
+    description="Sentinel findings (incl. forced-release alarms) in the last 7 days, from durable audit.events. Tracks how much the analytical resident is flagging over time.",
+    unit="findings",
+))
+
 # GitHub traffic for the CIRWEL org. The GitHub traffic API only exposes a
 # rolling 14-day window, so daily snapshots overlap heavily by design — the
 # longitudinal value is the trend curve, not point-in-time deltas. Aggregated
