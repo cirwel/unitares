@@ -15,11 +15,11 @@ observables ──► observation blend ──► EMA state ──► residual /
  drift, tools)                                                               pause/reject
 ```
 
-The dynamical-systems / thermodynamic model (`governance_core/`, the ODE) runs **in parallel and does not drive verdicts** by default (`governance_monitor.py:1013-1017`: *"The ODE engine runs in parallel but does NOT drive verdicts… Primary verdicts come from behavioral assessment (EMA + z-score deviations)."*). It supplies the phi objective, regime detection, and historical continuity — the research lens, not the control loop.
+The dynamical-systems / thermodynamic model (`governance_core/`, the ODE) runs **in parallel and does not drive verdicts** by default (`governance_monitor.py`, the "does NOT drive verdicts" guard comment: *"The ODE engine runs in parallel but does NOT drive verdicts… Primary verdicts come from behavioral assessment (EMA + z-score deviations)."*). It supplies the phi objective, regime detection, and historical continuity — the research lens, not the control loop.
 
 ## Step 1 — Observations (`src/behavioral_sensor.py`)
 
-For non-embodied agents (the common case), three observations are computed from governance observables. Embodied agents (e.g. the Raspberry-Pi deployment) instead supply hardware `sensor_eisv` directly (`governance_monitor.py:967-972`).
+For non-embodied agents (the common case), three observations are computed from governance observables. Embodied agents (e.g. the Raspberry-Pi deployment) instead supply hardware `sensor_eisv` directly (`governance_monitor.py`, the `sensor_eisv` embodied-agent path).
 
 **E_obs** — productive capacity (`_compute_E`):
 ```
@@ -56,14 +56,14 @@ State is an EMA of the observations (α ramps from ~0.5 during bootstrap to a co
 E = (1−α)·E + α·E_obs        I = (1−α)·I + α·I_obs        S = (1−α)·S + α·S_obs
 ```
 
-**V is not an independent dimension.** It is the EMA-smoothed E−I imbalance (`behavioral_state.py:174-176`):
+**V is not an independent dimension.** It is the EMA-smoothed E−I imbalance (`behavioral_state.py`, `_raw_valence()` fed into the `update()` EMA):
 ```
 raw_v = E − I
 V     = (1−α_V)·V + α_V·raw_v
 ```
 So "four-dimensional state vector" is really three observed axes (E, I, S) plus a derived imbalance readout (V). V is surfaced separately because its **sign** is operationally actionable — positive = running hot (energetic but claims outrun results), negative = running careful (coherent but low progress) — not because it carries independent information.
 
-(If you grep the codebase you will find a second `_compute_V` — a slope-plus-level formula — in `behavioral_sensor.py`. It is **unused on the verdict path**: `governance_monitor.py:1002` passes only E/I/S observations to `behavioral_state.update()`, which recomputes V as the EMA of E−I above. The live V is the one described here.)
+(If you grep the codebase you will find a second `_compute_V` — a slope-plus-level formula — in `behavioral_sensor.py`. It is **unused on the verdict path**: `governance_monitor.py` passes only E/I/S observations to `self._behavioral_state.update()`, which recomputes V as the EMA of E−I above. The live V is the one described here.)
 
 ## Step 3 — Residuals: proprioception, not prosecution
 
