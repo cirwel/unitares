@@ -105,6 +105,7 @@ from src.dialectic_db import (
     create_session_async as pg_create_session,
     update_session_phase_async as pg_update_phase,
     update_session_reviewer_async as pg_update_reviewer,
+    update_session_awaiting_facilitation_async as pg_update_awaiting_facilitation,
     add_message_async as pg_add_message,
     resolve_session_async as pg_resolve_session,
     get_all_sessions_by_agent_async as pg_get_all_sessions_by_agent,
@@ -489,6 +490,8 @@ async def _apply_reviewer_reassignment(
         # BEAM owns the reviewer write when flagged; else Python. (Slice 2.3)
         if await beam_update_reviewer(session_id, new_reviewer_id) is None:
             await pg_update_reviewer(session_id, new_reviewer_id)
+        # A reassigned reviewer clears the stuck/facilitation state (#1167 Ask 2).
+        await pg_update_awaiting_facilitation(session_id, False)
         await pg_add_message(
             session_id=session_id,
             agent_id="system",
@@ -767,6 +770,13 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
         # No independent reviewer yet; the antithesis is owed by a summoned or
         # operator-assigned reviewer, not by the paused agent itself.
         session.awaiting_facilitation = True
+        # Persist so dialectic(list) can float this to the top (#1167 Ask 2).
+        # Fail-soft: the session row already committed above; only the surface
+        # flag is at risk.
+        try:
+            await pg_update_awaiting_facilitation(session.session_id, True)
+        except Exception as e:
+            logger.error(f"Failed to persist awaiting_facilitation on create: {e}")
 
     # Build response based on reviewer assignment
     if auto_awaiting_reviewer:
@@ -922,6 +932,8 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                                 message_type="system",
                                 reasoning=f"Reviewer '{old_reviewer}' stuck. Awaiting human facilitation.",
                             )
+                            # Persist the flag so dialectic(list) surfaces it (#1167 Ask 2).
+                            await pg_update_awaiting_facilitation(session_id, True)
                         except Exception as e:
                             logger.error(f"Failed to persist facilitation status: {e}")
                         logger.info(f"[DIALECTIC] Session {session_id[:16]} awaiting human facilitation (reviewer {old_reviewer} stuck)")

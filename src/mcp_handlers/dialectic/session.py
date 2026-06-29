@@ -417,6 +417,7 @@ async def list_all_sessions(
                     ds.topic,
                     ds.created_at,
                     ds.resolution_json,
+                    ds.awaiting_facilitation,
                     COALESCE(mc.cnt, 0) as message_count,
                     (SELECT dm.agent_id
                      FROM core.dialectic_messages dm
@@ -469,6 +470,7 @@ async def list_all_sessions(
                     "topic": row["topic"] or "",
                     "created": created_at or "",
                     "message_count": row["message_count"] or 0,
+                    "awaiting_facilitation": bool(row["awaiting_facilitation"]) if "awaiting_facilitation" in row else False,
                 }
 
                 # Parse resolution if present

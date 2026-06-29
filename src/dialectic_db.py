@@ -223,6 +223,21 @@ class DialecticDB:
             """, status, session_id)
             return "UPDATE 1" in result
 
+    async def update_session_awaiting_facilitation(self, session_id: str, awaiting: bool) -> bool:
+        """Persist the awaiting_facilitation flag (#1167 Ask 2).
+
+        Mirrors the in-memory DialecticSession.awaiting_facilitation attribute so
+        dialectic(list) can surface stuck sessions (and they survive restarts).
+        """
+        await self._ensure_pool()
+        async with self._pool.acquire() as conn:
+            result = await conn.execute("""
+                UPDATE core.dialectic_sessions
+                SET awaiting_facilitation = $1, updated_at = now()
+                WHERE session_id = $2
+            """, awaiting, session_id)
+            return "UPDATE 1" in result
+
     async def resolve_session(
         self,
         session_id: str,
@@ -530,6 +545,11 @@ async def update_session_reviewer_async(session_id: str, reviewer_agent_id: str)
 async def update_session_status_async(session_id: str, status: str) -> bool:
     db = await get_dialectic_db()
     return await db.update_session_status(session_id, status)
+
+
+async def update_session_awaiting_facilitation_async(session_id: str, awaiting: bool) -> bool:
+    db = await get_dialectic_db()
+    return await db.update_session_awaiting_facilitation(session_id, awaiting)
 
 
 async def resolve_session_async(session_id: str, resolution: Dict[str, Any], status: str = "resolved") -> bool:
