@@ -72,7 +72,8 @@ def test_landing_docs_link_the_proprioception_contract():
         assert "eisv-proprioception-contract.md" in text
     assert "not an outcome oracle" in readme
     assert "grand jury" in readme
-    assert "bad-verdict dispenser" in readme
+    assert "bad-result detector" in readme
+    assert "For AI clients, the stable contract is" in readme
     assert "task-negative" in evaluation_index
     assert "hand down bad verdicts" in evaluation_index
 
