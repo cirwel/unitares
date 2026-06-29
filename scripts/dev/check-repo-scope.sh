@@ -139,30 +139,30 @@ while IFS= read -r f; do
       ;;
   esac
 
-  # Rule 6: net-new metered model-CLOUD dependency. The execution-cost policy
-  # (CLAUDE.md "No metered model-API dependencies ... rules out
-  # anthropics/claude-code-action and any CI/automation that calls a metered
-  # API") is written but was previously enforced only by humans reading it.
-  # PRECISE, near-zero-false-positive signals ONLY — we deliberately do NOT flag
-  # the sanctioned free paths: the `openai` client is allowed (it talks to LOCAL
-  # Ollama via a base_url override), and the orchestrator may spawn the `claude`
-  # CLI by design. We flag only the unambiguously cloud-billed ones.
+  # Rule 6: a metered model-API on the REQUIRED default path. unitares is
+  # user/agent-agnostic and must run free/self-hosted with no paid key — so a
+  # metered API (Anthropic / OpenAI / ...) must never be FORCED on every
+  # installer. Metered models are welcome as an OPT-IN, off-by-default backend:
+  # a config-driven `base_url` (env override) is NOT flagged, and the existing
+  # `openai` client (drives LOCAL Ollama) and orchestrator-spawned `claude` CLI
+  # pass. We flag only the "forces it on everyone" signals — and an intentional
+  # opt-in metered backend can register in repo-scope-allow.txt.
   if [[ "$f" == .github/workflows/*.yml || "$f" == .github/workflows/*.yaml ]]; then
     if grep -nIE 'anthropics/claude-code-action' "$f" >/dev/null 2>&1; then
-      report "$f" "CI uses anthropics/claude-code-action — a metered model API. The execution-cost policy forbids metered deps; keep CI GITHUB_TOKEN-only / local Ollama."
+      report "$f" "CI uses anthropics/claude-code-action — a metered model API forced on everyone who runs CI. Keep CI free-runnable (GITHUB_TOKEN-only / local Ollama); a metered CI step must be opt-in, not the default."
     fi
   fi
   case "$bn" in
     *.py)
       if grep -nIE '^[[:space:]]*(import|from)[[:space:]]+anthropic([[:space:].]|$)' "$f" >/dev/null 2>&1; then
-        report "$f" "Imports the anthropic SDK — there is no local equivalent, so this is a metered Anthropic API dependency. Forbidden by the execution-cost policy (use a local model via the openai client, or make it a deferred opt-in outside the repo)."
+        report "$f" "Imports the anthropic SDK (no local fallback) — a metered dependency on the default path. Core must run free/self-hosted; expose metered models as an opt-in, off-by-default backend (config-gated), then allowlist this file in scripts/dev/repo-scope-allow.txt."
       fi
       ;;
   esac
   case "$bn" in
     *.py|*.sh|*.bash|*.yml|*.yaml|*.toml)
       if grep -nIE 'api\.(openai|anthropic)\.com' "$f" >/dev/null 2>&1; then
-        report "$f" "Targets a metered model cloud endpoint (api.openai.com / api.anthropic.com) — point at a local/self-hosted base_url, or make it a deferred opt-in per the execution-cost policy."
+        report "$f" "Hardcodes a metered model cloud endpoint (api.openai.com / api.anthropic.com) — that forces a paid API on every installer. Make base_url config-driven (env) so metered stays opt-in, or allowlist a deliberate opt-in backend."
       fi
       ;;
   esac
