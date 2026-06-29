@@ -186,17 +186,9 @@ class TestGetToolUsageStats:
 
     @pytest.mark.asyncio
     async def test_usage_stats_default(self):
-        mock_tracker = MagicMock()
-        mock_tracker.get_usage_stats.return_value = {
-            "total_calls": 100,
-            "unique_tools": 15,
-            "tools": [
-                {"name": "process_agent_update", "calls": 50},
-                {"name": "get_governance_metrics", "calls": 30},
-            ],
-        }
-
-        with patch("src.tool_usage_tracker.get_tool_usage_tracker", return_value=mock_tracker):
+        # DB sink (audit.tool_usage) is now the primary source.
+        db_stats = {"total_calls": 100, "unique_tools": 15, "source": "db"}
+        with patch("src.audit_db.get_tool_usage_stats_async", new=AsyncMock(return_value=db_stats)):
             from src.mcp_handlers.admin.handlers import handle_get_tool_usage_stats
             result = await handle_get_tool_usage_stats({})
 
@@ -205,13 +197,8 @@ class TestGetToolUsageStats:
 
     @pytest.mark.asyncio
     async def test_usage_stats_with_filters(self):
-        mock_tracker = MagicMock()
-        mock_tracker.get_usage_stats.return_value = {
-            "total_calls": 10,
-            "tools": [{"name": "ping_agent", "calls": 10}],
-        }
-
-        with patch("src.tool_usage_tracker.get_tool_usage_tracker", return_value=mock_tracker):
+        db_reader = AsyncMock(return_value={"total_calls": 10, "source": "db"})
+        with patch("src.audit_db.get_tool_usage_stats_async", new=db_reader):
             from src.mcp_handlers.admin.handlers import handle_get_tool_usage_stats
             result = await handle_get_tool_usage_stats({
                 "tool_name": "ping_agent",
@@ -221,9 +208,11 @@ class TestGetToolUsageStats:
 
             data = json.loads(result[0].text)
             assert data["total_calls"] == 10
-            # Verify filters were passed through
-            call_kwargs = mock_tracker.get_usage_stats.call_args
-            assert call_kwargs.kwargs.get("tool_name") == "ping_agent" or call_kwargs[1].get("tool_name") == "ping_agent"
+            # Filters flow through to the DB reader.
+            call_kwargs = db_reader.call_args.kwargs
+            assert call_kwargs.get("tool_name") == "ping_agent"
+            assert call_kwargs.get("agent_id") == "agent-1"
+            assert call_kwargs.get("window_hours") == 48
 
 
 # ============================================================================
