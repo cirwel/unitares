@@ -30,6 +30,7 @@ lowercase enum values — '|' won't collide with either.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +42,8 @@ from agents.watcher.calibration import BucketStats
 
 FLOOR_FILE_NAME = "pattern_floor.json"
 DEFAULT_STATE_DIR = watcher_state_dir()
+logger = logging.getLogger(__name__)
+
 _KEY_SEP = "|"
 
 
@@ -100,7 +103,13 @@ def save_floor(state: FloorState, *, state_dir: Path | None = None) -> None:
     target = target_dir / FLOOR_FILE_NAME
     tmp = target.with_suffix(f"{target.suffix}.tmp.{os.getpid()}.{time.monotonic_ns()}")
 
-    payload = {
+    with tmp.open("w") as fh:
+        json.dump(_floor_payload(state), fh, indent=2, sort_keys=True)
+    tmp.replace(target)
+
+
+def _floor_payload(state: FloorState) -> dict:
+    return {
         "updated_at": state.updated_at,
         "buckets": {
             f"{pattern}{_KEY_SEP}{file_class}": _bucket_to_dict(bucket)
@@ -108,9 +117,62 @@ def save_floor(state: FloorState, *, state_dir: Path | None = None) -> None:
         },
     }
 
-    with tmp.open("w") as fh:
-        json.dump(payload, fh, indent=2, sort_keys=True)
-    tmp.replace(target)
+
+def _floor_json(state: FloorState) -> str:
+    return json.dumps(_floor_payload(state), indent=2, sort_keys=True)
+
+
+def save_floor_governed(
+    state: FloorState,
+    *,
+    proposer_uuid: str,
+    continuity_token: str,
+    session_id: str,
+    state_dir: Path | None = None,
+    bearer_token: str | None = None,
+) -> bool:
+    """Persist the floor through a governed ``file_write`` effect — the write is
+    audited, rollback-tracked, and lease-coordinated (the lease plane enforces a
+    single writer, which is what the tmp+rename race guard approximated locally).
+
+    On ANY failure — plane down, veto, missing identity/bearer — this falls back
+    to the local atomic ``save_floor`` so the floor is never lost. Fail-open is
+    preserved end to end. Returns True only if the governed path committed.
+    """
+    import os
+
+    target = (state_dir or DEFAULT_STATE_DIR) / FLOOR_FILE_NAME
+    bearer = bearer_token or os.environ.get("LEASE_PLANE_BEARER_TOKEN")
+    try:
+        if bearer and proposer_uuid and continuity_token:
+            # The governed File.write fails (enoent) if the parent is absent —
+            # mkdir first, exactly as the atomic save_floor does.
+            target.parent.mkdir(parents=True, exist_ok=True)
+            from unitares_sdk.lease_plane.client import (
+                LeasePlaneClient,
+                LeasePlaneClientConfig,
+            )
+
+            client = LeasePlaneClient(LeasePlaneClientConfig(bearer_token=bearer))
+            resp = client.propose_file_write(
+                path=str(target),
+                content=_floor_json(state),
+                proposer_uuid=proposer_uuid,
+                continuity_token=continuity_token,
+                session_id=session_id,
+                idempotency_key=f"watcher-floor-{state.updated_at}",
+            )
+            if resp.get("ok"):
+                return True
+            logger.warning(
+                "governed floor write rejected (%s); atomic fallback",
+                resp.get("error"),
+            )
+    except Exception as exc:  # noqa: BLE001 — never lose the floor to a plane error
+        logger.warning("governed floor write failed (%s); atomic fallback", exc)
+
+    save_floor(state, state_dir=state_dir)
+    return False
 
 
 def load_floor(*, state_dir: Path | None = None) -> FloorState:
@@ -154,8 +216,14 @@ def recompute_floor(
     half_life_days: float = 30.0,
     min_weighted_n: float = 10.0,
     now: datetime | None = None,
+    governed_identity: dict | None = None,
 ) -> FloorState:
     """Read findings.jsonl, aggregate per-(pattern, file_class), persist.
+
+    When ``governed_identity`` (``{proposer_uuid, continuity_token, session_id}``)
+    is supplied, the floor is persisted through a governed ``file_write`` effect
+    (audited + rollback-tracked + lease-coordinated), falling back to the atomic
+    local write on any failure. Without it, the local atomic write is used.
 
     Returns the new FloorState. Designed to be called nightly (cron) or
     from the ``--recompute-floor`` CLI for ad-hoc rebuilds.
@@ -190,5 +258,8 @@ def recompute_floor(
         updated_at=reference.strftime("%Y-%m-%dT%H:%M:%SZ"),
         buckets=buckets,
     )
-    save_floor(state, state_dir=state_dir)
+    if governed_identity:
+        save_floor_governed(state, state_dir=state_dir, **governed_identity)
+    else:
+        save_floor(state, state_dir=state_dir)
     return state

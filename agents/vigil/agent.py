@@ -24,6 +24,7 @@ What it does each cycle:
 """
 
 import asyncio
+import functools
 
 import json
 import os
@@ -84,13 +85,17 @@ def _last_floor_recompute_iso() -> str | None:
 
 
 def maybe_recompute_watcher_floor(
-    *, max_age_hours: float = WATCHER_FLOOR_MAX_AGE_HOURS
+    *,
+    max_age_hours: float = WATCHER_FLOOR_MAX_AGE_HOURS,
+    governed_identity: dict | None = None,
 ) -> bool:
     """Trigger a watcher floor recompute if the last one is older than
     ``max_age_hours``. Returns True if a recompute fired.
 
-    Called from Vigil's run_cycle. Atomic write means a concurrent
-    surface hook can never see a half-written file.
+    Called from Vigil's run_cycle. When ``governed_identity`` is supplied the
+    floor is persisted through a governed ``file_write`` effect (the first real
+    consumer of that surface); it falls back to the local atomic write on any
+    failure, so a concurrent surface hook never sees a half-written file.
     """
     last_iso = _last_floor_recompute_iso()
     if last_iso:
@@ -103,7 +108,7 @@ def maybe_recompute_watcher_floor(
                 return False
         except (TypeError, ValueError):
             pass  # unparseable → recompute (safer to refresh than skip)
-    recompute_floor()
+    recompute_floor(governed_identity=governed_identity)
     return True
 
 
@@ -961,7 +966,23 @@ class VigilAgent(GovernanceAgent):
         # 24h staleness internally, so calling it every cycle is cheap.
         try:
             loop = asyncio.get_running_loop()
-            recomputed = await loop.run_in_executor(None, maybe_recompute_watcher_floor)
+            # Route the floor write through governed file_write (audited +
+            # rollback-tracked + lease-coordinated) using Vigil's own identity;
+            # save_floor_governed falls back to the atomic local write on any
+            # plane failure, so this can never lose the floor.
+            gov_id = None
+            if client.agent_uuid and client.continuity_token:
+                gov_id = {
+                    "proposer_uuid": client.agent_uuid,
+                    "continuity_token": client.continuity_token,
+                    "session_id": client.client_session_id or "",
+                }
+            recomputed = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    maybe_recompute_watcher_floor, governed_identity=gov_id
+                ),
+            )
             if recomputed:
                 findings.append("watcher_floor: recomputed")
         except Exception as e:
