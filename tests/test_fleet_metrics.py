@@ -30,6 +30,30 @@ class TestCatalog:
         for name in ("agents.active.7d", "kg.entries.count", "checkins.7d"):
             assert name in _catalog, f"{name} missing from catalog"
 
+    def test_governance_metrics_registered(self):
+        """The governance-health series must be in the catalog or their daily
+        POSTs 404 silently and the charts never populate."""
+        for name in (
+            "governance.coherence.mean.7d",
+            "governance.risk.mean.7d",
+            "governance.guide.7d",
+            "governance.pause.7d",
+            "governance.sentinel.findings.7d",
+        ):
+            assert name in _catalog, f"{name} missing from catalog"
+
+    def test_every_scraper_has_a_catalog_entry(self):
+        """Invariant: every name Chronicler scrapes must be catalog-registered.
+
+        The POST endpoint validates against the catalog, so any SCRAPERS name
+        without an entry is a silent 404 each daily run. This subset check
+        guards all current and future scrapers at once, rather than relying on
+        per-name lists drifting in step."""
+        from agents.chronicler.scrapers import SCRAPERS
+
+        missing = sorted(name for name in SCRAPERS if name not in _catalog)
+        assert not missing, f"scrapers missing catalog entries (will 404): {missing}"
+
     def test_require_known_name_returns_entry(self):
         entry = require("tokei.unitares.src.code")
         assert isinstance(entry, Metric)
