@@ -26,6 +26,7 @@ DEFAULT_TIMEOUT_SECONDS = 120
 IDENTITY_ALERT = "no-session get_governance_metrics is not identity-neutral"
 INVENTORY_ALERT = "outcome inventory no longer exposes BEAM/substrate eprocess lanes"
 MATRIX_ALERT = "ablation matrix default no longer excludes BEAM harness lane"
+GROUPED_MATRIX_ALERT = "ablation matrix grouped mode no longer exposes BEAM harness lane"
 
 
 def identity_neutrality_alert(metrics: dict[str, Any]) -> str | None:
@@ -74,6 +75,22 @@ def matrix_exclusion_alert(text: str) -> str | None:
     """Return an alert if default matrix output no longer excludes BEAM."""
 
     return None if "Excluded harness lanes: `beam`" in text else MATRIX_ALERT
+
+
+def matrix_grouped_lane_alert(text: str) -> str | None:
+    """Return an alert if grouped matrix output stops showing BEAM explicitly.
+
+    Default validation should still keep substrate EISV separated from runtime
+    harness rows, but much of UNITARES now moves through BEAM. The guard must
+    therefore prove BEAM remains visible as its own grouped lane rather than only
+    proving that the default matrix excludes it.
+    """
+
+    if "Harness lane mode: grouped" not in text:
+        return GROUPED_MATRIX_ALERT
+    if not re.search(r"(?im)^\|\s*beam\s*\|", text):
+        return GROUPED_MATRIX_ALERT
+    return None
 
 
 def render_alert_report(alerts: Sequence[str], evidence: Sequence[str]) -> str:
@@ -212,6 +229,30 @@ def collect_alerts(
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         alerts.append("ablation matrix lane-exclusion check failed to run")
         evidence.append(f"matrix_error={type(exc).__name__}: {exc}")
+
+    try:
+        grouped_matrix = run_repo_script(
+            repo,
+            python,
+            "scripts/analysis/eisv_ablation_matrix.py",
+            (
+                "--group-by-harness-lane",
+                "--scopes",
+                "task",
+                "--windows",
+                "90",
+                "--leads",
+                "0,30",
+            ),
+            timeout_seconds=timeout_seconds,
+        )
+        grouped_has_beam = matrix_grouped_lane_alert(grouped_matrix) is None
+        evidence.append(f"matrix_grouped_has_beam={grouped_has_beam}")
+        if not grouped_has_beam:
+            alerts.append(GROUPED_MATRIX_ALERT)
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        alerts.append("ablation matrix grouped BEAM lane check failed to run")
+        evidence.append(f"matrix_grouped_error={type(exc).__name__}: {exc}")
 
     return alerts, evidence
 
