@@ -693,6 +693,111 @@ async def http_call_tool(request):
         }, status_code=500)
 
 
+async def http_effect_grant(request):
+    """POST /v1/effect-grant — mint a single-use, content-bound effect grant.
+
+    Phase 1 of effect-binding (governed-effect-effect-binding-v0 §4-B / #1075).
+    A proposer calls this BEFORE submitting an effect to the lease plane: it
+    presents its continuity_token plus the effect's content fields; gov-mcp
+    re-certifies the token to ``strong`` (the §7 path) and, if strong, mints a
+    ``gnt.v1`` grant bound to (aid, payload_sha256, surface, custody_mode,
+    idempotency_key, nonce, exp). The proposer then carries the grant in the
+    effect envelope's ``proposer`` object; the lease plane forwards it to
+    ``/v1/effect-veto``, which verifies it covers THIS exact effect (a later
+    slice).
+
+    Closes T1 (retarget) + the grant-only slice of T2 (replay) — NOT T3 (a
+    bearer+token holder can still mint grants for effects it authors). See the
+    design's threat model.
+
+    INERT by default: gated on ``UNITARES_GOVERNED_EFFECT_BINDING``; off → 501.
+    Nothing forwards or verifies the grant yet (wiring is a later slice).
+
+    Request:  ``{"proposer_agent_uuid", "proposer_continuity_token",
+                 "payload_sha256", "surface", "custody_mode",
+                 "idempotency_key", "ttl_seconds"?}``
+    Response: ``{"ok": true, "grant": "gnt.v1...."}`` — the grant is issued TO
+              the caller (like onboard's continuity_token); never logged.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+    # Inert unless explicitly enabled. Fail-closed: off → not implemented, so a
+    # premature caller is refused rather than silently issued a grant nothing
+    # verifies yet.
+    if not _http_bool(os.getenv("UNITARES_GOVERNED_EFFECT_BINDING")):
+        return JSONResponse(
+            {"ok": False, "error": "binding_not_enabled",
+             "detail": "effect-binding grant minting is disabled (Phase 1, inert)"},
+            status_code=501,
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    proposer = body.get("proposer_agent_uuid") or body.get("agent_id")
+    fields = {
+        "proposer_agent_uuid": proposer,
+        "payload_sha256": body.get("payload_sha256"),
+        "surface": body.get("surface"),
+        "custody_mode": body.get("custody_mode"),
+        "idempotency_key": body.get("idempotency_key"),
+    }
+    missing = [k for k, v in fields.items() if not (isinstance(v, str) and v)]
+    if missing:
+        return JSONResponse(
+            {"ok": False, "error": "schema_invalid",
+             "detail": f"required string fields missing: {', '.join(missing)}"},
+            status_code=422,
+        )
+
+    # A grant is only minted for a proposer that re-certifies as a STRONG
+    # identity — the same §7 gate the veto enforces (the grant asserts
+    # aid=proposer). Fail-closed: no/invalid/expired/mismatched token → no
+    # grant. The token is consumed for verification only, never logged.
+    from src.mcp_handlers.identity.session import recertify_strong_tier
+    if not recertify_strong_tier(body.get("proposer_continuity_token"), proposer):
+        return JSONResponse(
+            {"ok": False, "error": "tier_recert_failed",
+             "detail": "proposer did not re-certify as a strong identity"},
+            status_code=403,
+        )
+
+    # Optional caller TTL; the primitive clamps to its floor. Default applies if
+    # absent or unparseable.
+    mint_kwargs = {}
+    ttl_raw = body.get("ttl_seconds")
+    if ttl_raw is not None:
+        try:
+            mint_kwargs["ttl_seconds"] = int(ttl_raw)
+        except (TypeError, ValueError):
+            pass
+
+    from src.effect_grant import mint_effect_grant
+    grant = mint_effect_grant(
+        aid=proposer,
+        payload_sha256=fields["payload_sha256"],
+        surface=fields["surface"],
+        custody_mode=fields["custody_mode"],
+        idempotency_key=fields["idempotency_key"],
+        **mint_kwargs,
+    )
+    if not grant:
+        # No HMAC secret configured — cannot mint. Fail closed.
+        return JSONResponse(
+            {"ok": False, "error": "grant_mint_unavailable",
+             "detail": "no signing secret configured"},
+            status_code=503,
+        )
+
+    return JSONResponse({"ok": True, "grant": grant})
+
+
 async def http_effect_veto(request):
     """POST /v1/effect-veto — governance veto for a proposed governed effect.
 
@@ -3304,6 +3409,7 @@ def register_http_routes(
     app.routes.append(Route("/", http_dashboard_redesign, methods=["GET"]))  # Root also serves the redesign
     app.routes.append(Route("/v1/tools", http_list_tools, methods=["GET"]))
     app.routes.append(Route("/v1/tools/call", http_call_tool, methods=["POST"]))
+    app.routes.append(Route("/v1/effect-grant", http_effect_grant, methods=["POST"]))
     app.routes.append(Route("/v1/effect-veto", http_effect_veto, methods=["POST"]))
     app.routes.append(Route("/health", http_health, methods=["GET"]))
     app.routes.append(Route("/health/live", http_health_live, methods=["GET"]))
