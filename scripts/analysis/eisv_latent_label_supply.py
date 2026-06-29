@@ -190,6 +190,8 @@ def parse_args(argv=None):
     p.add_argument("--gh-repo", default="cirwel/unitares")
     p.add_argument("--window-days", type=int, default=WINDOW_DAYS,
                    help="fixed lookback window for all rates (count scaled to /quarter)")
+    p.add_argument("--print-report", action="store_true",
+                   help="explicitly print full report to stdout")
     return p.parse_args(argv)
 
 
@@ -198,7 +200,11 @@ def main(argv=None) -> int:
     db = db_realized(args.db_url, args.window_days)
     reverts = git_reverts(args.repo, args.window_days)
     prs = gh_rejected_prs(args.gh_repo, args.window_days)
-    print(build_report(db, reverts, prs, args.repo, args.gh_repo))
+    report = build_report(db, reverts, prs, args.repo, args.gh_repo)
+    if args.print_report:
+        print(report)
+    else:
+        print("Latent label supply analysis completed. Use --print-report to emit full report.")
     return 0
 
 
