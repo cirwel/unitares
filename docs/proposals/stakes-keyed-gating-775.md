@@ -1,5 +1,7 @@
 # Stakes-keyed gating (#775) — design of record
 
+> **Design record.** A planning / RFC document kept as design provenance; it captures intent at a point in time and may lag the running code. For current behavior see [`UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md) and the runtime sources it points to.
+
 **Status:** classification artifact LANDED + INERT; gate mechanism PARKED.
 **Issue:** #775 (spun from #752, step 3). Sibling: #776 (trust→friction, step 4).
 **Date:** 2026-06-28.

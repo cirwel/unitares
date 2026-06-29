@@ -1,5 +1,7 @@
 # Track B — Implementation blueprint (`operator_delegate` disclosure scope)
 
+> **Design record.** A planning / RFC document kept as design provenance; it captures intent at a point in time and may lag the running code. For current behavior see [`UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md) and the runtime sources it points to.
+
 - **Status:** Ready to apply against `CIRWEL/unitares` (this repo).
 - **Prereq:** Track A enforced (`UNITARES_IDENTITY_STRICT=strict`,
   `UNITARES_SESSION_FINGERPRINT_CHECK=strict`). Do not ship Track B first.

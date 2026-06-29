@@ -1,5 +1,7 @@
 # S8a Phase 2 — Prep (2026-04-29)
 
+> **Design record.** A planning / RFC document kept as design provenance; it captures intent at a point in time and may lag the running code. For current behavior see [`UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md) and the runtime sources it points to.
+
 **Companion to:** `docs/ontology/s8a-tag-discipline-audit.md` (Phase 1)
 **Status:** Prep diagnostic. Not a ratification artifact. Tomorrow's session (≥1-week-of-data trigger fires 2026-04-30) opens the actual Phase-2 PR using this as the data input.
 

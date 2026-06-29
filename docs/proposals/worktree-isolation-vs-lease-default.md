@@ -16,6 +16,8 @@ stance: |
 
 # Worktree isolation as default; leases for the residue
 
+> **Design record.** A planning / RFC document kept as design provenance; it captures intent at a point in time and may lag the running code. For current behavior see [`UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md) and the runtime sources it points to.
+
 ## 0. What this note is and isn't
 
 This is **not** a proposal to remove or replace the Surface Lease Plane. The lease

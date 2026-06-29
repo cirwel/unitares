@@ -1,5 +1,7 @@
 # BEAM Event-Adapter Design — v0
 
+> **Design record.** A planning / RFC document kept as design provenance; it captures intent at a point in time and may lag the running code. For current behavior see [`UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md) and the runtime sources it points to.
+
 - **Created:** 2026-06-20
 - **Last Updated:** 2026-06-20
 - **Status:** Design note — DEFERRED to the 2026-06-24 Wave-3 gate read; no runtime code

@@ -1,5 +1,7 @@
 # S1 — `continuity_token` retirement plan
 
+> **Design record.** A planning / RFC document kept as design provenance; it captures intent at a point in time and may lag the running code. For current behavior see [`UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md) and the runtime sources it points to.
+
 **Date:** 2026-04-24
 **Scope:** Plan doc for `continuity_token` retirement per `plan.md` §Track C C1. Inventories current roles of the token, identifies what S11 already accomplished, surfaces the Part-C coupling that makes naive retirement unsafe, and lays out a sequenced deprecation path with operator decision points.
 **Stance:** Descriptive + recommendation. No code changes in this pass.
