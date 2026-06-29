@@ -423,6 +423,17 @@ defmodule AgentOrchestrator.AgentRunner do
 
   @impl true
   def terminate(_reason, state) do
+    # Reap the whole process TREE when the child is still running at teardown
+    # (operator stop / app shutdown — exit_status still nil). `claude`/SDK
+    # children spawn their own subprocesses (MCP servers); closing the Port alone
+    # orphans those descendants — they reparent to init and pile up on the
+    # always-on orchestrator. This MUST run before safe_close: once the parent
+    # dies its children reparent and can no longer be found by walking the tree.
+    # Guarded on a NOT-yet-finalized state so we never signal a clean exit's
+    # os_pid, which by now could belong to an unrelated reused pid (the same
+    # guard AgentPort uses via its `exited` flag).
+    if is_nil(state.exit_status) and is_integer(state.os_pid), do: kill_tree(state.os_pid)
+
     # Idempotent with the exit-status path: release returns :not_found harmlessly
     # if already released. Closing the port here kills the child on operator stop.
     if state.port, do: safe_close(state.port)
@@ -697,6 +708,28 @@ defmodule AgentOrchestrator.AgentRunner do
     if Port.info(port) != nil, do: Port.close(port)
   catch
     :error, _ -> :ok
+  end
+
+  # Recursively SIGKILL a process and all its descendants, deepest first, so a
+  # reaped agent leaves no orphaned subprocesses (e.g. the MCP servers `claude`
+  # spawns). Best-effort and side-effecting; an already-dead pid just fails the
+  # kill harmlessly. Children are discovered via `pgrep -P` BEFORE the parent is
+  # signalled — once the parent dies its children reparent to init and can no
+  # longer be found by walking from it.
+  defp kill_tree(pid) do
+    children =
+      case System.cmd("pgrep", ["-P", "#{pid}"], stderr_to_stdout: true) do
+        {out, 0} -> out |> String.split() |> Enum.map(&String.to_integer/1)
+        _ -> []
+      end
+
+    Enum.each(children, &kill_tree/1)
+    System.cmd("kill", ["-KILL", "#{pid}"], stderr_to_stdout: true)
+    :ok
+  catch
+    # pgrep/kill are external; a malformed pid or a transient System.cmd failure
+    # must not crash terminate/2 (which would skip the lease release below it).
+    _, _ -> :ok
   end
 
   # RFC-4122 v4 UUID without a third-party dep. Version nibble forced to 4 and

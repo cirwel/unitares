@@ -548,4 +548,63 @@ defmodule AgentOrchestratorTest do
       assert :ok = AgentOrchestrator.stop(id)
     end
   end
+
+  describe "tree reaping on stop" do
+    test "stop reaps the agent's descendant subprocesses, not just the direct child" do
+      # A child runtime like `claude` forks its own subprocesses (MCP servers).
+      # Closing the Port alone kills only the direct child; the descendants
+      # reparent to init and pile up on the always-on orchestrator. terminate/2
+      # must walk the tree and SIGKILL the descendants too. Model that here with
+      # a shell that backgrounds a long-lived grandchild, prints its pid, then
+      # blocks — stopping the agent must leave no live grandchild.
+      {:ok, id, _pid} =
+        AgentOrchestrator.run(%{
+          cmd: "sh",
+          args: ["-c", "sleep 300 & echo CHILD_PID=$! ; sleep 300"],
+          lease: false
+        })
+
+      child_pid =
+        eventually_value(fn ->
+          with {:ok, %{output: lines}} <- AgentOrchestrator.snapshot(id) do
+            Enum.find_value(lines, fn line ->
+              case Regex.run(~r/CHILD_PID=(\d+)/, line) do
+                [_, pid] -> String.to_integer(pid)
+                _ -> nil
+              end
+            end)
+          else
+            _ -> nil
+          end
+        end)
+
+      assert is_integer(child_pid), "expected the backgrounded grandchild's pid in output"
+      assert os_process_alive?(child_pid), "grandchild should be alive before stop"
+
+      assert :ok = AgentOrchestrator.stop(id, :test_reap)
+
+      # The grandchild must die — kill_tree reaped it. Poll: a SIGKILLed process
+      # is a zombie until init reaps the reparented orphan.
+      assert eventually(fn -> not os_process_alive?(child_pid) end, 200),
+             "grandchild #{child_pid} survived stop — tree was not reaped"
+    end
+  end
+
+  # Like eventually/2 but returns the first truthy value the probe yields (or nil
+  # after exhausting retries), for polling a value into existence rather than a
+  # boolean condition.
+  defp eventually_value(fun, retries \\ 100) do
+    case fun.() do
+      nil -> if retries <= 0, do: nil, else: Process.sleep(10) && eventually_value(fun, retries - 1)
+      val -> val
+    end
+  end
+
+  # True iff an OS pid currently exists (signal 0 probes without delivering).
+  defp os_process_alive?(os_pid) do
+    case System.cmd("kill", ["-0", "#{os_pid}"], stderr_to_stdout: true) do
+      {_, 0} -> true
+      _ -> false
+    end
+  end
 end
