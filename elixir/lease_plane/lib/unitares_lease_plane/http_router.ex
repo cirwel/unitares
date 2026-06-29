@@ -192,6 +192,47 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           reason: "transient lease-plane error; nothing was committed"
         })
 
+      # Executor validation rejections — client errors (bad payload/path), not 500s.
+      {:error, reason}
+      when reason in [
+             :path_required,
+             :surface_path_mismatch,
+             :content_required,
+             :bad_base64,
+             :payload_too_large
+           ] ->
+        json(conn, 422, %{
+          ok: false,
+          error: Atom.to_string(reason),
+          reason: "effect rejected at validation; nothing was written"
+        })
+
+      # The write could not be applied but was cleanly rolled back — the surface
+      # is unchanged. Distinct from the quarantine case below.
+      {:error, {:committed_failed_rolled_back, write_reason}} ->
+        json(conn, 422, %{
+          ok: false,
+          error: "effect_write_failed",
+          reason: "the write could not be applied and was rolled back: #{inspect(write_reason)}"
+        })
+
+      # Pre-image persist failed before any write attempt — durable record missing.
+      {:error, {:persist_failed, persist_reason}} ->
+        json(conn, 503, %{
+          ok: false,
+          error: "persist_failed",
+          reason: "could not durably record the effect; nothing was written: #{inspect(persist_reason)}"
+        })
+
+      # Write failed AND the rollback also failed — the surface is quarantined and
+      # needs operator review. A genuine 500, but reported, not a bare catch-all.
+      {:error, :rollback_failed} ->
+        json(conn, 500, %{
+          ok: false,
+          error: "rollback_failed",
+          reason: "write failed and the rollback also failed; the surface is quarantined for operator review"
+        })
+
       {:error, detail} when is_binary(detail) ->
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
 
