@@ -6,43 +6,42 @@ name: Elixir Tests
 # elixir/sentinel module) could merge unvalidated. This runs `mix test` for the
 # Sentinel app on every PR that touches it.
 #
-# Scope note: only elixir/sentinel runs here. Its test_helper.exs auto-detects
-# Postgres and EXCLUDES :db-tagged integration tests when the DB is unreachable,
-# so the pure-logic suite (incl. the cross-runtime fingerprint parity tests)
-# runs cleanly without a database service. elixir/lease_plane is intentionally
-# NOT included yet: its test_helper.exs raises without a live governance DB +
-# the lease_plane.* schema, which needs a Postgres service + migration load —
-# a follow-up once that harness exists.
+# Scope note: the `sentinel` job is DB-free — its test_helper.exs auto-detects
+# Postgres and EXCLUDES :db-tagged integration tests when the DB is unreachable.
+#
+# The `lease_plane` job IS DB-backed: its test_helper.exs raises without a live
+# governance DB + the lease_plane.*/effects.*/audit.*/core.* schema. Before this
+# job, the entire BEAM lease-plane — including the RCE `file_write` execute path
+# (commit / §5b rollback / the effects.payloads contract tests) — ran only
+# locally and never gated a merge. It stands up the real Postgres+AGE image used
+# by the documented quickstart (docker-initdb.sh applies every migration during
+# init, before the healthcheck passes) and runs the full suite.
 
 on:
   push:
     branches: [ master, main ]
     paths:
       - 'elixir/sentinel/**'
+      - 'elixir/lease_plane/**'
       - '.github/workflows/elixir-tests.yml'
   pull_request:
     branches: [ master, main ]
     paths:
       - 'elixir/sentinel/**'
+      - 'elixir/lease_plane/**'
       - '.github/workflows/elixir-tests.yml'
 
-# Least-privilege: this job only reads the repo and runs tests.
+# Least-privilege: these jobs only read the repo and run tests.
 permissions:
   contents: read
 
 jobs:
-  test:
+  sentinel:
     runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix:
-        # Structured as a matrix so adding DB-free apps later is one line.
-        app: [ sentinel ]
 
     defaults:
       run:
-        working-directory: elixir/${{ matrix.app }}
+        working-directory: elixir/sentinel
 
     steps:
     - name: Checkout code
@@ -60,11 +59,11 @@ jobs:
       uses: actions/cache@v4
       with:
         path: |
-          elixir/${{ matrix.app }}/deps
-          elixir/${{ matrix.app }}/_build
-        key: ${{ runner.os }}-mix-${{ matrix.app }}-${{ hashFiles(format('elixir/{0}/mix.lock', matrix.app), format('elixir/{0}/mix.exs', matrix.app)) }}
+          elixir/sentinel/deps
+          elixir/sentinel/_build
+        key: ${{ runner.os }}-mix-sentinel-${{ hashFiles('elixir/sentinel/mix.lock', 'elixir/sentinel/mix.exs') }}
         restore-keys: |
-          ${{ runner.os }}-mix-${{ matrix.app }}-
+          ${{ runner.os }}-mix-sentinel-
 
     - name: Install dependencies
       run: mix deps.get
@@ -73,3 +72,54 @@ jobs:
       # No DB service: test_helper.exs excludes :db-tagged integration tests
       # when Postgres is unreachable, so the pure-logic suite runs green.
       run: mix test
+
+  lease_plane:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    # The lease_plane suite needs the real governance schema. Reuse the same
+    # Postgres+AGE image the documented quickstart uses; docker-initdb.sh applies
+    # every migration during init, and `--wait` blocks on the pg_isready
+    # healthcheck, which only passes once init (and therefore the migrations) has
+    # completed.
+    - name: Bring up Postgres + AGE (migrations auto-applied)
+      run: docker compose up postgres-age -d --wait --build
+
+    - name: Set up Elixir / OTP
+      uses: erlef/setup-beam@v1
+      with:
+        otp-version: '27'
+        elixir-version: '1.19'
+
+    - name: Cache deps and build
+      uses: actions/cache@v4
+      with:
+        path: |
+          elixir/lease_plane/deps
+          elixir/lease_plane/_build
+        key: ${{ runner.os }}-mix-lease_plane-${{ hashFiles('elixir/lease_plane/mix.lock', 'elixir/lease_plane/mix.exs') }}
+        restore-keys: |
+          ${{ runner.os }}-mix-lease_plane-
+
+    - name: Install dependencies
+      working-directory: elixir/lease_plane
+      run: mix deps.get
+
+    - name: Run tests (real governance DB)
+      working-directory: elixir/lease_plane
+      env:
+        UNITARES_LEASE_PLANE_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/governance
+      run: mix test
+
+    - name: Postgres logs on failure
+      if: failure()
+      run: docker compose logs --no-color --tail=200 postgres-age
+
+    - name: Tear down
+      if: always()
+      run: docker compose down -v
