@@ -29,18 +29,31 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 DEFAULT_DB_URL = os.environ.get(
     "GOVERNANCE_DATABASE_URL",
     "postgresql://postgres:postgres@localhost:5432/governance",
 )
 
+
+def _cov_fail_under(default: int = 75) -> int:
+    """Read the coverage gate from the canonical test runner so this snapshot
+    cannot quote a stale number (it read 25 while the real gate was 75)."""
+    runner = Path(__file__).resolve().parents[2] / "scripts" / "dev" / "test-cache.sh"
+    try:
+        m = re.search(r"cov-fail-under=(\d+)", runner.read_text(encoding="utf-8"))
+    except OSError:
+        return default
+    return int(m.group(1)) if m else default
+
+
 # Non-DB rows: preserved as-is by --write, emitted verbatim by the print path.
 STATIC_ROWS = [
     ("V operating range", "Active agents often within [-0.1, 0.1]"),
     (
         "Tests",
-        "8,500+ collected · smoke/pre-push subset plus 25% min coverage gate",
+        f"8,500+ collected · smoke/pre-push subset plus {_cov_fail_under()}% min coverage gate",
     ),
 ]
 
