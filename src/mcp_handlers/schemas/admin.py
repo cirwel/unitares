@@ -141,3 +141,67 @@ class ConfigParams(AgentIdentityMixin):
     """Parameters for config"""
 
 
+class AdminParams(AgentIdentityMixin):
+    """Unified admin / diagnostics operations.
+
+    Consolidates the low-traffic operator/diagnostic single-purpose tools
+    (server_info, connections, workspace_health, tool_usage, telemetry,
+    debug_context, validate_path, reset_monitor, cleanup_locks) behind one
+    action router. The original single-purpose tools remain registered for
+    backwards compatibility; this router is the discoverable surface.
+    """
+    action: Literal[
+        "server_info",
+        "connections",
+        "workspace_health",
+        "tool_usage",
+        "telemetry",
+        "debug_context",
+        "validate_path",
+        "reset_monitor",
+        "cleanup_locks",
+    ] = Field(..., description="Diagnostic/maintenance operation to perform")
+    # server_info
+    detail: Literal["basic", "full"] = Field(
+        "basic", description="Detail level (for action=server_info)."
+    )
+    # telemetry / tool_usage — window_hours default diverges by action and is
+    # resolved in the validator below (telemetry=24, tool_usage=168) so the
+    # underlying handlers keep their original defaults without edits.
+    window_hours: Optional[float] = Field(
+        None,
+        description="Time window in hours (for action=telemetry default 24, action=tool_usage default 168).",
+    )
+    include_calibration: bool = Field(
+        False,
+        description="Include full calibration metrics (for action=telemetry). Default false to reduce response size.",
+    )
+    tool_name: Optional[str] = Field(
+        None, description="Filter by a specific tool name (for action=tool_usage)."
+    )
+    # cleanup_locks
+    max_age_seconds: float = Field(
+        300.0,
+        description="Max age in seconds before a lock is stale (for action=cleanup_locks). Default 300.",
+    )
+    dry_run: bool = Field(
+        False,
+        description="If true, report what would be cleaned without acting (for action=cleanup_locks).",
+    )
+    # validate_path
+    file_path: Optional[str] = Field(
+        None, description="Path to validate against project policy (required for action=validate_path)."
+    )
+
+    @model_validator(mode="after")
+    def _apply_action_window_defaults(self):
+        # Mirror the per-handler window_hours defaults so omitting the param
+        # routes the same value the standalone tool would have used.
+        if self.window_hours is None:
+            if self.action == "tool_usage":
+                self.window_hours = 168.0
+            elif self.action == "telemetry":
+                self.window_hours = 24.0
+        return self
+
+

@@ -149,6 +149,7 @@ TOOL_ORDER = [
     "observe",
     "dialectic",
     "dashboard",
+    "admin",
 ]
 
 
