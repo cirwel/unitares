@@ -62,8 +62,22 @@ def _slot_filename(slot: str | None) -> str:
 
 # --- IO primitives (separable for tests) -----------------------------------
 
+def _failure_response(error: str, *, reason: str, hint: str = "") -> dict:
+    """Return a REST-like tool failure envelope for client-side failures."""
+    return {
+        "result": {
+            "success": False,
+            "error": error,
+            "recovery": {
+                "reason": reason,
+                "hint": hint,
+            },
+        },
+    }
+
+
 def _post_json(url: str, payload: dict, timeout: float, token: str | None) -> dict:
-    """POST JSON to ``url`` and return the parsed response, or ``{}`` on error."""
+    """POST JSON to ``url`` and return the parsed response or structured failure."""
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
@@ -72,12 +86,34 @@ def _post_json(url: str, payload: dict, timeout: float, token: str | None) -> di
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8")
-    except (urllib.error.URLError, TimeoutError, ConnectionError):
-        return {}
+    except urllib.error.HTTPError as exc:
+        try:
+            raw = exc.read().decode("utf-8", errors="replace")
+            return json.loads(raw)
+        except Exception:
+            detail = raw[:500] if "raw" in locals() and raw else str(exc)
+            return _failure_response(
+                f"HTTP {exc.code} from {url}: {detail}",
+                reason="http_error",
+                hint="Check the governance server logs for the rejected request.",
+            )
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+        return _failure_response(
+            f"POST {url} failed: {exc}",
+            reason="transport_error",
+            hint=(
+                "Check that the governance server is reachable from this process; "
+                "sandboxed clients may need network permission."
+            ),
+        )
     try:
         return json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
+    except json.JSONDecodeError as exc:
+        return _failure_response(
+            f"Invalid JSON response from {url}: {exc}",
+            reason="invalid_json_response",
+            hint="Use curl or server logs to inspect /v1/tools/call.",
+        )
 
 
 def _read_cache_file(path: Path) -> dict:

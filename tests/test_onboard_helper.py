@@ -15,12 +15,14 @@ from __future__ import annotations
 import json
 import os
 import stat
+import urllib.error
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from scripts.client.onboard_helper import (
+    _post_json,
     is_successful_onboard,
     run_onboard,
     trajectory_required,
@@ -98,6 +100,30 @@ class TestUnwrapToolResponse:
     def test_invalid_inner_json_returns_empty(self) -> None:
         raw = {"result": {"content": [{"text": "not-json"}]}}
         assert unwrap_tool_response(raw) == {}
+
+
+# --- _post_json ------------------------------------------------------------
+
+class TestPostJson:
+    def test_transport_error_returns_structured_failure(self, monkeypatch) -> None:
+        from scripts.client import onboard_helper
+
+        def fail(*args, **kwargs):
+            raise urllib.error.URLError(PermissionError(1, "Operation not permitted"))
+
+        monkeypatch.setattr(onboard_helper.urllib.request, "urlopen", fail)
+
+        raw = _post_json(
+            "http://127.0.0.1:8767/v1/tools/call",
+            {"name": "onboard", "arguments": {}},
+            timeout=1,
+            token=None,
+        )
+        parsed = unwrap_tool_response(raw)
+
+        assert parsed["success"] is False
+        assert parsed["recovery"]["reason"] == "transport_error"
+        assert "Operation not permitted" in parsed["error"]
 
 
 # --- predicates ------------------------------------------------------------
