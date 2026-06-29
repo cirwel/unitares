@@ -133,10 +133,16 @@ def render(flags: dict[str, Flag]) -> str:
         if len(default) > 32:
             default = default[:29] + "…"
         purpose = (fl.purpose or "").replace("|", "\\|") or "—"
-        sites = ", ".join(dict.fromkeys(fl.sites))  # dedupe, keep order
-        if len(fl.sites) > 3:
-            first = list(dict.fromkeys(fl.sites))[:2]
-            sites = ", ".join(first) + f" (+{len(set(fl.sites)) - len(first)} more)"
+        # Cite files, not file:line — line numbers churn on every unrelated edit to
+        # a read site, which would make this generated doc (and its CI freshness
+        # gate) go stale on changes that touch no flag. File-level is enough to
+        # locate the read; the table now changes only when the flag set / defaults
+        # / purposes / read-files change.
+        files = list(dict.fromkeys(s.rsplit(":", 1)[0] for s in fl.sites))
+        if len(files) > 3:
+            sites = ", ".join(files[:2]) + f" (+{len(files) - 2} more)"
+        else:
+            sites = ", ".join(files)
         rows.append(f"| `{name}` | `{default}` | {purpose} | {sites} |")
 
     body = "\n".join(rows)
