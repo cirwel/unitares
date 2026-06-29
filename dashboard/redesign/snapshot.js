@@ -128,7 +128,12 @@ window.SNAPSHOT = {
     vigil: { cycles24h:42, writesWindow:30, lastVerdict:"proceed", lastCycleAgeS:890, avgCoherence:0.489,
       eisv:{E:0.750,I:0.766,S:0.159,V:-0.017,coherence:0.489} },
     chronicler: { status:"silent", silenceH:18.6, note:"daily resident past its 1h check-in threshold" },
-    health: { status:"healthy", version:"2.13.0", checks:{ healthy:12, warning:0, error:0 },
+    health: { status:"healthy", version:"2.14.0", checks:{ healthy:12, warning:0, error:0 },
+      items:{ primary_db:{status:"healthy",latency_ms:3}, audit_db:{status:"healthy",latency_ms:4}, redis_cache:{status:"healthy",mode:"connected"},
+        lease_plane:{status:"healthy"}, knowledge_graph:{status:"healthy"}, pi_connectivity:{status:"healthy"},
+        identity_continuity:{status:"healthy",mode:"redis"}, calibration:{status:"healthy",pending_updates:0}, calibration_db:{status:"healthy"},
+        telemetry:{status:"healthy"}, agent_metadata:{status:"healthy"}, data_directory:{status:"healthy"} },
+      operator:{ overall_status:"healthy", failing_checks:[], degraded_checks:[], first_action:"No action needed." },
       breakers:{ governance:0, redis:0 }, calibration:"healthy", dbPool:{ size:8, idle:4, max:25 }, redis:true, continuity:"redis" },
   },
   research: {

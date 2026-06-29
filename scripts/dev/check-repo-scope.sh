@@ -138,6 +138,34 @@ while IFS= read -r f; do
       fi
       ;;
   esac
+
+  # Rule 6: net-new metered model-CLOUD dependency. The execution-cost policy
+  # (CLAUDE.md "No metered model-API dependencies ... rules out
+  # anthropics/claude-code-action and any CI/automation that calls a metered
+  # API") is written but was previously enforced only by humans reading it.
+  # PRECISE, near-zero-false-positive signals ONLY — we deliberately do NOT flag
+  # the sanctioned free paths: the `openai` client is allowed (it talks to LOCAL
+  # Ollama via a base_url override), and the orchestrator may spawn the `claude`
+  # CLI by design. We flag only the unambiguously cloud-billed ones.
+  if [[ "$f" == .github/workflows/*.yml || "$f" == .github/workflows/*.yaml ]]; then
+    if grep -nIE 'anthropics/claude-code-action' "$f" >/dev/null 2>&1; then
+      report "$f" "CI uses anthropics/claude-code-action — a metered model API. The execution-cost policy forbids metered deps; keep CI GITHUB_TOKEN-only / local Ollama."
+    fi
+  fi
+  case "$bn" in
+    *.py)
+      if grep -nIE '^[[:space:]]*(import|from)[[:space:]]+anthropic([[:space:].]|$)' "$f" >/dev/null 2>&1; then
+        report "$f" "Imports the anthropic SDK — there is no local equivalent, so this is a metered Anthropic API dependency. Forbidden by the execution-cost policy (use a local model via the openai client, or make it a deferred opt-in outside the repo)."
+      fi
+      ;;
+  esac
+  case "$bn" in
+    *.py|*.sh|*.bash|*.yml|*.yaml|*.toml)
+      if grep -nIE 'api\.(openai|anthropic)\.com' "$f" >/dev/null 2>&1; then
+        report "$f" "Targets a metered model cloud endpoint (api.openai.com / api.anthropic.com) — point at a local/self-hosted base_url, or make it a deferred opt-in per the execution-cost policy."
+      fi
+      ;;
+  esac
 done <<EOF
 $FILES
 EOF

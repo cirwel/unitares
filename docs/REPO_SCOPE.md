@@ -34,6 +34,20 @@ agent (or no agent) against it.
   discusses these patterns (this guard, a register cleanup, meta-docs) can opt
   the PR-body lint out with the HTML comment `<!-- scope-guard: allow-register -->`.
 
+## Metered model-cloud dependencies
+
+The execution-cost policy (`CLAUDE.md` → *Execution-cost policy*) keeps this repo
+free / self-hosted: no dependency that requires a paid model API. The guard makes
+the policy's most concrete clauses executable, flagging only **unambiguously
+cloud-billed** signals in changed files: `anthropics/claude-code-action` in a
+`.github/workflows/` file, an `import`/`from anthropic` SDK import (no local
+equivalent exists), and a hardcoded `api.openai.com` / `api.anthropic.com`
+endpoint. It deliberately does **not** flag the sanctioned free paths — the
+`openai` client is allowed because it also drives a **local Ollama** server via a
+`base_url` override, and the agent orchestrator may spawn the `claude` CLI by
+design. A feature that genuinely needs a paid API should be a *deferred, opt-in*
+option (or live outside this repo), per the policy.
+
 ## Why a guard, not just this doc
 
 Memory and per-vendor instruction files (`CLAUDE.md`, `AGENTS.md`) do not
