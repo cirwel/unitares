@@ -44,9 +44,9 @@ index; that one is the curated decision record.
 | `UNITARES_DIALECTIC_BEAM_RESOLUTION` | `'0'` | True iff the operator has flipped UNITARES_DIALECTIC_BEAM_RESOLUTION on. | src/mcp_handlers/dialectic/beam_resolve_client.py:28 |
 | `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW` | `'0'` | Opt-in gate for routing reviews through the orchestrator (default OFF) | src/mcp_handlers/dialectic/orchestrator_dispatch.py:38 |
 | `UNITARES_DIALECTIC_REVIEWER_TIMEOUT` | `(required)` | Timeout budget for a structured dialectic reviewer call | src/mcp_handlers/support/llm_delegation.py:68 |
-| `UNITARES_DIALECTIC_REVIEW_BUDGET` | `(required)` | Wall-clock cap for the inline synthetic review (antithesis + synthesis) | src/mcp_handlers/dialectic/handlers.py:1211 |
+| `UNITARES_DIALECTIC_REVIEW_BUDGET` | `(required)` | Wall-clock cap for the inline synthetic review (antithesis + synthesis) | src/mcp_handlers/dialectic/handlers.py:1224 |
 | `UNITARES_DIALECTIC_REVIEW_MAX_TOKENS` | `'1024'` | Run the local heterogeneous model in THIS process (not via the server's call_model tool, whose 30s timeout is shorter than gemma4's 43–70s b | agents/dialectic_reviewer/reviewer.py:181 |
-| `UNITARES_DIALECTIC_SYNTHETIC_REVIEWER` | `'1'` | Whether submit_thesis auto-completes a no-live-reviewer session via the local synthetic reviewer instead of leaving it to hang at awaiting_f | src/mcp_handlers/dialectic/handlers.py:1201 |
+| `UNITARES_DIALECTIC_SYNTHETIC_REVIEWER` | `'1'` | Whether submit_thesis auto-completes a no-live-reviewer session via the local synthetic reviewer instead of leaving it to hang at awaiting_f | src/mcp_handlers/dialectic/handlers.py:1214 |
 | `UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT` | `'1'` | — | src/mcp_handlers/dialectic/session.py:70 |
 | `UNITARES_DISABLE_PLUGINS` | `(required)` | Load every registered ``governance_mcp.plugins`` entry point | src/plugin_loader.py:40 |
 | `UNITARES_EMBEDDING_MODEL` | `'minilm'` | Derive a config tag matching baseline filename suffix from env vars | src/embeddings.py:48, agents/vigil/agent.py:347 |
@@ -96,7 +96,7 @@ index; that one is the curated decision record.
 | `UNITARES_PROXY_URL` | `(required)` | — | src/mcp_server_std.py:127 |
 | `UNITARES_REPO` | `str(Path(__file__).resolve().…` | read by main() | agents/vigil_hygiene/agent.py:364 |
 | `UNITARES_RERANKER_MODEL` | `'bge-m3'` | — | src/reranker.py:38 |
-| `UNITARES_RESIDENT_AGENTS` | `''` | Figure out which agent labels to treat as residents | src/http_api.py:2830 |
+| `UNITARES_RESIDENT_AGENTS` | `''` | Figure out which agent labels to treat as residents | src/http_api.py:2884 |
 | `UNITARES_SENSOR_COUPLING` | `(required)` | Whether sensor-derived EISV spring-couples into the ODE | governance_core/parameters.py:182, governance_core/parameters.py:204 |
 | `UNITARES_SESSION_FINGERPRINT_CHECK` | `'log'` | Runtime accessor — respects env changes set after module load | config/governance_config.py:1240, config/governance_config.py:1251 |
 | `UNITARES_SESSION_MIRROR_APPLY` | `''` | Whether the resolver READS the PostgreSQL session mirror as a source of truth (UNITARES_SESSION_MIRROR_APPLY) | config/governance_config.py:1175 |
