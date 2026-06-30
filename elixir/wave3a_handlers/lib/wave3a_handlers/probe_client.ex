@@ -52,6 +52,21 @@ defmodule Wave3aHandlers.ProbeClient do
   @spec tool_registry() :: {:ok, map()} | {:error, atom() | {atom(), any()}}
   def tool_registry, do: get("/v1/probe/tool_registry")
 
+  @spec list_tools() :: {:ok, map()} | {:error, atom() | {atom(), any()}}
+  def list_tools, do: get("/v1/probe/list_tools")
+
+  @doc """
+  Fetch the single-tool description for `tool_name`.
+
+  `tool_name` is URI-encoded into the query string so names with reserved
+  characters round-trip safely to the Python probe, which reads it from
+  `request.query_params` and forwards it to `handle_describe_tool`.
+  """
+  @spec describe_tool(String.t()) :: {:ok, map()} | {:error, atom() | {atom(), any()}}
+  def describe_tool(tool_name) when is_binary(tool_name) do
+    get("/v1/probe/describe_tool?tool_name=" <> URI.encode_www_form(tool_name))
+  end
+
   defp get(path) do
     case Application.get_env(:wave3a_handlers, :probe_token) do
       token when is_binary(token) and byte_size(token) > 0 ->

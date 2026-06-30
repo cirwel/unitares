@@ -205,13 +205,13 @@ defmodule Wave3aHandlers.EnvelopeShapeTest do
 
   describe "501 envelope (unwired tools)" do
     test "unwired tool name returns 501 with envelope" do
-      # PR #5 cut over `health_check`, PR #6 cut over `get_server_info`;
-      # every OTHER tool name still returns 501 from the dispatch table.
-      # `list_tools` is the next §1.1 handler in line for PR #7 — it's
-      # still unwired, so it serves as a stable canary for the 501 shape.
+      # PR #5-#8 cut over the full §1.1 set (`health_check`,
+      # `get_server_info`, `list_tools`, `describe_tool`); every OTHER tool
+      # name still returns 501 from the dispatch table. A real out-of-scope
+      # governance tool serves as a stable canary for the 501 shape.
       resp =
         :post
-        |> conn("/v1/handlers/list_tools", "{}")
+        |> conn("/v1/handlers/get_governance_metrics", "{}")
         |> put_req_header("content-type", "application/json")
         |> authed()
         |> HTTPRouter.call(@opts)
@@ -223,7 +223,7 @@ defmodule Wave3aHandlers.EnvelopeShapeTest do
       assert body["protocol_version"] == "wave3a.v1"
       assert body["error"] == "not_implemented"
       assert body["reason"] == "handler not wired"
-      assert body["tool_name"] == "list_tools"
+      assert body["tool_name"] == "get_governance_metrics"
     end
 
     test "501 also fires on arbitrary tool names" do

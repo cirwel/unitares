@@ -585,6 +585,100 @@ async def _tool_registry(request: Request) -> JSONResponse:
     )
 
 
+def _extract_handler_payload(result: Any) -> Dict[str, Any]:
+    """Parse the JSON payload out of an MCP handler's ``TextContent`` return.
+
+    The in-process introspection handlers (``handle_list_tools`` /
+    ``handle_describe_tool``) build their payload inline and wrap it with
+    ``success_response`` / ``error_response`` — there is no separable builder
+    like ``build_server_info_payload``. The faithful way to single-source the
+    payload (§2.6 byte-parity: "call the same function, do not reconstruct")
+    is therefore to invoke the handler and surface its own output verbatim.
+
+    Each handler returns a ``Sequence[TextContent]`` whose first element
+    carries the JSON response in ``.text`` — exactly the bytes the MCP
+    transport wrapper (``src/tool_registration.py``) ``json.loads`` before
+    returning to the client. We decode the same bytes here so the probe
+    payload is the handler's payload by construction (both the success and
+    the semantic-error shapes pass through unchanged).
+    """
+    if isinstance(result, (list, tuple)) and result:
+        first = result[0]
+        text = getattr(first, "text", None)
+        if isinstance(text, str):
+            try:
+                decoded = json.loads(text)
+            except (TypeError, ValueError):
+                return {"text": text}
+            if isinstance(decoded, dict):
+                return decoded
+            return {"data": decoded}
+    return {"error": "handler_returned_unexpected_shape"}
+
+
+async def _list_tools(request: Request) -> JSONResponse:
+    start = time.monotonic()
+    endpoint = f"{PROBE_PREFIX}/list_tools"
+    auth_err = _auth_or_response(request)
+    if auth_err is not None:
+        return _record_and_return(
+            request, auth_err, endpoint=endpoint, start_monotonic=start
+        )
+
+    # §2.6 parity: single-source the payload by CALLING the same handler the
+    # in-process MCP dispatch uses. ``handle_list_tools`` builds its payload
+    # inline (no separable builder), so the probe invokes it and passes its
+    # output through verbatim — never reconstructs it. Arguments are the
+    # handler defaults (lite=true, progressive=false): the BEAM-side handler
+    # ignores caller args (mirrors ``get_server_info``), so the parity unit
+    # is the default-argument response. Lazy import so test patches at module
+    # scope work.
+    from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
+
+    result = await handle_list_tools({})
+    payload = _extract_handler_payload(result)
+    # The ``success_response`` envelope adds a volatile ``server_time``; mask
+    # it (and any other timestamp/UUID/PID) so the response is byte-
+    # deterministic across calls — same determinism contract as
+    # ``tool_registry`` (§2.6).
+    masked = mask_timestamps(payload)
+    response = JSONResponse(_envelope_ok(masked), status_code=200)
+    return _record_and_return(
+        request, response, endpoint=endpoint, start_monotonic=start
+    )
+
+
+async def _describe_tool(request: Request) -> JSONResponse:
+    start = time.monotonic()
+    endpoint = f"{PROBE_PREFIX}/describe_tool"
+    auth_err = _auth_or_response(request)
+    if auth_err is not None:
+        return _record_and_return(
+            request, auth_err, endpoint=endpoint, start_monotonic=start
+        )
+
+    # ``tool_name`` is the only caller-supplied argument forwarded by the
+    # BEAM ``describe_tool`` handler. Read it from the query string and pass
+    # it to the SAME handler the MCP dispatch uses. Missing / unknown
+    # ``tool_name`` is handled INSIDE ``handle_describe_tool`` (it returns the
+    # canonical ``error_response``), so the probe surfaces that error verbatim
+    # rather than reconstructing it — byte-parity holds on both the success
+    # and the semantic-error paths. Lazy import so test patches at module
+    # scope work.
+    from src.mcp_handlers.introspection.tool_introspection import (
+        handle_describe_tool,
+    )
+
+    tool_name = request.query_params.get("tool_name")
+    result = await handle_describe_tool({"tool_name": tool_name})
+    payload = _extract_handler_payload(result)
+    masked = mask_timestamps(payload)
+    response = JSONResponse(_envelope_ok(masked), status_code=200)
+    return _record_and_return(
+        request, response, endpoint=endpoint, start_monotonic=start
+    )
+
+
 # ---------------------------------------------------------------------------
 # Route registration
 # ---------------------------------------------------------------------------
@@ -603,6 +697,8 @@ def register_wave3a_probe_routes(app) -> None:
         Route(f"{PROBE_PREFIX}/health_snapshot", _health_snapshot, methods=["GET"]),
         Route(f"{PROBE_PREFIX}/server_info", _server_info, methods=["GET"]),
         Route(f"{PROBE_PREFIX}/tool_registry", _tool_registry, methods=["GET"]),
+        Route(f"{PROBE_PREFIX}/list_tools", _list_tools, methods=["GET"]),
+        Route(f"{PROBE_PREFIX}/describe_tool", _describe_tool, methods=["GET"]),
     ]
     for route in routes:
         if route.path in existing_paths:
