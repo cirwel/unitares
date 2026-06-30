@@ -207,7 +207,7 @@ class TestCadenceFromTags:
 
 
 # ============================================================================
-# _get_expected_interval — tag > label fallback > embodied/autonomous default
+# _get_expected_interval — event-driven > tag > label fallback > embodied/autonomous default
 # ============================================================================
 
 class TestExpectedInterval:
@@ -230,10 +230,10 @@ class TestExpectedInterval:
         meta = _protection_meta(label="Lumen", tags=[])
         assert _get_expected_interval(meta) == 300
 
-    def test_watcher_label_falls_back_to_hook_cadence(self):
-        """Watcher is hook-driven; autonomous tag must not force 5-minute daemon cadence."""
+    def test_watcher_event_driven_registry_suppresses_cadence(self):
+        """Watcher is hook-driven; cadence fallback must not page between edits."""
         meta = _protection_meta(label="Watcher", tags=["persistent", "autonomous"])
-        assert _get_expected_interval(meta) == 21600
+        assert _get_expected_interval(meta) is None
 
     def test_falls_back_to_embodied_default(self):
         meta = _protection_meta(label="SomeEmbodied", tags=["embodied"])

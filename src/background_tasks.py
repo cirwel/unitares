@@ -1206,16 +1206,26 @@ def _get_expected_interval(meta) -> int | None:
     """Return expected check-in interval for persistent agents, None for ephemeral.
 
     Priority:
-      1. ``cadence.*`` tag (generic, label-independent)
-      2. Hardcoded label fallback (back-compat; retires with tag migration)
-      3. ``embodied`` / ``autonomous`` tag → 300s default
+      1. resident-progress event-driven labels -> no heartbeat interval
+      2. ``cadence.*`` tag (generic, label-independent)
+      3. Hardcoded label fallback (back-compat; retires with tag migration)
+      4. ``embodied`` / ``autonomous`` tag -> 300s default
     """
+    label = getattr(meta, "label", None)
+    if label:
+        try:
+            from src.resident_progress.registry import is_event_driven_label
+
+            if is_event_driven_label(label):
+                return None
+        except Exception:
+            pass
     tags = meta.tags or []
     tagged_cadence = cadence_from_tags(tags)
     if tagged_cadence is not None:
         return tagged_cadence
-    if meta.label and meta.label in _PERSISTENT_AGENT_INTERVALS:
-        return _PERSISTENT_AGENT_INTERVALS[meta.label]
+    if label and label in _PERSISTENT_AGENT_INTERVALS:
+        return _PERSISTENT_AGENT_INTERVALS[label]
     if "embodied" in tags or "autonomous" in tags:
         return 300  # default for embodied/autonomous agents
     return None  # ephemeral — skip
