@@ -2333,7 +2333,9 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # that boundary is documented on the constant and in
     # docs/ontology/identity.md.
     try:
-        logger.debug(f"[ONBOARD_PIN] base_session_key={base_session_key!r}")
+        # Redact the full session_key (write-proof string) — prefix + length only.
+        _bsk = f"{base_session_key[:8]}...(len={len(base_session_key)})" if base_session_key else repr(base_session_key)
+        logger.debug(f"[ONBOARD_PIN] base_session_key={_bsk}")
         base_fp = _extract_base_fingerprint(base_session_key)
         from .session import SUBAGENT_PIN_NX_SPAWN_REASONS
         await set_onboard_pin(
