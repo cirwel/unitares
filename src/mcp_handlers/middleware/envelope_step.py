@@ -171,6 +171,58 @@ def _recovery_hint(
     )
 
 
+def _verdict_caveat(source_payload: Dict[str, Any]) -> Optional[str]:
+    """Plain-language warning that the verdict is provisional, lifted from
+    risk_attribution to the envelope surface.
+
+    The self-disclosure already exists in the canonical payload, but it sits
+    three levels deep (risk_attribution.discriminability / .primary_driver).
+    A reader skimming the friendly state_summary alone would see a clean
+    'safe'/'proceed' and miss that the system is explicitly telling itself not
+    to trust that verdict yet (dogfood: a maxed self-reported ethical_drift
+    returned status=healthy with the only caveat buried in risk_attribution).
+    This re-exposes it where the skimmer actually looks; it computes no new
+    signal. Returns None when the verdict is NOT provisional (baseline warm).
+    """
+    attribution = source_payload.get("risk_attribution")
+    if not isinstance(attribution, dict):
+        return None
+    primary_driver = attribution.get("primary_driver")
+    discriminability = attribution.get("discriminability")
+    discriminability = discriminability if isinstance(discriminability, dict) else {}
+    cold_start = primary_driver == "phi_cold_start"
+    non_discriminative = discriminability.get("non_discriminative") is True
+    if not (cold_start or non_discriminative):
+        return None
+    until = discriminability.get("updates_until_baseline")
+    tail = ""
+    if isinstance(until, int) and until > 0:
+        tail = f" ~{until} more check-in(s) until the behavioral signal is weighted."
+    return (
+        "Verdict is provisional: the behavioral baseline isn't warm yet, so it "
+        "runs on the cold-start prior and risk_score is non-discriminative "
+        "during bootstrap. A 'safe'/'proceed' here means 'no evidence of trouble "
+        "yet', not a validated all-clear — don't read it as vindication of a high "
+        "self-reported drift. See raw_governance.risk_attribution for the full "
+        "provenance." + tail
+    )
+
+
+def _reflection(source_payload: Dict[str, Any]) -> Optional[str]:
+    """Lift the single mirror reflection to the envelope surface.
+
+    The reflection ("You're near a basin boundary. Proceed carefully.") is a
+    real actionable signal, but in the raw payload it lives only under
+    _mirror_reflection (full mode) or reflection (mirror mode) — invisible to a
+    reader of the friendly fields. Surface it as a top-level string when present.
+    """
+    for key in ("reflection", "_mirror_reflection", "_mirror_question"):
+        value = source_payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
 def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Surface prior discoveries the canonical payload already carries."""
     payload = _harvest_payload(payload)
@@ -329,6 +381,21 @@ def build_experience_envelope(
     risk_text = _risk_summary(coherence, risk)
     if risk_text:
         envelope["risk_summary"] = risk_text
+
+    # Provisional-verdict caveat: pull the cold-start / non-discriminative
+    # self-disclosure out of risk_attribution so a reader of state_summary
+    # alone is not misled by a clean 'safe'/'proceed'. Also flag it inside
+    # state_summary itself, where the skimmer actually looks.
+    caveat = _verdict_caveat(source_payload)
+    if caveat:
+        envelope["verdict_caveat"] = caveat
+        summary = envelope.get("state_summary")
+        if isinstance(summary, dict):
+            summary["verdict_provisional"] = True
+
+    reflection = _reflection(source_payload)
+    if reflection:
+        envelope["reflection"] = reflection
 
     suggestions = _memory_suggestions(payload)
     if suggestions:

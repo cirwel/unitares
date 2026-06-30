@@ -214,6 +214,73 @@ def test_sync_state_envelope_near_edge_proceed_hint_does_not_say_pause():
     assert "only if work stalls" in env["recovery_hint"]
 
 
+def test_sync_state_envelope_surfaces_provisional_verdict_caveat():
+    """A clean verdict riding on the cold-start prior must carry its caveat at
+    the envelope surface, not three levels deep in risk_attribution."""
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed"},
+        "metrics": {"coherence": 0.7, "risk_score": 0.05, "verdict": "safe"},
+        "health_status": "healthy",
+        "risk_attribution": {
+            "primary_driver": "phi_cold_start",
+            "verdict": "safe",
+            "discriminability": {
+                "baselined": False,
+                "non_discriminative": True,
+                "updates_until_baseline": 4,
+            },
+        },
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert "verdict_caveat" in env
+    assert "provisional" in env["verdict_caveat"].lower()
+    assert "4 more check-in" in env["verdict_caveat"]
+    assert env["state_summary"]["verdict_provisional"] is True
+
+
+def test_sync_state_envelope_no_caveat_when_baseline_warm():
+    """Once the behavioral baseline is warm and discriminative, the verdict is
+    authoritative — no provisional caveat, no state_summary flag."""
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed"},
+        "metrics": {"coherence": 0.8, "risk_score": 0.1, "verdict": "safe"},
+        "health_status": "healthy",
+        "risk_attribution": {
+            "primary_driver": "behavioral_assessment",
+            "verdict": "safe",
+            "discriminability": {
+                "baselined": True,
+                "non_discriminative": False,
+                "updates_until_baseline": 0,
+            },
+        },
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert "verdict_caveat" not in env
+    assert "verdict_provisional" not in env["state_summary"]
+
+
+def test_sync_state_envelope_surfaces_reflection():
+    """The mirror reflection is a real actionable signal but lives only under
+    _mirror_reflection/reflection in the raw payload — lift it to the surface."""
+    full_mode = {
+        "success": True,
+        "decision": {"action": "proceed"},
+        "metrics": {"coherence": 0.6, "risk_score": 0.2},
+        "_mirror_reflection": "You're near a basin boundary. Proceed carefully.",
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", full_mode)
+    assert env["reflection"] == "You're near a basin boundary. Proceed carefully."
+
+    mirror_mode = dict(full_mode)
+    del mirror_mode["_mirror_reflection"]
+    mirror_mode["reflection"] = "You're close to a governance edge."
+    env = build_experience_envelope("sync_state", "process_agent_update", mirror_mode)
+    assert env["reflection"] == "You're close to a governance edge."
+
+
 def test_sync_state_envelope_surfaces_discoveries():
     payload = {
         "success": True,
