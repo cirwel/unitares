@@ -1473,5 +1473,22 @@ async def handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextContent
     return success_response(payload)
 
 
+@mcp_tool("bridge_summary_query", timeout=15.0, register=False)
+async def handle_bridge_summary(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """Summarize Discord bridge delivery receipts and operator attention.
+
+    This is intentionally backed by the dedicated bridge receipt audit stream,
+    not ``/api/events``. The bridge should not re-ingest delivery receipts and
+    post about its own posts.
+    """
+    from src.bridge_events import BridgeEventError, build_bridge_summary
+
+    try:
+        payload = await build_bridge_summary(arguments)
+    except BridgeEventError as exc:
+        return error_response(str(exc), error_code="invalid_argument")
+    return success_response(payload)
+
+
 # REMOVED: handle_get_status - redundant with status alias → get_governance_metrics
 # Use status() or get_governance_metrics() instead
