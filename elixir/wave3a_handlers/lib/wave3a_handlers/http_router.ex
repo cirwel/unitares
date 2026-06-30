@@ -95,11 +95,14 @@ defmodule Wave3aHandlers.HTTPRouter do
 
   # ---------- /v1/handlers/:tool_name ----------
   # Dispatch table for the wired §1.1 handlers. PR #5 cut over
-  # `health_check`; PR #6 adds `get_server_info`. Every other tool name
-  # returns 501; subsequent PRs (list_tools, describe_tool) add rows here.
+  # `health_check`; PR #6 added `get_server_info`; PR #7/#8 complete the set
+  # with `list_tools` and `describe_tool` (4/4). Every other tool name
+  # returns 501.
   @handler_modules %{
     "health_check" => Wave3aHandlers.Handlers.HealthCheck,
-    "get_server_info" => Wave3aHandlers.Handlers.GetServerInfo
+    "get_server_info" => Wave3aHandlers.Handlers.GetServerInfo,
+    "list_tools" => Wave3aHandlers.Handlers.ListTools,
+    "describe_tool" => Wave3aHandlers.Handlers.DescribeTool
   }
 
   post "/v1/handlers/:tool_name" do

@@ -90,6 +90,8 @@ AUTHED_ENDPOINTS = [
     f"{PROBE_PREFIX}/health_snapshot",
     f"{PROBE_PREFIX}/server_info",
     f"{PROBE_PREFIX}/tool_registry",
+    f"{PROBE_PREFIX}/list_tools",
+    f"{PROBE_PREFIX}/describe_tool",
 ]
 
 LIVENESS_ENDPOINT = f"{PROBE_PREFIX}/health"
@@ -328,6 +330,137 @@ class TestServerInfoProbeProcessFlag:
         body = response.json()
         assert "meta" in body
         assert body["meta"].get("probe_process") is True
+
+
+# ---------------------------------------------------------------------------
+# Case 9 — list_tools / describe_tool envelope + parity-source (PR #7/#8)
+# ---------------------------------------------------------------------------
+
+
+class TestListToolsEnvelope:
+    """list_tools probe single-sources its payload by CALLING the in-process
+    ``handle_list_tools`` and surfacing its output verbatim (§2.6 parity)."""
+
+    def test_list_tools_envelope(self, client: TestClient, token_set: str) -> None:
+        response = client.get(
+            f"{PROBE_PREFIX}/list_tools", headers=_bearer(VALID_TOKEN)
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ok"] is True
+        assert body["protocol_version"] == PROTOCOL_VERSION
+        assert "data" in body
+        data = body["data"]
+        assert isinstance(data, dict)
+        # Forbid a nested envelope.
+        assert "ok" not in data
+        assert "protocol_version" not in data
+        # The handler's own payload rode through: lite list_tools carries
+        # `tools` and the `success_response` envelope `success` flag.
+        assert "tools" in data
+        assert data.get("success") is True
+        # `server_time` is masked for byte-determinism (§2.6).
+        assert data.get("server_time") == "<MASKED_TIMESTAMP>"
+
+
+class TestDescribeToolEnvelope:
+    """describe_tool probe forwards ``tool_name`` to the in-process
+    ``handle_describe_tool`` and surfaces both success and semantic-error
+    shapes verbatim."""
+
+    def test_describe_tool_known_tool(
+        self, client: TestClient, token_set: str
+    ) -> None:
+        response = client.get(
+            f"{PROBE_PREFIX}/describe_tool",
+            params={"tool_name": "list_tools"},
+            headers=_bearer(VALID_TOKEN),
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ok"] is True
+        assert body["protocol_version"] == PROTOCOL_VERSION
+        data = body["data"]
+        assert data.get("success") is True
+        assert data.get("tool") == "list_tools"
+        assert "parameters" in data
+
+    def test_describe_tool_missing_name_returns_canonical_error(
+        self, client: TestClient, token_set: str
+    ) -> None:
+        # No tool_name query param → the handler's own `error_response`
+        # ("tool_name is required") rides through `data`. The probe envelope
+        # is still ok=True (the probe call itself succeeded); the semantic
+        # failure is inside `data.success`.
+        response = client.get(
+            f"{PROBE_PREFIX}/describe_tool", headers=_bearer(VALID_TOKEN)
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ok"] is True
+        data = body["data"]
+        assert data.get("success") is False
+        assert "tool_name is required" in data.get("error", "")
+
+    def test_describe_tool_unknown_tool_returns_canonical_error(
+        self, client: TestClient, token_set: str
+    ) -> None:
+        response = client.get(
+            f"{PROBE_PREFIX}/describe_tool",
+            params={"tool_name": "no_such_tool_xyz"},
+            headers=_bearer(VALID_TOKEN),
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data.get("success") is False
+        assert "Unknown tool" in data.get("error", "")
+
+
+class TestListToolsDescribeToolDeterminism:
+    """§2.6 + determinism: list_tools / describe_tool must be byte-equal
+    across two calls (the masked `server_time` is the only volatile field;
+    `agent_signature` is the deterministic unbound `{"uuid": null}`). Same
+    contract as the tool_registry determinism guard."""
+
+    def test_list_tools_two_calls_byte_equal(
+        self, client: TestClient, token_set: str
+    ) -> None:
+        import json
+
+        first = client.get(
+            f"{PROBE_PREFIX}/list_tools", headers=_bearer(VALID_TOKEN)
+        )
+        second = client.get(
+            f"{PROBE_PREFIX}/list_tools", headers=_bearer(VALID_TOKEN)
+        )
+        assert first.status_code == 200 and second.status_code == 200
+        assert json.dumps(first.json(), sort_keys=True) == json.dumps(
+            second.json(), sort_keys=True
+        ), (
+            "list_tools response differed across calls — a non-deterministic "
+            "field escaped masking; extend _VOLATILE_FIELD_NAMES or "
+            "_VOLATILE_SUFFIXES in src/mcp_handlers/wave3a_probe.py"
+        )
+
+    def test_describe_tool_two_calls_byte_equal(
+        self, client: TestClient, token_set: str
+    ) -> None:
+        import json
+
+        first = client.get(
+            f"{PROBE_PREFIX}/describe_tool",
+            params={"tool_name": "list_tools"},
+            headers=_bearer(VALID_TOKEN),
+        )
+        second = client.get(
+            f"{PROBE_PREFIX}/describe_tool",
+            params={"tool_name": "list_tools"},
+            headers=_bearer(VALID_TOKEN),
+        )
+        assert first.status_code == 200 and second.status_code == 200
+        assert json.dumps(first.json(), sort_keys=True) == json.dumps(
+            second.json(), sort_keys=True
+        )
 
 
 # ---------------------------------------------------------------------------
