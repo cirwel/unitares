@@ -1786,6 +1786,9 @@ class TestHandleAuditEvents:
         data = parse_result(result)
         assert data["success"] is False
         assert "event_type" in data.get("error", "").lower()
+        assert data["next_step"].startswith("Retry observe(action='audit_events')")
+        assert data["safe_options"]
+        assert data["recovery"]["required_one_of"] == ["event_type", "event_types"]
 
     @pytest.mark.asyncio
     async def test_shorthand_window_resolves_correctly(self):
@@ -1989,11 +1992,18 @@ class TestHandleAuditEvents:
 
         with patch("src.audit_db.query_audit_events_async", new=fake_query):
             from src.mcp_handlers.consolidated import handle_observe
-            result = await handle_observe({
-                "action": "audit_events",
-                "event_type": "continuity_token_deprecated_accept",
-                "since": "14d",
-            })
+            with patch(
+                "src.mcp_handlers.context.get_context_agent_id",
+                return_value="operator-agent",
+            ), patch(
+                "src.mcp_handlers.context.get_session_proof_origin",
+                return_value="caller_asserted",
+            ):
+                result = await handle_observe({
+                    "action": "audit_events",
+                    "event_type": "continuity_token_deprecated_accept",
+                    "since": "14d",
+                })
 
         data = parse_result(result)
         assert data["success"] is True
@@ -2215,11 +2225,18 @@ class TestHandleOutcomeEvidence:
 
         with patch("src.db.get_db", return_value=db):
             from src.mcp_handlers.consolidated import handle_observe
-            result = await handle_observe({
-                "action": "outcome_evidence",
-                "diagnostic": "claim_only_task_completed",
-                "since": "7d",
-            })
+            with patch(
+                "src.mcp_handlers.context.get_context_agent_id",
+                return_value="operator-agent",
+            ), patch(
+                "src.mcp_handlers.context.get_session_proof_origin",
+                return_value="caller_asserted",
+            ):
+                result = await handle_observe({
+                    "action": "outcome_evidence",
+                    "diagnostic": "claim_only_task_completed",
+                    "since": "7d",
+                })
 
         data = parse_result(result)
         assert data["success"] is True

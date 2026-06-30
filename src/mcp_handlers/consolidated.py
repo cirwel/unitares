@@ -15,7 +15,13 @@ Each consolidated tool uses an 'action' parameter to select the operation.
 Original tools remain available for backwards compatibility.
 """
 
+from functools import wraps
+from typing import Any, Awaitable, Callable, Dict, Sequence
+
+from mcp.types import TextContent
+
 from .decorators import action_router
+from .utils import success_response
 
 # Import original handlers to delegate to
 from .knowledge.handlers import (
@@ -88,6 +94,77 @@ from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 # Pi orchestration (``pi`` action router + handlers) moved to the
 # ``unitares-pi-plugin`` package — registered via the
 # ``governance_mcp.plugins`` entry point at server startup.
+
+
+def _has_bound_observe_operator_identity() -> bool:
+    try:
+        from .context import get_context_agent_id, get_session_proof_origin
+
+        if not get_context_agent_id():
+            return False
+        return get_session_proof_origin() != "server_inferred"
+    except Exception:
+        return False
+
+
+def _observe_operator_refusal(
+    action: str, arguments: Dict[str, Any]
+) -> Sequence[TextContent]:
+    from .identity_bootstrap import strict_identity_refusal_payload
+
+    return success_response(
+        strict_identity_refusal_payload(
+            "observe",
+            hint=(
+                f"observe(action='{action}') is an operator observability "
+                "surface and requires a bound governance identity before "
+                "returning telemetry or audit evidence."
+            ),
+            next_step=(
+                "Call onboard(force_new=true), then retry observe(...) with "
+                "the returned client_session_id."
+            ),
+            safe_options=[
+                {
+                    "action": "start_fresh",
+                    "call": "onboard(force_new=true)",
+                    "when": "This is a new process-instance with no causal predecessor.",
+                },
+                {
+                    "action": "declare_lineage",
+                    "call": (
+                        "onboard(force_new=true, parent_agent_id=<prior UUID>, "
+                        "spawn_reason='new_session')"
+                    ),
+                    "when": "A finished predecessor explicitly handed this work to you.",
+                },
+                {
+                    "action": "stay_read_only",
+                    "call": "observe(action='aggregate') or observe(action='anomalies')",
+                    "when": "You need pre-onboard fleet-level read data only.",
+                },
+            ],
+            surface_context={
+                "tool": "observe",
+                "action": action,
+                "requirement": "operator_observability_identity",
+            },
+        ),
+        arguments=arguments,
+    )
+
+
+def _observe_operator_action(
+    action: str,
+    handler: Callable[[Dict[str, Any]], Awaitable[Sequence[TextContent]]],
+) -> Callable[[Dict[str, Any]], Awaitable[Sequence[TextContent]]]:
+    @wraps(handler)
+    async def guarded(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+        if _has_bound_observe_operator_identity():
+            return await handler(arguments)
+        return _observe_operator_refusal(action, arguments)
+
+    return guarded
 
 # ============================================================
 # Consolidated Knowledge Graph Tool
@@ -237,9 +314,13 @@ handle_observe = action_router(
         "similar": handle_compare_me_to_similar,
         "anomalies": handle_detect_anomalies,
         "aggregate": handle_aggregate_metrics,
-        "telemetry": handle_get_telemetry_metrics,
-        "audit_events": handle_audit_events,
-        "outcome_evidence": handle_outcome_evidence,
+        "telemetry": _observe_operator_action(
+            "telemetry", handle_get_telemetry_metrics
+        ),
+        "audit_events": _observe_operator_action("audit_events", handle_audit_events),
+        "outcome_evidence": _observe_operator_action(
+            "outcome_evidence", handle_outcome_evidence
+        ),
     },
     timeout=15.0,
     description="Unified observability operations: agent, compare, similar, anomalies, aggregate, telemetry, audit_events, outcome_evidence",
