@@ -2596,6 +2596,69 @@ async def http_record_finding(request):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+async def http_record_bridge_event(request):
+    """POST /v1/bridge/events — ingest Discord bridge delivery/attention receipts."""
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return _http_unauthorized()
+    try:
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"success": False, "error": "Invalid JSON"}, status_code=400)
+
+        from src.bridge_events import BridgeEventError, record_bridge_event
+
+        try:
+            result = await record_bridge_event(payload)
+        except BridgeEventError as exc:
+            return JSONResponse({"success": False, "error": str(exc)}, status_code=400)
+
+        if not result.get("persisted"):
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": "Bridge event could not be persisted",
+                    "event": result.get("event"),
+                },
+                status_code=503,
+            )
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error(f"Error recording bridge event: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+async def http_bridge_summary(request):
+    """GET /v1/bridge/summary — summarize Discord delivery and attention state."""
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return _http_unauthorized()
+    try:
+        from src.bridge_events import BridgeEventError, build_bridge_summary
+
+        include_events_raw = request.query_params.get("include_events")
+        include_events = True
+        if include_events_raw is not None:
+            include_events = include_events_raw.lower() not in {"0", "false", "no"}
+
+        try:
+            result = await build_bridge_summary(
+                {
+                    "since": request.query_params.get("since"),
+                    "until": request.query_params.get("until"),
+                    "limit": request.query_params.get("limit"),
+                    "include_events": include_events,
+                }
+            )
+        except BridgeEventError as exc:
+            return JSONResponse({"success": False, "error": str(exc)}, status_code=400)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error(f"Error building bridge summary: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
 async def http_substrate_observe(request):
     """POST /v1/substrate/observe — the identity-free check-in FLOOR.
 
@@ -3621,6 +3684,8 @@ def register_http_routes(
     app.routes.append(Route("/v1/lifecycle/recent", http_lifecycle_recent, methods=["GET"]))
     app.routes.append(Route("/api/events", http_events, methods=["GET"]))
     app.routes.append(Route("/api/findings", http_record_finding, methods=["POST"]))
+    app.routes.append(Route("/v1/bridge/events", http_record_bridge_event, methods=["POST"]))
+    app.routes.append(Route("/v1/bridge/summary", http_bridge_summary, methods=["GET"]))
     app.routes.append(Route("/v1/substrate/observe", http_substrate_observe, methods=["POST"]))
     app.routes.append(Route("/v1/substrate/dark_sessions", http_substrate_dark_sessions, methods=["GET"]))
     app.routes.append(Route("/v1/sentinel/backlog", http_sentinel_backlog, methods=["GET"]))

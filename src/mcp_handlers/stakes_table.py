@@ -138,6 +138,7 @@ _BASELINE: frozenset[tuple[str, Optional[str]]] = frozenset({
     ("observe", "telemetry"),
     ("observe", "audit_events"),
     ("observe", "outcome_evidence"),
+    ("observe", "bridge"),
     # admin — diagnostic reads (destructive actions are in _HIGH); mirrors the
     # standalone get_server_info / get_workspace_health / ... classification
     ("admin", "server_info"),

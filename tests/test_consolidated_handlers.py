@@ -585,7 +585,7 @@ class TestObserveHandler:
         valid = sorted(data["recovery"]["valid_actions"])
         expected = sorted(["agent", "compare", "similar", "anomalies",
                            "aggregate", "telemetry", "audit_events",
-                           "outcome_evidence"])
+                           "outcome_evidence", "bridge"])
         assert valid == expected
 
     @pytest.mark.asyncio
@@ -606,6 +606,19 @@ class TestObserveHandler:
         assert "next_step" in data
         assert "safe_options" in data
         assert "skip_rate_metrics" not in data
+
+    @pytest.mark.asyncio
+    async def test_bridge_action_refuses_unbound_caller(self):
+        from src.mcp_handlers.consolidated import handle_observe
+
+        with patch("src.mcp_handlers.context.get_context_agent_id", return_value=None):
+            result = await handle_observe({"action": "bridge"})
+
+        data = _parse_response(result)
+        assert data["success"] is True
+        assert data["status"] == "identity_required"
+        assert data["surface_context"]["action"] == "bridge"
+        assert data["agent_signature"]["uuid"] is None
 
 
 class TestAdminHandler:

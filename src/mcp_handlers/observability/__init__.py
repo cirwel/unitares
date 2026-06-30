@@ -8,6 +8,7 @@ from .handlers import (
     handle_aggregate_metrics,
     handle_outcome_evidence,
     handle_audit_events,
+    handle_bridge_summary,
 )
 from .outcome_events import handle_outcome_event, handle_outcome_correlation
 
@@ -19,6 +20,7 @@ __all__ = [
     "handle_aggregate_metrics",
     "handle_outcome_evidence",
     "handle_audit_events",
+    "handle_bridge_summary",
     "handle_outcome_event",
     "handle_outcome_correlation",
 ]
