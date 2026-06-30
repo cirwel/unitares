@@ -10,7 +10,7 @@ import pytest
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -587,6 +587,25 @@ class TestObserveHandler:
                            "aggregate", "telemetry", "audit_events",
                            "outcome_evidence"])
         assert valid == expected
+
+    @pytest.mark.asyncio
+    async def test_operator_action_refuses_unbound_caller_even_with_agent_arg(self):
+        from src.mcp_handlers.consolidated import handle_observe
+
+        with patch("src.mcp_handlers.context.get_context_agent_id", return_value=None):
+            result = await handle_observe({
+                "action": "telemetry",
+                "agent_id": "deb879b6-4ff8-4dee-81ce-0683f4563dc5",
+            })
+
+        data = _parse_response(result)
+        assert data["success"] is True
+        assert data["status"] == "identity_required"
+        assert data["surface_context"]["action"] == "telemetry"
+        assert data["agent_signature"]["uuid"] is None
+        assert "next_step" in data
+        assert "safe_options" in data
+        assert "skip_rate_metrics" not in data
 
 
 class TestAdminHandler:

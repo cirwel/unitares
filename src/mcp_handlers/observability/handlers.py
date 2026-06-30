@@ -1335,6 +1335,41 @@ async def handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextContent
         return error_response(
             "event_type or event_types is required",
             error_code="missing_argument",
+            details={
+                "next_step": (
+                    "Retry observe(action='audit_events') with event_type=<name> "
+                    "or event_types=[<name>, ...]."
+                ),
+                "safe_options": [
+                    {
+                        "action": "query_one_type",
+                        "call": (
+                            "observe(action='audit_events', "
+                            "event_type='continuity_token_deprecated_accept', since='14d')"
+                        ),
+                    },
+                    {
+                        "action": "query_multiple_types",
+                        "call": (
+                            "observe(action='audit_events', "
+                            "event_types=['governance_decision', "
+                            "'coordination_failure.mcp_handler_timeout.tool_decorator'], "
+                            "since='24h')"
+                        ),
+                    },
+                    {
+                        "action": "inspect_tool_schema",
+                        "call": "describe_tool(tool_name='observe')",
+                    },
+                ],
+            },
+            recovery={
+                "required_one_of": ["event_type", "event_types"],
+                "examples": [
+                    "observe(action='audit_events', event_type='continuity_token_deprecated_accept', since='14d')",
+                    "observe(action='audit_events', event_types=['governance_decision'], since='24h')",
+                ],
+            },
         )
 
     # Default 7d (168h). The primary use case is multi-week grace-window
