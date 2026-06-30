@@ -80,6 +80,7 @@ from .observability.handlers import (
     handle_aggregate_metrics,
     handle_outcome_evidence,
     handle_audit_events,
+    handle_bridge_summary,
 )
 from .dialectic.handlers import (
     handle_get_dialectic_session,
@@ -322,12 +323,13 @@ handle_observe = action_router(
         "outcome_evidence": _observe_operator_action(
             "outcome_evidence", handle_outcome_evidence
         ),
+        "bridge": _observe_operator_action("bridge", handle_bridge_summary),
     },
     timeout=15.0,
     description="Unified observability operations",
     # #425 action-level identity: the analysis reads (incl. the
     # dashboard's anomalies/compare) serve unbound; telemetry,
-    # audit_events, and outcome_evidence are operator surfaces and stay
+    # audit_events, outcome_evidence, and bridge are operator surfaces and stay
     # identity-gated.
     pre_onboard_actions={"agent", "compare", "similar", "anomalies", "aggregate"},
     examples=[
@@ -339,6 +341,7 @@ handle_observe = action_router(
         "observe(action='telemetry')",
         "observe(action='audit_events', event_type='continuity_token_deprecated_accept', since='14d')",
         "observe(action='outcome_evidence', diagnostic='claim_only_task_completed')",
+        "observe(action='bridge', since='24h')",
     ],
 )
 
