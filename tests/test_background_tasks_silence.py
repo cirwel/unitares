@@ -196,6 +196,23 @@ async def test_non_persistent_agent_skipped(isolated_silence_state):
 
 
 @pytest.mark.asyncio
+async def test_event_driven_resident_skips_silence_monitor(isolated_silence_state):
+    """Watcher is event-driven; absence of check-ins between edits is not silence."""
+    broadcaster, _ = isolated_silence_state
+
+    stale = datetime.now(timezone.utc) - timedelta(hours=30)
+    meta = _make_meta("watcher-uuid", "Watcher", stale.isoformat())
+    meta.tags = ["persistent", "autonomous"]
+    agent_metadata["watcher-uuid"] = meta
+
+    await background_tasks._silence_check_iteration()
+
+    broadcaster.broadcast_event.assert_not_awaited()
+    assert "watcher-uuid" not in background_tasks._silence_alerted
+    assert "watcher-uuid" not in background_tasks._silence_critical_alerted
+
+
+@pytest.mark.asyncio
 async def test_repeat_iteration_does_not_refire(isolated_silence_state):
     """Once an agent has fired CRITICAL, subsequent iterations stay quiet."""
     broadcaster, _ = isolated_silence_state
