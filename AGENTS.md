@@ -168,7 +168,10 @@ Operational rules:
 1. Start each driver with `start_session(force_new=true)` (`onboard` is the
    canonical tool underneath). Save the returned `uuid` and `client_session_id`.
 2. For later check-ins and writes in the same running process, pass
-   `client_session_id`. Adapters should do this automatically.
+   `client_session_id`. Adapters should do this automatically. If your adapter
+   does not thread it, you fall back to the weak transport-fingerprint pin and
+   can fragment under co-residency — check `session_source`/`tier` in the
+   onboard response to confirm you bound as expected.
 3. To continue prior work in a fresh process, mint fresh and declare the cause:
    `start_session(force_new=true, parent_agent_id=<prior_uuid>, spawn_reason="new_session")`.
    Use this only for a real handoff from a finished predecessor.
