@@ -35,7 +35,7 @@ full = [
     # Ed25519 signing/verification for the Agent Identity Credential (AIC)
     # attestation primitive (src/identity/agent_identity_credential.py). The
     # module guards the import, so the core install does not require it.
-    "cryptography>=41.0.0,<46.0.0",
+    "cryptography>=41.0.0,<50.0.0",
 ]
 dev = [
     "pytest>=7.4.0,<10.0.0",
