@@ -34,6 +34,14 @@
     <key>KeepAlive</key>
     <true/>
 
+    <!-- Place the server in the Interactive jetsam band so macOS does not
+         pick it first under memory pressure. With ProcessType unset (Standard),
+         a large in-process model/embedding footprint can make this the fattest
+         process and the first jetsam target, killing it without a watchdog
+         signal. Interactive raises its survival priority. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
     <key>StandardOutPath</key>
     <string>/PATH/TO/UNITARES/data/logs/mcp_server.log</string>
 
