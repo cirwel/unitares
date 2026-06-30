@@ -87,3 +87,64 @@ Each phase is its own migration slot (049+), its own draft PR, operator-gated. N
 - **Extends/corrects S4 (A2)** — covers the storage-layer gap the resolution-code audit missed.
 - **Resolves the S5 resident-fork inversion locus** (`persistence.py:463`) for free once the handle is non-key (collision on a cosmetic label stops being identity-relevant).
 - **Complements PR #700** — that made handles unique-ish; this makes handle uniqueness *irrelevant to identity*, which is the real fix.
+
+---
+
+## Amendment 2026-06-30 — simplification-council synthesis (no scope change)
+
+The 2026-06-30 identity-layer **simplification council** (verdict: the identity
+layer is *already simplified where it counts*; the implementation complexity is
+incident-earned) ranked this migration the **single architectural lever with
+real leverage** — and sharpened *why*. No change to §1–§7; this records the
+decision-relevant framing.
+
+### A. Root cause confirmed — the handle-PK is what keeps generating resolver band-aids
+
+The council's finding is that the resolver-layer special-cases a simplifier
+keeps wanting to cut are all **symptoms of the handle-as-PK**, not independent
+debt. They dissolve into UUID equality once the handle is demoted:
+
+- The **O(n) alias scan** at `src/mcp_handlers/support/agent_auth.py:409-421` —
+  a linear scan over `agent_metadata.items()` matching the passed id against
+  `label`/`public_agent_id`/`structured_id`. It exists *only* because a
+  non-UUID handle cannot be a dict-key lookup; it collapses to the O(1)
+  `if is_uuid:` branch directly above it (`:399-407`) once callers pass UUIDs
+  and handles canonicalize at the boundary.
+- The **"model+date OR UUID" dual-lookup** (`knowledge/handlers.py:479-495`, §3).
+- The **self-ref alias rewrite** and the **S5 resident-fork inversion** (§7).
+- **Lineage-DAG conflation** corrupting R1/R2 scoring inputs (§1).
+
+**Strategic guidance (council):** *stop patching the resolver layer the
+handle-PK keeps generating.* When a new resolver special-case is tempting,
+prefer advancing this migration over adding another band-aid.
+
+### B. Decision framing — this **lowers** urgency, it does not raise it
+
+- **Blast radius is near-zero *today* for write-accountability.** The write gate
+  already resolves to UUIDs internally (`require_agent_id` canonicalizes;
+  context binding is UUID-keyed). The handle-PK is therefore mostly a
+  *storage/display/lineage-graph* artifact, not a live write-decision hazard —
+  so the cost of *waiting* is low. It generates resolver overhead and DAG noise,
+  not wrong accountability verdicts.
+- **BEAM / `db_connection` may re-key much of this for free.** The Wave-3
+  substrate migration touches the same storage/connection layer; starting the
+  UUID re-key *ahead* of BEAM risks doing work BEAM would redo. Where they
+  overlap, sequencing should let BEAM land first rather than race it.
+
+### C. Gate status refresh (2026-06-30)
+
+§5 gated Phase 4 CONTRACT on the Wave-3 §14 window closing "~2026-06-24." That
+calendar date has now passed, **but Wave 3 is still in flight** — `beam-wave-3-handler-dispatch`
+is a v0.3.2 active redraft and the `2026-06-24-wave-3-gate-framing` note records
+the p99 coordination tail still LIVE. So the gate is **still closed**; Phase 4
+remains correctly deferred. Do **not** read the passed date as permission to
+contract.
+
+### D. Net recommendation (unchanged in direction, firmer in rationale)
+
+Hold at **Phase 0** (this doc is landed). Do **not** begin Phase 1 EXPAND as a
+race against BEAM. In the meantime, treat any new resolver special-case as a
+signal to advance *this* migration instead. Let the BEAM Wave-3 outcome inform
+whether Phase 1 EXPAND is even the right vehicle, or whether a BEAM-native
+re-key subsumes it. The responsible next action is operator/council sequencing,
+not migration code.
