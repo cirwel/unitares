@@ -121,8 +121,8 @@ def test_wrappers_echo_session_id_on_writes():
         return _f
 
     mcp_tools = {n: rec(n) for n in (
-        "health_check", "onboard", "identity", "process_agent_update",
-        "get_governance_metrics", "knowledge", "leave_note", "agent",
+        "health_check", "onboard", "identity", "sync_state",
+        "check_working_state", "knowledge", "leave_note", "agent",
         "describe_tool",
     )}
     identity = bridge.IdentityConfig()  # fresh new_session
@@ -133,7 +133,7 @@ def test_wrappers_echo_session_id_on_writes():
     assert session.client_session_id == "csid-9"
 
     tools["checkin"]("verified", 0.3, 0.8)
-    assert calls["process_agent_update"]["client_session_id"] == "csid-9"
+    assert calls["sync_state"]["client_session_id"] == "csid-9"
 
     tools["list_agents"]()
     assert calls["agent"]["client_session_id"] == "csid-9"
