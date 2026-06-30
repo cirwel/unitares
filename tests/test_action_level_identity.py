@@ -97,6 +97,18 @@ def test_legacy_alias_canonicalizes_with_injected_action():
     assert get_call_identity_requirement("list_agents", {}) == "pre_onboard"
 
 
+def test_identity_resolver_uses_shared_call_canonicalization(monkeypatch):
+    import src.mcp_handlers.decorators as decorators
+
+    monkeypatch.setattr(
+        decorators,
+        "_resolve_canonical_and_action",
+        lambda tool_name, arguments: ("knowledge", "search"),
+    )
+
+    assert decorators.get_call_identity_requirement("legacy_alias", {}) == "pre_onboard"
+
+
 def test_workflow_alias_identity_classification_matches_canonical_calls():
     assert get_call_identity_requirement("start_session", {"force_new": True}) == "pre_onboard"
     assert get_call_identity_requirement("check_working_state", {}) == "pre_onboard"
