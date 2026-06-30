@@ -215,7 +215,7 @@ def make_wrappers(mcp_tools: dict, identity: "IdentityConfig", session: "Session
             complexity: How complex the task was, from 0.0 (trivial) to 1.0 (very hard)
             confidence: How confident you are in your work, from 0.0 to 1.0 (default 0.7)
         """
-        return mcp_tools["process_agent_update"](**session.bind(
+        return mcp_tools["sync_state"](**session.bind(
             response_text=description,
             complexity=complexity,
             confidence=confidence,
@@ -224,7 +224,7 @@ def make_wrappers(mcp_tools: dict, identity: "IdentityConfig", session: "Session
     @tool
     def get_metrics() -> str:
         """Get your current EISV state vector, coherence, risk score, and verdict."""
-        return mcp_tools["get_governance_metrics"](**session.bind())
+        return mcp_tools["check_working_state"](**session.bind(include_state="true", lite="true"))
 
     @tool
     def search_knowledge(query: str) -> str:
