@@ -450,6 +450,103 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
         "related_to": ["agent", "process_agent_update"],
         "category": "observability"
     },
+    # Registered tools that previously had no catalog entry → surfaced under a
+    # "null" category in list_tools (Mistral dogfood UX finding 2026-06-30).
+    "admin": {
+        "depends_on": [],
+        "related_to": ["health_check", "observe", "config"],
+        "category": "admin",
+    },
+    "bind_session": {
+        "depends_on": [],
+        "related_to": ["onboard", "identity", "start_session"],
+        "category": "identity",
+    },
+    "self_recovery": {
+        "depends_on": [],
+        "related_to": ["request_review", "check_working_state"],
+        "category": "core",
+    },
+    "outcome_event": {
+        "depends_on": [],
+        "related_to": ["record_result", "process_agent_update"],
+        "category": "core",
+    },
+    "archive_orphan_agents": {
+        "depends_on": [],
+        "related_to": ["agent", "list_agents"],
+        "category": "lifecycle",
+    },
+    "operator_resume_agent": {
+        "depends_on": [],
+        "related_to": ["agent", "self_recovery"],
+        "category": "lifecycle",
+    },
+    "detect_stuck_agents": {
+        "depends_on": [],
+        "related_to": ["observe", "agent"],
+        "category": "observability",
+    },
+    "cleanup_knowledge_graph": {
+        "depends_on": [],
+        "related_to": ["knowledge", "get_lifecycle_stats"],
+        "category": "knowledge",
+    },
+    "get_lifecycle_stats": {
+        "depends_on": [],
+        "related_to": ["knowledge", "cleanup_knowledge_graph"],
+        "category": "knowledge",
+    },
+    "cirs_protocol": {
+        "depends_on": [],
+        "related_to": ["dialectic", "self_recovery"],
+        "category": "core",
+    },
+    "reassign_reviewer": {
+        "depends_on": [],
+        "related_to": ["dialectic", "request_review"],
+        "category": "dialectic",
+    },
+    "get_trajectory_status": {
+        "depends_on": [],
+        "related_to": ["verify_trajectory_identity", "identity"],
+        "category": "identity",
+    },
+    "verify_trajectory_identity": {
+        "depends_on": [],
+        "related_to": ["get_trajectory_status", "identity"],
+        "category": "identity",
+    },
+    "list_process_bindings": {
+        "depends_on": [],
+        "related_to": ["identity", "agent"],
+        "category": "identity",
+    },
+    "outcome_correlation": {
+        "depends_on": [],
+        "related_to": ["observe", "outcome_event"],
+        "category": "observability",
+    },
+    "record_progress_pulse": {
+        "depends_on": [],
+        "related_to": ["process_agent_update", "sync_state"],
+        "category": "core",
+    },
+    "research_registry": {
+        "depends_on": [],
+        "related_to": ["knowledge", "search_shared_memory"],
+        "category": "knowledge",
+    },
+    "skills": {
+        "depends_on": [],
+        "related_to": ["list_tools", "describe_tool"],
+        "category": "admin",
+    },
+    "dashboard": {
+        "depends_on": [],
+        "related_to": ["observe", "health_check"],
+        "category": "observability",
+    },
     # "pi" introspection entry lives in unitares-pi-plugin when that
     # plugin is installed; omitted here so OSS builds don't advertise
     # an embodied-system tool that isn't loaded.

@@ -581,5 +581,65 @@ class TestValidatorEdgeCases:
 
 
 
+class TestMistralDogfoodFindings:
+    """UX fixes from the 2026-06-30 Mistral dogfood eval: discovery_type
+    discoverability/error-parity and the 'null category' tool-catalog gap."""
+
+    def test_discovery_type_description_enumerates_valid_values(self):
+        """The store field description must list the accepted set upfront
+        (derived from the Literal), not bury it behind 'etc.' or omit it."""
+        from typing import get_args
+        from src.mcp_handlers.schemas.knowledge import (
+            DiscoveryType,
+            StoreKnowledgeGraphParams,
+        )
+
+        desc = StoreKnowledgeGraphParams.model_fields["discovery_type"].description
+        for value in get_args(DiscoveryType):
+            assert value in desc, f"discovery_type description omits '{value}'"
+
+    def test_consolidated_knowledge_discovery_type_enumerates(self):
+        """The consolidated knowledge(action=store) param — what agents actually
+        call — must also enumerate, not hide behind 'etc.'."""
+        from typing import get_args
+        from src.mcp_handlers.schemas.knowledge import DiscoveryType, KnowledgeParams
+
+        desc = KnowledgeParams.model_fields["discovery_type"].description
+        assert "etc." not in desc
+        for value in get_args(DiscoveryType):
+            assert value in desc
+
+    def test_batch_invalid_discovery_type_lists_valid_values(self):
+        """The batch-store error path must enumerate valid types like the
+        single-store path (was the only one that hid the set)."""
+        import asyncio
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        result = asyncio.run(handle_store_knowledge_graph({
+            "discoveries": [
+                {"discovery_type": "definitely_not_valid", "summary": "x"},
+            ],
+        }))
+        body = result[0].text
+        # If execution reaches batch validation, the message must enumerate the
+        # valid set (an identity gate may fire first in strict deployments).
+        if "invalid discovery_type" in body.lower():
+            assert "Valid:" in body, f"batch error hides valid set: {body}"
+            assert "insight" in body
+
+    def test_every_registered_tool_has_a_catalog_category(self):
+        """No registered (non-hidden) tool may fall into the 'null' category in
+        list_tools — every one needs a TOOL_RELATIONSHIPS entry with a category."""
+        from src.mcp_handlers.decorators import list_registered_tools
+        from src.mcp_handlers.introspection.tool_catalog import TOOL_RELATIONSHIPS
+
+        registered = set(list_registered_tools(include_hidden=False))
+        missing = sorted(
+            t for t in registered
+            if not TOOL_RELATIONSHIPS.get(t, {}).get("category")
+        )
+        assert not missing, f"registered tools lacking a catalog category: {missing}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
