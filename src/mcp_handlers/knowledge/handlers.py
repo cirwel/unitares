@@ -2528,7 +2528,14 @@ async def _handle_store_knowledge_graph_batch(arguments: Dict[str, Any], agent_i
                     continue
                 
                 if discovery_type not in VALID_DISCOVERY_TYPES:
-                    errors.append(f"Discovery {idx}: invalid discovery_type '{discovery_type}'")
+                    # Enumerate valid values like the single-store path
+                    # (_invalid_enum_response) instead of a bare name — the batch
+                    # path was the only discovery_type error that hid the set
+                    # (Mistral dogfood UX finding 2026-06-30).
+                    errors.append(
+                        f"Discovery {idx}: invalid discovery_type '{discovery_type}'. "
+                        f"Valid: {sorted(VALID_DISCOVERY_TYPES)}."
+                    )
                     continue
                 
                 summary = disc_data.get("summary", "")

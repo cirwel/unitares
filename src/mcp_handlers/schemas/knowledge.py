@@ -1,4 +1,4 @@
-from typing import Optional, Union, Literal, List
+from typing import Optional, Union, Literal, List, get_args
 from pydantic import Field, model_validator
 from .mixins import AgentIdentityMixin
 
@@ -8,6 +8,14 @@ DiscoveryType = Literal[
     "insight", "bug_found", "bug", "improvement", "exploration", "observation"
 ]
 
+# Enumerate the valid values IN the field description, derived from the Literal
+# so describe_tool/list_tools shows an agent the accepted set upfront instead of
+# only on a validation failure (Mistral dogfood UX finding 2026-06-30). Derived,
+# not hand-listed, so it can't drift from the type (cf. PR #1288 same class).
+_DISCOVERY_TYPE_DESC = (
+    "Type of discovery. One of: " + ", ".join(get_args(DiscoveryType)) + "."
+)
+
 Severity = Literal["low", "medium", "high", "critical"]
 
 class StoreKnowledgeGraphParams(AgentIdentityMixin):
@@ -16,7 +24,7 @@ class StoreKnowledgeGraphParams(AgentIdentityMixin):
     """
     discovery_type: Optional[DiscoveryType] = Field(
         default=None,
-        description="Type of discovery"
+        description=_DISCOVERY_TYPE_DESC
     )
     summary: Optional[str] = Field(
         default=None,
@@ -315,7 +323,7 @@ class KnowledgeParams(AgentIdentityMixin):
     content: Optional[str] = Field(None, description="Extended content/details (for action=store or action=note)")
     details: Optional[str] = Field(None, description="Extended details for discovery (for action=store). Alias: content")
     summary: Optional[str] = Field(None, description="Discovery summary (for action=store)")
-    discovery_type: Optional[str] = Field(None, description="Type: bug_found, insight, pattern, question, note, etc. (for action=store)")
+    discovery_type: Optional[str] = Field(None, description="Required for action=store. One of: " + ", ".join(get_args(DiscoveryType)) + ".")
     response_to: Optional[dict] = Field(None, description="Typed response link {discovery_id, response_type} for threaded store/note writes")
     tags: Optional[List[str]] = Field(None, description="Tags for discovery (for action=store, search, note)")
     severity: Optional[str] = Field(None, description="Severity: low, medium, high, critical (for action=store)")
