@@ -2,6 +2,14 @@
 <!--
   launchd manifest for BEAM Sentinel (Wave 1 cutover target).
 
+  Production: render __UNITARES_ROOT__ against a MASTER-PINNED worktree
+  (e.g. ~/projects/unitares-deploy), NOT the shared dev checkout, so a concurrent
+  branch-switch can't deploy the wrong code on restart (provision the Elixir
+  build there once: `mix deps.get && mix compile` in <root>/elixir/sentinel).
+  Point the state files at FIXED $HOME paths via UNITARES_SENTINEL_STATE_FILE /
+  UNITARES_SENTINEL_LEGACY_SESSION_FILE (not __UNITARES_ROOT__-relative) so they
+  survive a re-point; the session anchor is already fixed under $HOME.
+
   Render, but do NOT load while Python Sentinel is still running:
     sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
         -e "s|__HOME__|$HOME|g" \

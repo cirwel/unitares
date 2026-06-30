@@ -5,6 +5,12 @@
   The gateway exposes a 6-tool subset of the full governance MCP for weak
   external clients (e.g. Cursor). It proxies to the governance server on :8767.
 
+  Production: render __UNITARES_ROOT__ against a MASTER-PINNED worktree
+  (e.g. ~/projects/unitares-deploy), NOT the shared dev checkout — else a
+  concurrent session that switches the dev checkout's branch will deploy the
+  wrong code on this service's next restart. (governance-mcp + agent-orchestrator
+  already run from pinned worktrees; the [DEV] services were pinned 2026-06-29.)
+
   Install (render __VARS__ then load):
     sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
         -e "s|__HOME__|$HOME|g" \

@@ -14,6 +14,14 @@
   (src/wave3a_beam_proxy.py) is the rollback contract. "Rollback by
   default" is the posture before any handler is wired.
 
+  Production: render __UNITARES_ROOT__ against a MASTER-PINNED worktree
+  (e.g. ~/projects/unitares-deploy), NOT the shared dev checkout — else a
+  concurrent session that switches the dev checkout's branch will deploy the
+  wrong code on this service's next restart. (governance-mcp + agent-orchestrator
+  already run from pinned worktrees; the [DEV] services were pinned 2026-06-29.)
+  Note: the deploy worktree needs the Elixir build provisioned once —
+  `mix deps.get && mix compile` in <root>/elixir/wave3a_handlers.
+
   Install (render __VARS__ then load):
     sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
         -e "s|__HOME__|$HOME|g" \
