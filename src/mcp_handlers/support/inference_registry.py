@@ -1,8 +1,10 @@
 """Inference host registry for model delegation.
 
-Phase 1 is deliberately static and local-process-only: it exposes what the
-server knows how to route today plus placeholder records for future host
-adapters. It does not store credentials or probe subscription-backed hosts.
+Exposes what the server can route today: the synchronous local hosts (Ollama, HF
+via ``call_model``) plus the strong-heterogeneous subscription-CLI hosts (Codex,
+Claude) served ASYNCHRONOUSLY via the agent-orchestrator (``host_adapter.py``).
+It does not store credentials; availability is probed live (socket / CLI on PATH /
+opt-in flag). The strong hosts are gated by ``UNITARES_HOST_ADAPTER_ENABLED``.
 """
 
 from __future__ import annotations
@@ -11,6 +13,8 @@ from dataclasses import asdict, dataclass, replace
 import os
 import socket
 from typing import Any
+
+from .host_adapter import host_adapter_available, host_adapter_enabled
 
 
 @dataclass(frozen=True)
@@ -90,30 +94,44 @@ def _base_hosts() -> list[InferenceHost]:
             display_name="Codex host adapter",
             provider_kind="codex_host_adapter",
             transport="host_adapter",
-            configured=False,
-            available=False,
+            configured=host_adapter_enabled(),
+            available=host_adapter_available("codex:host-adapter"),
             privacy_class="operator_authorized_external",
             cost_class="subscription_backed",
             accountability_class="tool_evidence",
             capabilities=["reasoning", "review", "summarize"],
-            models=[],
-            implementation_status="placeholder",
-            notes="Placeholder only; no Codex host adapter is wired in this server.",
+            models=["codex"],
+            implementation_status=(
+                "active" if host_adapter_available("codex:host-adapter") else "opt_in"
+            ),
+            notes=(
+                "Subscription-backed Codex (`codex exec`) served ASYNC via the "
+                "agent-orchestrator (not the sync call_model path). Enable with "
+                "UNITARES_HOST_ADAPTER_ENABLED=1; needs the codex CLI on PATH + "
+                "AGENT_ORCHESTRATOR_BEARER_TOKEN. See support/host_adapter.py."
+            ),
         ),
         InferenceHost(
             host_id="claude:host-adapter",
             display_name="Claude host adapter",
             provider_kind="claude_host_adapter",
             transport="host_adapter",
-            configured=False,
-            available=False,
+            configured=host_adapter_enabled(),
+            available=host_adapter_available("claude:host-adapter"),
             privacy_class="operator_authorized_external",
             cost_class="subscription_backed",
             accountability_class="tool_evidence",
             capabilities=["reasoning", "review", "summarize"],
-            models=[],
-            implementation_status="placeholder",
-            notes="Placeholder only; no Claude host adapter is wired in this server.",
+            models=["claude"],
+            implementation_status=(
+                "active" if host_adapter_available("claude:host-adapter") else "opt_in"
+            ),
+            notes=(
+                "Subscription-backed Claude (`claude -p`) served ASYNC via the "
+                "agent-orchestrator (not the sync call_model path). Enable with "
+                "UNITARES_HOST_ADAPTER_ENABLED=1; needs the claude CLI on PATH + "
+                "AGENT_ORCHESTRATOR_BEARER_TOKEN. See support/host_adapter.py."
+            ),
         ),
     ]
 
