@@ -24,6 +24,7 @@ import pytest
 # order anchor as test_zero_observation_honesty.py).
 import src.mcp_handlers.core  # noqa: F401
 import src.mcp_handlers.consolidated  # noqa: F401
+import src.mcp_handlers.support.model_inference  # noqa: F401
 
 from src.mcp_handlers.decorators import (
     action_router,
@@ -141,6 +142,8 @@ def test_agent_experience_aliases_inherit_canonical_classification():
 def test_standalone_read_tools_classified():
     assert get_call_identity_requirement("detect_stuck_agents", {}) == "pre_onboard"
     assert get_call_identity_requirement("search_knowledge_graph", {"query": "x"}) == "pre_onboard"
+    assert get_call_identity_requirement("list_inference_hosts", {}) == "pre_onboard"
+    assert get_call_identity_requirement("describe_inference_host", {"host_id": "ollama:local"}) == "pre_onboard"
 
 
 # ---------------------------------------------------------------------------

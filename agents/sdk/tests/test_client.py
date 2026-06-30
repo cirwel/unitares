@@ -335,6 +335,70 @@ class TestToolMapping:
         assert "model" not in args
         assert args["prompt"] == "test prompt"
 
+    @pytest.mark.asyncio
+    async def test_call_model_passes_host_id_and_parses_provenance(self):
+        session = AsyncMock()
+        session.call_tool = AsyncMock(return_value=make_mcp_result({
+            "success": True,
+            "response": "hello",
+            "model_used": "gemma4:latest",
+            "tokens_used": 12,
+            "energy_cost": 0.01,
+            "routed_via": "ollama",
+            "task_type": "reasoning",
+            "inference": {
+                "schema": "unitares.inference_result.v0",
+                "host_id": "ollama:local",
+                "provider_kind": "ollama",
+            },
+        }))
+        client = make_client_with_session(session)
+
+        result = await client.call_model("test prompt", host_id="ollama:local")
+
+        args = session.call_tool.call_args[0][1]
+        assert args["host_id"] == "ollama:local"
+        assert result.model_used == "gemma4:latest"
+        assert result.inference is not None
+        assert result.inference.host_id == "ollama:local"
+
+    @pytest.mark.asyncio
+    async def test_list_inference_hosts_maps_tool(self):
+        session = AsyncMock()
+        session.call_tool = AsyncMock(return_value=make_mcp_result({
+            "success": True,
+            "schema": "unitares.inference_hosts.v0",
+            "count": 1,
+            "hosts": [{"host_id": "ollama:local", "provider_kind": "ollama"}],
+        }))
+        client = make_client_with_session(session)
+
+        result = await client.list_inference_hosts(provider_kind="ollama")
+
+        tool_name, args = session.call_tool.call_args[0]
+        assert tool_name == "list_inference_hosts"
+        assert args["provider_kind"] == "ollama"
+        assert args["include_unconfigured"] is True
+        assert result.hosts[0].host_id == "ollama:local"
+
+    @pytest.mark.asyncio
+    async def test_describe_inference_host_maps_tool(self):
+        session = AsyncMock()
+        session.call_tool = AsyncMock(return_value=make_mcp_result({
+            "success": True,
+            "schema": "unitares.inference_host.v0",
+            "host": {"host_id": "hf:router", "provider_kind": "hf"},
+        }))
+        client = make_client_with_session(session)
+
+        result = await client.describe_inference_host("hf:router")
+
+        tool_name, args = session.call_tool.call_args[0]
+        assert tool_name == "describe_inference_host"
+        assert args["host_id"] == "hf:router"
+        assert result.host is not None
+        assert result.host.provider_kind == "hf"
+
 
 # --- Strict-identity check-in recovery (resume-binding cliff) ---
 

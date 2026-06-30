@@ -9,6 +9,9 @@ from unitares_sdk.models import (
     CheckinResult,
     CleanupResult,
     IdentityResult,
+    InferenceHostResult,
+    InferenceHostsResult,
+    InferenceProvenance,
     ModelResult,
     OnboardResult,
     SearchResult,
@@ -131,8 +134,67 @@ def test_search_result_failure_preserved():
 
 
 def test_model_result():
-    r = ModelResult(success=True, response="The code looks correct.")
+    r = ModelResult(
+        success=True,
+        response="The code looks correct.",
+        model_used="gemma4:latest",
+        tokens_used=42,
+        energy_cost=0.01,
+        routed_via="ollama",
+        task_type="analysis",
+        inference={
+            "schema": "unitares.inference_result.v0",
+            "host_id": "ollama:local",
+            "provider_kind": "ollama",
+            "tokens_used": 42,
+        },
+    )
     assert r.response == "The code looks correct."
+    assert r.model_used == "gemma4:latest"
+    assert r.tokens_used == 42
+    assert r.inference is not None
+    assert r.inference.host_id == "ollama:local"
+    assert r.inference.provider_kind == "ollama"
+
+
+def test_inference_hosts_result():
+    r = InferenceHostsResult.model_validate({
+        "success": True,
+        "schema": "unitares.inference_hosts.v0",
+        "count": 1,
+        "hosts": [{
+            "host_id": "ollama:local",
+            "display_name": "Ollama local",
+            "provider_kind": "ollama",
+            "configured": True,
+            "available": True,
+        }],
+    })
+    assert r.success is True
+    assert r.schema_name == "unitares.inference_hosts.v0"
+    assert r.count == 1
+    assert r.hosts[0].host_id == "ollama:local"
+
+
+def test_inference_host_result():
+    r = InferenceHostResult.model_validate({
+        "success": True,
+        "schema": "unitares.inference_host.v0",
+        "host": {
+            "host_id": "hf:router",
+            "provider_kind": "hf",
+            "configured": True,
+            "available": True,
+        },
+    })
+    assert r.host is not None
+    assert r.schema_name == "unitares.inference_host.v0"
+    assert r.host.provider_kind == "hf"
+
+
+def test_inference_provenance_defaults_warnings_to_list():
+    r = InferenceProvenance(host_id="ollama:local")
+    assert r.warnings == []
 
 
 # --- Error hierarchy ---

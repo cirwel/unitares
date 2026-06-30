@@ -14,7 +14,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**96 flags.**
+**97 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
@@ -60,6 +60,7 @@ index; that one is the curated decision record.
 | `UNITARES_GROUNDING_APPLY` | `''` | Whether grounded E/I/S/coherence actually replace the ODE/heuristic values in the canonical metrics (UNITARES_GROUNDING_APPLY) | config/governance_config.py |
 | `UNITARES_GROUNDING_SHADOW` | `''` | Whether to shadow-compare grounded vs ungrounded canonical metrics each check-in (UNITARES_GROUNDING_SHADOW) | config/governance_config.py |
 | `UNITARES_HEALTH_PROBE_INTERVAL_SECONDS` | `(required)` | Periodically run the deep health check and cache the result | src/background_tasks.py |
+| `UNITARES_HOST_ADAPTER_ENABLED` | `''` | Opt-in flag | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HTTP_API_TOKEN` | `(required)` | List all tools in OpenAI-compatible format Query params: mode: Tool mode filter - "minimal", "lite", "full" | src/http_api.py, src/mcp_handlers/identity/session.py (+2 more) |
 | `UNITARES_HTTP_CORS_ALLOW_ORIGIN` | `(required)` | Main entry point for governance MCP server. | src/mcp_server.py |
 | `UNITARES_IDENTITY_STRICT` | `'log'` | Runtime accessor — respects env changes set after module load | config/governance_config.py |
@@ -71,7 +72,7 @@ index; that one is the curated decision record.
 | `UNITARES_KG_SEARCH_TIMEOUT_S` | `'0.25'` | — | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_KNOWLEDGE_BACKEND` | `'auto'` | Get global knowledge graph instance (singleton) | src/knowledge_graph.py |
 | `UNITARES_LINEAGE_TRANSITIVE_ARCHIVAL` | `(required)` | Whether transitive succession-reachability DRIVES archival (vs shadow) | src/mcp_handlers/lifecycle/stuck.py |
-| `UNITARES_LLM_MODEL` | `'gemma4:latest'` | Call a free/low-cost LLM for reasoning, generation, or analysis | src/mcp_handlers/support/model_inference.py, src/mcp_handlers/support/llm_delegation.py, agents/dialectic_reviewer/reviewer.py |
+| `UNITARES_LLM_MODEL` | `'gemma4:latest'` | read by _base_hosts() | src/mcp_handlers/support/inference_registry.py, src/mcp_handlers/support/model_inference.py (+2 more) |
 | `UNITARES_MCP_HOST` | `''` | Return the default socket bind address | src/mcp_listen_config.py |
 | `UNITARES_METADATA_BACKEND` | `'postgres'` | — | src/agent_metadata_persistence.py |
 | `UNITARES_METADATA_WRITE_JSON_SNAPSHOT` | `'0'` | — | src/agent_metadata_persistence.py |
