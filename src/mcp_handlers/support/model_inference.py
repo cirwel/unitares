@@ -12,6 +12,7 @@ Usage tracked in EISV (Energy consumption) for self-regulation.
 
 from typing import Dict, Any, Sequence
 from mcp.types import TextContent
+import asyncio
 import hashlib
 import os
 import time
@@ -19,6 +20,7 @@ import time
 from ..utils import success_response, error_response, require_argument
 from ..decorators import mcp_tool
 from .inference_registry import (
+    _ollama_available,
     get_inference_host,
     host_for_routed_provider,
     list_inference_hosts,
@@ -49,7 +51,11 @@ async def handle_list_inference_hosts(arguments: Dict[str, Any]) -> Sequence[Tex
             "0", "false", "no",
         )
     provider_kind = arguments.get("provider_kind")
-    hosts = list_inference_hosts(
+    # list_inference_hosts() runs a blocking Ollama socket probe; offload it off
+    # the event loop so this unauthenticated pre_onboard read can't stall the
+    # anyio task group (see CLAUDE.md "Substrate Tax" + the cached probe).
+    hosts = await asyncio.to_thread(
+        list_inference_hosts,
         include_unconfigured=bool(include_unconfigured),
         provider_kind=provider_kind,
     )
@@ -68,7 +74,9 @@ async def handle_describe_inference_host(arguments: Dict[str, Any]) -> Sequence[
     if error:
         return [error]
 
-    host = get_inference_host(str(host_id))
+    # get_inference_host() runs a blocking Ollama socket probe; offload it (same
+    # reasoning as list_inference_hosts above — unauthenticated pre_onboard read).
+    host = await asyncio.to_thread(get_inference_host, str(host_id))
     if host is None:
         return [error_response(
             f"Inference host '{host_id}' is not registered",
@@ -232,18 +240,10 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             model = f"{model}:fastest"  # Auto-select fastest provider
         logger.info(f"Using Hugging Face Inference Providers: {model}")
     elif provider == "auto":
-        # Auto-select: Try Ollama first (local, free), then Gemini, then HF
-        # Check if Ollama is available
-        ollama_available = False
-        try:
-            import socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.5)
-            result = sock.connect_ex(('localhost', 11434))
-            sock.close()
-            ollama_available = (result == 0)
-        except Exception:
-            pass
+        # Auto-select: Try Ollama first (local, free), then Gemini, then HF.
+        # Reuse the registry's cached probe instead of a second inline socket
+        # connect — same source of truth, and it benefits from the TTL cache.
+        ollama_available = _ollama_available()
 
         if ollama_available:
             # Prefer Ollama (local, free, no token needed)

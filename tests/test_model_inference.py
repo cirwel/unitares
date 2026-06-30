@@ -70,6 +70,19 @@ def _make_mock_response(content="Test response", tokens=42, model="gemini-flash"
     return mock_response
 
 
+@pytest.fixture(autouse=True)
+def _reset_ollama_probe_cache():
+    """The registry caches its blocking Ollama probe for a short TTL. Reset it
+    before each test so socket-mocked availability is re-evaluated per test
+    rather than served stale from a prior test within the TTL window."""
+    from src.mcp_handlers.support import inference_registry
+
+    inference_registry._ollama_probe_cache.update(
+        {"ts": 0.0, "available": False, "primed": False}
+    )
+    yield
+
+
 # =============================================================================
 # Tests: OpenAI SDK unavailable
 # =============================================================================
@@ -167,6 +180,37 @@ class TestInferenceHostRegistry:
         parsed = _parse_text_content(result)
         assert parsed["success"] is False
         assert parsed["error_code"] == "INFERENCE_HOST_NOT_FOUND"
+
+    @pytest.mark.asyncio
+    async def test_describe_inference_host_known_returns_host(self):
+        """Positive path: a registered host_id resolves and reflects availability."""
+        with patch(
+            "src.mcp_handlers.support.inference_registry._ollama_available",
+            return_value=True,
+        ):
+            from src.mcp_handlers.support.model_inference import handle_describe_inference_host
+
+            result = await handle_describe_inference_host({"host_id": "ollama:local"})
+
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is True
+        assert parsed["host"]["host_id"] == "ollama:local"
+        assert parsed["host"]["provider_kind"] == "ollama"
+        assert parsed["host"]["available"] is True
+
+    def test_ollama_available_caches_probe_within_ttl(self):
+        """The blocking socket probe runs once within the TTL, not per call —
+        the bound on event-loop pressure from repeated host-registry reads."""
+        from src.mcp_handlers.support import inference_registry
+
+        with patch.object(
+            inference_registry, "_probe_ollama_socket", return_value=True
+        ) as probe:
+            assert inference_registry._ollama_available() is True
+            assert inference_registry._ollama_available() is True
+            assert inference_registry._ollama_available() is True
+
+        assert probe.call_count == 1
 
 
 # =============================================================================
