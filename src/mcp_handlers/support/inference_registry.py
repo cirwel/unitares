@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 import os
 import socket
+import time
 from typing import Any
 
 from .host_adapter import host_adapter_available, host_adapter_enabled
@@ -37,7 +38,12 @@ class InferenceHost:
         return asdict(self)
 
 
-def _ollama_available() -> bool:
+_OLLAMA_PROBE_TTL_S = 5.0
+# {"ts": monotonic seconds of last probe, "available": last result, "primed": bool}
+_ollama_probe_cache: dict[str, Any] = {"ts": 0.0, "available": False, "primed": False}
+
+
+def _probe_ollama_socket() -> bool:
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(0.5)
@@ -46,6 +52,29 @@ def _ollama_available() -> bool:
         return result == 0
     except Exception:
         return False
+
+
+def _ollama_available() -> bool:
+    """Reachability of the local Ollama endpoint, cached for a short TTL.
+
+    The probe is a BLOCKING socket connect (up to 500ms when Ollama is down). It
+    is reached from every host-registry read — including the unauthenticated
+    ``pre_onboard`` tools ``list_inference_hosts`` / ``describe_inference_host``.
+    Caching bounds how often we re-probe so the blocking call cannot be amplified
+    into event-loop pressure by repeated calls, and so a single host lookup or a
+    success-path routing check does not re-run the socket connect. Async callers
+    should still offload the first (cache-priming) probe off the loop — see the
+    ``asyncio.to_thread`` use in the handlers.
+    """
+    now = time.monotonic()
+    cache = _ollama_probe_cache
+    if cache["primed"] and (now - cache["ts"]) < _OLLAMA_PROBE_TTL_S:
+        return bool(cache["available"])
+    available = _probe_ollama_socket()
+    cache["ts"] = now
+    cache["available"] = available
+    cache["primed"] = True
+    return available
 
 
 def _hf_token_present() -> bool:
