@@ -133,6 +133,8 @@ TOOL_ORDER = [
     "leave_note",
     "cleanup_knowledge_graph",
     "get_lifecycle_stats",
+    "list_inference_hosts",
+    "describe_inference_host",
     "call_model",
     "onboard",
     "identity",

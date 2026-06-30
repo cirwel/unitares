@@ -60,6 +60,8 @@ LITE_MODE_TOOLS: Set[str] = {
 
     # Convenient shortcuts (kept for discoverability)
     "leave_note",                 # Quick notes
+    "list_inference_hosts",       # Discover inference hosts
+    "describe_inference_host",    # Inspect one inference host
     "call_model",                 # LLM access
 
     # Session hook (required by automation)
@@ -178,6 +180,9 @@ TOOL_TIERS: dict[str, Set[str]] = {
         "debug_request_context",
         "get_connection_status",         # Verify MCP connection and tool availability
         "get_lifecycle_stats",           # KG lifecycle stats (Dec 2025)
+        "list_inference_hosts",
+        "describe_inference_host",
+        "call_model",
     },
     "advanced": {  # Tier 3: Rarely used tools
         "cleanup_stale_locks",
@@ -280,6 +285,9 @@ TOOL_OPERATIONS: dict[str, str] = {
     "validate_file_path": "read",         # Validate path
     "debug_request_context": "read",      # Debug context
     "get_connection_status": "read",      # Verify MCP connection and tool availability
+    "list_inference_hosts": "read",       # Discover inference hosts
+    "describe_inference_host": "read",    # Inspect one inference host
+    "call_model": "read",                 # Advisory inference; returns evidence artifact
 
     # Dialectic
     "request_dialectic_review": "write",  # Create dialectic session
@@ -352,6 +360,11 @@ TOOL_CATEGORIES = {
         "update_discovery_status_graph",
         "cleanup_knowledge_graph",   # Lifecycle cleanup (Dec 2025)
         "get_lifecycle_stats",       # Lifecycle statistics (Dec 2025)
+    },
+    "inference": {
+        "list_inference_hosts",
+        "describe_inference_host",
+        "call_model",
     },
     "dialectic": {
         "request_review",

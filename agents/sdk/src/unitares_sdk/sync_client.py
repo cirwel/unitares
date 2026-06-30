@@ -24,6 +24,8 @@ from unitares_sdk.models import (
     CheckinResult,
     CleanupResult,
     IdentityResult,
+    InferenceHostResult,
+    InferenceHostsResult,
     MetricsResult,
     ModelResult,
     NoteResult,
@@ -294,11 +296,35 @@ class SyncGovernanceClient:
 
     # --- Model inference ---
 
+    def list_inference_hosts(
+        self,
+        include_unconfigured: bool = True,
+        provider_kind: str | None = None,
+        **kwargs: Any,
+    ) -> InferenceHostsResult:
+        args: dict[str, Any] = {"include_unconfigured": include_unconfigured}
+        if provider_kind is not None:
+            args["provider_kind"] = provider_kind
+        args.update(kwargs)
+        raw = self.call_tool("list_inference_hosts", args)
+        return InferenceHostsResult.model_validate(raw)
+
+    def describe_inference_host(
+        self,
+        host_id: str,
+        **kwargs: Any,
+    ) -> InferenceHostResult:
+        args: dict[str, Any] = {"host_id": host_id}
+        args.update(kwargs)
+        raw = self.call_tool("describe_inference_host", args)
+        return InferenceHostResult.model_validate(raw)
+
     def call_model(
         self,
         prompt: str,
         provider: str | None = None,
         model: str | None = None,
+        host_id: str | None = None,
         max_tokens: int = 1024,
         temperature: float = 0.0,
         **kwargs: Any,
@@ -312,6 +338,8 @@ class SyncGovernanceClient:
             args["provider"] = provider
         if model is not None:
             args["model"] = model
+        if host_id is not None:
+            args["host_id"] = host_id
         args.update(kwargs)
         raw = self.call_tool("call_model", args)
         return ModelResult.model_validate(raw)

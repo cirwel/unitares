@@ -410,10 +410,25 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
         "related_to": ["process_agent_update", "observe"],
         "category": "core"
     },
+    "list_inference_hosts": {
+        "depends_on": [],
+        "related_to": ["describe_inference_host", "call_model"],
+        "category": "inference",
+    },
+    "describe_inference_host": {
+        "depends_on": ["list_inference_hosts"],
+        "related_to": ["call_model"],
+        "category": "inference",
+    },
     "call_model": {
         "depends_on": [],
-        "related_to": ["knowledge", "dialectic"],
-        "category": "core"
+        "related_to": [
+            "list_inference_hosts",
+            "describe_inference_host",
+            "knowledge",
+            "dialectic",
+        ],
+        "category": "inference"
     },
     "config": {
         "depends_on": [],

@@ -109,6 +109,67 @@ class TestMissingPrompt:
 
 
 # =============================================================================
+# Tests: Inference host registry
+# =============================================================================
+
+class TestInferenceHostRegistry:
+    """Tests for list_inference_hosts and describe_inference_host."""
+
+    @pytest.mark.asyncio
+    async def test_list_inference_hosts_includes_active_and_placeholder_hosts(self):
+        with patch("src.mcp_handlers.support.inference_registry._ollama_available", return_value=True), \
+             patch("src.mcp_handlers.support.inference_registry._hf_token_present", return_value=False), \
+             patch.dict(os.environ, {"UNITARES_LLM_MODEL": "test-local:latest"}, clear=False):
+            from src.mcp_handlers.support.model_inference import handle_list_inference_hosts
+            result = await handle_list_inference_hosts({})
+
+        parsed = _parse_text_content(result)
+        host_ids = {host["host_id"] for host in parsed["hosts"]}
+        assert parsed["success"] is True
+        assert parsed["schema"] == "unitares.inference_hosts.v0"
+        assert host_ids == {
+            "ollama:local",
+            "hf:router",
+            "codex:host-adapter",
+            "claude:host-adapter",
+        }
+        assert parsed["count"] == 4
+        assert next(h for h in parsed["hosts"] if h["host_id"] == "ollama:local")["models"] == [
+            "test-local:latest"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_list_inference_hosts_can_hide_unconfigured_hosts(self):
+        with patch("src.mcp_handlers.support.inference_registry._ollama_available", return_value=True), \
+             patch("src.mcp_handlers.support.inference_registry._hf_token_present", return_value=False):
+            from src.mcp_handlers.support.model_inference import handle_list_inference_hosts
+            result = await handle_list_inference_hosts({"include_unconfigured": False})
+
+        parsed = _parse_text_content(result)
+        assert [host["host_id"] for host in parsed["hosts"]] == ["ollama:local"]
+        assert parsed["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_list_inference_hosts_filters_provider_kind(self):
+        with patch("src.mcp_handlers.support.inference_registry._hf_token_present", return_value=True):
+            from src.mcp_handlers.support.model_inference import handle_list_inference_hosts
+            result = await handle_list_inference_hosts({"provider_kind": "hf"})
+
+        parsed = _parse_text_content(result)
+        assert [host["host_id"] for host in parsed["hosts"]] == ["hf:router"]
+
+    @pytest.mark.asyncio
+    async def test_describe_inference_host_unknown_fails_closed(self):
+        from src.mcp_handlers.support.model_inference import handle_describe_inference_host
+
+        result = await handle_describe_inference_host({"host_id": "missing:host"})
+
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is False
+        assert parsed["error_code"] == "INFERENCE_HOST_NOT_FOUND"
+
+
+# =============================================================================
 # Tests: Provider routing - Ollama (local / privacy=local)
 # =============================================================================
 
@@ -715,7 +776,33 @@ class TestResponseContent:
         assert "energy_cost" in parsed
         assert "routed_via" in parsed
         assert "task_type" in parsed
+        assert parsed["inference"]["schema"] == "unitares.inference_result.v0"
+        assert parsed["inference"]["host_id"] == "ollama:local"
+        assert parsed["inference"]["provider_kind"] == "ollama"
+        assert parsed["inference"]["model_used"] == parsed["model_used"]
+        assert parsed["inference"]["tokens_used"] == parsed["tokens_used"]
+        assert parsed["inference"]["prompt_hash"].startswith("sha256:")
+        assert parsed["inference"]["response_hash"].startswith("sha256:")
+        assert isinstance(parsed["inference"]["latency_ms"], int)
         assert "message" in parsed
+
+    @pytest.mark.asyncio
+    async def test_unavailable_host_id_fails_before_model_call(self):
+        """Subscription-backed placeholders are visible but not callable."""
+        mock_client_instance = MagicMock()
+
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
+             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance):
+            from src.mcp_handlers.support.model_inference import handle_call_model
+            result = await handle_call_model({
+                "prompt": "Hello",
+                "host_id": "claude:host-adapter",
+            })
+
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is False
+        assert parsed["error_code"] == "INFERENCE_HOST_UNAVAILABLE"
+        mock_client_instance.chat.completions.create.assert_not_called()
 
     # `test_energy_cost_free_tier_flash` removed: gemini-flash is no longer a
     # supported model after #80 dropped the Gemini provider; the free-tier

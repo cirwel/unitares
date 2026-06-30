@@ -24,7 +24,8 @@ _tool_call_history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
 _READ_ONLY_TOOLS = {
     'health_check', 'get_server_info', 'list_tools', 'get_thresholds',
     'search_knowledge_graph', 'get_governance_metrics', 'skills',
-    'detect_stuck_agents',
+    'detect_stuck_agents', 'list_inference_hosts',
+    'describe_inference_host',
 }
 
 # Expensive-read loop detection keys: (canonical name, resolved action).

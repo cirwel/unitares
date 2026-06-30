@@ -12,10 +12,17 @@ Usage tracked in EISV (Energy consumption) for self-regulation.
 
 from typing import Dict, Any, Sequence
 from mcp.types import TextContent
+import hashlib
 import os
+import time
 
 from ..utils import success_response, error_response, require_argument
 from ..decorators import mcp_tool
+from .inference_registry import (
+    get_inference_host,
+    host_for_routed_provider,
+    list_inference_hosts,
+)
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 logger = get_logger(__name__)
@@ -27,6 +34,58 @@ try:
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
+
+
+def _sha256_text(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+@mcp_tool("list_inference_hosts", timeout=5.0, requires_identity="pre_onboard")
+async def handle_list_inference_hosts(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """List known inference hosts and adapter placeholders."""
+    include_unconfigured = arguments.get("include_unconfigured", True)
+    if isinstance(include_unconfigured, str):
+        include_unconfigured = include_unconfigured.strip().lower() not in (
+            "0", "false", "no",
+        )
+    provider_kind = arguments.get("provider_kind")
+    hosts = list_inference_hosts(
+        include_unconfigured=bool(include_unconfigured),
+        provider_kind=provider_kind,
+    )
+    return success_response({
+        "success": True,
+        "schema": "unitares.inference_hosts.v0",
+        "hosts": hosts,
+        "count": len(hosts),
+    }, agent_id=arguments.get("agent_id"), arguments=arguments)
+
+
+@mcp_tool("describe_inference_host", timeout=5.0, requires_identity="pre_onboard")
+async def handle_describe_inference_host(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """Describe one inference host by host_id."""
+    host_id, error = require_argument(arguments, "host_id")
+    if error:
+        return [error]
+
+    host = get_inference_host(str(host_id))
+    if host is None:
+        return [error_response(
+            f"Inference host '{host_id}' is not registered",
+            error_code="INFERENCE_HOST_NOT_FOUND",
+            error_category="validation_error",
+            recovery={
+                "action": "Call list_inference_hosts to see registered hosts",
+                "related_tools": ["list_inference_hosts"],
+            },
+        )]
+
+    return success_response({
+        "success": True,
+        "schema": "unitares.inference_host.v0",
+        "host": host,
+    }, agent_id=arguments.get("agent_id"), arguments=arguments)
+
 
 @mcp_tool("call_model", timeout=30.0)
 async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
@@ -84,6 +143,49 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     temperature = float(arguments.get("temperature", 0.7))
     privacy = arguments.get("privacy", "local")  # local (Ollama default), auto, cloud
     provider = arguments.get("provider", "auto")  # auto, hf, ollama
+    host_id = arguments.get("host_id")
+
+    if host_id:
+        host = get_inference_host(str(host_id))
+        if host is None:
+            return [error_response(
+                f"Inference host '{host_id}' is not registered",
+                error_code="INFERENCE_HOST_NOT_FOUND",
+                error_category="validation_error",
+                recovery={
+                    "action": "Call list_inference_hosts to see registered hosts",
+                    "related_tools": ["list_inference_hosts"],
+                },
+            )]
+        if not host.get("configured") or not host.get("available"):
+            return [error_response(
+                f"Inference host '{host_id}' is not available",
+                error_code="INFERENCE_HOST_UNAVAILABLE",
+                error_category="system_error",
+                details={"host": host},
+                recovery={
+                    "action": "Choose an available host or configure the requested adapter",
+                    "related_tools": ["list_inference_hosts", "describe_inference_host"],
+                },
+            )]
+        provider_kind = host.get("provider_kind")
+        if provider_kind == "ollama":
+            provider = "ollama"
+            privacy = "local"
+        elif provider_kind == "hf":
+            provider = "hf"
+            privacy = "cloud"
+        else:
+            return [error_response(
+                f"Inference host '{host_id}' uses unsupported provider kind '{provider_kind}'",
+                error_code="INFERENCE_HOST_UNSUPPORTED",
+                error_category="system_error",
+                details={"host": host},
+                recovery={
+                    "action": "Use a host with provider_kind ollama or hf in Phase 1",
+                    "related_tools": ["list_inference_hosts"],
+                },
+            )]
     
     # Privacy routing: Force local if requested
     if privacy == "local" or provider == "ollama":
@@ -187,6 +289,7 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         )]
     
     try:
+        started = time.monotonic()
         client = OpenAI(base_url=base_url, api_key=api_key)
         
         logger.debug(f"Calling model '{model}' via {base_url} for task_type='{task_type}'")
@@ -197,6 +300,7 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             max_tokens=max_tokens,
             temperature=temperature
         )
+        latency_ms = int((time.monotonic() - started) * 1000)
         
         message = response.choices[0].message
         result_text = message.content or ""
@@ -268,6 +372,33 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             routed_via = "ollama"
         else:
             routed_via = "direct"
+
+        host = host_for_routed_provider(provider)
+        finish_reason = getattr(response.choices[0], "finish_reason", None)
+        if not isinstance(finish_reason, str):
+            finish_reason = None
+        inference = {
+            "schema": "unitares.inference_result.v0",
+            "host_id": host.get("host_id"),
+            "provider_kind": host.get("provider_kind", provider),
+            "transport": host.get("transport", "direct"),
+            "model_used": model_used,
+            "task_type": task_type,
+            "privacy_class": host.get("privacy_class", privacy),
+            "cost_class": host.get("cost_class", "unknown"),
+            "accountability_class": host.get("accountability_class", "tool_evidence"),
+            "requesting_agent_uuid": arguments.get("agent_id"),
+            "latency_ms": latency_ms,
+            "tokens_used": tokens_used,
+            "energy_cost": energy_cost,
+            "prompt_hash": _sha256_text(prompt),
+            "response_hash": _sha256_text(result_text),
+            "finish_reason": finish_reason,
+            "configured_by": (
+                "operator" if host.get("provider_kind") == "hf" else "local_runtime"
+            ),
+            "warnings": [],
+        }
         
         return success_response({
             "success": True,
@@ -277,6 +408,7 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "energy_cost": energy_cost,
             "routed_via": routed_via,
             "task_type": task_type,
+            "inference": inference,
             "message": f"Model inference completed via {routed_via}"
         }, agent_id=arguments.get("agent_id"), arguments=arguments)
         
@@ -338,4 +470,3 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 ]
             }
         )]
-
