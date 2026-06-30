@@ -27,14 +27,22 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 
 ---
 
-## What you get after install
+## The loop, and the organs around it
 
-- **A governance server for heterogeneous agents.** MCP on `/mcp/`, REST on `/v1/tools/call`, an optional dashboard on `/dashboard`, and an SDK for resident or scheduled agents.
-- **A per-agent health loop.** Each process identity gets a state reading graded against its *own* baseline and recent history. The baseline warms over ~30 check-ins; until then the reading uses universal thresholds, and the payload flags warmup explicitly. The deeper docs call this four-score vector EISV; first-time users can treat it as runtime health telemetry. ([how warmup works ->](docs/EISV_COMPUTATION.md))
-- **Evidence-grounded calibration.** Self-reported `confidence` is scored against real evidence — tests, exit codes, tool output, file ops, deployments, and task results — and that calibration keeps future state readings and policy actions honest.
-- **Governed shared memory.** A Postgres + pgvector + Apache AGE knowledge graph lets agents search and contribute durable discoveries, corrections, supersessions, and cross-agent relations with provenance. It is sediment, not a transcript dump.
-- **Dialectic review and durable constraints.** Disputed policy actions can be reviewed by authority-weighted peers; synthesized conditions persist and can gate that agent's future decisions.
-- **One action the agent can obey.** Every check-in returns `proceed` / `guide` / `pause` / `reject`, plus the full state vector for finer policies. Humans watch the same fleet through the optional dashboard.
+Everything in UNITARES hangs off one per-agent loop: an agent checks in after meaningful work and gets back one action — `proceed` / `guide` / `pause` / `reject`. The other subsystems are answers to questions that loop raises about the agent doing the work:
+
+| Question about the running agent | Answered by |
+|---|---|
+| Who is acting? | per-process **identity** — reads open, writes accountable |
+| How is it doing, versus its own baseline? | the four-score **state** (EISV) — *[how it's graded](docs/EISV_COMPUTATION.md)* |
+| Did its confidence match real evidence? | evidence-grounded **calibration** |
+| Has this been learned or corrected before? | governed **shared memory** (knowledge graph) |
+| Is a disputed action defensible? | **dialectic** peer review → durable constraints |
+| When another model produced the output, what evidence is that? | **`call_model`** provenance |
+
+Around that per-agent loop sits fleet infrastructure you reach for only when work is multi-agent or side-effectful — surface **leases**, **resident monitors** (scheduled agents that run the loop themselves), **BEAM/Elixir coordination**, and **governed effects** (agents propose; only governed effects commit). The [CIRWEL stack](#the-cirwel-stack) table maps these and their maturity.
+
+The transports are MCP on `/mcp/`, REST on `/v1/tools/call`, an optional dashboard on `/dashboard`, and an SDK for resident or scheduled agents. Pick up only the loop for a quick start; the organs are there when you want to act on *why*, and the infrastructure when persistent or side-effectful work needs it.
 
 ## Use UNITARES if
 
@@ -70,21 +78,7 @@ UNITARES runs **alongside** your evals and guardrails — it doesn't replace eit
 
 ### How it relates to agent clients
 
-UNITARES is not an agent framework or chat interface. Hermes, Claude Code, Codex, Goose, Discord dispatchers, SDK residents, and local-model hosts provide the hands: prompts, tools, files, terminals, browsers, scheduled work, and operator UX. UNITARES provides governed continuity underneath them: process identity, check-ins, runtime state estimation, evidence-grounded calibration, shared-memory provenance, dialectic review, and auditable policy actions. For one-off chat or local coding, skip the governance loop; for persistent, multi-agent, high-side-effect, or resident work, mount the client through MCP/REST/SDK or a lifecycle adapter.
-
-<details>
-<summary><strong>Mechanisms behind the state reading</strong></summary>
-
-- **State-aware policy engine** — baseline, calibration, and recent history; not the current action alone ([`behavioral_assessment.py`](src/behavioral_assessment.py)).
-- **Runtime state-estimation loop** — the four-score state vector, confidence, evidence provenance, and policy margin are fed back to the agent as telemetry.
-- **Evidence-grounded calibration** — self-reported `confidence` is scored against objective evidence when available.
-- **Dialectic review → constraints** — disputed policy actions can become durable gating conditions after peer review.
-- **Per-instance identity isolation** — each process has its own governed state; reads are open, writes are accountable.
-- **Audit trail + KG** — confidence, evidence, policy actions, drift, recovery, and shared-memory contributions remain inspectable.
-
-[Architecture](docs/UNIFIED_ARCHITECTURE.md) · [Scope & threat model](docs/SCOPE_AND_THREAT_MODEL.md)
-
-</details>
+UNITARES is not an agent framework or chat interface. Hermes, Claude Code, Codex, Goose, Discord dispatchers, SDK residents, and local-model hosts provide the hands: prompts, tools, files, terminals, browsers, scheduled work, and operator UX. UNITARES provides the governed continuity underneath — the loop and organs above. For one-off chat or local coding, skip the governance loop; for persistent, multi-agent, high-side-effect, or resident work, mount the client through MCP/REST/SDK or a lifecycle adapter.
 
 ## How it works
 
