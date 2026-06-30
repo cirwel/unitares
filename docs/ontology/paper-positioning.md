@@ -114,7 +114,50 @@ Paper-language posture: active inference appears in the Related Work section as 
 
 ---
 
+## 2026-06-30 update: interoceptive-inference prior art for EISV (Related Work spine)
+
+A prior-art audit (`docs/ontology/trajectory-identity-prior-art-2026-06.md`)
+sharpened the active-inference neighbor for the specific case of **EISV framed
+as proprioception/interoception**. The Related-Work §10 spine should name the
+*interoceptive*-inference branch by name, not just generic active inference, and
+should position EISV as an **engineering instance of an existing framework, not
+a new theory** — the audit's verdict was "near-direct rediscovery," and the
+field is converging fast (2024–2026), so the honest framing also protects the
+paper from a novelty overclaim.
+
+Anchor citations (all corroborate "sense your own internal state, stay within
+viable bounds" as the prior art EISV's contract describes):
+
+- **Seth (2013), *"Interoceptive inference, emotion, and the embodied self,"*
+  *Trends in Cognitive Sciences* 17(11):565-573** — the canonical
+  predictive-processing account: selfhood from actively-inferred generative
+  models of interoceptive causes (self *constructed*, not stored).
+- **Lee, …, Friston, …, *"Life-inspired Interoceptive AI,"* arXiv 2309.05999**
+  — Friston-co-authored; "monitoring one's internal environment to keep it
+  within certain bounds," with a self/world **Markov-blanket** factorization
+  (prior art for treating EISV as a distinct interoceptive channel).
+- **Tschantz, Seth, Pezzulo (2022), *Biological Psychology*** — interoceptive
+  control = minimizing prediction error (free energy) against set-points;
+  homeostatic / **allostatic** / goal-directed. The allostatic branch is also
+  the named mechanism in `docs/proposals/genesis-baseline-aging-v0.md`.
+- **Interoceptive Machine Framework (2026), *Physics of Life Reviews*** — the
+  closest architectural prior art: homeostatic/allostatic/enactive principles
+  with concrete viability variables (energy, actuator strain, prediction-error
+  statistics, latent-state stability).
+
+**Posture (consistent with the 2026-04-23 demotion above):** these are
+Related-Work *neighbors*, not grounding. The paper cites interoceptive inference
+as the framework EISV instantiates in engineering form; it does **not** claim
+EISV's coordinates are variational free-energy quantities (that claim retired
+with the F-hat spike). The contribution is the engineering realization +
+heterogeneity frame, not a new theory of interoception. This also pre-empts the
+§66 risk (philosophy/cog-sci reviewers wanting deeper literature engagement) by
+citing the precise neighbor rather than gesturing at "active inference."
+
+---
+
 **Revision history:**
 - 2026-04-21 — original recommendation.
 - 2026-04-23 — structural-retention correction.
 - 2026-04-23 — Session 1b fit, halt, R1 resolution.
+- 2026-06-30 — interoceptive-inference prior-art spine for EISV (from the prior-art audit).

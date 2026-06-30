@@ -135,7 +135,19 @@ against an earned baseline*, not as *loss of self* — protected by hysteresis
 (promotion at 0.70 confidence / demotion only at 0.65, etc.). The benefit of the
 doubt runs in opposite directions at the two ends of life, and both directions
 are merciful. Drift is information about state change before it is ever a verdict
-about identity. This is the proprioception axiom — "deviation inside a healthy
+about identity.
+
+There is a real risk lurking in the mature regime, and the prior art names it.
+The continuous-authentication literature calls it *template aging*: a legitimate
+agent's own behavior drifts over time, so a *fixed* baseline eventually ages out
+of the very self it was meant to track (Maciejewski et al., 2020; see the
+prior-art companion). UNITARES locks genesis at tier 2+ — which is precisely the
+static-template that the literature predicts will degrade. The tier-1 reseed path
+mitigates this *while a self is young*, but once an identity is established its
+origin is frozen exactly when its behavior is most likely to keep evolving. The
+mercy of §3's mature regime (don't strip earned trust on one bad reading) and the
+risk of §5's frozen genesis are the same mechanism seen from two sides: stability
+bought against noise is also rigidity bought against legitimate growth. This is the proprioception axiom — "deviation inside a healthy
 basin is room to learn, not proof of failure" — applied to selfhood: deviation
 from who you were is, by default, growth, and only becomes alarm under specific,
 separately-reported conditions.
@@ -192,6 +204,20 @@ tension is real and the docs half-name it; I would name it fully. The strongest
 present-tense identity the system has is the one the trajectory theory explicitly
 calls performative.
 
+> **Prior-art note (added 2026-06-30).** A literature audit
+> (`trajectory-identity-prior-art-2026-06.md`) turns this from a hole into a
+> design vindication. The narrative-identity tradition affirms identity as a
+> temporally-extended *construction*, not a present-tense fact — which sharpens
+> the tension — while the security literature supplies the present-tense gate
+> *separately*, via a hardware-bound credential checked per-presentation
+> (remote attestation, device-bound non-transferable credentials). No surfaced
+> source unifies the two; the literature **implies bifurcation** — integral
+> identity for continuity, a separate hardware-anchored credential for
+> present-tense authorization. That is exactly the §4 division of labor. The
+> present-tense answer is not missing from trajectory identity; it correctly
+> belongs to a different layer (substrate-earned / bearer binding). The patch is
+> the architecture working as designed, not a leak.
+
 **(b) Seeded, not earned — the criteria of the self are themselves provisional.**
 Every threshold — 0.6 for anomaly, 0.7/0.8 for tiers, 50 and 200 observations —
 is admitted in `r1-verify-lineage-claim.md` to be *seeded, not earned*: arbitrary
@@ -218,7 +244,12 @@ by `class_tag`, inspect `resident_persistent` separately) and document the
 expected high-plausibility cluster as a known confound. That is the correct
 response to a problem you cannot solve at your resolution: name it, fence it, and
 do not let it contaminate the claims you *can* make. A theory of mind that knows
-which minds it cannot tell apart from machines is doing better than most.
+which minds it cannot tell apart from machines is doing better than most. The
+prior-art audit underlines how live this is: of everything surveyed, the
+Blockhead objection applied to AI behavior-as-identity — telling genuine
+*integration* from sufficiently rich *replay* — was the one named problem with
+*no* answer in the literature. The system is fencing an open frontier, not a
+solved one; that fence is an unclaimed contribution, not a stopgap.
 
 ## 6. What the machine is, as a philosophy of mind
 
@@ -255,3 +286,12 @@ one (the §2 reincarnation question, axiom #12), and whether an integral self ca
 ever discharge a present-tense accountability demand (§5a). Those are not bugs.
 They are the two places where the philosophy of mind runs ahead of the
 implementation, which is the correct direction for it to run.
+
+---
+
+**Companion:** `trajectory-identity-prior-art-2026-06.md` situates each construct
+against the external literature (Lee's metric-space self-identity formalism; the
+Seth / Friston interoceptive-inference lineage; remote-attestation and
+device-bound-credential security; Heersmink's narrative niche-construction) and
+records the novel-vs-rediscovered verdict, the bifurcation finding, and the
+template-aging and forgeability failure modes with citations.
