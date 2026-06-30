@@ -126,3 +126,29 @@ inventory, and prospective cohort reports should make weak data obvious: sparse
 bad labels, synthetic fixtures, unbound prediction IDs, missing prior-state
 coverage, and harness-lane contamination are data-quality limits, not
 philosophical failures of proprioception.
+
+## Prior art / positioning
+
+EISV-as-proprioception is an **engineering instance of interoceptive inference,
+not a new theory** (prior-art audit:
+`docs/ontology/trajectory-identity-prior-art-2026-06.md`). The
+"sense your own internal state, keep it within viable bounds, before any verdict"
+posture this contract describes is the established interoceptive-inference branch
+of the Free Energy Principle: Seth (2013), *Trends in Cognitive Sciences*
+17(11):565-573; the Friston-co-authored "Life-inspired Interoceptive AI" (arXiv
+2309.05999), with its self/world Markov-blanket factorization; Tschantz, Seth &
+Pezzulo (2022), *Biological Psychology* (interoceptive control as prediction-error
+minimization against homeostatic/allostatic set-points); and the Interoceptive
+Machine Framework (2026), *Physics of Life Reviews*.
+
+Two cautions follow, both consistent with the rest of this contract:
+
+- **Neighbor, not grounding.** Cite these as the framework EISV instantiates;
+  do **not** claim EISV's coordinates are variational free-energy quantities —
+  that grounding claim retired with the v7 F-hat spike (see
+  `paper-positioning.md`, 2026-04-23). The "thermometer, not a court" framing
+  here is *the same* pre-judgmental stance the interoceptive literature gives
+  interoception: it informs regulation, it does not adjudicate.
+- **Novelty window.** The interoceptive-AI literature is converging quickly
+  (2024–2026); positioning EISV as a rediscovered/instantiated framework rather
+  than a novel one is the honest and durable framing.

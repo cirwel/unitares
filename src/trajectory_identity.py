@@ -6,7 +6,10 @@ Thin integration layer that:
 2. Compares trajectory signatures on updates
 3. Detects anomalies via trajectory deviation
 
-Based on: "Trajectory Identity: A Mathematical Framework for Enactive AI Self-Hood"
+Based on the internal/unpublished UNITARES paper "Trajectory Identity: A
+Mathematical Framework for Enactive AI Self-Hood" (project-authored; not an
+external publication). For external prior-art positioning of this approach, see
+docs/ontology/trajectory-identity-prior-art-2026-06.md.
 
 This is a lightweight integration - trajectory data is optional and non-blocking.
 Agents can operate without providing trajectory signatures; this is additive.
