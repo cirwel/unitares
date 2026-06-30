@@ -46,6 +46,7 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`discord-thread-identity-resume-v0.md`](discord-thread-identity-resume-v0.md) | Reference decision record — Discord BEAM thread resume-per-thread plumbing; orchestrator + reference-hook side merged (#834), fail-closed/cross-repo follow-ups tracked separately |
 | [`principal-rollup-v0.md`](principal-rollup-v0.md) | v0 proposal (2026-06-18) — count the **principal** (logical worker) not the process-instance; first-class form of identity.md research #3 ("identity as integral, not point-value"). Measurement shipped (`scripts/dev/octopus_rollup.py`); count/mint changes operator-gated. Sits atop `uuid-keyed-identity-migration` |
 | [`orchestrator-vouched-identity-v0.md`](orchestrator-vouched-identity-v0.md) | DESIGN-FIRST RFC, council-reviewed 2026-06-17 — earn a genuine `strong` tier for orchestrated headless children (the deferred follow-on to resume-per-thread). Gate artifact for the 2026-06-24 Wave-3 read; no live cutover |
+| [`genesis-baseline-aging-v0.md`](genesis-baseline-aging-v0.md) | Open question / design sketch (2026-06-30) — **no decision, no code change.** Surfaces template-aging risk against immutable-genesis-at-tier-2 (`store_genesis_signature`); recommends measure-first via R1 shadow-mode, then spike dual-anchor (immutable origin + bounded rolling reference) only if decay is real. Anti-laundering tension stated explicitly. From `docs/ontology/trajectory-identity-prior-art-2026-06.md` |
 
 ### Other active
 
