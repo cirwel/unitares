@@ -453,7 +453,15 @@ class GovernanceClient:
         response_mode: str = "compact",
         **kwargs: Any,
     ) -> CheckinResult:
-        """Check in with governance. Maps to server tool: process_agent_update."""
+        """Check in with governance via the advertised ``sync_state`` tool.
+
+        ``sync_state`` is the promoted agent-facing alias of the raw
+        ``process_agent_update`` handler (same dispatch, same response shape;
+        see ToolAlias in tool_stability.py). We call the alias deliberately:
+        #1292 dropped the raw twin from the lite MCP wire, so calling
+        ``process_agent_update`` by raw name now fails ``Unknown tool`` on the
+        :8767 ``/mcp/`` surface residents use. Do NOT revert to the raw name.
+        """
         args: dict[str, Any] = {
             "response_text": response_text,
             "complexity": complexity,
@@ -462,8 +470,8 @@ class GovernanceClient:
         }
         args.update(kwargs)
 
-        raw = await self.call_tool("process_agent_update", args)
-        self._raise_for_tool_failure("process_agent_update", raw)
+        raw = await self.call_tool("sync_state", args)
+        self._raise_for_tool_failure("sync_state", raw)
 
         # #425: a strict-identity refusal comes back as a structured SUCCESS
         # shape (no isError, no "error" key), so _raise_for_tool_failure passes
@@ -489,8 +497,8 @@ class GovernanceClient:
             if self.continuity_token and not args.get("continuity_token"):
                 retry_args = dict(args)
                 retry_args["continuity_token"] = self.continuity_token
-                raw = await self.call_tool("process_agent_update", retry_args)
-                self._raise_for_tool_failure("process_agent_update", raw)
+                raw = await self.call_tool("sync_state", retry_args)
+                self._raise_for_tool_failure("sync_state", raw)
                 # Capture the rebound session so later calls this run ride it
                 # without re-presenting the token.
                 self._capture_identity(raw)
@@ -631,8 +639,13 @@ class GovernanceClient:
     # --- Metrics ---
 
     async def get_metrics(self, **kwargs: Any) -> MetricsResult:
-        """Get governance metrics. Maps to server tool: get_governance_metrics."""
-        raw = await self.call_tool("get_governance_metrics", kwargs)
+        """Get governance metrics via the advertised ``check_working_state`` alias.
+
+        Same handler as raw ``get_governance_metrics`` (ToolAlias in
+        tool_stability.py); the raw twin was dropped from the lite MCP wire by
+        #1292, so call the alias to avoid ``Unknown tool`` on :8767 ``/mcp/``.
+        """
+        raw = await self.call_tool("check_working_state", kwargs)
         return MetricsResult.model_validate(raw)
 
     # --- Model inference ---

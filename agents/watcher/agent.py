@@ -396,7 +396,9 @@ def _emit_resolution_outcome(
             log("resolution outcome skipped: no resolved Watcher identity", "warning")
             return
         args = build_resolution_outcome_args(status, fingerprint, uuid, reason)
-        client.call_tool("outcome_event", args, timeout=15)
+        # record_result: advertised alias of outcome_event (raw twin dropped
+        # from the lite MCP wire by #1292).
+        client.call_tool("record_result", args, timeout=15)
         log(f"recorded external-truth outcome ({status}) for finding {fingerprint}")
     except Exception as e:  # noqa: BLE001 — best-effort, never break resolution
         log(f"resolution outcome emit skipped: {e}", "warning")

@@ -31,13 +31,13 @@ class TestHandleStatus:
         result = json.loads(await handle_status(mock_client))
         assert result["ok"] is True
         assert result["data"]["verdict"] == "proceed"
-        mock_client.call_tool.assert_called_with("get_governance_metrics", {})
+        mock_client.call_tool.assert_called_with("check_working_state", {})
 
     @pytest.mark.asyncio
     async def test_with_agent_id(self, mock_client):
         mock_client.call_tool.return_value = {"action": "proceed"}
         await handle_status(mock_client, agent_id="my-agent")
-        mock_client.call_tool.assert_called_with("get_governance_metrics", {"agent_id": "my-agent"})
+        mock_client.call_tool.assert_called_with("check_working_state", {"agent_id": "my-agent"})
 
     @pytest.mark.asyncio
     async def test_error(self, mock_client):
@@ -56,7 +56,7 @@ class TestHandleCheckin:
         result = json.loads(await handle_checkin(mock_client, summary="Fixed bug"))
         assert result["ok"] is True
         assert result["data"]["verdict"] == "proceed"
-        mock_client.call_tool.assert_called_with("process_agent_update", {
+        mock_client.call_tool.assert_called_with("sync_state", {
             "summary": "Fixed bug",
             "complexity": 0.5,
             "confidence": 0.7,
@@ -66,7 +66,7 @@ class TestHandleCheckin:
     async def test_custom_params(self, mock_client):
         mock_client.call_tool.return_value = {"action": "guide"}
         await handle_checkin(mock_client, summary="Work", complexity=0.9, confidence=0.3)
-        mock_client.call_tool.assert_called_with("process_agent_update", {
+        mock_client.call_tool.assert_called_with("sync_state", {
             "summary": "Work",
             "complexity": 0.9,
             "confidence": 0.3,
@@ -76,7 +76,7 @@ class TestHandleCheckin:
     async def test_agent_id_forwarded(self, mock_client):
         mock_client.call_tool.return_value = {"action": "proceed"}
         await handle_checkin(mock_client, summary="Work", agent_id="perplexity-bot")
-        mock_client.call_tool.assert_called_with("process_agent_update", {
+        mock_client.call_tool.assert_called_with("sync_state", {
             "summary": "Work",
             "complexity": 0.5,
             "confidence": 0.7,

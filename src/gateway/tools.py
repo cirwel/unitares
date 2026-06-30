@@ -44,7 +44,9 @@ async def handle_status(client: GovernanceMCPClient, agent_id: Optional[str] = N
         args: dict = {}
         if agent_id:
             args["agent_id"] = agent_id
-        raw = await client.call_tool("get_governance_metrics", args)
+        # check_working_state: advertised alias of get_governance_metrics
+        # (raw twin dropped from the lite MCP wire by #1292).
+        raw = await client.call_tool("check_working_state", args)
         return json.dumps(simplifiers.simplify_status(raw))
     except Exception as exc:
         logger.warning("status failed: %s", exc)
@@ -67,7 +69,9 @@ async def handle_checkin(
         }
         if agent_id:
             args["agent_id"] = agent_id
-        raw = await client.call_tool("process_agent_update", args)
+        # sync_state: advertised alias of process_agent_update
+        # (raw twin dropped from the lite MCP wire by #1292).
+        raw = await client.call_tool("sync_state", args)
         return json.dumps(simplifiers.simplify_checkin(raw))
     except Exception as exc:
         logger.warning("checkin failed: %s", exc)
