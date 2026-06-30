@@ -289,26 +289,19 @@ def extract_token_agent_uuid(token: str) -> Optional[str]:
     `verify_token_fresh(token)` rather than tightening this function. Callers
     that rely on resume-after-long-idle will regress silently if `exp` starts
     being enforced here.
+
+    Routes through `_decode_token_payload` (like `extract_token_iat`/`_exp`) so
+    the HMAC/version/decode verify lives in exactly one place — and, per that
+    helper's contract, expiry is NOT checked here (the resume-after-idle
+    invariant above is preserved).
     """
-    if not token or not isinstance(token, str):
+    payload = _decode_token_payload(token)
+    if payload is None:
         return None
-    secret = _get_continuity_secret()
-    if not secret:
+    aid = payload.get("aid")
+    if not aid or not isinstance(aid, str):
         return None
-    try:
-        version, payload_b64, sig_b64 = token.split(".", 2)
-        if version != "v1":
-            return None
-        expected_sig = _b64url_encode(hmac.new(secret, payload_b64.encode(), hashlib.sha256).digest())
-        if not hmac.compare_digest(expected_sig, sig_b64):
-            return None
-        payload = json.loads(_b64url_decode(payload_b64).decode())
-        aid = payload.get("aid")
-        if not aid or not isinstance(aid, str):
-            return None
-        return aid
-    except Exception:
-        return None
+    return aid
 
 
 def extract_token_agent_uuid_safe(token: object) -> Optional[str]:

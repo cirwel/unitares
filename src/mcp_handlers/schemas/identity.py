@@ -43,8 +43,23 @@ class IdentityParams(AgentIdentityMixin):
 
 
 class OnboardParams(AgentIdentityMixin):
-    """
-    Single entry point for new agents
+    """Single entry point for new agents.
+
+    The schema exposes many fields, but the "Strict Identity, Simple Contract"
+    normal path uses only a few — the rest are adapter/advanced-only. So the
+    surface a reader sees matches the contract the docs describe:
+
+    - Normal path: `force_new` (mint fresh — the default posture for a new
+      process), and on later calls `client_session_id` (the write binding,
+      threaded by adapters). For a real handoff from a finished predecessor:
+      `parent_agent_id` + `spawn_reason`.
+    - Advanced / adapter-only: `name` (cosmetic), `model_type`, `client_hint`,
+      `resume`, `orchestrated`, `thread_id`, `trajectory_signature`,
+      `process_fingerprint`, `initial_state`, `response_mode`. Ordinary
+      interactive callers should not need these.
+
+    See docs/ontology/identity.md ("Strict Identity, Simple Contract" + the
+    identifier reference table) for which identifier to pass when.
     """
     name: Optional[str] = Field(
         default=None,

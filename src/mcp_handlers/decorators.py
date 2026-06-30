@@ -349,8 +349,8 @@ def get_call_identity_requirement(tool_name: str, arguments) -> str:
 def _resolve_canonical_and_action(tool_name: str, arguments):
     """Canonical tool name + resolved action for a CALL — the shared seam.
 
-    Both the #425 identity resolver and the #775 stakes resolver agree on which
-    canonical (tool, action) a call maps to, or their decisions diverge on
+    Both the #425 identity resolver and the #775 stakes resolver MUST agree on
+    which canonical (tool, action) a call maps to, or their decisions diverge on
     aliased calls. This helper is the single canonicalization point used by both
     resolvers; `test_action_level_identity.py` and `test_stakes_table.py` pin
     the important alias/default-action behavior from each gate's perspective.
