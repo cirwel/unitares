@@ -329,35 +329,7 @@ def get_call_identity_requirement(tool_name: str, arguments) -> str:
     4. Otherwise the tool-level value; unknown tools fail closed to
        'required'.
     """
-    canonical = tool_name
-    implied_action = None
-    try:
-        from src.mcp_handlers.tool_stability import resolve_tool_alias
-        canonical, alias = resolve_tool_alias(tool_name)
-        if alias is not None:
-            implied_action = getattr(alias, "inject_action", None)
-            if implied_action:
-                # Normalize here so the membership check below has ONE
-                # authoritative normalization point regardless of how a
-                # future ToolAlias spells its inject_action.
-                implied_action = str(implied_action).lower()
-    except ImportError:
-        # Deferred/cold module load (test collection, import cycles) —
-        # judging on the raw tool_name fails closed, which is safe.
-        pass
-    except Exception:
-        # Anything else is a REGRESSION in alias resolution with a
-        # security consequence (every alias call would refuse under
-        # strict) — fail closed but never silently (review fold,
-        # PR #611: the bare except ate a wrong-import-name bug during
-        # development).
-        logger.warning(
-            "get_call_identity_requirement: alias resolution failed for "
-            "%r — judging on the raw name (fails closed)",
-            tool_name,
-            exc_info=True,
-        )
-
+    canonical, action = _resolve_canonical_and_action(tool_name, arguments)
     td = _TOOL_DEFINITIONS.get(canonical)
     if td is None:
         return "required"
@@ -366,13 +338,9 @@ def get_call_identity_requirement(tool_name: str, arguments) -> str:
     if not td.pre_onboard_actions:
         return td.requires_identity
 
-    action = None
-    if isinstance(arguments, dict):
-        action = arguments.get("action") or arguments.get("op")
-    # Every branch below is already lowercase: explicit actions are
-    # lowered here, implied_action at alias resolution above,
-    # default_action and the exemption set at registration (mcp_tool).
-    action = (str(action).lower() if action else None) or implied_action or td.default_action
+    # _resolve_canonical_and_action lowercases explicit/injected actions and
+    # applies the tool default_action, so this membership check has one
+    # canonical source of truth shared with the stakes resolver.
     if action and action in td.pre_onboard_actions:
         return "pre_onboard"
     return td.requires_identity
@@ -381,13 +349,11 @@ def get_call_identity_requirement(tool_name: str, arguments) -> str:
 def _resolve_canonical_and_action(tool_name: str, arguments):
     """Canonical tool name + resolved action for a CALL — the shared seam.
 
-    Both the #425 identity resolver and the #775 stakes resolver must agree on
-    which canonical (tool, action) a call maps to, or their decisions diverge on
-    aliased calls. This helper is the single canonicalization point the stakes
-    resolver uses; `get_call_identity_requirement` keeps its own inline copy for
-    now (hot, heavily tested path), and `test_stakes_table.py` pins that the two
-    agree on the canonical name for aliased inputs. Unifying them is a follow-up
-    when the gate mechanism lands.
+    Both the #425 identity resolver and the #775 stakes resolver agree on which
+    canonical (tool, action) a call maps to, or their decisions diverge on
+    aliased calls. This helper is the single canonicalization point used by both
+    resolvers; `test_action_level_identity.py` and `test_stakes_table.py` pin
+    the important alias/default-action behavior from each gate's perspective.
     """
     canonical = tool_name
     implied_action = None
