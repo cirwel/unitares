@@ -105,7 +105,11 @@ from .identity.handlers import (
     handle_get_trajectory_status,
 )
 # Model Inference - Free/low-cost LLM access via Ollama (local) or HF Inference Providers
-from .support.model_inference import handle_call_model
+from .support.model_inference import (
+    handle_call_model,
+    handle_describe_inference_host,
+    handle_list_inference_hosts,
+)
 # Outcome Events - EISV validation infrastructure (Feb 2026)
 from .observability.outcome_events import handle_outcome_event
 # Resident Progress - sentinel push-based pulse (Phase 1)

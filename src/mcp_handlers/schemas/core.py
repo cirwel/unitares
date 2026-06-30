@@ -521,7 +521,43 @@ class CallModelParams(AgentIdentityMixin):
     prompt: str = Field(..., description="The prompt/question to send to the model (required)")
     model: str = Field("auto", description="Model to use. For ollama: any model pulled locally (default UNITARES_LLM_MODEL or gemma4:latest). For hf: model IDs like 'deepseek-ai/DeepSeek-R1' or 'Qwen/Qwen2.5-72B-Instruct'. Default: auto")
     provider: Literal["auto", "hf", "ollama"] = Field("auto", description="Provider to use. Options: auto (ollama first, hf fallback), hf (Hugging Face Inference Providers), ollama (local). Default: auto")
+    host_id: Optional[str] = Field(
+        None,
+        description=(
+            "Optional inference host id from list_inference_hosts. When set, "
+            "routes through that host and fails closed if unavailable."
+        ),
+    )
     task_type: Literal["reasoning", "generation", "analysis"] = Field("reasoning", description="Type of task. Options: reasoning, generation, analysis. Default: reasoning")
     max_tokens: float = Field(500, description="Maximum tokens in response. Default: 500")
     temperature: float = Field(0.7, description="Temperature (creativity). Range: 0.0-1.0. Default: 0.7")
     privacy: Literal["local", "auto", "cloud"] = Field("local", description="Privacy mode. Options: local (Ollama, default), auto (system chooses), cloud (external providers)")
+
+
+class ListInferenceHostsParams(AgentIdentityMixin):
+    """Parameters for list_inference_hosts"""
+    include_unconfigured: bool = Field(
+        True,
+        description=(
+            "Include known but unconfigured adapter placeholders such as "
+            "codex:host-adapter and claude:host-adapter."
+        ),
+    )
+    provider_kind: Optional[str] = Field(
+        None,
+        description=(
+            "Optional provider kind filter, e.g. ollama, hf, codex_host_adapter, "
+            "claude_host_adapter."
+        ),
+    )
+
+
+class DescribeInferenceHostParams(AgentIdentityMixin):
+    """Parameters for describe_inference_host"""
+    host_id: str = Field(
+        ...,
+        description=(
+            "Inference host id returned by list_inference_hosts, e.g. "
+            "ollama:local or hf:router."
+        ),
+    )

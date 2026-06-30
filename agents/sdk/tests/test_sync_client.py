@@ -209,6 +209,72 @@ class TestSyncToolMapping:
         assert "provider" not in captured_args[0]
         assert "model" not in captured_args[0]
 
+    def test_call_model_passes_host_id_and_parses_provenance(self):
+        client = SyncGovernanceClient(transport="rest")
+        captured_args = []
+
+        def fake_call(tool_name, arguments, **kwargs):
+            captured_args.append(arguments)
+            return {
+                "success": True,
+                "response": "hi",
+                "model_used": "gemma4:latest",
+                "tokens_used": 12,
+                "energy_cost": 0.01,
+                "routed_via": "ollama",
+                "task_type": "reasoning",
+                "inference": {
+                    "schema": "unitares.inference_result.v0",
+                    "host_id": "ollama:local",
+                    "provider_kind": "ollama",
+                },
+            }
+
+        client.call_tool = fake_call
+        result = client.call_model("test prompt", host_id="ollama:local")
+        assert captured_args[0]["host_id"] == "ollama:local"
+        assert result.model_used == "gemma4:latest"
+        assert result.inference is not None
+        assert result.inference.host_id == "ollama:local"
+
+    def test_list_inference_hosts_maps_tool(self):
+        client = SyncGovernanceClient(transport="rest")
+        calls = []
+
+        def fake_call(tool_name, arguments, **kwargs):
+            calls.append((tool_name, arguments))
+            return {
+                "success": True,
+                "schema": "unitares.inference_hosts.v0",
+                "count": 1,
+                "hosts": [{"host_id": "ollama:local", "provider_kind": "ollama"}],
+            }
+
+        client.call_tool = fake_call
+        result = client.list_inference_hosts(provider_kind="ollama")
+        assert calls[-1][0] == "list_inference_hosts"
+        assert calls[-1][1]["provider_kind"] == "ollama"
+        assert result.hosts[0].host_id == "ollama:local"
+
+    def test_describe_inference_host_maps_tool(self):
+        client = SyncGovernanceClient(transport="rest")
+        calls = []
+
+        def fake_call(tool_name, arguments, **kwargs):
+            calls.append((tool_name, arguments))
+            return {
+                "success": True,
+                "schema": "unitares.inference_host.v0",
+                "host": {"host_id": "hf:router", "provider_kind": "hf"},
+            }
+
+        client.call_tool = fake_call
+        result = client.describe_inference_host("hf:router")
+        assert calls[-1][0] == "describe_inference_host"
+        assert calls[-1][1]["host_id"] == "hf:router"
+        assert result.host is not None
+        assert result.host.provider_kind == "hf"
+
     def test_checkin_failure_raises_connection_error(self):
         client = SyncGovernanceClient(transport="rest")
 
