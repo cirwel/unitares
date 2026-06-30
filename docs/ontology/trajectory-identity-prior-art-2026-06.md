@@ -41,10 +41,14 @@ conceptual content survives the audit:
 **Three actionable takeaways:**
 
 - The paper cited in `src/trajectory_identity.py:9` ("Trajectory Identity: A
-  Mathematical Framework for Enactive AI Self-Hood") **could not be found as
-  any external publication** and appears internal/unpublished. The citation
-  should be relabeled as internal or removed; it currently reads as external
-  backing that does not exist.
+  Mathematical Framework for Enactive AI Self-Hood") is **the project's own
+  internal/unpublished work** (confirmed by the maintainer), not external prior
+  art — a verbatim title search surfaces no public publication, as expected.
+  The citation is legitimate; the only hygiene action is to mark it explicitly
+  as an internal/unpublished work so a reader does not mistake it for a
+  findable external reference, and — if it is ever published — to position it
+  against the external prior art below (Lee's metric-space formalism; the
+  enactivism lineage).
 - **EISV should cite the active-inference / interoceptive-AI literature
   (Seth; Friston et al.; the Interoceptive Machine Framework) and position
   itself as an engineering instance, not a new theory.**
@@ -90,9 +94,14 @@ with a novel DTW/attractor implementation.**
   and onto EISV's viability bounds. Implication for the essay: a
   self-maintaining trajectory *shape alone* is, by the enactive critique, not
   yet a sense-making self.
-- **Provenance of the cited paper.** A verbatim title search for "Trajectory
-  Identity: A Mathematical Framework for Enactive AI Self-Hood" surfaced **no
-  external publication.** Treat as internal/unpublished.
+- **Provenance of the cited paper.** "Trajectory Identity: A Mathematical
+  Framework for Enactive AI Self-Hood" is **the project's own
+  internal/unpublished paper** (maintainer-confirmed); a verbatim title search
+  surfaces no public publication, as expected for an internal work. It is a
+  legitimate internal citation, not external prior art — the external
+  prior art for the *concept* remains Lee (2411.18530) and the enactivism
+  lineage. If the internal paper is published, it should be positioned against
+  those.
 
 ## Construct 2 — EISV proprioception
 
@@ -257,9 +266,10 @@ layer.
 
 ## Open questions carried forward
 
-1. Actual provenance/content of the internally-cited "Trajectory Identity:
-   A Mathematical Framework for Enactive AI Self-Hood" — does it engage Lee
-   (2411.18530) or the enactivism literature at all?
+1. The internal paper "Trajectory Identity: A Mathematical Framework for
+   Enactive AI Self-Hood" (project-authored, unpublished) — does it engage Lee
+   (2411.18530) or the enactivism literature, and is it intended for
+   publication? If so, the prior art here is its related-work scaffolding.
 2. Does *any* existing work unify an integral-over-time behavioral identity
    with a present-tense authorization gate in one construct, or does the field
    consistently bifurcate them (as the sources here imply)?
