@@ -14,7 +14,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**97 flags.**
+**98 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
@@ -37,6 +37,7 @@ index; that one is the curated decision record.
 | `UNITARES_BASELINE_CACHE_MAXLEN` | `'1000'` | — | governance_core/ethical_drift.py |
 | `UNITARES_CALIBRATION_BACKEND` | `'postgres'` | Initialize calibration checker with confidence bins | src/calibration.py |
 | `UNITARES_CLASS_CALIBRATION` | `''` | Merge a deployment-local per-class calibration overlay into the class-keyed dicts, if ``UNITARES_CLASS_CALIBRATION`` names a JSON file | config/governance_config.py |
+| `UNITARES_COHORT_PRIOR` | `(required)` | Whether cohort-prior warm-start is active | src/cohort_prior.py |
 | `UNITARES_CONNECT_RETRIES` | `'1'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |
 | `UNITARES_CONNECT_TIMEOUT` | `'10'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |
 | `UNITARES_CONTINUITY_TOKEN_SECRET` | `(required)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py |
