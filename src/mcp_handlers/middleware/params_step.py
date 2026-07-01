@@ -270,8 +270,18 @@ def _format_pydantic_error(error, tool_name: str):
     msg = first.get("msg", "")
     err_type = first.get("type", "")
 
+    # #1322: the specialized branches below render ONLY the first error's
+    # violation class. Pydantic already reports every violation in one pass;
+    # dispatching on errors[0] threw the rest away, so a caller with e.g. one
+    # missing field AND extra_forbidden fields learned the contract one
+    # round-trip at a time (2026-07-01 dogfood F5). Keep the specialized
+    # shapes for homogeneous error sets; route mixed sets to the general
+    # enumerate-everything formatter.
+    error_types = {err.get("type", "") for err in errors}
+    homogeneous = len(error_types) == 1
+
     # Map common Pydantic error types to our error taxonomy
-    if err_type == "missing":
+    if err_type == "missing" and homogeneous:
         missing_fields = [
             ".".join(str(part) for part in err.get("loc", []))
             for err in errors
@@ -299,7 +309,9 @@ def _format_pydantic_error(error, tool_name: str):
             )
         return missing_parameter_error(loc, tool_name=tool_name)[0]
 
-    if err_type == "literal_error":
+    # Single-error only: the literal/parsing shapes describe one field; with
+    # multiple errors (even same-type) the general formatter lists them all.
+    if err_type == "literal_error" and len(errors) == 1:
         valid_values = _literal_expected_values(first)
         provided = first.get("input")
         suggestion = _suggest_enum_value(loc, provided, valid_values)
@@ -331,16 +343,20 @@ def _format_pydantic_error(error, tool_name: str):
             },
         )
 
-    if err_type in ("int_parsing", "float_parsing", "bool_parsing"):
+    if err_type in ("int_parsing", "float_parsing", "bool_parsing") and len(errors) == 1:
         expected = err_type.replace("_parsing", "")
         provided = str(first.get("input", ""))[:50]
         return invalid_parameter_type_error(loc, expected, type(first.get("input")).__name__, tool_name=tool_name)[0]
 
-    # General error: include all issues for multi-error cases
+    # General error: enumerate every violation so one round-trip teaches the
+    # whole contract (#1322). Message lines cap at 10 for readability; the
+    # structured details always carry the full list.
     detail_lines = []
-    for err in errors[:5]:  # Cap at 5 errors
+    for err in errors[:10]:
         err_loc = ".".join(str(x) for x in err.get("loc", []))
         detail_lines.append(f"  - {err_loc}: {err.get('msg', '')}")
+    if len(errors) > 10:
+        detail_lines.append(f"  … and {len(errors) - 10} more (see details.errors)")
     detail_text = "\n".join(detail_lines)
 
     return error_response(
@@ -349,7 +365,14 @@ def _format_pydantic_error(error, tool_name: str):
         error_category="validation_error",
         details={
             "tool_name": tool_name,
-            "errors": [{"field": ".".join(str(x) for x in e["loc"]), "message": e["msg"]} for e in errors[:5]],
+            "errors": [
+                {
+                    "field": ".".join(str(x) for x in e.get("loc", [])),
+                    "message": e.get("msg", ""),
+                    "type": e.get("type", ""),
+                }
+                for e in errors
+            ],
         },
         recovery={
             "action": "Check parameter types and try again",
