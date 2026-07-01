@@ -1166,10 +1166,13 @@ async def resolve_session_identity(
     # reason (guards live inside the `not force_new` block), so ordinary
     # fresh onboards are untouched.
     if resume_rejected_reason is not None:
+        # session_key rides the audit event's structured payload, not this
+        # clear-text warning — its name trips CodeQL's clear-text-logging
+        # heuristic (same convention as the PATH1 fingerprint warning above).
         logger.warning(
-            "[PATH3_MINT_REFUSED] resume rejected (%s) for session_key=%s... "
+            "[PATH3_MINT_REFUSED] resume rejected (%s) "
             "— refusing silent PATH 3 mint (#1319)",
-            resume_rejected_reason, session_key[:20],
+            resume_rejected_reason,
         )
         _audit_session_resolve_miss(
             session_key=session_key,
