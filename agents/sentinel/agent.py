@@ -893,7 +893,9 @@ async def adjudicate_finding(
     args = build_resolution_outcome_args(
         "sentinel_finding", status, fingerprint, agent.agent_uuid, reason
     )
-    await client.call_tool("outcome_event", args)
+    # record_result: advertised alias of outcome_event (raw twin dropped from
+    # the lite MCP wire by #1292).
+    await client.call_tool("record_result", args)
     log(f"recorded external-truth outcome ({status}) for sentinel finding {fingerprint}")
     return args
 

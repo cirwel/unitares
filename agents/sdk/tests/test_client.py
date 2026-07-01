@@ -236,7 +236,9 @@ class TestOnboardFailureSurfaces:
 
 class TestToolMapping:
     @pytest.mark.asyncio
-    async def test_checkin_maps_to_process_agent_update(self):
+    async def test_checkin_maps_to_sync_state(self):
+        # #1292 dropped the raw process_agent_update twin from the lite MCP
+        # wire; checkin() must call the advertised sync_state alias instead.
         session = AsyncMock()
         session.call_tool = AsyncMock(return_value=make_mcp_result({
             "success": True,
@@ -249,11 +251,12 @@ class TestToolMapping:
         result = await client.checkin("did work", complexity=0.5)
         session.call_tool.assert_called_once()
         tool_name = session.call_tool.call_args[0][0]
-        assert tool_name == "process_agent_update"
+        assert tool_name == "sync_state"
         assert isinstance(result, CheckinResult)
 
     @pytest.mark.asyncio
-    async def test_get_metrics_maps_to_get_governance_metrics(self):
+    async def test_get_metrics_maps_to_check_working_state(self):
+        # #1292: raw get_governance_metrics off the lite wire; use the alias.
         session = AsyncMock()
         session.call_tool = AsyncMock(return_value=make_mcp_result({
             "success": True,
@@ -263,7 +266,7 @@ class TestToolMapping:
 
         await client.get_metrics()
         tool_name = session.call_tool.call_args[0][0]
-        assert tool_name == "get_governance_metrics"
+        assert tool_name == "check_working_state"
 
     @pytest.mark.asyncio
     async def test_search_knowledge_maps_to_knowledge_action_search(self):

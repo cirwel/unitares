@@ -175,8 +175,11 @@ class SyncGovernanceClient:
             "response_mode": response_mode,
         }
         args.update(kwargs)
-        raw = self.call_tool("process_agent_update", args)
-        self._raise_for_tool_failure("process_agent_update", raw)
+        # sync_state: advertised alias of the raw process_agent_update handler.
+        # #1292 dropped the raw twin from the lite MCP wire; call the alias so
+        # residents don't hit "Unknown tool" on the :8767 /mcp/ surface.
+        raw = self.call_tool("sync_state", args)
+        self._raise_for_tool_failure("sync_state", raw)
 
         decision = raw.get("decision", {})
         verdict = decision.get("action", raw.get("verdict", "proceed"))
@@ -291,7 +294,9 @@ class SyncGovernanceClient:
     # --- Metrics ---
 
     def get_metrics(self, **kwargs: Any) -> MetricsResult:
-        raw = self.call_tool("get_governance_metrics", kwargs)
+        # check_working_state: advertised alias of get_governance_metrics.
+        # #1292 dropped the raw twin from the lite MCP wire (see client.py).
+        raw = self.call_tool("check_working_state", kwargs)
         return MetricsResult.model_validate(raw)
 
     # --- Model inference ---

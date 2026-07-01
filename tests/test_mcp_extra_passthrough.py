@@ -31,9 +31,36 @@ def test_checkin_tool_preserves_s22_extra_argument_passthrough():
 
 
 def test_process_agent_update_handler_still_dispatchable():
-    """Hidden from the lite wire, but still a register=True handler — so the
-    gateway, hooks, and compat wrappers can call it by raw name (the server
-    dispatches any registered handler whether or not it is advertised)."""
+    """Still a register=True handler, so REST ``/v1/tools/call`` and in-process
+    callers can invoke it by raw name.
+
+    CAVEAT (learned the hard way, 2026-06-30): "registered handler" does NOT
+    mean "callable over the MCP ``/mcp/`` wire". FastMCP only dispatches tools
+    present in ``mcp._tool_manager`` (the advertised set). #1292 dropped the raw
+    twin from that set, so every resident/SDK/gateway caller that reached it by
+    raw name over ``/mcp/`` broke with ``Unknown tool``. Raw-name access is a
+    REST/in-process affordance only — MCP-wire callers MUST use the advertised
+    alias. See test_resident_workflow_aliases_advertised_on_mcp_wire below.
+    """
     from src.mcp_handlers import TOOL_HANDLERS
 
     assert "process_agent_update" in TOOL_HANDLERS
+
+
+def test_resident_workflow_aliases_advertised_on_mcp_wire():
+    """The workflow aliases residents/SDK/gateway call over ``/mcp/`` MUST be
+    present in the FastMCP tool manager (the advertised wire) — not merely in
+    TOOL_HANDLERS.
+
+    This guards the 2026-06-30 outage: #1292 pruned the raw twins
+    (process_agent_update / get_governance_metrics / outcome_event) from the
+    lite wire, and the check-in/metrics/outcome paths call these aliases. A
+    future prune that drops an alias from the wire would silently dark every
+    resident again; assert on the wire, not on internal dispatch.
+    """
+    from src import mcp_server
+
+    for alias in ("sync_state", "check_working_state", "record_result"):
+        assert mcp_server.mcp._tool_manager.get_tool(alias) is not None, (
+            f"{alias!r} missing from the MCP wire — residents call it over /mcp/"
+        )

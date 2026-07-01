@@ -60,7 +60,9 @@ async def test_adjudicate_finding_posts_outcome_attributed_to_sentinel():
     agent._ensure_identity.assert_awaited_once_with(client)
     client.call_tool.assert_awaited_once()
     tool, payload = client.call_tool.await_args.args
-    assert tool == "outcome_event"
+    # #1292 dropped raw outcome_event from the lite MCP wire; sentinel posts
+    # via the advertised record_result alias (same handler).
+    assert tool == "record_result"
     assert payload["agent_id"] == "sentinel-uuid"
     assert payload["outcome_type"] == "sentinel_finding_dismissed"
     assert payload["is_bad"] is True

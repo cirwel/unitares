@@ -167,7 +167,9 @@ class TestSyncIdentityCapture:
 
 
 class TestSyncToolMapping:
-    def test_checkin_maps_to_process_agent_update(self):
+    def test_checkin_maps_to_sync_state(self):
+        # #1292 dropped the raw twin from the lite MCP wire; the alias resolves
+        # over both REST and MCP, so checkin() calls sync_state on all transports.
         client = SyncGovernanceClient(transport="rest")
         calls = []
 
@@ -181,10 +183,10 @@ class TestSyncToolMapping:
 
         client.call_tool = fake_call
         result = client.checkin("test")
-        assert calls[-1] == "process_agent_update"
+        assert calls[-1] == "sync_state"
         assert isinstance(result, CheckinResult)
 
-    def test_get_metrics_maps_to_get_governance_metrics(self):
+    def test_get_metrics_maps_to_check_working_state(self):
         client = SyncGovernanceClient(transport="rest")
         calls = []
 
@@ -194,7 +196,7 @@ class TestSyncToolMapping:
 
         client.call_tool = fake_call
         client.get_metrics()
-        assert calls[-1] == "get_governance_metrics"
+        assert calls[-1] == "check_working_state"
 
     def test_call_model_omits_none_provider(self):
         client = SyncGovernanceClient(transport="rest")
