@@ -263,7 +263,9 @@ class TestProcessAgentUpdate:
             result = await handle_process_agent_update({"response_text": "test"})
 
             data = parse_result(result)
-            assert "error" in data or "Identity not resolved" in json.dumps(data)
+            assert data["error"] == "Identity not resolved for this check-in."
+            assert "client_session_id returned by that onboard() call" in data["recovery"]["action"]
+            assert data["recovery"]["related_tools"] == ["onboard", "identity", "process_agent_update"]
 
     @pytest.mark.asyncio
     async def test_require_strong_identity_rejects_weak_resolution(self, mock_server):
