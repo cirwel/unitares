@@ -4,11 +4,11 @@
 **Parent:** `redis-retirement-v0.md` (v0.1). This details Phase 1 only.
 **Goal:** make PostgreSQL durably carry the session/identity state that today lives only in Redis, so Redis can later be retired — while *measuring*, not assuming, how much of that state actually needs mirroring.
 
-> **v1 → v1.1 council changes.** A three-member council (architect + code-reviewer + live-verifier) reviewed v1 against the running system. Outcome: the FK reasoning and new-table-vs-alternatives analysis hold, but v1 was **over-scoped, under-specified, and its schema was provably incomplete.** Key revisions: (1) the durable artifact that actually matters is the **onboard pin (C2)** — restructure Phase 1 so pins + persist-time rich fields + the hijack helper (all unconditionally needed) ship first, and the full `core.session_bindings` ephemeral mirror is **gated on a shadow-phase measurement** (architect: it may be solving a problem the pin already solves). (2) Add the two missing columns the live-verifier found (`public_agent_id`, `api_key_hash`). (3) Fix the two-table drift hazard with an explicit authority contract. (4) Replace the point-in-time parity gate. (5) Fix two extraction blockers (B1 `resume` mutation, B2 PATH 2 data shape).
+> **v1 → v1.1 council changes.** A three-member council (architect + code-reviewer + live verification) reviewed v1 against the running system. Outcome: the FK reasoning and new-table-vs-alternatives analysis hold, but v1 was **over-scoped, under-specified, and its schema was provably incomplete.** Key revisions: (1) the durable artifact that actually matters is the **onboard pin (C2)** — restructure Phase 1 so pins + persist-time rich fields + the hijack helper (all unconditionally needed) ship first, and the full `core.session_bindings` ephemeral mirror is **gated on a shadow-phase measurement** (architect: it may be solving a problem the pin already solves). (2) Add the two missing columns live verification found (`public_agent_id`, `api_key_hash`). (3) Fix the two-table drift hazard with an explicit authority contract. (4) Replace the point-in-time parity gate. (5) Fix two extraction blockers (B1 `resume` mutation, B2 PATH 2 data shape).
 
 ## The central decision: FK forces a separate store, not `core.sessions`
 
-`core.sessions` cannot hold the ephemeral 94% (live-verifier confirmed `\d core.sessions`):
+`core.sessions` cannot hold the ephemeral 94% (live verification confirmed `\d core.sessions`):
 
 ```sql
 session_id   TEXT PRIMARY KEY,
@@ -43,7 +43,7 @@ Build `core.session_bindings` as an **instrumented shadow only**. During the soa
 
 This defers the heaviest, most-uncertain piece behind data instead of assuming it.
 
-## Schema (corrected per live-verifier)
+## Schema (corrected per live verification)
 
 ```sql
 -- core.onboard_pins — Phase 1A. Durable mirror of recent_onboard:* keys.
@@ -133,4 +133,4 @@ Phase 2 (separate PR): delete PATH 1, Redis branches, `redis_client.py`, the dep
 
 ## Provenance
 
-v1 from the Phase 1 facts dossier. v1.1 from a council on 2026-06-27: architect (FK alternatives, drift hazard, the pins-vs-mirror challenge, parity-metric critique), code-reviewer (B1/B2/M1/M2/M3, write-site enumeration), live-verifier (the two missing columns + key-format + TTL ground-truth against 865 live payloads). Live-verifier refutations are why the schema gained `public_agent_id`/`api_key_hash` and lost `label`.
+v1 from the Phase 1 facts dossier. v1.1 from a council on 2026-06-27: architect (FK alternatives, drift hazard, the pins-vs-mirror challenge, parity-metric critique), code-reviewer (B1/B2/M1/M2/M3, write-site enumeration), live verification (the two missing columns + key-format + TTL ground-truth against 865 live payloads). Live-verification refutations are why the schema gained `public_agent_id`/`api_key_hash` and lost `label`.
