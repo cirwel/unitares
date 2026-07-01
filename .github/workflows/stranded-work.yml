@@ -47,6 +47,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # self-provision the label (surface-findings.yml assumes it too, but it
+          # doesn't exist until something creates it)
+          gh label create ci-finding --description "Opened by a CI audit/collector" \
+            --color D93F0B 2>/dev/null || true
           marker='<!-- finding-fingerprint: stranded-work-audit -->'
           body_file=$(mktemp)
           {
