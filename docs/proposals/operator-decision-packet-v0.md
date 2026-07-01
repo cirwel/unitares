@@ -1,6 +1,6 @@
 # Operator Decision Packet — making load-bearing calls cheap to answer
 
-- **Status:** Proposal (design-first; v1). No runtime code proposed in this doc.
+- **Status:** Proposal (design-first; v1) — **runtime build PARKED behind a demand-trigger (2026-06-22 triage decision).** Thesis is sound (escalation packaging is a real bottleneck) and survived a 3-lens council, but a runtime decision-packet schema/handler is *can-ship-inert with no standing producer* → building it now is inventory ahead of demand (`feasible ≠ needed`). The value is an **escalation discipline** (present a load-bearing call as: options + recommendation + reversibility/blast-radius + default-if-silent) that agents practice today with zero code. **Build-trigger:** a standing producer surface that needs the structured contract (e.g. a dashboard "decisions" queue or a recurring automated escalation path), not a one-off. Until then, design-of-record — like `beam-event-adapter-design-v0.md`.
   v1 corrects v0's factual claims about current wiring after a council pass
   (3 lenses, 2026-06-17) returned `withhold pending v1` — see the council-findings
   block at the end. The thesis survived all three lenses; only the scaffolding was

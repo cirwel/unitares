@@ -84,7 +84,7 @@ What *is* clearly unsupported is **new build atop the inert orchestrator** (next
 
 ## The keystone and what hangs off it
 
-`agent-orchestrator-beam-v0.md` is built, tested, and **unwired** — by its own words "explicitly NOT a fix for a measured failure," and `:8789` is not listening, nothing spawns through it. It is the keystone: a cluster of proposals can only earn their value once it has a live consumer.
+`agent-orchestrator-beam-v0.md` is built, tested, and **unwired** — `:8789` is not listening, nothing spawns through it. It is the keystone: a cluster of proposals can only earn their value once it has a live consumer. **(See Decision A's 2026-06-23 correction: "unwired" describes UNITARES wiring, not absence of demand — orchestration is a real demand and the capability is proven-working. The fix is to *give it a consumer*, not freeze it.)**
 
 Proposals that gate on the orchestrator de-inerting (or are otherwise demand-empty until it does):
 
@@ -104,11 +104,17 @@ This is the "inventory ahead of demand" pattern at fleet scale: each doc is chea
 There are **two independent decisions** here; the earlier draft wrongly merged them.
 
 ### Decision A — the orchestrator cluster (latency-independent)
-Question: *is there a real, named workload that needs orchestrated headless children (not "would be nice," a workload)?*
 
-**If YES:** de-inert the orchestrator behind that consumer (plist + first caller); then `orchestrator-vouched-identity`, `monitor-delegated-liveness`, and `behavioral-running-hot` have a non-empty population and proceed on their own gates.
+> **Correction (2026-06-23, operator-flagged migration-resistance bias).** The earlier "freeze unless a named workload appears" framing conflated *no caller in UNITARES's audit log* with *no demand*. That was substrate-resistance bias, not analysis. Two facts reframe it: (1) **orchestration is a known, real demand** — the agent ecosystem runs on fleets of ephemeral headless agents that need lifecycle ownership (spawn / supervise / monitor-liveness / capture-results / clean-exit), and UNITARES's own pitch ("governance for agent fleets") presupposes something orchestrating the fleet; (2) the capability is **built and proven** (live round-trip 2026-06-23), so there is no build to freeze.
 
-**If NO (current state):** **freeze the cluster** — park orchestrator + vouched-identity + monitor-liveness + behavioral-hot behind one explicit demand-trigger ("a real workload needs orchestrated children"), the way `beam-event-adapter` is already parked. Close or freeze `beam-wave-3a-read-only-handlers` (infra-first build, self-admitted no evidence). Keep `governed-effects` Phase 1 (shipped, #846) + protocol spec as design-of-record; no `elixir/` runtime work.
+So Call A is **not** freeze-vs-build. It is: **name the first consumer and de-inert the orchestrator behind it.** The only discipline that survives is narrow — don't run a supervisor *daemon* with literally nothing calling it (an empty running service is its own kind of inventory). So pair the de-inert with a real first caller; don't deploy it bare and don't keep treating a finished, demanded capability as unwanted inventory.
+
+**First-consumer candidates (real, in-house — not hypothetical):**
+- **Independent dialectic reviewer (lead).** Turns a known governance weakness — live-Claude-summon reviews are an "invisible rubber-stamp," `agrees=True` still hardcoded — into a structural fix: a governed headless reviewer spawned + lease-bound + verdict-captured + clean-exit, which is *exactly* what the orchestrator already does. An existing unsolved problem, not a "would be nice."
+- **Supervised `dispatch_beam` workers.** It already spawns agents ad-hoc; bringing them under OTP supervision adds real lifecycle + presence instead of self-report.
+- (`monitor-delegated-liveness` and `orchestrator-vouched-identity` are *downstream* of having a live spawn path — they ride this, they don't drive it.)
+
+**Recommendation:** pick the **independent dialectic reviewer** as the first consumer and de-inert behind it; the dependent proposals then have a non-empty population and proceed on their own gates. `beam-wave-3a-read-only-handlers` stays separable (still self-admitted no evidence). `governed-effects` Phase 1 (#846) stays shipped; its runtime phases ride the now-justified orchestrator.
 
 ### Decision B — Wave-3 handler-dispatch (latency-driven, separate)
 Question: *does the live, coordination-bound p99 tail (~4.7s, 15s max, math-independent) justify porting handler dispatch — at ~927 writes/day and ~1 dialectic session/30d?*
@@ -119,7 +125,27 @@ The gate read should **state both axes accurately**: the p50 floor is closed, th
 
 ## Author recommendation (labelled)
 
-- **Decision A: freeze** absent a named consumer surfacing before the read. The keystone has been inert since 2026-06-12; the rationale is "architectural coherence," not demand; #819 (inert build = inventory ahead of demand) is the operator's own axis. Freezing is reversible — a real workload un-freezes it in one decision.
+- **Decision A: name the first consumer and de-inert** (corrected 2026-06-23 — see Decision A's bias note). Orchestration is a real demand and the capability is built+proven; "freeze" was migration-resistance. Lead consumer: the **independent dialectic reviewer**. Don't deploy the supervisor bare with no caller, but don't sit on a finished, demanded capability either.
 - **Decision B: genuinely open — operator's call on tail-vs-volume.** I won't push it either way; my substrate-migration biases cut in both directions and the evidence is mixed (real tail, low volume). My only ask is that it be decided on the *measured* tradeoff, not on the dead-floor framing my first draft mistakenly supplied.
 
 Proposals **outside** this cluster are healthy and proceed independently of the read (Track A strict-identity flip, dashboard-hero rollup, the eisv-probe KILL already recorded, the reversible identity micro-steps). This note is only about the BEAM-forward cluster.
+
+## Council review (2026-06-22) — the binary collapses; the decision is cheaper
+
+A 3-lens council (architect + code-reviewer + live-verifier, adversarial) materially reframed Call B. **Supersede the "tail-vs-volume" framing above with this.**
+
+**Corrected numbers (live-verifier):** volume is **~1,009 `core.agent_state` writes/day** (not 927) and **2 dialectic sessions/last-30d** (not ~1). Direction works against porting (slightly higher), doesn't flip anything. p99 4738ms / math 1.3% confirmed (one 3973ms math outlier aside). Orchestrator demand verified **empty** across audit.events, KG, git, port checks, dispatch_beam source → no *wired caller* in UNITARES today. **(Superseded 2026-06-23 — see Decision A's correction: "no wired caller" ≠ "no demand"; orchestration is a real demand and the orchestrator is proven-working — 68/68 tests + a full live acquire→run→release round-trip. Call A is "name the first consumer and de-inert," not "freeze.")** Track A flip healthy: post-flip `identity_required` failures are tokenless callers rejected at the gate (agent_id=NULL, latency 0) — expected, residents not dark.
+
+**The killer finding (code-reviewer, code-verified):** the p99/15s-max tail is the **`fcntl` file-lock spin-wait** in `src/state_locking.py::acquire_agent_lock` (`LOCK_EX|LOCK_NB` polled with `time.sleep(0.1)`, `timeout=5.0 × max_retries=3` = ~15s ceiling, a dead-on match for the observed 15s max). It is **not** PG coordination and **not** math. There is a **cheap one-file Python fix**: replace the file lock with `pg_try_advisory_lock(hashtext(agent_uuid))` (asyncpg already ExecutorPool-wrapped; crash-safe; deletes the stale-lock-cleanup code). This is the RFC's own **(A.2) disconfirmer**: **if it drops p99 < 2.0s, the Wave-3 port question is moot** — the tail was the file lock, not the substrate.
+
+**The structural finding (architect, DB-verified):** the full port's *own* go/no-go evidence does not exist. Disconfirmer (B) needs `measurement.beam_python_boundary.request` boundary-cost rows; the live count is **zero** (that emitter is Wave-3 impl, paused under (α)). The lease-plane *baseline* has its 14 days (p50 4ms/p99 15ms, n=17,121) but the comparison side is empty by construction. So **"port the full handler-dispatch on measured boundary cost" was never an available option for 06-24.** The dominating middle options are the roadmap's own **(γ) ETS / (β) dialectic-only scoped ports** — the only way to *generate* the (B) evidence at minimal blast radius — which the binary wrongly parked with the frozen cluster. Also: identity-middleware (in Call B's port) and vouched-identity (in Call A's freeze) are the **same single-writer surface** — don't split them across the two calls.
+
+**Blast-radius caveat:** the full identity-middleware port is the hottest surface in the codebase and Track A strict just went live today; a BEAM divergence in the `server_inferred`/`sticky_cache` proof_origin gate would silently pass or block writes. Argues against a big port now regardless.
+
+### Reframed decision (council-synthesized)
+Call B is **not** "port vs don't-port." The honest, cheap sequence:
+1. **Ship the one-file `fcntl`→`pg_advisory_lock` fix** (the A.2 falsifier). Reversible, one deploy, no BEAM.
+2. **Measure p99 ~7 days.** If **< 2.0s** → tail solved Python-side, **don't port**, freeze the whole BEAM-forward tree. If **still high** → the architectural-ceiling case strengthens *with evidence*, and the next step is a scoped **(γ)/(β)** probe (to populate disconfirmer B), **not** the full handler-dispatch port.
+3. **Call A: name the first consumer and de-inert** the orchestrator behind it (lead: independent dialectic reviewer) — corrected 2026-06-23; not "freeze."
+
+So the operator's actual 06-24 call is: **approve the one-file falsifier (Call B) + pick Call A's first consumer and de-inert.** The 9-week (mid-August) full handler-dispatch port is not the live next step; a one-file experiment plus wiring one real orchestrator consumer is.
