@@ -47,9 +47,16 @@ Resident agents (Sentinel/Vigil/Watcher/Steward) hold **zero** Redis connections
 | C4 | **KG surfaced dedup** (`kg_surfaced:*`, `enrichments.py:1583-1616`) — **NEW, missed in v0** | ❌ Redis sole store (fail-open) | Drop → duplicate KG notifications every check-in. Behavioral regression, not correctness. | **S** |
 | D | Metadata cache (`src/cache/metadata_cache.py`) | ✅ clean direct-PG fallback (verified) | ~~Delete module~~ **KEEP — cross-worker cache under multi-process (see topology decision); in-process copy = N× hydrate tax + stale skew** | ~~Trivial — safe now~~ **not a deletion** |
 | E | Distributed lock (`src/cache/distributed_lock.py`) | ✅ `fcntl` file fallback is the single-node path | ~~Delete Redis branch~~ **KEEP — `fcntl` is single-node only; this is the correct cross-process primitive once workers contend** | ~~Trivial — safe now~~ **not a deletion** |
-| F | Circuit breaker / metrics (`redis_client.py`) | n/a | Vanishes with Redis | **Free** |
+| F | Circuit breaker / metrics (`redis_client.py`) | n/a | Lives *inside* `redis_client.py`, still used by session cache → **cannot delete until Phase 2 (with Redis itself)** | **Phase 2, not Phase 0** |
 
 `identity_notifications:*` (read at `enrichments.py:1795`) is **dead code** — no writer exists. Remove on cleanup, no migration needed.
+
+> **Correction (2026-06-27, caller grep): Phase 0 is NOT "trivial safe deletions."** The v0/v1 framing was wrong on all three:
+> - **D — metadata cache is performance-load-bearing, not dead.** ~6 production call sites (`agent_metadata_persistence.py:230-239` bulk-hydrates ~3000 agents; `lifecycle/query.py:945,1029` read/set; `.invalidate()` at `persistence.py:818`, `handlers.py:1929`, `helpers.py:180`). The comment at `agent_metadata_persistence.py:99` ties it to a **~17s first-call tax on observe** it was added to fix. Deleting it risks regressing that. Correct move: make it Redis-free by swapping its backend to in-process (it already degrades to in-process), not deleting it — that's Phase 1/2 work, not a quick win.
+> - **E — no real lock-acquisition caller** (only `runtime_queries.py:703-714` health output + the `__init__` export + status strings). Removing it means updating the health surface, not a no-op.
+> - **F — the circuit breaker lives in `redis_client.py`**, which the session cache still imports. It can't be deleted until Redis itself goes (Phase 2).
+>
+> **Net: there is no genuinely-free Phase 0 deletion.** The only safe-now item is the prep fix (next section, shipped as PR #1122). Everything else carries a real (if small) caller update or perf consideration. The deletions belong in Phase 2, after the mirror lands.
 
 ## Why Surface A is NOT near-free (the v0 error)
 
@@ -61,7 +68,7 @@ Additionally, the Redis session payload carries `trajectory_required`, `spawn_re
 
 ## Corrected sequencing
 
-**Phase 0 — safe deletions now (no data path):** D + E + F. Zero behavior change, shrinks dependency surface, proves the harness. Also delete the false "PostgreSQL backend will enforce" comment in `rate_limiter.py` and the dead `identity_notifications` reader.
+**Phase 0 — REVISED: there is no free deletion (see correction above).** The only safe-now change is the **prep fix** (check `create_session`'s return value + log PG-layer session collisions) — **shipped as PR #1122**. The D/E/F deletions move to Phase 2 (after the mirror lands), because D is perf-load-bearing, E touches the health surface, and F lives inside the still-used `redis_client.py`. The harmless cleanups (delete the false "PostgreSQL backend will enforce" comment in `rate_limiter.py`, remove the dead `identity_notifications` reader) can ride along with the prep fix or Phase 2.
 
 **Phase 1 — build the durable mirror (the real work, Redis stays up):**
 1. Make every resolve path (including `persist=False`) write-through to `core.sessions` (or a purpose-built `core.session_bindings`) with the rich fields (`spawn_reason`, `bind_ip_ua`, `trajectory_required`) and UUID-typed `agent_id`.
