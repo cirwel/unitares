@@ -776,8 +776,16 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
         # ghost rate (the underlying motivation for the S21 incident).
         # Without this, S21-a would stop the Redis-overwrite bleed but
         # leave the lineage-declaration bleed open.
+        # #1319: resume_rejected_hijack_guard joins session_resolve_miss here.
+        # Resolution now fails closed instead of PATH-3-minting when a hijack
+        # guard (strict fingerprint mismatch / token mismatch) rejected the
+        # resume — without this, the 2026-07-01 dogfood incident bound a
+        # record_result write to a phantom uuid4 with success:true. Strict
+        # deployments get the typed refusal below; non-strict deployments
+        # keep the auto-mint retry (spawn_reason makes the mint legible).
         if (identity_result.get("resume_failed")
-                and identity_result.get("error") == "session_resolve_miss"):
+                and identity_result.get("error") in (
+                    "session_resolve_miss", "resume_rejected_hijack_guard")):
             # #425: identity-requirement is now a per-tool attribute on the
             # tool registry (`requires_identity` on the @mcp_tool decorator).
             # pre_onboard tools are exempt from auto-mint at this layer; the
@@ -814,32 +822,65 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                     strict_identity_refusal_payload,
                 )
                 if is_strict_identity_required():
+                    _resolve_error = identity_result.get("error")
                     logger.info(
-                        "[DISPATCH] session_resolve_miss for %s... "
+                        "[DISPATCH] %s for %s... "
                         "— STRICT_IDENTITY_REQUIRED=true; returning typed "
                         "refusal (no auto-mint).",
-                        session_key[:20],
+                        _resolve_error, session_key[:20],
                     )
                     from src.mcp_handlers.response_base import success_response
                     # Single-sourced payload — the REST gate returns the
                     # same dict, so the two transports cannot drift
                     # (stage-1 burn-in fold, 2026-06-11).
+                    _surface_context = {
+                        "transport_surface": "mcp_dispatch",
+                        "lifecycle_automation": "not_confirmed",
+                        "note": (
+                            "Direct MCP dispatch refusal; tool exposure does "
+                            "not prove client lifecycle-hook automation."
+                        ),
+                    }
+                    _hint_override = None
+                    if _resolve_error == "resume_rejected_hijack_guard":
+                        # #1319: tell the caller precisely why the resume was
+                        # refused — the whole point of failing closed here is
+                        # that the old silent phantom mint told them nothing.
+                        _surface_context["resume_rejected_reason"] = (
+                            identity_result.get("reason")
+                        )
+                        _token_presented = bool(
+                            arguments and arguments.get("continuity_token")
+                        )
+                        if _token_presented and not _token_agent_uuid:
+                            _surface_context["continuity_token_invalid"] = True
+                        _hint_override = (
+                            "Your session resume was rejected by the identity "
+                            "hijack guard "
+                            f"({identity_result.get('reason', 'unknown')})."
+                            + (
+                                " The continuity_token you presented failed "
+                                "verification (malformed, truncated, or "
+                                "expired secret) and could not prove "
+                                "ownership."
+                                if _token_presented and not _token_agent_uuid
+                                else ""
+                            )
+                            + " Nothing was written. Re-onboard with "
+                            "start_session(force_new=true, parent_agent_id="
+                            "<your prior uuid>, spawn_reason=\"new_session\") "
+                            "or retry with a valid continuity_token."
+                        )
                     return success_response(strict_identity_refusal_payload(
                         name,
-                        surface_context={
-                            "transport_surface": "mcp_dispatch",
-                            "lifecycle_automation": "not_confirmed",
-                            "note": (
-                                "Direct MCP dispatch refusal; tool exposure does "
-                                "not prove client lifecycle-hook automation."
-                            ),
-                        },
+                        hint=_hint_override,
+                        surface_context=_surface_context,
                     ))
                 logger.info(
-                    "[DISPATCH] session_resolve_miss for %s... — minting "
+                    "[DISPATCH] %s for %s... — minting "
                     "ephemeral dispatch identity (S21-a, spawn_reason="
                     "dispatch_auto_mint)",
-                    session_key[:20],
+                    identity_result.get("error"), session_key[:20],
                 )
                 identity_result = await resolve_session_identity(
                     session_key,
