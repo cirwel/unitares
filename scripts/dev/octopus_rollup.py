@@ -48,11 +48,19 @@ def fetch_rows(db: str, include_all: bool) -> list[tuple[str, str, str]]:
     Fields are uuids or empty — no embedded tabs — so a tab-separated read is
     unambiguous.
     """
-    where = "" if include_all else "where status = 'active'"
+    # thread_id lives in TWO places that drift: identities.metadata->>'thread_id'
+    # and the core.agents.thread_id column. Some rows carry it in one but not the
+    # other (a dual-store artifact), so coalesce both — reading only metadata
+    # undercounts thread connectivity and inflates the principal count with
+    # false singletons (council live-verify, 2026-06-18).
+    where = "" if include_all else "where i.status = 'active'"
     sql = (
-        "select agent_id, coalesce(metadata->>'thread_id',''), "
-        "coalesce(parent_agent_id::text,'') "
-        f"from core.identities {where}"
+        "select i.agent_id, "
+        "coalesce(i.metadata->>'thread_id', a.thread_id, ''), "
+        "coalesce(i.parent_agent_id::text, '') "
+        "from core.identities i "
+        "left join core.agents a on a.id = i.agent_id "
+        f"{where}"
     )
     proc = subprocess.run(
         ["psql", "-d", db, "-tAF", "\t", "-c", sql],
