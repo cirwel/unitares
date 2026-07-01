@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -103,6 +105,10 @@ class Finding:
 # ---------------------------------------------------------------------------
 
 
+def _unique_tmp_path(target: Path) -> Path:
+    return target.with_suffix(f"{target.suffix}.tmp.{os.getpid()}.{time.monotonic_ns()}")
+
+
 def load_dedup() -> dict[str, str]:
     """Return mapping of fingerprint → detected_at timestamp."""
     if not DEDUP_FILE.exists():
@@ -114,8 +120,25 @@ def load_dedup() -> dict[str, str]:
 
 
 def save_dedup(dedup: dict[str, str]) -> None:
+    """Atomically persist ``dedup.json``.
+
+    The scan hook can overlap with itself across fast edit bursts, so direct
+    ``write_text`` is too fragile: a crash or colliding writer can leave a
+    truncated dedup gate. Use the same tmp+rename discipline as the other
+    Watcher state files, with a unique temp name per writer.
+    """
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    DEDUP_FILE.write_text(json.dumps(dedup, indent=2))
+    tmp = _unique_tmp_path(DEDUP_FILE)
+    try:
+        with tmp.open("w") as fh:
+            json.dump(dedup, fh, indent=2, sort_keys=True)
+        tmp.replace(DEDUP_FILE)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def sweep_stale_dedup(
@@ -247,11 +270,18 @@ def _write_findings_atomic(findings: list[dict[str, Any]]) -> None:
     sibling temp file and renames, so a crash mid-write cannot corrupt the
     findings feed."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = FINDINGS_FILE.with_suffix(FINDINGS_FILE.suffix + ".tmp")
-    with tmp.open("w") as fh:
-        for f in findings:
-            fh.write(json.dumps(f) + "\n")
-    tmp.replace(FINDINGS_FILE)
+    tmp = _unique_tmp_path(FINDINGS_FILE)
+    try:
+        with tmp.open("w") as fh:
+            for f in findings:
+                fh.write(json.dumps(f) + "\n")
+        tmp.replace(FINDINGS_FILE)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 # ---------------------------------------------------------------------------
