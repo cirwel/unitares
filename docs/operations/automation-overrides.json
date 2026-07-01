@@ -12,7 +12,8 @@
       "description": "Nightly database dump.",
       "surface_claims": ["repo:/path/to/your-service"],
       "expected_outputs": ["backup_artifact", "status_or_stdout"],
-      "notes": ["gate:machine"]
+      "notes": ["gate:machine"],
+      "dashboard_priority": 2
     },
     "codex:weekly-report": {
       "owner": "operator",
@@ -20,7 +21,8 @@
       "description": "Generates a weekly summary for a human to review.",
       "surface_claims": ["repo:/path/to/your-service"],
       "expected_outputs": ["report_artifact"],
-      "notes": ["gate:human"]
+      "notes": ["gate:human"],
+      "dashboard_priority": 1
     },
     "cron:log-rotate": {
       "owner": "operator",
@@ -28,7 +30,8 @@
       "description": "Rotates local logs on a schedule (nothing verifies the outcome).",
       "surface_claims": ["repo:/path/to/your-service"],
       "expected_outputs": ["status_or_stdout"],
-      "notes": ["gate:ungated"]
+      "notes": ["gate:ungated"],
+      "dashboard_priority": 0
     }
   }
 }
