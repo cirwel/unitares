@@ -1,0 +1,73 @@
+name: Stranded Work Audit
+
+# Weekly sweep for branch work that silently never reached master — the
+# post-merge-commit failure mode (a PR merges, follow-up commits get pushed to
+# the same branch, no surface ever reports the gap; 2026-07-01 a manual sweep
+# found 10 branches carrying real marooned fixes). The audit itself is
+# scripts/dev/stranded_work_audit.py; this workflow is just the schedule plus
+# a deduped GitHub issue when STRANDED branches exist (same pattern as
+# surface-findings.yml: hidden fingerprint marker, ci-finding label).
+#
+# GITHUB_TOKEN-only — no metered APIs (execution-cost policy).
+
+on:
+  schedule:
+    - cron: "17 14 * * 1"   # Mondays 14:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history — the audit compares patch-ids across branches)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all branch heads
+        run: git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+
+      - name: Run stranded-work audit
+        id: audit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/dev/stranded_work_audit.py --repo "$GITHUB_REPOSITORY" | tee audit.txt
+          count=$(grep -c '^STRANDED' audit.txt || true)
+          echo "stranded=$count" >> "$GITHUB_OUTPUT"
+          { echo '## Stranded-work audit'; echo '```'; cat audit.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or update the audit issue (only when STRANDED work exists)
+        if: steps.audit.outputs.stranded != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          marker='<!-- finding-fingerprint: stranded-work-audit -->'
+          body_file=$(mktemp)
+          {
+            echo "$marker"
+            echo "The weekly stranded-work audit found branch work marooned off master."
+            echo "STRANDED = commits pushed after the branch's PR merged, patches not in master — re-land or explicitly discard."
+            echo
+            echo '```'
+            cat audit.txt
+            echo '```'
+            echo
+            echo "_Re-run locally: \`python3 scripts/dev/stranded_work_audit.py\`_"
+          } > "$body_file"
+          existing=$(gh issue list --label ci-finding --state open \
+                       --search 'stranded-work-audit in:body' \
+                       --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$body_file"
+          else
+            gh issue create \
+              --title "Stranded post-merge work on branches (weekly audit)" \
+              --label ci-finding \
+              --body-file "$body_file"
+          fi
