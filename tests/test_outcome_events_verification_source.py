@@ -417,3 +417,74 @@ async def test_bridge_does_not_override_explicit_eisv():
     db.get_latest_eisv_by_agent_id.assert_not_awaited()
     args = conn.calls[0][1]
     assert args[5] == 0.42  # explicit value preserved, not overridden
+
+
+# --- Phase-5 shadow isolation (#1320 follow-up): shadow rows persist but must
+# not train calibration. Before this guard nothing consumed shadow_write — the
+# rows self-graded TOOL_OBSERVED (0.65) via phase5_emitter, exactly the
+# training threshold, so "shadow" mode trained calibration at full effect.
+
+
+def _phase5_detail(**extra):
+    detail = {
+        "tool": "pytest",
+        "summary": "1 passed",
+        "kind": "test",
+        "exit_code": 0,
+        "phase5_emitter": True,
+    }
+    detail.update(extra)
+    return detail
+
+
+@pytest.mark.asyncio
+async def test_phase5_shadow_row_is_calibration_excluded():
+    from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+
+    db = MagicMock()
+    db.get_latest_eisv_by_agent_id = AsyncMock(return_value=None)
+    db.get_latest_confidence_before = AsyncMock(return_value=None)
+    db.record_outcome_event = AsyncMock(return_value="outcome-id")
+
+    checker = MagicMock()
+    with patch("src.db.get_db", return_value=db), \
+         patch("src.calibration.calibration_checker", checker):
+        await _record_outcome_event_inline({
+            "agent_id": "agent-1",
+            "outcome_type": "test_passed",
+            "confidence": 0.8,
+            "detail": _phase5_detail(shadow_write=True),
+            "verification_source": "agent_reported_tool_result",
+        })
+
+    persisted_detail = db.record_outcome_event.await_args.kwargs["detail"]
+    assert persisted_detail["calibration_excluded"] is True
+    assert persisted_detail["hard_exogenous"] is False
+    checker.record_prediction.assert_not_called()
+    checker.record_tactical_decision.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_phase5_enabled_row_still_trains_calibration():
+    """Enable mode keeps supplying calibration — the contract's whole purpose."""
+    from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+
+    db = MagicMock()
+    db.get_latest_eisv_by_agent_id = AsyncMock(return_value=None)
+    db.get_latest_confidence_before = AsyncMock(return_value=None)
+    db.record_outcome_event = AsyncMock(return_value="outcome-id")
+
+    checker = MagicMock()
+    with patch("src.db.get_db", return_value=db), \
+         patch("src.calibration.calibration_checker", checker):
+        await _record_outcome_event_inline({
+            "agent_id": "agent-1",
+            "outcome_type": "test_passed",
+            "confidence": 0.8,
+            "detail": _phase5_detail(),
+            "verification_source": "agent_reported_tool_result",
+        })
+
+    persisted_detail = db.record_outcome_event.await_args.kwargs["detail"]
+    assert persisted_detail["calibration_excluded"] is False
+    checker.record_prediction.assert_called_once()
