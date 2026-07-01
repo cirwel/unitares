@@ -105,7 +105,7 @@ def audit(repo: str, active_days: int) -> list[dict]:
             # Branch advanced past the merged head — is the advance in master?
             since = merged_head if _known_object(merged_head) else None
             stranded = unmerged_patch_count(branch, since)
-            if stranded:
+            if stranded and _end_state_differs(branch, since):
                 findings.append({"branch": branch, "class": "STRANDED",
                                  "detail": f"{stranded} commit(s) pushed after PR "
                                            f"#{pr['number']} merged; patches NOT in master"})
@@ -128,6 +128,23 @@ def audit(repo: str, active_days: int) -> list[dict]:
                              "detail": f"{unique} unique commit(s), {route}, "
                                        f"tip {age}d old"})
     return findings
+
+
+def _end_state_differs(branch: str, since: str | None) -> bool:
+    """Second opinion on a cherry '+': does the branch's END STATE of the files
+    it touched actually differ from master's? A patch can miss by patch-id
+    (different context after master evolved) while its content landed anyway —
+    without this check such branches read as STRANDED when they are PRUNABLE.
+    """
+    base = since or "origin/master"
+    try:
+        touched = run("git", "diff", "--name-only", base, f"origin/{branch}").split()
+        if not touched:
+            return False
+        delta = run("git", "diff", "origin/master", f"origin/{branch}", "--", *touched)
+        return bool(delta.strip())
+    except subprocess.CalledProcessError:
+        return True  # can't prove it landed -> keep the alarm
 
 
 def _known_object(sha: str) -> bool:
