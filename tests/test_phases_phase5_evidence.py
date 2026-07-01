@@ -428,3 +428,76 @@ async def test_kind_to_outcome_type_mapping(monkeypatch):
         assert args.get("verification_source") == "agent_reported_tool_result", (
             f"Expected agent_reported_tool_result; got {args.get('verification_source')}"
         )
+
+
+# ─── evidence_status disclosure (#1320) ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_flag_off_sets_ignored_status_and_warning(monkeypatch):
+    """Flag off + evidence present → evidence_status disclosed and warning appended."""
+    monkeypatch.delenv("UNITARES_PHASE5_EVIDENCE_WRITE", raising=False)
+
+    outcome_event_mock = AsyncMock(return_value=[MagicMock(text='{"outcome_id":"eid"}')])
+    ctx = _make_ctx(
+        recent_tool_results=[
+            {"kind": "test", "tool": "pytest", "summary": "passed", "exit_code": 0}
+        ]
+    )
+
+    with _make_patch_stack(ctx, outcome_event_mock=outcome_event_mock):
+        await execute_post_update_effects(ctx)
+
+    assert ctx.result.get("evidence_status") == "ignored:flag_off"
+    assert any("NOT scored" in w for w in ctx.warnings), (
+        f"Expected flag-off disclosure warning; ctx.warnings={ctx.warnings}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_flag_enabled_sets_recorded_status(monkeypatch):
+    monkeypatch.setenv("UNITARES_PHASE5_EVIDENCE_WRITE", "1")
+
+    outcome_event_mock = AsyncMock(return_value=[MagicMock(text='{"outcome_id":"eid"}')])
+    ctx = _make_ctx(
+        recent_tool_results=[
+            {"kind": "test", "tool": "pytest", "summary": "passed", "exit_code": 0}
+        ]
+    )
+
+    with _make_patch_stack(ctx, outcome_event_mock=outcome_event_mock):
+        await execute_post_update_effects(ctx)
+
+    assert ctx.result.get("evidence_status") == "recorded"
+    assert not any("NOT scored" in w for w in ctx.warnings)
+
+
+@pytest.mark.asyncio
+async def test_flag_shadow_sets_recorded_shadow_status(monkeypatch):
+    monkeypatch.setenv("UNITARES_PHASE5_EVIDENCE_WRITE", "shadow")
+
+    outcome_event_mock = AsyncMock(return_value=[MagicMock(text='{"outcome_id":"eid"}')])
+    ctx = _make_ctx(
+        recent_tool_results=[
+            {"kind": "test", "tool": "pytest", "summary": "passed", "exit_code": 0}
+        ]
+    )
+
+    with _make_patch_stack(ctx, outcome_event_mock=outcome_event_mock):
+        await execute_post_update_effects(ctx)
+
+    assert ctx.result.get("evidence_status") == "recorded:shadow"
+
+
+@pytest.mark.asyncio
+async def test_no_evidence_leaves_status_absent(monkeypatch):
+    """No recent_tool_results → no evidence_status key (absence means nothing offered)."""
+    monkeypatch.delenv("UNITARES_PHASE5_EVIDENCE_WRITE", raising=False)
+
+    outcome_event_mock = AsyncMock(return_value=[MagicMock(text='{"outcome_id":"eid"}')])
+    ctx = _make_ctx(recent_tool_results=[])
+
+    with _make_patch_stack(ctx, outcome_event_mock=outcome_event_mock):
+        await execute_post_update_effects(ctx)
+
+    assert "evidence_status" not in ctx.result

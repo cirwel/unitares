@@ -2049,6 +2049,12 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
     evidence_mode = os.environ.get("UNITARES_PHASE5_EVIDENCE_WRITE", "").lower()
     if ctx.recent_tool_results and evidence_mode in ("shadow", "1", "enable"):
         from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+        # #1320: disclose what happens to the evidence. "recorded" rows still
+        # carry verification_source="agent_reported_tool_result" downstream —
+        # recorded means graded-and-stored, not independently verified.
+        ctx.result["evidence_status"] = (
+            "recorded:shadow" if evidence_mode == "shadow" else "recorded"
+        )
         for evidence in ctx.recent_tool_results:
             try:
                 outcome_type, is_bad = _derive_outcome(evidence)
@@ -2083,6 +2089,19 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
             "would have processed %d items for agent=%s",
             len(ctx.recent_tool_results), ctx.agent_id,
         )
+        # #1320: the deploy gate (spec §8) is server policy, but silence toward
+        # the caller is not part of it. Without this, the payload validates,
+        # persists into the state row, and reads like evidence downstream while
+        # having had zero effect on scoring — disclose that explicitly.
+        ctx.result["evidence_status"] = "ignored:flag_off"
+        warning = (
+            f"recent_tool_results ({len(ctx.recent_tool_results)} item(s)) was "
+            "accepted but NOT scored or recorded: evidence recording is "
+            "disabled on this server (UNITARES_PHASE5_EVIDENCE_WRITE unset). "
+            "The items did not affect risk, coherence, or calibration."
+        )
+        if warning not in ctx.warnings:
+            ctx.warnings.append(warning)
 
     # R2 PR 5: lineage hooks — chain_obs_count increment + evaluate_lineage_for
     # dispatch. Fail-soft inside the helper. Placed at the end so trajectory
