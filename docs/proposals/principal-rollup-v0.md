@@ -1,10 +1,77 @@
 # Principal Rollup — counting the integral, not the point-value
 
-**Status:** v0 proposal — measurement shipped, write-path changes operator-gated
+**Status:** v0 proposal — measurement shipped (#877, #880); **Move 3 reframed by council 2026-06-18 (see amendment) — derive, do NOT store-at-mint**
 **Surface:** identity / onboarding (single-writer; see CLAUDE.md)
 **Relates to:** `docs/ontology/identity.md` research-agenda #3; the
 `participated/never_participated` view (#822); the anon-ghost mint source
 (dispatch_beam, closed 2026-06-18).
+
+## Council amendment (2026-06-18)
+
+A three-member council (ontology, implementation, live verification) reviewed
+Move 3. **Unanimous verdict: do NOT resolve-or-create `principal_id` at onboard.
+Keep the principal DERIVED.** Move 3 is reframed; the surface goal ("you are
+instance K of principal P") is kept, delivered without a stored mint-time FK.
+
+**Why (each member, independently):**
+- *Ontology:* storing a point-in-time grouping contradicts the doc's own
+  "identity as **integral**, not point-value" — an integral is *recomputed over a
+  window*, not frozen. **Onboard is the moment of LEAST information about the
+  component** (most lineage/thread edges arrive later). Freezing it at mint is
+  systematically wrong for exactly the persistent-worker cases that motivate this.
+- *Implementation:* the mint path (`resolution.py` PATH 3) is load-bearing and
+  anyio-asyncio-hardened; adding union-find + a write there is the dangerous
+  await class. Resolve-at-mint also re-opens the **false-archival** race
+  (concurrent siblings on a shared thread/parent → incoherent root) and forces a
+  stored-FK **re-point** on every late lineage edge, with no safe mechanism.
+  Derived cost is sub-ms over in-memory dicts — storing is premature optimization.
+- *Live-verifier (ground-truth):* root identities have **no** principal context
+  at mint; **65% of active agents have no `parent_agent_id` at all**; lineage-at-
+  mint covers only a minority; multi-root threads are the norm (15 active threads
+  with >1 root); 5 active cross-thread parents would force after-the-fact merges.
+
+**Reframed Move 3 (the smallest viable, off-hot-path increment):** a background
+reconciler (like `deep_health_probe_task`) recomputes the rollup every ~60s into
+an in-process `agent_uuid → principal_root` map; the onboard/identity **response**
+appends `principal_id` + `instance_count` via a single post-mint dict read,
+**fail-open null**, touching zero write paths and needing no migration. A *stored*
+`core.principals` table (if ever) is a **post-2026-06-24-Wave-3** question, owned
+by the BEAM side (correct write sequencing), populated by reconciler — **never
+resolve-at-mint**.
+
+**Must-fix before any implementation:**
+1. **Invariant (code + doc + test): `principal_id` MUST NEVER authorize resume,
+   rebind, write-attribution, or tier.** Display/count-only; rejected on every
+   write path. (Currently safe — no resume path keys on `thread_id`/`parent`,
+   verified — but a future "resume by principal" surface would re-open S19.)
+2. **Unattachable anonymous onboard → `principal_id: null`, NOT "its own
+   singleton."** A singleton-principal *object* lets the anon-ghost class
+   re-inflate the count; pair with the mint-time non-persistence discipline.
+3. **Split thread-union from lineage-union.** They are different layers (thread =
+   conversation/Memory artifact; lineage = causal declaration). Report
+   `principal_by_lineage` and `principal_by_thread` separately; the union is the
+   *coarsest* view, labeled as such — do not silently assert thread≈causal.
+4. **Gate the harness instance-key (Sentinel) on the substrate-earned appendix's
+   three conditions.** A generic file-`id_path` is closer to the `session.json`
+   performative failure case than to Lumen's hardware; only a true dedicated
+   substrate earns it.
+5. **Pin + label the population scope on every principal count** (active-7d vs
+   all-time partition differently — 38 vs 117 for the same worker).
+
+**Verification corrections to THIS doc / the tool (must fix for accuracy):**
+- The tool (`octopus_rollup.py`) reads `thread_id` from `identities.metadata`,
+  but **127 agents carry `thread_id` in `core.agents.thread_id` and NOT in
+  metadata** → it undercounts connectivity, so "530 principals" slightly
+  *over*counts (false singletons). Reconcile the thread_id source.
+- **Dual-store drift is live:** `core.identities` active = 817 vs `core.agents`
+  active = 761 — **56 identities are active in one store, archived in the other.**
+  Any honest count must reconcile this (relates to `uuid-keyed-identity-migration`).
+- **The `_shadow` tables are EMPTY (0 rows, dead surface)** — so a derived
+  principal sidesteps the shadow-parity hazard entirely (another argument for
+  derive-over-store).
+
+The numbers reproduced at the tool level (817→530; 38 active / 117 all-time), but
+the underlying population is soft per the two drift findings above.
 
 ## The gap, in the ontology's own words
 
