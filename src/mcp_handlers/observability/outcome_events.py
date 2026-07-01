@@ -365,7 +365,16 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     # functional half of the harness's self-marking (the detail flag alone is
     # only a forensic breadcrumb without this guard). Treat older red-team
     # fixture boundary flags as equivalent calibration exclusions too.
-    calibration_excluded = _is_controlled_validation_fixture(detail)
+    # Phase-5 shadow rows (UNITARES_PHASE5_EVIDENCE_WRITE=shadow) persist for
+    # burn-in analysis but must not train calibration: nothing else consumed
+    # the shadow_write flag, so "shadow" mode was shadow in name only — the
+    # rows self-grade TOOL_OBSERVED (0.65) via phase5_emitter, exactly the
+    # training threshold, and would have caused the distribution shift the
+    # deploy gate (phase-5 contract §8) exists to observe first.
+    calibration_excluded = (
+        _is_controlled_validation_fixture(detail)
+        or bool(detail.get("shadow_write"))
+    )
     hard_exogenous_signal = _classify_hard_exogenous_signal(outcome_type, detail)
     if evidence_weight < _MIN_TACTICAL_EVIDENCE_WEIGHT or calibration_excluded:
         hard_exogenous_signal = None
