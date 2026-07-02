@@ -725,8 +725,10 @@ async def http_effect_grant(request):
 
     # Inert unless explicitly enabled. Fail-closed: off → not implemented, so a
     # premature caller is refused rather than silently issued a grant nothing
-    # verifies yet.
-    if not _http_bool(os.getenv("UNITARES_GOVERNED_EFFECT_BINDING")):
+    # verifies yet. Minting opens when the global flag OR any per-type flag is
+    # set (#1252 item 2): during a staged rollout producers must be able to
+    # mint before every type enforces.
+    if not _binding_mint_enabled():
         return JSONResponse(
             {"ok": False, "error": "binding_not_enabled",
              "detail": "effect-binding grant minting is disabled (Phase 1, inert)"},
@@ -796,6 +798,38 @@ async def http_effect_grant(request):
         )
 
     return JSONResponse({"ok": True, "grant": grant})
+
+
+_BINDING_FLAG = "UNITARES_GOVERNED_EFFECT_BINDING"
+
+
+def _binding_enforced(effect_type) -> bool:
+    """Is effect-binding enforced for this effect type? (#1252 item 2)
+
+    The global ``UNITARES_GOVERNED_EFFECT_BINDING`` enforces every type at
+    once — flipping it requires every producer to be minting simultaneously.
+    Per-type flags (``UNITARES_GOVERNED_EFFECT_BINDING_FILE_WRITE``,
+    ``.._AGENT_SPAWN``, derived generically from the forwarded effect_type)
+    stage the rollout: enforce+prove file_write first while agent_spawn's
+    ad-hoc producers stay unbound. The effect_type here is the one the lease
+    plane forwards in the veto body (trusted loopback forwarder, always set
+    by its validated envelope) — a missing type under per-type staging is
+    simply not yet enforced; the global flag remains the blanket lockdown.
+    """
+    if _http_bool(os.getenv(_BINDING_FLAG)):
+        return True
+    if not isinstance(effect_type, str) or not effect_type:
+        return False
+    suffix = "".join(c if c.isalnum() else "_" for c in effect_type).upper()
+    return _http_bool(os.getenv(f"{_BINDING_FLAG}_{suffix}"))
+
+
+def _binding_mint_enabled() -> bool:
+    """Grant minting opens when the global OR any per-type flag is set."""
+    if _http_bool(os.getenv(_BINDING_FLAG)):
+        return True
+    prefix = _BINDING_FLAG + "_"
+    return any(k.startswith(prefix) and _http_bool(v) for k, v in os.environ.items())
 
 
 async def _check_effect_binding(body: dict, proposer: str):
@@ -914,13 +948,16 @@ async def http_effect_veto(request):
     tier_reason = None if tier_ok else "tier_recert_failed:not_strong_identity"
 
     # §8 effect-binding (governed-effect-effect-binding-v0 §5 / #1075). ADDITIVE,
-    # flag-gated: when UNITARES_GOVERNED_EFFECT_BINDING is off (default), this is
-    # a no-op (binding_ok=True) and the live §6/§7 veto is byte-identical. When
-    # on, the forwarded grant must cover THIS exact effect and its nonce must be
-    # unconsumed — otherwise binding_ok is False and the effect is vetoed. Like
-    # §7, this gate applies on EVERY exit path below.
+    # flag-gated: with no binding flag set (default), this is a no-op
+    # (binding_ok=True) and the live §6/§7 veto is byte-identical. Enforcement
+    # is per effect type (#1252 item 2): the global flag covers every type,
+    # per-type flags (e.g. UNITARES_GOVERNED_EFFECT_BINDING_FILE_WRITE) stage
+    # the rollout one type at a time. When enforced, the forwarded grant must
+    # cover THIS exact effect and its nonce must be unconsumed — otherwise
+    # binding_ok is False and the effect is vetoed. Like §7, this gate applies
+    # on EVERY exit path below.
     binding_ok, binding_reason = True, None
-    if _http_bool(os.getenv("UNITARES_GOVERNED_EFFECT_BINDING")):
+    if _binding_enforced(body.get("effect_type")):
         binding_ok, binding_reason = await _check_effect_binding(body, proposer)
 
     try:

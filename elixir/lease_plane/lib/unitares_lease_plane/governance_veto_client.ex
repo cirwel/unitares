@@ -99,14 +99,20 @@ defmodule UnitaresLeasePlane.GovernanceVetoClient do
   end
 
   # Canonical payload hash — MUST match the proposer's mint-time payload_sha256
-  # so the grant's bound `psha` equals what gov-mcp verifies. Same computation as
-  # GovernedEffect.idempotency_digest's payload_hash: sha256 of the JSON-encoded
-  # payload, lowercase hex. (Cross-language canonicalization — Elixir Jason vs a
-  # Python proposer's json — is the slice-4 wiring integration item; a mismatch
-  # fails CLOSED at the veto, never open.)
+  # so the grant's bound `psha` equals what gov-mcp verifies. Uses the shared
+  # cross-language canonical form (UnitaresLeasePlane.CanonicalPayload here,
+  # unitares_sdk.lease_plane.canonical on the Python producer side; both pinned
+  # by tests/vectors/effect_payload_canonical.json). A payload the canonical
+  # form refuses (float / control char) forwards a sentinel that can never
+  # equal a minted hash, so the grant fails verification at gov-mcp and the
+  # effect is vetoed — fail closed, never open. Distinct from
+  # GovernedEffect.idempotency_digest, which keeps its original non-canonical
+  # payload hash so existing idempotency replay keys are untouched.
   defp payload_sha256(env) do
-    :crypto.hash(:sha256, Jason.encode!(Map.get(env, :payload, %{})))
-    |> Base.encode16(case: :lower)
+    case UnitaresLeasePlane.CanonicalPayload.sha256(Map.get(env, :payload, %{})) do
+      {:ok, hex} -> hex
+      {:error, reason} -> "canonicalization_refused:#{reason}"
+    end
   end
 
   defp parse(resp) do
