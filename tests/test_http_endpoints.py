@@ -162,6 +162,20 @@ class TestCallToolEndpoint:
         arguments = call_args[0][1]
         assert arguments.get("client_session_id") == "my-session-123"
 
+    def test_explicit_client_session_id_beats_session_header(self, client, mock_dispatch):
+        """HTTP header must not overwrite the session id returned by onboard()."""
+        client.post(
+            "/v1/tools/call",
+            json={
+                "tool_name": "test_tool",
+                "arguments": {"client_session_id": "agent-returned-by-onboard"},
+            },
+            headers={"x-session-id": "custom-rest-session"},
+        )
+        call_args = mock_dispatch.call_args
+        arguments = call_args[0][1]
+        assert arguments.get("client_session_id") == "agent-returned-by-onboard"
+
     def test_empty_arguments_defaults_to_dict(self, client, mock_dispatch):
         """Missing arguments field should default to empty dict."""
         client.post("/v1/tools/call", json={

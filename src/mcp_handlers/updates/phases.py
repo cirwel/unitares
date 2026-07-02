@@ -317,7 +317,25 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
 
     if not ctx.agent_uuid:
         logger.error("No agent_uuid in context - identity_v2 resolution failed at dispatch")
-        return [error_response("Identity not resolved. Try calling identity() first.")]
+        return [error_response(
+            "Identity not resolved for this check-in.",
+            recovery={
+                "action": (
+                    "If you already called onboard(), retry with the "
+                    "client_session_id returned by that onboard() call. "
+                    "Otherwise call onboard(force_new=true) first."
+                ),
+                "related_tools": ["onboard", "identity", "process_agent_update"],
+                "workflow": [
+                    "1. Call onboard(force_new=true) to mint this process-instance",
+                    "2. Save client_session_id from the onboard() response",
+                    "3. Pass that client_session_id to process_agent_update()",
+                ],
+            },
+            error_code="SESSION_ERROR",
+            error_category="auth_error",
+            arguments=ctx.arguments,
+        )]
 
     # #425 strict WRITE precondition (caller-proven binding required).
     #
