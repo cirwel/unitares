@@ -342,7 +342,7 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
     _copy_passthrough_fields(
         response_data,
         result,
-        ("prediction_id", "warnings", "policy_evaluation", "enforcement"),
+        ("prediction_id", "warnings", "policy_evaluation", "enforcement", "evidence_status"),
     )
     return result
 
@@ -585,7 +585,7 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     _copy_passthrough_fields(
         response_data,
         result,
-        ("prediction_id", "warnings", "policy_evaluation", "enforcement"),
+        ("prediction_id", "warnings", "policy_evaluation", "enforcement", "evidence_status"),
     )
     return result
 
@@ -632,7 +632,7 @@ def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_t
     identity_notifications = response_data.get("_identity_notifications")
     if identity_notifications:
         result["identity_notifications"] = identity_notifications
-    _copy_passthrough_fields(response_data, result, ("warnings",))
+    _copy_passthrough_fields(response_data, result, ("warnings", "evidence_status"))
 
     return result
 
@@ -717,7 +717,7 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
     _copy_passthrough_fields(
         response_data,
         result,
-        ("prediction_id", "warnings", "policy_evaluation", "enforcement"),
+        ("prediction_id", "warnings", "policy_evaluation", "enforcement", "evidence_status"),
     )
     return result
 
