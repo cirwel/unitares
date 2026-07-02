@@ -15,6 +15,7 @@ from src.cohort_prior import (
     Z_SCORE_ACTIVATION_COUNT,
     DEFAULT_PSEUDO_COUNT,
     cohort_prior_enabled,
+    cohort_prior_mode,
 )
 
 SIGNAL = "coherence"
@@ -155,6 +156,18 @@ class TestFlag:
     def test_opt_in(self, monkeypatch):
         monkeypatch.setenv("UNITARES_COHORT_PRIOR", "on")
         assert cohort_prior_enabled() is True
+
+    def test_mode_defaults_to_observe(self, monkeypatch):
+        monkeypatch.delenv("UNITARES_COHORT_PRIOR_MODE", raising=False)
+        assert cohort_prior_mode() == "observe"
+
+    def test_mode_apply_is_explicit(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_COHORT_PRIOR_MODE", "apply")
+        assert cohort_prior_mode() == "apply"
+
+    def test_mode_unknown_falls_back_to_observe(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_COHORT_PRIOR_MODE", "whatever")
+        assert cohort_prior_mode() == "observe"
 
     def test_seed_never_persists(self):
         """Building/seeding must not touch the global baseline registry."""

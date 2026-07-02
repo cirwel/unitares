@@ -71,16 +71,35 @@ MIN_CONTRIBUTORS = 2
 
 
 def cohort_prior_enabled() -> bool:
-    """Whether cohort-prior warm-start is active. Default OFF.
+    """Whether cohort-prior warm-start is active at all. Default OFF.
 
-    This module is shadow-only regardless; the flag exists so any future live
-    wiring is opt-in from day one. Enable with UNITARES_COHORT_PRIOR in
-    {1, true, on, yes}.
+    Enabling this alone runs in *observe* mode (see ``cohort_prior_mode``): the
+    cold-start path logs the seed an agent would get but does not mutate.
+    Enable with UNITARES_COHORT_PRIOR in {1, true, on, yes}.
     """
     val = os.getenv("UNITARES_COHORT_PRIOR")
     if val is None:
         return False
     return val.strip().lower() in {"1", "true", "on", "yes"}
+
+
+def cohort_prior_mode() -> str:
+    """Behavior when cohort priors are enabled: 'observe' (default) or 'apply'.
+
+    'observe' — shadow: log the seed a cold-start agent WOULD receive; do not
+    mutate the baseline. This is the default even when the feature is enabled.
+
+    'apply' — live: actually seed the fresh baseline from the class cohort prior.
+    Requires the explicit second opt-in ``UNITARES_COHORT_PRIOR_MODE=apply`` so an
+    operator validates calibration lift from the observe logs *before* seeding for
+    real. Any other value (including unset) falls back to 'observe'. The
+    anti-poisoning invariant holds in both modes: a seeded baseline still cannot
+    z-score until the agent logs its own observations past the activation gate.
+    """
+    val = os.getenv("UNITARES_COHORT_PRIOR_MODE")
+    if val is None:
+        return "observe"
+    return "apply" if val.strip().lower() == "apply" else "observe"
 
 
 # (mean, std, total_count, n_contributors)

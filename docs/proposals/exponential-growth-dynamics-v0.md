@@ -1,9 +1,11 @@
 # Exponential / growth dynamics for UNITARES — scoping + council review (v0)
 
-**Status:** Site B (cohort priors) landed in shadow, read-only form — the pure primitive
-(PR #1334, merged), the per-class aggregation source, and a non-mutating shadow-observe hook
-on the cold-start resume path (this PR). Live-apply is the next promotion, gated on
-shadow-observe validation data. Sites A and C are **reviewed and rejected** as framed.
+**Status:** Site B (cohort priors) is fully wired — the pure primitive (PR #1334, merged),
+the per-class aggregation source + non-mutating shadow-observe hook (PR #1344, merged), and
+now live-apply behind an explicit second opt-in (this PR). Enabling the feature still
+*defaults to observe*; `UNITARES_COHORT_PRIOR_MODE=apply` is required to seed for real, so
+the "validate calibration lift first" gate is encoded as the default rather than left to
+discipline. Sites A and C remain **reviewed and rejected** as framed.
 
 ## Question
 
@@ -108,14 +110,25 @@ observations cross the gate.
 - `tests/test_cohort_prior_source.py` — grouping, per-class build, N=1 exclusion, TTL cache,
   and the flag-off-noop / flag-on-non-mutating shadow-hook invariants.
 
-This is the "build it as a shadow, read-only query first and validate calibration lift
-before applying" step. Live-apply is the next promotion, gated on that validation data.
+This was the "build it as a shadow, read-only query first" step.
 
-## Deferred (next promotion)
+**Live-apply (this PR):**
+- `src/cohort_prior.py` — `cohort_prior_mode()`: `observe` (default) vs `apply`. Enabling
+  the feature alone stays in observe; `UNITARES_COHORT_PRIOR_MODE=apply` is the deliberate
+  second opt-in.
+- `src/agent_behavioral_baseline.py` — the cold-start hook (`_maybe_seed_cohort_prior`) now
+  branches on mode: `observe` logs the would-be seed and does not mutate; `apply` replaces
+  the fresh baseline with `prior.seed_baseline()`. **The anti-poisoning invariant holds in
+  apply mode too** — the seed's count stays below the activation gate, so a seeded agent
+  still cannot z-score until it logs its own observations
+  (`test_apply_mode_seeds_but_stays_inert_until_earned`).
 
-**Live-apply.** Actually seeding the fresh baseline from the class cohort prior on cold
-start (still behind `cohort_prior_enabled()`, still a **coupled identity/onboarding
-single-writer surface** per `CLAUDE.md`). Promote only once the shadow-observe logs show a
-real cold-start calibration lift, and re-check for in-flight work on the baseline/identity
-surface before starting. This will also want a background refresh for the prior cache
-rather than the lazy TTL rebuild used for shadow.
+## Deferred / operational
+
+1. **Turn on `apply` only after observe validates.** The default guards this, but the real
+   gate is data: run `observe` in a deployment, confirm the `cohort-prior shadow` logs show
+   a genuine cold-start calibration lift, *then* flip `MODE=apply`.
+2. **Background refresh for the prior cache.** Apply currently relies on the lazy TTL rebuild
+   (`get_cached_cohort_priors`). A steadily-enabled `apply` deployment would want a
+   background refresh task instead, so no cold-start resume ever pays the bulk-load.
+3. **Re-check the single-writer surface** (baseline/identity) before any further change here.

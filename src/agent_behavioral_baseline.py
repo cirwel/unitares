@@ -165,22 +165,29 @@ async def ensure_baseline_loaded(agent_id: str) -> AgentBehavioralBaseline:
 
     # Fall through: create fresh baseline
     _baselines[agent_id] = AgentBehavioralBaseline()
-    await _maybe_observe_cohort_seed(agent_id)
+    await _maybe_seed_cohort_prior(agent_id)
     return _baselines[agent_id]
 
 
-async def _maybe_observe_cohort_seed(agent_id: str) -> None:
-    """Shadow-only: log the cohort seed a cold-start agent WOULD receive.
+async def _maybe_seed_cohort_prior(agent_id: str) -> None:
+    """Cohort-prior warm-start for a cold-start agent. No-op unless enabled.
 
-    No-op unless ``UNITARES_COHORT_PRIOR`` is enabled (default OFF). Never
-    mutates the just-created baseline — this only surfaces validation data
-    (calibration lift) so an operator can decide whether to promote to
-    live-apply later. Best-effort: any failure is swallowed at debug level so a
-    resume never breaks on it. Imports are deferred to avoid a circular import
-    (cohort_prior_source imports this module).
+    Gated by ``UNITARES_COHORT_PRIOR`` (default OFF). When enabled, behavior
+    depends on ``cohort_prior_mode()``:
+
+    - ``observe`` (default): log the seed the agent WOULD receive; do NOT mutate
+      the fresh baseline. Surfaces calibration-lift data for validation.
+    - ``apply``: replace the fresh baseline with one seeded from the class cohort
+      prior. The seed keeps its count below the z-score activation gate, so the
+      agent still cannot z-score until it logs its own observations — the
+      anti-poisoning invariant is preserved.
+
+    Best-effort: any failure is swallowed at debug level so a resume never breaks
+    on it. Imports are deferred to avoid a circular import (cohort_prior_source
+    imports this module).
     """
     try:
-        from src.cohort_prior import cohort_prior_enabled
+        from src.cohort_prior import cohort_prior_enabled, cohort_prior_mode
 
         if not cohort_prior_enabled():
             return
@@ -197,13 +204,24 @@ async def _maybe_observe_cohort_seed(agent_id: str) -> None:
             return
         priors = await get_cached_cohort_priors(get_db())
         observed = observe_seed_gap(agent_class, priors)
-        if observed:
+        if not observed:
+            return
+
+        if cohort_prior_mode() == "apply":
+            prior = priors.get(agent_class)
+            if prior is not None:
+                _baselines[agent_id] = prior.seed_baseline()
+                _logger.info(
+                    "cohort-prior apply: agent=%s class=%s seeded=%s",
+                    agent_id, agent_class, observed,
+                )
+        else:
             _logger.info(
                 "cohort-prior shadow: agent=%s class=%s would_seed=%s",
                 agent_id, agent_class, observed,
             )
     except Exception:
-        _logger.debug("cohort-prior shadow observation failed for %s", agent_id, exc_info=True)
+        _logger.debug("cohort-prior seed/observe failed for %s", agent_id, exc_info=True)
 
 
 def schedule_baseline_save(agent_id: str) -> None:
