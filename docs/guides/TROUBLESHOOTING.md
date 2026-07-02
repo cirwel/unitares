@@ -153,7 +153,7 @@ tail -f data/logs/mcp_server_error.log
    brew services restart redis
    ```
 
-3. **Note:** Redis is optional. If unavailable, the server falls back to in-memory session cache (sessions won't persist across restarts).
+3. **Note:** the server boots without Redis in a degraded local-only mode (in-memory session cache; sessions won't persist across restarts) — but in production Redis is the de-facto primary session store, so treat an unavailable Redis as an incident to fix, not a config option.
 
 ---
 

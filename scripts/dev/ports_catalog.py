@@ -35,14 +35,14 @@ PORTS = [
     {
         "port": 8766,
         "service": "Anima MCP (physical edge testbed)",
-        "host": "Pi / Lumen host",
+        "host": "edge host (Raspberry Pi)",
         "source": "`anima-mcp` service config (external repo)",
         "verify": None,
     },
     {
         "port": 8767,
         "service": "UNITARES governance MCP",
-        "host": "governance host (Mac)",
+        "host": "governance host",
         "source": "`src/mcp_server.py` — `DEFAULT_PORT`",
         "verify": "src/mcp_server.py",
     },

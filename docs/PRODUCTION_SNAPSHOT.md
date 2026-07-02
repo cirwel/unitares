@@ -37,7 +37,7 @@ they don't show:* product-market traction. External adoption is the open questio
 <p align="center">
   <img src="assets/dashboard-eisv.png" width="80%" alt="EISV — live fleet trajectory charts"/>
 </p>
-<p align="center"><em>EISV — live fleet trajectory: Energy · Integrity · Coherence and Entropy · Valence over time</em></p>
+<p align="center"><em>Live fleet trajectory over time — the four EISV scores (Energy · Integrity · Entropy · Valence) plus the coherence input</em></p>
 
 <p align="center">
   <img src="assets/dashboard-discoveries.png" width="80%" alt="Discoveries — shared knowledge graph"/>
