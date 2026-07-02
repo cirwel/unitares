@@ -10,6 +10,20 @@ from datetime import datetime
 from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
+MAX_DIALECTIC_CONDITIONS = 20
+
+
+def _append_dialectic_condition(meta, condition: Dict[str, Any]) -> None:
+    """Append a condition while keeping the runtime list bounded."""
+    conditions = getattr(meta, "dialectic_conditions", None)
+    if not isinstance(conditions, list):
+        conditions = []
+        meta.dialectic_conditions = conditions
+    conditions.append(condition)
+    if len(conditions) > MAX_DIALECTIC_CONDITIONS:
+        del conditions[:-MAX_DIALECTIC_CONDITIONS]
+
+
 class ParsedCondition:
     """Structured representation of a parsed condition"""
     
@@ -186,7 +200,7 @@ async def apply_condition(parsed: ParsedCondition, agent_id: str, mcp_server) ->
         if parsed.action == "set":
             if parsed.target == "complexity":
                 # Persist a complexity cap for subsequent updates (enforced in process_agent_update)
-                meta.dialectic_conditions.append({
+                _append_dialectic_condition(meta, {
                     "type": "complexity_limit",
                     "value": parsed.value,
                     "applied_at": datetime.now().isoformat()
@@ -194,7 +208,7 @@ async def apply_condition(parsed: ParsedCondition, agent_id: str, mcp_server) ->
                 result["changes"]["complexity_limit"] = parsed.value
             elif parsed.target == "risk_score":
                 # Can't directly set risk_score (it's computed), but can note it
-                meta.dialectic_conditions.append({
+                _append_dialectic_condition(meta, {
                     "type": "risk_target",
                     "value": parsed.value,
                     "applied_at": datetime.now().isoformat()
@@ -202,7 +216,7 @@ async def apply_condition(parsed: ParsedCondition, agent_id: str, mcp_server) ->
                 result["changes"]["risk_target"] = parsed.value
             elif parsed.target == "coherence":
                 # Can't directly set coherence (it's computed), but can note it
-                meta.dialectic_conditions.append({
+                _append_dialectic_condition(meta, {
                     "type": "coherence_target",
                     "value": parsed.value,
                     "applied_at": datetime.now().isoformat()
@@ -215,7 +229,7 @@ async def apply_condition(parsed: ParsedCondition, agent_id: str, mcp_server) ->
                 duration_hours = parsed.value
                 if parsed.unit == "minutes":
                     duration_hours = parsed.value / 60.0
-                meta.dialectic_conditions.append({
+                _append_dialectic_condition(meta, {
                     "type": "monitoring_duration",
                     "value": duration_hours,
                     "unit": "hours",
@@ -225,7 +239,7 @@ async def apply_condition(parsed: ParsedCondition, agent_id: str, mcp_server) ->
         
         elif parsed.action == "limit":
             # Store limit condition
-            meta.dialectic_conditions.append({
+            _append_dialectic_condition(meta, {
                 "type": f"{parsed.target}_limit",
                 "value": parsed.value,
                 "direction": parsed.unit,  # "below" or "above"
@@ -235,7 +249,7 @@ async def apply_condition(parsed: ParsedCondition, agent_id: str, mcp_server) ->
         
         elif parsed.action in ["reduce", "increase"]:
             # Store adjustment condition
-            meta.dialectic_conditions.append({
+            _append_dialectic_condition(meta, {
                 "type": f"{parsed.target}_adjustment",
                 "action": parsed.action,
                 "target_value": parsed.value,
@@ -257,4 +271,3 @@ async def apply_condition(parsed: ParsedCondition, agent_id: str, mcp_server) ->
         logger.error(f"Error applying condition to agent '{agent_id}': {e}", exc_info=True)
     
     return result
-

@@ -25,6 +25,7 @@ from src.mcp_handlers.support.condition_parser import (
     parse_condition,
     _normalize_target,
     apply_condition,
+    MAX_DIALECTIC_CONDITIONS,
 )
 
 
@@ -187,6 +188,20 @@ class TestApplyCondition:
         result = await apply_condition(pc, "agent-1", mock_server)
         assert result["status"] == "applied"
         assert "complexity_adjustment" in result["changes"]
+
+    @pytest.mark.asyncio
+    async def test_applied_conditions_are_capped(self, mock_server):
+        meta = mock_server.agent_metadata["agent-1"]
+        meta.dialectic_conditions = [
+            {"type": "old", "value": idx}
+            for idx in range(MAX_DIALECTIC_CONDITIONS + 2)
+        ]
+        pc = parse_condition("Set complexity to 0.3")
+        result = await apply_condition(pc, "agent-1", mock_server)
+        assert result["status"] == "applied"
+        assert len(meta.dialectic_conditions) == MAX_DIALECTIC_CONDITIONS
+        assert meta.dialectic_conditions[0]["value"] == 3
+        assert meta.dialectic_conditions[-1]["type"] == "complexity_limit"
 
     @pytest.mark.asyncio
     async def test_agent_not_found(self, mock_server):
