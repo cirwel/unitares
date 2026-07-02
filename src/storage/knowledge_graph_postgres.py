@@ -162,7 +162,8 @@ class KnowledgeGraphPostgres:
             RETURNING id
         """
 
-        result = await db._pool.fetchval(query, *params)
+        async with db.acquire() as conn:
+            result = await conn.fetchval(query, *params)
         return result is not None
 
     async def get_stats(
@@ -196,68 +197,70 @@ class KnowledgeGraphPostgres:
             clauses.append("status != 'cold'")
         where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
-        total = await db._pool.fetchval(
-            f"SELECT COUNT(*) FROM knowledge.discoveries{where_sql}", *params)
+        async with db.acquire() as conn:
+            total = await conn.fetchval(
+                f"SELECT COUNT(*) FROM knowledge.discoveries{where_sql}", *params)
 
-        by_agent_rows = await db._pool.fetch(
-            f"""
-            SELECT agent_id, COUNT(*) as count
-            FROM knowledge.discoveries{where_sql}
-            GROUP BY agent_id
-            """,
-            *params,
-        )
+            by_agent_rows = await conn.fetch(
+                f"""
+                SELECT agent_id, COUNT(*) as count
+                FROM knowledge.discoveries{where_sql}
+                GROUP BY agent_id
+                """,
+                *params,
+            )
+
+            by_type_rows = await conn.fetch(
+                f"""
+                SELECT type, COUNT(*) as count
+                FROM knowledge.discoveries{where_sql}
+                GROUP BY type
+                """,
+                *params,
+            )
+
+            by_status_rows = await conn.fetch(
+                f"""
+                SELECT status, COUNT(*) as count
+                FROM knowledge.discoveries{where_sql}
+                GROUP BY status
+                """,
+                *params,
+            )
+
+            # Provenance-source split (#165 part 4). NULL provenance → "legacy"
+            # bucket so callers can tell which rows predate the tagging convention.
+            # provenance is stored as JSONB; the extraction operator works on both
+            # JSONB and JSON rows.
+            prov_rows = await conn.fetch(
+                f"""
+                SELECT
+                    COALESCE(provenance->>'source', '__legacy_or_untagged__') AS source,
+                    COUNT(*) AS count
+                FROM knowledge.discoveries{where_sql}
+                GROUP BY 1
+                """,
+                *params,
+            )
+
+            # Same split per-agent so operators can audit a specific agent's
+            # caller-intentional writes apart from automation noise.
+            agent_prov_rows = await conn.fetch(
+                f"""
+                SELECT
+                    agent_id,
+                    COALESCE(provenance->>'source', '__legacy_or_untagged__') AS source,
+                    COUNT(*) AS count
+                FROM knowledge.discoveries{where_sql}
+                GROUP BY agent_id, source
+                """,
+                *params,
+            )
+
         by_agent = {row['agent_id']: row['count'] for row in by_agent_rows}
-
-        by_type_rows = await db._pool.fetch(
-            f"""
-            SELECT type, COUNT(*) as count
-            FROM knowledge.discoveries{where_sql}
-            GROUP BY type
-            """,
-            *params,
-        )
         by_type = {row['type']: row['count'] for row in by_type_rows}
-
-        by_status_rows = await db._pool.fetch(
-            f"""
-            SELECT status, COUNT(*) as count
-            FROM knowledge.discoveries{where_sql}
-            GROUP BY status
-            """,
-            *params,
-        )
         by_status = {row['status']: row['count'] for row in by_status_rows}
-
-        # Provenance-source split (#165 part 4). NULL provenance → "legacy"
-        # bucket so callers can tell which rows predate the tagging convention.
-        # provenance is stored as JSONB; the extraction operator works on both
-        # JSONB and JSON rows.
-        prov_rows = await db._pool.fetch(
-            f"""
-            SELECT
-                COALESCE(provenance->>'source', '__legacy_or_untagged__') AS source,
-                COUNT(*) AS count
-            FROM knowledge.discoveries{where_sql}
-            GROUP BY 1
-            """,
-            *params,
-        )
         by_provenance_source = {row['source']: row['count'] for row in prov_rows}
-
-        # Same split per-agent so operators can audit a specific agent's
-        # caller-intentional writes apart from automation noise.
-        agent_prov_rows = await db._pool.fetch(
-            f"""
-            SELECT
-                agent_id,
-                COALESCE(provenance->>'source', '__legacy_or_untagged__') AS source,
-                COUNT(*) AS count
-            FROM knowledge.discoveries{where_sql}
-            GROUP BY agent_id, source
-            """,
-            *params,
-        )
         explicit_sources = {
             "explicit_store", "explicit_answer", "explicit_leave_note",
         }
@@ -284,10 +287,11 @@ class KnowledgeGraphPostgres:
                 f"id IN (SELECT discovery_id FROM {embed_table})"
             )
             covered_where = " WHERE " + " AND ".join(covered_clauses)
-            with_embeddings = await db._pool.fetchval(
-                f"SELECT COUNT(*) FROM knowledge.discoveries{covered_where}",
-                *params,
-            ) or 0
+            async with db.acquire() as conn:
+                with_embeddings = await conn.fetchval(
+                    f"SELECT COUNT(*) FROM knowledge.discoveries{covered_where}",
+                    *params,
+                ) or 0
             total_in_scope = total or 0
             without_embeddings = max(0, total_in_scope - with_embeddings)
             ratio = (
