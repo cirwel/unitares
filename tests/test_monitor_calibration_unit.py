@@ -153,7 +153,11 @@ class TestTacticalDecisionRecording:
 
 
 class TestStrategicPrediction:
-    def test_tool_stats_with_enough_calls_records_prediction(self):
+    def test_tool_stats_never_train_calibration(self):
+        """#1321: tool-invocation success is infrastructure reliability, not
+        task outcome. Even with abundant tool stats available, check-ins must
+        not write strategic or tactical calibration from them — reintroducing
+        this feeder re-contaminates the bins."""
         import time
         monitor = _make_monitor(
             prev_verdict=None, prev_checkin_time=time.monotonic(),
@@ -173,38 +177,8 @@ class TestStrategicPrediction:
                 decision={"action": "proceed"},
                 drift_vector=_drift(0.1),
             )
-        ccm.record_prediction.assert_called_once()
-        call = ccm.record_prediction.call_args
-        assert call.kwargs["confidence"] == 0.75
-        assert call.kwargs["predicted_correct"] is True
-        assert call.kwargs["actual_correct"] == pytest.approx(0.8)
-        # tool_accuracy 0.8 >= 0.6 → outcome_was_good True
-        # confidence 0.75 >= 0.6 → immediate_outcome = True
-        ccm.record_tactical_decision.assert_called_once()
-        assert ccm.record_tactical_decision.call_args.kwargs["immediate_outcome"] is True
-
-    def test_low_confidence_inverts_immediate_outcome(self):
-        import time
-        monitor = _make_monitor(
-            prev_verdict=None, prev_checkin_time=time.monotonic(),
-        )
-        fake_stats = {
-            "total_calls": 5,
-            "tools": {"t1": {"success_count": 1}},
-        }
-        tracker = MagicMock()
-        tracker.get_usage_stats = MagicMock(return_value=fake_stats)
-        with patch("src.monitor_calibration.calibration_checker") as ccm, \
-             patch("src.tool_usage_tracker.get_tool_usage_tracker",
-                   return_value=tracker):
-            run_calibration_recording(
-                monitor, confidence=0.3,
-                decision={"action": "proceed"},
-                drift_vector=_drift(0.1),
-            )
-        # tool_accuracy 0.2 < 0.6 → outcome_was_good False
-        # confidence 0.3 < 0.6 → immediate_outcome = not outcome_was_good = True
-        assert ccm.record_tactical_decision.call_args.kwargs["immediate_outcome"] is True
+        ccm.record_prediction.assert_not_called()
+        ccm.record_tactical_decision.assert_not_called()
 
     def test_too_few_calls_no_prediction(self):
         import time
