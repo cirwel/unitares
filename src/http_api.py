@@ -2854,6 +2854,228 @@ async def http_sentinel_backlog(request):
         return JSONResponse({"success": False, "error": str(e), "findings": []}, status_code=500)
 
 
+# --- Sentinel finding adjudication (dashboard widget backend) ----------------
+#
+# The exogenous-anchor channel (#1214) made operator adjudication of Sentinel
+# findings the ground-truth feed for the EISV §6.3 falsifier — but the only
+# surface was the Sentinel CLI. These two endpoints give the dashboard a daily
+# queue + one-click verdicts. Cadence matters more than volume: outcomes join
+# to the last prior state snapshot, so a batch sweep collapses into ONE
+# statistical cluster — the queue is deliberately small (a few per day).
+
+_SENTINEL_ADJUDICATION_OUTCOME_TYPES = (
+    "sentinel_finding_confirmed", "sentinel_finding_dismissed",
+)
+# Mirrors agents/common/resolution_outcome.py semantics: only "fp" is a bad
+# label; the other reasons drop a finding that was still analytically right.
+_ADJUDICATION_DISMISS_REASONS = ("fp", "out_of_scope", "wont_fix", "dup", "unclear", "stale")
+_SENTINEL_SUBSTRATE_LABEL_PREFIX = "com.unitares.sentinel"
+
+
+async def _adjudicated_sentinel_fingerprints() -> set:
+    """Fingerprints already carrying a durable adjudication outcome (option A:
+    the outcome_event IS the adjudication record; backlog rows are immutable)."""
+    from src.db import get_db
+    db = get_db()
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT DISTINCT detail->>'fingerprint' AS fp
+               FROM audit.outcome_events
+               WHERE outcome_type = ANY($1::text[])
+                 AND detail->>'fingerprint' IS NOT NULL""",
+            list(_SENTINEL_ADJUDICATION_OUTCOME_TYPES),
+        )
+    return {r["fp"] for r in rows if r["fp"]}
+
+
+async def _sentinel_substrate_uuid() -> Optional[str]:
+    """Sentinel's UUID from the operator-enrolled substrate-claims registry.
+
+    This is deliberately NOT lookup-by-label identity resolution: the row is a
+    kernel-attested, operator-enrolled claim (single writer = the operator),
+    used here as configuration for which resident adjudication outcomes are
+    attributed to — the same UUID the Sentinel CLI path resolves to.
+    """
+    from src.db import get_db
+    db = get_db()
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT agent_id FROM core.substrate_claims
+               WHERE expected_launchd_label LIKE $1
+               ORDER BY enrolled_at DESC LIMIT 1""",
+            _SENTINEL_SUBSTRATE_LABEL_PREFIX + "%",
+        )
+    return row["agent_id"] if row else None
+
+
+async def _adjudication_progress() -> dict:
+    """Falsifier-progress readout: independent adjudication DAYS are what buy
+    statistical power (rows sharing a prior-state snapshot are one cluster —
+    day granularity is the operational proxy the widget can act on)."""
+    from src.db import get_db
+    db = get_db()
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT count(*) AS outcomes,
+                      count(*) FILTER (WHERE is_bad) AS bad,
+                      count(DISTINCT date(ts)) AS days,
+                      count(DISTINCT date(ts)) FILTER (WHERE is_bad) AS bad_days
+               FROM audit.outcome_events
+               WHERE verification_source = 'external_signal'
+                 AND (outcome_type LIKE 'sentinel_finding_%'
+                      OR outcome_type LIKE 'watcher_finding_%')""",
+        )
+    return {
+        "outcomes": row["outcomes"], "bad": row["bad"],
+        "days": row["days"], "bad_days": row["bad_days"],
+        # ≥3 independent bad days among ~11 day-clusters puts the permutation
+        # floor near p≈0.006 — the "quotable AUC" bar the widget tracks.
+        "bad_days_target": 3,
+    }
+
+
+async def http_sentinel_adjudication_queue(request):
+    """GET /v1/sentinel/adjudication-queue?limit=5&window_hours=336 — the daily
+    unadjudicated slice of the Sentinel backlog, plus falsifier progress."""
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return _http_unauthorized()
+    try:
+        try:
+            limit = int(request.query_params.get("limit", "5"))
+        except (TypeError, ValueError):
+            limit = 5
+        limit = max(1, min(limit, 25))
+        try:
+            window_hours = float(request.query_params.get("window_hours", "336"))
+        except (TypeError, ValueError):
+            window_hours = 336.0
+        window_hours = max(1.0, min(window_hours, 24 * 90))
+
+        from src.audit_db import query_audit_events_async
+        start_time = (
+            datetime.now(timezone.utc) - timedelta(hours=window_hours)
+        ).isoformat()
+        events = await query_audit_events_async(
+            event_types=list(_SENTINEL_FINDING_EVENT_TYPES),
+            start_time=start_time,
+            order="desc",
+            limit=1000,
+        )
+        adjudicated = await _adjudicated_sentinel_fingerprints()
+
+        seen: set = set()
+        queue = []
+        pending_total = 0
+        for e in events:
+            details = e.get("details") or {}
+            severity = details.get("severity")
+            if severity not in _SENTINEL_BACKLOG_DEFAULT_SEVERITIES:
+                continue
+            fp = details.get("fingerprint")
+            if not fp or fp in seen:
+                continue
+            seen.add(fp)
+            if fp in adjudicated:
+                continue
+            pending_total += 1
+            if len(queue) < limit:
+                queue.append({
+                    "timestamp": e.get("timestamp"),
+                    "severity": severity,
+                    "finding_type": details.get("finding_type") or details.get("alarm_kind"),
+                    "violation_class": details.get("violation_class"),
+                    "message": details.get("message"),
+                    "agent_name": details.get("agent_name"),
+                    "fingerprint": fp,
+                })
+
+        return JSONResponse({
+            "success": True,
+            "window_hours": window_hours,
+            "queue": queue,
+            "pending_total": pending_total,
+            "dismiss_reasons": list(_ADJUDICATION_DISMISS_REASONS),
+            "progress": await _adjudication_progress(),
+        })
+    except Exception as e:
+        logger.error(f"Error building adjudication queue: {e}")
+        return JSONResponse({"success": False, "error": str(e), "queue": []}, status_code=500)
+
+
+async def http_sentinel_adjudicate(request):
+    """POST /v1/sentinel/adjudicate {fingerprint, status, reason?} — operator-gated.
+
+    Records the operator verdict as an external-truth outcome_event attributed
+    to Sentinel's substrate UUID (same shared builder + semantics as the CLI
+    path in agents/sentinel/agent.py::adjudicate_finding). Idempotent per
+    fingerprint: a second verdict returns 409 rather than double-counting a
+    label the falsifier would read twice.
+    """
+    signals = _build_http_session_signals(request)
+    from src.mcp_handlers.identity.operator import is_operator_caller
+    if not is_operator_caller(signals):
+        return JSONResponse(
+            {"success": False,
+             "error": "operator credential required (X-Unitares-Operator header)"},
+            status_code=403,
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"success": False, "error": "invalid JSON body"}, status_code=400)
+
+    fingerprint = str(body.get("fingerprint") or "").strip()
+    status = str(body.get("status") or "").strip().lower()
+    reason = (str(body.get("reason") or "").strip().lower() or None)
+    if not fingerprint:
+        return JSONResponse({"success": False, "error": "fingerprint required"}, status_code=400)
+    if status not in ("confirmed", "dismissed"):
+        return JSONResponse(
+            {"success": False, "error": "status must be 'confirmed' or 'dismissed'"},
+            status_code=400,
+        )
+    if status == "dismissed" and reason not in _ADJUDICATION_DISMISS_REASONS:
+        return JSONResponse(
+            {"success": False,
+             "error": f"dismissal needs a reason: {', '.join(_ADJUDICATION_DISMISS_REASONS)}"},
+            status_code=400,
+        )
+
+    try:
+        if fingerprint in await _adjudicated_sentinel_fingerprints():
+            return JSONResponse(
+                {"success": False, "error": "already adjudicated", "fingerprint": fingerprint},
+                status_code=409,
+            )
+        sentinel_uuid = await _sentinel_substrate_uuid()
+        if not sentinel_uuid:
+            return JSONResponse(
+                {"success": False,
+                 "error": "no enrolled Sentinel substrate claim — cannot attribute outcome"},
+                status_code=503,
+            )
+
+        from agents.common.resolution_outcome import build_resolution_outcome_args
+        args = build_resolution_outcome_args(
+            "sentinel_finding", status, fingerprint, sentinel_uuid, reason
+        )
+        args["detail"]["adjudicated_via"] = "dashboard"
+
+        from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+        await _record_outcome_event_inline(args)
+        return JSONResponse({
+            "success": True,
+            "fingerprint": fingerprint,
+            "outcome_type": args["outcome_type"],
+            "is_bad": args["is_bad"],
+            "progress": await _adjudication_progress(),
+        })
+    except Exception as e:
+        logger.error(f"Error recording adjudication for {fingerprint}: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
 # Incident history endpoint (anomalies + stuck agents from audit log)
 async def http_incidents(request):
     """Return historical anomaly and stuck-agent incidents from the audit trail."""
@@ -3689,6 +3911,8 @@ def register_http_routes(
     app.routes.append(Route("/v1/substrate/observe", http_substrate_observe, methods=["POST"]))
     app.routes.append(Route("/v1/substrate/dark_sessions", http_substrate_dark_sessions, methods=["GET"]))
     app.routes.append(Route("/v1/sentinel/backlog", http_sentinel_backlog, methods=["GET"]))
+    app.routes.append(Route("/v1/sentinel/adjudication-queue", http_sentinel_adjudication_queue, methods=["GET"]))
+    app.routes.append(Route("/v1/sentinel/adjudicate", http_sentinel_adjudicate, methods=["POST"]))
     app.routes.append(Route("/v1/metrics", http_post_metric, methods=["POST"]))
     app.routes.append(Route("/v1/metrics/series", http_get_metrics, methods=["GET"]))
     app.routes.append(Route("/v1/metrics/catalog", http_get_metrics_catalog, methods=["GET"]))
