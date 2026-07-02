@@ -1,4 +1,4 @@
-from typing import Optional, Union, Literal, List, get_args
+from typing import Optional, Union, Literal, List, Any, get_args
 from pydantic import Field, model_validator
 from .mixins import AgentIdentityMixin
 
@@ -17,6 +17,19 @@ _DISCOVERY_TYPE_DESC = (
 )
 
 Severity = Literal["low", "medium", "high", "critical"]
+
+
+def _coerce_int_default(value: Any, default: int, *, minimum: int | None = None) -> int:
+    if value is None:
+        return default
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError):
+        return default
+    if minimum is not None and coerced < minimum:
+        return default
+    return coerced
+
 
 class StoreKnowledgeGraphParams(AgentIdentityMixin):
     """
@@ -241,6 +254,10 @@ class GetDiscoveryDetailsParams(AgentIdentityMixin):
         default=0,
         description="Character offset for details pagination"
     )
+    length: Union[int, str, None] = Field(
+        default=2000,
+        description="Max characters to return for details pagination"
+    )
     fetch_chain: Union[bool, str, None] = Field(
         default=False,
         description="If true, fetches the full discussion chain linked to this item"
@@ -252,11 +269,8 @@ class GetDiscoveryDetailsParams(AgentIdentityMixin):
     
     @model_validator(mode='after')
     def coerce_types(self):
-        if isinstance(self.offset, str):
-            try:
-                self.offset = int(self.offset)
-            except ValueError:
-                self.offset = 0
+        self.offset = _coerce_int_default(self.offset, 0, minimum=0)
+        self.length = _coerce_int_default(self.length, 2000, minimum=1)
         if isinstance(self.fetch_chain, str):
             self.fetch_chain = self.fetch_chain.lower() in ('true', '1', 'yes')
         if isinstance(self.include_provenance, str):
@@ -412,4 +426,7 @@ class KnowledgeParams(AgentIdentityMixin):
             self.include_response_chain = self.include_response_chain.lower() in ('true', '1', 'yes')
         if isinstance(self.including_cold, str):
             self.including_cold = self.including_cold.lower() in ('true', '1', 'yes')
+        if self.action == "details":
+            self.offset = _coerce_int_default(self.offset, 0, minimum=0)
+            self.length = _coerce_int_default(self.length, 2000, minimum=1)
         return self
