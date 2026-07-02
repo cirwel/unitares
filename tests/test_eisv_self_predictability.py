@@ -3,6 +3,7 @@
 No DB: drive evaluate() / evaluate_raw() with hand-built trajectories so the
 MAE / skill / individuality / AR(1)-null logic is verified on known inputs.
 """
+import datetime as dt
 import math
 import random
 
@@ -12,8 +13,11 @@ from scripts.analysis.eisv_self_predictability import (
     WARMUP,
     WARMUP_RAW,
     _ar1_predict,
+    _cadence_band,
     _extract_raw,
+    _median_gap_min,
     evaluate,
+    evaluate_decimation,
     evaluate_raw,
 )
 
@@ -138,3 +142,119 @@ def test_raw_gate_not_evaluable_below_floor():
     assert res["gate_eligible"] == 0
     assert res["gate_majority"] is None
     assert res["n_agents"] == 1  # still scored for the pooled table
+
+
+# --- cadence stratification + decimation diagnostic ------------------------
+
+
+def _ts(n: int, gap_min: float) -> list[dt.datetime]:
+    t0 = dt.datetime(2026, 7, 1, tzinfo=dt.timezone.utc)
+    return [t0 + dt.timedelta(minutes=gap_min * i) for i in range(n)]
+
+
+def test_median_gap_and_bands():
+    assert math.isclose(_median_gap_min(_ts(10, 5.0)), 5.0)
+    assert _median_gap_min([]) is None
+    assert _median_gap_min(_ts(1, 5.0)) is None
+    assert _median_gap_min([1, 2, 3]) is None  # not datetimes
+    assert _cadence_band(5.0) == "fast (<10m)"
+    assert _cadence_band(30.0) == "mid (10-60m)"
+    assert _cadence_band(600.0) == "slow (>=60m)"
+    assert _cadence_band(None) is None
+
+
+def test_evaluate_raw_reports_cadence_and_phi():
+    traj = {
+        "fast": _raw_noise(0.2, 120, sigma=0.05, seed=1),
+        "slow": _raw_noise(0.8, 120, sigma=0.05, seed=2),
+    }
+    ts = {"fast": _ts(120, 5.0), "slow": _ts(120, 120.0)}
+    res = evaluate_raw(traj, timestamps=ts, gate_min_states=50)
+    by_agent = {a["agent"]: a for a in res["per_agent"]}
+    assert by_agent["fast"]["cadence_band"] == "fast (<10m)"
+    assert by_agent["slow"]["cadence_band"] == "slow (>=60m)"
+    assert math.isclose(by_agent["fast"]["median_gap_min"], 5.0)
+    # iid noise: fitted AR(1) slope must be near 0, nowhere near random-walk 1
+    assert abs(by_agent["fast"]["phi_mean"]) < 0.4
+    bands = {b["band"]: b for b in res["cadence_bands"]}
+    assert bands["fast (<10m)"]["eligible"] == 1
+    assert bands["slow (>=60m)"]["eligible"] == 1
+    # verdict fields unchanged by stratification
+    assert res["gate_majority"] is True
+
+
+def test_evaluate_raw_without_timestamps_backward_compatible():
+    traj = {"a": _raw_noise(0.2, 120, sigma=0.05, seed=1)}
+    res = evaluate_raw(traj, gate_min_states=50)
+    ag = res["per_agent"][0]
+    assert ag["median_gap_min"] is None
+    assert ag["cadence_band"] is None
+
+
+def test_random_walk_phi_near_one():
+    traj = {"a": _raw_walk(0.5, 200, step=0.02, seed=7)}
+    res = evaluate_raw(traj, gate_min_states=50)
+    assert res["per_agent"][0]["phi_mean"] > 0.85
+
+
+def test_decimation_stable_normal_beats_persistence_at_every_k():
+    """iid noise around a stable per-agent mean: a stable-normal reference
+    (ema or the fitted ar1, whose intercept encodes the mean) must beat raw
+    persistence at native cadence AND every decimation, with low phi."""
+    traj = {"a": _raw_noise(0.3, 400, sigma=0.05, seed=11)}
+    ts = {"a": _ts(400, 5.0)}
+    res = evaluate_decimation(traj, timestamps=ts, gate_min_states=50)
+    assert len(res["agents"]) == 1
+    rows = res["agents"][0]["rows"]
+    assert rows[0]["k"] == 1
+    assert all(r["normal_beats_pers"] for r in rows)
+    assert all(abs(r["phi_mean"]) < 0.5 for r in rows)
+    # effective gap scales with k
+    ks = {r["k"]: r for r in rows}
+    assert math.isclose(ks[4]["eff_gap_min"], 20.0)
+
+
+def test_strict_gate_asymptotically_lost_to_ar1_on_stationary_normal():
+    """Pins the structural property the decimation report documents: on a
+    PERFECTLY stable normal with a long sample, the expanding AR(1) fit
+    (which nests the per-agent mean at phi=0) converges to the optimal
+    predictor, so the fixed-alpha runtime ema loses the strict ema-vs-ar1
+    comparison even though individuality is maximally true. The strict gate
+    therefore tests estimator choice on stationary data — a FAIL with
+    normal_beats_pers=True and low phi must not be read as individuality
+    being false."""
+    traj = {"a": _raw_noise(0.3, 400, sigma=0.05, seed=11)}
+    res = evaluate_decimation(traj, gate_min_states=50)
+    k1 = res["agents"][0]["rows"][0]
+    assert k1["k"] == 1 and k1["n_scored"] > 300
+    assert k1["normal_beats_pers"] is True     # individuality visible
+    assert k1["ema_beats_nulls"] is False      # strict gate lost to ar1
+    assert k1["mae_avg"]["ar1"] < k1["mae_avg"]["ema"]
+
+
+def test_decimation_random_walk_never_beats_persistence():
+    """Random walk: persistence is optimal at EVERY cadence — decimation must
+    not manufacture a pass on either column (the anti-laundering direction)."""
+    traj = {"a": _raw_walk(0.5, 800, step=0.02, seed=13)}
+    res = evaluate_decimation(traj, gate_min_states=50)
+    rows = res["agents"][0]["rows"]
+    assert len(rows) >= 3  # 800 states supports several factors
+    assert not any(r["ema_beats_nulls"] for r in rows)
+    assert not any(r["normal_beats_pers"] for r in rows)
+    assert all(r["phi_mean"] > 0.8 for r in rows)
+
+
+def test_decimation_skips_underpowered_factors():
+    """A 60-state series at k=4 leaves 15 states → fewer than min_scored
+    predictions → the row must be dropped, not reported as noise."""
+    traj = {"a": _raw_noise(0.3, 60, sigma=0.05, seed=17)}
+    res = evaluate_decimation(traj, gate_min_states=50, min_scored=20)
+    ks = [r["k"] for r in res["agents"][0]["rows"]]
+    assert 1 in ks
+    assert 4 not in ks and 8 not in ks and 16 not in ks
+
+
+def test_decimation_ignores_ineligible_agents():
+    traj = {"a": _raw_noise(0.3, 30, sigma=0.05, seed=19)}
+    res = evaluate_decimation(traj, gate_min_states=50)
+    assert res["agents"] == []
