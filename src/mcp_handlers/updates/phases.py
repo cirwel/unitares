@@ -749,25 +749,22 @@ def transform_inputs(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
         except Exception as e:
             logger.warning(f"Could not enforce complexity limit: {e}", exc_info=True)
 
-    # Confidence & Auto-Calibration (coerce to float — same str|float|None pattern)
+    # Confidence (coerce to float — same str|float|None pattern)
     raw_confidence = ctx.arguments.get("confidence")
     try:
         reported_confidence = float(raw_confidence) if raw_confidence is not None else None
     except (TypeError, ValueError):
         reported_confidence = None
     ctx.confidence = reported_confidence
+    # Auto-correction is OFF pending the #1321 rebuild. The tactical bins the
+    # corrector read were ~96% trained by the tool-invocation-success feeder
+    # (removed in monitor_calibration.py) whose inverted low-confidence scoring
+    # made the applied corrections run backwards — an honest 0.5–0.7 report was
+    # halved because the agent's tools succeeded. Identity is strictly less
+    # wrong than scaling against those bins. Re-enable only against
+    # hard-exogenous channels once the bins are re-versioned;
+    # apply_confidence_correction and its tests stay intact for that rebuild.
     ctx.calibration_correction_info = None
-
-    if reported_confidence is not None:
-        try:
-            from src.calibration import calibration_checker
-            corrected, correction_info = calibration_checker.apply_confidence_correction(reported_confidence)
-            if correction_info:
-                ctx.calibration_correction_info = correction_info
-                logger.info(f"Agent {ctx.agent_id}: {correction_info}")
-            ctx.confidence = corrected
-        except Exception as e:
-            logger.debug(f"Calibration correction skipped: {e}")
 
     # Epistemic class: forward-only storage label for the state row. Pydantic
     # validates the public schema; this fallback keeps non-schema internal

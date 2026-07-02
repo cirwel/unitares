@@ -17,8 +17,8 @@ def run_calibration_recording(monitor, confidence: float, decision: Dict, drift_
     """Retrospective trajectory validation + strategic/tactical calibration.
 
     Compares previous verdict to current drift norm to assess whether the
-    intervention improved the trajectory.  Records calibration signals for
-    both trajectory-based and tool-usage ground truth.
+    intervention improved the trajectory. Records a trajectory-based tactical
+    calibration signal only; the tool-usage feeder was removed (#1321).
 
     Mutates monitor._prev_verdict_action, monitor._prev_drift_norm,
     monitor._prev_confidence, monitor._prev_checkin_time.
@@ -73,43 +73,15 @@ def run_calibration_recording(monitor, confidence: float, decision: Dict, drift_
     # Mint a tactical prediction id
     monitor.register_tactical_prediction(confidence, decision_action=decision.get('action'))
 
-    # Record prediction for STRATEGIC calibration
-    predicted_correct = confidence >= 0.5
-    actual_correct = None
-
-    try:
-        from src.tool_usage_tracker import get_tool_usage_tracker
-        tracker = get_tool_usage_tracker()
-        stats = tracker.get_usage_stats(window_hours=1, agent_id=monitor.agent_id)
-        total_calls = stats.get('total_calls', 0)
-        if total_calls >= 3:
-            tools = stats.get('tools', {})
-            total_success = sum(t.get('success_count', 0) for t in tools.values())
-            tool_accuracy = float(total_success) / float(total_calls)
-            actual_correct = tool_accuracy
-    except Exception:
-        pass
-
-    if actual_correct is not None:
-        calibration_checker.record_prediction(
-            confidence=confidence,
-            predicted_correct=predicted_correct,
-            actual_correct=actual_correct
-        )
-
-        decision_action = decision['action']
-        outcome_was_good = actual_correct >= 0.6
-
-        if confidence >= 0.6:
-            immediate_outcome = outcome_was_good
-        else:
-            immediate_outcome = not outcome_was_good
-
-        if decision_action in ('proceed', 'pause'):
-            calibration_checker.record_tactical_decision(
-                confidence=confidence,
-                decision=decision_action,
-                immediate_outcome=immediate_outcome
-            )
+    # The former tool-usage feeder is deliberately gone (#1321). It graded
+    # reported confidence against the agent's MCP tool-invocation success rate
+    # over the last hour — a ~0.998 near-constant that measures infrastructure
+    # reliability, not task outcomes. Firing on every check-in, it supplied
+    # ~96% of the strategic/tactical bin mass, manufactured the fleet-wide
+    # −0.29 "underconfidence" artifact, and (via the inverted low-confidence
+    # scoring it used) taught the corrector to halve honest 0.5–0.7 reports.
+    # Calibration ground truth must come from outcome-graded events
+    # (evidence_weight-gated in outcome_events.py) — never from tool-call
+    # plumbing succeeding.
 
     return trajectory_validation
