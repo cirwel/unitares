@@ -12,8 +12,8 @@ this table cannot silently disagree with the code.
 
 | Port | Service | Host | Canonical source |
 |------|---------|------|------------------|
-| `8766` | Anima MCP (physical edge testbed) | Pi / Lumen host | `anima-mcp` service config (external repo) |
-| `8767` | UNITARES governance MCP | governance host (Mac) | `src/mcp_server.py` — `DEFAULT_PORT` |
+| `8766` | Anima MCP (physical edge testbed) | edge host (Raspberry Pi) | `anima-mcp` service config (external repo) |
+| `8767` | UNITARES governance MCP | governance host | `src/mcp_server.py` — `DEFAULT_PORT` |
 | `8768` | Gateway (weak external tier only) | governance host | `src/gateway/constants.py` — `GATEWAY_PORT` (`GATEWAY_PORT` env, default 8768) |
 | `8788` | Surface lease plane + governed-effect plane (BEAM) | governance host | `LEASE_PLANE_BASE_URL` default — `src/services/runtime_queries.py` |
 | `8789` | Agent orchestrator (BEAM) | governance host | `AGENT_ORCHESTRATOR_URL` default — `src/mcp_handlers/dialectic/orchestrator_dispatch.py` |

@@ -114,7 +114,7 @@ Want to act on *why*, not just the policy action? Each check-in also returns fou
 | **S** · Entropy / drift | drifting from its own normal? | erratic, divergent behavior |
 | **V** · Valence | derived: energy vs integrity | motion without coherence (or vice-versa) |
 
-The baseline takes ~30 check-ins to establish. Until then the policy action falls back to self-reported signals and fixed thresholds, so it is *not yet* discriminative of absolute drift magnitude — a worsening drift vector will not, on its own, move the action during warmup. After baselining, the per-agent behavioral assessment is combined into the action and can escalate it. A pause is enforced (the runtime boundary marks the agent `paused` and blocks further writes until recovery), not merely advisory.
+The baseline takes ~30 check-ins to establish. Until then the policy action falls back to a cold-start prior computed mostly from server-derived signals (complexity divergence, coherence, calibration — self-reported drift is a capped ≤30% blend), so it is *not yet* discriminative of absolute drift magnitude — a worsening drift vector will not, on its own, move the action during warmup. After baselining, the per-agent behavioral assessment is combined into the action and can escalate it. A pause is enforced (the runtime boundary marks the agent `paused` and blocks further writes until recovery), not merely advisory.
 
 </details>
 
@@ -188,7 +188,7 @@ For long-running or scheduled agents, the [SDK](agents/sdk/README.md) handles co
 
 **Evaluating with an agent?** On a fresh clone, the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) grades whether the four-score state telemetry beats deliberately dumb baselines (AUC, Brier) on externally labeled task/result evidence, reporting each slice honestly rather than asserting it. Most projects don't ship the means to disprove them; this one does. ([Reviewer Guide →](docs/REVIEWER_GUIDE.md))
 
-**Auditable, not a black box.** Policy actions come from an inspectable behavioral model ([`behavioral_assessment.py`](src/behavioral_assessment.py)); the information-theoretic formulation in [Paper v6](https://github.com/cirwel/unitares-paper-v6) is the research roadmap, not a claim about the current decision path ([how the four scores are computed](docs/EISV_COMPUTATION.md)).
+**Auditable, not a black box.** Once a baseline exists, policy actions come from an inspectable behavioral model ([`behavioral_assessment.py`](src/behavioral_assessment.py)); before that, from a mostly server-derived cold-start prior. The information-theoretic formulation in [Paper v6](https://github.com/cirwel/unitares-paper-v6) is the research roadmap, not a claim about the post-warmup decision path ([how the four scores are computed](docs/EISV_COMPUTATION.md)).
 
 Human evaluators start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md).
 

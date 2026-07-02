@@ -87,7 +87,7 @@ identity of EISV itself.
 *"No sigmoid/phi black box. Each risk component has a clear source and weight. Assessment is auditable — you can trace exactly why a verdict was issued."* (module docstring.)
 
 - Total risk = sum of named components (`low_E`, `low_I`, high-`S`, `|V|`, …), each with an explicit weight.
-- **Warmup** (first ~30 check-ins): fixed universal thresholds.
+- **Warmup** (first ~30 check-ins): the behavioral track scores against fixed universal thresholds, while the *live verdict* comes from the cold-start prior (≥70% server-derived drift signals; see [SCOPE_AND_THREAT_MODEL.md](SCOPE_AND_THREAT_MODEL.md)). The behavioral assessment becomes the verdict authority once its confidence clears the bar.
 - **After warmup**: self-relative z-score deviations from the agent's *own* behavioral baseline.
 - **Absolute safety floors always apply**, overriding the baseline.
 - Self-relative deviation risk is **gated by absolute basin health** (issue #689): inside the healthy basin a deviation from your own norm is treated as information, not danger; the gate opens only as a dimension leaves the basin toward its absolute floor. (This replaced a flat σ-floor that was false-pausing ultra-stable agents.)
