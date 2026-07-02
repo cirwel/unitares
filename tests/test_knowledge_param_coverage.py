@@ -12,9 +12,9 @@ dead read.
 
 This lint catches that class statically: it AST-scans the knowledge handlers for
 every `arguments.get("X")` / `arguments["X"]`, and asserts each key is either
-declared on `KnowledgeParams`, an internal injected key, or an explicitly
-recorded known-gap. A NEW undeclared, unclassified read fails the suite — so the
-next `superseded_by` can't slip in silently.
+declared on `KnowledgeParams`, an internal injected key, or an intentionally
+non-public legacy key. A NEW undeclared, unclassified read fails the suite — so
+the next `superseded_by` can't slip in silently.
 
 NOT inert: test_lint_fires_on_synthetic_undeclared_read proves the check rejects
 an undeclared read (a lint that never fires would be the very inertia it guards).
@@ -56,18 +56,19 @@ INTERNAL_KEYS = {
     "text",          # internal alias-resolution scratch
 }
 
-# Read by a handler but NOT exposed on KnowledgeParams as of 2026-06-21. Each is
-# either a genuinely useful param the unified tool should expose (search/get
-# controls like semantic, search_mode, min_similarity, include_archived,
-# include_cold, include_provenance, response_to, offset/length/...) or legacy
-# plumbing. This is a VISIBLE backlog, not a hidden one: the goal is to shrink
-# it by declaring the real params on KnowledgeParams (then deleting them here),
-# not to grow it. Adding a NEW entry must be a deliberate, reviewed act.
-KNOWN_UNEXPOSED = {
-    "auto_link_related", "exclude_agent_labels",
-    "related_files", "resolve_question",
-    "synthesize", "use_model",
+# Handler-read params that are intentionally NOT part of the unified
+# knowledge() schema. These are not a backlog: each entry needs a concrete
+# reason why exposing it would be misleading or noisy.
+INTENTIONALLY_UNEXPOSED = {
+    # Legacy answer_question-only flag. knowledge() has no answer action, so
+    # exposing this on KnowledgeParams would advertise an inert control.
+    "resolve_question",
+    # Legacy search-result LLM summary toggle. It is not the same operation as
+    # knowledge(action="synthesize"), and a bool named "synthesize" next to the
+    # action literal is too ambiguous for the unified surface.
+    "synthesize",
 }
+KNOWN_UNEXPOSED = set()
 # include_archived / include_cold were exposed on KnowledgeParams (2026-06-22) as
 # recall-recovery levers. include_provenance / search_mode / semantic /
 # min_similarity / operator followed on 2026-06-26 as handler-documented search
@@ -75,15 +76,16 @@ KNOWN_UNEXPOSED = {
 # response_to followed as details/threading controls. confidence followed as a
 # store-path writer-authored quality signal. epoch_scope / including_cold
 # followed as list/stats scope controls. audit scope / top_n followed as public
-# read-only audit controls. Shrinking this set is the goal; growing it is the
-# smell.
+# read-only audit controls. Store related-file/link controls, search label
+# exclusion, and audit use_model followed under #1001. Shrinking this set is the
+# goal; growing it is the smell.
 
 
 def _classify_undeclared() -> set[str]:
     """Read keys that are neither declared, internal, nor a recorded known-gap."""
     read = _read_arg_keys(HANDLERS.read_text())
     declared = set(KnowledgeParams.model_fields.keys())
-    allowed = declared | INTERNAL_KEYS | KNOWN_UNEXPOSED
+    allowed = declared | INTERNAL_KEYS | KNOWN_UNEXPOSED | INTENTIONALLY_UNEXPOSED
     return {k for k in read if not k.startswith("_") and k not in allowed}
 
 
@@ -92,9 +94,10 @@ def test_no_new_unexposed_handler_param():
 
     If this fails, you read `arguments.get("X")` for an X the agent can't pass
     via the unified `knowledge` tool. Fix by declaring X on KnowledgeParams
-    (preferred — exposes it), or, if X is server-injected, add it to
-    INTERNAL_KEYS with a note. Do NOT add it to KNOWN_UNEXPOSED to silence this
-    unless it is a deliberate, reviewed deferral.
+    (preferred — exposes it), or, if X is server-injected/direct-tool-only, add
+    it to the appropriate explicit classification with a note. Do NOT add it to
+    KNOWN_UNEXPOSED to silence this unless it is a deliberate, reviewed
+    deferral.
     """
     offenders = _classify_undeclared()
     assert not offenders, (
@@ -110,6 +113,11 @@ def test_known_unexposed_has_no_declared_params():
     declared = set(KnowledgeParams.model_fields.keys())
     stale = declared & KNOWN_UNEXPOSED
     assert not stale, f"declared params still listed as unexposed: {sorted(stale)}"
+
+
+def test_no_public_param_backlog_remaining():
+    """#1001 public backlog should stay empty; classify or expose future reads."""
+    assert KNOWN_UNEXPOSED == set()
 
 
 def test_archived_cold_recall_levers_exposed():
@@ -150,6 +158,28 @@ def test_store_confidence_signal_exposed():
     assert KnowledgeParams(action="store", summary="x", confidence="not-a-number").confidence is None
 
 
+def test_store_link_controls_exposed():
+    """Store-path related-file and auto-link controls must be sendable."""
+    declared = set(KnowledgeParams.model_fields.keys())
+    assert {"related_files", "auto_link_related"} <= declared
+    model = KnowledgeParams(
+        action="store",
+        summary="x",
+        related_files=["src/example.py"],
+        auto_link_related="false",
+    )
+    assert model.related_files == ["src/example.py"]
+    assert model.auto_link_related is False
+
+
+def test_search_label_exclusion_exposed():
+    """Dashboard/operator search label filtering must survive validation."""
+    declared = set(KnowledgeParams.model_fields.keys())
+    assert "exclude_agent_labels" in declared
+    model = KnowledgeParams(action="search", exclude_agent_labels=["Vigil"])
+    assert model.exclude_agent_labels == ["Vigil"]
+
+
 def test_list_scope_controls_exposed():
     """List/stats scope controls must be sendable through knowledge(action=list)."""
     declared = set(KnowledgeParams.model_fields.keys())
@@ -162,10 +192,11 @@ def test_list_scope_controls_exposed():
 def test_audit_scope_controls_exposed():
     """Audit controls must be sendable through knowledge(action=audit)."""
     declared = set(KnowledgeParams.model_fields.keys())
-    assert {"scope", "top_n"} <= declared
-    model = KnowledgeParams(action="audit", scope="by_agent", top_n="3")
+    assert {"scope", "top_n", "use_model"} <= declared
+    model = KnowledgeParams(action="audit", scope="by_agent", top_n="3", use_model="true")
     assert model.scope == "by_agent"
     assert model.top_n == 3
+    assert model.use_model is True
 
 
 def test_audit_scope_controls_advertised_in_tool_schema():
@@ -174,7 +205,14 @@ def test_audit_scope_controls_advertised_in_tool_schema():
 
     knowledge = next(t for t in get_tool_definitions(verbosity="full") if t.name == "knowledge")
     props = knowledge.inputSchema["properties"]
-    assert {"scope", "top_n"} <= set(props)
+    assert {
+        "auto_link_related",
+        "exclude_agent_labels",
+        "related_files",
+        "scope",
+        "top_n",
+        "use_model",
+    } <= set(props)
 
 
 def test_supersession_link_params_stay_declared():
@@ -191,5 +229,5 @@ def test_lint_fires_on_synthetic_undeclared_read():
     read = _read_arg_keys(snippet)
     assert "totally_made_up_param" in read
     declared = set(KnowledgeParams.model_fields.keys())
-    allowed = declared | INTERNAL_KEYS | KNOWN_UNEXPOSED
+    allowed = declared | INTERNAL_KEYS | KNOWN_UNEXPOSED | INTENTIONALLY_UNEXPOSED
     assert "totally_made_up_param" not in allowed  # would be flagged as an offender

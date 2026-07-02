@@ -327,6 +327,8 @@ class KnowledgeParams(AgentIdentityMixin):
     response_to: Optional[dict] = Field(None, description="Typed response link {discovery_id, response_type} for threaded store/note writes")
     tags: Optional[List[str]] = Field(None, description="Tags for discovery (for action=store, search, note)")
     severity: Optional[str] = Field(None, description="Severity: low, medium, high, critical (for action=store)")
+    related_files: Optional[List[str]] = Field(None, description="File paths referenced by this discovery (for action=store)")
+    auto_link_related: Union[bool, str, None] = Field(None, description="If false, skip automatic similar-discovery linking for action=store")
     confidence: Union[float, str, None] = Field(
         None,
         description=(
@@ -354,6 +356,7 @@ class KnowledgeParams(AgentIdentityMixin):
     semantic: Union[bool, str, None] = Field(None, description="Legacy action=search toggle to force or skip semantic retrieval when supported")
     min_similarity: Union[float, str, None] = Field(None, description="Minimum cosine similarity for semantic retrieval modes")
     operator: Optional[Literal["AND", "OR"]] = Field(None, description="Boolean operator for multi-term FTS queries")
+    exclude_agent_labels: Optional[List[str]] = Field(None, description="Omit search results whose writer display label matches one of these values")
     offset: Optional[int] = Field(None, description="Character offset for action=details pagination")
     length: Optional[int] = Field(None, description="Maximum details characters returned for action=details")
     include_response_chain: Union[bool, str, None] = Field(None, description="Include typed response chain for action=details")
@@ -368,6 +371,7 @@ class KnowledgeParams(AgentIdentityMixin):
     including_cold: Union[bool, str, None] = Field(None, description="Include cold-storage discoveries in action=list raw status aggregates")
     scope: Optional[Literal["open", "all", "by_agent"]] = Field(None, description="KG audit scope for action=audit")
     top_n: Optional[int] = Field(None, description="Maximum stale entries returned by action=audit")
+    use_model: Union[bool, str, None] = Field(None, description="Use the local model to assess stale entries for action=audit")
     dry_run: Union[bool, str, None] = Field(None, description="Dry run mode (for action=cleanup, synthesize)")
     # Synthesis (action=synthesize): roll discoveries up into topic summaries.
     topic: Optional[str] = Field(None, description="Synthesize just this one tag/topic (for action=synthesize). Omit to sweep the densest topics.")
@@ -386,8 +390,12 @@ class KnowledgeParams(AgentIdentityMixin):
             self.dry_run = self.dry_run.lower() in ('true', '1', 'yes')
         if isinstance(self.use_llm, str):
             self.use_llm = self.use_llm.lower() in ('true', '1', 'yes')
+        if isinstance(self.use_model, str):
+            self.use_model = self.use_model.lower() in ('true', '1', 'yes')
         if isinstance(self.include_provenance, str):
             self.include_provenance = self.include_provenance.lower() in ('true', '1', 'yes')
+        if isinstance(self.auto_link_related, str):
+            self.auto_link_related = self.auto_link_related.lower() in ('true', '1', 'yes')
         if isinstance(self.semantic, str):
             self.semantic = self.semantic.lower() in ('true', '1', 'yes')
         if isinstance(self.min_similarity, str):
