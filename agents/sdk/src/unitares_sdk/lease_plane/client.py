@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import time
 import urllib.error
@@ -61,6 +62,11 @@ class LeasePlaneClientConfig:
     # force_release(); release() rejects release_reason='forced' regardless.
     force_release_token: str | None = None
     timeout_s: float = 1.0
+    # Effect-binding (#1252): grants are minted at gov-mcp's REST surface, not
+    # the lease plane. None → UNITARES_GOVERNANCE_URL env → localhost:8767
+    # (loopback bypasses gov REST auth; the token is for non-loopback setups).
+    governance_url: str | None = None
+    governance_api_token: str | None = None
 
 
 @dataclass(frozen=True)
@@ -332,6 +338,7 @@ class LeasePlaneClient:
         ttl_s: int = 300,
         idempotency_key: str | None = None,
         encoding: str | None = None,
+        effect_binding: str = "auto",
     ) -> Mapping[str, Any]:
         """Propose a governed ``file_write`` effect on the lease plane.
 
@@ -349,12 +356,57 @@ class LeasePlaneClient:
         success, or an error envelope (e.g. ``proposer_invalid`` 422,
         ``governance_blocked`` 403, ``not_implemented`` 501 when the server
         flags are off). The bytes are committed only on ``ok: true``.
+
+        ``effect_binding`` (#1252 producer wiring) controls the pre-propose
+        grant mint at gov-mcp ``/v1/effect-grant``:
+
+        - ``"auto"`` (default): mint and attach ``proposer.effect_grant`` when
+          the server issues one; on ANY mint failure (binding flags off → 501,
+          tier refused → 403, gov unreachable) propose grantless — byte-
+          identical to the pre-binding envelope, so today's behavior is
+          unchanged until the operator enables minting server-side.
+        - ``"require"``: a failed mint returns an ``effect_grant_mint_failed``
+          error envelope WITHOUT proposing (no side effects). For producers
+          that must never submit an unbound effect once enforcement is on.
+        - ``"off"``: never mint (exact legacy envelope).
         """
+        if effect_binding not in ("auto", "require", "off"):
+            return {
+                "ok": False,
+                "error": "schema_invalid",
+                "detail": f"effect_binding must be auto|require|off, got {effect_binding!r}",
+            }
+
         fs_path = path[len("file://") :] if path.startswith("file://") else path
         surface = f"file://{fs_path}"
         payload: dict[str, Any] = {"path": fs_path, "content": content}
         if encoding:
             payload["encoding"] = encoding
+
+        # The grant binds the idempotency_key, so it must be fixed before mint.
+        idem = idempotency_key or f"fw-{uuid.uuid4().hex}"
+
+        proposer: dict[str, Any] = {
+            "agent_uuid": proposer_uuid,
+            "continuity_token": continuity_token,
+        }
+        if effect_binding != "off":
+            grant = self._mint_effect_grant(
+                proposer_uuid=proposer_uuid,
+                continuity_token=continuity_token,
+                payload=payload,
+                surface=surface,
+                custody_mode="execute",
+                idempotency_key=idem,
+            )
+            if grant:
+                proposer["effect_grant"] = grant
+            elif effect_binding == "require":
+                return {
+                    "ok": False,
+                    "error": "effect_grant_mint_failed",
+                    "detail": "effect_binding='require' and gov-mcp did not issue a grant",
+                }
 
         body = {
             "effect_type": "file_write",
@@ -362,11 +414,77 @@ class LeasePlaneClient:
             "surface": surface,
             "required_leases": [{"surface": surface, "ttl_s": ttl_s}],
             "payload": payload,
-            "proposer": {"agent_uuid": proposer_uuid, "continuity_token": continuity_token},
+            "proposer": proposer,
             "provenance": {"session_id": session_id},
-            "idempotency_key": idempotency_key or f"fw-{uuid.uuid4().hex}",
+            "idempotency_key": idem,
         }
         return self._request_json("POST", "/v1/effects", body)
+
+    def _mint_effect_grant(
+        self,
+        *,
+        proposer_uuid: str,
+        continuity_token: str,
+        payload: Mapping[str, Any],
+        surface: str,
+        custody_mode: str,
+        idempotency_key: str,
+    ) -> str | None:
+        """Best-effort grant mint at gov-mcp ``POST /v1/effect-grant``.
+
+        Returns the ``gnt.v1`` grant string, or None on any failure — the
+        caller decides whether grantless is acceptable (``auto``) or fatal
+        (``require``). The continuity_token is a credential: sent to gov-mcp
+        for §7 re-certification only, never logged. payload_sha256 uses the
+        shared cross-language canonical form (see ``.canonical``) so the hash
+        minted here equals the one the lease plane forwards to the veto.
+        """
+        from .canonical import CanonicalizationError, canonical_payload_sha256
+
+        try:
+            payload_sha = canonical_payload_sha256(payload)
+        except CanonicalizationError as e:
+            logger.debug("effect-grant mint skipped: payload not canonical (%s)", e)
+            return None
+
+        gov_base = (
+            self.config.governance_url
+            or os.getenv("UNITARES_GOVERNANCE_URL")
+            or "http://127.0.0.1:8767"
+        ).rstrip("/")
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        api_token = self.config.governance_api_token or os.getenv("UNITARES_HTTP_API_TOKEN")
+        if api_token:
+            headers["Authorization"] = f"Bearer {api_token}"
+
+        request = LeaseHTTPRequest(
+            method="POST",
+            url=gov_base + "/v1/effect-grant",
+            headers=headers,
+            json_body={
+                "proposer_agent_uuid": proposer_uuid,
+                "proposer_continuity_token": continuity_token,
+                "payload_sha256": payload_sha,
+                "surface": surface,
+                "custody_mode": custody_mode,
+                "idempotency_key": idempotency_key,
+            },
+            timeout_s=self.config.timeout_s,
+        )
+        try:
+            response = self._transport(request)
+        except Exception as e:  # noqa: BLE001 — mint is best-effort; caller decides
+            logger.debug("effect-grant mint unreachable: %s", e)
+            return None
+        if isinstance(response, Mapping) and response.get("ok") is True:
+            grant = response.get("grant")
+            if isinstance(grant, str) and grant:
+                return grant
+        if isinstance(response, Mapping):
+            logger.debug(
+                "effect-grant mint refused: %s", response.get("error") or "unknown_error"
+            )
+        return None
 
     def health_check(self, *, timeout_s: float | None = None) -> HealthResult:
         """Liveness probe against the BEAM lease-plane (Wave 2 Phase C).
