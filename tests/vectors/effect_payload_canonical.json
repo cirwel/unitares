@@ -1,0 +1,126 @@
+{
+  "description": "Cross-language canonical payload vectors for effect-binding (#1252). Both the Python producer (unitares_sdk.lease_plane.canonical) and the Elixir lease plane (UnitaresLeasePlane.CanonicalPayload) MUST reproduce `canonical` (UTF-8) and `sha256` exactly for each vector, and MUST reject every entry in `rejects`.",
+  "vectors": [
+    {
+      "name": "file_write_basic",
+      "payload": {
+        "path": "/tmp/x.txt",
+        "content": "aGVsbG8gd29ybGQ="
+      },
+      "canonical": "{\"content\":\"aGVsbG8gd29ybGQ=\",\"path\":\"/tmp/x.txt\"}",
+      "sha256": "beb9bdcac3ba265610863075ae6610b67d911eaba2cad282924de54fed810f52"
+    },
+    {
+      "name": "file_write_with_encoding",
+      "payload": {
+        "path": "/tmp/data.bin",
+        "content": "AAECAwQ=",
+        "encoding": "base64"
+      },
+      "canonical": "{\"content\":\"AAECAwQ=\",\"encoding\":\"base64\",\"path\":\"/tmp/data.bin\"}",
+      "sha256": "2badc3d30c4f38d5183bc9a0c2b10df82ea6f10cb824149bc90d2ad6628fd229"
+    },
+    {
+      "name": "nested_unsorted_keys",
+      "payload": {
+        "zeta": {
+          "z": 1,
+          "a": [
+            1,
+            2,
+            {
+              "k": null
+            }
+          ]
+        },
+        "alpha": true,
+        "mid": [
+          {
+            "b": 2,
+            "a": 1
+          }
+        ]
+      },
+      "canonical": "{\"alpha\":true,\"mid\":[{\"a\":1,\"b\":2}],\"zeta\":{\"a\":[1,2,{\"k\":null}],\"z\":1}}",
+      "sha256": "e05e862bca8fd4be47f6a89a4f1ac8521d1d31d990b928391344e1ce4393f164"
+    },
+    {
+      "name": "unicode_raw",
+      "payload": {
+        "path": "/tmp/naïve-🚀.txt",
+        "note": "日本語"
+      },
+      "canonical": "{\"note\":\"日本語\",\"path\":\"/tmp/naïve-🚀.txt\"}",
+      "sha256": "b246c2a2ea34690afacf980554a8526545b1c2aa611b7e8be792c556d06d4909"
+    },
+    {
+      "name": "quotes_and_backslash",
+      "payload": {
+        "s": "he said \"hi\" \\ done",
+        "p": "C:\\tmp\\x"
+      },
+      "canonical": "{\"p\":\"C:\\\\tmp\\\\x\",\"s\":\"he said \\\"hi\\\" \\\\ done\"}",
+      "sha256": "5f9d1905aceefbd150f71603a356013b92a6b8066e3859c660135fbd4c4f7e62"
+    },
+    {
+      "name": "ints_bools_null",
+      "payload": {
+        "n": -42,
+        "big": 12345678901234567890,
+        "zero": 0,
+        "t": true,
+        "f": false,
+        "empty_s": "",
+        "nil": null,
+        "empty_list": [],
+        "empty_obj": {}
+      },
+      "canonical": "{\"big\":12345678901234567890,\"empty_list\":[],\"empty_obj\":{},\"empty_s\":\"\",\"f\":false,\"n\":-42,\"nil\":null,\"t\":true,\"zero\":0}",
+      "sha256": "cafcd702472cc73ecf8387f9152eba54bfc1d1f126d4b709a1e5d599a957db3c"
+    },
+    {
+      "name": "key_sort_bytewise",
+      "payload": {
+        "b": 1,
+        "B": 2,
+        "a": 3,
+        "A": 4,
+        "_": 5,
+        "0": 6,
+        "é": 7
+      },
+      "canonical": "{\"0\":6,\"A\":4,\"B\":2,\"_\":5,\"a\":3,\"b\":1,\"é\":7}",
+      "sha256": "d96ed29af299d962c83aed832e1bab86e12185ce2f1c494b753c275d9f97bed0"
+    }
+  ],
+  "rejects": [
+    {
+      "name": "float_value",
+      "payload": {
+        "x": 1.5
+      }
+    },
+    {
+      "name": "float_nested",
+      "payload": {
+        "a": [
+          {
+            "b": 2.0
+          }
+        ]
+      }
+    },
+    {
+      "name": "control_char_in_string",
+      "payload": {
+        "s": "a\u0001b"
+      }
+    },
+    {
+      "name": "control_char_in_key",
+      "payload": {
+        "bad\tkey": "v"
+      }
+    }
+  ]
+}
