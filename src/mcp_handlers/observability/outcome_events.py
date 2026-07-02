@@ -534,10 +534,63 @@ async def handle_outcome_event(arguments: Dict[str, Any]) -> Sequence[TextConten
             error_category="identity_error",
         )]
 
+    # Ephemeral-write gate (#1351 item 1, defense-in-depth for #1319). The
+    # middleware stamps dispatch-minted identities `ephemeral: true /
+    # persisted: false`; until now no write path consulted it. Under strict
+    # identity an ephemeral writer should be impossible (#1325 closed the
+    # known route) — so if one appears, refuse fail-closed: it IS a future
+    # leak route. Under non-strict, auto-minted ephemeral identities are the
+    # designed flow — stamp the row and warn instead of breaking it.
+    ephemeral_stamp = False
+    try:
+        from ..context import get_session_context
+        _ident = get_session_context().get("identity_result") or {}
+        if _ident.get("ephemeral") and not _ident.get("persisted"):
+            from ..identity_bootstrap import is_strict_identity_required
+            if is_strict_identity_required():
+                logger.warning(
+                    "[EPHEMERAL-GATE] refusing outcome_event write from "
+                    "ephemeral-unpersisted identity %s... under strict "
+                    "identity — this route should not exist (#1351)",
+                    str(agent_id)[:8],
+                )
+                return [error_response(
+                    "Durable write refused: this session is bound to an "
+                    "ephemeral, unpersisted identity, which cannot own an "
+                    "outcome row under strict identity. Onboard first "
+                    "(start_session(force_new=true)) and retry.",
+                    error_code="EPHEMERAL_IDENTITY_WRITE_REFUSED",
+                    error_category="identity_error",
+                )]
+            ephemeral_stamp = True
+            logger.warning(
+                "[EPHEMERAL-GATE] outcome_event write from ephemeral-"
+                "unpersisted identity %s... — stamping row (#1351)",
+                str(agent_id)[:8],
+            )
+    except Exception:
+        # The gate is defense-in-depth; a gate error must not block a
+        # legitimate write. (Strict-mode refusal above returns before this.)
+        logger.debug("ephemeral-write gate check failed", exc_info=True)
+
     # Delegate to the non-decorated helper to avoid the @mcp_tool decorator's
     # asyncio.wait_for wrapping (anyio-asyncio deadlock risk — see CLAUDE.md).
     # agent_id resolved above is injected so the helper can skip context lookup.
-    payload = await _record_outcome_event_inline({**arguments, "agent_id": agent_id})
+    _gate_args = {**arguments, "agent_id": agent_id}
+    if ephemeral_stamp:
+        _detail = dict(_gate_args.get("detail") or {})
+        _detail["ephemeral_writer"] = True
+        _gate_args["detail"] = _detail
+    payload = await _record_outcome_event_inline(_gate_args)
+    if ephemeral_stamp and isinstance(payload, dict) and "error" not in payload:
+        payload.setdefault("identity_warnings", []).append({
+            "code": "ephemeral_writer",
+            "message": (
+                "This outcome was recorded under an ephemeral, unpersisted "
+                "identity and stamped ephemeral_writer=true. Onboard "
+                "(start_session) to write under a durable identity."
+            ),
+        })
 
     if "error" in payload:
         return [error_response(

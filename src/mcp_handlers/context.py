@@ -229,6 +229,33 @@ def get_session_proof_origin() -> Optional[str]:
     return _session_proof_origin.get()
 
 
+# Set True when the caller PRESENTED a continuity_token that failed
+# verification, regardless of whether the call later succeeded via another
+# proof (client_session_id, fingerprint pin, ...). session_resolution_source
+# can't carry this: it records the proof that WON, so a valid fallback
+# overwrites the invalid-token fact and the caller never learns their token
+# is bad until the fallback rotates (the #1319 incident). A dedicated sticky
+# flag lets the post-execution warning step (#1351) surface it on every
+# successful response. Cleared at resolve_identity entry for per-request
+# hygiene (same lifecycle as session_resolution_source).
+_continuity_token_invalid: ContextVar[bool] = ContextVar('continuity_token_invalid', default=False)
+
+
+def mark_continuity_token_invalid() -> object:
+    """Record that this request presented a continuity_token that failed verification."""
+    return _continuity_token_invalid.set(True)
+
+
+def clear_continuity_token_invalid() -> object:
+    """Clear the invalid-token flag (call at request entry)."""
+    return _continuity_token_invalid.set(False)
+
+
+def get_continuity_token_invalid() -> bool:
+    """Did this request present a continuity_token that failed verification?"""
+    return _continuity_token_invalid.get()
+
+
 # Set True at every point the transport INJECTS a synthetic client_session_id
 # into the arguments (REST: http_api; typed MCP wrapper: wrapper_generator).
 # An injected CSID is indistinguishable from a caller-sent one once in
