@@ -454,6 +454,12 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     """Extract session identity, resolve onboard pin, bind agent."""
     _clear_middleware_identity(arguments)
 
+    # Per-request hygiene for the sticky invalid-token flag (#1351): the
+    # contextvar default only covers a fresh context; a long-lived dispatch
+    # task must not leak one request's invalid-token fact into the next.
+    from ..context import clear_continuity_token_invalid
+    clear_continuity_token_invalid()
+
     # Unified session key derivation via SessionSignals + derive_session_key()
     from ..context import get_session_signals
     from ..identity.handlers import derive_session_key

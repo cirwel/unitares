@@ -17,6 +17,7 @@ from .params_step import unwrap_kwargs, resolve_alias, inject_identity, validate
 from .rate_limit_step import check_rate_limit, _tool_call_history
 from .pattern_step import track_patterns
 from .envelope_step import apply_experience_envelope
+from .identity_warning_step import apply_identity_warnings
 
 # Type alias for middleware return
 MiddlewareResult = Union[
@@ -62,4 +63,7 @@ POST_VALIDATION_STEPS = [
 # guards each step; a failing step never breaks the response.
 POST_EXECUTION_STEPS = [
     apply_experience_envelope,
+    # After the envelope so the warning lands at the top level of whichever
+    # shape (raw or envelope) the caller actually receives (#1351).
+    apply_identity_warnings,
 ]

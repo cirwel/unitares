@@ -687,6 +687,16 @@ async def _derive_session_key_impl(
             _mark("continuity_token")
             return resolved
         _mark("continuity_token_invalid")
+        # Sticky per-request flag (#1351): _mark records only the proof that
+        # WINS, so when a fallback proof succeeds below the invalid-token fact
+        # is overwritten and the caller never learns their token is bad until
+        # the fallback rotates (the #1319 incident). The post-execution
+        # warning step reads this flag and surfaces it on the response.
+        try:
+            from ..context import mark_continuity_token_invalid
+            mark_continuity_token_invalid()
+        except Exception:
+            pass
 
     # 2. Explicit from arguments
     if arguments.get("client_session_id"):
