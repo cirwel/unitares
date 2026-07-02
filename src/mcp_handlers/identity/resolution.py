@@ -639,6 +639,14 @@ async def resolve_session_identity(
                 token_agent_uuid[:8], exc, exc_info=True,
             )
 
+    # #1319: when a hijack guard (token mismatch / strict fingerprint mismatch)
+    # flips resume=False, both the PATH 2 resume and the S21-a fail-close are
+    # keyed on `resume` and silently disarm — the call then falls through to a
+    # PATH 3 mint bound to a phantom UUID while the tool proceeds success:true
+    # (2026-07-01 dogfood incident, outcome 524032fd). Track WHY resume was
+    # rejected so PATH 3 can refuse instead of minting.
+    resume_rejected_reason: Optional[str] = None
+
     # If force_new is requested, skip lookup paths and go straight to creation
 
     if not force_new:
@@ -745,6 +753,9 @@ async def resolve_session_identity(
                                     f"[PATH1_TOKEN_MISMATCH] broadcast failed: {_be}"
                                 )
                             resume = False
+                            # Normally rescued by PATH 2.8 token rebind; the
+                            # reason only bites if that path doesn't resolve.
+                            resume_rejected_reason = "token_mismatch"
 
                         # PATH 1 fingerprint cross-check — extracted to the shared
                         # _fingerprint_hijack_check helper (2026-04-20 council
@@ -760,6 +771,7 @@ async def resolve_session_identity(
                             # the legitimate owner can still resume from the correct
                             # fingerprint; fall through to PATH 2/3 for a fresh bind.
                             resume = False
+                            resume_rejected_reason = "fingerprint_mismatch"
 
                         # If strict-mode fingerprint mismatch set resume=False
                         # above, skip the cached-resume return and fall through
@@ -1142,6 +1154,47 @@ async def resolve_session_identity(
             "message": (
                 f"Continuity token references agent {token_agent_uuid[:8]}... "
                 f"which is not active. Use force_new=true or onboard() to create a new identity."
+            ),
+        }
+
+    # PATH 3 gate (#1319): a resume that was actively REJECTED by a hijack
+    # guard must not decay into a fresh mint — the caller asked to be an
+    # existing agent and was refused; minting here binds their write to a
+    # phantom UUID nobody can ever resolve, with success:true masking the
+    # refusal. Fail closed instead; the caller can re-onboard (force_new)
+    # or present a valid continuity_token. force_new callers never set the
+    # reason (guards live inside the `not force_new` block), so ordinary
+    # fresh onboards are untouched.
+    if resume_rejected_reason is not None:
+        # session_key rides the audit event's structured payload, not this
+        # clear-text warning — its name trips CodeQL's clear-text-logging
+        # heuristic (same convention as the PATH1 fingerprint warning above).
+        logger.warning(
+            "[PATH3_MINT_REFUSED] resume rejected (%s) "
+            "— refusing silent PATH 3 mint (#1319)",
+            resume_rejected_reason,
+        )
+        _audit_session_resolve_miss(
+            session_key=session_key,
+            reason=f"resume_rejected_{resume_rejected_reason}",
+            resume=True,  # original caller intent; the guard flipped the local
+            force_new=force_new,
+            token_agent_uuid=token_agent_uuid,
+            client_hint=client_hint,
+            model_type=model_type,
+        )
+        return {
+            "resume_failed": True,
+            "error": "resume_rejected_hijack_guard",
+            "reason": resume_rejected_reason,
+            "session_key": session_key,
+            "message": (
+                f"Resume for session_key={session_key[:20]}... was rejected "
+                f"by the identity hijack guard ({resume_rejected_reason}); "
+                f"refusing to silently mint a fresh identity in its place. "
+                f"Re-onboard with force_new=true (declaring parent_agent_id "
+                f"if this continues prior work), or present a valid "
+                f"continuity_token."
             ),
         }
 
