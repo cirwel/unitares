@@ -120,3 +120,28 @@ class BaselineMixin:
         except Exception as e:
             logger.warning(f"Failed to load behavioral baseline for {agent_id}: {e}")
             return None
+
+    async def load_all_behavioral_baselines(self) -> Dict[str, Dict[str, Any]]:
+        """Bulk-load every agent's Welford stats as ``{agent_id: stats}``.
+
+        Read-only. Feeds the shadow cohort-prior aggregator
+        (``src/cohort_prior_source.py``), which pools these into per-class priors.
+        Returns ``{}`` on error so a callsite degrades to "no cohort prior"
+        rather than raising.
+        """
+        import json as _json
+        out: Dict[str, Dict[str, Any]] = {}
+        try:
+            async with self.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT agent_id, stats FROM core.agent_behavioral_baselines"
+                )
+            for row in rows:
+                stats = row["stats"]
+                if isinstance(stats, str):
+                    stats = _json.loads(stats)
+                if stats:
+                    out[row["agent_id"]] = dict(stats)
+        except Exception as e:
+            logger.warning(f"Failed to bulk-load behavioral baselines: {e}")
+        return out

@@ -1,8 +1,9 @@
 # Exponential / growth dynamics for UNITARES — scoping + council review (v0)
 
-**Status:** scoping. Site B (cohort priors) has a shadow, read-only primitive landed
-(`src/cohort_prior.py` + `tests/test_cohort_prior.py`); live wiring is deferred and
-out of scope here. Sites A and C are **reviewed and rejected** as framed.
+**Status:** Site B (cohort priors) landed in shadow, read-only form — the pure primitive
+(PR #1334, merged), the per-class aggregation source, and a non-mutating shadow-observe hook
+on the cold-start resume path (this PR). Live-apply is the next promotion, gated on
+shadow-observe validation data. Sites A and C are **reviewed and rejected** as framed.
 
 ## Question
 
@@ -86,16 +87,35 @@ observations cross the gate.
 
 ## What landed here
 
+**Primitive (PR #1334, merged):**
 - `src/cohort_prior.py` — pure, read-only `CohortPrior` aggregator + guardrailed
   `seed_welford` / `seed_baseline`. `cohort_prior_enabled()` flag defaults OFF.
 - `tests/test_cohort_prior.py` — 15 tests, including the anti-poisoning invariant and a
   guard that keeps `Z_SCORE_ACTIVATION_COUNT` in sync with the real Welford gate.
 
-## Deferred (explicitly out of scope, separate PRs)
+**Aggregation source + shadow-observe (this PR):**
+- `src/cohort_prior_source.py` — bulk-loads stored baselines and groups them by
+  calibration class (same `classify_agent` logic the rest of the system uses) into one
+  `CohortPrior` per class. Named residents (N=1 classes) correctly get no prior. Adds a
+  coarse in-process TTL cache (`get_cached_cohort_priors`) so the cold-start path never
+  bulk-loads on every resume, and `observe_seed_gap` describing the seed a class would
+  receive.
+- `src/db/mixins/baseline.py` — `load_all_behavioral_baselines()`, a read-only bulk SELECT.
+- `src/agent_behavioral_baseline.py` — `_maybe_observe_cohort_seed()` on the cold-start
+  branch of `ensure_baseline_loaded`. **Shadow-only:** no-op unless the flag is enabled;
+  when enabled it *logs* the would-be seed and **never mutates** the fresh baseline
+  (`test_flag_on_observes_without_mutating`).
+- `tests/test_cohort_prior_source.py` — grouping, per-class build, N=1 exclusion, TTL cache,
+  and the flag-off-noop / flag-on-non-mutating shadow-hook invariants.
 
-1. **Cohort aggregation source.** A per-class EISV aggregator over stored baselines
-   (`core.agent_behavioral_baselines`) does not exist yet. Build it as a shadow, read-only
-   query first and validate that seeded cold-start calibration actually improves.
-2. **Live wiring.** Consuming a seed in the baseline-load path
-   (`ensure_baseline_loaded`) is a **coupled identity/onboarding single-writer surface**
-   (`CLAUDE.md`). Requires its own coordination + draft PR; do not wire it in parallel.
+This is the "build it as a shadow, read-only query first and validate calibration lift
+before applying" step. Live-apply is the next promotion, gated on that validation data.
+
+## Deferred (next promotion)
+
+**Live-apply.** Actually seeding the fresh baseline from the class cohort prior on cold
+start (still behind `cohort_prior_enabled()`, still a **coupled identity/onboarding
+single-writer surface** per `CLAUDE.md`). Promote only once the shadow-observe logs show a
+real cold-start calibration lift, and re-check for in-flight work on the baseline/identity
+surface before starting. This will also want a background refresh for the prior cache
+rather than the lazy TTL rebuild used for shadow.
