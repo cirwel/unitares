@@ -6,7 +6,7 @@ The installable Codex/Claude adapter bundle is canonical in the companion `unita
 
 ## Execution-cost policy (read first)
 
-- **No metered model-API dependencies.** Do not propose, scaffold, or depend on solutions that require an `ANTHROPIC_API_KEY` or any other paid model API — this rules out `anthropics/claude-code-action` and any CI/automation that calls a metered API. This project targets free / self-hosted execution paths: the local Ollama detector for Watcher, `GITHUB_TOKEN`-only CI, and deterministic CLI tools (ruff, the doctor, the surfacing collectors). If a feature genuinely needs a paid API, surface it as a *deferred, opt-in* option and do not build it inert "just in case."
+- **The core must run free / self-hosted — no *required* metered model-API dependency.** unitares is user/agent-agnostic, so a metered API (Anthropic / OpenAI / …) must never sit on the *required* default path: the server, CI, and residents must run with no paid key (local Ollama for Watcher, `GITHUB_TOKEN`-only CI, deterministic CLI tools — ruff, the doctor, the surfacing collectors). The guarantee is for *every* installer, not just a funded one: someone with no model budget can always run it. Metered models are **welcome as an opt-in, off-by-default backend** — config-gated (e.g. a `base_url` / key from env) so an operator with credits enables them and an operator without stays free. What's forbidden is *forcing* a paid API on everyone: a hardcoded metered endpoint, a metered CI action (`anthropics/claude-code-action`), or a hard SDK import with no local fallback. Add a metered path only as deferred / opt-in, and never build it inert "just in case." (`scripts/dev/check-repo-scope.sh` Rule 6 enforces this.)
 
 ## Claude-specific wiring
 

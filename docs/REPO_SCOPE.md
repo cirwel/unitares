@@ -36,17 +36,19 @@ agent (or no agent) against it.
 
 ## Metered model-cloud dependencies
 
-The execution-cost policy (`CLAUDE.md` → *Execution-cost policy*) keeps this repo
-free / self-hosted: no dependency that requires a paid model API. The guard makes
-the policy's most concrete clauses executable, flagging only **unambiguously
-cloud-billed** signals in changed files: `anthropics/claude-code-action` in a
-`.github/workflows/` file, an `import`/`from anthropic` SDK import (no local
-equivalent exists), and a hardcoded `api.openai.com` / `api.anthropic.com`
-endpoint. It deliberately does **not** flag the sanctioned free paths — the
-`openai` client is allowed because it also drives a **local Ollama** server via a
-`base_url` override, and the agent orchestrator may spawn the `claude` CLI by
-design. A feature that genuinely needs a paid API should be a *deferred, opt-in*
-option (or live outside this repo), per the policy.
+The execution-cost policy (`CLAUDE.md` → *Execution-cost policy*) keeps the repo
+**user-agnostic**: the core must run free / self-hosted, so a metered model API
+is never *required* on the default path (an installer without a paid key — a solo
+dev, not just a funded company — can always run it). Metered models are welcome
+as an **opt-in, off-by-default backend**; what's forbidden is *forcing* a paid
+API on every installer. The guard makes that line executable, flagging only the
+"forces it on everyone" signals in changed files: `anthropics/claude-code-action`
+in a `.github/workflows/` file, an `import`/`from anthropic` SDK import (no local
+fallback), and a **hardcoded** `api.openai.com` / `api.anthropic.com` endpoint. It
+deliberately does **not** flag the free/opt-in paths — a config-driven `base_url`
+(env override) passes, the `openai` client is allowed (it also drives a **local
+Ollama** server), and the orchestrator may spawn the `claude` CLI by design. A
+deliberate opt-in metered backend can register in `repo-scope-allow.txt`.
 
 ## Why a guard, not just this doc
 
