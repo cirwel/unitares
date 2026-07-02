@@ -405,6 +405,29 @@ class TestGetDiscoveryDetails:
         assert data["pagination"]["has_more"] is True
 
     @pytest.mark.asyncio
+    async def test_get_details_null_pagination_values_use_defaults(self, patch_common):
+        """Explicit null pagination from validated KG calls behaves like omission."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_get_discovery_details
+
+        long_details = "A" * 2500
+        disc = make_discovery(id="2026-01-01T00:00:00.000000", details=long_details)
+        mock_graph.get_discovery = AsyncMock(return_value=disc)
+
+        result = await handle_get_discovery_details({
+            "discovery_id": "2026-01-01T00:00:00.000000",
+            "offset": None,
+            "length": None,
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["details"] == long_details[:2000]
+        assert data["pagination"]["offset"] == 0
+        assert data["pagination"]["length"] == 2000
+        assert data["pagination"]["next_offset"] == 2000
+
+    @pytest.mark.asyncio
     async def test_get_details_short_content_no_pagination(self, patch_common):
         """Short details don't trigger pagination."""
         mock_mcp_server, mock_graph = patch_common
