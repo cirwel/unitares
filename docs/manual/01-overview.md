@@ -41,7 +41,7 @@ The agent reports **what it did** plus its self-reported `complexity` and `confi
 
 ## 1.4 The four numbers: EISV
 
-Each check-in returns four proprioceptive scores per agent. After warmup, the useful signal is a residual — current state against that agent's **own** ~30-check-in baseline — so slow drift surfaces even while output still looks fine. Before warmup, the live path uses fixed universal thresholds and should be read as cold-start guidance, not a personalized drift read:
+Each check-in returns four proprioceptive scores per agent. After warmup, the useful signal is a residual — current state against that agent's **own** ~30-check-in baseline — so slow drift surfaces even while output still looks fine. Before warmup, the verdict falls back to a mostly server-derived cold-start prior (the behavioral track scores against fixed universal thresholds until its confidence clears the bar) — read it as cold-start guidance, not a personalized drift read:
 
 | | Name | Reads | Goes wrong when… |
 |---|---|---|---|

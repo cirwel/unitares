@@ -16,6 +16,19 @@ When prose and code disagree, use this order:
 
 This ordering exists because the codebase has accumulated multiple eras of explanation. Some older docs accurately describe earlier phases of the system but no longer describe the runtime that agents interact with today. If an agent reads archived prose before it reads runtime code, it can form a coherent but outdated model of the system. This page exists to prevent that failure mode and give both humans and agents a compact rule for resolving contradictions without guesswork.
 
+## Contested Claims Registry
+
+Facts that were corrected once and must not silently revert. `scripts/diagnostics/check_doc_health.py`
+(`check_contested_claims`) warns when the stale wording reappears on a reader-facing surface.
+When you correct an architecture fact in prose, add a row here + a deny-pattern there,
+and grep all reader-facing docs for the old claim **in the same PR**.
+
+| Claim | Canonical wording | Owner |
+|-------|-------------------|-------|
+| Redis posture | Redis is the de-facto primary session store; the server boots without it in a degraded local-only mode (fine for the demo; sessions won't persist). It is not "optional" in production. | `docs/UNIFIED_ARCHITECTURE.md` · `docs/proposals/redis-retirement-v0.md` |
+| Warmup verdict source | During warmup (~first 30 check-ins) the live verdict falls back to a cold-start prior computed mostly (≥70%) from server-derived signals (complexity divergence, coherence, calibration); self-reported drift is a capped ≤30% blend and a zero report is ignored. The behavioral track meanwhile scores against fixed universal thresholds and becomes the verdict authority once its confidence clears the bar. | `docs/EISV_COMPUTATION.md` · `src/monitor_result.py`, `src/governance_monitor.py` |
+| Post-warmup verdict authority | Post-warmup the verdict IS the behavioral assessment (z-scores vs the agent's own baseline, absolute floors and basin gates always in force); Φ is telemetry by default. | `docs/EISV_COMPUTATION.md` · `config/governance_config.py` (`phi_telemetry_only`) |
+
 ## Current Architecture Truth
 
 These files are the canonical runtime sources for current behavior:

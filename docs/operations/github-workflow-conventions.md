@@ -99,6 +99,13 @@ guards keep concurrent sessions from clobbering each other:
   in-flight PR and branch from its head instead of starting a parallel
   attempt. The authoritative list lives under *"Before Starting Work on a
   Single-Writer Surface"* in the `AGENTS.md` / `CLAUDE.md` shared contract.
+- **Correcting an architecture fact in prose**: the same PR greps
+  reader-facing docs (README, `docs/` outside `proposals/`, `skills/`,
+  `AGENTS.md`/`CLAUDE.md`) for the old claim and updates every copy, and adds
+  a row + deny-pattern to the Contested Claims Registry in
+  `docs/dev/CANONICAL_SOURCES.md` so `check_doc_health.py` blocks the stale
+  wording from reappearing. Corrections that land in one doc and drift in the
+  others were the entire defect class of the 2026-07-02 coherence audit.
 - **Branch hygiene**: stale and superseded branches are swept per
   `docs/operations/branch-hygiene-runbook.md`. Branches with unique local work
   (`git cherry master <branch>` showing `+`) are held for review, never auto-

@@ -24,8 +24,9 @@ the measurement vector.
 The public math should lead with proprioceptive residuals, not bad-outcome
 classification. The live behavioral path is deliberately modest:
 
-- **Warmup:** fixed universal thresholds while the agent has too little history
-  for individualized drift.
+- **Warmup:** the behavioral track scores against fixed universal thresholds
+  while the agent has too little history for individualized drift; the live
+  verdict falls back to the mostly server-derived cold-start prior.
 - **After warmup:** self-relative z-score deviation from the agent's own Welford
   baseline.
 - **Always:** absolute safety floors and basin-health gates remain in force.

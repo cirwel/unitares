@@ -41,7 +41,7 @@ Every agent has four dimensions, updated through check-ins:
 - **V (Valence)** is derived from the E-I imbalance. Positive means running hot (motion outruns integrity); negative means running careful (integrity outruns progress).
 
 The headline math is proprioceptive residuals. In the live behavioral path,
-warmup uses fixed universal thresholds; after warmup, residual-like state comes
+warmup verdicts fall back to a mostly server-derived cold-start prior (the behavioral track scores against fixed universal thresholds); after warmup, residual-like state comes
 from self-relative z-score deviation against the agent's own Welford baseline,
 with absolute safety floors and basin-health gates always in force.
 
