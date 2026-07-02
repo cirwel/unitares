@@ -529,6 +529,72 @@ def check_demotion_candidates(md_files: list[Path]) -> list[str]:
 
 # --- Main ---
 
+# --- Check 6: Contested claims (corrected facts that must not reappear) ---
+#
+# Every finding in the 2026-07-02 README coherence audit was the same failure
+# shape: an architecture fact got corrected (e.g. PR #1235's verdict-driver
+# inversion), some prose copies were updated, and the stale copies kept
+# asserting the old claim. Files exist and links resolve, so the other checks
+# stay green — only the *sentence* is wrong. This check pins the known
+# corrected claims as deny-patterns so the stale wording becomes a warning the
+# moment it reappears anywhere reader-facing.
+#
+# The canonical wording for each claim lives in the "Contested claims
+# registry" section of docs/dev/CANONICAL_SOURCES.md — add a row there when
+# adding a pattern here. Patterns are deliberately narrow (exact stale
+# phrasings observed in the wild), not topic filters: prose *about* warmup or
+# Redis is fine; the specific corrected assertion is not.
+#
+# Scope: reader-facing surfaces only. Historical/internal research prose
+# (docs/proposals/) may legitimately quote superseded claims as provenance;
+# CANONICAL_SOURCES.md quotes them by design.
+
+_CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
+    (
+        re.compile(r"Redis is optional", re.IGNORECASE),
+        'corrected: Redis is the de-facto primary session store (boots degraded '
+        'local-only without it) — see UNIFIED_ARCHITECTURE.md and the registry',
+    ),
+    (
+        re.compile(r"falls back to self-reported signals", re.IGNORECASE),
+        "corrected (PR #1235 inversion): warmup verdict is the cold-start prior, "
+        "≥70% server-derived; self-report capped at ≤30%",
+    ),
+    (
+        re.compile(r"verdict[^.\n]{0,40}self-report(?:ed)?-driven", re.IGNORECASE),
+        "corrected (PR #1235 inversion): the verdict is not self-report-driven",
+    ),
+    (
+        re.compile(
+            r"(?:live (?:path|verdict)|warmup) uses fixed universal thresholds",
+            re.IGNORECASE,
+        ),
+        "conflation: the behavioral TRACK scores against fixed thresholds during "
+        "warmup, but the live VERDICT falls back to the server-derived cold-start "
+        "prior — say which one you mean (canonical wording in the registry)",
+    ),
+]
+
+# Reader-facing scope for the contested-claims check.
+_CONTESTED_SKIP_PARTS = ("proposals",)  # internal research/provenance prose
+_CONTESTED_SKIP_FILES = {"CANONICAL_SOURCES.md"}  # quotes the patterns by design
+
+
+def check_contested_claims(md_files: list[Path]) -> list[str]:
+    warnings = []
+    for fpath in md_files:
+        rel = fpath.relative_to(REPO_ROOT)
+        if rel.name in _CONTESTED_SKIP_FILES:
+            continue
+        if any(part in _CONTESTED_SKIP_PARTS for part in rel.parts):
+            continue
+        for i, line in enumerate(fpath.read_text(errors="replace").splitlines(), 1):
+            for pattern, reason in _CONTESTED_CLAIMS:
+                if pattern.search(line):
+                    warnings.append(f"  {rel}:{i}: {reason}")
+    return warnings
+
+
 def collect_md_files() -> list[Path]:
     md_files = []
     for root, dirs, files in os.walk(REPO_ROOT):
@@ -570,6 +636,10 @@ def main():
     counts = check_hardcoded_counts(md_files)
     if counts:
         all_warnings.append(("Hardcoded counts (will go stale)", counts))
+
+    contested = check_contested_claims(md_files)
+    if contested:
+        all_warnings.append(("Contested claims (corrected facts reappearing)", contested))
 
     # Advisory: surfaced only when requested, never gates the exit code
     # (demotion is a judgment call, not a defect). Printed separately from the

@@ -6,7 +6,7 @@ An end-to-end, task-ordered guide to **installing, running, integrating with, re
 
 ## What UNITARES is, in one breath
 
-Runtime governance and online proprioception for fleets of autonomous AI agents. Each agent checks in while it works; once the agent has enough history, UNITARES compares the current run to that agent's *own* baseline and returns a four-number state vector (EISV) plus one plain policy action: `proceed` / `guide` / `pause` / `reject`. During baseline warmup, the live path uses fixed universal thresholds instead of a personalized drift read. The point is to make drift visible to the agent while the output still looks fine. It runs **alongside** evals (pre-deploy) and guardrails (per-action), answering a third question: *is this agent still healthy as it works?*
+Runtime governance and online proprioception for fleets of autonomous AI agents. Each agent checks in while it works; once the agent has enough history, UNITARES compares the current run to that agent's *own* baseline and returns a four-number state vector (EISV) plus one plain policy action: `proceed` / `guide` / `pause` / `reject`. During baseline warmup, the verdict falls back to a mostly server-derived cold-start prior rather than a personalized drift read. The point is to make drift visible to the agent while the output still looks fine. It runs **alongside** evals (pre-deploy) and guardrails (per-action), answering a third question: *is this agent still healthy as it works?*
 
 ## How to read this manual
 
@@ -22,7 +22,7 @@ Runtime governance and online proprioception for fleets of autonomous AI agents.
 
 ### Two fast paths
 
-- **Operator, "just make it run":** [Try it in 60 seconds](../../README.md#try-it-in-60-seconds) (Docker) → [3 · Running the server](03-running-the-server.md). Bare-metal instead: [2 · Installation](02-install.md).
+- **Operator, "just make it run":** [Try the demo locally](../../README.md#try-the-demo-locally) (Docker) → [3 · Running the server](03-running-the-server.md). Bare-metal instead: [2 · Installation](02-install.md).
 - **Integrator, "I have a server, wire my agent":** [4 · Integrating agents](04-integrating-agents.md) → [5 · Reading the signals](05-reading-the-signals.md).
 
 ## Chapters

@@ -15,7 +15,7 @@ observables ──► observation blend ──► EMA state ──► residual /
 
 The **behavioral EISV** path (EMA observations from grounded signals) is primary and drives verdicts. The **ODE / thermodynamic model** (`governance_core/`) runs in parallel as a research lens and does **not** drive verdicts by default.
 
-After ~30 check-ins the system builds per-agent **Welford baselines** and assesses by z-score deviation from the agent's *own* operating point, rather than universal thresholds. Before that ("warmup"), it uses fixed universal thresholds. Read the result as proprioceptive residuals — state change against a grounded reference — not as an outcome judgment.
+After ~30 check-ins the system builds per-agent **Welford baselines** and assesses by z-score deviation from the agent's *own* operating point, rather than universal thresholds. Before that ("warmup"), the behavioral track scores against fixed universal thresholds while the live verdict falls back to a mostly server-derived cold-start prior (see [EISV_COMPUTATION.md](../EISV_COMPUTATION.md)). Read the result as proprioceptive residuals — state change against a grounded reference — not as an outcome judgment.
 
 ## 5.2 The four dimensions
 

@@ -7,7 +7,7 @@ There are two supported paths. Pick one:
 - **Docker** — fastest, one command, brings up Postgres + Redis + the server together. Best for trying it out and for most deployments.
 - **Bare-metal** — lower overhead, what the maintainer runs in production. You install PostgreSQL + Apache AGE + pgvector yourself.
 
-**Requirements either way:** Python 3.12+, PostgreSQL with Apache AGE and pgvector. Redis is optional (session cache; the server degrades gracefully without it).
+**Requirements either way:** Python 3.12+, PostgreSQL with Apache AGE and pgvector. Redis is the de-facto primary session store in production; the server boots without it in a degraded local-only mode (fine for the demo — sessions won't persist across restarts).
 
 ## 2.1 Docker (recommended quickstart)
 
