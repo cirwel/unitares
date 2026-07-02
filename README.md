@@ -80,6 +80,10 @@ UNITARES runs **alongside** your evals and guardrails — it doesn't replace eit
 
 UNITARES is not an agent framework or chat interface. Hermes, Claude Code, Codex, Goose, Discord dispatchers, SDK residents, and local-model hosts provide the hands: prompts, tools, files, terminals, browsers, scheduled work, and operator UX. UNITARES provides the governed continuity underneath — the loop and organs above. For one-off chat or local coding, skip the governance loop; for persistent, multi-agent, high-side-effect, or resident work, mount the client through MCP/REST/SDK or a lifecycle adapter.
 
+### Where it's going: accountability without a trusted center
+
+Everything above describes the deployed system: **one governor, one operator**. The identity layer already enforces the posture a multi-party world needs — identity is per-process, credentials structurally refuse cross-principal resume, and declared lineage is recorded as *provisional* rather than trusted on assertion. The active research direction extends this to genuinely **multi-principal** deployments: mutually-distrusting principals each running their own governor, with cross-principal delegation and shared-infrastructure effects mediated by verifiable attestation between governors rather than authorized by any central party. No multi-host, multi-party deployment exists yet — that is the research, not a shipped claim. A testbed-and-benchmark paper is in preparation (arXiv, expected August 2026).
+
 ## How it works
 
 <div align="center">
