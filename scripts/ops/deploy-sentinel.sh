@@ -72,13 +72,27 @@ fi
 echo "[deploy] fetching origin/master"
 git -C "$REPO" fetch origin master --quiet
 
+LEASE_FRESH=0
 if ! git -C "$REPO" worktree list --porcelain | grep -qx "worktree $DEPLOY"; then
   echo "[deploy] creating dedicated deploy worktree at $DEPLOY (on master)"
   git -C "$REPO" worktree add "$DEPLOY" master
+  # A fresh `worktree add` checks out TRACKED files only — the lease plane's
+  # gitignored deps/ + _build/ are GONE, while the running BEAM keeps serving
+  # in-RAM modules until an unloaded module needs disk (the 06-27 ~5.4h
+  # fail-open, #1277). Nudge the plane after the ff below.
+  LEASE_FRESH=1
 fi
 
+LEASE_PREV="$(git -C "$DEPLOY" rev-parse HEAD)"
 echo "[deploy] fast-forwarding $DEPLOY to origin/master (ff-only; refuses if it would lose work)"
 git -C "$DEPLOY" merge --ff-only origin/master
+# The shared worktree just moved under every co-resident service (#1277 fix 1).
+if [[ "$LEASE_FRESH" == 1 ]]; then
+  "$(dirname "$0")/nudge-lease-plane.sh" --reason "deploy-sentinel.sh: deploy worktree re-created (deps/_build gone)" || true
+else
+  "$(dirname "$0")/nudge-lease-plane.sh" --reason "deploy-sentinel.sh: shared-worktree ff" \
+    --if-changed "$LEASE_PREV" "$(git -C "$DEPLOY" rev-parse HEAD)" || true
+fi
 
 echo "[deploy] compiling sentinel (surfaces compile errors before the restart)"
 ( cd "$DEPLOY/elixir/sentinel" && mix deps.get && mix compile )

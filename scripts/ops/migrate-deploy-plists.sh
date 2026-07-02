@@ -52,6 +52,10 @@ if ! git -C "$REPO" worktree list --porcelain 2>/dev/null | grep -qx "worktree $
   else
     git -C "$REPO" fetch origin master --quiet
     git -C "$REPO" worktree add "$DEPLOY" master
+    # Fresh checkout = the lease plane's gitignored deps/_build are gone while
+    # its BEAM serves from RAM (#1277 fix 1) — restart it now, not at first
+    # failure. No-op when the plane isn't loaded on this machine.
+    "$(dirname "$0")/nudge-lease-plane.sh" --reason "migrate-deploy-plists: deploy worktree re-created" || true
   fi
 fi
 

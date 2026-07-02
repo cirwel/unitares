@@ -170,6 +170,13 @@ done
 
 if [[ "$ok" == yes ]]; then
   echo "[deploy-mcp] OK — governance MCP healthy on deploy-worktree code @ $(git -C "$DEPLOY" rev-parse --short HEAD)"
+  # The ff above moved the SHARED worktree; if it touched elixir/lease_plane,
+  # the running BEAM's disk just shifted under it — the RAM-vs-disk drift class
+  # behind the 06-27 fail-open (#1277 fix 1). Restart the plane at disturbance
+  # time, not at first failure. The rollback paths above need no nudge: they
+  # return the worktree to $PREV, net-zero for the plane's on-disk sources.
+  "$(dirname "$0")/nudge-lease-plane.sh" --reason "deploy-mcp ff moved the shared worktree" \
+    --if-changed "$PREV" "$(git -C "$DEPLOY" rev-parse HEAD)" || true
 else
   echo "[deploy-mcp] FAILED — new code did not come up healthy. Rolling the worktree back to ${PREV:0:8} and restarting." >&2
   git -C "$DEPLOY" reset --hard "$PREV"
