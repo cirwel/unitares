@@ -14,7 +14,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**98 flags.**
+**100 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
@@ -44,7 +44,9 @@ index; that one is the curated decision record.
 | `UNITARES_CONTINUITY_TOKEN_SECRET` | `(required)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py |
 | `UNITARES_DASHBOARD_DB_BUDGET_S` | `(required)` | Inner DB-read budget in seconds | src/mcp_handlers/admin/dashboard.py |
 | `UNITARES_DIALECTIC_BEAM_RESOLUTION` | `'0'` | True iff the operator has flipped UNITARES_DIALECTIC_BEAM_RESOLUTION on. | src/mcp_handlers/dialectic/beam_resolve_client.py |
+| `UNITARES_DIALECTIC_CODEX_TIMEOUT_S` | `'420'` | Run the review on Codex (``codex exec``, ChatGPT-subscription CLI) — the capable-heterogeneous reviewer path (2026-07-02 planted-flaw probe: | agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW` | `'0'` | Opt-in gate for routing reviews through the orchestrator (default OFF) | src/mcp_handlers/dialectic/orchestrator_dispatch.py |
+| `UNITARES_DIALECTIC_REVIEWER_HOST` | `''` | Route to the configured reviewer backend, falling back to the free local model | agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_REVIEWER_TIMEOUT` | `(required)` | Timeout budget for a structured dialectic reviewer call | src/mcp_handlers/support/llm_delegation.py |
 | `UNITARES_DIALECTIC_REVIEW_BUDGET` | `(required)` | Wall-clock cap for the inline synthetic review (antithesis + synthesis) | src/mcp_handlers/dialectic/handlers.py |
 | `UNITARES_DIALECTIC_REVIEW_MAX_TOKENS` | `'1024'` | Run the local heterogeneous model in THIS process (not via the server's call_model tool, whose 30s timeout is shorter than gemma4's 43–70s b | agents/dialectic_reviewer/reviewer.py |

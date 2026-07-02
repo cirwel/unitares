@@ -162,9 +162,91 @@ def _coerce_bool(value: Any) -> bool:
     return False
 
 
+def extract_last_json_object(text: str) -> Optional[str]:
+    """Return the LAST parseable top-level JSON object in ``text`` that carries
+    an ``agrees`` key, or None. Pure.
+
+    A ``codex exec`` transcript echoes the whole prompt (whose JSON *template*
+    contains ``true | false`` and is deliberately unparseable) plus banners and
+    exec traces before the final verdict — so the naive first-``{``-to-last-``}``
+    regex used for local models would swallow the transcript. Scan forward with
+    ``raw_decode`` (which consumes nested braces correctly) and keep the last
+    verdict-shaped object.
+    """
+    decoder = json.JSONDecoder()
+    last: Optional[str] = None
+    pos = 0
+    while True:
+        start = text.find("{", pos)
+        if start == -1:
+            return last
+        try:
+            obj, consumed = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            pos = start + 1
+            continue
+        if isinstance(obj, dict) and "agrees" in obj:
+            last = text[start : start + consumed]
+        pos = start + consumed
+
+
 # --------------------------------------------------------------------------- #
 # Async wiring (the impure shell). Kept thin; the testable logic is above.
 # --------------------------------------------------------------------------- #
+async def call_codex_reviewer(prompt: str) -> Optional[str]:
+    """Run the review on Codex (``codex exec``, ChatGPT-subscription CLI) —
+    the capable-heterogeneous reviewer path (2026-07-02 planted-flaw probe:
+    Codex named the planted circular-auth flaw first; gemma4 one-shot affirmed
+    it — the judgment gap is model class, not prompt or parse).
+
+    Opt-in via ``UNITARES_DIALECTIC_REVIEWER_HOST=codex``; returns the final
+    JSON verdict string, or None on ANY failure (CLI absent, non-zero exit,
+    timeout, no parseable verdict) — the caller then falls back to the free
+    local model, so the no-budget default path is never removed (execution-cost
+    policy: subscription CLI is an opt-in backend, never a requirement).
+
+    Spawn recipe mirrors the host adapter's proven one: ``sh -c 'exec codex
+    exec … "$DR_PROMPT" </dev/null'`` — stdin CLOSED (codex blocks reading a
+    non-tty stdin pipe) and the prompt passed via env, never argv-interpolated.
+    """
+    import asyncio
+    import shutil
+
+    if shutil.which("codex") is None:
+        return None
+    timeout_s = float(os.getenv("UNITARES_DIALECTIC_CODEX_TIMEOUT_S", "420"))
+    proc = await asyncio.create_subprocess_exec(
+        "/bin/sh",
+        "-c",
+        'exec codex exec --sandbox read-only --skip-git-repo-check "$DR_PROMPT" </dev/null',
+        env={**os.environ, "DR_PROMPT": prompt},
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        return None
+    if proc.returncode != 0:
+        return None
+    return extract_last_json_object(stdout.decode(errors="replace"))
+
+
+async def obtain_reviewer_text(prompt: str) -> str:
+    """Route to the configured reviewer backend, falling back to the free
+    local model. Default (env unset) is byte-identical to the pre-existing
+    gemma4 path."""
+    host = os.getenv("UNITARES_DIALECTIC_REVIEWER_HOST", "").strip().lower()
+    if host == "codex":
+        text = await call_codex_reviewer(prompt)
+        if text is not None:
+            return text
+        # Codex path failed — degrade to the local default, never harder than today.
+    return await call_reviewer_model(prompt)
+
+
 async def call_reviewer_model(prompt: str, model: str = DEFAULT_MODEL) -> str:
     """Run the local heterogeneous model in THIS process (not via the server's
     call_model tool, whose 30s timeout is shorter than gemma4's 43–70s budget).
@@ -189,7 +271,7 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
     """Onboard → model → claim slot + submit. Returns the Verdict for logging/tests."""
     from unitares_sdk.client import GovernanceClient  # type: ignore
 
-    verdict = parse_reviewer_verdict(await call_reviewer_model(build_review_prompt(thesis)))
+    verdict = parse_reviewer_verdict(await obtain_reviewer_text(build_review_prompt(thesis)))
 
     client = GovernanceClient(governance_url)
     await client.connect()
