@@ -200,6 +200,18 @@ def _invalid_enum_response(field: str, value: Any, valid_values: set[str], *, ti
     )
 
 
+def _coerce_pagination_int(value: Any, *, default: int, minimum: int) -> int:
+    if value is None:
+        return default
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError):
+        return default
+    if coerced < minimum:
+        return default
+    return coerced
+
+
 async def _clamp_confidence_to_coherence(discovery, agent_id: str) -> bool:
     """Cross-check discovery confidence against agent's EISV coherence.
 
@@ -2416,8 +2428,8 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
             return [await _discovery_not_found(discovery_id, graph)]
 
         # UX FIX: Pagination support for long details
-        offset = arguments.get("offset", 0)
-        length = arguments.get("length", 2000)
+        offset = _coerce_pagination_int(arguments.get("offset"), default=0, minimum=0)
+        length = _coerce_pagination_int(arguments.get("length"), default=2000, minimum=1)
 
         details = discovery.details or ""
         total_length = len(details)
