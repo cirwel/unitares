@@ -21,6 +21,23 @@
     } catch { return null; }
   }
 
+  // Operator write credential (X-Unitares-Operator). Provision once via
+  // ?operator_token=… — persisted to localStorage and scrubbed from the URL
+  // (same handoff pattern the classic dashboard used, #643).
+  function operatorToken() {
+    try {
+      const params = new URLSearchParams(location.search);
+      const fromUrl = params.get("operator_token");
+      if (fromUrl) {
+        localStorage.setItem("unitares_operator_token", fromUrl);
+        params.delete("operator_token");
+        const qs = params.toString();
+        history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash);
+      }
+      return localStorage.getItem("unitares_operator_token") || null;
+    } catch { return null; }
+  }
+
   async function authFetch(path, opts) {
     opts = opts || {};
     const headers = Object.assign({}, opts.headers);
@@ -335,6 +352,36 @@
         const h = (S().agentHistory || {})[id];
         return h ? { points: h, total: h.length, mode: "all" } : { points: [], total: 0, mode: "recent" };
       });
+    },
+
+    operatorToken,
+
+    // Daily adjudication queue + falsifier progress. Small on purpose —
+    // verdicts on separate days beat batches (cluster statistics).
+    async adjudicationQueue() {
+      return withFallback(
+        async () => {
+          const j = await authFetch("/v1/sentinel/adjudication-queue?limit=5");
+          return j && j.success ? j : null;
+        },
+        () => S().adjudication,
+      );
+    },
+
+    // POST an operator verdict. Throws on non-2xx (message carries the status
+    // code so the view can distinguish 403 token / 409 already-adjudicated).
+    async adjudicate(fingerprint, status, reason) {
+      const headers = { "Content-Type": "application/json" };
+      const op = operatorToken();
+      if (op) headers["X-Unitares-Operator"] = op;
+      const t = token();
+      if (t) headers["Authorization"] = "Bearer " + t;
+      const r = await fetch("/v1/sentinel/adjudicate", {
+        method: "POST", headers,
+        body: JSON.stringify({ fingerprint, status, reason: reason || undefined }),
+      });
+      if (!r.ok) throw new Error("/v1/sentinel/adjudicate -> " + r.status);
+      return r.json();
     },
 
     async residentPanels() {

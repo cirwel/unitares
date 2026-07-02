@@ -201,4 +201,22 @@ window.SNAPSHOT = {
       ],
     },
   },
+
+  // Adjudication queue mock — renders the section offline with two sample
+  // findings so the layout is reviewable without a live backlog.
+  adjudication: {
+    success: true,
+    window_hours: 336,
+    pending_total: 2,
+    dismiss_reasons: ["fp", "out_of_scope", "wont_fix", "dup", "unclear", "stale"],
+    progress: { outcomes: 25, bad: 3, days: 4, bad_days: 1, bad_days_target: 3 },
+    queue: [
+      { timestamp: "2026-06-28T04:26:14Z", severity: "high", finding_type: "ad_hoc",
+        violation_class: null, agent_name: "Sentinel", fingerprint: "snapshot-fp-1",
+        message: "forced release: td:/test/force-release-contract (lease 7be1c8fd)" },
+      { timestamp: "2026-06-27T22:11:03Z", severity: "critical", finding_type: "alarm",
+        violation_class: "resource", agent_name: "Sentinel", fingerprint: "snapshot-fp-2",
+        message: "lease-plane p95 breach sustained over two windows" },
+    ],
+  },
 };

@@ -17,6 +17,46 @@
     animation: live-pulse 2s var(--ease) infinite; }
   .live-pill.paused .dot { background: var(--faint); animation: none; }
   @keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+  /* Adjudication section */
+  .adj-top { display: flex; align-items: baseline; gap: var(--space-3); }
+  .adj-top .pending { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted); }
+  .adj-blurb { color: var(--muted); font-size: var(--text-sm); max-width: 62ch; }
+  .adj-progress { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: baseline;
+    font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted);
+    padding: var(--space-3) 0; border-bottom: 1px solid var(--line); margin-bottom: var(--space-4); }
+  .adj-progress .stat b { color: var(--ink-2); font-weight: 500; }
+  .adj-progress .stat.ok b { color: var(--ok); }
+  .adj-progress .hint { flex-basis: 100%; color: var(--faint); }
+  .adj-token-hint { background: color-mix(in srgb, var(--warn) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+    border-radius: var(--radius-sm); padding: var(--space-3); font-size: var(--text-sm);
+    margin-bottom: var(--space-4); }
+  .adj-card { border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: var(--space-4); margin-bottom: var(--space-3); background: var(--surface-2);
+    transition: opacity 0.4s var(--ease); }
+  .adj-card.done { opacity: 0.35; }
+  .adj-head { display: flex; gap: var(--space-3); align-items: baseline;
+    font-family: var(--font-mono); font-size: var(--text-xs); margin-bottom: var(--space-2); }
+  .adj-head .sev { padding: 1px 6px; border-radius: var(--radius-sm); }
+  .adj-head .sev-critical { color: var(--bad, #d33); background: color-mix(in srgb, var(--bad, #d33) 12%, transparent); }
+  .adj-head .sev-high { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+  .adj-head .type { color: var(--muted); }
+  .adj-head .when { color: var(--faint); margin-left: auto; }
+  .adj-msg { font-size: var(--text-sm); margin-bottom: var(--space-3); word-break: break-word; }
+  .adj-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+  .adj-actions .btn { font: inherit; font-size: var(--text-xs); padding: 4px 10px;
+    border: 1px solid var(--line-2); border-radius: var(--radius-sm); background: var(--surface);
+    color: var(--ink-2); cursor: pointer; }
+  .adj-actions .btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .adj-actions .btn:disabled { opacity: 0.5; cursor: default; }
+  .adj-actions .btn.confirm:hover:not(:disabled) { border-color: var(--ok); color: var(--ok); }
+  .adj-actions .btn.fp:hover:not(:disabled) { border-color: var(--warn); color: var(--warn); }
+  .adj-actions .dismiss-group { display: inline-flex; gap: var(--space-2); align-items: center; margin-left: auto; }
+  .adj-actions select.reason { font: inherit; font-size: var(--text-xs); padding: 3px 6px;
+    border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--muted); }
+  .adj-note { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted); margin-top: var(--space-2); }
+  .adj-empty { color: var(--muted); font-size: var(--text-sm); padding: var(--space-5) 0; }
 </style>
 </head>
 <body>
@@ -42,6 +82,7 @@
     <a href="#metrics" data-section="metrics">Metrics</a>
     <a href="#residents" data-section="residents">Residents</a>
     <a href="#automations" data-section="automations">Automations</a>
+    <a href="#adjudication" data-section="adjudication">Adjudication</a>
   </nav>
 
   <main id="main">
@@ -118,6 +159,10 @@
       <h2 class="section-title">Automations</h2>
       <div id="auto-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
     </section>
+
+    <section class="section" data-pane="adjudication" hidden>
+      <div id="adj-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
+    </section>
   </main>
 
   <p class="footnote" id="foot"></p>
@@ -136,6 +181,7 @@
 <script src="./sections/metrics.js"></script>
 <script src="./sections/residents.js"></script>
 <script src="./sections/automations.js"></script>
+<script src="./sections/adjudication.js"></script>
 <script>
 // theme toggle
 const themeBtn = document.getElementById("themeBtn");
@@ -189,6 +235,7 @@ function lazyLoad(id) {
   if (id === "metrics" && window.Metrics) { loaded[id] = true; window.Metrics.load(); }
   if (id === "residents" && window.Residents) { loaded[id] = true; window.Residents.load(); }
   if (id === "automations" && window.Automations) { loaded[id] = true; window.Automations.load(); }
+  if (id === "adjudication" && window.Adjudication) { loaded[id] = true; window.Adjudication.load(); }
 }
 
 // ── auto-refresh: keep the monitor views live ──────────────────────────────
