@@ -286,6 +286,52 @@ def test_sweep_boundary_exactly_at_ttl_is_kept(watcher_module):
     assert "boundary" in pruned
 
 
+def test_save_dedup_crash_leaves_previous_file_intact(
+    watcher_module, monkeypatch
+):
+    """dedup.json is the scan de-dup gate; a mid-write crash must not corrupt
+    the live file and turn future repeats into noisy rediscoveries."""
+    from agents.watcher import findings as watcher_findings
+
+    watcher_module.save_dedup({"old": "2026-04-11T00:00:00Z"})
+    before = watcher_module.DEDUP_FILE.read_text()
+
+    def crashing_dump(obj, fp, *args, **kwargs):
+        fp.write('{"partial"')
+        raise IOError("simulated mid-write crash")
+
+    monkeypatch.setattr(watcher_findings.json, "dump", crashing_dump)
+    with pytest.raises(IOError):
+        watcher_module.save_dedup({"new": "2026-04-12T00:00:00Z"})
+
+    assert watcher_module.DEDUP_FILE.read_text() == before
+    assert watcher_module.load_dedup() == {"old": "2026-04-11T00:00:00Z"}
+    assert not list(watcher_module.DEDUP_FILE.parent.glob("dedup.json.tmp.*"))
+
+
+def test_write_findings_atomic_crash_leaves_previous_file_intact(
+    watcher_module, monkeypatch
+):
+    """The rewrite path is used by resolve/dismiss/sweep/compact. A failed
+    rewrite should leave the prior feed readable."""
+    from agents.watcher import findings as watcher_findings
+
+    old_rows = [{"fingerprint": "old", "status": "open"}]
+    watcher_module._write_findings_atomic(old_rows)
+    before = watcher_module.FINDINGS_FILE.read_text()
+
+    def crashing_dumps(obj, *args, **kwargs):
+        raise IOError("simulated serialization failure")
+
+    monkeypatch.setattr(watcher_findings.json, "dumps", crashing_dumps)
+    with pytest.raises(IOError):
+        watcher_module._write_findings_atomic([{"fingerprint": "new", "status": "open"}])
+
+    assert watcher_module.FINDINGS_FILE.read_text() == before
+    assert watcher_module._iter_findings_raw() == old_rows
+    assert not list(watcher_module.FINDINGS_FILE.parent.glob("findings.jsonl.tmp.*"))
+
+
 # ---------------------------------------------------------------------------
 # persist_findings — end-to-end dedup with TTL enforcement
 # ---------------------------------------------------------------------------
