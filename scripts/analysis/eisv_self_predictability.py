@@ -59,6 +59,21 @@ EMA_ALPHA = {"E": 0.12, "I": 0.08, "S": 0.15, "V": 0.10}
 # never scored. A prediction needs at least one prior point.
 WARMUP = 3
 
+# --- Raw-series (AR(1) decontamination null) section -------------------------
+# state_json.behavioral_eisv.raw_obs = [E_obs, I_obs, S_obs] (PR #1294,
+# forward-only): the clamped pre-EMA input of that check-in. No V — V is a
+# derived EMA of the E-I imbalance and has no per-check-in raw input.
+RAW_DIMS = ("E", "I", "S")
+
+# The AR(1) null needs enough (x_{t-1}, x_t) pairs for a stable per-agent fit
+# before any model is scored on the raw series.
+WARMUP_RAW = 8
+
+# Individuality gate (docs/proposals/eisv-grounding-next-move-v0.md, step 4):
+# the per-agent reference must beat fleet-mean AND persistence AND AR(1),
+# out-of-sample, for a majority of agents with at least this many raw states.
+RAW_GATE_MIN_STATES = 50
+
 
 def _extract_eisv(state_json: dict) -> dict | None:
     """Pull the smoothed behavioral E/I/S/V measurement from a state row.
@@ -81,8 +96,39 @@ def _extract_eisv(state_json: dict) -> dict | None:
     return out
 
 
-async def fetch_trajectories(db_url: str, *, min_states: int) -> dict[str, list[dict]]:
-    """Return {agent_id: [eisv_dict, ...]} time-ordered, non-synthetic, behavioral."""
+def _extract_raw(state_json: dict) -> dict | None:
+    """Pull the raw pre-EMA [E, I, S] observation from a state row.
+
+    Rows persisted before PR #1294 carry no raw_obs and are skipped — the raw
+    eval is forward-only by construction.
+    """
+    if not isinstance(state_json, dict):
+        return None
+    beh = state_json.get("behavioral_eisv")
+    if not isinstance(beh, dict):
+        return None
+    raw = beh.get("raw_obs")
+    if not isinstance(raw, (list, tuple)) or len(raw) != len(RAW_DIMS):
+        return None
+    out = {}
+    for d, v in zip(RAW_DIMS, raw):
+        if not isinstance(v, (int, float)):
+            return None
+        out[d] = float(v)
+    return out
+
+
+async def fetch_trajectories(
+    db_url: str, *, min_states: int
+) -> tuple[dict[str, list[dict]], dict[str, list[dict]], dict[str, str]]:
+    """Return (smoothed, raw, labels).
+
+    smoothed: {agent_id: [eisv_dict, ...]} time-ordered, non-synthetic,
+    behavioral, thresholded at min_states (unchanged from the original eval).
+    raw: {agent_id: [raw_dict, ...]} for rows carrying raw_obs, thresholded at
+    WARMUP_RAW + 2 (enough for at least one scored prediction).
+    labels: {agent_id: human label} where core.agents knows one.
+    """
     try:
         import asyncpg
     except ImportError:
@@ -93,9 +139,10 @@ async def fetch_trajectories(db_url: str, *, min_states: int) -> dict[str, list[
     try:
         records = await conn.fetch(
             """
-            SELECT i.agent_id, s.recorded_at, s.state_json
+            SELECT i.agent_id, a.label, s.recorded_at, s.state_json
             FROM core.identities i
             JOIN core.agent_state s ON s.identity_id = i.identity_id
+            LEFT JOIN core.agents a ON a.id::text = i.agent_id
             WHERE s.synthetic IS NOT TRUE
               AND s.state_json IS NOT NULL
             ORDER BY i.agent_id, s.recorded_at ASC
@@ -107,6 +154,8 @@ async def fetch_trajectories(db_url: str, *, min_states: int) -> dict[str, list[
     import json
 
     traj: dict[str, list[dict]] = {}
+    raw_traj: dict[str, list[dict]] = {}
+    labels: dict[str, str] = {}
     for r in records:
         sj = r["state_json"]
         if isinstance(sj, str):
@@ -114,11 +163,19 @@ async def fetch_trajectories(db_url: str, *, min_states: int) -> dict[str, list[
                 sj = json.loads(sj)
             except Exception:
                 continue
+        if r["label"]:
+            labels[r["agent_id"]] = r["label"]
         eisv = _extract_eisv(sj)
-        if eisv is None:
-            continue
-        traj.setdefault(r["agent_id"], []).append(eisv)
-    return {a: seq for a, seq in traj.items() if len(seq) >= min_states}
+        if eisv is not None:
+            traj.setdefault(r["agent_id"], []).append(eisv)
+        raw = _extract_raw(sj)
+        if raw is not None:
+            raw_traj.setdefault(r["agent_id"], []).append(raw)
+    return (
+        {a: seq for a, seq in traj.items() if len(seq) >= min_states},
+        {a: seq for a, seq in raw_traj.items() if len(seq) >= WARMUP_RAW + 2},
+        labels,
+    )
 
 
 def _global_means(traj: dict[str, list[dict]]) -> dict[str, float]:
@@ -201,6 +258,206 @@ def evaluate(traj: dict[str, list[dict]]) -> dict:
 
 def _mae_avg(mae_row: dict[str, float]) -> float:
     return sum(mae_row.values()) / len(mae_row)
+
+
+def _ar1_predict(n: int, sx: float, sy: float, sxx: float, sxy: float,
+                 x_last: float, fallback: float) -> float:
+    """One-step AR(1) prediction from online (x_{t-1}, x_t) pair sums.
+
+    Least-squares fit x_t = c + phi * x_{t-1} on the history pairs only (no
+    leakage). phi is clamped to [-1, 1] — this is a *null* model and a
+    stationarity-violating fit on a short window would let it explode rather
+    than describe. Falls back to the history mean when the slope is
+    unidentifiable (constant history / too few pairs).
+    """
+    denom = n * sxx - sx * sx
+    if n < 2 or abs(denom) < 1e-12:
+        return fallback
+    phi = (n * sxy - sx * sy) / denom
+    phi = max(-1.0, min(1.0, phi))
+    c = (sy - phi * sx) / n
+    return c + phi * x_last
+
+
+RAW_MODELS = ("persistence", "ar1", "expanding_mean", "ema", "global_mean")
+
+
+def evaluate_raw(traj: dict[str, list[dict]], *,
+                 gate_min_states: int = RAW_GATE_MIN_STATES) -> dict:
+    """Walk-forward eval on the RAW pre-EMA series — the decontamination null.
+
+    This is the test the smoothed eval declares confounded: on raw_obs,
+    persistence is no longer trivially accurate, so per-agent references can be
+    honestly compared against per-agent persistence and AR(1) nulls.
+
+    Gate (pre-registered, next-move doc step 4): the runtime-shaped per-agent
+    reference (`ema`, mirroring the live baseline) must have lower avg MAE than
+    `global_mean` AND `persistence` AND `ar1` for a majority of agents with
+    >= gate_min_states raw states. Beating fleet-mean alone is NOT success.
+    """
+    gmean = {d: 0.0 for d in RAW_DIMS}
+    n_all = 0
+    for seq in traj.values():
+        for m in seq:
+            for d in RAW_DIMS:
+                gmean[d] += m[d]
+            n_all += 1
+    gmean = {d: (gmean[d] / n_all if n_all else 0.0) for d in RAW_DIMS}
+
+    pooled_err = {mdl: {d: 0.0 for d in RAW_DIMS} for mdl in RAW_MODELS}
+    pooled_cnt = 0
+    per_agent: list[dict] = []
+
+    for agent, seq in traj.items():
+        T = len(seq)
+        run_sum = {d: 0.0 for d in RAW_DIMS}
+        ema = {d: seq[0][d] for d in RAW_DIMS}
+        # AR(1) online pair sums over (x_{i-1}, x_i), per dim
+        ar = {d: {"n": 0, "sx": 0.0, "sy": 0.0, "sxx": 0.0, "sxy": 0.0}
+              for d in RAW_DIMS}
+        a_err = {mdl: {d: 0.0 for d in RAW_DIMS} for mdl in RAW_MODELS}
+        a_cnt = 0
+        for i in range(T):
+            cur = seq[i]
+            if i >= WARMUP_RAW:
+                exp_mean = {d: run_sum[d] / i for d in RAW_DIMS}
+                for d in RAW_DIMS:
+                    s = ar[d]
+                    preds = {
+                        "persistence": seq[i - 1][d],
+                        "ar1": _ar1_predict(s["n"], s["sx"], s["sy"], s["sxx"],
+                                            s["sxy"], seq[i - 1][d],
+                                            exp_mean[d]),
+                        "expanding_mean": exp_mean[d],
+                        "ema": ema[d],
+                        "global_mean": gmean[d],
+                    }
+                    for mdl, p in preds.items():
+                        a_err[mdl][d] += abs(p - cur[d])
+                a_cnt += 1
+            # fold cur into running stats AFTER scoring (no leakage)
+            for d in RAW_DIMS:
+                if i >= 1:
+                    s = ar[d]
+                    x, y = seq[i - 1][d], cur[d]
+                    s["n"] += 1
+                    s["sx"] += x
+                    s["sy"] += y
+                    s["sxx"] += x * x
+                    s["sxy"] += x * y
+                run_sum[d] += cur[d]
+                ema[d] = EMA_ALPHA[d] * cur[d] + (1 - EMA_ALPHA[d]) * ema[d]
+
+        if a_cnt == 0:
+            continue
+        a_mae = {mdl: {d: a_err[mdl][d] / a_cnt for d in RAW_DIMS}
+                 for mdl in RAW_MODELS}
+        avg = {mdl: _mae_avg(a_mae[mdl]) for mdl in RAW_MODELS}
+        wins_gate = (avg["ema"] < avg["global_mean"]
+                     and avg["ema"] < avg["persistence"]
+                     and avg["ema"] < avg["ar1"])
+        per_agent.append({
+            "agent": agent,
+            "n_states": T,
+            "n_scored": a_cnt,
+            "mae_avg": avg,
+            "mae": a_mae,
+            "gate_eligible": T >= gate_min_states,
+            "wins_gate": wins_gate,
+        })
+        for mdl in RAW_MODELS:
+            for d in RAW_DIMS:
+                pooled_err[mdl][d] += a_err[mdl][d]
+        pooled_cnt += a_cnt
+
+    pooled_mae = {
+        mdl: {d: (pooled_err[mdl][d] / pooled_cnt if pooled_cnt else float("nan"))
+              for d in RAW_DIMS}
+        for mdl in RAW_MODELS
+    }
+    eligible = [a for a in per_agent if a["gate_eligible"]]
+    winners = [a for a in eligible if a["wins_gate"]]
+    return {
+        "n_agents": len(per_agent),
+        "n_predictions": pooled_cnt,
+        "pooled_mae": pooled_mae,
+        "global_mean": gmean,
+        "per_agent": sorted(per_agent, key=lambda a: -a["n_states"]),
+        "gate_min_states": gate_min_states,
+        "gate_eligible": len(eligible),
+        "gate_winners": len(winners),
+        "gate_majority": (len(winners) * 2 > len(eligible)) if eligible else None,
+    }
+
+
+def build_raw_report(res: dict, labels: dict[str, str]) -> str:
+    a: list[str] = []
+    a.append("\n---\n\n# Raw-series AR(1) null — the individuality gate\n")
+    a.append(
+        "Target = raw pre-EMA observations (`behavioral_eisv.raw_obs`, "
+        "PR #1294, forward-only). On this series persistence is NOT trivially "
+        "accurate, so the persistence/AR(1) comparison the smoothed eval "
+        "declares confounded is honest here. E/I/S only (V has no raw input).\n"
+    )
+    if res["n_agents"] == 0:
+        a.append("**No agents have enough raw_obs rows yet** — the raw eval is "
+                 "forward-only; re-run as data accrues.\n")
+        return "\n".join(a)
+
+    a.append(
+        f"Agents scored: **{res['n_agents']}**  |  scored predictions: "
+        f"**{res['n_predictions']}**  |  gate-eligible (>= "
+        f"{res['gate_min_states']} states): **{res['gate_eligible']}**\n"
+    )
+    a.append("## Pooled MAE by model (raw series)")
+    a.append("| Model | E | I | S | avg |")
+    a.append("|---|---:|---:|---:|---:|")
+    for mdl in RAW_MODELS:
+        row = res["pooled_mae"][mdl]
+        a.append(f"| `{mdl}` | {row['E']:.4f} | {row['I']:.4f} | "
+                 f"{row['S']:.4f} | {_mae_avg(row):.4f} |")
+
+    a.append("\n## Per-agent (gate = `ema` beats global_mean AND persistence AND ar1)")
+    a.append("| Agent | states | persistence | ar1 | exp_mean | ema | global | gate |")
+    a.append("|---|---:|---:|---:|---:|---:|---:|---|")
+    for ag in res["per_agent"]:
+        name = labels.get(ag["agent"], ag["agent"][:8])
+        m = ag["mae_avg"]
+        flag = ("**PASS**" if ag["wins_gate"] else "fail") if ag["gate_eligible"] \
+            else ("(pass)" if ag["wins_gate"] else "(fail)")
+        a.append(
+            f"| {name} | {ag['n_states']} | {m['persistence']:.4f} | "
+            f"{m['ar1']:.4f} | {m['expanding_mean']:.4f} | {m['ema']:.4f} | "
+            f"{m['global_mean']:.4f} | {flag} |"
+        )
+    a.append("\n(parenthesised = below the gate's states floor; shown for trend only)")
+
+    a.append("\n## Gate verdict")
+    if res["gate_eligible"] == 0:
+        a.append(f"- **NOT EVALUABLE** — no agent has >= {res['gate_min_states']} "
+                 "raw states yet. Forward-only data; re-run later.")
+    else:
+        verdict = "PASS" if res["gate_majority"] else "FAIL"
+        a.append(
+            f"- Majority rule over eligible agents: **{res['gate_winners']} / "
+            f"{res['gate_eligible']} win → {verdict}** (pre-registered: beating "
+            "fleet-mean alone is not success; the per-agent reference must also "
+            "beat per-agent persistence AND AR(1), out-of-sample)."
+        )
+        if res["gate_eligible"] < 5:
+            a.append(
+                f"- **Scope: early read.** Only {res['gate_eligible']} agent(s) "
+                "clear the states floor; a majority over so few is weak evidence "
+                "either way. Treat as trend, re-run as raw_obs accrues fleet-wide."
+            )
+    a.append(
+        "- Interpretation guard: a PASS here earns 'a non-trivial per-agent "
+        "self-model exists' (estimator individuality) — it says NOTHING about "
+        "outcome validity, which remains label-blocked. A FAIL means the "
+        "'self-model' is dressed-up autocorrelation and must not be shipped or "
+        "publicly framed (next-move doc, step 4)."
+    )
+    return "\n".join(a) + "\n"
 
 
 def build_report(res: dict, *, min_states: int) -> str:
@@ -301,7 +558,8 @@ def build_report(res: dict, *, min_states: int) -> str:
     a.append(
         "\nTo settle it, log the RAW (un-smoothed) per-check-in EISV and re-run "
         "expanding_mean / ema vs a per-agent persistence+AR(1) null on the raw series. "
-        "That is the label-free test that would actually earn the individuality axiom."
+        "That is the label-free test that would actually earn the individuality axiom — "
+        "run below on rows that carry `raw_obs` (PR #1294, forward-only)."
     )
     a.append(
         "\nInterpretation rule: this measures the *estimator* (does the self-model "
@@ -316,12 +574,16 @@ def build_report(res: dict, *, min_states: int) -> str:
 
 
 async def main_async(args: argparse.Namespace) -> int:
-    traj = await fetch_trajectories(args.db_url, min_states=args.min_states)
+    traj, raw_traj, labels = await fetch_trajectories(
+        args.db_url, min_states=args.min_states
+    )
     if not traj:
         print("no agents meet the minimum-states threshold", file=sys.stderr)
         return 1
     res = evaluate(traj)
     report = build_report(res, min_states=args.min_states)
+    raw_res = evaluate_raw(raw_traj, gate_min_states=args.raw_gate_min_states)
+    report += build_raw_report(raw_res, labels)
     if args.output:
         path = Path(args.output)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -337,6 +599,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--db-url", default=DEFAULT_DB_URL)
     p.add_argument("--min-states", type=int, default=10,
                    help="minimum behavioral states per agent to include")
+    p.add_argument("--raw-gate-min-states", type=int, default=RAW_GATE_MIN_STATES,
+                   help="raw states an agent needs to count toward the "
+                        "individuality-gate majority (next-move doc step 4)")
     p.add_argument("--output", help="optional markdown output path")
     return p.parse_args(argv)
 
