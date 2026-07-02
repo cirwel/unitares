@@ -134,16 +134,17 @@ async def test_kg_get_discoveries_by_ids_batches_in_one_query():
 @pytest.mark.asyncio
 class TestUpdateDiscoveryTimestampCoercion:
     async def _make_backend(self, captured: list):
-        """KnowledgeGraphPostgres with a mocked pool that records fetchval args."""
+        """KnowledgeGraphPostgres with a mocked acquire() that records fetchval args."""
         backend = KnowledgeGraphPostgres()
 
         async def fake_fetchval(query, *args):
             captured.append((query, args))
             return "discovery-id"
 
+        conn = MagicMock()
+        conn.fetchval = AsyncMock(side_effect=fake_fetchval)
         db = MagicMock()
-        db._pool = MagicMock()
-        db._pool.fetchval = AsyncMock(side_effect=fake_fetchval)
+        db.acquire = lambda: _AcquireContext(conn)
         backend._db = db
         backend._initialized = True
 
