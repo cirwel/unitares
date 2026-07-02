@@ -22,10 +22,15 @@ Canonical form:
 - **Floats are rejected** (``CanonicalizationError``): float formatting is
   not stable across languages, and a silent divergence would veto every
   bound effect. Fail loudly at the producer instead.
-- **Control characters (U+0000–U+001F) in strings and keys are rejected**:
-  they are the one region where JSON escape spelling can differ between
-  encoders (``\\u001b`` vs ``\\u001B``); real payloads (paths, base64
-  content) never contain them, so refusing is cheaper than normalizing.
+- **Control characters in strings and keys are rejected, EXCEPT the five
+  short-escape characters** ``\\b \\t \\n \\f \\r`` (U+0008, U+0009,
+  U+000A, U+000C, U+000D). Both encoders spell those five identically
+  (verified byte-for-byte; pinned by the shared fixture), and real text
+  content — the payload of every real ``file_write`` — contains them.
+  The remaining C0 controls (U+0000–U+0007, U+000B, U+000E–U+001F) are
+  the genuinely divergent region — Python spells ``\\u000b`` in lowercase
+  hex where Jason spells ``\\u000B`` in uppercase — so they stay rejected
+  (fail closed at the producer, sentinel-hash at the plane).
 """
 
 from __future__ import annotations
@@ -45,12 +50,20 @@ class CanonicalizationError(ValueError):
     """Payload cannot be canonically serialized (float, control char, bad key)."""
 
 
+# The five C0 controls with a JSON short escape (\b \t \n \f \r). Python's
+# json.dumps and Jason emit these byte-identically; every other C0 control is
+# spelled "\\u000b" by Python (lowercase hex) but "\\u000B" by Jason, and must
+# stay rejected or the two sides silently hash different bytes.
+_SHORT_ESCAPE_OK = frozenset("\b\t\n\f\r")
+
+
 def _check_string(s: str, *, context: str) -> None:
     for ch in s:
-        if ord(ch) < 0x20:
+        if ord(ch) < 0x20 and ch not in _SHORT_ESCAPE_OK:
             raise CanonicalizationError(
                 f"control character U+{ord(ch):04X} in {context}; canonical "
-                "payloads must not contain control characters"
+                "payloads only admit control characters with a cross-language "
+                "stable short escape (\\b \\t \\n \\f \\r)"
             )
 
 

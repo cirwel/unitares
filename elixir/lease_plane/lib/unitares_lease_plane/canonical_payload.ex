@@ -19,10 +19,14 @@ defmodule UnitaresLeasePlane.CanonicalPayload do
     object, array.
   - **Floats are rejected** (`{:error, :float_in_payload}`): float
     formatting is not stable across languages.
-  - **Control characters (U+0000–U+001F) in strings/keys are rejected**
-    (`{:error, :control_char_in_payload}`): the one region where JSON
-    escape spelling can differ between encoders; real payloads (paths,
-    base64 content) never contain them.
+  - **Control characters in strings/keys are rejected EXCEPT the five
+    short-escape characters** `\\b \\t \\n \\f \\r` (U+0008, U+0009, U+000A,
+    U+000C, U+000D) — both encoders spell those five identically (pinned
+    by the shared fixture), and real text content contains them. The
+    remaining C0 controls (U+0000–U+0007, U+000B, U+000E–U+001F) are the
+    genuinely divergent region (Jason emits uppercase hex escapes where
+    Python emits lowercase) and stay rejected
+    (`{:error, :control_char_in_payload}`).
   """
 
   @type reason ::
@@ -102,8 +106,17 @@ defmodule UnitaresLeasePlane.CanonicalPayload do
   defp check_key(_), do: {:error, :non_string_key}
 
   # UTF-8 continuation bytes are always >= 0x80, so a raw byte scan for
-  # < 0x20 exactly detects control codepoints without decoding.
-  defp has_control_char?(<<b, _rest::binary>>) when b < 0x20, do: true
+  # < 0x20 exactly detects control codepoints without decoding. The five
+  # short-escape controls \b \t \n \f \r (0x08 0x09 0x0A 0x0C 0x0D) are
+  # admitted: Jason and Python's json.dumps emit them byte-identically.
+  # Every other C0 control diverges (Jason emits uppercase hex escapes,
+  # "\\u000B", where Python emits lowercase "\\u000b") and stays rejected.
+  @short_escape_ok [0x08, 0x09, 0x0A, 0x0C, 0x0D]
+
+  defp has_control_char?(<<b, rest::binary>>) when b < 0x20 do
+    if b in @short_escape_ok, do: has_control_char?(rest), else: true
+  end
+
   defp has_control_char?(<<_b, rest::binary>>), do: has_control_char?(rest)
   defp has_control_char?(<<>>), do: false
 end

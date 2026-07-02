@@ -119,3 +119,27 @@ def test_mint_hits_governance_url_not_lease_plane():
     _propose(_client(transport))
     (mint,) = transport.mint_requests()
     assert mint.url == "http://gov.test:8767/v1/effect-grant"
+
+def test_auto_mints_for_multiline_text_content():
+    """Regression (#1075 activation attempt, 2026-07-02): real file content is
+    multi-line text — the floor writer proposes pretty-printed JSON — and the
+    canonical form must admit the short-escape controls, or the sole standing
+    producer can never mint and every enforced propose vetoes binding_absent."""
+    transport = RecordingTransport({"ok": True, "grant": "gnt.v1.abc.def"})
+    content = '{\n  "a": 1,\n\t"b": "x"\r\n}\n'
+    result = _client(transport).propose_file_write(
+        path="/tmp/floor.json",
+        content=content,
+        proposer_uuid="00000000-0000-0000-0000-000000000001",
+        continuity_token="v1.tok",
+        session_id="s-1",
+        idempotency_key="fw-multiline",
+    )
+    assert result["ok"] is True
+
+    (mint,) = transport.mint_requests()
+    expected_sha = canonical_payload_sha256({"path": "/tmp/floor.json", "content": content})
+    assert mint.json_body["payload_sha256"] == expected_sha
+
+    (effect,) = transport.effect_requests()
+    assert effect.json_body["proposer"]["effect_grant"] == "gnt.v1.abc.def"
