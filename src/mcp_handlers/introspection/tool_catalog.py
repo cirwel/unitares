@@ -547,9 +547,19 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
         "related_to": ["observe", "health_check"],
         "category": "observability",
     },
-    # "pi" introspection entry lives in unitares-pi-plugin when that
-    # plugin is installed; omitted here so OSS builds don't advertise
-    # an embodied-system tool that isn't loaded.
+    # Pi tools are registered by unitares-pi-plugin when installed. These
+    # relationships do not register them; they only prevent loaded plugin tools
+    # from falling into the null category in list_tools.
+    "pi": {
+        "depends_on": [],
+        "related_to": ["admin", "observe"],
+        "category": "admin",
+    },
+    "pi_restart_service": {
+        "depends_on": ["pi"],
+        "related_to": ["admin"],
+        "category": "admin",
+    },
 }
 
 
