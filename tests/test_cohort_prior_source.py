@@ -154,41 +154,84 @@ class TestCache:
         assert calls["n"] == 2  # reset forces a rebuild
 
 
-class TestShadowHook:
+class TestSeedHook:
+    _CLASSIFY = {"new-eph": "ephemeral", "e0": "ephemeral", "e1": "ephemeral", "e2": "ephemeral"}
+
+    class _FakeDB:
+        async def load_all_behavioral_baselines(self):
+            return {f"e{i}": _stats([0.5] * 8) for i in range(3)}
+
+    def _patches(self):
+        return patch("src.db.get_db", return_value=self._FakeDB()), patch(
+            "src.cohort_prior_source.default_classifier",
+            return_value=_fixed_classifier(self._CLASSIFY),
+        )
+
     @pytest.mark.asyncio
     async def test_flag_off_is_noop_and_baseline_stays_cold(self, monkeypatch):
-        """Default (flag OFF): resume creates a cold baseline, no observation."""
+        """Default (flag OFF): resume creates a cold baseline, no DB touch."""
         monkeypatch.delenv("UNITARES_COHORT_PRIOR", raising=False)
         from src import agent_behavioral_baseline as abl
 
         abl._baselines.pop("cold-agent", None)
         with patch("src.db.get_db") as get_db:
-            await abl._maybe_observe_cohort_seed("cold-agent")
+            await abl._maybe_seed_cohort_prior("cold-agent")
             get_db.assert_not_called()  # flag gate short-circuits before any DB touch
 
     @pytest.mark.asyncio
-    async def test_flag_on_observes_without_mutating(self, monkeypatch, caplog):
+    async def test_observe_mode_is_default_and_does_not_mutate(self, monkeypatch):
+        """Flag ON, mode unset -> observe: logs, never mutates the baseline."""
         monkeypatch.setenv("UNITARES_COHORT_PRIOR", "on")
+        monkeypatch.delenv("UNITARES_COHORT_PRIOR_MODE", raising=False)
         reset_cohort_prior_cache()
         from src import agent_behavioral_baseline as abl
 
-        class FakeDB:
-            async def load_all_behavioral_baselines(self):
-                return {f"e{i}": _stats([0.5] * 8) for i in range(3)}
-
-        # Create the fresh (cold) baseline exactly as the resume path does.
         abl._baselines["new-eph"] = AgentBehavioralBaseline()
-        with patch("src.db.get_db", return_value=FakeDB()), patch(
-            "src.cohort_prior_source.default_classifier",
-            return_value=_fixed_classifier(
-                {"new-eph": "ephemeral", "e0": "ephemeral", "e1": "ephemeral", "e2": "ephemeral"}
-            ),
-        ):
-            await abl._maybe_observe_cohort_seed("new-eph")
+        p1, p2 = self._patches()
+        with p1, p2:
+            await abl._maybe_seed_cohort_prior("new-eph")
 
-        # The observed agent's baseline is UNCHANGED — still cold, still inert.
         b = abl._baselines["new-eph"]
-        assert b.sample_count == 0
+        assert b.sample_count == 0  # unchanged — still cold
         assert b.z_score(SIGNAL, 100.0) == 0.0
+        abl._baselines.pop("new-eph", None)
+        reset_cohort_prior_cache()
+
+    @pytest.mark.asyncio
+    async def test_apply_mode_seeds_but_stays_inert_until_earned(self, monkeypatch):
+        """Flag ON, mode=apply -> the fresh baseline is replaced with a seeded one,
+        carrying the cohort mean, yet STILL inert until the agent earns its own count."""
+        monkeypatch.setenv("UNITARES_COHORT_PRIOR", "on")
+        monkeypatch.setenv("UNITARES_COHORT_PRIOR_MODE", "apply")
+        reset_cohort_prior_cache()
+        from src import agent_behavioral_baseline as abl
+        from src.cohort_prior import DEFAULT_PSEUDO_COUNT
+
+        abl._baselines["new-eph"] = AgentBehavioralBaseline()
+        p1, p2 = self._patches()
+        with p1, p2:
+            await abl._maybe_seed_cohort_prior("new-eph")
+
+        b = abl._baselines["new-eph"]
+        seeded = b._stats[SIGNAL]
+        assert seeded.count == DEFAULT_PSEUDO_COUNT       # seeded, not cold
+        assert seeded.mean == pytest.approx(0.5, abs=1e-6)  # carries cohort mean
+        assert b.z_score(SIGNAL, 100.0) == 0.0            # but still inert (anti-poisoning)
+        abl._baselines.pop("new-eph", None)
+        reset_cohort_prior_cache()
+
+    @pytest.mark.asyncio
+    async def test_apply_mode_unknown_value_falls_back_to_observe(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_COHORT_PRIOR", "on")
+        monkeypatch.setenv("UNITARES_COHORT_PRIOR_MODE", "yolo")  # not 'apply'
+        reset_cohort_prior_cache()
+        from src import agent_behavioral_baseline as abl
+
+        abl._baselines["new-eph"] = AgentBehavioralBaseline()
+        p1, p2 = self._patches()
+        with p1, p2:
+            await abl._maybe_seed_cohort_prior("new-eph")
+
+        assert abl._baselines["new-eph"].sample_count == 0  # observe: not mutated
         abl._baselines.pop("new-eph", None)
         reset_cohort_prior_cache()
