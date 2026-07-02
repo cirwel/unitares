@@ -444,7 +444,11 @@ class LeasePlaneClient:
         try:
             payload_sha = canonical_payload_sha256(payload)
         except CanonicalizationError as e:
-            logger.debug("effect-grant mint skipped: payload not canonical (%s)", e)
+            # WARNING, not debug: a payload that cannot canonicalize can never
+            # bind, so under enforcement every propose from this producer is
+            # vetoed (binding_absent) and falls back — a standing condition the
+            # operator needs to see, not a transient mint hiccup.
+            logger.warning("effect-grant mint skipped: payload not canonical (%s)", e)
             return None
 
         gov_base = (

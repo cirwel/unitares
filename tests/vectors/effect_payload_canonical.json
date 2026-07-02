@@ -91,6 +91,24 @@
       },
       "canonical": "{\"0\":6,\"A\":4,\"B\":2,\"_\":5,\"a\":3,\"b\":1,\"é\":7}",
       "sha256": "d96ed29af299d962c83aed832e1bab86e12185ce2f1c494b753c275d9f97bed0"
+    },
+    {
+      "name": "multiline_text_content",
+      "payload": {
+        "path": "/tmp/floor.json",
+        "content": "{\n  \"a\": 1,\n  \"b\": 2\n}\n"
+      },
+      "canonical": "{\"content\":\"{\\n  \\\"a\\\": 1,\\n  \\\"b\\\": 2\\n}\\n\",\"path\":\"/tmp/floor.json\"}",
+      "sha256": "bacd0405b9b13e6c76deaa371a2a08f1c2f3e48382cdf02d85d9327067478d6b"
+    },
+    {
+      "name": "all_short_escape_controls",
+      "payload": {
+        "s": "tab\there\nnewline\rcr\fff\bbs",
+        "crlf": "line1\r\nline2\r\n"
+      },
+      "canonical": "{\"crlf\":\"line1\\r\\nline2\\r\\n\",\"s\":\"tab\\there\\nnewline\\rcr\\fff\\bbs\"}",
+      "sha256": "bc1c76b722c235de5980a74d90fc62026188d50d019cc2a58f7d69e70d3daf28"
     }
   ],
   "rejects": [
@@ -119,7 +137,19 @@
     {
       "name": "control_char_in_key",
       "payload": {
-        "bad\tkey": "v"
+        "bad\u000bkey": "v"
+      }
+    },
+    {
+      "name": "divergent_control_vt",
+      "payload": {
+        "s": "a\u000bb"
+      }
+    },
+    {
+      "name": "divergent_control_esc_ansi",
+      "payload": {
+        "s": "\u001b[31mred\u001b[0m"
       }
     }
   ]
