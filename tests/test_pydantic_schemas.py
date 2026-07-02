@@ -272,6 +272,31 @@ class TestPydanticSchemas:
         assert dumped["top_n"] == 5
         assert dumped["agent_id"] == "agent-1"
 
+    def test_knowledge_details_null_pagination_uses_defaults(self):
+        """Explicit null offset/length must not reach the details handler."""
+        from src.mcp_handlers.schemas.knowledge import GetDiscoveryDetailsParams, KnowledgeParams
+
+        unified = KnowledgeParams(
+            action="details",
+            discovery_id="disc-1",
+            offset=None,
+            length=None,
+        )
+        legacy = GetDiscoveryDetailsParams(
+            discovery_id="disc-1",
+            offset=None,
+            length=None,
+        )
+
+        assert unified.offset == 0
+        assert unified.length == 2000
+        assert legacy.offset == 0
+        assert legacy.length == 2000
+
+        unrelated = KnowledgeParams(action="search", query="pagination")
+        assert unrelated.offset is None
+        assert unrelated.length is None
+
     def test_leave_note_accepts_s22_h5_agent_knowable_fields(self):
         """Quick notes must preserve the same S22 diagnostic fields as store."""
         from src.mcp_handlers.schemas.knowledge import LeaveNoteParams
