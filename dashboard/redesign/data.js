@@ -384,6 +384,25 @@
       return r.json();
     },
 
+    // Light freshness map for the residents (label -> {silence, status}).
+    // The Agents pane uses it to keep lease-anchored in-process residents
+    // (e.g. Steward — zero agent_state rows BY DESIGN, liveness lives in
+    // lease_plane heartbeats) out of the "Never checked in" bucket.
+    async residentFreshness() {
+      return withFallback(
+        async () => {
+          const j = await authFetch("/v1/residents");
+          if (!j || !Array.isArray(j.residents)) return null;
+          const map = {};
+          j.residents.forEach((r) => {
+            if (r.label) map[r.label] = { silence: r.silence_seconds, status: r.status };
+          });
+          return map;
+        },
+        () => S().residentFreshness || {},
+      );
+    },
+
     async residentPanels() {
       return withFallback(async () => {
         const [w, sn, vg, h, res] = await Promise.all([
