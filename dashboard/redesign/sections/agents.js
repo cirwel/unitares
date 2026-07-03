@@ -181,7 +181,8 @@
 
   function rowBadges(a, st) {
     const out = [];
-    if (a.event_driven) out.push(`<span class="tag" title="event-driven resident — silence is not a liveness signal">event</span>`);
+    if (a.leaseAnchored) out.push(`<span class="tag" title="in-process resident — liveness from its lease-plane heartbeat, not check-in rows">lease heartbeat</span>`);
+    else if (a.event_driven) out.push(`<span class="tag" title="event-driven resident — silence is not a liveness signal">event</span>`);
     else if (st.level === "stale" || st.level === "dead") out.push(`<span class="tag warn">inactive</span>`);
     if (a.superseded) out.push(`<span class="tag warn" title="${a.lifecycleReason || "superseded"}">superseded</span>`);
     if (a.parent) out.push(`<span class="tag" title="lineage parent ${a.parent}">↑ lineage</span>`);
@@ -244,8 +245,8 @@
     }[sortF] || cmp_recent;
     rows.sort(cmp);
 
-    const participated = rows.filter((a) => (a.updates || 0) >= 1);
-    const never = rows.filter((a) => (a.updates || 0) === 0);
+    const participated = rows.filter((a) => (a.updates || 0) >= 1 || a.leaseAnchored);
+    const never = rows.filter((a) => (a.updates || 0) === 0 && !a.leaseAnchored);
     const shown = participated.slice(0, pageSize);
 
     const tr = (a) => {
@@ -318,6 +319,20 @@
       list: r.data.list || [], summary: r.data.summary || {}, source: r.source,
       nowMs: r.source === "live" ? Date.now() : Date.parse((window.SNAPSHOT && window.SNAPSHOT.capturedAt) || 0) || Date.now(),
     };
+    // Lease-anchored residents (in-process, e.g. Steward) have zero check-in
+    // rows BY DESIGN — their liveness is the lease-plane heartbeat. Without
+    // this they sit in "Never checked in" forever and read as dead.
+    try {
+      const fresh = (await DATA.residentFreshness()).data || {};
+      MODEL.list.forEach((a) => {
+        const f = a.label && fresh[a.label];
+        if (f && (a.updates || 0) === 0 && typeof f.silence === "number") {
+          a.leaseAnchored = true;
+          a.last = new Date(MODEL.nowMs - f.silence * 1000).toISOString();
+          a.leaseStatus = f.status;
+        }
+      });
+    } catch { /* freshness is an enhancement — the pane renders without it */ }
     render();
   }
 

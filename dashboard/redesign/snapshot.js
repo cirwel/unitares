@@ -139,6 +139,11 @@ window.SNAPSHOT = {
     ],
   },
   // Real resident-panel data from /v1/{watcher,sentinel,vigil}/summary + /health/deep 2026-06-19T20:41Z.
+  residentFreshness: {
+    Steward: { silence: 120, status: "healthy" },
+    Lumen: { silence: 95, status: "healthy" },
+  },
+
   residentPanels: {
     watcher: { total:76, byStatus:{ dismissed:54, confirmed:17, surfaced:5 }, openSev:{ high:3, medium:2 },
       patterns:[ {p:"P011",confirmed:6,dismissed:16,surfaced:1,ratio:0.73}, {p:"P001",confirmed:7,dismissed:7,surfaced:0,ratio:0.50}, {p:"P016",confirmed:0,dismissed:7,surfaced:2,ratio:1.0}, {p:"P009",confirmed:0,dismissed:0,surfaced:2,ratio:null} ] },
