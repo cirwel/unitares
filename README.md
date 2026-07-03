@@ -12,7 +12,7 @@ Most controls inspect one action against one rule. UNITARES keeps history for ea
 [![License](https://img.shields.io/badge/license-Apache_2.0-2f7d72?style=flat-square&labelColor=0f171f)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
 
-*Status: live since November 2025 — 3.7M+ governance events (public snapshot frozen 2026-06-16).*
+*Status: live since November 2025 — 4.2M+ governance events (public snapshot frozen 2026-07-02).*
 
 [![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#try-the-demo-locally)
 [![Docs](https://img.shields.io/badge/docs-read-7d8f97?style=for-the-badge&labelColor=0f171f)](docs/README.md)
@@ -64,7 +64,7 @@ docker compose up -d --wait && make demo
 
 For a human operator view, open the optional dashboard at `http://localhost:8767/dashboard`. Dashboard implementation details live in [`dashboard/README.md`](dashboard/README.md); public deployment screenshots live in [`docs/PRODUCTION_SNAPSHOT.md`](docs/PRODUCTION_SNAPSHOT.md).
 
-> **Running continuously since November 2025 · 3.7M+ governance events** — the agents building UNITARES run under it. ([Production snapshot →](docs/PRODUCTION_SNAPSHOT.md) · [verify the numbers →](docs/REVIEWER_GUIDE.md))
+> **Running continuously since November 2025 · 4.2M+ governance events** — the agents building UNITARES run under it. ([Production snapshot →](docs/PRODUCTION_SNAPSHOT.md) · [verify the numbers →](docs/REVIEWER_GUIDE.md))
 
 ## Where it fits
 

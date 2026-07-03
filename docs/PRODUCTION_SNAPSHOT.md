@@ -1,8 +1,10 @@
 # Production snapshot
 
-Frozen public snapshot from June 16, 2026 (single-operator — the author's own
-traffic). Headline: **3.7M+ governance events processed · ≈714K in the last 7
-days**. Running continuously since November 2025 and dogfooded — the agents
+Frozen public snapshot from July 2, 2026 (single-operator — the author's own
+traffic; previous snapshot: June 16, 2026). Headline: **4.2M+ governance events
+processed · ≈72K in the last 7 days**. Weekly volume varies with the operator's
+workload — the June snapshot coincided with a high-throughput period, and
+identity-consolidation work since then removed phantom per-session traffic. Running continuously since November 2025 and dogfooded — the agents
 building UNITARES run under it. The falsifiability checks run on a fresh clone;
 the live deployment metrics below need governance-DB access to reproduce — see
 the [Reviewer Guide](REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc).
@@ -11,13 +13,13 @@ the [Reviewer Guide](REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-t
 
 | Metric | Value |
 |--------|-------|
-| Agents onboarded | 3,777 total process-instances — overwhelmingly ephemeral CLI sessions from one operator's workstation plus a handful of long-running resident agents (launchd crons) |
-| Distinct event-emitting identities (last 21 days) | 510; mostly ephemeral local CLI sessions (lower than earlier snapshots as identity-consolidation work cut phantom per-session identities) |
-| Unique agents active (last 7 days) | 369 distinct event emitters |
-| Governance events processed | 3,748,000+ (≈714K in the last 7 days) |
-| Knowledge graph discoveries | 1,054 |
+| Agents onboarded | 5,162 total process-instances — overwhelmingly ephemeral CLI sessions from one operator's workstation plus a handful of long-running resident agents (launchd crons) |
+| Distinct event-emitting identities (last 21 days) | 1,336; mostly ephemeral local CLI sessions |
+| Unique agents active (last 7 days) | 448 distinct event emitters |
+| Governance events processed | 4,244,000+ (≈72K in the last 7 days) |
+| Knowledge graph discoveries | 1,339 |
 | V operating range | Active agents often within [-0.1, 0.1] |
-| Tests | 8,500+ collected · smoke/pre-push subset plus 75% min coverage gate |
+| Tests | 10,300+ collected · smoke/pre-push subset plus 75% min coverage gate |
 
 *What these numbers show:* the pipeline holds up under sustained volume. *What
 they don't show:* product-market traction. External adoption is the open question.
