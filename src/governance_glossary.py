@@ -300,9 +300,55 @@ def _wrap(value: Any, table: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     return {"value": value, **info}
 
 
-def explain_verdict(verdict: Optional[str]) -> Dict[str, Any]:
-    """Wrap a verdict value with meaning + next_action."""
-    return _wrap(verdict, VERDICTS)
+# Behavioral-assessment verdicts (safe/caution/high-risk) are issued from EISV.
+# Before the behavioral channel warms (confidence < 0.3, primary_eisv_source ==
+# "ode_fallback") such a verdict runs on the ODE cold-start prior, not on
+# accumulated observation — so its wording ("low risk") reads more confident
+# than the evidence supports. The decision verdicts (proceed/pause/reject/guide)
+# are NOT graded here; they carry their own actuator semantics.
+_BEHAVIORAL_VERDICTS = frozenset({"safe", "caution", "high-risk"})
+
+
+def explain_verdict(
+    verdict: Optional[str],
+    *,
+    evidence_source: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Wrap a verdict value with meaning + next_action.
+
+    ``evidence_source`` is the ``primary_eisv_source`` in force when the verdict
+    was issued (``"behavioral"`` once warm, ``"ode_fallback"`` before). When it
+    is ``ode_fallback`` a *behavioral* verdict is graded **provisional**: the
+    meaning is qualified and an ``evidence`` block records that the basis is the
+    cold-start prior, not warm behavioral measurement. This mirrors the
+    outcome-event corroboration labeling (``claim_only`` / ``evidence_weight``):
+    the verdict still stands — it is just graded so the wording does not outrun
+    the evidence. Omitted / ``"behavioral"`` → byte-identical to the ungraded
+    output, so existing callers are unaffected.
+    """
+    wrapped = _wrap(verdict, VERDICTS)
+    if (
+        evidence_source == "ode_fallback"
+        and isinstance(wrapped.get("value"), str)
+        and wrapped["value"] in _BEHAVIORAL_VERDICTS
+    ):
+        base_meaning = wrapped.get("meaning", "").rstrip()
+        wrapped["meaning"] = (
+            f"{base_meaning} Provisional — issued on the ODE cold-start prior, "
+            "not yet on warm behavioral observation; treat as claim-only."
+        )
+        wrapped["evidence"] = {
+            "grade": "provisional",
+            "corroboration": "claim_only",
+            "basis": "ode_fallback",
+            "note": (
+                "Behavioral confidence < 0.3, so primary EISV is the ODE "
+                "fallback and this verdict is the cold-start prior, not a warm "
+                "behavioral measurement. Its confidence scales up as "
+                "observations accumulate (primary_eisv_source -> behavioral)."
+            ),
+        }
+    return wrapped
 
 
 def explain_basin(basin: Optional[str]) -> Dict[str, Any]:
