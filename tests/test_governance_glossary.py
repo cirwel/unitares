@@ -130,6 +130,40 @@ class TestExplainVerdict:
         result = explain_verdict(None)
         assert result == {"value": None}
 
+    def test_default_and_behavioral_source_are_byte_identical(self):
+        # Grading is opt-in: omitting evidence_source, or passing a warm
+        # behavioral source, must not change the ungraded output for any caller.
+        for source in (None, "behavioral"):
+            assert explain_verdict("safe", evidence_source=source) == explain_verdict("safe")
+            assert "evidence" not in explain_verdict("safe", evidence_source=source)
+
+    def test_ode_fallback_grades_behavioral_verdict_provisional(self):
+        result = explain_verdict("safe", evidence_source="ode_fallback")
+        assert result["value"] == "safe"
+        # Base meaning is preserved; the qualifier is appended, not replaced.
+        assert "low risk" in result["meaning"].lower()
+        assert "provisional" in result["meaning"].lower()
+        assert "claim-only" in result["meaning"].lower()
+        assert result["evidence"]["grade"] == "provisional"
+        assert result["evidence"]["corroboration"] == "claim_only"
+        assert result["evidence"]["basis"] == "ode_fallback"
+        # next_action is unchanged — grading the confidence must not alter the
+        # verdict's actuator guidance.
+        assert result["next_action"] == explain_verdict("safe")["next_action"]
+
+    def test_ode_fallback_grades_all_behavioral_verdicts(self):
+        for v in ("safe", "caution", "high-risk"):
+            result = explain_verdict(v, evidence_source="ode_fallback")
+            assert result.get("evidence", {}).get("grade") == "provisional", v
+
+    def test_ode_fallback_does_not_grade_decision_verdicts(self):
+        # Decision verdicts carry actuator semantics, not an EISV confidence
+        # basis — the cold-start prior grading must not touch them.
+        for v in ("proceed", "pause", "reject", "guide"):
+            result = explain_verdict(v, evidence_source="ode_fallback")
+            assert "evidence" not in result, v
+            assert result == explain_verdict(v)
+
 
 class TestExplainBasin:
 

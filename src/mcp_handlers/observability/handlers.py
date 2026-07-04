@@ -138,7 +138,9 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
                 "coherence": float(monitor.state.coherence),
                 "risk_score": float(metrics.get("risk_score") or metrics.get("current_risk") or 0.0),  # Governance/operational risk
                 "phi": metrics.get("phi"),  # Primary physics signal
-                "verdict": explain_verdict(metrics.get("verdict")),  # Primary governance signal
+                "verdict": explain_verdict(
+                    metrics.get("verdict"), evidence_source=metrics.get("primary_eisv_source")
+                ),  # Primary governance signal
                 "lambda1": float(monitor.state.lambda1),
                 "update_count": monitor.state.update_count
             }
