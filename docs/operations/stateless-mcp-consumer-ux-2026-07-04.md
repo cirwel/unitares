@@ -80,6 +80,16 @@ evidence, mirroring the outcome-event labeling philosophy. The deeper axis — m
 [`verification-weighted-verdict-v0.md`](../proposals/verification-weighted-verdict-v0.md)
 and [`continuous-verdict-blending-v0.md`](../proposals/continuous-verdict-blending-v0.md).
 
+> **Gate guardrail (read before extending).** This grading is **presentation-only** and
+> is *not* council-gated: it sits in the same class as the outcome-event corroboration
+> labeling (`claim_only` / `evidence_weight`), which grades the confidence of a surfaced
+> claim without touching the actuator. The council gate protects `resolve_verdict_risk`,
+> the one-sided blend invariant, and *enabling* `GOVERNANCE_VERIFICATION_FLOOR` — i.e.
+> anything that can change **what verdict/decision/enforcement fires**. The moment an
+> `evidence: provisional` grade is allowed to gate enforcement, de-escalate risk, or
+> otherwise feed the decision, it crosses into actuator territory and inherits that gate.
+> Keep it a label.
+
 ### F3 — Continuity token is context-window-hostile for LLM callers
 The ~340-char `continuity_token` echoed on **every** call is expensive for an LLM caller
 holding it in context. A short opaque handle (server-side lookup) would be kinder to the
