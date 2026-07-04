@@ -10,6 +10,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress as _ipaddress
 import json
 import os
@@ -418,6 +419,30 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
                     )
                 except Exception as e:
                     logger.debug("[STICKY-REST] cache update failed: %s", e)
+            # Transport parity with the dispatch middleware's post-resolution
+            # session-TTL update (identity_step): renew the durable
+            # core.sessions row on every successfully resolved call. REST is
+            # the only transport fleet residents use, and without this touch
+            # their PG binding never advances after provisioning — expires_at
+            # lapses after SESSION_TTL_HOURS and the Redis-loss self-heal path
+            # (PATH2, which reads the PG row) silently dies with it, while
+            # check-ins keep landing via the Redis binding. Row-scoped UPDATE:
+            # a session_key with no core.sessions row (e.g. transport-injected
+            # CSIDs) is a no-op, so this never creates or extends bindings
+            # that were not provisioned.
+            for attempt in range(2):
+                try:
+                    from src.db import get_db
+                    await get_db().update_session_activity(session_key)
+                    break
+                except Exception as e:
+                    if attempt == 0:
+                        await asyncio.sleep(0.05)
+                    else:
+                        logger.warning(
+                            "[REST-SESSION] TTL update failed for %s...: %s",
+                            str(session_key)[:20], e,
+                        )
             return agent_uuid
     return None
 
