@@ -440,8 +440,8 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
                         await asyncio.sleep(0.05)
                     else:
                         logger.warning(
-                            "[REST-SESSION] TTL update failed for %s...: %s",
-                            str(session_key)[:20], e,
+                            "[REST-SESSION] TTL update failed for agent %s...: %s",
+                            agent_uuid[:8], e,
                         )
             return agent_uuid
     return None
