@@ -520,6 +520,114 @@ class TestUpdateCurrentSignature:
                     assert payload.get("old_tier") != payload.get("new_tier"), \
                         f"Spurious broadcast: old_tier={payload.get('old_tier')} == new_tier={payload.get('new_tier')}"
 
+    @staticmethod
+    def _drifted_fixture():
+        """Tier-2 identity whose current signature is far from genesis."""
+        from src.trajectory_identity import TrajectorySignature
+
+        current_sig = TrajectorySignature(
+            attractor={"center": [0.9, 0.9, 0.9, 0.9]},
+            beliefs={"values": [0.9, 0.9, 0.9]},
+            recovery={"tau_estimate": 100.0},
+            stability_score=0.95,
+            observation_count=100,
+        )
+        metadata = {
+            "trajectory_genesis": {
+                "attractor": {"center": [0.1, 0.1, 0.1, 0.1]},
+                "beliefs": {"values": [0.1, 0.1, 0.1]},
+                "recovery": {"tau_estimate": 5.0},
+                "stability_score": 0.2,
+                "observation_count": 10,
+            },
+            "trust_tier": {"tier": 2, "name": "established"},
+        }
+        return current_sig, metadata
+
+    @pytest.mark.asyncio
+    async def test_static_drift_emits_once_not_per_checkin(self):
+        """A static drift condition alerts on entry, then stays silent (#1370)."""
+        from src.trajectory_identity import update_current_signature
+
+        current_sig, metadata = self._drifted_fixture()
+
+        with patch('src.db.get_db') as mock_db, \
+             patch('src.trajectory_identity.store_genesis_signature',
+                   new_callable=AsyncMock, return_value=False), \
+             patch('src.audit_db.append_audit_event_async',
+                   new_callable=AsyncMock) as mock_audit, \
+             patch('src.broadcaster.broadcaster_instance') as mock_bc:
+            mock_bc.broadcast_event = AsyncMock()
+            mock_identity = MagicMock()
+            mock_identity.metadata = metadata  # shared dict = persisted metadata
+            mock_db_instance = AsyncMock()
+            mock_db_instance.get_identity = AsyncMock(return_value=mock_identity)
+            mock_db_instance.update_identity_metadata = AsyncMock()
+            mock_db.return_value = mock_db_instance
+
+            first = await update_current_signature("test-uuid", current_sig)
+            second = await update_current_signature("test-uuid", current_sig)
+
+            assert first["is_anomaly"] is True
+            assert second["is_anomaly"] is True
+            drift_broadcasts = [
+                c for c in mock_bc.broadcast_event.call_args_list
+                if c.args and c.args[0] == "identity_drift"
+            ]
+            drift_audits = [
+                c for c in mock_audit.call_args_list
+                if c.args and c.args[0].get("event_type") == "trajectory_drift"
+            ]
+            assert len(drift_broadcasts) == 1
+            assert len(drift_audits) == 1
+            assert "trajectory_drift_emit" in metadata
+
+    @pytest.mark.asyncio
+    async def test_drift_resolution_emits_resolved_once(self):
+        """When previously-alerted drift clears, emit trajectory_drift_resolved once."""
+        from src.trajectory_identity import update_current_signature, TrajectorySignature
+
+        # Current ≈ genesis → high similarity, no anomaly.
+        current_sig = TrajectorySignature(
+            attractor={"center": [0.5, 0.5, 0.5, 0.5]},
+            observation_count=50,
+        )
+        metadata = {
+            "trajectory_genesis": {
+                "attractor": {"center": [0.5, 0.5, 0.5, 0.5]},
+                "observation_count": 50,
+            },
+            "trust_tier": {"tier": 2, "name": "established"},
+            # A drift alert was emitted earlier; condition has now cleared.
+            "trajectory_drift_emit": {
+                "lineage_similarity": 0.12,
+                "emitted_at": "2026-07-24T00:00:00+00:00",
+            },
+        }
+
+        with patch('src.db.get_db') as mock_db, \
+             patch('src.audit_db.append_audit_event_async',
+                   new_callable=AsyncMock) as mock_audit, \
+             patch('src.broadcaster.broadcaster_instance') as mock_bc:
+            mock_bc.broadcast_event = AsyncMock()
+            mock_identity = MagicMock()
+            mock_identity.metadata = metadata
+            mock_db_instance = AsyncMock()
+            mock_db_instance.get_identity = AsyncMock(return_value=mock_identity)
+            mock_db_instance.update_identity_metadata = AsyncMock()
+            mock_db.return_value = mock_db_instance
+
+            first = await update_current_signature("test-uuid", current_sig)
+            second = await update_current_signature("test-uuid", current_sig)
+
+            assert first.get("is_anomaly") is False
+            resolved_broadcasts = [
+                c for c in mock_bc.broadcast_event.call_args_list
+                if c.args and c.args[0] == "identity_drift_resolved"
+            ]
+            assert len(resolved_broadcasts) == 1
+            assert "trajectory_drift_emit" not in metadata
+
 
 class TestGetTrajectoryStatus:
     """Tests for get_trajectory_status function."""
