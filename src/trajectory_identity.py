@@ -31,6 +31,12 @@ _TRUST_TIER_NAMES = {
     3: "verified",
 }
 
+# Drift alerts re-emit only when lineage_similarity moves more than this since
+# the last emitted alert (plus one trajectory_drift_resolved when it clears).
+# Static drift conditions otherwise flood audit.events and the event feed
+# with an identical row per check-in (#1370).
+_DRIFT_EMIT_DELTA = 0.05
+
 # Paper Definition 2.2: Viability Envelope (EISV bounds)
 VIABILITY_BOUNDS = {
     "E": (0.1, 0.9),
@@ -636,28 +642,72 @@ async def update_current_signature(
                     if prev_trust_tier is not None:
                         metadata["trust_tier"] = prev_trust_tier
 
-            # Drift alert: emit audit event + broadcast if anomaly persists after reseed
+            # Drift alert: emit audit event + broadcast on state CHANGE, not on
+            # every check-in. A static condition (e.g. a client cutover pinning
+            # lineage_similarity — #1370) used to re-emit identical events every
+            # check-in: ~480 audit rows/day per agent and a flooded events feed.
+            # Emit when drift starts, when the metric moves > _DRIFT_EMIT_DELTA,
+            # and once more when it resolves; stay silent in between.
+            drift_emit = metadata.get("trajectory_drift_emit")
+            prev_emit_sim = None
+            if isinstance(drift_emit, dict):
+                try:
+                    prev_emit_sim = float(drift_emit.get("lineage_similarity"))
+                except (TypeError, ValueError):
+                    prev_emit_sim = None
             if result.get("is_anomaly"):
+                changed = (
+                    prev_emit_sim is None
+                    or abs(lineage_sim - prev_emit_sim) > _DRIFT_EMIT_DELTA
+                )
+                if changed:
+                    try:
+                        from src.audit_db import append_audit_event_async
+                        from src.broadcaster import broadcaster_instance
+                        await append_audit_event_async({
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "event_type": "trajectory_drift",
+                            "agent_id": agent_id,
+                            "details": {
+                                "lineage_similarity": lineage_sim,
+                                "threshold": 0.6,
+                                "trust_tier": tier,
+                            },
+                        })
+                        await broadcaster_instance.broadcast_event(
+                            "identity_drift",
+                            agent_id=agent_id,
+                            payload={"lineage_similarity": lineage_sim, "threshold": 0.6},
+                        )
+                        metadata["trajectory_drift_emit"] = {
+                            "lineage_similarity": lineage_sim,
+                            "emitted_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    except Exception as e:
+                        logger.debug(f"Drift alert emission failed: {e}")
+            elif prev_emit_sim is not None:
+                # Previously-alerted drift has cleared (reseed, operator
+                # re-baseline, or genuine reconvergence) — say so once.
+                metadata.pop("trajectory_drift_emit", None)
                 try:
                     from src.audit_db import append_audit_event_async
                     from src.broadcaster import broadcaster_instance
                     await append_audit_event_async({
                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "event_type": "trajectory_drift",
+                        "event_type": "trajectory_drift_resolved",
                         "agent_id": agent_id,
                         "details": {
                             "lineage_similarity": lineage_sim,
                             "threshold": 0.6,
-                            "trust_tier": tier,
                         },
                     })
                     await broadcaster_instance.broadcast_event(
-                        "identity_drift",
+                        "identity_drift_resolved",
                         agent_id=agent_id,
                         payload={"lineage_similarity": lineage_sim, "threshold": 0.6},
                     )
                 except Exception as e:
-                    logger.debug(f"Drift alert emission failed: {e}")
+                    logger.debug(f"Drift-resolved emission failed: {e}")
         else:
             # No genesis - store this as genesis
             await store_genesis_signature(agent_id, signature)
