@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Lumen check-in self-doctor.
+
+    Runs lumen_checkin_doctor.py every 10 min: diagnoses "Lumen not checking
+    in" against the four field-verified failure classes, auto-heals the two
+    mechanical ones (restart false-pause -> resume; DNS freeze -> service
+    restart), verifies the heal actually restored check-ins, and escalates a
+    governance finding (-> Discord #alerts) for everything else — including
+    when a heal fails its verify or the same class flaps (2x/24h cap).
+
+    Before installing, substitute the placeholder:
+      __UNITARES_ROOT__ -> absolute path to the deploy checkout
+                           (e.g. $HOME/projects/unitares-deploy)
+
+    Example:
+      mkdir -p "$HOME/projects/unitares-deploy/data/logs"
+      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
+          scripts/ops/com.unitares.lumen-doctor.plist.template \
+          > ~/Library/LaunchAgents/com.unitares.lumen-doctor.plist
+      launchctl load ~/Library/LaunchAgents/com.unitares.lumen-doctor.plist
+
+    Secrets (UNITARES_HTTP_API_TOKEN, ANIMA_ADMIN_SECRET) are read from
+    ~/.config/cirwel/secrets.env by the script itself — none in this plist.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unitares.lumen-doctor</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/env</string>
+        <string>python3</string>
+        <string>__UNITARES_ROOT__/scripts/ops/lumen_checkin_doctor.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__UNITARES_ROOT__</string>
+
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__UNITARES_ROOT__/data/logs/lumen_doctor.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__UNITARES_ROOT__/data/logs/lumen_doctor.log</string>
+</dict>
+</plist>
