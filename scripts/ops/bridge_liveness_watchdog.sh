@@ -7,12 +7,11 @@
 # silently dead while the service "looked up". KeepAlive cannot see a hang. This
 # is the watcher for the watcher: it detects a wedged event loop and restarts.
 #
-# Signal: the bridge polls governance every EVENT_POLL_INTERVAL (10s) and logs
-# each poll (httpx INFO), so a healthy bridge writes its log at least every ~10s.
-# If the log is stale beyond STALE_THRESHOLD_S the poll loop is hung. (This
-# leans on httpx INFO-level poll logging — the bridge default. A heartbeat file
-# written from the poll loop would be a verbosity-independent upgrade; noted as a
-# follow-up rather than a bridge code change here.)
+# Signal: the bridge's poll loop rewrites a heartbeat file every iteration
+# (bridge PR #24) — verbosity-independent. The log mtime remains only as a
+# fallback for a bridge that predates the heartbeat; note that log rotation
+# can leave the bridge writing to an unlinked inode, making the visible log's
+# mtime permanently stale, so the heartbeat is the trustworthy signal.
 #
 # Debounced: requires CONSEC consecutive stale observations before acting, so a
 # log-rotation blip or brief quiet never triggers a needless restart. One-shot;
@@ -33,12 +32,26 @@ BRIDGE_HEARTBEAT_FILE="${BRIDGE_HEARTBEAT_PATH:-$HOME/.unitares/discord-bridge.h
 STALE_THRESHOLD_S="${BRIDGE_STALE_THRESHOLD_S:-180}"   # 18x the 10s poll interval
 CONSEC="${BRIDGE_WATCHDOG_CONSEC:-2}"
 STATE_FILE="${BRIDGE_WATCHDOG_STATE:-$HOME/.unitares/bridge-watchdog.state}"
+# Ongoing-wedge state: "<first_confirmed_epoch> <last_alert_epoch>". Repeat
+# criticals for the SAME continuing wedge are rate-limited to one per
+# ALERT_COOLDOWN_S (the 2026-07 wedge posted ~12 identical criticals/day for
+# six days). The per-run log line still records every stale observation.
+WEDGE_STATE_FILE="${BRIDGE_WATCHDOG_WEDGE_STATE:-$HOME/.unitares/bridge-watchdog.wedge}"
+ALERT_COOLDOWN_S="${BRIDGE_WATCHDOG_ALERT_COOLDOWN_S:-21600}"
+RESTART_SETTLE_S="${BRIDGE_RESTART_SETTLE_S:-3}"
 ALERT_LOG="${UNITARES_ALERT_LOG:-/tmp/unitares_alerts.log}"
 SECRETS_FILE="${UNITARES_SECRETS_ENV:-$HOME/.config/cirwel/secrets.env}"
 GOV_API_URL="${UNITARES_GOVERNANCE_HTTP_URL:-http://127.0.0.1:8767}"
 TIMEOUT_S="${HEALTHCHECK_TIMEOUT_S:-5}"
 # Stubbable so tests can assert the restart fires without touching launchd.
 RESTART_CMD="${BRIDGE_RESTART_CMD:-launchctl kickstart -k gui/$(id -u)/$BRIDGE_LABEL}"
+# Stubbable PID probe so tests can simulate restart success/failure.
+PID_CMD="${BRIDGE_PID_CMD:-}"
+
+bridge_pid() {
+  if [ -n "$PID_CMD" ]; then eval "$PID_CMD" 2>/dev/null; return; fi
+  launchctl list 2>/dev/null | awk -v l="$BRIDGE_LABEL" '$3==l && $1 ~ /^[0-9]+$/ {print $1; exit}'
+}
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 now() { date '+%s'; }
@@ -86,6 +99,7 @@ age=$(liveness_age_s)
 if [ "$age" -le "$STALE_THRESHOLD_S" ]; then
   prev=$(read_count)
   write_count 0
+  rm -f "$WEDGE_STATE_FILE" 2>/dev/null || true
   if [ "$prev" -ge "$CONSEC" ]; then
     rec="RECOVERED: Discord bridge is alive again (liveness age ${age}s) after a wedge — #alerts delivery restored"
     alert "$rec"
@@ -105,8 +119,38 @@ fi
 
 # confirmed wedge: restart FIRST so the alert can be delivered, then alert.
 echo "[$(ts)] bridge appears wedged (liveness stale ${age}s, ${n}x) — restarting $BRIDGE_LABEL" >&2
+pid_before="$(bridge_pid)"
 eval "$RESTART_CMD" >/dev/null 2>&1 || true
-msg="Discord bridge wedged — process alive but event loop silent for ${age}s (no governance polling, #alerts delivery dead). Restarted $BRIDGE_LABEL. KeepAlive can't catch a hang; this watchdog did."
+sleep "$RESTART_SETTLE_S"
+pid_after="$(bridge_pid)"
+
+# Say what actually happened. The 2026-07 wedge ran six days with every
+# alert claiming "Restarted" while kickstart silently changed nothing —
+# never report a restart as done without evidence the pid changed.
+if [ -n "$pid_before" ] && [ "$pid_before" = "$pid_after" ]; then
+  restart_desc="restart FAILED — pid $pid_after unchanged after kickstart; MANUAL restart needed: launchctl kickstart -k gui/$(id -u)/$BRIDGE_LABEL"
+elif [ -n "$pid_after" ]; then
+  restart_desc="restarted $BRIDGE_LABEL (pid ${pid_before:-none} -> $pid_after)"
+else
+  restart_desc="restart issued but bridge pid unknown — verify $BRIDGE_LABEL manually"
+fi
+
+now_s=$(now)
+first_confirmed="$now_s"; last_alert=0
+if [ -f "$WEDGE_STATE_FILE" ]; then
+  read -r first_confirmed last_alert < "$WEDGE_STATE_FILE" 2>/dev/null || true
+  case "$first_confirmed" in (*[!0-9]*|"") first_confirmed="$now_s" ;; esac
+  case "$last_alert" in (*[!0-9]*|"") last_alert=0 ;; esac
+fi
+
+msg="Discord bridge wedged — process alive but event loop silent for ${age}s (no governance polling, #alerts delivery dead; wedge first confirmed $(date -r "$first_confirmed" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "epoch $first_confirmed")). ${restart_desc}."
 alert "$msg"
-post_finding "critical" "bridge-liveness-wedge" "$msg"
+if [ $(( now_s - last_alert )) -ge "$ALERT_COOLDOWN_S" ]; then
+  post_finding "critical" "bridge-liveness-wedge" "$msg"
+  last_alert="$now_s"
+else
+  echo "[$(ts)] wedge continues; governance alert suppressed (cooldown $(( ALERT_COOLDOWN_S - (now_s - last_alert) ))s remaining)" >&2
+fi
+mkdir -p "$(dirname "$WEDGE_STATE_FILE")" 2>/dev/null || true
+printf '%s %s' "$first_confirmed" "$last_alert" >"$WEDGE_STATE_FILE" 2>/dev/null || true
 exit 1
