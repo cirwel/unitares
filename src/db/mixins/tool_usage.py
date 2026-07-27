@@ -257,6 +257,71 @@ class ToolUsageMixin:
             except Exception:
                 return None
 
+    async def get_agent_external_calibration(
+        self, agent_id: str, limit: int = 500, claim_window_hours: float = 24.0
+    ) -> Optional[Dict[str, Any]]:
+        """Score the agent's confidence claims against externally-verified outcomes.
+
+        For each of the agent's `verification_source='external_signal'` task/test
+        outcomes, the most recent prior confidence claim from `audit.events`
+        (within ``claim_window_hours``) is the claim being scored — the same
+        per-agent audit-trail source `get_latest_confidence_before` uses, so a
+        claim is never borrowed across agents. Self-reported outcomes are
+        deliberately excluded so the feedback cannot be self-referential.
+
+        Returns aggregate stats plus `n_batches` (distinct sessions) because
+        adjudication batches are not independent samples (unitares#1370), or
+        None when no external outcome has a joinable claim.
+        """
+        async with self.acquire() as conn:
+            try:
+                row = await conn.fetchrow(
+                    """
+                    WITH ext AS (
+                        SELECT o.ts, o.is_bad, o.session_id
+                        FROM audit.outcome_events o
+                        WHERE o.agent_id = $1
+                          AND o.verification_source = 'external_signal'
+                          AND o.outcome_type IN
+                              ('task_completed','task_failed','test_passed','test_failed')
+                        ORDER BY o.ts DESC
+                        LIMIT $2
+                    ),
+                    scored AS (
+                        SELECT ext.is_bad, ext.session_id, c.conf
+                        FROM ext
+                        JOIN LATERAL (
+                            SELECT e.confidence AS conf
+                            FROM audit.events e
+                            WHERE e.agent_id = $1
+                              AND e.confidence IS NOT NULL AND e.confidence > 0
+                              AND e.ts <= ext.ts
+                              AND e.ts > ext.ts - ($3 * interval '1 hour')
+                            ORDER BY e.ts DESC
+                            LIMIT 1
+                        ) c ON true
+                    )
+                    SELECT count(*) AS n,
+                           count(DISTINCT session_id) AS n_batches,
+                           avg(conf) AS mean_claim,
+                           avg(CASE WHEN is_bad THEN 0.0 ELSE 1.0 END) AS success_rate,
+                           avg(power(conf - CASE WHEN is_bad THEN 0.0 ELSE 1.0 END, 2)) AS brier
+                    FROM scored
+                    """,
+                    agent_id, limit, claim_window_hours,
+                )
+                if not row or not row["n"]:
+                    return None
+                return {
+                    "n": int(row["n"]),
+                    "n_batches": int(row["n_batches"] or 0),
+                    "mean_claim": round(float(row["mean_claim"]), 3),
+                    "success_rate": round(float(row["success_rate"]), 3),
+                    "brier": round(float(row["brier"]), 4),
+                }
+            except Exception:
+                return None
+
     async def query_tool_usage(
         self,
         agent_id: Optional[str] = None,
