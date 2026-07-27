@@ -146,6 +146,31 @@ def test_frozen_binding_loss_requires_all_three_signals(doc_mod):
     assert doc_mod.classify(old_redis)[0] == doc_mod.UNKNOWN
 
 
+def test_frozen_with_recent_restart_is_restart_gap_even_over_dns(doc_mod):
+    # Restart-gap takes precedence over the journal classes: boot noise can
+    # match the C2 fingerprint and C2's heal is ANOTHER restart (loop risk).
+    s = signals(
+        doc_mod,
+        central={"status": "active", "last_update": iso(NOW - 4000)},
+        journal="anima: Cannot connect to host x [Name or service not known]",
+        anima_uptime_s=400.0,
+    )
+    cls, evidence = doc_mod.classify(s)
+    assert cls == doc_mod.RESTART_GAP
+    assert cls not in doc_mod.AUTO_HEALABLE
+    assert "NOT healing" in evidence
+
+
+def test_frozen_with_old_service_still_classifies_dns(doc_mod):
+    s = signals(
+        doc_mod,
+        central={"status": "active", "last_update": iso(NOW - 4000)},
+        journal="anima: Cannot connect to host x [Name or service not known]",
+        anima_uptime_s=5000.0,
+    )
+    assert doc_mod.classify(s)[0] == doc_mod.C2_DNS_FREEZE
+
+
 def test_frozen_no_fingerprint_is_unknown_and_mentions_broker(doc_mod):
     s = signals(doc_mod, central={"status": "active", "last_update": iso(NOW - 4000)})
     cls, evidence = doc_mod.classify(s)
@@ -167,6 +192,7 @@ def make_doctor(doc_mod, io_overrides, dry_run=False):
         "pi_diagnostics": lambda: {"governance": {"last_decision_source": "unitares_ex"}},
         "gov_process_start_epoch": lambda: NOW - 86400,
         "pi_journal_tail": lambda: "",
+        "pi_anima_uptime_s": lambda: 999999.0,
         "live_session_row_count": lambda: 1,
         "redis_uptime_s": lambda: 999999,
         "path2_miss_recent": lambda: False,
@@ -265,6 +291,18 @@ def test_alert_cooldown_suppresses_repeat_findings(doc_mod):
     doctor.run_once()
     doctor.run_once()
     assert len(calls["findings"]) == 1
+
+
+def test_restart_gap_escalates_info_and_never_heals(doc_mod):
+    frozen = {"status": "active", "last_update": iso(NOW - 4000)}
+    doctor, calls = make_doctor(doc_mod, {
+        "central_agent": lambda: frozen,
+        "pi_anima_uptime_s": lambda: 400.0,
+        "pi_journal_tail": lambda: "anima: Cannot connect to host x [Name or service not known]",
+    })
+    assert doctor.run_once() == doc_mod.RESTART_GAP
+    assert calls["restart"] == 0 and calls["resume"] == 0
+    assert [sev for sev, _, _ in calls["findings"]] == ["info"]
 
 
 def test_dry_run_diagnoses_but_never_acts(doc_mod):
