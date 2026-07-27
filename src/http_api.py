@@ -2931,6 +2931,14 @@ _SENTINEL_ADJUDICATION_OUTCOME_TYPES = (
 # Mirrors agents/common/resolution_outcome.py semantics: only "fp" is a bad
 # label; the other reasons drop a finding that was still analytically right.
 _ADJUDICATION_DISMISS_REASONS = ("fp", "out_of_scope", "wont_fix", "dup", "unclear", "stale")
+
+# Provenance values the harness outcome endpoint will accept — mirrors the
+# outcome_event schema Literal (src/mcp_handlers/schemas/core.py).
+_HARNESS_OUTCOME_VERIFICATION_SOURCES = frozenset({
+    "agent_reported_tool_result",
+    "server_observation",
+    "external_signal",
+})
 _SENTINEL_SUBSTRATE_LABEL_PREFIX = "com.unitares.sentinel"
 
 
@@ -3135,6 +3143,128 @@ async def http_sentinel_adjudicate(request):
         })
     except Exception as e:
         logger.error(f"Error recording adjudication for {fingerprint}: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+async def http_harness_outcome(request):
+    """POST /v1/harness/outcome {agent_uuid, outcome_type, ...} — operator-gated.
+
+    Sanctioned delivery path for harness-side observers (e.g. the PostToolUse
+    outcome-tracker hook) to record outcomes attributed to a governed agent
+    (#1345). The REST tool-call path deliberately refuses a cross-fingerprint
+    ``client_session_id`` echo (hijack-guard fail-closed, #1325), which
+    orphaned hook delivery; this endpoint accepts explicit attribution under
+    the operator credential instead — the same trust model as
+    /v1/sentinel/adjudicate. Attribution is operator-asserted: the server
+    records the row against ``agent_uuid`` as given and does not attempt
+    session resolution, so the caller owns pointing at the right identity.
+    """
+    signals = _build_http_session_signals(request)
+    from src.mcp_handlers.identity.operator import is_operator_caller
+    if not is_operator_caller(signals):
+        return JSONResponse(
+            {"success": False,
+             "error": "operator credential required (X-Unitares-Operator header)"},
+            status_code=403,
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"success": False, "error": "invalid JSON body"}, status_code=400)
+
+    import uuid as _uuid_mod
+
+    from src.mcp_handlers.observability.outcome_events import VALID_OUTCOME_TYPES
+
+    agent_uuid = str(body.get("agent_uuid") or "").strip()
+    outcome_type = str(body.get("outcome_type") or "").strip()
+    if not agent_uuid:
+        return JSONResponse({"success": False, "error": "agent_uuid required"}, status_code=400)
+    try:
+        _uuid_mod.UUID(agent_uuid)
+    except ValueError:
+        return JSONResponse(
+            {"success": False, "error": "agent_uuid must be a UUID"}, status_code=400
+        )
+    if outcome_type not in VALID_OUTCOME_TYPES:
+        return JSONResponse(
+            {"success": False,
+             "error": f"outcome_type must be one of {sorted(VALID_OUTCOME_TYPES)}"},
+            status_code=400,
+        )
+
+    verification_source = str(
+        body.get("verification_source") or "agent_reported_tool_result"
+    ).strip()
+    if verification_source not in _HARNESS_OUTCOME_VERIFICATION_SOURCES:
+        return JSONResponse(
+            {"success": False,
+             "error": "verification_source must be one of "
+                      f"{sorted(_HARNESS_OUTCOME_VERIFICATION_SOURCES)}"},
+            status_code=400,
+        )
+
+    detail = body.get("detail") or {}
+    if not isinstance(detail, dict):
+        return JSONResponse(
+            {"success": False, "error": "detail must be an object"}, status_code=400
+        )
+    detail = dict(detail)
+    detail["recorded_via"] = "harness_outcome_endpoint"
+
+    args: dict = {
+        "agent_id": agent_uuid,
+        "outcome_type": outcome_type,
+        "verification_source": verification_source,
+        "detail": detail,
+    }
+
+    confidence = body.get("confidence")
+    if confidence is not None:
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            return JSONResponse(
+                {"success": False, "error": "confidence must be a number"}, status_code=400
+            )
+        if not 0.0 <= confidence <= 1.0:
+            return JSONResponse(
+                {"success": False, "error": "confidence must be in [0, 1]"}, status_code=400
+            )
+        args["confidence"] = confidence
+
+    if body.get("is_bad") is not None:
+        args["is_bad"] = bool(body["is_bad"])
+    if body.get("outcome_score") is not None:
+        try:
+            args["outcome_score"] = float(body["outcome_score"])
+        except (TypeError, ValueError):
+            return JSONResponse(
+                {"success": False, "error": "outcome_score must be a number"}, status_code=400
+            )
+    session_id = str(body.get("session_id") or "").strip()
+    if session_id:
+        args["session_id"] = session_id
+
+    try:
+        from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+        payload = await _record_outcome_event_inline(args)
+        if "error" in payload:
+            return JSONResponse(
+                {"success": False, "error": payload["error"]}, status_code=500
+            )
+        return JSONResponse({
+            "success": True,
+            "outcome_id": payload.get("outcome_id"),
+            "outcome_type": outcome_type,
+            "agent_uuid": agent_uuid,
+            "is_bad": payload.get("is_bad"),
+            "corroboration_grade": payload.get("corroboration_grade"),
+            "evidence_weight": payload.get("evidence_weight"),
+            "agent_state_found": payload.get("eisv_snapshot") is not None,
+        })
+    except Exception as e:
+        logger.error(f"Error recording harness outcome for {agent_uuid}: {e}")
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
@@ -3975,6 +4105,7 @@ def register_http_routes(
     app.routes.append(Route("/v1/sentinel/backlog", http_sentinel_backlog, methods=["GET"]))
     app.routes.append(Route("/v1/sentinel/adjudication-queue", http_sentinel_adjudication_queue, methods=["GET"]))
     app.routes.append(Route("/v1/sentinel/adjudicate", http_sentinel_adjudicate, methods=["POST"]))
+    app.routes.append(Route("/v1/harness/outcome", http_harness_outcome, methods=["POST"]))
     app.routes.append(Route("/v1/metrics", http_post_metric, methods=["POST"]))
     app.routes.append(Route("/v1/metrics/series", http_get_metrics, methods=["GET"]))
     app.routes.append(Route("/v1/metrics/catalog", http_get_metrics_catalog, methods=["GET"]))
