@@ -73,3 +73,38 @@ class TestPerChannelTacticalStats:
         checker = CalibrationChecker(state_file=state_file)
         per_channel = checker.compute_tactical_metrics_per_channel()
         assert per_channel == {}
+
+
+class TestAggregateGate:
+    """#1321 semantics unification: the aggregate tactical bins are reserved
+    for hard-exogenous outcome-graded rows; self-relative feeders opt out."""
+
+    def test_include_in_aggregate_false_routes_channel_only(self, checker):
+        checker.record_tactical_decision(
+            confidence=0.8, decision="proceed", immediate_outcome=True,
+            signal_source="trajectory", include_in_aggregate=False,
+        )
+        assert sum(s["count"] for s in checker.tactical_bin_stats.values()) == 0
+        channel = checker.tactical_bin_stats_by_channel["trajectory"]
+        assert any(s["count"] == 1 for s in channel.values())
+
+    def test_channel_row_still_scores_prediction_fields(self, checker):
+        checker.record_tactical_decision(
+            confidence=0.8, decision="proceed", immediate_outcome=True,
+            signal_source="trajectory", include_in_aggregate=False,
+        )
+        # 0.8 lands in the half-open 0.8-0.9 bin (bin_min <= c < bin_max)
+        stats = checker.tactical_bin_stats_by_channel["trajectory"]["0.8-0.9"]
+        assert stats["predicted_correct"] == 1
+        assert stats["actual_correct"] == 1
+
+    def test_default_include_in_aggregate_preserves_existing_behavior(self, checker):
+        checker.record_tactical_decision(
+            confidence=0.8, decision="proceed", immediate_outcome=True,
+            signal_source="tests",
+        )
+        assert sum(s["count"] for s in checker.tactical_bin_stats.values()) == 1
+        assert any(
+            s["count"] == 1
+            for s in checker.tactical_bin_stats_by_channel["tests"].values()
+        )
