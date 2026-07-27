@@ -115,6 +115,11 @@ class TestTacticalDecisionRecording:
         assert call.kwargs["confidence"] == 0.8
         assert call.kwargs["decision"] == "proceed"
         assert call.kwargs["immediate_outcome"] is True
+        # #1321 unification: trajectory quality is self-relative, not an
+        # outcome grade — it must ride its own channel and stay out of the
+        # aggregate tactical bins.
+        assert call.kwargs["signal_source"] == "trajectory"
+        assert call.kwargs["include_in_aggregate"] is False
 
     def test_small_delta_no_tactical_recording(self):
         import time

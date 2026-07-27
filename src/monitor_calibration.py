@@ -49,10 +49,19 @@ def run_calibration_recording(monitor, confidence: float, decision: Dict, drift_
 
         if (monitor._prev_verdict_action in ('proceed', 'pause')
                 and abs(improvement) > 0.03):
+            # Self-relative signal (drift-norm improvement, not an outcome
+            # grade) — route to its own channel and keep it OUT of the
+            # aggregate tactical bins, which are reserved for hard-exogenous
+            # outcome-graded rows (#1321 semantics unification). Mixing a
+            # trajectory-quality heuristic into the same bins as test/task
+            # pass-fail re-creates the category error the removed tool-success
+            # feeder had, in miniature.
             calibration_checker.record_tactical_decision(
                 confidence=monitor._prev_confidence,
                 decision=monitor._prev_verdict_action,
                 immediate_outcome=(trajectory_quality > 0.5),
+                signal_source='trajectory',
+                include_in_aggregate=False,
             )
 
         trajectory_validation = {

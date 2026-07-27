@@ -106,6 +106,10 @@ class CalibrationChecker:
         self._backend = os.getenv("UNITARES_CALIBRATION_BACKEND", "postgres").strip().lower()
         self._pg_db = None  # PostgreSQL backend (lazy init)
         self._last_json_write = 0.0  # monotonic timestamp of last JSON snapshot write
+        # Single-flight PG writer state (#1375): mutations mark dirty, one
+        # drain task snapshots at write time so saves can't land out of order.
+        self._save_dirty = False
+        self._pg_writer_running = False
 
         # Resolve backend: postgres is default, json is fallback
         if self._backend not in ("json", "postgres"):
@@ -142,10 +146,11 @@ class CalibrationChecker:
             loop = asyncio.get_running_loop()
             # We're inside an async context — schedule as a task
             loop.create_task(async_fn(*args, **kwargs))
+            return True
         except RuntimeError:
             # No running loop (shouldn't happen in normal MCP flow, but safe fallback).
             # Use a dedicated connection instead of the shared pool.
-            pass  # Skip DB save — JSON snapshot (below in save_state) is the fallback
+            return False  # Skip DB save — JSON snapshot (below in save_state) is the fallback
     
     def reset(self):
         """Reset calibration statistics"""
@@ -246,7 +251,8 @@ class CalibrationChecker:
     
     def record_tactical_decision(self, confidence: float, decision: str,
                                   immediate_outcome: bool,
-                                  signal_source: Optional[str] = None):
+                                  signal_source: Optional[str] = None,
+                                  include_in_aggregate: bool = True):
         """
         Record a decision for TACTICAL calibration (per-decision, no retroactive).
 
@@ -260,8 +266,17 @@ class CalibrationChecker:
                               (not trajectory outcomes - that's strategic calibration)
             signal_source: Optional channel name (e.g. "tests", "tasks"). When provided,
                            the row is also recorded in tactical_bin_stats_by_channel for
-                           per-channel reliability breakdown. Aggregate stats above are
-                           populated regardless.
+                           per-channel reliability breakdown.
+            include_in_aggregate: Whether the row also trains the aggregate
+                           tactical_bin_stats. The aggregate is reserved for
+                           hard-exogenous outcome-graded rows (test_*/task_*
+                           via outcome_events); self-relative feeders — the
+                           trajectory drift-improvement signal — must pass
+                           False plus their own signal_source so the channels
+                           stay semantically pure (#1321: mixing a self-relative
+                           quality signal into the same bins as pass/fail
+                           outcomes is the same category error, in miniature,
+                           as the removed tool-success feeder).
 
         Example:
             - Decision "proceed" is tactically correct if agent could proceed without immediate issues
@@ -287,21 +302,21 @@ class CalibrationChecker:
                 'confidence_sum': 0.0
             })
 
-        stats = self.tactical_bin_stats[bin_key]
-        stats['count'] += 1
-        stats['confidence_sum'] += confidence
-
         # FIXED: predicted_correct is based on confidence, not decision
         # High confidence (>=0.5) = we predicted correct
         # Low confidence (<0.5) = we predicted incorrect
         # This measures calibration: "When I said I was X% confident, was I right?"
         predicted_correct = confidence >= 0.5
-        if predicted_correct:
-            stats['predicted_correct'] += 1
 
-        # Tactical correctness is fixed at decision time - no retroactive updates!
-        if immediate_outcome:
-            stats['actual_correct'] += 1
+        if include_in_aggregate:
+            stats = self.tactical_bin_stats[bin_key]
+            stats['count'] += 1
+            stats['confidence_sum'] += confidence
+            if predicted_correct:
+                stats['predicted_correct'] += 1
+            # Tactical correctness is fixed at decision time - no retroactive updates!
+            if immediate_outcome:
+                stats['actual_correct'] += 1
 
         # Per-channel routing (additive — aggregate above is unchanged).
         if signal_source:
@@ -944,31 +959,57 @@ class CalibrationChecker:
         # Save state after update
         self.save_state()
     
+    def _snapshot_state(self) -> dict:
+        """Build a JSON-serializable snapshot of the current bin structures.
+
+        Must stay synchronous (no awaits) so a snapshot taken inside the PG
+        writer task is atomic with respect to other event-loop tasks.
+        """
+        # Convert defaultdict to regular dict for JSON serialization
+        return {
+            'bins': {k: dict(v) for k, v in self.bin_stats.items()},
+            'complexity_bins': {k: dict(v) for k, v in self.complexity_stats.items()},
+            # Tactical calibration (per-decision, no retroactive marking)
+            'tactical_bins': {k: dict(v) for k, v in self.tactical_bin_stats.items()} if hasattr(self, 'tactical_bin_stats') else {},
+            # Per-channel breakdown (additive — older readers ignore unknown keys)
+            'tactical_bins_by_channel': {
+                channel: {k: dict(v) for k, v in bins.items()}
+                for channel, bins in self.tactical_bin_stats_by_channel.items()
+            } if hasattr(self, 'tactical_bin_stats_by_channel') else {},
+        }
+
     def save_state(self):
         """Save calibration state to file"""
         try:
-            # Convert defaultdict to regular dict for JSON serialization
-            state_data = {
-                'bins': {k: dict(v) for k, v in self.bin_stats.items()},
-                'complexity_bins': {k: dict(v) for k, v in self.complexity_stats.items()},
-                # NEW: Tactical calibration (per-decision, no retroactive marking)
-                'tactical_bins': {k: dict(v) for k, v in self.tactical_bin_stats.items()} if hasattr(self, 'tactical_bin_stats') else {},
-                # Per-channel breakdown (additive — older readers ignore unknown keys)
-                'tactical_bins_by_channel': {
-                    channel: {k: dict(v) for k, v in bins.items()}
-                    for channel, bins in self.tactical_bin_stats_by_channel.items()
-                } if hasattr(self, 'tactical_bin_stats_by_channel') else {},
-            }
-
-            # PostgreSQL backend
+            # PostgreSQL backend: single-flight writer with coalescing (#1375).
+            # The previous per-call create_task captured a snapshot at SCHEDULE
+            # time with no ordering guarantee — two saves microseconds apart
+            # could land out of order and persist the older snapshot (observed
+            # live 2026-07-26: a tactical-bin update vanished from the blob
+            # until the next save re-persisted it). Now each mutation marks
+            # dirty and one drain task snapshots at WRITE time, so the persisted
+            # blob can only move forward.
             if self._backend == "postgres":
-                async def _save(data):
-                    from src.db import get_db
-                    db = get_db()
-                    # Note: do NOT call db.close() here — this is the shared singleton pool.
-                    # Closing it breaks all other concurrent users.
-                    return await db.update_calibration(data)
-                self._run_async(_save, state_data)
+                self._save_dirty = True
+                if not self._pg_writer_running:
+                    async def _drain():
+                        try:
+                            from src.db import get_db
+                            db = get_db()
+                            # Note: do NOT call db.close() here — this is the
+                            # shared singleton pool. Closing it breaks all
+                            # other concurrent users.
+                            while self._save_dirty:
+                                self._save_dirty = False
+                                try:
+                                    await db.update_calibration(self._snapshot_state())
+                                except Exception as e_pg:
+                                    print(f"Warning: calibration PG save failed: {e_pg}", file=sys.stderr)
+                                    break
+                        finally:
+                            self._pg_writer_running = False
+                    if self._run_async(_drain):
+                        self._pg_writer_running = True
 
             # Write JSON snapshot as write-through cache.
             # When postgres is the backend, debounce to <=1 write per 10s (JSON is
@@ -978,7 +1019,7 @@ class CalibrationChecker:
                 try:
                     self.state_file.parent.mkdir(parents=True, exist_ok=True)
                     with open(self.state_file, 'w') as f:
-                        json.dump(state_data, f, indent=2)
+                        json.dump(self._snapshot_state(), f, indent=2)
                     self._last_json_write = now
                 except Exception as e_json:
                     print(f"Warning: Failed to write calibration JSON snapshot: {e_json}", file=sys.stderr)
