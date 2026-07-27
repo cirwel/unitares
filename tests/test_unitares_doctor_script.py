@@ -615,3 +615,120 @@ def test_check_class_anchors_fresh_runs_and_classifies(doctor):
 def test_class_anchors_fresh_is_registered(doctor):
     names = {c.name for c in doctor.build_checks(REPO_ROOT, "postgresql://x/y")}
     assert "class_anchors_fresh" in names
+
+
+# --- telemetry-liveness checks ---------------------------------------------
+
+
+def _psql_proc(stdout: str):
+    class Proc:
+        returncode = 0
+        stderr = ""
+
+    Proc.stdout = stdout
+    return Proc()
+
+
+def _mock_psql(doctor, monkeypatch, stdout: str):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run",
+                        lambda *a, **k: _psql_proc(stdout))
+
+
+def test_failure_label_live_warns_on_flatline(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, "500000|0\n")
+    result = doctor.check_failure_label_live("postgresql://x/y")
+    assert result.status == doctor.Status.WARN
+    assert "hardcoded-true" in result.message
+
+
+def test_failure_label_live_passes_with_failures(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, "461512|146\n")
+    result = doctor.check_failure_label_live("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+
+
+def test_failure_label_live_skips_low_volume_flatline(doctor, monkeypatch):
+    # A quiet install with 200 calls and 0 failures is not evidence of a dead
+    # classifier — only flatline-at-volume warns.
+    _mock_psql(doctor, monkeypatch, "200|0\n")
+    result = doctor.check_failure_label_live("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+
+
+def test_failure_label_live_skips_fresh_install(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, "0|0\n")
+    result = doctor.check_failure_label_live("postgresql://x/y")
+    assert result.status == doctor.Status.SKIP
+
+
+def test_checkin_stream_live_warns_when_dark(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, "0|4200\n")
+    result = doctor.check_checkin_stream_live("postgresql://x/y")
+    assert result.status == doctor.Status.WARN
+    assert "governance-dark" in result.message
+
+
+def test_checkin_stream_live_passes_when_flowing(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, "239|4200\n")
+    result = doctor.check_checkin_stream_live("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+
+
+def test_checkin_stream_live_skips_without_history(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, "0|0\n")
+    result = doctor.check_checkin_stream_live("postgresql://x/y")
+    assert result.status == doctor.Status.SKIP
+
+
+def test_grounding_stage_live_warns_when_silent(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, "0|3144\n")
+    result = doctor.check_grounding_stage_live("postgresql://x/y")
+    assert result.status == doctor.Status.WARN
+    assert "silent" in result.message
+
+
+def test_grounding_stage_live_skips_when_shadow_off(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, "0|0\n")
+    result = doctor.check_grounding_stage_live("postgresql://x/y")
+    assert result.status == doctor.Status.SKIP
+
+
+def test_grounding_stage_live_passes_when_flowing(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, "450|3144\n")
+    result = doctor.check_grounding_stage_live("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+
+
+def test_label_join_overlap_warns_on_disjoint_populations(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, "26|126|0\n")
+    result = doctor.check_label_join_overlap("postgresql://x/y")
+    assert result.status == doctor.Status.WARN
+    assert "disjoint" in result.message
+
+
+def test_label_join_overlap_passes_on_any_overlap(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, "26|126|2\n")
+    result = doctor.check_label_join_overlap("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+
+
+def test_label_join_overlap_skips_when_one_side_empty(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, "0|126|0\n")
+    result = doctor.check_label_join_overlap("postgresql://x/y")
+    assert result.status == doctor.Status.SKIP
+
+
+def test_telemetry_checks_skip_without_psql(doctor, monkeypatch):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+    for fn in (doctor.check_failure_label_live, doctor.check_checkin_stream_live,
+               doctor.check_grounding_stage_live, doctor.check_label_join_overlap):
+        assert fn("postgresql://x/y").status == doctor.Status.SKIP
+
+
+def test_telemetry_checks_are_registered_as_operator(doctor):
+    checks = {c.name: c for c in doctor.build_checks(REPO_ROOT, "postgresql://x/y")}
+    for name in ("failure_label_live", "checkin_stream_live",
+                 "grounding_stage_live", "label_join_overlap"):
+        assert name in checks
+        assert checks[name].mode == "operator"
