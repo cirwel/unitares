@@ -237,6 +237,56 @@ def enrich_calibration_feedback(ctx: UpdateContext) -> None:
     except Exception as e:
         logger.debug(f"Could not generate calibration feedback: {e}")
 
+@enrichment(order=55)
+async def enrich_external_grounding(ctx: UpdateContext) -> None:
+    """Score the agent's confidence claims against externally-verified outcomes.
+
+    The one piece of self-knowledge an agent cannot derive from its own
+    context: whether its claims actually verify. Scores only
+    external_signal outcomes (never self-reported ones) against the agent's
+    own prior audit-trail confidence claims, and self-discloses
+    insufficiency below the sample floor instead of going silent — the
+    floor counts distinct sessions, not rows, because adjudication batches
+    are not independent samples (unitares#1370).
+    """
+    MIN_N = 10
+    MIN_BATCHES = 3
+    try:
+        if not ctx.agent_id:
+            return
+        from src.db import get_db
+        stats = await get_db().get_agent_external_calibration(ctx.agent_id)
+        if stats is None:
+            return  # nothing accrued — stay silent rather than report noise
+
+        block: dict[str, Any] = dict(stats)
+        if stats["n"] < MIN_N or stats["n_batches"] < MIN_BATCHES:
+            block["status"] = "accruing"
+            block["message"] = (
+                f"External grounding accruing: {stats['n']} externally-verified "
+                f"outcome(s) across {stats['n_batches']} session(s) scoreable "
+                f"against your confidence claims (floor: {MIN_N} outcomes / "
+                f"{MIN_BATCHES} sessions). No calibration verdict yet."
+            )
+        else:
+            gap = stats["mean_claim"] - stats["success_rate"]
+            block["status"] = "grounded"
+            block["claim_gap"] = round(gap, 3)
+            direction = "over-claiming" if gap > 0.1 else (
+                "under-claiming" if gap < -0.1 else "well-calibrated")
+            block["message"] = (
+                f"Across {stats['n']} externally-verified outcomes "
+                f"({stats['n_batches']} sessions): mean claimed confidence "
+                f"{stats['mean_claim']:.2f} vs verified success rate "
+                f"{stats['success_rate']:.2f} — {direction}. "
+                f"Brier {stats['brier']:.3f}."
+            )
+        feedback = ctx.response_data.setdefault('calibration_feedback', {})
+        feedback['external_grounding'] = block
+    except Exception as e:
+        logger.debug(f"Could not compute external grounding: {e}")
+
+
 # ─── Warnings & Loop Detection ─────────────────────────────────────────
 
 @enrichment(order=60)
