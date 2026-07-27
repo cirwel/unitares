@@ -317,6 +317,76 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       refute row_text =~ "SECRET-s8-grant-payload"
       refute row_text =~ "effect_grant"
     end
+
+    test "a governance_blocked row does NOT poison its idempotency key — the retry re-runs the veto" do
+      key = tracked_key()
+      set_execute_flag(true, "http://127.0.0.1:8789", "http://127.0.0.1:1")
+
+      body =
+        base(%{
+          "idempotency_key" => key,
+          "custody_mode" => "execute",
+          "effect_type" => "agent_spawn",
+          "proposer" => %{"agent_uuid" => "00000000-0000-0000-0000-0000000000aa"},
+          "payload" => %{"cmd" => "echo", "args" => ["hi"]}
+        })
+
+      assert {:error, :governance_blocked} = GovernedEffect.handle(body)
+
+      # The retry must NOT be answered as an idempotent replay of the refusal
+      # ({:ok, %{idempotent: true, agent_id: nil}} would read as success to a
+      # producer and evaluate the veto exactly once per key, forever). It must
+      # go back through the veto — here still unreachable, so blocked again,
+      # with a SECOND durable row.
+      assert {:error, :governance_blocked} = GovernedEffect.handle(body)
+      assert [_first, _second] = execute_rows(key)
+    end
+
+    test "a non-committed prior row with a different digest is not an idempotency_conflict" do
+      key = tracked_key()
+      set_execute_flag(true, "http://127.0.0.1:8789", "http://127.0.0.1:1")
+
+      blocked = fn payload ->
+        GovernedEffect.handle(
+          base(%{
+            "idempotency_key" => key,
+            "custody_mode" => "execute",
+            "effect_type" => "agent_spawn",
+            "proposer" => %{"agent_uuid" => "00000000-0000-0000-0000-0000000000aa"},
+            "payload" => payload
+          })
+        )
+      end
+
+      assert {:error, :governance_blocked} = blocked.(%{"cmd" => "echo", "args" => ["a"]})
+      # Different payload → different digest against a mere refusal: this is a
+      # fresh proposal, not a conflicting claim on a committed irreversible
+      # spawn — it must reach the veto, not 409.
+      assert {:error, :governance_blocked} = blocked.(%{"cmd" => "echo", "args" => ["b"]})
+    end
+
+    test "orchestrator_spec forwards cd when the payload names one, omits it otherwise" do
+      env = %{
+        payload: %{
+          "cmd" => "python3",
+          "args" => ["-m", "agents.dialectic_reviewer"],
+          "env" => %{"A" => "1"},
+          "cd" => "/tmp/repo-root"
+        },
+        proposer_agent_uuid: "00000000-0000-0000-0000-0000000000aa"
+      }
+
+      spec = GovernedEffect.orchestrator_spec(env)
+      assert spec["cd"] == "/tmp/repo-root"
+      assert spec["cmd"] == "python3"
+      assert spec["lineage"]["parent_agent_uuid"] == "00000000-0000-0000-0000-0000000000aa"
+
+      no_cd = GovernedEffect.orchestrator_spec(%{env | payload: Map.delete(env.payload, "cd")})
+      refute Map.has_key?(no_cd, "cd")
+
+      blank_cd = GovernedEffect.orchestrator_spec(%{env | payload: %{env.payload | "cd" => ""}})
+      refute Map.has_key?(blank_cd, "cd")
+    end
   end
 
   describe "§7 GovernanceVetoClient body forwarding" do
