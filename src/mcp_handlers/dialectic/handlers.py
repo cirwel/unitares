@@ -388,6 +388,7 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     paused_agent_id = session_data.get("paused_agent_id")
     reviewer_agent_id = session_data.get("reviewer_agent_id") or session_data.get("reviewer")
     phase = str(session_data.get("phase") or "").lower()
+    session_id = session_data.get("session_id") or "<session_id>"
 
     try:
         from ..context import get_context_agent_id
@@ -462,7 +463,54 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     else:
         current_agent_can_submit = current_agent_id in allowed_agent_ids
 
+    # Plain-language "whose move is it" — the protocol fields above are
+    # accurate but easy to misread as a hang (a live session waiting on the
+    # CALLER's synthesis was read as "stalled" by two experienced operators,
+    # 2026-07-28). whose_move answers from the caller's seat; next_call is a
+    # ready-to-use template when the move is theirs.
+    whose_move = "nobody — session is terminal"
+    next_call: Optional[str] = None
+    if phase == "thesis":
+        if current_agent_role == "paused_agent":
+            whose_move = "YOURS — your thesis is owed"
+            next_call = (
+                f"dialectic(action='thesis', session_id='{session_id}', "
+                "root_cause='...', reasoning='...', proposed_conditions=[...])"
+            )
+        else:
+            whose_move = "the paused agent's — their thesis is owed"
+    elif phase == "antithesis":
+        if reviewer_agent_id is None:
+            if current_agent_role == "paused_agent":
+                whose_move = "a reviewer's — the slot is open; wait or ask for facilitation"
+            else:
+                whose_move = "a reviewer's — the slot is OPEN, you may claim it"
+                next_call = (
+                    f"dialectic(action='antithesis', session_id='{session_id}', "
+                    "reasoning='...', concerns=[...])"
+                )
+        elif current_agent_role == "reviewer":
+            whose_move = "YOURS — your antithesis is owed"
+            next_call = (
+                f"dialectic(action='antithesis', session_id='{session_id}', "
+                "reasoning='...', concerns=[...])"
+            )
+        else:
+            whose_move = "the reviewer's — their antithesis is owed"
+    elif phase == "synthesis":
+        if current_agent_role in {"paused_agent", "reviewer"}:
+            whose_move = "YOURS — a converging synthesis is owed (negotiate until agreement)"
+            next_call = (
+                f"dialectic(action='synthesis', session_id='{session_id}', "
+                "agrees=true/false, root_cause='...', reasoning='...', "
+                "proposed_conditions=[...])"
+            )
+        else:
+            whose_move = "the participants' — they negotiate synthesis until convergence"
+
     return {
+        "whose_move": whose_move,
+        "next_call": next_call,
         "paused_agent_label": _agent_label(paused_agent_id),
         "reviewer_label": _agent_label(reviewer_agent_id),
         "reviewer_status": _agent_status(reviewer_agent_id),
@@ -855,6 +903,51 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
         note = "Session created with self-review. Use submit_thesis to add your thesis."
     else:
         note = "Session created. Awaiting reviewer assignment. Operator should assign a reviewer, then paused agent submits thesis."
+
+    # One-call review (adoption UX): when the request already carries the
+    # thesis content, submit it in the same call — the caller gets a review
+    # verdict (or a dispatched reviewer) from a single request_review()
+    # instead of having to learn the request→thesis protocol and its
+    # pause-recovery vocabulary. The two-call flow is unchanged when the
+    # thesis fields are absent.
+    if arguments.get("reasoning") or arguments.get("root_cause"):
+        thesis_args: Dict[str, Any] = {
+            "session_id": session.session_id,
+            "root_cause": arguments.get("root_cause")
+            or arguments.get("issue_description")
+            or reason,
+            "reasoning": arguments.get("reasoning") or "",
+            "proposed_conditions": arguments.get("proposed_conditions") or [],
+        }
+        for key in ("agent_id", "client_session_id", "api_key"):
+            if key in arguments:
+                thesis_args[key] = arguments[key]
+        thesis_result = await handle_submit_thesis(thesis_args)
+        try:
+            payload = json.loads(thesis_result[0].text)
+        except Exception:
+            # Un-parseable thesis response — return it untouched rather than
+            # dropping information; the session exists and the thesis call's
+            # own error/recovery text stands.
+            return thesis_result
+        payload.setdefault("session_id", session.session_id)
+        payload["one_call_review"] = True
+        resolution = payload.get("resolution") or {}
+        if payload.get("phase") == "resolved" or resolution:
+            payload["review_verdict"] = resolution.get("action") or "resolved"
+            payload["whose_move"] = "nobody — review resolved in this call"
+        elif payload.get("reviewer_dispatch"):
+            payload["whose_move"] = (
+                "the reviewer's — an independent reviewer was spawned; poll "
+                f"dialectic(action='get', session_id='{session.session_id}') "
+                "for its antithesis/synthesis"
+            )
+        else:
+            payload["whose_move"] = (
+                "a reviewer's — thesis recorded, awaiting a reviewer to claim "
+                "the open slot"
+            )
+        return success_response(payload)
 
     return success_response({
         "success": True,
