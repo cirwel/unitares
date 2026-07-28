@@ -2347,6 +2347,23 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             user_agent=signals.user_agent if signals else None,
             if_absent=arguments.get("spawn_reason") in SUBAGENT_PIN_NX_SPAWN_REASONS,
         )
+        # Longer-lived recovery anchor alongside the pin. The pin's 30-minute
+        # TTL is a routing hint scoped to a recent onboard; when it lapses,
+        # session-key derivation rotates and dispatch used to mint a phantom
+        # UUID. The anchor is read ONLY at that pre-mint moment. A subagent
+        # that must not displace the driver's pin must not displace its anchor
+        # either, so the NX decision is shared.
+        if arguments.get("spawn_reason") not in SUBAGENT_PIN_NX_SPAWN_REASONS:
+            from .session import set_identity_anchor
+            await set_identity_anchor(
+                base_fp,
+                agent_uuid,
+                stable_session_id,
+                client_session_id=stable_session_id,
+                client_hint=client_hint,
+                model_type=model_type,
+                user_agent=signals.user_agent if signals else None,
+            )
     except Exception as e:
         logger.warning(f"[ONBOARD_PIN] Could not set pin: {e}")
 

@@ -349,6 +349,53 @@ properties, not surprises:
   separate, evidence-driven question for that rollout boundary, not
   one this document resolves.
 
+### Pre-mint recovery: preferring a stale resume over a fresh fork
+
+The pin above decays on a 30-minute TTL. When it lapses,
+`derive_session_key` drops from `pinned_onboard_session` to the bare
+`ip_ua_fingerprint` tail, the derived key rotates, PATH 1/2 miss, and the
+dispatch middleware used to retry with
+`force_new=True, spawn_reason="dispatch_auto_mint"` — a fresh UUID for an
+agent that never went anywhere. The identity had not changed; only the key
+had. Consequences were exactly the fragmentation this document exists to
+prevent: EISV trajectories restarting, KG entries from one agent reading as
+strangers', and (2026-07-01, outcome `524032fd`) a `record_result` write
+landing on a phantom UUID with `success: true`.
+
+`recover_identity_before_mint` (`src/mcp_handlers/identity/resolution.py`)
+is the last stop before `uuid.uuid4()`. It consults the two
+fingerprint-anchored records that survive a key rotation — the live onboard
+pin's `agent_uuid`, then an `identity_anchor:<fp>` record written on a
+genuine resume with a TTL that deliberately outlives the pin's — and
+adopts one instead of minting.
+
+By this document's taxonomy the anchor is **performative for exactly the
+same reason the pin is**, and inherits the pin's decay conditions verbatim
+(it reuses `_build_pin_fingerprint_candidates`, so client/model scoping and
+the co-residency collision are identical). Four constraints keep it from
+being worse than the bug it fixes:
+
+- **Only resumed identities are anchored, never mints.** Anchoring a
+  `dispatch_auto_mint` UUID would make a phantom *sticky*.
+- **Adoption is verified, not asserted.** The candidate must exist in
+  PostgreSQL, be `active`, and clear the substrate-over-HTTP gate (#802) —
+  this rung must not become the one path that hands out a resident's UUID
+  over HTTP.
+- **A refused resume is not a missing one.** Recovery runs on
+  `session_resolve_miss` only. A resume that a hijack guard rejected
+  (`resume_rejected_hijack_guard`, #1319) stays rejected; recovering there
+  would hand the guard a fingerprint-shaped bypass.
+- **It narrows minting, it does not abolish it.** With nothing recoverable,
+  a fresh mint is the honest answer — and is now logged at WARNING
+  (`[MID_SESSION_MINT]`) plus audited, because the 2026-07-01 incident was
+  invisible precisely because that mint was silent.
+
+A recovered call re-threads the `client_session_id` the identity was
+onboarded under, marked transport-injected: recovery is server inference and
+must not launder into `caller_asserted` proof for the strict write gate.
+`UNITARES_IDENTITY_ANCHOR_RECOVERY=0` restores the old mint-on-miss
+behavior; `UNITARES_IDENTITY_ANCHOR_TTL` tunes the anchor lifetime.
+
 ## Open questions
 
 - **Trajectory portability.** When a prior process-instance's trajectory informs a successor's priors, is the successor inheriting identity or inheriting data? Answer probably depends on whether the successor *integrates* the prior's trajectory (identity-adjacent, per axiom #12) or merely *reads* it (data-only).
