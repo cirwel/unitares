@@ -4,7 +4,7 @@ description: >
   Use when setting up or operating the UNITARES Discord bridge — a standalone bot that
   surfaces governance events, agent presence, Lumen's state, and autonomous governance
   actions as a living Discord server.
-last_verified: "2026-06-27"
+last_verified: "2026-07-28"
 freshness_days: 14
 source_files:
   - unitares-discord-bridge/src/bridge/bot.py
@@ -85,5 +85,6 @@ Key design decisions:
 - **Read-heavy, write-light**: The bridge reads governance state frequently but writes back rarely (only autonomous actions).
 - **SQLite cursor-based delivery**: Tracks what has been sent to Discord to avoid duplicate messages. Uses cursors per channel per event type.
 - **Rate-limited message queue**: Messages are queued and sent with 150ms spacing to respect Discord rate limits.
-- **Stateless restarts**: The bridge can restart cleanly — cursor tracking means it picks up where it left off without replaying history.
+- **Stateless restarts**: The bridge can restart cleanly — cursor tracking means it picks up where it left off without replaying history. On a failed event fetch (`fetch_events` returns `None` on error), the poller never resets its cursor — it waits for the next poll, so governance stalls cannot trigger a feed replay to Discord.
+- **Liveness heartbeat + external watchdog**: The event loop rewrites a heartbeat file (`BRIDGE_HEARTBEAT_PATH`, default `~/.unitares/discord-bridge.heartbeat`) each poll iteration. The `com.unitares.bridge-liveness-watchdog` LaunchAgent (unitares repo, `scripts/ops/`) uses it to detect a wedged loop — process alive but loop hung — and restarts the bridge, which launchd `KeepAlive` alone cannot catch.
 - **Governed identity**: On startup the bridge best-effort mints its own UNITARES identity so polling traffic can be attributed when governance is available.
