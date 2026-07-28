@@ -8,7 +8,7 @@
 # - requests (only used by integration tests)
 
 # Core MCP SDK
-mcp>=1.26.0,<2.0.0
+mcp>=1.26.0,<3.0.0
 
 # Governance system core math (governance_core/ is in-repo, pure Python)
 numpy>=1.24.0,<3.0.0
