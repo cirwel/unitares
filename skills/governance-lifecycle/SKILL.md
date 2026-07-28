@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-06-29"
+last_verified: "2026-07-28"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -16,7 +16,7 @@ source_files:
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-06-29
+**Last Updated:** 2026-07-28
 
 ## Primary Workflow Names
 
@@ -31,7 +31,7 @@ The core lifecycle should use primary task-verb tools. Each is implemented by a 
 | Record what actually happened | `record_result(...)` | `outcome_event` |
 | Ask for a structured review | `request_review(issue_description=...)` | `dialectic(action="request")` |
 
-Use the primary workflow tools by default. Use raw implementation names only for older servers, compatibility code, or when you explicitly need the unwrapped handler response. `start_session(force_new=true)` is a process-start operation, not a per-turn continuation primitive.
+Use the primary workflow tools by default. Use raw implementation names only for older servers, compatibility code, or when you explicitly need the unwrapped handler response. `start_session(force_new=true)` is a process-start operation, not a per-turn continuation primitive. `request_review` also supports a one-call form: pass `reasoning` (and optionally `root_cause`/`proposed_conditions`) and the thesis is submitted in the same call, with the response carrying plain-language `whose_move`/`next_call` guidance on every dialectic session read.
 
 ## Starting a Session
 

@@ -360,7 +360,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "check_working_state": "(lite?:bool, include_state?:bool)",
                 "search_shared_memory": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
                 "record_result": "(outcome_type:str, confidence?:float, prediction_id?:str, detail?:dict)",
-                "request_review": "(issue_description:str, reason?:str)",
+                "request_review": "(issue_description:str, reason?:str, reasoning?:str — with reasoning, the whole review runs in this one call)",
                 "store_knowledge_graph": "(summary:str, tags?:list, severity?:str, details?:str)",
                 "search_knowledge_graph": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
                 "knowledge_search": "(action='search', query?:str, tags?:list, limit?:int, include_details?:bool)",
