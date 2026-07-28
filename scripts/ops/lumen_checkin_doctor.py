@@ -83,6 +83,10 @@ PI_SSH_HOST = os.environ.get("LUMEN_SSH_HOST", "pi-anima")
 
 STALE_S = int(os.environ.get("LUMEN_DOCTOR_STALE_S", "900"))  # 3 missed 5-min beats
 RESTART_PROXIMITY_S = int(os.environ.get("LUMEN_DOCTOR_RESTART_PROXIMITY_S", "900"))
+# A fresh anima restart produces an EXPECTED ~6-10 min central gap (Elixir
+# client skips on stale/missing envelope while the Python broker reboots).
+RESTART_GAP_S = int(os.environ.get("LUMEN_DOCTOR_RESTART_GAP_S", "1200"))
+ELEVATED_S = int(os.environ.get("LUMEN_DOCTOR_ELEVATED_S", "300"))
 VERIFY_TIMEOUT_S = int(os.environ.get("LUMEN_DOCTOR_VERIFY_TIMEOUT_S", "420"))
 VERIFY_POLL_S = int(os.environ.get("LUMEN_DOCTOR_VERIFY_POLL_S", "60"))
 HEAL_CAP_PER_24H = int(os.environ.get("LUMEN_DOCTOR_HEAL_CAP", "2"))
@@ -93,6 +97,7 @@ HEALTHY = "healthy"
 C1_FALSE_PAUSE = "false_pause"
 PAUSED_REAL = "paused_unexplained"
 C2_DNS_FREEZE = "dns_freeze"
+RESTART_GAP = "restart_gap"
 C3_UNKNOWN_TOOL = "unknown_tool"
 C4_BINDING_LOSS = "binding_loss"
 UNKNOWN = "unknown"
@@ -182,6 +187,20 @@ def io_pi_journal_tail() -> str:
     )
 
 
+def io_pi_anima_uptime_s() -> float | None:
+    """Seconds since the anima service last (re)started, None if unknown."""
+    out = _run(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", PI_SSH_HOST,
+         "systemctl show anima --property=ActiveEnterTimestamp --value"],
+        timeout=20,
+    ).strip()
+    try:
+        started = datetime.strptime(out, "%a %Y-%m-%d %H:%M:%S %Z").timestamp()
+        return max(0.0, time.time() - started)
+    except (ValueError, OSError):
+        return None
+
+
 def io_live_session_row_count() -> int | None:
     out = _run(
         ["psql", "-h", "localhost", "-U", "postgres", "-d", "governance", "-tAc",
@@ -250,6 +269,7 @@ DEFAULT_IO: dict[str, Callable[..., Any]] = {
     "pi_diagnostics": io_pi_diagnostics,
     "gov_process_start_epoch": io_gov_process_start_epoch,
     "pi_journal_tail": io_pi_journal_tail,
+    "pi_anima_uptime_s": io_pi_anima_uptime_s,
     "live_session_row_count": io_live_session_row_count,
     "redis_uptime_s": io_redis_uptime_s,
     "path2_miss_recent": io_path2_miss_recent,
@@ -280,6 +300,7 @@ class Signals:
     pi_diag: dict = field(default_factory=dict)
     gov_start_epoch: float | None = None
     journal: str = ""
+    anima_uptime_s: float | None = None
     session_rows: int | None = None
     redis_uptime_s: int | None = None
     path2_miss: bool = False
@@ -323,7 +344,18 @@ def classify(s: Signals) -> tuple[str, str]:
     if age <= STALE_S:
         return HEALTHY, f"central last_update {int(age)}s ago"
 
-    # Active but frozen — differentiate via the Pi journal (the tell for C2/C3).
+    # Active but frozen. A fresh anima restart wins over the journal classes:
+    # boot noise in the 45-min journal window can match the C2 fingerprint,
+    # and C2's heal is another restart — classifying it C2 here would loop.
+    if s.anima_uptime_s is not None and s.anima_uptime_s < RESTART_GAP_S:
+        return RESTART_GAP, (
+            f"central frozen {int(age)}s but anima restarted "
+            f"{int(s.anima_uptime_s)}s ago — post-restart gap overrunning the "
+            f"expected ~10 min; NOT healing (another restart would loop); "
+            f"reclassifies normally once service uptime exceeds {RESTART_GAP_S}s"
+        )
+
+    # Differentiate via the Pi journal (the tell for C2/C3).
     if re.search(r"Unknown tool", s.journal, re.IGNORECASE):
         line = next(
             (ln for ln in s.journal.splitlines() if re.search(r"Unknown tool", ln, re.I)),
@@ -408,6 +440,7 @@ class Doctor:
         s.gov_start_epoch = self.io["gov_process_start_epoch"]()
         if deep:
             s.journal = self.io["pi_journal_tail"]()
+            s.anima_uptime_s = self.io["pi_anima_uptime_s"]()
             s.session_rows = self.io["live_session_row_count"]()
             s.redis_uptime_s = self.io["redis_uptime_s"]()
             s.path2_miss = self.io["path2_miss_recent"]()
@@ -455,7 +488,16 @@ class Doctor:
         if cls == HEALTHY:
             self.state.pop("unreachable_since", None)
             self._save_state()
-            log(f"OK — {evidence}")
+            last = _parse_ts(signals.central.get("last_update"))
+            age = (signals.now - last) if last else None
+            if age is not None and age > ELEVATED_S:
+                up = self.io["pi_anima_uptime_s"]()
+                if up is not None and up < RESTART_GAP_S:
+                    log(f"OK — {evidence} (elevated: expected deploy/restart gap, anima up {int(up)}s)")
+                else:
+                    log(f"OK — {evidence} (elevated beyond one broker cadence, no recent restart — watching)")
+            else:
+                log(f"OK — {evidence}")
             return cls
 
         # Central down is its own case: can't diagnose Lumen through a dead server,
@@ -506,11 +548,18 @@ class Doctor:
             )
             return cls
 
-        severity = "high" if cls in (C3_UNKNOWN_TOOL, C4_BINDING_LOSS) else "critical"
+        severity = (
+            "info" if cls == RESTART_GAP
+            else "high" if cls in (C3_UNKNOWN_TOOL, C4_BINDING_LOSS)
+            else "critical"
+        )
         remedy = {
             C3_UNKNOWN_TOOL: "a wire client is sending a dropped tool name — code fix "
                              "(see the unknown-tool-twin runbook); no restart will help",
             C4_BINDING_LOSS: RUNBOOK_C4,
+            RESTART_GAP: "expected deploy/restart gap running long — wait; the "
+                         "doctor heals/escalates normally once service uptime "
+                         "clears the gap window",
             PAUSED_REAL: "review the pause verdict (dashboard/dialectic); resume only "
                          "after judging it — this doctor never overrules a real pause",
             UNKNOWN: "no known fingerprint — investigate broker (unitares_ex) and Pi",

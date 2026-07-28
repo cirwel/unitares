@@ -6,7 +6,7 @@ description: >
   pattern (window.X = { load }), the live-or-snapshot data seam, theme-aware
   charts via design tokens, and the app.html wiring (nav / pane / lazyLoad /
   RELOAD / retheme). A repo-specific reference — not general dashboard advice.
-last_verified: "2026-06-29"
+last_verified: "2026-07-28"
 freshness_days: 30
 source_files:
   - unitares/dashboard/redesign/app.html
@@ -133,13 +133,18 @@ the event doesn't carry. Worked references: `sections/eisv.js::applyEvent`
 (composite status snaps on check-in), `sections/discoveries.js` (`notifyNew`
 badge). The WS plumbing lives in `ws.js`.
 
-## Read-only today
+## Mostly read-only — one operator write surface
 
-The redesign sends only the read bearer token. Operator **write** actions
-(archive/resume agent, request review, discovery status) are **not** wired —
-they need the `X-Unitares-Operator` header under `STRICT_IDENTITY` (`PLAN.md`).
-Don't assume a section can mutate state; if you add a write surface, that's a
-deliberate new capability, not a copy-paste.
+The redesign sends the read bearer token everywhere; most sections are
+read-only. The **one wired write surface** is the Adjudication section
+(#1343): `DATA.adjudicate()` POSTs `/v1/sentinel/adjudicate` with the
+`X-Unitares-Operator` header. The operator credential is provisioned once via
+`?operator_token=…` (persisted to localStorage, scrubbed from the URL —
+`DATA.operatorToken()` in `data.js`). Other operator write actions
+(archive/resume agent, request review, discovery status) are still **not**
+wired. Don't assume a section can mutate state; if you add a write surface,
+follow the adjudication pattern deliberately — it's a new capability, not a
+copy-paste.
 
 ## Verify before claiming done
 

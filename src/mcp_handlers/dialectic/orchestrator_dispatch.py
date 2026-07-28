@@ -125,6 +125,45 @@ async def dispatch_orchestrated_review(
         return None
 
     spec = _build_spec(session_id, thesis, parent_agent_id)
+
+    # Governed-first routing (opt-in): try the lease plane's governed-effect
+    # surface before the direct orchestrator POST. The outcome buckets are
+    # load-bearing — a governance refusal or an ambiguous outcome must degrade
+    # to the in-process synthetic reviewer (return None) and must NOT fall
+    # through to a direct spawn; only availability/config conditions may.
+    # Rationale per bucket: src/mcp_handlers/dialectic/governed_spawn.py.
+    from src.mcp_handlers.dialectic.governed_spawn import (
+        GovernedOutcome,
+        governed_dispatch,
+        governed_spawn_enabled,
+    )
+
+    if governed_spawn_enabled():
+        governed = await governed_dispatch(session_id, spec)
+        if governed.outcome is GovernedOutcome.COMMITTED:
+            logger.info(
+                "[DIALECTIC] governed reviewer spawned for session %s: agent_id=%s "
+                "effect_id=%s",
+                session_id[:16], governed.agent_id, governed.effect_id,
+            )
+            return {
+                "ok": True,
+                "agent_id": governed.agent_id,
+                "effect_id": governed.effect_id,
+                "governed": True,
+            }
+        if governed.outcome is GovernedOutcome.REFUSED:
+            logger.info(
+                "[DIALECTIC] governed spawn refused (%s); degrading to in-process "
+                "synthetic reviewer (no direct-spawn fallback for this bucket)",
+                governed.detail,
+            )
+            return None
+        logger.warning(
+            "[DIALECTIC] governed spawn %s (%s); falling back to direct orchestrator",
+            governed.outcome.value, governed.detail,
+        )
+
     url = f"{_orchestrator_url()}/v1/agents"
     try:
         import httpx

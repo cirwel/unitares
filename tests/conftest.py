@@ -255,6 +255,13 @@ def _isolate_db_backend(monkeypatch):
     # ImportError in CI and the entire preload block was skipped, masking
     # this leak.
     mock_backend.load_agent_baseline = AsyncMock(return_value=None)
+    # External-grounding calibration feedback (enrich_external_grounding →
+    # get_agent_external_calibration). Must return None (nothing accrued) so
+    # the enrichment stays silent; without an explicit stub the auto-generated
+    # AsyncMock child returns an AsyncMock whose dict(stats)/keys() call would
+    # leak an unawaited _execute_mock_call coroutine — same class as
+    # get_identities_batch above.
+    mock_backend.get_agent_external_calibration = AsyncMock(return_value=None)
     # Health
     mock_backend.init.return_value = None
     mock_backend.close.return_value = None

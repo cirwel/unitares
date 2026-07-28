@@ -839,6 +839,164 @@ def check_class_anchors_fresh(repo_root: Path) -> CheckResult:
         return CheckResult(name, mode, Status.SKIP, f"anchor freshness check skipped: {e}")
 
 
+# ---------------------------------------------------------------------------
+# Telemetry-liveness checks (operator mode)
+#
+# Four incidents share one failure class: a telemetry channel that stops
+# meaning anything without announcing it. tool_usage.success hardcoded true
+# across 3.12M rows (2026-05); grounding enrichment silently no-op'd by
+# pipeline ordering for weeks (2026-06); the 06-13 validation oneshot
+# reporting 0.000 in every cohort because its join spanned disjoint identity
+# namespaces; the Jul-09 broker cutover leaving Lumen governance-dark 10.5h.
+# Each check below encodes one fingerprint: "this stream was alive, and now
+# it is silent (or flat)". WARN, not FAIL — a dead sensor degrades evidence,
+# it doesn't break the install.
+# ---------------------------------------------------------------------------
+
+
+def _psql_row(db_url: str, sql: str, timeout: int = 20) -> list[str] | None:
+    """Run a single-row query via psql; return |-split fields or None on any error."""
+    if shutil.which("psql") is None:
+        return None
+    proc = subprocess.run(
+        ["psql", db_url, "-Atqc", sql],
+        capture_output=True, text=True, timeout=timeout,
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    return proc.stdout.strip().splitlines()[0].split("|")
+
+
+def check_failure_label_live(db_url: str) -> CheckResult:
+    """WARN if tool telemetry flows at volume but records zero failures.
+
+    audit.tool_usage.success is the one EISV-blind external outcome label the
+    schema holds. It sat hardcoded-true across 3.12M rows until 2026-05-30
+    (PR #543) — making every discrimination test structurally impossible. A
+    week of real traffic with 0 failures means the classifier regressed to
+    that state, not that nothing failed.
+    """
+    name, mode = "failure_label_live", "operator"
+    row = _psql_row(db_url, (
+        "SELECT count(*), count(*) FILTER (WHERE success = false) "
+        "FROM audit.tool_usage WHERE ts > now() - interval '7 days'"
+    ))
+    if row is None:
+        return CheckResult(name, mode, Status.SKIP, "audit.tool_usage not queryable")
+    calls, failures = int(row[0]), int(row[1])
+    if calls == 0:
+        return CheckResult(name, mode, Status.SKIP, "no tool telemetry in 7d (fresh install?)")
+    if calls >= 10_000 and failures == 0:
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"0 failures across {calls} tool calls in 7d — failure classifier "
+            "looks dead (hardcoded-true regression)",
+            detail="see src/services/tool_usage_recorder.py classify_tool_result()",
+        )
+    return CheckResult(name, mode, Status.PASS,
+                       f"{failures} failures / {calls} calls in 7d")
+
+
+def check_checkin_stream_live(db_url: str) -> CheckResult:
+    """WARN if the fleet-wide governance check-in stream has gone silent.
+
+    Residents check in on minutes-to-30min cadences, so hours of zero
+    process_agent_update/sync_state across the whole fleet is a transport or
+    broker outage (Jul-09 Elixir-cutover class: Lumen governance-dark 10.5h
+    while everything else looked healthy), not a quiet fleet.
+    """
+    name, mode = "checkin_stream_live", "operator"
+    row = _psql_row(db_url, (
+        "SELECT count(*) FILTER (WHERE ts > now() - interval '6 hours'), count(*) "
+        "FROM audit.tool_usage "
+        "WHERE tool_name IN ('process_agent_update', 'sync_state') "
+        "AND ts > now() - interval '7 days'"
+    ))
+    if row is None:
+        return CheckResult(name, mode, Status.SKIP, "audit.tool_usage not queryable")
+    recent, week = int(row[0]), int(row[1])
+    if week == 0:
+        return CheckResult(name, mode, Status.SKIP, "no check-in history in 7d")
+    if recent == 0:
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"0 check-ins in 6h (vs {week} over 7d) — fleet governance-dark; "
+            "check broker/transport before anything else",
+        )
+    return CheckResult(name, mode, Status.PASS, f"{recent} check-ins in last 6h")
+
+
+def check_grounding_stage_live(db_url: str) -> CheckResult:
+    """WARN if grounding shadow events were flowing and have stopped.
+
+    The grounding enrichment ran as a silent no-op for weeks in 2026-06
+    because it executed after persist/response-build — no error, no signal
+    (PR #1095). With UNITARES_GROUNDING_SHADOW on, every check-in emits a
+    grounding_shadow audit event; a stream that was alive over the week but
+    empty for a day means the stage detached again.
+    """
+    name, mode = "grounding_stage_live", "operator"
+    row = _psql_row(db_url, (
+        "SELECT count(*) FILTER (WHERE ts > now() - interval '24 hours'), count(*) "
+        "FROM audit.events WHERE event_type = 'grounding_shadow' "
+        "AND ts > now() - interval '7 days'"
+    ))
+    if row is None:
+        return CheckResult(name, mode, Status.SKIP, "audit.events not queryable")
+    day, week = int(row[0]), int(row[1])
+    if week == 0:
+        return CheckResult(name, mode, Status.SKIP,
+                           "no grounding_shadow events in 7d (shadow flag off?)")
+    if day == 0:
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"grounding_shadow went silent (0 in 24h vs {week} over 7d) — "
+            "enrichment stage likely detached from the check-in pipeline again",
+        )
+    return CheckResult(name, mode, Status.PASS,
+                       f"{day} grounding_shadow events in 24h")
+
+
+def check_label_join_overlap(db_url: str) -> CheckResult:
+    """WARN if the failure-labeled and check-in populations are fully disjoint.
+
+    Validating EISV against the exogenous failure label requires agents that
+    BOTH check in AND have recorded failures. The 06-13 scheduled validation
+    returned 0.000 in every cohort because the two populations lived in
+    disjoint identity namespaces — a broken join that read as a clean result.
+    Overlap is expected to be small (participation is low); zero, with both
+    sides populated, is the broken-join fingerprint.
+    """
+    name, mode = "label_join_overlap", "operator"
+    row = _psql_row(db_url, (
+        "WITH failers AS (SELECT DISTINCT agent_id FROM audit.tool_usage "
+        "  WHERE success = false AND ts > now() - interval '30 days'), "
+        "checkers AS (SELECT DISTINCT agent_id FROM audit.tool_usage "
+        "  WHERE tool_name IN ('process_agent_update', 'sync_state') "
+        "  AND ts > now() - interval '30 days') "
+        "SELECT (SELECT count(*) FROM failers), (SELECT count(*) FROM checkers), "
+        "(SELECT count(*) FROM failers f JOIN checkers c USING (agent_id))"
+    ), timeout=30)
+    if row is None:
+        return CheckResult(name, mode, Status.SKIP, "audit.tool_usage not queryable")
+    failers, checkers, overlap = int(row[0]), int(row[1]), int(row[2])
+    if failers == 0 or checkers == 0:
+        return CheckResult(name, mode, Status.SKIP,
+                           f"one side empty (failers={failers}, checkers={checkers})")
+    if overlap == 0:
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"failure-labeled and check-in populations disjoint "
+            f"(failers={failers}, checkers={checkers}, overlap=0) — "
+            "EISV-vs-outcome validation join is structurally impossible",
+        )
+    return CheckResult(
+        name, mode, Status.PASS,
+        f"{overlap} of {failers} failure-bearing agents also check in "
+        f"({checkers} checkers, 30d)",
+    )
+
+
 def build_checks(repo_root: Path, db_url: str) -> list[Check]:
     loaded_cache: dict[str, set[str]] = {}
 
@@ -873,6 +1031,10 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
         Check("launchagent_loaded", "operator", lambda: check_launchagent(loaded())),
         Check("resident_agents", "operator", lambda: check_resident_agents(loaded())),
         Check("ipv6_sidecar", "operator", lambda: check_ipv6_sidecar(loaded())),
+        Check("failure_label_live", "operator", lambda: check_failure_label_live(db_url)),
+        Check("checkin_stream_live", "operator", lambda: check_checkin_stream_live(db_url)),
+        Check("grounding_stage_live", "operator", lambda: check_grounding_stage_live(db_url)),
+        Check("label_join_overlap", "operator", lambda: check_label_join_overlap(db_url)),
     ]
 
 

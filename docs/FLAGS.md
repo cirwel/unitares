@@ -14,7 +14,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**102 flags.**
+**105 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
@@ -45,6 +45,8 @@ index; that one is the curated decision record.
 | `UNITARES_DASHBOARD_DB_BUDGET_S` | `(required)` | Inner DB-read budget in seconds | src/mcp_handlers/admin/dashboard.py |
 | `UNITARES_DIALECTIC_BEAM_RESOLUTION` | `'0'` | True iff the operator has flipped UNITARES_DIALECTIC_BEAM_RESOLUTION on. | src/mcp_handlers/dialectic/beam_resolve_client.py |
 | `UNITARES_DIALECTIC_CODEX_TIMEOUT_S` | `'420'` | Run the review on Codex (``codex exec``, ChatGPT-subscription CLI) — the capable-heterogeneous reviewer path (2026-07-02 planted-flaw probe: | agents/dialectic_reviewer/reviewer.py |
+| `UNITARES_DIALECTIC_DISPATCHER_UUID` | `(required)` | The standing dispatcher identity's UUID (operator-provisioned) | src/mcp_handlers/dialectic/governed_spawn.py |
+| `UNITARES_DIALECTIC_GOVERNED_SPAWN` | `'0'` | Opt-in gate (default OFF) | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW` | `'0'` | Opt-in gate for routing reviews through the orchestrator (default OFF) | src/mcp_handlers/dialectic/orchestrator_dispatch.py |
 | `UNITARES_DIALECTIC_REVIEWER_HOST` | `''` | Route to the configured reviewer backend, falling back to the free local model | agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_REVIEWER_TIMEOUT` | `(required)` | Timeout budget for a structured dialectic reviewer call | src/mcp_handlers/support/llm_delegation.py |
@@ -76,6 +78,7 @@ index; that one is the curated decision record.
 | `UNITARES_KG_PROACTIVE_EVERY` | `'0'` | Gate the proactive (steady-state) KG surface — cadence + warmup + length | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_KG_SEARCH_TIMEOUT_S` | `'0.25'` | — | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_KNOWLEDGE_BACKEND` | `'auto'` | Get global knowledge graph instance (singleton) | src/knowledge_graph.py |
+| `UNITARES_LEASE_PLANE_URL` | `'http://127.0.0.1:8788'` | read by _lease_plane_url() | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_LINEAGE_TRANSITIVE_ARCHIVAL` | `(required)` | Whether transitive succession-reachability DRIVES archival (vs shadow) | src/mcp_handlers/lifecycle/stuck.py |
 | `UNITARES_LLM_MODEL` | `'gemma4:latest'` | read by _base_hosts() | src/mcp_handlers/support/inference_registry.py, src/mcp_handlers/support/model_inference.py (+2 more) |
 | `UNITARES_MCP_HOST` | `''` | Return the default socket bind address | src/mcp_listen_config.py |

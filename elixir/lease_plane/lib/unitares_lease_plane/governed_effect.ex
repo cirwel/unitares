@@ -582,13 +582,24 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     digest = idempotency_digest(env)
 
     case Repo.governed_effect_by_idempotency_key(env.idempotency_key, @execute_event_type) do
-      # Idempotent replay — a previously committed spawn. Return the original
+      # Idempotent replay — a previously COMMITTED spawn. Return the original
       # effect_id + agent_id; DO NOT spawn again (an agent_spawn is irreversible).
-      {:ok, %{idempotency_digest: ^digest, payload: stored}} ->
+      # Only committed rows replay: a blocked/rejected row must not permanently
+      # poison its idempotency key — replaying a refusal would answer 202 with
+      # a nil agent_id forever and the veto would be evaluated exactly once per
+      # key. Non-committed prior rows fall through to a fresh veto + spawn.
+      {:ok, %{idempotency_digest: ^digest, payload: %{"status" => "committed"} = stored}} ->
         {:ok, execute_idempotent_body(stored)}
 
-      {:ok, %{idempotency_digest: other}} when is_binary(other) ->
+      # Digest conflict is only meaningful against a committed spawn (the
+      # irreversible thing that must not double-fire). A non-committed row with
+      # a different digest is just an earlier refusal of a different spec.
+      {:ok, %{idempotency_digest: other, payload: %{"status" => "committed"}}}
+      when is_binary(other) ->
         {:error, :idempotency_conflict}
+
+      {:ok, %{payload: %{}}} ->
+        spawn_and_record(env, digest)
 
       {:ok, nil} ->
         spawn_and_record(env, digest)
@@ -681,7 +692,9 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   # proposer so the spawned agent's parentage is correct by construction. The
   # proposer's `client_session_id` is NEVER forwarded (Invariant 1/7 — BEAM
   # consumes proof, the child mints its own identity under provisioned lineage).
-  defp orchestrator_spec(env) do
+  # Public for tests only (same precedent as FileWriteExecutor.resolved_payload/1).
+  @doc false
+  def orchestrator_spec(env) do
     p = env.payload || %{}
 
     base = %{
@@ -689,6 +702,16 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       "args" => Map.get(p, "args", []),
       "env" => Map.get(p, "env", %{})
     }
+
+    # Working directory matters independently of PYTHONPATH: `python -m`
+    # prepends the child's cwd to sys.path, and without `cd` that is the
+    # PLANE's cwd — an unrelated directory whose contents could shadow repo
+    # modules on name collision. Forward it when the payload names one.
+    base =
+      case Map.get(p, "cd") do
+        cd when is_binary(cd) and byte_size(cd) > 0 -> Map.put(base, "cd", cd)
+        _ -> base
+      end
 
     case env.proposer_agent_uuid do
       uuid when is_binary(uuid) ->

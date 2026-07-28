@@ -4,7 +4,7 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, policy actions, coherence, calibration. Reference material for interpreting
   governance metrics as proprioceptive state estimation, not outcome judgment.
-last_verified: "2026-06-29"
+last_verified: "2026-07-28"
 freshness_days: 14
 source_files:
   - unitares/config/governance_config.py

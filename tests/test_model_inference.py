@@ -1405,3 +1405,43 @@ class TestQwenRouting:
 
         parsed = _parse_text_content(result)
         assert parsed["energy_cost"] == 0.01
+
+
+class TestEventLoopNonBlocking:
+    """The sync OpenAI call must run on an executor thread, never the loop.
+
+    Regression for the 2026-07-28 incident: Vigil's KG audit → call_model →
+    Ollama cold-load blocked gov-mcp's entire event loop 2-3 minutes every
+    30 minutes (WS keepalives died, /health timed out, Lumen check-ins
+    failed). A blocked loop also disarms the tool's own wait_for timeout.
+    """
+
+    @pytest.mark.asyncio
+    async def test_sync_client_runs_off_the_event_loop_thread(self):
+        import threading
+
+        loop_thread = threading.get_ident()
+        seen: dict = {}
+
+        mock_client_instance = MagicMock()
+
+        def _record_thread(**kwargs):
+            seen["thread"] = threading.get_ident()
+            return _make_mock_response()
+
+        mock_client_instance.chat.completions.create.side_effect = _record_thread
+
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
+             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance):
+            from src.mcp_handlers.support.model_inference import handle_call_model
+            await handle_call_model({
+                "prompt": "Hello",
+                "provider": "ollama",
+                "model": "auto",
+            })
+
+        assert "thread" in seen, "the mocked create was never called"
+        assert seen["thread"] != loop_thread, (
+            "chat.completions.create ran ON the event loop thread — the sync "
+            "OpenAI client must be dispatched via run_in_executor"
+        )
