@@ -373,7 +373,10 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         experience=True),
     "request_review": ToolAlias(
         old_name="request_review", new_name="dialectic", reason="intuitive_alias",
-        migration_note="Primary workflow name for structured review; implemented by dialectic(action='request').",
+        migration_note="Primary workflow name for structured review; implemented by "
+        "dialectic(action='request'). One-call form: pass reasoning (and optionally "
+        "root_cause/proposed_conditions) and the thesis is submitted in the same "
+        "call — a reviewer answers or a verdict returns without further protocol.",
         inject_action="request", experience=True),
 }
 
