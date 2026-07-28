@@ -882,6 +882,15 @@ async def lookup_onboard_pin(base_fingerprint: str, *, refresh_ttl: bool = True)
 
 
 async def _lookup_onboard_pin_inner(base_fingerprint: str, *, refresh_ttl: bool) -> Optional[str]:
+    record = await _lookup_onboard_pin_record_inner(base_fingerprint, refresh_ttl=refresh_ttl)
+    if not record:
+        return None
+    return record.get("client_session_id")
+
+
+async def _lookup_onboard_pin_record_inner(
+    base_fingerprint: str, *, refresh_ttl: bool
+) -> Optional[Dict[str, Any]]:
     from src.cache.redis_client import get_redis
     import json as _json
     raw_redis = await get_redis()
@@ -893,10 +902,188 @@ async def _lookup_onboard_pin_inner(base_fingerprint: str, *, refresh_ttl: bool)
         logger.debug(f"[ONBOARD_PIN] No pin at {pin_key}")
         return None
     pin = _json.loads(pin_data if isinstance(pin_data, str) else pin_data.decode())
-    pinned_session_id = pin.get("client_session_id")
-    if pinned_session_id and refresh_ttl:
+    if not isinstance(pin, dict):
+        return None
+    if pin.get("client_session_id") and refresh_ttl:
         await raw_redis.expire(pin_key, _PIN_TTL)
-    return pinned_session_id
+    return pin
+
+
+async def lookup_onboard_pin_record(
+    base_fingerprint: str, *, refresh_ttl: bool = False
+) -> Optional[Dict[str, Any]]:
+    """Look up the FULL pin payload (``agent_uuid`` + ``client_session_id``).
+
+    `lookup_onboard_pin` returns only the pinned client_session_id because that
+    is what session-key derivation (step 7) needs. The pin payload also carries
+    the ``agent_uuid`` that was onboarded under that fingerprint, and the
+    pre-mint recovery ladder (`resolution.recover_identity_before_mint`) needs
+    it: when the pinned session id no longer has a live session row, the pinned
+    UUID is still a legitimate resume target and beats minting a phantom.
+
+    Defaults to ``refresh_ttl=False`` — a recovery probe should observe the pin,
+    not keep it alive.
+    """
+    if not base_fingerprint:
+        return None
+    try:
+        return await asyncio.wait_for(
+            _lookup_onboard_pin_record_inner(base_fingerprint, refresh_ttl=refresh_ttl),
+            timeout=_PIN_REDIS_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"[ONBOARD_PIN] Record lookup timed out after {_PIN_REDIS_TIMEOUT}s "
+            f"for {base_fingerprint}"
+        )
+        return None
+    except Exception as e:
+        logger.debug(f"[ONBOARD_PIN] Pin record lookup failed: {e}")
+        return None
+
+
+# =============================================================================
+# IDENTITY ANCHOR (fingerprint -> last RESUMED identity, long TTL)
+# =============================================================================
+# The onboard pin bridges argument-less calls back to the onboarded identity,
+# but its TTL is short (30 min) by design — it is a *routing* hint scoped to a
+# recent onboard. When it lapses, session-key derivation drops from
+# `pinned_onboard_session` to the raw `ip_ua_fingerprint` (step 7 tail), the
+# derived key has no session row, and dispatch used to mint a phantom UUID.
+# That is the fragmentation this anchor closes: a longer-lived, identically
+# scoped record of the last identity that RESUMED under this fingerprint,
+# consulted only at the pre-mint moment.
+#
+# Two invariants keep it honest:
+#   1. Only a resumed (or explicitly onboarded) identity is ever anchored —
+#      never a dispatch_auto_mint. Anchoring a phantom would make the phantom
+#      sticky, which is worse than the bug.
+#   2. It is never consulted ahead of a real resolution path, and never when a
+#      hijack guard rejected the resume (#1319). It is strictly a last stop
+#      before `uuid.uuid4()`.
+_IDENTITY_ANCHOR_TTL = 14400  # 4 hours — must outlive _PIN_TTL to be useful
+
+
+def identity_anchor_ttl() -> int:
+    """Anchor TTL in seconds (UNITARES_IDENTITY_ANCHOR_TTL). 0 disables writes."""
+    raw = os.getenv("UNITARES_IDENTITY_ANCHOR_TTL", "").strip()
+    if not raw:
+        return _IDENTITY_ANCHOR_TTL
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return _IDENTITY_ANCHOR_TTL
+
+
+def identity_anchor_recovery_enabled() -> bool:
+    """Whether pre-mint anchor/pin recovery runs (UNITARES_IDENTITY_ANCHOR_RECOVERY).
+
+    Default ON: minting a phantom UUID is the failure mode we are fixing, and a
+    recovered resume is verified against PostgreSQL (exists + active) and the
+    substrate-over-HTTP gate before it is adopted. Operators who prefer the old
+    mint-on-miss behavior can set the flag to 0/false/off.
+    """
+    return os.getenv("UNITARES_IDENTITY_ANCHOR_RECOVERY", "1").strip().lower() not in {
+        "0", "false", "off", "no",
+    }
+
+
+async def set_identity_anchor(
+    base_fingerprint: str,
+    agent_uuid: str,
+    session_key: str,
+    *,
+    client_session_id: Optional[str] = None,
+    client_hint: Optional[str] = None,
+    model_type: Optional[str] = None,
+    user_agent: Optional[str] = None,
+) -> bool:
+    """Record `fingerprint -> agent_uuid` for pre-mint recovery. Best-effort.
+
+    Uses the same scoped-candidate construction as the onboard pin so recovery
+    probes exactly the keys a legitimate caller would land on, and so the
+    cross-model/cross-client bleed protections apply identically.
+    """
+    ttl = identity_anchor_ttl()
+    if not base_fingerprint or not agent_uuid or ttl <= 0:
+        return False
+    candidates = _build_pin_fingerprint_candidates(
+        base_fingerprint,
+        client_hint=client_hint,
+        model_type=model_type,
+        user_agent=user_agent,
+        include_unscoped_fallback=not bool(client_hint or model_type),
+    )
+    if not candidates:
+        return False
+    try:
+        return await asyncio.wait_for(
+            _set_identity_anchor_inner(
+                candidates, agent_uuid, session_key, client_session_id, ttl
+            ),
+            timeout=_PIN_REDIS_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.debug("[IDENTITY_ANCHOR] write timed out — skipped")
+        return False
+    except Exception as e:
+        logger.debug(f"[IDENTITY_ANCHOR] write skipped: {e}")
+        return False
+
+
+async def _set_identity_anchor_inner(
+    candidates: list,
+    agent_uuid: str,
+    session_key: str,
+    client_session_id: Optional[str],
+    ttl: int,
+) -> bool:
+    from src.cache.redis_client import get_redis
+    import json as _json
+    raw_redis = await get_redis()
+    if not raw_redis:
+        return False
+    payload = _json.dumps({
+        "agent_uuid": agent_uuid,
+        "session_key": session_key,
+        "client_session_id": client_session_id,
+    })
+    for fp in candidates:
+        await raw_redis.setex(f"identity_anchor:{fp}", ttl, payload)
+    return True
+
+
+async def lookup_identity_anchor(base_fingerprint: str) -> Optional[Dict[str, Any]]:
+    """Return the anchored identity record for a fingerprint, or None."""
+    if not base_fingerprint:
+        return None
+    try:
+        return await asyncio.wait_for(
+            _lookup_identity_anchor_inner(base_fingerprint),
+            timeout=_PIN_REDIS_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"[IDENTITY_ANCHOR] lookup timed out after {_PIN_REDIS_TIMEOUT}s "
+            f"for {base_fingerprint}"
+        )
+        return None
+    except Exception as e:
+        logger.debug(f"[IDENTITY_ANCHOR] lookup failed: {e}")
+        return None
+
+
+async def _lookup_identity_anchor_inner(base_fingerprint: str) -> Optional[Dict[str, Any]]:
+    from src.cache.redis_client import get_redis
+    import json as _json
+    raw_redis = await get_redis()
+    if not raw_redis:
+        return None
+    data = await raw_redis.get(f"identity_anchor:{base_fingerprint}")
+    if not data:
+        return None
+    parsed = _json.loads(data if isinstance(data, str) else data.decode())
+    return parsed if isinstance(parsed, dict) else None
 
 
 # Spawn reasons whose onboards must NOT displace an existing pin. The pin
