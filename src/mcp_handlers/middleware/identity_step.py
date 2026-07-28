@@ -982,11 +982,17 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                             _recovered["agent_uuid"][:8],
                         )
                 else:
+                    # session_key stays OUT of this clear-text line — it is a
+                    # write-proof string and its name trips CodeQL's
+                    # clear-text-logging heuristic (same convention as the PATH1
+                    # fingerprint and PATH3 refusal warnings in resolution.py).
+                    # PATH 2 already recorded it on the structured
+                    # session_resolve_miss audit event before returning here, and
+                    # the mint itself is logged at WARNING by [MID_SESSION_MINT].
                     logger.info(
-                        "[DISPATCH] %s for %s... — minting "
-                        "ephemeral dispatch identity (S21-a, spawn_reason="
-                        "dispatch_auto_mint)",
-                        identity_result.get("error"), session_key[:20],
+                        "[DISPATCH] %s for tool=%s — minting ephemeral dispatch "
+                        "identity (S21-a, spawn_reason=dispatch_auto_mint)",
+                        identity_result.get("error"), name,
                     )
                     identity_result = await resolve_session_identity(
                         session_key,
