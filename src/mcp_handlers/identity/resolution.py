@@ -29,13 +29,19 @@ from config.governance_config import GovernanceConfig
 logger = get_logger(__name__)
 
 
+# Spawn reasons that mark a mint as following a FAILED resume rather than a
+# declared fresh start. These are the phantom-mint candidates: some caller
+# already believed it had an identity when it arrived here.
+_POST_RESUME_MISS_SPAWN_REASONS = frozenset({
+    "dispatch_auto_mint",
+    "auto_onboard_no_session",
+    "orchestrated_thread_anchor",
+})
+
+
 def _created_identity_outcome(*, force_new: bool, spawn_reason: Optional[str]) -> str:
     """Classify a successful PATH 3 mint separately from the input lane."""
-    if spawn_reason in {
-        "dispatch_auto_mint",
-        "auto_onboard_no_session",
-        "orchestrated_thread_anchor",
-    }:
+    if spawn_reason in _POST_RESUME_MISS_SPAWN_REASONS:
         return "minted_after_resume_miss"
     if force_new:
         return "minted_force_new"
@@ -492,6 +498,215 @@ async def _fingerprint_hijack_check(
         logger.warning(f"[PATH1_FINGERPRINT_MISMATCH] broadcast failed: {_be}")
 
     return _fp_mode == "strict"
+
+
+# =============================================================================
+# PRE-MINT RECOVERY (fingerprint anchor / onboard pin)
+# =============================================================================
+
+
+async def _adopt_recovered_identity(
+    agent_uuid: str,
+    session_key: str,
+    *,
+    recovery_via: str,
+    client_session_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Verify a recovery candidate and rebind the current session to it.
+
+    A candidate is adopted only when it is a real, live, non-substrate-gated
+    agent. Every rejection returns None so the caller falls to the next rung
+    (and ultimately to an honest mint) rather than binding writes to a UUID
+    that cannot be resolved later.
+
+    The rebind mirrors PATH 2.8's token-rebind: refresh the Redis binding and
+    (best-effort) the PG session row, so the NEXT call resolves through the
+    ordinary PATH 1/2 resume instead of arriving here again.
+    """
+    if not agent_uuid or not isinstance(agent_uuid, str):
+        return None
+    if len(agent_uuid) != 36 or agent_uuid.count("-") != 4:
+        return None
+
+    try:
+        if not await _agent_exists_in_postgres(agent_uuid):
+            logger.debug(
+                "[IDENTITY_RECOVERY] candidate %s... via %s not in PG — skipping",
+                agent_uuid[:8], recovery_via,
+            )
+            return None
+        status = await _get_agent_status(agent_uuid)
+        if status != "active":
+            logger.info(
+                "[IDENTITY_RECOVERY] candidate %s... via %s is %s, not resumable",
+                agent_uuid[:8], recovery_via, status,
+            )
+            return None
+    except Exception as e:
+        logger.warning(f"[IDENTITY_RECOVERY] candidate verification failed: {e}")
+        return None
+
+    # Same substrate-over-HTTP gate PATH 1 / PATH 2 / PATH 2.75 apply (#802).
+    # This rung resolves from a copyable transport fingerprint, so it must not
+    # become the one path that hands out a substrate resident's UUID over HTTP.
+    if await _substrate_http_reject(agent_uuid, source=f"premint_{recovery_via}") is not None:
+        return None
+
+    try:
+        agent_id = await _get_agent_id_from_metadata(agent_uuid) or agent_uuid
+        label = await _get_agent_label(agent_uuid)
+    except Exception:
+        agent_id, label = agent_uuid, None
+
+    # Rebind so subsequent calls resume normally. Not a mint site — this is a
+    # corrective write from a verified source, so mint_guard stays False
+    # (same posture as PATH 2 warm-back and PATH 2.8 token rebind).
+    try:
+        await _cache_session(session_key, agent_uuid, display_agent_id=agent_id)
+    except Exception as e:
+        logger.debug(f"[IDENTITY_RECOVERY] Redis rebind failed (non-fatal): {e}")
+    try:
+        db = get_db()
+        identity = await db.get_identity(agent_uuid)
+        if identity:
+            await db.create_session(
+                session_id=session_key,
+                identity_id=identity.identity_id,
+                expires_at=datetime.now() + timedelta(hours=GovernanceConfig.SESSION_TTL_HOURS),
+                client_type="mcp",
+                client_info={
+                    "agent_uuid": agent_uuid,
+                    "rebound_from_recovery": recovery_via,
+                },
+            )
+    except Exception as e:
+        logger.debug(f"[IDENTITY_RECOVERY] PG session rebind failed (non-fatal): {e}")
+
+    logger.info(
+        "[IDENTITY_RECOVERY] Recovered %s... via %s instead of minting a fresh "
+        "UUID (session key rotated; identity did not)",
+        agent_uuid[:8], recovery_via,
+    )
+    return {
+        "agent_id": agent_id,
+        "public_agent_id": agent_id,
+        "agent_uuid": agent_uuid,
+        "display_name": label,
+        "label": label,
+        "created": False,
+        "persisted": True,
+        "core_agent_row_status": "active",
+        "source": f"fingerprint_recovery:{recovery_via}",
+        "identity_resolution_outcome": "resumed",
+        "recovered_via": recovery_via,
+        "recovered_client_session_id": client_session_id,
+    }
+
+
+async def recover_identity_before_mint(
+    session_key: str,
+    *,
+    signals: Any = None,
+    client_hint: Optional[str] = None,
+    model_type: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Last stop before `uuid.uuid4()`: resume rather than fragment.
+
+    `session_key` stability depends on `client_session_id` being threaded on
+    every call. When it is not, derivation falls to the pin (step 7) and then
+    to the bare IP:UA fingerprint — so an expired pin, a transport restart, or
+    a co-residency reshuffle rotates the key, PATH 1/2 miss, and dispatch used
+    to mint a phantom UUID with `success: true` (2026-07-01 incident, outcome
+    524032fd). The identity did not change; only the key did.
+
+    This ladder consults the two fingerprint-anchored records that survive a
+    key rotation, strongest proof first:
+
+      1. the live onboard pin's ``agent_uuid`` — written by an explicit
+         onboard, so it is a declared identity, not an inferred one;
+      2. the identity anchor — written only after a genuine resume, with a
+         TTL that deliberately outlives the pin's.
+
+    Returns an adopted, resumed-shaped identity result, or None when nothing
+    recoverable exists (in which case minting is the honest answer).
+
+    Callers MUST NOT invoke this when a hijack guard rejected the resume: a
+    refused resume is not a missing one, and recovering there would re-open the
+    #1319 hole from the other side.
+    """
+    from .session import (
+        _extract_base_fingerprint,
+        _build_pin_fingerprint_candidates,
+        identity_anchor_recovery_enabled,
+        lookup_identity_anchor,
+        lookup_onboard_pin_record,
+    )
+
+    if not identity_anchor_recovery_enabled():
+        return None
+
+    fingerprint = getattr(signals, "ip_ua_fingerprint", None) if signals else None
+    if not fingerprint:
+        return None
+    base_fp = _extract_base_fingerprint(fingerprint)
+    if not base_fp:
+        return None
+
+    hint = client_hint or (getattr(signals, "client_hint", None) if signals else None)
+    candidates = _build_pin_fingerprint_candidates(
+        base_fp,
+        client_hint=hint,
+        model_type=model_type,
+        user_agent=getattr(signals, "user_agent", None) if signals else None,
+        # Same scoping discipline as pin lookup: with scope signals present,
+        # do NOT fall back to the unscoped key — that is the cross-model bleed.
+        include_unscoped_fallback=not bool(hint or model_type),
+    )
+    if not candidates:
+        return None
+
+    # Rung 1 — the live onboard pin. `lookup_onboard_pin` (step 7) already
+    # consumed its client_session_id; what we want here is the UUID it pinned,
+    # which stays valid even when that session id's row has expired.
+    for candidate in candidates:
+        try:
+            record = await lookup_onboard_pin_record(candidate)
+        except Exception:
+            record = None
+        if not record:
+            continue
+        adopted = await _adopt_recovered_identity(
+            record.get("agent_uuid"),
+            session_key,
+            recovery_via="onboard_pin",
+            client_session_id=record.get("client_session_id"),
+        )
+        if adopted:
+            return adopted
+
+    # Rung 2 — the identity anchor (outlives the pin).
+    for candidate in candidates:
+        try:
+            record = await lookup_identity_anchor(candidate)
+        except Exception:
+            record = None
+        if not record:
+            continue
+        adopted = await _adopt_recovered_identity(
+            record.get("agent_uuid"),
+            session_key,
+            recovery_via="identity_anchor",
+            client_session_id=record.get("client_session_id"),
+        )
+        if adopted:
+            return adopted
+
+    logger.info(
+        "[IDENTITY_RECOVERY] no recoverable identity for this fingerprint "
+        "(%d candidate scopes probed) — mint is the honest answer",
+        len(candidates),
+    )
+    return None
 
 
 async def resolve_session_identity(
@@ -1203,6 +1418,36 @@ async def resolve_session_identity(
     # UUID is the true identity (for lookup/persistence)
     # agent_id is human-readable label (model+date format, for display)
     agent_uuid = str(uuid.uuid4())
+
+    # Mid-session mints are the fragmentation event, so make them LOUD.
+    # A mint that carries a post-resume-miss spawn_reason means some caller
+    # already believed it had an identity and we handed it a different one:
+    # EISV trajectories restart, KG entries from one agent look like strangers'.
+    # The 2026-07-01 incident was invisible precisely because this was silent.
+    # An ordinary declared onboard (force_new with no post-miss reason) stays at
+    # info — that mint is the caller's stated intent, not a surprise.
+    if spawn_reason in _POST_RESUME_MISS_SPAWN_REASONS:
+        logger.warning(
+            "[MID_SESSION_MINT] Minting fresh UUID %s... after a resume miss "
+            "(spawn_reason=%s, parent_declared=%s). No recoverable identity was "
+            "found for this transport; any prior trajectory for this caller does "
+            "NOT continue into this UUID.",
+            agent_uuid[:8], spawn_reason, bool(parent_agent_id),
+        )
+        try:
+            from src.audit_log import audit_logger as _audit
+            _audit.log_session_resolve_miss_observed(
+                session_key=session_key,
+                resolution_source="path3_mint",
+                reason=f"mid_session_mint_{spawn_reason}",
+                resume=False,
+                force_new=force_new,
+                token_agent_uuid_present=bool(token_agent_uuid),
+                client_hint=client_hint,
+                model_type=model_type,
+            )
+        except Exception as e:
+            logger.debug(f"[MID_SESSION_MINT] audit write failed (non-fatal): {e}")
     agent_id = _generate_agent_id(model_type, client_hint)
     # Auto-assign a cosmetic default label from client signals. The label is
     # NOT used for lookup (name-claim removed 2026-04-17); operators can

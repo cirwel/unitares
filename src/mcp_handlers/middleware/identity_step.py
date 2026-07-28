@@ -450,6 +450,57 @@ async def _maybe_recover_via_x_agent_id(
         return bound_agent_id
 
 
+def _anchor_resolved_identity(
+    signals,
+    agent_uuid: str,
+    session_key: str,
+    *,
+    client_session_id: Optional[str] = None,
+    client_hint: Optional[str] = None,
+    model_type: Optional[str] = None,
+) -> None:
+    """Schedule a fingerprint -> identity anchor write. Never raises, never awaits.
+
+    Called at the tail of a SUCCESSFUL resume so a later session-key rotation
+    (pin expiry, transport restart) has something to recover from instead of
+    minting. See `identity/session.py::set_identity_anchor` for why the anchor
+    exists alongside the shorter-lived onboard pin.
+
+    Fire-and-forget for the same reason `_persist_binding_to_redis` is: this
+    runs on EVERY resumed dispatch, and up to three Redis round-trips on the
+    request path is a latency tax the anyio-asyncio coupling amplifies (see
+    CLAUDE.md "Substrate Tax"). Nothing in this request reads the anchor back —
+    it is only ever consulted by a LATER call's pre-mint ladder.
+    """
+    fingerprint = getattr(signals, "ip_ua_fingerprint", None) if signals else None
+    if not fingerprint:
+        return
+    try:
+        from ..identity.session import (
+            _extract_base_fingerprint,
+            set_identity_anchor,
+        )
+        base_fp = _extract_base_fingerprint(fingerprint)
+        if not base_fp:
+            return
+        asyncio.get_running_loop()  # raises RuntimeError if no loop
+        from src.background_tasks import create_tracked_task
+        create_tracked_task(
+            set_identity_anchor(
+                base_fp,
+                agent_uuid,
+                session_key,
+                client_session_id=client_session_id,
+                client_hint=client_hint or getattr(signals, "client_hint", None),
+                model_type=model_type,
+                user_agent=getattr(signals, "user_agent", None),
+            ),
+            name="identity_anchor_write",
+        )
+    except Exception as e:
+        logger.debug(f"[IDENTITY_ANCHOR] anchor write skipped: {e}")
+
+
 async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     """Extract session identity, resolve onboard pin, bind agent."""
     _clear_middleware_identity(arguments)
@@ -882,19 +933,74 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                         hint=_hint_override,
                         surface_context=_surface_context,
                     ))
-                logger.info(
-                    "[DISPATCH] %s for %s... — minting "
-                    "ephemeral dispatch identity (S21-a, spawn_reason="
-                    "dispatch_auto_mint)",
-                    identity_result.get("error"), session_key[:20],
-                )
-                identity_result = await resolve_session_identity(
-                    session_key,
-                    trajectory_signature=trajectory_sig,
-                    force_new=True,
-                    token_agent_uuid=_token_agent_uuid,
-                    spawn_reason="dispatch_auto_mint",
-                )
+                # Pre-mint recovery: a rotated session key is not a new agent.
+                # Only a genuine session_resolve_miss is recoverable — a resume
+                # that a hijack guard REFUSED (#1319) must stay refused, or this
+                # rung becomes the guard's bypass.
+                _recovered = None
+                if identity_result.get("error") == "session_resolve_miss":
+                    try:
+                        from ..identity.resolution import recover_identity_before_mint
+                        _recovered = await recover_identity_before_mint(
+                            session_key,
+                            signals=signals,
+                            client_hint=(
+                                arguments.get("client_hint") if arguments else None
+                            ),
+                            model_type=(
+                                arguments.get("model_type") if arguments else None
+                            ),
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"[DISPATCH] pre-mint identity recovery failed "
+                            f"(falling through to mint): {e}"
+                        )
+
+                if _recovered is not None:
+                    identity_result = _recovered
+                    # Re-thread the client_session_id the recovered identity was
+                    # onboarded under, so the REST of this call — and every
+                    # handler downstream — carries the stable proof string
+                    # instead of re-deriving from the fingerprint. Marked as
+                    # transport-injected: recovery is server inference, and must
+                    # not be laundered into caller-asserted proof for the strict
+                    # write gate.
+                    _recovered_csid = _recovered.get("recovered_client_session_id")
+                    if _recovered_csid and not client_session_id:
+                        client_session_id = _recovered_csid
+                        if arguments is not None:
+                            arguments["client_session_id"] = _recovered_csid
+                        try:
+                            from ..context import set_csid_transport_injected
+                            set_csid_transport_injected(True)
+                        except Exception:
+                            pass
+                        logger.info(
+                            "[DISPATCH] Re-threaded client_session_id from "
+                            "recovered identity %s... (was absent from this call)",
+                            _recovered["agent_uuid"][:8],
+                        )
+                else:
+                    # session_key stays OUT of this clear-text line — it is a
+                    # write-proof string and its name trips CodeQL's
+                    # clear-text-logging heuristic (same convention as the PATH1
+                    # fingerprint and PATH3 refusal warnings in resolution.py).
+                    # PATH 2 already recorded it on the structured
+                    # session_resolve_miss audit event before returning here, and
+                    # the mint itself is logged at WARNING by [MID_SESSION_MINT].
+                    logger.info(
+                        "[DISPATCH] %s for tool=%s — minting ephemeral dispatch "
+                        "identity (S21-a, spawn_reason=dispatch_auto_mint)",
+                        identity_result.get("error"), name,
+                    )
+                    identity_result = await resolve_session_identity(
+                        session_key,
+                        trajectory_signature=trajectory_sig,
+                        force_new=True,
+                        token_agent_uuid=_token_agent_uuid,
+                        spawn_reason="dispatch_auto_mint",
+                    )
         # PATH 2.75: X-Agent-Id UUID recovery (substrate-over-HTTP gated, #802).
         bound_agent_id = await _maybe_recover_via_x_agent_id(
             identity_result, x_agent_id_header, session_key
@@ -950,6 +1056,25 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
         session_key=session_key,
         identity_result=identity_result,
     )
+
+    # --- Anchor the resolved identity to this transport fingerprint ---
+    # Deliberately NOT gated on transport_key: the sticky cache refuses to key
+    # on a bare fingerprint for `transport == "mcp"` (co-resident processes
+    # share IP:UA), which is precisely the path that had no bridge at all once
+    # the onboard pin expired. The anchor fills that gap under the pin's own
+    # scoping rules, and is read only at the pre-mint moment.
+    #
+    # Invariant: anchor RESUMED identities only. Anchoring a freshly minted
+    # UUID would make a phantom sticky — strictly worse than the bug.
+    if bound_agent_id and identity_result and not identity_result.get("created"):
+        _anchor_resolved_identity(
+            signals,
+            bound_agent_id,
+            session_key,
+            client_session_id=client_session_id,
+            client_hint=client_hint,
+            model_type=arguments.get("model_type") if arguments else None,
+        )
 
     # --- Populate sticky cache after successful resolution ---
     if transport_key and bound_agent_id:
