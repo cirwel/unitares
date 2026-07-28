@@ -66,3 +66,39 @@ updates:
     labels:
       - "dependencies"
       - "ci"
+
+  - package-ecosystem: "npm"
+    # dashboard/ was the one manifest with no version-update coverage, so its
+    # only bump path was security updates — which is why its three open highs
+    # (postcss, js-yaml, brace-expansion) sat as alerts rather than PRs.
+    # Scope note: the dashboard is buildless and private, so these are
+    # transitive DEV-toolchain vulns (lint/test), not shipped runtime code.
+    directory: "/dashboard"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    groups:
+      dashboard-runtime:
+        patterns:
+          - "chart.js"
+          - "chartjs-*"
+          - "date-fns"
+        update-types:
+          - "minor"
+          - "patch"
+      dashboard-dev:
+        patterns:
+          - "eslint"
+          - "@eslint/*"
+          - "globals"
+          - "jsdom"
+          - "prettier"
+          - "vite"
+          - "vitest"
+        update-types:
+          - "minor"
+          - "patch"
+    labels:
+      - "dependencies"
+      - "dashboard"
