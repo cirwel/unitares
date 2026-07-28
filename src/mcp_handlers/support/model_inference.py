@@ -290,16 +290,28 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     
     try:
         started = time.monotonic()
-        client = OpenAI(base_url=base_url, api_key=api_key)
-        
+
         logger.debug(f"Calling model '{model}' via {base_url} for task_type='{task_type}'")
-        
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=temperature
-        )
+
+        # The sync OpenAI client MUST run on an executor thread, never on the
+        # event loop. This exact call blocked the entire gov-mcp loop for
+        # 2-3 minutes every 30 minutes (live incident 2026-07-28: Vigil's KG
+        # audit → call_model → Ollama cold-loading the model; captured stack:
+        # openai._base_client → sync httpx → sock.recv on the main thread).
+        # A blocked loop also disarms the tool's own asyncio.wait_for timeout
+        # — the timer needs the very loop that is stuck. Same bug class as
+        # llm_delegation.py, which already wraps all its sync calls this way.
+        def _call_sync():
+            client = OpenAI(base_url=base_url, api_key=api_key)
+            return client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(None, _call_sync)
         latency_ms = int((time.monotonic() - started) * 1000)
         
         message = response.choices[0].message
