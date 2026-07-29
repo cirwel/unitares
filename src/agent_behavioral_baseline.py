@@ -1,6 +1,13 @@
 """Per-agent behavioral baselines using Welford's online algorithm.
 
-Tracks rolling statistics (mean, variance) for each agent's behavioral signals.
+Tracks EXPANDING statistics (mean, variance) for each agent's behavioral
+signals — Welford accumulates over every observation since the baseline was
+created, with no window and no decay (see ``WelfordStats.update``). This is
+mechanically load-bearing, not a naming detail: as ``count`` grows the variance
+estimate stabilises, so a fixed z-threshold becomes progressively harder to
+trip and a long-lived agent's baseline desensitises to genuine drift. Do not
+describe these as "rolling" statistics.
+
 Anomalous values (>N std from agent's own baseline) can trigger mild entropy.
 
 Welford stats are persisted to PostgreSQL (core.agent_behavioral_baselines)
