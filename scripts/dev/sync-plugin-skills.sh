@@ -78,7 +78,17 @@ fi
 echo "[sync-plugin-skills] mirroring $SRC → $DST"
 # rsync: --delete to drop plugin-only skills (canonical is authoritative);
 # preserve only file content, not perms/owners (cross-repo is a portability concern).
-rsync -a --delete "$SRC/" "$DST/"
+#
+# --checksum is load-bearing, not belt-and-braces. rsync's default quick check
+# is size + mtime, and SKILLS_MANIFEST.sha256 is fixed-size (same seven
+# hash lines, same aggregate line length) so its size never changes when its
+# contents do. When both checkouts are created close together — e.g. two
+# `git worktree add` calls in the same session — git stamps identical mtimes,
+# rsync concludes "unchanged", and the stale manifest survives while the
+# SKILL.md files update around it. That lands the mirror in exactly the state
+# the plugin #80 parity gate exists to catch, and it is timing-dependent, so
+# it reproduces intermittently. Observed 2026-07-28 mirroring #1394.
+rsync -a --checksum --delete "$SRC/" "$DST/"
 
 echo "[sync-plugin-skills] done. Plugin status:"
 git -C "$PLUGIN_REPO" status --short -- skills/ | sed 's/^/  /'
