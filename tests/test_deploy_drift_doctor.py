@@ -21,13 +21,16 @@ _spec.loader.exec_module(ddd)
 
 
 def make_io(*, behind: int = 0, head_epoch: float | None = None,
-            started: float | None = None, log_subjects: str = "abc1234 fix: a thing"):
+            started: float | None = None, log_subjects: str = "abc1234 fix: a thing",
+            changed_files: str = "src/thing.py"):
     """IO seam returning a scripted git/process state."""
     def git(path, *args):
         if args[:1] == ("rev-list",):
             return f"0\t{behind}"
         if args[:2] == ("log", "-1"):
             return str(head_epoch) if head_epoch is not None else ""
+        if any(a.startswith("--since=") for a in args):
+            return changed_files
         if args[:1] == ("log",):
             return log_subjects
         return ""
@@ -163,3 +166,30 @@ def test_doctor_never_heals():
 ])
 def test_parse_etime(etime, expected):
     assert ddd._parse_etime(etime) == expected
+
+
+def test_restart_pending_ignores_non_code_changes(tmp_path):
+    """A pull carrying only markdown/config changes nothing in memory, so
+    telling the operator to restart a production server would be wrong-class
+    advice. Real case: the 2026-07-28 governance-plugin pull was 9 files,
+    zero Python."""
+    now = time.time()
+    d = ddd.diagnose(
+        ddd.Surface("live-thing", str(tmp_path), "main", "com.example.svc"),
+        make_io(behind=0, head_epoch=now, started=now - 600,
+                changed_files=".github/dependabot.yml skills/a/SKILL.md "
+                              "skills/SKILLS_MANIFEST.sha256"),
+    )
+    assert d == []
+
+
+def test_restart_pending_fires_on_code_among_docs(tmp_path):
+    """Mixed pull still needs a restart — one .py is enough."""
+    now = time.time()
+    d = ddd.diagnose(
+        ddd.Surface("live-thing", str(tmp_path), "main", "com.example.svc"),
+        make_io(behind=0, head_epoch=now, started=now - 600,
+                changed_files="README.md src/handlers.py docs/x.md"),
+    )
+    assert [x.condition for x in d] == ["restart_pending"]
+    assert "src/handlers.py" in d[0].detail
