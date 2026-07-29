@@ -143,6 +143,23 @@ independently sufficient reasons:
   (all p=0.1667); a within-cluster rank shuffle gives P(rho ≥ 0.857) = 0.264,
   i.e. the one apparently-passing dimension was the single one-Pi-vs-cron-daemons
   block contrast.
+- **The window contains a fleet outage the statistics cannot see.** The host was
+  shut ~10 days inside the observation window (2026-07-12→19 and 07-22→23); fleet
+  volume fell from ~137k tool calls/day to 200–250. Over 07-14→18 Lumen and Vigil
+  emitted **zero** observations and Sentinel fell to 28 from 862. Legs A and B
+  count *steps, not wall-clock*, so the observations either side of the gap are
+  treated as adjacent — a ~6-day discontinuity spanning a service restart, read
+  as one time step, in a test about whether a level reverts or wanders. The spec
+  contemplates cadence heterogeneity but not an outage. Any future
+  resident-trajectory test should be wall-clock-aware or exclude such gaps
+  explicitly.
+
+Corollary: the **n=4 verdict floor is absence-limited, not structural.** The
+spec's feasibility argument asserted Claude-session identities "have never
+sustained 100 states"; the longest single session by month is Apr 18, **May 107**,
+**Jun 93**, Jul 53, with 212 sessions in June against 37 in July. Arithmetic
+concluding that the eligible population cannot grow — and therefore that further
+streams require new hardware — is unsound if derived from the July window.
 
 **2. Individuality of the I dimension** → **REFUTED BY CONSTRUCTION**, before any
 data existed. `cal_I` carries 50–60% of I (`src/behavioral_sensor.py:147,149`)
