@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Deploy-drift self-doctor.
+
+    Runs deploy_drift_doctor.py hourly and answers one question nothing else in
+    the fleet asks: is the running process running the code that was merged?
+
+    Detects two distinct conditions, kept separate because their fixes differ:
+      behind_origin   — merged commits the live checkout never pulled
+                        (live-from-checkout surfaces only; the pinned deploy
+                        worktree lags origin by design)
+      restart_pending — checkout HEAD newer than the running process, i.e.
+                        bytes on disk but the old module still in memory
+
+    THIS DOCTOR NEVER HEALS. Pulling a live checkout and restarting
+    governance-mcp is a production deploy on Lumen's check-in path, which is in
+    the never-automate category (see memory: self-healing-doctor-layer,
+    contract item 2). It diagnoses, escalates a fingerprinted finding, and
+    closes that finding when the drift clears.
+
+    Motivating incident (2026-07-28): unitares-pi-plugin #8 — Steward's missing
+    core.agent_state write — merged with green CI and then sat dark in
+    production for a day because the live checkout was never pulled. Found by a
+    human asking "merged?", not by any detector.
+
+    Before installing, substitute the placeholder:
+      __UNITARES_ROOT__ -> absolute path to the deploy checkout
+                           (e.g. $HOME/projects/unitares-deploy)
+
+    Example:
+      mkdir -p "$HOME/projects/unitares-deploy/data/logs"
+      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
+          scripts/ops/com.unitares.deploy-drift-doctor.plist.template \
+          > ~/Library/LaunchAgents/com.unitares.deploy-drift-doctor.plist
+      launchctl load ~/Library/LaunchAgents/com.unitares.deploy-drift-doctor.plist
+
+    Optional env:
+      DEPLOY_DRIFT_DOCTOR_UUID       baselined governance identity; without it
+                                     resolutions close locally but emit no
+                                     outcome_event (an outcome row carrying no
+                                     EISV would add noise to the label-breadth
+                                     problem it is meant to help)
+      DEPLOY_DRIFT_COOLDOWN_SECONDS  re-alert window per surface+condition
+                                     (default 43200 = 12h)
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.unitares.deploy-drift-doctor</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/env</string>
+        <string>python3</string>
+        <string>__UNITARES_ROOT__/scripts/ops/deploy_drift_doctor.py</string>
+    </array>
+    <key>WorkingDirectory</key><string>__UNITARES_ROOT__</string>
+    <key>StartInterval</key><integer>3600</integer>
+    <key>RunAtLoad</key><false/>
+    <key>ProcessType</key><string>Background</string>
+    <key>StandardOutPath</key><string>__UNITARES_ROOT__/data/logs/deploy-drift-doctor.log</string>
+    <key>StandardErrorPath</key><string>__UNITARES_ROOT__/data/logs/deploy-drift-doctor.err</string>
+</dict>
+</plist>
