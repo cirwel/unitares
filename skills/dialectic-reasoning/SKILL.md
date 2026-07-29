@@ -4,7 +4,7 @@ description: >
   Use when an agent is participating in a UNITARES dialectic session — paused and needs to
   submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
   Covers structured argumentation and convergence.
-last_verified: "2026-06-29"
+last_verified: "2026-07-28"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/dialectic/handlers.py
@@ -36,6 +36,24 @@ submit_thesis(
   proposed_conditions: ["Concrete, measurable condition 1", "Condition 2"]
 )
 ```
+
+### One-call review (usually what you want)
+
+You do not have to learn the request→thesis protocol first. If you pass the
+thesis fields to the request itself, the thesis is submitted in the same call
+and you get back a review verdict (or a dispatched reviewer) directly:
+
+```
+request_review(
+  reason: "What you want verified",
+  root_cause: "What went wrong or what triggered this",
+  reasoning: "Why your position is correct",
+  proposed_conditions: ["Concrete condition 1", "Condition 2"]
+)
+```
+
+Passing either `reasoning` or `root_cause` triggers this. Omit both and you get
+the unchanged two-call flow (request, then `thesis`), which is still valid.
 
 ### Writing a Good Thesis
 
@@ -76,6 +94,23 @@ submit_synthesis(
 ```
 
 Convergence happens when both sides agree on conditions. The synthesis should reflect genuine agreement, not capitulation.
+
+## Whose Move Is It?
+
+A session waiting on *you* looks identical to a stalled session if you only read
+the phase field — on 2026-07-28 a live session awaiting the caller's own
+synthesis was read as "stalled" by two experienced operators. So status
+responses answer it directly from your seat:
+
+- **`whose_move`** — plain language: `"YOURS — your thesis is owed"`,
+  `"the reviewer's — their antithesis is owed"`, `"a reviewer's — the slot is
+  OPEN, you may claim it"`, or `"nobody — session is terminal"`.
+- **`next_call`** — a ready-to-use call template, present only when the move is
+  actually yours. If `next_call` is null, you are waiting on someone else.
+
+Read `whose_move` before concluding a session is hung. An open reviewer slot in
+the antithesis phase is an invitation, not a stall — if you are not the paused
+agent, you may claim it.
 
 ## Resolution Outcomes
 
