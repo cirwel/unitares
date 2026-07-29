@@ -1630,9 +1630,28 @@ async def http_events(request):
     try:
         from src.event_detector import event_detector
 
+        # A mistyped or unsupported filter key used to be dropped silently, so
+        # the response came back 200 with the FULL unfiltered set — a caller
+        # asking for one event type got everything and no indication the filter
+        # had been ignored. Surfaced by the dogfood probe (finding 9028fa1e,
+        # 2026-07-28) using `event_type`, which is what the MCP
+        # observe(action='audit_events') surface calls the same parameter.
+        # `event_type` is now an accepted alias; anything else is a 400 rather
+        # than a silent full-table read.
+        supported = {"limit", "agent_id", "type", "event_type", "since"}
+        unknown = sorted(set(request.query_params.keys()) - supported)
+        if unknown:
+            return JSONResponse({
+                "success": False,
+                "error": f"Unsupported filter parameter(s): {', '.join(unknown)}",
+                "next_step": "Remove the parameter or use a supported one.",
+                "safe_options": sorted(supported),
+            }, status_code=400)
+
         limit = int(request.query_params.get("limit", 50))
         agent_id = request.query_params.get("agent_id")
-        event_type = request.query_params.get("type")
+        # `type` wins when both are given, so existing callers are unaffected.
+        event_type = request.query_params.get("type") or request.query_params.get("event_type")
         since_raw = request.query_params.get("since")
         since = int(since_raw) if since_raw is not None else None
 
