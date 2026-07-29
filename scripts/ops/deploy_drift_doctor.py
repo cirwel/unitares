@@ -73,6 +73,10 @@ FINDING_KIND = "deploy_drift_finding"
 # A surface left un-deployed deliberately (waiting on a review, staged rollout)
 # must not re-alert every cycle. One finding per surface+condition per window.
 COOLDOWN_SECONDS = int(os.environ.get("DEPLOY_DRIFT_COOLDOWN_SECONDS", str(12 * 3600)))
+# Extensions the interpreter actually loads. A pull that changes only these is
+# the one that leaves a stale module in memory; anything else (markdown, skills
+# content, CI config) is live on disk the moment it lands.
+RUNTIME_SUFFIXES = (".py", ".pyi", ".so", ".pth")
 
 
 class Surface:
@@ -238,7 +242,14 @@ def diagnose(surface: Surface, io: Dict[str, Callable[..., Any]]) -> List[Diagno
                     behind=behind,
                 ))
 
-    # Restart-pending: newest commit on disk is younger than the process.
+    # Restart-pending: commits on disk that the running process predates.
+    #
+    # Only commits touching code the interpreter actually loads count. A pull
+    # carrying markdown, skills content or CI config changes nothing in memory,
+    # so flagging it would tell the operator to restart a production server for
+    # a docs change — the wrong-class advice contract item 1 exists to prevent.
+    # Caught by dogfooding: the 2026-07-28 governance-plugin pull was 9 files,
+    # zero Python, and an earlier draft raised restart_pending on it.
     if surface.launchd_label:
         started = io["process_start_epoch"](surface.launchd_label)
         head_ts = io["git"](surface.path, "log", "-1", "--format=%ct")
@@ -248,12 +259,18 @@ def diagnose(surface: Surface, io: Dict[str, Callable[..., Any]]) -> List[Diagno
             except ValueError:
                 head_epoch = 0.0
             if head_epoch > started:
-                age_min = int((head_epoch - started) / 60)
-                found.append(Diagnosis(
-                    surface.name, "restart_pending",
-                    f"checkout HEAD is {age_min}m newer than the running "
-                    f"{surface.launchd_label} process — bytes on disk, old module in memory",
-                ))
+                changed = io["git"](surface.path, "log", f"--since=@{int(started)}",
+                                    "--name-only", "--format=") or ""
+                runtime = sorted({f for f in changed.split()
+                                  if f.endswith(RUNTIME_SUFFIXES)})
+                if runtime:
+                    age_min = int((head_epoch - started) / 60)
+                    found.append(Diagnosis(
+                        surface.name, "restart_pending",
+                        f"checkout HEAD is {age_min}m newer than the running "
+                        f"{surface.launchd_label} process and touches loaded code "
+                        f"({', '.join(runtime[:3])}) — bytes on disk, old module in memory",
+                    ))
     return found
 
 
