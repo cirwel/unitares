@@ -80,7 +80,11 @@ def _build_http_session_signals(request):
 def _serialize_mcp_content_item(item):
     """Convert MCP content items into JSON-serializable dicts."""
     if hasattr(item, "model_dump"):
-        return item.model_dump(exclude_none=True)
+        # by_alias keeps the MCP wire format (camelCase, e.g. `mimeType`). mcp
+        # 1.x named the fields that way; 2.x renamed them to snake_case with the
+        # camelCase kept as a serialization alias, so without by_alias the REST
+        # surface would silently start emitting `mime_type`.
+        return item.model_dump(exclude_none=True, by_alias=True)
     if isinstance(item, dict):
         return item
     if hasattr(item, "__dict__"):

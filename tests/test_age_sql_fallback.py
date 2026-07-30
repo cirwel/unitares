@@ -24,8 +24,25 @@ import pytest
 # which pulls in src/mcp_handlers/__init__.py → mcp.types → pydantic.RootModel.
 # On Python 3.14 + pydantic < 3.x, RootModel class creation fails with
 # "TypeError: _eval_type() got an unexpected keyword argument 'prefer_fwd_module'".
-# Stubbing at module level is safe because conftest.py does not import mcp.types.
+# The stubs must not LEAK to sibling test modules: any stub this module inserts
+# is removed again by the module-scoped teardown fixture below. Under mcp 2.x,
+# `mcp.server.fastmcp` no longer exists, so setdefault always inserts a stub
+# there — and a leaked MagicMock at that key silently corrupts every later test
+# that imports it (e.g. FastMCP/Context resolution), which is exactly how it
+# broke CI. Only keys genuinely absent before this module ran are cleaned up,
+# so a real, already-imported module is never removed.
 # ---------------------------------------------------------------------------
+_STUB_KEYS = (
+    "src.mcp_handlers.knowledge.limits",
+    "src.mcp_handlers.knowledge",
+    "mcp.types",
+    "mcp.server",
+    "mcp.server.fastmcp",
+    "mcp",
+    "src.mcp_handlers",
+)
+_STUBS_INSERTED_BY_THIS_MODULE = [k for k in _STUB_KEYS if k not in sys.modules]
+
 _limits_stub = MagicMock()
 _limits_stub.EMBED_DETAILS_WINDOW = 200
 sys.modules.setdefault("src.mcp_handlers.knowledge.limits", _limits_stub)
@@ -38,6 +55,14 @@ sys.modules.setdefault("mcp.server.fastmcp", MagicMock())
 _mcp_stub = MagicMock()
 _mcp_stub.types = _mcp_types_stub
 sys.modules.setdefault("mcp", _mcp_stub)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _drop_leaked_mcp_stubs():
+    """Remove the mcp/src stubs this module installed so they don't leak."""
+    yield
+    for _key in _STUBS_INSERTED_BY_THIS_MODULE:
+        sys.modules.pop(_key, None)
 
 # Only stub src.mcp_handlers if it has not already been imported as the real module.
 # (Avoids overwriting a partially-initialised real module that another conftest fixture

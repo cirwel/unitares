@@ -362,9 +362,8 @@ class TestSessionWrapperContextDetection:
         assert wrapper.__annotations__["ctx"] == sig.parameters["ctx"].annotation
 
     def test_fastmcp_finds_ctx_in_session_wrapper(self):
-        """FastMCP's find_context_parameter must locate ctx on a session wrapper."""
-        pytest.importorskip("mcp.server.fastmcp")
-        from mcp.server.fastmcp.utilities.context_injection import find_context_parameter
+        """The SDK's find_context_parameter must locate ctx on a session wrapper."""
+        from src.mcp_compat import find_context_parameter
 
         def get_handler(name):
             async def handler(**kwargs):
@@ -383,9 +382,7 @@ class TestSessionWrapperContextDetection:
 
     def test_tools_list_schema_omits_ctx(self):
         """With ctx detected, func_metadata must exclude it from the emitted schema."""
-        pytest.importorskip("mcp.server.fastmcp")
-        from mcp.server.fastmcp.utilities.context_injection import find_context_parameter
-        from mcp.server.fastmcp.utilities.func_metadata import func_metadata
+        from src.mcp_compat import find_context_parameter, func_metadata
 
         def get_handler(name):
             async def handler(**kwargs):

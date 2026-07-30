@@ -36,12 +36,20 @@ try:  # mcp 2.x
     from mcp.server import MCPServer as _ServerClass
     from mcp.server.mcpserver import Context
     from mcp.server.mcpserver.tools.base import Tool as InternalTool
+    from mcp.server.mcpserver.utilities.context_injection import find_context_parameter
+    from mcp.server.mcpserver.utilities.func_metadata import func_metadata
 
     MCP_MAJOR = 2
 except ImportError:  # mcp 1.x
     from mcp.server.fastmcp import FastMCP as _ServerClass  # type: ignore[no-redef]
     from mcp.server.fastmcp import Context  # type: ignore[no-redef]
     from mcp.server.fastmcp.tools.base import Tool as InternalTool  # type: ignore[no-redef]
+    from mcp.server.fastmcp.utilities.context_injection import (  # type: ignore[no-redef]
+        find_context_parameter,
+    )
+    from mcp.server.fastmcp.utilities.func_metadata import (  # type: ignore[no-redef]
+        func_metadata,
+    )
 
     MCP_MAJOR = 1
 
@@ -53,11 +61,14 @@ __all__ = [
     "FastMCP",
     "Context",
     "InternalTool",
+    "find_context_parameter",
+    "func_metadata",
     "MCP_MAJOR",
     "server_supports_kwarg",
     "get_tool_input_schema",
     "set_tool_input_schema",
     "lowlevel_server",
+    "make_lowlevel_server",
 ]
 
 

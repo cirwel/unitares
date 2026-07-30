@@ -189,16 +189,20 @@ def test_sse_routes_are_prunable_to_close_gate_bypass():
     # SDK wires to the SAME tool registry, unauthenticated when OAuth is off)
     # stayed mounted. mcp_server prunes them; assert that prune fully removes
     # the SSE surface so no ungated route reaches the tools.
-    pytest.importorskip("mcp.server.fastmcp")
-    from mcp.server.fastmcp import FastMCP
+    # Use the compat shim's FastMCP (MCPServer on mcp 2.x) — resolved to the
+    # real class at import time, so it is unaffected by tests that stub
+    # `mcp.server.fastmcp` in sys.modules. Mirror mcp_server.py's version-
+    # agnostic path lookup: 1.x exposes the mount paths on settings, 2.x uses
+    # the fixed sse_app() defaults (/sse, /messages).
+    from src.mcp_compat import FastMCP
 
     m = FastMCP("probe")
     app = m.sse_app()
     before = {getattr(r, "path", None) for r in app.routes}
-    assert m.settings.sse_path in before  # /sse present pre-prune
+    _sse = getattr(m.settings, "sse_path", "/sse")
+    _msg = getattr(m.settings, "message_path", "/messages/").rstrip("/")
+    assert _sse in before  # /sse present pre-prune
 
-    _sse = m.settings.sse_path
-    _msg = m.settings.message_path.rstrip("/")
     app.routes[:] = [r for r in app.routes if getattr(r, "path", None) not in (_sse, _msg)]
 
     after = {getattr(r, "path", None) for r in app.routes}
