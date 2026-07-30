@@ -199,6 +199,199 @@ for a sticky agent a 24-row horizon can span fewer event-advances than the
 10-event feature window that horizon was raised to clear. Any future measurement
 work starts with resolution and event-locking, not with a new statistic.
 
+### Trajectory identity — same discipline, different instrument
+
+Added 2026-07-30. `TrajectorySignature.similarity()` and its `lineage_similarity`
+consumer are a *different* instrument from behavioural EISV, but they are audited
+under this contract because they make the same shape of claim and drifted the same
+way. Population counts below are from `core.identities`: **427** identities carry a
+`trajectory_genesis`, **364** carry both genesis and current, **275** carry
+`attractor.covariance` on both, and **253** of those also carry a non-null stored
+`trust_tier.lineage_similarity` (substrate-earned tiers store `None`, which is why
+the two figures differ — they are not inconsistent).
+
+Audited bytes are live bytes: `src/trajectory_identity.py` is md5
+`ab5bf17101955153dfdde1644b0435c6` in both this repo and the deploy checkout.
+A third checkout, `unitares-orchestrator`, holds a stale 960-line copy
+(`817d665a…`, pre-`_DRIFT_EMIT_DELTA`) that serves no traffic — do not cite line
+numbers from it.
+
+**6. The six-component model measures six things** → **REFUTED BY CONSTRUCTION.**
+`src/behavioral_trajectory.py:40-44` assigns `homeostatic.set_point =
+attractor.center`, `basin_shape = attractor.covariance` and `recovery_tau =
+recovery.tau_estimate` — η is α and ρ restated. `_compute_beliefs` and
+`_compute_attractor` both reduce to the EISV window mean, so β aliases α too.
+Live: `attractor.center == homeostatic.set_point` in **338/427**,
+`attractor.covariance == homeostatic.basin_shape` **338/427**,
+`beliefs.values == attractor.center` **421/427**. η's set-point Bhattacharyya is
+the numerically identical call to component α. The six weighted terms run on
+about two distinct quantities.
+
+**7. Π (preferences) contributes** → **REFUTED BY CONSTRUCTION.** The producer
+emits `preferences` as `{decision_bias, task_type_distribution}`; the consumer
+requires `preferences["vector"]`. Live: **0 of 427** genesis and **0 of 364**
+current signatures carry a `vector` key, so the branch never fires and its 0.15
+renormalizes away. Total live weight is 0.85, not 1.0 — every threshold
+comparison is against a renormalized sum.
+
+**8. ρ (recovery) contributes** → **REFUTED BY CONSTRUCTION.** ρ is
+`exp(-|ln(tau1/tau2)|)`, which is exactly 1.0 whenever tau is shared. Live: tau
+identical genesis↔current in **359/364** pairs, and `3.0` in **421/427** genesis
+signatures. ρ is 0.20 of unconditional free credit. δ (relational) is weaker but
+similar — identical in 237/364 — so call δ degenerate, not constant.
+
+**9. α (attractor) discriminates** → **REFUTED BY CONSTRUCTION** for the
+covariance-bearing population. The covariance is eps-regularized **twice**: the
+producer adds `1e-6` to the diagonal (`src/behavioral_trajectory.py:175`) and
+`bhattacharyya_similarity` adds `eps=1e-6` again
+(`src/trajectory_identity.py:63-69`). That puts the σ floor at 1e-3 while real
+genesis↔current centre drift is 0.0065–0.023. Sweep: similarity 0.785 at euclid
+2e-3, 3e-11 at 2e-2, exactly 0 at ≥0.1. So α is 0.25 of always-zero, and with ρ+δ
+free credit the composite collapses to a constant:
+
+| agent | observations | `similarity()` |
+|---|---|---|
+| Lumen | 135,416 | 0.632819 |
+| Sentinel | 24,297 | 0.633565 |
+| Watcher | 7,411 | 0.634505 |
+| Vigil | 4,538 | 0.635000 |
+| Chronicler | 89 | 0.642313 |
+
+A **0.0095 spread across a 1,520× range in observation count**, all within 0.007
+of the theoretical α-saturated ceiling 0.6353. Two consequences. First, the
+`is_anomaly` cut of 0.6 sits **below the metric's own floor**, so the detector
+cannot fire for that population. Second, the tier gates (lineage > 0.70 for
+tier 2, > 0.80 for tier 3) are unreachable on this path; `resolve_trust_tier`'s
+substrate-earned route and `stabilize_demoted_tier` are what actually hold
+resident tiers up.
+
+Scope this correctly: the metric is **not** inverted with respect to drift.
+Spearman over the 253 scorable identities gives lineage↔real-centre-drift
+**−0.856** (correct sign), lineage↔covariance-magnitude **+0.32**, and
+covariance↔drift **−0.04**. The honest claim is that stored covariance *width*
+shifts the score at fixed drift — an artifact of serialization, not an inversion.
+Banded by `covariance[0][0]`, mean lineage rises 0.7794 → 0.8557 → 0.9403 →
+0.9930 while mean real drift stays flat.
+
+**10. `lineage_similarity` is telemetry-only** → **REFUTED.** It is on the hot
+check-in path and it moves two live quantities. The entry point is
+`@enrichment(order=170)` in `src/mcp_handlers/updates/enrichments.py:750-789`,
+which *synthesizes* a signature via `compute_behavioral_trajectory` for any agent
+with `update_count >= 10` that did not supply one, then calls
+`update_current_signature` → `similarity()` at `:818`. Its imports are
+function-local, so a top-of-file grep for callers finds nothing — that absence is
+not evidence of dormancy. Then:
+
+- `enrichments.py:878-905` rewrites the agent-visible `metrics.risk_score`:
+  **+0.15** on anomaly, **+0.05** at tier ≤ 1, **−0.05** at tier 3. With 324/364
+  identities at tier 1, the +0.05 is close to universal.
+- `middleware/trajectory_step.py:19-27` sets `trajectory_confidence =
+  min(coherence_sim, lineage_sim)`, which reaches
+  `updates/phases.py:174-181`, where it adds `0.2 × confidence` to the
+  identity-assurance score and upgrades `weak → medium` at ≥ 0.7. That upgrade
+  **exempts the caller from the confidence clamp** at `phases.py:782-786`, whose
+  stated purpose is that low-assurance identity should not drive high-confidence
+  updates. `require_strong_identity` (`phases.py:434`) is *not* reachable this
+  way — the upgrade stops at medium.
+
+**11. Drift alerting has discriminated anything** → **REFUTED as deployed.**
+`audit.events` holds 1,891 `trajectory_drift` events from **4 agent_ids ever**,
+max firing similarity 0.5995. **1,746 of them are Lumen alone**, pinned at
+0.1224–0.1260:
+
+| week | events | lineage range | agents |
+|---|---|---|---|
+| 2026-04-13 | 4 | 0.3941–0.4570 | 3 |
+| 2026-04-27 | 32 | 0.5728–0.5995 | 1 |
+| 2026-05-18 | 21 | 0.5745–0.5982 | 1 |
+| 2026-06-08 | 88 | 0.5728–0.5992 | 1 |
+| 2026-07-06 | 1,402 | 0.1231–0.1260 | 1 |
+| 2026-07-20 | 344 | 0.1224–0.1237 | 1 |
+
+The step change coincides with the Elixir broker cutover, which changed Lumen's
+check-in producer. The last event is stamped `2026-07-24 12:36:11.494893-06` and
+the stored genesis `computed_at` is `2026-07-24T18:36:11.493914Z` — the same
+instant to the millisecond. **The alarm was silenced by rewriting the baseline,
+not by the drift resolving**, and the documented rebaseline-on-cutover step ran
+15 days after it was due while a 1,402-event week went unread. No
+`trajectory_drift_resolved` event has ever been emitted; the resolve branch
+requires `metadata['trajectory_drift_emit']`, which only the later throttle code
+writes, and the throttle landed after this drift had already cleared.
+
+**12. Lumen's Pi-side lineage is a six-component signature** → **REFUTED BY
+CONSTRUCTION.** `anima-mcp` runs the same maths (same six weights, same
+eps-regularized Bhattacharyya, same `exp(-dist*2)` fallback) but its genesis,
+frozen `2026-02-22T09:03:34`, was written on a path without numpy:
+`preferences: {}`, `relational: {}`, `homeostatic: null`,
+`recovery.tau_estimate: null`, `beliefs.values` 11-dim against a current 13-dim
+(so cosine returns `None` on length mismatch), and `attractor` carrying
+`variance` plus `_note: "Full covariance requires numpy"` instead of
+`covariance`. Five of six components drop; α survives at weight 0.25 renormalized
+to 1.0, and the missing covariance forces the fallback. Read live 2026-07-30:
+
+```
+euclid(current centre, genesis centre) = 0.242892
+exp(-2 * 0.242892)                     = 0.615214   <- this IS lineage_similarity
+real per-dim sigma                     = 0.0262  ->  drift = 9.26 sigma
+```
+
+Lumen's trajectory identity is one scalar: `exp(-2 × euclidean distance between
+two 4-dim ANIMA means)`. The same payload simultaneously reports
+`identity_status: "stable"`. The value has no behavioural effect on the Pi
+(display and report only), and the governance-side path for it is dormant — but
+no statement that Lumen's identity is verified by a six-component trajectory
+signature is true. Note the failure modes are **inverse**, not shared: on the Pi
+tau is volatile rather than constant, so ρ injects spurious *dissimilarity* where
+governance-side ρ is free credit. Do not port findings 6–9 to the Pi verbatim.
+
+**Latent exposure, narrow but real.** `resolve_trust_tier` swallows every
+exception (`src/identity/trust_tier_routing.py:194-200`) and falls through to
+`compute_trust_tier`. At the saturated floor, `lineage_low = similarity < 0.7` is
+permanently true, which disarms the second guard in `store_genesis_signature`, so
+any identity that lands at tier ≤ 1 has its genesis Σ₀ overwritten on the next
+check-in. Running `compute_trust_tier` against live metadata for all 26 tier-2/3
+identities: **1 of 26** is exposed — Chronicler, at 89 observations and
+`identity_confidence` 0.4249, just under the 0.45 `stabilize_demoted_tier`
+threshold that protects the others. The residents all compute to tier 2 and are
+safe. This is an automatic Σ₀ overwrite, which is what the standing "do not edit
+Σ₀ or tier by hand" rule exists to prevent; it wants an operator decision, not a
+quiet patch.
+
+**Cross-repo reconciliation.** The trajectory-identity paper's Appendix A states
+that the cited reference implementation "uses the five informationally-independent
+weights (0.18, 0.18, 0.30, 0.22, 0.12) … and η is exposed as a derived view rather
+than included in the weighted sum." `anima-mcp/src/anima_mcp/trajectory.py:395-399`
+appends η with `weights.append(0.15)` inside the same weighted sum, and the other
+weights are 0.15/0.15/0.25/0.20/0.10. The paper is archived with a DOI and the
+repo is public, so this is checkable by any reader in one file open. Finding 6
+makes it more than version skew: the double-count the paper says was removed is
+the one live data confirms is present.
+
+**Do not, each verified unsafe or laundering.**
+
+- **Do not lower the 0.6 anomaly cut to make the detector fire.** The ~0.633 floor
+  is the eps artifact; moving the threshold to meet it calibrates against a bug.
+- **Do not widen eps or the covariance floor to un-saturate α.** Score already
+  rises with covariance width at flat real drift, so widening buys a higher score
+  for less continuity.
+- **Do not promote the Pi's genesis `variance` list to a diagonal covariance
+  matrix.** It reads as a three-line repair and flips Lumen from passing to hard
+  failing, because with the Pi's real covariance the Bhattacharyya branch has a
+  usable window about 1σ wide against a live 9.26σ drift.
+- **Do not re-freeze or delete a genesis to raise a low score,** and do not run
+  the rebaseline script as a general remedy. It is correct only for an
+  operator-attested client cutover; anywhere else it converts an unexplained
+  divergence into a clean baseline and returns a green number, which is what
+  happened on 2026-07-24.
+- **Do not add a `vector` key to stored preferences to revive Π** without first
+  checking it is not another copy of `attractor.center`. Every component added so
+  far turned out to be a re-serialization of the same 4-vector.
+- **Do not build a reject or pause on `lineage_similarity`.** At a floor above the
+  cut it would be inert for most of the fleet and arbitrary for the rest.
+- **Do not cite trajectory identity as validated or discriminating** on any
+  surface, and do not describe governance-side and Pi-side as sharing a failure
+  mode.
+
 ## Preferred wording
 
 Use:
