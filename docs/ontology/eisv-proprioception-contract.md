@@ -120,10 +120,26 @@ agent-specific, temporally stable operating level."* → **UNTESTED AS DEPLOYED.
 Pre-registered v2 (`docs/proposals/eisv-individuality-v2-preregistration.md`,
 script sha `e512c01c…`, thresholds frozen 2026-07-02) returned **FAIL** at the
 2026-07-16 interim read; an unofficial dry run of the frozen script on
-2026-07-29 reproduced it (leg A 1/7, leg B 1 of 3 dims). The final read is
-scheduled 2026-07-30. Honour the kill criterion — no v3 against this
-measurement — but do **not** record the FAIL as evidence against the axiom. Two
-independently sufficient reasons:
+2026-07-29 reproduced it (leg A 1/7, leg B 1 of 3 dims).
+
+**The pre-registered FINAL read ran 2026-07-30 09:00 local and returned FAIL**
+(`~/.unitares/analysis/eisv-individuality-v2-final-2026-07-30_0900.md`, script
+sha `e512c01c…` confirmed in the report header — the repo copy, matching the
+frozen snapshot). **Leg A 0/7, leg B fail (E rho=0.86 p=0.012; I p=0.249;
+S p=0.118), leg C 0/7.** It is *harder* than the dry run: Vigil, the lone leg-A
+pass on 07-29, flipped to fail on one further day of data, which tells you that
+pass was fragile rather than that the instrument changed. The 2026-06-13
+broken-join checks pass — `Eligible agents: 7`, a real verdict line, populated
+per-agent and VR-curve tables — so this is a finding, not an empty join.
+**The kill criterion is triggered and honoured: the axiom is retired for raw
+behavioral EISV as currently measured; no v3 without changing the measurement
+process.**
+
+Honour that as a pre-registration commitment kept, and do **not** record the
+FAIL as evidence against the axiom. Two independently sufficient reasons, both
+still visible in the final report — note its eligible list contains
+`lumen-broker-ex-shadow`, `..._a00e9d21` and `..._f4eba889`, i.e. three of the
+seven "agents" are the replicate Pi described below:
 
 - **Leg A is a whiteness detector.** Against synthetic stationary,
   mean-reverting series that *all satisfy the axiom*, with only autocorrelation
