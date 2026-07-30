@@ -6,6 +6,7 @@ Extracted from admin.py for maintainability.
 
 from typing import Dict, Any, List, Sequence
 from mcp.types import TextContent
+from src.mcp_compat import get_tool_input_schema
 from ..utils import success_response, error_response
 from ..decorators import mcp_tool
 from ..support.coerce import coerce_bool
@@ -716,7 +717,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                             or TOOL_DESCRIPTIONS.get(tool_name)
                             or f"Tool: {tool_name}"
                         )
-                        tool_schema = candidate.inputSchema or {
+                        tool_schema = get_tool_input_schema(candidate) or {
                             "type": "object",
                             "properties": {},
                             "additionalProperties": True,

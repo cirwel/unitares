@@ -20,7 +20,20 @@ from src.mcp_handlers.support.wrapper_generator import (
     _create_simple_wrapper,
     enable_extra_argument_passthrough,
 )
-from mcp.server.fastmcp.tools.base import Tool
+from src.mcp_compat import InternalTool as Tool
+
+
+def _run_tool(tool, arguments):
+    """Invoke the internal ``Tool.run`` across mcp 1.x/2.x.
+
+    2.x made ``context`` a required positional argument; 1.x defaulted it. The
+    wrappers under test type ``ctx`` as Optional and ignore a ``None`` value, so
+    pass ``None`` only when the installed SDK's signature demands the argument.
+    """
+    params = inspect.signature(tool.run).parameters
+    if "context" in params and params["context"].default is inspect.Parameter.empty:
+        return asyncio.run(tool.run(arguments, None))
+    return asyncio.run(tool.run(arguments))
 
 
 # ============================================================================
@@ -311,7 +324,7 @@ class TestCreateTypedWrapper:
         assert sig.parameters["initial_state"].annotation == Optional[dict]
 
         tool = Tool.from_function(wrapper, structured_output=False)
-        asyncio.run(tool.run({"initial_state": {"task_type": "introspection"}}))
+        _run_tool(tool, {"initial_state": {"task_type": "introspection"}})
 
         assert call_log == [{"initial_state": {"task_type": "introspection"}}]
 
@@ -349,9 +362,8 @@ class TestSessionWrapperContextDetection:
         assert wrapper.__annotations__["ctx"] == sig.parameters["ctx"].annotation
 
     def test_fastmcp_finds_ctx_in_session_wrapper(self):
-        """FastMCP's find_context_parameter must locate ctx on a session wrapper."""
-        pytest.importorskip("mcp.server.fastmcp")
-        from mcp.server.fastmcp.utilities.context_injection import find_context_parameter
+        """The SDK's find_context_parameter must locate ctx on a session wrapper."""
+        from src.mcp_compat import find_context_parameter
 
         def get_handler(name):
             async def handler(**kwargs):
@@ -370,9 +382,7 @@ class TestSessionWrapperContextDetection:
 
     def test_tools_list_schema_omits_ctx(self):
         """With ctx detected, func_metadata must exclude it from the emitted schema."""
-        pytest.importorskip("mcp.server.fastmcp")
-        from mcp.server.fastmcp.utilities.context_injection import find_context_parameter
-        from mcp.server.fastmcp.utilities.func_metadata import func_metadata
+        from src.mcp_compat import find_context_parameter, func_metadata
 
         def get_handler(name):
             async def handler(**kwargs):
@@ -463,7 +473,7 @@ class TestExtraArgumentPassthrough:
             "locus": "in_process_mcp_wrapper",
         }
 
-        asyncio.run(tool.run(sent))
+        _run_tool(tool, sent)
 
         assert call_log
         for key, value in sent.items():

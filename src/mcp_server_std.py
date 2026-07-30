@@ -51,9 +51,11 @@ from src.services.identity_continuity import (
 logger = get_logger(__name__)
 
 try:
-    from mcp.server import Server
     from mcp.server.stdio import stdio_server
     from mcp.types import Tool, TextContent
+    # make_lowlevel_server builds the low-level Server with request handlers on
+    # both mcp 1.x (decorator API) and 2.x (on_* constructor callbacks).
+    from src.mcp_compat import make_lowlevel_server
 except ImportError as e:
     print(f"Error: MCP SDK not available: {e}", file=sys.stderr)
     print(f"Install with: pip install mcp", file=sys.stderr)
@@ -86,13 +88,13 @@ from src.background_tasks import create_tracked_task  # noqa: F401 — re-export
 # MCP Server Instance
 # ============================================================================
 
-server = Server("governance-monitor-v1")
-
 # ============================================================================
 # MCP Resource Registration (SKILL.md)
 # ============================================================================
+# Handlers are plain functions here; the low-level Server that dispatches to
+# them is built via make_lowlevel_server() once all four are defined (below),
+# so the same bodies register on both mcp 1.x and 2.x.
 
-@server.list_resources()
 async def list_resources():
     from mcp.types import Resource
     return [
@@ -104,7 +106,6 @@ async def list_resources():
         )
     ]
 
-@server.read_resource()
 async def read_resource(uri):
     if str(uri) == "unitares://skill":
         skill_path = Path(project_root) / "skills" / "unitares-governance" / "SKILL.md"
@@ -283,7 +284,6 @@ activity_tracker = get_activity_tracker(HEARTBEAT_CONFIG)
 # MCP Tool Handlers
 # ============================================================================
 
-@server.list_tools()
 async def list_tools() -> list[Tool]:
     """List all available MCP tools"""
     def _filtered_local_tools() -> list[Tool]:
@@ -375,7 +375,6 @@ async def inject_lightweight_heartbeat(
         logger.error(f"Error injecting heartbeat for {agent_id}: {e}", exc_info=True)
 
 
-@server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[TextContent]:
     """Handle tool calls from MCP client"""
     process_mgr.write_heartbeat()
@@ -488,6 +487,21 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
                           error_type="execution_error", latency_ms=latency_ms,
                           session_id=session_id)
         return [sanitized_error]
+
+
+# ============================================================================
+# MCP Server Instance
+# ============================================================================
+# Built after the handlers so make_lowlevel_server can register all four on the
+# low-level Server (decorator API on mcp 1.x, on_* callbacks on 2.x).
+
+server = make_lowlevel_server(
+    "governance-monitor-v1",
+    list_tools=list_tools,
+    call_tool=call_tool,
+    list_resources=list_resources,
+    read_resource=read_resource,
+)
 
 
 # ============================================================================

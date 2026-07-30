@@ -202,9 +202,10 @@ def test_audit_scope_controls_exposed():
 def test_audit_scope_controls_advertised_in_tool_schema():
     """Declaring fields is not enough; list_tools must advertise them."""
     from src.tool_schemas import get_tool_definitions
+    from src.mcp_compat import get_tool_input_schema
 
     knowledge = next(t for t in get_tool_definitions(verbosity="full") if t.name == "knowledge")
-    props = knowledge.inputSchema["properties"]
+    props = get_tool_input_schema(knowledge)["properties"]
     assert {
         "auto_link_related",
         "exclude_agent_labels",

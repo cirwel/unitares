@@ -27,6 +27,11 @@ from src.oauth_provider import (
     RefreshTokenEntry,
 )
 
+# mcp 1.x let `client_id` be unset on the registered-client record (the provider
+# minted it); 2.x split the registration request from the record and made
+# `client_id` required on the record, so the SDK mints it before register_client.
+_CLIENT_ID_OPTIONAL = not OAuthClientInformationFull.model_fields["client_id"].is_required()
+
 
 @pytest.fixture
 def provider():
@@ -82,10 +87,21 @@ class TestEntryExpiry:
 class TestRegisterClient:
     @pytest.mark.asyncio
     async def test_fills_in_missing_id_and_secret(self, provider):
-        client = OAuthClientInformationFull(redirect_uris=["https://app.example/cb"])
-        assert client.client_id is None
-        await provider.register_client(client)
-        assert client.client_id.startswith("unitares_")
+        if _CLIENT_ID_OPTIONAL:
+            # mcp 1.x: client_id may arrive unset; register_client mints one.
+            client = OAuthClientInformationFull(redirect_uris=["https://app.example/cb"])
+            assert client.client_id is None
+            await provider.register_client(client)
+            assert client.client_id.startswith("unitares_")
+        else:
+            # mcp 2.x: client_id is required on the record (the SDK mints it from
+            # the registration request first), so the provider fills the rest.
+            client = OAuthClientInformationFull(
+                client_id="unitares_provided",
+                redirect_uris=["https://app.example/cb"],
+            )
+            await provider.register_client(client)
+            assert client.client_id == "unitares_provided"
         assert client.client_secret
         assert client.client_id_issued_at
         # registered and retrievable

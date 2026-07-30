@@ -8,11 +8,25 @@ the agent-experience envelope are bypassed.
 
 from __future__ import annotations
 
+import inspect
 import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from mcp.types import TextContent
+
+
+def _run_args(run_method, arguments):
+    """Positional args for the internal Tool.run across mcp 1.x/2.x.
+
+    2.x made ``context`` a required positional; 1.x defaulted it. The alias
+    wrapper ignores a ``None`` ctx, so pass ``None`` only when the installed
+    SDK's signature requires the argument.
+    """
+    params = inspect.signature(run_method).parameters
+    if "context" in params and params["context"].default is inspect.Parameter.empty:
+        return (arguments, None)
+    return (arguments,)
 
 
 @pytest.mark.asyncio
@@ -72,12 +86,15 @@ async def test_sync_state_mcp_wrapper_uses_alias_middleware(monkeypatch):
 
     tool = mcp_server.mcp._tool_manager.get_tool("sync_state")
     result = await tool.run(
-        {
-            "client_session_id": "test-session",
-            "response_text": "dogfood alias wrapper",
-            "complexity": "medium",
-            "confidence": 0.8,
-        },
+        *_run_args(
+            tool.run,
+            {
+                "client_session_id": "test-session",
+                "response_text": "dogfood alias wrapper",
+                "complexity": "medium",
+                "confidence": 0.8,
+            },
+        ),
         convert_result=False,
     )
 

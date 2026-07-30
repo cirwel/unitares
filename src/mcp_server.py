@@ -76,7 +76,8 @@ from src.connection_tracker import ConnectionTrackingMiddleware
 
 # Try to import MCP SDK
 try:
-    from mcp.server import FastMCP
+    # mcp_compat resolves FastMCP (1.x) / MCPServer (2.x) behind one name.
+    from src.mcp_compat import FastMCP, server_supports_kwarg
     from mcp.types import TextContent  # noqa: F401 — availability probe
     MCP_SDK_AVAILABLE = True
 except ImportError as e:
@@ -154,13 +155,19 @@ if _oauth_issuer_url:
 # Default bind: 127.0.0.1 (see default_listen_host). LAN/tunnel: set UNITARES_BIND_ALL_INTERFACES=1
 # and UNITARES_MCP_ALLOWED_HOSTS / UNITARES_MCP_ALLOWED_ORIGINS as needed.
 _LISTEN_HOST = default_listen_host()
-mcp = FastMCP(
+# mcp 1.x's FastMCP accepted host/transport_security at construction time; 2.x's
+# MCPServer dropped both (host is applied at run time, transport security moved
+# to the streamable-HTTP manager). Pass the 1.x-only kwargs only when supported.
+_server_kwargs = dict(
     name="governance-monitor-v1",
-    host=_LISTEN_HOST,
     auth_server_provider=_oauth_provider,
     auth=_auth_settings,
-    transport_security=build_transport_security_settings(),
 )
+if server_supports_kwarg("host"):
+    _server_kwargs["host"] = _LISTEN_HOST
+if server_supports_kwarg("transport_security"):
+    _server_kwargs["transport_security"] = build_transport_security_settings()
+mcp = FastMCP(**_server_kwargs)
 
 
 # Custom decorator that disables outputSchema to avoid schema validation errors
@@ -422,14 +429,24 @@ async def main():
         from starlette.responses import JSONResponse
         from starlette.middleware.cors import CORSMiddleware
         from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+        from src.mcp_compat import lowlevel_server
 
         # Create Streamable HTTP session manager (primary MCP transport)
         # stateless=True: any client can connect without MCP-level session management
         #   (we handle identity separately via transport signals + sticky cache)
-        _streamable_session_manager = StreamableHTTPSessionManager(
-            app=mcp._mcp_server,
+        # mcp 1.x exposed the low-level ASGI server as `_mcp_server`; 2.x renamed
+        # it to `_lowlevel_server` (lowlevel_server bridges both).
+        _shsm_kwargs = dict(
+            app=lowlevel_server(mcp),
             stateless=True,
         )
+        # 1.x carried DNS-rebinding host/origin protection on FastMCP itself; 2.x
+        # dropped that constructor kwarg, so enforce it here on the manager the
+        # /mcp transport actually uses. Only add it when the server class no
+        # longer accepts `transport_security`, leaving the 1.x path untouched.
+        if not server_supports_kwarg("transport_security"):
+            _shsm_kwargs["security_settings"] = build_transport_security_settings()
+        _streamable_session_manager = StreamableHTTPSessionManager(**_shsm_kwargs)
         HAS_STREAMABLE_HTTP = True
         logger.info("Streamable HTTP transport available at /mcp")
 
@@ -444,8 +461,11 @@ async def main():
         # over a different transport. The SSE transport is unused anyway, so drop
         # those two routes — keep the rest of the sse_app() base (the body-reading
         # setup the REST routes depend on). Closes the gate-bypass surface.
-        _sse_path = mcp.settings.sse_path
-        _msg_path = mcp.settings.message_path.rstrip("/")
+        # 1.x exposed the SSE/message mount paths on `mcp.settings`; 2.x dropped
+        # those fields but still mounts sse_app() at the same defaults (/sse,
+        # /messages). Fall back to the defaults when the settings are absent.
+        _sse_path = getattr(mcp.settings, "sse_path", "/sse")
+        _msg_path = getattr(mcp.settings, "message_path", "/messages/").rstrip("/")
         _pruned = [r for r in app.routes if getattr(r, "path", None) in (_sse_path, _msg_path)]
         app.routes[:] = [r for r in app.routes if getattr(r, "path", None) not in (_sse_path, _msg_path)]
         logger.info(f"Pruned {len(_pruned)} unused/ungated SSE route(s): {_sse_path}, {_msg_path}")

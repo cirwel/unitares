@@ -19,6 +19,8 @@ import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from src.mcp_compat import get_tool_input_schema
+
 
 class TestExtractBaseFingerprint:
     """Unit tests for _extract_base_fingerprint().
@@ -662,7 +664,7 @@ class TestToolSchemaClientSessionId:
         """Each critical tool schema must include client_session_id in its properties."""
         assert tool_name in tool_schemas, f"Tool '{tool_name}' not found in TOOL_SCHEMAS"
         tool = tool_schemas[tool_name]
-        input_schema = tool.inputSchema or {}
+        input_schema = get_tool_input_schema(tool, {})
         props = input_schema.get("properties", {})
         assert "client_session_id" in props, (
             f"Tool '{tool_name}' is missing client_session_id in inputSchema.properties. "
@@ -673,7 +675,7 @@ class TestToolSchemaClientSessionId:
     def test_client_session_id_is_string_type(self, tool_schemas, tool_name):
         """client_session_id should be typed as string (or anyOf including string)."""
         tool = tool_schemas[tool_name]
-        input_schema = tool.inputSchema or {}
+        input_schema = get_tool_input_schema(tool, {})
         props = input_schema.get("properties", {})
         if "client_session_id" in props:
             csid = props["client_session_id"]
@@ -693,7 +695,7 @@ class TestToolSchemaClientSessionId:
         """Critical tools expose continuity_token for PATH 0 ownership proof."""
         assert tool_name in tool_schemas, f"Tool '{tool_name}' not found in TOOL_SCHEMAS"
         tool = tool_schemas[tool_name]
-        input_schema = tool.inputSchema or {}
+        input_schema = get_tool_input_schema(tool, {})
         props = input_schema.get("properties", {})
         assert "continuity_token" in props, (
             f"Tool '{tool_name}' is missing continuity_token in inputSchema.properties."
@@ -735,7 +737,7 @@ class TestToolSchemaClientSessionId:
             if tool_name not in tool_schemas:
                 continue  # Tool may have been renamed/removed
             tool = tool_schemas[tool_name]
-            input_schema = tool.inputSchema or {}
+            input_schema = get_tool_input_schema(tool, {})
             props = input_schema.get("properties", {})
             if "client_session_id" not in props:
                 missing.append(tool_name)
