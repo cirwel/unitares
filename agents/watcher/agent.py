@@ -119,13 +119,20 @@ PATTERNS_FILE = Path(__file__).resolve().parent / "patterns.md"
 OLLAMA_URL = os.environ.get(
     "WATCHER_OLLAMA_URL", "http://localhost:11434/v1/chat/completions"
 )
-# Default detector: qwen3.6:27b-coding-nvfp4 — a newer-generation coding model,
-# same 256K context window as the prior qwen3-coder-next:79B but ~19GB vs ~51GB,
-# so it loads/runs faster on a detector that fires on every tool use. It is a
-# size-down (27B vs 79B), so detection-quality parity is not pre-verified;
-# override via WATCHER_MODEL=qwen3-coder-next:latest to revert if findings regress
-# (qwen3.6:27b-coding-mxfp8 is a higher-precision middle option at ~31GB).
-DEFAULT_MODEL = os.environ.get("WATCHER_MODEL", "qwen3.6:27b-coding-nvfp4")
+# Default detector: qwen3-coder-next:latest (~51GB, 256K context) — the only tag
+# verified to pass `--self-test` on the reference host.
+#
+# Do NOT default to a tag that is not pulled locally. #1276 switched this to
+# qwen3.6:27b-coding-nvfp4, which was never present in `ollama list` — every
+# hook-fired scan from 2026-06-29 to 2026-07-29 died with `model call failed:
+# HTTP Error 404` while check-ins kept reporting stale finding counts, so the
+# breakage stayed invisible for a month.
+#
+# qwen3.6:27b-coding-mxfp8 IS pulled (~31GB) and answers plain chat, but it is a
+# thinking model: it spends the budget in `reasoning` and leaves
+# `message.content` empty at scan size, so `--self-test` yields no findings. Any
+# future size-down must clear `--self-test`, not just return HTTP 200.
+DEFAULT_MODEL = os.environ.get("WATCHER_MODEL", "qwen3-coder-next:latest")
 DEFAULT_TIMEOUT = int(os.environ.get("WATCHER_TIMEOUT", "90"))
 
 WATCHER_FINDINGS_LEASE_MODE_ENV = "WATCHER_FINDINGS_LEASE_MODE"
