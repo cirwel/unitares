@@ -14,6 +14,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+from src.mcp_compat import get_tool_input_schema
 from src.tool_schemas import (
     get_tool_definitions,
     get_pydantic_schemas,
@@ -181,28 +182,29 @@ class TestSchemaStructure:
 
     def test_every_tool_has_input_schema(self, full_tools):
         for tool in full_tools:
-            assert hasattr(tool, "inputSchema"), (
-                f"Tool {tool.name} missing 'inputSchema' attribute"
+            schema = get_tool_input_schema(tool)
+            assert schema is not None, (
+                f"Tool {tool.name} missing an input schema"
             )
-            assert isinstance(tool.inputSchema, dict), (
-                f"Tool {tool.name} inputSchema is not a dict"
+            assert isinstance(schema, dict), (
+                f"Tool {tool.name} input schema is not a dict"
             )
 
     def test_input_schema_type_is_object(self, full_tools):
-        """Every inputSchema must have type: 'object'."""
+        """Every input schema must have type: 'object'."""
         for tool in full_tools:
-            schema = tool.inputSchema
+            schema = get_tool_input_schema(tool)
             assert schema.get("type") == "object", (
-                f"Tool {tool.name} inputSchema type should be 'object', "
+                f"Tool {tool.name} input schema type should be 'object', "
                 f"got '{schema.get('type')}'"
             )
 
     def test_input_schema_has_properties_key(self, full_tools):
-        """Every inputSchema must have a 'properties' key."""
+        """Every input schema must have a 'properties' key."""
         for tool in full_tools:
-            schema = tool.inputSchema
+            schema = get_tool_input_schema(tool)
             assert "properties" in schema, (
-                f"Tool {tool.name} inputSchema missing 'properties' key"
+                f"Tool {tool.name} input schema missing 'properties' key"
             )
 
     def test_no_duplicate_tool_names_in_schema(self, full_tools):
@@ -226,7 +228,7 @@ class TestSchemaStructure:
     def test_required_params_subset_of_properties(self, full_tools):
         """If 'required' is present, every entry must exist in 'properties'."""
         for tool in full_tools:
-            schema = tool.inputSchema
+            schema = get_tool_input_schema(tool)
             required = schema.get("required", [])
             properties = schema.get("properties", {})
             for param in required:

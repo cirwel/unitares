@@ -34,7 +34,7 @@ import json
 import time
 from typing import Dict
 
-from mcp.server.fastmcp import Context
+from src.mcp_compat import Context, get_tool_input_schema
 
 from src.logging_utils import get_logger
 from src.metrics_registry import TOOL_CALLS_TOTAL, TOOL_CALL_DURATION
@@ -322,7 +322,7 @@ def auto_register_all_tools(mcp):
             continue
 
         description = tool.description.split("\n")[0] if tool.description else f"Tool: {tool_name}"
-        input_schema = getattr(tool, 'inputSchema', {}) or {}
+        input_schema = get_tool_input_schema(tool, {}) or {}
         inject_session = tool_name in TOOLS_NEEDING_SESSION_INJECTION
 
         try:
@@ -399,7 +399,7 @@ def _register_common_aliases(mcp):
         actual_schema = {}
         for tool_def in get_tool_definitions():
             if tool_def.name == actual:
-                actual_schema = getattr(tool_def, 'inputSchema', {}) or {}
+                actual_schema = get_tool_input_schema(tool_def, {}) or {}
                 break
 
         # If inject_action is set, remove "action" from the alias schema —

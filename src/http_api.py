@@ -37,6 +37,7 @@ from src.metrics_registry import (
 from src.broadcaster import broadcaster_instance
 from src.services.http_tool_service import execute_http_tool
 from src.mcp_listen_config import check_mcp_bearer, mcp_bearer_required
+from src.mcp_compat import get_tool_input_schema
 
 if TYPE_CHECKING:
     from starlette.applications import Starlette
@@ -481,7 +482,7 @@ async def http_list_tools(request):
                 "function": {
                     "name": tool.name,
                     "description": description,
-                    "parameters": tool.inputSchema
+                    "parameters": get_tool_input_schema(tool)
                 }
             })
         return JSONResponse({

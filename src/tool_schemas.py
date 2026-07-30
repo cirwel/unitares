@@ -13,6 +13,8 @@ from typing import Any
 from mcp.types import Tool
 from pydantic import BaseModel
 
+from src.mcp_compat import get_tool_input_schema, set_tool_input_schema
+
 
 _EXTRA_SCHEMA_MODULES: list[str] = []
 
@@ -300,10 +302,10 @@ def get_tool_definitions(verbosity: str | None = None) -> list[Tool]:
     # Apply verbosity and field description stripping
     for t in all_tools:
         if t.name in _HIDE_IDENTITY_PARAMS_TOOLS:
-            t.inputSchema = _hide_auto_injected_identity(t.inputSchema)
+            set_tool_input_schema(t, _hide_auto_injected_identity(get_tool_input_schema(t)))
         if verbosity == "short":
             t.description = _first_line(t.description)
         if strip_field_descriptions:
-            t.inputSchema = _strip_schema_descriptions(t.inputSchema)
+            set_tool_input_schema(t, _strip_schema_descriptions(get_tool_input_schema(t)))
 
     return all_tools

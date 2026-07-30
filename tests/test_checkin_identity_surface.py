@@ -15,6 +15,7 @@ and tests/test_onboard_pin.py::TestToolSchemaClientSessionId (the cross-guard).
 
 import pytest
 
+from src.mcp_compat import get_tool_input_schema
 from src.tool_schemas import get_tool_definitions
 from src.mcp_handlers.tool_stability import resolve_tool_alias
 from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
@@ -32,7 +33,7 @@ def tool_defs():
 
 @pytest.mark.parametrize("tool_name", CANONICAL)
 def test_canonical_surface_hides_identity_params(tool_defs, tool_name):
-    props = tool_defs[tool_name].inputSchema.get("properties", {})
+    props = get_tool_input_schema(tool_defs[tool_name], {}).get("properties", {})
     leaked = [p for p in HIDDEN if p in props]
     assert not leaked, f"{tool_name} still advertises {leaked}"
 
@@ -41,7 +42,7 @@ def test_canonical_surface_hides_identity_params(tool_defs, tool_name):
 def test_alias_inherits_stripped_surface(tool_defs, alias):
     actual, info = resolve_tool_alias(alias)
     assert info is not None, f"{alias} should resolve to a canonical tool"
-    props = tool_defs[actual].inputSchema.get("properties", {})
+    props = get_tool_input_schema(tool_defs[actual], {}).get("properties", {})
     leaked = [p for p in HIDDEN if p in props]
     assert not leaked, f"{alias} -> {actual} still advertises {leaked}"
 
@@ -52,20 +53,20 @@ def test_attribution_keys_stay_advertised(tool_defs, tool_name):
     # claude.ai only sends advertised params; these two are the unique-attribution
     # keys (client_session_id) and resume proof (continuity_token). Stripping them
     # collapses connector attribution onto a shared fingerprint / breaks resume.
-    props = tool_defs[tool_name].inputSchema.get("properties", {})
+    props = get_tool_input_schema(tool_defs[tool_name], {}).get("properties", {})
     missing = [p for p in KEPT_ATTRIBUTION if p not in props]
     assert not missing, f"{tool_name} dropped attribution keys {missing}"
 
 
 def test_core_params_survive(tool_defs):
-    props = tool_defs["process_agent_update"].inputSchema.get("properties", {})
+    props = get_tool_input_schema(tool_defs["process_agent_update"], {}).get("properties", {})
     for keep in ("response_text", "complexity", "confidence"):
         assert keep in props, f"process_agent_update lost {keep}"
 
 
 def test_onboard_keeps_identity_params(tool_defs):
     # onboard is a real entry point for identity — it must NOT be stripped.
-    props = tool_defs["onboard"].inputSchema.get("properties", {})
+    props = get_tool_input_schema(tool_defs["onboard"], {}).get("properties", {})
     assert "agent_id" in props
     assert "continuity_token" in props
 

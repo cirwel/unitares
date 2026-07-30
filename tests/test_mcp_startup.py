@@ -15,19 +15,21 @@ def test_mcp_startup():
     try:
         print("1. Loading tool schemas...")
         from src.tool_schemas import get_tool_definitions
+        from src.mcp_compat import get_tool_input_schema
         tools = get_tool_definitions()
         print(f"   ✓ Loaded {len(tools)} tools")
-        
+
         # Validate each tool
         for tool in tools:
             if not tool.name:
                 errors.append(f"Tool missing name: {tool}")
-            if not tool.inputSchema:
-                errors.append(f"{tool.name}: Missing inputSchema")
-            if not isinstance(tool.inputSchema, dict):
-                errors.append(f"{tool.name}: inputSchema must be dict")
-            if tool.inputSchema.get('type') != 'object':
-                errors.append(f"{tool.name}: inputSchema.type must be 'object'")
+            schema = get_tool_input_schema(tool)
+            if not schema:
+                errors.append(f"{tool.name}: Missing input schema")
+            if not isinstance(schema, dict):
+                errors.append(f"{tool.name}: input schema must be dict")
+            elif schema.get('type') != 'object':
+                errors.append(f"{tool.name}: input schema.type must be 'object'")
     except Exception as e:
         errors.append(f"Tool schemas: {e}")
         traceback.print_exc()
@@ -59,9 +61,14 @@ def test_mcp_startup():
         print("3. Importing MCP server...")
         from src.mcp_server_std import server
         print("   ✓ Server imported")
-        
-        # Check list_tools registration
-        if hasattr(server, 'list_tools'):
+
+        # Check list_tools registration. mcp 1.x exposes the decorator method
+        # `list_tools`; 2.x registers handlers by method string in
+        # `_request_handlers` ("tools/list").
+        has_list_tools = hasattr(server, "list_tools") or (
+            "tools/list" in getattr(server, "_request_handlers", {})
+        )
+        if has_list_tools:
             print("   ✓ list_tools registered")
         else:
             errors.append("server.list_tools not found")
@@ -74,11 +81,12 @@ def test_mcp_startup():
         print("4. Testing JSON serialization...")
         import json
         from src.tool_schemas import get_tool_definitions
+        from src.mcp_compat import get_tool_input_schema
         tools = get_tool_definitions()
-        
+
         for tool in tools:
             try:
-                json.dumps(tool.inputSchema)
+                json.dumps(get_tool_input_schema(tool))
             except Exception as e:
                 errors.append(f"{tool.name}: JSON serialization failed: {e}")
         

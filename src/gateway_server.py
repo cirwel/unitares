@@ -23,7 +23,9 @@ _src_dir = str(Path(__file__).resolve().parent)
 if _src_dir not in sys.path:
     sys.path.insert(0, _src_dir)
 
-from mcp.server.fastmcp import FastMCP
+# `src/` (not the repo root) is what this script guarantees on sys.path, so
+# import the compat shim by its src-relative name to match `from gateway.x`.
+from mcp_compat import FastMCP, server_supports_kwarg
 
 from gateway.client import GovernanceMCPClient
 from gateway.constants import GATEWAY_HOST, GATEWAY_PORT, GOVERNANCE_URL
@@ -37,11 +39,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("gateway")
 
-# FastMCP server
-mcp = FastMCP(
-    name="unitares-gateway",
-    host=GATEWAY_HOST,
-)
+# FastMCP (1.x) / MCPServer (2.x) server. 2.x dropped the `host` constructor
+# kwarg (host is applied at run time), so pass it only when supported.
+_gw_kwargs = {"name": "unitares-gateway"}
+if server_supports_kwarg("host"):
+    _gw_kwargs["host"] = GATEWAY_HOST
+mcp = FastMCP(**_gw_kwargs)
 
 # Shared client instance (created at startup)
 _client: GovernanceMCPClient | None = None

@@ -8,7 +8,7 @@
 #   pip install -r requirements-core.txt
 
 # Core MCP SDK
-mcp>=1.26.0,<2.0.0
+mcp>=1.26.0,<3.0.0
 
 # Governance system core math
 numpy>=1.24.0,<3.0.0

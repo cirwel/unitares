@@ -309,7 +309,7 @@ def _create_session_wrapper(
         get_handler: Function that returns the actual handler (e.g., get_tool_wrapper)
         session_extractor: Function to extract session_id from context (ctx -> str)
     """
-    from mcp.server.fastmcp import Context
+    from src.mcp_compat import Context
 
     # Build signature: ctx first, then typed params
     params = [
