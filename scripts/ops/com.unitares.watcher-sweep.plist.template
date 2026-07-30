@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Watcher periodic-sweep launchd template.
+
+    Watcher's primary trigger is the Claude Code PostToolUse hook, which makes
+    its coverage depend on an editor session even though its inference is
+    entirely local. This job is the session-independent backstop: every 15
+    minutes it scans source files edited since the last sweep that the hook did
+    not already cover (see agents/watcher/watcher-sweep.sh).
+
+    Requires a reachable local Ollama at localhost:11434. The script exits
+    quietly when Ollama is down, when scans are already running, or when
+    nothing changed — so a laptop with the model server off costs nothing.
+
+    Before installing, substitute placeholders:
+      __UNITARES_ROOT__  → absolute path to your unitares checkout
+      __HOME__           → your $HOME (expanded absolute path)
+
+    Example:
+      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
+          -e "s|__HOME__|$HOME|g" \
+          scripts/ops/com.unitares.watcher-sweep.plist.template \
+          > ~/Library/LaunchAgents/com.unitares.watcher-sweep.plist
+      launchctl load ~/Library/LaunchAgents/com.unitares.watcher-sweep.plist
+
+    Run-once smoke test (fire immediately instead of waiting for the interval):
+      launchctl kickstart -k gui/$(id -u)/com.unitares.watcher-sweep
+      grep sweep $HOME/Library/Logs/unitares-watcher.log | tail -5
+
+    Scope defaults to $HOME/projects. Override with
+    UNITARES_WATCHER_SWEEP_ROOTS (colon-separated) below.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unitares.watcher-sweep</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__UNITARES_ROOT__/agents/watcher/watcher-sweep.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__UNITARES_ROOT__</string>
+
+    <!-- Every 15 minutes. The script's own watermark makes repeat fires cheap. -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <!-- Don't stampede at load; wait for the first interval. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Local inference is CPU/GPU-heavy; stay out of the way of foreground work. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/unitares-watcher-sweep-launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/unitares-watcher-sweep-launchd.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <!-- Roots to walk, colon-separated. -->
+        <key>UNITARES_WATCHER_SWEEP_ROOTS</key>
+        <string>__HOME__/projects</string>
+    </dict>
+</dict>
+</plist>
