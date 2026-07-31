@@ -226,7 +226,26 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
         Application.get_env(:unitares_sentinel, :analysis_jitter_ms, @default_jitter_ms)
       )
 
-    lease_opts = Keyword.get(opts, :lease_opts, [])
+    # The emitter's lease surface is a property of the emitter, not of whatever
+    # the caller remembered to pass. `LeaseAdvisory.acquire_cycle/1` defaults to
+    # ForcedReleasePoller's `resident:/sentinel_cycle`, so an emitter started
+    # without `lease_opts[:surface_id]` contended with the poller on the lease
+    # plane *and* collided with it inside `LeaseStarvation` — same derived
+    # sidecar path (two writers, one file) and same `fingerprint_extra` (one
+    # resident's outage dedupping into the other's). `application.ex` documents
+    # the distinct-surface invariant (KG 2026-05-08T02:14:43.822544+00:00);
+    # defaulting here makes it structural instead of a property of one config
+    # line that a future caller can omit.
+    #
+    # NOT `Keyword.put_new/3`: that keys on the key being PRESENT, so an explicit
+    # `lease_opts: [surface_id: nil]` walked past it into the `fetch!` below,
+    # reached `LeaseStarvation.require_surface_id/1`, and raised inside `init/1`
+    # — a supervisor restart loop from a mistyped option. The defense is
+    # value-shaped and lives with the requirement.
+    lease_opts =
+      opts
+      |> Keyword.get(:lease_opts, [])
+      |> LeaseStarvation.put_default_surface_id("resident:/sentinel_fleet_emit")
 
     state = %{
       opts:
@@ -276,7 +295,9 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
         state,
         LeaseStarvation.new(
           resident: "FleetFindingEmitter",
-          surface_id: Keyword.get(lease_opts, :surface_id),
+          # `fetch!`, not `get`: the surface is resolved above, and a nil here
+          # would put both residents on one sidecar file and one fingerprint.
+          surface_id: Keyword.fetch!(lease_opts, :surface_id),
           alert_after_seconds: Keyword.get(opts, :lease_blocked_alert_after_seconds),
           state_path: Keyword.get(opts, :lease_blocked_state_path, :derive)
         )

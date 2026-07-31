@@ -362,6 +362,23 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
 
     cursor = load_cursor_from_state()
 
+    # Name the surface HERE rather than letting it default twice, in two places,
+    # to the same string. `LeaseAdvisory.acquire_cycle/1` already falls back to
+    # `resident:/sentinel_cycle`, so this changes nothing about which lease the
+    # poller acquires — what it changes is that `LeaseStarvation.new/1` can now
+    # demand a real surface (see `require_surface_id/1` there) instead of quietly
+    # sharing one default with FleetFindingEmitter, which would give both
+    # residents the same sidecar path and the same finding fingerprint.
+    #
+    # NOT `Keyword.put_new/3`: that keys on the key being PRESENT, so an explicit
+    # `lease_opts: [surface_id: nil]` walked past it into the `fetch!` below,
+    # raised inside `init/1`, and crash-looped the supervisor. The defense is
+    # value-shaped and lives with the requirement.
+    lease_opts =
+      opts
+      |> Keyword.get(:lease_opts, [])
+      |> LeaseStarvation.put_default_surface_id(LeaseAdvisory.cycle_surface_id())
+
     state = %{
       db: db,
       cursor: cursor,
@@ -381,7 +398,7 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
           :lease_advisory,
           Application.get_env(:unitares_sentinel, :lease_advisory_enabled, true)
         ),
-      lease_opts: Keyword.get(opts, :lease_opts, []),
+      lease_opts: lease_opts,
       tick_timeout_ms:
         Keyword.get(
           opts,
@@ -408,7 +425,9 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
         state,
         LeaseStarvation.new(
           resident: "ForcedReleasePoller",
-          surface_id: Keyword.get(Keyword.get(opts, :lease_opts, []), :surface_id),
+          # `fetch!`, not `get`: the surface is resolved above, and a nil here
+          # would put both residents on one sidecar file and one fingerprint.
+          surface_id: Keyword.fetch!(lease_opts, :surface_id),
           alert_after_seconds: Keyword.get(opts, :lease_blocked_alert_after_seconds),
           state_path: Keyword.get(opts, :lease_blocked_state_path, :derive)
         )

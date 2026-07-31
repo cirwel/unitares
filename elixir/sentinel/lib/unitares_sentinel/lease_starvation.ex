@@ -23,7 +23,7 @@ defmodule UnitaresSentinel.LeaseStarvation do
   **The insight that makes self-reporting possible at all**: the findings POST
   goes to `/api/findings` on gov-MCP (:8767), a different process on a different
   port from the lease plane (:8788), and `http_record_finding`
-  (`src/http_api.py:2635`) gates on `_check_http_auth` only — there is no lease
+  (`src/http_api.py:2634`) gates on `_check_http_auth` only — there is no lease
   check anywhere in that handler. A lease-starved resident can therefore still
   report its own starvation. Verified 2026-07-31; if that ever stops being true
   this module goes silent in exactly the condition it exists for, so treat it as
@@ -57,7 +57,43 @@ defmodule UnitaresSentinel.LeaseStarvation do
   retried on the next tick until it lands. This is not hypothetical: gov-MCP on
   this box is periodically jetsam-killed, and a governance plane that is down is
   *correlated* with residents starving, so the densest and most valuable early
-  alerts are precisely the ones a fire-and-forget design would drop.
+  alerts are precisely the ones a fire-and-forget design would drop. The same
+  reasoning applies with even more force to the CLOSURE finding, and for the
+  same reason: a jetsam-restarted gov-MCP is itself a plausible explanation for
+  why the lease plane suddenly freed up, so the moment a closure is emitted is
+  correlated with the moment a POST is most likely to be lost. `clear/2`
+  therefore retries a lost closure (bounded) instead of destroying the episode.
+
+  **The episode's phase is explicit and persisted, never inferred.** "The
+  episode ended but its closure is still owed" used to be encoded as the
+  conjunction of two independent halves — the sidecar file still existing, and
+  an in-memory `:lease_blocked_pending_closure`. Two halves that *can* disagree
+  *did*, both ways, and both were live HIGH defects:
+
+    * a later, NON-alerting episode reached the settle path with "this episode
+      owes nothing", which was implemented as "no closure is owed at all". One
+      `service_unavailable` blip far under the threshold (there are 62 of them
+      interleaved in the live data, so this is ordinary traffic) silently
+      destroyed the previous episode's closure debt with zero POSTs attempted,
+      leaving its `high` finding open in the backlog forever; and
+    * a retained sidecar carried no "episode ended" marker, so a restart — the
+      `kickstart -k` / jetsam trigger this persistence exists for — resumed a
+      CLOSED episode: it kept the old `blocked_since`, skipped ladder rungs, and
+      emitted a finding claiming a contiguous outage across an interval during
+      which the surface had been GRANTED. That is precisely the fabricated
+      outage the "Known gap" section below commits to never producing.
+
+  The sidecar is therefore the single source of truth for both facts. It carries
+  a `"schema_version"` and an explicit `"state"` — `"open"` (starving now) vs
+  `"closing"` (episode over, closure owed) — plus an optional `"owed_closure"`
+  record that may ride along in EITHER state, because a new episode can
+  legitimately open while a previous episode's closure is still undelivered.
+  `persist/1`, `load_episode/5` and `clear/2` branch on that field instead of
+  inferring the phase, and `sync_sidecar/1` is the single function that decides
+  what the file says. Because the debt itself is persisted, a resident restarted
+  mid-retry really does deliver the closure on its next granted tick, with the
+  duration frozen at the moment the episode ended — that used to be a comment
+  describing behavior the code did not have.
 
   **Sticky blocker.** The remedy sentence is chosen from the whole episode, not
   from whichever tick happened to land on a ladder rung. Live data: 62
@@ -74,9 +110,9 @@ defmodule UnitaresSentinel.LeaseStarvation do
   forever while fully dark. The likelier variant is an operator running
   `launchctl kickstart -k` because "sentinel looks stuck" — which under
   in-memory-only state buys another 12 minutes of silence at exactly the moment
-  someone is looking. The episode start is therefore persisted (single-writer
-  sidecar file, see `resolve_state_path/2`) and reloaded in `init/1`. Do not
-  "simplify" that away.
+  someone is looking. The episode start, its ladder position AND its sticky
+  blocker are therefore persisted (single-writer sidecar file, see
+  `resolve_state_path/2`) and reloaded in `init/1`. Do not "simplify" that away.
 
   ## Known gap (deliberate, tracked)
 
@@ -89,7 +125,7 @@ defmodule UnitaresSentinel.LeaseStarvation do
   counter and its own message; it is not folded in here.
   """
 
-  alias UnitaresSentinel.{AtomicWrite, CycleState, Findings, LeaseAdvisory}
+  alias UnitaresSentinel.{AtomicWrite, CycleState, Findings}
 
   require Logger
 
@@ -101,23 +137,58 @@ defmodule UnitaresSentinel.LeaseStarvation do
   @default_alert_after_seconds 720
   @max_backoff_multiplier 16
 
+  # Delivery attempts for a closure finding before the episode is dropped. See
+  # `retry_pending_closure/2` for why the retry terminates.
+  @max_closure_retries 5
+
+  # Sidecar schema. Bumped from the implicit v1 (no key) when the episode gained
+  # an explicit `"state"`: a v1 file cannot express "closing", so reading one as
+  # if it could would be the same misinterpretation this version exists to fix.
+  # `episode_state/1` therefore matches versions EXACTLY and treats anything it
+  # does not know as unreadable — degrade to "no resumed episode", never crash,
+  # never guess. A future v3 adds a clause; it does not widen a comparison.
+  @schema_version 2
+
   # `finding_type`, not `type`. The `_FINDING_TYPE_SUFFIX = "_finding"` gate at
   # `src/http_api.py:2655` is checked against `payload["type"]`, which
   # `Findings.finding_body/2` hardcodes to `"sentinel_finding"` — and keeping it
   # there is load-bearing, because `sentinel_finding` is in
-  # `_SENTINEL_FINDING_EVENT_TYPES` (`http_api.py:1819`) so the finding reaches
+  # `_SENTINEL_FINDING_EVENT_TYPES` (`http_api.py:1821`) so the finding reaches
   # `audit.events` and the backlog endpoint. The kind-within-channel rides in
   # the ungated `finding_type`, matching the `sentinel_self_pause` precedent.
   @finding_type "sentinel_lease_starved"
   @cleared_finding_type "sentinel_lease_starvation_cleared"
 
   # `_SENTINEL_BACKLOG_DEFAULT_SEVERITIES = {"high", "critical"}`
-  # (`src/http_api.py:1822`). Anything below `high` does not appear in the
+  # (`src/http_api.py:1824`). Anything below `high` does not appear in the
   # operator's default "what did I miss across restarts?" query — which is
   # precisely the query this incident should have answered. Forced, not stylistic.
   @starved_severity "high"
 
   @default_lease_plane_base_url "http://127.0.0.1:8788"
+
+  # The conflict keys that survive into the sidecar and back. Whitelisted rather
+  # than round-tripped wholesale so a schema change on the lease plane cannot
+  # smuggle unexpected atoms through `String.to_existing_atom/1`-shaped code.
+  @persisted_conflict_keys [:blocking_lease_id, :held_by_uuid, :expires_at]
+
+  @typedoc """
+  An episode that has ENDED, frozen at the moment it ended.
+
+  The closure finding is rendered from these facts on demand rather than stored
+  pre-rendered, so the copy retried after a restart is identical by construction
+  to the one the ending process would have sent — `blocked_seconds` is
+  `ended_at - since`, not "now minus since", and cannot drift while the debt
+  sits unpaid.
+  """
+  @type closure_episode :: %{
+          required(:surface_id) => String.t(),
+          required(:resident) => String.t(),
+          required(:since) => DateTime.t(),
+          required(:ended_at) => DateTime.t(),
+          required(:ticks) => non_neg_integer(),
+          required(:counts) => %{String.t() => pos_integer()}
+        }
 
   @typedoc """
   The `lease_blocked_*` slice of a resident GenServer's state.
@@ -137,6 +208,8 @@ defmodule UnitaresSentinel.LeaseStarvation do
           required(:lease_blocked_last_conflict) => map() | nil,
           required(:lease_blocked_outcome_counts) => %{atom() => pos_integer()},
           required(:lease_blocked_last_emitted_multiple) => non_neg_integer(),
+          required(:lease_blocked_pending_closure) =>
+            %{episode: closure_episode(), attempts: non_neg_integer()} | nil,
           optional(any()) => any()
         }
 
@@ -145,7 +218,8 @@ defmodule UnitaresSentinel.LeaseStarvation do
 
   Options:
     * `:resident` (required) — human name used in the finding, e.g. `"ForcedReleasePoller"`
-    * `:surface_id` — defaults to `LeaseAdvisory.cycle_surface_id/0`
+    * `:surface_id` (required) — the lease surface this resident acquires. Must be
+      a non-empty string; see `require_surface_id/1` for why it is not defaulted.
     * `:alert_after_seconds` — overrides app env / the 720s default
     * `:state_path` — explicit sidecar path; `false` disables persistence
       entirely (tests), `nil` / omitted derives it from the Sentinel state file
@@ -154,7 +228,7 @@ defmodule UnitaresSentinel.LeaseStarvation do
   @spec new(keyword()) :: tracker()
   def new(opts) do
     resident = Keyword.fetch!(opts, :resident)
-    surface_id = Keyword.get(opts, :surface_id) || LeaseAdvisory.cycle_surface_id()
+    surface_id = require_surface_id(Keyword.fetch!(opts, :surface_id))
     alert_after_seconds = resolve_alert_after_seconds(opts)
     state_path = resolve_state_path(Keyword.get(opts, :state_path, :derive), surface_id)
     now = Keyword.get(opts, :now) || DateTime.utc_now()
@@ -169,12 +243,55 @@ defmodule UnitaresSentinel.LeaseStarvation do
       lease_blocked_last_blocked_at: nil,
       lease_blocked_last_conflict: nil,
       lease_blocked_outcome_counts: %{},
-      lease_blocked_last_emitted_multiple: 0
+      lease_blocked_last_emitted_multiple: 0,
+      lease_blocked_pending_closure: nil
     }
 
-    case load_episode(state_path, alert_after_seconds, now) do
+    case load_episode(state_path, surface_id, resident, alert_after_seconds, now) do
       nil -> base
       episode -> Map.merge(base, episode)
+    end
+  end
+
+  # `:surface_id` used to default to `LeaseAdvisory.cycle_surface_id/0` while
+  # `:resident` was already `fetch!`-required. A review caught what that
+  # asymmetry costs: BOTH the sidecar path (`derive_state_path/1`) and the
+  # finding fingerprint (`fingerprint_extra`) are keyed on this string, so two
+  # residents that both take the default become two writers on one file whose
+  # outages dedup into each other — exactly the two properties the comments on
+  # those lines claim are prevented. `Keyword.fetch!` on its own is not enough
+  # either: both call sites read the surface out of `:lease_opts`, where a
+  # missing key yields `nil` and `fetch!` would happily accept it. A resident
+  # with no surface is a misconfiguration; fail loudly at `init/1` rather than
+  # silently collide.
+  defp require_surface_id(surface_id) when is_binary(surface_id) and surface_id != "",
+    do: surface_id
+
+  defp require_surface_id(other) do
+    raise ArgumentError,
+          "LeaseStarvation requires a non-empty :surface_id (the starvation sidecar path and " <>
+            "the finding fingerprint are both keyed on it, so two residents sharing one value " <>
+            "collide); got: #{inspect(other)}"
+  end
+
+  @doc """
+  Stamp a resident's own lease surface onto `lease_opts` unless the caller
+  supplied a REAL one.
+
+  Both residents used to do this with `Keyword.put_new/3`, which keys on key
+  PRESENCE, not on value: `lease_opts: [surface_id: nil]` sails straight past it,
+  reaches `Keyword.fetch!/2` at the `new/1` call site, and hands
+  `require_surface_id/1` a `nil` — which raises inside `init/1` and turns a
+  mistyped option into a supervisor restart loop. The comments at those call
+  sites already claimed the surface was defended; only omission actually was.
+  This is the whole defense, so it lives next to the requirement it satisfies
+  rather than being re-derived at each caller.
+  """
+  @spec put_default_surface_id(keyword(), String.t()) :: keyword()
+  def put_default_surface_id(lease_opts, default) do
+    case Keyword.get(lease_opts, :surface_id) do
+      surface_id when is_binary(surface_id) and surface_id != "" -> lease_opts
+      _ -> Keyword.put(lease_opts, :surface_id, default)
     end
   end
 
@@ -241,10 +358,44 @@ defmodule UnitaresSentinel.LeaseStarvation do
   @doc """
   Clear the episode after a tick that was NOT lease-blocked.
 
-  Emits one `info` closure finding if the episode had actually alerted —
-  without it the operator is left holding several `high`-severity findings on a
-  surface that flaps at episode granularity and no way to answer "is it still
-  bad?" from the backlog. No-op (and no file I/O) when no episode is open, which
+  Emits one `info` closure finding if the episode had actually alerted. What
+  that closure does and does not buy, precisely (an earlier version of this
+  docstring claimed more than the server can deliver):
+
+    * It lands in the live event stream and, via
+      `_SENTINEL_FINDING_EVENT_TYPES` (`src/http_api.py:1821`), durably in
+      `audit.events`. It is readable at
+      `GET /v1/sentinel/backlog?severity=all`.
+    * It does NOT retire anything. `_SENTINEL_BACKLOG_DEFAULT_SEVERITIES`
+      is `{"high","critical"}` (`src/http_api.py:1824`) and the `severity` query
+      param takes `all` or exactly one value — there is no `{high, info}` view —
+      so the operator's default backlog query still shows the open
+      `sentinel_lease_starved` rows for the episode.
+    * Actually retiring a finding is an operator action:
+      `POST /v1/sentinel/adjudicate {fingerprint, status, reason?}`
+      (`src/http_api.py:3100`), operator-credential gated and idempotent per
+      fingerprint.
+
+  `info` is deliberate anyway: a closure is not an alarm, and promoting it to
+  `high` would pollute the very backlog it exists to make readable.
+
+  Delivery is not assumed. A closure lost to a transport error used to take the
+  whole episode with it (`discard_persisted/1` ran unconditionally), leaving the
+  tracker with no memory that an episode had ever existed — and gov-MCP's
+  jetsam-kill 502 window is *correlated* with the lease plane freeing up, so the
+  loss lands exactly when closures are emitted. A lost closure is now kept and
+  retried on later ticks, bounded by `@max_closure_retries`, and the debt is
+  written into the sidecar so a restart mid-retry does not silently forgive it.
+
+  The debt owed by a PREVIOUS episode is settled first and is settled
+  independently of whatever this episode owes. That ordering is the fix for a
+  HIGH regression: "this episode owes nothing" (`closure == nil`, the normal
+  outcome for any episode that never reached the alert threshold) used to route
+  straight into an unconditional `forget_episode/1`, so a single
+  `service_unavailable` blip between the loss and the retry destroyed the older
+  debt with ZERO POSTs attempted. There are 62 such blips in the live data.
+
+  No-op (and no file I/O) when no episode is open and no closure is owed, which
   is the overwhelmingly common case.
 
   Options: `:emit_findings?` (default true), `:findings_opts`, `:now`.
@@ -252,18 +403,27 @@ defmodule UnitaresSentinel.LeaseStarvation do
   @spec clear(tracker(), keyword()) :: tracker()
   def clear(tracker, opts \\ [])
 
-  def clear(%{lease_blocked_since: nil} = tracker, _opts), do: tracker
+  # Nothing open, nothing owed: the hot path, and it must not touch the disk.
+  def clear(%{lease_blocked_since: nil, lease_blocked_pending_closure: nil} = tracker, _opts),
+    do: tracker
+
+  # No open episode, but a closure owed by a PREVIOUS episode still has to get
+  # its retry — including one restored from the sidecar by `new/1`, which is the
+  # only way a debt outlives the process that incurred it.
+  def clear(%{lease_blocked_since: nil} = tracker, opts),
+    do: tracker |> retry_pending_closure(opts) |> sync_sidecar()
 
   def clear(tracker, opts) do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
 
-    if tracker.lease_blocked_last_emitted_multiple > 0 and
-         Keyword.get(opts, :emit_findings?, true) do
-      Findings.post_finding_result(
-        cleared_finding(tracker, now),
-        Keyword.get(opts, :findings_opts, [])
-      )
-    end
+    # Freeze the episode's facts BEFORE resetting. A retry three ticks (or one
+    # restart) later must still describe the episode that actually ended, not a
+    # duration that kept growing after it did.
+    closure =
+      if tracker.lease_blocked_last_emitted_multiple > 0 and
+           Keyword.get(opts, :emit_findings?, true) do
+        closure_episode(tracker, now)
+      end
 
     Logger.warning(
       "#{tracker.lease_blocked_resident}: lease starvation CLEARED on " <>
@@ -272,12 +432,24 @@ defmodule UnitaresSentinel.LeaseStarvation do
         "(#{tracker.lease_blocked_streak} blocked ticks this process)"
     )
 
-    discard_persisted(tracker)
-    reset(tracker)
+    tracker
+    |> reset()
+    # An OLDER debt is a separate obligation to a separate episode. Pay it on
+    # its own before this episode's closure can supersede it; `closure == nil`
+    # must never be read as "nothing is owed by anyone".
+    |> retry_pending_closure(opts)
+    |> owe_closure(closure)
+    |> retry_pending_closure(opts)
+    |> sync_sidecar()
   end
 
   @doc """
   Pure field reset. Does not emit and does not touch the sidecar file.
+
+  Deliberately does NOT touch `:lease_blocked_pending_closure`: an undelivered
+  closure is a debt owed for an episode that has already ended, not part of the
+  episode's own state, and dropping it here would reintroduce the
+  fire-and-forget hole `clear/2` exists to close.
   """
   @spec reset(tracker()) :: tracker()
   def reset(tracker) do
@@ -367,29 +539,50 @@ defmodule UnitaresSentinel.LeaseStarvation do
 
   @doc false
   @spec cleared_finding(tracker(), DateTime.t()) :: map()
-  def cleared_finding(tracker, now) do
-    seconds = blocked_seconds(tracker, now)
+  def cleared_finding(tracker, now), do: closure_finding(closure_episode(tracker, now))
+
+  # Freeze an ending episode into the minimal set of facts the closure finding
+  # is a pure function of. Everything downstream — the in-memory debt, the
+  # sidecar record, the retried POST — works from THIS, so there is exactly one
+  # description of the episode and nothing to keep in sync.
+  @spec closure_episode(tracker(), DateTime.t()) :: closure_episode()
+  defp closure_episode(tracker, now) do
+    %{
+      surface_id: tracker.lease_blocked_surface_id,
+      resident: tracker.lease_blocked_resident,
+      since: tracker.lease_blocked_since,
+      ended_at: now,
+      ticks: tracker.lease_blocked_streak,
+      counts: stringify_counts(tracker.lease_blocked_outcome_counts)
+    }
+  end
+
+  @spec closure_finding(closure_episode()) :: map()
+  defp closure_finding(episode) do
+    # `ended_at - since`, never `now - since`: the duration belongs to the
+    # episode, not to whenever the POST finally lands.
+    seconds = max(DateTime.diff(episode.ended_at, episode.since, :second), 0)
 
     %{
       type: @cleared_finding_type,
       severity: "info",
       violation_class: "BEH",
-      fingerprint_extra: [tracker.lease_blocked_surface_id],
-      change_token: change_token(tracker.lease_blocked_since, "cleared"),
+      fingerprint_extra: [episode.surface_id],
+      change_token: change_token(episode.since, "cleared"),
       summary:
-        "Sentinel resident #{tracker.lease_blocked_resident} lease starvation CLEARED: surface " <>
-          "#{tracker.lease_blocked_surface_id} acquired its lease again after " <>
-          "#{format_duration(seconds)} dark (#{tick_phrase(tracker)} observed by this " <>
+        "Sentinel resident #{episode.resident} lease starvation CLEARED: surface " <>
+          "#{episode.surface_id} acquired its lease again after " <>
+          "#{format_duration(seconds)} dark (#{tick_phrase(episode.ticks)} observed by this " <>
           "process). Closes the sentinel_lease_starved finding for the episode " <>
-          "that started #{DateTime.to_iso8601(tracker.lease_blocked_since)}.",
+          "that started #{DateTime.to_iso8601(episode.since)}.",
       extra: %{
         self_observation: true,
-        surface_id: tracker.lease_blocked_surface_id,
-        resident: tracker.lease_blocked_resident,
-        blocked_since: DateTime.to_iso8601(tracker.lease_blocked_since),
+        surface_id: episode.surface_id,
+        resident: episode.resident,
+        blocked_since: DateTime.to_iso8601(episode.since),
         blocked_seconds: seconds,
-        blocked_ticks_this_process: tracker.lease_blocked_streak,
-        lease_outcome_counts: stringify_counts(tracker.lease_blocked_outcome_counts)
+        blocked_ticks_this_process: episode.ticks,
+        lease_outcome_counts: episode.counts
       }
     }
   end
@@ -416,14 +609,134 @@ defmodule UnitaresSentinel.LeaseStarvation do
     end
   end
 
+  # ---- closure delivery --------------------------------------------------
+  #
+  # Nothing here may block or crash the calling GenServer: a resident whose
+  # governance plane is down must keep ticking. Every path returns a tracker.
+
+  # Adopt an ended episode as the debt. At most one closure is ever owed: a
+  # second episode's closure supersedes an older undelivered one, which requires
+  # gov-MCP to be down across two whole episodes and, by then, names the outage
+  # the operator actually cares about. The older debt has already had its own
+  # delivery attempt this tick (see `clear/2`) — superseding is what happens
+  # after that attempt fails, not instead of it.
+  defp owe_closure(tracker, nil), do: tracker
+
+  defp owe_closure(%{lease_blocked_pending_closure: nil} = tracker, episode),
+    do: %{tracker | lease_blocked_pending_closure: %{episode: episode, attempts: 0}}
+
+  defp owe_closure(tracker, episode) do
+    Logger.warning(
+      "#{tracker.lease_blocked_resident}: a newer lease-starvation closure supersedes an " <>
+        "undelivered one (gov-MCP has been unreachable across two episodes on " <>
+        "#{tracker.lease_blocked_surface_id})"
+    )
+
+    %{tracker | lease_blocked_pending_closure: %{episode: episode, attempts: 0}}
+  end
+
+  # The common case, and the reason `clear/2`'s no-episode clause stays free of
+  # file I/O.
+  defp retry_pending_closure(%{lease_blocked_pending_closure: nil} = tracker, _opts), do: tracker
+
+  # Termination, three independent ways, because an unbounded retry against a
+  # down gov-MCP would outlive the incident it describes and turn an
+  # informational courtesy into a background loop:
+  #   1. this cap — 5 attempts, each consuming one granted (non-blocked) tick, so
+  #      ~2.5 minutes at the poller's 30s cadence and ~25 minutes at the
+  #      emitter's 300s one. The count is PERSISTED, so restarting no longer
+  #      resets the budget;
+  #   2. staleness — `decode_owed_closure/5` refuses a debt whose episode ended
+  #      more than one alert threshold ago, so a sidecar found on disk after a
+  #      long downtime is not paid out as news;
+  #   3. delivery, which is the expected outcome once gov-MCP is back.
+  defp retry_pending_closure(
+         %{lease_blocked_pending_closure: %{attempts: attempts}} = tracker,
+         _opts
+       )
+       when attempts >= @max_closure_retries do
+    Logger.warning(
+      "#{tracker.lease_blocked_resident}: lease-starvation closure undelivered after " <>
+        "#{attempts} attempts — dropping it (the open sentinel_lease_starved " <>
+        "findings stay in the backlog and need /v1/sentinel/adjudicate)"
+    )
+
+    forget_closure(tracker)
+  end
+
+  defp retry_pending_closure(%{lease_blocked_pending_closure: pending} = tracker, opts) do
+    if Keyword.get(opts, :emit_findings?, true) do
+      case post_closure(tracker, closure_finding(pending.episode), opts) do
+        :delivered ->
+          forget_closure(tracker)
+
+        :lost ->
+          %{tracker | lease_blocked_pending_closure: %{pending | attempts: pending.attempts + 1}}
+      end
+    else
+      # Findings were switched off between the failure and the retry. Nothing is
+      # owed to a plane the operator asked us not to talk to.
+      forget_closure(tracker)
+    end
+  end
+
+  defp post_closure(tracker, closure, opts) do
+    case Findings.post_finding_result(closure, Keyword.get(opts, :findings_opts, [])) do
+      result when result in [:accepted, :deduped] ->
+        :delivered
+
+      {:error, reason} ->
+        Logger.warning(
+          "#{tracker.lease_blocked_resident}: lease-starvation closure POST failed " <>
+            "(#{inspect(reason)}) — keeping the episode, retrying on a later granted tick"
+        )
+
+        :lost
+    end
+  end
+
+  # Drop the debt ONLY. It deliberately does not touch the file: `sync_sidecar/1`
+  # owns that, from the tracker's whole state. Coupling "forget the debt" to
+  # "delete the file" is what let a nil closure delete an episode that was not
+  # its own.
+  defp forget_closure(tracker), do: %{tracker | lease_blocked_pending_closure: nil}
+
+  # The one place that decides what is on disk, from the two facts that define
+  # the phase. Nothing open and nothing owed means the file has no reason to
+  # exist; anything else is written in full, so the file and the tracker cannot
+  # describe different episodes.
+  defp sync_sidecar(%{lease_blocked_since: nil, lease_blocked_pending_closure: nil} = tracker) do
+    discard_persisted(tracker)
+    tracker
+  end
+
+  defp sync_sidecar(tracker) do
+    persist(tracker)
+    tracker
+  end
+
   # ---- summaries ---------------------------------------------------------
 
+  # Scoped to this PROCESS, not to the lease plane. The earlier wording ("The
+  # lease plane reported NO blocking lease at any point in this episode") is an
+  # assertion about the whole episode that this process is not in a position to
+  # make: an episode resumed from the sidecar after a restart carries its clock
+  # and its ladder, and — since a review — its sticky blocker, but a sidecar that
+  # is absent, unreadable or from an older schema restores no conflict at all.
+  # If the first blocked tick after such a restart is one of the
+  # `service_unavailable` bursts and a rung is already due, the old sentence told
+  # the operator there was nothing to force-release while an immortal lease was
+  # in fact holding the surface — the "worse than saying nothing" outcome the
+  # sticky-blocker design exists to prevent. `tick_phrase/1` was already careful
+  # this way; this sentence now is too.
   defp starved_summary(tracker, seconds, nil) do
     preamble(tracker, seconds) <>
-      " The lease plane reported NO blocking lease at any point in this episode, so there is " <>
-      "nothing to force-release: check the lease plane is up on $LEASE_PLANE_BASE_URL " <>
-      "(default #{@default_lease_plane_base_url}) and that LEASE_PLANE_BEARER_TOKEN is set for " <>
-      "this resident."
+      " No blocking lease was observed by THIS PROCESS during the episode (a restart mid-episode " <>
+      "resumes the clock, not necessarily the observations that preceded it), so this resident " <>
+      "has nothing to force-release by name: check the lease plane is up on " <>
+      "$LEASE_PLANE_BASE_URL (default #{@default_lease_plane_base_url}), that " <>
+      "LEASE_PLANE_BEARER_TOKEN is set for this resident, and query the plane directly for a " <>
+      "lease on this surface before concluding there is none."
   end
 
   defp starved_summary(tracker, seconds, lease_id) do
@@ -446,16 +759,18 @@ defmodule UnitaresSentinel.LeaseStarvation do
     "Sentinel resident #{tracker.lease_blocked_resident} is LEASE-STARVED: surface " <>
       "#{tracker.lease_blocked_surface_id} has been refused by lease enforcement for " <>
       "#{format_duration(seconds)} (since #{DateTime.to_iso8601(tracker.lease_blocked_since)}; " <>
-      "#{tick_phrase(tracker)} observed by this process; " <>
+      "#{tick_phrase(tracker.lease_blocked_streak)} observed by this process; " <>
       "#{outcome_phrase(tracker)}). This resident is doing NO governance work while its OS " <>
       "process, launchd job and liveness checks all read healthy."
   end
 
   # The streak is honestly per-process: a resident restarted mid-episode resumes
   # the episode (and its ladder) but counts its own ticks from zero. Say
-  # "observed by this process" rather than implying a total.
-  defp tick_phrase(%{lease_blocked_streak: 1}), do: "1 blocked tick"
-  defp tick_phrase(%{lease_blocked_streak: n}), do: "#{n} blocked ticks"
+  # "observed by this process" rather than implying a total. Takes the count and
+  # not a tracker, because a closure re-rendered from a persisted debt reports
+  # the count the ENDED episode had, not this process's.
+  defp tick_phrase(1), do: "1 blocked tick"
+  defp tick_phrase(n), do: "#{n} blocked ticks"
 
   defp outcome_phrase(%{lease_blocked_outcome_counts: counts}) when map_size(counts) == 0,
     do: "outcomes: none recorded"
@@ -511,13 +826,19 @@ defmodule UnitaresSentinel.LeaseStarvation do
   defp persist(%{lease_blocked_state_path: nil}), do: :ok
 
   defp persist(tracker) do
-    payload = %{
-      "surface_id" => tracker.lease_blocked_surface_id,
-      "resident" => tracker.lease_blocked_resident,
-      "blocked_since" => DateTime.to_iso8601(tracker.lease_blocked_since),
-      "last_blocked_at" => DateTime.to_iso8601(tracker.lease_blocked_last_blocked_at),
-      "last_emitted_multiple" => tracker.lease_blocked_last_emitted_multiple
-    }
+    payload =
+      %{
+        "schema_version" => @schema_version,
+        "surface_id" => tracker.lease_blocked_surface_id,
+        "resident" => tracker.lease_blocked_resident
+      }
+      |> Map.merge(episode_payload(tracker))
+      # An owed closure is orthogonal to the episode phase: it may be the ONLY
+      # thing in the file ("closing"), or it may ride alongside a newer episode
+      # that opened while it was still undelivered ("open"). Both are real and
+      # both used to be unrepresentable, which is how one got destroyed by the
+      # other.
+      |> maybe_put("owed_closure", encode_owed_closure(tracker.lease_blocked_pending_closure))
 
     AtomicWrite.write(tracker.lease_blocked_state_path, Jason.encode!(payload))
     :ok
@@ -527,6 +848,40 @@ defmodule UnitaresSentinel.LeaseStarvation do
       :ok
   end
 
+  # "closing" carries no live episode fields on purpose: there is no clock still
+  # running, and a reader that finds none cannot accidentally restart one.
+  defp episode_payload(%{lease_blocked_since: nil}), do: %{"state" => "closing"}
+
+  defp episode_payload(tracker) do
+    %{
+      "state" => "open",
+      "blocked_since" => DateTime.to_iso8601(tracker.lease_blocked_since),
+      "last_blocked_at" => DateTime.to_iso8601(tracker.lease_blocked_last_blocked_at),
+      "last_emitted_multiple" => tracker.lease_blocked_last_emitted_multiple
+    }
+    # The sticky blocker rides along. Without it a resumed episode started with
+    # `last_conflict: nil`, so a restart mid-episode could make the very next
+    # finding assert that the lease plane had named no blocking lease — while
+    # an immortal lease held the surface. The episode's most load-bearing fact
+    # is the one thing the sidecar used to drop.
+    |> maybe_put("last_conflict", encode_conflict(tracker.lease_blocked_last_conflict))
+  end
+
+  # `blocked_seconds` is deliberately NOT written: it is `ended_at - since`, and
+  # a stored copy is one more thing that can disagree with the pair it is derived
+  # from. Same reason `surface_id` / `resident` are read back off the top level.
+  defp encode_owed_closure(nil), do: nil
+
+  defp encode_owed_closure(%{episode: episode, attempts: attempts}) do
+    %{
+      "blocked_since" => DateTime.to_iso8601(episode.since),
+      "ended_at" => DateTime.to_iso8601(episode.ended_at),
+      "blocked_ticks" => episode.ticks,
+      "outcome_counts" => episode.counts,
+      "attempts" => attempts
+    }
+  end
+
   defp discard_persisted(%{lease_blocked_state_path: nil}), do: :ok
 
   defp discard_persisted(tracker) do
@@ -534,30 +889,173 @@ defmodule UnitaresSentinel.LeaseStarvation do
     :ok
   end
 
-  # Resume an episode only if the process was down for less than the alert
-  # threshold. A longer gap means a fresh episode would reach the threshold in
-  # the same time anyway, and resuming a days-old file would make the very first
-  # blocked tick claim a multi-day outage that never happened.
-  defp load_episode(nil, _alert_after_seconds, _now), do: nil
+  # Read the sidecar and restore whatever it says is true: an open episode, an
+  # owed closure, both, or neither. Every failure mode — missing file, bad JSON,
+  # another writer, a schema version this build does not know, a stale record —
+  # lands on "nothing restored". Never crashes: `init/1` calls this.
+  defp load_episode(nil, _surface_id, _resident, _alert_after_seconds, _now), do: nil
 
-  defp load_episode(path, alert_after_seconds, now) do
+  defp load_episode(path, surface_id, resident, alert_after_seconds, now) do
     with {:ok, raw} <- File.read(path),
          {:ok, %{} = decoded} <- Jason.decode(raw),
-         {:ok, since, _} <- parse_datetime(Map.get(decoded, "blocked_since")),
-         {:ok, last_blocked_at, _} <- parse_datetime(Map.get(decoded, "last_blocked_at")),
-         true <- DateTime.diff(now, last_blocked_at, :second) <= alert_after_seconds do
-      %{
-        lease_blocked_since: since,
-        lease_blocked_last_blocked_at: last_blocked_at,
-        lease_blocked_last_emitted_multiple:
-          non_neg_integer(Map.get(decoded, "last_emitted_multiple"))
-      }
+         true <- same_writer?(decoded, surface_id, resident) do
+      decoded
+      |> load_state(episode_state(decoded), surface_id, resident, alert_after_seconds, now)
+      |> presence()
     else
       _ -> nil
     end
   rescue
     _ -> nil
   end
+
+  # A HEAD-era file and a current-era file both exist on real disks, and neither
+  # carries a version key. Reading them as "open" is not a guess: it is exactly
+  # what they meant, because before the explicit state existed the sidecar was
+  # deleted unconditionally the moment an episode ended, so every v1 file on
+  # disk IS an in-progress episode. (The narrow exception is a file left by the
+  # intermediate build that retained a sidecar on a lost closure without marking
+  # it — never released, so at most one dev tree, and the resume window bounds
+  # even that to one threshold of over-patience rather than a fabricated multi-
+  # day outage.)
+  defp episode_state(%{"schema_version" => @schema_version} = decoded),
+    do: normalize_state(Map.get(decoded, "state"))
+
+  defp episode_state(decoded) when not is_map_key(decoded, "schema_version"), do: "open"
+
+  # A version from the future. Do not try to interpret its fields.
+  defp episode_state(_decoded), do: nil
+
+  defp normalize_state(state) when state in ["open", "closing"], do: state
+  defp normalize_state(_state), do: nil
+
+  defp load_state(decoded, "open", surface_id, resident, alert_after_seconds, now) do
+    decoded
+    |> resume_open_episode(alert_after_seconds, now)
+    |> merge_owed_closure(decoded, surface_id, resident, alert_after_seconds, now)
+  end
+
+  # The whole point of the state field: a closed episode is NOT resumed. Its
+  # clock does not restart, its ladder position is gone, and a later blocked tick
+  # opens a fresh episode at rung 1 with an honest duration. Only the debt
+  # survives.
+  defp load_state(decoded, "closing", surface_id, resident, alert_after_seconds, now),
+    do: merge_owed_closure(%{}, decoded, surface_id, resident, alert_after_seconds, now)
+
+  defp load_state(_decoded, _unknown_state, _surface_id, _resident, _alert_after_seconds, _now),
+    do: %{}
+
+  # Resume an episode only if the process was down for less than the alert
+  # threshold. A longer gap means a fresh episode would reach the threshold in
+  # the same time anyway, and resuming a days-old file would make the very first
+  # blocked tick claim a multi-day outage that never happened. A stale episode
+  # does not veto a still-live owed closure: they are independent records.
+  defp resume_open_episode(decoded, alert_after_seconds, now) do
+    with {:ok, since, _} <- parse_datetime(Map.get(decoded, "blocked_since")),
+         {:ok, last_blocked_at, _} <- parse_datetime(Map.get(decoded, "last_blocked_at")),
+         true <- DateTime.diff(now, last_blocked_at, :second) <= alert_after_seconds do
+      %{
+        lease_blocked_since: since,
+        lease_blocked_last_blocked_at: last_blocked_at,
+        lease_blocked_last_conflict: decode_conflict(Map.get(decoded, "last_conflict")),
+        lease_blocked_last_emitted_multiple:
+          non_neg_integer(Map.get(decoded, "last_emitted_multiple"))
+      }
+    else
+      _ -> %{}
+    end
+  end
+
+  defp merge_owed_closure(acc, decoded, surface_id, resident, alert_after_seconds, now) do
+    case decode_owed_closure(
+           Map.get(decoded, "owed_closure"),
+           surface_id,
+           resident,
+           alert_after_seconds,
+           now
+         ) do
+      nil -> acc
+      pending -> Map.put(acc, :lease_blocked_pending_closure, pending)
+    end
+  end
+
+  # Both bounds that survive a restart live here: the attempt budget (so the
+  # cap is not reset by the crash it is most likely to follow) and staleness
+  # against `ended_at` (so a sidecar found after a long downtime is not posted
+  # as if the surface had just recovered).
+  defp decode_owed_closure(raw, surface_id, resident, alert_after_seconds, now)
+       when is_map(raw) do
+    with {:ok, since, _} <- parse_datetime(Map.get(raw, "blocked_since")),
+         {:ok, ended_at, _} <- parse_datetime(Map.get(raw, "ended_at")),
+         attempts when attempts < @max_closure_retries <-
+           non_neg_integer(Map.get(raw, "attempts")),
+         true <- DateTime.diff(now, ended_at, :second) <= alert_after_seconds,
+         true <- DateTime.compare(ended_at, since) != :lt do
+      %{
+        episode: %{
+          surface_id: surface_id,
+          resident: resident,
+          since: since,
+          ended_at: ended_at,
+          ticks: non_neg_integer(Map.get(raw, "blocked_ticks")),
+          counts: decode_counts(Map.get(raw, "outcome_counts"))
+        },
+        attempts: attempts
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp decode_owed_closure(_raw, _surface_id, _resident, _alert_after_seconds, _now), do: nil
+
+  # Left as string keys deliberately. These are display-only (the finding
+  # stringifies them anyway) and never merge back into
+  # `:lease_blocked_outcome_counts`, so a sidecar cannot seed the atom table.
+  defp decode_counts(raw) when is_map(raw) do
+    for {outcome, count} <- raw,
+        is_binary(outcome),
+        is_integer(count),
+        count > 0,
+        into: %{},
+        do: {outcome, count}
+  end
+
+  defp decode_counts(_raw), do: %{}
+
+  defp presence(loaded) when map_size(loaded) == 0, do: nil
+  defp presence(loaded), do: loaded
+
+  # `persist/1` has always written these two keys and nothing ever read them.
+  # They are the natural guard, because `slug/1` collapses every non-alphanumeric
+  # run to "_": `resident:/sentinel_cycle` and `resident.sentinel-cycle` derive
+  # the SAME filename, and resuming another writer's episode would put one
+  # resident's outage clock on the other's ladder. Fails closed — a mismatch
+  # starts a fresh episode, which is at worst one threshold of extra patience and
+  # never a fabricated outage.
+  defp same_writer?(decoded, surface_id, resident) do
+    Map.get(decoded, "surface_id") == surface_id and Map.get(decoded, "resident") == resident
+  end
+
+  defp encode_conflict(conflict) when is_map(conflict) and map_size(conflict) > 0,
+    do: Map.new(conflict, fn {key, value} -> {Atom.to_string(key), value} end)
+
+  defp encode_conflict(_conflict), do: nil
+
+  # Only a conflict that names a lease is worth restoring: `sticky_conflict/2`
+  # only ever stores one, and `finding/3` selects the force-release summary on
+  # exactly that key.
+  defp decode_conflict(%{"blocking_lease_id" => lease_id} = raw)
+       when is_binary(lease_id) and lease_id != "" do
+    Enum.reduce(@persisted_conflict_keys, %{}, fn key, acc ->
+      case Map.get(raw, Atom.to_string(key)) do
+        value when is_binary(value) and value != "" -> Map.put(acc, key, value)
+        _ -> acc
+      end
+    end)
+  end
+
+  defp decode_conflict(_raw), do: nil
 
   defp parse_datetime(value) when is_binary(value), do: DateTime.from_iso8601(value)
   defp parse_datetime(_value), do: :error
@@ -595,7 +1093,7 @@ defmodule UnitaresSentinel.LeaseStarvation do
   defp sticky_conflict(previous, conflict) do
     case Map.get(conflict, :blocking_lease_id) do
       lease_id when is_binary(lease_id) and lease_id != "" ->
-        Map.take(conflict, [:blocking_lease_id, :held_by_uuid, :expires_at])
+        Map.take(conflict, @persisted_conflict_keys)
 
       _ ->
         previous

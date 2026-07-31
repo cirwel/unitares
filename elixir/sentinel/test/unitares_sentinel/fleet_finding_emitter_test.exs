@@ -162,7 +162,13 @@ defmodule UnitaresSentinel.FleetFindingEmitterTest do
     send(pid, :tick)
 
     assert_receive {:lease_acquire, acquire_body}, 1_000
-    assert acquire_body["surface_id"] == "resident:/sentinel_cycle"
+    # This emitter passes :lease_opts WITHOUT a :surface_id. It used to fall
+    # through to LeaseAdvisory's default — ForcedReleasePoller's
+    # resident:/sentinel_cycle — which is the collision application.ex's
+    # distinct-surface comment says must not happen, and which also gave both
+    # residents one LeaseStarvation sidecar file and one finding fingerprint.
+    # The emitter now names its own surface.
+    assert acquire_body["surface_id"] == "resident:/sentinel_fleet_emit"
     assert acquire_body["intent"] == "sentinel analysis cycle"
 
     assert_receive {:posted, body}, 1_000
@@ -171,6 +177,67 @@ defmodule UnitaresSentinel.FleetFindingEmitterTest do
 
     assert_receive {:lease_release, %{"lease_id" => ^lease_id, "release_reason" => "normal"}},
                    1_000
+
+    GenServer.stop(pid)
+  end
+
+  test "an explicit nil surface_id in lease_opts falls back instead of crash-looping init" do
+    parent = self()
+
+    # `Keyword.put_new/3` keys on the key being PRESENT, not on its value, so an
+    # explicit `surface_id: nil` walked past the default above, reached
+    # `Keyword.fetch!/2`, and handed `LeaseStarvation.require_surface_id/1` a nil
+    # — which raises inside `init/1` and turns one mistyped option into a
+    # supervisor restart loop. The comment at the call site read as if the
+    # surface were defended when only OMISSION was.
+    lease_http_post = fn url, body, _headers, _timeout_ms ->
+      cond do
+        String.ends_with?(url, "/v1/lease/acquire") ->
+          send(parent, {:lease_acquire, body})
+
+          {:ok, 200,
+           Jason.encode!(%{
+             ok: true,
+             lease: %{
+               lease_id: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+               surface_id: body["surface_id"],
+               expires_at: "2026-07-31T23:59:59Z"
+             }
+           })}
+
+        String.ends_with?(url, "/v1/lease/release") ->
+          {:ok, 200, ~s({"ok":true})}
+      end
+    end
+
+    {:ok, pid} =
+      FleetFindingEmitter.start_link(
+        name: :"test_fleet_finding_emitter_nil_surface_#{System.unique_integer([:positive])}",
+        initial_delay_ms: 60_000,
+        interval_ms: 60_000,
+        jitter_ms: 0,
+        lease_advisory: true,
+        lease_opts: [
+          base_url: "http://lease.test",
+          bearer_token: "test-token",
+          holder_agent_uuid: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+          http_post: lease_http_post,
+          surface_id: nil
+        ],
+        snapshot: %{agents: %{}, events: []},
+        analysis_fun: fn _s, _o -> [] end,
+        self_agent_id: "sentinel-test",
+        findings_opts: [http_post: fn _u, _b, _h, _t -> {:ok, 200, ~s({"success":true})} end]
+      )
+
+    # It started at all — that is the regression. And it fell back to the
+    # EMITTER's own surface, not to LeaseAdvisory's poller default, so the
+    # distinct-surface invariant still holds.
+    assert :sys.get_state(pid).lease_blocked_surface_id == "resident:/sentinel_fleet_emit"
+
+    send(pid, :tick)
+    assert_receive {:lease_acquire, acquire_body}, 1_000
+    assert acquire_body["surface_id"] == "resident:/sentinel_fleet_emit"
 
     GenServer.stop(pid)
   end

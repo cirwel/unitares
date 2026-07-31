@@ -45,10 +45,21 @@ defmodule UnitaresSentinel.LeaseAdvisory do
           optional(:blocked_outcome) => outcome()
         }
 
+  @typedoc """
+  What one advisory acquire attempt yielded.
+
+  `:conflict` is *optional*, not merely nilable: both resident GenServers
+  short-circuit with a bare two-key map when advisory leasing is switched off
+  (`acquire_runtime_lease(%{lease_advisory?: false})` in
+  `fleet_finding_emitter.ex` and `forced_release_poller.ex`), and
+  `LeaseStarvation.scope_conflict/1` reads the key with `Map.get/2` for exactly
+  that reason. The type said `required` until a review caught the drift; there
+  is no dialyzer in this repo, so nothing mechanical would have.
+  """
   @type scope :: %{
-          outcome: outcome(),
-          lease_id: String.t() | nil,
-          conflict: conflict() | nil
+          required(:outcome) => outcome(),
+          required(:lease_id) => String.t() | nil,
+          optional(:conflict) => conflict() | nil
         }
 
   @type http_post ::
@@ -148,10 +159,12 @@ defmodule UnitaresSentinel.LeaseAdvisory do
   @doc """
   The default cycle surface id.
 
-  Public so `LeaseStarvation` can resolve which surface a resident will be
-  refused on at `init/1` time — before any acquire has happened — without
-  hardcoding the literal a second time. `ForcedReleasePoller` passes no
-  `:lease_opts`, so this default is its surface.
+  Public so a resident can name the surface it will be refused on at `init/1`
+  time — before any acquire has happened — without hardcoding the literal a
+  second time. `ForcedReleasePoller.init/1` reads it into its own `:lease_opts`
+  for exactly that reason: `LeaseStarvation.new/1` requires a real surface (the
+  starvation sidecar path and the finding fingerprint are both keyed on it), and
+  a nil there would collide the poller with `FleetFindingEmitter`.
   """
   @spec cycle_surface_id() :: String.t()
   def cycle_surface_id, do: @cycle_surface_id

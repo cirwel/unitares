@@ -201,4 +201,53 @@ defmodule UnitaresSentinel.ForcedReleasePollerStarvationTest do
     assert_receive {:lease_acquire, _}, 1_000
     refute_receive {:finding_posted, _}, 200
   end
+
+  test "an explicit nil surface_id in lease_opts falls back instead of crash-looping init" do
+    # `Keyword.put_new/3` keys on the key being PRESENT, not on its value, so an
+    # explicit `surface_id: nil` walked straight past the default, reached
+    # `Keyword.fetch!/2`, and handed `LeaseStarvation.require_surface_id/1` a nil
+    # — which raises inside `init/1`. Under a supervisor that is a restart loop
+    # from one mistyped option, and the inline comment at the call site read as
+    # if the surface were defended when only OMISSION was.
+    parent = self()
+
+    pid =
+      start_poller(parent, "nil_surface",
+        lease_opts: [
+          base_url: "http://lease.test",
+          bearer_token: "test-token",
+          enforced_surface_kinds: MapSet.new(["resident"]),
+          http_post: blocked_lease_post(parent),
+          surface_id: nil
+        ]
+      )
+
+    # It started at all — that is the regression. And it landed on the poller's
+    # own surface, not on a shared default that would collide with the emitter's
+    # sidecar path and finding fingerprint.
+    assert :sys.get_state(pid).lease_blocked_surface_id == "resident:/sentinel_cycle"
+
+    send(pid, :tick)
+    assert_receive {:lease_acquire, body}, 1_000
+    assert body["surface_id"] == "resident:/sentinel_cycle"
+  end
+
+  test "an empty-string surface_id in lease_opts is treated as absent, not as a surface" do
+    # `""` slugs to `""` in `derive_state_path/1` and contributes nothing to the
+    # fingerprint, so it collides exactly the way a shared default does.
+    parent = self()
+
+    pid =
+      start_poller(parent, "empty_surface",
+        lease_opts: [
+          base_url: "http://lease.test",
+          bearer_token: "test-token",
+          enforced_surface_kinds: MapSet.new(["resident"]),
+          http_post: blocked_lease_post(parent),
+          surface_id: ""
+        ]
+      )
+
+    assert :sys.get_state(pid).lease_blocked_surface_id == "resident:/sentinel_cycle"
+  end
 end
