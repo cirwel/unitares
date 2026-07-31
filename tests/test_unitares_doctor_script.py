@@ -789,18 +789,18 @@ def test_signal_degeneracy_skips_on_short_row(doctor, monkeypatch):
 
 
 # --- finding_producer_live -------------------------------------------------
-# Row layout is (event_type, n, hours_silent, median_gap_hours), one per
-# producer. Fixtures use the real 2026-07 numbers so the calibration is pinned
-# to measured cadence rather than invented ones.
+# Row layout is (event_type, n, hours_silent, median_gap_hours, active_days),
+# one per producer. Fixtures use the real 2026-07 numbers so the calibration is
+# pinned to measured cadence rather than invented ones.
 
 def _producer_rows(*rows):
     return "".join("|".join(str(v) for v in r) + "\n" for r in rows)
 
 
 _LIVE_PRODUCERS = (
-    ("sentinel_finding", 399, 29.3, 0.58),
-    ("sentinel_alarm_finding", 594, 0.0, 0.09),
-    ("bridge_liveness_finding", 136, 71.4, 1.73),
+    ("sentinel_finding", 402, 29.3, 0.58, 48),
+    ("sentinel_alarm_finding", 598, 0.0, 0.09, 34),
+    ("bridge_liveness_finding", 136, 71.4, 1.73, 13),
 )
 
 
@@ -811,7 +811,7 @@ def test_finding_producer_live_warns_on_the_watcher_outage(doctor, monkeypatch):
     404ing on every scan while every other liveness indicator stayed green.
     """
     _mock_psql(doctor, monkeypatch, _producer_rows(
-        ("watcher_finding", 98, 612.0, 0.32), *_LIVE_PRODUCERS))
+        ("watcher_finding", 98, 612.0, 0.32, 22), *_LIVE_PRODUCERS))
     result = doctor.check_finding_producer_live("postgresql://x/y")
     assert result.status == doctor.Status.WARN
     assert "watcher_finding" in result.message
@@ -820,7 +820,7 @@ def test_finding_producer_live_warns_on_the_watcher_outage(doctor, monkeypatch):
 
 def test_finding_producer_live_passes_when_all_report(doctor, monkeypatch):
     _mock_psql(doctor, monkeypatch, _producer_rows(
-        ("watcher_finding", 99, 30.0, 0.33), *_LIVE_PRODUCERS))
+        ("watcher_finding", 99, 30.0, 0.33, 22), *_LIVE_PRODUCERS))
     result = doctor.check_finding_producer_live("postgresql://x/y")
     assert result.status == doctor.Status.PASS
 
@@ -828,7 +828,7 @@ def test_finding_producer_live_passes_when_all_report(doctor, monkeypatch):
 def test_finding_producer_live_ignores_event_driven_producers(doctor, monkeypatch):
     """vigil fires 4x in 90d — quiet is its normal state, not a fault."""
     _mock_psql(doctor, monkeypatch, _producer_rows(
-        ("vigil_finding", 4, 172.7, 13.75), *_LIVE_PRODUCERS))
+        ("vigil_finding", 4, 172.7, 13.75, 3), *_LIVE_PRODUCERS))
     result = doctor.check_finding_producer_live("postgresql://x/y")
     assert result.status == doctor.Status.PASS
     assert "vigil" not in result.message
@@ -837,7 +837,7 @@ def test_finding_producer_live_ignores_event_driven_producers(doctor, monkeypatc
 def test_finding_producer_live_ignores_slow_cadence_producers(doctor, monkeypatch):
     """A producer that reports every ~16 days has no weekly cadence to miss."""
     _mock_psql(doctor, monkeypatch, _producer_rows(
-        ("sentinel_build_finding", 30, 800.0, 396.24), *_LIVE_PRODUCERS))
+        ("sentinel_build_finding", 30, 800.0, 396.24, 12), *_LIVE_PRODUCERS))
     result = doctor.check_finding_producer_live("postgresql://x/y")
     assert result.status == doctor.Status.PASS
 
@@ -845,14 +845,14 @@ def test_finding_producer_live_ignores_slow_cadence_producers(doctor, monkeypatc
 def test_finding_producer_live_holds_fire_below_the_week_floor(doctor, monkeypatch):
     """10x a 1.7h cadence is 17h — far too tight to page on. The floor wins."""
     _mock_psql(doctor, monkeypatch, _producer_rows(
-        ("bridge_liveness_finding", 136, 100.0, 1.73),))
+        ("bridge_liveness_finding", 136, 100.0, 1.73, 13),))
     result = doctor.check_finding_producer_live("postgresql://x/y")
     assert result.status == doctor.Status.PASS
 
 
 def test_finding_producer_live_skips_when_nothing_is_judgeable(doctor, monkeypatch):
     _mock_psql(doctor, monkeypatch, _producer_rows(
-        ("healthcheck_selftest_finding", 1, 995.0, ""),))
+        ("healthcheck_selftest_finding", 1, 995.0, "", 1),))
     result = doctor.check_finding_producer_live("postgresql://x/y")
     assert result.status == doctor.Status.SKIP
 
@@ -866,3 +866,19 @@ def test_finding_producer_live_is_registered_as_operator(doctor):
     checks = {c.name: c for c in doctor.build_checks(REPO_ROOT, "postgresql://x/y")}
     assert "finding_producer_live" in checks
     assert checks["finding_producer_live"].mode == "operator"
+
+
+def test_finding_producer_live_ignores_single_incident_bursts(doctor, monkeypatch):
+    """lease_plane_health: 14 findings across ONE day, then 33 days quiet.
+
+    A fire-on-failure producer emits a burst during an incident (here 66
+    consecutive synthetic-acquire failures plus the RECOVERED notice) and
+    nothing while things are healthy. The burst gives it a 0.5h median gap, so
+    without the active-days gate it looks like a high-cadence producer whose
+    healthy silence is death — it warned on arrival for exactly that reason.
+    """
+    _mock_psql(doctor, monkeypatch, _producer_rows(
+        ("lease_plane_health_finding", 14, 799.2, 0.50, 1), *_LIVE_PRODUCERS))
+    result = doctor.check_finding_producer_live("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+    assert "lease_plane_health" not in result.message
