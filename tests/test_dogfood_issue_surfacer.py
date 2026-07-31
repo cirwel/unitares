@@ -63,6 +63,24 @@ def test_creates_issue_when_new():
     assert "dogfood friction:" in create[0][create[0].index("--title") + 1]
 
 
+def test_fingerprint_selection_applies_only_reviewed_findings():
+    reviewed = finding(fingerprint="reviewed-fp", surface="reviewed surface")
+    unreviewed = finding(fingerprint="unreviewed-fp", surface="unreviewed surface")
+    io, calls = make_io([reviewed, unreviewed])
+
+    dis.Surfacer(
+        io=io,
+        apply=True,
+        fingerprints={"reviewed-fp"},
+    ).run()
+
+    creates = [args for args in calls if args[:2] == ["issue", "create"]]
+    assert len(creates) == 1
+    body = creates[0][creates[0].index("--body") + 1]
+    assert dis.FP_MARKER.format("reviewed-fp") in body
+    assert dis.FP_MARKER.format("unreviewed-fp") not in body
+
+
 def test_dedupes_on_fingerprint():
     """Same fingerprint + same change_token => already tracked, do nothing."""
     f = finding()

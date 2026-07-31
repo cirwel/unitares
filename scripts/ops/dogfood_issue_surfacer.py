@@ -48,7 +48,7 @@ import json
 import os
 import subprocess
 import sys
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 DEFAULT_REPO = os.environ.get("DOGFOOD_ISSUE_REPO", "CIRWEL/unitares")
 DEFAULT_BASE = os.environ.get("UNITARES_HTTP_BASE", "http://127.0.0.1:8767")
@@ -189,14 +189,25 @@ def render_body(f: Dict[str, Any]) -> str:
 # --------------------------------------------------------------------------
 
 class Surfacer:
-    def __init__(self, repo: str = DEFAULT_REPO, base: str = DEFAULT_BASE,
-                 io: Optional[Dict[str, Callable[..., Any]]] = None,
-                 apply: bool = False, limit: int = 50):
+    def __init__(
+        self,
+        repo: str = DEFAULT_REPO,
+        base: str = DEFAULT_BASE,
+        io: Optional[Dict[str, Callable[..., Any]]] = None,
+        apply: bool = False,
+        limit: int = 50,
+        fingerprints: Optional[Iterable[str]] = None,
+    ):
         self.repo = repo
         self.base = base
         self.io = {**DEFAULT_IO, **(io or {})}
         self.apply = apply
         self.limit = limit
+        self.fingerprints = {
+            str(fingerprint).strip()
+            for fingerprint in (fingerprints or ())
+            if str(fingerprint).strip()
+        }
 
     def _existing(self) -> Dict[str, Dict[str, Any]]:
         """Map fingerprint -> issue for already-surfaced findings.
@@ -229,6 +240,13 @@ class Surfacer:
         findings = self.io["fetch_findings"](self.base, self.limit)
         routed = [f for f in findings if ROUTE in (f.get("routes") or [])]
         log(f"{len(findings)} finding(s) fetched, {len(routed)} routed to {ROUTE}")
+        if self.fingerprints:
+            routed = [
+                finding
+                for finding in routed
+                if finding.get("fingerprint") in self.fingerprints
+            ]
+            log(f"{len(routed)} matched explicit fingerprint selection")
         if not routed:
             return 0
 
@@ -302,9 +320,21 @@ def main() -> int:
     p.add_argument("--repo", default=DEFAULT_REPO)
     p.add_argument("--base", default=DEFAULT_BASE)
     p.add_argument("--limit", type=int, default=50)
+    p.add_argument(
+        "--fingerprint",
+        action="append",
+        default=[],
+        help="limit the run to an explicitly reviewed fingerprint; repeatable",
+    )
     a = p.parse_args()
     try:
-        return Surfacer(repo=a.repo, base=a.base, apply=a.apply, limit=a.limit).run()
+        return Surfacer(
+            repo=a.repo,
+            base=a.base,
+            apply=a.apply,
+            limit=a.limit,
+            fingerprints=a.fingerprint,
+        ).run()
     except Exception as exc:  # noqa: BLE001 - operator-facing tool
         print(f"[dogfood-surfacer] failed: {exc}", file=sys.stderr)
         return 1
