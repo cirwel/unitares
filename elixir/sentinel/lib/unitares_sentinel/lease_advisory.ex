@@ -26,7 +26,30 @@ defmodule UnitaresSentinel.LeaseAdvisory do
           | :schema_invalid
           | :client_error
 
-  @type scope :: %{outcome: outcome(), lease_id: String.t() | nil}
+  @typedoc """
+  Diagnostic detail carried alongside a non-acquiring outcome.
+
+  Added 2026-07-31 (immortal-lease incident): the lease plane has always sent
+  `blocking_lease_id` on the 409 `held_by_other` body
+  (`elixir/lease_plane/lib/unitares_lease_plane/http_router.ex:84-92`, populated
+  by `repo.ex:113-120`), but this client read only `held_by_uuid` for a log line
+  and dropped the rest. `blocking_lease_id` is the exact argument to
+  `POST /v1/lease/force-release`, so a starvation finding that omits it is
+  informative but not actionable.
+  """
+  @type conflict :: %{
+          optional(:surface_id) => String.t() | nil,
+          optional(:blocking_lease_id) => String.t() | nil,
+          optional(:held_by_uuid) => String.t() | nil,
+          optional(:expires_at) => String.t() | nil,
+          optional(:blocked_outcome) => outcome()
+        }
+
+  @type scope :: %{
+          outcome: outcome(),
+          lease_id: String.t() | nil,
+          conflict: conflict() | nil
+        }
 
   @type http_post ::
           (String.t(), map(), [{String.t(), String.t()}], pos_integer() ->
@@ -123,6 +146,17 @@ defmodule UnitaresSentinel.LeaseAdvisory do
       :ok
   end
 
+  @doc """
+  The default cycle surface id.
+
+  Public so `LeaseStarvation` can resolve which surface a resident will be
+  refused on at `init/1` time — before any acquire has happened — without
+  hardcoding the literal a second time. `ForcedReleasePoller` passes no
+  `:lease_opts`, so this default is its surface.
+  """
+  @spec cycle_surface_id() :: String.t()
+  def cycle_surface_id, do: @cycle_surface_id
+
   @doc false
   @spec new_holder_uuid() :: String.t()
   def new_holder_uuid do
@@ -217,10 +251,19 @@ defmodule UnitaresSentinel.LeaseAdvisory do
 
       {:ok, %{"ok" => false, "error" => "held_by_other"} = decoded} ->
         Logger.info(
-          "lease_advisory: held_by_other surface=#{surface_id} held_by=#{Map.get(decoded, "held_by_uuid")} (Phase A: proceeding regardless)"
+          "lease_advisory: held_by_other surface=#{surface_id} held_by=#{Map.get(decoded, "held_by_uuid")} lease_id=#{Map.get(decoded, "blocking_lease_id")} (Phase A: proceeding regardless)"
         )
 
-        scope(:held_by_other)
+        # Carry `blocking_lease_id` through instead of discarding it one line
+        # after logging. It is the force-release argument
+        # (`POST /v1/lease/force-release {"lease_id": ...}`), which is what turns
+        # a lease-starvation self-finding from "something is wrong" into
+        # "run this". 2026-07-31 immortal-lease incident.
+        scope(:held_by_other, nil, %{
+          blocking_lease_id: Map.get(decoded, "blocking_lease_id"),
+          held_by_uuid: Map.get(decoded, "held_by_uuid"),
+          expires_at: Map.get(decoded, "expires_at")
+        })
 
       {:ok, %{"ok" => false, "error" => "permission_denied", "reason" => reason}} ->
         Logger.warning("lease_advisory: permission_denied surface=#{surface_id} reason=#{reason}")
@@ -278,7 +321,8 @@ defmodule UnitaresSentinel.LeaseAdvisory do
     end
   end
 
-  defp scope(outcome, lease_id \\ nil), do: %{outcome: outcome, lease_id: lease_id}
+  defp scope(outcome, lease_id \\ nil, conflict \\ nil),
+    do: %{outcome: outcome, lease_id: lease_id, conflict: conflict}
 
   defp headers(token) do
     [
@@ -331,7 +375,21 @@ defmodule UnitaresSentinel.LeaseAdvisory do
   defp enforce_scope(%{lease_id: nil, outcome: outcome} = scope, surface_id, opts) do
     if surface_enforced?(surface_id, opts) do
       Logger.warning("lease_enforcement: blocked surface=#{surface_id} outcome=#{outcome}")
-      %{scope | outcome: :enforcement_blocked}
+
+      # `:enforcement_blocked` is a conflation of held_by_other,
+      # permission_denied, schema_invalid, client_error AND a missing/blank
+      # LEASE_PLANE_BEARER_TOKEN. Overwriting `:outcome` destroyed the only
+      # record of *why*, and a caller that cannot tell "another holder" from
+      # "the plane is down" can only ever emit a remedy that is right by luck.
+      # Keep the pre-enforcement outcome and stamp the surface — the poller
+      # passes no `:lease_opts`, so this is its only channel for knowing which
+      # surface it was refused on. 2026-07-31 immortal-lease incident.
+      conflict =
+        (Map.get(scope, :conflict) || %{})
+        |> Map.put(:blocked_outcome, outcome)
+        |> Map.put(:surface_id, surface_id)
+
+      %{scope | outcome: :enforcement_blocked, conflict: conflict}
     else
       scope
     end

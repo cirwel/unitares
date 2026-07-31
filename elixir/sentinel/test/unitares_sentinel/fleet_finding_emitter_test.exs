@@ -175,24 +175,72 @@ defmodule UnitaresSentinel.FleetFindingEmitterTest do
     GenServer.stop(pid)
   end
 
-  test "GenServer skips runtime tick when lease enforcement blocks" do
-    parent = self()
+  @blocking_lease_id "b583498a-51a8-4fc4-8e69-8796423f7491"
+  @blocking_holder_uuid "cccccccc-cccc-cccc-cccc-cccccccccccc"
 
-    lease_http_post = fn url, body, _headers, _timeout_ms ->
+  defp held_by_other_body do
+    Jason.encode!(%{
+      ok: false,
+      error: "held_by_other",
+      held_by_uuid: @blocking_holder_uuid,
+      blocking_lease_id: @blocking_lease_id
+    })
+  end
+
+  # Every starvation-path test injects BOTH channels: `{:lease_acquire, _}` for
+  # the lease plane and `{:finding_posted, _}` for /api/findings. Sharing one
+  # stub, or leaving `findings_opts: []`, would let a POST fall through to
+  # `Findings.finch_post/4` against the real UNITARES_FINDINGS_URL — the exact
+  # silent non-hermetic dependency PR #1410 landed to kill.
+  defp blocked_lease_post(parent) do
+    fn url, body, _headers, _timeout_ms ->
       if String.ends_with?(url, "/v1/lease/acquire") do
         send(parent, {:lease_acquire, body})
-
-        {:ok, 409,
-         Jason.encode!(%{
-           ok: false,
-           error: "held_by_other",
-           held_by_uuid: "cccccccc-cccc-cccc-cccc-cccccccccccc"
-         })}
+        {:ok, 409, held_by_other_body()}
       else
         send(parent, {:unexpected_release, body})
         {:ok, 200, ~s({"ok":true})}
       end
     end
+  end
+
+  defp finding_post(parent) do
+    fn _url, body, _headers, _timeout_ms ->
+      send(parent, {:finding_posted, body})
+      {:ok, 200, ~s({"success":true,"deduped":false})}
+    end
+  end
+
+  defp start_enforced_emitter(parent, prefix, opts) do
+    FleetFindingEmitter.start_link(
+      Keyword.merge(
+        [
+          name: :"test_fleet_finding_emitter_#{prefix}_#{System.unique_integer([:positive])}",
+          initial_delay_ms: 60_000,
+          interval_ms: 60_000,
+          jitter_ms: 0,
+          lease_advisory: true,
+          lease_opts: [
+            base_url: "http://lease.test",
+            bearer_token: "test-token",
+            surface_id: "resident:/sentinel_fleet_emit",
+            enforced_surface_kinds: MapSet.new(["resident"]),
+            http_post: blocked_lease_post(parent)
+          ],
+          snapshot: %{agents: %{}, events: []},
+          self_agent_id: "sentinel-test",
+          findings_opts: [http_post: finding_post(parent)],
+          # Off unless a test opts in — the sidecar file is a real filesystem
+          # side effect and this suite must stay hermetic.
+          lease_blocked_state_path: false
+        ],
+        opts
+      )
+    )
+  end
+
+  test "GenServer skips runtime tick when lease enforcement blocks" do
+    parent = self()
 
     analysis_fun = fn _snapshot, _analysis_opts ->
       send(parent, :analysis_ran)
@@ -200,22 +248,11 @@ defmodule UnitaresSentinel.FleetFindingEmitterTest do
     end
 
     {:ok, pid} =
-      FleetFindingEmitter.start_link(
-        name: :"test_fleet_finding_emitter_enforced_#{System.unique_integer([:positive])}",
-        initial_delay_ms: 60_000,
-        interval_ms: 60_000,
-        jitter_ms: 0,
-        lease_advisory: true,
-        lease_opts: [
-          base_url: "http://lease.test",
-          bearer_token: "test-token",
-          enforced_surface_kinds: MapSet.new(["resident"]),
-          http_post: lease_http_post
-        ],
-        snapshot: %{agents: %{}, events: []},
+      start_enforced_emitter(parent, "enforced",
         analysis_fun: analysis_fun,
-        self_agent_id: "sentinel-test",
-        findings_opts: []
+        # Far above anything this test can reach, so the blocked branch does
+        # everything EXCEPT emit.
+        lease_blocked_alert_after_seconds: 86_400
       )
 
     send(pid, :tick)
@@ -223,7 +260,110 @@ defmodule UnitaresSentinel.FleetFindingEmitterTest do
     assert_receive {:lease_acquire, _body}, 1_000
     refute_receive :analysis_ran, 100
     refute_receive {:unexpected_release, _body}, 100
+    refute_receive {:finding_posted, _body}, 100
 
+    GenServer.stop(pid)
+  end
+
+  # 2026-07-31 immortal-lease incident: this branch used to log
+  # "tick skipped by lease enforcement" and reschedule, 5,703 times, while
+  # launchctl / the live PID / the absence of a crash all read healthy.
+  test "GenServer emits a lease-starvation self finding once the episode passes the threshold" do
+    parent = self()
+
+    {:ok, pid} =
+      start_enforced_emitter(parent, "starved",
+        analysis_fun: fn _s, _o -> [] end,
+        lease_blocked_alert_after_seconds: 60
+      )
+
+    send(pid, :tick)
+    assert_receive {:lease_acquire, _body}, 1_000
+    refute_receive {:finding_posted, _body}, 100
+
+    # Backdate the episode instead of sleeping past a real threshold — the
+    # ladder trips on elapsed seconds, so this is the whole condition.
+    :sys.replace_state(pid, fn state ->
+      %{state | lease_blocked_since: DateTime.add(DateTime.utc_now(), -61, :second)}
+    end)
+
+    send(pid, :tick)
+
+    assert_receive {:finding_posted, finding}, 1_000
+    assert finding["type"] == "sentinel_finding"
+    assert finding["finding_type"] == "sentinel_lease_starved"
+    assert finding["severity"] == "high"
+    assert finding["violation_class"] == "BEH"
+    assert finding["agent_id"] == "sentinel-test"
+    assert finding["self_observation"] == true
+    assert finding["surface_id"] == "resident:/sentinel_fleet_emit"
+    assert finding["blocking_lease_id"] == @blocking_lease_id
+    assert finding["held_by_uuid"] == @blocking_holder_uuid
+    assert finding["message"] =~ "resident:/sentinel_fleet_emit"
+    assert finding["message"] =~ "/v1/lease/force-release"
+    assert is_binary(finding["change_token"])
+
+    state = :sys.get_state(pid)
+    assert state.lease_blocked_streak == 2
+    assert state.lease_blocked_last_emitted_multiple == 1
+
+    GenServer.stop(pid)
+  end
+
+  test "a granted lease clears the lease-blocked episode" do
+    parent = self()
+    lease_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+    lease_http_post = fn url, body, _headers, _timeout_ms ->
+      cond do
+        String.ends_with?(url, "/v1/lease/acquire") ->
+          send(parent, {:lease_acquire, body})
+
+          case Agent.get_and_update(counter, fn n -> {n, n + 1} end) do
+            0 ->
+              {:ok, 409, held_by_other_body()}
+
+            _ ->
+              {:ok, 200,
+               Jason.encode!(%{ok: true, idempotent: false, lease: %{lease_id: lease_id}})}
+          end
+
+        true ->
+          send(parent, {:lease_release, body})
+          {:ok, 200, ~s({"ok":true})}
+      end
+    end
+
+    {:ok, pid} =
+      start_enforced_emitter(parent, "cleared",
+        analysis_fun: fn _s, _o -> [] end,
+        lease_blocked_alert_after_seconds: 60,
+        lease_opts: [
+          base_url: "http://lease.test",
+          bearer_token: "test-token",
+          surface_id: "resident:/sentinel_fleet_emit",
+          enforced_surface_kinds: MapSet.new(["resident"]),
+          http_post: lease_http_post
+        ]
+      )
+
+    send(pid, :tick)
+    assert_receive {:lease_acquire, _}, 1_000
+    assert :sys.get_state(pid).lease_blocked_streak == 1
+
+    send(pid, :tick)
+    assert_receive {:lease_release, _}, 1_000
+
+    state = :sys.get_state(pid)
+    assert state.lease_blocked_streak == 0
+    assert state.lease_blocked_since == nil
+
+    # The episode never reached the alert threshold, so clearing it is silent —
+    # no closure finding for something no operator was ever told about.
+    refute_receive {:finding_posted, _}, 100
+
+    Agent.stop(counter)
     GenServer.stop(pid)
   end
 

@@ -175,6 +175,90 @@ defmodule UnitaresSentinel.LeaseAdvisoryTest do
     end
   end
 
+  # 2026-07-31 immortal-lease incident. The lease plane has always sent
+  # `blocking_lease_id` on the 409 body (http_router.ex:84-92, populated by
+  # repo.ex:113-120); this client read only `held_by_uuid` for a log line and
+  # dropped the rest one line later. That id is the argument to
+  # `POST /v1/lease/force-release`, which is what makes a starvation finding
+  # actionable instead of merely informative.
+  test "held_by_other scope carries blocking_lease_id for force-release" do
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      {:ok, 409,
+       Jason.encode!(%{
+         ok: false,
+         error: "held_by_other",
+         held_by_uuid: @holder_uuid,
+         blocking_lease_id: @lease_id,
+         expires_at: "2026-07-31T21:16:03Z",
+         retry_after_hint_ms: 500
+       })}
+    end
+
+    assert %{
+             outcome: :held_by_other,
+             lease_id: nil,
+             conflict: %{
+               blocking_lease_id: @lease_id,
+               held_by_uuid: @holder_uuid,
+               expires_at: "2026-07-31T21:16:03Z"
+             }
+           } =
+             LeaseAdvisory.acquire_advisory(%{"surface_id" => "dialectic:/unenforced"},
+               bearer_token: "test-token",
+               http_post: http_post
+             )
+  end
+
+  # `:enforcement_blocked` conflates held_by_other, permission_denied,
+  # schema_invalid, client_error AND a missing bearer token. Overwriting
+  # `:outcome` destroyed the only record of *why*, so a downstream finding could
+  # only ever name the right remedy by luck.
+  test "enforcement_blocked scope preserves the pre-enforcement outcome and the surface id" do
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      {:ok, 409,
+       Jason.encode!(%{
+         ok: false,
+         error: "held_by_other",
+         held_by_uuid: @holder_uuid,
+         blocking_lease_id: @lease_id
+       })}
+    end
+
+    assert %{
+             outcome: :enforcement_blocked,
+             lease_id: nil,
+             conflict: %{
+               blocked_outcome: :held_by_other,
+               surface_id: "resident:/sentinel_cycle",
+               blocking_lease_id: @lease_id
+             }
+           } =
+             LeaseAdvisory.acquire_cycle(
+               bearer_token: "test-token",
+               enforced_surface_kinds: MapSet.new(["resident"]),
+               http_post: http_post
+             )
+  end
+
+  test "enforcement_blocked scope from a missing bearer token reports no blocking lease" do
+    scope =
+      LeaseAdvisory.acquire_cycle(
+        bearer_token: "",
+        enforced_surface_kinds: MapSet.new(["resident"]),
+        http_post: fn _url, _body, _headers, _timeout_ms -> flunk("no HTTP without a token") end
+      )
+
+    assert %{
+             outcome: :enforcement_blocked,
+             conflict: %{
+               blocked_outcome: :service_unavailable,
+               surface_id: "resident:/sentinel_cycle"
+             }
+           } = scope
+
+    refute Map.has_key?(scope.conflict, :blocking_lease_id)
+  end
+
   test "release posts normal release and swallows failures" do
     http_post = fn url, body, headers, timeout_ms ->
       assert url == "http://lease.test/v1/lease/release"
