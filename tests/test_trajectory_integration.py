@@ -684,7 +684,114 @@ class TestUpdateCurrentSignature:
                 if c.args and c.args[0] == "identity_drift_resolved"
             ]
             assert len(resolved_broadcasts) == 1
-            assert "trajectory_drift_emit" not in metadata
+            # Tombstoned, not popped: metadata persists via jsonb `||` merge,
+            # which can overwrite a key but never delete one.
+            assert metadata.get("trajectory_drift_emit") is None
+            assert "trajectory_drift_emit" in metadata
+
+    @pytest.mark.asyncio
+    async def test_resolved_does_not_refire_under_jsonb_merge_persistence(self):
+        """update_identity_metadata(merge=True) is a jsonb `||` merge — it can
+        overwrite keys but never delete them. The resolved branch must
+        tombstone trajectory_drift_emit rather than pop it: a popped key
+        silently survives in the stored row, so every subsequent healthy
+        check-in re-reads it and re-emits trajectory_drift_resolved (observed
+        live 2026-07-31: one resolved emit per 3-minute check-in, all day)."""
+        import copy
+        from src.trajectory_identity import update_current_signature, TrajectorySignature
+
+        current_sig = TrajectorySignature(
+            attractor={"center": [0.5, 0.5, 0.5, 0.5]},
+            observation_count=50,
+        )
+        # The stored row, as PostgreSQL holds it. A drift alert was emitted
+        # earlier, so the emit marker is present.
+        db_metadata = {
+            "trajectory_genesis": {
+                "attractor": {"center": [0.5, 0.5, 0.5, 0.5]},
+                "observation_count": 50,
+            },
+            "trust_tier": {"tier": 2, "name": "established"},
+            "trajectory_drift_emit": {
+                "lineage_similarity": 0.12,
+                "emitted_at": "2026-07-24T00:00:00+00:00",
+            },
+        }
+
+        def fresh_row():
+            row = MagicMock()
+            row.metadata = copy.deepcopy(db_metadata)
+            return row
+
+        async def jsonb_merge(agent_id, new_metadata, merge=True):
+            # jsonb `||`: keys present in the payload overwrite (None becomes
+            # JSON null), keys absent from the payload are NOT deleted.
+            db_metadata.update(copy.deepcopy(new_metadata))
+            return True
+
+        with patch('src.db.get_db') as mock_db, \
+             patch('src.audit_db.append_audit_event_async',
+                   new_callable=AsyncMock), \
+             patch('src.broadcaster.broadcaster_instance') as mock_bc:
+            mock_bc.broadcast_event = AsyncMock()
+            mock_db_instance = AsyncMock()
+            mock_db_instance.get_identity = AsyncMock(side_effect=lambda _: fresh_row())
+            mock_db_instance.update_identity_metadata = AsyncMock(side_effect=jsonb_merge)
+            mock_db.return_value = mock_db_instance
+
+            for _ in range(3):
+                await update_current_signature("test-uuid", current_sig)
+
+            resolved_broadcasts = [
+                c for c in mock_bc.broadcast_event.call_args_list
+                if c.args and c.args[0] == "identity_drift_resolved"
+            ]
+            assert len(resolved_broadcasts) == 1
+            assert db_metadata.get("trajectory_drift_emit") is None
+
+    @pytest.mark.asyncio
+    async def test_no_resolved_emit_inside_hysteresis_band(self):
+        """Similarity just above threshold but below threshold + delta must
+        emit nothing: an agent skating the threshold (live case: ~0.628 steady
+        with dips to ~0.27) would otherwise emit a drift/resolved pair on
+        every crossing. The open drift alert stays open until the metric
+        genuinely clears."""
+        from src.trajectory_identity import update_current_signature, TrajectorySignature
+
+        current_sig, metadata = self._drifted_fixture()
+        metadata["trajectory_drift_emit"] = {
+            "lineage_similarity": 0.27,
+            "emitted_at": "2026-07-31T00:00:00+00:00",
+        }
+
+        with patch('src.db.get_db') as mock_db, \
+             patch.object(TrajectorySignature, 'similarity', return_value=0.62), \
+             patch('src.audit_db.append_audit_event_async',
+                   new_callable=AsyncMock) as mock_audit, \
+             patch('src.broadcaster.broadcaster_instance') as mock_bc:
+            mock_bc.broadcast_event = AsyncMock()
+            mock_identity = MagicMock()
+            mock_identity.metadata = metadata
+            mock_db_instance = AsyncMock()
+            mock_db_instance.get_identity = AsyncMock(return_value=mock_identity)
+            mock_db_instance.update_identity_metadata = AsyncMock()
+            mock_db.return_value = mock_db_instance
+
+            result = await update_current_signature("test-uuid", current_sig)
+
+            assert result.get("is_anomaly") is False
+            assert mock_bc.broadcast_event.call_count == 0 or all(
+                c.args[0] not in ("identity_drift", "identity_drift_resolved")
+                for c in mock_bc.broadcast_event.call_args_list if c.args
+            )
+            drift_audits = [
+                c for c in mock_audit.call_args_list
+                if c.args and c.args[0].get("event_type") in (
+                    "trajectory_drift", "trajectory_drift_resolved")
+            ]
+            assert drift_audits == []
+            # Marker retained — the drift alert is still open.
+            assert isinstance(metadata.get("trajectory_drift_emit"), dict)
 
 
 class TestGetTrajectoryStatus:

@@ -35,6 +35,10 @@ _TRUST_TIER_NAMES = {
 # the last emitted alert (plus one trajectory_drift_resolved when it clears).
 # Static drift conditions otherwise flood audit.events and the event feed
 # with an identical row per check-in (#1370).
+# The same delta doubles as resolve hysteresis: drift only counts as cleared
+# once lineage_similarity rises past threshold + delta, so an agent skating
+# the threshold (observed live: ~0.628 steady with dips to ~0.27) does not
+# emit a drift/resolved pair on every crossing.
 _DRIFT_EMIT_DELTA = 0.05
 
 # Paper Definition 2.2: Viability Envelope (EISV bounds)
@@ -685,10 +689,18 @@ async def update_current_signature(
                         }
                     except Exception as e:
                         logger.debug(f"Drift alert emission failed: {e}")
-            elif prev_emit_sim is not None:
+            elif prev_emit_sim is not None and lineage_sim >= 0.6 + _DRIFT_EMIT_DELTA:
                 # Previously-alerted drift has cleared (reseed, operator
                 # re-baseline, or genuine reconvergence) — say so once.
-                metadata.pop("trajectory_drift_emit", None)
+                # Hysteresis: require clearing threshold + delta so a metric
+                # skating the threshold doesn't emit a pair on every crossing.
+                # Tombstone with None instead of pop: metadata persists via
+                # update_identity_metadata(merge=True), i.e. jsonb `||`, which
+                # can overwrite a key but never delete one. A popped key
+                # silently survives in the stored row, and every subsequent
+                # healthy check-in re-reads it and re-emits resolved — the
+                # ~480 events/day feed flood this branch was built to stop.
+                metadata["trajectory_drift_emit"] = None
                 try:
                     from src.audit_db import append_audit_event_async
                     from src.broadcaster import broadcaster_instance
