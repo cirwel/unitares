@@ -13,6 +13,9 @@ from ..utils import success_response, error_response
 from src.logging_utils import get_logger
 from config.governance_config import GovernanceConfig
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
+# Same redacted-handle synthesis agent(action=list) uses, so a stuck entry and
+# a listed agent row carry the SAME identifier string (see _stuck_entry).
+from .query import _public_agent_identifier
 
 logger = get_logger(__name__)
 
@@ -269,6 +272,37 @@ def stuck_change_token(stuck_agents: list) -> str:
 _last_stuck_audit_token: str | None = None
 
 
+def _stuck_entry(agent_id: str, meta: Any, **fields) -> Dict[str, Any]:
+    """Build one stuck-agent record, enriched so a caller can NAME the agent.
+
+    `agent_id` stays the registry UUID (the server-side recovery path keys on
+    it), but every non-operator caller sees agents through the redacted
+    identifier `agent(action=list)` emits — so a UUID alone cannot be joined to
+    a rendered agent row. `public_agent_id` is that same handle, produced by the
+    same function on the same meta, so the two payloads match by construction.
+
+    `agent_name` also fixes a latent audit bug: the stuck_detected audit row
+    (below) has always read a key nothing ever wrote, so every row logged an
+    empty agent_name.
+
+    Enrichment is best-effort — it must never turn a real detection into an
+    exception, so identifier synthesis is guarded.
+    """
+    entry: Dict[str, Any] = {"agent_id": agent_id}
+    try:
+        entry["agent_name"] = (
+            getattr(meta, "label", None) or getattr(meta, "display_name", None)
+        )
+    except Exception:  # pragma: no cover - defensive
+        entry["agent_name"] = None
+    try:
+        entry["public_agent_id"] = _public_agent_identifier(agent_id, meta)
+    except Exception:  # pragma: no cover - defensive
+        entry["public_agent_id"] = None
+    entry.update(fields)
+    return entry
+
+
 def _detect_stuck_agents(
     max_age_minutes: float = 30.0,  # Unused, kept for API compatibility
     critical_margin_timeout_minutes: float = 5.0,
@@ -391,18 +425,18 @@ def _detect_stuck_agents(
                     # Window: recently went quiet, but not so long ago it's just
                     # abandoned/archive-pending (which would be noise).
                     if silence_threshold < age_minutes <= CADENCE_SILENCE_STALE_CAP_MINUTES:
-                        stuck_agents.append({
-                            "agent_id": agent_id,
-                            "reason": "cadence_silence",
-                            "age_minutes": round(age_minutes, 1),
-                            "soft": True,
-                            "details": (
+                        stuck_agents.append(_stuck_entry(
+                            agent_id, meta,
+                            reason="cadence_silence",
+                            age_minutes=round(age_minutes, 1),
+                            soft=True,
+                            details=(
                                 f"Active cadence ~{avg_gap_minutes:.1f} min over {total_updates} "
                                 f"updates, then silent {age_minutes:.0f} min "
                                 f"(> {silence_threshold:.0f} min threshold). Possibly hung/abandoned "
                                 f"mid-work — verify. Soft signal; not auto-recovered."
                             ),
-                        })
+                        ))
                         # A confirmed-silent agent: surface the soft signal and move
                         # on — don't also margin-evaluate its STALE state below (which
                         # would double-list it and is meaningless for a gone agent).
@@ -441,21 +475,21 @@ def _detect_stuck_agents(
                     # Add pattern-based stuck detection
                     for pattern in patterns.get("patterns", []):
                         if pattern["type"] == "loop":
-                            stuck_agents.append({
-                                "agent_id": agent_id,
-                                "reason": "cognitive_loop",
-                                "age_minutes": None,  # Pattern-based, not time-based
-                                "pattern": pattern,
-                                "details": pattern["message"]
-                            })
+                            stuck_agents.append(_stuck_entry(
+                                agent_id, meta,
+                                reason="cognitive_loop",
+                                age_minutes=None,  # Pattern-based, not time-based
+                                pattern=pattern,
+                                details=pattern["message"],
+                            ))
                         elif pattern["type"] == "time_box":
-                            stuck_agents.append({
-                                "agent_id": agent_id,
-                                "reason": "time_box_exceeded",
-                                "age_minutes": pattern["total_minutes"],
-                                "pattern": pattern,
-                                "details": pattern["message"]
-                            })
+                            stuck_agents.append(_stuck_entry(
+                                agent_id, meta,
+                                reason="time_box_exceeded",
+                                age_minutes=pattern["total_minutes"],
+                                pattern=pattern,
+                                details=pattern["message"],
+                            ))
                         elif pattern["type"] == "untested_hypothesis":
                             # Don't mark as stuck, but include in details for context
                             # (This is more of a warning than stuck state)
@@ -482,16 +516,16 @@ def _detect_stuck_agents(
 
                 # Detection rule 1: Critical margin + timeout
                 if margin == "critical" and age_minutes > critical_margin_timeout_minutes:
-                    stuck_agents.append({
-                        "agent_id": agent_id,
-                        "reason": "critical_margin_timeout",
-                        "age_minutes": round(age_minutes, 1),
-                        "margin": margin,
-                        "nearest_edge": margin_info.get('nearest_edge'),
-                        "details": "Critical margin ({}) for {:.1f} minutes".format(
+                    stuck_agents.append(_stuck_entry(
+                        agent_id, meta,
+                        reason="critical_margin_timeout",
+                        age_minutes=round(age_minutes, 1),
+                        margin=margin,
+                        nearest_edge=margin_info.get('nearest_edge'),
+                        details="Critical margin ({}) for {:.1f} minutes".format(
                             margin_info.get('nearest_edge', 'unknown'), age_minutes
-                        )
-                    })
+                        ),
+                    ))
                     continue
 
                 # Detection rule 2: Tight margin + inactivity + unhealthy state
@@ -505,16 +539,16 @@ def _detect_stuck_agents(
                     or float(monitor.state.S) > 0.5  # High entropy
                 )
                 if margin == "tight" and age_minutes > max(tight_margin_timeout_minutes, 60.0) and total_updates >= 50 and _is_actually_degraded:
-                    stuck_agents.append({
-                        "agent_id": agent_id,
-                        "reason": "tight_margin_timeout",
-                        "age_minutes": round(age_minutes, 1),
-                        "margin": margin,
-                        "nearest_edge": margin_info.get('nearest_edge'),
-                        "details": "Tight margin ({}) for {:.1f} minutes".format(
+                    stuck_agents.append(_stuck_entry(
+                        agent_id, meta,
+                        reason="tight_margin_timeout",
+                        age_minutes=round(age_minutes, 1),
+                        margin=margin,
+                        nearest_edge=margin_info.get('nearest_edge'),
+                        details="Tight margin ({}) for {:.1f} minutes".format(
                             margin_info.get('nearest_edge', 'unknown'), age_minutes
-                        )
-                    })
+                        ),
+                    ))
                     continue
 
         except Exception as e:
