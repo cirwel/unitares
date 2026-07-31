@@ -184,6 +184,72 @@ def test_explicit_allow_overrides_env(monkeypatch):
     assert cfg.check_mcp_bearer(None, allow=[]) is True
 
 
+def _request(host: str, origin: str | None = None):
+    """Minimal Starlette request carrying just the headers the guard inspects."""
+    from starlette.requests import Request
+
+    headers = [(b"host", host.encode()), (b"content-type", b"application/json")]
+    if origin is not None:
+        headers.append((b"origin", origin.encode()))
+    return Request({"type": "http", "method": "POST", "headers": headers})
+
+
+def test_streamable_manager_carries_dns_rebinding_protection(monkeypatch):
+    # /mcp is served by the manager mcp_server builds, NOT by the SDK's own
+    # streamable_http_app(), so the transport_security= passed to the high-level
+    # server object never reaches this transport. With security_settings=None the
+    # SDK's TransportSecurityMiddleware disables protection outright — i.e. the
+    # allowlists below would be configured but never enforced. Pin that the
+    # factory attaches them.
+    monkeypatch.setenv("UNITARES_MCP_ALLOWED_HOSTS", "gov.example.org")
+    monkeypatch.setenv("UNITARES_MCP_ALLOWED_ORIGINS", "https://gov.example.org")
+
+    manager = cfg.build_streamable_session_manager(object())
+    settings = manager.security_settings
+
+    assert settings is not None
+    assert settings.enable_dns_rebinding_protection is True
+    assert "gov.example.org" in settings.allowed_hosts
+    assert "127.0.0.1:*" in settings.allowed_hosts
+
+
+def test_dns_rebinding_protection_has_an_operator_kill_switch(monkeypatch):
+    # Flipping enforcement on for a live deployment needs a no-redeploy way out
+    # if a client turns up under a Host nobody enumerated. Default stays ON.
+    assert cfg.dns_rebinding_protection_enabled() is True
+    assert cfg.build_transport_security_settings().enable_dns_rebinding_protection is True
+
+    monkeypatch.setenv("UNITARES_MCP_DNS_REBIND_PROTECTION", "off")
+    assert cfg.dns_rebinding_protection_enabled() is False
+    assert cfg.build_transport_security_settings().enable_dns_rebinding_protection is False
+
+    # Only an explicit falsy value disables it — an unrecognized value stays safe.
+    monkeypatch.setenv("UNITARES_MCP_DNS_REBIND_PROTECTION", "maybe")
+    assert cfg.dns_rebinding_protection_enabled() is True
+
+
+@pytest.mark.asyncio
+async def test_configured_allowlists_reject_forged_host_and_origin(monkeypatch):
+    # Behavioral half: the settings this repo builds actually accept the hosts an
+    # operator allowlists and reject everything else (a forged Host is the DNS-
+    # rebinding vector; a foreign Origin is the browser-driven one).
+    from mcp.server.transport_security import TransportSecurityMiddleware
+
+    monkeypatch.setenv("UNITARES_MCP_ALLOWED_HOSTS", "gov.example.org")
+    monkeypatch.setenv("UNITARES_MCP_ALLOWED_ORIGINS", "https://gov.example.org")
+    guard = TransportSecurityMiddleware(cfg.build_transport_security_settings())
+
+    # Allowed: loopback with a port (base allowlist) and the configured host.
+    assert await guard.validate_request(_request("127.0.0.1:8767"), is_post=True) is None
+    assert await guard.validate_request(_request("gov.example.org"), is_post=True) is None
+
+    # Rejected: forged Host, and an allowed Host with a foreign Origin.
+    assert await guard.validate_request(_request("evil.example.com"), is_post=True) is not None
+    assert await guard.validate_request(
+        _request("127.0.0.1:8767", origin="https://evil.example.com"), is_post=True
+    ) is not None
+
+
 def test_sse_routes_are_prunable_to_close_gate_bypass():
     # The /mcp bearer gate would be bypassable if /sse + /messages/ (which the
     # SDK wires to the SAME tool registry, unauthenticated when OAuth is off)

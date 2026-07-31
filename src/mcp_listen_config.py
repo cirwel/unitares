@@ -56,6 +56,11 @@ def build_transport_security_settings() -> TransportSecuritySettings:
     Base allowlists always include localhost. Append UNITARES_MCP_ALLOWED_HOSTS and
     UNITARES_MCP_ALLOWED_ORIGINS (comma-separated). Optional opaque 'null' origin
     for file:// clients when UNITARES_MCP_ALLOW_NULL_ORIGIN is truthy (default true).
+
+    Protection is on by default. An operator whose client sends a Host this
+    deployment cannot enumerate ahead of time can unblock without a code change
+    by setting UNITARES_MCP_DNS_REBIND_PROTECTION=off — the correct fix is
+    normally to add that host to UNITARES_MCP_ALLOWED_HOSTS instead.
     """
     base_hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
     extra_hosts = split_csv_env("UNITARES_MCP_ALLOWED_HOSTS")
@@ -72,9 +77,44 @@ def build_transport_security_settings() -> TransportSecuritySettings:
         allowed_origins.append("null")
 
     return TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
+        enable_dns_rebinding_protection=dns_rebinding_protection_enabled(),
         allowed_hosts=allowed_hosts,
         allowed_origins=allowed_origins,
+    )
+
+
+def dns_rebinding_protection_enabled() -> bool:
+    """Whether Host/Origin validation is enforced on the MCP transports.
+
+    On unless UNITARES_MCP_DNS_REBIND_PROTECTION is explicitly falsy
+    (0/false/no/off). Read fresh so the value can be logged at startup.
+    """
+    raw = os.environ.get("UNITARES_MCP_DNS_REBIND_PROTECTION", "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return True
+
+
+def build_streamable_session_manager(app, *, stateless: bool = True):
+    """
+    Build the StreamableHTTPSessionManager that serves ``/mcp``.
+
+    The security settings must be attached HERE. ``/mcp`` is served by this
+    manager (mounted in ``mcp_server.main()``), not by the SDK's own
+    ``streamable_http_app()``, so the ``transport_security=`` handed to the
+    high-level server object never reaches this transport — and
+    ``security_settings=None`` makes the SDK's ``TransportSecurityMiddleware``
+    default to protection DISABLED. Constructing the manager anywhere else
+    silently drops UNITARES_MCP_ALLOWED_HOSTS / _ORIGINS enforcement.
+
+    ``security_settings`` is accepted on both the mcp 1.x and 2.x lines.
+    """
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+
+    return StreamableHTTPSessionManager(
+        app=app,
+        stateless=stateless,
+        security_settings=build_transport_security_settings(),
     )
 
 
