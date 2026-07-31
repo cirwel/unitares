@@ -744,20 +744,36 @@ async def update_current_signature(
             else:
                 trust_tier = await resolve_trust_tier(agent_id, metadata)
         except Exception as e:
-            # WARNING, not debug: this fallthrough can silently demote a
-            # substrate-earned identity to the raw trajectory tier. At the
-            # saturated lineage floor (~0.633, below `lin_2`) that lands a
+            # This fallthrough used to recompute — and persist — a possibly
+            # LOWER tier whenever the resolver raised. At the saturated lineage
+            # floor (~0.633, below `lin_2`) that lands a substrate-earned
             # resident at tier <= 1, which opens the genesis-reseed gate below
-            # and disarms `store_genesis_signature`'s value guard — because
-            # `lineage_low = similarity < 0.7` is permanently true. The next
-            # check-in then overwrites Σ₀. The default log level is INFO, so at
-            # debug this whole path emitted nothing and zero log hits could not
-            # be read as evidence it had not fired. See issue #1407.
-            logger.warning(
-                f"Trust tier routing failed for {agent_id[:8]}..., falling back to "
-                f"trajectory-only tier (may demote a substrate-earned identity): {e}"
-            )
-            trust_tier = compute_trust_tier(metadata)
+            # and disarms `store_genesis_signature`'s value guard, because
+            # `lineage_low = similarity < 0.7` is permanently true once the
+            # metric is a constant. The next check-in then overwrites Σ₀.
+            # It also logged at debug under a default INFO logger, so the whole
+            # path emitted nothing and zero log hits could not be read as
+            # evidence it had not fired. See issue #1407.
+            stored_tier = metadata.get("trust_tier")
+            if isinstance(stored_tier, dict) and stored_tier.get("tier") is not None:
+                # Fail SAFE, not down. An exception here means the *resolver*
+                # failed — it is not evidence the agent lost standing. Recomputing
+                # from raw trajectory thresholds on an infrastructure error is what
+                # persists an unearned tier <= 1 and arms the reseed cascade, so
+                # keep what the agent already earned and let the next check-in
+                # re-resolve normally.
+                logger.warning(
+                    f"Trust tier routing failed for {agent_id[:8]}...; preserving "
+                    f"stored tier {stored_tier.get('tier')} "
+                    f"({stored_tier.get('source', 'trajectory')}): {e}"
+                )
+                trust_tier = stored_tier
+            else:
+                logger.warning(
+                    f"Trust tier routing failed for {agent_id[:8]}... and no stored "
+                    f"tier to preserve; falling back to trajectory-only tier: {e}"
+                )
+                trust_tier = compute_trust_tier(metadata)
         metadata["trust_tier"] = trust_tier
         result["trust_tier"] = trust_tier
 
