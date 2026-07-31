@@ -1,5 +1,15 @@
 # EISV individuality test v2 — pre-registration
 
+> **RESULT POSTED.** Both registered reads have been executed and reported:
+> interim 2026-07-16 **FAIL**, final 2026-07-30 **FAIL** (leg A 0/7, leg B fail,
+> 7 eligible agents against a floor of 4). The kill criterion executed — the
+> individuality axiom is **retired for raw behavioral EISV as currently measured**.
+> Full output and a labelled post-hoc annotation:
+> **[`eisv-individuality-v2-result.md`](eisv-individuality-v2-result.md)**.
+>
+> Nothing in this document was altered after registration; this banner is a
+> pointer, and the thresholds, spec, and frozen script sha below are unchanged.
+
 **Status:** PRE-REGISTERED 2026-07-02. Design frozen at the merge commit of the
 PR introducing this file, after an adversarial design review
 (independent statistical, implementation-correctness, and live-data
