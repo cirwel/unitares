@@ -22,15 +22,47 @@ def _looks_like_uuid(value: str) -> bool:
         return False
 
 
+class AmbiguousAgentRef(Exception):
+    """A caller-supplied handle names more than one registered identity."""
+
+    def __init__(self, provided: str, matches: Sequence[str]):
+        super().__init__(f"{provided!r} matches {len(matches)} identities")
+        self.provided = provided
+        self.matches = list(matches)
+
+
 def _canonicalize_from_metadata(provided: str) -> Optional[str]:
     """
     Map a caller-supplied agent reference onto its UUID via the warm metadata
     cache. Accepts the UUID itself, `public_agent_id`, or `structured_id`.
 
-    Deliberately does NOT match on `label`: labels are self-claimed at onboard
-    and never server-verified, so resolving identity by label is a standing
-    invariant violation (no-lookup-by-label). `require_registered_agent` is
-    laxer here; the dialectic path is not.
+    `public_agent_id` IS NOT UNIQUE and must never be resolved first-match-wins.
+    On the live DB (2026-07-31) 4294 of 4492 identities carrying a handle share
+    it with at least one other identity — 269 distinct colliding handles, the
+    largest set being `mcp_20260414` with 479 holders; restricted to
+    `status='active'` it is still 1848 of 2030 (91%). The metadata cache is
+    built from `list_identities(... ORDER BY i.created_at DESC)`, so a naive
+    scan returns the NEWEST holder of a handle — typically a live co-resident,
+    not the caller. Two rules keep this honest:
+
+    1. **Bound identity first.** If the reference is an alias of the agent the
+       server already bound this session to, return the bound UUID. This is the
+       overwhelmingly common case (`middleware/params_step.py` only lets a
+       non-bound `agent_id` reach a dialectic call when it IS a bound alias),
+       and it mirrors `require_agent_id` (`support/agent_auth.py`), which does
+       the same rewrite before any fleet-wide scan.
+    2. **Otherwise require uniqueness.** Collect every match and raise
+       `AmbiguousAgentRef` when more than one identity answers to the handle,
+       rather than silently picking one. Guessing here writes another agent's
+       UUID into `core.dialectic_messages.agent_id`.
+
+    Matching on `label` is confined to rule 1. Searching the fleet BY label is a
+    standing invariant violation (no-lookup-by-label) because labels are
+    self-claimed at onboard and never server-verified — but confirming that a
+    string is an alias of the identity the server itself bound the caller to is
+    not a lookup; it resolves to the caller's own already-verified UUID and
+    cannot name anyone else. `params_step._bound_identity_aliases` already
+    blesses label-of-bound, so rejecting it here would only false-reject.
     """
     try:
         ensure_metadata_loaded = getattr(mcp_server, "ensure_metadata_loaded", None)
@@ -45,12 +77,36 @@ def _canonicalize_from_metadata(provided: str) -> Optional[str]:
     if provided in metadata:
         return provided
 
-    for uuid_key, meta in metadata.items():
+    # Rule 1: an alias of the bound identity resolves to the bound UUID.
+    try:
+        from ..context import get_context_agent_id
+
+        bound_uuid = get_context_agent_id()
+        if bound_uuid:
+            bound_meta = metadata.get(bound_uuid)
+            if bound_meta is not None and provided in (
+                getattr(bound_meta, "public_agent_id", None),
+                getattr(bound_meta, "structured_id", None),
+                getattr(bound_meta, "label", None),
+            ):
+                return bound_uuid
+    except Exception:
+        pass
+
+    # Rule 2: fleet-wide scan, but only an unambiguous hit is usable.
+    matches = [
+        uuid_key
+        for uuid_key, meta in metadata.items()
         if provided in (
             getattr(meta, "public_agent_id", None),
             getattr(meta, "structured_id", None),
-        ):
-            return uuid_key
+        )
+    ]
+
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise AmbiguousAgentRef(provided, matches)
 
     return None
 
@@ -123,6 +179,31 @@ async def resolve_dialectic_agent_id(
                 "registered agent",
                 recovery=unresolvable_recovery,
             )]
+    except AmbiguousAgentRef as ambiguous:
+        # Must precede the generic handler below — otherwise a collision is
+        # reported as a transient "could not verify" and invites a retry that
+        # will fail identically.
+        return None, [error_response(
+            f"Agent reference '{provided[:8]}...' is ambiguous: it names "
+            f"{len(ambiguous.matches)} registered identities",
+            error_code="AMBIGUOUS_AGENT_REF",
+            error_category="auth_error",
+            recovery={
+                "error_type": "agent_ref_ambiguous",
+                "action": (
+                    "Pass your agent UUID (the `uuid` from onboard()/identity()) "
+                    "instead of the handle. Do NOT call onboard() — that mints a "
+                    "NEW identity and will not help."
+                ),
+                "note": (
+                    "public_agent_id is not unique across the fleet, so this "
+                    "handle cannot identify one agent. Resolving it by guess "
+                    "would attribute your message to someone else."
+                ),
+                "match_count": len(ambiguous.matches),
+                "related_tools": ["identity", "dialectic"],
+            },
+        )]
     except Exception:
         return None, [error_response(
             f"Could not verify agent '{provided[:8]}...' registration",
