@@ -59,6 +59,13 @@ The AUC delta is fitted-vs-fitted on both sides. `AUC delta (raw, legacy)` is th
 older asymmetric number — candidate raw feature vs baseline fitted probability —
 retained only to explain earlier reports. Do not cite it.
 
+**Before re-running either script to ask "does EISV predict bad outcomes yet",
+read [`proposals/eisv-outcome-grounding-stop-rule-v0.md`](proposals/eisv-outcome-grounding-stop-rule-v0.md).**
+That question now has a measured bound (any lift is below ≈ 0.05 AUC at ~100
+independent bad clusters) and a pre-registered confirmatory read on 2026-12-01
+with a kill criterion. Ad-hoc reruns between now and then will keep surfacing a
+selected maximum that the null explains.
+
 The honest current state of "does EISV discriminate / add predictive signal / support safer policy" lives in memory
 `project_eisv-validation-gap.md` (the `frt_autonomy_sandbagging` demo and its
 `REAL_LLM_FINDINGS.md` write-up were removed from the repo as out-of-scope — see
