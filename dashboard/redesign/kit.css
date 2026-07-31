@@ -135,14 +135,35 @@ a.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)
 .card.wide { grid-column: span 2; }
 .card.accent-rule { border-top: 2px solid var(--accent); }
 
-/* trust-tier mini bars */
-.tiers { display: flex; gap: 3px; align-items: flex-end; height: 34px; margin-top: var(--space-1); }
-.tiers .t { flex: 1; border-radius: 3px 3px 0 0; background: var(--eisv-c); opacity: 0.85; }
-.tiers .t.strong { background: var(--eisv-i); }
-.tiers .t.medium { background: var(--eisv-s); }
-.tiers .t.weak { background: var(--faint); }
+/* Trust-tier rows — horizontal, linear, self-labelling (so no separate legend).
+   Replaces the 34px-tall vertical bar box in which three of four tiers rendered
+   at 1–2px. Rotating to the axis the card actually has (2 columns wide) turns a
+   ~125×1px sliver into a ~10×10px block without touching the scale. */
+.tier-rows { display: flex; flex-direction: column; gap: 3px; margin-top: var(--space-1); }
+.tier-row { display: grid; grid-template-columns: 78px minmax(0, 1fr) 40px;
+  align-items: center; gap: var(--space-2);
+  font-size: var(--text-xs); line-height: 1.3; color: var(--muted); }
+.tier-name { text-transform: capitalize; }
+.tier-track { height: 10px; background: var(--bg-sunken); border-radius: 2px; overflow: hidden; }
+.tier-track i { display: block; height: 100%; border-radius: 2px; }
+.tier-n { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  text-align: right; color: var(--ink-2); }
 .legend { display: flex; gap: var(--space-3); font-size: var(--text-xs); color: var(--muted); }
 .legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 4px; }
+
+/* Stuck-card body — named agents, each a drill-down link. */
+.card-body { margin-top: var(--space-3); display: flex; flex-direction: column; gap: 3px; }
+.stuck-row, .stuck-more { display: flex; justify-content: space-between; gap: var(--space-2);
+  font-size: var(--text-xs); text-decoration: none; line-height: 1.4; }
+.stuck-row .name { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* No joinable identifier from the server ⇒ no link. Muted so it reads as
+   information, not a broken affordance. */
+.stuck-row.plain { cursor: default; }
+.stuck-row.plain .name { color: var(--muted); }
+.stuck-row .reason { color: var(--warn); font-family: var(--font-mono); flex: none; }
+.stuck-row:hover .name { color: var(--accent); }
+.stuck-more { color: var(--muted); }
+.stuck-more:hover { color: var(--accent); }
 
 /* ---------------- panel ---------------- */
 .panel {
@@ -216,6 +237,13 @@ a.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)
 .tag.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line-2)); }
 .tag.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line-2)); }
 .tag.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--line-2)); }
+/* Trust-tier badge: the tier colour rides a pip + border, NEVER the text.
+   --tier-emerging is 3.55:1 on --surface in paper — fine as a non-text mark
+   (3:1), under AA for 12px text (4.5:1). --ink-2 is 8.9:1 and theme-safe, so
+   colour carries identity only and legibility never depends on it. */
+.tag.tier { color: var(--ink-2); border-color: color-mix(in srgb, var(--tier) 45%, var(--line-2)); }
+.tag.tier i { width: 6px; height: 6px; border-radius: 2px; background: var(--tier);
+  display: inline-block; margin-right: 5px; vertical-align: 1px; }
 
 /* ---------------- misc ---------------- */
 .dot-pip { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: var(--ok); }

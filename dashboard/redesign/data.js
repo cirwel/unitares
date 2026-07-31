@@ -89,8 +89,39 @@
     });
   }
 
+  // Normalise one detect_stuck_agents entry for the views. `public_agent_id` is
+  // the SAME redacted handle agent(action=list) emits (the client never sees the
+  // registry UUID), so it is the only usable join key back to an agent row.
+  function mapStuck(s) {
+    return {
+      id: s.public_agent_id || null, name: s.agent_name || s.public_agent_id || null,
+      reason: s.reason, soft: s.soft === true, details: s.details || "",
+    };
+  }
+
   const DATA = {
     bucketEisv,
+
+    // ── THE resident-liveness predicate ──────────────────────────────────────
+    // One question, one answer. `status` is the server's authoritative rollup
+    // (src/http_api.py http_residents) — cadence-relative, computed from the
+    // NEWER of agent_metadata.last_update and the EISV event, so two panels
+    // cannot disagree after a broadcaster gap.
+    //
+    // Three-way ON PURPOSE. "alive but no EISV recoverable" is a real state the
+    // server already represents (status="healthy" with coherence=null); it must
+    // not read as dead, and it must not count toward an EISV mean. Collapsing it
+    // either way is what made the Overview say "5 of 6 reporting" while all six
+    // residents were alive.
+    //
+    // A plain function, not an accessor: no fetch, no seam to cross, no
+    // snapshot mock. Callers pass the shape DATA.residents() /
+    // DATA.residentFreshness() already return.
+    residentLiveness(r) {
+      if (!r) return "down";
+      if (["silent", "paused", "archived"].indexOf(r.status) !== -1) return "down";
+      return r.coherence != null ? "reporting" : "alive-no-eisv";
+    },
 
     async health() {
       return withFallback(async () => {
@@ -166,6 +197,10 @@
           discoveriesToday: null, // no honest live "today" delta; show neutral subtitle
           dialectic: dlcSessions ? dlcSessions.filter((s) => !["resolved", "failed"].includes(s.phase || s.status)).length : null,
           stuck: stuckR ? (stuckR.stuck_agents || []).length : null,
+          // Named entries so the Stuck card can say WHICH agents and go
+          // somewhere. Capped here, not in the view: a real incident flagging
+          // 40 agents must not grow the card without bound.
+          stuckList: stuckR ? (stuckR.stuck_agents || []).slice(0, 3).map(mapStuck) : null,
           calibration: calR && typeof calR.trajectory_health === "number" ? calR.trajectory_health : null,
           anomalies: anomR && anomR.summary ? anomR.summary.total_anomalies : null,
           systemHealth: healthR ? (healthR.status === "healthy" ? "OK" : healthR.status) : null,
@@ -189,7 +224,10 @@
             const m = a.metrics || {};
             flat.push({
               agent_id: a.agent_id, label: a.label, status: a.lifecycle_status || a.status || status,
-              tier: typeof a.trust_tier === "string" ? a.trust_tier : a.trust_tier, updates: a.total_updates || 0,
+              // trust_tier is the tier NAME (lifecycle/query.py emits
+              // tier_info["name"]); `null` for agents with no computed tier —
+              // the badge distinguishes "unknown" from "not computed".
+              tier: a.trust_tier, updates: a.total_updates || 0,
               last: a.last_update || a.created, purpose: a.purpose, tags: a.tags || [],
               event_driven: a.event_driven === true, health: a.health_status,
               redacted: a.agent_id_redacted === true, parent: a.parent_agent_id,
@@ -384,10 +422,13 @@
       return r.json();
     },
 
-    // Light freshness map for the residents (label -> {silence, status}).
+    // Light freshness map for the residents (label -> {silence, status, coherence}).
     // The Agents pane uses it to keep lease-anchored in-process residents
     // (e.g. Steward — zero agent_state rows BY DESIGN, liveness lives in
-    // lease_plane heartbeats) out of the "Never checked in" bucket.
+    // lease_plane heartbeats) out of the "Never checked in" bucket. `coherence`
+    // rides along so the pane can apply DATA.residentLiveness — the SAME
+    // predicate the Overview applies — instead of inferring liveness from the
+    // mere presence of a silence number.
     async residentFreshness() {
       return withFallback(
         async () => {
@@ -395,12 +436,24 @@
           if (!j || !Array.isArray(j.residents)) return null;
           const map = {};
           j.residents.forEach((r) => {
-            if (r.label) map[r.label] = { silence: r.silence_seconds, status: r.status };
+            if (r.label) map[r.label] = { silence: r.silence_seconds, status: r.status, coherence: r.coherence };
           });
           return map;
         },
         () => S().residentFreshness || {},
       );
+    },
+
+    // Stuck detections on their own (one tool call). The Overview card gets its
+    // copy inside the coordinated stats() batch; the Agents pane calls this so a
+    // stuck row can name its REASON instead of the generic "inactive" tag.
+    // Read-only: auto_recover defaults false server-side.
+    async stuckAgents() {
+      return withFallback(async () => {
+        const r = await callTool("detect_stuck_agents", {});
+        if (!r || !Array.isArray(r.stuck_agents)) return null;
+        return r.stuck_agents.map(mapStuck);
+      }, () => (S().stats && S().stats.stuckList) || []);
     },
 
     async residentPanels() {

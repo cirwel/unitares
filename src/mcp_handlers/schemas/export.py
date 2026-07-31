@@ -29,6 +29,23 @@ class ExportToFileParams(AgentIdentityMixin):
     )
 
 class ExportParams(AgentIdentityMixin):
-    """Parameters for export"""
-
+    """Unified governance history export operations."""
+    action: Literal["history", "file"] = Field(
+        "history",
+        description="Operation to perform",
+    )
+    format: Literal["json", "csv"] = Field(
+        "json",
+        description="Output format",
+    )
+    filename: Optional[str] = Field(
+        None,
+        description="Custom filename without an extension for action=file",
+    )
+    complete_package: bool = Field(
+        False,
+        description=(
+            "Export metadata, history, and validation together for action=file"
+        ),
+    )
 

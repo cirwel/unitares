@@ -136,6 +136,52 @@ class TestToolOrderSchemaSync:
             f"output (silently dropped at boot): {dropped}"
         )
 
+    def test_unordered_consolidated_tool_fails_loudly(self, monkeypatch):
+        """Removing a core action router from TOOL_ORDER must not yield a stub."""
+        import src.tool_schemas as tool_schemas
+
+        monkeypatch.setattr(
+            tool_schemas,
+            "TOOL_ORDER",
+            [name for name in TOOL_ORDER if name != "config"],
+        )
+
+        with pytest.raises(RuntimeError, match=r"missing from TOOL_ORDER.*config"):
+            tool_schemas.get_tool_definitions()
+
+    @pytest.mark.parametrize(
+        ("tool_name", "default_action", "actions"),
+        [
+            ("config", "get", {"get", "set"}),
+            ("export", "history", {"history", "file"}),
+        ],
+    )
+    def test_defaulted_consolidated_schemas_are_advertised(
+        self,
+        tool_name,
+        default_action,
+        actions,
+    ):
+        """Schema-driven clients see actions without breaking empty calls."""
+        advertised = {
+            tool.name: get_tool_input_schema(tool)
+            for tool in get_tool_definitions(verbosity="full")
+        }
+        schema = advertised[tool_name]
+        action = schema["properties"]["action"]
+
+        assert action["default"] == default_action
+        assert set(action["enum"]) == actions
+        assert schema.get("required", []) == []
+
+    def test_empty_consolidated_params_preserve_router_defaults(self):
+        """Validation must not turn existing empty calls into errors."""
+        from src.mcp_handlers.schemas.admin import ConfigParams
+        from src.mcp_handlers.schemas.export import ExportParams
+
+        assert ConfigParams.model_validate({}).action == "get"
+        assert ExportParams.model_validate({}).action == "history"
+
 
 # ============================================================================
 # Schema Structure

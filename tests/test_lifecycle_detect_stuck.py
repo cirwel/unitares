@@ -1216,3 +1216,105 @@ class TestLineageSuccession:
         # The parent's live binding protects it — nothing archived.
         assert mock_arch.call_args_list == []
         assert results == []
+
+
+class TestStuckEntryIdentifierEnrichment:
+    """Every stuck entry must be joinable to a rendered agent row.
+
+    `agent_id` is the registry UUID, but `agent(action=list)` redacts it for
+    non-operator callers, so a UUID alone cannot be matched against a listed
+    agent. `public_agent_id` carries the SAME handle the list emits, and
+    `agent_name` fixes a latent audit bug (the stuck_detected audit row has
+    always read a key nothing wrote, logging an empty agent_name).
+    """
+
+    def _silent_meta(self, now, **kw):
+        meta = _make_agent_meta(
+            created_at=now - timedelta(minutes=60),
+            last_update=now - timedelta(minutes=50),
+            total_updates=13,
+        )
+        for k, v in kw.items():
+            setattr(meta, k, v)
+        return meta
+
+    @patch(_PATCHES["mcp_server"])
+    def test_entry_carries_name_and_public_handle(self, mock_server):
+        now = datetime.now(timezone.utc)
+        uid = "11111111-2222-3333-4444-555555555555"
+        mock_server.agent_metadata = {
+            uid: self._silent_meta(now, label="Sentinel", agent_uuid=uid),
+        }
+        mock_server.monitors = {}
+        mock_server.load_monitor_state.return_value = None
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+        entry = _detect_stuck_agents()[0]
+        assert entry["agent_id"] == uid           # UUID preserved for recovery
+        assert entry["agent_name"] == "Sentinel"  # was never set → empty audit rows
+        assert entry["public_agent_id"]           # joinable by a redacted client
+
+    @patch(_PATCHES["mcp_server"])
+    def test_public_handle_matches_the_agent_list(self, mock_server):
+        """The join key must be produced by the SAME function the list uses."""
+        now = datetime.now(timezone.utc)
+        uid = "11111111-2222-3333-4444-555555555555"
+        meta = self._silent_meta(
+            now, label="claude-unitares#abc", agent_uuid=uid,
+            public_agent_id="Claude_Code_20260731", structured_id=None,
+        )
+        mock_server.agent_metadata = {uid: meta}
+        mock_server.monitors = {}
+        mock_server.load_monitor_state.return_value = None
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+        from src.mcp_handlers.lifecycle.query import _public_agent_identifier
+        entry = _detect_stuck_agents()[0]
+        assert entry["public_agent_id"] == _public_agent_identifier(uid, meta)
+
+    @patch(_PATCHES["mcp_server"])
+    def test_enrichment_does_not_perturb_the_audit_change_token(self, mock_server):
+        """Additive keys must not make the emit-on-change audit re-fire."""
+        now = datetime.now(timezone.utc)
+        mock_server.agent_metadata = {
+            "a1": self._silent_meta(now, label="Vigil"),
+        }
+        mock_server.monitors = {}
+        mock_server.load_monitor_state.return_value = None
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents, stuck_change_token
+        entry = _detect_stuck_agents()[0]
+        legacy = {"agent_id": entry["agent_id"], "reason": entry["reason"]}
+        assert stuck_change_token([entry]) == stuck_change_token([legacy])
+
+    @patch(_PATCHES["mcp_server"])
+    def test_identifier_failure_never_breaks_detection(self, mock_server):
+        """Enrichment is best-effort — a hostile meta must not lose a detection."""
+        now = datetime.now(timezone.utc)
+        base = self._silent_meta(now)
+
+        class ExplodingMeta:
+            """Every identity attribute raises; the timing attributes do not."""
+
+            def __init__(self, src):
+                self.status = src.status
+                self.last_update = src.last_update
+                self.created_at = src.created_at
+                self.total_updates = src.total_updates
+                self.tags = src.tags
+                self.parent_agent_id = None
+                self.spawn_reason = None
+
+            @property
+            def label(self):
+                raise RuntimeError("no label for you")
+
+            @property
+            def agent_uuid(self):
+                raise RuntimeError("no uuid for you")
+
+        mock_server.agent_metadata = {"a1": ExplodingMeta(base)}
+        mock_server.monitors = {}
+        mock_server.load_monitor_state.return_value = None
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+        result = _detect_stuck_agents()
+        assert len(result) == 1
+        assert result[0]["reason"] == "cadence_silence"
+        assert result[0]["agent_id"] == "a1"

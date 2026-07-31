@@ -87,6 +87,20 @@
   --eisv-v: #a8412f;  /* valence  — red     */
   --eisv-c: #3f7d93;  /* coherence— teal    */
 
+  /* Trust tiers — ONE vocabulary, read by the landing bars AND the agents-table
+     badge. `provisional` is NOT a rung on the earning ladder: it is a lineage
+     gate that pre-empts every other verdict (src/identity/trust_tier_routing.py
+     resolve_trust_tier), and it shares ORDINAL 1 with `emerging`. So it gets a
+     hue off the ladder rather than a shade of it. It previously mapped to
+     --warn, which is byte-identical to --eisv-s (emerging) in BOTH themes —
+     the two tiers painted the same pixel value. `unknown` moved off --faint
+     (2.1:1 on --surface, below the 3:1 non-text floor) onto --muted (3.7:1). */
+  --tier-verified:    var(--ok);       /* #4f7d5e */
+  --tier-established: var(--eisv-c);   /* #3f7d93 */
+  --tier-emerging:    var(--eisv-s);   /* #b07d2b */
+  --tier-provisional: var(--eisv-e);   /* #6e5aa8 — violet, off the ladder */
+  --tier-unknown:     var(--muted);    /* #8a8278 */
+
   --shadow: 0 1px 2px rgba(40, 30, 16, 0.04), 0 6px 20px rgba(40, 30, 16, 0.05);
   --shadow-soft: 0 1px 0 rgba(40, 30, 16, 0.03);
 }
@@ -121,6 +135,13 @@
   --eisv-s: #d4a24c;
   --eisv-v: #d4705e;
   --eisv-c: #5fa6c4;
+
+  /* Trust tiers — same vocabulary, ink values (see the paper block for why). */
+  --tier-verified:    var(--ok);       /* #6fae84 */
+  --tier-established: var(--eisv-c);   /* #5fa6c4 */
+  --tier-emerging:    var(--eisv-s);   /* #d4a24c */
+  --tier-provisional: var(--eisv-e);   /* #a18fd6 */
+  --tier-unknown:     var(--muted);    /* #8d867c */
 
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 28px rgba(0, 0, 0, 0.35);
   --shadow-soft: 0 1px 0 rgba(0, 0, 0, 0.2);

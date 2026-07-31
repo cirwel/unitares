@@ -9,6 +9,43 @@
   const $ = (id) => document.getElementById(id);
   const fmtSil = (s) => s == null ? "—" : s < 90 ? s + "s" : s < 5400 ? Math.round(s / 60) + "m" : (s / 3600).toFixed(1) + "h";
   const num = (x, d = 2) => typeof x === "number" ? x.toFixed(d) : "—";
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  // ── ONE liveness partition, used by every reducer on this page ─────────────
+  // Previously six different predicates answered "is this resident alive?" —
+  // `coherence != null`, `r.eisv`, `silence > threshold`, `status === "dark"` —
+  // and they could disagree. They all route through DATA.residentLiveness now.
+  //
+  // `reporting` is also the Fleet Coherence denominator: that headline IS an
+  // EISV mean, so its denominator MUST be the EISV predicate or the card lies
+  // about its own arithmetic. The fix for "N of M reporting" reading as
+  // liveness is the LABEL plus surfacing the middle — not swapping the maths.
+  function partition(residents) {
+    const p = { reporting: [], "alive-no-eisv": [], down: [] };
+    (residents || []).forEach((r) => { (p[DATA.residentLiveness(r)] || p.down).push(r); });
+    return p;
+  }
+  // Byte-identical subtitle from both renderers (full rebuild + in-place
+  // update), or the card visibly flickers between two wordings.
+  //
+  // The subtitle must (a) describe the predicate that actually produced the
+  // denominator and (b) account for EVERY resident. "N of M reporting EISV"
+  // failed both: `reporting` also requires being IN CADENCE, so a resident past
+  // its check-in threshold was excluded even though it still carries a (stale)
+  // coherence — which the strip immediately below prints. The card said "5 of 6
+  // reporting EISV" while all six rows showed a coh value, and only one of the
+  // two excluded buckets was ever named, so the numbers did not add up. Both
+  // excluded buckets are named now; the maths is unchanged, and deliberately
+  // so — a mean over residents that stopped checking in is a stale mean.
+  function fleetSummary(residents) {
+    const p = partition(residents);
+    const live = p.reporting;
+    const coh = live.length ? live.reduce((a, r) => a + r.coherence, 0) / live.length : null;
+    const sub = `${live.length} of ${(residents || []).length} in cadence with EISV`
+      + (p["alive-no-eisv"].length ? ` · ${p["alive-no-eisv"].length} in cadence, no EISV` : "")
+      + (p.down.length ? ` · ${p.down.length} not checking in` : "");
+    return { part: p, coh, sub };
+  }
 
   function badge(el, source) {
     el.className = "src-badge " + source;
@@ -29,9 +66,12 @@
 
   function renderResidents(residents, source) {
     badge($("resSrc"), source);
+    const part = partition(residents);
+    // "dark" survives only as a CSS class here — it is not a status the server
+    // ever emits (grep '"dark"' src/ → 0 hits).
     $("residents").innerHTML = residents.map((r) => {
       const t = resTiming(r);
-      const cls = t.overdue ? "attention" : r.status === "dark" ? "dark" : "";
+      const cls = t.overdue ? "attention" : DATA.residentLiveness(r) === "down" ? "dark" : "";
       const meta = r.coherence == null ? "no EISV" : "coh " + num(r.coherence);
       return `<span class="res ${cls}"><span class="pip"></span>`
         + `<span class="name">${r.name}</span>`
@@ -40,12 +80,13 @@
 
     // Attention band — distinguish a real alarm (silent past threshold) from a
     // calm fleet-wide reconnect window (no EISV after a restart is steady-state,
-    // not a problem; residents report on their own cadence).
+    // not a problem; residents report on their own cadence). Derived from the
+    // same partition, so it cannot disagree with the strip above it.
     const silent = [], noEisv = [];
     residents.forEach((r) => {
       const thr = r.silenceThreshold || 3600;
       if (r.silence != null && r.silence > thr) silent.push(r.name);
-      else if (r.coherence == null && r.status !== "silent") noEisv.push(r.name);
+      else if (part["alive-no-eisv"].indexOf(r) !== -1) noEisv.push(r.name);
     });
     const attn = $("attn");
     const names = (a) => a.map((n) => `<b>${n}</b>`).join(" · ");
@@ -65,8 +106,7 @@
   }
 
   function renderStats(stats, residents, source, auto) {
-    const live = residents.filter((r) => r.coherence != null);
-    const fleetCoh = live.length ? (live.reduce((a, r) => a + r.coherence, 0) / live.length) : null;
+    const fleet = fleetSummary(residents);
     // Automation Health — awareness only ("do I need to care?"); the map lives in /automations.
     const asum = (auto && auto.summary) || {};
     const aKind = asum.by_kind || {};
@@ -82,10 +122,34 @@
     // Cards that map to a section are links (href); the rest (Calibration,
     // Anomalies — pure stats with no detail view) stay plain, so the clickable
     // affordance is honest rather than implied on everything.
+    // Stuck card body: NAME the flagged agents, each a link to that one agent's
+    // detail. The old whole-card `href="#agents"` landed the operator on an
+    // unfiltered 100-row table with no indication which agents were meant —
+    // the count said "4 · needs attention" and the click went nowhere useful.
+    // Per-agent beats a filter: `stuck` is orthogonal to the status filter (all
+    // four live stuck agents are status=active), and agent(list) is hard-capped
+    // at 100 of ~457 server-side, so a client-side filter could render an empty
+    // table under a non-zero count. A per-agent link degrades honestly instead.
+    // Degradation window: a server that predates the stuck-entry enrichment
+    // returns neither a name nor a joinable handle. Render the reason WITHOUT a
+    // link rather than a link that goes nowhere — a dead link is the bug being
+    // fixed. Self-resolves once the server change deploys.
+    const stuckList = stats.stuckList || [];
+    const stuckBody = stuckList.map((s) => {
+      const inner = `<span class="name">${esc(s.name || "agent not identified")}</span>`
+        + `<span class="reason">${esc(s.reason)}${s.soft ? " · soft" : ""}</span>`;
+      if (!s.id) {
+        return `<span class="stuck-row plain" title="${esc(s.details)}${s.name ? "" : "\n(server did not report an identifier for this detection)"}">${inner}</span>`;
+      }
+      return `<a href="#agents" class="stuck-row" data-stuck-id="${esc(s.id)}" title="${esc(s.details)}">${inner}</a>`;
+    }).join("")
+      + (typeof stats.stuck === "number" && stats.stuck > stuckList.length
+        ? `<a href="#agents" class="stuck-more">+${stats.stuck - stuckList.length} more</a>` : "");
     const cards = [
-      { h: "Fleet Coherence", id: "fleetcoh", num: num(fleetCoh), sub: `${live.length} of ${residents.length} residents reporting`, cls: "up", rule: true, href: "#residents" },
+      { h: "Fleet Coherence", id: "fleetcoh", num: num(fleet.coh), sub: fleet.sub, cls: "up", rule: true, href: "#residents" },
       { h: "Agents", num: un(stats.agentsActive) ? "—" : stats.agentsActive, of: un(stats.agentsTotal) ? "" : "/ " + stats.agentsTotal, sub: un(stats.agentsActive) ? "unavailable" : "active / total", href: "#agents" },
-      { h: "Stuck", num: un(stats.stuck) ? "—" : stats.stuck, sub: un(stats.stuck) ? "unavailable" : (stats.stuck ? "needs attention" : "none flagged"), cls: un(stats.stuck) ? "" : (stats.stuck ? "down" : "up"), href: "#agents" },
+      { h: "Stuck", num: un(stats.stuck) ? "—" : stats.stuck, sub: un(stats.stuck) ? "unavailable" : (stats.stuck ? "needs attention" : "none flagged"), cls: un(stats.stuck) ? "" : (stats.stuck ? "down" : "up"),
+        body: stuckBody, href: stuckBody ? null : "#agents" },
       { h: "Automations", num: asum.total || 0, sub: autoSub, cls: aWarn ? "down" : "up", href: "#automations" },
       { h: "Discoveries", num: un(stats.discoveries) ? "—" : stats.discoveries.toLocaleString(), sub: un(stats.discoveries) ? "unavailable" : (typeof stats.discoveriesToday === "number" ? "+" + stats.discoveriesToday + " today" : "knowledge graph"), href: "#discoveries" },
       { h: "Dialectic", num: un(stats.dialectic) ? "—" : stats.dialectic, sub: un(stats.dialectic) ? "unavailable" : (stats.dialectic ? "open sessions" : "no open sessions"), href: "#dialectic" },
@@ -96,34 +160,54 @@
     const degradeBanner = stats.degraded > 0
       ? `<div style="grid-column:1/-1;font-size:var(--text-xs);color:var(--warn);display:flex;gap:6px;align-items:center;margin-bottom:calc(-1 * var(--space-2))"><span>⚠</span><span>${stats.degraded} metric${stats.degraded > 1 ? "s" : ""} couldn't refresh just now — showing "—" instead of stale values.</span></div>`
       : "";
-    // 5 real trust tiers (earned → forming → unearned), each its own colour.
-    const TIER_COLOR = { verified: "var(--ok)", established: "var(--eisv-c)", emerging: "var(--eisv-s)", provisional: "var(--warn)", unknown: "var(--faint)" };
+    // Tier colours live in tokens.css (--tier-*) so this and the agents-table
+    // badge share ONE vocabulary and both themes come free. The whitelist is
+    // also the guard on the var() interpolation — a server-supplied tier name
+    // never reaches the style attribute.
+    const TIER_NAMES = ["verified", "established", "emerging", "provisional", "unknown"];
+    const tierVar = (k) => TIER_NAMES.indexOf(k) !== -1 ? `var(--tier-${k})` : "var(--tier-unknown)";
     const tiers = stats.trustTiers || [];
     const max = Math.max(1, ...tiers.map((t) => t.n));
-    const tierBars = tiers.map((t) =>
-      `<div title="${t.tier}: ${t.n}" style="flex:1;border-radius:3px 3px 0 0;background:${TIER_COLOR[t.tier] || "var(--faint)"};height:${Math.round((t.n / max) * 100)}%"></div>`).join("");
-    const tierLegend = tiers.map((t) =>
-      `<span><i style="background:${TIER_COLOR[t.tier] || "var(--faint)"}"></i>${t.tier} ${t.n}</span>`).join("");
+    // Horizontal + LINEAR. The card is 2 columns wide and the old bar box was a
+    // hard 34px tall, so four ~125px-wide bars rendered the three small tiers at
+    // 1.0–1.7px — unreadable and effectively un-hoverable, and Math.round on the
+    // PERCENTAGE collapsed established (5.3%) and provisional (4.7%) to the same
+    // height. Width is the axis with room (~370px track). Same linear scale, so
+    // proportion stays honest — a log scale would render established at half of
+    // emerging when it is 5% of it. Each row is self-labelling, which absorbs
+    // the separate legend that used to duplicate these numbers underneath.
+    // min-width 3px only when n > 0, so "there are none" still reads as none;
+    // worst-case distortion 3/370 = 0.8%, vs 12% for a 4px floor on 34px.
+    const tierRows = tiers.map((t) => {
+      const pct = (t.n / max) * 100;
+      return `<div class="tier-row" title="${esc(t.tier)}: ${t.n.toLocaleString()}">`
+        + `<span class="tier-name">${esc(t.tier)}</span>`
+        + `<span class="tier-track"><i style="width:${pct}%;min-width:${t.n > 0 ? 3 : 0}px;background:${tierVar(t.tier)}"></i></span>`
+        + `<span class="tier-n">${t.n.toLocaleString()}</span></div>`;
+    }).join("");
     const tierScope = typeof stats.trustEarned === "number"
       ? `${stats.trustEarned.toLocaleString()} earned of ${stats.trustFleet.toLocaleString()} · ${(stats.trustUnknown || 0).toLocaleString()} unknown`
       : "";
 
     const trustBody = stats.trustTiers
-      ? `<div class="tiers">${tierBars}</div><div class="legend" style="margin-top:.5rem;flex-wrap:wrap">${tierLegend}</div>`
+      ? `<div class="tier-rows">${tierRows}</div>`
       : `<div class="sub" style="color:var(--muted)">unavailable</div>`;
     $("stats").innerHTML = degradeBanner + cards.map((s) => {
       const tag = s.href ? "a" : "div"; const attr = s.href ? ` href="${s.href}" style="text-decoration:none;color:inherit"` : "";
       const dataAttr = s.id ? ` data-card="${s.id}"` : "";
       return `<${tag} class="card ${s.rule ? "accent-rule" : ""}"${attr}${dataAttr}><h3>${s.h}</h3>`
         + `<div class="num">${s.num}${s.of ? `<span class="of"> ${s.of}</span>` : ""}</div>`
-        + `<div class="sub ${s.cls || ""}">${s.sub}</div></${tag}>`;
+        + `<div class="sub ${s.cls || ""}">${s.sub}</div>`
+        + (s.body ? `<div class="card-body">${s.body}</div>` : "") + `</${tag}>`;
     }).join("")
       + `<div class="card wide"><h3>Trust Tiers ${tierScope ? `<span style="text-transform:none;letter-spacing:0;color:var(--faint);font-weight:400">· ${tierScope}</span>` : ""}</h3>${trustBody}</div>`;
   }
 
   function renderPulse(residents) {
-    // last check-in = smallest silence among reporting residents
-    const reporting = residents.filter((r) => r.eisv);
+    // last check-in = smallest silence among reporting residents. Same
+    // partition as everything else on this page (was a fourth predicate,
+    // `r.eisv`); Pulse additionally needs the eisv payload it renders.
+    const reporting = partition(residents).reporting.filter((r) => r.eisv);
     const last = reporting.sort((a, b) => (a.silence ?? 1e9) - (b.silence ?? 1e9))[0];
     if (!last) return;
     $("pulseWho").textContent = last.name;
@@ -178,11 +262,10 @@
   function updateFleetCoherence(residents) {
     const el = document.querySelector('[data-card="fleetcoh"]');
     if (!el) return;
-    const live = residents.filter((r) => r.coherence != null);
-    const fleetCoh = live.length ? live.reduce((a, r) => a + r.coherence, 0) / live.length : null;
+    const fleet = fleetSummary(residents);
     const numEl = el.querySelector(".num"), subEl = el.querySelector(".sub");
-    if (numEl) numEl.textContent = num(fleetCoh);
-    if (subEl) subEl.textContent = `${live.length} of ${residents.length} residents reporting`;
+    if (numEl) numEl.textContent = num(fleet.coh);
+    if (subEl) subEl.textContent = fleet.sub; // same string renderStats produces
   }
 
   // Apply one pushed eisv_update to the residents strip directly — no refetch.
@@ -198,8 +281,8 @@
     if (typeof msg.risk === "number") r.risk = msg.risk;
     const act = msg.decision && msg.decision.action;
     if (act) r.verdict = act;
-    r._lastSeenMs = Date.now(); // just checked in: not silent, not dark
-    if (r.status === "dark" || r.status === "silent") r.status = "healthy";
+    r._lastSeenMs = Date.now(); // just checked in: not silent
+    if (r.status === "silent") r.status = "healthy"; // server vocabulary only
     const view = viewResidents();
     renderResidents(view, lastSource);
     renderPulse(view);
@@ -257,6 +340,24 @@
     const [stats, auto] = await Promise.all([DATA.stats(), DATA.automations()]);
     if (!RMODEL.length) { const residents = await DATA.residents(); seedResidents(residents.data, residents.source); }
     renderStats(stats.data, viewResidents(), lastSource, auto.data);
+  }
+
+  // Stuck-row drill-down. Bound ONCE and delegated: renderStats replaces the
+  // whole #stats innerHTML every 30s, so per-render onclick handlers would be
+  // destroyed and rebound on every tick. (#stats holds no <select>/<input>, so
+  // the full rebuild is otherwise safe — this design adds none.)
+  const statsEl = $("stats");
+  if (statsEl) {
+    statsEl.addEventListener("click", (e) => {
+      const row = e.target.closest && e.target.closest("[data-stuck-id]");
+      if (!row) return;
+      e.preventDefault();
+      const id = row.dataset.stuckId;
+      // Hash FIRST so the pane is visible, then focus — Agents.focus is safe
+      // whether or not the section has loaded, and consumes itself once.
+      if (location.hash !== "#agents") location.hash = "#agents";
+      if (window.Agents && window.Agents.focus) window.Agents.focus(id);
+    });
   }
 
   window.Landing = { render, refresh, refreshStats, applyEvent, tickSilence };
