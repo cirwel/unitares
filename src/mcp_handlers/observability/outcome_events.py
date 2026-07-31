@@ -6,6 +6,7 @@ Enables validation of the EISV model by collecting real outcome data
 EISV state at outcome time.
 """
 
+import os
 import time as _time
 from typing import Dict, Any, Optional, Sequence
 from mcp.types import TextContent
@@ -66,6 +67,27 @@ _CONTROLLED_FIXTURE_FLAGS = frozenset(
     }
 )
 _CONTROLLED_FIXTURE_BINDINGS = frozenset({"synthetic_negative_control"})
+
+# Prediction sources where the SERVER supplied the confidence, not the caller.
+# `registry` (a prediction registered before the work, consumed by id) and
+# `argument` (the caller stated it on this call) are the caller's own number.
+# These two are not: the fallback chain scrapes the agent's most recent
+# confidence from anywhere — a different turn, a different task, hours earlier —
+# and pairs it with THIS outcome. Calibration asks "does stated confidence
+# predict outcomes"; a number the agent never stated about this work cannot
+# answer that, in either direction.
+#
+# Measured 2026-07-31 on the `tests` channel (clean epoch since the 2026-07-26
+# reset): 198 rows carried FIVE distinct confidence values, 103 of them at
+# exactly 0.60 across 12 different agents, and every single row was
+# server-scraped (`registry` = 0). The confidence axis was a handful of sticky
+# per-agent defaults, so the resulting "calibration" curve measured which agent
+# emitted a row, not anyone's judgement. The apparent +0.405 overconfidence in
+# the top bin was 37 rows of scraped 1.0 from TWO agents. See #1321 / #1345.
+_SERVER_SCRAPED_PREDICTION_SOURCES = frozenset({
+    "prev_confidence_fallback",
+    "audit_trail_fallback",
+})
 
 _HARD_EXOGENOUS_TYPE_TO_CHANNEL = {
     "test_passed": "tests", "test_failed": "tests",
@@ -371,9 +393,27 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     # rows self-grade TOOL_OBSERVED (0.65) via phase5_emitter, exactly the
     # training threshold, and would have caused the distribution shift the
     # deploy gate (phase-5 contract §8) exists to observe first.
+    # Third exclusion class, same principle as the two above: a confidence the
+    # SERVER scraped rather than the caller stated is not a prediction, so
+    # training on it poisons the channel exactly as a misaimed fixture would.
+    # Keyed on `prediction_source` (where the number came from), NOT on
+    # `prediction_binding` — the binding label can read "missing_prediction"
+    # while the caller did supply a confidence by argument, because the
+    # `if prediction_binding == "no_binding"` guards above stop the label being
+    # overwritten. Gating on the label would exclude caller-supplied rows.
+    # Escape hatch, no redeploy needed, for an operator who wants the prior
+    # behaviour while the prediction protocol is designed:
+    # UNITARES_CALIBRATION_ALLOW_SCRAPED_CONFIDENCE=1.
+    scraped_confidence = (
+        prediction_source in _SERVER_SCRAPED_PREDICTION_SOURCES
+        and os.environ.get(
+            "UNITARES_CALIBRATION_ALLOW_SCRAPED_CONFIDENCE", ""
+        ).strip().lower() not in {"1", "true", "yes", "on"}
+    )
     calibration_excluded = (
         _is_controlled_validation_fixture(detail)
         or bool(detail.get("shadow_write"))
+        or scraped_confidence
     )
     hard_exogenous_signal = _classify_hard_exogenous_signal(outcome_type, detail)
     if evidence_weight < _MIN_TACTICAL_EVIDENCE_WEIGHT or calibration_excluded:
