@@ -13,7 +13,12 @@
   function ago(sec) { return sec == null ? "—" : sec < 90 ? Math.round(sec) + "s" : sec < 5400 ? Math.round(sec / 60) + "m" : (sec / 3600).toFixed(1) + "h"; }
 
   function head(name, status, sub) {
-    const color = status === "silent" ? "var(--warn)" : status === "dark" ? "var(--faint)" : "var(--ok)";
+    // One predicate (DATA.residentLiveness). `status` here is the server's own
+    // vocabulary — healthy | silent | paused | archived | unknown; "dark" was a
+    // client-only invention the server never emits. Callers that pass a literal
+    // "healthy" for a panel with no liveness of its own still read as ok.
+    const down = DATA.residentLiveness({ status, coherence: 0 }) === "down";
+    const color = status === "silent" ? "var(--warn)" : down ? "var(--faint)" : "var(--ok)";
     return `<div class="panel-head" style="margin-bottom:var(--space-4)">
       <span class="dot-pip" style="background:${color}"></span>
       <h2 style="font-family:var(--font-display);font-size:var(--text-lg)">${name}</h2>
