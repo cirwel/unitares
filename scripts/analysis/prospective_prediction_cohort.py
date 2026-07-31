@@ -30,6 +30,7 @@ from scripts.analysis.outcome_inventory import (  # noqa: E402
     harness_lane_from_detail,
     is_controlled_validation_fixture,
 )
+from src.grounding.outcome_anchors import is_anchorable  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -106,7 +107,16 @@ def build_cohort_summary(
 ) -> ProspectiveCohortSummary:
     """Summarize prospective prediction-bound rows without fallback leakage."""
 
-    trusted = [row for row in rows if not is_controlled_validation_fixture(row.detail)]
+    trusted = [
+        row
+        for row in rows
+        if not is_controlled_validation_fixture(row.detail)
+        and is_anchorable(
+            row.verification_source,
+            eisv_present=row.snapshot_e is not None,
+            snapshot_missing=row.detail.get("snapshot_missing") is True,
+        )
+    ]
     prediction_rows = [row for row in trusted if is_prospective_prediction_bound(row)]
     by_lane: dict[str, int] = {}
     for row in prediction_rows:
