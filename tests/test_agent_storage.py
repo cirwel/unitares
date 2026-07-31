@@ -779,6 +779,8 @@ class TestRecordAgentState:
         assert call_kwargs["state_json"]["epistemic_class"] == "agent_report"
         # No behavioral_eisv passed → key absent (backward compatible)
         assert "behavioral_eisv" not in call_kwargs["state_json"]
+        # Same for sensor_eisv_source: absent unless explicitly supplied
+        assert "sensor_eisv_source" not in call_kwargs["state_json"]
 
     @pytest.mark.asyncio
     async def test_persists_behavioral_eisv_into_state_json(self):
@@ -797,6 +799,64 @@ class TestRecordAgentState:
             )
         call_kwargs = db.record_agent_state.call_args.kwargs
         assert call_kwargs["state_json"]["behavioral_eisv"] == beh
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("source", ["physical", "behavioral"])
+    async def test_persists_sensor_eisv_source_into_state_json(self, source):
+        """Which instrument produced the row must be recoverable from stored data.
+
+        phases.py gates the behavioral sensor on the absence of a caller-published
+        sensor_data["eisv"], so a row is one instrument or the other -- but the tag
+        lived only in the in-request ctx and was never written. Downstream analysis
+        therefore could not tell a mixed-instrument cohort from a single-instrument
+        one, which is exactly what made the 2026-07 individuality cohort
+        uninterpretable (Pi-sensor and behavioral agents differed by 0.40 in mean E
+        against 0.028 within-block spread, with nothing in the row to say so).
+        """
+        identity = _make_identity(identity_id=42)
+        db = _mock_db(get_identity=identity, record_agent_state=1)
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import record_agent_state
+            await record_agent_state(
+                "agent-1",
+                E=0.34, I=0.78, S=0.25, V=-0.4,
+                regime="CONVERGENCE", coherence=0.5,
+                sensor_eisv_source=source,
+            )
+        call_kwargs = db.record_agent_state.call_args.kwargs
+        assert call_kwargs["state_json"]["sensor_eisv_source"] == source
+
+    @pytest.mark.asyncio
+    async def test_sensor_eisv_source_does_not_disturb_eisv_values(self):
+        """Provenance only: tagging must not perturb any recorded quantity."""
+        identity = _make_identity(identity_id=42)
+        db = _mock_db(get_identity=identity, record_agent_state=1)
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import record_agent_state
+            await record_agent_state(
+                "agent-1",
+                E=0.7, I=0.8, S=0.15, V=-0.01,
+                regime="EXPLORATION", coherence=0.5,
+                health_status="healthy",
+            )
+            base = dict(db.record_agent_state.call_args.kwargs)
+            db.record_agent_state.reset_mock()
+            await record_agent_state(
+                "agent-1",
+                E=0.7, I=0.8, S=0.15, V=-0.01,
+                regime="EXPLORATION", coherence=0.5,
+                health_status="healthy",
+                sensor_eisv_source="behavioral",
+            )
+            tagged = dict(db.record_agent_state.call_args.kwargs)
+
+        for field in ("entropy", "integrity", "stability_index", "void",
+                      "regime", "coherence", "risk_score", "epistemic_class"):
+            assert base[field] == tagged[field], f"{field} perturbed by tagging"
+        base_sj = dict(base["state_json"])
+        tagged_sj = dict(tagged["state_json"])
+        assert tagged_sj.pop("sensor_eisv_source") == "behavioral"
+        assert base_sj == tagged_sj
 
     @pytest.mark.asyncio
     async def test_raises_when_agent_not_found(self):

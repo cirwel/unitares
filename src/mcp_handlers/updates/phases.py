@@ -1780,6 +1780,7 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
             provenance_context=ctx.agent_state.get("provenance_context"),
             epistemic_class=ctx.epistemic_class,
             behavioral_eisv=behavioral_snapshot,
+            sensor_eisv_source=ctx.agent_state.get("sensor_eisv_source"),
         )
         logger.debug(f"PostgreSQL: Recorded state for {agent_id}")
     except ValueError:
