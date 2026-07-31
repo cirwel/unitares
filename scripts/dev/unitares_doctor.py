@@ -926,6 +926,121 @@ def check_checkin_stream_live(db_url: str) -> CheckResult:
     return CheckResult(name, mode, Status.PASS, f"{recent} check-ins in last 6h")
 
 
+def check_resident_checkin_stale(db_url: str) -> CheckResult:
+    """WARN if an INDIVIDUAL agent has gone silent, against its OWN cadence.
+
+    ``checkin_stream_live`` above is fleet-aggregate and only fires at exactly
+    zero, so a single dead resident hides behind its healthy peers — which is
+    precisely what happened on 2026-07-29: Sentinel stopped checking in for
+    24h (lease-blocked upstream of GovernanceCheckin) while four other
+    residents checked in every few minutes and every aggregate read PASS.
+
+    Each agent is scored against a baseline derived from its own history
+    rather than a fleet-wide cadence constant: hardcoded per-agent intervals
+    go stale silently, and judging an agent against its own normal is the
+    same posture the behavioral path takes. 6x an agent's own median gap is
+    deliberately loose — a check that cries wolf gets ignored, and the failure
+    mode being caught here is "stopped", not "a bit late". The 30-minute floor
+    keeps fast residents from tripping on a single slow cycle.
+
+    Ephemeral harness sessions are excluded structurally rather than by a
+    hardcoded roster (rosters go stale silently — see the class-anchor
+    calibration gap): a session identity carries a ``#`` fragment marker or a
+    harness prefix, while residents are bare names. A finished session is
+    *supposed* to stop, so scoring it here would generate exactly the
+    permanent-warning noise that trains an operator to ignore the check.
+    """
+    name, mode = "resident_checkin_stale", "operator"
+    row = _psql_row(db_url, (
+        "WITH gaps AS ("
+        "  SELECT a.label, s.recorded_at,"
+        "         s.recorded_at - lag(s.recorded_at) OVER "
+        "           (PARTITION BY a.label ORDER BY s.recorded_at) AS gap"
+        "  FROM core.identities i"
+        "  JOIN core.agent_state s ON s.identity_id = i.identity_id"
+        "  JOIN core.agents a ON a.id = i.agent_id"
+        "  WHERE s.synthetic IS NOT TRUE AND a.label IS NOT NULL"
+        "    AND a.label NOT LIKE '%#%'"
+        "    AND a.label NOT ILIKE 'claude%' AND a.label NOT ILIKE 'codex%'"
+        "    AND s.recorded_at > now() - interval '7 days'), "
+        "stats AS ("
+        "  SELECT label, count(*) AS n, max(recorded_at) AS last_seen,"
+        "         percentile_cont(0.5) WITHIN GROUP "
+        "           (ORDER BY EXTRACT(epoch FROM gap)) AS med_gap"
+        "  FROM gaps WHERE gap IS NOT NULL"
+        "  GROUP BY label HAVING count(*) >= 20), "
+        "stale AS ("
+        "  SELECT label, med_gap,"
+        "         EXTRACT(epoch FROM (now() - last_seen)) AS silent_s"
+        "  FROM stats"
+        "  WHERE EXTRACT(epoch FROM (now() - last_seen)) "
+        "        > greatest(med_gap * 6, 1800)) "
+        "SELECT (SELECT count(*) FROM stats), (SELECT count(*) FROM stale), "
+        "       coalesce((SELECT string_agg("
+        "         label || ' silent ' || round(silent_s/60.0) || 'min "
+        "(own median ' || round(med_gap/60.0) || 'min)', '; ' "
+        "         ORDER BY silent_s DESC) FROM stale), '')"
+    ))
+    if row is None:
+        return CheckResult(name, mode, Status.SKIP, "core.agent_state not queryable")
+    tracked, stale, detail = int(row[0]), int(row[1]), row[2]
+    if tracked == 0:
+        return CheckResult(name, mode, Status.SKIP,
+                           "no agent has 20+ check-ins in 7d (fresh install?)")
+    if stale:
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"{stale} of {tracked} agents silent past 6x their own cadence: {detail}",
+            detail="a live PID proves nothing — check the agent's log for an "
+                   "upstream gate (see immortal_lease) before assuming a crash",
+        )
+    return CheckResult(name, mode, Status.PASS,
+                       f"{tracked} agents all within 6x their own cadence")
+
+
+def check_immortal_lease(db_url: str) -> CheckResult:
+    """WARN on live leases renewed far past any sane TTL — the orphan signature.
+
+    An acquire that succeeds server-side but misses the client's
+    ``lease_plane_timeout_ms`` leaves the client without a ``lease_id``, so it
+    can never release. The lease-plane-side holder then auto-renews every
+    TTL/3 forever with ``holder_pid`` NULL, and ``Reaper.perform`` only sweeps
+    leases whose ``expires_at`` is already past — which never happens. The TTL
+    becomes decorative and the lease is immortal, silently blocking every
+    later acquire on that surface (2026-07-29: Sentinel's check-in emitter,
+    291 consecutive skipped ticks, nothing escalated).
+
+    Detection is span-based rather than holder-based because the orphan's
+    tell is that ``expires_at - acquired_at`` keeps growing past the TTL it
+    was granted with, while a healthy lease's span stays at its TTL. The
+    35-minute threshold sits above the longest legitimate TTL in use (the
+    30-minute dispatch surface) so a normal long-lived lease does not trip it.
+    """
+    name, mode = "immortal_lease", "operator"
+    row = _psql_row(db_url, (
+        "SELECT count(*), coalesce(string_agg(DISTINCT surface_id, ', '), '') "
+        "FROM lease_plane.surface_leases "
+        "WHERE released_at IS NULL AND expires_at > now() "
+        "AND (expires_at - acquired_at) > interval '35 minutes'"
+    ))
+    if row is None:
+        return CheckResult(name, mode, Status.SKIP,
+                           "lease_plane.surface_leases not queryable "
+                           "(lease plane not installed?)")
+    count, surfaces = int(row[0]), row[1]
+    if count:
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"{count} lease(s) renewed past any sane TTL — verify each is "
+            f"intentional: {surfaces}",
+            detail="force-release each id via POST /v1/lease/force-release on "
+                   "the lease plane (LEASE_FORCE_RELEASE_TOKEN, a separate "
+                   "per-path token) — releasing kills the renew timer and the "
+                   "next tick acquires cleanly",
+        )
+    return CheckResult(name, mode, Status.PASS, "no immortal leases")
+
+
 def check_grounding_stage_live(db_url: str) -> CheckResult:
     """WARN if grounding shadow events were flowing and have stopped.
 
@@ -1241,6 +1356,8 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
         Check("ipv6_sidecar", "operator", lambda: check_ipv6_sidecar(loaded())),
         Check("failure_label_live", "operator", lambda: check_failure_label_live(db_url)),
         Check("checkin_stream_live", "operator", lambda: check_checkin_stream_live(db_url)),
+        Check("resident_checkin_stale", "operator", lambda: check_resident_checkin_stale(db_url)),
+        Check("immortal_lease", "operator", lambda: check_immortal_lease(db_url)),
         Check("grounding_stage_live", "operator", lambda: check_grounding_stage_live(db_url)),
         Check("label_join_overlap", "operator", lambda: check_label_join_overlap(db_url)),
         Check("signal_degeneracy", "operator", lambda: check_signal_degeneracy(db_url)),

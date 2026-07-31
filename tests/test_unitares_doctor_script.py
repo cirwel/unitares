@@ -882,3 +882,55 @@ def test_finding_producer_live_ignores_single_incident_bursts(doctor, monkeypatc
     result = doctor.check_finding_producer_live("postgresql://x/y")
     assert result.status == doctor.Status.PASS
     assert "lease_plane_health" not in result.message
+
+
+def test_resident_checkin_stale_warns_on_single_dead_resident(doctor, monkeypatch):
+    # The 2026-07-29 Sentinel case: one resident silent 24h while the fleet
+    # aggregate stayed healthy. checkin_stream_live cannot see this.
+    _mock_psql(doctor, monkeypatch,
+               "5|1|Sentinel silent 632min (own median 5min)\n")
+    result = doctor.check_resident_checkin_stale("postgresql://x/y")
+    assert result.status == doctor.Status.WARN
+    assert "Sentinel" in result.message
+    assert "1 of 5" in result.message
+
+
+def test_resident_checkin_stale_passes_when_all_current(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, "5|0|\n")
+    result = doctor.check_resident_checkin_stale("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+
+
+def test_resident_checkin_stale_skips_fresh_install(doctor, monkeypatch):
+    # No agent has enough history to have a cadence yet.
+    _mock_psql(doctor, monkeypatch, "0|0|\n")
+    result = doctor.check_resident_checkin_stale("postgresql://x/y")
+    assert result.status == doctor.Status.SKIP
+
+
+def test_immortal_lease_warns_on_renewed_orphan(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch,
+               "2|resident:/sentinel_fleet_emit, resident:/steward\n")
+    result = doctor.check_immortal_lease("postgresql://x/y")
+    assert result.status == doctor.Status.WARN
+    assert "sentinel_fleet_emit" in result.message
+    assert "force-release" in result.detail
+
+
+def test_immortal_lease_passes_when_clean(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, "0|\n")
+    result = doctor.check_immortal_lease("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+
+
+def test_immortal_lease_skips_without_lease_plane(doctor, monkeypatch):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+    result = doctor.check_immortal_lease("postgresql://x/y")
+    assert result.status == doctor.Status.SKIP
+
+
+def test_liveness_gap_checks_are_registered_as_operator(doctor):
+    checks = {c.name: c for c in doctor.build_checks(REPO_ROOT, "postgresql://x/y")}
+    for name in ("resident_checkin_stale", "immortal_lease"):
+        assert name in checks
+        assert checks[name].mode == "operator"
