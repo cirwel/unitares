@@ -997,6 +997,98 @@ def check_label_join_overlap(db_url: str) -> CheckResult:
     )
 
 
+# Metric columns on core.agent_state that are supposed to vary across the fleet.
+# All are bounded in [0, 1] (or [-1, 1]), so a single absolute dispersion floor
+# is meaningful across them without per-metric scaling.
+DEGENERACY_METRICS = ("coherence", "stability_index", "entropy", "integrity", "risk_score")
+DEGENERACY_MIN_N = 500      # below this, flatness is small-sample, not a defect
+DEGENERACY_SD = 0.01        # measured margin: nearest healthy metric is 4x above
+
+
+def check_signal_degeneracy(db_url: str) -> CheckResult:
+    """WARN when a live metric has stopped carrying information.
+
+    The sibling checks above ask "is this stream still flowing?". This one asks
+    the other half of the same question — "can this signal still move?" — which
+    the section header has always claimed ("silent *or flat*") but nothing
+    implemented. A metric pinned to one value, or wobbling only in its fourth
+    decimal, keeps flowing forever and reads as healthy on every liveness check
+    while telling you nothing.
+
+    Two degeneracy modes, both seen in production:
+      * constant  — exactly one distinct value (stability_index: dead field
+        still written by the resident check-in INSERT path)
+      * collapsed — many distinct values but dispersion near zero (coherence,
+        which moves only in the 4th decimal)
+
+    Calibration, measured on live data over 7d (n=6232) rather than chosen:
+        stability_index  sd 0.000000, 1 distinct   <- constant
+        coherence        sd 0.005262               <- collapsed
+        integrity        sd 0.043202               <- healthy, 4x the floor
+        risk_score       sd 0.061173               <- healthy
+        entropy          sd 0.080398               <- healthy
+
+    KNOWN GAP, stated so nobody over-trusts this: population dispersion does not
+    catch every degenerate metric. `lineage_similarity` is saturated — pinned
+    near 0.633 for any long-lived agent — yet its stored population sd is 0.096,
+    because reseeds write 1.0 and short-lived agents spread out. Its degeneracy
+    is only visible by recomputing the metric against a covariate that should
+    drive it (observation_count spanning 1520x moves it 0.0095). Catching that
+    class needs a per-metric hypothesis about what *should* vary the signal, and
+    is deliberately out of scope here.
+
+    WARN, not FAIL — a degenerate metric degrades evidence, it doesn't break the
+    install. It is also expected to fire on arrival: coherence and
+    stability_index are both degenerate as of 2026-07-30.
+    """
+    name, mode = "signal_degeneracy", "operator"
+    cols = ", ".join(
+        f"stddev({m}::numeric), count(DISTINCT {m}), count({m})" for m in DEGENERACY_METRICS
+    )
+    row = _psql_row(db_url, (
+        f"SELECT {cols} FROM core.agent_state "
+        "WHERE recorded_at > now() - interval '7 days'"
+    ), timeout=30)
+    if row is None or len(row) < 3 * len(DEGENERACY_METRICS):
+        return CheckResult(name, mode, Status.SKIP, "core.agent_state not queryable")
+
+    degenerate, healthy, thin = [], [], []
+    for i, metric in enumerate(DEGENERACY_METRICS):
+        sd_raw, distinct_raw, n_raw = row[3 * i], row[3 * i + 1], row[3 * i + 2]
+        try:
+            n, distinct = int(n_raw), int(distinct_raw)
+        except ValueError:
+            continue
+        if n < DEGENERACY_MIN_N:
+            thin.append(f"{metric} (n={n})")
+            continue
+        if distinct <= 1:
+            degenerate.append(f"{metric}: constant (n={n})")
+            continue
+        try:
+            sd = float(sd_raw)
+        except ValueError:
+            continue
+        if sd < DEGENERACY_SD:
+            degenerate.append(f"{metric}: sd={sd:.6f} over {distinct} values (n={n})")
+        else:
+            healthy.append(f"{metric} sd={sd:.4f}")
+
+    if not degenerate and not healthy:
+        return CheckResult(name, mode, Status.SKIP,
+                           f"insufficient state rows in 7d ({', '.join(thin) or 'none'})")
+    if degenerate:
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"{len(degenerate)} metric(s) carry no information: " + "; ".join(degenerate),
+            detail=("A metric that cannot move cannot support a threshold. Retire the "
+                    "field or fix its producer — do not recalibrate a gate against it. "
+                    + (f"Healthy: {', '.join(healthy)}." if healthy else "")),
+        )
+    return CheckResult(name, mode, Status.PASS,
+                       f"all {len(healthy)} metrics vary: {', '.join(healthy)}")
+
+
 def build_checks(repo_root: Path, db_url: str) -> list[Check]:
     loaded_cache: dict[str, set[str]] = {}
 
@@ -1035,6 +1127,7 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
         Check("checkin_stream_live", "operator", lambda: check_checkin_stream_live(db_url)),
         Check("grounding_stage_live", "operator", lambda: check_grounding_stage_live(db_url)),
         Check("label_join_overlap", "operator", lambda: check_label_join_overlap(db_url)),
+        Check("signal_degeneracy", "operator", lambda: check_signal_degeneracy(db_url)),
     ]
 
 
