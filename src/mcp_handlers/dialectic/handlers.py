@@ -385,7 +385,16 @@ async def handle_quick_dialectic(arguments: Dict[str, Any]) -> Sequence[TextCont
 
 def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, Any]:
     """Annotate a session payload with concrete next-action metadata."""
-    paused_agent_id = session_data.get("paused_agent_id")
+    # Two dict shapes reach this function. `load_session_as_dict`
+    # (dialectic/session.py) and `list_all_sessions` emit "paused_agent";
+    # `DialecticSession.to_dict` emits "paused_agent_id". Only the reviewer key
+    # had the fallback, so on the default `get` fast path paused_agent_id was
+    # always None — which rendered `allowed_agent_ids: []` and "Paused agent
+    # 'unassigned' should submit thesis" on sessions that had a perfectly good
+    # paused agent (#1414).
+    paused_agent_id = session_data.get("paused_agent_id") or session_data.get("paused_agent")
+    if paused_agent_id == "unknown":  # session.py sentinel for a NULL column
+        paused_agent_id = None
     reviewer_agent_id = session_data.get("reviewer_agent_id") or session_data.get("reviewer")
     phase = str(session_data.get("phase") or "").lower()
     session_id = session_data.get("session_id") or "<session_id>"
@@ -722,11 +731,21 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             arguments=arguments
         )]
 
-    reason = arguments.get("reason", "Dialectic review requested")
-    session_type = arguments.get("session_type", "review")
+    # Pydantic `model_dump()` materializes Optional fields as an explicit None
+    # (schemas/dialectic.py + middleware/params_step.py), so `.get(k, default)`
+    # returns the stored None, never the default. Use `or`-chains.
+    # #1414: also fold in issue_description — the parameter the tool's own
+    # examples advertise — so the review's subject is not silently discarded.
+    # (Live row c7b26e6adcf68d62 was written with reason NULL and topic NULL.)
+    reason = (
+        arguments.get("reason")
+        or arguments.get("issue_description")
+        or "Dialectic review requested"
+    )
+    session_type = arguments.get("session_type") or "review"
     discovery_id = arguments.get("discovery_id")
     dispute_type = arguments.get("dispute_type")
-    topic = arguments.get("topic") or reason
+    topic = arguments.get("topic") or arguments.get("issue_description") or reason
     reviewer_mode = arguments.get("reviewer_mode", "auto")  # auto|self|llm
     max_synthesis_rounds = arguments.get("max_synthesis_rounds", 5)
     # Determine trigger source: explicit param > inferred from reason > "manual"
@@ -748,8 +767,14 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             "root_cause": reason,
             "proposed_conditions": arguments.get("proposed_conditions", []),
             "reasoning": arguments.get("reasoning", ""),
+            # #1414: forward the AUTHORITATIVE UUID. `require_registered_agent`
+            # has already rewritten arguments["agent_id"] to the PUBLIC HANDLE,
+            # which is not an identity key. This path happens to survive today
+            # because the callee re-runs require_registered_agent, but it is the
+            # same latent shape as the one-call-review launder below.
+            "agent_id": agent_uuid,
         }
-        for key in ("agent_id", "client_session_id", "api_key", "session_type"):
+        for key in ("client_session_id", "api_key", "session_type"):
             if key in arguments:
                 llm_args[key] = arguments[key]
         return await handle_llm_assisted_dialectic(llm_args)
@@ -918,8 +943,15 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             or reason,
             "reasoning": arguments.get("reasoning") or "",
             "proposed_conditions": arguments.get("proposed_conditions") or [],
+            # #1414: forward the AUTHORITATIVE UUID, not arguments["agent_id"] —
+            # require_registered_agent has already rewritten that slot to the
+            # PUBLIC HANDLE, which is not an identity key. Passing the handle
+            # made the nested submit_thesis auth fail ("not registered") against
+            # a session the caller had just been authorized to create, leaving a
+            # committed session row with no thesis in it.
+            "agent_id": agent_uuid,
         }
-        for key in ("agent_id", "client_session_id", "api_key"):
+        for key in ("client_session_id", "api_key"):
             if key in arguments:
                 thesis_args[key] = arguments[key]
         thesis_result = await handle_submit_thesis(thesis_args)
@@ -932,6 +964,22 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             return thesis_result
         payload.setdefault("session_id", session.session_id)
         payload["one_call_review"] = True
+        # #1414: the nested thesis can fail AFTER the session row committed
+        # (bad phase, missing root_cause, DB error). Say so, instead of letting
+        # a failed payload fall through to the `else` branch below and be
+        # labelled "thesis recorded". This must stay ABOVE the resolution read
+        # so no later branch can reach a failed payload.
+        if payload.get("success") is False:
+            payload["thesis_recorded"] = False
+            payload["session_created"] = True
+            payload["whose_move"] = (
+                "YOURS — the session exists but your thesis was NOT recorded"
+            )
+            payload["next_call"] = (
+                f"dialectic(action='thesis', session_id='{session.session_id}', "
+                "root_cause='...', reasoning='...', proposed_conditions=[...])"
+            )
+            return success_response(payload, arguments=arguments)
         resolution = payload.get("resolution") or {}
         if payload.get("phase") == "resolved" or resolution:
             payload["review_verdict"] = resolution.get("action") or "resolved"
@@ -947,7 +995,7 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
                 "a reviewer's — thesis recorded, awaiting a reviewer to claim "
                 "the open slot"
             )
-        return success_response(payload)
+        return success_response(payload, arguments=arguments)
 
     return success_response({
         "success": True,
@@ -1911,8 +1959,13 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                 eligible.add(session.paused_agent_id)
             if getattr(session, "reviewer_agent_id", None):
                 eligible.add(session.reviewer_agent_id)
-            agent_uuid = resolve_agent_uuid(arguments, agent_id)
-            if agent_id not in eligible and (not agent_uuid or agent_uuid not in eligible):
+            # #1414: `agent_id` is now canonically a UUID (dialectic/auth.py
+            # contract), so the second-chance lookup through
+            # `resolve_agent_uuid` is no longer needed — and it read a
+            # caller-supplied `_agent_uuid` on a path where
+            # `require_registered_agent` never ran, which let a registered
+            # non-participant forge their way past this eligibility gate.
+            if agent_id not in eligible:
                 return [error_response(
                     f"Agent '{agent_id}' is not a participant in this dialectic session.",
                     recovery=(
