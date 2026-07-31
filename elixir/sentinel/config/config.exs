@@ -23,11 +23,16 @@ bool_env = fn name, default ->
   end
 end
 
-first_boot_lookback_seconds =
-  case System.get_env("UNITARES_SENTINEL_FIRST_BOOT_LOOKBACK_SECONDS") do
-    nil -> 7 * 24 * 60 * 60
-    raw -> String.to_integer(raw)
+int_env = fn name, default ->
+  case System.get_env(name) do
+    nil -> default
+    "" -> default
+    raw -> raw |> String.trim() |> String.to_integer()
   end
+end
+
+first_boot_lookback_seconds =
+  int_env.("UNITARES_SENTINEL_FIRST_BOOT_LOOKBACK_SECONDS", 7 * 24 * 60 * 60)
 
 config :unitares_sentinel,
   start_application: bool_env.("UNITARES_SENTINEL_START_APPLICATION", true),
@@ -55,6 +60,19 @@ config :unitares_sentinel,
   websocket_reconnect_ms: 10_000,
   first_boot_lookback_seconds: first_boot_lookback_seconds,
   lease_advisory_enabled: true,
+  # Seconds a resident may be refused its advisory lease before it reports its
+  # OWN starvation to /api/findings (2026-07-31 immortal-lease incident: 5,703
+  # consecutive "tick skipped by lease enforcement" warnings, zero alerts).
+  # Seconds and not a tick count, because `poller_interval_ms` is itself tunable
+  # and ticks are jittered — a count would silently mean a different wall clock
+  # after any retune. One shared value covers both residents. Env-tunable
+  # because retuning during an incident is the actual use case and the launchd
+  # plist is the tuning surface.
+  # `ForcedReleasePoller` is started by `Application.poller_children/0` as a bare
+  # module atom, so application env is its ONLY channel for this: it has to live
+  # here, not just as an inline `Application.get_env/3` default.
+  lease_blocked_alert_after_seconds:
+    int_env.("UNITARES_SENTINEL_LEASE_BLOCKED_ALERT_AFTER_SECONDS", 720),
   lease_audit_session: System.get_env("UNITARES_SENTINEL_AUDIT_SESSION"),
   lease_enforced_surface_kinds: System.get_env("LEASE_PLANE_ENFORCED_SURFACE_KINDS"),
   lease_plane_base_url: System.get_env("LEASE_PLANE_BASE_URL") || "http://127.0.0.1:8788",
