@@ -42,6 +42,23 @@ Don't rebuild discrimination analysis — these exist and are current:
 - **`scripts/analysis/eisv_ablation_matrix.py`** ✓ — same question across scope/window/lead
   slices with bootstrap CIs, permutation p-values, BEAM-lane exclusion.
 
+**Reading either output — three columns decide whether a "lift" is real:**
+
+- `AUC delta` is the **maximum over ~7 candidates**, so its reference is `Null max
+  median`, never zero. The null permutes whole EISV readings between (agent,
+  prior-state snapshot) clusters, leaving labels — and therefore the baseline —
+  untouched. A delta below the null median is weaker than noise. `Selective p`
+  tests exactly the reported statistic; `Brier perm p` tests only Brier.
+- `Bad clusters`, not `Bad`, is the sample size. Prior state is constant within a
+  cluster, so an edit-test-retry burst of N failures is one event.
+- A slice whose chronological training half holds **no bad outcomes** reports
+  `INCONCLUSIVE` rather than a baseline AUC. An untrained baseline ranks by
+  Laplace tie-breaks and reads below chance, which any continuous feature clears.
+
+The AUC delta is fitted-vs-fitted on both sides. `AUC delta (raw, legacy)` is the
+older asymmetric number — candidate raw feature vs baseline fitted probability —
+retained only to explain earlier reports. Do not cite it.
+
 The honest current state of "does EISV discriminate / add predictive signal / support safer policy" lives in memory
 `project_eisv-validation-gap.md` (the `frt_autonomy_sandbagging` demo and its
 `REAL_LLM_FINDINGS.md` write-up were removed from the repo as out-of-scope — see

@@ -132,6 +132,13 @@ class ModelScore:
     y_true: tuple[int, ...] = ()
     y_prob: tuple[float, ...] = ()
     y_auc_score: tuple[float, ...] = ()
+    # AUC of the *fitted* probability, always. `auc` above ranks by the raw
+    # feature when a candidate supplies `raw_score_fn`, which the baseline
+    # cannot do -- see `score_deltas_vs_baseline` for why deltas use this one.
+    auc_fitted: float | None = None
+    # Positive labels in this model's own training split. Zero means every
+    # fitted group rate is the Laplace floor and the model is untrained.
+    n_train_bad: int | None = None
 
 
 @dataclass(frozen=True)
@@ -144,6 +151,9 @@ class ScoreDelta:
     brier_improvement: float
     paired_n: int
     beats_baseline: bool
+    # Same delta computed on raw-feature ranking, kept for continuity with
+    # reports published before the scoring asymmetry was fixed.
+    auc_delta_raw: float | None = None
 
 
 def _score_row_key(row: OutcomeRow) -> Any:
@@ -153,8 +163,18 @@ def _score_row_key(row: OutcomeRow) -> Any:
 def _paired_model_metrics(
     baseline: ModelScore,
     candidate: ModelScore,
-) -> tuple[float | None, float | None, float | None, float | None, int]:
-    """Return candidate and baseline metrics over the candidate-covered rows."""
+) -> tuple[
+    float | None, float | None, float | None, float | None, int,
+    float | None, float | None,
+]:
+    """Return candidate and baseline metrics over the candidate-covered rows.
+
+    The last two elements are the *fitted-probability* AUCs. They exist because
+    ranking candidates on their raw feature while ranking the baseline on its
+    fitted probability is not a fair comparison: the baseline's probability is a
+    tie-saturated step function over at most three groups, so it degrades under
+    train-split label starvation in a way a continuous raw feature never does.
+    """
     baseline_n = len(baseline.scored_row_keys)
     candidate_n = len(candidate.scored_row_keys)
     if not (
@@ -173,6 +193,8 @@ def _paired_model_metrics(
             baseline.auc,
             baseline.brier,
             min(baseline.n_test_scored, candidate.n_test_scored),
+            candidate.auc_fitted if candidate.auc_fitted is not None else candidate.auc,
+            baseline.auc_fitted if baseline.auc_fitted is not None else baseline.auc,
         )
 
     baseline_by_key = {
@@ -196,7 +218,7 @@ def _paired_model_metrics(
         paired_baseline_auc_score.append(baseline.y_auc_score[baseline_idx])
 
     if not paired_true:
-        return None, None, None, None, 0
+        return None, None, None, None, 0, None, None
 
     return (
         auc_score(paired_true, paired_candidate_auc_score),
@@ -204,6 +226,8 @@ def _paired_model_metrics(
         auc_score(paired_true, paired_baseline_auc_score),
         brier_score(paired_true, paired_baseline_prob),
         len(paired_true),
+        auc_score(paired_true, paired_candidate_prob),
+        auc_score(paired_true, paired_baseline_prob),
     )
 
 
@@ -219,18 +243,36 @@ def score_deltas_vs_baseline(
     improvement means lower probability error than the baseline. Candidates with
     missing AUC or Brier are skipped so single-class/sparse slices do not pretend
     to have measurable lift.
+
+    The AUC delta is computed on fitted probabilities for BOTH sides. Scoring
+    candidates on their raw feature while scoring the baseline on its fitted
+    probability manufactures lift whenever the chronological training half is
+    label-starved, because only the fitted side degrades. `auc_delta_raw`
+    preserves the old asymmetric number for continuity.
+
+    A baseline fitted on zero positive labels is not a baseline -- its group
+    rates differ only in the Laplace denominator, so its ranking is tie-break
+    noise that any continuous feature clears. Those slices return no deltas.
     """
     baseline = next((score for score in scores if score.name == baseline_name), None)
     if baseline is None:
+        return []
+    if baseline.n_train_bad == 0:
         return []
 
     deltas: list[ScoreDelta] = []
     for score in scores:
         if score.name not in candidate_names:
             continue
-        candidate_auc, candidate_brier, baseline_auc, baseline_brier, paired_n = (
-            _paired_model_metrics(baseline, score)
-        )
+        (
+            candidate_auc_raw,
+            candidate_brier,
+            baseline_auc_raw,
+            baseline_brier,
+            paired_n,
+            candidate_auc,
+            baseline_auc,
+        ) = _paired_model_metrics(baseline, score)
         if (
             candidate_auc is None
             or candidate_brier is None
@@ -240,6 +282,11 @@ def score_deltas_vs_baseline(
             continue
         auc_delta = round(candidate_auc - baseline_auc, 12)
         brier_improvement = round(baseline_brier - candidate_brier, 12)
+        auc_delta_raw = (
+            None
+            if candidate_auc_raw is None or baseline_auc_raw is None
+            else round(candidate_auc_raw - baseline_auc_raw, 12)
+        )
         deltas.append(
             ScoreDelta(
                 name=score.name,
@@ -248,6 +295,7 @@ def score_deltas_vs_baseline(
                 brier_improvement=brier_improvement,
                 paired_n=paired_n,
                 beats_baseline=auc_delta > 0.0 and brier_improvement > 0.0,
+                auc_delta_raw=auc_delta_raw,
             )
         )
     return deltas
@@ -416,6 +464,8 @@ def _score_predictions(
         y_true=tuple(y_true),
         y_prob=tuple(y_prob),
         y_auc_score=tuple(y_auc_score),
+        auc_fitted=auc_score(y_true, y_prob),
+        n_train_bad=sum(int(row.is_bad) for row in train_rows),
     )
 
 
@@ -783,6 +833,14 @@ def summarize_conclusion(rows: Sequence[OutcomeRow], scores: Sequence[ModelScore
     if bad < 10:
         return "INCONCLUSIVE: fewer than 10 bad outcomes; predictive lift is too fragile."
 
+    baseline = next((s for s in scores if s.name == "previous_outcome_bad"), None)
+    if baseline is not None and baseline.n_train_bad == 0:
+        return (
+            "INCONCLUSIVE: the chronological training split contains no bad "
+            "outcomes, so the previous-outcome baseline is untrained and any "
+            "lift over it is meaningless. Widen the window or resplit."
+        )
+
     deltas = score_deltas_vs_baseline(scores)
     if not deltas:
         return "INCONCLUSIVE: EISV/prior-state coverage is too low for model comparison."
@@ -1003,13 +1061,25 @@ def build_report(
     a("## Model Comparison")
     a("")
     a("Lower Brier is better. AUC above 0.5 means ranking is better than chance.")
+    a(
+        "`AUC (fitted)` ranks by the model's fitted probability and is the one "
+        "deltas use; `AUC (raw)` ranks by the underlying feature, which only "
+        "feature-backed candidates have. `Train bad` = positive labels the model "
+        "was fitted on -- 0 means the model is untrained, not accurate."
+    )
     a("")
-    a("| Model | Train N | Test N | Scored Test N | AUC | Brier | Note |")
-    a("|---|---:|---:|---:|---:|---:|---|")
+    a(
+        "| Model | Train N | Train bad | Test N | Scored Test N | AUC (fitted) "
+        "| AUC (raw) | Brier | Note |"
+    )
+    a("|---|---:|---:|---:|---:|---:|---:|---:|---|")
     for score in scores:
         a(
-            f"| `{score.name}` | {score.n_train} | {score.n_test} | {score.n_test_scored} "
-            f"| {_fmt_float(score.auc, 3)} | {_fmt_float(score.brier, 4)} | {score.note} |"
+            f"| `{score.name}` | {score.n_train} "
+            f"| {'-' if score.n_train_bad is None else score.n_train_bad} "
+            f"| {score.n_test} | {score.n_test_scored} "
+            f"| {_fmt_float(score.auc_fitted, 3)} | {_fmt_float(score.auc, 3)} "
+            f"| {_fmt_float(score.brier, 4)} | {score.note} |"
         )
     a("")
 
@@ -1020,20 +1090,29 @@ def build_report(
         "the candidate-scored rows."
     )
     a("Positive AUC delta means better ranking; positive Brier improvement means lower probability error.")
+    a(
+        "`AUC delta` is symmetric (fitted-vs-fitted). `AUC delta (raw)` is the "
+        "legacy asymmetric number -- candidate raw feature vs baseline fitted "
+        "probability -- kept only to explain older reports; do not cite it."
+    )
     a("")
-    a("| EISV/prior-state model | Paired N | AUC delta | Brier improvement | Beats both? |")
-    a("|---|---:|---:|---:|---|")
+    a(
+        "| EISV/prior-state model | Paired N | AUC delta | AUC delta (raw, legacy) "
+        "| Brier improvement | Beats both? |"
+    )
+    a("|---|---:|---:|---:|---:|---|")
     deltas = score_deltas_vs_baseline(scores)
     if deltas:
         for delta in deltas:
             a(
                 f"| `{delta.name}` | {delta.paired_n} "
                 f"| {_fmt_float(delta.auc_delta, 3)} "
+                f"| {_fmt_float(delta.auc_delta_raw, 3)} "
                 f"| {_fmt_float(delta.brier_improvement, 4)} "
                 f"| {'yes' if delta.beats_baseline else 'no'} |"
             )
     else:
-        a("| (insufficient paired baseline/candidate metrics) | 0 | - | - | no |")
+        a("| (insufficient paired baseline/candidate metrics) | 0 | - | - | - | no |")
     a("")
 
     a("## Conclusion")
@@ -1256,7 +1335,8 @@ async def fetch_rows(
         row
         for record in records
         if not is_controlled_validation_fixture(
-            (row := _row_from_record(record)).detail
+            (row := _row_from_record(record)).detail,
+            include_declared_purpose=False,
         )
     ]
 

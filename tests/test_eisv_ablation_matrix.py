@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import subprocess
@@ -119,7 +120,7 @@ def test_build_matrix_from_db_groups_lanes_and_respects_explicit_exclusions(
             leads=[0],
         )
     )
-    assert [(row.harness_lane, row.trusted, row.bad) for row in default_rows] == [
+    assert [(row.harness_lane, row.rows, row.bad) for row in default_rows] == [
         (None, 1, 0)
     ]
 
@@ -133,7 +134,7 @@ def test_build_matrix_from_db_groups_lanes_and_respects_explicit_exclusions(
             exclude_harness_lanes=(),
         )
     )
-    assert [(row.harness_lane, row.trusted, row.bad) for row in grouped_rows] == [
+    assert [(row.harness_lane, row.rows, row.bad) for row in grouped_rows] == [
         ("beam", 1, 1),
         ("substrate", 1, 0),
     ]
@@ -197,7 +198,7 @@ def test_build_matrix_row_summarizes_baseline_and_best_candidate():
     assert row.scope == "task"
     assert row.window_days == 90
     assert row.lead_minutes == 30
-    assert row.trusted == 120
+    assert row.rows == 120
     assert row.bad == 24
     assert row.prior_state == 120
     assert row.baseline_auc is not None
@@ -269,8 +270,10 @@ def test_format_matrix_report_contains_skeptical_ablation_table():
             scope="task",
             window_days=90,
             lead_minutes=30,
-            trusted=120,
+            rows=120,
             bad=24,
+            bad_clusters=6,
+            bad_agents=4,
             prior_state=120,
             prior_risk=120,
             baseline_auc=0.70,
@@ -291,13 +294,21 @@ def test_format_matrix_report_contains_skeptical_ablation_table():
     assert report.startswith("# EISV Ablation Matrix")
     assert "Excluded harness lanes: `beam`" in report
     assert (
-        "| Scope | Window days | Lead min | Trusted | Bad | Prior state | Prior risk |"
+        "| Scope | Window days | Lead min | Rows | Bad | Bad clusters | Bad agents "
+        "| Prior state | Prior risk |"
         in report
     )
+    # "Trusted" was a lie: the matrix passes no anchor predicate by default, so
+    # the count printed under it was the unanchored population.
+    assert "| Trusted |" not in report
     assert "AUC delta 95% CI" in report
     assert "Brier improvement 95% CI" in report
     assert "Brier perm p" in report
-    assert "| task | 90 | 30 | 120 | 24 | 120 | 120 |" in report
+    assert "Null max median" in report
+    assert "Selective p" in report
+    assert "Read `AUC delta` against `Null max median`, never against zero." in report
+    assert "Read `Bad` against `Bad clusters`." in report
+    assert "| task | 90 | 30 | 120 | 24 | 6 | 4 | 120 | 120 |" in report
     assert "[0.010, 0.050]" in report
     assert "[0.0020, 0.0200]" in report
     assert "0.040" in report
@@ -318,8 +329,10 @@ def test_format_matrix_report_labels_grouped_harness_lane_rows():
             scope="task",
             window_days=90,
             lead_minutes=0,
-            trusted=2,
+            rows=2,
             bad=1,
+            bad_clusters=1,
+            bad_agents=1,
             prior_state=0,
             prior_risk=0,
             baseline_auc=None,
@@ -335,8 +348,10 @@ def test_format_matrix_report_labels_grouped_harness_lane_rows():
             scope="task",
             window_days=90,
             lead_minutes=0,
-            trusted=2,
+            rows=2,
             bad=0,
+            bad_clusters=0,
+            bad_agents=0,
             prior_state=2,
             prior_risk=2,
             baseline_auc=None,
@@ -354,8 +369,8 @@ def test_format_matrix_report_labels_grouped_harness_lane_rows():
 
     assert "Harness lane mode: grouped" in report
     assert "| Lane | Scope | Window days | Lead min |" in report
-    assert "| beam | task | 90 | 0 | 2 | 1 | 0 | 0 |" in report
-    assert "| substrate | task | 90 | 0 | 2 | 0 | 2 | 2 |" in report
+    assert "| beam | task | 90 | 0 | 2 | 1 | 1 | 1 | 0 | 0 |" in report
+    assert "| substrate | task | 90 | 0 | 2 | 0 | 0 | 0 | 2 | 2 |" in report
 
 
 def test_cli_help_runs_when_invoked_as_a_file():
@@ -371,3 +386,163 @@ def test_cli_help_runs_when_invoked_as_a_file():
     assert result.returncode == 0, result.stderr
     assert "Run a compact EISV ablation matrix" in result.stdout
     assert "--group-by-harness-lane" in result.stdout
+
+
+def test_count_bad_clusters_collapses_a_retry_burst_sharing_one_snapshot():
+    """Rows sharing a prior-state snapshot are one unit of evidence, not N.
+
+    An edit-test-retry burst emits several failures seconds apart, all joining
+    the same prior state. Every candidate feature is then identical across them,
+    so within-burst discrimination is 0.5 by construction. Live example: three
+    `test_failed` rows six minutes apart from one agent, one snapshot, all at
+    prior_s=0.417.
+    """
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    burst = [
+        dataclasses.replace(
+            _row(0, bad=True, risk=0.4, agent="agent-burst"),
+            ts=base + timedelta(seconds=offset),
+            # Same absolute snapshot instant for all three.
+            prior_state_age_seconds=3600.0 + offset,
+        )
+        for offset in (0, 11, 354)
+    ]
+    other = dataclasses.replace(
+        _row(9, bad=True, risk=0.4, agent="agent-other"),
+        ts=base,
+        prior_state_age_seconds=3600.0,
+    )
+    good = _row(20, bad=False, risk=0.1, agent="agent-burst")
+
+    clusters, agents = matrix_module.count_bad_clusters([*burst, other, good])
+
+    assert clusters == 2, "three bursty rows plus one other = two independent events"
+    assert agents == 2
+
+
+def test_selective_null_reports_the_distribution_of_the_reported_maximum():
+    """The reported statistic is a max over candidates, so its null is not zero.
+
+    With ~7 candidates on a few dozen paired rows, EISV readings that carry no
+    information still produce a sizeable best-candidate lift. Reporting the max
+    against an implicit zero null is what made a noise-level +0.139 read as a
+    signal. Permuting readings between clusters (rather than shuffling labels)
+    leaves the previous-outcome baseline identical in every resample, so the
+    null isolates the EISV contribution.
+    """
+    rows = [
+        _row(idx, bad=(idx % 9 == 0), risk=0.1 + (idx % 5) / 10.0, agent=f"agent-{idx % 6}")
+        for idx in range(180)
+    ]
+
+    null = matrix_module.estimate_selective_null(
+        rows, observed_best_delta=0.0, resamples=25, seed=7, min_feature_rows=10
+    )
+
+    assert null is not None
+    assert null.resamples > 0
+    assert null.median is not None
+    assert null.selective_p is not None
+    assert 0.0 < null.selective_p <= 1.0
+    # A max over several candidates does not centre on zero under the null.
+    assert null.p95 is not None and null.p95 >= null.median
+
+
+def test_selective_null_reports_that_it_could_not_form_a_null():
+    """A slice with no deltas must say so, not silently omit the null."""
+    rows = [_row(idx, bad=False, risk=0.2) for idx in range(40)]
+
+    single_class = matrix_module.estimate_selective_null(
+        rows, observed_best_delta=0.1, resamples=10
+    )
+    assert single_class is not None
+    assert single_class.resamples == 0
+    assert single_class.selective_p is None
+
+    assert (
+        matrix_module.estimate_selective_null(
+            rows, observed_best_delta=0.1, resamples=0
+        )
+        is None
+    )
+
+
+def test_selective_null_needs_at_least_three_permutable_clusters():
+    """Two clusters cannot produce a null worth printing."""
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    rows = [
+        dataclasses.replace(
+            _row(idx, bad=(idx % 2 == 0), risk=0.3, agent=f"agent-{idx % 2}"),
+            ts=base + timedelta(seconds=idx),
+            prior_state_age_seconds=60.0 + idx,
+        )
+        for idx in range(2)
+    ]
+
+    null = matrix_module.estimate_selective_null(
+        rows, observed_best_delta=0.1, resamples=10
+    )
+
+    assert null is not None
+    assert null.clusters == 2
+    assert null.selective_p is None
+
+
+def test_validation_slices_keep_rows_whose_identity_self_declared_testing():
+    """The agent under measurement must not be able to exclude itself."""
+    substrate = _row(0, bad=False, risk=0.1)
+    self_declared = OutcomeRow(
+        **{
+            **_row(1, bad=True, risk=0.9).__dict__,
+            "detail": {"_identity_metadata": {"purpose": "testing", "label": "claude-x"}},
+        }
+    )
+
+    assert filter_rows_for_validation([substrate, self_declared]) == [
+        substrate,
+        self_declared,
+    ]
+
+
+def test_conclusion_is_downgraded_when_the_selective_null_is_not_cleared():
+    """"KEEP TESTING" must not survive a lift the noise floor reproduces.
+
+    `summarize_conclusion` thresholds the best candidate against zero, but the
+    reported delta is a maximum over ~7 candidates, so zero is the wrong
+    reference. The conclusion string is what gets quoted downstream, so the
+    qualification has to live there and not only in a column.
+    """
+    not_cleared = matrix_module.SelectiveNull(
+        resamples=300, clusters=34, median=0.145, p95=0.400, selective_p=0.100
+    )
+    qualified = matrix_module.qualify_conclusion_with_selective_null(
+        "KEEP TESTING: EISV/prior-state features show modest lift",
+        best_auc_delta=0.312,
+        selective_null=not_cleared,
+    )
+    assert qualified.startswith("NOISE-LEVEL")
+    assert "selective p=0.100" in qualified
+    assert "34 permutable clusters" in qualified
+    assert "KEEP TESTING" in qualified, "the original verdict stays visible"
+
+    cleared = matrix_module.SelectiveNull(
+        resamples=300, clusters=34, median=0.145, p95=0.400, selective_p=0.004
+    )
+    kept = matrix_module.qualify_conclusion_with_selective_null(
+        "KEEP TESTING: EISV/prior-state features show modest lift",
+        best_auc_delta=0.6,
+        selective_null=cleared,
+    )
+    assert kept.startswith("KEEP TESTING")
+    assert "Clears the selective null" in kept
+
+
+def test_conclusion_is_untouched_when_no_selective_null_was_computed():
+    assert (
+        matrix_module.qualify_conclusion_with_selective_null(
+            "SKEPTICAL: nothing here",
+            best_auc_delta=0.01,
+            selective_null=None,
+        )
+        == "SKEPTICAL: nothing here"
+    )

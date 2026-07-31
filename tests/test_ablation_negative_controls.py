@@ -66,7 +66,7 @@ def test_matrix_rows_are_explicitly_labeled_synthetic_controls() -> None:
 
     assert [row.scope for row in matrix_rows] == ["strict", "task"]
     assert all(row.bad > 0 for row in matrix_rows)
-    assert all(row.prior_state == row.trusted for row in matrix_rows)
+    assert all(row.prior_state == row.rows for row in matrix_rows)
     assert all("SYNTHETIC NEGATIVE CONTROL" in row.conclusion for row in matrix_rows)
     assert any(row.beats_both for row in matrix_rows)
 

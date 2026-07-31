@@ -251,3 +251,52 @@ def test_skeptic_record_conversion_preserves_identity_metadata_for_fixture_filte
     )
 
     assert row.detail["_identity_metadata"] == {"label": "perf-profile-checkin_be34425f"}
+
+
+def test_zero_positive_training_split_yields_no_deltas():
+    """A baseline fitted on no positives is untrained, not accurate.
+
+    Its group rates then differ only in the Laplace denominator, so its ranking
+    is tie-break noise that any continuous candidate clears. Reporting lift over
+    it manufactures a result -- observed live at strict/365d, where the baseline
+    read AUC 0.355 (below chance) purely because every bad label landed in the
+    chronological test half.
+    """
+    rows = [
+        _row(idx, bad=idx >= 80, risk=0.9 if idx >= 80 else 0.1, agent=f"agent-{idx % 5}")
+        for idx in range(100)
+    ]
+    scores = build_model_scores(rows, train_fraction=0.7, min_feature_rows=10)
+
+    baseline = next(s for s in scores if s.name == "previous_outcome_bad")
+    assert baseline.n_train_bad == 0
+
+    assert score_deltas_vs_baseline(scores) == []
+    assert "no bad outcomes" in summarize_conclusion(rows, scores)
+
+
+def test_auc_delta_is_symmetric_and_keeps_the_legacy_raw_number():
+    """Deltas must not score the candidate raw and the baseline fitted.
+
+    `prior_s_binned` supplies `raw_score_fn`, so its old AUC ranked by the
+    continuous feature while the baseline ranked by a tie-saturated step
+    function. Only the fitted side degrades under label starvation, so the
+    asymmetry showed up as candidate lift.
+    """
+    rows = [
+        _row(idx, bad=(idx % 7 == 0), risk=0.9 if idx % 7 == 0 else 0.1, agent=f"agent-{idx % 4}")
+        for idx in range(140)
+    ]
+    scores = build_model_scores(rows, train_fraction=0.7, min_feature_rows=10)
+    deltas = score_deltas_vs_baseline(scores)
+    assert deltas
+
+    by_name = {delta.name: delta for delta in deltas}
+    risk_delta = by_name["prior_risk_binned"]
+    # Symmetric delta is reproducible from the fitted AUCs the table prints.
+    candidate = next(s for s in scores if s.name == "prior_risk_binned")
+    baseline = next(s for s in scores if s.name == "previous_outcome_bad")
+    assert candidate.auc_fitted is not None
+    assert baseline.auc_fitted is not None
+    # The legacy asymmetric number is retained but distinct in general.
+    assert risk_delta.auc_delta_raw is not None
