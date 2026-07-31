@@ -19,8 +19,8 @@ from scripts.analysis.ablation_negative_controls import (
 NOW = datetime(2026, 6, 14, 23, 30, tzinfo=timezone.utc)
 
 
-def test_negative_control_rows_are_synthetic_strict_and_not_persistable() -> None:
-    """Negative controls create known bad strict outcomes without real writes."""
+def test_negative_control_rows_are_synthetic_and_excluded_from_live_validation() -> None:
+    """Negative controls create known bad outcomes without claiming persistence control."""
     rows = build_negative_control_outcome_rows(generated_at=NOW)
 
     assert len(rows) >= 40
@@ -29,7 +29,8 @@ def test_negative_control_rows_are_synthetic_strict_and_not_persistable() -> Non
     assert all(row.verification_source == SYNTHETIC_FIXTURE_SOURCE for row in rows)
     assert all(row.agent_id.startswith("synthetic-negative-control/") for row in rows)
     assert all(row.detail["synthetic_negative_control"] is True for row in rows)
-    assert all(row.detail["do_not_persist"] is True for row in rows)
+    assert all(row.detail["do_not_use_for_live_validation"] is True for row in rows)
+    assert all("do_not_persist" not in row.detail for row in rows)
     assert all(row.detail["prediction_binding"] == "synthetic_negative_control" for row in rows)
     assert all(row.prior_state_age_seconds is not None for row in rows)
     assert min(row.prior_risk for row in rows if row.is_bad) > max(
@@ -79,7 +80,11 @@ def test_serialized_rows_keep_fixture_label_and_drop_private_fields() -> None:
 
     assert len(serialized) == 4
     assert all(item["detail"]["synthetic_negative_control"] is True for item in serialized)
-    assert all(item["detail"]["do_not_persist"] is True for item in serialized)
+    assert all(
+        item["detail"]["do_not_use_for_live_validation"] is True
+        for item in serialized
+    )
+    assert all("do_not_persist" not in item["detail"] for item in serialized)
     assert all("continuity_token" not in json.dumps(item) for item in serialized)
     assert all("GOVERNANCE_DATABASE_URL" not in json.dumps(item) for item in serialized)
 
@@ -120,4 +125,8 @@ def test_cli_outputs_summary_and_writes_local_jsonl_only(tmp_path: Path) -> None
     assert output_path.exists()
     exported = [json.loads(line) for line in output_path.read_text().splitlines()]
     assert len(exported) == 12
-    assert all(item["detail"]["do_not_persist"] is True for item in exported)
+    assert all(
+        item["detail"]["do_not_use_for_live_validation"] is True
+        for item in exported
+    )
+    assert all("do_not_persist" not in item["detail"] for item in exported)

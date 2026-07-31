@@ -61,10 +61,10 @@ def _outcome_for_index(index: int) -> tuple[str, bool, float, float, str]:
 
 
 def _detail(index: int) -> dict[str, Any]:
-    """Return non-secret fixture metadata that explicitly forbids persistence."""
+    """Return non-secret metadata that excludes the fixture from live validation."""
     return {
         "synthetic_negative_control": True,
-        "do_not_persist": True,
+        "do_not_use_for_live_validation": True,
         "fixture_id": f"negative-control-{index:03d}",
         "prediction_id": f"synthetic-prediction-{index:03d}",
         "prediction_binding": "synthetic_negative_control",
