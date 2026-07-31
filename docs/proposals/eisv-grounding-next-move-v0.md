@@ -5,6 +5,13 @@ tournament (5 seeded proposals → 3-judge panel → adversarial stress on the t
 → synthesis), grounded in the label-free validation work of PRs #1285/#1289/
 #1293/#1294. Companion to `docs/proposals/eisv-maths-roadmap-v0.md`.
 
+> **Partly superseded (2026-07-31).** The outcome-grounding question this
+> document leaves open now has a measured bound and a pre-registered stop rule:
+> see [`eisv-outcome-grounding-stop-rule-v0.md`](eisv-outcome-grounding-stop-rule-v0.md).
+> The power discussion in §"The power result" below predates the selective null
+> shipped in #1422, which is what made the noise floor measurable. The
+> label-free recommendations here still stand.
+
 ## TL;DR
 
 Run an **"honest-floor" quarter, not a Stage-B quarter.** The maths are not the
