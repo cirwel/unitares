@@ -722,13 +722,67 @@ def test_label_join_overlap_skips_when_one_side_empty(doctor, monkeypatch):
 def test_telemetry_checks_skip_without_psql(doctor, monkeypatch):
     monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
     for fn in (doctor.check_failure_label_live, doctor.check_checkin_stream_live,
-               doctor.check_grounding_stage_live, doctor.check_label_join_overlap):
+               doctor.check_grounding_stage_live, doctor.check_label_join_overlap,
+               doctor.check_signal_degeneracy):
         assert fn("postgresql://x/y").status == doctor.Status.SKIP
 
 
 def test_telemetry_checks_are_registered_as_operator(doctor):
     checks = {c.name: c for c in doctor.build_checks(REPO_ROOT, "postgresql://x/y")}
     for name in ("failure_label_live", "checkin_stream_live",
-                 "grounding_stage_live", "label_join_overlap"):
+                 "grounding_stage_live", "label_join_overlap", "signal_degeneracy"):
         assert name in checks
         assert checks[name].mode == "operator"
+
+
+# --- signal_degeneracy -----------------------------------------------------
+# Row layout is (stddev, distinct, count) per metric, in DEGENERACY_METRICS
+# order: coherence, stability_index, entropy, integrity, risk_score.
+
+def _degeneracy_row(*triples):
+    return "|".join(str(v) for t in triples for v in t) + "\n"
+
+
+_HEALTHY = ((0.0432, 6192, 6232), (0.0612, 833, 6232), (0.0804, 5815, 6232))
+
+
+def test_signal_degeneracy_warns_on_constant_metric(doctor, monkeypatch):
+    """stability_index pinned to a single value — the live 2026-07-30 case."""
+    _mock_psql(doctor, monkeypatch, _degeneracy_row(
+        (0.0432, 6192, 6232), ("", 1, 6232), *_HEALTHY[:3]))
+    result = doctor.check_signal_degeneracy("postgresql://x/y")
+    assert result.status == doctor.Status.WARN
+    assert "stability_index: constant" in result.message
+
+
+def test_signal_degeneracy_warns_on_collapsed_dispersion(doctor, monkeypatch):
+    """coherence: 5632 distinct values but sd 0.005 — moves only in the 4th decimal."""
+    _mock_psql(doctor, monkeypatch, _degeneracy_row(
+        (0.005262, 5632, 6233), *_HEALTHY, (0.0612, 833, 6233)))
+    result = doctor.check_signal_degeneracy("postgresql://x/y")
+    assert result.status == doctor.Status.WARN
+    assert "coherence" in result.message
+    # many distinct values must NOT be mistaken for a healthy signal
+    assert "constant" not in result.message
+
+
+def test_signal_degeneracy_passes_when_all_metrics_vary(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, _degeneracy_row(
+        (0.0217, 5000, 6232), (0.1009, 491, 6232), *_HEALTHY))
+    result = doctor.check_signal_degeneracy("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+
+
+def test_signal_degeneracy_skips_thin_data(doctor, monkeypatch):
+    """A flat metric on 10 rows is small-sample, not a defect."""
+    _mock_psql(doctor, monkeypatch, _degeneracy_row(
+        ("", 1, 10), ("", 1, 10), ("", 1, 10), ("", 1, 10), ("", 1, 10)))
+    result = doctor.check_signal_degeneracy("postgresql://x/y")
+    assert result.status == doctor.Status.SKIP
+
+
+def test_signal_degeneracy_skips_on_short_row(doctor, monkeypatch):
+    """A truncated/malformed row must not be read as 'everything healthy'."""
+    _mock_psql(doctor, monkeypatch, "0.02|100|6232\n")
+    result = doctor.check_signal_degeneracy("postgresql://x/y")
+    assert result.status == doctor.Status.SKIP
