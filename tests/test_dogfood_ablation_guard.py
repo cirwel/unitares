@@ -106,7 +106,9 @@ def test_collect_alerts_runs_grouped_matrix_for_beam_visibility(monkeypatch, tmp
     )
 
     assert alerts == []
-    assert any("--group-by-harness-lane" in args for _, args in calls)
+    matrix_calls = [args for script, args in calls if script.endswith("eisv_ablation_matrix.py")]
+    assert any("--group-by-harness-lane" in args for args in matrix_calls)
+    assert all(("--selective-null-resamples", "0") == args[-2:] for args in matrix_calls)
     assert "matrix_grouped_has_beam=True" in evidence
 
 
