@@ -146,6 +146,8 @@ TOOL_ORDER = [
     "research_registry",
     "agent",
     "calibration",
+    "config",
+    "export",
     "cirs_protocol",
     "self_recovery",
     "operator_resume_agent",
@@ -155,6 +157,46 @@ TOOL_ORDER = [
     "dashboard",
     "admin",
 ]
+
+
+def _is_extra_schema_model(schema_model: type[BaseModel] | None) -> bool:
+    """Return whether a schema was explicitly registered by a plugin."""
+    if schema_model is None:
+        return False
+    model_module = getattr(schema_model, "__module__", "")
+    return any(
+        model_module == module or model_module.startswith(f"{module}.")
+        for module in _EXTRA_SCHEMA_MODULES
+    )
+
+
+def _validate_consolidated_tool_order(
+    schemas: dict[str, type[BaseModel]],
+) -> None:
+    """Fail when a core action router would fall through to a stub schema.
+
+    Plugin action routers are allowed outside the core ordering when their
+    Pydantic model arrived through ``register_extra_schemas``. Their schemas are
+    applied in the decorator-discovery path below.
+    """
+    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
+
+    ordered = set(TOOL_ORDER)
+    missing = sorted(
+        name
+        for name, definition in _TOOL_DEFINITIONS.items()
+        if definition.known_actions is not None
+        and not definition.hidden
+        and name not in ordered
+        and not _is_extra_schema_model(schemas.get(name))
+    )
+    if missing:
+        raise RuntimeError(
+            "Registered action-routed tools are missing from TOOL_ORDER and "
+            "would be advertised with empty stub schemas: "
+            f"{missing}. Add each core tool to TOOL_ORDER with a matching "
+            "*Params model; plugins must call register_extra_schemas()."
+        )
 
 
 def _first_line(s: str | None) -> str:
@@ -242,10 +284,12 @@ def get_tool_definitions(verbosity: str | None = None) -> list[Tool]:
 
     from src.tool_descriptions import TOOL_DESCRIPTIONS
 
+    schemas = get_pydantic_schemas()
+    _validate_consolidated_tool_order(schemas)
     all_tools: list[Tool] = []
 
     for tool_name in TOOL_ORDER:
-        schema_model = get_pydantic_schemas().get(tool_name)
+        schema_model = schemas.get(tool_name)
         if not schema_model:
             print(f"WARNING: Schema for {tool_name} not found in Pydantic models!")
             continue
@@ -287,14 +331,20 @@ def get_tool_definitions(verbosity: str | None = None) -> list[Tool]:
                 else:
                     desc = f"[DEPRECATED] {desc}"
 
-            all_tools.append(Tool(
-                name=tn,
-                description=desc,
-                inputSchema={
+            plugin_schema = schemas.get(tn)
+            if _is_extra_schema_model(plugin_schema):
+                input_schema = plugin_schema.model_json_schema()
+            else:
+                input_schema = {
                     "type": "object",
                     "properties": {},
                     "additionalProperties": True,
-                },
+                }
+
+            all_tools.append(Tool(
+                name=tn,
+                description=desc,
+                inputSchema=input_schema,
             ))
     except ImportError:
         pass
