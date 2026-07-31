@@ -76,6 +76,14 @@
   /* semantic state (desaturated — data only) */
   --ok:     #4f7d5e;
   --warn:   #b07d2b;
+  /* --warn is calibrated as a MARK (border, pip, chart segment): 3.55:1 on
+     --surface clears the 3:1 non-text floor. As TEXT it does not — 12px is
+     normal-size, so WCAG AA wants 4.5:1, and the worst case is worse still:
+     .verdict.warn paints on its own 14% tint (#f4ebdb), where --warn lands at
+     3.05:1. --warn-text is the AA-safe amber for the four rules that set it as
+     a text colour; every non-text use stays on --warn.
+     #85601e: 5.60:1 on --surface, 4.81:1 on the 14% tint. */
+  --warn-text: #85601e;
   --hot:    #b8502e;
   --danger: #a8412f;
   --info:   #4a6f93;
@@ -126,6 +134,11 @@
 
   --ok:     #6fae84;
   --warn:   #d4a24c;
+  /* Ink needs no separate text amber — --warn already clears AA everywhere it
+     is set as text (7.07:1 on --surface, 5.50:1 on the .verdict.warn tint).
+     The token exists so the four text rules can name one variable across both
+     themes rather than branching. */
+  --warn-text: var(--warn);
   --hot:    #d97757;
   --danger: #d4705e;
   --info:   #6f9bc4;
