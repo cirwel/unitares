@@ -19,6 +19,9 @@ def _row(
     binding: str | None = None,
     harness: str | None = None,
     prior_state: bool = True,
+    verification_source: str | None = "external_signal",
+    snapshot_present: bool = True,
+    snapshot_missing: bool = False,
 ) -> OutcomeRow:
     detail = {}
     if prediction_id:
@@ -27,13 +30,15 @@ def _row(
         detail["prediction_binding"] = binding
     if harness:
         detail["harness"] = harness
+    if snapshot_missing:
+        detail["snapshot_missing"] = True
     return OutcomeRow(
         ts=datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=idx),
         agent_id=f"agent-{idx % 2}",
         outcome_type="task_failed" if bad else "task_completed",
         is_bad=bad,
         outcome_score=0.0 if bad else 1.0,
-        verification_source="server_observation",
+        verification_source=verification_source,
         reported_confidence=None,
         reported_complexity=None,
         detail=detail,
@@ -47,7 +52,7 @@ def _row(
         prior_s=None,
         prior_v=None,
         snapshot_verdict=None,
-        snapshot_e=None,
+        snapshot_e=0.1 if snapshot_present else None,
         snapshot_i=None,
         snapshot_s=None,
         snapshot_v=None,
@@ -72,6 +77,47 @@ def test_build_cohort_summary_counts_only_registry_prediction_bound_rows():
     assert summary.prediction_bound_bad == 1
     assert summary.prediction_bound_prior_state == 1
     assert summary.by_harness_lane == {"beam": 1, "substrate": 1}
+
+
+def test_build_cohort_summary_uses_only_trusted_joinable_outcomes():
+    rows = [
+        _row(0, prediction_id="pred-trusted", binding="registry"),
+        _row(
+            1,
+            prediction_id="pred-no-state",
+            binding="registry",
+            snapshot_present=False,
+        ),
+        _row(
+            2,
+            prediction_id="pred-self-observed",
+            binding="registry",
+            verification_source="server_observation",
+        ),
+        _row(
+            3,
+            prediction_id="pred-soft",
+            binding="registry",
+            verification_source="agent_reported_tool_result",
+        ),
+        _row(
+            4,
+            prediction_id="pred-explicitly-missing",
+            binding="registry",
+            snapshot_missing=True,
+        ),
+    ]
+
+    summary = build_cohort_summary(
+        rows,
+        scope="task",
+        window_days=90,
+        lead_minutes=30,
+    )
+
+    assert summary.total_outcomes == 1
+    assert summary.prediction_bound == 1
+    assert summary.prediction_coverage == 1.0
 
 
 def test_format_cohort_report_keeps_holdout_language_and_lane_counts():
