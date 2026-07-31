@@ -155,9 +155,14 @@ async def resolve_trust_tier(
     which does its own DB lookup. This preserves correctness when callers
     don't have tags handy, at the cost of one extra DB roundtrip.
 
-    On any exception in the substrate-earned check, fall through to
-    `compute_trust_tier` — a failed R4 lookup should not block tier
-    computation. The provisional gate fails-soft the same way.
+    On any exception in the substrate-earned check, fail SAFE rather than
+    down: if `metadata` carries a stored `trust_tier`, preserve it and let
+    the next check-in re-resolve normally. Only when there is nothing to
+    preserve do we fall through to `compute_trust_tier`. A failed R4 lookup
+    is evidence about the lookup, not about the agent, and must never
+    recompute a lower tier — persisting tier <= 1 opens the genesis-reseed
+    gate in `update_current_signature` (#1407). Both branches log at
+    `warning`; the provisional gate fails-soft the same way.
     """
     from src.trajectory_identity import compute_trust_tier
 
@@ -192,11 +197,36 @@ async def resolve_trust_tier(
                 metadata=metadata,
             )
     except Exception as e:
-        logger.debug(
+        # #1411 added a fail-safe `except` around the *call site* in
+        # `update_current_signature`. It never fires for anything raised in
+        # here, because this handler catches first and then returns normally —
+        # so an infrastructure failure inside `evaluate_substrate_earned` /
+        # `verify_substrate_earned` still recomputed a possibly-LOWER tier and
+        # persisted it, at `logger.debug` under a default INFO logger. That is
+        # the same defect #1411 fixed one layer up, on the route it missed.
+        # See #1407.
+        stored_tier = metadata.get("trust_tier")
+        if isinstance(stored_tier, dict) and stored_tier.get("tier") is not None:
+            # Fail SAFE, not down. An exception here is evidence about the
+            # substrate *check*, not about the agent — a DB hiccup or an import
+            # error is not a reason to revoke standing an agent earned.
+            # Persisting tier <= 1 is what opens the genesis-reseed gate.
+            logger.warning(
+                f"[trust_tier_routing] substrate check failed for "
+                f"{agent_uuid[:8]}...; preserving stored tier "
+                f"{stored_tier.get('tier')} "
+                f"({stored_tier.get('source', 'trajectory')}): {e}"
+            )
+            return stored_tier
+        logger.warning(
             f"[trust_tier_routing] substrate check failed for "
-            f"{agent_uuid[:8]}...: {e}; falling through to compute_trust_tier"
+            f"{agent_uuid[:8]}... and no stored tier to preserve; "
+            f"falling through to compute_trust_tier: {e}"
         )
 
+    # Designed fall-through — reached when no exception occurred and the agent
+    # simply is not substrate-earned (no substrate tag, or verdict not earned),
+    # and when there was no stored tier to preserve. Not an error path.
     return compute_trust_tier(metadata)
 
 
