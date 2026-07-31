@@ -219,7 +219,16 @@ def collect_alerts(
             repo,
             python,
             "scripts/analysis/eisv_ablation_matrix.py",
-            ("--scopes", "strict,task", "--windows", "30,90", "--leads", "0,5,30"),
+            (
+                "--scopes",
+                "strict,task",
+                "--windows",
+                "30,90",
+                "--leads",
+                "0,5,30",
+                "--selective-null-resamples",
+                "0",
+            ),
             timeout_seconds=timeout_seconds,
         )
         excluded = matrix_exclusion_alert(matrix) is None
@@ -243,6 +252,8 @@ def collect_alerts(
                 "90",
                 "--leads",
                 "0,30",
+                "--selective-null-resamples",
+                "0",
             ),
             timeout_seconds=timeout_seconds,
         )
