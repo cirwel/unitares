@@ -551,6 +551,7 @@ async def record_agent_state(
     provenance_context: Optional[Mapping[str, Any]] = None,
     epistemic_class: Optional[str] = "agent_report",
     behavioral_eisv: Optional[Mapping[str, Any]] = None,
+    sensor_eisv_source: Optional[str] = None,
 ) -> int:
     """
     Record agent EISV state to PostgreSQL.
@@ -602,6 +603,16 @@ async def record_agent_state(
     # hydrate gap that left the fleet permanently is_baselined=false (2026-06-03).
     if behavioral_eisv:
         state_json["behavioral_eisv"] = dict(behavioral_eisv)
+    # Which instrument produced this row's EISV: "physical" (caller published
+    # sensor_data["eisv"], e.g. Lumen's Pi) or "behavioral" (computed here from
+    # governance observables). phases.py gates the behavioral sensor on the
+    # absence of a caller-published reading, so the two are mutually exclusive
+    # per row — but the tag was set in-request and never persisted, leaving the
+    # branch unrecoverable from stored data. That made mixed-instrument cohorts
+    # indistinguishable from single-instrument ones in downstream analysis.
+    # Provenance only: nothing computed here reads this field.
+    if sensor_eisv_source is not None:
+        state_json["sensor_eisv_source"] = sensor_eisv_source
 
     state_id = await db.record_agent_state(
         identity_id=identity.identity_id,
