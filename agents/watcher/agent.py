@@ -46,6 +46,7 @@ Design notes:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -53,6 +54,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from contextlib import contextmanager
 from collections.abc import Callable
 from dataclasses import asdict, field
 from datetime import datetime, timedelta, timezone
@@ -926,9 +928,78 @@ def call_ollama(prompt: str, model: str, timeout: int) -> dict[str, Any]:
     }
 
 
+class ModelBusy(RuntimeError):
+    """Another watcher process holds the model slot — skip, do not queue.
+
+    Deliberately NOT a model failure: the detector is healthy, it is simply
+    occupied. Counting contention toward the detector-down threshold would
+    invert that signal, firing "detector down" precisely when the detector is
+    busiest and most alive.
+    """
+
+
+# Ollama serializes requests per model, so concurrent watcher processes do not
+# run concurrently — they queue. Observed 2026-07-31: three hook-fired scans
+# started within 19s, one completed in ~3min, and the other two failed at
+# EXACTLY their start + WATCHER_TIMEOUT (22:49:32 -> 22:55:32 and 22:49:39 ->
+# 22:55:39). Both burned their whole budget waiting for a slot; the model never
+# saw either prompt. Note a larger/slower model makes this strictly worse, so
+# "switch models" is the wrong lever here.
+#
+# Serializing at this boundary means a call's timeout starts when it OWNS the
+# slot, so every scan gets its full budget instead of racing an invisible queue.
+MODEL_LOCK_WAIT = int(os.environ.get("WATCHER_MODEL_LOCK_WAIT", "300"))
+_MODEL_LOCK_FILE = "model_slot.lock"
+
+
+@contextmanager
+def model_slot(wait_s: int = MODEL_LOCK_WAIT):
+    """Hold an exclusive cross-process slot for the duration of a model call.
+
+    Bounded on purpose: waiting forever would just relocate the pile-up from
+    Ollama's queue into a pile of watcher processes. On expiry the scan is
+    skipped — the file is picked up by a later sweep, which costs less than a
+    guaranteed-dead 360s call.
+    """
+    path = watcher_state_dir() / _MODEL_LOCK_FILE
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = path.open("w")
+    except OSError as exc:
+        # Lock I/O must never be the reason a scan cannot run at all.
+        log(f"model slot unavailable ({exc}) — proceeding unserialized", "warning")
+        yield
+        return
+
+    deadline = time.monotonic() + wait_s
+    try:
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise ModelBusy(
+                        f"model slot held by another scan for >{wait_s}s"
+                    ) from None
+                time.sleep(1.0)
+        yield
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        handle.close()
+
+
 def call_model(prompt: str, model: str = DEFAULT_MODEL, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
-    """Entry point used by scan_file; thin wrapper over call_ollama."""
-    return call_ollama(prompt, model, timeout)
+    """Entry point used by scan_file; thin wrapper over call_ollama.
+
+    ``timeout`` covers the call itself, which only begins once this process
+    owns the model slot — see model_slot().
+    """
+    with model_slot():
+        return call_ollama(prompt, model, timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -2245,6 +2316,11 @@ def scan_file(
 
     try:
         result = call_model(prompt)
+    except ModelBusy as e:
+        # Contention, not capability. Skipping keeps the detector-down counter
+        # meaningful; counting this would fire "detector down" under load.
+        log(f"scan skipped — {e}", "warning")
+        return []
     except Exception as e:
         log(f"model call failed: {e}", "error")
         _record_model_failure(e)
@@ -2316,6 +2392,11 @@ def review_file(
 
     try:
         result = call_model(prompt)
+    except ModelBusy as e:
+        # Contention, not capability. Skipping keeps the detector-down counter
+        # meaningful; counting this would fire "detector down" under load.
+        log(f"scan skipped — {e}", "warning")
+        return []
     except Exception as e:
         log(f"model call failed: {e}", "error")
         _record_model_failure(e)
