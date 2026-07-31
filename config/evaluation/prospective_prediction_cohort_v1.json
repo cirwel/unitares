@@ -1,0 +1,31 @@
+{
+  "contract_version": "outcome-attested-prediction-binding-funnel-v1",
+  "digest": {
+    "algorithm": "sha256",
+    "value": "a24e8f010537091146a72461580b8f726fc1afb40ad8ef6dc71cc27b2e31a2f6"
+  },
+  "predicates": {
+    "accepted_outcome_attested": "prior_state_available",
+    "fetched_outcomes": "outcome_type in selection.outcome_types and selection.as_of - selection.window_days <= ts <= selection.as_of and detail source is audit.outcome_events.detail (mutable identity metadata excluded)",
+    "nonfixture_outcomes": "not is_controlled_validation_fixture(detail, include_declared_purpose=True)",
+    "prediction_id_presented": "nonfixture_outcomes and detail.get('prediction_id') not in (None, '')",
+    "prior_state_available": "trusted_registry_bound and prior_state_age_seconds is not None",
+    "registry_bound": "prediction_id_presented and detail.get('prediction_binding') == 'registry'",
+    "trusted_outcomes": "is_anchorable(verification_source, eisv_present=(snapshot_e is not None), snapshot_missing=(detail.get('snapshot_missing') is True), include_soft=False)",
+    "trusted_registry_bound": "registry_bound and is_anchorable(verification_source, eisv_present=(snapshot_e is not None), snapshot_missing=(detail.get('snapshot_missing') is True), include_soft=False)"
+  },
+  "schema_version": 1,
+  "selection": {
+    "as_of": "2026-07-31T20:01:30.502467Z",
+    "lead_minutes": 30.0,
+    "outcome_types": [
+      "test_passed",
+      "test_failed",
+      "tool_rejected",
+      "task_completed",
+      "task_failed"
+    ],
+    "scope": "task",
+    "window_days": 90
+  }
+}
