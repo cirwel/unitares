@@ -61,7 +61,8 @@ defmodule UnitaresSentinel.LeaseAdvisory do
 
     scope =
       with {:ok, token} <- bearer_token(opts),
-           {:ok, status, response_body} <- post_json("/v1/lease/acquire", body, token, opts) do
+           {:ok, status, response_body} <-
+             post_acquire_with_recovery(body, token, opts, surface_id) do
         classify_acquire(status, response_body, surface_id)
       else
         {:disabled, reason} ->
@@ -149,6 +150,59 @@ defmodule UnitaresSentinel.LeaseAdvisory do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # A transport error on acquire is ambiguous: the request may never have
+  # arrived, or it may have COMMITTED server-side with only the response lost.
+  # The second case stranded Sentinel for 24h on 2026-07-29 — the lease row
+  # existed, the client never learned its `lease_id`, so its `after` block
+  # released a blocked scope instead of the lease, and the lease-plane holder
+  # then auto-renewed that orphan every TTL/3 forever (`Reaper.perform` sweeps
+  # only `expires_at < now()`, which the renew makes unsatisfiable). Every
+  # later tick on that surface saw `held_by_other`.
+  #
+  # One retry with the SAME body resolves the ambiguity, because acquire is
+  # idempotent on `holder_agent_uuid` (RFC §7.13, `Repo.acquire_step/3`): if the
+  # first attempt committed, the retry returns that exact lease with its
+  # `lease_id`, and the caller can release it normally.
+  #
+  # SAFETY — why this is not the stable-holder-uuid design that was rejected:
+  # the uuid is minted per ACQUIRE ATTEMPT (`acquire_cycle/1` calls
+  # `new_holder_uuid/0` while building the body), so only a retry of *this*
+  # attempt can adopt *this* lease. Two concurrently live instances still mint
+  # different uuids and still contend correctly via `held_by_other`. A uuid made
+  # stable across attempts would instead let a second live instance adopt the
+  # first one's lease — trading a liveness bug for a double-grant.
+  #
+  # Bounded to one retry: the failure addressed is a lost response, not a busy
+  # server, and this runs inside a resident's tick. Retrying harder would add
+  # latency to the path that is already timing out.
+  defp post_acquire_with_recovery(body, token, opts, surface_id) do
+    case post_json("/v1/lease/acquire", body, token, opts) do
+      {:ok, status, response_body} ->
+        {:ok, status, response_body}
+
+      {:error, reason} ->
+        Logger.debug(
+          "lease_advisory: acquire transport error #{inspect(reason)} — retrying once " <>
+            "to recover a possibly-committed lease (surface=#{surface_id})"
+        )
+
+        case post_json("/v1/lease/acquire", body, token, opts) do
+          {:ok, status, response_body} ->
+            Logger.info(
+              "lease_advisory: acquire recovered after transport error surface=#{surface_id}"
+            )
+
+            {:ok, status, response_body}
+
+          {:error, retry_reason} ->
+            # Both attempts failed at the transport: either nothing committed,
+            # or a lease is stranded this process can no longer identify. The
+            # doctor's immortal_lease check is the backstop for the latter.
+            {:error, retry_reason}
+        end
     end
   end
 
