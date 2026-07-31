@@ -786,3 +786,83 @@ def test_signal_degeneracy_skips_on_short_row(doctor, monkeypatch):
     _mock_psql(doctor, monkeypatch, "0.02|100|6232\n")
     result = doctor.check_signal_degeneracy("postgresql://x/y")
     assert result.status == doctor.Status.SKIP
+
+
+# --- finding_producer_live -------------------------------------------------
+# Row layout is (event_type, n, hours_silent, median_gap_hours), one per
+# producer. Fixtures use the real 2026-07 numbers so the calibration is pinned
+# to measured cadence rather than invented ones.
+
+def _producer_rows(*rows):
+    return "".join("|".join(str(v) for v in r) + "\n" for r in rows)
+
+
+_LIVE_PRODUCERS = (
+    ("sentinel_finding", 399, 29.3, 0.58),
+    ("sentinel_alarm_finding", 594, 0.0, 0.09),
+    ("bridge_liveness_finding", 136, 71.4, 1.73),
+)
+
+
+def test_finding_producer_live_warns_on_the_watcher_outage(doctor, monkeypatch):
+    """The 2026-06-29 case, measured as of 07-25: 612h silent, 0.32h cadence.
+
+    This is the check's reason for existing — a detector whose model call was
+    404ing on every scan while every other liveness indicator stayed green.
+    """
+    _mock_psql(doctor, monkeypatch, _producer_rows(
+        ("watcher_finding", 98, 612.0, 0.32), *_LIVE_PRODUCERS))
+    result = doctor.check_finding_producer_live("postgresql://x/y")
+    assert result.status == doctor.Status.WARN
+    assert "watcher_finding" in result.message
+    assert "silent 25.5d" in result.message
+
+
+def test_finding_producer_live_passes_when_all_report(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, _producer_rows(
+        ("watcher_finding", 99, 30.0, 0.33), *_LIVE_PRODUCERS))
+    result = doctor.check_finding_producer_live("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+
+
+def test_finding_producer_live_ignores_event_driven_producers(doctor, monkeypatch):
+    """vigil fires 4x in 90d — quiet is its normal state, not a fault."""
+    _mock_psql(doctor, monkeypatch, _producer_rows(
+        ("vigil_finding", 4, 172.7, 13.75), *_LIVE_PRODUCERS))
+    result = doctor.check_finding_producer_live("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+    assert "vigil" not in result.message
+
+
+def test_finding_producer_live_ignores_slow_cadence_producers(doctor, monkeypatch):
+    """A producer that reports every ~16 days has no weekly cadence to miss."""
+    _mock_psql(doctor, monkeypatch, _producer_rows(
+        ("sentinel_build_finding", 30, 800.0, 396.24), *_LIVE_PRODUCERS))
+    result = doctor.check_finding_producer_live("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+
+
+def test_finding_producer_live_holds_fire_below_the_week_floor(doctor, monkeypatch):
+    """10x a 1.7h cadence is 17h — far too tight to page on. The floor wins."""
+    _mock_psql(doctor, monkeypatch, _producer_rows(
+        ("bridge_liveness_finding", 136, 100.0, 1.73),))
+    result = doctor.check_finding_producer_live("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+
+
+def test_finding_producer_live_skips_when_nothing_is_judgeable(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, _producer_rows(
+        ("healthcheck_selftest_finding", 1, 995.0, ""),))
+    result = doctor.check_finding_producer_live("postgresql://x/y")
+    assert result.status == doctor.Status.SKIP
+
+
+def test_finding_producer_live_skips_without_psql(doctor, monkeypatch):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+    assert doctor.check_finding_producer_live("postgresql://x/y").status == doctor.Status.SKIP
+
+
+def test_finding_producer_live_is_registered_as_operator(doctor):
+    checks = {c.name: c for c in doctor.build_checks(REPO_ROOT, "postgresql://x/y")}
+    assert "finding_producer_live" in checks
+    assert checks["finding_producer_live"].mode == "operator"
