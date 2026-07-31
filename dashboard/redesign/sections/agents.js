@@ -76,6 +76,9 @@
         <span class="spring"></span>
         <button class="theme-toggle" id="ag-detail-close">✕ close</button>
       </div>
+      ${a.stuckReason ? `<div class="attn-band" style="margin-bottom:var(--space-4)"><span class="glyph">⚠</span><span>`
+        + `Flagged stuck — <b>${esc(a.stuckReason)}</b>${a.stuckDetails ? `. ${esc(a.stuckDetails)}` : ""}`
+        + `</span></div>` : ""}
       <div class="split-2" style="gap:var(--space-6)">
         <div id="ag-state">${stateBlock(m, "")}</div>
         <div>
@@ -286,17 +289,33 @@
     const participated = rows.filter((a) => (a.updates || 0) >= 1 || a.leaseAnchored);
     const never = rows.filter((a) => (a.updates || 0) === 0 && !a.leaseAnchored);
     const shown = participated.slice(0, pageSize);
+    // A selected agent's row must be IN the table. The Overview's Stuck card
+    // deep-links here, and a flagged agent tends to be old BY CONSTRUCTION —
+    // `cadence_silence` means it stopped speaking — so under the default
+    // `recent` sort most detections land past the first page (measured
+    // 2026-07-31: 4 of 5 at sorted indices 24/28/29/33, pageSize 20). The card
+    // said "needs attention" and the destination showed nothing corroborating
+    // it. Pin the selection instead of growing the page, so the row keeps its
+    // true sort position everywhere else.
+    let pinned = false;
+    if (selectedId && !shown.some((a) => a.agent_id === selectedId)) {
+      const pin = participated.find((a) => a.agent_id === selectedId);
+      if (pin) { shown.unshift(pin); pinned = true; }
+    }
 
-    const tr = (a) => {
+    const tr = (a, isPin) => {
       const st = staleness(a.last, MODEL.nowMs);
       const name = a.label || `<span style="color:var(--muted)">anon · ${(a.agent_id || "—").slice(0, 8)}</span>`;
       const pip = a.status === "paused" ? "var(--warn)" : a.status === "archived" ? "var(--faint)"
         : st.level === "dead" ? "var(--faint)" : "var(--ok)";
       const sel = a.agent_id === selectedId ? ' style="background:var(--surface-2);cursor:pointer" ' : ' style="cursor:pointer" ';
+      // A pinned row is out of sort position — say so rather than letting it
+      // read as "the most recent agent".
+      const pinTag = isPin ? ` <span class="tag" title="pinned to the top because it is open below — its real position is further down this sort">pinned</span>` : "";
       return `<tr class="ag-row" data-id="${a.agent_id || ""}"${sel}>
         <td><span class="dot-pip" style="background:${pip}"></span></td>
         <td><div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
-            <span style="font-weight:500;color:var(--ink)">${name}</span> ${tierBadge(a.tier)} ${rowBadges(a, st)}
+            <span style="font-weight:500;color:var(--ink)">${name}</span> ${tierBadge(a.tier)} ${rowBadges(a, st)}${pinTag}
           </div>${a.purpose ? `<div style="font-size:var(--text-xs);color:var(--muted);margin-top:2px">${a.purpose}</div>` : ""}</td>
         <td><span class="tag ${verdictClass(a.metrics.verdict)}">${a.metrics.verdict || "—"}</span></td>
         <td class="mono">${num(a.metrics.coherence)}</td>
@@ -322,15 +341,29 @@
         + `<b>${esc(focusNote)}</b> is flagged stuck but is not in the loaded window`
         + `${sm.total ? ` (showing ${MODEL.list.length} of ${sm.total})` : ""} — search for it above.</span></div>`
       : "";
+    // This pane is NOT in app.html's RELOAD map and lazyLoad guards on
+    // loaded[id], so load() runs exactly once per page load — the table and its
+    // stuck flags are a point-in-time read that can sit for an entire session.
+    // The source badge alone said "live", which reads as live-UPDATING. Stamp
+    // the read time and give it the manual refresh Automations/Metrics have
+    // (auto-refresh is wrong here: render() rebuilds the search box and both
+    // selects and tears down an open detail's chart).
+    const asOf = MODEL.fetchedAt
+      ? new Date(MODEL.fetchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+    const stuckNote = MODEL.stuckOmitted
+      ? `<span style="color:var(--warn)" title="${esc(MODEL.stuckOmitted)}">⚠ no stuck reasons</span>` : "";
     mount.innerHTML = note +
-      `<div style="display:flex;gap:var(--space-5);margin-bottom:var(--space-3);font-size:var(--text-xs);color:var(--muted)">
+      `<div style="display:flex;gap:var(--space-5);margin-bottom:var(--space-3);font-size:var(--text-xs);color:var(--muted);align-items:center;flex-wrap:wrap">
          <span><b style="color:var(--ink)">${sm.total ?? rows.length}</b> total</span>
          <span><b style="color:var(--ink)">${sm.active ?? "—"}</b> active</span>
          <span><b style="color:var(--ink)">${sm.participated ?? participated.length}</b> participated</span>
          <span><b style="color:var(--ink)">${sm.archived ?? 0}</b> archived</span>
          <span class="src-badge ${MODEL.source}">${MODEL.source}</span>
+         <span style="color:var(--faint)" title="This view does not auto-refresh — it is a point-in-time read.">read ${asOf}</span>
+         <button id="ag-refresh" class="theme-toggle" title="Re-read the fleet">↻</button>
+         ${stuckNote}
        </div>
-       ${shown.length ? `<table class="tbl">${head}<tbody>${shown.map(tr).join("")}</tbody></table>` : `<p class="empty">No agents match the current filters.</p>`}
+       ${shown.length ? `<table class="tbl">${head}<tbody>${shown.map((a, i) => tr(a, pinned && i === 0)).join("")}</tbody></table>` : `<p class="empty">No agents match the current filters.</p>`}
        ${moreBtn}${neverGroup}`;
     wireResults();
   }
@@ -338,6 +371,7 @@
 
   function wireResults() {
     const more = $("#ag-more"); if (more) more.onclick = () => { pageSize += 20; renderResults(); };
+    const rf = $("#ag-refresh"); if (rf) rf.onclick = () => { load(); };
     document.querySelectorAll("#ag-results .ag-row").forEach((row) => { row.onclick = () => select(row.dataset.id); });
   }
 
@@ -389,6 +423,7 @@
     MODEL = {
       list: r.data.list || [], summary: r.data.summary || {}, source: r.source,
       nowMs: r.source === "live" ? Date.now() : Date.parse((window.SNAPSHOT && window.SNAPSHOT.capturedAt) || 0) || Date.now(),
+      fetchedAt: Date.now(), // wall-clock read time — this pane does not auto-refresh
     };
     // Lease-anchored residents (in-process, e.g. Steward) have zero check-in
     // rows BY DESIGN — their liveness is the lease-plane heartbeat. Without
@@ -411,15 +446,33 @@
     } catch { /* freshness is an enhancement — the pane renders without it */ }
     // Stuck reasons, joined on the SAME redacted handle the list emits. The
     // registry UUID detect_stuck_agents keys on is never visible to this client.
+    //
+    // PROVENANCE GUARD. A stuck reason is a governance ACCUSATION against a
+    // named agent, and the two sides of this join cross the live/snapshot seam
+    // independently. detect_stuck_agents walks the whole fleet, so it is the
+    // call in this pane most likely to fail ALONE (stats() wraps the same call
+    // in .catch(() => null) for exactly that reason) — and DATA.stuckAgents()
+    // then falls back to the BUNDLED snapshot list. This pane has ONE source
+    // badge and it reflects DATA.agents(), so a partial failure used to stamp
+    // fixture findings onto live rows under a "live" badge: a healthy agent
+    // wearing a fabricated `critical_margin_timeout`. Enrich only when both
+    // sides came from the same world, and say so when they didn't.
     try {
-      const stuck = (await DATA.stuckAgents()).data || [];
-      const byId = {};
-      stuck.forEach((s) => { if (s.id) byId[s.id] = s; });
-      MODEL.list.forEach((a) => {
-        const s = byId[a.agent_id];
-        if (s) { a.stuckReason = s.reason; a.stuckDetails = s.details; }
-      });
-    } catch { /* stuck enrichment is optional — the table renders without it */ }
+      const sr = await DATA.stuckAgents();
+      // Omitted, not silently absent: the table drops back to its generic
+      // staleness tags and the summary bar says the reasons are missing.
+      MODEL.stuckOmitted = sr.source !== MODEL.source
+        ? `stuck reasons withheld — the detection call fell back to the bundled snapshot while this table is ${MODEL.source}`
+        : null;
+      if (!MODEL.stuckOmitted) {
+        const byId = {};
+        (sr.data || []).forEach((s) => { if (s.id) byId[s.id] = s; });
+        MODEL.list.forEach((a) => {
+          const s = byId[a.agent_id];
+          if (s) { a.stuckReason = s.reason; a.stuckDetails = s.details; }
+        });
+      }
+    } catch { MODEL.stuckOmitted = "stuck reasons unavailable — the detection call did not answer"; }
     render();
     flushFocus(); // a deep-link that arrived before this section existed
   }

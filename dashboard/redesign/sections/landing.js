@@ -27,12 +27,23 @@
   }
   // Byte-identical subtitle from both renderers (full rebuild + in-place
   // update), or the card visibly flickers between two wordings.
+  //
+  // The subtitle must (a) describe the predicate that actually produced the
+  // denominator and (b) account for EVERY resident. "N of M reporting EISV"
+  // failed both: `reporting` also requires being IN CADENCE, so a resident past
+  // its check-in threshold was excluded even though it still carries a (stale)
+  // coherence — which the strip immediately below prints. The card said "5 of 6
+  // reporting EISV" while all six rows showed a coh value, and only one of the
+  // two excluded buckets was ever named, so the numbers did not add up. Both
+  // excluded buckets are named now; the maths is unchanged, and deliberately
+  // so — a mean over residents that stopped checking in is a stale mean.
   function fleetSummary(residents) {
     const p = partition(residents);
     const live = p.reporting;
     const coh = live.length ? live.reduce((a, r) => a + r.coherence, 0) / live.length : null;
-    const sub = `${live.length} of ${(residents || []).length} reporting EISV`
-      + (p["alive-no-eisv"].length ? ` · ${p["alive-no-eisv"].length} alive without` : "");
+    const sub = `${live.length} of ${(residents || []).length} in cadence with EISV`
+      + (p["alive-no-eisv"].length ? ` · ${p["alive-no-eisv"].length} in cadence, no EISV` : "")
+      + (p.down.length ? ` · ${p.down.length} not checking in` : "");
     return { part: p, coh, sub };
   }
 

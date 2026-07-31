@@ -49,10 +49,23 @@ window.SNAPSHOT = {
     // offline page could not show (or review) the drill-down at all. Second
     // entry is deliberately NOT in agentsList below, so the offline page also
     // demonstrates the honest "outside the loaded window" branch.
+    //
+    // The second id is SYNTHETIC by rule. A stuck entry is an accusation, and
+    // this fixture is the fallback DATA.stuckAgents() serves when the live
+    // detection call fails ON ITS OWN — while the agent table beside it is
+    // still live. It was first captured verbatim from the 2026-07-31 fleet,
+    // where that id (Claude_Code_20260731_3745aa33) was a healthy live agent,
+    // so any join reaching live rows would have libelled a real, named one.
+    // Worse, hours later the live detector DID flag that same agent — for
+    // `cadence_silence`, not this entry's `critical_margin_timeout`: a captured
+    // id does not stay true, it goes quietly wrong. agents.js now refuses to
+    // cross the provenance seam; this keeps the fixture harmless even if a
+    // future caller forgets to. Any id here that is NOT also in agentsList
+    // below must stay obviously fake.
     stuckList: [
       { id:"Claude_Code_20260618_a0382d76", name:"claude-dispatch_beam#0b06a37f", reason:"cadence_silence", soft:true,
         details:"Active cadence ~10.3 min over 15 updates, then silent 742 min (> 62 min threshold). Possibly hung/abandoned mid-work — verify. Soft signal; not auto-recovered." },
-      { id:"Claude_Code_20260731_3745aa33", name:"claude-unitares#6fbef18c", reason:"critical_margin_timeout", soft:false,
+      { id:"Claude_Code_00000000_synthetic", name:"claude-example#outside-window", reason:"critical_margin_timeout", soft:false,
         details:"Critical margin (risk) for 12.4 minutes" },
     ],
     // Real tier vocabulary + scope from /v1/agents/tier_distribution 2026-07-31.

@@ -242,10 +242,20 @@ document.getElementById("attn").innerHTML =
   + `<b>Steward</b> reporting no EISV vector.</span>`;
 
 // stats grid — live where available (coherence, fleet size), representative elsewhere
-const liveCoh = FLEET.filter(r=>r.coh!=null);
+// Fleet Coherence mirrors the shipped predicate (DATA.residentLiveness): the mean
+// is over residents that are IN CADENCE *and* carry an EISV. A resident past its
+// check-in threshold still has a (stale) coherence — counting it would make this
+// mock teach the arithmetic the live card was fixed to stop doing.
+const inCadence = FLEET.filter(r=>!["silent","paused","archived"].includes(r.status));
+const liveCoh = inCadence.filter(r=>r.coh!=null);
+const noEisv  = inCadence.length - liveCoh.length;
+const outOfCadence = FLEET.length - inCadence.length;
 const fleetCoh = (liveCoh.reduce((a,r)=>a+r.coh,0)/liveCoh.length).toFixed(2);
+const fleetSub = `${liveCoh.length} of ${FLEET.length} in cadence with EISV`
+  + (noEisv ? ` · ${noEisv} in cadence, no EISV` : "")
+  + (outOfCadence ? ` · ${outOfCadence} not checking in` : "");
 const STATS = [
-  { h:"Fleet Coherence", num:fleetCoh, sub:"5 of 6 residents reporting", cls:"up", rule:true },
+  { h:"Fleet Coherence", num:fleetCoh, sub:fleetSub, cls:"up", rule:true },
   { h:"Agents", num:"6", of:"/ 658", sub:"active / total" },
   { h:"Stuck", num:"0", sub:"none flagged", cls:"up" },
   { h:"Discoveries", num:"1,204", sub:"+12 today" },
