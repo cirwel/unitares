@@ -168,7 +168,11 @@ def _identity_metadata_from_detail(detail: Mapping[str, Any]) -> Mapping[str, An
     return _normalized_detail(metadata)
 
 
-def is_controlled_validation_fixture(detail: Mapping[str, Any] | str | None) -> bool:
+def is_controlled_validation_fixture(
+    detail: Mapping[str, Any] | str | None,
+    *,
+    include_declared_purpose: bool = True,
+) -> bool:
     """Return whether an outcome detail belongs to a controlled validation fixture.
 
     These rows are useful for harness plumbing and local red-team checks, but they
@@ -176,6 +180,16 @@ def is_controlled_validation_fixture(detail: Mapping[str, Any] | str | None) -> 
     conservative: explicit fixture flags win, legacy one-shot calibration probe
     names cover rows written before the flags existed, and known demo/perf
     identity labels catch auto-checkin outcomes whose detail was otherwise plain.
+
+    ``include_declared_purpose`` gates the last and weakest clause: matching on
+    ``identities.metadata.purpose``. That field is free text the agent supplies
+    at onboarding, so excluding on it means the subject of the measurement
+    chooses whether it is measured. Inventory reporting keeps it (the question
+    there is "what did this fleet emit"); predictive-validation slices must not,
+    because it silently removed 47% of one strict-scope window -- including bad
+    labels -- and reversed the sign of the measured lift. Structural markers
+    (fixture flags, prediction bindings, known harness label prefixes) still
+    apply either way.
     """
     normalized = _normalized_detail(detail)
     if any(_truthy(normalized.get(flag)) for flag in _CONTROLLED_FIXTURE_FLAGS):
@@ -205,11 +219,28 @@ def is_controlled_validation_fixture(detail: Mapping[str, Any] | str | None) -> 
             for prefix in _CONTROLLED_IDENTITY_LABEL_PREFIXES
         ):
             return True
-        purpose = str(identity_metadata.get("purpose") or "").strip().lower()
-        if purpose in _CONTROLLED_IDENTITY_PURPOSES:
-            return True
+        if include_declared_purpose:
+            purpose = str(identity_metadata.get("purpose") or "").strip().lower()
+            if purpose in _CONTROLLED_IDENTITY_PURPOSES:
+                return True
 
     return False
+
+
+def is_declared_non_production_purpose(
+    detail: Mapping[str, Any] | str | None,
+) -> bool:
+    """Return whether the row's identity self-declared a non-production purpose.
+
+    Split out from ``is_controlled_validation_fixture`` so validation slices can
+    *report* how much this agent-controlled clause would have removed instead of
+    silently applying it.
+    """
+    identity_metadata = _identity_metadata_from_detail(_normalized_detail(detail))
+    if not identity_metadata:
+        return False
+    purpose = str(identity_metadata.get("purpose") or "").strip().lower()
+    return purpose in _CONTROLLED_IDENTITY_PURPOSES
 
 
 def _verification_source(row: OutcomeInventoryRow) -> str:
