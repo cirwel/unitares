@@ -141,3 +141,74 @@ async def test_substrate_check_exception_falls_through():
             metadata,
         )
     assert result["tier"] == 1  # from compute_trust_tier, not a crash
+
+
+@pytest.mark.asyncio
+async def test_substrate_check_exception_preserves_stored_tier():
+    """#1407 / #1411-follow-up: an exception in the substrate check is evidence
+    about the *resolver*, not the agent. When a stored tier exists it must be
+    preserved, not recomputed downward.
+
+    Recomputing lands a substrate-earned resident at tier 1 (trajectory-only
+    thresholds score `lineage_similarity` against `lin_2`, and a mature identity
+    sits at the alpha-saturated ~0.633 floor). Persisting tier <= 1 opens the
+    genesis-reseed gate in `update_current_signature`, where the value guard is
+    already disarmed because `lineage_low = similarity < 0.7` is true for
+    exactly those drifted identities — so the next check-in overwrites the
+    agent's genesis anchor, with no archival.
+
+    #1411 fixed this at the call site in `update_current_signature`. That guard
+    cannot fire for anything raised in here, because `resolve_trust_tier`
+    catches first and returns normally.
+    """
+    stored = {
+        "tier": 3,
+        "source": "substrate_earned",
+        "lineage_similarity": 0.6335,
+    }
+    metadata = {
+        "trust_tier": stored,
+        # Deliberately weak — compute_trust_tier scores this at tier 1, so a
+        # recompute is distinguishable from a preserve.
+        "trajectory_genesis": {"observation_count": 5, "identity_confidence": 0.3},
+    }
+
+    async def _boom(agent_uuid):
+        raise RuntimeError("DB unavailable")
+
+    with patch("src.identity.substrate.verify_substrate_earned", _boom):
+        result = await trust_tier_routing.resolve_trust_tier(
+            "7bf970d4-5713-4184-a6f8-58e798275f3f",
+            metadata,
+        )
+
+    assert result["tier"] == 3, "earned tier must survive a resolver failure"
+    assert result["source"] == "substrate_earned"
+    assert result is stored
+
+
+@pytest.mark.asyncio
+async def test_substrate_check_exception_is_visible_not_debug_silent():
+    """The fallthrough logged at `debug` under a default INFO logger, so it
+    emitted nothing and zero log hits could not be read as evidence it had not
+    fired (#1407). It must log at >= warning on both branches."""
+    metadata = {"trajectory_genesis": {"observation_count": 5, "identity_confidence": 0.3}}
+
+    async def _boom(agent_uuid):
+        raise RuntimeError("DB unavailable")
+
+    with patch("src.identity.substrate.verify_substrate_earned", _boom):
+        with patch.object(trust_tier_routing.logger, "warning") as warn:
+            await trust_tier_routing.resolve_trust_tier(
+                "7bf970d4-5713-4184-a6f8-58e798275f3f",
+                metadata,
+            )
+    assert warn.call_count == 1, "no-stored-tier fallthrough must be visible"
+
+    with patch("src.identity.substrate.verify_substrate_earned", _boom):
+        with patch.object(trust_tier_routing.logger, "warning") as warn:
+            await trust_tier_routing.resolve_trust_tier(
+                "7bf970d4-5713-4184-a6f8-58e798275f3f",
+                {"trust_tier": {"tier": 3, "source": "substrate_earned"}},
+            )
+    assert warn.call_count == 1, "preserve branch must be visible"
