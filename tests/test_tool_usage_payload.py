@@ -303,11 +303,19 @@ async def test_payload_is_built_before_alias_injection_mutates_arguments():
 async def _dispatch_that_injects_the_alias_action(_name, arguments):
     """Stand-in for the real pipeline's in-place mutation.
 
-    ``params_step.resolve_alias`` does exactly this to the CALLER'S dict
-    (``run_tool_dispatch_pipeline`` makes no defensive copy). Reproducing it
-    here is what makes the surface tests below regression tests for the
-    BUILD ORDER: if a call site moves its ``build_tool_usage_payload`` after
-    dispatch, ``action_source`` flips to "explicit" and they fail.
+    ``params_step.resolve_alias`` does exactly this to the CALLER'S dict, and
+    it runs BEFORE ``validate_params``. Reproducing it here is what makes the
+    surface tests below regression tests for the BUILD ORDER: if a call site
+    moves its ``build_tool_usage_payload`` after dispatch, ``action_source``
+    flips to "explicit" and they fail.
+
+    Do NOT read this as "the pipeline never copies ``arguments``" — it does.
+    ``validate_params`` rebinds ``arguments = validated_dict`` for every tool
+    with a Pydantic schema, so a HANDLER'S write to ``arguments["agent_id"]``
+    never reaches the caller's dict. That asymmetry is the whole reason
+    ``resolve_dispatch_bound_agent_id`` exists, and it is pinned end-to-end
+    against the REAL pipeline in
+    ``test_mcp_wrapper_attributes_request_review_end_to_end``.
     """
     if isinstance(arguments, dict) and "action" not in arguments:
         arguments["action"] = "request"
@@ -435,6 +443,125 @@ async def test_mcp_protocol_wrapper_counts_the_identity_refusal(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# End-to-end: WHO, through the real dispatch pipeline
+# ---------------------------------------------------------------------------
+
+BOUND_UUID = "bb3602ee-9d4c-4a10-9f6e-1a2b3c4d5e6f"
+
+
+async def _fake_resolve_identity(name, arguments, ctx):
+    """A strongly-bound caller, resolved the way the real middleware resolves.
+
+    Mirrors the three ``_attach_middleware_identity`` sites in
+    ``resolve_identity`` (identity_step.py:584 / :737 / :1054): it writes the
+    handoff keys into the CALLER'S dict and sets a request-scoped session
+    context which ``run_tool_dispatch_pipeline`` tears down in its ``finally``.
+    Both facts matter — the teardown is why a contextvar fallback cannot
+    rescue attribution on this surface.
+    """
+    from src.mcp_handlers.context import set_session_context
+    from src.mcp_handlers.middleware import identity_step
+
+    identity_step._attach_middleware_identity(
+        arguments,
+        session_key="sk-e2e",
+        identity_result={"agent_uuid": BOUND_UUID, "source": "test"},
+    )
+    ctx.context_token = set_session_context(
+        session_key="sk-e2e", client_session_id="csid-e2e", agent_id=BOUND_UUID
+    )
+    ctx.session_key = "sk-e2e"
+    ctx.bound_agent_id = BOUND_UUID
+    return name, arguments, ctx
+
+
+async def _stub_handler(_arguments):
+    from mcp.types import TextContent
+
+    import json as _json
+
+    return [TextContent(type="text", text=_json.dumps({"success": True}))]
+
+
+@pytest.mark.parametrize(
+    "invoked, kwargs, canonical",
+    [
+        # The #1387 question itself. `dialectic` is in inject_identity's
+        # `browsable_data_tools`, so `arguments["agent_id"]` is NEVER written
+        # for it, and the handler's own write lands in validate_params' copy.
+        ("request_review", {"issue_description": "e2e"}, "dialectic"),
+        ("dialectic", {"action": "request", "issue_description": "e2e"}, "dialectic"),
+        # Same carve-out via `knowledge_browsable_actions`.
+        ("knowledge", {"action": "search", "query": "e2e"}, "knowledge"),
+        # Control: a non-browsable tool, where inject_identity's in-place
+        # write already survived. Must keep working.
+        ("sync_state", {"summary": "e2e"}, "process_agent_update"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_mcp_wrapper_attributes_request_review_end_to_end(
+    monkeypatch, invoked, kwargs, canonical
+):
+    """The row must say WHO, not just THAT — through the real pipeline.
+
+    Before this, every one of the browsable-carve-out tools wrote
+    ``agent_id=NULL`` from the MCP-protocol surface even for a strongly bound
+    caller: countable, unattributed, and the PR's own title claim unmet. Only
+    ``resolve_identity`` and the handler are stubbed; ``resolve_alias``,
+    ``inject_identity``, ``validate_params`` and
+    ``run_tool_dispatch_pipeline`` (including its context ``finally``) are the
+    real ones.
+    """
+    import src.mcp_handlers as mh
+    import src.mcp_handlers.middleware as mw
+    import src.tool_registration as tr
+
+    _tracker, append = _patch_recorder_io(monkeypatch)
+    monkeypatch.setattr(tr, "_wave3a_get_route", lambda _n: None)
+    monkeypatch.setitem(
+        mw.PRE_DISPATCH_STEPS,
+        mw.PRE_DISPATCH_STEPS.index(mw.resolve_identity),
+        _fake_resolve_identity,
+    )
+    monkeypatch.setitem(mh.TOOL_HANDLERS, canonical, _stub_handler)
+
+    tr._tool_wrappers_cache.clear()
+    try:
+        await tr.get_tool_wrapper(invoked)(**kwargs)
+    finally:
+        tr._tool_wrappers_cache.clear()
+
+    assert append.call_count == 1
+    assert append.call_args.kwargs["agent_id"] == BOUND_UUID
+
+
+def test_dispatch_bound_attribution_ignores_a_caller_supplied_handoff_key():
+    """``_middleware_identity_result`` is server-written — ``resolve_identity``
+    opens with an unconditional ``_clear_middleware_identity``. The reader is
+    still UUID-clamped so a malformed value can never enter the column."""
+    from src.services.tool_usage_recorder import resolve_dispatch_bound_agent_id
+
+    assert resolve_dispatch_bound_agent_id({}) is None
+    assert resolve_dispatch_bound_agent_id(None) is None
+    assert (
+        resolve_dispatch_bound_agent_id({"_middleware_identity_result": "not-a-dict"})
+        is None
+    )
+    assert (
+        resolve_dispatch_bound_agent_id(
+            {"_middleware_identity_result": {"agent_uuid": "Claude_Code_20260727"}}
+        )
+        is None
+    )
+    assert (
+        resolve_dispatch_bound_agent_id(
+            {"_middleware_identity_result": {"agent_uuid": BOUND_UUID}}
+        )
+        == BOUND_UUID
+    )
+
+
+# ---------------------------------------------------------------------------
 # Refusal classification + attribution
 # ---------------------------------------------------------------------------
 
@@ -461,42 +588,181 @@ def test_governance_verdicts_are_still_successes():
     ) == (True, None)
 
 
-def test_attribution_falls_back_to_the_resolved_binding(monkeypatch):
+def test_attribution_falls_back_to_the_resolved_binding():
     """``identity`` (3,049 rows/30d) and every ``pre_onboard`` read audited as
-    anonymous because the recorder only ever read ``arguments['agent_id']``."""
-    monkeypatch.setattr(
-        "src.mcp_handlers.context.get_context_agent_id", lambda: AGENT_UUID
+    anonymous because the recorder only ever read ``arguments['agent_id']``.
+
+    Driven through the REAL context primitives, not a patched getter: what
+    makes a value attributable is that ``update_context_agent_id`` — the sole
+    write path identity resolution takes — put it there.
+    """
+    from src.mcp_handlers.context import (
+        reset_session_context,
+        set_session_context,
+        update_context_agent_id,
     )
-    assert resolve_audit_agent_id(None) == AGENT_UUID
-    # Request-side always wins.
-    assert resolve_audit_agent_id("explicit-value") == "explicit-value"
+
+    token = set_session_context(session_key="sk", client_session_id="csid")
+    try:
+        update_context_agent_id(AGENT_UUID)  # what a resolver does
+        assert resolve_audit_agent_id(None) == AGENT_UUID
+        # Request-side always wins.
+        assert resolve_audit_agent_id("explicit-value") == "explicit-value"
+    finally:
+        reset_session_context(token)
 
 
-def test_attribution_fallback_admits_only_uuids(monkeypatch):
-    """``set_session_context`` seeds the contextvar from the UNVERIFIED
-    ``X-Agent-Id`` header before any resolution runs. The fallback may only
-    ever add a joinable UUID, never an arbitrary caller string."""
-    monkeypatch.setattr(
-        "src.mcp_handlers.context.get_context_agent_id", lambda: "Claude_Code_20260727"
+def test_unverified_x_agent_id_header_is_never_attribution():
+    """SECURITY: ``http_api`` seeds the session context with the raw
+    ``X-Agent-Id`` header BEFORE any resolution runs, and for the two tools
+    #1387 targets nothing overwrites it — ``identity`` is in
+    ``_resolve_http_bound_agent``'s ``skip_tools`` and every ``pre_onboard``
+    read returns at the #945 guard. A UUID clamp does not save this: it only
+    makes the forged value JOINABLE, which is worse than NULL. Attribution
+    must require that a resolver actually wrote the binding.
+    """
+    from src.mcp_handlers.context import reset_session_context, set_session_context
+
+    forged = "11111111-2222-3333-4444-555555555555"
+    # Exactly what src/http_api.py does at the REST entry point:
+    #   set_session_context(..., agent_id=x_agent_id or arguments.get("agent_id"))
+    token = set_session_context(
+        session_key=None, client_session_id=None, agent_id=forged
     )
-    assert resolve_audit_agent_id(None) is None
+    try:
+        assert resolve_audit_agent_id(None) is None
+    finally:
+        reset_session_context(token)
+
+
+def test_attribution_fallback_admits_only_uuids():
+    """Second belt: even a RESOLVED non-UUID label (``audit.tool_usage.agent_id``
+    carries a mix of UUIDs and structured labels) may not enter via the
+    fallback — it could only ever add an unjoinable string."""
+    from src.mcp_handlers.context import (
+        reset_session_context,
+        set_session_context,
+        update_context_agent_id,
+    )
+
+    token = set_session_context(session_key="sk")
+    try:
+        update_context_agent_id("Claude_Code_20260727")
+        assert resolve_audit_agent_id(None) is None
+    finally:
+        reset_session_context(token)
 
 
 def test_presence_refresh_still_keys_on_the_request_side_id(monkeypatch):
     """The agent:/ presence lease is a liveness claim on another surface —
     the audit-only attribution fallback must not widen who refreshes it."""
+    from src.mcp_handlers.context import (
+        reset_session_context,
+        set_session_context,
+        update_context_agent_id,
+    )
+
     _patch_recorder_io(monkeypatch)
     scheduled = []
     monkeypatch.setattr(
         "src.mcp_handlers.identity.agent_presence_lease.schedule_agent_presence_heartbeat",
         lambda agent_id, client_session_id=None: scheduled.append(agent_id),
     )
-    monkeypatch.setattr(
-        "src.mcp_handlers.context.get_context_agent_id", lambda: AGENT_UUID
+
+    token = set_session_context(session_key="sk")
+    try:
+        update_context_agent_id(AGENT_UUID)
+        recorder.record_tool_usage(tool_name="knowledge", agent_id=None, success=True)
+    finally:
+        reset_session_context(token)
+
+    assert scheduled == []
+
+
+def test_jsonl_sink_keeps_the_request_side_agent_id(monkeypatch):
+    """The JSONL tracker is a behavioural-sensor INPUT, not a log.
+
+    ``get_usage_stats(agent_id=..., window_hours=1)`` feeds
+    ``compute_behavioral_sensor_eisv`` (``E = 0.85E + 0.15*(1-err)``,
+    ``I = 0.90I + 0.10*ratio``) from five live call sites, and a per-agent
+    query only fires at all when ``tu_total > 0``. Newly-attributed rows
+    would flip that guard from never-executing to executing — turning a
+    verdict-relevant signal ON as a telemetry side effect. The audit
+    attribution fallback is confined to ``audit.tool_usage``.
+    """
+    from src.mcp_handlers.context import (
+        reset_session_context,
+        set_session_context,
+        update_context_agent_id,
     )
 
-    recorder.record_tool_usage(tool_name="knowledge", agent_id=None, success=True)
+    tracker, append = _patch_recorder_io(monkeypatch)
 
+    token = set_session_context(session_key="sk")
+    try:
+        update_context_agent_id(AGENT_UUID)
+        recorder.record_tool_usage(tool_name="identity", agent_id=None, success=True)
+    finally:
+        reset_session_context(token)
+
+    assert tracker.log_tool_call.call_args.kwargs["agent_id"] is None
+    assert append.call_args.kwargs["agent_id"] == AGENT_UUID
+
+
+def test_audit_only_writes_the_audit_row_and_nothing_else(monkeypatch):
+    """``audit_only`` is what keeps a NEWLY instrumented surface from also
+    enrolling itself in the JSONL sensor feed and the agent:/ presence lease."""
+    tracker, append = _patch_recorder_io(monkeypatch)
+    scheduled = []
+    monkeypatch.setattr(
+        "src.mcp_handlers.identity.agent_presence_lease.schedule_agent_presence_heartbeat",
+        lambda agent_id, client_session_id=None: scheduled.append(agent_id),
+    )
+
+    recorder.record_tool_usage(
+        tool_name="knowledge", agent_id=AGENT_UUID, success=True, audit_only=True
+    )
+
+    assert append.call_args.kwargs["agent_id"] == AGENT_UUID
+    assert tracker.log_tool_call.call_count == 0
+    assert scheduled == []
+
+    # Default is unchanged for every pre-existing caller (REST + stdio).
+    recorder.record_tool_usage(tool_name="knowledge", agent_id=AGENT_UUID, success=True)
+    assert tracker.log_tool_call.call_count == 1
+    assert scheduled == [AGENT_UUID]
+
+
+@pytest.mark.asyncio
+async def test_mcp_protocol_wrapper_is_audit_only(monkeypatch):
+    """Regression for the transport widening: ``src/tool_registration.py`` is
+    the FastMCP /mcp + /sse wrapper and wrote NOTHING before #1387. Adding an
+    audit row must not make a whole transport start refreshing agent:/ leases
+    — that is a presence change, and this PR measured no presence question.
+    ``knowledge`` is in ``_PRESENCE_REFRESH_TOOLS``, so this would fire.
+    """
+    import src.tool_registration as tr
+
+    tracker, append = _patch_recorder_io(monkeypatch)
+    scheduled = []
+    monkeypatch.setattr(
+        "src.mcp_handlers.identity.agent_presence_lease.schedule_agent_presence_heartbeat",
+        lambda agent_id, client_session_id=None: scheduled.append(agent_id),
+    )
+    monkeypatch.setattr(tr, "_wave3a_get_route", lambda _n: None)
+    monkeypatch.setattr(tr, "dispatch_tool", _dispatch_that_injects_the_alias_action)
+
+    tr._tool_wrappers_cache.clear()
+    try:
+        await tr.get_tool_wrapper("knowledge")(
+            action="search", query="x", agent_id=AGENT_UUID
+        )
+    finally:
+        tr._tool_wrappers_cache.clear()
+
+    assert append.call_count == 1
+    assert append.call_args.kwargs["agent_id"] == AGENT_UUID
+    assert tracker.log_tool_call.call_count == 0
     assert scheduled == []
 
 

@@ -266,11 +266,20 @@ def build_tool_usage_payload(
 ) -> Optional[Dict[str, str]]:
     """Build the bounded action discriminator for one tool call. Never raises.
 
-    MUST be called BEFORE dispatch. ``run_tool_dispatch_pipeline`` does not
-    copy ``arguments`` and ``params_step.resolve_alias`` mutates it in place
-    (``arguments["action"] = alias_info.inject_action``), so a post-dispatch
-    build would see an alias-injected action as caller-explicit and every
-    ``request_review`` row would claim ``action_source="explicit"``.
+    MUST be called BEFORE dispatch. ``params_step.resolve_alias`` mutates the
+    CALLER'S dict in place (``arguments["action"] =
+    alias_info.inject_action``), so a post-dispatch build would see an
+    alias-injected action as caller-explicit and every ``request_review`` row
+    would claim ``action_source="explicit"``.
+
+    Do NOT read the converse into that. ``run_tool_dispatch_pipeline`` DOES
+    make a copy — ``params_step.validate_params`` rebinds ``arguments =
+    validated_dict`` for every tool with a Pydantic schema (and
+    ``apply_param_aliases`` can rebind before it) — so anything a HANDLER
+    writes into ``arguments`` afterwards is invisible to the caller's dict.
+    That is why ``resolve_dispatch_bound_agent_id`` reads
+    ``_middleware_identity_result`` (attached in ``resolve_identity``, before
+    the rebind) rather than the handler's later ``arguments["agent_id"]``.
 
     Shape (max three keys, all ``str``, no nesting):
 
@@ -344,22 +353,66 @@ def resolve_audit_agent_id(agent_id: Optional[str]) -> Optional[str]:
     ``None`` — 3,049 `identity` rows and 52,712 `list_agents` rows in 30 days,
     all with ``agent_id IS NULL``.
 
-    Request-side ALWAYS wins (unchanged). The fallback is clamped to UUID-shaped
-    values on purpose: ``set_session_context`` seeds the contextvar from the
-    unverified ``X-Agent-Id`` header before any resolution runs, and
-    ``audit.tool_usage.agent_id`` already carries a mix of UUIDs and structured
-    labels. Admitting only UUIDs means the fallback can add a joinable key and
-    nothing else. Never raises.
+    Request-side ALWAYS wins (unchanged). The fallback reads
+    ``get_context_resolved_agent_id``, NOT ``get_context_agent_id``: the
+    latter also returns transport-asserted values, because ``http_api``
+    seeds the session context with the raw, unverified ``X-Agent-Id`` header
+    before any resolution runs — and for exactly the two tools above nothing
+    ever overwrites it. A UUID clamp does not fix that; it only guarantees
+    the forged value is JOINABLE, which is worse than NULL, not better.
+    Gating on "a resolver actually wrote this" is the correctness condition.
+    The UUID clamp is kept as a second belt so the fallback can still only
+    ever contribute a joinable key. Never raises.
     """
     if agent_id:
         return agent_id
     try:
-        from src.mcp_handlers.context import get_context_agent_id
+        from src.mcp_handlers.context import get_context_resolved_agent_id
 
-        bound = get_context_agent_id()
+        bound = get_context_resolved_agent_id()
     except Exception:  # pragma: no cover - observability must never break tools
         return agent_id
     return bound if _is_uuid_like(bound) else agent_id
+
+
+def resolve_dispatch_bound_agent_id(arguments: Any) -> Optional[str]:
+    """Read the dispatch middleware's RESOLVED binding out of the caller's dict.
+
+    The MCP-protocol wrapper (``src/tool_registration.py``) has no other way
+    to see who called. Two mechanisms hide the resolved identity from it:
+
+    1. ``params_step.inject_identity`` carves out ``browsable_data_tools``,
+       which CONTAINS ``dialectic`` — so it never writes
+       ``arguments["agent_id"]`` for ``dialectic`` / ``request_review``, the
+       one tool #1387 exists to ask about (and the same for
+       ``knowledge(action=search)`` via ``knowledge_browsable_actions``).
+    2. Handler-level resolution DOES set ``arguments["agent_id"]``
+       (``require_agent_id``), but ``params_step.validate_params`` rebinds
+       ``arguments = validated_dict`` — a NEW dict — so the handler's write
+       lands in a copy the wrapper never sees.
+
+    ``_attach_middleware_identity`` runs inside ``resolve_identity``, i.e.
+    BEFORE that rebind, and writes into the caller's own dict, so
+    ``_middleware_identity_result["agent_uuid"]`` survives in the wrapper's
+    ``kwargs``. It is server-written, not caller-supplied: ``resolve_identity``
+    opens with an unconditional ``_clear_middleware_identity(arguments)``.
+
+    Use ONLY on a surface that runs the full ``dispatch_tool`` pipeline.
+    ``execute_http_dispatch_fallback`` omits ``resolve_identity`` from its
+    pre_steps, so on that path the key is never cleared and a REST caller
+    could put one in the request body. Never raises.
+    """
+    try:
+        if not isinstance(arguments, dict):
+            return None
+        identity = arguments.get("_middleware_identity_result")
+        if not isinstance(identity, dict):
+            return None
+        bound = identity.get("agent_uuid")
+        return str(bound) if _is_uuid_like(bound) else None
+    except Exception as e:  # pragma: no cover - telemetry must never break a tool
+        logger.debug(f"dispatch-bound agent_id resolve failed (non-fatal): {e}")
+        return None
 
 
 def record_tool_usage(
@@ -370,29 +423,53 @@ def record_tool_usage(
     latency_ms: Optional[int] = None,
     session_id: Optional[str] = None,
     payload: Optional[Dict[str, str]] = None,
+    audit_only: bool = False,
 ) -> None:
-    """Record a tool call. Never raises — telemetry failure must not break the call."""
-    # Presence refresh deliberately keys on the REQUEST-side agent_id, not the
-    # context fallback: the agent:/ presence lease is a liveness claim on a
-    # different surface, and widening who refreshes it is not a telemetry
-    # change. Audit attribution is resolved below, for the audit writes only.
+    """Record a tool call. Never raises — telemetry failure must not break the call.
+
+    ``audit_only=True`` writes ``audit.tool_usage`` and NOTHING else — no
+    JSONL row, no presence-lease refresh. It exists for surfaces this
+    function was never wired to before (#1387 instrumented the MCP-protocol
+    wrapper, which was Prometheus-only), so adding an audit row cannot
+    silently change two OTHER systems:
+
+    * the JSONL tracker is a behavioural-sensor INPUT, not a log —
+      ``get_usage_stats(agent_id=..., window_hours=1)`` feeds
+      ``compute_behavioral_sensor_eisv``, which has verdict authority.
+      A whole transport appearing in it is a fleet-wide sensor change, not
+      telemetry;
+    * ``_schedule_presence_refresh`` writes an ``agent:/`` liveness lease.
+      Widening WHICH TRANSPORTS refresh it is a presence change, and it is
+      not one this PR measured (see the 2026-07-30 immortal-lease incident).
+
+    Both are deliberate omissions, reversible in one keyword, and each is
+    pinned by a test. The default is unchanged for every pre-existing
+    caller (REST + stdio).
+    """
+    # The JSONL sink and the presence lease deliberately key on the
+    # REQUEST-side agent_id. The context fallback exists to make
+    # `audit.tool_usage.agent_id` answerable (#1387) — it must not leak into
+    # a behavioural-sensor input or a liveness claim, where newly-attributed
+    # rows would turn a per-agent signal ON that was previously OFF.
     request_side_agent_id = agent_id
-    agent_id = resolve_audit_agent_id(agent_id)
+    audit_agent_id = resolve_audit_agent_id(agent_id)
     payload = _sanitize_payload(payload)
-    try:
-        from src.tool_usage_tracker import get_tool_usage_tracker
-        get_tool_usage_tracker().log_tool_call(
-            tool_name=tool_name, agent_id=agent_id, success=success, error_type=error_type,
-        )
-    except Exception as e:
-        logger.debug(f"JSONL tool_usage log failed (non-fatal): {e}")
+    if not audit_only:
+        try:
+            from src.tool_usage_tracker import get_tool_usage_tracker
+            get_tool_usage_tracker().log_tool_call(
+                tool_name=tool_name, agent_id=request_side_agent_id,
+                success=success, error_type=error_type,
+            )
+        except Exception as e:
+            logger.debug(f"JSONL tool_usage log failed (non-fatal): {e}")
 
     try:
         from src.background_tasks import create_tracked_task
         from src.audit_db import append_tool_usage_async
         create_tracked_task(
             append_tool_usage_async(
-                agent_id=agent_id,
+                agent_id=audit_agent_id,
                 tool_name=tool_name,
                 latency_ms=latency_ms,
                 success=success,
@@ -407,9 +484,10 @@ def record_tool_usage(
     except Exception as e:
         logger.debug(f"DB tool_usage persist failed (non-fatal): {e}")
 
-    _schedule_presence_refresh(
-        tool_name=tool_name,
-        agent_id=request_side_agent_id,
-        success=success,
-        session_id=session_id,
-    )
+    if not audit_only:
+        _schedule_presence_refresh(
+            tool_name=tool_name,
+            agent_id=request_side_agent_id,
+            success=success,
+            session_id=session_id,
+        )
