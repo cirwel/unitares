@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -32,8 +32,13 @@ async def test_run_cycle_posts_findings_for_high_severity():
         await agent.run_cycle(client=None)
 
     assert mock_post.called
-    kwargs = mock_post.call_args.kwargs
-    assert kwargs["event_type"] == "sentinel_finding"
+    # Select the fleet-finding call rather than trusting `call_args` to be it:
+    # run_cycle emits forced-release alarms first, so relying on "the last call"
+    # holds only by ordering luck and breaks when a new emitter lands after this one.
+    fleet_calls = [c for c in mock_post.call_args_list
+                   if c.kwargs.get("event_type") == "sentinel_finding"]
+    assert len(fleet_calls) == 1, f"expected one fleet finding, got {len(fleet_calls)}"
+    kwargs = fleet_calls[0].kwargs
     assert kwargs["severity"] == "high"
     assert "3 agents drifting in lockstep" in kwargs["message"]
     assert kwargs["agent_id"] == "sentinel-test-uuid"
@@ -95,6 +100,23 @@ async def test_run_cycle_does_not_post_self_observations():
     ]
     agent.fleet.fleet_summary.return_value = {"active_agents": 1}
 
-    with patch("agents.sentinel.agent.post_finding") as mock_post:
+    # `run_cycle` also calls `_emit_forced_release_alarms` (which in turn drives
+    # phase-B transitions). That path queries the live governance DB and posts
+    # under its own event types, so left unstubbed this test passes in CI (no DB,
+    # no alarms) and fails on any machine with real lease-conflict state. Stub it
+    # and assert on the channel this test is actually about.
+    with patch("agents.sentinel.agent.post_finding") as mock_post, \
+            patch.object(SentinelAgent, "_emit_forced_release_alarms",
+                         new=AsyncMock(return_value=None)):
         await agent.run_cycle(client=None)
-    assert not mock_post.called
+
+    # The claim is "no self-observation reaches the fleet-finding stream", not
+    # "run_cycle posts nothing at all" — the latter breaks whenever run_cycle
+    # grows an unrelated emitter, which is exactly what happened.
+    fleet_finding_calls = [
+        c for c in mock_post.call_args_list
+        if c.kwargs.get("event_type") == "sentinel_finding"
+    ]
+    assert not fleet_finding_calls, (
+        f"self-observation leaked to the event stream: {fleet_finding_calls}"
+    )
