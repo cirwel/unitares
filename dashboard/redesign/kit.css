@@ -160,7 +160,7 @@ a.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)
    information, not a broken affordance. */
 .stuck-row.plain { cursor: default; }
 .stuck-row.plain .name { color: var(--muted); }
-.stuck-row .reason { color: var(--warn); font-family: var(--font-mono); flex: none; }
+.stuck-row .reason { color: var(--warn-text); font-family: var(--font-mono); flex: none; }
 .stuck-row:hover .name { color: var(--accent); }
 .stuck-more { color: var(--muted); }
 .stuck-more:hover { color: var(--accent); }
@@ -183,7 +183,7 @@ a.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)
   padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill);
 }
 .verdict .pip { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
-.verdict.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.verdict.warn { color: var(--warn-text); background: color-mix(in srgb, var(--warn) 14%, transparent); }
 .verdict.warn .pip { background: var(--warn); }
 .verdict.danger { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
 .verdict.danger .pip { background: var(--danger); }
@@ -235,7 +235,7 @@ a.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)
   background: var(--surface-2); border: var(--hairline) solid var(--line-2); color: var(--muted);
 }
 .tag.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line-2)); }
-.tag.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line-2)); }
+.tag.warn { color: var(--warn-text); border-color: color-mix(in srgb, var(--warn) 40%, var(--line-2)); }
 .tag.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--line-2)); }
 /* Trust-tier badge: the tier colour rides a pip + border, NEVER the text.
    --tier-emerging is 3.55:1 on --surface in paper — fine as a non-text mark
@@ -253,7 +253,7 @@ a.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)
 .footnote code { font-family: var(--font-mono); color: var(--ink-2); }
 .src-badge { font-family: var(--font-mono); font-size: 0.68rem; padding: 1px 6px; border-radius: var(--radius-sm); }
 .src-badge.live { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
-.src-badge.snapshot { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.src-badge.snapshot { color: var(--warn-text); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 
 /* Two-up layouts (agent detail state|identity, resident panels, Pulse risk|eisv)
    that collapse to a single stacked column on phones — see the 640px block. */
