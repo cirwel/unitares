@@ -1089,6 +1089,111 @@ def check_signal_degeneracy(db_url: str) -> CheckResult:
                        f"all {len(healthy)} metrics vary: {', '.join(healthy)}")
 
 
+PRODUCER_MIN_N = 10          # below this there is no cadence to be silent against
+PRODUCER_REGULAR_GAP_H = 72  # a producer must have reported at least this often
+PRODUCER_FLOOR_H = 168       # never warn before a week of silence
+PRODUCER_GAP_MULTIPLE = 10   # silence this many times its own median gap
+
+
+def _psql_rows(db_url: str, sql: str, timeout: int = 20) -> list[list[str]] | None:
+    """Run a multi-row query via psql; return |-split rows or None on any error."""
+    if shutil.which("psql") is None:
+        return None
+    proc = subprocess.run(
+        ["psql", db_url, "-Atqc", sql],
+        capture_output=True, text=True, timeout=timeout,
+    )
+    if proc.returncode != 0:
+        return None
+    return [line.split("|") for line in proc.stdout.strip().splitlines() if line]
+
+
+def check_finding_producer_live(db_url: str) -> CheckResult:
+    """WARN when a detector that used to report regularly has gone silent.
+
+    The checks above ask whether a *stream* is flowing and whether a *metric*
+    can move. This one asks the question that covers both from the outside: is
+    the thing that produces findings still producing any? A detector that dies
+    emits nothing, and nothing is exactly what a healthy detector emits on a
+    quiet day — so its death is invisible by construction. Every other signal
+    stays green: the process runs, its state files update, its check-ins report
+    stale counts.
+
+    The incident this encodes (2026-06-29 → 2026-07-30): PR #1276 pointed
+    Watcher's default detector at an ollama tag that was never pulled. Every
+    hook-fired scan died with `model call failed: HTTP Error 404` into a log
+    nobody reads — 420 of them — while the hook kept firing, the pattern floor
+    kept updating, and zero findings reached governance for 31 days. #1403 fixed
+    the tag; nothing had reported the outage.
+
+    Self-relative by design, so no cadence table has to be maintained and
+    event-driven producers do not get punished for being quiet:
+      * only producers with >= PRODUCER_MIN_N findings are judged at all
+      * only those whose own median inter-finding gap is <= PRODUCER_REGULAR_GAP_H
+        (i.e. they demonstrably reported on a regular cadence)
+      * warn when silence exceeds both PRODUCER_FLOOR_H and
+        PRODUCER_GAP_MULTIPLE x that producer's own median gap
+
+    WARN, not FAIL — a dead detector degrades evidence, it doesn't break the
+    install. A retired producer will also warn; the fix there is to stop
+    counting it, which is a decision, not a defect.
+    """
+    name, mode = "finding_producer_live", "operator"
+    rows = _psql_rows(db_url, (
+        "SELECT event_type, count(*), "
+        "  round(extract(epoch FROM (now() - max(ts))) / 3600.0, 1), "
+        "  round(extract(epoch FROM percentile_cont(0.5) WITHIN GROUP (ORDER BY gap))"
+        "        / 3600.0, 2) "
+        "FROM (SELECT event_type, ts, "
+        "             ts - lag(ts) OVER (PARTITION BY event_type ORDER BY ts) AS gap "
+        "      FROM audit.events "
+        "      WHERE ts > now() - interval '90 days' AND event_type LIKE '%\\_finding') s "
+        "GROUP BY 1"
+    ), timeout=30)
+    if rows is None:
+        return CheckResult(name, mode, Status.SKIP, "audit.events not queryable")
+    if not rows:
+        return CheckResult(name, mode, Status.SKIP, "no finding producers in 90d")
+
+    silent, live, unjudged = [], [], 0
+    for row in rows:
+        if len(row) < 4:
+            continue
+        producer, n_raw, silent_raw, median_raw = row[0], row[1], row[2], row[3]
+        try:
+            n, silent_h = int(n_raw), float(silent_raw)
+            median_h = float(median_raw)
+        except ValueError:
+            unjudged += 1
+            continue
+        if n < PRODUCER_MIN_N or median_h > PRODUCER_REGULAR_GAP_H:
+            unjudged += 1
+            continue
+        threshold = max(PRODUCER_FLOOR_H, PRODUCER_GAP_MULTIPLE * median_h)
+        if silent_h > threshold:
+            silent.append(
+                f"{producer}: silent {silent_h / 24:.1f}d "
+                f"(n={n}, usually every {median_h:.1f}h)"
+            )
+        else:
+            live.append(f"{producer} ({silent_h:.0f}h)")
+
+    if not silent and not live:
+        return CheckResult(name, mode, Status.SKIP,
+                           f"no producer has a regular cadence to judge ({unjudged} skipped)")
+    if silent:
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"{len(silent)} finding producer(s) went quiet: " + "; ".join(silent),
+            detail=("Silence from a detector is not evidence of health — it is the same "
+                    "output a dead one produces. Run the producer's own self-test before "
+                    "assuming the codebase simply got clean. "
+                    + (f"Reporting: {', '.join(live)}." if live else "")),
+        )
+    return CheckResult(name, mode, Status.PASS,
+                       f"all {len(live)} regular producer(s) reporting: {', '.join(live)}")
+
+
 def build_checks(repo_root: Path, db_url: str) -> list[Check]:
     loaded_cache: dict[str, set[str]] = {}
 
@@ -1128,6 +1233,8 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
         Check("grounding_stage_live", "operator", lambda: check_grounding_stage_live(db_url)),
         Check("label_join_overlap", "operator", lambda: check_label_join_overlap(db_url)),
         Check("signal_degeneracy", "operator", lambda: check_signal_degeneracy(db_url)),
+        Check("finding_producer_live", "operator",
+              lambda: check_finding_producer_live(db_url)),
     ]
 
 
