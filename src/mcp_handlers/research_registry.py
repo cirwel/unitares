@@ -71,6 +71,10 @@ def _record_payload(arguments: Dict[str, Any]) -> dict[str, Any]:
     ),
     pre_onboard_actions=_READ_ACTIONS,
     default_action="list",
+    # Hand-rolled router (not action_router), so the vocabulary is declared
+    # rather than derived. Same set the unknown-action recovery hint lists,
+    # so a new action cannot be added without updating both.
+    known_actions={*_READ_ACTIONS, "record"},
 )
 async def handle_research_registry(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Register and query agent-network research runs."""

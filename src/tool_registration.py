@@ -48,6 +48,16 @@ from src.mcp_handlers import dispatch_tool
 # see memory ``feedback_patch-local-imports``). FIND-A3 review fold.
 from src.wave3a_routing import get_route as _wave3a_get_route
 from src.wave3a_beam_proxy import proxy_to_beam as _wave3a_proxy_to_beam
+# tool_usage telemetry (#1387). Module-level for the same two reasons as the
+# Wave 3a imports: zero per-call import cost on the dispatch hot path, and
+# `patch("src.tool_registration.record_tool_usage")` works in tests.
+from src.services.tool_usage_recorder import (
+    build_tool_usage_payload,
+    classify_tool_result,
+    record_tool_usage,
+    resolve_dispatch_bound_agent_id,
+    resolve_minted_agent_id,
+)
 
 logger = get_logger(__name__)
 
@@ -137,6 +147,78 @@ def get_tool_wrapper(tool_name: str):
         async def wrapper(**kwargs):
             start_time = time.time()
             logger.info(f"[TOOL_WRAPPER] {tool_name}: called with keys={list(kwargs.keys())}")
+            # #1387: this wrapper is the ONLY path MCP-protocol clients take
+            # (FastMCP /mcp streamable-HTTP and /sse). Until now it incremented
+            # Prometheus counters and wrote NOTHING to audit.tool_usage, so
+            # every MCP tool call in the fleet's history — including every
+            # `request_review` / `dialectic(action="request")` an agent ever
+            # made, and every identity refusal — was invisible to the table
+            # that the adoption question is asked of. Never wired; not a
+            # regression.
+            #
+            # The payload is built here, before dispatch, because dispatch_tool
+            # runs params_step.resolve_alias which mutates `kwargs` in place.
+            # `session_id` and the request-side `agent_id` are read here for
+            # the same reason (identity middleware injects agent_id into
+            # kwargs during dispatch; we re-read it at the exit points so the
+            # RESOLVED binding wins over the request-side value).
+            usage_payload = build_tool_usage_payload(tool_name, kwargs)
+            session_id = kwargs.get("client_session_id")
+            request_agent_id = kwargs.get("agent_id")
+
+            def _record(success, error_type=None, result=None):
+                """Fire-and-forget audit row.
+
+                ``record_tool_usage`` is contractually non-raising, but this
+                sits INSIDE the wrapper's try/except: an unexpected raise here
+                would be caught below and turned into an error envelope, i.e.
+                telemetry would have broken a working tool call. Guarded so
+                that cannot happen at any exit point, including the exception
+                handler (where a raise would propagate to the client).
+                """
+                try:
+                    # Attribution, most-proven first:
+                    #   1. kwargs["agent_id"] — inject_identity's in-place write
+                    #      (survives, it runs BEFORE validate_params rebinds).
+                    #   2. the request-side value read at entry.
+                    #   3. the dispatch middleware's RESOLVED binding.
+                    # (3) is load-bearing, not a nicety: `dialectic` is in
+                    # inject_identity's `browsable_data_tools`, so (1) never
+                    # fires for it, and the handler's own
+                    # `arguments["agent_id"]` write lands in validate_params'
+                    # COPY. Without it a strongly-bound agent's
+                    # `request_review` audits as agent_id=NULL — countable but
+                    # not attributed, which is exactly the question #1387 was
+                    # opened to answer. Same for knowledge(action="search").
+                    agent_id = (
+                        kwargs.get("agent_id")
+                        or request_agent_id
+                        or resolve_dispatch_bound_agent_id(kwargs)
+                    )
+                    if result is not None:
+                        agent_id = resolve_minted_agent_id(tool_name, agent_id, result)
+                    record_tool_usage(
+                        tool_name=tool_name,
+                        agent_id=agent_id,
+                        success=success,
+                        error_type=error_type,
+                        latency_ms=int((time.time() - start_time) * 1000),
+                        session_id=session_id,
+                        payload=usage_payload,
+                        # This wrapper wrote NOTHING before #1387. Adding an
+                        # audit row must not also enrol a whole transport in
+                        # the JSONL behavioural-sensor feed or start it
+                        # refreshing agent:/ presence leases — neither is a
+                        # telemetry change and neither was measured here.
+                        audit_only=True,
+                    )
+                except Exception as telemetry_error:  # pragma: no cover - defensive
+                    logger.debug(
+                        "[TOOL_WRAPPER] %s: tool_usage record failed (non-fatal): %s",
+                        tool_name,
+                        telemetry_error,
+                    )
+
             try:
                 # Wave 3a per-tool routing table (RFC docs/proposals/
                 # beam-wave-3a-read-only-handlers.md v0.2 §3.1). If the
@@ -167,6 +249,7 @@ def get_tool_wrapper(tool_name: str):
                         TOOL_CALL_DURATION.labels(tool_name=tool_name).observe(
                             duration
                         )
+                        _record(True)
                         return proxy_result.response
                     # BEAM failed — fall through to Python dispatch.
                     # The proxy already emitted the §4.2 fallback event.
@@ -186,7 +269,16 @@ def get_tool_wrapper(tool_name: str):
 
                 if result is None:
                     TOOL_CALLS_TOTAL.labels(tool_name=tool_name, status="not_found").inc()
+                    _record(False, error_type="unknown_tool")
                     return {"success": False, "error": f"Tool '{tool_name}' not found"}
+
+                # classify_tool_result reads the handler payload, so it sees
+                # both plain error_response() failures AND the #425 typed
+                # identity refusal (which is deliberately success-SHAPED —
+                # see _identity_refusal_status). A refused call is now
+                # countable instead of auditing as a succeeding anonymous one.
+                success, error_type = classify_tool_result(result)
+                _record(success, error_type=error_type, result=result)
 
                 # Extract structured payload from TextContent response
                 # Many MCP clients enforce outputSchema and require structured output.
@@ -216,6 +308,7 @@ def get_tool_wrapper(tool_name: str):
                 # Note: @mcp_tool decorator on handlers also catches exceptions,
                 # but dispatch_tool may raise before reaching handler (e.g., rate limit)
                 logger.error(f"Error in tool wrapper {tool_name}: {e}", exc_info=True)
+                _record(False, error_type=type(e).__name__)
                 return {"success": False, "error": str(e), "error_type": type(e).__name__}
 
         wrapper.__name__ = tool_name

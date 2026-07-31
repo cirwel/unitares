@@ -137,12 +137,47 @@ def get_context_agent_id() -> Optional[str]:
     return ctx.get('agent_id') if ctx else None
 
 def update_context_agent_id(agent_id: str) -> None:
-    """Update agent_id in context (e.g., after binding)."""
+    """Update agent_id in context (e.g., after binding).
+
+    Also stamps ``agent_id_resolved`` — this function is the SOLE write path
+    identity resolution uses, so the marker separates "a resolver wrote this"
+    from "the transport seeded the slot". See
+    ``get_context_resolved_agent_id``.
+    """
     ctx = _session_context.get()
     if ctx is None:
         return
     # Create a new dict to avoid mutating shared state
-    _session_context.set({**ctx, 'agent_id': agent_id})
+    _session_context.set({**ctx, 'agent_id': agent_id, 'agent_id_resolved': True})
+
+
+def get_context_resolved_agent_id() -> Optional[str]:
+    """Return the context agent_id ONLY when identity resolution wrote it.
+
+    ``get_context_agent_id`` cannot be used for attribution. ``http_api``
+    seeds the session context with ``x_agent_id or arguments["agent_id"]``
+    BEFORE any resolution runs (``set_session_context(... agent_id=...)``),
+    and ``X-Agent-Id`` is a header the codebase deliberately refuses as
+    identity: http_api's own comment says "X-Agent-Id NOT injected as
+    agent_id pre-dispatch", and the #802 gate in ``identity_step`` exists to
+    deny "the same-host copyable-header exfiltration path". For a REST call
+    that never resolves — ``identity`` (in ``_resolve_http_bound_agent``'s
+    ``skip_tools``) and every ``pre_onboard`` read (the #945 guard returns
+    before binding) — the raw header is still sitting in that slot when the
+    handler returns.
+
+    ``update_context_agent_id`` is the only write path resolution takes
+    (operator token, sticky binding, session resolve, and the identity/
+    onboard handlers all funnel through it), so the marker it stamps is the
+    difference between an attributed row and a forged one. Callers that want
+    the legacy "whatever is in the slot" behaviour keep using
+    ``get_context_agent_id``; this accessor is for anything that WRITES the
+    value down as fact.
+    """
+    ctx = _session_context.get()
+    if not ctx or not ctx.get('agent_id_resolved'):
+        return None
+    return ctx.get('agent_id')
 
 def get_context_client_hint() -> Optional[str]:
     """
