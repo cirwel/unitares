@@ -520,6 +520,64 @@ class TestUpdateCurrentSignature:
                     assert payload.get("old_tier") != payload.get("new_tier"), \
                         f"Spurious broadcast: old_tier={payload.get('old_tier')} == new_tier={payload.get('new_tier')}"
 
+    @pytest.mark.asyncio
+    async def test_resolver_exception_preserves_stored_tier(self):
+        """A resolver error must not demote a substrate-earned identity.
+
+        Regression for the genesis-reseed cascade (#1407): `resolve_trust_tier`
+        swallows every exception and used to fall back to `compute_trust_tier`,
+        which — at the saturated lineage floor (~0.633, below `lin_2`) — returns
+        tier 1 for a resident. Persisting that opens the `tier <= 1` reseed gate,
+        and `store_genesis_signature`'s value guard is already disarmed because
+        `lineage_low = similarity < 0.7` is permanently true. Next check-in
+        overwrites Σ₀. An exception in the resolver is evidence about the
+        RESOLVER, not about the agent — keep what it earned.
+        """
+        from src.trajectory_identity import update_current_signature, TrajectorySignature
+
+        current_sig = TrajectorySignature(
+            attractor={"center": [0.81, 0.82, 0.09, -0.02]},
+            beliefs={"values": [0.81, 0.82, 0.09, -0.02]},
+            recovery={"tau_estimate": 3.0},
+            observation_count=135_000,
+            identity_confidence=0.99,
+        )
+        earned = {"tier": 3, "name": "verified", "source": "substrate_earned",
+                  "observation_count": 135_000, "identity_confidence": 0.99,
+                  "lineage_similarity": None, "reason": "substrate-earned"}
+        metadata = {
+            "trajectory_genesis": {
+                "attractor": {"center": [0.85, 0.85, 0.06, 0.00]},
+                "beliefs": {"values": [0.85, 0.85, 0.06, 0.00]},
+                "recovery": {"tau_estimate": 3.0},
+                "observation_count": 132_000,
+                "identity_confidence": 0.99,
+            },
+            "trust_tier": earned,
+        }
+
+        with patch('src.db.get_db') as mock_db, \
+             patch('src.identity.trust_tier_routing.resolve_trust_tier',
+                   new=AsyncMock(side_effect=RuntimeError("substrate lookup failed"))), \
+             patch('src.trajectory_identity.store_genesis_signature',
+                   new_callable=AsyncMock) as mock_store:
+
+            mock_identity = MagicMock()
+            mock_identity.metadata = dict(metadata)
+            mock_db_instance = AsyncMock()
+            mock_db_instance.get_identity = AsyncMock(return_value=mock_identity)
+            mock_db_instance.update_identity_metadata = AsyncMock()
+            mock_db.return_value = mock_db_instance
+
+            result = await update_current_signature("test-uuid", current_sig)
+
+        assert result["trust_tier"]["tier"] == 3, (
+            "resolver failure demoted an earned tier — this is the cascade trigger"
+        )
+        assert result["trust_tier"]["source"] == "substrate_earned"
+        # And with the tier preserved above 1, the reseed gate must stay shut.
+        mock_store.assert_not_called()
+
     @staticmethod
     def _drifted_fixture():
         """Tier-2 identity whose current signature is far from genesis."""
