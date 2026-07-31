@@ -334,3 +334,32 @@ def test_inventory_record_conversion_preserves_identity_metadata_for_fixture_fil
 
     assert row.detail["_identity_metadata"] == {"label": "quick-demo-agent_abc123"}
     assert is_controlled_validation_fixture(row.detail)
+
+
+def test_declared_purpose_clause_is_gateable_for_validation_slices():
+    """`purpose` is agent-supplied free text, so it must not gate validation.
+
+    Excluding on it lets the subject of the measurement opt out of being
+    measured. Live, that clause removed 47% of a strict-scope window -- bad
+    labels included -- and reversed the sign of the measured lift, so predictive
+    slices pass include_declared_purpose=False while inventory reporting keeps
+    the default.
+    """
+    declared_only = {"_identity_metadata": {"purpose": "testing", "label": "real-agent"}}
+
+    assert is_controlled_validation_fixture(declared_only)
+    assert not is_controlled_validation_fixture(
+        declared_only, include_declared_purpose=False
+    )
+    assert inventory_module.is_declared_non_production_purpose(declared_only)
+
+    # Structural markers still apply with the clause disabled.
+    structural = {
+        "_identity_metadata": {"purpose": "testing", "label": "quick-demo-agent_6d05"}
+    }
+    assert is_controlled_validation_fixture(
+        structural, include_declared_purpose=False
+    )
+    assert is_controlled_validation_fixture(
+        {"synthetic_calibration_fixture": True}, include_declared_purpose=False
+    )
