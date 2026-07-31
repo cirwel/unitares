@@ -1141,13 +1141,22 @@ def _parse_detail(raw: Any) -> dict[str, Any]:
     return {}
 
 
-def _row_from_record(record: Any) -> OutcomeRow:
-    detail = dict(
-        attach_identity_metadata(
-            record.get("detail"),
-            record.get("identity_metadata"),
+def _row_from_record(
+    record: Any,
+    *,
+    include_identity_metadata: bool = True,
+) -> OutcomeRow:
+    """Convert a database record, optionally excluding mutable identity metadata."""
+
+    if include_identity_metadata:
+        detail = dict(
+            attach_identity_metadata(
+                record.get("detail"),
+                record.get("identity_metadata"),
+            )
         )
-    )
+    else:
+        detail = dict(_parse_detail(record.get("detail")))
     n_prior = record.get("n_prior_snapshots")
     n_prior = int(n_prior) if n_prior is not None else None
     # Gate dispersion on a minimum snapshot count: a stddev over 1-2 points is
@@ -1201,7 +1210,18 @@ async def fetch_rows(
     outcome_types: Sequence[str],
     dispersion_window_minutes: float = DISPERSION_WINDOW_MINUTES,
     anchor_predicate: str | None = None,
+    as_of: datetime | None = None,
+    exclude_controlled_fixtures: bool = True,
+    include_identity_metadata: bool = True,
 ) -> list[OutcomeRow]:
+    """Fetch outcome rows with optional frozen boundary and fixture retention.
+
+    Existing callers retain the live ``now()`` boundary and controlled-fixture
+    exclusion. Instrumentation callers may retain fixtures long enough to make
+    their exclusion visible as an explicit attrition stage, and may exclude
+    mutable identity metadata when replaying a frozen outcome-only contract.
+    """
+
     try:
         import asyncpg
     except ImportError:
@@ -1209,6 +1229,20 @@ async def fetch_rows(
         raise SystemExit(1)
 
     conn = await asyncpg.connect(db_url)
+    if include_identity_metadata:
+        identity_metadata_projection = "identity_meta.metadata AS identity_metadata"
+        identity_metadata_join = """
+            LEFT JOIN LATERAL (
+                SELECT ident_meta.metadata
+                FROM core.identities ident_meta
+                WHERE ident_meta.agent_id = o.agent_id
+                ORDER BY ident_meta.updated_at DESC NULLS LAST
+                LIMIT 1
+            ) identity_meta ON TRUE
+        """
+    else:
+        identity_metadata_projection = "NULL::jsonb AS identity_metadata"
+        identity_metadata_join = ""
     try:
         records = await conn.fetch(
             """
@@ -1227,7 +1261,7 @@ async def fetch_rows(
                 o.eisv_verdict,
                 o.eisv_coherence,
                 o.detail,
-                identity_meta.metadata AS identity_metadata,
+                {identity_metadata_projection},
                 o.verification_source,
                 EXTRACT(EPOCH FROM (o.ts - ps.recorded_at))::float AS prior_state_age_seconds,
                 ps.risk_score AS prior_risk,
@@ -1261,13 +1295,7 @@ async def fetch_rows(
                 disp.prior_v_disp,
                 disp.prior_risk_disp
             FROM audit.outcome_events o
-            LEFT JOIN LATERAL (
-                SELECT ident_meta.metadata
-                FROM core.identities ident_meta
-                WHERE ident_meta.agent_id = o.agent_id
-                ORDER BY ident_meta.updated_at DESC NULLS LAST
-                LIMIT 1
-            ) identity_meta ON TRUE
+            {identity_metadata_join}
             LEFT JOIN LATERAL (
                 SELECT
                     s.recorded_at,
@@ -1319,23 +1347,39 @@ async def fetch_rows(
                   AND s.recorded_at <= o.ts - ($2::double precision * INTERVAL '1 minute')
                   AND s.recorded_at >  o.ts - (($2 + $4)::double precision * INTERVAL '1 minute')
             ) disp ON TRUE
-            WHERE o.ts >= now() - ($1::int * INTERVAL '1 day')
+            WHERE o.ts >= COALESCE($5::timestamptz, now())
+                              - ($1::int * INTERVAL '1 day')
+              AND ($5::timestamptz IS NULL OR o.ts <= $5::timestamptz)
               AND o.outcome_type = ANY($3::text[])
               AND {anchor_clause}
             ORDER BY o.ts ASC
-            """.format(anchor_clause=(anchor_predicate or "TRUE")),
+            """.format(
+                anchor_clause=(anchor_predicate or "TRUE"),
+                identity_metadata_projection=identity_metadata_projection,
+                identity_metadata_join=identity_metadata_join,
+            ),
             window_days,
             lead_minutes,
             list(outcome_types),
             dispersion_window_minutes,
+            as_of,
         )
     finally:
         await conn.close()
+    rows = [
+        _row_from_record(
+            record,
+            include_identity_metadata=include_identity_metadata,
+        )
+        for record in records
+    ]
+    if not exclude_controlled_fixtures:
+        return rows
     return [
         row
-        for record in records
+        for row in rows
         if not is_controlled_validation_fixture(
-            (row := _row_from_record(record)).detail,
+            row.detail,
             include_declared_purpose=False,
         )
     ]

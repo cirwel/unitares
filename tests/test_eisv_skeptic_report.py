@@ -1,5 +1,8 @@
+import asyncio
 import dataclasses
+import sys
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from scripts.analysis import eisv_skeptic_report as skeptic_module
 from scripts.analysis.eisv_skeptic_report import (
@@ -16,6 +19,7 @@ from scripts.analysis.eisv_skeptic_report import (
     smoothed_rate,
     summarize_conclusion,
 )
+from scripts.utils.date_utils import now_utc
 
 
 def _row(idx: int, *, bad: bool, risk: float | None, agent: str = "agent-a") -> OutcomeRow:
@@ -214,8 +218,7 @@ def test_build_report_includes_ablation_delta_section():
 
 
 def test_skeptic_record_conversion_preserves_identity_metadata_for_fixture_filtering():
-    row = skeptic_module._row_from_record(
-        {
+    record = {
             "ts": datetime(2026, 1, 1, tzinfo=timezone.utc),
             "outcome_id": "outcome-1",
             "agent_id": "agent-demo",
@@ -248,9 +251,90 @@ def test_skeptic_record_conversion_preserves_identity_metadata_for_fixture_filte
             "prior_v_disp": None,
             "prior_risk_disp": None,
         }
-    )
+    row = skeptic_module._row_from_record(record)
 
     assert row.detail["_identity_metadata"] == {"label": "perf-profile-checkin_be34425f"}
+
+
+def test_skeptic_record_conversion_can_exclude_mutable_identity_metadata():
+    record = {
+        "ts": now_utc(),
+        "outcome_id": "outcome-frozen",
+        "agent_id": "agent-demo",
+        "outcome_type": "task_failed",
+        "outcome_score": 0.0,
+        "is_bad": True,
+        "detail": {"source": "auto_checkin"},
+        "identity_metadata": {"purpose": "testing"},
+        "verification_source": "agent_reported_tool_result",
+        "prior_state_age_seconds": None,
+        "prior_risk": None,
+        "prior_phi": None,
+        "prior_verdict": None,
+        "prior_coherence": None,
+        "prior_e": None,
+        "prior_i": None,
+        "prior_s": None,
+        "prior_v": None,
+        "eisv_verdict": None,
+        "eisv_e": None,
+        "eisv_i": None,
+        "eisv_s": None,
+        "eisv_v": None,
+        "eisv_phi": None,
+        "eisv_coherence": None,
+        "n_prior_snapshots": None,
+        "prior_s_disp": None,
+        "prior_e_disp": None,
+        "prior_i_disp": None,
+        "prior_v_disp": None,
+        "prior_risk_disp": None,
+    }
+
+    row = skeptic_module._row_from_record(
+        record,
+        include_identity_metadata=False,
+    )
+
+    assert row.detail == {"source": "auto_checkin"}
+
+
+def test_fetch_rows_omits_mutable_identity_metadata_join_when_disabled(
+    monkeypatch,
+):
+    observed: dict[str, str] = {}
+
+    class FakeConnection:
+        async def fetch(self, query: str, *_args: object) -> list[object]:
+            observed["query"] = query
+            return []
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_connect(_db_url: str) -> FakeConnection:
+        return FakeConnection()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "asyncpg",
+        SimpleNamespace(connect=fake_connect),
+    )
+
+    rows = asyncio.run(
+        skeptic_module.fetch_rows(
+            "postgresql://example.invalid/db",
+            window_days=90,
+            lead_minutes=30,
+            outcome_types=("task_completed",),
+            include_identity_metadata=False,
+        )
+    )
+
+    assert rows == []
+    assert "NULL::jsonb AS identity_metadata" in observed["query"]
+    assert "ident_meta.metadata" not in observed["query"]
+    assert "ORDER BY ident_meta.updated_at" not in observed["query"]
 
 
 def test_zero_positive_training_split_yields_no_deltas():
