@@ -179,7 +179,18 @@ def assess_recovery_safety(
 # Single entry point with action dispatch - replaces 3 separate tools
 # ============================================================================
 
-@mcp_tool("self_recovery", timeout=15.0)
+# default_action/known_actions mirror SelfRecoveryParams.action
+# (Literal["check","quick","review"], default "check") and the dispatch below.
+# Not an action_router — declared by hand so the shared (tool, action) resolver
+# and the tool_usage telemetry clamp see the same vocabulary the handler routes
+# on. Without default_action a bare self_recovery() audited as no-action while
+# actually running "check".
+@mcp_tool(
+    "self_recovery",
+    timeout=15.0,
+    default_action="check",
+    known_actions={"check", "quick", "review"},
+)
 async def handle_self_recovery(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Unified self-recovery tool for stuck/paused agents.

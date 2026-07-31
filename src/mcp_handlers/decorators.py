@@ -55,6 +55,18 @@ class ToolDefinition:
     # tool-level escape hatch for a single-purpose tool that wants to declare
     # its stakes inline. The table still wins for any (tool, action) it lists.
     requires_verdict: str = "baseline"
+    # The tool's complete sub-action vocabulary, lowercase. Populated
+    # automatically by ``action_router`` from its own ``actions={}`` routing
+    # map (so it can never drift from what actually routes), and declarable by
+    # hand on a non-router tool that still takes a bounded ``action`` literal
+    # (self_recovery). ``None`` means "single-purpose tool, no sub-action".
+    #
+    # Consumed by the tool_usage telemetry payload builder as the CLAMP: an
+    # action token that is not in this set is recorded as the literal
+    # ``action_unlisted`` rather than as the caller's string, so a caller can
+    # never inject unbounded cardinality (or free text) into
+    # ``audit.tool_usage.payload``. Not a gate — nothing refuses on it.
+    known_actions: Optional[frozenset] = None
 
 _TOOL_DEFINITIONS: Dict[str, ToolDefinition] = {}
 
@@ -71,6 +83,7 @@ def mcp_tool(
     pre_onboard_actions: Optional[set] = None,
     default_action: Optional[str] = None,
     requires_verdict: str = "baseline",
+    known_actions: Optional[set] = None,
 ):
     """
     Decorator for MCP tool handlers with auto-registration and timeout protection.
@@ -128,6 +141,19 @@ def mcp_tool(
             else None
         )
         _default_action = default_action.lower() if default_action else None
+        _known_actions = (
+            frozenset(str(a).lower() for a in known_actions)
+            if known_actions
+            else None
+        )
+        if _known_actions is not None and _default_action is not None:
+            if _default_action not in _known_actions:
+                raise ValueError(
+                    f"Tool {tool_name!r}: default_action {_default_action!r} is not "
+                    f"in known_actions {sorted(_known_actions)!r} — a default that "
+                    f"cannot route would audit as 'action_unlisted' on every "
+                    f"action-less call."
+                )
 
         # Attach metadata to function for introspection
         func._mcp_tool_name = tool_name
@@ -247,6 +273,7 @@ def mcp_tool(
                 pre_onboard_actions=_pre_onboard_actions,
                 default_action=_default_action,
                 requires_verdict=requires_verdict,
+                known_actions=_known_actions,
             )
 
         return wrapper
@@ -346,14 +373,25 @@ def get_call_identity_requirement(tool_name: str, arguments) -> str:
     return td.requires_identity
 
 
-def _resolve_canonical_and_action(tool_name: str, arguments):
-    """Canonical tool name + resolved action for a CALL — the shared seam.
+def resolve_canonical_action_and_source(tool_name: str, arguments):
+    """Canonical tool name + resolved action + WHERE the action came from.
 
-    Both the #425 identity resolver and the #775 stakes resolver MUST agree on
-    which canonical (tool, action) a call maps to, or their decisions diverge on
-    aliased calls. This helper is the single canonicalization point used by both
-    resolvers; `test_action_level_identity.py` and `test_stakes_table.py` pin
-    the important alias/default-action behavior from each gate's perspective.
+    Superset of ``_resolve_canonical_and_action``: same precedence, one extra
+    return value. ``source`` is one of:
+
+      "explicit"       — the caller passed ``action`` (or its ``op`` synonym)
+      "alias_injected" — a friendly alias supplied it (request_review →
+                         dialectic(action="request"))
+      "default"        — neither; the tool's ``default_action`` filled in
+      None             — no action resolved at all
+
+    ``source`` is load-bearing for telemetry, not for any gate. ``dialectic``
+    has ``default_action="list"``, so a bare ``dialectic()`` and an explicit
+    ``dialectic(action="list")`` produce identical (canonical, action) pairs;
+    only the source separates "an agent asked" from "the router defaulted".
+    It is derived HERE, inside the resolver that owns the precedence order,
+    rather than at the call site — a second implementation of the precedence
+    is exactly the drift this shared seam exists to prevent.
     """
     canonical = tool_name
     implied_action = None
@@ -377,10 +415,29 @@ def _resolve_canonical_and_action(tool_name: str, arguments):
     action = None
     if isinstance(arguments, dict):
         action = arguments.get("action") or arguments.get("op")
-    action = (str(action).lower() if action else None) or implied_action
+    explicit_action = str(action).lower() if action else None
+    action = explicit_action or implied_action
+    source = "explicit" if explicit_action else ("alias_injected" if action else None)
     td = _TOOL_DEFINITIONS.get(canonical)
     if action is None and td is not None:
         action = td.default_action
+        source = "default" if action else None
+    return canonical, action, source
+
+
+def _resolve_canonical_and_action(tool_name: str, arguments):
+    """Canonical tool name + resolved action for a CALL — the shared seam.
+
+    Both the #425 identity resolver and the #775 stakes resolver MUST agree on
+    which canonical (tool, action) a call maps to, or their decisions diverge on
+    aliased calls. This helper is the single canonicalization point used by both
+    resolvers; `test_action_level_identity.py` and `test_stakes_table.py` pin
+    the important alias/default-action behavior from each gate's perspective.
+
+    Thin projection of ``resolve_canonical_action_and_source`` so the telemetry
+    consumer (#1387) shares the precedence with both gates instead of forking it.
+    """
+    canonical, action, _source = resolve_canonical_action_and_source(tool_name, arguments)
     return canonical, action
 
 
@@ -504,6 +561,10 @@ def action_router(
         description=_full_description,
         pre_onboard_actions=pre_onboard_actions,
         default_action=default_action,
+        # Same drift-proofing as _full_description: the telemetry clamp is
+        # DERIVED from the routing map, never hand-listed. A newly wired
+        # action is auditable the moment it can route.
+        known_actions=frozenset(actions.keys()),
     )
     async def router(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         # Support both 'action' and 'op' (op is alias for consistency with other tools)

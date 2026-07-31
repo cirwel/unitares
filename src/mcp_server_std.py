@@ -78,6 +78,7 @@ from src.agent_state import (
 from src.tool_schemas import get_tool_definitions
 from src.lock_cleanup import cleanup_stale_state_locks
 from src.services.tool_usage_recorder import (
+    build_tool_usage_payload,
     classify_tool_result,
     record_tool_usage,
     resolve_minted_agent_id,
@@ -457,6 +458,11 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
     # Dispatch to handler registry; record tool_usage at each exit point
     # (JSONL tracker + fire-and-forget write to audit.tool_usage)
     t0 = time.monotonic()
+    # #1387 action discriminator — built BEFORE dispatch. dispatch_tool runs
+    # params_step.resolve_alias, which mutates `arguments` in place to inject
+    # an alias's implied action; building afterwards would misreport every
+    # aliased call as action_source="explicit".
+    usage_payload = build_tool_usage_payload(name, arguments)
     try:
         from src.mcp_handlers import dispatch_tool
         result = await dispatch_tool(name, arguments)
@@ -467,13 +473,21 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
                               agent_id=resolve_minted_agent_id(name, agent_id, result),
                               success=success,
                               error_type=error_type, latency_ms=latency_ms,
-                              session_id=session_id)
+                              session_id=session_id, payload=usage_payload)
             return result
         record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
                           error_type="unknown_tool", latency_ms=latency_ms,
-                          session_id=session_id)
+                          session_id=session_id, payload=usage_payload)
         return [TextContent(type="text", text=json.dumps({"success": False, "error": f"Unknown tool: {name}"}, indent=2))]
     except ImportError:
+        # Previously the one exit point with no row: a handler-registry import
+        # failure returned an error to the caller and left audit.tool_usage
+        # silent, so a broken deploy looked like "no traffic" rather than
+        # "every call failed".
+        record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
+                          error_type="handler_registry_unavailable",
+                          latency_ms=int((time.monotonic() - t0) * 1000),
+                          session_id=session_id, payload=usage_payload)
         return [TextContent(type="text", text=json.dumps({"success": False, "error": f"Handler registry not available for tool '{name}'"}, indent=2))]
     except Exception as e:
         latency_ms = int((time.monotonic() - t0) * 1000)
@@ -485,7 +499,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
         )
         record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
                           error_type="execution_error", latency_ms=latency_ms,
-                          session_id=session_id)
+                          session_id=session_id, payload=usage_payload)
         return [sanitized_error]
 
 

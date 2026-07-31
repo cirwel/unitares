@@ -32,6 +32,7 @@ from src.mcp_handlers.utils import require_agent_id
 from src.services.http_dispatch_fallback import execute_http_dispatch_fallback
 from src.services.runtime_queries import get_governance_metrics_data, get_health_check_data
 from src.services.tool_usage_recorder import (
+    build_tool_usage_payload,
     classify_tool_result,
     record_tool_usage,
     resolve_minted_agent_id,
@@ -218,11 +219,19 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
     mode, fall through to the existing direct-handler / fallback path.
     Routing-table-miss → unchanged (single dict lookup is hot-path cheap).
 
-    Records tool_usage telemetry (JSONL + audit.tool_usage) at every exit point.
+    Records tool_usage telemetry (JSONL + audit.tool_usage) at every exit point,
+    including the strict-identity refusal.
     """
     agent_id = arguments.get("agent_id") if isinstance(arguments, dict) else None
     session_id = arguments.get("client_session_id") if isinstance(arguments, dict) else None
     t0 = time.monotonic()
+    # #1387 action discriminator. Built HERE, alongside the latency clock and
+    # BEFORE any dispatch, because the pipeline mutates `arguments` in place:
+    # `params_step.resolve_alias` writes the alias's implied action into the
+    # caller's own dict, so a post-dispatch build would record every
+    # `request_review` as action_source="explicit". Held in a local and reused
+    # by whichever exit point fires.
+    usage_payload = build_tool_usage_payload(tool_name, arguments)
     try:
         # #425 strict-identity gate — REST parity with the MCP dispatch
         # middleware (stage-1 burn-in fold). Sits ahead of Wave-3a routing:
@@ -243,7 +252,8 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
             # triage queries can subtract refusals without log archaeology.
             record_tool_usage(tool_name=tool_name, agent_id=None,
                               success=False, error_type="identity_required",
-                              latency_ms=latency_ms, session_id=session_id)
+                              latency_ms=latency_ms, session_id=session_id,
+                              payload=usage_payload)
             return refusal
 
         # Wave 3a routing — HTTP path symmetric with MCP-protocol wrapper.
@@ -263,7 +273,7 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
                 latency_ms = int((time.monotonic() - t0) * 1000)
                 record_tool_usage(tool_name=tool_name, agent_id=agent_id,
                                   success=True, latency_ms=latency_ms,
-                                  session_id=session_id)
+                                  session_id=session_id, payload=usage_payload)
                 # The proxy already wrote the success-row measurement
                 # (FIND-A5 fold in ``wave3a_beam_proxy.py``); do not
                 # duplicate the write here.
@@ -279,7 +289,8 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
             record_tool_usage(tool_name=tool_name,
                               agent_id=resolve_minted_agent_id(tool_name, agent_id, result),
                               success=success, error_type=error_type,
-                              latency_ms=latency_ms, session_id=session_id)
+                              latency_ms=latency_ms, session_id=session_id,
+                              payload=usage_payload)
             return _normalize_direct_http_result(result)
         result = await execute_http_dispatch_fallback(tool_name, arguments)
         latency_ms = int((time.monotonic() - t0) * 1000)
@@ -287,11 +298,13 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
         record_tool_usage(tool_name=tool_name,
                           agent_id=resolve_minted_agent_id(tool_name, agent_id, result),
                           success=success, error_type=error_type,
-                          latency_ms=latency_ms, session_id=session_id)
+                          latency_ms=latency_ms, session_id=session_id,
+                          payload=usage_payload)
         return result
     except Exception as e:
         latency_ms = int((time.monotonic() - t0) * 1000)
         record_tool_usage(tool_name=tool_name, agent_id=agent_id,
                           success=False, error_type=type(e).__name__,
-                          latency_ms=latency_ms, session_id=session_id)
+                          latency_ms=latency_ms, session_id=session_id,
+                          payload=usage_payload)
         raise
