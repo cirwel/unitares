@@ -1090,6 +1090,7 @@ def check_signal_degeneracy(db_url: str) -> CheckResult:
 
 
 PRODUCER_MIN_N = 10          # below this there is no cadence to be silent against
+PRODUCER_MIN_ACTIVE_DAYS = 3  # a single-day burst is an incident, not a cadence
 PRODUCER_REGULAR_GAP_H = 72  # a producer must have reported at least this often
 PRODUCER_FLOOR_H = 168       # never warn before a week of silence
 PRODUCER_GAP_MULTIPLE = 10   # silence this many times its own median gap
@@ -1129,6 +1130,14 @@ def check_finding_producer_live(db_url: str) -> CheckResult:
     Self-relative by design, so no cadence table has to be maintained and
     event-driven producers do not get punished for being quiet:
       * only producers with >= PRODUCER_MIN_N findings are judged at all
+      * only those active on >= PRODUCER_MIN_ACTIVE_DAYS distinct days. A
+        fire-on-failure producer emits a burst during one incident and nothing
+        for months; the burst gives it a tiny median gap, so without this it
+        masquerades as a high-cadence producer and its healthy silence reads as
+        death. Measured: lease_plane_health_finding is 14 findings across ONE
+        day (a 66x consecutive-failure incident plus its RECOVERED notice), and
+        warned on arrival until this gate was added. Judged producers span
+        13-48 distinct days; every excluded one spans <= 3.
       * only those whose own median inter-finding gap is <= PRODUCER_REGULAR_GAP_H
         (i.e. they demonstrably reported on a regular cadence)
       * warn when silence exceeds both PRODUCER_FLOOR_H and
@@ -1143,7 +1152,8 @@ def check_finding_producer_live(db_url: str) -> CheckResult:
         "SELECT event_type, count(*), "
         "  round(extract(epoch FROM (now() - max(ts))) / 3600.0, 1), "
         "  round(extract(epoch FROM percentile_cont(0.5) WITHIN GROUP (ORDER BY gap))"
-        "        / 3600.0, 2) "
+        "        / 3600.0, 2), "
+        "  count(DISTINCT ts::date) "
         "FROM (SELECT event_type, ts, "
         "             ts - lag(ts) OVER (PARTITION BY event_type ORDER BY ts) AS gap "
         "      FROM audit.events "
@@ -1157,16 +1167,17 @@ def check_finding_producer_live(db_url: str) -> CheckResult:
 
     silent, live, unjudged = [], [], 0
     for row in rows:
-        if len(row) < 4:
+        if len(row) < 5:
             continue
-        producer, n_raw, silent_raw, median_raw = row[0], row[1], row[2], row[3]
+        producer, n_raw, silent_raw, median_raw, days_raw = row[:5]
         try:
             n, silent_h = int(n_raw), float(silent_raw)
-            median_h = float(median_raw)
+            median_h, active_days = float(median_raw), int(days_raw)
         except ValueError:
             unjudged += 1
             continue
-        if n < PRODUCER_MIN_N or median_h > PRODUCER_REGULAR_GAP_H:
+        if (n < PRODUCER_MIN_N or active_days < PRODUCER_MIN_ACTIVE_DAYS
+                or median_h > PRODUCER_REGULAR_GAP_H):
             unjudged += 1
             continue
         threshold = max(PRODUCER_FLOOR_H, PRODUCER_GAP_MULTIPLE * median_h)
