@@ -55,6 +55,7 @@ from src.services.tool_usage_recorder import (
     build_tool_usage_payload,
     classify_tool_result,
     record_tool_usage,
+    resolve_dispatch_bound_agent_id,
     resolve_minted_agent_id,
 )
 
@@ -176,7 +177,24 @@ def get_tool_wrapper(tool_name: str):
                 handler (where a raise would propagate to the client).
                 """
                 try:
-                    agent_id = kwargs.get("agent_id") or request_agent_id
+                    # Attribution, most-proven first:
+                    #   1. kwargs["agent_id"] — inject_identity's in-place write
+                    #      (survives, it runs BEFORE validate_params rebinds).
+                    #   2. the request-side value read at entry.
+                    #   3. the dispatch middleware's RESOLVED binding.
+                    # (3) is load-bearing, not a nicety: `dialectic` is in
+                    # inject_identity's `browsable_data_tools`, so (1) never
+                    # fires for it, and the handler's own
+                    # `arguments["agent_id"]` write lands in validate_params'
+                    # COPY. Without it a strongly-bound agent's
+                    # `request_review` audits as agent_id=NULL — countable but
+                    # not attributed, which is exactly the question #1387 was
+                    # opened to answer. Same for knowledge(action="search").
+                    agent_id = (
+                        kwargs.get("agent_id")
+                        or request_agent_id
+                        or resolve_dispatch_bound_agent_id(kwargs)
+                    )
                     if result is not None:
                         agent_id = resolve_minted_agent_id(tool_name, agent_id, result)
                     record_tool_usage(
@@ -187,6 +205,12 @@ def get_tool_wrapper(tool_name: str):
                         latency_ms=int((time.time() - start_time) * 1000),
                         session_id=session_id,
                         payload=usage_payload,
+                        # This wrapper wrote NOTHING before #1387. Adding an
+                        # audit row must not also enrol a whole transport in
+                        # the JSONL behavioural-sensor feed or start it
+                        # refreshing agent:/ presence leases — neither is a
+                        # telemetry change and neither was measured here.
+                        audit_only=True,
                     )
                 except Exception as telemetry_error:  # pragma: no cover - defensive
                     logger.debug(
