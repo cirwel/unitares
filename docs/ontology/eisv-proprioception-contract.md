@@ -177,14 +177,37 @@ sustained 100 states"; the longest single session by month is Apr 18, **May 107*
 concluding that the eligible population cannot grow — and therefore that further
 streams require new hardware — is unsound if derived from the July window.
 
-**2. Individuality of the I dimension** → **REFUTED BY CONSTRUCTION**, before any
-data existed. `cal_I` carries 50–60% of I (`src/behavioral_sensor.py:147,149`)
-and comes from `get_mean_calibration_error` (`src/mcp_handlers/updates/context.py:85`),
-which takes no `agent_id` — it averages bins from a module-level singleton keyed
-by confidence range only, and `agent_id` appears **zero** times in
-`src/calibration.py`. Every agent receives the identical scalar on the same tick,
-so a per-agent I *home* is not a measurable quantity. Leg B's I failure is
-arithmetic, not sampling noise.
+**2. Individuality of the I dimension** → **ATTENUATED BY CONSTRUCTION** (corrected
+2026-07-31; this row previously read "REFUTED BY CONSTRUCTION" and overstated).
+The mechanism is real and re-verified: `cal_I` carries 50–60% of I
+(`src/behavioral_sensor.py:147,149`) and comes from `get_mean_calibration_error`
+(`src/mcp_handlers/updates/context.py:85`), which takes no `agent_id` — it averages
+bins from a module-level singleton keyed by confidence range only, and `agent_id`
+appears **zero** times in `src/calibration.py`. Every agent receives the identical
+scalar on the same tick.
+
+But the inference previously drawn from that mechanism does not follow, on three
+independent grounds:
+
+- **A fleet-common additive term cannot move a rank statistic.** Leg B is a Spearman
+  correlation on split-half *means*. A component shared identically across agents at
+  each tick shifts every agent's mean by the same amount and leaves the ordering
+  untouched. Whatever defeated leg B's I dimension, it was not this.
+- **40–50% of I is agent-local**, so I is diluted, not constant.
+- **The remaining signal is not negligible**: the Sentinel–Vigil I gap of 0.0896 is
+  3.3× the mean within-agent SD.
+
+So the earlier claims "a per-agent I *home* is not a measurable quantity" and
+"leg B's I failure is arithmetic, not sampling noise" are **struck**. The honest
+statement is that I is a low-contrast dimension whose agent-specific component is
+diluted by a fleet-common majority term — a measurement weakness worth fixing, not
+a proof that the quantity does not exist.
+
+*Why the distinction is load-bearing rather than pedantic:* the v2 kill criterion
+permits a v3 only on a **changed measurement**. Measurement defects are therefore
+the licence key, and an overstated measurement defect is an inflated licence. An
+agent-scoped calibration feature remains a legitimate qualifying change; it should
+be justified on its actual merits, not on a refutation that the data do not support.
 
 **3. The per-agent reference does useful work** → **REFUTED as deployed.** Leg C
 compares the runtime-form EMA reference against last-value persistence at moved
