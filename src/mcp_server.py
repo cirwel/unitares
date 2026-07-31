@@ -428,27 +428,44 @@ async def main():
         from starlette.applications import Starlette  # noqa: F401 — availability probe
         from starlette.responses import JSONResponse
         from starlette.middleware.cors import CORSMiddleware
-        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
         from src.mcp_compat import lowlevel_server
+        from src.mcp_listen_config import build_streamable_session_manager
 
         # Create Streamable HTTP session manager (primary MCP transport)
         # stateless=True: any client can connect without MCP-level session management
         #   (we handle identity separately via transport signals + sticky cache)
         # mcp 1.x exposed the low-level ASGI server as `_mcp_server`; 2.x renamed
         # it to `_lowlevel_server` (lowlevel_server bridges both).
-        _shsm_kwargs = dict(
-            app=lowlevel_server(mcp),
-            stateless=True,
+        #
+        # The factory attaches the DNS-rebinding host/origin allowlists. They
+        # belong on THIS manager: /mcp is served by it (see the Mount below), not
+        # by the SDK's own streamable_http_app(), so the `transport_security=`
+        # handed to the server object above never reaches this transport — and
+        # `security_settings=None` leaves the SDK's TransportSecurityMiddleware
+        # with protection disabled. See build_streamable_session_manager().
+        _streamable_session_manager = build_streamable_session_manager(
+            lowlevel_server(mcp)
         )
-        # 1.x carried DNS-rebinding host/origin protection on FastMCP itself; 2.x
-        # dropped that constructor kwarg, so enforce it here on the manager the
-        # /mcp transport actually uses. Only add it when the server class no
-        # longer accepts `transport_security`, leaving the 1.x path untouched.
-        if not server_supports_kwarg("transport_security"):
-            _shsm_kwargs["security_settings"] = build_transport_security_settings()
-        _streamable_session_manager = StreamableHTTPSessionManager(**_shsm_kwargs)
         HAS_STREAMABLE_HTTP = True
         logger.info("Streamable HTTP transport available at /mcp")
+
+        # Make the enforced allowlist visible in the deploy log: a client that
+        # reaches the server under an un-allowlisted Host now gets rejected, and
+        # the fix is an env edit, not a code change.
+        _tsec = _streamable_session_manager.security_settings
+        if _tsec is not None and _tsec.enable_dns_rebinding_protection:
+            logger.info(
+                "/mcp Host/Origin validation ENFORCED — allowed_hosts=%s allowed_origins=%s "
+                "(add more via UNITARES_MCP_ALLOWED_HOSTS / _ORIGINS)",
+                _tsec.allowed_hosts,
+                _tsec.allowed_origins,
+            )
+        else:
+            logger.warning(
+                "/mcp Host/Origin validation DISABLED via "
+                "UNITARES_MCP_DNS_REBIND_PROTECTION — any Host/Origin is accepted%s",
+                "; server is bound to all interfaces" if args.host == "0.0.0.0" else "",
+            )
 
         # NOTE: sse_app() provides the Starlette base app. The SSE transport at /sse
         # is unused (all clients use /mcp), but sse_app() is needed because bare
