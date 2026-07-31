@@ -13,7 +13,10 @@ window.SNAPSHOT = {
     { id:"mcp_20260406_e55caaf1", name:"Vigil",      status:"healthy", coherence:0.49, risk:0.00, verdict:"proceed", eisv:{E:0.75,I:0.77,S:0.16,V:-0.02}, silence:101,   silenceThreshold:3600 },
     { id:"mcp_20260428_69a1a4f7", name:"Lumen",      status:"careful", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.31,I:0.83,S:0.15,V:-0.52}, silence:56,    silenceThreshold:3600 },
     { id:"mcp_20260407_f92dcea8", name:"Sentinel",   status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.77,I:0.68,S:0.26,V:+0.09}, silence:273,   silenceThreshold:3600 },
-    { id:"mcp_20260417_9a6681ec", name:"Steward",    status:"dark",    coherence:null, risk:null, verdict:null,      eisv:null,                          silence:32,    silenceThreshold:3600 },
+    // Steward: the honest middle — the server says ALIVE (its own vocabulary:
+    // healthy | silent | paused | archived | unknown; it never emits "dark"),
+    // but no EISV was recoverable. Exercises the alive-no-eisv branch offline.
+    { id:"mcp_20260417_9a6681ec", name:"Steward",    status:"healthy", coherence:null, risk:null, verdict:null,      eisv:null,                          silence:32,    silenceThreshold:3600 },
     { id:"mcp_20260419_chron001", name:"Chronicler", status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.81,I:0.68,S:0.22,V:+0.11}, silence:67156, silenceThreshold:172800 },
   ],
   // Bundled per-agent trajectory for the offline drill-down demo — Lumen's
@@ -40,12 +43,26 @@ window.SNAPSHOT = {
   },
   // representative until wired to live tool calls (agent/detect_stuck/knowledge/calibration)
   stats: {
-    agentsActive: 6, agentsTotal: 658, stuck: 0, discoveries: 1204, discoveriesToday: 12,
+    agentsActive: 6, agentsTotal: 658, stuck: 2, discoveries: 1204, discoveriesToday: 12,
     dialectic: 0, systemHealth: "OK", calibration: 0.71, anomalies: 1,
-    trustTiers: [
-      { tier:"strong", n:78 }, { tier:"strong", n:64 }, { tier:"strong", n:90 },
-      { tier:"medium", n:44 }, { tier:"medium", n:52 }, { tier:"weak", n:30 }, { tier:"weak", n:22 },
+    // Non-empty on purpose: `stuck: 0` never exercises the card body, so the
+    // offline page could not show (or review) the drill-down at all. Second
+    // entry is deliberately NOT in agentsList below, so the offline page also
+    // demonstrates the honest "outside the loaded window" branch.
+    stuckList: [
+      { id:"Claude_Code_20260618_a0382d76", name:"claude-dispatch_beam#0b06a37f", reason:"cadence_silence", soft:true,
+        details:"Active cadence ~10.3 min over 15 updates, then silent 742 min (> 62 min threshold). Possibly hung/abandoned mid-work — verify. Soft signal; not auto-recovered." },
+      { id:"Claude_Code_20260731_3745aa33", name:"claude-unitares#6fbef18c", reason:"critical_margin_timeout", soft:false,
+        details:"Critical margin (risk) for 12.4 minutes" },
     ],
+    // Real tier vocabulary + scope from /v1/agents/tier_distribution 2026-07-31.
+    // The pre-rename strong/medium/weak names no longer exist server-side and
+    // would resolve to no --tier-* token at all.
+    trustTiers: [
+      { tier:"verified", n:9 }, { tier:"established", n:17 },
+      { tier:"emerging", n:318 }, { tier:"provisional", n:15 },
+    ],
+    trustEarned: 359, trustFleet: 5859, trustUnknown: 5500,
   },
   // Real subset from agent(list) on 2026-06-19T20:03Z — covers residents
   // (verified/persistent), engaged-ephemerals (emerging), one-shots (unknown),
@@ -61,7 +78,7 @@ window.SNAPSHOT = {
     { agent_id:"7a424397-3f2c-4a33-8b8a-fd706c3a5ac8", label:"dashboard-redesign", status:"active", tier:"unknown", updates:2, last:"2026-06-19T20:00:50Z", purpose:"implementation", tags:["ephemeral"], event_driven:false, health:"healthy", redacted:false, metrics:{coherence:0.489,risk:0.282,verdict:"safe",E:0.729,I:0.796,S:0.142,V:-0.022} },
     { agent_id:"Claude_Code_20260619_18d9a014", label:"claude-cirwel#49251cfd", status:"active", tier:"emerging", updates:26, last:"2026-06-19T19:56:00Z", purpose:null, tags:["engaged_ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.506,risk:0.283,verdict:"safe",E:0.778,I:0.770,S:0.083,V:0.012} },
     { agent_id:"Claude_20260619_18ff4568", label:"claude_code-claude_18ff4568", status:"active", tier:"emerging", updates:21, last:"2026-06-19T17:38:01Z", purpose:"review", tags:["engaged_ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.504,risk:0.261,verdict:"safe",E:0.788,I:0.780,S:0.076,V:0.008} },
-    { agent_id:"Claude_Code_20260618_a0382d76", label:"claude-dispatch_beam#0b06a37f", status:"active", tier:"emerging", updates:12, last:"2026-06-19T14:59:09Z", purpose:"testing", tags:["engaged_ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.500,risk:0.306,verdict:"safe",E:0.776,I:0.766,S:0.088,V:-0.000} },
+    { agent_id:"Claude_Code_20260618_a0382d76", label:"claude-dispatch_beam#0b06a37f", status:"active", tier:"provisional", updates:12, last:"2026-06-19T14:59:09Z", purpose:"testing", tags:["engaged_ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.500,risk:0.306,verdict:"safe",E:0.776,I:0.766,S:0.088,V:-0.000} },
     { agent_id:"Gpt_5_5_20260619_11723403", label:"UNITARES Dogfood Pulse", status:"active", tier:"unknown", updates:1, last:"2026-06-19T18:32:35Z", purpose:"review", tags:["ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.496,risk:0.259,verdict:"safe",E:0.708,I:0.799,S:0.174,V:-0.009} },
     { agent_id:"anon_20260619_3a73a16c", label:"Euler", status:"active", tier:"unknown", updates:1, last:"2026-06-19T15:09:52Z", purpose:null, tags:["ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.499,risk:0.263,verdict:"safe",E:0.703,I:0.800,S:0.190,V:-0.003} },
     { agent_id:"anon_20260619_98e07da6", label:"Codex Weekly Release Notes", status:"active", tier:"unknown", updates:3, last:"2026-06-19T15:02:54Z", purpose:"deployment", tags:["engaged_ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.490,risk:0.296,verdict:"safe",E:0.722,I:0.797,S:0.138,V:-0.020} },
@@ -139,9 +156,13 @@ window.SNAPSHOT = {
     ],
   },
   // Real resident-panel data from /v1/{watcher,sentinel,vigil}/summary + /health/deep 2026-06-19T20:41Z.
+  // `coherence` rides along so the Agents pane applies DATA.residentLiveness
+  // (the one predicate) rather than inferring liveness from `silence != null`.
+  // Steward = alive-no-eisv; Lumen = reporting. Add a `status:"silent"` entry
+  // here to exercise the `overdue` badge offline.
   residentFreshness: {
-    Steward: { silence: 120, status: "healthy" },
-    Lumen: { silence: 95, status: "healthy" },
+    Steward: { silence: 120, status: "healthy", coherence: null },
+    Lumen: { silence: 95, status: "healthy", coherence: 0.50 },
   },
 
   residentPanels: {

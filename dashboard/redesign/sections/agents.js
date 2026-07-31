@@ -9,7 +9,19 @@
   "use strict";
 
   const $ = (s, r = document) => r.querySelector(s);
-  const TIER = { verified: 3, established: 2, emerging: 1, unknown: 0 };
+  // Ordinals per src/trajectory_identity.py + src/identity/trust_tier_routing.py.
+  // provisional and emerging BOTH sit at ordinal 1 — provisional is a lineage
+  // gate that pre-empts every other verdict, not a rung on the earning ladder —
+  // so a `T{n}` badge is STRUCTURALLY unable to tell them apart, and rendered
+  // them identically. The badge is keyed on the NAME; the ordinal moves to the
+  // tooltip. The whitelist is also the guard on the var(--tier-*) interpolation.
+  const TIER = {
+    verified:    { n: 3, why: "long-running, behaviourally consistent" },
+    established: { n: 2, why: "consistent across 50+ observations" },
+    emerging:    { n: 1, why: "identity still forming" },
+    provisional: { n: 1, why: "lineage unconfirmed — gated, cannot promote until lineage is confirmed" },
+    unknown:     { n: 0, why: "no trajectory data" },
+  };
   const num = (x, d = 2) => typeof x === "number" ? x.toFixed(d) : "—";
 
   let MODEL = { list: [], summary: {}, source: "snapshot", nowMs: 0 };
@@ -18,6 +30,10 @@
   let histChart = null;
   let histMode = "recent"; // "recent" (raw events) | "all" (full lifespan, sampled)
   const histCache = {};
+  // Deep-link intent from the Overview's Stuck card. Consume-once: applied on
+  // navigation, never re-asserted (see focus()).
+  let pendingFocus = null;
+  let focusNote = null;
 
   const BASIN_COLOR = { high: "var(--ok)", boundary: "var(--warn)", low: "var(--danger)" };
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -55,7 +71,7 @@
       <div class="panel-head" style="margin-bottom:var(--space-4)">
         <span class="dot-pip" style="background:${a.status === "paused" ? "var(--warn)" : st.level === "dead" ? "var(--faint)" : "var(--ok)"}"></span>
         <h2 style="font-family:var(--font-display)">${a.label ? esc(a.label) : "anon"}</h2>
-        ${tierBadge(a.tier)} ${basin}
+        ${tierBadge(a.tier, true)} ${basin}
         <span class="verdict ${verdictClass(m.verdict) === "ok" ? "" : verdictClass(m.verdict) === "warn" ? "warn" : "danger"}"><span class="pip"></span><span>${esc(m.verdict || "—")}</span></span>
         <span class="spring"></span>
         <button class="theme-toggle" id="ag-detail-close">✕ close</button>
@@ -174,15 +190,37 @@
     return "danger";
   }
 
-  function tierBadge(tier) {
-    const t = TIER[tier] ?? 0;
-    return `<span class="tag" title="Trust tier ${t}: ${tier}">T${t}</span>`;
+  // `always` = detail panel (state every agent's tier, even unknown). Rows omit
+  // unknown/absent: ~77 of 100 live rows carry no earned tier, and a badge on
+  // all of them buries the ~23 that mean something.
+  function tierBadge(tier, always) {
+    const key = Object.prototype.hasOwnProperty.call(TIER, tier) ? tier : null;
+    if (!key || key === "unknown") {
+      if (!always) return "";
+      const known = key === "unknown";
+      return `<span class="tag tier" style="--tier:var(--tier-unknown)"`
+        + ` title="Trust tier 0: ${known ? "unknown — " + TIER.unknown.why : "not computed — server returned no trust_tier"}">`
+        + `<i></i>${known ? "unknown" : "no tier"}</span>`;
+    }
+    const t = TIER[key];
+    return `<span class="tag tier" style="--tier:var(--tier-${key})"`
+      + ` title="Trust tier ${t.n}: ${key} — ${t.why}"><i></i>${key}</span>`;
   }
 
   function rowBadges(a, st) {
     const out = [];
-    if (a.leaseAnchored) out.push(`<span class="tag" title="in-process resident — liveness from its lease-plane heartbeat, not check-in rows">lease heartbeat</span>`);
+    // leaseOverdue before leaseAnchored: a lease-anchored resident whose SERVER
+    // status says it is past its check-in threshold used to render as calmly
+    // alive here (synthesised `last` → staleness "fresh" → green pip → "lease
+    // heartbeat") while the Overview flagged it. Same predicate both places now.
+    if (a.leaseOverdue) out.push(`<span class="tag warn" title="lease-anchored resident past its check-in threshold (server status: ${esc(a.leaseStatus || "down")})">overdue</span>`);
+    else if (a.leaseAnchored) out.push(`<span class="tag" title="in-process resident — liveness from its lease-plane heartbeat, not check-in rows">lease heartbeat</span>`);
     else if (a.event_driven) out.push(`<span class="tag" title="event-driven resident — silence is not a liveness signal">event</span>`);
+    // A stuck reason is a SPECIFIC claim; it replaces the generic "inactive"
+    // rather than sitting beside it. They are different concepts and stay
+    // separate: `inactive` is a threshold on wall-clock age; `stuck` means the
+    // agent was in a rhythm or state implying it should have spoken and didn't.
+    else if (a.stuckReason) out.push(`<span class="tag warn" title="${esc(a.stuckDetails || "")}">${esc(a.stuckReason)}</span>`);
     else if (st.level === "stale" || st.level === "dead") out.push(`<span class="tag warn">inactive</span>`);
     if (a.superseded) out.push(`<span class="tag warn" title="${a.lifecycleReason || "superseded"}">superseded</span>`);
     if (a.parent) out.push(`<span class="tag" title="lineage parent ${a.parent}">↑ lineage</span>`);
@@ -279,7 +317,12 @@
          ${never.length ? `<table class="tbl" style="margin-top:var(--space-3)">${head}<tbody>${never.slice(0, 30).map(tr).join("")}</tbody></table>`
             : `<p class="empty">Not in this snapshot subset — ${sm.neverParticipated} fleet-wide.</p>`}</details>` : "";
 
-    mount.innerHTML =
+    const note = focusNote
+      ? `<div class="attn-band" style="margin-bottom:var(--space-3)"><span class="glyph">·</span><span>`
+        + `<b>${esc(focusNote)}</b> is flagged stuck but is not in the loaded window`
+        + `${sm.total ? ` (showing ${MODEL.list.length} of ${sm.total})` : ""} — search for it above.</span></div>`
+      : "";
+    mount.innerHTML = note +
       `<div style="display:flex;gap:var(--space-5);margin-bottom:var(--space-3);font-size:var(--text-xs);color:var(--muted)">
          <span><b style="color:var(--ink)">${sm.total ?? rows.length}</b> total</span>
          <span><b style="color:var(--ink)">${sm.active ?? "—"}</b> active</span>
@@ -308,9 +351,37 @@
   function select(id) {
     if (id && id !== selectedId) histMode = "recent"; // new agent → default to recent events
     selectedId = (id && id === selectedId) ? null : id; // click again to close
+    focusNote = null;
     render();
     const d = document.getElementById("ag-detail");
     if (d && d.scrollIntoView) d.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  // ── deep-link focus (Overview Stuck card → one agent) ──────────────────────
+  // Applying intent inside load() alone would be broken by construction:
+  // app.html's lazyLoad guards on loaded[id], so load() runs EXACTLY ONCE per
+  // page load. A second click from the Overview would silently no-op. So focus()
+  // works both before and after the section has loaded, and clears itself —
+  // "apply once on navigation", never "re-assert on every render".
+  function focus(id) {
+    if (!id) return;
+    pendingFocus = id;
+    // Defer a tick so a hash-driven pane switch (and its lazyLoad) lands first
+    // and scrollIntoView has a laid-out target.
+    setTimeout(flushFocus, 0);
+  }
+  function flushFocus() {
+    const id = pendingFocus;
+    if (!id) return;
+    if (!MODEL.list.length) return; // not loaded yet — load() flushes after render
+    pendingFocus = null;
+    const hit = MODEL.list.find((a) => a.agent_id === id);
+    if (hit) { select(id); return; }
+    // Honest failure. agent(action=list) is truncated to 100 rows server-side
+    // (serialization.py) out of ~457, so a flagged agent can genuinely be
+    // outside the loaded window. Say so rather than opening nothing.
+    focusNote = id;
+    renderResults();
   }
 
   async function load() {
@@ -327,14 +398,31 @@
       MODEL.list.forEach((a) => {
         const f = a.label && fresh[a.label];
         if (f && (a.updates || 0) === 0 && typeof f.silence === "number") {
-          a.leaseAnchored = true;
+          // `f.status` used to be stored and never read: an overdue resident
+          // still got leaseAnchored=true and a synthesised fresh `last`. Route
+          // through the one predicate so this pane and the Overview agree.
+          const liveness = DATA.residentLiveness(f);
+          a.leaseAnchored = liveness !== "down";
+          a.leaseOverdue = liveness === "down";
           a.last = new Date(MODEL.nowMs - f.silence * 1000).toISOString();
           a.leaseStatus = f.status;
         }
       });
     } catch { /* freshness is an enhancement — the pane renders without it */ }
+    // Stuck reasons, joined on the SAME redacted handle the list emits. The
+    // registry UUID detect_stuck_agents keys on is never visible to this client.
+    try {
+      const stuck = (await DATA.stuckAgents()).data || [];
+      const byId = {};
+      stuck.forEach((s) => { if (s.id) byId[s.id] = s; });
+      MODEL.list.forEach((a) => {
+        const s = byId[a.agent_id];
+        if (s) { a.stuckReason = s.reason; a.stuckDetails = s.details; }
+      });
+    } catch { /* stuck enrichment is optional — the table renders without it */ }
     render();
+    flushFocus(); // a deep-link that arrived before this section existed
   }
 
-  window.Agents = { load, select };
+  window.Agents = { load, select, focus };
 })();
