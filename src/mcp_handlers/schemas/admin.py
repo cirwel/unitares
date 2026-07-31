@@ -138,7 +138,24 @@ class DebugRequestContextParams(AgentIdentityMixin):
 
 
 class ConfigParams(AgentIdentityMixin):
-    """Parameters for config"""
+    """Unified threshold configuration operations."""
+    action: Literal["get", "set"] = Field(
+        "get",
+        description="Operation to perform",
+    )
+    thresholds: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Threshold name-to-value mapping for action=set. Valid keys: "
+            "risk_approve_threshold, risk_revise_threshold, "
+            "coherence_critical_threshold, void_threshold_initial"
+        ),
+    )
+    validate_params: bool = Field(
+        True,
+        alias="validate",
+        description="Validate threshold values for action=set",
+    )
 
 
 class AdminParams(AgentIdentityMixin):
@@ -203,5 +220,3 @@ class AdminParams(AgentIdentityMixin):
             elif self.action == "telemetry":
                 self.window_hours = 24.0
         return self
-
-
