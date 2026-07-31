@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Doctor-findings escalator.
+
+    Runs unitares_doctor's operator-mode checks hourly and posts one
+    fingerprinted finding per failing check, so the fleet's own detectors stop
+    depending on a human remembering to run them.
+
+    Why it exists: the doctor's live checks ran NOWHERE. No launchd job invoked
+    it and CI imports it only for check_dockerfile_pinned_tags, a static check.
+    Detectors for silent failure were themselves silent — Sentinel was
+    governance-dark 24h from 2026-07-29 and Watcher was dead a month, and checks
+    that would have caught both already existed.
+
+    THIS DOCTOR NEVER HEALS. It diagnoses, escalates, and closes its own finding
+    when the check returns to PASS.
+
+    TWO ENVIRONMENT REQUIREMENTS, both load-bearing — do not drop them:
+
+      PATH must include the Homebrew bin dir. Nearly every operator check is
+      DB-backed, and the doctor's _psql_row returns None — SKIP, not FAIL —
+      when `psql` is absent. launchd's minimal PATH omits /opt/homebrew/bin, so
+      without this the entire sweep SKIPs and reports "all operator checks
+      pass" forever. The script now escalates doctor_sweep_blind when most
+      checks skip, but fixing PATH is the actual cure; the guard is the net.
+
+      python3 is PINNED to the framework build. launchd's minimal PATH resolves
+      python3 to /usr/bin/python3 (3.9.6) while the repo targets 3.12+.
+
+    Before installing, substitute the placeholders:
+      __UNITARES_ROOT__ -> absolute path to the deploy checkout
+      PYTHON_BIN            -> absolute path to a 3.12+ interpreter
+
+    Example:
+      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
+          -e "s|PYTHON_BIN|$(which python3)|g" \
+          scripts/ops/com.unitares.doctor-findings.plist.template \
+          > ~/Library/LaunchAgents/com.unitares.doctor-findings.plist
+      launchctl load ~/Library/LaunchAgents/com.unitares.doctor-findings.plist
+
+    Verify it can actually see the system (must NOT say "all operator checks
+    pass" if the DB is reachable, and must NOT report doctor_sweep_blind):
+      PYTHON_BIN scripts/ops/doctor_findings.py --dry-run
+
+    Optional env:
+      DOCTOR_FINDINGS_COOLDOWN  re-alert window per (check, status)
+                                (default 21600 = 6h)
+      DOCTOR_FINDINGS_SKIP      comma-separated checks to leave to other
+                                watchdogs (default http_listening,http_health,pid_file)
+      DOCTOR_FINDINGS_STATE     open/resolved state file
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.unitares.doctor-findings</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>PYTHON_BIN</string>
+        <string>__UNITARES_ROOT__/scripts/ops/doctor_findings.py</string>
+    </array>
+    <key>WorkingDirectory</key><string>__UNITARES_ROOT__</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>StartInterval</key><integer>3600</integer>
+    <key>RunAtLoad</key><false/>
+    <key>ProcessType</key><string>Background</string>
+    <key>StandardOutPath</key><string>__UNITARES_ROOT__/data/logs/doctor-findings.log</string>
+    <key>StandardErrorPath</key><string>__UNITARES_ROOT__/data/logs/doctor-findings.err</string>
+</dict>
+</plist>
