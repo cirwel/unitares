@@ -209,8 +209,9 @@ def test_streamable_manager_carries_dns_rebinding_protection(monkeypatch):
 
     assert settings is not None
     assert settings.enable_dns_rebinding_protection is True
-    assert "gov.example.org" in settings.allowed_hosts
-    assert "127.0.0.1:*" in settings.allowed_hosts
+    # set-superset rather than `"host" in list` — the latter reads to CodeQL as
+    # substring sanitization of a URL (py/incomplete-url-substring-sanitization).
+    assert set(settings.allowed_hosts).issuperset({"gov.example.org", "127.0.0.1:*"})
 
 
 def test_dns_rebinding_protection_has_an_operator_kill_switch(monkeypatch):
