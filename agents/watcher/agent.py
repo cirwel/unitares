@@ -79,6 +79,7 @@ from agents.watcher._util import (
     log,
     migrate_legacy_watcher_state,
     repo_relative_path,
+    watcher_state_dir,
 )
 from agents.common.log import trim_log as _common_trim_log
 from agents.common.findings import post_finding
@@ -928,6 +929,132 @@ def call_ollama(prompt: str, model: str, timeout: int) -> dict[str, Any]:
 def call_model(prompt: str, model: str = DEFAULT_MODEL, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
     """Entry point used by scan_file; thin wrapper over call_ollama."""
     return call_ollama(prompt, model, timeout)
+
+
+# ---------------------------------------------------------------------------
+# Detector capability — a dead detector must announce itself
+# ---------------------------------------------------------------------------
+#
+# A model call that fails returns no findings, and no findings is exactly what a
+# healthy scan of clean code returns. That symmetry is how the 2026-06-29 →
+# 07-29 outage stayed invisible: #1276 pointed the default at an unpulled ollama
+# tag, every hook-fired scan died with HTTP 404 into ~/Library/Logs (420 of
+# them), and the only reader of that log was nobody. The hook kept firing and
+# the pattern floor kept updating, so every liveness indicator stayed green.
+#
+# Failing loudly into a log is not enough — the log has to be read. Crossing the
+# threshold posts a finding, which is the one channel that reaches a human
+# (governance event stream -> #residents). Deduped server-side by fingerprint,
+# so a persistent misconfiguration announces itself once, not once per edit.
+
+MODEL_FAILURE_ESCALATE_AFTER = int(os.environ.get("WATCHER_MODEL_FAILURE_ESCALATE_AFTER", "3"))
+_MODEL_FAILURE_STATE = "model_failures.json"
+
+
+def _model_failure_path() -> Path:
+    return watcher_state_dir() / _MODEL_FAILURE_STATE
+
+
+def _classify_model_failure(exc: Exception) -> str:
+    """Coarse failure class, used for the dedup fingerprint and the message.
+
+    The two live modes are distinct problems with distinct fixes: a tag that is
+    not pulled (404, instant) versus a model too slow for the timeout budget.
+    """
+    text = str(exc).lower()
+    if "404" in text or "not found" in text:
+        return "model_not_found"
+    if "timed out" in text or isinstance(exc, TimeoutError):
+        return "timeout"
+    if "connection" in text or "refused" in text:
+        return "unreachable"
+    return "error"
+
+
+def _record_model_failure(exc: Exception) -> None:
+    """Count consecutive model-call failures; escalate once at the threshold.
+
+    Best-effort throughout — a detector that cannot report its own death must
+    still not crash the scan that discovered it.
+    """
+    failure_class = _classify_model_failure(exc)
+    path = _model_failure_path()
+    try:
+        state = json.loads(path.read_text())
+        if not isinstance(state, dict):
+            state = {}
+    except Exception:
+        state = {}
+
+    if state.get("class") != failure_class or state.get("model") != DEFAULT_MODEL:
+        state = {"class": failure_class, "model": DEFAULT_MODEL, "count": 0, "escalated": False}
+    state["count"] = int(state.get("count", 0)) + 1
+    state["last_error"] = str(exc)[:300]
+
+    if state["count"] >= MODEL_FAILURE_ESCALATE_AFTER and not state.get("escalated"):
+        state["escalated"] = _escalate_model_failure(failure_class, state["last_error"], state["count"])
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state))
+    except Exception as e:  # noqa: BLE001 — state I/O must not break the scan
+        log(f"could not persist model-failure state: {e}", "error")
+
+
+def _clear_model_failures() -> None:
+    """Reset the counter after a successful model call."""
+    path = _model_failure_path()
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _escalate_model_failure(failure_class: str, last_error: str, count: int) -> bool:
+    """Post a capability finding. Returns True if it was accepted (or deduped)."""
+    hints = {
+        "model_not_found": (
+            f"WATCHER_MODEL={DEFAULT_MODEL} is not present in ollama — pull the tag "
+            "or point WATCHER_MODEL at an installed one, then confirm with "
+            "`agent.py --self-test`."
+        ),
+        "timeout": (
+            f"{DEFAULT_MODEL} did not answer within WATCHER_TIMEOUT={DEFAULT_TIMEOUT}s at "
+            "scan size. Raise the budget or use a smaller model; HTTP 200 on a toy "
+            "prompt does NOT mean the real prompt fits."
+        ),
+        "unreachable": "The ollama endpoint is not reachable — is the service running?",
+        "error": "The detector's model call is failing; see ~/Library/Logs/unitares-watcher.log.",
+    }
+    identity = get_watcher_identity()
+    if not identity or not identity.get("agent_uuid"):
+        log("detector down but no governance identity — cannot escalate", "error")
+        return False
+    try:
+        post_finding(
+            event_type="watcher_capability_finding",
+            severity="high",
+            message=(
+                f"Watcher detector down ({failure_class}): {count} consecutive model-call "
+                f"failures. No scan since has produced findings. {hints[failure_class]}"
+            ),
+            agent_id=identity["agent_uuid"],
+            agent_name="Watcher",
+            fingerprint=f"watcher-capability:{failure_class}:{DEFAULT_MODEL}",
+            extra={
+                "failure_class": failure_class,
+                "model": DEFAULT_MODEL,
+                "timeout_s": DEFAULT_TIMEOUT,
+                "consecutive_failures": count,
+                "last_error": last_error,
+            },
+        )
+        log(f"escalated detector-down finding ({failure_class})", "error")
+        return True
+    except Exception as e:  # noqa: BLE001 — post_finding shouldn't raise, but never trust that here
+        log(f"could not escalate detector-down finding: {e}", "error")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -2120,7 +2247,9 @@ def scan_file(
         result = call_model(prompt)
     except Exception as e:
         log(f"model call failed: {e}", "error")
+        _record_model_failure(e)
         return []
+    _clear_model_failures()
 
     parsed = parse_findings(
         result["text"], file_path, result.get("model_used", DEFAULT_MODEL), region_start
@@ -2189,7 +2318,9 @@ def review_file(
         result = call_model(prompt)
     except Exception as e:
         log(f"model call failed: {e}", "error")
+        _record_model_failure(e)
         return []
+    _clear_model_failures()
 
     raw_text = result["text"]
     # Parse the JSON — review mode returns a simpler schema
