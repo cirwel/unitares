@@ -394,6 +394,11 @@
 
     operatorToken,
 
+    // Read bearer, exposed so ws.js can put it in the /ws/eisv query string —
+    // a browser cannot set headers on a WebSocket. Same credential authFetch
+    // sends; exported rather than duplicated so the two cannot drift.
+    apiToken: token,
+
     // Daily adjudication queue + falsifier progress. Small on purpose —
     // verdicts on separate days beat batches (cluster statistics).
     async adjudicationQueue() {
