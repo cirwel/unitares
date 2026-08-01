@@ -22,7 +22,8 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
     FleetAnalysis,
     FleetState,
     GovernanceCheckin,
-    LeaseAdvisory
+    LeaseAdvisory,
+    LeaseStarvation
   }
 
   @default_interval_ms 300_000
@@ -225,6 +226,27 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
         Application.get_env(:unitares_sentinel, :analysis_jitter_ms, @default_jitter_ms)
       )
 
+    # The emitter's lease surface is a property of the emitter, not of whatever
+    # the caller remembered to pass. `LeaseAdvisory.acquire_cycle/1` defaults to
+    # ForcedReleasePoller's `resident:/sentinel_cycle`, so an emitter started
+    # without `lease_opts[:surface_id]` contended with the poller on the lease
+    # plane *and* collided with it inside `LeaseStarvation` — same derived
+    # sidecar path (two writers, one file) and same `fingerprint_extra` (one
+    # resident's outage dedupping into the other's). `application.ex` documents
+    # the distinct-surface invariant (KG 2026-05-08T02:14:43.822544+00:00);
+    # defaulting here makes it structural instead of a property of one config
+    # line that a future caller can omit.
+    #
+    # NOT `Keyword.put_new/3`: that keys on the key being PRESENT, so an explicit
+    # `lease_opts: [surface_id: nil]` walked past it into the `fetch!` below,
+    # reached `LeaseStarvation.require_surface_id/1`, and raised inside `init/1`
+    # — a supervisor restart loop from a mistyped option. The defense is
+    # value-shaped and lives with the requirement.
+    lease_opts =
+      opts
+      |> Keyword.get(:lease_opts, [])
+      |> LeaseStarvation.put_default_surface_id("resident:/sentinel_fleet_emit")
+
     state = %{
       opts:
         opts
@@ -251,7 +273,7 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
           :lease_advisory,
           Application.get_env(:unitares_sentinel, :lease_advisory_enabled, true)
         ),
-      lease_opts: Keyword.get(opts, :lease_opts, []),
+      lease_opts: lease_opts,
       cycle_count: Keyword.get(opts, :cycle_count, 0),
       running?: false,
       last_result: nil,
@@ -260,6 +282,26 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
       # Re-armed when a check-in succeeds (episode cleared).
       recovery_blocked_episode?: false
     }
+
+    # Lease-starvation tracker (2026-07-31 immortal-lease incident). Merged into
+    # state rather than nested so `%{state | lease_blocked_*}` updates work and
+    # `UnitaresSentinel.LeaseStarvation` never has to know this GenServer's
+    # shape. `LeaseStarvation.new/1` reloads a persisted episode: a resident that
+    # was restarted mid-outage (crash loop, or an operator running
+    # `launchctl kickstart -k` because "sentinel looks stuck") must NOT get a
+    # fresh threshold's worth of silence.
+    state =
+      Map.merge(
+        state,
+        LeaseStarvation.new(
+          resident: "FleetFindingEmitter",
+          # `fetch!`, not `get`: the surface is resolved above, and a nil here
+          # would put both residents on one sidecar file and one fingerprint.
+          surface_id: Keyword.fetch!(lease_opts, :surface_id),
+          alert_after_seconds: Keyword.get(opts, :lease_blocked_alert_after_seconds),
+          state_path: Keyword.get(opts, :lease_blocked_state_path, :derive)
+        )
+      )
 
     Process.send_after(self(), :tick, initial_delay_ms + sample_jitter(jitter_ms))
     {:ok, state}
@@ -277,10 +319,34 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
     lease = acquire_runtime_lease(state)
 
     if lease_enforcement_blocked?(lease) do
-      Logger.warning("FleetFindingEmitter: tick skipped by lease enforcement")
+      # 2026-07-31: this branch used to log and reschedule, nothing more. It
+      # emitted "tick skipped by lease enforcement" by the thousand while every
+      # liveness signal (launchctl, live PID, no crash) read healthy. Count the
+      # episode and self-report it.
+      state =
+        state
+        |> LeaseStarvation.record_blocked(lease)
+        |> LeaseStarvation.maybe_emit(starvation_opts(state))
+
+      Logger.warning(
+        "FleetFindingEmitter: tick skipped by lease enforcement " <>
+          "(blocked_ticks=#{state.lease_blocked_streak} " <>
+          "alert_after=#{state.lease_blocked_alert_after_seconds}s)"
+      )
+
       schedule_next_tick(state)
       {:noreply, %{state | running?: false}}
     else
+      # The lease was granted (or advisory is off / the surface is unenforced):
+      # whatever happens below, this tick was NOT starved. Clear HERE, above the
+      # `try`, so the {:ok, _} arm, the :timeout arm and the task-exit path share
+      # one reset and cannot drift apart. A runtime timeout means the lease WAS
+      # acquired and the work was slow — a different failure with its own
+      # warning; feeding it into the starvation counter would make the finding
+      # lie about its own cause and point the operator at a force-release that
+      # would not help.
+      state = LeaseStarvation.clear(state, starvation_opts(state))
+
       try do
         case await_runtime_tick(state) do
           {:ok, result} ->
@@ -379,6 +445,22 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
 
   defp schedule_next_tick(state) do
     Process.send_after(self(), :tick, state.interval_ms + sample_jitter(state.jitter_ms))
+  end
+
+  # Mirrors the identity resolution in `handle_checkin_pause/3` so a starvation
+  # self-finding fingerprints on the same agent the rest of this resident's
+  # findings use.
+  defp starvation_opts(%{opts: opts}) do
+    findings_opts =
+      opts
+      |> Keyword.get(:findings_opts, [])
+      |> Keyword.put_new(:agent_id, self_agent_id(opts))
+      |> Keyword.put_new(:agent_name, agent_name(opts))
+
+    [
+      emit_findings?: Keyword.get(opts, :emit_findings, true),
+      findings_opts: findings_opts
+    ]
   end
 
   defp acquire_runtime_lease(%{lease_advisory?: false}),

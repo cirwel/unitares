@@ -68,7 +68,22 @@ defmodule UnitaresSentinel.SupervisionRestartTest do
         name: :"sup_#{System.unique_integer([:positive])}"
       )
 
-    on_exit(fn -> if Process.alive?(sup), do: Supervisor.stop(sup) end)
+    # `Supervisor.start_link/2` links `sup` to the TEST process, and ExUnit runs
+    # `on_exit` from a SEPARATE process after the test process has exited — so
+    # the exit signal that tears `sup` down races this callback. `Process.alive?/1`
+    # is a TOCTOU check, not a guard: the supervisor can die between the check
+    # and the stop, and then the TEARDOWN fails while every assertion in the test
+    # passed. Latent since the test was written; it only started firing (~3 runs
+    # in 8) when the suite grew enough to change the scheduler load. Verified by
+    # padding the unmodified 154b0a6d tree with 27 trivial tests, which
+    # reproduces it there too.
+    on_exit(fn ->
+      try do
+        Supervisor.stop(sup)
+      catch
+        :exit, _ -> :ok
+      end
+    end)
 
     pid_before = Process.whereis(poller_name)
     assert is_pid(pid_before) and Process.alive?(pid_before)

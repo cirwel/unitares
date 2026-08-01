@@ -45,6 +45,31 @@ defmodule UnitaresSentinel.Findings do
   end
 
   @doc """
+  POST one finding and report *why* it did or did not land.
+
+  `post_finding/2` collapses network error, non-200 and server-side dedup into
+  a single `false`. That is fine for fire-and-forget fleet findings, but a
+  caller that self-limits its own re-emission (see
+  `UnitaresSentinel.LeaseStarvation`) must distinguish "delivered" from "lost":
+  a lost POST has to be retried on the next tick, while a deduped POST is
+  already recorded server-side and retrying it would be a storm against an
+  endpoint that will keep answering `deduped: true`.
+
+  This matters most in exactly the condition the starvation finding exists for:
+  gov-MCP being unreachable (the documented jetsam 502 window) is *correlated*
+  with residents starving, so the densest and most valuable early alerts are the
+  ones most likely to be dropped. `src/http_api.py:2676` already puts
+  `{"success": true, "deduped": true}` on the wire; `accepted?/1` just threw it
+  away. 2026-07-31 immortal-lease incident.
+  """
+  @spec post_finding_result(map(), keyword()) :: :accepted | :deduped | {:error, term()}
+  def post_finding_result(finding, opts \\ []) when is_map(finding) do
+    finding
+    |> finding_body(opts)
+    |> post_json_result(opts)
+  end
+
+  @doc """
   POST a one-shot build-info finding (`sentinel_build_finding`, severity info)
   so the alert stream records exactly which commit the running node booted from
   — the queryable answer to "is the merged fix actually live?".
@@ -97,16 +122,39 @@ defmodule UnitaresSentinel.Findings do
     violation_class = map_get(finding, :violation_class, "")
     agent_id = agent_id(opts)
 
-    %{
+    # `:fingerprint_extra` appends discriminators to the legacy 4-part key.
+    # Empty by default, so every pre-existing caller's fingerprint is
+    # byte-identical (pinned by the golden `da9b8e957ab6971e` in findings_test).
+    # Needed because two residents on ONE agent_id can starve on two different
+    # lease surfaces, and keying only on [type, class, agent_id] would silently
+    # dedup one resident's outage into the other's. 2026-07-31 incident.
+    fingerprint_extra = map_get(finding, :fingerprint_extra, [])
+
+    base = %{
       "type" => Keyword.get(opts, :event_type, "sentinel_finding"),
       "severity" => map_fetch!(finding, :severity),
       "message" => map_fetch!(finding, :summary),
       "agent_id" => agent_id,
       "agent_name" => agent_name(opts),
-      "fingerprint" => compute_fingerprint(["sentinel", finding_type, violation_class, agent_id]),
+      "fingerprint" =>
+        compute_fingerprint(
+          ["sentinel", finding_type, violation_class, agent_id] ++ fingerprint_extra
+        ),
       "violation_class" => violation_class,
       "finding_type" => finding_type
     }
+
+    # Same extra-merge contract as `alarm_body/2`: caller context rides along,
+    # base keys always win. `change_token` flips the governance detector
+    # (`src/event_detector.py` `record_event`) from 30-minute fingerprint dedup
+    # to time-independent emit-on-change, which is what lets a resident own its
+    # own re-emission schedule instead of fighting a server-side window it
+    # cannot see.
+    finding
+    |> map_get(:extra, %{})
+    |> stringify_keys()
+    |> Map.merge(base, fn _key, _extra_value, base_value -> base_value end)
+    |> maybe_put("change_token", map_get(finding, :change_token, nil))
   end
 
   @doc false
@@ -123,30 +171,36 @@ defmodule UnitaresSentinel.Findings do
   @doc false
   @spec post_json(map(), keyword()) :: boolean()
   def post_json(body, opts \\ []) when is_map(body) do
+    post_json_result(body, opts) == :accepted
+  end
+
+  @doc false
+  @spec post_json_result(map(), keyword()) :: :accepted | :deduped | {:error, term()}
+  def post_json_result(body, opts \\ []) when is_map(body) do
     http_post = Keyword.get(opts, :http_post, &finch_post/4)
     url = Keyword.get(opts, :url, findings_url())
     timeout_ms = Keyword.get(opts, :timeout_ms, findings_timeout_ms())
 
     case http_post.(url, body, headers(), timeout_ms) do
       {:ok, 200, response_body} ->
-        accepted?(response_body)
+        classify_response(response_body)
 
       {:ok, status, _response_body} ->
         Logger.debug("UnitaresSentinel.Findings.post_json non-200: #{inspect(status)}")
-        false
+        {:error, {:http_status, status}}
 
       {:error, reason} ->
         Logger.debug("UnitaresSentinel.Findings.post_json failed: #{inspect(reason)}")
-        false
+        {:error, reason}
     end
   rescue
     e ->
       Logger.debug("UnitaresSentinel.Findings.post_json raised: #{inspect(e)}")
-      false
+      {:error, {:raised, e}}
   catch
     :exit, reason ->
       Logger.debug("UnitaresSentinel.Findings.post_json exited: #{inspect(reason)}")
-      false
+      {:error, {:exited, reason}}
   end
 
   defp finch_post(url, body, headers, timeout_ms) do
@@ -162,10 +216,20 @@ defmodule UnitaresSentinel.Findings do
     end
   end
 
-  defp accepted?(response_body) when is_binary(response_body) do
+  # `deduped: true` is a DELIVERY, not a failure: the governance detector saw
+  # this exact condition already. Callers that self-limit re-emission must not
+  # retry it. `post_json/2` keeps the historical boolean contract by treating
+  # anything other than `:accepted` as false.
+  defp classify_response(response_body) when is_binary(response_body) do
     case Jason.decode(response_body) do
-      {:ok, %{"success" => true} = decoded} -> not Map.get(decoded, "deduped", false)
-      _ -> false
+      {:ok, %{"success" => true} = decoded} ->
+        if Map.get(decoded, "deduped", false), do: :deduped, else: :accepted
+
+      {:ok, decoded} ->
+        {:error, {:rejected, decoded}}
+
+      _ ->
+        {:error, :undecodable_response}
     end
   end
 
@@ -217,4 +281,7 @@ defmodule UnitaresSentinel.Findings do
   defp map_get(map, key, default) when is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key), default)
   end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

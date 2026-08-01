@@ -211,6 +211,69 @@ defmodule UnitaresSentinel.ForcedReleasePollerStructureTest do
     GenServer.stop(pid)
   end
 
+  # 2026-07-31 immortal-lease incident. The starvation reset sits ABOVE the
+  # `try` in `handle_info(:tick, state)`, so the {:ok, _} arm and the :timeout
+  # arm cannot drift apart. This pins the granted-lease path end to end, through
+  # `run_runtime_tick/1`'s `%{state | ...}` (which must carry the cleared
+  # tracker into `next_state`) — hence the real DB. The blocked side needs no DB
+  # and lives in `forced_release_poller_starvation_test.exs`.
+  @tag :db
+  test "poller clears the lease-blocked episode on a tick that acquires the lease" do
+    parent = self()
+    lease_id = "88888888-8888-8888-8888-888888888888"
+
+    lease_http_post = fn url, body, _headers, _timeout_ms ->
+      cond do
+        String.ends_with?(url, "/v1/lease/acquire") ->
+          {:ok, 200, Jason.encode!(%{ok: true, idempotent: false, lease: %{lease_id: lease_id}})}
+
+        String.ends_with?(url, "/v1/lease/release") ->
+          send(parent, {:lease_release, body})
+          {:ok, 200, ~s({"ok":true})}
+      end
+    end
+
+    {:ok, pid} =
+      GenServer.start(
+        ForcedReleasePoller,
+        [
+          db: UnitaresSentinel.DB,
+          interval_ms: 60_000,
+          initial_delay_ms: 60_000,
+          jitter_ms: 0,
+          tick_timeout_ms: 5_000,
+          lease_advisory: true,
+          emit_findings: false,
+          lease_blocked_state_path: false,
+          lease_opts: [
+            base_url: "http://lease.test",
+            bearer_token: "test-token",
+            http_post: lease_http_post
+          ]
+        ],
+        name: :"test_starvation_reset_#{System.unique_integer([:positive])}"
+      )
+
+    :sys.replace_state(pid, fn state ->
+      %{
+        state
+        | lease_blocked_streak: 9,
+          lease_blocked_since: DateTime.add(DateTime.utc_now(), -3_600, :second),
+          lease_blocked_last_emitted_multiple: 2
+      }
+    end)
+
+    send(pid, :tick)
+    assert_receive {:lease_release, _}, 5_000
+
+    state = :sys.get_state(pid)
+    assert state.lease_blocked_streak == 0
+    assert state.lease_blocked_since == nil
+    assert state.lease_blocked_last_emitted_multiple == 0
+
+    GenServer.stop(pid)
+  end
+
   test "GenServer skips :tick when running? is true (mailbox guard)" do
     # Verifier-confirmed (PR #378 council): deleting the
     # `handle_info(:tick, %{running?: true})` head causes this test to fail
