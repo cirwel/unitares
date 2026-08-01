@@ -46,19 +46,134 @@
 --      never from bare `current_date`. After this a host in ANY session
 --      TimeZone computes the same set of months.
 --   3. Also create the PREVIOUS month, not just current + next.
+--   4. Retention: the drop_old_*_partitions() functions compare partition
+--      upper bounds as TIMESTAMPTZ instants instead of re-parsing a DATE out
+--      of session-rendered text. This removes the last `current_date` in the
+--      partition code. Detail and measurements under "RETENTION PATH" below.
 --
 -- WHY UTC, AND WHY NOW:
 --   * 045's own header already named this as the intended end state
 --     ("operator-gated detach/reattach normalization to uniform UTC bounds").
 --     The Denver pin was never the destination; it was continuity scaffolding
 --     for the live 2026-06/07 partitions that already had Denver bounds.
---   * A partition scheme keyed to where a human happens to live is a latent
---     defect. The operator does not intend to remain in Mountain Time
---     indefinitely; UTC removes the coupling permanently.
 --   * UTC has no DST, so month edges stop moving an hour in absolute time
 --     twice a year.
---   * CI already runs UTC. Aligning production to CI removes the environment
---     divergence that produced this incident in the first place.
+--   * THE STRONGEST ARGUMENT, stated plainly: a partition scheme keyed to
+--     where a human happens to live is a latent defect, and the operator does
+--     not intend to remain in Mountain Time. Had the host timezone changed
+--     while the bounds stayed Denver-pinned, the two halves would have
+--     disagreed IN PRODUCTION — the same failure CI hit, but against live
+--     audit data. 055 removes that exposure permanently by making both halves
+--     session-independent, instead of re-arming it at the next move.
+--
+-- WHAT THIS MIGRATION DOES *NOT* CHANGE, and a correction to the record:
+--   Production Postgres runs `timezone = 'America/Denver'`
+--   (postgresql.conf) and REMAINS so after 055. Only the partition BOUNDS
+--   move to UTC. An earlier draft of this header — and the commit message,
+--   which cannot be rewritten — claimed "CI already runs UTC; aligning
+--   production to CI removes the environment divergence that produced this
+--   incident." That is wrong twice over and the correct version belongs in
+--   the permanent record:
+--     (a) The live database was never exposed to the gap. Its Denver bounds
+--         and its Denver `current_date` AGREED. Measured on live while
+--         writing this: audit.partition_gaps() returns 0 rows, with 21
+--         partitions across the three parents this incident broke
+--         (events 8, tool_usage 5, outcome_events 8) and 28 across all five
+--         partitioned audit parents. THE INCIDENT WAS CI-ONLY. 055 is a
+--         latent-defect fix, not an outage repair.
+--     (b) Production is not being "aligned to CI" — the session zone stays
+--         Denver. What changes is that neither half depends on it any more.
+--         The surviving Denver session is precisely why the RETENTION half
+--         had to be de-sessioned in this same migration (see below); leaving
+--         it reading session-rendered text would have left the bug class
+--         alive in the one place the fix had not reached.
+--
+-- RETENTION PATH — the last session-rendered-text dependence, fixed here too.
+--
+--   audit.drop_old_events_partitions() / _tool_usage_ / _outcome_ decided what
+--   to drop by regexing a DATE out of pg_get_expr(c.relpartbound, c.oid) and
+--   comparing it against bare `current_date`. pg_get_expr renders a
+--   timestamptz IN THE SESSION TimeZone. That is the SAME bug class as the
+--   creation half this migration exists to fix — session-rendered text feeding
+--   a bound computation — and it was the last `current_date` in the partition
+--   code. On the live Denver-session host a partition bounded
+--   TO ('2026-06-01 00:00:00+00') renders as '2026-05-31 18:00:00-06' and
+--   parses back as 2026-05-31, one calendar day before its real end.
+--
+--   THE OBVIOUS READING OF THAT IS WRONG, so it is recorded measured rather
+--   than argued. "The parsed date is a day early, therefore partitions drop a
+--   day early and audit rows are silently deleted" does NOT follow:
+--   `current_date` is rendered in the same session zone and shifts with it.
+--   The two shifts largely cancel and the residual has a fixed sign.
+--
+--   MEASURED (scratch DB, 168 partition bounds covering every hour of seven
+--   days chosen to span both US DST transitions, x retention N = 1..400 days,
+--   x five session zones = 336,000 drop decisions, each compared against a
+--   session-independent timestamptz reference):
+--
+--     session TimeZone           early drops (data loss)   late (extra retention)
+--     UTC                                              0                       14
+--     America/Denver                                   0                      137
+--     Asia/Tokyo                                       0                       77
+--     Pacific/Kiritimati (+14)                         0                      112
+--     Pacific/Midway (-11)                             0                      105
+--
+--   ZERO early drops anywhere. The DATE-reparse predicate is provably weaker
+--   than the correct one — floor_tz(bound) < floor_tz(now) - N implies
+--   bound < now - N, because flooring is monotone — so it can only ever RETAIN
+--   a partition the correct predicate would drop, never the reverse. Worst
+--   observed error: 19.74 hours of EXTRA retention (Denver), bounded above by
+--   |UTC offset| + 24h. No audit row was ever at risk of early deletion.
+--
+--   Nor did the UTC bound pin introduce it. Same sweep, Denver session, split
+--   by bound convention: pre-055 Denver-midnight ends (06:00Z/07:00Z) gave 11
+--   late divergences in 5,600 decisions; post-055 UTC-midnight ends gave 7 in
+--   2,800. Both zero early. The defect predates 055 under both conventions;
+--   055 removes it rather than creating it.
+--
+--   What it DOES do is make retention depend on where the session is pinned.
+--   Measured end-to-end on one scratch database at one instant, on a
+--   filler-shaped partition [2026-06-01 00:00Z, 12:00Z) that was genuinely
+--   past a 60-day cutoff:
+--       UTC session            -> dropped     (correct)
+--       Asia/Tokyo session     -> dropped     (correct)
+--       America/Denver session -> RETAINED    (its current_date was a day
+--                                              behind, so the cutoff was too)
+--   Three sessions, one database, one instant, two different answers. That is
+--   the defect, and it is the same class as the original bug even though its
+--   consequence is milder than the creation-half hole.
+--
+--   So this is a DETERMINISM fix, not a data-loss fix — and it is still worth
+--   making. Hosts in different zones must not disagree about what "180 days"
+--   means; retention should be the window that was configured; and leaving one
+--   `current_date` behind in the file whose entire subject is session
+--   dependence is an invitation to reintroduce the rest.
+--
+--   WHY `now()` AND AN HOURS INTERVAL, SPECIFICALLY. The natural-looking
+--   rewrite is a trap, and was measured on the same 67,200-decision sweep:
+--
+--     bound < timezone('UTC', now()) - make_interval(days => N)
+--         timezone('UTC', now()) returns TIMESTAMP WITHOUT TIME ZONE. Compared
+--         against a timestamptz, PostgreSQL reinterprets it IN THE SESSION
+--         ZONE, so in a Denver session the cutoff lands six hours in the
+--         FUTURE. 46 decisions dropped a partition EARLY — e.g. a bound of
+--         2026-06-01 04:00Z at N=61 dropped while the true cutoff was
+--         2026-06-01 01:45Z, with 2h15m of retention still owed. This form
+--         would have MANUFACTURED the data-loss bug that does not exist today.
+--
+--     bound < now() - make_interval(days => N)
+--         now() is timestamptz so there is no reinterpretation — but
+--         PostgreSQL does day arithmetic on timestamptz in the session zone,
+--         so the cutoff moves an hour across a DST transition. 3 of 67,200
+--         decisions dropped early in a Denver session.
+--
+--     bound < now() - make_interval(hours => N * 24)        <-- what 055 uses
+--         Exact 24-hour days from an absolute instant. Identical decisions in
+--         all five session zones; zero divergence.
+--
+--   The quoted-literal regex ('TO \(''([^'']+)''') replaces the date-shaped one
+--   and still excludes DEFAULT and MAXVALUE partitions, whose bound text has no
+--   quoted literal in that position.
 --
 -- WHY NO DETACH/REATTACH IS NEEDED (this is the load-bearing claim):
 --   045 added neighbour-snapping to month_partition_bounds, and its COMMENT
@@ -362,7 +477,208 @@ COMMENT ON FUNCTION audit.partition_maintenance() IS
     'must never be reintroduced here.';
 
 -- ---------------------------------------------------------------------------
--- 3. Apply the normalization now (guarded for fresh installs where the audit
+-- 3. Retention — compare bounds as instants, never as re-parsed DATEs
+--
+--    The three function bodies below are byte-identical to the copies in
+--    db/postgres/partitions.sql (the fresh-install bootstrap CI runs). Keep
+--    them in sync.
+-- ---------------------------------------------------------------------------
+
+-- Retention cutoffs are compared as TIMESTAMPTZ, never as a re-parsed DATE
+-- (migration 055). pg_get_expr() renders a timestamptz in the *session*
+-- TimeZone, so slicing a DATE out of that text makes the drop decision depend
+-- on where the caller's session is pinned — the same session-rendered-text
+-- dependence that migration 045/055 removed from the creation half. See the
+-- rationale block in 055 for the measured behaviour and why `now()` (not
+-- `timezone('UTC', now())`) and an hours interval (not a days interval) are
+-- the only combination that is genuinely session-independent.
+
+-- Drop old event partitions (older than retention_days)
+CREATE OR REPLACE FUNCTION audit.drop_old_events_partitions(
+    p_retention_days INTEGER DEFAULT 180
+)
+RETURNS TABLE(partition_name TEXT, action TEXT) AS $$
+DECLARE
+    v_cutoff TIMESTAMPTZ;
+    v_rec RECORD;
+BEGIN
+    -- Absolute instant, identical in every session TimeZone. now() is
+    -- timestamptz; an hours interval avoids the calendar-day arithmetic that
+    -- PostgreSQL performs in the session zone (and that therefore shifts by an
+    -- hour across a DST transition).
+    v_cutoff := now() - make_interval(hours => p_retention_days * 24);
+
+    FOR v_rec IN
+        SELECT c.relname as partition_name,
+               pg_get_expr(c.relpartbound, c.oid) as partition_bound
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_inherits i ON i.inhrelid = c.oid
+        JOIN pg_class parent ON parent.oid = i.inhparent
+        WHERE n.nspname = 'audit'
+          AND parent.relname = 'events'
+          AND c.relkind = 'r'
+    LOOP
+        -- Extract the upper bound from the partition bound expression
+        -- (e.g. "FOR VALUES FROM ('2025-01-01 00:00:00+00') TO ('2025-02-01 00:00:00+00')")
+        -- and compare it as an instant. The quoted-literal regex also keeps
+        -- DEFAULT and MAXVALUE partitions out of the retention path, exactly as
+        -- the older date-shaped regex did.
+        IF v_rec.partition_bound ~ 'TO \(''([^'']+)''' THEN
+            DECLARE
+                v_end TIMESTAMPTZ;
+            BEGIN
+                v_end := ((regexp_match(v_rec.partition_bound, 'TO \(''([^'']+)'''))[1])::TIMESTAMPTZ;
+                IF v_end < v_cutoff THEN
+                    EXECUTE format('DROP TABLE IF EXISTS audit.%I', v_rec.partition_name);
+                    partition_name := v_rec.partition_name;
+                    action := 'dropped';
+                    RETURN NEXT;
+                END IF;
+            END;
+        END IF;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Drop old tool_usage partitions (older than retention_days)
+CREATE OR REPLACE FUNCTION audit.drop_old_tool_usage_partitions(
+    p_retention_days INTEGER DEFAULT 90
+)
+RETURNS TABLE(partition_name TEXT, action TEXT) AS $$
+DECLARE
+    v_cutoff TIMESTAMPTZ;
+    v_rec RECORD;
+BEGIN
+    -- Absolute instant, identical in every session TimeZone (see
+    -- drop_old_events_partitions).
+    v_cutoff := now() - make_interval(hours => p_retention_days * 24);
+
+    FOR v_rec IN
+        SELECT c.relname as partition_name,
+               pg_get_expr(c.relpartbound, c.oid) as partition_bound
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_inherits i ON i.inhrelid = c.oid
+        JOIN pg_class parent ON parent.oid = i.inhparent
+        WHERE n.nspname = 'audit'
+          AND parent.relname = 'tool_usage'
+          AND c.relkind = 'r'
+    LOOP
+        IF v_rec.partition_bound ~ 'TO \(''([^'']+)''' THEN
+            DECLARE
+                v_end TIMESTAMPTZ;
+            BEGIN
+                v_end := ((regexp_match(v_rec.partition_bound, 'TO \(''([^'']+)'''))[1])::TIMESTAMPTZ;
+                IF v_end < v_cutoff THEN
+                    EXECUTE format('DROP TABLE IF EXISTS audit.%I', v_rec.partition_name);
+                    partition_name := v_rec.partition_name;
+                    action := 'dropped';
+                    RETURN NEXT;
+                END IF;
+            END;
+        END IF;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Drop old outcome_events partitions (older than retention_days)
+CREATE OR REPLACE FUNCTION audit.drop_old_outcome_partitions(
+    p_retention_days INTEGER DEFAULT 365
+)
+RETURNS TABLE(partition_name TEXT, action TEXT) AS $$
+DECLARE
+    v_cutoff TIMESTAMPTZ;
+    v_rec RECORD;
+BEGIN
+    -- Absolute instant, identical in every session TimeZone (see
+    -- drop_old_events_partitions).
+    v_cutoff := now() - make_interval(hours => p_retention_days * 24);
+
+    FOR v_rec IN
+        SELECT c.relname as partition_name,
+               pg_get_expr(c.relpartbound, c.oid) as partition_bound
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_inherits i ON i.inhrelid = c.oid
+        JOIN pg_class parent ON parent.oid = i.inhparent
+        WHERE n.nspname = 'audit'
+          AND parent.relname = 'outcome_events'
+          AND c.relkind = 'r'
+    LOOP
+        IF v_rec.partition_bound ~ 'TO \(''([^'']+)''' THEN
+            DECLARE
+                v_end TIMESTAMPTZ;
+            BEGIN
+                v_end := ((regexp_match(v_rec.partition_bound, 'TO \(''([^'']+)'''))[1])::TIMESTAMPTZ;
+                IF v_end < v_cutoff THEN
+                    EXECUTE format('DROP TABLE IF EXISTS audit.%I', v_rec.partition_name);
+                    partition_name := v_rec.partition_name;
+                    action := 'dropped';
+                    RETURN NEXT;
+                END IF;
+            END;
+        END IF;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+-- audit.drop_old_r1_score_audit_partitions() carries the identical defect and
+-- is repaired here too, so that no session-rendered-text retention predicate
+-- survives this migration anywhere in the audit schema.
+--
+-- It is currently ORPHANED: migration 031 defined it AND called it from its
+-- version of partition_maintenance(), but 045/055 replaced that function and
+-- deliberately do not call it (r1_score_audit keeps full score history by
+-- design — see the create-side note in section 2). Orphaned is not the same as
+-- harmless: the function is still defined, still grantable, and still does
+-- exactly what its name says if an operator or a future maintenance revision
+-- calls it. Fixing it costs one CREATE OR REPLACE.
+--
+-- Not byte-shared with partitions.sql: that bootstrap file has no copy of this
+-- function (031 owns it), so it sits outside the shared block above.
+CREATE OR REPLACE FUNCTION audit.drop_old_r1_score_audit_partitions(
+    p_retention_days INTEGER DEFAULT 180
+)
+RETURNS TABLE (partition_name TEXT, action TEXT) AS $$
+DECLARE
+    v_cutoff TIMESTAMPTZ;
+    v_rec    RECORD;
+BEGIN
+    -- Absolute instant, identical in every session TimeZone (see
+    -- drop_old_events_partitions).
+    v_cutoff := now() - make_interval(hours => p_retention_days * 24);
+
+    FOR v_rec IN
+        SELECT c.relname AS pname,
+               pg_get_expr(c.relpartbound, c.oid) AS partition_bound
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_inherits inh ON inh.inhrelid = c.oid
+        JOIN pg_class parent ON parent.oid = inh.inhparent
+        WHERE n.nspname = 'audit'
+          AND parent.relname = 'r1_score_audit'
+          AND c.relkind = 'r'
+    LOOP
+        IF v_rec.partition_bound ~ 'TO \(''([^'']+)''' THEN
+            DECLARE
+                v_end TIMESTAMPTZ;
+            BEGIN
+                v_end := ((regexp_match(v_rec.partition_bound, 'TO \(''([^'']+)'''))[1])::TIMESTAMPTZ;
+                IF v_end < v_cutoff THEN
+                    EXECUTE format('DROP TABLE IF EXISTS audit.%I', v_rec.pname);
+                    partition_name := v_rec.pname;
+                    action := 'dropped';
+                    RETURN NEXT;
+                END IF;
+            END;
+        END IF;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ---------------------------------------------------------------------------
+-- 4. Apply the normalization now (guarded for fresh installs where the audit
 --    tables may not exist yet when this file is applied out of order)
 -- ---------------------------------------------------------------------------
 
@@ -397,11 +713,20 @@ END $$;
 --      the new partition. That turns a routine monthly CREATE TABLE ...
 --      PARTITION OF into a lock-heavy operation that can fail outright once
 --      any row has landed in the default — exactly on the hot audit path.
---   3. It blinds the instrument that detects this bug class.
---      audit.partition_gaps()'s own COMMENT already documents the blind spot:
---      DEFAULT partitions do not match the bound regex, so gaps adjacent to
---      one become invisible and rows route to the DEFAULT instead of failing.
---      The detector for this failure mode would stop working.
+--   3. Do NOT reach for audit.partition_gaps() as the counter-argument — it
+--      would not have caught this, and that limitation is the thing actually
+--      worth recording here. Measured during the live failure,
+--      partition_gaps() returned ZERO rows. It only finds holes BETWEEN
+--      existing partitions; this hole was BEFORE the earliest one, so it is
+--      structurally invisible to that query, DEFAULT partitions or not. The
+--      detector read healthy straight through a partition-hole outage.
+--      (It has a second blind spot documented in its own COMMENT: DEFAULT
+--      partitions do not match the bound regex, so gaps adjacent to one are
+--      invisible too.) So "it would blind the detector" is not the reason to
+--      decline — but neither is "partition_gaps() is empty" ever evidence
+--      that there is no hole. Treat it as weak evidence only, and if it is
+--      ever wired to an alarm, extend it to cover the region before the
+--      first partition and after the last.
 --   4. The live evidence is against it. audit.coordination_events has no
 --      rolling creation path — its newest concrete partition ends
 --      2026-07-01, and 89 of its 106 rows (84%) now sit in

@@ -246,16 +246,29 @@ $$ LANGUAGE plpgsql;
 -- RETENTION / CLEANUP FUNCTIONS
 -- =============================================================================
 
+-- Retention cutoffs are compared as TIMESTAMPTZ, never as a re-parsed DATE
+-- (migration 055). pg_get_expr() renders a timestamptz in the *session*
+-- TimeZone, so slicing a DATE out of that text makes the drop decision depend
+-- on where the caller's session is pinned — the same session-rendered-text
+-- dependence that migration 045/055 removed from the creation half. See the
+-- rationale block in 055 for the measured behaviour and why `now()` (not
+-- `timezone('UTC', now())`) and an hours interval (not a days interval) are
+-- the only combination that is genuinely session-independent.
+
 -- Drop old event partitions (older than retention_days)
 CREATE OR REPLACE FUNCTION audit.drop_old_events_partitions(
     p_retention_days INTEGER DEFAULT 180
 )
 RETURNS TABLE(partition_name TEXT, action TEXT) AS $$
 DECLARE
-    v_cutoff DATE;
+    v_cutoff TIMESTAMPTZ;
     v_rec RECORD;
 BEGIN
-    v_cutoff := current_date - (p_retention_days || ' days')::INTERVAL;
+    -- Absolute instant, identical in every session TimeZone. now() is
+    -- timestamptz; an hours interval avoids the calendar-day arithmetic that
+    -- PostgreSQL performs in the session zone (and that therefore shifts by an
+    -- hour across a DST transition).
+    v_cutoff := now() - make_interval(hours => p_retention_days * 24);
 
     FOR v_rec IN
         SELECT c.relname as partition_name,
@@ -268,14 +281,17 @@ BEGIN
           AND parent.relname = 'events'
           AND c.relkind = 'r'
     LOOP
-        -- Extract end date from partition bound (e.g., "FOR VALUES FROM ('2025-01-01') TO ('2025-02-01')")
-        -- If end date < cutoff, drop it
-        IF v_rec.partition_bound ~ 'TO \(''(\d{4}-\d{2}-\d{2})' THEN
+        -- Extract the upper bound from the partition bound expression
+        -- (e.g. "FOR VALUES FROM ('2025-01-01 00:00:00+00') TO ('2025-02-01 00:00:00+00')")
+        -- and compare it as an instant. The quoted-literal regex also keeps
+        -- DEFAULT and MAXVALUE partitions out of the retention path, exactly as
+        -- the older date-shaped regex did.
+        IF v_rec.partition_bound ~ 'TO \(''([^'']+)''' THEN
             DECLARE
-                v_end_date DATE;
+                v_end TIMESTAMPTZ;
             BEGIN
-                v_end_date := (regexp_match(v_rec.partition_bound, 'TO \(''(\d{4}-\d{2}-\d{2})'))[1]::DATE;
-                IF v_end_date < v_cutoff THEN
+                v_end := ((regexp_match(v_rec.partition_bound, 'TO \(''([^'']+)'''))[1])::TIMESTAMPTZ;
+                IF v_end < v_cutoff THEN
                     EXECUTE format('DROP TABLE IF EXISTS audit.%I', v_rec.partition_name);
                     partition_name := v_rec.partition_name;
                     action := 'dropped';
@@ -293,10 +309,12 @@ CREATE OR REPLACE FUNCTION audit.drop_old_tool_usage_partitions(
 )
 RETURNS TABLE(partition_name TEXT, action TEXT) AS $$
 DECLARE
-    v_cutoff DATE;
+    v_cutoff TIMESTAMPTZ;
     v_rec RECORD;
 BEGIN
-    v_cutoff := current_date - (p_retention_days || ' days')::INTERVAL;
+    -- Absolute instant, identical in every session TimeZone (see
+    -- drop_old_events_partitions).
+    v_cutoff := now() - make_interval(hours => p_retention_days * 24);
 
     FOR v_rec IN
         SELECT c.relname as partition_name,
@@ -309,12 +327,12 @@ BEGIN
           AND parent.relname = 'tool_usage'
           AND c.relkind = 'r'
     LOOP
-        IF v_rec.partition_bound ~ 'TO \(''(\d{4}-\d{2}-\d{2})' THEN
+        IF v_rec.partition_bound ~ 'TO \(''([^'']+)''' THEN
             DECLARE
-                v_end_date DATE;
+                v_end TIMESTAMPTZ;
             BEGIN
-                v_end_date := (regexp_match(v_rec.partition_bound, 'TO \(''(\d{4}-\d{2}-\d{2})'))[1]::DATE;
-                IF v_end_date < v_cutoff THEN
+                v_end := ((regexp_match(v_rec.partition_bound, 'TO \(''([^'']+)'''))[1])::TIMESTAMPTZ;
+                IF v_end < v_cutoff THEN
                     EXECUTE format('DROP TABLE IF EXISTS audit.%I', v_rec.partition_name);
                     partition_name := v_rec.partition_name;
                     action := 'dropped';
@@ -332,10 +350,12 @@ CREATE OR REPLACE FUNCTION audit.drop_old_outcome_partitions(
 )
 RETURNS TABLE(partition_name TEXT, action TEXT) AS $$
 DECLARE
-    v_cutoff DATE;
+    v_cutoff TIMESTAMPTZ;
     v_rec RECORD;
 BEGIN
-    v_cutoff := current_date - (p_retention_days || ' days')::INTERVAL;
+    -- Absolute instant, identical in every session TimeZone (see
+    -- drop_old_events_partitions).
+    v_cutoff := now() - make_interval(hours => p_retention_days * 24);
 
     FOR v_rec IN
         SELECT c.relname as partition_name,
@@ -348,12 +368,12 @@ BEGIN
           AND parent.relname = 'outcome_events'
           AND c.relkind = 'r'
     LOOP
-        IF v_rec.partition_bound ~ 'TO \(''(\d{4}-\d{2}-\d{2})' THEN
+        IF v_rec.partition_bound ~ 'TO \(''([^'']+)''' THEN
             DECLARE
-                v_end_date DATE;
+                v_end TIMESTAMPTZ;
             BEGIN
-                v_end_date := (regexp_match(v_rec.partition_bound, 'TO \(''(\d{4}-\d{2}-\d{2})'))[1]::DATE;
-                IF v_end_date < v_cutoff THEN
+                v_end := ((regexp_match(v_rec.partition_bound, 'TO \(''([^'']+)'''))[1])::TIMESTAMPTZ;
+                IF v_end < v_cutoff THEN
                     EXECUTE format('DROP TABLE IF EXISTS audit.%I', v_rec.partition_name);
                     partition_name := v_rec.partition_name;
                     action := 'dropped';
