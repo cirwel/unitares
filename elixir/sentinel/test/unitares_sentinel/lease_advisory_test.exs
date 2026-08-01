@@ -199,4 +199,116 @@ defmodule UnitaresSentinel.LeaseAdvisoryTest do
                http_post: fn _url, _body, _headers, _timeout_ms -> raise "boom" end
              )
   end
+
+  # --- lost-acquire-response recovery (2026-07-29 Sentinel 24h outage) -------
+  #
+  # An acquire that commits server-side but whose response is lost leaves a
+  # lease the client cannot identify, cannot release, and that the lease plane
+  # then auto-renews forever. One retry with the same body recovers it via
+  # idempotent re-acquire.
+
+  test "acquire retries once on transport error and adopts the committed lease" do
+    {:ok, calls} = Agent.start_link(fn -> [] end)
+
+    http_post = fn _url, body, _headers, _timeout_ms ->
+      Agent.update(calls, &[body["holder_agent_uuid"] | &1])
+
+      case Agent.get(calls, &length/1) do
+        1 ->
+          # committed server-side; response lost
+          {:error, :timeout}
+
+        _ ->
+          {:ok, 200,
+           Jason.encode!(%{
+             ok: true,
+             idempotent: true,
+             lease: %{lease_id: @lease_id},
+             drift_warning: []
+           })}
+      end
+    end
+
+    assert %{outcome: :acquired_idempotent, lease_id: @lease_id} =
+             LeaseAdvisory.acquire_cycle(
+               bearer_token: "test-token",
+               holder_agent_uuid: @holder_uuid,
+               http_post: http_post
+             )
+
+    uuids = Agent.get(calls, & &1)
+    assert length(uuids) == 2, "expected exactly one retry"
+
+    # The retry MUST reuse the same holder uuid — that is what makes the
+    # re-acquire idempotent rather than a fresh contending acquire.
+    assert [@holder_uuid, @holder_uuid] = uuids
+  end
+
+  test "acquire gives up after one retry and does not loop" do
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      Agent.update(calls, &(&1 + 1))
+      {:error, :timeout}
+    end
+
+    assert %{outcome: :service_unavailable} =
+             LeaseAdvisory.acquire_cycle(
+               bearer_token: "test-token",
+               holder_agent_uuid: @holder_uuid,
+               http_post: http_post
+             )
+
+    assert Agent.get(calls, & &1) == 2
+  end
+
+  test "a successful acquire is not retried" do
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      Agent.update(calls, &(&1 + 1))
+
+      {:ok, 200,
+       Jason.encode!(%{
+         ok: true,
+         idempotent: false,
+         lease: %{lease_id: @lease_id},
+         drift_warning: []
+       })}
+    end
+
+    assert %{outcome: :acquired_new, lease_id: @lease_id} =
+             LeaseAdvisory.acquire_cycle(
+               bearer_token: "test-token",
+               holder_agent_uuid: @holder_uuid,
+               http_post: http_post
+             )
+
+    assert Agent.get(calls, & &1) == 1
+  end
+
+  test "held_by_other is a real conflict and is not retried" do
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      Agent.update(calls, &(&1 + 1))
+
+      {:ok, 409,
+       Jason.encode!(%{
+         ok: false,
+         error: "held_by_other",
+         held_by_uuid: "33333333-3333-3333-3333-333333333333"
+       })}
+    end
+
+    assert %{outcome: :held_by_other} =
+             LeaseAdvisory.acquire_cycle(
+               bearer_token: "test-token",
+               holder_agent_uuid: @holder_uuid,
+               http_post: http_post
+             )
+
+    assert Agent.get(calls, & &1) == 1, "a conflict is an answer, not a transport failure"
+  end
 end
+
