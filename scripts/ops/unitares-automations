@@ -790,6 +790,203 @@ def collect_external(warnings: list[str]) -> list[Automation]:
     return results
 
 
+def _settings_hook_sources() -> list[tuple[Path, str | None]]:
+    """(settings-or-hooks-json, plugin_root) pairs that can declare hooks.
+
+    User settings first, then every installed plugin's hooks/hooks.json —
+    directory-source plugins (read live from a checkout) and cached ones.
+    """
+    sources: list[tuple[Path, str | None]] = [
+        (HOME / ".claude/settings.json", None),
+        (HOME / ".claude/settings.local.json", None),
+    ]
+    marketplaces = HOME / ".claude/plugins/known_marketplaces.json"
+    roots: list[Path] = []
+    if marketplaces.exists():
+        try:
+            data = json.loads(marketplaces.read_text())
+            for entry in (data or {}).values() if isinstance(data, dict) else []:
+                src = (entry or {}).get("source") if isinstance(entry, dict) else None
+                path = (src or {}).get("path") if isinstance(src, dict) else None
+                if path:
+                    roots.append(Path(path))
+        except Exception:  # noqa: BLE001 - best effort; absence is not an error
+            pass
+    cache = HOME / ".claude/plugins/cache"
+    if cache.is_dir():
+        roots.extend(p for p in cache.iterdir() if p.is_dir())
+    for root in roots:
+        hooks_json = root / "hooks/hooks.json"
+        if hooks_json.exists():
+            sources.append((hooks_json, str(root)))
+    return sources
+
+
+DISPATCHER_NAMES = {"run-hook.cmd", "run-hook", "run-hook.sh"}
+# Editor/tooling debris that lives beside real hooks but is not a hook.
+NON_HOOK_SUFFIXES = (".bak", ".orig", ".disabled", ".sample", "~")
+
+
+def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
+    """Resolve filesystem paths a hook command actually invokes.
+
+    Follows one level of indirection: the plugin wires every lifecycle hook
+    as `run-hook.cmd <name> --host <host>`, so the script that actually runs
+    is an ARGUMENT, not the command. Resolving only the command would report
+    every real plugin hook (post-edit, session-start, ...) as orphaned.
+    """
+    text = command.replace("${CLAUDE_PLUGIN_ROOT}", plugin_root or "")
+    text = text.replace("$CLAUDE_PLUGIN_ROOT", plugin_root or "")
+    tokens = [t.strip("\"'") for t in text.split()]
+    found: list[str] = []
+    for idx, tok in enumerate(tokens):
+        if "/" not in tok:
+            continue
+        expanded = os.path.expanduser(tok)
+        if not Path(expanded).exists():
+            continue
+        resolved = Path(expanded).resolve()
+        found.append(str(resolved))
+        if resolved.name in DISPATCHER_NAMES:
+            for nxt in tokens[idx + 1:]:
+                if nxt.startswith("-"):
+                    continue
+                target = resolved.parent / nxt
+                if target.exists():
+                    found.append(str(target.resolve()))
+                break
+    return found
+
+
+def _dispatched_label(scripts: list[str], command: str) -> str:
+    """Prefer the dispatched hook name over the dispatcher's own filename."""
+    for path in scripts:
+        if Path(path).name not in DISPATCHER_NAMES:
+            return Path(path).name
+    return Path(scripts[0]).name if scripts else command.split()[0]
+
+
+def collect_claude_hooks(warnings: list[str]) -> list[Automation]:
+    """Session-lifecycle hooks — the class the scheduler collectors miss.
+
+    launchd/cron/Actions answer "what runs on a clock." Nothing answered
+    "what runs on my session," so a hook wired in settings.json was
+    invisible to the census. This closes that gap and also surfaces
+    ORPHANED scripts: files sitting in a hooks directory wired to nothing,
+    which read as live to anyone browsing the directory.
+    """
+    results: list[Automation] = []
+    referenced: set[str] = set()
+
+    for settings_path, plugin_root in _settings_hook_sources():
+        if not settings_path.exists():
+            continue
+        try:
+            data = json.loads(settings_path.read_text())
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"claude-hooks: failed to parse {short_path(settings_path)}: {exc}")
+            continue
+        hooks = (data or {}).get("hooks") if isinstance(data, dict) else None
+        if not isinstance(hooks, dict):
+            continue
+        for event, groups in hooks.items():
+            if not isinstance(groups, list):
+                continue
+            for group in groups:
+                if not isinstance(group, dict):
+                    continue
+                matcher = group.get("matcher")
+                for hook in group.get("hooks") or []:
+                    if not isinstance(hook, dict):
+                        continue
+                    command = str(hook.get("command") or "")
+                    if hook.get("type") != "command" or not command:
+                        continue
+                    scripts = _hook_script_paths(command, plugin_root)
+                    referenced.update(scripts)
+                    label = _dispatched_label(scripts, command)
+                    notes = [f"event={event}"]
+                    if matcher:
+                        notes.append(f"matcher={matcher}")
+                    if not scripts:
+                        notes.append("attention:script_not_found_on_disk")
+                        warnings.append(
+                            f"claude-hooks: {event} command has no resolvable script: {command[:80]}"
+                        )
+                    results.append(
+                        Automation(
+                            id=stable_id("claude-hook", f"{settings_path}:{event}:{matcher}:{command}"),
+                            name=f"{event}: {label}",
+                            source="claude-hooks",
+                            kind="hook",
+                            scheduler="claude-settings" if plugin_root is None else "claude-plugin",
+                            runner=infer_runner(command, default="shell"),
+                            status="wired" if scripts else "missing",
+                            cadence=f"on:{event}",
+                            command=[command],
+                            config_path=str(settings_path),
+                            workdir=plugin_root,
+                            notes=notes,
+                        )
+                    )
+
+    # Orphan sweep: scripts on disk wired to nothing. Skip anything a launchd
+    # plist invokes -- collect_launchd already owns those, and counting them
+    # here would double-report a script that is genuinely scheduled.
+    launchd_refs: set[str] = set()
+    agents_dir = HOME / "Library/LaunchAgents"
+    if agents_dir.is_dir():
+        for plist in agents_dir.glob("*.plist"):
+            try:
+                launchd_refs.add(plist.read_text(errors="ignore"))
+            except Exception:  # noqa: BLE001
+                continue
+    launchd_blob = "\n".join(launchd_refs)
+
+    hook_dirs = [HOME / ".claude/hooks"]
+    for _, plugin_root in _settings_hook_sources():
+        if plugin_root:
+            hook_dirs.append(Path(plugin_root) / "hooks")
+    seen_dirs: set[str] = set()
+    for hook_dir in hook_dirs:
+        key = str(hook_dir)
+        if key in seen_dirs or not hook_dir.is_dir():
+            continue
+        seen_dirs.add(key)
+        for script in sorted(hook_dir.iterdir()):
+            if not script.is_file() or not os.access(script, os.X_OK):
+                continue
+            if script.suffix in {".json", ".md"}:
+                continue
+            # Backups and editor debris keep the executable bit but are not
+            # hooks; reporting them as orphaned is noise that trains people
+            # to ignore the orphan list.
+            name_l = script.name.lower()
+            if any(s in name_l for s in NON_HOOK_SUFFIXES):
+                continue
+            resolved = str(script.resolve())
+            if resolved in referenced or script.name in launchd_blob:
+                continue
+            results.append(
+                Automation(
+                    id=stable_id("claude-hook-orphan", resolved),
+                    name=f"ORPHANED: {script.name}",
+                    source="claude-hooks",
+                    kind="hook",
+                    scheduler="none",
+                    runner=infer_runner(script.name, default="shell"),
+                    status="orphaned",
+                    command=[resolved],
+                    config_path=str(hook_dir),
+                    notes=[
+                        "attention:orphaned_hook_script",
+                        "executable in a hooks dir but wired to no event and no launchd plist",
+                    ],
+                )
+            )
+    return results
+
+
 def collect_all(projects_root: Path) -> dict[str, Any]:
     warnings: list[str] = []
     items: list[Automation] = []
@@ -800,6 +997,7 @@ def collect_all(projects_root: Path) -> dict[str, Any]:
         collect_codex,
         collect_hermes,
         collect_claude_tasks,
+        collect_claude_hooks,
         collect_external,
     ]
     for collector in collectors:
@@ -840,7 +1038,11 @@ def collect_all(projects_root: Path) -> dict[str, Any]:
         if is_past_due and "attention:next_run_past_due" not in item.notes:
             item.notes.append("attention:next_run_past_due")
         if (
-            status in {"disabled", "paused", "failing", "failed"}
+            # "orphaned" = executable in a hooks dir wired to nothing;
+            # "missing" = wired to a script that is not on disk. Both are
+            # the drift this census exists to surface, so they belong in
+            # --attention rather than only in the full listing.
+            status in {"disabled", "paused", "failing", "failed", "orphaned", "missing"}
             or last_status in {"failed", "error"}
             or (item.source == "claude" and status == "pending")
             or is_past_due
