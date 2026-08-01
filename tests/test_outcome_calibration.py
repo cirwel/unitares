@@ -414,26 +414,21 @@ class TestExplicitOutcomeEventCalibration:
         assert parsed.get('outcome_id') == 'oe-2'
         assert parsed['prediction_binding'] == 'prev_confidence_fallback'
 
-        mock_checker.record_prediction.assert_called_once_with(
-            confidence=0.7,
-            predicted_correct=True,
-            actual_correct=1.0,
-        )
-        # task_completed became hard-exogenous-eligible when the truth channel
-        # broadened (epoch 3); the seq_tracker is now called for it.
-        mock_seq_tracker.record_exogenous_tactical_outcome.assert_called_once_with(
-            confidence=0.7,
-            outcome_correct=True,
-            agent_id='agent-mon',
-            class_tag='default',
-            signal_source='tasks',
-            decision_action=None,
-            outcome_type='task_completed',
-            prediction_id=None,
-        )
+        # The fallback still RESOLVES a confidence and records it — that part of
+        # the chain is unchanged, and the row persists for per-agent analysis.
         _, kwargs = mock_db.record_outcome_event.call_args
         assert kwargs['detail']['reported_confidence'] == 0.7
-        assert kwargs['detail']['eprocess_eligible'] is True
+
+        # But it no longer TRAINS calibration. A confidence the server scraped
+        # from an earlier, unrelated turn is not a prediction about this outcome,
+        # so pairing the two measures nothing. Measured 2026-07-31 across the
+        # whole clean epoch: prev_confidence_fallback carried FOUR distinct
+        # values across 155 rows / 16 agents, audit_trail_fallback four across
+        # 87 / 10 — sticky per-agent defaults, not judgement. See #1321.
+        mock_checker.record_prediction.assert_not_called()
+        mock_seq_tracker.record_exogenous_tactical_outcome.assert_not_called()
+        assert kwargs['detail']['calibration_excluded'] is True
+        assert kwargs['detail']['eprocess_eligible'] is False
 
     @pytest.mark.asyncio
     async def test_no_calibration_when_no_confidence_available(self):
@@ -505,25 +500,19 @@ class TestExplicitOutcomeEventCalibration:
         assert parsed.get('outcome_id') == 'oe-db'
         assert parsed['prediction_binding'] == 'audit_trail_fallback'
 
-        # Calibration should fire with DB-resolved confidence
-        mock_checker.record_prediction.assert_called_once_with(
-            confidence=0.65,
-            predicted_correct=True,
-            actual_correct=1.0,
-        )
-
-        # Sequential tracker should fire — test_passed is hard exogenous
-        mock_seq_tracker.record_exogenous_tactical_outcome.assert_called_once()
-        seq_kwargs = mock_seq_tracker.record_exogenous_tactical_outcome.call_args[1]
-        assert seq_kwargs['confidence'] == 0.65
-        assert seq_kwargs['outcome_correct'] is True
-        assert seq_kwargs['signal_source'] == 'tests'
-
-        # Verify detail records the source
+        # The chain still RESOLVES the DB confidence and records the source —
+        # unchanged, and the row still persists for per-agent analysis.
         _, db_kwargs = mock_db.record_outcome_event.call_args
         assert db_kwargs['detail']['reported_confidence'] == 0.65
         assert db_kwargs['detail']['prediction_source'] == 'audit_trail_fallback'
-        assert db_kwargs['detail']['eprocess_eligible'] is True
+
+        # But neither calibration channel trains on it. A confidence scraped
+        # from the agent's audit trail was never stated about THIS outcome, so
+        # the pair measures nothing in either direction. See #1321.
+        mock_checker.record_prediction.assert_not_called()
+        mock_seq_tracker.record_exogenous_tactical_outcome.assert_not_called()
+        assert db_kwargs['detail']['calibration_excluded'] is True
+        assert db_kwargs['detail']['eprocess_eligible'] is False
 
     @pytest.mark.asyncio
     async def test_test_failed_records_tactical_with_bad_outcome(self):
@@ -740,16 +729,20 @@ class TestPredictionIdLookup:
         parsed = parse_result(result)
         assert parsed.get('outcome_id') == 'oe-pid-2'
 
-        # Fallback confidence used (id was not in registry)
-        mock_checker.record_prediction.assert_called_once_with(
-            confidence=0.55,
-            predicted_correct=True,
-            actual_correct=1.0,
-        )
+        # The fallback confidence is still RESOLVED and recorded (the id was
+        # not in the registry), and the row persists.
         _, db_kwargs = mock_db.record_outcome_event.call_args
         assert db_kwargs['detail']['reported_confidence'] == 0.55
         assert db_kwargs['detail']['prediction_source'] == 'prev_confidence_fallback'
         assert db_kwargs['detail']['prediction_id'] == 'pid-stale'
+
+        # But this is the case that must MOST clearly not train: the caller
+        # intended a bound prediction, the binding failed, and what got
+        # substituted was a number from some earlier unrelated turn. Quietly
+        # calibrating on that is worse than recording nothing, because the row
+        # looks intentional. See #1321.
+        mock_checker.record_prediction.assert_not_called()
+        assert db_kwargs['detail']['calibration_excluded'] is True
 
 
 # ============================================================================
