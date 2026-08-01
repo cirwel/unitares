@@ -49,6 +49,41 @@
       </div>`;
   }
 
+  // Server-side event check (bridge-dispatch proposal §4, PR #1450). Scope
+  // honesty: the lease row and the finding's source event are written by one
+  // lease-plane transaction, so a match is a pipeline-consistency fact, not
+  // independent corroboration — the wording below must never imply the
+  // machine has certified Sentinel's judgment. Only no_lease_row is alarming
+  // (that table has no retention and DELETE is forbidden). Absence of any
+  // check renders explicitly, so "no check exists", "check errored", and
+  // "checked" stay distinguishable.
+  function latencyText(s) {
+    if (s == null || s < 300) return "";  // under Sentinel's own 5-min cadence
+    const t = s < 5400 ? Math.round(s / 60) + "min" : (s / 3600).toFixed(1) + "h";
+    return ` · reported ${t} after the event`;
+  }
+
+  function evidenceHtml(ev) {
+    if (!ev) {
+      return `<div class="adj-evidence ev-none">no machine check for this finding type — this verdict rests on your judgment alone</div>`;
+    }
+    if (ev.assessment === "event_recorded") {
+      const bits = ["lease row present", "release_reason=forced"];
+      if (ev.held_x_ttl != null) bits.push(`held ${ev.held_x_ttl}× TTL`);
+      if (ev.holder_pid_null) bits.push("holder pid null");
+      return `<div class="adj-evidence ev-none">${esc(bits.join(" · "))}${esc(latencyText(ev.report_latency_s))}<br>
+        event check only (same transaction as the finding — not independent); severity and novelty are your judgment</div>`;
+    }
+    if (ev.assessment === "lookup_mismatch") {
+      return `<div class="adj-evidence ev-none">finding did not resolve to a matching lease row${ev.note ? " — " + esc(ev.note) : ""}<br>
+        both fields come from one transaction, so this is almost certainly an evidence-side fault, not a wrong finding — do not record a false positive on this line alone</div>`;
+    }
+    if (ev.assessment === "no_lease_row") {
+      return `<div class="adj-evidence ev-bad">no lease row for the claimed lease id — this table has no retention, so a missing row is a lease-plane integrity fault. Escalate; do not adjudicate from this line alone</div>`;
+    }
+    return `<div class="adj-evidence ev-none">machine check errored — no evidence either way; this verdict rests on your judgment alone</div>`;
+  }
+
   function cardHtml(f, reasons) {
     const opts = (reasons || [])
       .filter((r) => r !== "fp")
@@ -62,8 +97,9 @@
           <span class="when">${esc(age(f.timestamp))}</span>
         </div>
         <div class="adj-msg">${esc(f.message || "(no message)")}</div>
+        ${evidenceHtml(f.evidence)}
         <div class="adj-actions">
-          <button class="btn confirm" data-act="confirm">✓ Confirm — Sentinel was right</button>
+          <button class="btn confirm" data-act="confirm">✓ Confirm — consistent with what I know</button>
           <button class="btn fp" data-act="fp">✗ False positive</button>
           <span class="dismiss-group">
             <select class="reason">${opts}</select>
