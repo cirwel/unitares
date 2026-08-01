@@ -34,8 +34,25 @@
       Postgres moves to @18 the sweep goes blind again, and doctor_sweep_blind
       is what tells you. Fixing PATH is the cure; the guard is only the net.
 
-      python3 is PINNED to the framework build. launchd's minimal PATH resolves
-      python3 to /usr/bin/python3 (3.9.6) while the repo targets 3.12+.
+      python3 is PINNED to an interpreter that has the repo's DEPENDENCIES, not
+      merely a new enough version. launchd's minimal PATH resolves python3 to
+      /usr/bin/python3 (3.9.6) while the repo targets 3.12+ — but "3.12+" is
+      not the whole requirement and reading it as such is how this broke.
+
+      escalation imports agents.common.findings, which imports httpx at module
+      level. A bare Homebrew python satisfies "3.12+" and still lacks httpx, so
+      the sweep runs, diagnoses correctly, logs its findings — and every
+      post_finding raises ModuleNotFoundError. Point this at a venv that has the
+      project installed. Verify before trusting it:
+
+        PYTHON_BIN -c "import httpx, sys; print(sys.version)"
+
+      This is not hypothetical. com.unitares.deploy-drift-doctor ran hourly on
+      /usr/bin/env python3 and posted ZERO findings across its entire life
+      (verified 2026-08-01: no deploy_drift row in audit.events, ever) because
+      its io_post_finding swallows the import error with `except Exception:
+      pass`. It logged faithfully to a file nobody reads. Do not repeat that
+      shape: if escalation cannot escalate, it must say so where someone looks.
 
     Before installing, substitute the placeholders:
       __UNITARES_ROOT__ -> absolute path to the deploy checkout
