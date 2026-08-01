@@ -18,7 +18,16 @@
   function make(onEvent, onStatus) {
     let ws = null, retry = 0, closed = false;
 
-    const url = () => `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws/eisv`;
+    // A browser cannot set headers on a WebSocket, so the read bearer rides in
+    // the query string. Read at connect time (not once at load) so a reconnect
+    // after a token change picks up the new one. On loopback/Tailscale the
+    // server's trusted-network bypass makes the token unnecessary and its
+    // absence is not an error.
+    const url = () => {
+      const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+      const t = window.DATA && window.DATA.apiToken && window.DATA.apiToken();
+      return `${scheme}//${location.host}/ws/eisv${t ? "?token=" + encodeURIComponent(t) : ""}`;
+    };
     const status = (s) => { try { onStatus(s); } catch { /* ignore */ } };
 
     function schedule() {

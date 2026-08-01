@@ -189,6 +189,53 @@ def _http_unauthorized():
     )
 
 
+def _bearer_from_header(auth: str | None) -> str | None:
+    """Extract ``<tok>`` from an ``Authorization: Bearer <tok>`` header."""
+    if not auth or not isinstance(auth, str):
+        return None
+    if not auth.lower().startswith("bearer "):
+        return None
+    return auth.split(" ", 1)[1].strip()
+
+
+def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
+    """Bearer token auth for WebSocket endpoints.
+
+    Same posture as :func:`_check_http_auth` — hosted mode (``UNITARES_MCP_BEARER_TOKENS``)
+    requires a valid bearer with no IP bypass; the legacy/local posture keeps the
+    trusted-network bypass and then gates on ``UNITARES_HTTP_API_TOKEN``.
+
+    The one difference is *where the token comes from*. A browser cannot set
+    request headers on a ``WebSocket``, so the credential has to ride in the
+    query string (``/ws/eisv?token=…``); non-browser clients may still send the
+    ``Authorization`` header. The dashboard already carries its read bearer in
+    the URL by design (the ``?token=`` bookmark, #643), so this reuses the
+    existing credential rather than introducing a second one.
+
+    Without this, ``/ws/eisv`` was the only route on the server with no auth
+    check at all: over the tunnel ``GET /v1/residents`` answered 401 while the
+    WebSocket handshake answered 101 and streamed the full governance feed
+    (agent ids, EISV, risk, verdicts, and Lumen's raw sensor payload) to any
+    unauthenticated caller.
+    """
+    tok = websocket.query_params.get("token") or _bearer_from_header(
+        websocket.headers.get("authorization") or websocket.headers.get("Authorization")
+    )
+
+    # Hosted posture: the MCP bearer governs every transport; no IP bypass.
+    if mcp_bearer_required():
+        return check_mcp_bearer(f"Bearer {tok}" if tok else None)
+
+    # Legacy / local posture — loopback and Tailscale stay unauthenticated.
+    if _is_trusted_network(websocket):
+        return True
+    if not http_api_token:
+        return True
+    if not tok:
+        return False
+    return secrets.compare_digest(tok, http_api_token)
+
+
 def _check_http_auth(request, *, http_api_token: str | None) -> bool:
     """Bearer token auth for HTTP endpoints.
 
@@ -3985,6 +4032,11 @@ async def http_taxonomy(request):
 
 async def websocket_eisv_stream(websocket):
     """WebSocket endpoint for live EISV streaming to dashboard."""
+    if not _check_ws_auth(websocket, http_api_token=os.getenv("UNITARES_HTTP_API_TOKEN")):
+        # Close before accept — uvicorn turns this into a 403 on the handshake,
+        # so an unauthorized caller never reaches the broadcaster at all.
+        await websocket.close(code=1008)
+        return
     await broadcaster_instance.connect(websocket)
     try:
         while True:
