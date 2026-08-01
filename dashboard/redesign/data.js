@@ -494,4 +494,10 @@
   };
 
   window.DATA = DATA;
+
+  // Absorb ?operator_token= at load. Sections call operatorToken() lazily,
+  // so without this the credential only persists if the Adjudication pane
+  // opens while the param is still in the URL — a provisioning URL that
+  // lands on any other pane silently does nothing.
+  operatorToken();
 })();
