@@ -11,7 +11,9 @@
 -- PARTITION CREATION FUNCTIONS
 -- =============================================================================
 
--- Timezone-deterministic month bounds, snapped to neighbors (migration 045)
+-- Timezone-deterministic month bounds, snapped to neighbors (migration 045),
+-- UTC-pinned (migration 055). This bootstrap file and migrations 045/055 carry
+-- the same function bodies; keep them in sync.
 CREATE OR REPLACE FUNCTION audit.month_partition_bounds(
     p_parent REGCLASS,
     p_year INTEGER,
@@ -23,24 +25,25 @@ DECLARE
     v_prev_end TIMESTAMPTZ;
     v_next_start TIMESTAMPTZ;
 BEGIN
-    -- Month edges at America/Denver midnight, independent of the session
-    -- TimeZone. Denver (not UTC) because the live 2026-06/07 partitions
-    -- already use Denver-midnight bounds — pinning UTC would overlap them
-    -- at the next month boundary. make_timestamptz() with an explicit zone
-    -- is immune to the session-TimeZone drift that caused the 2026-06 hole.
-    -- NOTE: on a FRESH install the pin is the sole bound-determinant (no
-    -- neighbor to snap to), so a future UTC-tz host bootstraps
-    -- Denver-offset bounds by design — internally consistent and gapless,
-    -- but offset from UTC month edges. Intended end-state is an
-    -- operator-gated detach/reattach normalization to uniform UTC bounds;
-    -- until then this pin and partitions.sql must stay in agreement.
-    -- (Denver DST transitions fire at 02:00 local on Sundays; month-firsts
-    -- at 00:00 are never skipped or ambiguous, verified 2000-2040.)
-    v_start := make_timestamptz(p_year, p_month, 1, 0, 0, 0, 'America/Denver');
+    -- Month edges at UTC midnight, independent of the session TimeZone.
+    -- make_timestamptz() with an explicit zone is immune to the session-
+    -- TimeZone drift that caused the 2026-06 hole; the zone is UTC (migration
+    -- 055) rather than America/Denver (migration 045) so that partition
+    -- boundaries do not depend on where the operator lives, and do not shift
+    -- an hour in absolute time across DST transitions.
+    --
+    -- The Denver-bounded partitions that predate 055 are NOT rewritten. The
+    -- neighbour-snapping below absorbs the convention change: the first month
+    -- created after the cutover snaps its lower bound up to the last
+    -- Denver-bounded partition's real end (one transitional partition, six
+    -- hours short), and every month after that is clean UTC with snapping a
+    -- no-op. Gapless and overlap-free by construction, so no detach/reattach
+    -- normalization is required.
+    v_start := make_timestamptz(p_year, p_month, 1, 0, 0, 0, 'UTC');
     IF p_month = 12 THEN
-        v_end := make_timestamptz(p_year + 1, 1, 1, 0, 0, 0, 'America/Denver');
+        v_end := make_timestamptz(p_year + 1, 1, 1, 0, 0, 0, 'UTC');
     ELSE
-        v_end := make_timestamptz(p_year, p_month + 1, 1, 0, 0, 0, 'America/Denver');
+        v_end := make_timestamptz(p_year, p_month + 1, 1, 0, 0, 0, 'UTC');
     END IF;
 
     -- Snap the lower bound to the closest existing upper bound at or below
@@ -75,9 +78,10 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 COMMENT ON FUNCTION audit.month_partition_bounds(REGCLASS, INTEGER, INTEGER) IS
-    'Timezone-deterministic month partition bounds (America/Denver midnight), '
-    'snapped to neighboring partition bounds so creation is gapless and '
-    'overlap-free regardless of what convention older partitions used.';
+    'Timezone-deterministic month partition bounds (UTC midnight, migration '
+    '055; was America/Denver midnight in 045), snapped to neighboring '
+    'partition bounds so creation is gapless and overlap-free regardless of '
+    'what convention older partitions used.';
 
 -- Shared per-parent index DDL (migration 045)
 CREATE OR REPLACE FUNCTION audit.ensure_partition_indexes(
@@ -242,16 +246,29 @@ $$ LANGUAGE plpgsql;
 -- RETENTION / CLEANUP FUNCTIONS
 -- =============================================================================
 
+-- Retention cutoffs are compared as TIMESTAMPTZ, never as a re-parsed DATE
+-- (migration 055). pg_get_expr() renders a timestamptz in the *session*
+-- TimeZone, so slicing a DATE out of that text makes the drop decision depend
+-- on where the caller's session is pinned — the same session-rendered-text
+-- dependence that migration 045/055 removed from the creation half. See the
+-- rationale block in 055 for the measured behaviour and why `now()` (not
+-- `timezone('UTC', now())`) and an hours interval (not a days interval) are
+-- the only combination that is genuinely session-independent.
+
 -- Drop old event partitions (older than retention_days)
 CREATE OR REPLACE FUNCTION audit.drop_old_events_partitions(
     p_retention_days INTEGER DEFAULT 180
 )
 RETURNS TABLE(partition_name TEXT, action TEXT) AS $$
 DECLARE
-    v_cutoff DATE;
+    v_cutoff TIMESTAMPTZ;
     v_rec RECORD;
 BEGIN
-    v_cutoff := current_date - (p_retention_days || ' days')::INTERVAL;
+    -- Absolute instant, identical in every session TimeZone. now() is
+    -- timestamptz; an hours interval avoids the calendar-day arithmetic that
+    -- PostgreSQL performs in the session zone (and that therefore shifts by an
+    -- hour across a DST transition).
+    v_cutoff := now() - make_interval(hours => p_retention_days * 24);
 
     FOR v_rec IN
         SELECT c.relname as partition_name,
@@ -264,14 +281,17 @@ BEGIN
           AND parent.relname = 'events'
           AND c.relkind = 'r'
     LOOP
-        -- Extract end date from partition bound (e.g., "FOR VALUES FROM ('2025-01-01') TO ('2025-02-01')")
-        -- If end date < cutoff, drop it
-        IF v_rec.partition_bound ~ 'TO \(''(\d{4}-\d{2}-\d{2})' THEN
+        -- Extract the upper bound from the partition bound expression
+        -- (e.g. "FOR VALUES FROM ('2025-01-01 00:00:00+00') TO ('2025-02-01 00:00:00+00')")
+        -- and compare it as an instant. The quoted-literal regex also keeps
+        -- DEFAULT and MAXVALUE partitions out of the retention path, exactly as
+        -- the older date-shaped regex did.
+        IF v_rec.partition_bound ~ 'TO \(''([^'']+)''' THEN
             DECLARE
-                v_end_date DATE;
+                v_end TIMESTAMPTZ;
             BEGIN
-                v_end_date := (regexp_match(v_rec.partition_bound, 'TO \(''(\d{4}-\d{2}-\d{2})'))[1]::DATE;
-                IF v_end_date < v_cutoff THEN
+                v_end := ((regexp_match(v_rec.partition_bound, 'TO \(''([^'']+)'''))[1])::TIMESTAMPTZ;
+                IF v_end < v_cutoff THEN
                     EXECUTE format('DROP TABLE IF EXISTS audit.%I', v_rec.partition_name);
                     partition_name := v_rec.partition_name;
                     action := 'dropped';
@@ -289,10 +309,12 @@ CREATE OR REPLACE FUNCTION audit.drop_old_tool_usage_partitions(
 )
 RETURNS TABLE(partition_name TEXT, action TEXT) AS $$
 DECLARE
-    v_cutoff DATE;
+    v_cutoff TIMESTAMPTZ;
     v_rec RECORD;
 BEGIN
-    v_cutoff := current_date - (p_retention_days || ' days')::INTERVAL;
+    -- Absolute instant, identical in every session TimeZone (see
+    -- drop_old_events_partitions).
+    v_cutoff := now() - make_interval(hours => p_retention_days * 24);
 
     FOR v_rec IN
         SELECT c.relname as partition_name,
@@ -305,12 +327,12 @@ BEGIN
           AND parent.relname = 'tool_usage'
           AND c.relkind = 'r'
     LOOP
-        IF v_rec.partition_bound ~ 'TO \(''(\d{4}-\d{2}-\d{2})' THEN
+        IF v_rec.partition_bound ~ 'TO \(''([^'']+)''' THEN
             DECLARE
-                v_end_date DATE;
+                v_end TIMESTAMPTZ;
             BEGIN
-                v_end_date := (regexp_match(v_rec.partition_bound, 'TO \(''(\d{4}-\d{2}-\d{2})'))[1]::DATE;
-                IF v_end_date < v_cutoff THEN
+                v_end := ((regexp_match(v_rec.partition_bound, 'TO \(''([^'']+)'''))[1])::TIMESTAMPTZ;
+                IF v_end < v_cutoff THEN
                     EXECUTE format('DROP TABLE IF EXISTS audit.%I', v_rec.partition_name);
                     partition_name := v_rec.partition_name;
                     action := 'dropped';
@@ -328,10 +350,12 @@ CREATE OR REPLACE FUNCTION audit.drop_old_outcome_partitions(
 )
 RETURNS TABLE(partition_name TEXT, action TEXT) AS $$
 DECLARE
-    v_cutoff DATE;
+    v_cutoff TIMESTAMPTZ;
     v_rec RECORD;
 BEGIN
-    v_cutoff := current_date - (p_retention_days || ' days')::INTERVAL;
+    -- Absolute instant, identical in every session TimeZone (see
+    -- drop_old_events_partitions).
+    v_cutoff := now() - make_interval(hours => p_retention_days * 24);
 
     FOR v_rec IN
         SELECT c.relname as partition_name,
@@ -344,12 +368,12 @@ BEGIN
           AND parent.relname = 'outcome_events'
           AND c.relkind = 'r'
     LOOP
-        IF v_rec.partition_bound ~ 'TO \(''(\d{4}-\d{2}-\d{2})' THEN
+        IF v_rec.partition_bound ~ 'TO \(''([^'']+)''' THEN
             DECLARE
-                v_end_date DATE;
+                v_end TIMESTAMPTZ;
             BEGIN
-                v_end_date := (regexp_match(v_rec.partition_bound, 'TO \(''(\d{4}-\d{2}-\d{2})'))[1]::DATE;
-                IF v_end_date < v_cutoff THEN
+                v_end := ((regexp_match(v_rec.partition_bound, 'TO \(''([^'']+)'''))[1])::TIMESTAMPTZ;
+                IF v_end < v_cutoff THEN
                     EXECUTE format('DROP TABLE IF EXISTS audit.%I', v_rec.partition_name);
                     partition_name := v_rec.partition_name;
                     action := 'dropped';
@@ -406,6 +430,9 @@ CREATE OR REPLACE FUNCTION audit.partition_maintenance()
 RETURNS JSONB AS $$
 DECLARE
     v_result JSONB := '{}'::jsonb;
+    v_now_utc TIMESTAMP;
+    v_prev_year INTEGER;
+    v_prev_month INTEGER;
     v_current_year INTEGER;
     v_current_month INTEGER;
     v_next_year INTEGER;
@@ -458,17 +485,37 @@ BEGIN
         v_result := v_result || jsonb_build_object('gaps_filled', v_filled);
     END IF;
 
-    -- Get current and next month
-    v_current_year := EXTRACT(YEAR FROM current_date)::INTEGER;
-    v_current_month := EXTRACT(MONTH FROM current_date)::INTEGER;
+    -- Month selection in UTC (migration 055). NEVER use bare `current_date`
+    -- here: it is evaluated in the session TimeZone, so a UTC host and a
+    -- Denver host disagree about which month it is for six hours after every
+    -- month rollover. That disagreement against the UTC-pinned bounds above
+    -- is what left [00:00Z, 06:00Z) on the 1st with no partition and turned
+    -- every insert in that window into a check_violation.
+    v_now_utc := timezone('UTC', now());
 
-    IF v_current_month = 12 THEN
-        v_next_year := v_current_year + 1;
-        v_next_month := 1;
-    ELSE
-        v_next_year := v_current_year;
-        v_next_month := v_current_month + 1;
-    END IF;
+    v_prev_year     := EXTRACT(YEAR  FROM v_now_utc - INTERVAL '1 month')::INTEGER;
+    v_prev_month    := EXTRACT(MONTH FROM v_now_utc - INTERVAL '1 month')::INTEGER;
+    v_current_year  := EXTRACT(YEAR  FROM v_now_utc)::INTEGER;
+    v_current_month := EXTRACT(MONTH FROM v_now_utc)::INTEGER;
+    v_next_year     := EXTRACT(YEAR  FROM v_now_utc + INTERVAL '1 month')::INTEGER;
+    v_next_month    := EXTRACT(MONTH FROM v_now_utc + INTERVAL '1 month')::INTEGER;
+
+    -- Previous month (migration 055). Month selection is now deterministic in
+    -- SQL, but the inputs above SQL are not — a skewed clock, a stale
+    -- container RTC, or a run firing seconds before rollover can leave the
+    -- behind-us edge uncovered. On an established database this is one
+    -- name-existence check per parent returning 'already exists'; it can only
+    -- do real work when something upstream has gone wrong. Safe against the
+    -- create-then-drop ordering below because every retention window
+    -- (90/180/365 days) exceeds one month.
+    v_msg := audit.create_events_partition(v_prev_year, v_prev_month);
+    v_result := v_result || jsonb_build_object('events_prev', v_msg);
+
+    v_msg := audit.create_tool_usage_partition(v_prev_year, v_prev_month);
+    v_result := v_result || jsonb_build_object('tool_usage_prev', v_msg);
+
+    v_msg := audit.create_outcome_partition(v_prev_year, v_prev_month);
+    v_result := v_result || jsonb_build_object('outcome_events_prev', v_msg);
 
     -- Ensure current month partitions exist
     v_msg := audit.create_events_partition(v_current_year, v_current_month);
@@ -497,6 +544,9 @@ BEGIN
     -- 30-day-archived projection, see r1_maintenance.py).
     IF to_regclass('audit.r1_score_audit') IS NOT NULL
        AND to_regprocedure('audit.create_r1_score_audit_partition(integer, integer)') IS NOT NULL THEN
+        v_msg := audit.create_r1_score_audit_partition(v_prev_year, v_prev_month);
+        v_result := v_result || jsonb_build_object('r1_score_audit_prev', v_msg);
+
         v_msg := audit.create_r1_score_audit_partition(v_current_year, v_current_month);
         v_result := v_result || jsonb_build_object('r1_score_audit_current', v_msg);
 
@@ -534,21 +584,44 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+COMMENT ON FUNCTION audit.partition_maintenance() IS
+    'Fills detected gaps, then ensures previous/current/next month partitions '
+    'exist for the monthly-partitioned audit parents and applies retention. '
+    'Month selection is pinned to UTC (migration 055) so it agrees with the '
+    'UTC month bounds regardless of the session TimeZone; bare current_date '
+    'must never be reintroduced here.';
+
 
 -- =============================================================================
 -- INITIAL PARTITION CREATION
--- Create partitions for current month and next 2 months
+-- Create partitions for the previous month, the current month, and the next 2
 -- =============================================================================
 
 DO $$
 DECLARE
+    v_now_utc TIMESTAMP;
     v_year INTEGER;
     v_month INTEGER;
     v_i INTEGER;
 BEGIN
-    FOR v_i IN 0..2 LOOP
-        v_year := EXTRACT(YEAR FROM current_date + (v_i || ' month')::INTERVAL)::INTEGER;
-        v_month := EXTRACT(MONTH FROM current_date + (v_i || ' month')::INTERVAL)::INTEGER;
+    -- UTC month selection (migration 055), matching the UTC-pinned bounds in
+    -- audit.month_partition_bounds(). This block used bare `current_date`,
+    -- which is evaluated in the session TimeZone: on a UTC host during
+    -- [00:00Z, 06:00Z) on the 1st it already read the new month while the
+    -- Denver-pinned bounds said the new month had not started, so a fresh
+    -- bootstrap produced a database whose earliest partition began six hours
+    -- in the future and every insert of now() hard-failed. That is the exact
+    -- fresh-install path CI takes (docker-initdb.sh), and it is what turned
+    -- the lease_plane job red on every branch on 2026-08-01.
+    --
+    -- Start at the previous month for the same reason partition_maintenance()
+    -- does: it costs one no-op name check per parent on any established
+    -- database and closes the behind-us edge if the host clock skews backwards.
+    v_now_utc := timezone('UTC', now());
+
+    FOR v_i IN -1..2 LOOP
+        v_year := EXTRACT(YEAR FROM v_now_utc + (v_i || ' month')::INTERVAL)::INTEGER;
+        v_month := EXTRACT(MONTH FROM v_now_utc + (v_i || ' month')::INTERVAL)::INTEGER;
 
         PERFORM audit.create_events_partition(v_year, v_month);
         PERFORM audit.create_tool_usage_partition(v_year, v_month);
