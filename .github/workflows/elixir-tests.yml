@@ -17,18 +17,26 @@ name: Elixir Tests
 # by the documented quickstart (docker-initdb.sh applies every migration during
 # init, before the healthcheck passes) and runs the full suite.
 
+# `db/postgres/**` is in the filter because the `lease_plane` job runs against the
+# real governance schema built by docker-initdb.sh — so a change under db/postgres
+# can break it while nothing runs to catch that. 2026-08-01 is the worked example:
+# an audit-partition timezone bug turned this job red on every branch, and a
+# db-only PR fixing it would have shown the `lease_plane` check as ABSENT rather
+# than green — the fix could not be validated by the job it repairs.
 on:
   push:
     branches: [ master, main ]
     paths:
       - 'elixir/sentinel/**'
       - 'elixir/lease_plane/**'
+      - 'db/postgres/**'
       - '.github/workflows/elixir-tests.yml'
   pull_request:
     branches: [ master, main ]
     paths:
       - 'elixir/sentinel/**'
       - 'elixir/lease_plane/**'
+      - 'db/postgres/**'
       - '.github/workflows/elixir-tests.yml'
 
 # Least-privilege: these jobs only read the repo and run tests.
