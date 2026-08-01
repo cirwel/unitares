@@ -164,3 +164,34 @@ def test_a_couple_of_skips_is_not_blindness():
     ]
     make(results, posted).run()
     assert posted == []
+
+
+TEMPLATE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "scripts" / "ops" / "com.unitares.doctor-findings.plist.template"
+)
+
+
+def test_plist_path_reaches_a_keg_only_psql():
+    """The shipped PATH must contain the dir that actually holds psql.
+
+    Homebrew's postgresql@17 is keg-only — brew does NOT symlink it into
+    /opt/homebrew/bin; it stays at /opt/homebrew/opt/postgresql@17/bin. The
+    first version of this template shipped only /opt/homebrew/bin, so an
+    install that followed its own instructions verbatim came up with 8 of 11
+    checks SKIPPED (verified 2026-08-01 via --dry-run).
+
+    doctor_sweep_blind did catch it, which is the point of the net — but the
+    install looked correct while it happened, and the net should not be the
+    thing standing between this detector and another month of silence.
+    """
+    line = next(
+        (ln for ln in TEMPLATE_PATH.read_text().splitlines() if "<key>PATH</key>" in ln),
+        None,
+    )
+    assert line is not None, "template no longer declares a PATH env var"
+    entries = line.split("<string>", 1)[1].split("</string>", 1)[0].split(":")
+    assert any("postgresql" in entry for entry in entries), (
+        "PATH declares no postgresql bin dir, so keg-only psql will not resolve "
+        f"and every DB-backed check will SKIP. Got: {entries}"
+    )

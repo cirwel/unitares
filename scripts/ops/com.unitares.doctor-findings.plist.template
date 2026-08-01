@@ -17,12 +17,22 @@
 
     TWO ENVIRONMENT REQUIREMENTS, both load-bearing — do not drop them:
 
-      PATH must include the Homebrew bin dir. Nearly every operator check is
-      DB-backed, and the doctor's _psql_row returns None — SKIP, not FAIL —
-      when `psql` is absent. launchd's minimal PATH omits /opt/homebrew/bin, so
-      without this the entire sweep SKIPs and reports "all operator checks
-      pass" forever. The script now escalates doctor_sweep_blind when most
-      checks skip, but fixing PATH is the actual cure; the guard is the net.
+      PATH must include the dir that actually holds `psql`, which on Homebrew
+      is NOT /opt/homebrew/bin. Nearly every operator check is DB-backed, and
+      the doctor's _psql_row returns None — SKIP, not FAIL — when `psql` is
+      absent, so a wrong PATH makes the whole sweep SKIP and report "all
+      operator checks pass" forever.
+
+      postgresql@17 is KEG-ONLY: brew does not symlink it into
+      /opt/homebrew/bin, it stays at /opt/homebrew/opt/postgresql@17/bin.
+      Shipping only /opt/homebrew/bin was the original bug here — verified
+      2026-08-01, `ls /opt/homebrew/bin/psql` -> No such file, and the
+      resulting --dry-run reported 8 of 11 checks SKIPPED. Confirm with
+      `command -v psql` and put THAT directory first, rather than assuming.
+
+      The version pin in the path is deliberate and self-announcing: if
+      Postgres moves to @18 the sweep goes blind again, and doctor_sweep_blind
+      is what tells you. Fixing PATH is the cure; the guard is only the net.
 
       python3 is PINNED to the framework build. launchd's minimal PATH resolves
       python3 to /usr/bin/python3 (3.9.6) while the repo targets 3.12+.
@@ -62,7 +72,7 @@
     <key>WorkingDirectory</key><string>__UNITARES_ROOT__</string>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>PATH</key><string>/opt/homebrew/opt/postgresql@17/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
     <key>StartInterval</key><integer>3600</integer>
     <key>RunAtLoad</key><false/>
