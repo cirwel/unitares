@@ -2712,6 +2712,20 @@ async def http_record_finding(request):
                 status_code=400,
             )
 
+        # Evidence at ingest (bridge-dispatch proposal §4, PR #1450): forced-
+        # release sentinel findings get their event check attached BEFORE
+        # storage, so the durable audit record, the /api/events feed (Discord
+        # bridge), and the dashboard all carry it. Client-supplied evidence is
+        # stripped first — this endpoint is not operator-gated, so the check
+        # must always be server-computed. Additive: failure never blocks ingest.
+        payload.pop("evidence", None)
+        try:
+            if (str(payload["type"]).startswith("sentinel_")
+                    and str(payload.get("message") or "").startswith(_FORCED_RELEASE_MESSAGE_PREFIX)):
+                await _attach_forced_release_evidence([(payload, payload)])
+        except Exception as ev_err:
+            logger.warning(f"finding ingest event-check failed (ingest unaffected): {ev_err}")
+
         from src.event_detector import event_detector
         stored = event_detector.record_event(payload)
         if stored is not None:
@@ -3195,7 +3209,12 @@ async def _attach_forced_release_evidence(targets: list) -> None:
         return
     for item, details, lease_id in resolvable:
         ev = _assess_forced_release_row(rows.get(lease_id), details.get("surface_id") or "")
-        latency = _finding_report_latency_s(item.get("timestamp"), details.get("ts"))
+        # Queue items carry the audit row's emission timestamp; at ingest the
+        # finding IS being emitted now, so "now" is the honest emission time.
+        latency = _finding_report_latency_s(
+            item.get("timestamp") or datetime.now(timezone.utc).isoformat(),
+            details.get("ts"),
+        )
         if latency is not None:
             ev["report_latency_s"] = round(latency, 1)
         item["evidence"] = ev
