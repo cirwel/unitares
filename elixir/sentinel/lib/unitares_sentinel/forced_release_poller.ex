@@ -362,6 +362,23 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
 
     cursor = load_cursor_from_state()
 
+    # Name the surface HERE rather than letting it default twice, in two places,
+    # to the same string. `LeaseAdvisory.acquire_cycle/1` already falls back to
+    # `resident:/sentinel_cycle`, so this changes nothing about which lease the
+    # poller acquires — what it changes is that `LeaseStarvation.new/1` can now
+    # demand a real surface (see `require_surface_id/1` there) instead of quietly
+    # sharing one default with FleetFindingEmitter, which would give both
+    # residents the same sidecar path and the same finding fingerprint.
+    #
+    # NOT `Keyword.put_new/3`: that keys on the key being PRESENT, so an explicit
+    # `lease_opts: [surface_id: nil]` walked past it into the `fetch!` below,
+    # raised inside `init/1`, and crash-looped the supervisor. The defense is
+    # value-shaped and lives with the requirement.
+    lease_opts =
+      opts
+      |> Keyword.get(:lease_opts, [])
+      |> LeaseStarvation.put_default_surface_id(LeaseAdvisory.cycle_surface_id())
+
     state = %{
       db: db,
       cursor: cursor,
@@ -381,7 +398,7 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
           :lease_advisory,
           Application.get_env(:unitares_sentinel, :lease_advisory_enabled, true)
         ),
-      lease_opts: Keyword.get(opts, :lease_opts, []),
+      lease_opts: lease_opts,
       tick_timeout_ms:
         Keyword.get(
           opts,
@@ -408,7 +425,9 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
         state,
         LeaseStarvation.new(
           resident: "ForcedReleasePoller",
-          surface_id: Keyword.get(Keyword.get(opts, :lease_opts, []), :surface_id),
+          # `fetch!`, not `get`: the surface is resolved above, and a nil here
+          # would put both residents on one sidecar file and one fingerprint.
+          surface_id: Keyword.fetch!(lease_opts, :surface_id),
           alert_after_seconds: Keyword.get(opts, :lease_blocked_alert_after_seconds),
           state_path: Keyword.get(opts, :lease_blocked_state_path, :derive)
         )
@@ -436,11 +455,11 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
     lease = acquire_runtime_lease(state)
 
     if lease_enforcement_blocked?(lease) do
-      # 2026-07-31: this branch used to log and reschedule, nothing more. Between
-      # the two residents the log accumulated 5,703 consecutive "tick skipped by
-      # lease enforcement" warnings and NOTHING was raised — launchctl, the live
-      # PID and the absence of any crash all read healthy the whole time. Count
-      # the episode and self-report it.
+      # 2026-07-31: this branch used to log and reschedule, nothing more. This
+      # surface was refused on 1,742 of 2,012 tick attempts in one BEAM run —
+      # four episodes, the longest 918 ticks (7h41m, overnight) — and NOTHING
+      # was raised. launchctl, the live PID and the absence of any crash all
+      # read healthy throughout. Count the episode and self-report it.
       state =
         state
         |> LeaseStarvation.record_blocked(lease)
