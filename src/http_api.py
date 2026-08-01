@@ -14,6 +14,7 @@ import asyncio
 import ipaddress as _ipaddress
 import json
 import os
+import re
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -3075,6 +3076,88 @@ async def _adjudication_progress() -> dict:
     }
 
 
+# --- Evidence at the point of verdict (docs/proposals/bridge-dispatch-v0.md §4)
+#
+# Findings whose truth is a database fact get their check attached to the queue
+# item, so the operator's verdict is made with the evidence visible instead of
+# on trust. Deterministic SQL only — the free path. Evidence is additive: it
+# never gates whether a finding is shown, and any enrichment failure leaves the
+# queue exactly as it was.
+
+_FORCED_RELEASE_MESSAGE_RE = re.compile(
+    r"^forced release: (?P<surface>\S+) \(lease (?P<lease_id>[0-9a-fA-F-]{36})\)$"
+)
+
+# Span/TTL multiple above which a local_beam lease with no holder PID matches
+# the immortal-orphan shape. Healthy leases sit near 1.0x (remote_heartbeat is
+# exactly 1.0x); observed orphans read 3x-382x. Context, not a verdict.
+_ORPHAN_X_TTL_FLOOR = 3.0
+
+
+def _assess_forced_release_row(row: Optional[dict], claimed_surface: str) -> dict:
+    """Pure assessment of one forced-release claim against its lease row.
+
+    ``no_match`` (row absent) is deliberately distinct from ``contradicts``:
+    retention may have dropped an old lease row, which says nothing about
+    whether the finding was right when it fired.
+    """
+    if row is None:
+        return {
+            "kind": "forced_release",
+            "assessment": "no_match",
+            "note": "no lease row found for the claimed lease id",
+        }
+    surface_match = row.get("surface_id") == claimed_surface
+    reason = row.get("release_reason")
+    ttl = row.get("original_ttl_s") or 0
+    held_s = row.get("held_s")
+    x_ttl = round(float(held_s) / ttl, 1) if ttl and held_s is not None else None
+    return {
+        "kind": "forced_release",
+        "assessment": "corroborates" if (surface_match and reason == "forced") else "contradicts",
+        "surface_match": surface_match,
+        "release_reason": reason,
+        "held_x_ttl": x_ttl,
+        "orphan_shape": bool(
+            row.get("holder_kind") == "local_beam"
+            and row.get("holder_pid_null")
+            and x_ttl is not None
+            and x_ttl >= _ORPHAN_X_TTL_FLOOR
+        ),
+    }
+
+
+async def _fetch_lease_rows(lease_ids: list) -> dict:
+    """Lease rows for evidence assessment, keyed by lease id text."""
+    from src.db import get_db
+    db = get_db()
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT lease_id::text AS lease_id, surface_id, release_reason,
+                      holder_kind, holder_pid IS NULL AS holder_pid_null,
+                      original_ttl_s,
+                      EXTRACT(epoch FROM (released_at - acquired_at)) AS held_s
+               FROM lease_plane.surface_leases
+               WHERE lease_id = ANY($1::uuid[])""",
+            lease_ids,
+        )
+    return {r["lease_id"]: dict(r) for r in rows}
+
+
+async def _attach_forced_release_evidence(queue: list) -> None:
+    """Attach evidence blocks to forced-release findings, in place."""
+    targets = []
+    for f in queue:
+        m = _FORCED_RELEASE_MESSAGE_RE.match(f.get("message") or "")
+        if m:
+            targets.append((f, m.group("surface"), m.group("lease_id").lower()))
+    if not targets:
+        return
+    rows = await _fetch_lease_rows(sorted({t[2] for t in targets}))
+    for f, surface, lease_id in targets:
+        f["evidence"] = _assess_forced_release_row(rows.get(lease_id), surface)
+
+
 async def http_sentinel_adjudication_queue(request):
     """GET /v1/sentinel/adjudication-queue?limit=5&window_hours=336 — the daily
     unadjudicated slice of the Sentinel backlog, plus falsifier progress."""
@@ -3130,6 +3213,11 @@ async def http_sentinel_adjudication_queue(request):
                     "agent_name": details.get("agent_name"),
                     "fingerprint": fp,
                 })
+
+        try:
+            await _attach_forced_release_evidence(queue)
+        except Exception as ev_err:
+            logger.warning(f"adjudication evidence enrichment failed (queue unaffected): {ev_err}")
 
         return JSONResponse({
             "success": True,
