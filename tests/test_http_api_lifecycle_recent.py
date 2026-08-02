@@ -22,7 +22,7 @@ def client():
     app = Starlette(routes=[
         Route("/v1/lifecycle/recent", http_lifecycle_recent, methods=["GET"]),
     ])
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 def _audit_row(event_type, agent_id="agent-1", reason="boom", details_extra=None):

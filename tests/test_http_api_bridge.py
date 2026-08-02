@@ -19,7 +19,7 @@ def client():
             Route("/v1/bridge/summary", http_bridge_summary, methods=["GET"]),
         ]
     )
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 def test_record_bridge_event_accepts_valid_payload(client, monkeypatch):

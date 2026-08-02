@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -39,7 +40,7 @@ async def test_endpoint_returns_row_per_configured_resident(test_db, monkeypatch
     from src.http_api import http_get_progress_flat_recent
 
     class _MockRequest:
-        client = None
+        client = SimpleNamespace(host="127.0.0.1")
 
         def __init__(self, params):
             self.query_params = params
@@ -66,7 +67,7 @@ async def test_endpoint_status_field_uses_priority_resolver(test_db, monkeypatch
     from src.http_api import http_get_progress_flat_recent
 
     class _MockRequest:
-        client = None
+        client = SimpleNamespace(host="127.0.0.1")
         query_params = {}
         headers = {}
 

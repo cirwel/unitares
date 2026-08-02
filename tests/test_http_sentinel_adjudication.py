@@ -22,6 +22,7 @@ from src.http_api import (
 )
 
 OP_TOKEN = "test-operator-token"
+READ_TOKEN = "test-dashboard-read-token"
 SENTINEL_UUID = "f92dcea8-4786-412a-a0eb-362c273382f5"
 PROGRESS = {"outcomes": 25, "bad": 3, "days": 4, "bad_days": 1, "bad_days_target": 3}
 
@@ -29,12 +30,12 @@ PROGRESS = {"outcomes": 25, "bad": 3, "days": 4, "bad_days": 1, "bad_days_target
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("UNITARES_OPERATOR_TOKENS", OP_TOKEN)
-    monkeypatch.delenv("UNITARES_HTTP_API_TOKEN", raising=False)
+    monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", READ_TOKEN)
     app = Starlette(routes=[
         Route("/v1/sentinel/adjudication-queue", http_sentinel_adjudication_queue, methods=["GET"]),
         Route("/v1/sentinel/adjudicate", http_sentinel_adjudicate, methods=["POST"]),
     ])
-    return TestClient(app)
+    return TestClient(app, headers={"Authorization": f"Bearer {READ_TOKEN}"})
 
 
 def _op_headers():
