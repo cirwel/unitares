@@ -10,7 +10,7 @@ benchmark suite for accountable multi-principal AI agents: tool-using agent
 populations under separate, mutually-distrusting principals with no shared
 administrative root, where cross-principal interaction is mediated by verifiable
 attestations between principals' governors rather than a trusted center. The
-testbed proposal has been submitted to the Schmidt Sciences "Scaling AI Safety
+testbed proposal is being submitted to the Schmidt Sciences "Scaling AI Safety
 for a Multi-Agent World" call (TAI-RFP-MAS-26-3000650507, Tier 1); this
 registration stands regardless of funding outcome — if unfunded, the same plan
 governs the slower self-funded path.
@@ -114,3 +114,10 @@ code and its model-organism test suite, and the failed v1 result with its
 diagnostic follow-up. The practice promised in this plan — operational
 definitions, fixed thresholds, kill conditions, negative results published
 rather than reworked — is the practice already in this repository's history.
+
+## Deviation log
+
+- **2026-08-01 (editorial, no protocol change):** Scope's "has been submitted"
+  corrected to "is being submitted" — the original phrasing was anachronistic at
+  freeze time (submission window closes 2026-08-08). No metric, threshold,
+  oracle, sample size, or decision rule is touched by this edit.
