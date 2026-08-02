@@ -1618,6 +1618,105 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
     return success_response(bind_response)
 
 
+async def _assign_onboard_thread(
+    *,
+    arguments: Dict[str, Any],
+    session_key: str,
+    agent_uuid: Optional[str],
+    parent_agent_id: Optional[str],
+    spawn_reason: Optional[str],
+    thread_id_hint: Optional[str],
+) -> tuple[Optional[str], Optional[int], Optional[str]]:
+    """Assign a new identity's thread while preserving onboard's fail-soft policy."""
+    try:
+        return await _assign_thread_for_new_agent(
+            arguments=arguments,
+            session_key=session_key,
+            agent_uuid=agent_uuid,
+            parent_agent_id=parent_agent_id,
+            spawn_reason=spawn_reason,
+            thread_id_hint=thread_id_hint,
+        )
+    except Exception as exc:
+        logger.debug("[THREAD] Could not assign thread (non-fatal): %s", exc)
+        return None, None, spawn_reason
+
+
+def _sync_onboard_parent_metadata(
+    agent_uuid: str,
+    parent_agent_id: str,
+    spawn_reason: Optional[str],
+) -> None:
+    try:
+        from src.agent_metadata_persistence import get_or_create_metadata
+
+        meta = get_or_create_metadata(agent_uuid)
+        meta.parent_agent_id = parent_agent_id
+        meta.spawn_reason = spawn_reason
+    except Exception as exc:
+        logger.debug("[ONBOARD] Could not sync parent to metadata: %s", exc)
+
+
+def _schedule_onboard_lineage_tasks(
+    agent_uuid: str,
+    parent_agent_id: str,
+    spawn_reason: Optional[str],
+) -> None:
+    from src.background_tasks import create_tracked_task
+
+    create_tracked_task(
+        _create_spawned_edge_bg(agent_uuid, parent_agent_id, spawn_reason),
+        name="spawned_edge",
+    )
+    create_tracked_task(
+        _seed_genesis_from_parent_bg(agent_uuid, parent_agent_id),
+        name="seed_genesis_from_parent",
+    )
+    create_tracked_task(
+        _score_lineage_continuity_bg(agent_uuid, parent_agent_id),
+        name="score_lineage_continuity",
+    )
+
+
+async def _finalize_onboard_lineage(
+    *,
+    agent_uuid: str,
+    parent_agent_id: Optional[str],
+    spawn_reason: Optional[str],
+    name: Optional[str],
+    sync_metadata: bool,
+    schedule_fail_soft: bool,
+) -> tuple[Optional[str], str]:
+    """Sync, pre-check, and schedule a declared new-identity lineage edge."""
+    if not parent_agent_id:
+        return None, "no_lineage_declared"
+
+    if sync_metadata:
+        _sync_onboard_parent_metadata(agent_uuid, parent_agent_id, spawn_reason)
+    lineage_state, _ = await _r2_pre_check_and_declare(
+        agent_uuid,
+        parent_agent_id,
+        name,
+        mcp_server.agent_metadata.get(agent_uuid),
+        spawn_reason,
+    )
+    if lineage_state in ("rejected_cross_role", "rejected_coincidental"):
+        return None, lineage_state
+
+    if schedule_fail_soft:
+        try:
+            _schedule_onboard_lineage_tasks(
+                agent_uuid, parent_agent_id, spawn_reason
+            )
+        except Exception as exc:
+            logger.debug("[ONBOARD] Could not schedule lineage tasks: %s", exc)
+    else:
+        _schedule_onboard_lineage_tasks(
+            agent_uuid, parent_agent_id, spawn_reason
+        )
+    return parent_agent_id, "provisional"
+
+
 @mcp_tool("onboard", timeout=15.0, requires_identity="pre_onboard")
 async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
@@ -1992,20 +2091,14 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         # CRITICAL FIX (v2.5.7): Persist the fresh identity we already created
         # instead of calling resolve_session_identity again (which could create a different UUID)
         try:
-            # THREAD IDENTITY: Create/join thread for new agent
-            _thread_id = None
-            _thread_position = None
-            try:
-                _thread_id, _thread_position, _spawn_reason = await _assign_thread_for_new_agent(
-                    arguments=arguments,
-                    session_key=session_key,
-                    agent_uuid=agent_uuid,
-                    parent_agent_id=_parent_agent_id,
-                    spawn_reason=_spawn_reason,
-                    thread_id_hint=_thread_id_hint,
-                )
-            except Exception as e:
-                logger.debug(f"[THREAD] Could not assign thread (non-fatal): {e}")
+            _thread_id, _thread_position, _spawn_reason = await _assign_onboard_thread(
+                arguments=arguments,
+                session_key=session_key,
+                agent_uuid=agent_uuid,
+                parent_agent_id=_parent_agent_id,
+                spawn_reason=_spawn_reason,
+                thread_id_hint=_thread_id_hint,
+            )
 
             # Persist the identity we got from the persist=False call
             newly_persisted = await ensure_agent_persisted(
@@ -2017,59 +2110,17 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             )
             if newly_persisted:
                 logger.info(f"[ONBOARD] Persisted fresh identity {agent_uuid[:8]}... to PostgreSQL")
-                # Sync parent_agent_id to in-memory metadata for EISV inheritance
-                if _parent_agent_id:
-                    try:
-                        from src.agent_metadata_model import agent_metadata as _agent_metadata
-                        from src.agent_metadata_persistence import get_or_create_metadata
-                        meta = get_or_create_metadata(agent_uuid)
-                        meta.parent_agent_id = _parent_agent_id
-                        meta.spawn_reason = _spawn_reason
-                    except Exception as e:
-                        logger.debug(f"[ONBOARD] Could not sync parent to metadata: {e}")
             else:
                 logger.debug(f"[ONBOARD] Fresh identity {agent_uuid[:8]}... was already persisted")
 
-            # R2 PR 3: cross-role pre-check + lineage_declared audit.
-            # If the pre-check rejects (class mismatch), parent_agent_id
-            # is cleared and the downstream lineage tasks are skipped —
-            # there's no lineage edge to score, edge to draw, or genesis
-            # to seed once the cross-role envelope vetoed it.
-            if _parent_agent_id:
-                _r2_state, _ = await _r2_pre_check_and_declare(
-                    agent_uuid,
-                    _parent_agent_id,
-                    name,
-                    mcp_server.agent_metadata.get(agent_uuid),
-                    _spawn_reason,
-                )
-                if _r2_state in ("rejected_cross_role", "rejected_coincidental"):
-                    _parent_agent_id = None
-                    _lineage_for_response = _r2_state
-                else:
-                    _lineage_for_response = "provisional"
-                    from src.background_tasks import create_tracked_task
-                    # Create SPAWNED edge in AGE graph (non-blocking)
-                    create_tracked_task(
-                        _create_spawned_edge_bg(agent_uuid, _parent_agent_id, _spawn_reason),
-                        name="spawned_edge",
-                    )
-                    # Q2 reseed: seed child's genesis from parent's trajectory_current
-                    # so tier<=1 agents with lineage get a meaningful baseline rather
-                    # than comparing their first 10 samples against themselves.
-                    create_tracked_task(
-                        _seed_genesis_from_parent_bg(agent_uuid, _parent_agent_id),
-                        name="seed_genesis_from_parent",
-                    )
-                    # R1 v3.3-D `marks` policy: score declared lineage and stamp
-                    # provisional on inconclusive verdicts. Fire-and-forget — onboard
-                    # response must not block on the per-dim DTW + audit write.
-                    create_tracked_task(
-                        _score_lineage_continuity_bg(agent_uuid, _parent_agent_id),
-                        name="score_lineage_continuity",
-                    )
-            else:
-                _lineage_for_response = "no_lineage_declared"
+            _parent_agent_id, _lineage_for_response = await _finalize_onboard_lineage(
+                agent_uuid=agent_uuid,
+                parent_agent_id=_parent_agent_id,
+                spawn_reason=_spawn_reason,
+                name=name,
+                sync_metadata=newly_persisted,
+                schedule_fail_soft=False,
+            )
 
             # Cache with the adjusted session_key (may include model suffix)
             await _cache_session(session_key, agent_uuid, display_agent_id=agent_id)
@@ -2089,19 +2140,14 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         # lineage. parent_agent_id / spawn_reason are now threaded through so
         # the create path mirrors ensure_agent_persisted's write.
         try:
-            _thread_id = None
-            _thread_position = None
-            try:
-                _thread_id, _thread_position, _spawn_reason = await _assign_thread_for_new_agent(
-                    arguments=arguments,
-                    session_key=session_key,
-                    agent_uuid=None,
-                    parent_agent_id=_parent_agent_id,
-                    spawn_reason=_spawn_reason,
-                    thread_id_hint=_thread_id_hint,
-                )
-            except Exception as e:
-                logger.debug(f"[THREAD] Could not assign thread (non-fatal): {e}")
+            _thread_id, _thread_position, _spawn_reason = await _assign_onboard_thread(
+                arguments=arguments,
+                session_key=session_key,
+                agent_uuid=None,
+                parent_agent_id=_parent_agent_id,
+                spawn_reason=_spawn_reason,
+                thread_id_hint=_thread_id_hint,
+            )
 
             identity = await resolve_session_identity(
                 session_key,
@@ -2119,51 +2165,15 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             is_new = identity.get("created", False) or force_new
             agent_label = identity.get("label")
 
-            # Mirror the created_fresh_identity branch: sync lineage into
-            # in-memory metadata (EISV inheritance) and create the SPAWNED
-            # edge in AGE. Without this the force_new branch would have DB
-            # lineage but no trajectory/graph continuity.
-            if is_new and _parent_agent_id:
-                try:
-                    from src.agent_metadata_persistence import get_or_create_metadata
-                    meta = get_or_create_metadata(agent_uuid)
-                    meta.parent_agent_id = _parent_agent_id
-                    meta.spawn_reason = _spawn_reason
-                except Exception as e:
-                    logger.debug(f"[ONBOARD] Could not sync parent to metadata (force_new branch): {e}")
-                # R2 PR 3: cross-role pre-check + lineage_declared audit.
-                # Mirrors the created_fresh_identity branch above.
-                _r2_state, _ = await _r2_pre_check_and_declare(
-                    agent_uuid,
-                    _parent_agent_id,
-                    name,
-                    mcp_server.agent_metadata.get(agent_uuid),
-                    _spawn_reason,
+            if is_new:
+                _parent_agent_id, _lineage_for_response = await _finalize_onboard_lineage(
+                    agent_uuid=agent_uuid,
+                    parent_agent_id=_parent_agent_id,
+                    spawn_reason=_spawn_reason,
+                    name=name,
+                    sync_metadata=True,
+                    schedule_fail_soft=True,
                 )
-                if _r2_state in ("rejected_cross_role", "rejected_coincidental"):
-                    _parent_agent_id = None
-                    _lineage_for_response = _r2_state
-                else:
-                    _lineage_for_response = "provisional"
-                    try:
-                        from src.background_tasks import create_tracked_task
-                        create_tracked_task(
-                            _create_spawned_edge_bg(agent_uuid, _parent_agent_id, _spawn_reason),
-                            name="spawned_edge",
-                        )
-                        # Q2 reseed: mirror the created_fresh_identity branch.
-                        create_tracked_task(
-                            _seed_genesis_from_parent_bg(agent_uuid, _parent_agent_id),
-                            name="seed_genesis_from_parent",
-                        )
-                        # R1 v3.3-D `marks` policy: mirror the created_fresh_identity
-                        # branch. See _score_lineage_continuity_bg for contract.
-                        create_tracked_task(
-                            _score_lineage_continuity_bg(agent_uuid, _parent_agent_id),
-                            name="score_lineage_continuity",
-                        )
-                    except Exception as e:
-                        logger.debug(f"[ONBOARD] Could not schedule SPAWNED edge (force_new branch): {e}")
             else:
                 _lineage_for_response = "no_lineage_declared"
         except Exception as e:
