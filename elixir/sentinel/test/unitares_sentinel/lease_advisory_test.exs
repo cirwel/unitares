@@ -394,5 +394,391 @@ defmodule UnitaresSentinel.LeaseAdvisoryTest do
 
     assert Agent.get(calls, & &1) == 1, "a conflict is an answer, not a transport failure"
   end
-end
 
+  # --- own-orphan reclaim (2026-08-01 double-lost-response incident) ---------
+  #
+  # 2026-08-01 15:42: a Postgres stall pushed the plane past the client's 2s
+  # budget on BOTH the acquire and its recovery retry while the first INSERT
+  # had already committed. The attempt's holder uuid was discarded, every later
+  # tick minted a fresh uuid, and the poller starved for 1h49m (216 ticks) on
+  # held_by_other responses that were naming the orphan's holder uuid — a uuid
+  # this process itself had minted — plus the blocking_lease_id needed to free
+  # it. With `reclaim_candidates` threaded (see `UnitaresSentinel.LeaseReclaim`),
+  # the advisory recognizes such a conflict as its own stranded lease,
+  # releases it, and re-acquires in the same call.
+
+  @other_lease_id "44444444-4444-4444-4444-444444444444"
+
+  test "double transport failure carries the attempted holder uuid" do
+    http_post = fn _url, _body, _headers, _timeout_ms -> {:error, :timeout} end
+
+    assert %{
+             outcome: :service_unavailable,
+             lease_id: nil,
+             conflict: %{attempted_holder_uuid: @holder_uuid}
+           } =
+             LeaseAdvisory.acquire_cycle(
+               bearer_token: "test-token",
+               holder_agent_uuid: @holder_uuid,
+               http_post: http_post
+             )
+  end
+
+  test "enforcement preserves the attempted holder uuid for reclaim memory" do
+    http_post = fn _url, _body, _headers, _timeout_ms -> {:error, :timeout} end
+
+    assert %{
+             outcome: :enforcement_blocked,
+             conflict: %{
+               blocked_outcome: :service_unavailable,
+               attempted_holder_uuid: @holder_uuid
+             }
+           } =
+             LeaseAdvisory.acquire_cycle(
+               bearer_token: "test-token",
+               holder_agent_uuid: @holder_uuid,
+               enforced_surface_kinds: MapSet.new(["resident"]),
+               http_post: http_post
+             )
+  end
+
+  test "held_by_other naming our own prior attempt releases the orphan and re-acquires" do
+    {:ok, calls} = Agent.start_link(fn -> [] end)
+
+    http_post = fn url, body, _headers, _timeout_ms ->
+      Agent.update(calls, &(&1 ++ [{url, body}]))
+
+      case Agent.get(calls, &length/1) do
+        1 ->
+          assert String.ends_with?(url, "/v1/lease/acquire")
+
+          {:ok, 409,
+           Jason.encode!(%{
+             ok: false,
+             error: "held_by_other",
+             held_by_uuid: @holder_uuid,
+             blocking_lease_id: @lease_id
+           })}
+
+        2 ->
+          assert String.ends_with?(url, "/v1/lease/release")
+
+          assert body == %{
+                   "lease_id" => @lease_id,
+                   "release_reason" => "reclaimed_lost_acquire"
+                 }
+
+          {:ok, 200, ~s({"ok":true})}
+
+        3 ->
+          assert String.ends_with?(url, "/v1/lease/acquire")
+
+          {:ok, 200,
+           Jason.encode!(%{
+             ok: true,
+             idempotent: false,
+             lease: %{lease_id: @other_lease_id},
+             drift_warning: []
+           })}
+      end
+    end
+
+    assert %{
+             outcome: :acquired_new,
+             lease_id: @other_lease_id,
+             conflict: %{reclaimed_lease_id: @lease_id}
+           } =
+             LeaseAdvisory.acquire_cycle(
+               bearer_token: "test-token",
+               reclaim_candidates: [@holder_uuid],
+               http_post: http_post
+             )
+
+    recorded = Agent.get(calls, & &1)
+    assert length(recorded) == 3
+
+    # The re-acquire is a NEW attempt with a fresh uuid, not a resurrection of
+    # the stranded one — per-attempt uuids are the double-grant safety.
+    [{_, first_acquire}, _release, {_, reacquire}] = recorded
+    refute reacquire["holder_agent_uuid"] == first_acquire["holder_agent_uuid"]
+    refute reacquire["holder_agent_uuid"] == @holder_uuid
+  end
+
+  test "held_by_other naming a foreign holder is not reclaimed" do
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      Agent.update(calls, &(&1 + 1))
+
+      {:ok, 409,
+       Jason.encode!(%{
+         ok: false,
+         error: "held_by_other",
+         held_by_uuid: "33333333-3333-3333-3333-333333333333",
+         blocking_lease_id: @lease_id
+       })}
+    end
+
+    assert %{outcome: :held_by_other} =
+             LeaseAdvisory.acquire_cycle(
+               bearer_token: "test-token",
+               reclaim_candidates: [@holder_uuid],
+               http_post: http_post
+             )
+
+    assert Agent.get(calls, & &1) == 1, "no release, no re-acquire for a foreign holder"
+  end
+
+  test "reclaim keeps the conflict and retries next tick when the release fails" do
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    http_post = fn url, _body, _headers, _timeout_ms ->
+      Agent.update(calls, &(&1 + 1))
+
+      case Agent.get(calls, & &1) do
+        1 ->
+          {:ok, 409,
+           Jason.encode!(%{
+             ok: false,
+             error: "held_by_other",
+             held_by_uuid: @holder_uuid,
+             blocking_lease_id: @lease_id
+           })}
+
+        # The release dies at the transport. Under a DB stall it may still
+        # have committed server-side, so there must be NO 'normal' fallback
+        # here — that would mislabel the orphan span this reason exists to
+        # distinguish. Next tick retries the reclaim.
+        2 ->
+          assert String.ends_with?(url, "/v1/lease/release")
+          {:error, :timeout}
+      end
+    end
+
+    assert %{
+             outcome: :held_by_other,
+             lease_id: nil,
+             conflict: %{reclaim_failed: true, blocking_lease_id: @lease_id}
+           } =
+             LeaseAdvisory.acquire_cycle(
+               bearer_token: "test-token",
+               reclaim_candidates: [@holder_uuid],
+               http_post: http_post
+             )
+
+    assert Agent.get(calls, & &1) == 2,
+           "no 'normal' fallback and no re-acquire after a transport-failed release"
+  end
+
+  # A 503 is ambiguous between a real internal error and new router code over
+  # an unapplied 056 migration. Falling back to 'normal' there would make the
+  # unapplied-migration state silently mislabel every reclaimed-orphan span
+  # forever; failing loudly routes the operator to the migration instead.
+  test "reclaim does not fall back to 'normal' on a 503 rejection" do
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    http_post = fn url, _body, _headers, _timeout_ms ->
+      Agent.update(calls, &(&1 + 1))
+
+      case Agent.get(calls, & &1) do
+        1 ->
+          {:ok, 409,
+           Jason.encode!(%{
+             ok: false,
+             error: "held_by_other",
+             held_by_uuid: @holder_uuid,
+             blocking_lease_id: @lease_id
+           })}
+
+        2 ->
+          assert String.ends_with?(url, "/v1/lease/release")
+
+          {:ok, 503,
+           Jason.encode!(%{ok: false, error: "service_unavailable", reason: "internal error"})}
+      end
+    end
+
+    assert %{
+             outcome: :held_by_other,
+             conflict: %{reclaim_failed: true}
+           } =
+             LeaseAdvisory.acquire_cycle(
+               bearer_token: "test-token",
+               reclaim_candidates: [@holder_uuid],
+               http_post: http_post
+             )
+
+    assert Agent.get(calls, & &1) == 2, "no 'normal' fallback on an ambiguous 503"
+  end
+
+  test "reclaim treats an already-released lease as success and re-acquires" do
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    http_post = fn url, _body, _headers, _timeout_ms ->
+      Agent.update(calls, &(&1 + 1))
+
+      case Agent.get(calls, & &1) do
+        1 ->
+          {:ok, 409,
+           Jason.encode!(%{
+             ok: false,
+             error: "held_by_other",
+             held_by_uuid: @holder_uuid,
+             blocking_lease_id: @lease_id
+           })}
+
+        # An operator force-release (or the reaper) got there first.
+        2 ->
+          assert String.ends_with?(url, "/v1/lease/release")
+          {:ok, 404, Jason.encode!(%{ok: false, error: "not_found"})}
+
+        3 ->
+          assert String.ends_with?(url, "/v1/lease/acquire")
+
+          {:ok, 200,
+           Jason.encode!(%{
+             ok: true,
+             idempotent: false,
+             lease: %{lease_id: @other_lease_id},
+             drift_warning: []
+           })}
+      end
+    end
+
+    assert %{outcome: :acquired_new, lease_id: @other_lease_id} =
+             LeaseAdvisory.acquire_cycle(
+               bearer_token: "test-token",
+               reclaim_candidates: [@holder_uuid],
+               http_post: http_post
+             )
+  end
+
+  test "acquired scopes carry the holder uuid they were acquired under" do
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      {:ok, 200,
+       Jason.encode!(%{
+         ok: true,
+         idempotent: false,
+         lease: %{lease_id: @lease_id},
+         drift_warning: []
+       })}
+    end
+
+    assert %{outcome: :acquired_new, lease_id: @lease_id, holder_uuid: @holder_uuid} =
+             LeaseAdvisory.acquire_cycle(
+               bearer_token: "test-token",
+               holder_agent_uuid: @holder_uuid,
+               http_post: http_post
+             )
+  end
+
+  test "reclaim release falls back to 'normal' when the plane predates the reason" do
+    {:ok, calls} = Agent.start_link(fn -> [] end)
+
+    http_post = fn url, body, _headers, _timeout_ms ->
+      Agent.update(calls, &(&1 ++ [{url, body}]))
+
+      case Agent.get(calls, &length/1) do
+        1 ->
+          {:ok, 409,
+           Jason.encode!(%{
+             ok: false,
+             error: "held_by_other",
+             held_by_uuid: @holder_uuid,
+             blocking_lease_id: @lease_id
+           })}
+
+        2 ->
+          assert body["release_reason"] == "reclaimed_lost_acquire"
+
+          {:ok, 422,
+           Jason.encode!(%{ok: false, error: "schema_invalid", detail: "invalid release_reason"})}
+
+        3 ->
+          assert String.ends_with?(url, "/v1/lease/release")
+          assert body["release_reason"] == "normal"
+          {:ok, 200, ~s({"ok":true})}
+
+        4 ->
+          assert String.ends_with?(url, "/v1/lease/acquire")
+
+          {:ok, 200,
+           Jason.encode!(%{
+             ok: true,
+             idempotent: false,
+             lease: %{lease_id: @other_lease_id},
+             drift_warning: []
+           })}
+      end
+    end
+
+    assert %{outcome: :acquired_new, lease_id: @other_lease_id} =
+             LeaseAdvisory.acquire_cycle(
+               bearer_token: "test-token",
+               reclaim_candidates: [@holder_uuid],
+               http_post: http_post
+             )
+  end
+
+  # The deterministic regression for the incident itself: the server commits
+  # the acquisition, BOTH client responses (original + recovery retry) are
+  # lost, and a later tick recovers via the candidate memory instead of
+  # starving until an operator force-releases.
+  test "regression: committed acquire with both responses lost is reclaimed on a later tick" do
+    {:ok, tick1_calls} = Agent.start_link(fn -> [] end)
+
+    tick1_post = fn _url, body, _headers, _timeout_ms ->
+      Agent.update(tick1_calls, &(&1 ++ [body["holder_agent_uuid"]]))
+      {:error, :timeout}
+    end
+
+    tick1 = LeaseAdvisory.acquire_cycle(bearer_token: "test-token", http_post: tick1_post)
+
+    assert %{outcome: :service_unavailable, conflict: %{attempted_holder_uuid: stranded_uuid}} =
+             tick1
+
+    # Both attempts used the SAME uuid — the one the server committed under.
+    assert [^stranded_uuid, ^stranded_uuid] = Agent.get(tick1_calls, & &1)
+
+    # Tick 2: the plane answers again; the orphan committed under
+    # stranded_uuid blocks the surface. The candidate memory (threaded by
+    # LeaseReclaim from the scope above) recognizes and reclaims it.
+    {:ok, tick2_calls} = Agent.start_link(fn -> [] end)
+
+    tick2_post = fn url, body, _headers, _timeout_ms ->
+      Agent.update(tick2_calls, &(&1 ++ [{url, body}]))
+
+      case Agent.get(tick2_calls, &length/1) do
+        1 ->
+          {:ok, 409,
+           Jason.encode!(%{
+             ok: false,
+             error: "held_by_other",
+             held_by_uuid: stranded_uuid,
+             blocking_lease_id: @lease_id
+           })}
+
+        2 ->
+          assert String.ends_with?(url, "/v1/lease/release")
+          assert body["lease_id"] == @lease_id
+          {:ok, 200, ~s({"ok":true})}
+
+        3 ->
+          {:ok, 200,
+           Jason.encode!(%{
+             ok: true,
+             idempotent: false,
+             lease: %{lease_id: @other_lease_id},
+             drift_warning: []
+           })}
+      end
+    end
+
+    assert %{outcome: :acquired_new, lease_id: @other_lease_id} =
+             LeaseAdvisory.acquire_cycle(
+               bearer_token: "test-token",
+               reclaim_candidates: [stranded_uuid],
+               http_post: tick2_post
+             )
+  end
+end
