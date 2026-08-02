@@ -98,7 +98,7 @@ class _FakeDB:
 
 def _client():
     app = Starlette(routes=[Route("/v1/effect-veto", http_effect_veto, methods=["POST"])])
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 def _post(row=None, *, raise_exc=None, body=None, token="__valid__"):

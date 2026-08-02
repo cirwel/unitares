@@ -24,14 +24,14 @@ def clear_events():
 
 @pytest.fixture(autouse=True)
 def _no_http_api_token(monkeypatch):
-    """Unset token so _check_http_auth falls through to the no-token path."""
+    """Use the local trusted-network path without configuring a token."""
     monkeypatch.delenv("UNITARES_HTTP_API_TOKEN", raising=False)
 
 
 @pytest.fixture
 def client():
     app = Starlette(routes=[Route("/api/findings", http_record_finding, methods=["POST"])])
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 def test_accepts_valid_finding(client):

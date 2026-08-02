@@ -212,8 +212,8 @@ async def test_http_bootstrap_silent_returns_aged_agents(db, monkeypatch):
                                   params=BootstrapStateParams())
     await _backdate_state(db, block["state_id"], hours=48.0)
 
-    # Auth disabled so the test doesn't need a token.
-    monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "")
+    # Exercise the deliberate local trusted-network bypass without a token.
+    monkeypatch.delenv("UNITARES_HTTP_API_TOKEN", raising=False)
 
     # Wire the request to our test backend.
     import src.db as db_module
@@ -225,6 +225,7 @@ async def test_http_bootstrap_silent_returns_aged_agents(db, monkeypatch):
         "path": "/v1/bootstrap/silent",
         "headers": [],
         "query_string": b"min_age_hours=24",
+        "client": ("127.0.0.1", 50000),
     }
     request = Request(scope)
 
@@ -268,7 +269,7 @@ async def test_http_bootstrap_silent_clamps_limit(db, monkeypatch):
     from starlette.requests import Request
     from src.http_api import http_bootstrap_silent
 
-    monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "")
+    monkeypatch.delenv("UNITARES_HTTP_API_TOKEN", raising=False)
     import src.db as db_module
     monkeypatch.setattr(db_module, "get_db", lambda: db)
 
@@ -278,6 +279,7 @@ async def test_http_bootstrap_silent_clamps_limit(db, monkeypatch):
         "path": "/v1/bootstrap/silent",
         "headers": [],
         "query_string": b"limit=9999",
+        "client": ("127.0.0.1", 50000),
     }
     request = Request(scope)
     response = await http_bootstrap_silent(request)

@@ -71,7 +71,7 @@ def client(monkeypatch, recorder):
         Route("/v1/substrate/observe", http_substrate_observe, methods=["POST"]),
         Route("/v1/substrate/dark_sessions", http_substrate_dark_sessions, methods=["GET"]),
     ])
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 def test_observe_rejects_missing_slot(client, recorder):

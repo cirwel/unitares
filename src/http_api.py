@@ -47,6 +47,21 @@ from src.services.http_request_parser import (
 )
 from src.mcp_listen_config import check_mcp_bearer, mcp_bearer_required
 from src.mcp_compat import get_tool_input_schema
+from src.dashboard_auth import (
+    DASHBOARD_EXPECTED_ORIGIN,
+    attach_dashboard_session,
+    dashboard_session_authenticated,
+    dashboard_session_write_authorized,
+    http_auth_credential_revoke,
+    http_auth_enroll,
+    http_auth_logout,
+    http_auth_sessions,
+    http_auth_signin,
+    http_webauthn_options,
+    http_webauthn_register_options,
+    http_webauthn_register_verify,
+    http_webauthn_verify,
+)
 
 if TYPE_CHECKING:
     from starlette.applications import Starlette
@@ -181,7 +196,7 @@ def _http_unauthorized():
         {
             "success": False,
             "error": "Unauthorized",
-            "hint": "Provide a valid bearer token: Authorization: Bearer <token>. Tokens come from UNITARES_MCP_BEARER_TOKENS (hosted) or UNITARES_HTTP_API_TOKEN (local).",
+            "hint": "Sign in at /auth/signin or provide a valid bearer token. Tokens come from UNITARES_MCP_BEARER_TOKENS (hosted) or UNITARES_HTTP_API_TOKEN (local).",
         },
         status_code=401,
     )
@@ -203,12 +218,11 @@ def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
     requires a valid bearer with no IP bypass; the legacy/local posture keeps the
     trusted-network bypass and then gates on ``UNITARES_HTTP_API_TOKEN``.
 
-    The one difference is *where the token comes from*. A browser cannot set
-    request headers on a ``WebSocket``, so the credential has to ride in the
-    query string (``/ws/eisv?token=…``); non-browser clients may still send the
-    ``Authorization`` header. The dashboard already carries its read bearer in
-    the URL by design (the ``?token=`` bookmark, #643), so this reuses the
-    existing credential rather than introducing a second one.
+    A browser cannot set request headers on a ``WebSocket``, so the break-glass
+    bearer rides in the query string (``/ws/eisv?token=…``); non-browser clients
+    may still send the ``Authorization`` header. A DB-validated passkey session
+    is also accepted in local posture when the browser supplies the exact RP
+    Origin.
 
     Without this, ``/ws/eisv`` was the only route on the server with no auth
     check at all: over the tunnel ``GET /v1/residents`` answered 401 while the
@@ -221,17 +235,26 @@ def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
     )
 
     # Hosted posture: the MCP bearer governs every transport; no IP bypass.
+    # Dashboard cookies are intentionally NOT authorized into this bearer-only
+    # branch without a separate operator decision.
     if mcp_bearer_required():
         return check_mcp_bearer(f"Bearer {tok}" if tok else None)
 
-    # Legacy / local posture — loopback and Tailscale stay unauthenticated.
+    # Legacy / local posture. Keep explicit tokens as break-glass, then allow
+    # a DB-validated cookie only from our exact RP origin (WebSockets do not
+    # receive CORS protection and sibling subdomains are same-site).
+    if tok and http_api_token and secrets.compare_digest(tok, http_api_token):
+        return True
+    if dashboard_session_authenticated(websocket):
+        origin = websocket.headers.get("origin") or websocket.headers.get("Origin")
+        return bool(origin) and secrets.compare_digest(origin, DASHBOARD_EXPECTED_ORIGIN)
+
+    # Loopback and Tailscale stay unauthenticated in local posture.
     if _is_trusted_network(websocket):
         return True
-    if not http_api_token:
-        return True
-    if not tok:
-        return False
-    return secrets.compare_digest(tok, http_api_token)
+    # An unset local token is deny, not "gate disabled". Passkey sessions and
+    # trusted-network access above remain usable after deliberate token removal.
+    return False
 
 
 def _check_http_auth(request, *, http_api_token: str | None) -> bool:
@@ -245,27 +268,29 @@ def _check_http_auth(request, *, http_api_token: str | None) -> bool:
     ``10.x``) would otherwise bypass auth on the write path. Same token, same
     rule, both transports.
 
-    Local / self-host default — no MCP bearer configured: the legacy posture
-    stands. Trusted networks bypass, and the optional ``UNITARES_HTTP_API_TOKEN``
-    gates the rest.
+    Local / self-host default — no MCP bearer configured: trusted networks
+    bypass, while the rest require either ``UNITARES_HTTP_API_TOKEN`` or a
+    DB-validated passkey session. An unset local token fails closed.
     """
     # Hosted posture: the MCP bearer governs every transport; no IP bypass.
+    # Dashboard cookies are intentionally NOT authorized into this bearer-only
+    # branch without a separate operator decision.
     if mcp_bearer_required():
         auth = request.headers.get("authorization") or request.headers.get("Authorization")
         return check_mcp_bearer(auth)
 
-    # Legacy / local posture.
+    # Legacy / local posture: trusted network -> bearer -> validated session.
     if _is_trusted_network(request):
         return True
-    if not http_api_token:
-        return True
     auth = request.headers.get("authorization") or request.headers.get("Authorization")
-    if not auth or not isinstance(auth, str):
-        return False
-    if not auth.lower().startswith("bearer "):
-        return False
-    token = auth.split(" ", 1)[1].strip()
-    return secrets.compare_digest(token, http_api_token)
+    token = _bearer_from_header(auth)
+    if token and http_api_token and secrets.compare_digest(token, http_api_token):
+        return True
+    if dashboard_session_authenticated(request):
+        return True
+    # Fail closed when UNITARES_HTTP_API_TOKEN is unset. Removing the token is
+    # a deliberate lockout of non-session, non-trusted clients—not cleanup.
+    return False
 
 
 async def _extract_client_session_id(request) -> str:
@@ -1299,6 +1324,10 @@ async def http_dashboard_redesign(request):
     rel = request.path_params.get("file", "") or "app.html"
     if ".." in rel or rel.startswith("/"):
         return JSONResponse({"error": "Invalid file path"}, status_code=400)
+    # Auth HTML is served only through the gated /auth handlers. Shared CSS/JS
+    # remains available here so those standalone pages stay buildless.
+    if rel in {"auth/signin.html", "auth/enroll.html"}:
+        return JSONResponse({"error": "File not found", "requested": rel}, status_code=404)
     if not rel.endswith((".html", ".css", ".js", ".md")):
         return JSONResponse({"error": "File type not allowed", "requested": rel}, status_code=403)
 
@@ -3236,10 +3265,10 @@ async def http_sentinel_adjudicate(request):
     """
     signals = _build_http_session_signals(request)
     from src.mcp_handlers.identity.operator import is_operator_caller
-    if not is_operator_caller(signals):
+    if not is_operator_caller(signals) and not dashboard_session_write_authorized(request):
         return JSONResponse(
             {"success": False,
-             "error": "operator credential required (X-Unitares-Operator header)"},
+             "error": "operator credential or passkey session with X-Unitares-Csrf: 1 required"},
             status_code=403,
         )
     try:
@@ -3313,10 +3342,10 @@ async def http_harness_outcome(request):
     """
     signals = _build_http_session_signals(request)
     from src.mcp_handlers.identity.operator import is_operator_caller
-    if not is_operator_caller(signals):
+    if not is_operator_caller(signals) and not dashboard_session_write_authorized(request):
         return JSONResponse(
             {"success": False,
-             "error": "operator credential required (X-Unitares-Operator header)"},
+             "error": "operator credential or passkey session with X-Unitares-Csrf: 1 required"},
             status_code=403,
         )
     try:
@@ -4203,6 +4232,7 @@ def register_http_routes(
     ``request.state`` attributes before each handler runs.  This avoids
     module-level globals while keeping handler signatures clean.
     """
+    from starlette.requests import HTTPConnection
     from starlette.types import ASGIApp, Receive, Scope, Send
 
     # Tiny middleware that injects server context into request.state
@@ -4223,6 +4253,50 @@ def register_http_routes(
             await self.app(scope, receive, send)
 
     app.add_middleware(_InjectContextMiddleware)
+
+    class _DashboardSessionMiddleware:
+        """Attach a validated Postgres session before sync REST/WS auth gates."""
+
+        def __init__(self, app: ASGIApp):
+            self.app = app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send):
+            path = scope.get("path", "")
+            session_aware_path = (
+                path.startswith(("/v1/", "/api/", "/auth/", "/debug/"))
+                or path == "/metrics"
+            )
+            if scope["type"] == "websocket" or (
+                scope["type"] == "http" and session_aware_path
+            ):
+                await attach_dashboard_session(HTTPConnection(scope))
+            await self.app(scope, receive, send)
+
+    app.add_middleware(_DashboardSessionMiddleware)
+
+    # Browser passkey auth. These precede dashboard static routes and do not
+    # alter /mcp, /sse, the public health endpoints, or Host allowlisting.
+    app.routes.append(Route("/auth/signin", http_auth_signin, methods=["GET"]))
+    app.routes.append(Route("/auth/enroll", http_auth_enroll, methods=["GET", "POST"]))
+    app.routes.append(Route("/auth/webauthn/options", http_webauthn_options, methods=["POST"]))
+    app.routes.append(Route("/auth/webauthn/verify", http_webauthn_verify, methods=["POST"]))
+    app.routes.append(Route(
+        "/auth/webauthn/register/options",
+        http_webauthn_register_options,
+        methods=["POST"],
+    ))
+    app.routes.append(Route(
+        "/auth/webauthn/register/verify",
+        http_webauthn_register_verify,
+        methods=["POST"],
+    ))
+    app.routes.append(Route("/auth/logout", http_auth_logout, methods=["POST"]))
+    app.routes.append(Route("/auth/sessions", http_auth_sessions, methods=["GET", "POST"]))
+    app.routes.append(Route(
+        "/auth/credentials/{credential_id}/revoke",
+        http_auth_credential_revoke,
+        methods=["POST"],
+    ))
 
     # Redesign preview routes — must come BEFORE /dashboard/{file} so that
     # /dashboard/redesign resolves to the redesign handler, not the flat
