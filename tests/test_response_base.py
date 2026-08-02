@@ -108,3 +108,82 @@ class TestSuccessResponse:
             {"value": 1}, agent_id="a",
             arguments={"lite_response": True, "_param_coercions": {"x": "y"}})
         assert "_param_coercions" not in d
+
+
+# --------------------------------------------------------------------------- #
+# identity_required denials stay identity-neutral
+# (dogfood 2026-08-02, fingerprint 90b801cb13669bac: middleware-injected
+# agent_id defeated compute_agent_signature's server-inferred guard and
+# decorated no-proof denials with a resident identity)
+# --------------------------------------------------------------------------- #
+
+def _signature(uuid, caller_proven):
+    return {
+        "uuid": uuid,
+        "agent_id": "Agent_X",
+        "display_name": "resident_x",
+        "identity_assurance": {
+            "tier": "strong" if caller_proven else "weak",
+            "caller_proven": caller_proven,
+            "proof_origin": "caller_asserted" if caller_proven else "server_inferred",
+            "session_source": "continuity_token" if caller_proven else "ip_ua_fingerprint",
+        },
+    }
+
+
+class TestIdentityRequiredDenialSignature:
+    def _payload(self, data, signature, monkeypatch):
+        from src.mcp_handlers.support import agent_auth
+        monkeypatch.setattr(
+            agent_auth, "compute_agent_signature", lambda **kw: signature)
+        seq = success_response(data, arguments={"agent_id": "injected-by-middleware"})
+        return json.loads(seq[0].text)
+
+    def test_server_inferred_signature_suppressed_on_denial(self, monkeypatch):
+        d = self._payload(
+            {"status": "identity_required", "tool": "observe"},
+            _signature("11111111-2222-4333-8444-555555555555", caller_proven=False),
+            monkeypatch,
+        )
+        assert d["agent_signature"] == {"uuid": None}
+        # Recovery guidance survives: the assurance block is hoisted intact.
+        assert d["identity_assurance"]["caller_proven"] is False
+        assert d["identity_assurance"]["proof_origin"] == "server_inferred"
+
+    def test_caller_proven_signature_kept_on_denial(self, monkeypatch):
+        d = self._payload(
+            {"status": "identity_required", "tool": "observe"},
+            _signature("11111111-2222-4333-8444-555555555555", caller_proven=True),
+            monkeypatch,
+        )
+        assert d["agent_signature"]["uuid"] == "11111111-2222-4333-8444-555555555555"
+        assert "identity_assurance" not in d
+
+    def test_non_denial_response_untouched(self, monkeypatch):
+        d = self._payload(
+            {"value": 1},
+            _signature("11111111-2222-4333-8444-555555555555", caller_proven=False),
+            monkeypatch,
+        )
+        assert d["agent_signature"]["uuid"] == "11111111-2222-4333-8444-555555555555"
+        assert "identity_assurance" not in d
+
+    def test_already_neutral_signature_passes_through(self, monkeypatch):
+        d = self._payload(
+            {"status": "identity_required", "tool": "observe"},
+            {"uuid": None},
+            monkeypatch,
+        )
+        assert d["agent_signature"] == {"uuid": None}
+        assert "identity_assurance" not in d
+
+    def test_payload_provided_assurance_not_clobbered(self, monkeypatch):
+        d = self._payload(
+            {"status": "identity_required",
+             "identity_assurance": {"tier": "weak", "caller_proven": False,
+                                    "reason": "from-refusal-payload"}},
+            _signature("11111111-2222-4333-8444-555555555555", caller_proven=False),
+            monkeypatch,
+        )
+        assert d["agent_signature"] == {"uuid": None}
+        assert d["identity_assurance"]["reason"] == "from-refusal-payload"
