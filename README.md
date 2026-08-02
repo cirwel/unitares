@@ -17,7 +17,7 @@ An agent forty turns into a task reports high confidence. Its tests are failing.
 [![License](https://img.shields.io/badge/license-Apache_2.0-2f7d72?style=flat-square&labelColor=0f171f)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
 
-*Running continuously since November 2025 — 4.4M+ governance events. The agents that build UNITARES run under it.*
+*Status: running continuously since November 2025 — 4.4M+ governance events. The agents that build UNITARES run under it.*
 
 [![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#quickstart)
 [![What's in the box](https://img.shields.io/badge/what's-in_the_box-5eead4?style=for-the-badge&labelColor=0f171f)](#whats-in-the-box)
