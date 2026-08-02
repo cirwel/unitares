@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "notes": "Seed labels for KG retrieval eval. Each entry: a query an agent might plausibly issue, and the discovery IDs that a correct retrieval system should surface in the top results. Labels are 'relevant enough to be in top-10' — ties broken by closeness. Extend via hand-labeling or LLM-assisted labeling; aim for 100+ pairs over time.",
-  "labeled_at": "2026-04-20",
-  "labeled_by": "cirwel+claude (scoping session)",
+  "labeled_at": "2026-08-02",
+  "labeled_by": "cirwel+claude (scoping session); codex (lease regression additions)",
   "pairs": [
     {
       "query": "hybrid search retrieval rebuild",
@@ -134,6 +134,24 @@
       "relevant_ids": [
         "2026-04-19T19:12:09.075003"
       ]
+    },
+    {
+      "query": "immortal lease orphan force-release reclaim",
+      "relevant_ids": [
+        "2026-08-02T04:57:41.872422+00:00",
+        "2026-08-02T04:58:07.431958+00:00",
+        "2026-06-21T06:50:26.422129+00:00"
+      ],
+      "rationale": "The deployed immortal-lease closure, the orphan-detection discipline it depends on, and the earlier BEAM lease-client contract pattern. Added from the 2026-08-02 live retrieval failure."
+    },
+    {
+      "query": "steward lease span TTL false positive detection",
+      "relevant_ids": [
+        "2026-08-02T04:58:07.431958+00:00",
+        "2026-08-02T04:57:41.872422+00:00",
+        "2026-06-21T06:50:26.422129+00:00"
+      ],
+      "rationale": "The orphan-detection discipline, the incident closure that motivated it, and the prior live-client verification pattern. Added from the 2026-08-02 live retrieval failure."
     }
   ]
 }
