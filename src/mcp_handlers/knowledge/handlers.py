@@ -2337,208 +2337,361 @@ async def handle_list_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Tex
     except Exception as e:
         return [error_response(f"Failed to list knowledge: {str(e)}")]
 
-@mcp_tool("update_discovery_status_graph", timeout=10.0, register=False)
-async def handle_update_discovery_status_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Update discovery fields - status, details, and selected metadata.
-    
-    SECURITY: Requires authentication for high-severity discoveries.
-    Low/medium severity discoveries can be updated by any registered agent (collaborative).
-    """
-    # Identity is resolved below, after we fetch the discovery and know its
-    # severity — see the severity-keyed gate in the try block (Credential Loop
-    # Asymmetry fix). Resolving here unconditionally with require_registered_agent
-    # is what blocked a low-friction writer from editing the very row it was
-    # allowed to create.
-    discovery_id, error = require_argument(arguments, "discovery_id",
-                                         "discovery_id is required")
-    if error:
-        return [error]
-    
-    # Validate discovery_id format
-    
-    status = arguments.get("status")
-    raw_details = arguments.get("details")
-    if raw_details is None:
-        raw_details = arguments.get("content")
-    resolution_notes = arguments.get("resolution_notes")
-    resolution_note_text = None
-    if resolution_notes is not None:
-        resolution_note_text = str(resolution_notes).strip() or None
-    summary = arguments.get("summary")
-    severity = arguments.get("severity")
-    discovery_type = arguments.get("discovery_type")
-    tags = arguments.get("tags")
-    # The discovery that supersedes this one (records the directed link, not just
-    # the status). Previously read nowhere, so it was silently dropped.
-    superseded_by = arguments.get("superseded_by")
+@dataclass(frozen=True)
+class _KnowledgeUpdateRequest:
+    arguments: Dict[str, Any]
+    discovery_id: str
+    status: Any
+    details: Any
+    resolution_note: Optional[str]
+    summary: Any
+    severity: Any
+    discovery_type: Any
+    tags: Any
+    superseded_by: Any
 
-    # Foolproofing (KG 2026-06-13 footgun): same guard as the store path —
-    # reject an edit whose text fields absorbed tool-call markup rather than
-    # silently persisting a corrupt update.
-    leaked_marker = _detect_toolcall_markup_leak(summary, raw_details, resolution_note_text)
+
+class _UpdateResponseError(Exception):
+    """Abort a discovery update with an already-structured MCP error."""
+
+    def __init__(self, response: TextContent):
+        super().__init__()
+        self.response = response
+
+
+def _parse_knowledge_update_request(
+    arguments: Dict[str, Any],
+) -> _KnowledgeUpdateRequest:
+    """Validate update fields before opening the graph backend."""
+    discovery_id, error = require_argument(
+        arguments, "discovery_id", "discovery_id is required"
+    )
+    if error:
+        raise _UpdateResponseError(error)
+
+    details = arguments.get("details")
+    if details is None:
+        details = arguments.get("content")
+
+    resolution_notes = arguments.get("resolution_notes")
+    resolution_note = None
+    if resolution_notes is not None:
+        resolution_note = str(resolution_notes).strip() or None
+
+    request = _KnowledgeUpdateRequest(
+        arguments=arguments,
+        discovery_id=discovery_id,
+        status=arguments.get("status"),
+        details=details,
+        resolution_note=resolution_note,
+        summary=arguments.get("summary"),
+        severity=arguments.get("severity"),
+        discovery_type=arguments.get("discovery_type"),
+        tags=arguments.get("tags"),
+        superseded_by=arguments.get("superseded_by"),
+    )
+    leaked_marker = _detect_toolcall_markup_leak(
+        request.summary, request.details, request.resolution_note
+    )
     if leaked_marker:
-        field = (
+        field_name = (
             "summary"
-            if isinstance(summary, str) and leaked_marker in summary
+            if isinstance(request.summary, str) and leaked_marker in request.summary
             else "content"
         )
-        return [_degenerate_write_response(leaked_marker, field)]
+        raise _UpdateResponseError(
+            _degenerate_write_response(leaked_marker, field_name)
+        )
 
-    if not any(value is not None for value in (status, raw_details, resolution_note_text, summary, severity, discovery_type, tags, superseded_by)):
-        return [error_response(
-            "At least one updatable field is required. Provide status, details/content, resolution_notes, summary, severity, discovery_type, tags, or superseded_by."
-        )]
-    
+    update_values = (
+        request.status,
+        request.details,
+        request.resolution_note,
+        request.summary,
+        request.severity,
+        request.discovery_type,
+        request.tags,
+        request.superseded_by,
+    )
+    if not any(value is not None for value in update_values):
+        raise _UpdateResponseError(
+            error_response(
+                "At least one updatable field is required. Provide status, "
+                "details/content, resolution_notes, summary, severity, "
+                "discovery_type, tags, or superseded_by."
+            )
+        )
+    return request
+
+
+def _resolve_update_writer(
+    request: _KnowledgeUpdateRequest, discovery: DiscoveryNode
+) -> str:
+    """Apply the existing-severity identity gate for discovery updates."""
+    if discovery.severity in ["high", "critical"]:
+        agent_id, error = require_registered_agent(request.arguments)
+    else:
+        agent_id, error, _ = _resolve_low_friction_writer(request.arguments)
+    if error:
+        raise _UpdateResponseError(error)
+    return agent_id
+
+
+def _requested_non_owner_edits(
+    request: _KnowledgeUpdateRequest, allowed_statuses: set[str]
+) -> list[str]:
+    """List fields a non-owner cannot change on a high-severity discovery."""
+    requested_edits = [
+        field_name
+        for field_name, field_value in {
+            "details/content": request.details,
+            "summary": request.summary,
+            "severity": request.severity,
+            "discovery_type": request.discovery_type,
+            "tags": request.tags,
+        }.items()
+        if field_value is not None
+    ]
+    if (
+        request.resolution_note is not None
+        and request.status not in allowed_statuses
+    ):
+        requested_edits.append("resolution_notes")
+    return requested_edits
+
+
+def _authorize_high_severity_update(
+    request: _KnowledgeUpdateRequest,
+    discovery: DiscoveryNode,
+    agent_id: str,
+) -> None:
+    """Enforce authentication and ownership rules for sensitive updates."""
+    if discovery.severity not in ["high", "critical"]:
+        return
+
+    from ..utils import verify_agent_ownership
+
+    if not verify_agent_ownership(agent_id, request.arguments):
+        raise _UpdateResponseError(
+            error_response(
+                "Authentication required for updating high-severity discoveries.",
+                error_code="AUTH_REQUIRED",
+                error_category="auth_error",
+                recovery={
+                    "action": "Ensure your session is bound to this agent",
+                    "related_tools": ["identity"],
+                    "workflow": (
+                        "Identity auto-binds on first tool call. "
+                        "Use identity() to check binding."
+                    ),
+                },
+            )
+        )
+
+    allowed_statuses = {"resolved", "closed", "wont_fix"}
+    if discovery.agent_id == agent_id:
+        return
+
+    requested_edits = _requested_non_owner_edits(request, allowed_statuses)
+    allowed_list = sorted(allowed_statuses)
+    if requested_edits:
+        raise _UpdateResponseError(
+            error_response(
+                "Permission denied: Non-owners cannot edit "
+                f"{', '.join(requested_edits)} on high-severity discovery "
+                f"'{request.discovery_id}'. Allowed cross-agent status values: "
+                f"{allowed_list}.",
+                recovery={
+                    "action": (
+                        "Retry with status only. "
+                        f"Allowed values: {allowed_list}"
+                    ),
+                    "related_tools": [
+                        "get_discovery_details",
+                        "search_knowledge_graph",
+                    ],
+                },
+            )
+        )
+    if request.status not in allowed_statuses:
+        raise _UpdateResponseError(
+            error_response(
+                f"Permission denied: Cannot set status '{request.status}' on "
+                f"high-severity discovery '{request.discovery_id}'. Allowed "
+                f"cross-agent status values: {allowed_list}.",
+                recovery={
+                    "action": (
+                        f"Use status in {allowed_list} to close another "
+                        "agent's discovery"
+                    ),
+                    "related_tools": [
+                        "get_discovery_details",
+                        "search_knowledge_graph",
+                    ],
+                },
+            )
+        )
+
+
+def _apply_update_text_fields(
+    request: _KnowledgeUpdateRequest,
+    discovery: DiscoveryNode,
+    updates: dict[str, Any],
+) -> None:
+    """Apply summary, details, and resolution-note edits."""
+    if request.summary is not None:
+        updates["summary"] = str(request.summary)
+    if request.details is not None:
+        updates["details"] = str(request.details)
+    if request.resolution_note is not None:
+        base_details = (
+            str(request.details)
+            if request.details is not None
+            else (discovery.details or "")
+        ).rstrip()
+        note_block = (
+            f"Resolution notes ({_utc_now_iso()}):\n"
+            f"{request.resolution_note}"
+        )
+        updates["details"] = (
+            f"{base_details}\n\n{note_block}" if base_details else note_block
+        )
+
+
+def _apply_update_metadata_fields(
+    request: _KnowledgeUpdateRequest, updates: dict[str, Any]
+) -> None:
+    """Validate and apply severity, type, and tags edits."""
+    if request.severity is not None:
+        severity = str(request.severity).lower()
+        if severity not in VALID_SEVERITIES:
+            raise _UpdateResponseError(
+                _invalid_enum_response("severity", severity, VALID_SEVERITIES)
+            )
+        updates["severity"] = severity
+
+    if request.discovery_type is not None:
+        discovery_type = _normalize_discovery_type(request.discovery_type)
+        if discovery_type not in VALID_DISCOVERY_TYPES:
+            raise _UpdateResponseError(
+                _invalid_enum_response(
+                    "discovery_type",
+                    discovery_type,
+                    VALID_DISCOVERY_TYPES,
+                )
+            )
+        updates["type"] = discovery_type
+
+    if request.tags is not None:
+        updates["tags"] = request.tags
+
+
+def _build_discovery_updates(
+    request: _KnowledgeUpdateRequest, discovery: DiscoveryNode
+) -> tuple[dict[str, Any], Optional[str]]:
+    """Build and validate the backend update payload."""
+    updates: dict[str, Any] = {"updated_at": _utc_now_iso()}
+    normalized_status = None
+
+    if request.status is not None:
+        normalized_status = str(request.status).lower()
+        if normalized_status not in VALID_DISCOVERY_STATUSES:
+            raise _UpdateResponseError(
+                error_response(
+                    f"Invalid status '{normalized_status}'. "
+                    f"Valid: {sorted(VALID_DISCOVERY_STATUSES)}"
+                )
+            )
+        updates["status"] = normalized_status
+        if normalized_status == "resolved":
+            updates["resolved_at"] = _utc_now_iso()
+
+    _apply_update_text_fields(request, discovery, updates)
+    _apply_update_metadata_fields(request, updates)
+    return updates, normalized_status
+
+
+def _build_update_response(
+    request: _KnowledgeUpdateRequest,
+    discovery: Optional[DiscoveryNode],
+    normalized_status: Optional[str],
+    supersession_warning: Optional[str],
+) -> Sequence[TextContent]:
+    """Render the stable update response shape."""
+    message = f"Discovery '{request.discovery_id}' updated"
+    if normalized_status is not None:
+        message = (
+            f"Discovery '{request.discovery_id}' status updated to "
+            f"'{normalized_status}'"
+        )
+
+    payload = {
+        "message": message,
+        "discovery": (
+            discovery.to_dict(include_details=False) if discovery else None
+        ),
+    }
+    if request.superseded_by:
+        payload["superseded_by"] = str(request.superseded_by)
+        if supersession_warning:
+            payload["supersession_warning"] = supersession_warning
+    return success_response(payload, arguments=request.arguments)
+
+
+async def _execute_discovery_update(
+    request: _KnowledgeUpdateRequest, graph: Any
+) -> Sequence[TextContent]:
+    """Authorize, persist, and render one discovery update."""
+    discovery = await graph.get_discovery(request.discovery_id)
+    if not discovery:
+        raise _UpdateResponseError(
+            await _discovery_not_found(request.discovery_id, graph)
+        )
+
+    agent_id = _resolve_update_writer(request, discovery)
+    _authorize_high_severity_update(request, discovery, agent_id)
+    updates, normalized_status = _build_discovery_updates(request, discovery)
+
+    updated = await graph.update_discovery(request.discovery_id, updates)
+    if not updated:
+        raise _UpdateResponseError(
+            error_response(f"Discovery '{request.discovery_id}' not found")
+        )
+
+    supersession_warning = None
+    if request.superseded_by:
+        supersession_warning = await _record_supersession_edge(
+            graph,
+            new_id=str(request.superseded_by),
+            old_id=request.discovery_id,
+        )
+    refreshed = await graph.get_discovery(request.discovery_id)
+    return _build_update_response(
+        request,
+        refreshed,
+        normalized_status,
+        supersession_warning,
+    )
+
+
+@mcp_tool("update_discovery_status_graph", timeout=10.0, register=False)
+async def handle_update_discovery_status_graph(
+    arguments: Dict[str, Any],
+) -> Sequence[TextContent]:
+    """Update discovery status, details, and selected metadata."""
+    try:
+        request = _parse_knowledge_update_request(arguments)
+    except _UpdateResponseError as error:
+        return [error.response]
+
     try:
         graph = await get_knowledge_graph()
-        
-        # Get discovery to check severity and ownership
-        discovery = await graph.get_discovery(discovery_id)
-        if not discovery:
-            return [await _discovery_not_found(discovery_id, graph)]
+        return await _execute_discovery_update(request, graph)
+    except _UpdateResponseError as error:
+        return [error.response]
+    except Exception as error:
+        return [error_response(f"Failed to update discovery: {str(error)}")]
 
-        # Identity gate, keyed on the EXISTING discovery's severity so update
-        # mirrors store (Credential Loop Asymmetry fix). store() lets low/medium
-        # rows be written by a low-friction writer — including the stable
-        # anonymous writer (anonkg_*) derived for fingerprint-pinned callers —
-        # but update() previously demanded a registered agent unconditionally,
-        # so a caller could create a row yet not edit it without re-running
-        # onboard() (which mints a sibling identity). Match the store gate:
-        # high/critical still require a registered, session-bound agent; the
-        # high-severity ownership checks below are unchanged.
-        if discovery.severity in ["high", "critical"]:
-            agent_id, error = require_registered_agent(arguments)
-        else:
-            agent_id, error, _ = _resolve_low_friction_writer(arguments)
-        if error:
-            return [error]
-
-        # SECURITY: Require session ownership for high-severity discoveries (UUID-based auth, Dec 2025)
-        if discovery.severity in ["high", "critical"]:
-            from ..utils import verify_agent_ownership
-            if not verify_agent_ownership(agent_id, arguments):
-                return [error_response(
-                    "Authentication required for updating high-severity discoveries.",
-                    error_code="AUTH_REQUIRED",
-                    error_category="auth_error",
-                    recovery={
-                        "action": "Ensure your session is bound to this agent",
-                        "related_tools": ["identity"],
-                        "workflow": "Identity auto-binds on first tool call. Use identity() to check binding."
-                    }
-                )]
-            
-            # Ownership check: non-owners may only close high-severity discoveries,
-            # and may not edit content/metadata while doing so.
-            allowed_non_owner_statuses = {"resolved", "closed", "wont_fix"}
-            requested_non_status_edits = [
-                field_name
-                for field_name, field_value in {
-                    "details/content": raw_details,
-                    "summary": summary,
-                    "severity": severity,
-                    "discovery_type": discovery_type,
-                    "tags": tags,
-                }.items()
-                if field_value is not None
-            ]
-            if resolution_note_text is not None and status not in allowed_non_owner_statuses:
-                requested_non_status_edits.append("resolution_notes")
-            if discovery.agent_id != agent_id and requested_non_status_edits:
-                allowed_list = sorted(allowed_non_owner_statuses)
-                return [error_response(
-                    f"Permission denied: Non-owners cannot edit {', '.join(requested_non_status_edits)} on high-severity discovery '{discovery_id}'. "
-                    f"Allowed cross-agent status values: {allowed_list}.",
-                    recovery={
-                        "action": f"Retry with status only. Allowed values: {allowed_list}",
-                        "related_tools": ["get_discovery_details", "search_knowledge_graph"],
-                    }
-                )]
-            if discovery.agent_id != agent_id and status not in allowed_non_owner_statuses:
-                allowed_list = sorted(allowed_non_owner_statuses)
-                return [error_response(
-                    f"Permission denied: Cannot set status '{status}' on high-severity discovery '{discovery_id}'. "
-                    f"Allowed cross-agent status values: {allowed_list}.",
-                    recovery={
-                        "action": f"Use status in {allowed_list} to close another agent's discovery",
-                        "related_tools": ["get_discovery_details", "search_knowledge_graph"],
-                    }
-                )]
-        
-        updates = {"updated_at": _utc_now_iso()}
-
-        if status is not None:
-            status = str(status).lower()
-            if status not in VALID_DISCOVERY_STATUSES:
-                return [error_response(f"Invalid status '{status}'. Valid: {sorted(VALID_DISCOVERY_STATUSES)}")]
-            updates["status"] = status
-            if status == "resolved":
-                updates["resolved_at"] = _utc_now_iso()
-
-        if summary is not None:
-            updates["summary"] = str(summary)
-
-        if raw_details is not None:
-            updates["details"] = str(raw_details)
-
-        if resolution_note_text is not None:
-            base_details = (
-                str(raw_details)
-                if raw_details is not None
-                else (discovery.details or "")
-            ).rstrip()
-            note_block = f"Resolution notes ({_utc_now_iso()}):\n{resolution_note_text}"
-            updates["details"] = (
-                f"{base_details}\n\n{note_block}" if base_details else note_block
-            )
-
-        if severity is not None:
-            severity = str(severity).lower()
-            if severity not in VALID_SEVERITIES:
-                return [_invalid_enum_response("severity", severity, VALID_SEVERITIES)]
-            updates["severity"] = severity
-
-        if discovery_type is not None:
-            discovery_type = _normalize_discovery_type(discovery_type)
-            if discovery_type not in VALID_DISCOVERY_TYPES:
-                return [_invalid_enum_response("discovery_type", discovery_type, VALID_DISCOVERY_TYPES)]
-            updates["type"] = discovery_type
-
-        if tags is not None:
-            updates["tags"] = tags
-        
-        success = await graph.update_discovery(discovery_id, updates)
-        
-        if not success:
-            return [error_response(f"Discovery '{discovery_id}' not found")]
-
-        # Record the supersession LINK, not just the status. Without this the
-        # successor pointer is lost (no relational column); the AGE SUPERSEDES
-        # edge is what a reader/dashboard resolves. superseded_by SUPERSEDES this.
-        supersession_warning = None
-        if superseded_by:
-            supersession_warning = await _record_supersession_edge(
-                graph, new_id=str(superseded_by), old_id=discovery_id
-            )
-
-        discovery = await graph.get_discovery(discovery_id)
-
-        message = f"Discovery '{discovery_id}' updated"
-        if status is not None:
-            message = f"Discovery '{discovery_id}' status updated to '{status}'"
-
-        payload = {
-            "message": message,
-            "discovery": discovery.to_dict(include_details=False) if discovery else None
-        }
-        if superseded_by:
-            payload["superseded_by"] = str(superseded_by)
-            if supersession_warning:
-                payload["supersession_warning"] = supersession_warning
-        return success_response(payload, arguments=arguments)
-        
-    except Exception as e:
-        return [error_response(f"Failed to update discovery: {str(e)}")]
 
 @mcp_tool("get_discovery_details", timeout=10.0, register=False)
 async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[TextContent]:
@@ -2641,211 +2794,331 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
     except Exception as e:
         return [error_response(f"Failed to get discovery details: {str(e)}")]
 
-async def _handle_store_knowledge_graph_batch(arguments: Dict[str, Any], agent_id: str) -> Sequence[TextContent]:
-    """Internal batch handler - called by store_knowledge_graph when discoveries array is provided"""
+
+class _BatchItemError(Exception):
+    """Abort one batch item with a plain per-item error message."""
+
+
+@dataclass(frozen=True)
+class _PreparedBatchDiscovery:
+    discovery: DiscoveryNode
+    summary: Any
+    discovery_type: Any
+    truncated_fields: list[str]
+
+
+@dataclass
+class _BatchStoreResult:
+    stored: list[dict[str, Any]] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+def _validate_batch_discoveries(arguments: Dict[str, Any]) -> list[Any]:
+    """Validate the batch envelope before opening the graph backend."""
     discoveries = arguments.get("discoveries")
-    
     if not isinstance(discoveries, list):
-        return [error_response("discoveries must be a list of discovery objects")]
-    
-    if len(discoveries) == 0:
-        return [error_response("discoveries list cannot be empty")]
-    
+        raise _StoreResponseError(
+            error_response("discoveries must be a list of discovery objects")
+        )
+    if not discoveries:
+        raise _StoreResponseError(
+            error_response("discoveries list cannot be empty")
+        )
     if len(discoveries) > 10:
-        return [error_response("Maximum 10 discoveries per batch (to prevent context overflow)")]
-    
-    # agent_id already validated by caller
-    
+        raise _StoreResponseError(
+            error_response(
+                "Maximum 10 discoveries per batch "
+                "(to prevent context overflow)"
+            )
+        )
+    return discoveries
+
+
+def _truncate_batch_summary(summary: Any) -> tuple[Any, Optional[str]]:
+    """Truncate a batch summary at a nearby sentence or word boundary."""
+    if len(summary) <= MAX_SUMMARY_LEN:
+        return summary, None
+
+    truncation = f"summary ({len(summary)} → {MAX_SUMMARY_LEN})"
+    shortened = summary[:MAX_SUMMARY_LEN]
+    for end_char in [". ", "! ", "? "]:
+        last_end = shortened.rfind(end_char, MAX_SUMMARY_LEN - 100)
+        if last_end > 0:
+            shortened = shortened[: last_end + 1]
+            break
+    else:
+        last_space = shortened.rfind(" ")
+        if last_space > MAX_SUMMARY_LEN - 50:
+            shortened = shortened[:last_space]
+    return shortened.rstrip() + "...", truncation
+
+
+def _truncate_batch_details(details: Any) -> tuple[Any, Optional[str]]:
+    """Apply the stable details limit used by batch writes."""
+    if len(details) <= MAX_DETAILS_LEN:
+        return details, None
+    truncation = f"details ({len(details)} → {MAX_DETAILS_LEN})"
+    return details[:MAX_DETAILS_LEN] + "... [truncated]", truncation
+
+
+def _parse_batch_response_to(
+    disc_data: dict[str, Any],
+) -> Optional[ResponseTo]:
+    """Parse a response edge, preserving the legacy ignore-invalid behavior."""
+    if "response_to" not in disc_data or not disc_data["response_to"]:
+        return None
+
+    response_data = disc_data["response_to"]
+    required_fields = {"discovery_id", "response_type"}
+    if not isinstance(response_data, dict) or not required_fields.issubset(
+        response_data
+    ):
+        return None
+
+    parent_id = str(response_data["discovery_id"]).strip()
+    if not parent_id:
+        raise _BatchItemError("Invalid response_to.discovery_id (empty)")
+
+    response_type = response_data["response_type"]
+    if response_type not in VALID_RESPONSE_TYPES:
+        return None
+    return ResponseTo(
+        discovery_id=parent_id,
+        response_type=response_type,
+    )
+
+
+def _parse_batch_severity(
+    disc_data: dict[str, Any],
+    idx: int,
+    result: _BatchStoreResult,
+) -> Optional[str]:
+    """Validate severity without fabricating a fallback value."""
+    severity = disc_data.get("severity")
+    if severity is None:
+        return None
+
+    normalized = str(severity).lower()
+    if normalized in VALID_SEVERITIES:
+        return normalized
+
+    result.warnings.append(
+        f"Discovery {idx}: invalid severity '{severity}' ignored "
+        f"(stored unset). Valid: {sorted(VALID_SEVERITIES)}"
+    )
+    return None
+
+
+def _parse_batch_confidence(disc_data: dict[str, Any]) -> Optional[float]:
+    """Parse and clamp optional confidence, ignoring malformed values."""
+    if disc_data.get("confidence") is None:
+        return None
+    try:
+        confidence = float(disc_data["confidence"])
+    except (ValueError, TypeError):
+        return None
+    return max(0.0, min(1.0, confidence))
+
+
+def _prepare_batch_discovery(
+    disc_data: Any,
+    idx: int,
+    agent_id: str,
+    result: _BatchStoreResult,
+) -> _PreparedBatchDiscovery:
+    """Validate and materialize one batch discovery."""
+    if not isinstance(disc_data, dict):
+        raise _BatchItemError("must be a dict")
+
+    discovery_type = _normalize_discovery_type(
+        disc_data.get("discovery_type")
+    )
+    if not discovery_type:
+        raise _BatchItemError("discovery_type is required")
+    if discovery_type not in VALID_DISCOVERY_TYPES:
+        raise _BatchItemError(
+            f"invalid discovery_type '{discovery_type}'. "
+            f"Valid: {sorted(VALID_DISCOVERY_TYPES)}."
+        )
+
+    summary = disc_data.get("summary", "")
+    if not summary:
+        raise _BatchItemError("summary is required")
+
+    truncated_fields = []
+    summary, summary_truncation = _truncate_batch_summary(summary)
+    if summary_truncation:
+        truncated_fields.append(summary_truncation)
+
+    details = disc_data.get("details") or disc_data.get("content") or ""
+    details, details_truncation = _truncate_batch_details(details)
+    if details_truncation:
+        truncated_fields.append(details_truncation)
+
+    discovery_id = _new_discovery_id()
+    response_to = _parse_batch_response_to(disc_data)
+    severity = _parse_batch_severity(disc_data, idx, result)
+    confidence = _parse_batch_confidence(disc_data)
+
+    from src.knowledge_graph import tag_provenance_source as _tag_src
+
+    discovery = DiscoveryNode(
+        id=discovery_id,
+        agent_id=agent_id,
+        type=discovery_type,
+        summary=summary,
+        details=details,
+        tags=disc_data.get("tags", []),
+        severity=severity,
+        response_to=response_to,
+        references_files=disc_data.get("related_files", []),
+        confidence=confidence,
+        provenance=_tag_src(
+            disc_data.get("provenance"), "explicit_store"
+        ),
+    )
+    return _PreparedBatchDiscovery(
+        discovery=discovery,
+        summary=summary,
+        discovery_type=discovery_type,
+        truncated_fields=truncated_fields,
+    )
+
+
+async def _persist_batch_discovery(
+    prepared: _PreparedBatchDiscovery,
+    disc_data: dict[str, Any],
+    graph: Any,
+    agent_id: str,
+    arguments: Dict[str, Any],
+) -> dict[str, Any]:
+    """Apply graph-side enrichment, authorization, and persistence."""
+    discovery = prepared.discovery
+    await _clamp_confidence_to_coherence(discovery, agent_id)
+
+    if disc_data.get("auto_link_related", True):
+        similar = await graph.find_similar(discovery, limit=3)
+        discovery.related_to = [item.id for item in similar]
+
+    if discovery.severity in ["high", "critical"]:
+        from ..utils import verify_agent_ownership
+
+        if not verify_agent_ownership(agent_id, arguments):
+            raise _BatchItemError(
+                "Authentication required for high-severity discoveries"
+            )
+
+    await graph.add_discovery(discovery)
+    await _broadcast_knowledge_write(discovery, agent_id)
+    stored_item = {
+        "discovery_id": discovery.id,
+        "summary": prepared.summary,
+        "type": prepared.discovery_type,
+    }
+    if prepared.truncated_fields:
+        stored_item["_truncated"] = prepared.truncated_fields
+    return stored_item
+
+
+async def _process_batch_discovery(
+    disc_data: Any,
+    idx: int,
+    graph: Any,
+    agent_id: str,
+    arguments: Dict[str, Any],
+    result: _BatchStoreResult,
+) -> None:
+    """Process one item while isolating its errors from the rest of the batch."""
+    try:
+        prepared = _prepare_batch_discovery(
+            disc_data, idx, agent_id, result
+        )
+        stored_item = await _persist_batch_discovery(
+            prepared,
+            disc_data,
+            graph,
+            agent_id,
+            arguments,
+        )
+        result.stored.append(stored_item)
+    except _BatchItemError as error:
+        result.errors.append(f"Discovery {idx}: {str(error)}")
+    except ValueError as error:
+        error_message = str(error)
+        if "rate limit" in error_message.lower():
+            result.errors.append(
+                f"Discovery {idx}: Rate limit exceeded - {error_message}"
+            )
+        else:
+            result.errors.append(
+                f"Discovery {idx}: Validation error - {error_message}"
+            )
+    except Exception as error:
+        result.errors.append(f"Discovery {idx}: {str(error)}")
+
+
+def _build_batch_store_response(
+    arguments: Dict[str, Any],
+    discoveries: list[Any],
+    result: _BatchStoreResult,
+) -> Sequence[TextContent]:
+    """Render aggregate batch results using the existing response contract."""
+    response = {
+        "message": (
+            f"Stored {len(result.stored)}/{len(discoveries)} "
+            "discovery/discoveries"
+        ),
+        "stored": result.stored,
+        "total": len(discoveries),
+        "success_count": len(result.stored),
+        "error_count": len(result.errors),
+    }
+    if result.errors:
+        response["errors"] = result.errors
+    if result.warnings:
+        response["warnings"] = result.warnings
+
+    truncated_count = sum(
+        1 for stored in result.stored if "_truncated" in stored
+    )
+    if truncated_count > 0:
+        response["_tip"] = (
+            f"{truncated_count} discovery(ies) had content truncated. "
+            "Limits: summary=1000, details=5000 chars."
+        )
+    return success_response(response, arguments=arguments)
+
+
+async def _handle_store_knowledge_graph_batch(
+    arguments: Dict[str, Any], agent_id: str
+) -> Sequence[TextContent]:
+    """Store up to ten discoveries while isolating per-item failures."""
+    try:
+        discoveries = _validate_batch_discoveries(arguments)
+    except _StoreResponseError as error:
+        return [error.response]
+
     try:
         graph = await get_knowledge_graph()
-        
-        # SECURITY: Rate limiting is handled by the knowledge graph backend per-discovery
-        # Backend handles rate limiting internally (O(1) per store)
-        # No need for inefficient O(n) query here - let graph handle it per-discovery
-        
-        # Process each discovery with graceful error handling
-        stored = []
-        errors = []
-        warnings: list[str] = []
-
+        result = _BatchStoreResult()
         for idx, disc_data in enumerate(discoveries):
-            try:
-                # Validate required fields
-                if not isinstance(disc_data, dict):
-                    errors.append(f"Discovery {idx}: must be a dict")
-                    continue
-                
-                discovery_type = _normalize_discovery_type(disc_data.get("discovery_type"))
-                if not discovery_type:
-                    errors.append(f"Discovery {idx}: discovery_type is required")
-                    continue
-                
-                if discovery_type not in VALID_DISCOVERY_TYPES:
-                    # Enumerate valid values like the single-store path
-                    # (_invalid_enum_response) instead of a bare name — the batch
-                    # path was the only discovery_type error that hid the set
-                    # (Mistral dogfood UX finding 2026-06-30).
-                    errors.append(
-                        f"Discovery {idx}: invalid discovery_type '{discovery_type}'. "
-                        f"Valid: {sorted(VALID_DISCOVERY_TYPES)}."
-                    )
-                    continue
-                
-                summary = disc_data.get("summary", "")
-                if not summary:
-                    errors.append(f"Discovery {idx}: summary is required")
-                    continue
-                
-                # Truncate fields (limits imported at module top).
-                truncated_fields = []
-                if len(summary) > MAX_SUMMARY_LEN:
-                    truncated_fields.append(f"summary ({len(summary)} → {MAX_SUMMARY_LEN})")
-                    # Try to cut at sentence boundary, else word boundary
-                    truncated = summary[:MAX_SUMMARY_LEN]
-                    for end_char in ['. ', '! ', '? ']:
-                        last_end = truncated.rfind(end_char, MAX_SUMMARY_LEN - 100)
-                        if last_end > 0:
-                            truncated = truncated[:last_end + 1]
-                            break
-                    else:
-                        last_space = truncated.rfind(' ')
-                        if last_space > MAX_SUMMARY_LEN - 50:
-                            truncated = truncated[:last_space]
-                    summary = truncated.rstrip() + "..."
+            await _process_batch_discovery(
+                disc_data,
+                idx,
+                graph,
+                agent_id,
+                arguments,
+                result,
+            )
+        return _build_batch_store_response(arguments, discoveries, result)
+    except Exception as error:
+        return [
+            error_response(
+                f"Failed to store batch knowledge: {str(error)}"
+            )
+        ]
 
-                # Accept both 'details' and 'content' as parameter names
-                details = disc_data.get("details") or disc_data.get("content") or ""
-                if len(details) > MAX_DETAILS_LEN:
-                    truncated_fields.append(f"details ({len(details)} → {MAX_DETAILS_LEN})")
-                    details = details[:MAX_DETAILS_LEN] + "... [truncated]"
-                
-                # Create discovery node
-                discovery_id = _new_discovery_id()
-
-                # Parse response_to if provided
-                response_to = None
-                if "response_to" in disc_data and disc_data["response_to"]:
-                    resp_data = disc_data["response_to"]
-                    if isinstance(resp_data, dict) and "discovery_id" in resp_data and "response_type" in resp_data:
-                        parent_id = str(resp_data["discovery_id"]).strip()
-                        if not parent_id:
-                            errors.append(f"Discovery {idx}: Invalid response_to.discovery_id (empty)")
-                            continue
-
-                        response_type = resp_data["response_type"]
-                        if response_type in VALID_RESPONSE_TYPES:
-                            response_to = ResponseTo(
-                                discovery_id=parent_id,
-                                response_type=response_type
-                            )
-                
-                # Validate severity. On an invalid value, store the entry with
-                # severity unset and warn — never fabricate a specific severity.
-                # (Previously this silently coerced to "medium", which both
-                # contradicts the documented "falls back to None" intent and
-                # invents a severity claim the writer never made.)
-                severity = disc_data.get("severity")
-                if severity is not None:
-                    severity = str(severity).lower()
-                    if severity not in VALID_SEVERITIES:
-                        warnings.append(
-                            f"Discovery {idx}: invalid severity "
-                            f"'{disc_data.get('severity')}' ignored (stored unset). "
-                            f"Valid: {sorted(VALID_SEVERITIES)}"
-                        )
-                        severity = None
-                
-                # Parse confidence if provided
-                batch_confidence = None
-                if disc_data.get("confidence") is not None:
-                    try:
-                        batch_confidence = float(disc_data["confidence"])
-                        batch_confidence = max(0.0, min(1.0, batch_confidence))
-                    except (ValueError, TypeError):
-                        pass
-
-                from src.knowledge_graph import tag_provenance_source as _tag_src
-                discovery = DiscoveryNode(
-                    id=discovery_id,
-                    agent_id=agent_id,
-                    type=discovery_type,
-                    summary=summary,
-                    details=details,
-                    tags=disc_data.get("tags", []),
-                    severity=severity,
-                    response_to=response_to,
-                    references_files=disc_data.get("related_files", []),
-                    confidence=batch_confidence,
-                    provenance=_tag_src(disc_data.get("provenance"), "explicit_store"),
-                )
-
-                # CONFIDENCE CROSS-CHECK: Clamp to agent coherence + 0.3
-                await _clamp_confidence_to_coherence(discovery, agent_id)
-
-                # Auto-link similar discoveries
-                if disc_data.get("auto_link_related", True):
-                    similar = await graph.find_similar(discovery, limit=3)
-                    discovery.related_to = [s.id for s in similar]
-                
-                # SECURITY: Require session ownership for high-severity discoveries (UUID-based auth, Dec 2025)
-                if discovery.severity in ["high", "critical"]:
-                    from ..utils import verify_agent_ownership
-                    if not verify_agent_ownership(agent_id, arguments):
-                        errors.append(f"Discovery {idx}: Authentication required for high-severity discoveries")
-                        continue
-                
-                # Add to graph (rate limiting handled internally)
-                await graph.add_discovery(discovery)
-                # Mirror the single-write path: batch writes were landing in
-                # the KG but never reaching the dashboard/bridge live timeline
-                # because they skipped this broadcast (the exact gap
-                # _broadcast_knowledge_write was created to close).
-                await _broadcast_knowledge_write(discovery, agent_id)
-                stored_item = {
-                    "discovery_id": discovery_id,
-                    "summary": summary,
-                    "type": discovery_type
-                }
-                if truncated_fields:
-                    stored_item["_truncated"] = truncated_fields
-                stored.append(stored_item)
-                
-            except ValueError as e:
-                # Handle rate limiting and validation errors gracefully
-                error_msg = str(e)
-                if "rate limit" in error_msg.lower() or "Rate limit" in error_msg:
-                    errors.append(f"Discovery {idx}: Rate limit exceeded - {error_msg}")
-                else:
-                    errors.append(f"Discovery {idx}: Validation error - {error_msg}")
-            except Exception as e:
-                errors.append(f"Discovery {idx}: {str(e)}")
-        
-        # Return results
-        response = {
-            "message": f"Stored {len(stored)}/{len(discoveries)} discovery/discoveries",
-            "stored": stored,
-            "total": len(discoveries),
-            "success_count": len(stored),
-            "error_count": len(errors)
-        }
-
-        if errors:
-            response["errors"] = errors
-
-        # Non-fatal per-item notes (e.g. invalid severity ignored). The entry
-        # is still stored; the warning explains why it differs from the input.
-        if warnings:
-            response["warnings"] = warnings
-
-        # Check if any items were truncated (v2.5.0+)
-        truncated_count = sum(1 for s in stored if "_truncated" in s)
-        if truncated_count > 0:
-            response["_tip"] = f"{truncated_count} discovery(ies) had content truncated. Limits: summary=1000, details=5000 chars."
-
-        return success_response(response, arguments=arguments)
-        
-    except Exception as e:
-        return [error_response(f"Failed to store batch knowledge: {str(e)}")]
 
 @mcp_tool("answer_question", timeout=15.0, register=False)
 async def handle_answer_question(arguments: Dict[str, Any]) -> Sequence[TextContent]:
