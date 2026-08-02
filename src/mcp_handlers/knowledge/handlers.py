@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, Sequence, Optional
 from mcp.types import TextContent
 from datetime import datetime, timezone, timedelta
-import hmac
+import hashlib
 import os
 import secrets
 import threading
@@ -712,7 +712,13 @@ def _pseudonymize_anonymous_writer_source(source: str) -> str:
         if configured_key
         else _ANONYMOUS_WRITER_FALLBACK_KEY
     )
-    return hmac.digest(key, source.encode("utf-8"), "sha256").hex()[:12]
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        source.encode("utf-8"),
+        key,
+        100_000,
+        dklen=6,
+    ).hex()
 
 
 def _derive_anonymous_writer_id(arguments: Dict[str, Any]) -> str:
