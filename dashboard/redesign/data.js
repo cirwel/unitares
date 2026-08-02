@@ -43,7 +43,14 @@
     const headers = Object.assign({}, opts.headers);
     const t = token();
     if (t) headers["Authorization"] = "Bearer " + t;
-    const r = await fetch(path, Object.assign({}, opts, { headers }));
+    const r = await fetch(path, Object.assign({}, opts, {
+      credentials: "same-origin",
+      headers,
+    }));
+    if (r.status === 401 && !t) {
+      location.assign("/auth/signin");
+      throw new Error(path + " -> 401 (sign-in required)");
+    }
     if (!r.ok) throw new Error(path + " -> " + r.status);
     return r.json();
   }
@@ -414,17 +421,65 @@
     // POST an operator verdict. Throws on non-2xx (message carries the status
     // code so the view can distinguish 403 token / 409 already-adjudicated).
     async adjudicate(fingerprint, status, reason) {
-      const headers = { "Content-Type": "application/json" };
+      const headers = {
+        "Content-Type": "application/json",
+        "X-Unitares-Csrf": "1",
+      };
       const op = operatorToken();
       if (op) headers["X-Unitares-Operator"] = op;
       const t = token();
       if (t) headers["Authorization"] = "Bearer " + t;
       const r = await fetch("/v1/sentinel/adjudicate", {
-        method: "POST", headers,
+        method: "POST", credentials: "same-origin", headers,
         body: JSON.stringify({ fingerprint, status, reason: reason || undefined }),
       });
       if (!r.ok) throw new Error("/v1/sentinel/adjudicate -> " + r.status);
       return r.json();
+    },
+
+    // Passkey security is live-only: rendering a snapshot of sessions or
+    // credentials would be dangerously misleading. Views stay behind DATA,
+    // but failures surface honestly instead of degrading to fixture data.
+    async passkeySecurity() {
+      return authFetch("/auth/sessions", {
+        headers: { "X-Unitares-Csrf": "1" },
+      });
+    },
+
+    async logoutDashboardSession() {
+      return authFetch("/auth/logout", {
+        method: "POST",
+        headers: { "X-Unitares-Csrf": "1" },
+      });
+    },
+
+    async revokeAllDashboardSessions() {
+      return authFetch("/auth/sessions", {
+        method: "POST",
+        headers: { "X-Unitares-Csrf": "1" },
+      });
+    },
+
+    async revokePasskey(credentialId) {
+      const headers = { "X-Unitares-Csrf": "1" };
+      const op = operatorToken();
+      if (op) headers["X-Unitares-Operator"] = op;
+      return authFetch("/auth/credentials/" + encodeURIComponent(credentialId) + "/revoke", {
+        method: "POST",
+        headers,
+      });
+    },
+
+    async mintEnrollmentCode() {
+      const op = operatorToken();
+      if (!op) throw new Error("operator credential required");
+      return authFetch("/auth/enroll", {
+        method: "POST",
+        headers: {
+          "X-Unitares-Csrf": "1",
+          "X-Unitares-Operator": op,
+        },
+      });
     },
 
     // Light freshness map for the residents (label -> {silence, status, coherence}).

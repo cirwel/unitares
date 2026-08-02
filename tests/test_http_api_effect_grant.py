@@ -61,7 +61,7 @@ def _token(aid=PROPOSER):
 
 def _client():
     app = Starlette(routes=[Route("/v1/effect-grant", http_effect_grant, methods=["POST"])])
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 def _post(body):

@@ -24,7 +24,7 @@ def _no_http_api_token(monkeypatch):
 @pytest.fixture
 def client():
     app = Starlette(routes=[Route("/v1/sentinel/backlog", http_sentinel_backlog, methods=["GET"])])
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 def _audit_row(severity, finding_type="verdict_shift", vclass="ENT", ts="2026-06-16T16:00:00+00:00"):

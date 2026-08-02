@@ -18,9 +18,17 @@ from src.http_api import _check_http_auth
 class _Req:
     """Minimal stand-in for a Starlette request: .headers.get + .client.host."""
 
-    def __init__(self, ip: str = "10.1.2.3", auth: str | None = None):
+    def __init__(
+        self,
+        ip: str = "10.1.2.3",
+        auth: str | None = None,
+        dashboard_session: dict | None = None,
+    ):
         self.headers = {"authorization": auth} if auth is not None else {}
         self.client = type("C", (), {"host": ip})()
+        self.state = type("State", (), {})()
+        if dashboard_session is not None:
+            self.state.dashboard_session = dashboard_session
 
 
 @pytest.fixture(autouse=True)
@@ -67,9 +75,19 @@ def test_local_trusted_network_bypasses(monkeypatch):
     assert _check_http_auth(_Req(ip="192.168.1.5", auth=None), http_api_token=None) is True
 
 
-def test_local_untrusted_no_token_allows(monkeypatch):
-    # Default-off: no token configured -> open (unchanged legacy behavior).
-    assert _check_http_auth(_Req(ip="8.8.8.8", auth=None), http_api_token=None) is True
+def test_local_untrusted_no_token_fails_closed(monkeypatch):
+    assert _check_http_auth(_Req(ip="8.8.8.8", auth=None), http_api_token=None) is False
+
+
+def test_local_untrusted_valid_dashboard_session_is_accepted(monkeypatch):
+    req = _Req(ip="8.8.8.8", dashboard_session={"operator_label": "operator"})
+    assert _check_http_auth(req, http_api_token=None) is True
+
+
+def test_hosted_posture_does_not_accept_dashboard_session(monkeypatch):
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-tok")
+    req = _Req(ip="8.8.8.8", dashboard_session={"operator_label": "operator"})
+    assert _check_http_auth(req, http_api_token=None) is False
 
 
 def test_local_untrusted_with_token_enforced(monkeypatch):

@@ -24,10 +24,22 @@ from src.http_api import _check_ws_auth
 class _WS:
     """Minimal stand-in for a Starlette WebSocket: .query_params + .headers + .client."""
 
-    def __init__(self, ip: str = "10.1.2.3", auth: str | None = None, qs_token: str | None = None):
+    def __init__(
+        self,
+        ip: str = "10.1.2.3",
+        auth: str | None = None,
+        qs_token: str | None = None,
+        dashboard_session: dict | None = None,
+        origin: str | None = None,
+    ):
         self.headers = {"authorization": auth} if auth is not None else {}
+        if origin is not None:
+            self.headers["origin"] = origin
         self.query_params = {"token": qs_token} if qs_token is not None else {}
         self.client = type("C", (), {"host": ip})()
+        self.state = type("State", (), {})()
+        if dashboard_session is not None:
+            self.state.dashboard_session = dashboard_session
 
 
 @pytest.fixture(autouse=True)
@@ -79,9 +91,37 @@ def test_tailscale_bypasses_without_token():
     assert _check_ws_auth(_WS(ip="100.101.102.103"), http_api_token="s3cret") is True
 
 
-def test_no_token_configured_allows_everyone():
-    # Self-host default: UNITARES_HTTP_API_TOKEN unset -> gate off, same as REST.
-    assert _check_ws_auth(_WS(ip="8.8.8.8"), http_api_token=None) is True
+def test_no_token_configured_fails_closed_for_untrusted_peer():
+    assert _check_ws_auth(_WS(ip="8.8.8.8"), http_api_token=None) is False
+
+
+def test_cookie_session_accepts_exact_origin():
+    ws = _WS(
+        ip="8.8.8.8",
+        dashboard_session={"operator_label": "operator"},
+        origin="https://gov.cirwel.org",
+    )
+    assert _check_ws_auth(ws, http_api_token=None) is True
+
+
+@pytest.mark.parametrize("origin", [None, "https://lumen.cirwel.org", "https://evil.example"])
+def test_cookie_session_rejects_missing_or_foreign_origin(origin):
+    ws = _WS(
+        ip="8.8.8.8",
+        dashboard_session={"operator_label": "operator"},
+        origin=origin,
+    )
+    assert _check_ws_auth(ws, http_api_token=None) is False
+
+
+def test_hosted_posture_does_not_accept_cookie_session(monkeypatch):
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-tok")
+    ws = _WS(
+        ip="8.8.8.8",
+        dashboard_session={"operator_label": "operator"},
+        origin="https://gov.cirwel.org",
+    )
+    assert _check_ws_auth(ws, http_api_token=None) is False
 
 
 # ---- Hosted mode: MCP bearer configured -> strict, no IP bypass ----
