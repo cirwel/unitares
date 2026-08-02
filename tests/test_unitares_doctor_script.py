@@ -906,6 +906,42 @@ def test_resident_checkin_stale_skips_fresh_install(doctor, monkeypatch):
     _mock_psql(doctor, monkeypatch, "0|0|\n")
     result = doctor.check_resident_checkin_stale("postgresql://x/y")
     assert result.status == doctor.Status.SKIP
+    # The skip reason must name BOTH gates; naming only the check-in count sent
+    # an operator looking for the wrong thing once the day gate could also skip.
+    assert "distinct days" in result.message
+
+
+def test_resident_checkin_stale_requires_multi_day_activity(doctor, monkeypatch):
+    """#1486: a bare-named task agent clears 20 check-ins in a single burst,
+    passes every marker test (no '#', not claude/codex-prefixed), and is then
+    scored as a resident forever — last_seen only recedes, so it can never
+    return to PASS. Measured 2026-08-02: SchmidtPacketAudit (32 check-ins,
+    1 active day) and fable-lease-triage (33, 2 days) were permanently WARN
+    while all five real residents (5-8 active days) read healthy.
+
+    Asserted at the SQL level because the gate IS the SQL — a mocked row count
+    would pass whether or not the predicate survived an edit.
+    """
+    captured = {}
+
+    def capture_psql_row(db_url, sql):
+        captured["sql"] = sql
+        return ("0", "0", "")
+
+    monkeypatch.setattr(doctor, "_psql_row", capture_psql_row)
+    doctor.check_resident_checkin_stale("postgresql://x/y")
+    sql = captured["sql"]
+    assert "count(DISTINCT (recorded_at AT TIME ZONE 'UTC')::date)" in sql
+    assert f">= {doctor.RESIDENT_MIN_ACTIVE_DAYS}" in sql
+    assert f"count(*) >= {doctor.RESIDENT_MIN_CHECKINS}" in sql
+
+
+def test_resident_day_gate_sits_in_the_measured_gap(doctor):
+    """The threshold is only defensible if it separates the two populations
+    measured on 2026-08-02: task bursts at 1-2 active days, real residents at
+    5-8. A value outside that band would either re-admit the bursts or start
+    dropping residents."""
+    assert 2 < doctor.RESIDENT_MIN_ACTIVE_DAYS < 5
 
 
 def test_immortal_lease_warns_on_renewed_orphan(doctor, monkeypatch):
