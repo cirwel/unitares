@@ -54,8 +54,12 @@ def get_identity_continuity_status(
     if mode == "redis":
         status = "healthy" if redis_operational else "warning"
         note = (
-            "Redis is present; session continuity uses Redis-backed bindings "
-            "with PostgreSQL as the durable source of truth."
+            "Redis is present and is the AUTHORITATIVE store for live session "
+            "bindings — most active sessions exist only in Redis, because the "
+            "default resolve path is persist=False. PostgreSQL is durable for "
+            "identities; it holds sessions only for the onboarded subset, plus "
+            "a best-effort mirror when UNITARES_SESSION_MIRROR_SHADOW is set "
+            "that nothing reads yet. Losing Redis loses live session bindings."
         )
     else:
         # Degraded-local is an expected fallback in local/dev mode, so surface it
@@ -94,7 +98,17 @@ def get_identity_continuity_status(
         "status": status,
         "mode": mode,
         "redis_present": bool(redis_present),
-        "source_of_truth": "postgres",
+        # Split deliberately: the old flat "postgres" was false for the half that
+        # matters operationally. Identities are durable in PG; live session
+        # bindings are Redis-authoritative and are NOT mirrored durably yet
+        # (Redis-retirement Phase 1 — docs/proposals/redis-retirement-v0.md).
+        "source_of_truth": (
+            "postgres (identities); redis (live session bindings)"
+            if mode == "redis"
+            else "postgres (identities); in-memory (session bindings, lost on restart)"
+        ),
+        "identity_source_of_truth": "postgres",
+        "session_binding_source_of_truth": "redis" if mode == "redis" else "in-memory",
         "session_binding_backend": (
             "redis-backed session cache" if mode == "redis" else "in-memory fallback cache"
         ),
@@ -113,7 +127,9 @@ def format_identity_continuity_startup_message(status: Optional[Dict[str, Any]] 
     """Render a single-line startup message for operators."""
     status = status or get_identity_continuity_status()
     redis_clause = "Redis present" if status.get("redis_present") else "Redis absent"
+    binding = status.get("session_binding_source_of_truth", "unknown")
     return (
         f"Identity continuity mode: {status.get('mode', 'unknown')} "
-        f"({redis_clause}; PostgreSQL remains the durable source of truth)"
+        f"({redis_clause}; identities durable in PostgreSQL, "
+        f"live session bindings authoritative in {binding})"
     )
