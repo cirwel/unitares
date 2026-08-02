@@ -42,7 +42,10 @@ defmodule UnitaresSentinel.LeaseAdvisory do
           optional(:blocking_lease_id) => String.t() | nil,
           optional(:held_by_uuid) => String.t() | nil,
           optional(:expires_at) => String.t() | nil,
-          optional(:blocked_outcome) => outcome()
+          optional(:blocked_outcome) => outcome(),
+          optional(:attempted_holder_uuid) => String.t(),
+          optional(:reclaimed_lease_id) => String.t(),
+          optional(:reclaim_failed) => boolean()
         }
 
   @typedoc """
@@ -105,10 +108,27 @@ defmodule UnitaresSentinel.LeaseAdvisory do
 
         {:error, reason} ->
           Logger.debug("lease_advisory: acquire failed #{inspect(reason)}")
-          scope(:service_unavailable)
+
+          # Both transport attempts failed. Either nothing committed, or a
+          # lease committed under THIS attempt's holder uuid with both
+          # responses lost (2026-08-01: a Postgres stall did exactly that —
+          # the stall that causes the timeout is the stall that defeats the
+          # single retry). Carry the uuid so the caller can remember it and a
+          # later held_by_other naming it can be reclaimed
+          # (`maybe_reclaim_own_orphan/3`, `UnitaresSentinel.LeaseReclaim`).
+          scope(:service_unavailable, nil, %{
+            attempted_holder_uuid: Map.get(body, "holder_agent_uuid")
+          })
       end
 
-    enforce_scope(scope, surface_id, opts)
+    case maybe_reclaim_own_orphan(scope, body, opts) do
+      # The reclaim re-acquired: the returned scope came out of a full nested
+      # acquire_advisory/2 pass, so enforcement has already been applied to
+      # it — applying enforce_scope/3 again would clobber the nested pass's
+      # `blocked_outcome` with the outer `:enforcement_blocked`.
+      {:reacquired, final} -> final
+      scope -> enforce_scope(scope, surface_id, opts)
+    end
   rescue
     e ->
       Logger.debug("lease_advisory: acquire raised #{inspect(e)}")
@@ -246,10 +266,129 @@ defmodule UnitaresSentinel.LeaseAdvisory do
 
           {:error, retry_reason} ->
             # Both attempts failed at the transport: either nothing committed,
-            # or a lease is stranded this process can no longer identify. The
-            # doctor's immortal_lease check is the backstop for the latter.
+            # or a lease is stranded whose id this process never learned. The
+            # attempt's holder uuid is carried out on the scope (see
+            # acquire_advisory/2) so a later held_by_other naming it can be
+            # reclaimed; the doctor's immortal_lease check remains the
+            # backstop when the resident restarts and forfeits that memory.
             {:error, retry_reason}
         end
+    end
+  end
+
+  # 2026-08-01 double-lost-response incident: when a conflict names a holder
+  # uuid WE minted for an earlier attempt on this surface, the blocking lease
+  # is our own — created by an acquire whose response (and whose recovery
+  # retry's response) was lost. `holder_agent_uuid` values come from
+  # `new_holder_uuid/0` (`:crypto.strong_rand_bytes/1`, process-local), so the
+  # match proves authorship: releasing the lease cannot take the surface away
+  # from another live holder. Candidates arrive via `opts[:reclaim_candidates]`
+  # (threaded by `UnitaresSentinel.LeaseReclaim` from GenServer state).
+  #
+  # On a successful release the surface is free NOW — re-acquire immediately
+  # (fresh uuid, candidates emptied so the nested pass cannot recurse) instead
+  # of staying starved until the next tick. If the release fails, keep the
+  # held_by_other scope, mark `reclaim_failed`, and let the next tick retry —
+  # the candidate list is preserved by `LeaseReclaim.absorb/2`.
+  defp maybe_reclaim_own_orphan(
+         %{outcome: :held_by_other, conflict: %{held_by_uuid: held_by, blocking_lease_id: blocking}} =
+           scope,
+         body,
+         opts
+       )
+       when is_binary(held_by) and is_binary(blocking) do
+    candidates = Keyword.get(opts, :reclaim_candidates, [])
+
+    if held_by in candidates do
+      surface_id = Map.get(body, "surface_id")
+
+      Logger.warning(
+        "lease_advisory: held_by_other names our own prior attempt — reclaiming lease " <>
+          "stranded by a lost acquire response (surface=#{surface_id} " <>
+          "lease_id=#{blocking} holder_uuid=#{held_by})"
+      )
+
+      case release_checked(blocking, opts) do
+        :ok ->
+          retry_body = Map.put(body, "holder_agent_uuid", new_holder_uuid())
+          final = acquire_advisory(retry_body, Keyword.put(opts, :reclaim_candidates, []))
+          {:reacquired, put_in_conflict(final, :reclaimed_lease_id, blocking)}
+
+        {:error, reason} ->
+          Logger.warning(
+            "lease_advisory: reclaim release failed lease_id=#{blocking} " <>
+              "#{inspect(reason)} — will retry next tick"
+          )
+
+          put_in_conflict(scope, :reclaim_failed, true)
+      end
+    else
+      scope
+    end
+  end
+
+  defp maybe_reclaim_own_orphan(scope, _body, _opts), do: scope
+
+  defp put_in_conflict(scope, key, value) do
+    conflict = (Map.get(scope, :conflict) || %{}) |> Map.put(key, value)
+    Map.put(scope, :conflict, conflict)
+  end
+
+  @reclaim_release_reason "reclaimed_lost_acquire"
+
+  # Unlike `release/2` (fire-and-forget, swallows everything), a reclaim
+  # release must report whether it worked: on failure the caller keeps its
+  # candidate memory and retries next tick instead of assuming the orphan is
+  # gone. The distinct release_reason keeps `release_reason='normal'` honest
+  # as "a live holder released its own in-hand lease" — the property the 90d
+  # legitimate-long-hold analysis rests on — while a reclaimed orphan's
+  # span-since-acquire is anything but a legitimate hold.
+  defp release_checked(lease_id, opts) do
+    case post_release(lease_id, @reclaim_release_reason, opts) do
+      {:ok, %{"ok" => true}} ->
+        Logger.info(
+          "lease_advisory: released reclaimed lease_id=#{lease_id} " <>
+            "reason=#{@reclaim_release_reason}"
+        )
+
+        :ok
+
+      # Fall back to 'normal' on ANY failed first attempt, not only an
+      # explicit schema_invalid: a plane whose router predates the reason
+      # 422s, but a plane with new router code and the 056 migration
+      # unapplied fails the CHECK constraint and surfaces as a 503 — and a
+      # transport blip looks like neither. One 'normal' retry covers all
+      # three without depending on deploy order; the audit distinction
+      # upgrades itself once the plane is current. Releasing twice is safe
+      # (release is a WHERE released_at IS NULL update), and if both fail the
+      # caller keeps its candidate memory and retries next tick.
+      first_failure ->
+        case post_release(lease_id, "normal", opts) do
+          {:ok, %{"ok" => true}} ->
+            Logger.info(
+              "lease_advisory: released reclaimed lease_id=#{lease_id} reason=normal " <>
+                "(#{@reclaim_release_reason} attempt failed: #{inspect(first_failure)}; " <>
+                "deploy-order fallback)"
+            )
+
+            :ok
+
+          other ->
+            {:error, other}
+        end
+    end
+  end
+
+  defp post_release(lease_id, reason, opts) do
+    with {:ok, token} <- bearer_token(opts),
+         {:ok, _status, response_body} <-
+           post_json(
+             "/v1/lease/release",
+             %{"lease_id" => lease_id, "release_reason" => reason},
+             token,
+             opts
+           ) do
+      decode_object(response_body)
     end
   end
 

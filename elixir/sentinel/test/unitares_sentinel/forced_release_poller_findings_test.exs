@@ -299,4 +299,95 @@ defmodule UnitaresSentinel.ForcedReleasePollerFindingsTest do
 
     GenServer.stop(pid)
   end
+
+  # 2026-08-01 double-lost-response incident, wired end-to-end through the
+  # GenServer: tick 1 loses both acquire responses (the server may have
+  # committed under that attempt's holder uuid — here it did), tick 2 sees
+  # held_by_other naming that uuid, releases the orphan, and re-acquires in
+  # the same tick instead of starving until an operator force-release.
+  # Exercises the LeaseReclaim state threading (init merge → acquire_opts →
+  # absorb) that the LeaseAdvisory-level tests cannot see.
+  test "GenServer reclaims its own stranded lease across two ticks" do
+    parent = self()
+    {:ok, calls} = Agent.start_link(fn -> [] end)
+    stranded_lease_id = "77777777-7777-7777-7777-777777777777"
+
+    lease_http_post = fn url, body, _headers, _timeout_ms ->
+      Agent.update(calls, &(&1 ++ [{url, body}]))
+      recorded = Agent.get(calls, & &1)
+
+      cond do
+        # Tick 1: the acquire and its recovery retry both die at the
+        # transport. The server committed under this attempt's holder uuid.
+        length(recorded) in [1, 2] ->
+          {:error, :timeout}
+
+        # Tick 2 acquire: the orphan blocks the surface, named by the uuid
+        # tick 1 minted.
+        String.ends_with?(url, "/v1/lease/acquire") and length(recorded) == 3 ->
+          [{_, first_attempt} | _] = recorded
+
+          {:ok, 409,
+           Jason.encode!(%{
+             ok: false,
+             error: "held_by_other",
+             held_by_uuid: first_attempt["holder_agent_uuid"],
+             blocking_lease_id: stranded_lease_id
+           })}
+
+        String.ends_with?(url, "/v1/lease/release") ->
+          send(parent, {:released, body["lease_id"], body["release_reason"]})
+          {:ok, 200, ~s({"ok":true})}
+
+        # The post-reclaim re-acquire, and nothing else.
+        true ->
+          send(parent, :reacquired)
+
+          {:ok, 200,
+           Jason.encode!(%{
+             ok: true,
+             idempotent: false,
+             lease: %{lease_id: "88888888-8888-8888-8888-888888888888"},
+             drift_warning: []
+           })}
+      end
+    end
+
+    {:ok, pid} =
+      ForcedReleasePoller.start_link(
+        name: :"test_reclaim_wiring_#{System.unique_integer([:positive])}",
+        db: UnitaresSentinel.DB,
+        interval_ms: 60_000,
+        initial_delay_ms: 60_000,
+        jitter_ms: 0,
+        emit_findings: false,
+        lease_advisory: true,
+        lease_blocked_state_path: false,
+        lease_opts: [
+          bearer_token: "test-token",
+          enforced_surface_kinds: MapSet.new(["resident"]),
+          http_post: lease_http_post
+        ]
+      )
+
+    send(pid, :tick)
+
+    # Tick 1 left the attempt's uuid in the reclaim memory.
+    state = :sys.get_state(pid)
+    [{_, first_attempt} | _] = Agent.get(calls, & &1)
+    assert state.lease_reclaim_candidates == [first_attempt["holder_agent_uuid"]]
+
+    send(pid, :tick)
+
+    assert_receive {:released, ^stranded_lease_id, "reclaimed_lost_acquire"}, 2_000
+    assert_receive :reacquired, 2_000
+
+    # The reclaim resolved the candidate: a successful acquire clears memory.
+    # (End-of-tick release of the re-acquired lease also flows through the
+    # fake; wait for it so the stop below never races the tick task.)
+    assert_receive {:released, "88888888-8888-8888-8888-888888888888", _reason}, 5_000
+    assert :sys.get_state(pid).lease_reclaim_candidates == []
+
+    GenServer.stop(pid)
+  end
 end
