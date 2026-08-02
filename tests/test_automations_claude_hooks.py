@@ -57,6 +57,9 @@ def fake_home(tmp_path, monkeypatch, census_mod):
     plugin = home / "plugins/demo-plugin"
     _exe(plugin / "hooks/run-hook.cmd")
     _exe(plugin / "hooks/post-edit")
+    # Declared only in codex-hooks.json, and with the ${PLUGIN_ROOT}
+    # placeholder rather than ${CLAUDE_PLUGIN_ROOT}.
+    _exe(plugin / "hooks/post-activity")
     _exe(plugin / "hooks/never-wired")
 
     (home / ".claude").mkdir(parents=True, exist_ok=True)
@@ -81,6 +84,18 @@ def fake_home(tmp_path, monkeypatch, census_mod):
                 "hooks": [{
                     "type": "command",
                     "command": '"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd" post-edit --host claude',
+                }],
+            }]
+        }
+    }))
+    (plugin / "hooks/codex-hooks.json").write_text(json.dumps({
+        "hooks": {
+            "PostToolUse": [{
+                "matcher": "Edit",
+                "hooks": [{
+                    "type": "command",
+                    "command": '"${PLUGIN_ROOT}/hooks/run-hook.cmd" post-activity --host codex',
+                    "commandWindows": '"%PLUGIN_ROOT%\\hooks\\run-hook.cmd" post-activity --host codex',
                 }],
             }]
         }
@@ -110,10 +125,14 @@ def test_dispatched_plugin_hook_is_not_orphaned(census_mod, fake_home):
     items, _ = _collect(census_mod)
     orphan_names = {i.name for i in items if i.status == "orphaned"}
     assert not any("post-edit" in n for n in orphan_names), orphan_names
-    wired = [i for i in items if i.status == "wired" and i.scheduler == "claude-plugin"]
-    assert len(wired) == 1
+    # Scoped to the hooks.json declaration -- codex-hooks.json contributes
+    # its own plugin entry, so counting all plugin hooks would be brittle.
+    wired = [
+        i for i in items
+        if i.status == "wired" and i.scheduler == "claude-plugin" and "post-edit" in i.name
+    ]
+    assert len(wired) == 1, [i.name for i in items if i.status == "wired"]
     # Labelled by the dispatched target, not by the dispatcher.
-    assert "post-edit" in wired[0].name
     assert "run-hook.cmd" not in wired[0].name
 
 
@@ -197,3 +216,32 @@ def test_unreadable_settings_warns_but_does_not_raise(census_mod, tmp_path, monk
     items, warnings = _collect(census_mod)
     assert items == []
     assert any("failed to parse" in w for w in warnings)
+
+
+def test_codex_only_hook_is_wired_not_orphaned(census_mod, fake_home):
+    """A plugin declares hooks per HOST, in separate files.
+
+    Reading only hooks.json (the Claude contract) reports every Codex-only
+    hook as orphaned. Caught in the field: `post-activity` is wired in
+    codex-hooks.json and the census listed it as dead.
+    """
+    items, _ = _collect(census_mod)
+    orphans = {i.name for i in items if i.status == "orphaned"}
+    assert not any("post-activity" in n for n in orphans), orphans
+    wired = [i for i in items if i.status == "wired" and "post-activity" in i.name]
+    assert len(wired) == 1, [i.name for i in items if i.status == "wired"]
+    assert wired[0].cadence == "on:PostToolUse"
+
+
+def test_plugin_root_placeholder_is_expanded(census_mod, fake_home):
+    """codex-hooks.json uses ${PLUGIN_ROOT}; hooks.json uses
+    ${CLAUDE_PLUGIN_ROOT}. Both must resolve, and expanding the shorter
+    token first must not leave a dangling "CLAUDE_" prefix."""
+    items, _ = _collect(census_mod)
+    wired = [i for i in items if i.status == "wired"]
+    for item in wired:
+        assert "PLUGIN_ROOT" not in item.name, item.name
+    # Both declaration files contributed a resolved entry.
+    labels = {i.name for i in wired}
+    assert any("post-edit" in n for n in labels), labels
+    assert any("post-activity" in n for n in labels), labels

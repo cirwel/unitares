@@ -27,7 +27,7 @@
       /opt/homebrew/bin, it stays at /opt/homebrew/opt/postgresql@17/bin.
       Shipping only /opt/homebrew/bin was the original bug here — verified
       2026-08-01, `ls /opt/homebrew/bin/psql` -> No such file, and the
-      resulting --dry-run reported 8 of 11 checks SKIPPED. Confirm with
+      resulting dry-run reported 8 of 11 checks SKIPPED. Confirm with
       `command -v psql` and put THAT directory first, rather than assuming.
 
       The version pin in the path is deliberate and self-announcing: if
@@ -67,7 +67,7 @@
 
     Verify it can actually see the system (must NOT say "all operator checks
     pass" if the DB is reachable, and must NOT report doctor_sweep_blind):
-      PYTHON_BIN scripts/ops/doctor_findings.py --dry-run
+      PYTHON_BIN scripts/ops/doctor_findings.py (pass the dry-run flag)
 
     Optional env:
       DOCTOR_FINDINGS_COOLDOWN  re-alert window per (check, status)
