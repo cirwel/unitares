@@ -69,7 +69,7 @@ index; that one is the curated decision record.
 | `UNITARES_HEALTH_PROBE_INTERVAL_SECONDS` | `(required)` | Periodically run the deep health check and cache the result | src/background_tasks.py |
 | `UNITARES_HOST_ADAPTER_ENABLED` | `''` | Opt-in flag | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HTTP_API_TOKEN` | `(required)` | List all tools in OpenAI-compatible format Query params: mode: Tool mode filter - "minimal", "lite", "full" | src/http_api.py, src/mcp_handlers/identity/session.py (+3 more) |
-| `UNITARES_HTTP_CORS_ALLOW_ORIGIN` | `(required)` | Main entry point for governance MCP server. | src/mcp_server.py |
+| `UNITARES_HTTP_CORS_ALLOW_ORIGIN` | `(required)` | read by _configure_middleware() | src/services/mcp_transport_service.py |
 | `UNITARES_IDENTITY_ANCHOR_RECOVERY` | `'1'` | Whether pre-mint anchor/pin recovery runs (UNITARES_IDENTITY_ANCHOR_RECOVERY) | src/mcp_handlers/identity/session.py |
 | `UNITARES_IDENTITY_ANCHOR_TTL` | `''` | Anchor TTL in seconds (UNITARES_IDENTITY_ANCHOR_TTL) | src/mcp_handlers/identity/session.py |
 | `UNITARES_IDENTITY_STRICT` | `'log'` | Runtime accessor — respects env changes set after module load | config/governance_config.py |
@@ -124,5 +124,5 @@ index; that one is the curated decision record.
 | `UNITARES_TOOL_USAGE_LOG` | `(required)` | read by __init__() | src/tool_usage_tracker.py |
 | `UNITARES_TRACEMALLOC` | `''` | — | src/mcp_server.py |
 | `UNITARES_TRACEMALLOC_FRAMES` | `'5'` | — | src/mcp_server.py |
-| `UNITARES_UDS_SOCKET` | `(required)` | Main entry point for governance MCP server. | src/mcp_server.py, agents/watcher/agent.py (+2 more) |
+| `UNITARES_UDS_SOCKET` | `(required)` | Start the optional kernel-attested resident listener. | src/services/mcp_transport_service.py, agents/watcher/agent.py (+2 more) |
 | `UNITARES_WATCHER_DATA_DIR` | `(required)` | Checkout-independent home for Watcher's local state (reader's view) | src/watcher_state_reader.py, agents/watcher/_util.py |
