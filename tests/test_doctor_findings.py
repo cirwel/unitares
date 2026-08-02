@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 from dataclasses import dataclass
+import plistlib
 from pathlib import Path
 
 import pytest
@@ -232,3 +233,39 @@ def test_deduped_escalation_counts_as_reaching_governance():
     d.io["post_finding"] = lambda payload: df.DEDUPED
     d.run()
     assert d.state.get("open", {}) != {}, "dedup means governance holds it; record the alert"
+
+
+def test_template_renders_to_a_plist_python_can_parse():
+    """The template must survive a strict XML parser, not just Apple's.
+
+    XML forbids "--" inside a comment. Apple's parser is lenient -- launchd
+    loads such a plist and `plutil -lint` passes -- but plistlib rejects it
+    outright, so every Python tool that reads LaunchAgents silently drops
+    the job and still reports its inventory as complete. That is how
+    `unitares-automations census` under-counted this exact automation while
+    it was running happily (fixed 2026-08-01).
+
+    The failure recurs because the offending text is documentation: any
+    edit that mentions a CLI long-flag inside the header comment
+    reintroduces it. It came back within hours of the first fix, in a
+    rewrite of this very comment block. Hence a test rather than a patch.
+    """
+    rendered = (
+        TEMPLATE_PATH.read_text()
+        .replace("__UNITARES_ROOT__", "/tmp/unitares-test")
+        .replace("PYTHON_BIN", "/usr/bin/python3")
+    )
+    try:
+        parsed = plistlib.loads(rendered.encode())
+    except Exception as exc:  # noqa: BLE001
+        offenders = [
+            f"line {n}: {ln.strip()}"
+            for n, ln in enumerate(rendered.splitlines(), 1)
+            if "--" in ln and not ln.strip().startswith(("<!--", "-->"))
+        ]
+        raise AssertionError(
+            f"template does not parse as a plist: {exc}\n"
+            "XML forbids '--' inside comments. Offending lines:\n  "
+            + "\n  ".join(offenders or ["<none found; different cause>"])
+        ) from exc
+    assert parsed.get("Label") == "com.unitares.doctor-findings"
