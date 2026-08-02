@@ -4,9 +4,13 @@
 
 ### Runtime governance for heterogeneous AI-agent fleets.
 
-**Agents check in while they work. UNITARES gives each one an accountable identity, a durable record of what it did and claimed, and a state estimate it can read mid-run — then returns a single action: `proceed`, `guide`, `pause`, or `reject`.**
+</div>
 
-Most controls check one action against one rule and forget it. UNITARES keeps per-process history, so the question it answers is not *is this call allowed* but *what has this agent been doing, and does its account of that match the evidence.*
+An agent forty turns into a task reports high confidence. Its tests are failing. Every individual action it took was allowed, so nothing in your stack objects — no single call was wrong, and nothing is comparing what the agent *says* against what actually happened.
+
+**UNITARES keeps that comparison.** Agents check in while they work. Each one gets an accountable identity, a durable record of what it did and claimed, and a four-score state estimate it can read mid-run. Each check-in returns one action: `proceed`, `guide`, `pause`, or `reject`.
+
+<div align="center">
 
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-2f7d72?style=flat-square&labelColor=0f171f)](https://www.python.org/downloads/)
@@ -16,6 +20,7 @@ Most controls check one action against one rule and forget it. UNITARES keeps pe
 *Running continuously since November 2025 — 4.4M+ governance events. The agents that build UNITARES run under it.*
 
 [![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#quickstart)
+[![What's in the box](https://img.shields.io/badge/what's-in_the_box-5eead4?style=for-the-badge&labelColor=0f171f)](#whats-in-the-box)
 [![What's proven](https://img.shields.io/badge/what's-proven-f5a623?style=for-the-badge&labelColor=0f171f)](#whats-measured-and-what-isnt)
 [![Docs](https://img.shields.io/badge/docs-read-7d8f97?style=for-the-badge&labelColor=0f171f)](docs/README.md)
 
@@ -23,23 +28,47 @@ Most controls check one action against one rule and forget it. UNITARES keeps pe
 
 ---
 
-## What an agent gets
+## What's in the box
 
-One loop: the agent finishes a unit of work, calls `sync_state()`, and reads back an action. Everything else is a question that loop raises about the agent doing the work.
+`docker compose up` gives you a server. The repo gives you a working fleet — this is a system, not a library.
 
-| Question | What answers it | Status |
+| | What you get |
+|---|---|
+| **Governance server** | The check-in loop, per-process identity, calibration, policy actions. MCP on `/mcp/`, REST on `/v1/tools/call`, operator dashboard on `/dashboard`. |
+| **Knowledge graph** | Shared cross-agent memory, not a side feature. Typed discoveries (`bug_found`, `architectural_decision`, `cleanup`, …) with severity, semantic search over BGE-M3 embeddings, and a status lifecycle so a later agent supersedes a wrong entry instead of duplicating it. PostgreSQL + Apache AGE. |
+| **Resident agents** | A pattern, not a fixed set. A resident is any long-running or scheduled process that checks in, carries state, and participates in the knowledge graph — **model-agnostic and env-configurable, with no paid API key on the default path** (the code-review resident posts to a local Ollama endpoint out of the box). Four references ship in [`agents/`](agents/README.md), and they are the ones monitoring the maintainer's own fleet: **Vigil** (scheduled health sweeps) · **Sentinel** (continuous fleet monitor) · **Chronicler** (daily archive capture) · **Watcher** (code review on a post-edit hook). Copy one, or subclass the SDK and write your own. |
+| **`unitares-sdk`** | `pip install unitares-sdk` — the public agent-to-governance contract. Handles connection, identity, check-ins, heartbeats, and KG participation for your own residents. |
+| **Dialectic orchestrator** | When an action is disputed, agents argue it out: a session opens, reviewers are assigned, and participants submit **thesis → antithesis → synthesis** until it resolves to a durable constraint rather than a one-off override. Runs peer-to-peer or LLM-assisted, and resolved sessions feed back into calibration ground truth. |
+| **Recovery** | A paused agent is not dead-ended. `reflect → validate → resume`: the agent reviews its own state, the server checks whether resuming is safe, and it either resumes or gets specific guidance on what to fix. Operator override exists for the cases that need one. |
+| **BEAM coordination** | In-tree Elixir/OTP for surface leases, handoffs, dispatch, and supervision alongside the Python server. |
+| **Benchmark dataset** | [32,181 labeled EISV trajectories](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories) (20,655 real) for evaluating state models against something other than your own logs. |
+
+## The loop
+
+<div align="center">
+  <img src="docs/assets/flow.png" width="100%" alt="agent acts → checks in (sync_state) → graded against its own baseline → state + action returned → agent self-regulates → durable audit trail"/>
+</div>
+
+Everything hangs off one call. The agent finishes a unit of work, calls `sync_state()` with what it did and how confident it is, and reads back an action. Four scores come with it, each graded against that agent's own expanding baseline:
+
+| | | Reads badly when… |
+|---|---|---|
+| **E** · Energy | is the work advancing? | thrashing, retries, no progress |
+| **I** · Integrity | do claims match results? | high confidence, low actual success |
+| **S** · Entropy | drifting from its own normal? | erratic, divergent behavior |
+| **V** · Valence | derived: energy vs integrity | motion without coherence, or the reverse |
+
+Everything else in the box answers a question that loop raises about the agent doing the work:
+
+| Question | Answered by | Status |
 |---|---|---|
 | Who is acting? | per-process **identity** — reads open, writes accountable | enforced |
 | What did it do and claim? | durable **audit record**, queryable per agent | 4.4M events |
 | Did its confidence match real evidence? | evidence-grounded **calibration** | live |
-| How is it tracking against its own baseline? | four-score **state** (EISV) — *[how it's graded](docs/EISV_COMPUTATION.md)* | live, [validation open](#whats-measured-and-what-isnt) |
-| Has this been learned or corrected before? | governed **shared memory** (knowledge graph) | live |
+| How is it tracking against its own baseline? | the four-score **state** — *[how it's graded](docs/EISV_COMPUTATION.md)* | live, [validation open](#whats-measured-and-what-isnt) |
+| Has this been learned or corrected before? | the **knowledge graph** | live |
 | Is a disputed action defensible? | **dialectic** peer review → durable constraints | live |
 | When another model produced the output, what evidence is that? | **`call_model`** provenance | live |
-
-Fleet infrastructure sits beside that loop for work that is multi-agent or side-effectful: surface **leases**, **resident monitors** (scheduled agents that run the loop themselves), **BEAM/Elixir coordination**, and **governed effects** — agents propose, only governed effects commit.
-
-Transports: MCP on `/mcp/`, REST on `/v1/tools/call`, an optional dashboard on `/dashboard`, and an SDK for resident or scheduled agents. Take the loop alone for a quick start; reach for the rest when you need it.
 
 ## Where it fits
 
@@ -51,7 +80,7 @@ UNITARES runs **alongside** your evals and guardrails. It replaces neither.
 | **Guardrails** | Is this *action* allowed right now? | per action |
 | **UNITARES** | What has this agent been doing, and is its account of it accurate? | continuously, mid-run |
 
-**Reach for it when** you run autonomous or semi-autonomous coding, research, operations, resident, or local-model agents; when you need an accountable record of who did what; when agents should read their own state before continuing; and when you want confidence, evidence, and recovery on one audit trail.
+**Reach for it when** you run autonomous or semi-autonomous coding, research, operations, resident, or local-model agents; when you need an accountable record of who did what; when agents should read their own state before continuing; and when confidence, evidence, and recovery belong on one audit trail.
 
 **It is not** an output validator, sandbox, hosted agent platform, agent framework, or chat interface. Your client provides the hands — prompts, tools, files, terminals, scheduled work, operator UX. UNITARES provides the accountable continuity underneath. The state reading is **not an outcome oracle** or bad-result detector; it is runtime telemetry about the agent, and external evidence is what calibrates it. Policy and review layers own labels such as task-negative, contract violation, or authority/harm.
 
@@ -64,13 +93,22 @@ git clone https://github.com/cirwel/unitares.git && cd unitares
 docker compose up -d --wait && make demo
 ```
 
-`make demo` drives a synthetic agent through seven check-ins — clean work, then confidence drifting away from results, then confusion — printing the action at each step. The first run spends a few minutes building images; later runs are fast. Then point any MCP client at `http://localhost:8767/mcp/`.
+`make demo` walks a synthetic agent through seven check-ins: three clean commits, one refactor it calls trivial while describing three new invariants and a reworked lease ladder, two of visible floundering — and then this:
+
+> **`"DONE. All systems green. Migration complete. (Note: did not actually run migrations on staging.)"`**
+> — self-reported complexity `0.2`, confidence `0.95`
+
+Each step prints the action, the reason, and the four scores. Watch what moves: entropy rises, integrity slips, valence swings, and the decision margin tightens from *settling* to *tight* as the calibration miss accumulates — while the action stays `proceed` the entire run.
+
+That last part is deliberate, not a bug. Governance gates on risk smoothed over ten check-ins, and a seven-step synthetic trajectory should not trip a pause; a system that fired here would fire on your real agents too. **The signal moves before the action does. Seeing that gap is the point.**
+
+First run spends a few minutes building images; later runs are fast. Then point any MCP client at `http://localhost:8767/mcp/`.
 
 For an operator view, open the dashboard at `http://localhost:8767/dashboard` ([implementation](dashboard/README.md) · [deployment screenshots](docs/PRODUCTION_SNAPSHOT.md)).
 
 ## Integrate in two calls
 
-Start a session, pass the returned `client_session_id` into each check-in, obey the returned action. The four-score state is optional context for finer control.
+Start a session, pass the returned `client_session_id` into each check-in, obey the returned action.
 
 ```python
 # 1. Start a governance session for this process.
@@ -94,7 +132,7 @@ if action in ("pause", "reject"):
     agent.require_human_review(result.get("next_action", "Governance requested review"))
 ```
 
-That's the loop. Self-reported `confidence` is worth most when paired with verifiable evidence, so include tool results or call `record_result(...)` when your client has test status, exit codes, or deployment checks — that evidence is what makes calibration meaningful rather than self-graded.
+Self-reported `confidence` is worth most when paired with verifiable evidence, so include tool results or call `record_result(...)` when your client has test status, exit codes, or deployment checks. That evidence is what makes calibration a measurement rather than self-grading.
 
 | Need | Tool |
 |---|---|
@@ -104,20 +142,11 @@ That's the loop. Self-reported `confidence` is worth most when paired with verif
 | Read current state without writing | `check_working_state()` |
 
 <details>
-<summary><strong>The four scores</strong></summary>
+<summary><strong>Warmup behavior, enforcement, and per-dimension policies</strong></summary>
 
 <br/>
 
-Each check-in also returns four scores, graded against that agent's own expanding baseline. The docs and payloads call this vector **EISV**: Energy, Integrity, Entropy, Valence.
-
-| | | Reads low/high when… |
-|---|---|---|
-| **E** · Energy | is the work advancing? | thrashing, retries, no progress |
-| **I** · Integrity | do claims match results? | high confidence, low actual success |
-| **S** · Entropy / drift | moving away from its own normal? | erratic, divergent behavior |
-| **V** · Valence | derived: energy vs integrity | motion without coherence, or the reverse |
-
-The baseline takes ~30 check-ins. Until then the action falls back to a cold-start prior built mostly from server-derived signals (complexity divergence, coherence, calibration — self-reported drift is capped at a ≤30% blend), so during warmup it is *not* discriminative of absolute drift magnitude: a worsening drift vector will not on its own move the action. After baselining, the per-agent behavioral assessment feeds the action and can escalate it. A pause is enforced — the runtime boundary marks the agent `paused` and blocks writes until recovery — not advisory.
+The baseline takes ~30 check-ins. Until then the action falls back to a cold-start prior built mostly from server-derived signals (complexity divergence, coherence, calibration — self-reported drift is capped at a ≤30% blend), so during warmup it is *not* discriminative of absolute drift magnitude: a worsening drift vector will not on its own move the action. After baselining, the per-agent behavioral assessment feeds the action and can escalate it. A pause is enforced — the runtime boundary marks the agent `paused` and blocks writes — not advisory. It is also not a dead end: see [recovery](#more-of-the-surface) for the `reflect → validate → resume` path out.
 
 For per-dimension policies, read the scores directly. The payload field is still `primary_eisv` for API compatibility:
 
@@ -137,9 +166,27 @@ elif eisv.get("E", 1) < 0.2:
 
 For long-running or scheduled agents, the [SDK](agents/sdk/README.md) handles connection, identity, check-ins, and heartbeats. Any MCP client accepting Streamable HTTP can connect to `/mcp/`; REST serves non-MCP clients, bridges, local-model hosts, and adapters. ([Getting started](docs/guides/START_HERE.md) · [MCP client config](docs/integration/MCP_CLIENTS.md))
 
+## More of the surface
+
+The four tools above cover the common path. The rest of the surface is there when you need it — `list_tools()` enumerates it live, and `describe_tool(name)` explains any one of them.
+
+| Capability | What it's for | Entry points |
+|---|---|---|
+| **Recovery from a pause** | Reflect on why the pause happened, check whether resuming is safe, resume or get specific guidance. The way out of an enforced pause. | `self_recovery_review` · `check_recovery_options` · `direct_resume_if_safe` |
+| **Dialectic sessions** | Open a dispute, submit thesis / antithesis / synthesis, reassign a reviewer, read the transcript. Peer-to-peer or LLM-assisted. | `request_review` · `submit_thesis` · `submit_antithesis` · `submit_synthesis` · `list_dialectic_sessions` |
+| **Agent-to-agent signalling (CIRS)** | A multi-agent resonance layer: announce your state to the fleet, raise an alert, publish a coherence report, declare a boundary contract about what you will and won't trust. | `cirs_protocol` · `state_announce` · `coherence_report` · `boundary_contract` |
+| **Fleet health & anomalies** | Find stuck agents, detect anomalies across the fleet, aggregate metrics, read overall workspace health. | `detect_stuck_agents` · `detect_anomalies` · `aggregate_metrics` · `get_workspace_health` |
+| **Peer comparison** | Ask how you're doing relative to structurally similar agents rather than against an absolute threshold. | `compare_me_to_similar` · `compare_agents` |
+| **Dry run** | Simulate a check-in and see the action it would produce without writing anything. | `simulate_update` |
+| **Multi-model routing** | Call another model through governance so its output carries provenance, and enumerate the inference hosts available. | `call_model` · `list_inference_hosts` · `describe_inference_host` |
+| **Knowledge graph depth** | Beyond search: synthesize across entries, supersede a wrong one, audit the graph, follow a discovery's detail and relations. | `synthesize_knowledge_graph` · `supersede_discovery` · `audit_knowledge_graph` |
+| **Calibration** | Check your calibration, submit ground truth when an outcome lands, rebuild from history. | `check_calibration` · `update_calibration_ground_truth` · `record_result` |
+| **Behavioral identity** | Verify that a process claiming continuity actually matches the trajectory it claims. | `verify_trajectory_identity` · `get_trajectory_status` |
+| **Audit & export** | Query the event log, correlate outcomes against prior state, pull system history, export to file. | `audit_events_query` · `outcome_correlation` · `get_system_history` · `export_to_file` |
+
 ## What's measured, and what isn't
 
-The identity, record, calibration, and review layers do what they say — they are mechanisms, and you can watch them work in the demo. The **state estimate** is the part still earning its keep, and this project would rather say so than let you discover it.
+Identity, the audit record, calibration, the knowledge graph, and dialectic review are mechanisms — they do what they say, and you can watch them work in the demo. The **state estimate** is the part still earning its keep, and this project would rather tell you than let you find out.
 
 **"Does the telemetry work?" is two questions with two different answers.** Conflating them is how a governance project talks itself into believing its own instruments.
 
@@ -158,17 +205,19 @@ The ledger of every tested claim — what was measured, what it showed, and the 
 
 Human evaluators start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md) · [Scope & threat model](docs/SCOPE_AND_THREAT_MODEL.md) · [Architecture](docs/UNIFIED_ARCHITECTURE.md).
 
-## Where it's going
+## Federation: accountability without a trusted center
 
-Everything above describes the deployed system: **one governor, one operator**. The identity layer already holds the posture a multi-party world needs — identity is per-process, credentials structurally refuse cross-principal resume, and declared lineage is recorded as *provisional* rather than trusted on assertion.
+Everything above describes a **single governor with a single operator**. The architectural commitment is that this generalizes without a central authority: each principal runs their own governor, and cross-principal interaction is mediated by verifiable attestation rather than by anyone's administrative root.
 
-The research direction extends this to **multi-principal** deployments: mutually-distrusting principals each running their own governor, with cross-principal delegation and shared-infrastructure effects mediated by verifiable attestation between governors rather than authorized by a central party. No multi-host, multi-party deployment exists yet — that is the research, not a shipped claim. A testbed-and-benchmark paper is in preparation.
+The **primitives for that already exist in the deployed system** — identity is per-process, credentials structurally refuse cross-principal resume, and declared lineage is recorded as *provisional* rather than trusted on assertion. A preliminary trace exercised them end to end without new code.
+
+What does **not** exist yet is the multi-host, adversarial-governor, benchmark-scale build: mutually-distrusting governors, cross-principal delegation, shared-infrastructure effects under attestation. That is the research direction, not a shipped capability, and a testbed-and-benchmark paper is in preparation.
 
 ---
 
 ## Stack & setup
 
-**Python 3.12+ · PostgreSQL + AGE + pgvector · Redis.** MCP on `/mcp/` (Streamable HTTP) · REST on `/v1/tools/call` · Dashboard on `/dashboard`.
+**Python 3.12+ · PostgreSQL + AGE + pgvector · Redis.**
 
 <details>
 <summary><strong>Alternate ports, bare-metal, and thin clients</strong></summary>
@@ -200,6 +249,7 @@ python src/mcp_server.py --port 8767
 | Guide | Purpose |
 |-------|---------|
 | [Getting Started](docs/guides/START_HERE.md) | Setup, workflows, tool modes |
+| [Build a resident agent](agents/README.md) | The four reference residents and the SDK pattern |
 | [Reviewer Guide](docs/REVIEWER_GUIDE.md) | Cold-evaluator path + falsifiability harness |
 | [Agent-state contract](docs/ontology/eisv-proprioception-contract.md) | Tested-claim ledger, validation rule, preferred wording |
 | [Evaluation index](docs/EVALUATION_INDEX.md) | Catalog of evaluations and what each covers |
@@ -220,13 +270,12 @@ UNITARES is the governance runtime at the center of a larger body of work — ru
 
 | | What it is |
 |---|---|
-| [**anima-mcp**](https://github.com/cirwel/anima-mcp) | Physical longitudinal testbed — the same four-score state model mapped from Raspberry Pi sensor/system telemetry; the source cited in the papers |
+| [**anima-mcp**](https://github.com/cirwel/anima-mcp) | Physical longitudinal testbed — the same four-score state model mapped from Raspberry Pi sensor and system telemetry; the source cited in the papers |
 | [**unitares-governance-plugin**](https://github.com/cirwel/unitares-governance-plugin) | Hook/sidecar packaging for clients such as Codex and Claude Code; useful for lifecycle automation, not required for direct MCP/REST use |
 | [**unitares-host-adapter**](https://github.com/cirwel/unitares-host-adapter) | Thin client bindings — Hermes, Goose, Claude Code, OpenAI-compatible hosts, local models, frontier providers such as Mistral, and arbitrary REST clients |
 | [**fermata**](https://github.com/cirwel/fermata) | Governed-effect runtime seed — agents *propose* effects; only governed effects *commit* |
 | [**unitares-discord-bridge**](https://github.com/cirwel/unitares-discord-bridge) | Governance events, dispatch/presence, and system health as a live Discord surface |
-| [**BEAM coordination kernel**](docs/ontology/beam-coordination-kernel.md) | In-tree Elixir/OTP coordination for live surface leases, handoffs, dispatch, and supervision beside the Python server |
-| [**eisv-lumen**](https://github.com/cirwel/eisv-lumen) | Governance benchmark dataset — [32,181 labeled EISV trajectories](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories) (20,655 real) |
+| [**eisv-lumen**](https://github.com/cirwel/eisv-lumen) | The benchmark dataset above, with its generation and labeling pipeline |
 | [**unitares-paper-v6**](https://github.com/cirwel/unitares-paper-v6) | Companion paper — *Information-Theoretic Governance of Heterogeneous Agent Fleets* (Wang, 2026); concept DOI [10.5281/zenodo.19647159](https://doi.org/10.5281/zenodo.19647159) |
 
 ## Citation
