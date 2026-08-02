@@ -89,6 +89,17 @@ async def help() -> str:
     return tools.handle_help()
 
 
+# -- Health --
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request):
+    # deploy-gateway.sh and deploy-status.sh probe this; without it every
+    # deploy verdict was a false FAILED against a healthy process.
+    from starlette.responses import JSONResponse
+
+    return JSONResponse({"status": "ok", "service": "unitares-gateway"})
+
+
 # -- Entry point --
 
 def parse_args():
