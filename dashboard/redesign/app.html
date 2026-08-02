@@ -286,6 +286,7 @@ function lazyLoad(id) {
 // hidden or an input is focused, and fires immediately on tab re-focus.
 let activeSection = "overview";
 const REFRESH_MS = 10000;       // light monitor refresh
+const RUNTIME_REFRESH_MS = 30000; // audit-backed continuity while WS is open
 const STATS_REFRESH_MS = 30000; // heavy headline batch (7 tools) — gentler cadence
 const RELOAD = {
   overview: () => window.Landing && window.Landing.refresh(),
@@ -321,6 +322,14 @@ function refreshActive() {
 // Polling fallback — only fires when the stream is NOT connected.
 function refreshTick() { if (wsStatus !== "open") refreshActive(); }
 setInterval(refreshTick, REFRESH_MS);
+// Runtime observations are audit-only and intentionally do not masquerade as
+// EISV websocket updates. Keep the Activity continuity clock fresh at a
+// gentler cadence when the socket is open; disconnected mode already uses the
+// normal 10-second polling fallback above.
+setInterval(() => {
+  if (wsStatus !== "open" || document.hidden || isTyping() || activeSection !== "activity") return;
+  if (window.Activity) window.Activity.load();
+}, RUNTIME_REFRESH_MS);
 // Heavier headline batch on a gentler cadence, only while watching the Overview.
 setInterval(() => {
   if (document.hidden || isTyping() || activeSection !== "overview") return;
