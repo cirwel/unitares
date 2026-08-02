@@ -67,6 +67,7 @@ def _snapshot_queries() -> dict:
               AND u.tool_name IN ('knowledge', 'search_knowledge_graph')
               AND u.agent_id IS NOT NULL
               AND coalesce(a.label, '') NOT LIKE 'operator\\_%%'
+              AND coalesce(a.label, '') NOT LIKE 'canary\\_%%'
         """,
         # Onboard engagement. `converted` used to mean process_agent_update only,
         # which made BEAM-dispatch harness identities look like permanent
@@ -85,6 +86,11 @@ def _snapshot_queries() -> dict:
                        ) AS is_adopter
                 FROM core.agents a
                 WHERE a.created_at > now() - make_interval(days => %(days)s)
+                  -- Scheduled positive-control probes (dialectic_canary.py,
+                  -- #1387 gate amendment) are synthetic traffic: exclude them
+                  -- from every cohort cut, not just the adopter flag — a
+                  -- daily probe would otherwise read as a daily mint+engage.
+                  AND coalesce(a.label, '') NOT LIKE 'canary\\_%%'
             ),
             f AS (
                 SELECT a.id, a.is_adopter,
