@@ -17,6 +17,8 @@ Reference implementations of Unitares governance agents. These are **not** part 
 
 To deploy your own residents, depend on `unitares-sdk` and follow the `run_cycle` pattern shown in `vigil/agent.py` or `sentinel/agent.py`. Lumen (the embodied agent) lives in a separate repo (`anima-mcp`) and is another example of an SDK consumer.
 
+Declare the resident to a deployment with `UNITARES_RESIDENTS` (names and calibration class) and the `UNITARES_RESIDENT_PROGRESS_MANIFEST` (progress probing). If you want the progress probe to track a metric of your own, ship a source in the `unitares.resident_progress_sources` entry-point group — no change to this repo is required. See [`docs/operations/resident-roster.md`](../docs/operations/resident-roster.md).
+
 ## LaunchAgents (Mac)
 
 - `com.unitares.vigil` — runs `vigil/agent.py --once` every 30 min

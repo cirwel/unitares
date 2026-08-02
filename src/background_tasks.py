@@ -648,6 +648,19 @@ async def progress_flat_probe_task(interval_seconds: float | None = None):
         "sentinel_pulse":   SentinelPulseSource(db),
         "agent_checkins":   CheckinSource(db),
     }
+    # Third-party sources for out-of-tree residents. Inert unless the operator
+    # installed a distribution declaring the entry-point group; first-party
+    # names always win a collision. See src/resident_progress/plugins.py.
+    from src.resident_progress.plugins import discover_progress_sources
+    plugin_result = discover_progress_sources(db, builtin_names=sources.keys())
+    for err in plugin_result.errors:
+        logger.warning("[PROGRESS_FLAT] source plugin rejected: %s", err)
+    if plugin_result.sources:
+        logger.info(
+            "[PROGRESS_FLAT] loaded %d third-party source(s): %s",
+            len(plugin_result.sources), ", ".join(sorted(plugin_result.sources)),
+        )
+    sources.update(plugin_result.sources)
     probe = ProgressFlatProbe(
         sources_by_name=sources,
         heartbeat_evaluator=HeartbeatEvaluator(_MetadataStore()),
