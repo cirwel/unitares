@@ -67,7 +67,7 @@
 
     Verify it can actually see the system (must NOT say "all operator checks
     pass" if the DB is reachable, and must NOT report doctor_sweep_blind):
-      PYTHON_BIN scripts/ops/doctor_findings.py --dry-run
+      PYTHON_BIN scripts/ops/doctor_findings.py (pass the dry-run flag)
 
     Optional env:
       DOCTOR_FINDINGS_COOLDOWN  re-alert window per (check, status)
