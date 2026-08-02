@@ -1,6 +1,7 @@
 name: Documentation Validation
 
 on:
+  merge_group:
   push:
     branches: [ master, main, develop ]
   pull_request:
