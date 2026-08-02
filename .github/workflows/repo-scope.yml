@@ -5,6 +5,7 @@ name: Repo Scope Guard
 # web agent sessions, which bypass the local pre-commit hook. See docs/REPO_SCOPE.md.
 
 on:
+  merge_group:
   pull_request:
     branches: [ master, main ]
   push:

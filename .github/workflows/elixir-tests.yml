@@ -24,6 +24,7 @@ name: Elixir Tests
 # db-only PR fixing it would have shown the `lease_plane` check as ABSENT rather
 # than green — the fix could not be validated by the job it repairs.
 on:
+  merge_group:
   push:
     branches: [ master, main ]
     paths:
