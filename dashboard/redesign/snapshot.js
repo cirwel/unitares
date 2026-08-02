@@ -130,6 +130,15 @@ window.SNAPSHOT = {
   },
   // Real event stream + activity histogram from /api/events + /api/activity 2026-06-19T20:30Z.
   activity: {
+    operational: {
+      available: true, source: "snapshot", windowHours: 24,
+      summary: { processes:2, agents:2, recent_processes:1, observations:19, processes_after_reflection:2, last_operational_at:"2026-06-19T20:28:00Z", last_reflection_at:"2026-06-19T18:32:35Z" },
+      processes: [
+        { process_id:"11723403:ab12cd34", agent_id:"11723403-9f10-4fa8-b374-67db05f6704e", agent_label:"UNITARES Dogfood Pulse", slot_hash:"ab12cd34ef56", host_family:"codex", plugin_version:"0.4.12", latest_kind:"activity_rollup", observation_count:12, tool_count:184, tools_in_window:37, last_operational_at:"2026-06-19T20:28:00Z", last_heartbeat_at:"2026-06-19T20:12:00Z", operational_recent:true, last_reflection_at:"2026-06-19T18:32:35Z", last_interpretation_at:null, reflection_count:1, operational_after_reflection:true, host_process_alive:true },
+        { process_id:"98e07da6:de45fa67", agent_id:"98e07da6-6ccf-40c4-b169-644c358470da", agent_label:"Codex Weekly Release Notes", slot_hash:"de45fa678901", host_family:"codex", plugin_version:"0.4.12", latest_kind:"heartbeat", observation_count:7, tool_count:63, tools_in_window:18, last_operational_at:"2026-06-19T17:55:00Z", last_heartbeat_at:"2026-06-19T17:55:00Z", operational_recent:false, last_reflection_at:"2026-06-19T15:02:54Z", last_interpretation_at:"2026-06-19T17:56:00Z", reflection_count:3, operational_after_reflection:true, host_process_alive:true },
+      ],
+      semantics: { operational:"identity-bound substrate observations; never EISV", reflection:"agent_state rows explicitly labeled agent_report", interpretation:"substrate_interpretation rows remain separately labeled" },
+    },
     buckets: [ {p:5,g:0,x:0},{p:7,g:0,x:0},{p:8,g:0,x:0},{p:3,g:0,x:0},{p:10,g:0,x:0},{p:4,g:0,x:0},{p:7,g:0,x:0},{p:9,g:0,x:0},{p:12,g:0,x:0},{p:5,g:0,x:0},{p:10,g:0,x:0},{p:5,g:0,x:0} ],
     windowMin: 60, bucketMin: 5,
     events: [

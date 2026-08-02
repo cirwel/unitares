@@ -1,5 +1,5 @@
 /*
- * Activity section — histogram + event stream.
+ * Activity section — operational continuity + governance updates + event stream.
  * Built from old timeline.js oracle: a proceed/guide/pause activity
  * histogram over the window, plus a filterable event timeline (icon by
  * type, severity/verdict colour, violation-class badge, agent, time,
@@ -27,8 +27,73 @@
   }
   const clock = (iso) => { const t = Date.parse(iso); return isNaN(t) ? "" : new Date(t).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }); };
 
-  let MODEL = { events: [], buckets: [], windowMin: 60, bucketMin: 5, source: "snapshot" };
+  let MODEL = { events: [], buckets: [], operational: null, windowMin: 60, bucketMin: 5, source: "snapshot" };
   let filter = "all";
+
+  const nfmt = (n) => typeof n === "number" ? n.toLocaleString() : "—";
+  const shortId = (s) => String(s || "").slice(0, 8) || "—";
+
+  function processRow(p) {
+    const name = p.agent_label || shortId(p.agent_id);
+    const liveRecent = MODEL.operational && MODEL.operational.source === "live" && p.operational_recent;
+    const opState = liveRecent ? (p.host_process_alive ? "alive" : "active") : "observed";
+    const opColor = liveRecent ? "var(--ok)" : "var(--muted)";
+    const reflection = p.last_reflection_at
+      ? `<span title="${esc(p.last_reflection_at)}">reflection ${relTime(p.last_reflection_at)}</span>`
+      : `<span style="color:var(--faint)">no authored reflection</span>`;
+    const interpretation = p.last_interpretation_at
+      ? `<div class="fresh" title="Substrate interpretation — not agent-authored">interpretation ${relTime(p.last_interpretation_at)}</div>`
+      : "";
+    const relation = p.operational_after_reflection
+      ? `<span class="tag" style="color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,var(--line-2))">ops since reflection</span>`
+      : `<span class="tag">reflection current</span>`;
+    return `<div style="display:flex;gap:var(--space-4);align-items:center;flex-wrap:wrap;padding:var(--space-3) 0;border-bottom:var(--hairline) solid var(--line)">
+      <div style="min-width:190px;flex:1.4">
+        <div style="font-weight:600;color:var(--ink)" title="${esc(p.agent_id)}">${esc(name)}</div>
+        <div class="fresh">${esc(p.host_family || "unknown")} · slot ${esc(shortId(p.slot_hash))}</div>
+      </div>
+      <div style="min-width:150px;flex:1">
+        <div><span class="dot-pip" style="display:inline-block;background:${opColor};margin-right:6px"></span>${opState} · <span title="${esc(p.last_operational_at)}">${relTime(p.last_operational_at)}</span></div>
+        <div class="fresh">${esc((p.latest_kind || "observation").replace(/_/g, " "))}</div>
+      </div>
+      <div style="min-width:155px;flex:1">
+        <div>${reflection}</div>${interpretation}
+      </div>
+      <div style="min-width:130px;flex:.8" class="mono">
+        <div>${nfmt(p.tool_count)} tools</div><div class="fresh">+${nfmt(p.tools_in_window)} in window</div>
+      </div>
+      <div style="min-width:145px;flex:none">${relation}</div>
+    </div>`;
+  }
+
+  function continuity() {
+    const op = MODEL.operational;
+    if (!op || !op.available) {
+      return `<div class="attn-band calm"><span class="glyph">○</span><span>Operational runtime stream unavailable. Governance state activity below remains independently sourced.</span></div>`;
+    }
+    const s = op.summary || {};
+    const stat = (label, value, sub) => `<div class="card"><h3>${label}</h3><div class="num">${nfmt(value)}</div><div class="sub">${sub}</div></div>`;
+    const rows = (op.processes || []).slice(0, 30);
+    return `<div style="margin-bottom:var(--space-6)">
+      <div class="panel" style="padding:var(--space-5);margin-bottom:var(--space-4)">
+        <div style="display:flex;align-items:baseline;gap:var(--space-3);margin-bottom:var(--space-3)">
+          <span class="eyebrow" style="margin:0">Operational continuity</span>
+          <span class="fresh">substrate facts · last ${nfmt(op.windowHours)}h · never EISV</span>
+          <span class="spring"></span><span class="src-badge ${esc(op.source)}">${esc(op.source)}</span>
+        </div>
+        <p style="font-size:var(--text-sm);color:var(--ink-2)">Runtime observations answer whether a process is active. Agent-authored reflections remain a separate clock; substrate interpretations are labeled rather than promoted into speech.</p>
+      </div>
+      <div class="grid" style="margin-bottom:var(--space-4)">
+        ${stat("Observed processes", s.processes, `${nfmt(s.agents)} identities`)}
+        ${stat("Recent processes", s.recent_processes, op.source === "live" ? "activity within 1 hour" : "at snapshot capture")}
+        ${stat("Runtime observations", s.observations, `last ${nfmt(op.windowHours)} hours`)}
+        ${stat("Ops after reflection", s.processes_after_reflection, "neutral continuity signal")}
+      </div>
+      <div class="panel" style="padding:var(--space-2) var(--space-5)">
+        ${rows.length ? rows.map(processRow).join("") : `<p class="empty" style="padding:var(--space-4) 0">No identity-bound runtime observations in this window.</p>`}
+      </div>
+    </div>`;
+  }
 
   function histogram() {
     const b = MODEL.buckets;
@@ -42,8 +107,8 @@
     const total = b.reduce((a, x) => a + x.p + x.g + x.x, 0);
     return `<div class="panel" style="padding:var(--space-5);margin-bottom:var(--space-5)">
       <div style="display:flex;align-items:baseline;gap:var(--space-3);margin-bottom:var(--space-3)">
-        <span class="eyebrow" style="margin:0">Check-in activity</span>
-        <span class="fresh">last ${MODEL.windowMin}m · ${MODEL.bucketMin}m buckets · ${total} check-ins</span>
+        <span class="eyebrow" style="margin:0">Governance state updates</span>
+        <span class="fresh">state-writing check-ins · provenance varies · runtime excluded · last ${MODEL.windowMin}m · ${MODEL.bucketMin}m buckets · ${total} updates</span>
         <span class="spring"></span>
         <span class="legend" style="font-size:var(--text-xs)"><span><i style="background:var(--ok)"></i>proceed</span><span><i style="background:var(--warn)"></i>guide</span><span><i style="background:var(--danger)"></i>pause</span></span>
       </div>
@@ -76,7 +141,7 @@
       .map(([v, t]) => `<button class="theme-toggle act-f" data-f="${v}" style="${v === filter ? "border-color:var(--accent);color:var(--accent)" : ""}">${esc(t)}</button>`).join("");
 
     $("#act-mount").innerHTML =
-      histogram() +
+      continuity() + histogram() +
       `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:var(--space-3)">
          ${chips}<span class="spring"></span><span class="src-badge ${MODEL.source}">${MODEL.source}</span></div>
        <div class="panel" style="padding:var(--space-4) var(--space-5)">
@@ -87,7 +152,7 @@
 
   async function load() {
     const r = await DATA.activity();
-    MODEL = { events: r.data.events || [], buckets: r.data.buckets || [], windowMin: r.data.windowMin || 60, bucketMin: r.data.bucketMin || 5, source: r.source };
+    MODEL = { events: r.data.events || [], buckets: r.data.buckets || [], operational: r.data.operational || null, windowMin: r.data.windowMin || 60, bucketMin: r.data.bucketMin || 5, source: r.source };
     render();
   }
   window.Activity = { load };

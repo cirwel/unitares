@@ -10,7 +10,8 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from src.http_api import http_runtime_observe
+from src.http_api import http_runtime_activity, http_runtime_observe
+from src.runtime_observations import summarize_runtime_activity
 
 
 AGENT_UUID = "86ae619f-87e0-4040-8f29-eacece0c7904"
@@ -61,7 +62,10 @@ def recorder(monkeypatch):
 @pytest.fixture
 def client():
     app = Starlette(
-        routes=[Route("/v1/runtime/observe", http_runtime_observe, methods=["POST"])]
+        routes=[
+            Route("/v1/runtime/observe", http_runtime_observe, methods=["POST"]),
+            Route("/v1/runtime/activity", http_runtime_activity, methods=["GET"]),
+        ]
     )
     return TestClient(app, client=("127.0.0.1", 50000))
 
@@ -147,3 +151,90 @@ def test_event_id_is_stable_for_retry(client, recorder):
     second = client.post("/v1/runtime/observe", json=retry).json()["event_id"]
     assert first == second
     assert rows[0][0]["event_id"] == rows[1][0]["event_id"]
+
+
+def test_activity_summary_keeps_operational_and_reflective_provenance_separate():
+    now = datetime(2026, 8, 2, 12, 0, tzinfo=timezone.utc)
+    events = [
+        {
+            "agent_id": AGENT_UUID,
+            "timestamp": "2026-08-02T11:50:00+00:00",
+            "details": {
+                "observation_kind": "activity_rollup",
+                "host_family": "codex",
+                "slot_hash": "ab" * 16,
+                "observed_at": "2026-08-02T11:50:00+00:00",
+                "tool_count": 42,
+                "tool_delta": 7,
+                "seconds_since_last_tool": 30,
+            },
+        },
+        {
+            "agent_id": AGENT_UUID,
+            "timestamp": "2026-08-02T11:40:00+00:00",
+            "details": {
+                "observation_kind": "heartbeat",
+                "host_family": "codex",
+                "slot_hash": "ab" * 16,
+                "observed_at": "2026-08-02T11:40:00+00:00",
+                "host_process_alive": True,
+                "tool_count": 35,
+            },
+        },
+    ]
+    reflections = [
+        {
+            "agent_id": AGENT_UUID,
+            "label": "Codex runtime",
+            "last_reflection_at": datetime(2026, 8, 2, 10, 0, tzinfo=timezone.utc),
+            "reflection_count": 2,
+            "last_interpretation_at": datetime(2026, 8, 2, 11, 0, tzinfo=timezone.utc),
+            "last_unclassified_at": datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc),
+        }
+    ]
+
+    result = summarize_runtime_activity(events, reflections, now=now)
+
+    assert result["summary"] == {
+        "processes": 1,
+        "agents": 1,
+        "recent_processes": 1,
+        "observations": 2,
+        "processes_after_reflection": 1,
+        "last_operational_at": "2026-08-02T11:50:00+00:00",
+        "last_reflection_at": "2026-08-02T10:00:00+00:00",
+    }
+    process = result["processes"][0]
+    assert process["agent_label"] == "Codex runtime"
+    assert process["last_reflection_at"] == "2026-08-02T10:00:00+00:00"
+    assert process["last_interpretation_at"] == "2026-08-02T11:00:00+00:00"
+    assert process["reflection_count"] == 2
+    assert process["tool_count"] == 42
+    assert process["tools_in_window"] == 7
+    assert process["host_process_alive"] is True
+    assert process["operational_after_reflection"] is True
+
+
+def test_runtime_activity_endpoint_bounds_query_and_returns_read_model(
+    client, monkeypatch
+):
+    calls = []
+
+    async def read_runtime_activity(*, window_hours, limit):
+        calls.append((window_hours, limit))
+        return {"success": True, "summary": {"processes": 0}, "processes": []}
+
+    import src.runtime_observations as runtime_module
+
+    monkeypatch.setattr(runtime_module, "read_runtime_activity", read_runtime_activity)
+    response = client.get("/v1/runtime/activity?window_hours=9999&limit=99999")
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["processes"] == 0
+    assert calls == [(24 * 90, 5000)]
+
+
+def test_runtime_activity_endpoint_rejects_invalid_query(client):
+    response = client.get("/v1/runtime/activity?window_hours=forever")
+    assert response.status_code == 400
+    assert response.json()["success"] is False
