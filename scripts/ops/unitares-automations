@@ -816,9 +816,14 @@ def _settings_hook_sources() -> list[tuple[Path, str | None]]:
     if cache.is_dir():
         roots.extend(p for p in cache.iterdir() if p.is_dir())
     for root in roots:
-        hooks_json = root / "hooks/hooks.json"
-        if hooks_json.exists():
-            sources.append((hooks_json, str(root)))
+        # A plugin declares hooks per HOST, in separate files. Reading only
+        # hooks.json (the Claude contract) reports every Codex-only hook as
+        # orphaned -- caught in the field by `post-activity`, which is wired
+        # in codex-hooks.json and was listed as dead.
+        for declaration in ("hooks/hooks.json", "hooks/codex-hooks.json"):
+            path = root / declaration
+            if path.exists():
+                sources.append((path, str(root)))
     return sources
 
 
@@ -835,8 +840,15 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
     is an ARGUMENT, not the command. Resolving only the command would report
     every real plugin hook (post-edit, session-start, ...) as orphaned.
     """
-    text = command.replace("${CLAUDE_PLUGIN_ROOT}", plugin_root or "")
-    text = text.replace("$CLAUDE_PLUGIN_ROOT", plugin_root or "")
+    # hooks.json uses ${CLAUDE_PLUGIN_ROOT}; codex-hooks.json uses
+    # ${PLUGIN_ROOT}. Expand both, longest token first so the CLAUDE_ form
+    # is not left with a dangling "CLAUDE_" prefix.
+    text = command
+    for placeholder in (
+        "${CLAUDE_PLUGIN_ROOT}", "$CLAUDE_PLUGIN_ROOT",
+        "${PLUGIN_ROOT}", "$PLUGIN_ROOT",
+    ):
+        text = text.replace(placeholder, plugin_root or "")
     tokens = [t.strip("\"'") for t in text.split()]
     found: list[str] = []
     for idx, tok in enumerate(tokens):
