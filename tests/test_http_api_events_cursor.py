@@ -36,7 +36,7 @@ def _no_http_api_token(monkeypatch):
 @pytest.fixture
 def client():
     app = Starlette(routes=[Route("/api/events", http_events, methods=["GET"])])
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 def _audit_row(event_id, event_type="cross_device_call"):

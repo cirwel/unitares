@@ -73,12 +73,16 @@ class _FakeDB:
 def _post_veto(body):
     with patch("src.db.get_db", return_value=_FakeDB()):
         app = Starlette(routes=[Route("/v1/effect-veto", http_effect_veto, methods=["POST"])])
-        return TestClient(app).post("/v1/effect-veto", json=body)
+        return TestClient(app, client=("127.0.0.1", 50000)).post(
+            "/v1/effect-veto", json=body
+        )
 
 
 def _post_grant(body):
     app = Starlette(routes=[Route("/v1/effect-grant", http_effect_grant, methods=["POST"])])
-    return TestClient(app).post("/v1/effect-grant", json=body)
+    return TestClient(app, client=("127.0.0.1", 50000)).post(
+        "/v1/effect-grant", json=body
+    )
 
 
 def _veto_body(effect_type):

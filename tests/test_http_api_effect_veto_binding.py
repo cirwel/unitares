@@ -100,7 +100,9 @@ class _FakeDB:
 def _post(body, *, insert_result="INSERT 0 1", execute_exc=None):
     with patch("src.db.get_db", return_value=_FakeDB(None, insert_result, execute_exc)):
         app = Starlette(routes=[Route("/v1/effect-veto", http_effect_veto, methods=["POST"])])
-        return TestClient(app).post("/v1/effect-veto", json=body)
+        return TestClient(app, client=("127.0.0.1", 50000)).post(
+            "/v1/effect-veto", json=body
+        )
 
 
 def _body(grant="__valid__", **content_overrides):

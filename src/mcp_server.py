@@ -503,6 +503,10 @@ async def main():
             allow_methods=["GET", "POST", "OPTIONS"],
             allow_headers=["*"],
             expose_headers=["*"],
+            # Browser passkey sessions must stay same-origin. Enabling
+            # credentialed CORS would turn the cookie into a cross-origin
+            # ambient credential and weaken the explicit CSRF write header.
+            allow_credentials=False,
         )
         
         # === Connection Tracking Middleware ===
