@@ -820,7 +820,13 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         "reaped_after_supervisor_failed",
         "reaped_local_ttl",
         "reaped_remote_ttl",
-        "handoff"
+        "handoff",
+        # A client releasing its OWN lease that it recognized via a
+        # held_by_other naming a holder uuid it minted for an earlier acquire
+        # whose response was lost (2026-08-01 incident). Distinct from
+        # 'normal' so span-based analyses of legitimate long holds don't
+        # absorb reclaimed orphans' spans.
+        "reclaimed_lost_acquire"
       ] ->
         {:ok, lease_id, reason}
 

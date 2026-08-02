@@ -23,6 +23,7 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
     FleetState,
     GovernanceCheckin,
     LeaseAdvisory,
+    LeaseReclaim,
     LeaseStarvation
   }
 
@@ -303,6 +304,11 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
         )
       )
 
+    # Reclaim memory for acquire attempts whose response was lost twice over
+    # (2026-08-01 incident): a later held_by_other naming one of these uuids is
+    # our own stranded lease, releasable without operator intervention.
+    state = Map.merge(state, LeaseReclaim.new())
+
     Process.send_after(self(), :tick, initial_delay_ms + sample_jitter(jitter_ms))
     {:ok, state}
   end
@@ -317,6 +323,10 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
   def handle_info(:tick, state) do
     state = %{state | running?: true}
     lease = acquire_runtime_lease(state)
+    # Absorb BEFORE branching: both the blocked path (a failed attempt may
+    # contribute a reclaim candidate) and the granted path (a success clears
+    # them) update the memory.
+    state = LeaseReclaim.absorb(state, lease)
 
     if lease_enforcement_blocked?(lease) do
       # 2026-07-31: this branch used to log and reschedule, nothing more. It
@@ -466,8 +476,8 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
   defp acquire_runtime_lease(%{lease_advisory?: false}),
     do: %{outcome: :service_unavailable, lease_id: nil}
 
-  defp acquire_runtime_lease(%{lease_opts: lease_opts}),
-    do: LeaseAdvisory.acquire_cycle(lease_opts)
+  defp acquire_runtime_lease(%{lease_opts: lease_opts} = state),
+    do: LeaseAdvisory.acquire_cycle(Keyword.merge(lease_opts, LeaseReclaim.acquire_opts(state)))
 
   defp lease_enforcement_blocked?(%{outcome: :enforcement_blocked}), do: true
   defp lease_enforcement_blocked?(_lease), do: false
