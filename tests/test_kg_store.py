@@ -90,6 +90,26 @@ def strong_signature(agent_uuid: str) -> Dict[str, Any]:
     }
 
 
+def test_anonymous_writer_pseudonym_is_keyed_and_stable(monkeypatch):
+    """Session-derived writer IDs use deterministic keyed pseudonyms."""
+    from src.mcp_handlers.knowledge.handlers import (
+        _pseudonymize_anonymous_writer_source,
+    )
+
+    monkeypatch.setenv(
+        "UNITARES_CONTINUITY_TOKEN_SECRET",
+        "test-anonymous-writer-secret",
+    )
+    first = _pseudonymize_anonymous_writer_source("session-sensitive-value")
+    repeated = _pseudonymize_anonymous_writer_source("session-sensitive-value")
+    different = _pseudonymize_anonymous_writer_source("another-session")
+
+    assert first == repeated
+    assert first != different
+    assert len(first) == 12
+    assert "session" not in first
+
+
 # ============================================================================
 # Shared fixtures
 # ============================================================================
