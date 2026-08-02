@@ -38,7 +38,10 @@ def make_io(*, behind: int = 0, head_epoch: float | None = None,
         "git": git,
         "fetch": lambda path: None,
         "process_start_epoch": lambda label: started,
-        "post_finding": lambda payload: posted.append(payload),
+        # Returns DELIVERED, not None: the caller now records last_alert only
+        # when the post actually reached governance, so a None-returning stub
+        # would simulate a failed escalation on every test.
+        "post_finding": lambda payload: (posted.append(payload), ddd.DELIVERED)[1],
         "post_outcome": lambda args: outcomes.append(args),
     }
 
@@ -193,3 +196,40 @@ def test_restart_pending_fires_on_code_among_docs(tmp_path):
     )
     assert [x.condition for x in d] == ["restart_pending"]
     assert "src/handlers.py" in d[0].detail
+
+
+def test_failed_escalation_leaves_no_open_finding(tmp_path):
+    """The bug this doctor lived inside for its entire life.
+
+    io_post_finding swallowed ModuleNotFoundError with a bare `pass` while
+    _escalate recorded last_alert regardless, so the 12h cooldown suppressed
+    every retry. Result: hourly runs, success-shaped log lines, and zero
+    deploy_drift rows in audit.events, ever (verified 2026-08-01).
+    """
+    io = make_io(behind=1)
+    io["post_finding"] = lambda payload: ddd.FAILED
+    doc = ddd.Doctor(io=io)
+    doc.run()
+    assert doc.state.get("open", {}) == {}, "a failed post must not be recorded as an alert"
+
+
+def test_failed_escalation_retries_next_cycle(tmp_path):
+    """Because nothing was recorded, the cooldown cannot suppress the retry."""
+    io = make_io(behind=1)
+    io["post_finding"] = lambda payload: ddd.FAILED
+    ddd.Doctor(io=io).run()
+
+    recovered: list = []
+    io2 = make_io(behind=1)
+    io2["post_finding"] = lambda payload: (recovered.append(payload), ddd.DELIVERED)[1]
+    ddd.Doctor(io=io2).run()
+    assert len(recovered) == 1, "escalation must retry once governance is reachable again"
+
+
+def test_deduped_escalation_is_recorded(tmp_path):
+    """DEDUPED means governance already holds it — record, or retry forever."""
+    io = make_io(behind=1)
+    io["post_finding"] = lambda payload: ddd.DEDUPED
+    doc = ddd.Doctor(io=io)
+    doc.run()
+    assert doc.state.get("open", {}) != {}, "dedup means it reached governance"

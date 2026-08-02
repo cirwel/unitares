@@ -47,6 +47,17 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "dev"))
 sys.path.insert(0, str(REPO_ROOT))
 
+try:  # pragma: no cover - exercised by the very failure it guards against
+    from agents.common.findings import (
+        DEDUPED, DELIVERED, FAILED, REACHED_GOVERNANCE,
+    )
+except Exception:
+    # Guarded for the same reason as in deploy_drift_doctor: the escalation
+    # module is precisely what is missing when this runs under an interpreter
+    # lacking the project's deps. Keep in sync with agents/common/findings.py.
+    DELIVERED, DEDUPED, FAILED = "delivered", "deduped", "failed"
+    REACHED_GOVERNANCE = frozenset({DELIVERED, DEDUPED})
+
 FINDING_KIND = "doctor_check_finding"
 PRODUCER = "doctor-findings"
 
@@ -95,13 +106,20 @@ def log(msg: str) -> None:
     print(f"[doctor-findings] {msg}", flush=True)
 
 
-def io_post_finding(payload: Dict[str, Any]) -> None:
-    """Best-effort escalation. Must not raise: the log line always lands."""
+def io_post_finding(payload: Dict[str, Any]) -> str:
+    """Best-effort escalation returning DELIVERED / DEDUPED / FAILED.
+
+    Must not raise. "The log line always lands" was the old justification for
+    ignoring the outcome; it lands in a file nobody reads, so the caller needs
+    the outcome to know whether it may record having alerted.
+    """
     try:
-        from agents.common.findings import post_finding
-        post_finding(**payload)
+        from agents.common.findings import post_finding_result
+        return post_finding_result(**payload)
     except Exception as exc:  # noqa: BLE001 - escalation is advisory
-        log(f"  post_finding failed ({exc.__class__.__name__}) — log line stands")
+        log(f"  post_finding unavailable ({exc.__class__.__name__}: {exc}) — "
+            f"escalation is DOWN, not quiet")
+        return FAILED
 
 
 DEFAULT_IO: Dict[str, Callable[..., Any]] = {"post_finding": io_post_finding}
@@ -224,7 +242,7 @@ class DoctorFindings:
         message = r.message
         if getattr(r, "detail", ""):
             message = f"{message} — {r.detail}"
-        self.io["post_finding"]({
+        outcome = self.io["post_finding"]({
             "event_type": FINDING_KIND,
             "severity": severity_for(r.status.value),
             "message": f"{r.name}: {message}",
@@ -232,6 +250,14 @@ class DoctorFindings:
             "agent_id": PRODUCER,
             "agent_name": PRODUCER,
         })
+        # Only claim the alert if governance actually holds it. DEDUPED counts
+        # (the finding is on file); FAILED does not. Recording a failed post
+        # would leave the cooldown suppressing every retry, so one transient
+        # outage would bury the finding until an operator cleared the state by
+        # hand — the failure mode being silent is the whole reason this exists.
+        if outcome not in REACHED_GOVERNANCE:
+            log(f"  ESCALATION FAILED for {r.name} — not recorded, retrying next cycle")
+            return
         open_findings[fp] = {
             "check": r.name,
             "status": r.status.value,

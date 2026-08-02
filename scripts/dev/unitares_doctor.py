@@ -1346,6 +1346,93 @@ def check_finding_producer_live(db_url: str) -> CheckResult:
                        f"all {len(live)} regular producer(s) reporting: {', '.join(live)}")
 
 
+#: Files whose finding declarations are fixtures, not producers.
+_PRODUCER_SCAN_EXCLUDE = ("/tests/", "test_", "conftest")
+#: Where a real producer declares the event_type it will post.
+_PRODUCER_DECL = re.compile(
+    r'(?:FINDING_KIND\s*=\s*|event_type\s*=\s*)["\']([a-z0-9_]+_finding)["\']'
+)
+
+
+def declared_finding_producers(repo_root: Path) -> set[str]:
+    """Event types the source says something will post.
+
+    Deliberately source-derived rather than registry-derived: a registry is
+    another thing that can go stale, and the declaration site cannot lie about
+    its own intent to post.
+    """
+    declared: set[str] = set()
+    for sub in ("agents", "scripts"):
+        base = repo_root / sub
+        if not base.is_dir():
+            continue
+        for path in base.rglob("*.py"):
+            # Match the path RELATIVE to repo_root. Matching the absolute path
+            # would let any ancestor directory containing "test_" (a pytest
+            # tmp_path, a checkout under ~/test_repos) silently exclude the
+            # entire tree and make this check pass by seeing nothing.
+            rel = path.relative_to(repo_root).as_posix()
+            if any(x in rel for x in _PRODUCER_SCAN_EXCLUDE):
+                continue
+            try:
+                declared.update(_PRODUCER_DECL.findall(path.read_text(errors="ignore")))
+            except OSError:
+                continue
+    return declared
+
+
+def check_producer_never_reported(db_url: str, repo_root: Path) -> CheckResult:
+    """WARN when source declares a finding producer that has NEVER posted once.
+
+    ``finding_producer_live`` is self-relative: it judges a producer against its
+    own past cadence, so it detects *died* and is structurally blind to
+    *never-born*. A producer with zero rows is absent from its result set
+    entirely — not judged and found healthy, simply invisible.
+
+    That blind spot is not theoretical. ``deploy_drift_doctor`` ran hourly for
+    its entire life posting nothing: its interpreter could not import the
+    escalation module, the exception was swallowed by a bare ``except``, and
+    ``finding_producer_live`` never had a cadence to measure it against. It was
+    found by a human asking "has this ever actually fired?" — which is the
+    question this check asks on a timer.
+
+    WARN, not FAIL: a genuinely new producer legitimately sits here until its
+    first real condition fires. The fix for that is time or a self-test, not a
+    code change — so this must not block CI or page anyone.
+    """
+    name, mode = "producer_never_reported", "operator"
+    declared = declared_finding_producers(repo_root)
+    if not declared:
+        return CheckResult(name, mode, Status.SKIP,
+                           "no finding producers declared in source")
+
+    rows = _psql_rows(db_url, (
+        "SELECT DISTINCT event_type FROM audit.events "
+        "WHERE event_type LIKE '%\\_finding'"
+    ))
+    if rows is None:
+        return CheckResult(name, mode, Status.SKIP, "audit.events not queryable")
+
+    seen = {r[0] for r in rows if r and r[0]}
+    never = sorted(declared - seen)
+    if not never:
+        return CheckResult(
+            name, mode, Status.PASS,
+            f"all {len(declared)} declared producer(s) have reported at least once",
+        )
+    return CheckResult(
+        name, mode, Status.WARN,
+        f"{len(never)} declared producer(s) have NEVER posted a finding: "
+        + ", ".join(never),
+        detail=("Zero findings is not the same as nothing to report — it is also "
+                "what a broken escalation path looks like, and the two are "
+                "indistinguishable from the outside. Check the producer can "
+                "import agents.common.findings under the interpreter its plist "
+                "actually uses, then confirm end-to-end with a real condition. "
+                "A newly added producer will appear here until it first fires."),
+    )
+
+
 def build_checks(repo_root: Path, db_url: str) -> list[Check]:
     loaded_cache: dict[str, set[str]] = {}
 
@@ -1389,6 +1476,10 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
         Check("signal_degeneracy", "operator", lambda: check_signal_degeneracy(db_url)),
         Check("finding_producer_live", "operator",
               lambda: check_finding_producer_live(db_url)),
+        # Companion to the above: that one catches DIED, this one catches
+        # NEVER-BORN. Neither sees the other's case.
+        Check("producer_never_reported", "operator",
+              lambda: check_producer_never_reported(db_url, repo_root)),
     ]
 
 
