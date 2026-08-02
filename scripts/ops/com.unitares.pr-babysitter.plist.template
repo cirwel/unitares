@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    com.unitares.pr-babysitter - un-strand armed PRs every 5 minutes.
+
+    See scripts/ops/pr-babysitter.sh for what it does and, more importantly,
+    what it deliberately does not do (no readying drafts, no conflict
+    resolution, no arming). It only runs `gh pr update-branch` on PRs that a
+    session already armed and CI already likes.
+
+    PATH must include the Homebrew bin dir: `gh` is /opt/homebrew/bin/gh and
+    launchd's minimal PATH omits it. gh auth comes from ~/.config/gh under
+    the user context launchd runs this in.
+
+    Install (the doctor-findings pattern):
+      sed "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
+        scripts/ops/com.unitares.pr-babysitter.plist.template \
+        > ~/Library/LaunchAgents/com.unitares.pr-babysitter.plist
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.unitares.pr-babysitter.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.unitares.pr-babysitter</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__UNITARES_ROOT__/scripts/ops/pr-babysitter.sh</string>
+    </array>
+    <key>WorkingDirectory</key><string>__UNITARES_ROOT__</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>StartInterval</key><integer>300</integer>
+    <key>StandardOutPath</key><string>__UNITARES_ROOT__/data/logs/pr-babysitter.log</string>
+    <key>StandardErrorPath</key><string>__UNITARES_ROOT__/data/logs/pr-babysitter.err</string>
+</dict>
+</plist>
