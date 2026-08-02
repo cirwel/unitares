@@ -588,7 +588,11 @@ class LeasePlaneClient:
             _record_lease_rpc_latency(
                 path, _start, "transport_exception", method=method, payload_bytes=_body_bytes
             )
-            return {"ok": False, "error": "service_unavailable"}
+            # `reason` names the discriminant so callers can distinguish "the
+            # transport raised (request MAY have committed server-side)" from
+            # a server-sent 503 or a disabled client — the lost-response
+            # recovery in `advisory.py` retries only on this value (#1460).
+            return {"ok": False, "error": "service_unavailable", "reason": "transport_exception"}
         if not isinstance(payload, Mapping):
             _record_lease_rpc_latency(
                 path, _start, "schema_invalid", method=method, payload_bytes=_body_bytes
