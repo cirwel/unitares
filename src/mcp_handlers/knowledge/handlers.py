@@ -16,6 +16,9 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, Sequence, Optional
 from mcp.types import TextContent
 from datetime import datetime, timezone, timedelta
+import hmac
+import os
+import secrets
 import threading
 
 
@@ -697,9 +700,27 @@ def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dic
     return agent_display
 
 
+_ANONYMOUS_WRITER_KEY_ENV = "UNITARES_CONTINUITY_TOKEN_SECRET"
+_ANONYMOUS_WRITER_FALLBACK_KEY = secrets.token_bytes(32)
+
+
+def _pseudonymize_anonymous_writer_source(source: str) -> str:
+    """Return a keyed, non-reversible digest for a session-derived identifier."""
+    configured_key = os.getenv(_ANONYMOUS_WRITER_KEY_ENV)
+    key = (
+        configured_key.encode("utf-8")
+        if configured_key
+        else _ANONYMOUS_WRITER_FALLBACK_KEY
+    )
+    return hmac.digest(key, source.encode("utf-8"), "sha256").hex()[:12]
+
+
 def _derive_anonymous_writer_id(arguments: Dict[str, Any]) -> str:
-    """Derive a stable low-friction writer ID for anonymous low-severity writes."""
-    import hashlib
+    """Derive a stable low-friction writer ID for anonymous low-severity writes.
+
+    A deployment continuity secret keeps the pseudonym stable across restarts.
+    Without one, stability is intentionally limited to the current server process.
+    """
     from ..context import get_context_client_session_id, get_context_session_key, get_session_signals
 
     signals = get_session_signals()
@@ -717,7 +738,7 @@ def _derive_anonymous_writer_id(arguments: Dict[str, Any]) -> str:
     client_hint = "".join(ch if ch.isalnum() else "_" for ch in client_hint.lower()).strip("_") or "client"
 
     if source:
-        digest = hashlib.sha256(str(source).encode("utf-8")).hexdigest()[:12]
+        digest = _pseudonymize_anonymous_writer_source(str(source))
         return f"anonkg_{client_hint}_{digest}"
     return f"anonkg_{client_hint}_local"
 
