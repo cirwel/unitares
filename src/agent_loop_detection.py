@@ -13,7 +13,7 @@ import json
 import time
 import asyncio
 from typing import Any, Dict, Optional
-from collections import Counter, deque
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from functools import partial
 
@@ -23,18 +23,9 @@ from src.agent_monitor_state import monitors, save_monitor_state, save_monitor_s
 from src.agent_identity_auth import verify_agent_ownership
 from src.agent_metadata_persistence import load_metadata_async
 from src.perf_monitor import record_ms as _perf_record_ms
+from src.loop_rules import LoopWindow, evaluate_loop_rules
 
 logger = get_logger(__name__)
-
-# Loop-pattern freshness guards. Both decision-based branches of Pattern 4
-# (proceed-count, pause-count) and Pattern 7 count entries in fixed-size
-# windows over recent_decisions. Without a "newest timestamp is recent"
-# floor, a dormant history keeps re-firing: any new update sees the old
-# burst, gets rejected, and the burst never rolls off. Proceeds naturally
-# fire in tight bursts (<300s window), pauses spread out more, so the
-# pause guard is deliberately wider.
-PROCEED_LOOP_FRESHNESS_SECONDS = 600
-PAUSE_LOOP_FRESHNESS_SECONDS = 3600
 
 # Telemetry: ring buffer of governance circuit breaker pause timestamps
 _governance_pause_timestamps: deque[datetime] = deque(maxlen=100)
@@ -82,30 +73,55 @@ def get_circuit_breaker_telemetry() -> Dict[str, Any]:
     }
 
 
+def _within_recovery_grace(meta, now: datetime) -> bool:
+    recovery_attempt_at = getattr(meta, "recovery_attempt_at", None)
+    if not recovery_attempt_at:
+        return False
+    try:
+        recovery_time = datetime.fromisoformat(recovery_attempt_at)
+        return (now - recovery_time).total_seconds() < 120.0
+    except (ValueError, TypeError):
+        return False
+
+
+def _recent_rapid_timestamps(values: list[str], now: datetime) -> list[str]:
+    recent = []
+    for value in values:
+        try:
+            if (now - datetime.fromisoformat(value)).total_seconds() <= 30.0:
+                recent.append(value)
+        except (ValueError, TypeError):
+            continue
+    return recent
+
+
+def _skip_rapid_rules(meta, server_start_time: datetime) -> bool:
+    grace_period = timedelta(minutes=5)
+    if datetime.now() - server_start_time < grace_period:
+        return True
+    try:
+        raw_created = meta.created_at
+        agent_created = datetime.fromisoformat(
+            raw_created.replace("Z", "+00:00") if "Z" in raw_created else raw_created
+        )
+        agent_age = (
+            datetime.now(agent_created.tzinfo) - agent_created
+            if agent_created.tzinfo
+            else datetime.now() - agent_created.replace(tzinfo=None)
+        )
+        return agent_age < grace_period
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
 def detect_loop_pattern(agent_id: str) -> tuple[bool, str]:
-    """
-    Detect recursive self-monitoring loop patterns.
-
-    Detects patterns like:
-    - Pattern 1: Multiple updates within same second (rapid-fire)
-    - Pattern 2: 3+ updates within 10 seconds with 2+ reject decisions
-    - Pattern 3: 4+ updates within 5 seconds (any decisions)
-    - Pattern 4: Decision loop - same decision repeated 5+ times in recent history
-    - Pattern 5: Slow-stuck pattern - 3+ updates in 60s with any reject
-    - Pattern 6: Extended rapid pattern - 5+ updates in 120s regardless of decisions
-    - Pattern 7: Slow proceed loop - 8+ proceed decisions in 5 min (no pause/reject needed)
-
-    Returns:
-        (is_loop, reason) - True if loop detected, with explanation
-    """
+    """Detect update-loop patterns through the ordered pure rule engine."""
     from src.agent_process_mgmt import SERVER_START_TIME
 
     if agent_id not in agent_metadata:
         return False, ""
 
     meta = agent_metadata[agent_id]
-
-    # Check cooldown period
     if meta.loop_cooldown_until:
         cooldown_until = datetime.fromisoformat(meta.loop_cooldown_until)
         if datetime.now() < cooldown_until:
@@ -115,224 +131,29 @@ def detect_loop_pattern(agent_id: str) -> tuple[bool, str]:
     if len(meta.recent_update_timestamps) < 3:
         return False, ""
 
-    # Check recovery grace period
-    in_recovery_grace = False
-    recovery_attempt_at = getattr(meta, 'recovery_attempt_at', None)
-    if recovery_attempt_at:
-        try:
-            recovery_time = datetime.fromisoformat(recovery_attempt_at)
-            in_recovery_grace = (datetime.now() - recovery_time).total_seconds() < 120.0
-        except (ValueError, TypeError):
-            pass
-
-    all_timestamps = meta.recent_update_timestamps[-10:]
-    all_decisions = meta.recent_decisions[-10:]
-
-    # Filter to recent timestamps (within last 30 seconds) for Pattern 1
     now = datetime.now()
-    recent_timestamps_for_pattern1 = []
-    for ts_str in all_timestamps:
-        try:
-            ts = datetime.fromisoformat(ts_str)
-            age_seconds = (now - ts).total_seconds()
-            if age_seconds <= 30.0:
-                recent_timestamps_for_pattern1.append(ts_str)
-        except (ValueError, TypeError):
-            continue
-
-    recent_timestamps = all_timestamps
-    recent_decisions = all_decisions
-
-    # GRACE PERIOD: Allow rapid updates after server restart or agent creation
-    server_restart_grace_period = timedelta(minutes=5)
-    agent_creation_grace_period = timedelta(minutes=5)
-
-    server_age = datetime.now() - SERVER_START_TIME
-    in_server_grace_period = server_age < server_restart_grace_period
-
-    in_agent_grace_period = False
-    try:
-        agent_created = datetime.fromisoformat(meta.created_at.replace('Z', '+00:00') if 'Z' in meta.created_at else meta.created_at)
-        agent_age = datetime.now(agent_created.tzinfo) - agent_created if agent_created.tzinfo else datetime.now() - agent_created.replace(tzinfo=None)
-        in_agent_grace_period = agent_age < agent_creation_grace_period
-    except (ValueError, TypeError, AttributeError):
-        pass
-
-    skip_pattern1 = in_server_grace_period or in_agent_grace_period
-
-    # Pattern 1: Multiple updates within same second (HISTORICAL PATTERN ANALYSIS)
-    if not skip_pattern1 and len(recent_timestamps_for_pattern1) >= 2:
-        rapid_pairs = []
-        try:
-            timestamps = [datetime.fromisoformat(ts) for ts in recent_timestamps_for_pattern1]
-
-            for i in range(len(timestamps) - 1):
-                time_diff = (timestamps[i + 1] - timestamps[i]).total_seconds()
-                if time_diff < 0.3:
-                    rapid_pairs.append((i, i + 1, time_diff))
-
-            if rapid_pairs:
-                pair_count = len(rapid_pairs)
-                fastest_pair = min(rapid_pairs, key=lambda x: x[2])
-                return True, f"Rapid-fire updates detected ({pair_count} pair(s) within 0.3s, fastest: {fastest_pair[2]*1000:.1f}ms apart)"
-        except (ValueError, TypeError):
-            pass
-
-    # Check for 3+ updates within 0.5 seconds
-    if not skip_pattern1 and len(recent_timestamps_for_pattern1) >= 3:
-        try:
-            timestamps = [datetime.fromisoformat(ts) for ts in recent_timestamps_for_pattern1]
-
-            for i in range(len(timestamps) - 2):
-                t1 = timestamps[i]
-                t3 = timestamps[i + 2]
-                if (t3 - t1).total_seconds() < 0.5:
-                    return True, f"Rapid-fire updates detected (3+ updates within 0.5 seconds, detected at positions {i}-{i+2})"
-        except (ValueError, TypeError):
-            pass
-
-    # Check for 4+ updates within 1 second
-    if not skip_pattern1 and len(recent_timestamps_for_pattern1) >= 4:
-        try:
-            timestamps = [datetime.fromisoformat(ts) for ts in recent_timestamps_for_pattern1]
-
-            for i in range(len(timestamps) - 3):
-                t1 = timestamps[i]
-                t4 = timestamps[i + 3]
-                if (t4 - t1).total_seconds() < 1.0:
-                    return True, f"Rapid-fire updates detected (4+ updates within 1 second, detected at positions {i}-{i+3})"
-        except (ValueError, TypeError):
-            pass
-
-    # Pattern 2: 3+ updates within 10 seconds, all with "reject" decisions
-    if not in_recovery_grace and len(recent_timestamps) >= 3:
-        last_three_timestamps = recent_timestamps[-3:]
-        last_three_decisions = recent_decisions[-3:]
-
-        try:
-            timestamps = [datetime.fromisoformat(ts) for ts in last_three_timestamps]
-            time_span = (timestamps[-1] - timestamps[0]).total_seconds()
-
-            if time_span <= 10.0:
-                pause_count = sum(1 for d in last_three_decisions if d in ["pause", "reject"])
-                if pause_count >= 2:
-                    return True, f"Recursive pause pattern: {pause_count} pause decisions within {time_span:.1f}s"
-        except (ValueError, TypeError):
-            pass
-
-    # Pattern 3: 4+ updates within 5 seconds with concerning decisions
-    if len(recent_timestamps) >= 4:
-        last_four_timestamps = recent_timestamps[-4:]
-        last_four_decisions = recent_decisions[-4:]
-        try:
-            timestamps = [datetime.fromisoformat(ts) for ts in last_four_timestamps]
-            time_span = (timestamps[-1] - timestamps[0]).total_seconds()
-
-            if time_span <= 5.0:
-                concerning_count = sum(1 for d in last_four_decisions if d in ["pause", "reject"])
-                if concerning_count >= 1:
-                    return True, f"Rapid update pattern: 4+ updates within {time_span:.1f}s with {concerning_count} pause/reject decision(s)"
-        except (ValueError, TypeError):
-            pass
-
-    # Exempt autonomous/embodied agents from decision-based patterns (4-6).
-    # These agents can't change behavior in response to pause decisions —
-    # blocking updates prevents EISV recovery. Rapid-fire patterns (1-3)
-    # still apply to prevent actual runaway loops.
-    agent_tags = set(t.lower() for t in (getattr(meta, 'tags', None) or []))
-    is_autonomous = bool({"autonomous", "embodied"} & agent_tags)
+    timestamps = meta.recent_update_timestamps[-10:]
+    decisions = meta.recent_decisions[-10:]
+    tags = {tag.lower() for tag in (getattr(meta, "tags", None) or [])}
+    is_autonomous = bool({"autonomous", "embodied"} & tags)
     if is_autonomous:
-        logger.debug("Agent '%s' is autonomous — skipping decision-based loop patterns (4-6)", agent_id[:8])
+        logger.debug(
+            "Agent '%s' is autonomous — skipping decision-based loop patterns (4-6)",
+            agent_id[:8],
+        )
 
-    # Pattern 4: Decision loop - same decision repeated 5+ times
-    if not is_autonomous and len(recent_decisions) >= 5:
-        decision_window = recent_decisions[-10:] if len(recent_decisions) >= 10 else recent_decisions
-        decision_counts = Counter(decision_window)
-
-        pause_count = decision_counts.get("pause", 0) + decision_counts.get("reject", 0)
-        if pause_count >= 5:
-            # Don't fire on stale pause histories — they'd block updates
-            # forever, keeping recent_decisions frozen with the same pauses.
-            try:
-                window_span = min(len(decision_window), len(recent_timestamps))
-                if window_span > 0:
-                    newest_pause_ts = datetime.fromisoformat(recent_timestamps[-1])
-                    newest_age = (now - newest_pause_ts).total_seconds()
-                    if newest_age <= PAUSE_LOOP_FRESHNESS_SECONDS:
-                        return True, f"Decision loop detected: {pause_count} 'pause' decisions in recent history (stuck state)"
-            except (ValueError, TypeError, IndexError):
-                # Can't parse timestamps — fall back to original behavior to
-                # avoid masking a real loop because of bad metadata.
-                return True, f"Decision loop detected: {pause_count} 'pause' decisions in recent history (stuck state)"
-
-        proceed_count = decision_counts.get("proceed", 0) + decision_counts.get("approve", 0) + decision_counts.get("reflect", 0) + decision_counts.get("revise", 0)
-        if proceed_count >= 10:
-            # Only flag if these 10 proceeds happened within a short window.
-            # Cron agents (e.g. Vigil, 30min cycle) naturally accumulate 10
-            # proceeds over hours — that's health, not a loop.
-            try:
-                window_timestamps = [datetime.fromisoformat(ts) for ts in recent_timestamps[-10:]]
-                window_span = (window_timestamps[-1] - window_timestamps[0]).total_seconds()
-                newest_age = (now - window_timestamps[-1]).total_seconds()
-                if window_span <= 300 and newest_age <= PROCEED_LOOP_FRESHNESS_SECONDS:
-                    return True, f"Decision loop detected: {proceed_count} 'proceed' decisions in {window_span:.0f}s (agent may be stuck in feedback loop)"
-            except (ValueError, TypeError, IndexError):
-                pass  # Can't parse timestamps — skip this pattern
-
-    # Pattern 5: Slow-stuck pattern - 3+ updates in 60s with 2+ rejects
-    if not is_autonomous and not in_recovery_grace and len(recent_timestamps) >= 3:
-        last_three_timestamps = recent_timestamps[-3:]
-        last_three_decisions = recent_decisions[-3:]
-
-        try:
-            timestamps = [datetime.fromisoformat(ts) for ts in last_three_timestamps]
-            time_span = (timestamps[-1] - timestamps[0]).total_seconds()
-
-            if time_span <= 60.0:
-                pause_count = sum(1 for d in last_three_decisions if d in ["pause", "reject"])
-                if pause_count >= 2:
-                    return True, f"Slow-stuck pattern: {pause_count} pause(s) in {len(last_three_timestamps)} updates within {time_span:.1f}s"
-        except (ValueError, TypeError):
-            pass
-
-    # Pattern 6: Extended rapid pattern - 5+ updates in 120s with concerning decisions
-    if not is_autonomous and not in_recovery_grace and len(recent_timestamps) >= 5:
-        last_five_timestamps = recent_timestamps[-5:]
-        last_five_decisions = recent_decisions[-5:]
-        try:
-            timestamps = [datetime.fromisoformat(ts) for ts in last_five_timestamps]
-            time_span = (timestamps[-1] - timestamps[0]).total_seconds()
-
-            if time_span <= 120.0:
-                concerning_count = sum(1 for d in last_five_decisions if d in ["pause", "reject"])
-                if concerning_count >= 3:
-                    return True, f"Extended rapid pattern: {len(last_five_timestamps)} updates within {time_span:.1f}s with {concerning_count} pause/reject decision(s)"
-        except (ValueError, TypeError):
-            pass
-
-    # Pattern 7: Slow proceed loop - 8+ proceed decisions in 10 updates within 5 minutes.
-    # Catches agents looping without triggering pause/reject verdicts — the gap
-    # that Pattern 4 (count-only, no time window) and Pattern 5 (requires
-    # pause/reject) both miss.
-    if not is_autonomous and not in_recovery_grace and len(recent_timestamps) >= 8:
-        window_timestamps = recent_timestamps[-10:]
-        window_decisions = recent_decisions[-10:]
-        try:
-            timestamps = [datetime.fromisoformat(ts) for ts in window_timestamps]
-            time_span = (timestamps[-1] - timestamps[0]).total_seconds()
-            newest_age = (now - timestamps[-1]).total_seconds()
-
-            if time_span <= 300.0 and newest_age <= PROCEED_LOOP_FRESHNESS_SECONDS:
-                proceed_count = sum(
-                    1 for d in window_decisions
-                    if d in ["proceed", "approve", "reflect", "revise"]
-                )
-                if proceed_count >= 8:
-                    return True, f"Slow proceed loop: {proceed_count} proceed decisions within {time_span:.1f}s (agent may be repeating without progress)"
-        except (ValueError, TypeError):
-            pass
-
-    return False, ""
+    reason = evaluate_loop_rules(
+        LoopWindow(
+            timestamps=timestamps,
+            decisions=decisions,
+            rapid_timestamps=_recent_rapid_timestamps(timestamps, now),
+            now=now,
+            skip_rapid=_skip_rapid_rules(meta, SERVER_START_TIME),
+            in_recovery_grace=_within_recovery_grace(meta, now),
+            is_autonomous=is_autonomous,
+        )
+    )
+    return (True, reason) if reason else (False, "")
 
 
 def process_update_authenticated(

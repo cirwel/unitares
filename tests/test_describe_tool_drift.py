@@ -132,6 +132,40 @@ async def test_list_tools_lite_surfaces_workflow_aliases():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("lite", [True, False])
+async def test_list_tools_filters_by_category(lite):
+    """A category request must not silently return unrelated tools."""
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
+
+    result = await handle_list_tools({"category": "  DiAlEcTiC  ", "lite": lite})
+    data = json.loads(result[0].text)
+
+    assert data["tools"]
+    assert {tool["category"] for tool in data["tools"]} == {"dialectic"}
+    assert all(tool["name"] != "health_check" for tool in data["tools"])
+    if not lite:
+        assert data["filter_applied"]["category_filter"] == "dialectic"
+
+
+@pytest.mark.asyncio
+async def test_list_tools_treats_whitespace_category_as_all():
+    """Whitespace is an omitted category, not a filter that removes everything."""
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
+
+    unfiltered = json.loads((await handle_list_tools({"lite": False}))[0].text)
+    whitespace = json.loads(
+        (await handle_list_tools({"category": "   ", "lite": False}))[0].text
+    )
+
+    assert [tool["name"] for tool in whitespace["tools"]] == [
+        tool["name"] for tool in unfiltered["tools"]
+    ]
+    assert whitespace["filter_applied"]["category_filter"] == "all"
+
+
+@pytest.mark.asyncio
 async def test_outcome_event_lite_mentions_calibration_parameters():
     import json
     from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool

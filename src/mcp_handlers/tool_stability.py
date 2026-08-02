@@ -8,11 +8,10 @@ Reduces friction from constant tool churn by:
 4. Single source of truth for tool lifecycle
 """
 
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from .support.tool_hints import KNOWLEDGE_SEARCH_SIMILARITY_MIGRATION_NOTE
 from .support.param_normalization import ParamNormalizer, normalize_unit_interval
 class ToolStability(Enum):
