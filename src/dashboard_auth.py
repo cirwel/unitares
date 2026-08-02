@@ -171,10 +171,10 @@ def _normalize_enroll_code(value: str | None) -> str:
 
 
 def _enroll_code_from_request(request) -> str:
-    value = request.headers.get(ENROLL_CODE_HEADER)
-    if not value:
-        value = request.query_params.get("code")
-    return _normalize_enroll_code(value)
+    # D3: enrollment secrets must never enter URLs (history sync, access logs,
+    # referrers, and screenshots).  The dashboard collects a typed code and
+    # presents it only in this request header.
+    return _normalize_enroll_code(request.headers.get(ENROLL_CODE_HEADER))
 
 
 async def _enroll_code_valid(code: str) -> bool:

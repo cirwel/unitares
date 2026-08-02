@@ -86,6 +86,15 @@ def test_session_lifetimes_pin_sliding_and_hard_caps():
     assert dashboard_auth.SESSION_HARD_SECONDS == 90 * 24 * 60 * 60
 
 
+def test_enrollment_code_is_header_only_and_never_read_from_query():
+    assert dashboard_auth._enroll_code_from_request(
+        _Request(query={"code": "URL-LEAK"})
+    ) == ""
+    assert dashboard_auth._enroll_code_from_request(
+        _Request(headers={dashboard_auth.ENROLL_CODE_HEADER: "abcde-fghij"})
+    ) == "ABCDEFGHIJ"
+
+
 @pytest.mark.asyncio
 async def test_authentication_options_are_usernameless_uv_required_and_secure(monkeypatch):
     monkeypatch.setattr(dashboard_auth, "_active_credential_count", AsyncMock(return_value=1))
