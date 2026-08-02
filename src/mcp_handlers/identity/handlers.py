@@ -2897,10 +2897,21 @@ async def _r2_pre_check_and_declare(
     #   - explicit / new_session: a live parent means concurrent sibling → reject.
     #     A dead parent stays provisional and R1 adjudicates (preserves the
     #     genuine serial-handoff signal).
-    # Best-effort: get_live_bindings returns [] on DB error → treated as
-    # not-live → allow, same fail-open posture as #720.
+    # Liveness = process binding OR agent:/ presence lease. Bindings only
+    # exist for callers that sent process_fingerprint at onboard — ephemeral
+    # agents never do, so the binding table is structurally blind to them
+    # (the same blindness #720 patched at the archival site by OR-ing in
+    # has_live_agent_lease). The lease is the liveness signal those agents
+    # DO produce; either signal proves the parent is a live concurrent
+    # sibling.
+    # Best-effort: get_live_bindings returns [] and has_live_agent_lease
+    # returns False on DB error → treated as not-live → allow, same
+    # fail-open posture as #720.
     if spawn_reason not in ("subagent", "compaction"):
-        from src.mcp_handlers.identity.process_binding import get_live_bindings
+        from src.mcp_handlers.identity.process_binding import (
+            get_live_bindings,
+            has_live_agent_lease,
+        )
         parent_uuid = parent_id
         try:
             _prec = await backend.get_identity(parent_id)
@@ -2920,7 +2931,12 @@ async def _r2_pre_check_and_declare(
                 f"[R2] liveness pre-check failed for {agent_uuid[:8]}...: {e}"
             )
             live_bindings = []
-        if live_bindings:
+        live_lease = False
+        if not live_bindings:
+            # has_live_agent_lease is fail-soft internally (False on any
+            # error), so no try/except is needed here.
+            live_lease = await has_live_agent_lease(parent_uuid)
+        if live_bindings or live_lease:
             try:
                 await backend.clear_lineage_declaration(agent_uuid)
             except Exception as e:
@@ -2943,6 +2959,7 @@ async def _r2_pre_check_and_declare(
                         "reason": "parent_live_at_declaration",
                         "spawn_reason": spawn_reason,
                         "live_binding_count": len(live_bindings),
+                        "live_lease": live_lease,
                     },
                 )
             except Exception as e:
@@ -2953,7 +2970,7 @@ async def _r2_pre_check_and_declare(
             logger.info(
                 f"[R2] Coincidental lineage rejected: {agent_uuid[:8]}... -> "
                 f"{parent_id[:8]}... (parent live: {len(live_bindings)} "
-                f"binding(s), spawn_reason={spawn_reason})"
+                f"binding(s), lease={live_lease}, spawn_reason={spawn_reason})"
             )
             return "rejected_coincidental", None
 
