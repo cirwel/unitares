@@ -703,6 +703,11 @@ SKIP_PATH_FRAGMENTS = (
     "/data/logs/",
     "/data/watcher/",  # never scan our own findings (legacy checkout-relative state)
     "/.unitares/watcher/",  # never scan our own findings (shared home-anchored state)
+    # Claude Code session scratchpads (/tmp/claude-<uid>/... resolves to
+    # /private/tmp/claude-<uid>/... on macOS; substring match covers both).
+    # Ephemeral by design — findings on them are unactionable noise that
+    # someone has to hand-dismiss (P012 #7b0af90b, 2026-08-01).
+    "/tmp/claude-",
 )
 
 SKIP_EXTENSIONS = (
