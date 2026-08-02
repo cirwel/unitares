@@ -551,7 +551,9 @@ def test_websocket_gate_precedes_accept():
 
 
 def test_cors_does_not_allow_credentials():
-    source = inspect.getsource(__import__("src.mcp_server", fromlist=["main"]))
+    from src.services.mcp_transport_service import _configure_middleware
+
+    source = inspect.getsource(_configure_middleware)
     assert "allow_credentials=True" not in source
     assert "allow_credentials=False" in source
 
