@@ -101,6 +101,9 @@ describe("activity dual-log view", () => {
               agent_label: "Codex runtime",
               slot_hash: "abcdef123456",
               host_family: "codex",
+              execution_mode: "automation",
+              execution_mode_source: "explicit_env",
+              model: "gpt-5.4",
               latest_kind: "activity_rollup",
               operational_recent: true,
               host_process_alive: true,
@@ -110,6 +113,15 @@ describe("activity dual-log view", () => {
               operational_after_reflection: true,
               tool_count: 42,
               tools_in_window: 7,
+              restoration_capsule: {
+                operational: { event_id: "8f4bb851-dfed-4e12-b5b9-33820df47274" },
+                reflection: { context: { task_label: "weekly release notes", task_outcome: "drafted" } },
+                continuity: {
+                  relationship: "operations_after_reflection",
+                  missing: [],
+                  restore_basis: "operational_and_authored_context",
+                },
+              },
             }],
           },
         },
@@ -125,6 +137,10 @@ describe("activity dual-log view", () => {
     expect(text).toContain("no authored reflection");
     expect(text).toContain("interpretation");
     expect(text).toContain("ops since reflection");
+    expect(text).toContain("automation · explicit_env · gpt-5.4");
+    expect(text).toContain("Restoration capsule");
+    expect(text).toContain("weekly release notes · drafted");
+    expect(text).toContain("audit 8f4bb851");
     expect(text).toContain("Governance state updates");
     expect(text).toContain("provenance varies");
     expect(text).toContain("runtime excluded");

@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -20,6 +21,24 @@ RUNTIME_EVENT_PREFIX = "runtime_observation."
 VALID_KINDS = {"activity_rollup", "heartbeat"}
 RUNTIME_EVENT_TYPES = tuple(RUNTIME_EVENT_PREFIX + kind for kind in sorted(VALID_KINDS))
 RUNTIME_RECENT_SECONDS = 3600.0
+EXECUTION_MODES = {"interactive", "automation", "ephemeral", "unknown"}
+EXECUTION_MODE_SOURCES = {
+    "explicit_env",
+    "hook_payload",
+    "session_metadata",
+    "unspecified",
+}
+RESTORATION_CONTEXT_KEYS = (
+    "task_label",
+    "task_outcome",
+    "comparison_key",
+    "memory_context",
+    "harness_type",
+    "model_provider",
+    "model",
+    "transport",
+    "tool_surface",
+)
 _SLOT_HASH_RE = re.compile(r"^[0-9a-f]{12,64}$")
 _HOST_RE = re.compile(r"^[a-z0-9_.-]{1,32}$")
 _EVENT_NAMESPACE = uuid.UUID("d4bb38de-7a45-4f5a-82df-4864eac82e9d")
@@ -64,6 +83,107 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
+def _as_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return dict(parsed) if isinstance(parsed, Mapping) else {}
+    return {}
+
+
+def _bounded_reflection_context(value: Any) -> dict[str, Any]:
+    """Return only compact, explicitly persisted restoration context."""
+    state = _as_mapping(value)
+    context = _as_mapping(state.get("provenance_context"))
+    bounded: dict[str, Any] = {}
+    for key in RESTORATION_CONTEXT_KEYS:
+        item = context.get(key)
+        if isinstance(item, str) and item.strip():
+            bounded[key] = item.strip()[:240]
+        elif isinstance(item, (list, tuple)):
+            values = [str(part).strip()[:80] for part in item if str(part).strip()]
+            if values:
+                bounded[key] = values[:10]
+    action = state.get("action")
+    if isinstance(action, str) and action.strip():
+        bounded["governance_action"] = action.strip()[:40]
+    return bounded
+
+
+def _restoration_capsule(
+    process: dict[str, Any],
+    reflection: dict[str, Any],
+    *,
+    last_operational: datetime,
+    last_heartbeat: datetime | None,
+) -> dict[str, Any]:
+    """Cross-link bounded facts without collapsing their provenance."""
+    last_reflection = reflection.get("last_reflection")
+    reflection_context = _bounded_reflection_context(
+        reflection.get("last_reflection_state")
+    )
+    missing: list[str] = []
+    if last_reflection is None:
+        missing.append("authored_reflection")
+    if not reflection_context:
+        missing.append("authored_task_context")
+    if not process.get("latest_event_id"):
+        missing.append("operational_event_reference")
+
+    if last_reflection is None:
+        relationship = "operational_only"
+    elif last_operational > last_reflection:
+        relationship = "operations_after_reflection"
+    else:
+        relationship = "reflection_current"
+
+    return {
+        "schema": "unitares.restoration_capsule.v1",
+        "process_id": f"{process['agent_id']}:{process['slot_hash']}",
+        "generated_from": "bounded_operational_and_reflective_evidence",
+        "execution": {
+            "mode": process["execution_mode"],
+            "mode_source": process["execution_mode_source"],
+            "host_family": process["host_family"],
+            "model": process["model"],
+            "slot_hash": process["slot_hash"],
+            "plugin_version": process["plugin_version"],
+        },
+        "operational": {
+            "last_observed_at": _iso(last_operational),
+            "last_heartbeat_at": _iso(last_heartbeat),
+            "latest_kind": process["latest_kind"],
+            "event_id": process["latest_event_id"],
+            "observation_count": process["observation_count"],
+            "tool_count": process["tool_count"],
+            "tools_in_window": process["tools_in_window"],
+            "host_process_alive": process["host_process_alive"],
+        },
+        "reflection": {
+            "last_authored_at": _iso(last_reflection),
+            "count": reflection.get("reflection_count", 0),
+            "context": reflection_context,
+        },
+        "interpretation": {
+            "last_at": _iso(reflection.get("last_interpretation")),
+            "agent_authored": False,
+        },
+        "continuity": {
+            "relationship": relationship,
+            "missing": missing,
+            "restore_basis": (
+                "operational_and_authored_context"
+                if last_reflection and reflection_context
+                else "operational_evidence_only"
+            ),
+        },
+    }
+
+
 def summarize_runtime_activity(
     events: list[dict[str, Any]],
     reflection_rows: list[Any],
@@ -90,6 +210,7 @@ def summarize_runtime_activity(
             "reflection_count": int(_row_value(row, "reflection_count", 0) or 0),
             "last_interpretation": _as_utc(_row_value(row, "last_interpretation_at")),
             "last_unclassified": _as_utc(_row_value(row, "last_unclassified_at")),
+            "last_reflection_state": _row_value(row, "last_reflection_state"),
         }
 
     processes: dict[tuple[str, str], dict[str, Any]] = {}
@@ -110,12 +231,16 @@ def summarize_runtime_activity(
                 "slot_hash": slot_hash,
                 "host_family": str(details.get("host_family") or "unknown"),
                 "plugin_version": str(details.get("plugin_version") or ""),
+                "execution_mode": "unknown",
+                "execution_mode_source": "unspecified",
+                "model": "",
                 "observation_count": 0,
                 "tool_count": 0,
                 "tools_in_window": 0,
                 "last_operational": None,
                 "last_heartbeat": None,
                 "latest_kind": None,
+                "latest_event_id": None,
                 "host_process_alive": False,
                 "seconds_since_last_tool": None,
             },
@@ -138,6 +263,20 @@ def summarize_runtime_activity(
             process["latest_kind"] = kind or None
             process["host_family"] = str(details.get("host_family") or "unknown")
             process["plugin_version"] = str(details.get("plugin_version") or "")
+            mode = str(details.get("execution_mode") or "unknown").strip().lower()
+            process["execution_mode"] = mode if mode in EXECUTION_MODES else "unknown"
+            source = (
+                str(details.get("execution_mode_source") or "unspecified")
+                .strip()
+                .lower()
+            )
+            process["execution_mode_source"] = (
+                source if source in EXECUTION_MODE_SOURCES else "unspecified"
+            )
+            process["model"] = str(details.get("model") or "")[:80]
+            process["latest_event_id"] = (
+                str(event.get("event_id")) if event.get("event_id") else None
+            )
             process["seconds_since_last_tool"] = _optional_bounded_float(
                 details.get("seconds_since_last_tool"), maximum=31_536_000.0
             )
@@ -159,6 +298,12 @@ def summarize_runtime_activity(
             if last_reflection
             else None
         )
+        capsule = _restoration_capsule(
+            process,
+            reflection,
+            last_operational=last_operational,
+            last_heartbeat=last_heartbeat,
+        )
         rows.append(
             {
                 **process,
@@ -173,6 +318,7 @@ def summarize_runtime_activity(
                 "reflection_count": reflection.get("reflection_count", 0),
                 "last_interpretation_at": _iso(reflection.get("last_interpretation")),
                 "last_unclassified_at": _iso(reflection.get("last_unclassified")),
+                "restoration_capsule": capsule,
                 "operational_after_reflection": (
                     last_reflection is None or last_operational > last_reflection
                 ),
@@ -201,6 +347,11 @@ def summarize_runtime_activity(
             ),
             "last_operational_at": _iso(last_operational),
             "last_reflection_at": _iso(last_reflection),
+            "execution_modes": {
+                mode: sum(1 for row in rows if row["execution_mode"] == mode)
+                for mode in sorted(EXECUTION_MODES)
+                if any(row["execution_mode"] == mode for row in rows)
+            },
         },
         "processes": rows,
         "semantics": {
@@ -253,7 +404,11 @@ async def read_runtime_activity(
                        max(s.recorded_at) FILTER (
                            WHERE s.synthetic = false
                              AND s.epistemic_class IS NULL
-                       ) AS last_unclassified_at
+                       ) AS last_unclassified_at,
+                       (array_agg(s.state_json ORDER BY s.recorded_at DESC) FILTER (
+                           WHERE s.synthetic = false
+                             AND s.epistemic_class = 'agent_report'
+                       ))[1] AS last_reflection_state
                 FROM core.agents a
                 LEFT JOIN core.identities i ON i.agent_id = a.id
                 LEFT JOIN core.agent_state s ON s.identity_id = i.identity_id
@@ -339,6 +494,24 @@ def _normalize(
     if not _HOST_RE.fullmatch(host_family):
         raise RuntimeObservationError("missing or invalid 'host_family'")
 
+    execution_mode = str(payload.get("execution_mode") or "unknown").strip().lower()
+    if execution_mode not in EXECUTION_MODES:
+        raise RuntimeObservationError(
+            f"'execution_mode' must be one of {sorted(EXECUTION_MODES)}"
+        )
+    execution_mode_source = (
+        str(payload.get("execution_mode_source") or "unspecified").strip().lower()
+    )
+    if execution_mode_source not in EXECUTION_MODE_SOURCES:
+        raise RuntimeObservationError(
+            f"'execution_mode_source' must be one of {sorted(EXECUTION_MODE_SOURCES)}"
+        )
+    if (execution_mode == "unknown") != (execution_mode_source == "unspecified"):
+        raise RuntimeObservationError(
+            "'execution_mode' and 'execution_mode_source' must either both be "
+            "unknown/unspecified or both describe explicit provenance"
+        )
+
     slot_hash = str(payload.get("slot_hash") or "").strip().lower()
     if not _SLOT_HASH_RE.fullmatch(slot_hash):
         raise RuntimeObservationError("missing or invalid 'slot_hash'")
@@ -348,6 +521,9 @@ def _normalize(
         "schema_version": 1,
         "observation_kind": kind,
         "host_family": host_family,
+        "execution_mode": execution_mode,
+        "execution_mode_source": execution_mode_source,
+        "model": str(payload.get("model") or "").strip()[:80],
         "slot_hash": slot_hash,
         "observed_at": observed_at.isoformat(),
         "received_at": datetime.now(timezone.utc).isoformat(),

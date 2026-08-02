@@ -33,6 +33,29 @@
   const nfmt = (n) => typeof n === "number" ? n.toLocaleString() : "—";
   const shortId = (s) => String(s || "").slice(0, 8) || "—";
 
+  function restorationDetails(p) {
+    const capsule = p.restoration_capsule;
+    if (!capsule) return "";
+    const context = capsule.reflection && capsule.reflection.context || {};
+    const continuity = capsule.continuity || {};
+    const operational = capsule.operational || {};
+    const task = context.task_label || context.comparison_key || "no authored task label";
+    const outcome = context.task_outcome ? ` · ${esc(context.task_outcome)}` : "";
+    const missing = Array.isArray(continuity.missing) && continuity.missing.length
+      ? continuity.missing.map((x) => String(x).replace(/_/g, " ")).join(", ")
+      : "none";
+    const eventRef = operational.event_id ? shortId(operational.event_id) : "unavailable";
+    return `<details style="padding:0 0 var(--space-3) var(--space-2)">
+      <summary class="fresh" style="cursor:pointer;user-select:none">Restoration capsule · ${esc(String(continuity.restore_basis || "evidence only").replace(/_/g, " "))}</summary>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--space-3);padding:var(--space-3);margin-top:var(--space-2);background:var(--surface-2);border:var(--hairline) solid var(--line);border-radius:var(--radius-sm)">
+        <div><div class="fresh">Authored context</div><div>${esc(task)}${outcome}</div></div>
+        <div><div class="fresh">Continuity relation</div><div>${esc(String(continuity.relationship || "unknown").replace(/_/g, " "))}</div></div>
+        <div><div class="fresh">Evidence reference</div><div class="mono">audit ${esc(eventRef)}</div></div>
+        <div><div class="fresh">Missing evidence</div><div>${esc(missing)}</div></div>
+      </div>
+    </details>`;
+  }
+
   function processRow(p) {
     const name = p.agent_label || shortId(p.agent_id);
     const liveRecent = MODEL.operational && MODEL.operational.source === "live" && p.operational_recent;
@@ -47,10 +70,15 @@
     const relation = p.operational_after_reflection
       ? `<span class="tag" style="color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,var(--line-2))">ops since reflection</span>`
       : `<span class="tag">reflection current</span>`;
-    return `<div style="display:flex;gap:var(--space-4);align-items:center;flex-wrap:wrap;padding:var(--space-3) 0;border-bottom:var(--hairline) solid var(--line)">
+    const mode = p.execution_mode || "unknown";
+    const modeSource = p.execution_mode_source || "unspecified";
+    const model = p.model ? ` · ${esc(p.model)}` : "";
+    return `<div style="border-bottom:var(--hairline) solid var(--line)">
+    <div style="display:flex;gap:var(--space-4);align-items:center;flex-wrap:wrap;padding:var(--space-3) 0">
       <div style="min-width:190px;flex:1.4">
         <div style="font-weight:600;color:var(--ink)" title="${esc(p.agent_id)}">${esc(name)}</div>
-        <div class="fresh">${esc(p.host_family || "unknown")} · slot ${esc(shortId(p.slot_hash))}</div>
+        <div class="fresh">${esc(p.host_family || "unknown")} · ${esc(mode)} · ${esc(modeSource)}${model}</div>
+        <div class="fresh">slot ${esc(shortId(p.slot_hash))}</div>
       </div>
       <div style="min-width:150px;flex:1">
         <div><span class="dot-pip" style="display:inline-block;background:${opColor};margin-right:6px"></span>${opState} · <span title="${esc(p.last_operational_at)}">${relTime(p.last_operational_at)}</span></div>
@@ -63,7 +91,7 @@
         <div>${nfmt(p.tool_count)} tools</div><div class="fresh">+${nfmt(p.tools_in_window)} in window</div>
       </div>
       <div style="min-width:145px;flex:none">${relation}</div>
-    </div>`;
+    </div>${restorationDetails(p)}</div>`;
   }
 
   function continuity() {
