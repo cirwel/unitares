@@ -312,14 +312,26 @@
 
     async activity() {
       return withFallback(async () => {
-        const [ev, act] = await Promise.all([authFetch("/api/events?limit=40"), authFetch("/api/activity?window=60&bucket=5")]);
+        const [ev, act, runtime] = await Promise.all([
+          authFetch("/api/events?limit=40"),
+          authFetch("/api/activity?window=60&bucket=5"),
+          authFetch("/v1/runtime/activity?window_hours=24&limit=1000").catch(() => null),
+        ]);
         if (!ev || !ev.events) return null;
         const events = ev.events.map((e) => ({
           type: e.type, severity: e.severity, agent: e.agent_name || e.agent_id, ts: e.timestamp || e.ts,
           message: e.message, vclass: e.violation_class,
         }));
         const buckets = (act && act.buckets ? act.buckets : []).map((b) => ({ p: b.proceed || 0, g: b.guide || 0, x: b.pause || 0 }));
-        return { events, buckets, windowMin: (act && act.window_minutes) || 60, bucketMin: (act && act.bucket_minutes) || 5 };
+        const operational = runtime && runtime.success ? {
+          available: true,
+          source: "live",
+          windowHours: runtime.window_hours || 24,
+          summary: runtime.summary || {},
+          processes: runtime.processes || [],
+          semantics: runtime.semantics || {},
+        } : { available: false, source: "unavailable", windowHours: 24, summary: {}, processes: [] };
+        return { events, buckets, operational, windowMin: (act && act.window_minutes) || 60, bucketMin: (act && act.bucket_minutes) || 5 };
       }, () => S().activity);
     },
 
