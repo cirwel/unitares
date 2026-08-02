@@ -65,6 +65,11 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`governed-effect-s7-strong-tier-recert.md`](governed-effect-s7-strong-tier-recert.md) | Design v0.2, council-folded — strong-tier re-certification gate for governed-effect `execute agent_spawn`; implementation landed separately in the governed-effect track |
 | [`harness-registry-v0.md`](harness-registry-v0.md) | v0 (2026-06-28) — design-only, **DO NOT BUILD YET.** Authoritative catalog of harness *types* (not identity; instances stay observed in the census). Resolves the type-vs-instance open question by splitting declared-type authority from observed-instance telemetry. Build-trigger = harness-census evidence (PR #1153) crosses the §6 promotion thresholds; conforms to plan.md Track D |
 | [`orchestrated-dialectic-reviewer-v0.md`](orchestrated-dialectic-reviewer-v0.md) | Design-first (2026-06-23) — the agent-orchestrator's **first real consumer**: spawn a governed headless reviewer (own identity, local gemma4, model-derived `agrees` incl. `False`) to retire the hardcoded-`agrees=True` rubber-stamp. Answers the gate's Call A. No code yet |
+| [`bridge-dispatch-v0.md`](bridge-dispatch-v0.md) | v0 draft (2026-08-01), pre-review and not an implementation gate — move the operator from transport bottleneck to evidence-backed exception handler |
+| [`docs-consolidation-v0.md`](docs-consolidation-v0.md) | Phase 0 shipped; Phase 1 planned after the 2026-08-08 reader-facing docs freeze — establish one canonical owner per load-bearing claim |
+| [`thread-trajectory-stitching-v0.md`](thread-trajectory-stitching-v0.md) | v0 proposal, demoted to a metrics-layer backstop — keep genuine cross-instance deaths legible without forging identity continuity |
+| [`accountable-testbed-metrics-preregistration-v0.md`](accountable-testbed-metrics-preregistration-v0.md) | Frozen evaluation pre-registration for the accountable multi-principal testbed |
+| [`accountable-testbed-preliminary-trace.md`](accountable-testbed-preliminary-trace.md) | Preliminary deployed-system trace exercising the federation primitives; explicitly not a multi-host or multi-organization result |
 
 ## Resolved — relocated to [`resolved/`](resolved/)
 
